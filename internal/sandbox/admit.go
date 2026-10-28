@@ -233,6 +233,16 @@ type refusedCompletion struct {
 // signalled for the seat since: the same rule [Coordinator.waitOwed] applies
 // to an answer.
 //
+// NOR IS A PERSON'S STOP. A stop ends a collected job's wait by re-firing what is
+// kept for it ([Coordinator.endCollectedWait]), and it leaves a run whose
+// resume is out to that resume's turn. A resume refused after its claim
+// returns minutes on, its review's call refused as the stop landed: kept then,
+// its hold outlived the stop, and the stopped seat's work stayed open until the
+// limit's instant, up to the hour an entry is benched for. So a stop is
+// signalled for its seat too ([stopLanded]), and a keep that finds the seat
+// stopped since it was asked re-fires at once, into a gate that admits a
+// stopped seat's completion and a turn its fence closes as stopped.
+//
 // A refusal that names no condition is not kept: nothing would signal its end.
 // Nor is one for a seat this node lets go of ([Coordinator.ReleaseSeat]): the
 // waiter that drives its box announces it to the seat's next holder. A drain's
@@ -263,7 +273,8 @@ func (c *Coordinator) keepRefused(ev types.SandboxRunCompleted, trigger *events.
 	if held {
 		kept.heldUntil, kept.reason = refusal.Until, refusal.Reason
 	}
-	if c.signalledSinceLocked(refusal.Condition, ev.AgentHandle, seen) {
+	if c.signalledSinceLocked(refusal.Condition, ev.AgentHandle, seen) ||
+		c.signalledSinceLocked(stopLanded, ev.AgentHandle, seen) {
 		c.refireLocked(kept)
 		c.mu.Unlock()
 		return
@@ -274,6 +285,12 @@ func (c *Coordinator) keepRefused(ev types.SandboxRunCompleted, trigger *events.
 		c.forgetRefused(ev.TurnID)
 	}
 }
+
+// stopLanded is what a person's stop of a seat is signalled as
+// ([Coordinator.StopSeat]): no condition a refusal waits on, but one a
+// completion refused while the stop landed is re-fired for rather than kept
+// ([Coordinator.keepRefused]).
+const stopLanded Condition = "stop"
 
 // stillRefused reports whether this node holds ev's job off itself, and the
 // refusal it holds it with: a completion whose resume was refused after its

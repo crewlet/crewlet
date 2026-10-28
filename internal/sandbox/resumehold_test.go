@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -488,6 +489,52 @@ func TestAStopEndsTheWaitOfACollectedJobsResume(t *testing.T) {
 					"for its turn's fence to close", len(calls))
 			}
 		})
+	}
+}
+
+// A STOP THAT LANDS WHILE A RESUME RUNS IS NOT KEPT OUT BY THAT RESUME'S HOLD.
+// The stop leaves a claimed run to its turn, and the turn's call then comes back
+// refused for a limit after the claim: kept and held, the job's announcements
+// were refused here until the limit's instant, up to the hour an entry is
+// benched for, while the stop stood unanswered. The stop is signalled for its
+// seat, so the keep re-fires the completion at once, and the turn it resumes is
+// one the seat's fence closes as stopped.
+//
+// Mutation: keep the refusal without asking whether a stop landed since
+// (keepRefused), and the job is held until the instant.
+func TestAStopThatLandsWhileAResumeRunsIsNotKeptOutByItsHold(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	gated(rig)
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "fixed the flake"})
+	rig.resumer.failWith(&TurnRefused{Cause: errors.New("llm chain exhausted: usage limit"),
+		Refusal: Refusal{Condition: conditionLimit, Reason: "provider limit: default",
+			Until: rig.now.Add(time.Hour)}})
+	rig.resumer.failsInTurn = true
+	var once sync.Once
+	rig.resumer.during = func(ctx context.Context, _ PendingRun) {
+		once.Do(func() {
+			// THE STOP LANDS while the resume's call is out: the run is
+			// claimed, so the stop leaves it to the turn.
+			if err := rig.coordinator.StopSeat(ctx, "swe", RunStop{By: "ana", ByKind: "human"}); err != nil {
+				t.Errorf("StopSeat: %v", err)
+			}
+			rig.resumer.failWith(nil)
+		})
+	}
+
+	payload, ev := rig.completion("t1")
+	var refused *TurnRefused
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); !errors.As(err, &refused) {
+		t.Fatalf("OnCompleted = %v, want the resume's refusal", err)
+	}
+	eventually(t, func() bool { return len(rig.resumer.calls()) == 1 },
+		"the completion refused as the stop landed was kept until its instant")
+	rig.coordinator.inflight.Wait()
+	if _, held := rig.coordinator.stillRefused(payload); held {
+		t.Error("the stopped seat's job is still held here")
 	}
 }
 

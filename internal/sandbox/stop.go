@@ -88,6 +88,12 @@ func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) e
 	if !held {
 		return notHeld(ctx, handle, "", "stopping its running work")
 	}
+	// SAID FIRST, for a completion whose resume is out as the stop lands: the
+	// listing below leaves that run to its turn, and a refusal its turn then
+	// meets is re-fired rather than kept ([Coordinator.keepRefused]).
+	c.mu.Lock()
+	c.signals[signal{cond: stopLanded, handle: handle}]++
+	c.mu.Unlock()
 	runs, err := c.pending.ListActiveForSeat(ctx, handle)
 	if err != nil {
 		return fmt.Errorf("sandbox: listing seat %s's runs to stop them: %w", handle, err)
