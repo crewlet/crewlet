@@ -2098,20 +2098,29 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// Two of the seat's turns in flight at once is what the hold exists to
 	// prevent (seathold.go).
 	//
-	// AND A PANIC RECOUNTS TOO, before it goes on up: the counts are this
-	// node's, and a panic that left them as the claim set them would hold the
-	// seat for as long as this process ran, whatever the store says of it.
-	defer func() {
-		if p := recover(); p != nil {
-			c.syncSeat(context.WithoutCancel(ctx), run.AgentHandle)
-			panic(p)
-		}
-	}()
-
 	// WHETHER THE TURN BEGAN, which the resumer reports by calling Begin —
 	// see [ResumeRequest.Begin]. Atomic because nothing here promises the
 	// resumer calls it on this goroutine.
 	var began atomic.Bool
+
+	// A PANIC ENDS THE CLAIM, as an abandoned resume does, before it goes on
+	// up. The queue's handler recovers it and the process lives on, so a
+	// claim left as it was kept the row `resumed`, which holds the seat, and
+	// the seat took no mail until the process restarted or the seat moved.
+	// Ended on the terms [ErrResumeAbandoned] is: announced as lost where the
+	// turn never began (a recorded reply goes back to the seat through the
+	// row), and settled without a word where it did, because the turn may
+	// already have acted and a retry must not re-enter it.
+	defer func() {
+		if p := recover(); p != nil {
+			var note *failureNote
+			if !began.Load() {
+				note = &failureNote{reason: types.SandboxFailureResumeBroken, detail: resumeBrokenDetail}
+			}
+			c.settleAbandoned(context.WithoutCancel(ctx), run, note)
+			panic(p)
+		}
+	}()
 	begin := func(ctx context.Context) error {
 		if claimedAnswer(run) {
 			// THE TURN TAKES THE ANSWER, on the row, or it does not run —

@@ -136,28 +136,42 @@ func TestEveryResumeExitLetsGoOfTheSeat(t *testing.T) {
 			}
 		})
 	}
-	t.Run("a panic on its way up", func(t *testing.T) {
-		t.Parallel()
-		rig := newCoordRig(t)
-		launchScheduled(t, rig, "t1")
-		rig.resumer.during = func(context.Context, PendingRun) { panic("the resumer broke") }
-		rig.runner.Finish(Result{Success: true})
-		payload, ev := rig.completion("t1")
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Error("the panic was swallowed rather than passed on")
-				}
+	for name, beforeTurn := range map[string]bool{
+		"a panic after the turn began":  false,
+		"a panic before the turn began": true,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			holds := rig.withHold()
+			launchScheduled(t, rig, "t1")
+			rig.coordinator.reconcileHold(t.Context(), "swe")
+			if beforeTurn {
+				rig.resumer.beforeBegin = func(context.Context) { panic("the resumer broke") }
+			} else {
+				rig.resumer.during = func(context.Context, PendingRun) { panic("the resumer broke") }
+			}
+			rig.runner.Finish(Result{Success: true})
+			payload, ev := rig.completion("t1")
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Error("the panic was swallowed rather than passed on")
+					}
+				}()
+				_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
 			}()
-			_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
-		}()
-		// THE STORE'S ANSWER: the claim is still on the row, so the seat is
-		// held once, by it, and not by a count the panic left behind.
-		rig.coordinator.mu.Lock()
-		counted := rig.coordinator.runs["swe"]
-		rig.coordinator.mu.Unlock()
-		if counted.holding != 1 {
-			t.Fatalf("after a panic the seat counts %d holding, want the store's one claim", counted.holding)
-		}
-	})
+			// THE PROCESS LIVES ON, as it does behind the queue's handler: the
+			// run is ended rather than left in the claim, and the seat is free.
+			if run, found, err := rig.pending.Get(t.Context(), "t1"); err != nil ||
+				(found && run.Status == StatusResumed) {
+				t.Fatalf("after a panic the run is %q (found %v, %v), want it ended, not left "+
+					"in the claim", run.Status, found, err)
+			}
+			if held, _ := rig.coordinator.SeatRuns("swe"); held || holds.holding("swe") {
+				t.Fatalf("after a panic the seat is still held (counted %v, inbox %v)",
+					held, holds.holding("swe"))
+			}
+		})
+	}
 }
