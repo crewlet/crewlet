@@ -513,11 +513,14 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		// or absolute deadline is an expiry nobody authored, and
 		// announcing it once per lineage took a remembered set the size
 		// of every session ever noticed.
+		//
+		// AND THE BROWSER'S CACHE GOES WITH IT ([session.End]): what
+		// the ended session was answered by object id is kept under a
+		// key that holds no cookie, so nothing but emptying it keeps it
+		// from whoever the browser is signed in as next.
 		log.InfoContext(r.Context(), "api_session_refused",
 			"row", string(v.Row), "detail", v.Detail)
-		for _, clear := range session.Clears(s.external) {
-			http.SetCookie(w, clear)
-		}
+		session.End(w, s.external)
 		answer := sessionAnswer{how: iam.Anonymous, presented: true}
 		answer.malformed = v.Row == session.RowMalformed
 		return answer
@@ -637,11 +640,13 @@ func (s *Sessions) awaitStart(ctx context.Context, directory session.Directory,
 	return validate(ctx, directory, cookie)
 }
 
-// reissue sets the cookie a served validation re-issued, if it re-issued one.
+// reissue sets the cookie a served validation re-issued, if it re-issued one
+// — through [session.Continue], which keeps the browser's cache: the browser
+// is signed in as the person it was, and emptying the cache at every re-issue
+// would drop each answer it kept five minutes after keeping it.
 func (s *Sessions) reissue(w http.ResponseWriter, v session.Validation) {
 	if v.Reissue != "" {
-		http.SetCookie(w, session.Cookie(s.external, v.Reissue,
-			v.Bearer.AbsoluteExpiresAt))
+		session.Continue(w, s.external, v.Reissue, v.Bearer.AbsoluteExpiresAt)
 	}
 }
 

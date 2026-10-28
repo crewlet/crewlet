@@ -1890,6 +1890,19 @@ signed in on their Account, with no browser holding it until its deadline. The
 invitation's screen says which session it is about to end before anything is
 pressed.
 
+**A sign-in or a sign-out empties the browser's cache.** Every sign-in's
+answer, and every response that clears the cookie — a sign-out, or a request
+presenting a session the engine no longer accepts — carries
+`Clear-Site-Data: "cache"`. An answer read by object id is kept by the browser
+under a key that holds no cookie, because the cookie's bytes move at every
+re-issue, five minutes of use apart, and a key holding them would miss
+everything kept by the next one. So what a browser keeps is held to who it is
+signed in as from the other side, by emptying it whenever that may change; a
+re-issue, and the session a step-up, an enrolment or a password change opens
+for the same person, empty nothing. What a browser honours, and what it costs,
+is under [Security headers on every
+response](../reference/api-endpoints.md#security-headers-on-every-response).
+
 Every field is there because a node has to answer with it and has no other way
 to know it:
 

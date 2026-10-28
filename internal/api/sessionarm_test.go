@@ -16,14 +16,13 @@ import (
 )
 
 // cookieArm is the guard's REAL session arm over rows a case states — one
-// person per bearer, found by the person the bearer names — and the signer
-// its cookies are minted with, so a case presents a session cookie exactly as
-// a signed-in browser does.
+// person per bearer, found by the person the bearer names — whose cookies are
+// minted under the keyring it verifies ([cookieKeyring]), so a case presents a
+// session cookie exactly as a signed-in browser does.
 type cookieArm struct {
-	arm    *auth.Sessions
-	signer *session.Signer
-	rows   personRows
-	name   string
+	arm  *auth.Sessions
+	rows personRows
+	name string
 }
 
 // personRows answers each bearer's identity by the person it names: a person
@@ -45,35 +44,57 @@ func (personRows) AwaitApplied(context.Context, uint64) error { return nil }
 // yet arrived.
 const cookieApplied = 1 << 20
 
+// cookieKeyring is the fleet keyring every cookie here is signed under, so a
+// cookie a signer on another clock minted is one the arm verifies.
+func cookieKeyring() runtoken.Material {
+	return runtoken.Material{ActiveID: "k1",
+		Keys: []runtoken.KeyMaterial{{ID: "k1", Material: "the-posture-signing-key"}}}
+}
+
 // newCookieArm builds the arm for a bootstrap, over no rows yet.
 func newCookieArm(t *testing.T, b *config.Bootstrap) *cookieArm {
 	t.Helper()
-	signer, err := session.New(session.Options{
-		Material: runtoken.Material{ActiveID: "k1",
-			Keys: []runtoken.KeyMaterial{{ID: "k1", Material: "the-posture-signing-key"}}},
-		Now: func() time.Time { return clock },
-	})
-	if err != nil {
-		t.Fatalf("session.New: %v", err)
-	}
 	rows := personRows{}
 	arm, err := auth.NewSessions(auth.SessionsDeps{
-		Signer: signer, Directory: rows, Applier: rows, Chart: postureNoSeats{},
+		Signer: signerAt(t, clock), Directory: rows, Applier: rows, Chart: postureNoSeats{},
 		External: b.API.ExternalBase(),
 		Now:      func() time.Time { return clock },
 	})
 	if err != nil {
 		t.Fatalf("auth.NewSessions: %v", err)
 	}
-	return &cookieArm{arm: arm, signer: signer, rows: rows,
-		name: session.CookieName(b.API.ExternalBase())}
+	return &cookieArm{arm: arm, rows: rows, name: session.CookieName(b.API.ExternalBase())}
+}
+
+// signerAt is a signer under [cookieKeyring] whose clock reads at.
+func signerAt(t *testing.T, at time.Time) *session.Signer {
+	t.Helper()
+	signer, err := session.New(session.Options{
+		Material: cookieKeyring(),
+		Now:      func() time.Time { return at },
+	})
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	return signer
 }
 
 // person enrols one person holding grants, whose session proved who they are
 // at provedAt, and answers the cookie their browser holds.
 func (c *cookieArm) person(t *testing.T, grants []iam.Grant, provedAt time.Time) *http.Cookie {
 	t.Helper()
-	cookie := c.mint(t)
+	return c.personIssued(t, grants, provedAt, clock)
+}
+
+// personIssued is [cookieArm.person] holding a cookie issued at issued rather
+// than now: the cookie a browser presents that long after the sign-in or the
+// re-issue that set it, which the arm re-issues once that is
+// [session.ReissueAfter] or more.
+func (c *cookieArm) personIssued(t *testing.T, grants []iam.Grant,
+	provedAt, issued time.Time) *http.Cookie {
+
+	t.Helper()
+	cookie := c.mintAt(t, issued)
 	c.rows[cookie.person] = session.Identity{
 		Applied: cookieApplied, Generation: 1,
 		Session: session.LineageRow{Found: true, Epoch: 1, ProvedAt: provedAt},
@@ -96,15 +117,22 @@ type minted struct {
 
 func (c *cookieArm) mint(t *testing.T) minted {
 	t.Helper()
+	return c.mintAt(t, clock)
+}
+
+// mintAt is a cookie for a session begun at at, issued then: signed by a
+// signer whose clock read at, so its idle deadline is counted from at.
+func (c *cookieArm) mintAt(t *testing.T, at time.Time) minted {
+	t.Helper()
 	lineage := uuid.Must(uuid.NewV7())
-	millis := clock.UnixMilli()
+	millis := at.UnixMilli()
 	for i := range 6 {
 		lineage[i] = byte(millis >> (8 * (5 - i)))
 	}
 	person := uuid.Must(uuid.NewV7()).String()
-	bearer, err := c.signer.Mint(session.Mint{
+	bearer, err := signerAt(t, at).Mint(session.Mint{
 		Lineage: lineage, Person: person, Epoch: 1, Generation: 1,
-		StartPosition: 1, AbsoluteExpiresAt: clock.Add(8 * time.Hour),
+		StartPosition: 1, AbsoluteExpiresAt: at.Add(8 * time.Hour),
 	})
 	if err != nil {
 		t.Fatalf("mint: %v", err)

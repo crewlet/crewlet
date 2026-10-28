@@ -117,6 +117,7 @@ type answered struct {
 	principal iam.Principal
 	how       iam.Resolution
 	cookies   []*http.Cookie
+	header    http.Header
 }
 
 func (s *signedIn) call(g *auth.Guard, method, path string,
@@ -139,6 +140,7 @@ func (s *signedIn) call(g *auth.Guard, method, path string,
 	defer result.Body.Close()
 	out.status = result.StatusCode
 	out.cookies = result.Cookies()
+	out.header = result.Header
 	_ = json.NewDecoder(result.Body).Decode(&out.body)
 	return out
 }
@@ -512,7 +514,11 @@ func TestTheSessionArmNeedsAnApplier(t *testing.T) {
 }
 
 // AN ENDED SESSION IS 401 AND THE COOKIE IS CLEARED, so a browser stops
-// re-presenting a value that can never work again.
+// re-presenting a value that can never work again — AND THE BROWSER'S CACHE
+// WITH IT ([session.End]): what the session was answered by object id is kept
+// under a key that holds no cookie, so only emptying the cache keeps it from
+// whoever the browser is signed in as next. Mutation: clear the cookies alone
+// and no Clear-Site-Data comes back, red.
 func TestAnEndedSessionIsRefusedAndTheCookieCleared(t *testing.T) {
 	t.Parallel()
 	rig := newSignedIn(t)
@@ -529,6 +535,49 @@ func TestAnEndedSessionIsRefusedAndTheCookieCleared(t *testing.T) {
 	}
 	if !cleared {
 		t.Errorf("the cookie was not cleared: %v", got.cookies)
+	}
+	if got := got.header.Get("Clear-Site-Data"); got != `"cache"` {
+		t.Errorf("the ended session's refusal carried Clear-Site-Data %q, want %q: the "+
+			"browser keeps what the session was answered for whoever holds it next",
+			got, `"cache"`)
+	}
+}
+
+// A RE-ISSUE MOVES THE COOKIE AND KEEPS THE BROWSER'S CACHE.
+//
+// A served session's cookie is re-issued once it is [session.ReissueAfter]
+// old — its idle deadline moved, the person the same — and an answer the
+// browser keeps by object id is keyed by no cookie, so nothing it kept is
+// anybody else's: the re-issue empties nothing ([session.Continue]). Emptying
+// the cache there would drop every answer the browser kept, once every five
+// minutes of use.
+//
+// Mutation: re-issue through session.Begin and the response carries
+// Clear-Site-Data, red.
+func TestAReissueMovesTheCookieAndKeepsTheBrowsersCache(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	// THE VALIDATING NODE'S CLOCK MOVES ON BY THE THROTTLE, so the cookie
+	// minted at the rig's start is exactly as old as a re-issue wants.
+	rig.at = rig.at.Add(session.ReissueAfter)
+	rig.signerAt(rig.at)
+	got := rig.call(rig.guard(), http.MethodGet, "/agents", rig.withCookie)
+	if got.status != http.StatusOK {
+		t.Fatalf("status %d, want 200 (body %v)", got.status, got.body)
+	}
+	var fresh string
+	for _, c := range got.cookies {
+		if c.Name == session.CookieBaseName && c.MaxAge >= 0 {
+			fresh = c.Value
+		}
+	}
+	if fresh == "" || fresh == rig.cookie {
+		t.Fatalf("a cookie %s old was not re-issued (cookies %v): this case holds "+
+			"nothing", session.ReissueAfter, got.cookies)
+	}
+	if v := got.header.Values("Clear-Site-Data"); len(v) != 0 {
+		t.Errorf("the re-issue carried Clear-Site-Data %v, which drops every answer the "+
+			"browser kept once every five minutes of use", v)
 	}
 }
 

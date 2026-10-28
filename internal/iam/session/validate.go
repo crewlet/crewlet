@@ -269,7 +269,8 @@ type Validation struct {
 	// Reissue is a fresh cookie value to set, or empty. It is produced on
 	// a served row only, and only once the idle deadline has drifted past
 	// [ReissueAfter] — a Set-Cookie on every response is a header nobody
-	// needs.
+	// needs — and set through [Continue], which leaves the browser's cache
+	// as it was: the same person's session, carried on.
 	Reissue string
 
 	// Person is the holder's row as this node has it, empty on the rows

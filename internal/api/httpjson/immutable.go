@@ -9,8 +9,11 @@ import (
 )
 
 // ImmutableCacheControl is how an answer that never changes is marked: kept
-// by the caller's own cache alone (`private`), for a year, and never asked
-// again while it is kept (`immutable`, RFC 8246) — not even on a reload.
+// by the caller's own cache alone (`private`), for a year at most, and never
+// asked again while it is kept (`immutable`, RFC 8246) — not even on a
+// reload. A browser keeps it for as long as it stays signed in as the person
+// who asked: every sign-in and sign-out empties its cache ([Immutable] says
+// why), and a re-issue of the session's cookie does not.
 //
 // PRIVATE, because the answer was decided for the credential that asked it,
 // and a shared cache in front of the node would hand it to whoever asked the
@@ -24,9 +27,9 @@ const ImmutableCacheControl = "private, max-age=31536000, immutable"
 
 // Immutable answers 200 with body as JSON, marked as never changing: a STRONG
 // entity tag of its bytes, [ImmutableCacheControl], and a cache key that holds
-// the credential (`Vary: Authorization, Cookie`) — or, where the request's
-// `If-None-Match` already names that tag, `304` with no body and the same
-// three headers (RFC 9110 §15.4.5: a 304 carries what the 200 would have).
+// the bearer a request presents (`Vary: Authorization`) — or, where the
+// request's `If-None-Match` already names that tag, `304` with no body and the
+// same three headers (RFC 9110 §15.4.5: a 304 carries what the 200 would have).
 //
 // THE TAG IS THE BYTES' OWN DIGEST, never a name for the request: it is right
 // whatever the answer was a function of, including the build that encoded it,
@@ -34,11 +37,20 @@ const ImmutableCacheControl = "private, max-age=31536000, immutable"
 // rather than a 304 confirming a body it never sent. What it saves is the
 // transfer; the answer is still read to compute it.
 //
-// THE CACHE KEY HOLDS THE CREDENTIAL because `private` keeps the answer out of
-// shared caches and not out of a second person's session in the same
-// browser: the guard resolves the caller from `Authorization` first and the
-// session cookie after it, so a browser's cache reuses an entry only for the
-// same pair.
+// THE CACHE KEY HOLDS THE BEARER A CLIENT SETS, AND NEVER THE SESSION COOKIE.
+// `private` keeps the answer out of shared caches and not out of the next
+// credential in the same client, so the key keeps apart the credentials a
+// client sets itself: an `Authorization` header is put there by its client,
+// and an answer kept for one token is never served for another. The session
+// cookie cannot be in it: a served session's cookie is re-issued every five
+// minutes of use (session.ReissueAfter), so a key holding its bytes stopped
+// matching minutes after an answer was kept, and every page a person went back
+// to was read again on its repository's home git node — the read the cache is
+// for. Who a browser is signed in as is kept apart from the other side
+// instead: every response that may change it — a sign-in, a sign-out, a
+// session the guard refused — empties the browser's cache (session.Begin and
+// session.End's `Clear-Site-Data`), so the next person in a browser is never
+// served what the last one was answered.
 func Immutable(w http.ResponseWriter, r *http.Request, body any) {
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -52,7 +64,6 @@ func Immutable(w http.ResponseWriter, r *http.Request, body any) {
 	h.Set("Cache-Control", ImmutableCacheControl)
 	// ADDED, never set: a route's own Vary — CORS's Origin — stays beside it.
 	h.Add("Vary", "Authorization")
-	h.Add("Vary", "Cookie")
 	if noneMatch(r.Header.Get("If-None-Match"), tag) {
 		w.WriteHeader(http.StatusNotModified)
 		return

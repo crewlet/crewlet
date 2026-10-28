@@ -15,7 +15,23 @@ import "encoding/json"
 // as a cache keeps anything, and answers a request that names that tag `304`
 // with no body (httpjson.Immutable): a screen paging back through a diff
 // costs the node the read and none of the transfer, or — from the browser's
-// own cache — not even the request.
+// own cache — not even the request. A browser keeps it for as long as it stays
+// signed in as the person who asked: the cache key holds no cookie, so the
+// session cookie's re-issue every five minutes moves nothing, and every
+// sign-in and sign-out empties the browser's cache (session.Begin,
+// session.End), so the next person in that browser asks for themselves.
+//
+// SO AN ANSWER IS IMMUTABLE ONLY WHERE IT IS THE SAME FOR EVERY CALLER WHO MAY
+// ASK IT — as a repository's content is: every person reads every repository
+// (ADR-0058). The cache key does not say who asked, and the emptying is the
+// browser's to do: it honours `Clear-Site-Data` only in a secure context
+// (https, or a loopback address) and only from a release that implements the
+// directive. Where it does not, a kept answer outlives the session that asked
+// for it, and the next person to sign in there is served it from the cache —
+// harmless exactly when it is what they would be answered themselves. An
+// answer that differs by who asks therefore names the asker in what is asked —
+// a parameter the question holds equal to the caller the guard resolved — so
+// the request, and with it the cache key, differs too.
 //
 // A TRANSPORT THAT CACHES NOTHING SENDS THE ANSWER ITSELF: Immutable encodes
 // as the value it wraps ([Immutable.MarshalJSON]), so the socket's frame and a

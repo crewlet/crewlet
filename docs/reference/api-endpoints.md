@@ -879,6 +879,33 @@ and the step-up that was needed to read them. `no-store` rather than `private`,
 which still lets the browser keep it, or `no-cache`, which only revalidates
 what was kept.
 
+**Signing in and out empties the browser's cache.** Every response that may
+change who a browser is signed in as carries `Clear-Site-Data: "cache"`:
+every sign-in that sets the session cookie (`POST /auth/login`, an
+invitation's redemption, `POST /auth/token`), and every response that clears
+it — a sign-out of any kind, a gesture that ends the session it was made
+through, and any answer to a request presenting a cookie the engine no longer
+accepts, whether ended, expired or never valid (on a guarded route, the
+`401`). An answer read by object id, whose bytes are a function of what its
+request named, is sent with a strong `ETag`, `Cache-Control: private,
+max-age=31536000, immutable` and `Vary: Authorization`, and kept by the
+browser under a key that holds the bearer a client sets and **not** the
+session cookie, which the engine re-issues every five minutes of use: a key
+holding the cookie would stop matching at each re-issue, and the browser
+would ask again for every page it had kept. So one person's kept answers are
+kept from the next person in the same browser by emptying its cache whenever
+that person may change, and a re-issue — like the session a step-up, a second
+factor's enrolment or a password change opens for the same person — leaves
+the cache alone. A browser honours the header only in a secure context
+(https, or a loopback address) and only where it implements the directive —
+Firefox again from 138, after dropping it from 94 — and a reverse proxy
+should pass it through unchanged. Where it is not honoured, a kept answer
+stays until the browser evicts it, which is why only an answer every
+signed-in person may read is kept this way: [every person reads every
+repository](../concepts/code-host.md#who-may-read-and-push). It also costs the
+browser the dashboard's own files, fetched again once after each sign-in or
+sign-out.
+
 Read-side handlers live in the `internal/api` package (one module
 per domain — `agents`, `events`, `tokens`, `org`, `fleet`, `mcpstatus`,
 `sandbox_runs`, `budgets`, `integrations`, `webhooks`,

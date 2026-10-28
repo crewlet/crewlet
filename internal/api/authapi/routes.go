@@ -210,7 +210,10 @@ func (s *Service) Token(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return
 	}
-	http.SetCookie(w, session.Cookie(s.boot.API.ExternalBase(), bearer, expires))
+	// THE TOKEN'S SESSION, begun with the browser's cache empty as every
+	// sign-in's is ([session.Begin]): it ends whatever person the browser
+	// held, so nothing they were answered is served to the token.
+	session.Begin(w, s.boot.API.ExternalBase(), bearer, expires)
 	log.InfoContext(r.Context(), "api_token_exchanged",
 		"token", entry.ID, "seat", principal.Seat, "expires_at", expires)
 	s.audit.Emit(r.Context(), types.IAMSessionStarted{

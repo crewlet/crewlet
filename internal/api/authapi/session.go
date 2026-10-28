@@ -477,11 +477,11 @@ func (s *Service) presentedSession(r *http.Request) session.Validation {
 }
 
 // clearSession ends the session in the browser under every name a bearer can
-// be held under — see [session.Clears].
+// be held under, and empties the browser's cache with it, so nothing the
+// session was answered is served to whoever signs in there next — see
+// [session.End].
 func (s *Service) clearSession(w http.ResponseWriter) {
-	for _, clear := range session.Clears(s.boot.API.ExternalBase()) {
-		http.SetCookie(w, clear)
-	}
+	session.End(w, s.boot.API.ExternalBase())
 }
 
 // LogoutOne ends ONE named session, which is how somebody signs out of a
