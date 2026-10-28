@@ -94,7 +94,7 @@ const (
 	// its own or the company's, is refusing: the engine has parked the
 	// seat until the window resets or the ceiling is raised.
 	StoppedBudget StoppedReason = "budget"
-	// StoppedProvider: every model of the seat's chain is at its usage
+	// StoppedProvider is a seat every model of whose chain is at its usage
 	// limit, and the engine has parked the seat until the first is tried
 	// again (`seat_provider_parked`). It lifts when a call through the
 	// chain answers. A chain that merely FAILED (`llm_unavailable`) is not
