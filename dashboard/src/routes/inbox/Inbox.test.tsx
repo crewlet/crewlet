@@ -578,6 +578,54 @@ describe("the pane", () => {
     expect(pane.textContent).not.toContain("GP-20 GP-20");
   });
 
+  // A CITED ADDRESS IS A BUTTON ONLY WHERE THE DASHBOARD BUILDS IT, labelled by
+  // the dashboard: an asker's label and its address as written are its words.
+  //
+  // Mutation: draw a url evidence as the live external button it was and the
+  // evil address is an anchor labelled "Sign in to GitHub".
+  test("a cited address opens only as the dashboard rebuilt it, never by the asker's label", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(
+          askItem({
+            ...DECISION,
+            evidence: [
+              {
+                kind: "url",
+                ref: "https://evil.example.net/c?q=secret",
+                label: "Sign in to GitHub",
+              },
+              {
+                kind: "url",
+                ref: "https://github.com/gophrase/backend/pull/14?ref=x",
+                label: "Approve here",
+              },
+            ],
+          }),
+        ),
+        link_hosts: {
+          hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }],
+        },
+      },
+    });
+    await settle();
+    const pane = document.querySelector(".crewlet-reading-pane")!;
+    const anchors = [...pane.querySelectorAll("a")].filter((a) =>
+      a.getAttribute("href")?.startsWith("https://"),
+    );
+    expect(anchors.map((a) => a.getAttribute("href"))).toEqual([
+      "https://github.com/gophrase/backend/pull/14",
+    ]);
+    // THE DASHBOARD'S LABEL AND THE APP'S MARK, never the asker's words.
+    expect(anchors[0]!.textContent).toContain("gophrase/backend#14");
+    expect(anchors[0]!.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
+    expect(pane.textContent).not.toContain("Approve here");
+    expect(pane.textContent).not.toContain("Sign in to GitHub");
+    // THE OTHER IS ITS ADDRESS AS WRITTEN, to read and copy.
+    expect(pane.textContent).toContain("https://evil.example.net/c?q=secret");
+  });
+
   test("an option answers with one press, through the one write, and marks its notice read", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";
     mount({
