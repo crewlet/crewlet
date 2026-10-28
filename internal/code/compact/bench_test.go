@@ -106,10 +106,10 @@ import (
 //     per-object charge (window-MiB). A peak past the charge raises
 //     CompactWindowBytes to the window measured.
 //   - swap/packs={50,2048} (2048 LARGE): one sync of a copy holding that many
-//     packs after a compaction retired two of them — a SWAP into the copy's
-//     next directory, of links: its wall clock, its download of the one output
-//     included, and the files it links (links/swap), which follow the pack
-//     count, never the bytes.
+//     packs — at 2 048 the bound itself — after a compaction retired three of
+//     them — a SWAP into the copy's next directory, of links: its wall clock,
+//     its download of the one output included, and the files it links
+//     (links/swap), which follow the pack count, never the bytes.
 //   - poll/repos={1000,10000}/op=pass/home={all,1of8}: one pass over that
 //     many listed repositories none of which is due here — the memory's
 //     steady state — on the home of every one (all: each remembered as not
@@ -953,7 +953,12 @@ func revisions(b *testing.B, client *gittest.Client, src string, n, size int) []
 }
 
 // benchSwap is swap/packs=n: a loop of syncs that each swap a copy holding n
-// packs, after a compaction retired the two newest.
+// packs, after a compaction retired the three newest. The repository holds
+// n − 2 packs between two syncs, so the two pushes each iteration lands before
+// its compaction take it to n and never past code.MaxPacksPerRepo — at
+// packs=2048 the bound itself, where a third would be refused
+// compaction_behind — and the compaction, of the two pushes and the pack
+// below them, takes it back to n − 2.
 func benchSwap(b *testing.B, n int) {
 	if n > 50 {
 		gittest.Large(b, fmt.Sprintf("%d pushes packed, stored and synced", n))
@@ -961,31 +966,52 @@ func benchSwap(b *testing.B, n int) {
 	gittest.RequireNode(b)
 	client := gittest.NewClient(b)
 	src := gittest.Empty(b)
-	commits := extend(b, client, src, "", 0, n, swapPushBytes)
+	commits := extend(b, client, src, "", 0, n-2, swapPushBytes)
 	f := newBenchFleet(b, 1)
 	node := f.home()
-	_, id, _ := f.repoOf(b, commitPushes(b, client, src, code.ZeroOID, commits))
+	_, id, packs := f.repoOf(b, commitPushes(b, client, src, code.ZeroOID, commits))
+	// live is the repository's live packs, oldest first, each with the
+	// commits it holds: those tip reaches and from does not.
+	type livePack struct{ id, from, tip string }
+	live := make([]livePack, len(packs))
+	for i, p := range packs {
+		from := code.ZeroOID
+		if i > 0 {
+			from = commits[i-1]
+		}
+		live[i] = livePack{id: p.PackID, from: from, tip: commits[i]}
+	}
 	tip, made := commits[len(commits)-1], len(commits)
-	// retireTwo lands two more pushes, has the node hold them, and lands a
-	// compaction retiring them into one output, which the node does not hold
-	// yet: what its next sync swaps out. It answers that compaction's
-	// position.
-	retireTwo := func() statelog.Position {
+	// retireThree lands two more pushes, has the node hold them, and lands a
+	// compaction retiring them and the pack below them into one output, which
+	// the node does not hold yet: what its next sync swaps out. It answers
+	// that compaction's position.
+	retireThree := func() statelog.Position {
 		b.Helper()
 		two := extend(b, client, src, tip, made, 2, swapPushBytes)
 		made += len(two)
-		var (
-			ids []string
-			at  statelog.Position
-		)
-		for _, p := range commitPushes(b, client, src, tip, two) {
+		var at statelog.Position
+		from := tip
+		for i, p := range commitPushes(b, client, src, tip, two) {
 			var pack code.PackRef
 			pack, at = f.propose(b, id, p)
-			ids = append(ids, pack.PackID)
+			live = append(live, livePack{id: pack.PackID, from: from, tip: two[i]})
+			from = two[i]
 		}
 		f.sync(b, node, id, at)
+		three := live[len(live)-3:]
+		var ids []string
+		for _, p := range three {
+			ids = append(ids, p.id)
+		}
+		// THE OUTPUT HOLDS EXACTLY ITS INPUTS' OBJECTS: the commits the newest
+		// reaches and the oldest's from does not.
+		revs := []string{two[1]}
+		if three[0].from != code.ZeroOID {
+			revs = append(revs, "^"+three[0].from)
+		}
 		bare := gittest.Empty(b)
-		checksum := gittest.Pack(b, client, bare, src, two[1], "^"+tip)
+		checksum := gittest.Pack(b, client, bare, src, revs...)
 		tip = two[1]
 		cid := statelog.NewOpID(time.Now(), "")
 		path := filepath.Join(bare, "objects", "pack", "pack-"+checksum+".pack")
@@ -1001,15 +1027,16 @@ func benchSwap(b *testing.B, n int) {
 			Compaction: code.Compaction{RepoID: id, CompactionID: cid, Node: node.ID(), Seen: at, Retire: ids,
 				Add: []code.PackRef{*out}}})
 		if err != nil || res.Outcome != statelog.OutcomeApplied {
-			b.Fatalf("the compaction retiring two pushes: %+v, %v", res, err)
+			b.Fatalf("the compaction retiring the three newest packs: %+v, %v", res, err)
 		}
+		live = append(live[:len(live)-3], livePack{id: out.PackID, from: three[0].from, tip: two[1]})
 		return res.Position
 	}
 	swaps := func() uint64 { return counterOn(node, metrics.CodeCacheSwaps) }
 	before := swaps()
 	for b.Loop() {
 		b.StopTimer()
-		at := retireTwo()
+		at := retireThree()
 		b.StartTimer()
 		f.sync(b, node, id, at)
 	}
@@ -1023,7 +1050,7 @@ func benchSwap(b *testing.B, n int) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	at := retireTwo()
+	at := retireThree()
 	next, err := node.Cache().Sync(b.Context(), id, statelog.FloorAt(statelog.ReadSession, at))
 	if err != nil {
 		b.Fatal(err)
