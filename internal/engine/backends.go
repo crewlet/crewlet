@@ -856,7 +856,7 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 		}
 		out.Coord, epochs = leases, leases.Epochs()
 	}
-	return floorSeatEpochs(ctx, epochs, shared)
+	return floorSeatEpochs(ctx, epochs, shared, runsBucketHome(b))
 }
 
 // floorSeatEpochs raises each seat's fencing counter above every epoch its
@@ -875,13 +875,12 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 // EVERY BOOT, on every topology, rather than once: it costs one listing of the
 // runs, and a floor at or below the counter changes nothing, so a fleet's
 // nodes doing it concurrently agree.
-func floorSeatEpochs(ctx context.Context, epochs *kv.Epochs, fleet coord.Fleet) error {
+func floorSeatEpochs(ctx context.Context, epochs *kv.Epochs, fleet coord.Fleet, home string) error {
 	floors, err := sandbox.NewCoordStore(fleet).OwnerEpochs(ctx)
 	if err != nil {
 		return fmt.Errorf("engine: coordination: list the sandbox runs to floor each "+
-			"seat's fencing epoch above them (the coordination store's sandbox runs "+
-			"bucket on the stream's broker, kept under stream.store_dir, must be "+
-			"readable for the node to start): %w", err)
+			"seat's fencing epoch above them (the sandbox runs bucket, %s, must be "+
+			"readable for the node to start): %w", home, err)
 	}
 	for seat, floor := range floors {
 		resource := coord.SeatResource(seat)
@@ -1001,6 +1000,21 @@ func effectiveLeaseTTL(b *config.Bootstrap, backend coord.Backend) time.Duration
 		return got
 	}
 	return configured
+}
+
+// runsBucketHome says where the sandbox runs bucket this node reads lives,
+// for an error an operator acts on: the place to look differs by broker, and
+// naming stream.store_dir to a node whose bucket is on an external cluster
+// sends the operator to a directory that holds none of it.
+func runsBucketHome(b *config.Bootstrap) string {
+	switch b.BrokerKind() {
+	case placement.BrokerClient:
+		return "on the external NATS cluster stream.url dials"
+	case placement.BrokerLeaf:
+		return "on the data members this node joins through stream.leaf.urls"
+	default:
+		return "on this node's embedded broker, kept under stream.store_dir"
+	}
 }
 
 // clusteredStream is whether this node's broker has PEERS.

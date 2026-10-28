@@ -949,6 +949,44 @@ func TestACodingRunIsRefusedBelowTheBudgetFloor(t *testing.T) {
 	}
 }
 
+// A NODE WITH NO COORDINATOR RETIRES BESIDE A RUN RECORD NOTHING CAN READ. The
+// listing it refuses on skips the record rather than failing, so a seat with
+// no readable run is retired and one with a readable run is still refused, and
+// the unreadable record is left exactly as it was for the documented repair:
+// nothing can deliver to it, and nothing deletes or rewrites what it could not
+// read.
+func TestABareRetirementSkipsARecordNothingCanRead(t *testing.T) {
+	t.Parallel()
+	swe, pm := uuid.New(), uuid.New()
+	fleet := memory.NewFleet()
+	store := sandbox.NewCoordStore(fleet)
+	if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", AgentID: swe.String(), Role: "SWE",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	garbled := []byte("{not json")
+	if _, err := fleet.CreateSandboxRun(t.Context(), "t-garbled", garbled); err != nil {
+		t.Fatalf("CreateSandboxRun: %v", err)
+	}
+	bare := &Engine{backends: &Backends{Fleet: fleet}}
+	// Refused over the READABLE run, and over it alone: a listing that failed
+	// on the unreadable record would refuse too, for the wrong reason.
+	if err := bare.retireSeatRuns(t.Context(), swe, "swe", "retirement:1", 3); err == nil ||
+		!strings.Contains(err.Error(), "still has 1 coding runs") {
+		t.Fatalf("the retirement of a seat with one readable run = %v, want it refused over "+
+			"that run", err)
+	}
+	if err := bare.retireSeatRuns(t.Context(), pm, "pm", "retirement:1", 3); err != nil {
+		t.Fatalf("a seat with no readable run was refused beside an unreadable record: %v", err)
+	}
+	if record, found, err := fleet.SandboxRun(t.Context(), "t-garbled"); err != nil || !found ||
+		string(record.Value) != string(garbled) {
+		t.Fatalf("the unreadable record is %q (found %v, err %v), want it left as written",
+			record.Value, found, err)
+	}
+}
+
 // A RETIRED SEAT'S RUNS ARE ENDED BY THE NODE THAT RETIRES IT. Through the
 // coordinator where this node has one, which reclaims each box; and where it
 // has none, the retirement is refused while the fleet still records a run for
