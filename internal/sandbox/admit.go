@@ -40,10 +40,40 @@ import (
 // does on the condition (a node that is leaving, or a condition that clears by
 // waiting) rather than on the error behind it.
 //
+// # Which route it is told
+//
+// The route the resume takes ([ResumeRoute]), because the turn's first model
+// call is on a different chain on each: a completion's is its reviewer's, and
+// an answer's is the relaunch that carries the run on. A gate that refuses a
+// resume whose models are all at their limit has to ask the chain that call
+// would be made on, and a gate asked one chain for both refused a finished
+// run's review for its executor's limit, or admitted an answer into it.
+//
 // Admitted, it returns the context the turn runs under, which the admission may
 // end (a drain that can no longer wait for it), and the release, which the
 // caller calls once the resume is over.
-type TurnGate func(ctx context.Context, handle string) (context.Context, func(), error)
+type TurnGate func(ctx context.Context, handle string, route ResumeRoute) (context.Context, func(), error)
+
+// ResumeRoute is which of the two roads a resume takes into its turn, as its
+// [TurnGate] is told it.
+type ResumeRoute string
+
+const (
+	// ResumeCompletion is a coding run's completion: its job collected,
+	// and its turn re-entered for the engine's delivery check and the
+	// reviewer, whose send-back launches the run again.
+	ResumeCompletion ResumeRoute = "completion"
+
+	// ResumeAnswer is a person's answer to a run parked on its question,
+	// recorded on the run: its turn launches the run again to carry it on
+	// with the answer.
+	ResumeAnswer ResumeRoute = "answer"
+)
+
+// Valid reports whether r is one of the two routes.
+func (r ResumeRoute) Valid() bool {
+	return r == ResumeCompletion || r == ResumeAnswer
+}
 
 // TurnRefused is a [TurnGate]'s refusal: what an answer's retry waits on, and
 // the gate's own cause, which [errors.Is] reaches through it.
@@ -79,16 +109,16 @@ type admitted struct {
 	release func()
 }
 
-// admitTurn asks the gate to admit a turn on handle's seat.
+// admitTurn asks the gate to admit a turn on handle's seat, by route.
 //
 // A coordinator built without a gate admits every turn under the caller's
 // context: one with no node beneath it, which a test's is, has no admission to
 // pass. The engine always passes its node's ([CoordinatorOptions.Gate]).
-func (c *Coordinator) admitTurn(ctx context.Context, handle string) (admitted, error) {
+func (c *Coordinator) admitTurn(ctx context.Context, handle string, route ResumeRoute) (admitted, error) {
 	if c.gate == nil {
 		return admitted{ctx: ctx, release: func() {}}, nil
 	}
-	turnCtx, release, err := c.gate(ctx, handle)
+	turnCtx, release, err := c.gate(ctx, handle, route)
 	if err != nil {
 		return admitted{}, err
 	}

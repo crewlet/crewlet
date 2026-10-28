@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -160,6 +161,26 @@ func withModels(t *testing.T, e *Engine, entry llm.Provider) {
 	}
 	c := *e.Company()
 	c.Models = reg
+	e.epoch.current.Store(&c)
+}
+
+// withLaunchModels is [withModels] for a case whose resumes relaunch their run:
+// e's current company served with a registry of the one coding-CLI entry
+// given, and the catalogue this node's coordinator launches on as the epoch's
+// own, as an apply that configured both would. The entry is what an answer's
+// relaunch picks from ([firstCallMembers]).
+func withLaunchModels(t *testing.T, e *Engine, entry *cliagent.Provider) {
+	t.Helper()
+	reg, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: entry}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	c := *e.Company()
+	c.Models = reg
+	c.catalogue = e.sandboxManager()
+	if c.catalogue == nil {
+		t.Fatal("the node runs no sandbox to launch on")
+	}
 	e.epoch.current.Store(&c)
 }
 
@@ -387,13 +408,13 @@ func TestACompletionRefusedOnAWaitResumesOnceItClears(t *testing.T) {
 			limited.Store(true)
 			var refusals atomic.Int32
 			r.gate = func(next sandbox.TurnGate) sandbox.TurnGate {
-				return func(ctx context.Context, handle string) (context.Context, func(), error) {
+				return func(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
 					if limited.Load() {
 						refusals.Add(1)
 						return nil, nil, &sandbox.TurnRefused{Cause: errors.New("provider limit reached"),
 							Refusal: sandbox.Refusal{Condition: waitLimit, Reason: "provider limit reached"}}
 					}
-					return next(ctx, handle)
+					return next(ctx, handle, route)
 				}
 			}
 			e := r.start(t)
@@ -469,7 +490,7 @@ func TestADrainWaitsForAResumeAdmittedBeforeIt(t *testing.T) {
 	r := newDrainRig(t)
 	e := r.start(t)
 
-	_, release, err := e.admitResume(t.Context(), "swe")
+	_, release, err := e.admitResume(t.Context(), "swe", sandbox.ResumeAnswer)
 	if err != nil {
 		t.Fatalf("admitResume on a serving node: %v", err)
 	}
@@ -484,7 +505,7 @@ func TestADrainWaitsForAResumeAdmittedBeforeIt(t *testing.T) {
 	// precedes until the drain has closed the gate.
 	var refused *sandbox.TurnRefused
 	eventually(t, "the drain to refuse the next resume", func() bool {
-		_, next, err := e.admitResume(t.Context(), "swe")
+		_, next, err := e.admitResume(t.Context(), "swe", sandbox.ResumeCompletion)
 		if err == nil {
 			next()
 			return false

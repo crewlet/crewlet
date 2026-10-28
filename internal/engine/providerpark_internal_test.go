@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // The provider park, end to end over the in-memory queue: a seat every model
@@ -451,7 +452,7 @@ func TestARetriedResumeWaitsForALimitItsModelsKnow(t *testing.T) {
 			}
 			c.Models = reg
 			r.e.epoch.current.Store(c)
-			reason, until, refused := r.e.providerRefusing(t.Context(), "lead")
+			reason, until, refused := r.e.providerRefusing(t.Context(), c, "lead", sandbox.ResumeCompletion)
 			if refused != tc.refused {
 				t.Fatalf("refused = %v (%q), want %v", refused, reason, tc.refused)
 			}

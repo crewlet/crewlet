@@ -744,8 +744,13 @@ entry whose specification the apply left unchanged keeps its sit-out (below)
 and refuses before any CLI starts, so a limit that still holds parks the seat
 again at the cost of one delivery and no process.
 A coding run's completion, or a person's answer to one, that arrives while the
-seat's models are at a limit they reported waits for it rather than resuming
-into it, and resumes once the park lifts or the first entry is tried again.
+models its first call would take are at a limit they reported waits for it
+rather than resuming into it, and resumes once the park lifts or the first
+entry is tried again. Those are the reviewer's chain for a completion, whose
+first call is its review (`llm_review`, else `llm`), and the members a launch
+can take for an answer, whose first call is the relaunch that carries the run
+on: a seat whose executor sits out while its reviewer answers has its
+finished run reviewed and delivered at once.
 
 The sit-out is the entry's own, on the node that heard the sentence: every other
 node learns the same thing from its own calls, once per window. A later sit-out

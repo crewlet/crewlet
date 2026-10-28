@@ -176,10 +176,10 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 // counter is not a refusal, for the reason [Engine.budgetPark] gives.
 //
 // A FULL WINDOW ONLY, and not one merely too short for a launch, which
-// [Engine.budgetHold] asks as well: the gate passes every resume, and a
-// completion's first model call is its reviewer's, which a window below the
-// launch floor can still pay for. The floor refuses a launch, and a review that
-// sends its run back is held at that relaunch ([Engine.heldByBudget]).
+// [Engine.budgetHold] asks as well: the gate asks this of a completion, whose
+// first model call is its reviewer's, which a window below the launch floor
+// can still pay for. The floor refuses a launch, and a review that sends its
+// run back is held at that relaunch ([Engine.heldByBudget]).
 func (e *Engine) budgetRefusing(ctx context.Context, c *Company, handle string) (sandbox.Refusal, bool) {
 	m := e.meterFor(c, handle)
 	if m == nil || !m.basis.capped() {
@@ -199,11 +199,11 @@ func (e *Engine) budgetRefusing(ctx context.Context, c *Company, handle string) 
 // window turns over. False where neither holds, and where the counters cannot
 // be read, for the reason [Engine.budgetPark] gives.
 //
-// FOR A RESUME THAT WILL LAUNCH, which has no mail to park. A recorded answer's
-// retry asks it before every attempt ([Engine.mayResumeAnswer]) — an answer
-// always relaunches its executor, so a starved window refuses it as surely as a
-// full one — and a collected job's resume that its relaunch was refused for is
-// held on it ([sandbox.ErrResumeHeld]).
+// FOR A RESUME THAT WILL LAUNCH, which has no mail to park. The turn gate asks
+// it of every attempt at a recorded answer's resume ([Engine.seatCannotRun]) —
+// an answer always relaunches its executor, so a starved window refuses it as
+// surely as a full one — and a collected job's resume that its relaunch was
+// refused for is held on it ([sandbox.ErrResumeHeld]).
 func (e *Engine) budgetHold(ctx context.Context, c *Company, handle string) (sandbox.Refusal, bool) {
 	if refusal, refusing := e.budgetRefusing(ctx, c, handle); refusing {
 		return refusal, true

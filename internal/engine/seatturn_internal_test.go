@@ -55,7 +55,7 @@ func TestAnAnswerArrivingMidTurnIsResumedWhenTheTurnEnds(t *testing.T) {
 		return err == nil
 	})
 	t.Cleanup(release)
-	_, next, err := e.admitResume(t.Context(), "swe")
+	_, next, err := e.admitResume(t.Context(), "swe", sandbox.ResumeAnswer)
 	var refused *sandbox.TurnRefused
 	if err == nil {
 		next()

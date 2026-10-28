@@ -503,15 +503,17 @@ type CoordinatorOptions struct {
 	Admit Admission
 
 	// Gate is the node's admission, which every resume passes before it
-	// claims its run, on every route: see [TurnGate]. Nil admits every
-	// turn, which a coordinator with no node beneath it (a test's) is
-	// entitled to; the engine passes its node's.
+	// claims its run, on every route and told which: see [TurnGate]. Nil
+	// admits every turn, which a coordinator with no node beneath it (a
+	// test's) is entitled to; the engine passes its node's.
 	//
-	// NOT Admit, which it sits beside: Admit is the seat's own conditions
-	// (a person's pause, a budget, a posture), which a retried answer asks
-	// because it runs outside the delivery that would have screened it. The
-	// gate is the node's question, whether this process may start a turn at
-	// all, and a completion asks it as much as a retry does.
+	// NOT Admit, which it sits beside: Admit is the screening a delivery
+	// applies (the lease, a person's pause, a model, a posture), which a
+	// retried answer asks because it runs outside the delivery that would
+	// have screened it. The gate is whether this process may start the
+	// route's turn at all, and whether its first model call would only meet
+	// a limit or a budget already known, and a completion asks it as much as
+	// a retry does.
 	Gate TurnGate
 
 	// Lease is the seat lease this node holds a seat under, which a launch
@@ -1190,7 +1192,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// condition decides what the caller does with this delivery. What was
 	// signalled is read first, for the reason [Coordinator.keepRefused] gives.
 	seen := c.signalsSeen()
-	adm, err := c.admitTurn(ctx, ev.AgentHandle)
+	adm, err := c.admitTurn(ctx, ev.AgentHandle, ResumeCompletion)
 	if err != nil {
 		log.InfoContext(ctx, "sandbox_completion_not_admitted",
 			"turn_id", ev.TurnID, "agent", ev.AgentHandle, "reason", err.Error(),

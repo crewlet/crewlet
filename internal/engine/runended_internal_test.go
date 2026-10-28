@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -119,4 +121,50 @@ func planOf(t *testing.T, c *Company) *cliagent.Provider {
 		t.Fatal("no plan entry")
 	}
 	return p.(*cliagent.Provider)
+}
+
+// A RESUME WAITS ON THE CHAIN ITS FIRST CALL TAKES. A completion's first model
+// call is its reviewer's, and an answer's is the relaunch that carries its run
+// on, so a seat whose executor sits out a spent plan while its own reviewer
+// answers has a finished run to review and deliver: the gate admits its
+// completion at once, and holds an answer, whose relaunch would find every
+// runner sitting out, until the first is tried again. Spend the reviewer
+// instead and the two swap.
+//
+// Mutation: ask the executor chain for both routes, and the completion of the
+// seat whose reviewer answers waits on its executor's limit.
+func TestAResumeWaitsOnTheChainItsFirstCallTakes(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		spent              string
+		completion, answer bool
+	}{
+		"its executor spent": {spent: "plan", answer: true},
+		"its reviewer spent": {spent: "review", completion: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, seat := chainCompany(t,
+				chainMember{key: "plan", agent: "claude-code", model: "opus", spent: tc.spent == "plan"},
+				chainMember{key: "review", agent: "claude-code", model: "haiku", spent: tc.spent == "review"},
+			)
+			seat.LLM, seat.LLMReview = org.ProviderKeys{"plan"}, org.ProviderKeys{"review"}
+			e := launchReadyEngine(t, c)
+			for route, want := range map[sandbox.ResumeRoute]bool{
+				sandbox.ResumeCompletion: tc.completion, sandbox.ResumeAnswer: tc.answer,
+			} {
+				refusal, refused := e.seatCannotRun(t.Context(), "swe", route)
+				if refused != want {
+					t.Errorf("a %s's resume on a seat with %s: refused = %v (%+v), want %v",
+						route, name, refused, refusal, want)
+					continue
+				}
+				if refused && (refusal.Condition != waitProvider || refusal.Until.IsZero() ||
+					!strings.Contains(refusal.Reason, tc.spent)) {
+					t.Errorf("a %s's resume was refused as %+v, want it waiting on %q for %s's retry",
+						route, refusal, waitProvider, tc.spent)
+				}
+			}
+		})
+	}
 }

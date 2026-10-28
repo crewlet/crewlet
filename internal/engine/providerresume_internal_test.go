@@ -66,7 +66,7 @@ func TestAResumeAtItsModelsLimitIsAWaitNotAFailure(t *testing.T) {
 	withModels(t, e, entry)
 	turns := e.node.InFlightTurns()
 
-	_, release, err := e.admitResume(t.Context(), "swe")
+	_, release, err := e.admitResume(t.Context(), "swe", sandbox.ResumeCompletion)
 	if err == nil {
 		// Admitted: the slot is given back before the case fails, so the
 		// engine's stop does not wait on it.
@@ -102,7 +102,7 @@ func TestAResumeAtItsModelsLimitIsAWaitNotAFailure(t *testing.T) {
 	}
 
 	entry.limited.Store(false)
-	if _, release, err := e.admitResume(t.Context(), "swe"); err != nil {
+	if _, release, err := e.admitResume(t.Context(), "swe", sandbox.ResumeCompletion); err != nil {
 		t.Fatalf("admitResume once the limit lifted: %v", err)
 	} else {
 		release()
@@ -125,8 +125,8 @@ func TestACompletionDuringALimitIsNeverHandedBackAndResumesOnce(t *testing.T) {
 	r := newDrainRig(t)
 	var refusals atomic.Int32
 	r.gate = func(next sandbox.TurnGate) sandbox.TurnGate {
-		return func(ctx context.Context, handle string) (context.Context, func(), error) {
-			ctx, release, err := next(ctx, handle)
+		return func(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
+			ctx, release, err := next(ctx, handle, route)
 			var refused *sandbox.TurnRefused
 			if errors.As(err, &refused) && refused.Condition == waitProvider {
 				refusals.Add(1)
@@ -230,8 +230,8 @@ func newLimitedResume(t *testing.T) *limitedResume {
 	r := newDrainRig(t)
 	var admitted atomic.Int32
 	r.gate = func(next sandbox.TurnGate) sandbox.TurnGate {
-		return func(ctx context.Context, handle string) (context.Context, func(), error) {
-			ctx, release, err := next(ctx, handle)
+		return func(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
+			ctx, release, err := next(ctx, handle, route)
 			if err == nil {
 				admitted.Add(1)
 			}

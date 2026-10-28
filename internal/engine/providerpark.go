@@ -15,9 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -442,34 +444,34 @@ func (e *Engine) probeModels(ctx context.Context, c *Company, handle string, key
 	return err
 }
 
-// providerRefusing reports whether every model of handle's executor chain is
-// at a usage limit it already reported, the reason naming it and when the
-// first is tried again: the provider stage's question ASKED WITHOUT PARKING,
-// for a caller with no mail of its own to hold (a retried resume), which waits
-// for the instant rather than parks, as [Engine.budgetRefusing] answers for the
-// budget. Asked of what the entries already know ([chain.Unready]), so it
-// launches nothing; a chain whose entries know of no limit is not refusing,
-// and the resume finds out by running.
+// providerRefusing reports whether every model the first call of route's turn
+// on handle's seat could take is at a usage limit it already reported, the
+// reason naming them and when the first is tried again: the provider stage's
+// question ASKED WITHOUT PARKING, for a caller with no mail of its own to hold
+// (the turn gate a resume passes), which waits for the instant rather than
+// parks, as [Engine.budgetRefusing] answers for the budget. Asked of what the
+// entries already know ([chain.Unready]), so it launches nothing; a chain
+// whose entries know of no limit is not refusing, and the resume finds out by
+// running.
 //
-// THE SEAT'S EXECUTOR CHAIN, its `llm`, whole. A resume's first model call is
-// not always on it as such: a completion's is its reviewer's, on `llm_review`
-// where the seat names one, and an answer's is the relaunch, on the members of
-// this chain with an in-box runner. For a seat on
-// one list, the common case, the whole chain refusing is the right gate for
-// both: every member the reviewer or the relaunch could take is in it. Where
-// they differ, the gate errs on running: a chain with any ready member admits
-// the resume, and a limit it meets is found mid-turn and refused there
-// ([resumeRefusal]).
-func (e *Engine) providerRefusing(ctx context.Context, handle string) (string, time.Time, bool) {
-	c := e.Company()
-	if c == nil || c.Models == nil {
+// THE CHAIN OF THE ROUTE'S FIRST CALL ([firstCallMembers]), because the two
+// differ wherever the seat names a reviewer of its own: a seat whose executor
+// sits out a spent plan while its `llm_review` answers has a finished run to
+// review and deliver, and held on its executor's limit it waited out the
+// vendor's window, an hour at a time, with its mail behind it. A call the turn
+// makes later, a review's send-back to a spent runner, meets its own limit
+// mid-turn and waits there ([resumeRefusal]).
+func (e *Engine) providerRefusing(ctx context.Context, c *Company, handle string,
+	route sandbox.ResumeRoute,
+) (string, time.Time, bool) {
+	if c == nil || c.Models == nil || c.Org == nil {
 		return "", time.Time{}, false
 	}
-	role := e.seatRole(handle)
+	role := c.Org.AgentSeatByHandle(handle)
 	if role == nil {
 		return "", time.Time{}, false
 	}
-	members, err := c.Models.Chain(role, phase.Execute)
+	members, err := firstCallMembers(c, role, route)
 	if err != nil {
 		return "", time.Time{}, false
 	}
@@ -484,6 +486,29 @@ func (e *Engine) providerRefusing(ctx context.Context, handle string) (string, t
 		return "", time.Time{}, false
 	}
 	return limitReason(keys, retry), retry, true
+}
+
+// firstCallMembers is the chain the first model call of route's turn on
+// role's seat is made on: a completion's is its reviewer's
+// ([phase.Registry.Chain] for [phase.Review], which is the seat's `llm` where
+// it names no `llm_review`), and an answer's is the relaunch that carries the
+// run on, over the executor members a launch can take ([executorRunners],
+// against the epoch's own catalogue, as the launch picks from it). An error
+// where the chain cannot be told, which no gate refuses on: the turn finds
+// out by running.
+func firstCallMembers(c *Company, role *org.Role, route sandbox.ResumeRoute) ([]chain.Member, error) {
+	switch route {
+	case sandbox.ResumeCompletion:
+		return c.Models.Chain(role, phase.Review)
+	case sandbox.ResumeAnswer:
+		if c.catalogue == nil {
+			return nil, fmt.Errorf("engine: seat %q's epoch has no sandbox catalogue to "+
+				"launch its executor from", role.Handle())
+		}
+		return executorRunners(c, role, c.catalogue)
+	default:
+		return nil, fmt.Errorf("engine: a resume on route %q", route)
+	}
 }
 
 // limitReason is a resume's refusal for a chain at its limit.

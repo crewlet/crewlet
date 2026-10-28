@@ -26,21 +26,24 @@ var errLeaving = errors.New("the node is draining")
 const conditionDrain Condition = "drain"
 
 // turnGate is a [TurnGate] a case moves by hand: it refuses while it holds a
-// refusal, and records every admission it grants and every release of one.
+// refusal, and records the route of every resume it is asked about, every
+// admission it grants and every release of one.
 type turnGate struct {
 	mu       sync.Mutex
 	refusing bool
 	asked    int
 	granted  int
 	released int
+	routes   []ResumeRoute
 }
 
 type gateKey struct{}
 
-func (g *turnGate) admit(ctx context.Context, _ string) (context.Context, func(), error) {
+func (g *turnGate) admit(ctx context.Context, _ string, route ResumeRoute) (context.Context, func(), error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.asked++
+	g.routes = append(g.routes, route)
 	if g.refusing {
 		return nil, nil, &TurnRefused{Cause: errLeaving,
 			Refusal: Refusal{Condition: conditionDrain, Reason: errLeaving.Error()}}
@@ -68,6 +71,13 @@ func (g *turnGate) counts() (asked, granted, released int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.asked, g.granted, g.released
+}
+
+// told is the route of every resume the gate was asked about, in order.
+func (g *turnGate) told() []ResumeRoute {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.routes)
 }
 
 // gated gives the rig's coordinator a gate the case moves by hand.
@@ -130,6 +140,47 @@ func TestACompletionTheNodeWillNotAdmitIsLeftForTheNextHolder(t *testing.T) {
 			granted, released)
 	}
 	rig.finished("t1")
+}
+
+// THE GATE IS TOLD WHICH ROUTE A RESUME TAKES. The turn's first model call is
+// on a different chain on each — a completion's is its reviewer's, an answer's
+// the relaunch that carries the run on — and the engine's gate refuses a resume
+// whose models are all at their limit by asking the chain that call is made
+// on: told one route for both, it held a finished run's review for its
+// executor's limit, and admitted an answer into it.
+//
+// Mutation: tell the gate the completion route from attemptOwed, and the
+// answer's resume is asked about as a completion.
+func TestTheGateIsToldEachResumesRoute(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	gate := gated(rig)
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "fixed the flake"})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := gate.told(); !slices.Equal(got, []ResumeRoute{ResumeCompletion}) {
+		t.Errorf("a completion told the gate %v, want %v", got, []ResumeRoute{ResumeCompletion})
+	}
+	rig.finished("t1")
+
+	// The run's own completion parks it on its question; the person's answer
+	// is then tried inline, under the delivery that carried it, and again
+	// by its retry.
+	answering := newCoordRig(t)
+	answered := gated(answering)
+	answeredAndOwed(t, answering)
+	answering.fireRetries()
+	want := []ResumeRoute{ResumeCompletion, ResumeAnswer, ResumeAnswer}
+	if got := answered.told(); !slices.Equal(got, want) {
+		t.Errorf("a run parked on its question and then answered told the gate %v, want %v", got, want)
+	}
+	if !ResumeCompletion.Valid() || !ResumeAnswer.Valid() || ResumeRoute("retry").Valid() {
+		t.Error("Valid does not hold the routes to the two")
+	}
 }
 
 // AN ADMITTED RESUME RUNS UNDER ITS ADMISSION AND HOLDS IT UNTIL IT SETTLES.
@@ -422,7 +473,7 @@ func TestASignalWhileTheGateRefusesIsNotLost(t *testing.T) {
 	rig := newCoordRig(t)
 	var mu sync.Mutex
 	refused := false
-	rig.coordinator.gate = func(ctx context.Context, handle string) (context.Context, func(), error) {
+	rig.coordinator.gate = func(ctx context.Context, handle string, _ ResumeRoute) (context.Context, func(), error) {
 		mu.Lock()
 		first := !refused
 		refused = true

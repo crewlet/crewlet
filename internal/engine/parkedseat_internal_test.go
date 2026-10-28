@@ -13,8 +13,10 @@ import (
 // A PROVIDER-PARKED SEAT WITH RESUMES WAITING ON IT STAYS QUIET, and resumes
 // each of them once the park releases.
 //
-// Two answers the seat owes are both refused at the turn gate while every model
-// of its chain is at its limit. A refusal there comes after the node admitted
+// Two answers the seat owes are both refused at the turn gate while every
+// member their relaunch could take is at its limit: a coding CLI's entry that
+// sits out a spent plan, in the catalogue this node launches on. A refusal
+// there comes after the node admitted
 // the turn, so the admission is released at once, and a release that woke the
 // seat's other waiting resumes could set them waking each other for as long as
 // the limit lasts. Each refused resume waits on the provider from then on, and
@@ -26,15 +28,14 @@ func TestAProviderParkedSeatWithWaitingResumesStaysQuiet(t *testing.T) {
 	r := newDrainRig(t)
 	var asked atomic.Int32
 	r.gate = func(next sandbox.TurnGate) sandbox.TurnGate {
-		return func(ctx context.Context, handle string) (context.Context, func(), error) {
+		return func(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
 			asked.Add(1)
-			return next(ctx, handle)
+			return next(ctx, handle, route)
 		}
 	}
 	e := r.start(t)
-	entry := &spentEntry{retry: time.Now().Add(time.Hour)}
-	entry.limited.Store(true)
-	withModels(t, e, entry)
+	withLaunchModels(t, e, cliProvider(t, chainMember{key: "default", agent: "claude-code",
+		model: "opus", spent: true}))
 	stopWaiters(e)
 
 	// TWO ANSWERS THE SEAT OWES, taken over as its holder recovers it.
@@ -57,8 +58,10 @@ func TestAProviderParkedSeatWithWaitingResumesStaysQuiet(t *testing.T) {
 			"waiting resumes woke each other", more)
 	}
 
-	// THE PARK RELEASES: both are tried again, and claimed.
-	entry.limited.Store(false)
+	// THE LIMIT LIFTS, as an apply that hands the seat an entry with a plan
+	// to spend does: both are tried again, and claimed.
+	withLaunchModels(t, e, cliProvider(t, chainMember{key: "default", agent: "claude-code",
+		model: "opus"}))
 	e.readmitResumes(waitProvider)
 	eventually(t, "both answers to be claimed for their resumes", func() bool {
 		for _, id := range []string{"a1", "a2"} {

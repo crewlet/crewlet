@@ -105,8 +105,13 @@ resumed executor's record is its run's calls over the bridge, made before the
 segment that collects it, and those are the calls it inherits. The resume's
 first model call is its reviewer's, and an answer's is the relaunch that
 carries the run on, whose every runner member sitting out is the same limited
-chain; a budget that refuses either holds the resume on its window
-(`sandbox.ErrResumeHeld`), ahead of the abandon, rather than reverting it.
+chain. So the turn gate is told the resume's route and asks each of its own
+first call: a completion of its reviewer's chain and a full window, an answer
+of the runner members its relaunch can take and a window long enough for that
+launch. A budget that refuses either a round later is waited out on its
+window, ahead of the abandon: a completion is held collected in its paused box
+(`sandbox.ErrResumeHeld`), and an answer is reverted and waits uncharged in
+its own series.
 
 **The way out is the remedy #427 introduced.** The condition carries the
 `model_providers` remedy (a `caveat.Setting`), which the dashboard's link table

@@ -606,7 +606,7 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 	// resumed, so it takes no slot and does not wait out a drain to be told
 	// so.
 	seen := c.signalsSeen()
-	adm, err := c.admitTurn(ctx, run.AgentHandle)
+	adm, err := c.admitTurn(ctx, run.AgentHandle, ResumeAnswer)
 	if err != nil {
 		c.owedRefused(ctx, run, refusalOf(err), seen)
 		return
