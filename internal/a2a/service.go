@@ -44,13 +44,13 @@ func (s *Service) inbox(handle string) (uuid.UUID, bool) {
 }
 
 // Service opens channels and carries asks and answers over the durable queue.
+//
+// It does not sweep: closing an idle ask and deleting a closed one is the
+// [Sweeper]'s, the half of a channel's life that addresses nobody, which shares
+// this one's store, publisher and clock ([keeper]) and nothing else. See
+// [Sweeper] for why the capability is split at all.
 type Service struct {
-	// Sweeper is the half of a channel's life that addresses nobody —
-	// closing an idle ask and deleting a closed one. EMBEDDED rather than
-	// held beside a second copy of the store, the publisher and the clock,
-	// which is what those three are to both halves. See [Sweeper] for why
-	// the capability is split at all.
-	*Sweeper
+	keeper
 
 	dir Directory
 
@@ -67,7 +67,7 @@ type Options struct {
 
 // New builds a service.
 func New(channels Store, pub queue.Publisher, opts Options) (*Service, error) {
-	sweeper, err := NewSweeper(channels, pub, opts.Now)
+	k, err := newKeeper(channels, pub, opts.Now)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func New(channels Store, pub queue.Publisher, opts Options) (*Service, error) {
 			"addressed — wire the running company's org, or take " +
 			"NewSweeper if this caller only closes and purges channels")
 	}
-	s := &Service{Sweeper: sweeper, dir: opts.Directory, newID: opts.NewID}
+	s := &Service{keeper: k, dir: opts.Directory, newID: opts.NewID}
 	if s.newID == nil {
 		s.newID = func() string { return "a2a-" + uuid.New().String()[:12] }
 	}

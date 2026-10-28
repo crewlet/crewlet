@@ -385,23 +385,26 @@ func CounterpartyJobs(c CounterpartyStore) []Job {
 //
 // DECLARED HERE, by the caller, and narrowed to two methods — which is what
 // changed the shape of this job rather than only its type. It used to take
-// a2a.Store and call CloseIdle on it directly, and that method returns the
-// channels it closed precisely so its caller can announce them; this one threw
-// the list away, so a swept close was the one channel ending that published no
-// event at all. Closing is now asked of the SERVICE, which owns what a close
-// means on the wire, and internal/maintenance stays a scheduler of jobs rather
-// than a second author of event payloads. a2a.Service is the implementation.
+// a2a.Store and close idle channels through it directly, and that close
+// returned the channels it closed precisely so its caller could announce them;
+// this one threw the list away, so a swept close was the one channel ending
+// that published no event at all. Closing is now asked of internal/a2a, which
+// owns what a close means on the wire — and which asks, before each one,
+// whether the channel's answer is still owed — and internal/maintenance stays a
+// scheduler of jobs rather than a second author of event payloads. a2a.Sweeper
+// is the implementation.
 type Channels interface {
-	// SweepIdle closes every channel idle since before cutoff, announces
-	// each one, and reports how many it closed.
+	// SweepIdle closes every channel idle since before cutoff whose answer
+	// is no longer owed, announces each one, and reports how many it
+	// closed.
 	SweepIdle(ctx context.Context, cutoff time.Time) (int, error)
 
 	// Purge deletes channels closed before cutoff.
 	Purge(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
-// ChannelJobs is the sweep for agent-to-agent channels: close what nobody
-// answered, then delete what has been closed long enough.
+// ChannelJobs is the sweep for agent-to-agent channels: close what nobody will
+// answer, then delete what has been closed long enough.
 //
 // TWO jobs rather than one, and the order matters only in that both run
 // every tick. Closing is a state change and deleting is garbage collection —
@@ -423,7 +426,7 @@ func ChannelJobs(c Channels) []Job {
 	return []Job{
 		{
 			// The CUTOFF is what this job acts on and the tick's `now` is
-			// not: the service reads its own clock for the close instant,
+			// not: the sweeper reads its own clock for the close instant,
 			// so a channel's closed_at and the event's duration come from
 			// one reading rather than two.
 			Name: "a2a_channels_idle", Scope: Fleet, Horizon: Fixed(ChannelIdleTimeout),
