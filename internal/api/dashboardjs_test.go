@@ -1137,8 +1137,9 @@ const (
 	// that link. Steering a turn whose coding run is out, merged beside it (the
 	// shared write hook reading a press label's own sentence for its receipt,
 	// `landed`, which says when a note is read, in the seats chunk the entry
-	// loads), measured 350.9 KiB with it, under the same 352 KiB.
-	initialBudget = 352 << 10
+	// loads), measured 350.9 KiB with it (359,293 bytes), under 351 KiB:
+	// 351 KiB again, still under two seconds on that link.
+	initialBudget = 351 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
