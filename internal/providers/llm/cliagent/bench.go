@@ -53,14 +53,6 @@ import (
 // reset costs the fallback's spend, or the seats' whole afternoon where there
 // is no fallback, for every minute of it.
 //
-// # The report outlives the window
-//
-// What the vendor said is HELD ([Provider.Limit]) from the first report until
-// a call through the entry answers, or until the reset it named has passed with
-// no report since. The window ends at every probe; the report does not, so a
-// reader asking "is this entry spent, and until when?" gets one steady answer
-// for the whole afternoon instead of one that blinks off at each probe.
-//
 // A LOGIN IS NOT BENCHED. `crewlet llm login` mends it — usually from another
 // process this one hears nothing from — and the very next call must find it,
 // where a window would hold a signed-in seat on its fallback for nothing; and
@@ -92,9 +84,6 @@ type bench struct {
 	// resetsAt is when the vendor said the limit lifts, zero where it named
 	// no instant.
 	resetsAt time.Time
-	// since is when the entry was first reported limited after it last
-	// answered; zero while it is not.
-	since time.Time
 	// unnamed counts the windows sat out for reports that named no reset
 	// since the entry last answered: the step of [limitBackoff] the next
 	// one takes.
@@ -113,9 +102,6 @@ func (p *Provider) bench(reset time.Time, said string) time.Time {
 	p.sitOut.mu.Lock()
 	defer p.sitOut.mu.Unlock()
 	b := &p.sitOut
-	if b.since.IsZero() {
-		b.since = now
-	}
 	var until time.Time
 	if reset.IsZero() {
 		if now.Before(b.until) {
@@ -140,7 +126,7 @@ func (p *Provider) bench(reset time.Time, said string) time.Time {
 func (p *Provider) answered() {
 	p.sitOut.mu.Lock()
 	defer p.sitOut.mu.Unlock()
-	p.sitOut.since, p.sitOut.resetsAt, p.sitOut.unnamed = time.Time{}, time.Time{}, 0
+	p.sitOut.resetsAt, p.sitOut.unnamed = time.Time{}, 0
 }
 
 // benched is the classified refusal of a call made while the entry sits out,
@@ -154,22 +140,6 @@ func (p *Provider) benched() error {
 	}
 	return p.limited(fmt.Errorf("%s, sitting out until %s, when this entry is tried again",
 		said, until.UTC().Format(time.RFC3339)), until, resets)
-}
-
-// Limit is the limit this entry's CLI last reported and that still holds, and
-// whether there is one: from the first report until a call through the entry
-// answers, or until the reset the vendor named has passed with no report since
-// (see the file's doc for why it outlives each window).
-func (p *Provider) Limit() (llm.Limit, bool) {
-	now := p.now()
-	p.sitOut.mu.Lock()
-	defer p.sitOut.mu.Unlock()
-	b := &p.sitOut
-	if b.since.IsZero() || (!b.resetsAt.IsZero() && !now.Before(b.resetsAt) && !now.Before(b.until)) {
-		return llm.Limit{}, false
-	}
-	return llm.Limit{Key: p.key, Said: b.said, Since: b.since.UTC(),
-		RetryAt: b.until.UTC(), ResetsAt: b.resetsAt}, true
 }
 
 // classified turns a marker's hit into the call's failure: a limit sits the

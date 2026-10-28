@@ -436,24 +436,6 @@ type Error struct {
 	Err          error
 }
 
-// Limit is a provider entry's standing limit report: what its vendor said,
-// since when, when the entry is next tried and when the vendor said the limit
-// lifts. A backend that keeps one holds it from the first report until a call
-// through the entry answers (internal/providers/llm/cliagent).
-type Limit struct {
-	// Key is the providers.llm key of the entry.
-	Key string
-	// Said is the vendor's own sentence.
-	Said string
-	// Since is when the entry was first reported limited, in UTC.
-	Since time.Time
-	// RetryAt is when the entry is next tried, in UTC.
-	RetryAt time.Time
-	// ResetsAt is when the vendor said the limit lifts, in UTC; zero where
-	// it named no instant, which a person is told as "resume time unknown".
-	ResetsAt time.Time
-}
-
 // LimitedUntil reports whether err is a rate limit, and when the entry that
 // refused it is tried again and when its vendor said the limit lifts (either
 // zero where unknown): the question a caller that runs on a schedule of its

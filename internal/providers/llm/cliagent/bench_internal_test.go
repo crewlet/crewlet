@@ -207,44 +207,6 @@ func TestAnUnnamedResetBacksOffAndStartsAgainOnceAnswered(t *testing.T) {
 	}
 }
 
-// THE REPORT OUTLIVES THE WINDOW. Between the end of a window and the probe
-// that meets the limit again, the entry is still limited as far as anybody
-// reading it knows: [Provider.Limit] keeps answering with what the vendor said
-// until a call answers or the named reset passes, so nothing built on it blinks.
-//
-// Mutation: answer Limit from the window alone, and the read between the
-// window and the probe finds no limit.
-func TestTheLimitReportHoldsUntilAnAnswerOrTheNamedReset(t *testing.T) {
-	t.Parallel()
-	start := time.Date(2026, time.October, 27, 23, 16, 0, 0, time.UTC)
-	reset := start.Add(3 * time.Hour)
-	clock := &testClock{now: start}
-	p := &Provider{now: clock.read, key: "default"}
-	if _, limited := p.Limit(); limited {
-		t.Fatal("an entry nothing refused reports a limit")
-	}
-	p.bench(reset, "You've hit your 5-hour limit")
-	clock.advance(maxLimitBench + time.Second)
-	limit, limited := p.Limit()
-	if !limited || !limit.ResetsAt.Equal(reset) || !limit.Since.Equal(start) || limit.Key != "default" {
-		t.Fatalf("after the window, Limit() = %+v, %v; want the report naming %v", limit, limited, reset)
-	}
-	clock.advance(2 * time.Hour)
-	if _, limited := p.Limit(); limited {
-		t.Error("the report outlived the reset the vendor named")
-	}
-
-	p.bench(time.Time{}, "limited")
-	clock.advance(time.Hour)
-	if _, limited := p.Limit(); !limited {
-		t.Error("a report that named no reset lapsed with nothing answered")
-	}
-	p.answered()
-	if _, limited := p.Limit(); limited {
-		t.Error("the report outlived an answered call")
-	}
-}
-
 // A LATER REPORT NEVER SHORTENS THE WINDOW. Two seats' calls that both met the
 // spent plan report it, and the one that lands last must not cut the longer
 // window the first set.
