@@ -741,21 +741,3 @@ func TestALaunchThatFailsAfterItsWriteLeavesItsNotesToTheRecordsEnding(t *testin
 		t.Errorf("a late note after the close answered (%s, %v), want it filed on the record", status, err)
 	}
 }
-
-// A RESUMED SEGMENT THAT ENDS THE TURN IS REMEMBERED CLOSED: the run's record
-// goes with the run, so a note that reaches this node after it is answered
-// `closed` by the scatter — never by nobody, which the person reads as a lost
-// note to send again.
-func TestAResumedSegmentThatEndsTheTurnIsRememberedClosed(t *testing.T) {
-	t.Parallel()
-	d := mustSteerDesk(t, steerRing)
-	if _, _, _, err := d.offer(t.Context(), "run-1", steer.Note{ID: "n", Text: "x"}); err == nil {
-		t.Fatal("a desk that never held the turn answered for it")
-	}
-	d.remember("run-1", steerSeat{agent: sweAgent, handle: "swe"})
-	status, _, seat, err := d.offer(t.Context(), "run-1", steer.Note{ID: "n", Text: "x"})
-	if err != nil || status != steer.StatusClosed || seat.agent != sweAgent {
-		t.Errorf("a note to a turn a resumed segment ended answered (%s, %+v, %v), want closed",
-			status, seat, err)
-	}
-}

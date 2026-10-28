@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -52,11 +53,13 @@ func steerable(t *testing.T, e *Engine) {
 	e.steers.runs = e.runSteers
 }
 
-// reviewWatch is [scripted], recording what its reviewer is opened with.
+// reviewWatch is [scripted], recording what its reviewer is opened with — and
+// sending the round back for its first sendBack reviews.
 type reviewWatch struct {
 	scripted
-	mu      sync.Mutex
-	reviews []string
+	mu       sync.Mutex
+	reviews  []string
+	sendBack int
 }
 
 func (r *reviewWatch) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
@@ -69,7 +72,18 @@ func (r *reviewWatch) Complete(ctx context.Context, req llm.Request) (*llm.Compl
 			}
 			r.mu.Lock()
 			r.reviews = append(r.reviews, b.String())
+			back := r.sendBack > 0
+			if back {
+				r.sendBack--
+			}
 			r.mu.Unlock()
+			if back {
+				return phasedCLI{model: "scripted", pick: func([]string) llmtest.Run {
+					return calling(runner.SubmitReviewTool, map[string]any{
+						"decision": "self_iterate", "notes": "not done yet: run it again",
+					}, llmtest.DefaultUsage)
+				}}.Complete(ctx, req)
+			}
 		}
 	}
 	return r.scripted.Complete(ctx, req)
@@ -102,7 +116,12 @@ type pull func(ctx context.Context, session *mcp.ClientSession, row func() sandb
 
 func newSteerCase(t *testing.T, before pull) *steerCase {
 	t.Helper()
-	model := &reviewWatch{}
+	return newSteerCaseOn(t, &reviewWatch{}, before)
+}
+
+// newSteerCaseOn is [newSteerCase] over a model of the case's own.
+func newSteerCaseOn(t *testing.T, model *reviewWatch, before pull) *steerCase {
+	t.Helper()
 	e, _ := indicatingWith(t, notify.StatusAlways, model)
 	steerable(t, e)
 	c := &steerCase{e: e, q: e.backends.Queue.(*memory.Queue), model: model}
@@ -670,6 +689,119 @@ func TestAnEndingExpiresWaitingNotesOnceUnderStableIDs(t *testing.T) {
 	if p.events[2].ID == published[0].ID {
 		t.Error("a different ending of the turn published under the same id")
 	}
+}
+
+// A NOTE LEFT WAITING WHEN A RUN ENDS IS RECORDED EXPIRED BY THE ENGINE'S OWN
+// COORDINATOR. The engine builds the coordinator that ends its runs
+// (sandboxRuntimeOn) and hands it the step that records the run's waiting
+// notes before the record goes ([sandbox.CoordinatorOptions.SteersExpired]);
+// nothing else does it, and nothing else holds the note once the record is
+// deleted. A person who sent one and was told it waits learns what became of
+// it from that record alone. Here a person's stop ends the run its turn is
+// parked on, through the engine's own pause path, with a note filed on the
+// record that no step of the run took: one record of it, `expired`, at the
+// ending's instant — the run's stop announcement's — and none `delivered`.
+//
+// Mutation: drop SteersExpired from the engine's coordinator options, and no
+// record of the note is published.
+func TestANoteLeftWaitingWhenARunEndsIsRecordedExpiredByTheEnginesCoordinator(t *testing.T) {
+	t.Parallel()
+	c := newSteerCase(t, nil)
+	parkOnARun(t, c.e, c.rig, "run-1")
+	c.file(t, "run-1", "req-1", "use the staging database")
+
+	pause := janeStops()
+	c.e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: pause.Seat, Pause: &pause})
+	if _, found, _ := c.e.sandbox.Load().pending.Get(t.Context(), "run-1"); found {
+		t.Fatal("the stopped run is still on the record")
+	}
+
+	got := c.awaitSteered(t, 1)
+	if len(got) != 1 || got[0].NoteID != "req-1" || got[0].TurnID != "run-1" ||
+		got[0].Outcome != types.SteerExpired || got[0].Boundary != "" || got[0].LaunchID != "" {
+		t.Fatalf("the run's ending recorded %+v, want the waiting note expired, once", got)
+	}
+	// ONE ANNOUNCEMENT, on the two topics every run's announcement goes to.
+	stops := recordsOf(c.q, "run-1").runStops
+	if len(stops) == 0 || slices.ContainsFunc(stops, func(ev *events.Event) bool { return ev.ID != stops[0].ID }) {
+		t.Fatalf("the run's stop was announced as %d records, want one", len(stops))
+	}
+	if expired := c.steered()[0]; !expired.Timestamp.Equal(stops[0].Timestamp) {
+		t.Errorf("the note expired at %v, want the ending's instant %v", expired.Timestamp, stops[0].Timestamp)
+	}
+}
+
+// A RESUMED SEGMENT THAT ENDS THE TURN IS REMEMBERED CLOSED, on whichever node
+// resumed it. The run's record goes with the turn, so a note that reaches a
+// node after it is answered by the node's desk alone — and the node that
+// resumes a parked turn need not be the one that launched it, nor the same
+// process: here its desk is a fresh one, as a restarted node's is, holding
+// nothing of the turn. Its resumed segment ends the turn, and from then the
+// desk answers a note to it `closed`, naming its seat — never nobody, which a
+// person reads as a lost note to send again.
+//
+// Mutation: drop the remember from the resume, and the desk answers nothing.
+func TestAResumedSegmentThatEndsTheTurnIsRememberedClosed(t *testing.T) {
+	t.Parallel()
+	c := newSteerCase(t, nil)
+	parkOnARun(t, c.e, c.rig, "run-1")
+	restartedDesk(t, c.e)
+	if _, _, _, err := c.e.steers.offer(t.Context(), "run-1", steer.Note{ID: "n", Text: "x"}); err == nil {
+		t.Fatal("a desk that never held the turn answered for it")
+	}
+
+	if err := c.rig.collect(t, "run-1"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if _, found, _ := c.e.sandbox.Load().pending.Get(t.Context(), "run-1"); found {
+		t.Fatal("the resumed segment did not end the turn")
+	}
+	status, _, seat, err := c.e.steers.offer(t.Context(), "run-1", steer.Note{ID: "n", Text: "x"})
+	if err != nil || status != steer.StatusClosed || seat.agent != seatOf("swe").String() || seat.handle != "swe" {
+		t.Errorf("a note to the turn its resumed segment ended answered (%s, %+v, %v), want closed on swe",
+			status, seat, err)
+	}
+	if status, seat, err := c.e.steers.probe("run-1"); err != nil || status != steer.StatusClosed ||
+		seat.handle != "swe" {
+		t.Errorf("the turn's probe answered (%s, %+v, %v), want closed on swe", status, seat, err)
+	}
+}
+
+// A RESUMED SEGMENT THAT PARKS AGAIN IS NOT REMEMBERED: its turn goes on, on a
+// new run whose record is its notes' home — so the desk answers nothing for it,
+// and a note goes to the record, accepted, where a desk that called the turn
+// ended would have told the person it was over.
+//
+// Mutation: remember every resumed segment that returns, and the desk answers
+// the running turn closed.
+func TestAResumedSegmentThatParksAgainIsNotRemembered(t *testing.T) {
+	t.Parallel()
+	c := newSteerCaseOn(t, &reviewWatch{sendBack: 1}, nil)
+	// ROOM FOR THE ROUND THE REVIEW SENDS BACK.
+	c.e.Company().Config.TurnEngine.MaxIterations = 2
+	parkOnARun(t, c.e, c.rig, "run-1")
+	first := c.rig.row(t, "run-1").LaunchID
+	restartedDesk(t, c.e)
+
+	if err := c.rig.collect(t, "run-1"); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if row := c.rig.row(t, "run-1"); row.LaunchID == first || row.Status != sandbox.StatusRunning {
+		t.Fatalf("the resumed segment did not park on a run of its own: %+v (first job %s)", row.Status, first)
+	}
+	if status, _, _, err := c.e.steers.offer(t.Context(), "run-1", steer.Note{ID: "n", Text: "x"}); err == nil {
+		t.Errorf("the desk answered %s for a turn that parked again, want nothing", status)
+	}
+	c.file(t, "run-1", "req-1", "use the staging database")
+}
+
+// restartedDesk gives e a desk of its own holding nothing, as a node that
+// restarted has: every turn it knew is gone with the process.
+func restartedDesk(t *testing.T, e *Engine) {
+	t.Helper()
+	d := mustSteerDesk(t, steerRing)
+	d.runs = e.runSteers
+	e.steers = d
 }
 
 // A LAUNCHED TURN'S LATE NOTE IS FILED ON ITS RECORD. The launch hands the
