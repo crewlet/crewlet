@@ -919,6 +919,9 @@ describe("the pane", () => {
 
     test("is shown as sent while the run still waits on its question", async () => {
       await answerRun({});
+      expect(
+        document.querySelector(".crewlet-reading-pane__outcome")?.getAttribute("data-tone"),
+      ).toBe("pending");
       expect(outcome()).toBe("Answer sent. Waiting for CTO’s run to take it.");
       expect(screen.queryByRole("button", { name: "Send answer" })).toBeNull();
       expect(screen.queryByRole("button", { name: /Answered$/ })).toBeNull();
@@ -932,6 +935,9 @@ describe("the pane", () => {
 
     test("is answered once the run was resumed with it", async () => {
       await answerRun({ status: "resumed", answer_ids: ["a1"] });
+      expect(
+        document.querySelector(".crewlet-reading-pane__outcome")?.getAttribute("data-tone"),
+      ).toBe("done");
       expect(outcome()).toBe("Answered “Yes, delete it.”");
     });
 

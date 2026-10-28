@@ -787,7 +787,9 @@ function RunPane({
       {/* THE RUN'S OWN WORDS, verbatim, where the heading is only their start. */}
       {question.trim() !== heading && <ReadingPaneQuote verbatim>{question}</ReadingPaneQuote>}
       {given !== null ? (
-        <ReadingPaneOutcome>
+        // PENDING UNTIL THE RUN TOOK IT: sent, recorded or ended is never the
+        // success check a used answer gets.
+        <ReadingPaneOutcome tone={fate === "taken" ? "done" : "pending"}>
           {fate === "taken" ? (
             <>
               Answered <strong>{`“${given.text}”`}</strong>
