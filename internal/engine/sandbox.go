@@ -2187,6 +2187,11 @@ const (
 	// Lifted on the clock when the window turns over, which the refusal
 	// names, or at once by an apply that changes the ceilings.
 	waitBudget sandbox.Condition = "budget"
+
+	// waitProvider: every model of the seat's chain is at a usage limit it
+	// already reported. Lifted on the clock when the first is tried again,
+	// which the refusal names (see providerpark.go).
+	waitProvider sandbox.Condition = "provider"
 )
 
 // mayResumeAnswer is the coordinator's [sandbox.Admission]: whether a seat may
@@ -2227,6 +2232,9 @@ func (e *Engine) mayResumeAnswer(ctx context.Context, handle string) (sandbox.Re
 	}
 	if reason, resets, refusing := e.budgetRefusing(ctx, handle); refusing {
 		return sandbox.Refusal{Condition: waitBudget, Reason: reason, Until: resets}, true
+	}
+	if reason, retry, limited := e.providerRefusing(ctx, handle); limited {
+		return sandbox.Refusal{Condition: waitProvider, Reason: reason, Until: retry}, true
 	}
 	return sandbox.Refusal{}, false
 }

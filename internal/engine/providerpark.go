@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -128,6 +130,41 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 		e.releaseProviderPark(ctx, seat, "the seat's models changed while it parked")
 	}
 	return reason, true, nil
+}
+
+// providerRefusing reports whether every model of handle's executor chain is
+// at a usage limit it already reported, the reason naming it and when the
+// first is tried again: the provider stage's question ASKED WITHOUT PARKING,
+// for a caller with no mail of its own to hold (a retried resume), which waits
+// for the instant rather than parks, as [Engine.budgetRefusing] answers for the
+// budget. Asked of what the entries already know ([chain.Unready]), so it
+// launches nothing; a chain whose entries know of no limit is not refusing,
+// and the resume finds out by running.
+func (e *Engine) providerRefusing(ctx context.Context, handle string) (string, time.Time, bool) {
+	c := e.Company()
+	if c == nil || c.Models == nil {
+		return "", time.Time{}, false
+	}
+	role := e.seatRole(handle)
+	if role == nil {
+		return "", time.Time{}, false
+	}
+	members, err := c.Models.Chain(role, phase.Execute)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	providers := make([]llm.Provider, 0, len(members))
+	keys := make([]string, 0, len(members))
+	for _, m := range members {
+		providers = append(providers, m.Provider)
+		keys = append(keys, m.Key)
+	}
+	retry, _, limited := llm.LimitedUntil(chain.Unready(ctx, providers))
+	if !limited || retry.IsZero() {
+		return "", time.Time{}, false
+	}
+	return fmt.Sprintf("provider limit: %s, tried again %s", strings.Join(keys, " -> "),
+		rfc3339(retry)), retry, true
 }
 
 // providerParked is the event a park publishes, its seat fields filled by

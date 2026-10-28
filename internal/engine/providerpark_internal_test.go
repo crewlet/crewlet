@@ -314,3 +314,58 @@ func newEmptyRegistry(t *testing.T) *phase.Registry {
 	}
 	return reg
 }
+
+// knownLimit is a model whose entry already knows it is at its limit until
+// retry, as cliagent's does once its CLI reported it ([chain.Unready]).
+type knownLimit struct{ retry time.Time }
+
+func (knownLimit) Model() string { return "opus" }
+
+func (knownLimit) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	return nil, errors.New("a retried resume was run against a limit the entry already knew")
+}
+
+func (m knownLimit) Unready(context.Context) error {
+	if m.retry.IsZero() {
+		return nil
+	}
+	return &llm.Error{Kind: llm.KindRateLimit, RetryAt: m.retry, Err: errors.New("limited")}
+}
+
+// A RETRIED RESUME WAITS FOR A LIMIT THE MODELS ALREADY KNOW, until the first
+// is tried again, rather than running a turn to meet it: the admission's
+// provider condition, beside the budget's. A chain whose entries know of no
+// limit is not refused, and the resume finds out by running.
+//
+// Mutation: ask the chain nothing (answer not refusing), and the limited seat
+// is admitted.
+func TestARetriedResumeWaitsForALimitItsModelsKnow(t *testing.T) {
+	t.Parallel()
+	retry := parkedAt.Add(14 * time.Minute)
+	for name, tc := range map[string]struct {
+		model   knownLimit
+		refused bool
+	}{
+		"its models know a limit": {model: knownLimit{retry: retry}, refused: true},
+		"its models know none":    {model: knownLimit{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newParkRig(t, "100000000")
+			c := companyFor(t, strings.Replace(leadDoc, "%d", "100000000", 1))
+			reg, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: tc.model}})
+			if err != nil {
+				t.Fatalf("NewRegistry: %v", err)
+			}
+			c.Models = reg
+			r.e.epoch.current.Store(c)
+			reason, until, refused := r.e.providerRefusing(t.Context(), "lead")
+			if refused != tc.refused {
+				t.Fatalf("refused = %v (%q), want %v", refused, reason, tc.refused)
+			}
+			if refused && (!until.Equal(retry) || !strings.Contains(reason, "default")) {
+				t.Errorf("refusal (%q) lifts at %v, want the entry's retry %v", reason, until, retry)
+			}
+		})
+	}
+}
