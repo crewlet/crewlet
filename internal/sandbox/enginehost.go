@@ -67,12 +67,13 @@ func EngineAddress(box Sandbox, raw string) string {
 // [EngineAddress] hands a box in place of loopback, under Docker or under
 // Podman. In any case, as DNS compares names.
 //
-// For the engine's own listeners to admit, beside a loopback name, as the Host
-// of a call that arrives on loopback: Docker Desktop and Podman's machine on
-// macOS and Windows deliver a container's call to the engine host there,
-// under the name it dialled. Both names are in `.internal`, which ICANN keeps
-// for private use, so no public DNS answers either and no page a browser
-// loads from the internet is served under one.
+// For the tool bridge to admit, beside a loopback name, as the Host of a call
+// to a session it holds to this host's loopback (internal/api/mcpbridge):
+// Docker Desktop and Podman's machine on macOS and Windows deliver a
+// container's call to the engine host there, under the name it dialled. Both
+// names are in `.internal`, which ICANN keeps for private use, so no public
+// DNS answers either and no page a browser loads from the internet is served
+// under one.
 func EngineHostName(host string) bool {
 	return strings.EqualFold(host, dockerHostAlias) || strings.EqualFold(host, podmanHostAlias)
 }

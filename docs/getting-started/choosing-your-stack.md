@@ -81,9 +81,9 @@ seat's tools reaching it over an MCP bridge, as a detached run that outlives
 the turn. It needs more than a sign-in: a CLI with a coding-agent runner
 (`claude-code` or `opencode`) in the seat's chain, a `providers.sandbox`
 catalogue to place the run in, and a bridge its box can dial — a `direct` box
-dials the node's own listener on loopback, while a `container` or `e2b` box,
-or any box in a fleet whose node serves no API, needs `CREWLET_MCP_BRIDGE_URL`,
-the fleet's address. `crewlet llm doctor` checks all three. Every other phase —
+dials the node's own listener on loopback wherever the node binds `api.port`,
+while a `container` or `e2b` box, or a `direct` one on a node started with
+`api.port: 0`, needs `CREWLET_MCP_BRIDGE_URL`, the fleet's address. `crewlet llm doctor` checks all three. Every other phase —
 the reviewer, delegated workers and the side passes — runs the same CLI on this
 host, its shell and editor denied, calling the seat's tools over MCP. See
 [LLM Backends § Where the CLI runs](../concepts/llm-backends.md#where-the-cli-runs).
@@ -412,7 +412,7 @@ that is reached.
 
 Coding-agent choice: the coding agent **is** the CLI of the entry the seat's
 executor launches on (the first member of its `llm` chain that can run one),
-with that entry's model and that entry's sign-in, so it needs no extra secret.
+with that entry's model, its `env` and its sign-in, so it needs no extra secret.
 **Claude Code** runs a `claude-code` entry; **OpenCode** — version 2, the
 `@opencode/cli` package, in the box — runs an `opencode` entry and so any model
 OpenCode reaches. A seat whose `llm` chain holds no `claude-code` or `opencode`
@@ -429,17 +429,13 @@ calls all of its seat's tools back through the bridge at
 the engine's API published to the internet, its
 [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api)
 behind your proxy, or a tunnel to it — and never `localhost` or `127.0.0.1`.
-A proxy or tunnel on your laptop that connects to the engine on `127.0.0.1`
-has to send it a loopback `Host` (ngrok's `--host-header=rewrite`,
-cloudflared's `httpHostHeader: localhost`, Caddy's
-`header_up Host {upstream_hostport}`): the bridge answers a call that reaches
-it on the loopback under a `Host` that is neither loopback nor a container
-runtime's name for the engine host with `403 Forbidden: invalid Host header`
+A proxy or tunnel on your laptop (ngrok, cloudflared, Caddy) works as it
+comes: it may reach the engine on `127.0.0.1` and pass the public `Host` on,
+since the bridge admits a call on the token in its path
 ([The tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
 Left unset, every `e2b` launch is refused; set to an address the VM cannot
-reach, or through a hop that keeps the public `Host`, every call the run makes
-over the bridge fails, so the run has none of its seat's tools, cannot call
-`submit_work`, and is rescued as `incomplete`.
+reach, every call the run makes over the bridge fails, so the run has none of
+its seat's tools, cannot call `submit_work`, and is rescued as `incomplete`.
 Services on your laptop the run would use directly (`localhost` GitLab) need
 the same: a reachable deployment, a tunnel, or self-hosted E2B on the same
 network.

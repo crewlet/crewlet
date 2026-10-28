@@ -1360,10 +1360,10 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 			// has recovered what this node holds — see
 			// [engine.Options.Recovered].
 			opts.Recovered = listeners.recovered
-			// AND WHERE A DIRECT BOX DIALS THE BRIDGE: the listener this
-			// process bound for it, on loopback — see
-			// [engine.Options.BridgeHostURL].
-			opts.BridgeHostURL = listeners.bridgeHostURL(boot, nodeID)
+			// AND WHERE A DIRECT BOX DIALS THE BRIDGE AND THE TELEMETRY
+			// RECEIVER: the listener this process bound for them, on
+			// loopback — see [engine.Options.BoxHostURL].
+			opts.BoxHostURL = listeners.boxHostURL(boot, nodeID)
 			return engine.New(ctx, opts)
 		}, log)
 	if err != nil {
@@ -1993,17 +1993,24 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// WHAT IT GAVE UP DEPENDS ON ITS ROLES. A node with the ingress role
 		// is the one integrations and a dashboard expect to find, so
 		// without a port every integration is deaf here. A node without it
-		// serves only its probes — its seats' executor boxes reach their
-		// tools through an ingress node — and a satellite with nothing
-		// inbound is a shape an operator chooses. The roles are read
-		// off Tier A, whose answer is the presence lease's: the profile's id
-		// is the one field it does not need.
+		// serves its probes, and where it runs seats the routes its own
+		// direct boxes dial on loopback — which, given no listener, reach
+		// their tools only at the fleet's address, through an ingress node
+		// — and a satellite with nothing inbound is a shape an operator
+		// chooses. The roles are read off Tier A, whose answer is the
+		// presence lease's: the profile's id is the one field it does not
+		// need.
 		hint := "api.port is 0, so this node binds no listener: no " +
 			"orchestrator can probe it (/health, /ready)"
-		if boot.Profile("").RunsIngress() {
+		switch profile := boot.Profile(""); {
+		case profile.RunsIngress():
 			hint = "api.port is 0, so this node serves no dashboard, no REST " +
 				"API, no webhook endpoint, no probe and no executor tool " +
 				"bridge; every integration is deaf here"
+		case profile.RunsSeats():
+			hint += ", and its direct boxes have no listener of this node's to " +
+				"dial, so they reach their tools at " + mcpbridge.BaseURLVar +
+				" alone"
 		}
 		// A WARNING ONLY WHERE NOTHING ELSE WARNED. An ingress node whose
 		// DECLARED roles name ingress was told this at WARN already, by the
@@ -2041,13 +2048,16 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// The port stays the hard off switch above; this is the role saying the
 	// same thing for a node whose file sets a port for its peers' sake.
 	//
-	// Except for its PROBES, which such a node serves on api.port and
-	// nothing beside them, because an orchestrator runs every node and has
-	// to be able to restart one that wedged and wait on one that has not
-	// joined. Its seats' tool bridge is not among them: an executor box dials
-	// the fleet's bridge address, and the ingress node its call reaches
-	// relays it here over the broker (internal/api/mcpbridge). See
-	// [api.Probes].
+	// Except for its PROBES, which such a node serves on api.port, because
+	// an orchestrator runs every node and has to be able to restart one that
+	// wedged and wait on one that has not joined — and, beside them, the two
+	// routes its own direct boxes dial, the tool bridge and the telemetry
+	// receiver, to this host's loopback alone: those boxes are processes of
+	// this host, handed this listener on loopback ([nodeListeners.boxHostURL]),
+	// so a seat pool with no address of its own still runs its seats. Every
+	// other box dials the fleet's bridge address, and the ingress node its
+	// call reaches relays it here over the broker (internal/api/mcpbridge).
+	// See [api.Probes].
 	if !boot.Profile(nodeID).RunsIngress() {
 		return serveProbes(ctx, boot, e, reconciler, listeners, log)
 	}
@@ -2809,12 +2819,12 @@ func artifactOrigin(boot *config.Bootstrap, e *engine.Engine, app *api.App, node
 }
 
 // serveProbes is serveAPI for a node whose roles leave out ingress: it hands
-// api.port the node's probes, and serves nothing else.
+// api.port the node's probes, and, where it runs seats, the routes its own
+// direct boxes dial, to this host's loopback alone ([api.Probes]).
 //
-// NOT EVEN ITS SEATS' TOOL BRIDGE: a box dials the fleet's bridge address, the
-// nodes that serve the API, and the one its call reaches relays it to this node
-// over the broker (internal/api/mcpbridge) — so nothing a box needs is a route
-// on this node.
+// NOTHING ELSE, and nothing more to the network: a box off this host dials the
+// fleet's bridge address, the nodes that serve the API, and the one its call
+// reaches relays it to this node over the broker (internal/api/mcpbridge).
 func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, listeners *nodeListeners, log *slog.Logger,
 ) (*httpSurface, error) {
@@ -2836,14 +2846,29 @@ func serveProbes(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 				"artifacts; api.artifacts is bound by the ingress nodes")
 	}
 	listeners.api.serve(handler)
+	// The address this node's own direct boxes dial, empty where it hands
+	// them none — a node that runs no seats, or one bound to a single address
+	// loopback does not reach, whose boxes dial the fleet's address.
+	own := listeners.boxHostURL(boot, opts.NodeID)
+	hint := "node.roles does not include ingress, so this node serves only " +
+		"/health and /ready; webhooks, the dashboard, the REST API and the " +
+		"executors' tool bridge (" + mcpbridge.PathPrefix + "{token}, which relays a " +
+		"box's call to this node when it holds the run's seat) are a peer's " +
+		"with the ingress role"
+	if own != "" {
+		hint = "node.roles does not include ingress, so this node serves the " +
+			"network /health and /ready alone, and this host's loopback the routes " +
+			"its own direct boxes dial (" + mcpbridge.PathPrefix + "{token} and, with " +
+			"a telemetry receiver, " + auth.OTLPPrefix + "); webhooks, the dashboard, " +
+			"the REST API and the tool bridge every other box dials are a peer's " +
+			"with the ingress role"
+	}
 	log.InfoContext(ctx, "api_probes_listening", "addr", listeners.api.socket.Addr().String(),
-		"node", opts.NodeID, "roles", opts.Roles,
-		"hint", "node.roles does not include ingress, so this node serves only "+
-			"/health and /ready; webhooks, the dashboard, the REST API and the "+
-			"executors' tool bridge ("+mcpbridge.PathPrefix+"{token}, which relays a "+
-			"box's call to this node when it holds the run's seat) are a peer's "+
-			"with the ingress role")
-	return &httpSurface{server: listeners.api}, nil
+		"node", opts.NodeID, "roles", opts.Roles, "box_host_url", own, "hint", hint)
+	// AND THE BRIDGE, for the held polls the surface's stop lets go of
+	// first: a direct box's poll for its notes is held on this listener
+	// now, as on an ingress node's ([httpSurface.stop]).
+	return &httpSurface{server: listeners.api, bridge: opts.Bridge}, nil
 }
 
 // bindFunc opens the socket one of the node's listeners serves on, at the

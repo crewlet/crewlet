@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/execstate"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/skills"
@@ -175,5 +177,76 @@ func TestASkillGuardNeedsItsLoaderActive(t *testing.T) {
 	active := tools.NewSurface(phase.Execute.String(), reg.Snapshot(), []string{skills.LoaderTool})
 	if g := r.guardFor(phase.Execute, 1, active, nil); g.guard == nil {
 		t.Error("no guard was armed although the loader is active and slack_post is in the universe")
+	}
+}
+
+// A COLLECTED RUN'S GUARD HOLDS WHAT THE RUN LOADED. A collection rebuilds the
+// run's surface as the run left it, guard included, by the one rebuild every
+// segment that re-enters a run makes (rebuiltSurface): the skills the launch
+// recorded, and then every skill the run loaded over the bridge. A
+// reopened run and a carried-on run go on calling through that guard; the
+// collection calls nothing through it, and is rebuilt the same way because a
+// rebuild of its own is how the collection came to drift from the other two.
+//
+// Mutation: leave the run's bridged loads out of the collection's rebuild, and
+// its guard holds only what the launch recorded; replay a failed load, and it
+// holds a skill the run never read.
+func TestACollectedRunsGuardHoldsWhatTheRunLoaded(t *testing.T) {
+	t.Parallel()
+	registry := skills.NewRegistry()
+	for _, s := range []skills.Skill{
+		{Key: "chat-conventions", Title: "Chat conventions", Summary: "how to post",
+			Trigger: skills.Trigger{Tool: "slack_post"}, Required: true,
+			SourcePageID: "chat-conventions-page"},
+		{Key: "release-notes", Title: "Release notes", Summary: "how to announce",
+			Trigger: skills.Trigger{Tool: "slack_post"}, Required: true,
+			SourcePageID: "release-notes-page"},
+		{Key: "standups", Title: "Standups", Summary: "how to report",
+			Trigger: skills.Trigger{Tool: "slack_post"}, Required: true,
+			SourcePageID: "standups-page"},
+	} {
+		if _, err := registry.PutPage(s); err != nil {
+			t.Fatalf("PutPage %s: %v", s.Key, err)
+		}
+	}
+	reg := tools.NewRegistry()
+	for _, name := range []string{"slack_post", skills.LoaderTool} {
+		if err := reg.Register(stubTool(name), tools.OriginBuiltin); err != nil {
+			t.Fatalf("Register %s: %v", name, err)
+		}
+	}
+	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
+	r, err := New(Config{
+		Registry: reg,
+		Models:   &phase.Registry{},
+		Launcher: stubLauncher{},
+		Sessions: testHost(t),
+		Skills:   registry,
+		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
+		Resume: &Resume{
+			State: execstate.State{
+				Version: execstate.Version, Round: 1,
+				ActiveTools:  []string{"slack_post", skills.LoaderTool},
+				LoadedSkills: []string{"release-notes"},
+			},
+			Bridged: []BridgedCall{
+				{Call: ledger.Call{Name: skills.LoaderTool, Args: map[string]any{"key": "chat-conventions"},
+					Result: "Always thread your reply."}, Seq: 1},
+				{Call: ledger.Call{Name: skills.LoaderTool, Args: map[string]any{"key": "standups"},
+					Result: "no such skill", Failed: true}, Seq: 2},
+				{Call: ledger.Call{Name: "slack_post", Args: map[string]any{"channel": "C1"},
+					Result: "posted"}, Seq: 3},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, _, err := r.Resume(context.Background(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if got, want := r.loadedSkills(), []string{"chat-conventions", "release-notes"}; !slices.Equal(got, want) {
+		t.Errorf("the collected run's guard holds %v, want what the launch recorded and what "+
+			"the run loaded over the bridge, %v", got, want)
 	}
 }

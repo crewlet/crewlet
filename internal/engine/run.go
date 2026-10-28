@@ -1000,23 +1000,26 @@ type Options struct {
 	Metrics *metrics.Recorder
 
 	// OtelReceiver mints the per-run OTLP endpoints a sandbox exports to.
-	// Nil builds one from the environment; see
+	// Nil builds one from the environment and BoxHostURL; see
 	// [sandbox.BuildOtelReceiver].
 	OtelReceiver *sandbox.OtelReceiver
 
 	// Bridge serves a seat's tools to a coding agent. Nil builds one from
-	// the environment and BridgeHostURL; see [mcpbridge.Build].
+	// the environment and BoxHostURL; see [mcpbridge.Build].
 	Bridge *mcpbridge.Bridge
 
-	// BridgeHostURL is where a box on this node's own host — the `direct`
-	// cell — reaches the bridge: the node's own listener that serves the
-	// bridge's route, on loopback ([mcpbridge.Options.HostURL]). The caller
-	// that bound that listener derives it, and only on a node that serves
-	// the API: a node without the ingress role mounts no bridge route, and
-	// its seats' boxes reach their tools through an ingress node's relay at
-	// [mcpbridge.BaseURLVar]'s address. Empty there, and wherever the node
-	// binds no listener.
-	BridgeHostURL string
+	// BoxHostURL is where a box on this node's own host — the `direct` cell
+	// — reaches the two routes a box dials, the tool bridge and the
+	// telemetry receiver: the node's own listener that serves them, on
+	// loopback ([mcpbridge.Options.HostURL],
+	// [sandbox.OtelReceiverOptions.HostURL]). The caller that bound that
+	// listener derives it, on a node that runs seats: an ingress node serves
+	// the routes there to anyone, and a node without the role serves them
+	// on api.port to this host's loopback alone (internal/api's probe
+	// surface). Empty wherever the node binds no listener its own boxes
+	// reach on loopback, whose boxes then dial [mcpbridge.BaseURLVar] and
+	// [sandbox.OtelReceiverURLVar] like any other.
+	BoxHostURL string
 
 	// Backends may be supplied by a caller that already opened them and
 	// keeps their lifetime. Nil opens them from the bootstrap config, and
@@ -1238,7 +1241,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	otel := opts.OtelReceiver
 	if otel == nil {
 		otel, err = sandbox.BuildOtelReceiver(getenv(environ),
-			tokenMaterial(opts.Bootstrap))
+			tokenMaterial(opts.Bootstrap), opts.BoxHostURL)
 		if err != nil {
 			// A receiver URL that is set and unusable is a deployment
 			// that asked for in-box telemetry and would get none, so it
@@ -1254,7 +1257,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	bridge := opts.Bridge
 	if bridge == nil {
 		if bridge, err = mcpbridge.Build(getenv(environ), tokenMaterial(opts.Bootstrap),
-			opts.BridgeHostURL); err != nil {
+			opts.BoxHostURL); err != nil {
 			return nil, fmt.Errorf("engine: tool bridge: %w", err)
 		}
 	}

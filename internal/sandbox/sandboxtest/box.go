@@ -2,6 +2,7 @@ package sandboxtest
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"io"
@@ -57,6 +58,7 @@ func Box(t *testing.T, readCap int, fresh func(t *testing.T) sandbox.Sandbox) {
 		{"AFilePastTheCapIsRefusedWholeAndReadAsAStream", testAFilePastTheCapIsRefusedWholeAndReadAsAStream},
 		{"AFileAtTheCapIsReadWhole", testAFileAtTheCapIsReadWhole},
 		{"AStreamClosedEarlyIsReleased", testAStreamClosedEarlyIsReleased},
+		{"ARewriteIsNeverReadHalfDone", testARewriteIsNeverReadHalfDone},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -264,3 +266,85 @@ func testAStreamClosedEarlyIsReleased(t *testing.T, box sandbox.Sandbox, _ int) 
 		t.Errorf("closing a stream early: %v", err)
 	}
 }
+
+// A REWRITE IS NEVER READ HALF DONE. The engine writes into a box a run is
+// using: the completion poll rewrites a seat's GitHub App token file under the
+// running job, and the job's git credential helper reads that file at every
+// call. A file truncated and then written in place is empty, then part of the
+// new body, for as long as the write takes — on E2B, for as long as the upload
+// takes to cross the network — and a push that read it then authenticated
+// with nothing. So every read made while the file is rewritten again and
+// again is one whole body or the other, never a part of either.
+//
+// The two bodies differ in length and in every byte, so a read of the longer
+// one cut short, or of the shorter one over the longer one's end, is neither.
+func testARewriteIsNeverReadHalfDone(t *testing.T, box sandbox.Sandbox, _ int) {
+	path := pathIn(box, "github-token")
+	long := pattern(wholeReadBytes)
+	short := bytes.Repeat([]byte{0xff}, wholeReadBytes/3)
+	write(t, box, path, long)
+
+	// The reader reports how it ended rather than failing the test itself:
+	// only the test's own goroutine may stop it.
+	type ending struct {
+		reads int
+		torn  []byte
+		err   error
+	}
+	stop := make(chan struct{})
+	ended := make(chan ending, 1)
+	go func() {
+		for reads := 0; ; reads++ {
+			select {
+			case <-stop:
+				ended <- ending{reads: reads}
+				return
+			default:
+			}
+			got, err := box.ReadFile(context.WithoutCancel(t.Context()), path)
+			if err != nil {
+				ended <- ending{reads: reads, err: err}
+				return
+			}
+			if !bytes.Equal(got, long) && !bytes.Equal(got, short) {
+				ended <- ending{reads: reads, torn: got}
+				return
+			}
+		}
+	}()
+	var failed error
+	for i := range rewrites {
+		body := short
+		if i%2 == 1 {
+			body = long
+		}
+		if failed = box.WriteFile(t.Context(), path, body); failed != nil {
+			break
+		}
+	}
+	close(stop)
+	end := <-ended
+	if failed != nil {
+		t.Fatalf("WriteFile %s: %v", path, failed)
+	}
+	switch {
+	case end.err != nil:
+		t.Fatalf("a read made while the file was rewritten failed: %v", end.err)
+	case end.torn != nil:
+		t.Fatalf("a read made while the file was rewritten saw %d bytes that are neither body written "+
+			"(%d and %d bytes): a rewrite was read half done", len(end.torn), len(long), len(short))
+	}
+	if got, err := box.ReadFile(t.Context(), path); err != nil || !bytes.Equal(got, long) {
+		t.Errorf("after the rewrites the file holds %d bytes, %v; want the last body written, %d bytes",
+			len(got), err, len(long))
+	}
+}
+
+// rewrites is how many times [testARewriteIsNeverReadHalfDone] rewrites its
+// file under the reader. A write made in place was caught half done by two
+// rewrites in twenty runs of twenty on both local cells, and by one over the
+// E2B stub, which holds an upload's empty and half-written states as envd
+// does while its body arrives; sixteen times that is the margin for a runner
+// the race detector and its neighbours slow down, at well under a second for
+// E2B's two requests a write.
+const rewrites = 32

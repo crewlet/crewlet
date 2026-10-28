@@ -749,6 +749,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		Engine:        req.Engine,
 		Ended:         req.Ended,
 		Asked:         req.Asked,
+		Lost:          req.Lost,
 	})
 }
 
@@ -875,6 +876,10 @@ type resumeInput struct {
 	// Asked is the question a person's answer resumes the run from, which
 	// the turn carries the run on with — see [sandbox.ResumeRequest.Asked].
 	Asked *sandbox.AskedRun
+
+	// Lost is the loss a lost job's round is carried on from — see
+	// [sandbox.ResumeRequest.Lost].
+	Lost *sandbox.LostRun
 }
 
 // resumeTurn re-enters a suspended turn.
@@ -1050,8 +1055,10 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// the only record of what the phase did — its submission included.
 		Bridged: bridgedCalls(in.Run.BridgeCalls),
 		// AND A PERSON'S ANSWER, which carries the run on rather than
-		// reporting it — see [runner.Asked].
+		// reporting it — see [runner.Asked] — or the loss of its job with its
+		// host, which carries its round on ([runner.Lost]).
 		Asked: runnerAsked(in.Asked),
+		Lost:  runnerLost(in.Lost),
 		// AND EVERY NOTE THE TURN HAS READ, off the record every read is
 		// written on — the briefs', the run's own and earlier reviews'.
 		Steered: e.runSteers.carried(in.Run),
@@ -1372,6 +1379,15 @@ func runnerAsked(asked *sandbox.AskedRun) *runner.Asked {
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
 	}
+}
+
+// runnerLost is the coordinator's account of a lost job in the runner's terms,
+// nil for a resume no loss drove.
+func runnerLost(lost *sandbox.LostRun) *runner.Lost {
+	if lost == nil {
+		return nil
+	}
+	return &runner.Lost{Why: lost.Why, BoxKept: lost.BoxKept, Losses: lost.Losses, Limit: lost.Limit}
 }
 
 // noteRunEnded sits out the entry a collected run launched on, where the run
@@ -2108,6 +2124,12 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// as stopped, by whichever node finishes the run's ending — see
 		// runstop.go.
 		CloseStopped: e.closeStoppedTurn,
+		// AND A TURN LOST WITH ITS RUN — the run's box gone, its
+		// suspension never recorded, its tail abandoned — tells the
+		// colleague whose ask it took up that it was lost, by whichever
+		// node finishes the run's ending: no frame of that turn is left to
+		// answer. See a2a.go.
+		TurnLost: e.answerLostTurn,
 		// A seat's inbox is held while one of its runs holds it or an
 		// answer's resume is owed, and a retried resume asks the seat's
 		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].
@@ -3221,10 +3243,11 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 //   - The MODEL, so the agent addresses the model the seat runs on rather
 //     than its catalogue's default — the entry's model exactly as its runs
 //     on this host name it, for its own CLI only.
-//   - A TOKEN OR A KEY, in the run environment, which reaches any box
-//     including a remote one: it is one scoped, revocable variable — a
-//     subscription's headless token, an api-key entry's key, or a key the
-//     entry's env names.
+//   - The ENTRY'S ENVIRONMENT, in the run environment beneath the seat's,
+//     which reaches any box including a remote one: its env — a gateway's
+//     base URL, a cloud switch and its region, a provider's key — and its
+//     sign-in, each a scoped, revocable variable: a subscription's headless
+//     token, an api-key entry's key.
 //   - The credential FILES, only as a host-path map the LOCAL backend seeds
 //     and writes back. They carry a refresh token whose rotation is shared
 //     fleet state, so pushing them onto somebody else's VM is a materially
@@ -3242,13 +3265,13 @@ type codingRun struct {
 //
 // ONE CONSTRUCTION for a seat's executor run and the Dashboard Assistant's
 // deep work on its own entry ([assistantDeep.Run]), which brings no seat
-// environment: a box signs in the same way whoever launched it.
+// environment: a box is handed its entry the same way whoever launched it.
 //
 // THE PICKED MEMBER, never a second resolution of the chain: the runner the box
 // runs IS that member's CLI, so its model, written in that CLI's own grammar,
-// and its sign-in, which that CLI reads, are always ones the runner can use —
-// and a launch that fell back past the head runs on the member it fell back
-// to, with that member's login rather than the head's.
+// and its env and sign-in, which that CLI reads, are always ones the runner can
+// use — and a launch that fell back past the head runs on the member it fell
+// back to, with that member's environment and login rather than the head's.
 func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun {
 	// THE MODEL AS THE ENTRY'S RUNS ON THIS HOST PASS IT, AND THE CLI IT IS
 	// WRITTEN FOR. An entry's model is in that CLI's own grammar — OpenCode
@@ -3256,12 +3279,14 @@ func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun
 	// the exact string every other phase's run on the entry gives the CLI,
 	// resolved and rendered as they render it.
 	//
-	// No base URL: an entry has none of its own — the CLI talks to its
-	// vendor, and declaring a custom provider for it would point a coding
-	// agent at an endpoint nothing is serving.
+	// No provider of the engine's declaring: the CLI reaches the model the
+	// way the entry's own calls do, its vendor's endpoint or the one a base
+	// URL in the entry's env names, which the run environment carries — a
+	// provider the engine declared beside it would shadow the one the model
+	// names.
 	run := codingRun{
 		model: agent.ModelArgument(),
-		env:   underlay(seatEnv, entrySignIn(agent, seatEnv)),
+		env:   underlay(seatEnv, entryEnv(agent, seatEnv)),
 		files: agent.SandboxCredentials(),
 	}
 	// A LOGIN THE CLI KEEPS IN ITS OWN DATABASE travels as the document its
@@ -3277,28 +3302,61 @@ func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun
 	return run
 }
 
-// entrySignIn is the sign-in an entry contributes to a run's environment,
-// beneath what the seat brought: its headless token, its API key, or the
-// provider key its env names ([cliagent.Provider.SandboxEnv]).
+// entryEnv is what an entry contributes to a run's environment, beneath what
+// the seat brought: its whole env with its sign-in — its headless token, its
+// API key, a provider key or a gateway's address in its env
+// ([cliagent.Provider.SandboxEnv]).
 //
-// UNDERLAID BY NAME, so a variable the seat names in role.sandbox.env wins.
-// For OpenCode that is the whole rule: it reads one key per model provider,
-// and the provider the run's model names reads the one variable it reads.
+// UNDERLAID BY NAME, so a variable the seat names in role.sandbox.env or a
+// setup step wins. For OpenCode that is the whole rule: it reads one key per
+// model provider, and the provider the run's model names reads the one
+// variable it reads.
 //
-// ONE UNIT FOR CLAUDE CODE: when the seat's own environment already signs
-// Claude Code in ([codingagent.ClaudeCodeCredentialEnv]), the entry adds
-// nothing. Claude Code has several sign-ins under different names and ranks
-// them — a cloud toggle routes away from the Anthropic API altogether, and
-// ANTHROPIC_API_KEY outranks a plan's CLAUDE_CODE_OAUTH_TOKEN — so underlaying
-// by name cannot see that a seat is already signed in. An api-key entry's key
-// underlaid beside a seat's own plan token silently moved that seat onto the
-// company's metered key, and beside a Bedrock toggle it rode into a box that
-// never reads it.
-func entrySignIn(agent *cliagent.Provider, seatEnv map[string]string) map[string]string {
-	if agent.Agent() == codingagent.ClaudeCodeName && signsIn(seatEnv, codingagent.ClaudeCodeCredentialEnv) {
-		return nil
+// ONE UNIT FOR CLAUDE CODE'S SIGN-IN: when the seat's own environment already
+// signs Claude Code in ([codingagent.ClaudeCodeCredentialEnv]), the entry adds
+// none of its own ([entrySignInName]). Claude Code has several sign-ins under
+// different names and ranks them — a cloud toggle routes away from the
+// Anthropic API altogether, and ANTHROPIC_API_KEY outranks a plan's
+// CLAUDE_CODE_OAUTH_TOKEN — so underlaying by name cannot see that a seat is
+// already signed in. An api-key entry's key underlaid beside a seat's own plan
+// token silently moved that seat onto the company's metered key, and beside a
+// Bedrock toggle it rode into a box that never reads it.
+//
+// THE REST OF THE ENTRY'S ENV STILL LIES BENEATH IT. A base URL, a region or
+// a proxy says where the run's requests go, not whom they are made as, so a
+// seat that signs in with its own token still reaches its model the way the
+// entry routes every call — a company's gateway included — and a seat meant
+// to bypass it names the variable itself. Dropped whole for such a seat, as
+// the entry's sign-in alone once was, its run would lose the gateway every
+// other phase of its entry goes through.
+func entryEnv(agent *cliagent.Provider, seatEnv map[string]string) map[string]string {
+	env := agent.SandboxEnv()
+	if agent.Agent() != codingagent.ClaudeCodeName || !signsIn(seatEnv, codingagent.ClaudeCodeCredentialEnv) {
+		return env
 	}
-	return agent.SandboxEnv()
+	for name := range env {
+		if entrySignInName(agent, name) {
+			delete(env, name)
+		}
+	}
+	return env
+}
+
+// entrySignInName reports whether name is part of a Claude Code entry's
+// sign-in, which a seat signing Claude Code in itself replaces as one unit
+// ([entryEnv]): a name Claude Code signs in by, its cloud toggles included
+// ([codingagent.ClaudeCodeCredentialEnv]); the profile's own token or key
+// variable, which an override may have renamed
+// ([cliagent.Provider.CredentialEnvNames]); and any credential-named variable
+// ([cliprofile.IsCredentialName]) — a cloud sign-in's own key, such as
+// Bedrock's AWS_BEARER_TOKEN_BEDROCK or the AWS key pair, which with the
+// entry's toggle gone no request of the run reads, and which would sit in a
+// box whose agent runs with every permission as a company credential the
+// seat's run never uses.
+func entrySignInName(agent *cliagent.Provider, name string) bool {
+	return slices.Contains(codingagent.ClaudeCodeCredentialEnv, name) ||
+		slices.Contains(agent.CredentialEnvNames(), name) ||
+		cliprofile.IsCredentialName(name)
 }
 
 // signsIn reports whether env carries a non-blank value under any of names.
@@ -3372,10 +3430,12 @@ func entrySignsIn(agent *cliagent.Provider, env map[string]string) bool {
 		return true
 	}
 	// CLAUDE CODE'S OTHER SIGN-INS COUNT TOO — a bearer token, a Bedrock,
-	// Vertex AI or Foundry toggle — because a seat that brought one is handed
-	// none of the entry's ([entrySignIn]). Judged by the profile's two names
-	// alone, that seat's remote run was refused as signed in to nothing when
-	// it was signed in to its own cloud.
+	// Vertex AI or Foundry toggle — whether the seat brought one, which is then
+	// handed none of the entry's sign-in ([entryEnv]), or the entry's own env
+	// carries it into the box: a gateway's bearer token, a cloud of the
+	// company's. Judged by the profile's two names alone, such a remote run was
+	// refused as signed in to nothing when it was signed in to its gateway or
+	// its cloud.
 	if agent.Agent() == codingagent.ClaudeCodeName && signsIn(env, codingagent.ClaudeCodeCredentialEnv) {
 		return true
 	}

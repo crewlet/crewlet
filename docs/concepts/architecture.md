@@ -294,9 +294,11 @@ projection shows and what the store keeps are two questions with two answers.
 
 **The API is served inside the engine's process, and only there.** `crewlet run`
 builds it over the engine's own store, broker and coordination plane; a node
-without the `ingress` role serves only its two
+without the `ingress` role serves the network only its two
 [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on
-`api.port`, and a node with `api.port: 0` serves nothing at all. `node.roles` changes what the engine
+`api.port` — and its own boxes, beside them, the tool bridge and the telemetry
+receiver to its own host's loopback alone — and a node with `api.port: 0`
+serves nothing at all. `node.roles` changes what the engine
 *does*, never whether there is one, so every API answers its node's in-flight
 count, seats, posture and applied epoch rather than reporting them as
 unknowable.

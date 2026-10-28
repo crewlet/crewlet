@@ -198,8 +198,9 @@ func (r *runRig) collect(t *testing.T, turnID string) error {
 	if !ok {
 		t.Fatalf("run %s is on %q, which the rig has no runner for", turnID, row.CodingAgent)
 	}
-	if done, err := runner.Poll(t.Context(), nil, sandbox.RunHandle{CommandID: row.CommandID}); err != nil || !done {
-		t.Fatalf("polling run %s: done %v, %v", turnID, done, err)
+	if state, err := runner.Poll(t.Context(), nil, sandbox.RunHandle{CommandID: row.CommandID}); err != nil ||
+		state != sandbox.JobEnded {
+		t.Fatalf("polling run %s: %v, %v; want it ended", turnID, state, err)
 	}
 	row = r.row(t, turnID)
 	completion := types.SandboxRunCompleted{

@@ -2599,8 +2599,9 @@ For an entry some agent seat's executor chain holds, `doctor` also prints
 runner — only `claude-code` and `opencode` do, and another CLI is skipped at
 launch and serves those seats' phases on this host only, which is a line and
 not a problem; and the tool bridge its box dials — for a `direct` cell this
-node's own listener on loopback where the node serves the API, and for any
-other cell `CREWLET_MCP_BRIDGE_URL`, whose absence there is a problem, since
+node's own listener on loopback where the node binds `api.port`, whatever its
+roles, and for any other cell `CREWLET_MCP_BRIDGE_URL`, whose absence there is
+a problem, since
 every launch on that entry would be refused
 ([The executor's run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box)).
 

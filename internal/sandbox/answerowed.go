@@ -341,7 +341,10 @@ func (r Reply) answerOf(now time.Time) (AnswerWords, RecordedAnswer) {
 	who := chatAnswerer(r.trigger())
 	words := AnswerWords{
 		// Redacted HERE, at the one place the reply becomes a record a
-		// second store keeps: it is spliced into a phase record verbatim.
+		// second store keeps: it is sealed onto the run's row, and handed
+		// as it is to the run's coding CLI — the asking session's next
+		// message, or a fresh run's brief — which the box and the CLI's
+		// own session keep.
 		Text: redact.Secrets(r.Text), Via: types.AnswerViaChat,
 		By: who.by, ByKind: who.kind, OperatorID: who.operatorID,
 	}

@@ -244,24 +244,30 @@ func TestARunOnAStoppedSeatIsNotServedAgainByTheNodeThatRecoversIt(t *testing.T)
 	}
 }
 
-// A RUN WHOSE BOX WENT WITH ITS NODE IS NOT SERVED ITS TOOLS AGAIN by the node
-// that recovers it: the fleet found the node its box was on gone for good
-// ([sandbox.PendingRun.LaunchNodeGone]), so there is no box left to call
-// anything, and the completion the fleet announced ends the run the moment the
-// seat's mailbox opens.
+// A RUN WHOSE JOB WAS LOST IS NOT SERVED ITS TOOLS AGAIN by the node that
+// recovers it: its job went with its host — killed by the restart this node
+// is recovering from, its box gone, or its node gone from the fleet
+// ([sandbox.PendingRun.Lost]) — so nothing in a box is left to call anything,
+// and the completion announced for it carries its round on in a job of its
+// own the moment the seat's mailbox opens.
 //
 // Mutation: drop the verdict check from reopenAgentRun, and the recovery opens
-// a session for a box that is not there.
-func TestARunWhoseBoxWentWithItsNodeIsNotServedAgain(t *testing.T) {
+// a session for a job that is not there.
+func TestARunWhoseJobWasLostIsNotServedAgain(t *testing.T) {
 	t.Parallel()
-	run := launchRecoverable(t)
-	run.restart()
-	row := run.row(t)
-	row.LaunchNodeGone = time.Now().UTC()
+	for _, cause := range sandbox.LossCauses {
+		t.Run(string(cause), func(t *testing.T) {
+			t.Parallel()
+			run := launchRecoverable(t)
+			run.restart()
+			row := run.row(t)
+			row.Lost = &sandbox.JobLoss{Cause: cause, At: time.Now().UTC()}
 
-	run.e.reopenAgentRun(t.Context(), row)
+			run.e.reopenAgentRun(t.Context(), row)
 
-	if live := run.e.bridge.Live(); live != 0 {
-		t.Fatalf("the recovery opened %d sessions for a run whose box went with its node", live)
+			if live := run.e.bridge.Live(); live != 0 {
+				t.Fatalf("the recovery opened %d sessions for a run whose job was lost", live)
+			}
+		})
 	}
 }

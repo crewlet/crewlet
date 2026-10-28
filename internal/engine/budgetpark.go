@@ -110,17 +110,7 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 		// No counter, or nothing to refuse with.
 		return "", false, nil
 	}
-	r, refusing, err := m.refusing(ctx)
-	starved := false
-	if err == nil && !refusing {
-		// AND A WINDOW TOO SHORT FOR A LAUNCH, which every turn makes: a
-		// seat with room left but less than the executor floor refuses
-		// every turn at its launch ([executorHeadroom]), and a seat that
-		// is not parked takes each redelivery into the same refusal until
-		// the broker dead-letters it. Parked, it waits for the window that
-		// starves it to turn over, exactly as for a full one.
-		r, starved, err = m.starved(ctx)
-	}
+	r, refusing, starved, err := m.parks(ctx)
 	if err != nil {
 		log.WarnContext(ctx, "budget_park_unknown", "seat", handle, "error", err,
 			"detail", "the counters could not be read, so the delivery runs and "+
@@ -176,6 +166,28 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 		e.releaseBudgetPark(ctx, seat, "the ceilings changed while it parked")
 	}
 	return reason, true, nil
+}
+
+// parks reports the window that parks a seat's mail, and which of the two
+// conditions holds it there: a capped window refusing outright, or — where none
+// is — one leaving less room than an executor launch needs ([meter.starved]).
+//
+// AND A WINDOW TOO SHORT FOR A LAUNCH, which every turn makes: a seat with room
+// left but less than the executor floor refuses every turn at its launch
+// ([executorHeadroom]), and a seat that is not parked takes each redelivery
+// into the same refusal until the broker dead-letters it. Parked, it waits for
+// the window that starves it to turn over, exactly as for a full one.
+//
+// ONE RULE for the two readers that ask it: the budget stage that parks a
+// seat's mail ([Engine.budgetPark]), and the idle sweep asking whether an ask
+// waiting in that mail is still owed its answer ([colleagueOwed]). Three-valued
+// as both its halves are.
+func (m *meter) parks(ctx context.Context) (r refusal, refusing, starved bool, err error) {
+	r, refusing, err = m.refusing(ctx)
+	if err == nil && !refusing {
+		r, starved, err = m.starved(ctx)
+	}
+	return r, refusing, starved, err
 }
 
 // budgetHold is what a seat's budget holds a resumed turn back for: a capped

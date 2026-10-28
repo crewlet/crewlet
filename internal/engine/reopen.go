@@ -57,19 +57,20 @@ import (
 // nothing. A pause this node has not read yet is no stop: the session is
 // opened, and the stop that arrives with the pauses closes it.
 //
-// # Nor one whose box went with its node
+// # Nor one whose job was lost with its host
 //
-// A run whose box was on the host of a node the fleet found gone carries that
-// verdict on its row ([sandbox.PendingRun.LaunchNodeGone]): there is no box
-// left to call anything, and the completion the fleet announced for it ends
-// the run as lost the moment the seat's mailbox opens. A session opened for it
-// would serve nobody.
+// A run whose job was lost — killed with its engine by a restart, its box gone
+// from its host, or its launch node gone from the fleet — carries that verdict
+// on its row ([sandbox.PendingRun.Lost]): nothing in a box is left to call
+// anything, and the completion announced for it carries its round on in a job
+// of its own, which opens a session of its own, the moment the seat's mailbox
+// opens. A session opened for the lost job would serve nobody.
 //
 // NEVER AN ERROR to the recovery that calls it: the seat is this node's
 // whatever becomes of one run's bridge, and the run is still collected when it
 // ends. What could not be opened is said, with why.
 func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
-	if run.Ending != nil || !run.LaunchNodeGone.IsZero() {
+	if run.Ending != nil || run.Lost != nil {
 		return
 	}
 	if seat, err := e.seatID(run.AgentHandle); err == nil && e.stopFor(seat, run.AgentHandle) != nil {

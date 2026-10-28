@@ -78,9 +78,10 @@ type BoxReader interface {
 // NOT A FAILURE OF THE BOX, which is why a collection handed it gives its
 // claim back UNCOUNTED and acknowledges the completion: the host announces the
 // completion again on its own next poll once it is back, and a host that never
-// comes back is found gone by the fleet's waiter, which ends the run as
-// [types.SandboxFailureLaunchNodeGone] ([Waiter.goneAfter]). Counted, a host
-// that restarted for a minute would have its runs given up as unreadable.
+// comes back is found gone by the fleet's waiter, which has the run's round
+// carried on in a box of its own ([Waiter.goneAfter], [LossLaunchNodeGone]).
+// Counted, a host that restarted for a minute would have its runs given up as
+// unreadable.
 var ErrBoxHostSilent = errors.New("sandbox: the node whose host the box is on did not answer")
 
 // ErrBoxNotHosted is a box read refused by the node asked: the run is not one

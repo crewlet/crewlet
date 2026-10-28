@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -94,14 +93,14 @@ type Request struct {
 	Header http.Header `json:"header,omitempty"`
 	Body   []byte      `json:"body,omitempty"`
 
-	// RemoteAddr is the client's address as the entry saw it, and
-	// LocalAddr the entry's own, with its network: both are what a handler
-	// reads off a request it was handed directly — a DNS-rebinding check
-	// compares the local address with the Host — so the holder's handler
-	// is handed the same.
-	RemoteAddr   string `json:"remote_addr,omitempty"`
-	LocalAddr    string `json:"local_addr,omitempty"`
-	LocalNetwork string `json:"local_network,omitempty"`
+	// RemoteAddr is the client's address as the entry saw it, which a
+	// handler reads off a request it was handed directly, so the holder's
+	// handler is handed the same. The ENTRY'S own address is not carried:
+	// no holder's handler judges a call by the interface it arrived on,
+	// and the one call that would be judged by where it came from — one
+	// to a bridge session admitted from its holder's loopback alone — is
+	// never relayed (internal/api/mcpbridge).
+	RemoteAddr string `json:"remote_addr,omitempty"`
 }
 
 // ErrTooLarge is a request body over [MaxBody]. The caller answers it 413.
@@ -121,14 +120,10 @@ func Read(r *http.Request) (*Request, error) {
 			return nil, ErrTooLarge
 		}
 	}
-	req := &Request{
+	return &Request{
 		Method: r.Method, URI: r.URL.RequestURI(), Host: r.Host,
 		Header: withoutHopByHop(r.Header), Body: body, RemoteAddr: r.RemoteAddr,
-	}
-	if local, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok && local != nil {
-		req.LocalAddr, req.LocalNetwork = local.String(), local.Network()
-	}
-	return req, nil
+	}, nil
 }
 
 // hopByHop is what a relay never carries: the headers that describe one
@@ -154,13 +149,6 @@ func withoutHopByHop(h http.Header) http.Header {
 	}
 	return out
 }
-
-// addr is a network address carried by name: what [Request.LocalAddr] becomes
-// on the holder.
-type addr struct{ network, address string }
-
-func (a addr) Network() string { return a.network }
-func (a addr) String() string  { return a.address }
 
 // --- the two signed channels ----------------------------------------------
 

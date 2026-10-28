@@ -143,8 +143,9 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	if e.bridge == nil {
 		return runner.Launched{}, fmt.Errorf("an executor needs a tool bridge its box can dial, "+
 			"and this node has none: set %s to the fleet's address a box can reach (any node "+
-			"serving the API, or a load balancer in front of them); a direct box on a "+
-			"node that serves the API reaches it on loopback without it",
+			"serving the API, or a load balancer in front of them); a direct box reaches "+
+			"this node's own listener on loopback without it wherever the node binds "+
+			"api.port on every interface or on loopback",
 			mcpbridge.BaseURLVar)
 	}
 	// A BRIDGE NOTHING REACHES IS REFUSED BY NAME, because the settings it
@@ -314,7 +315,9 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		Label: l.turn.Task,
 		// A RUN CARRIED ON WITH A PERSON'S ANSWER, continued in its own
 		// session where the launch runs it in the asking run's box — see
-		// [runner.Asked].
+		// [runner.Asked] — or a ROUND CARRIED ON after its job was lost with
+		// its host, in a session of its own ([runner.Lost]). Either keeps the
+		// round's calls on the row.
 		Continue:    sandboxContinuation(req.Continue),
 		SteerSeat:   e.runSteers.anchor(ref.TurnID, ref.AgentID, ref.AgentHandle),
 		BriefNotes:  brief,

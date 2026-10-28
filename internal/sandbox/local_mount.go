@@ -39,7 +39,7 @@ import (
 // containerProbeTimeout bounds the runtime queries around a box's creation:
 // the rootless probe and the in-box half of the mount proof.
 //
-// Short on purpose, and shorter than [controlTimeout]. Both run against a
+// Short on purpose, and shorter than [ControlTimeout]. Both run against a
 // daemon this process is about to ask for a container anyway, so a daemon slow
 // enough to blow this is a create that is about to fail regardless — the only
 // thing a longer bound would buy is a later error. Ten seconds is well past a
@@ -147,7 +147,7 @@ func verifyMount(ctx context.Context, box execer, layout boxLayout) error {
 	}
 	token := uuid.NewString()
 	fromEngine := filepath.Join(metaName, "mount-probe")
-	if err = writeIn(home, fromEngine, []byte(token)); err != nil {
+	if err = replaceIn(home, fromEngine, []byte(token)); err != nil {
 		return localErrorf("container sandbox %s could not write its mount probe: %v",
 			layout.id, err)
 	}
@@ -174,7 +174,7 @@ func verifyMount(ctx context.Context, box execer, layout boxLayout) error {
 
 	// The box made this directory; the engine now has to live in it.
 	made := filepath.Join(metaName, "mount-probe.d")
-	writeErr := writeIn(home, filepath.Join(made, "from-engine"), []byte(token))
+	writeErr := replaceIn(home, filepath.Join(made, "from-engine"), []byte(token))
 	removeErr := home.RemoveAll(made)
 	if writeErr != nil || removeErr != nil {
 		detail := writeErr

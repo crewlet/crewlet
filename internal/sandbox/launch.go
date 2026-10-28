@@ -183,20 +183,21 @@ type LaunchRequest struct {
 	ProviderKey string
 
 	// Continue is set when this job CONTINUES the job before it, which
-	// parked on a person's question that has now been answered — and so is
-	// the same round of the turn, carried on rather than begun again. Nil
-	// for every other launch.
+	// parked on a person's question that has now been answered, or was lost
+	// with its host ([PendingRun.Lost]) — and so is the same round of the
+	// turn, carried on rather than begun again. Nil for every other launch.
 	//
 	// The job continues the asking job's own CLI session where it runs in
 	// that job's box — the session lives there — with Continue.Brief, the
 	// answer, as its next prompt ([RunRequest.Resume]). Where it
 	// does not — the box was reclaimed while the question waited, or this
-	// launch runs another CLI or cell — it starts fresh with Brief, which
-	// then carries the question, the answer and the pushed branch; the
-	// decision is the launch's, made once it knows which box it has
-	// ([Coordinator.acquire]). And either way the row keeps the round's
-	// bridged calls: the ones made before the question are this round's
-	// too ([PendingRun.Continues]).
+	// launch runs another CLI or cell, or the job before it was lost, whose
+	// session names none — it starts fresh with Brief, which then carries
+	// the question and the answer, or how the job before it was cut off, and
+	// where its work is; the decision is the launch's, made once it knows
+	// which box it has ([Coordinator.acquire]). And either way the row keeps
+	// the round's bridged calls: the ones made before the question, or the
+	// loss, are this round's too ([PendingRun.Continues]).
 	Continue *Continuation
 
 	// Fence is the launching turn's own seat fence — its seat still held
@@ -292,12 +293,12 @@ type Opening struct {
 	Steer SteerWiring
 }
 
-// Continuation is how a job continues the asking job before it — see
+// Continuation is how a job continues the job before it — see
 // [LaunchRequest.Continue].
 type Continuation struct {
 	// SessionID is the asking job's CLI session ([PendingRun.SessionID]).
-	// Empty where its CLI named none, which continues nothing: the job
-	// starts fresh with the launch's Brief.
+	// Empty where its CLI named none, or the job before was lost, which
+	// continues nothing: the job starts fresh with the launch's Brief.
 	SessionID string
 	// Brief is the prompt the continued session is given: the answer, and
 	// what to do with it.
@@ -887,16 +888,19 @@ const agentRunNote = "You are running inside a command-line coding tool as one s
 // its own collector directly has said so deliberately — silently overriding
 // it would be the engine choosing where somebody else's telemetry goes.
 //
-// THE ENDPOINT IS THE RECEIVER'S AS BOX DIALS IT ([EngineAddress]): the
-// receiver's base is written in the engine host's network, and a loopback
-// one reaches nothing from inside a container. An operator's own value is
-// left as written, in the box's network already.
+// THE ENDPOINT IS THE RECEIVER'S AS BOX DIALS IT: a `direct` box, a process of
+// this host, exports to its node's own listener where the node forwards, and
+// every other box to the fleet's address ([OtelReceiver.Reaches]); that
+// address is written in the engine host's network, and a loopback one reaches
+// nothing from inside a container ([EngineAddress]). An operator's own value
+// is left as written, in the box's network already.
 func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) map[string]string {
 	if m.telemetry == nil {
 		return req.Spec.Env
 	}
 	added := m.telemetry.RunEnv(req.Turn.TraceID, req.Turn.SpanID,
-		req.Turn.TurnID, req.Turn.AgentHandle, otelTokenTTL(req.Spec))
+		req.Turn.TurnID, req.Turn.AgentHandle, req.Spec.Placement == Direct,
+		otelTokenTTL(req.Spec))
 	if len(added) == 0 {
 		return req.Spec.Env
 	}

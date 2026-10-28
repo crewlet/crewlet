@@ -343,7 +343,16 @@ type LLMProvider struct {
 	// child gets an ALLOWLISTED environment, not the engine's, so anything
 	// the CLI needs beyond PATH, locale, TLS and proxy is declared here —
 	// for OpenCode, the key of the provider its model names.
-	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Extra environment for the CLI child process."`
+	//
+	// EVERY INVOCATION INCLUDES A SEAT'S EXECUTOR RUN, in whichever cell its
+	// box is: the whole map is exported into the box with the entry's
+	// sign-in, beneath the seat's role.sandbox.env, which wins a name — so a
+	// gateway's base URL and bearer token, or a cloud provider's switch and
+	// region, reach the run as they reach every other phase. A seat that signs
+	// Claude Code in itself replaces the entry's sign-in whole, its
+	// credential-named variables and cloud toggles included, and keeps the
+	// rest.
+	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Extra environment for the CLI, on this host and in every executor run's box (beneath the seat's role.sandbox.env)."`
 
 	Auth CLIAgentAuth `yaml:"auth,omitempty" json:"auth"`
 

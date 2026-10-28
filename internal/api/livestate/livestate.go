@@ -323,10 +323,11 @@ type LiveState struct {
 	// phase that finished, which nothing would ever clear.
 	//
 	// The timestamp is what makes this safe for a phase published under the
-	// same coordinates more than once — a parked executor whose collection
-	// later publishes its record under the coordinates its launch used:
-	// whatever comes later is strictly newer than the checkpoint, so only a
-	// round at or before it is dropped.
+	// same coordinates more than once — the review of a parked turn's resume
+	// that runs again, held or retried, under the turn, phase and iteration
+	// of the attempt before it (see [CallVersions]): whatever comes later is
+	// strictly newer than that attempt's completion, so only a round at or
+	// before it is dropped.
 	finishedCalls *boundedSet[stamp]
 
 	// spend holds per-phase RECORDS rather than a folded rollup, so the
@@ -712,7 +713,13 @@ func (s *LiveState) applyTurnEvent(agent *agentLive, env Envelope, payload map[s
 	turnID := str(payload, "turn_id")
 	switch env.Type {
 	case "agent_phase_started", "agent_phase_completed":
-		s.touchTurn(agent, env, payload, StagePhase)
+		// ONE OF THE TURN'S OWN PHASES MOVES IT; a worker's record, a
+		// judge's or the run's own leaves its stage alone. See [phaseStage].
+		if stage, moves := phaseStage(payload); moves {
+			s.touchTurn(agent, env, payload, stage)
+		} else {
+			s.noteTurn(agent, env, payload, stage)
+		}
 	case "agent_turn_completed":
 		if flag(payload, "suspended") {
 			// A SUSPENSION IS NOT AN END. The segment parked on a
@@ -799,7 +806,12 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		// model, a response and tool calls with an empty placeholder. The
 		// reorder guard cannot catch it — applyProgress never advances
 		// stateTS — so the check belongs here.
-		if !agent.liveCall.sameCall(str(payload, "turn_id"),
+		//
+		// A CALL ITS PHASE'S FAILURE FROZE IS NOT THAT CALL: a start the
+		// reorder guard above let through is no older than the failure, so
+		// it is the phase running again and seeds a call of its own — see
+		// [LiveCall.runningAs].
+		if !agent.liveCall.runningAs(str(payload, "turn_id"),
 			str(payload, "phase"), num(payload, "iteration")) {
 			agent.liveCall = beginCall(env, payload)
 			agent.liveCall.Versions = s.restamp(nil, agent.liveCall)

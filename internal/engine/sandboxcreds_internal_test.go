@@ -428,11 +428,18 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 	if env["ANTHROPIC_API_KEY"] != "sk-ant-not-real" {
 		t.Fatalf("the run environment does not carry the env sign-in: %v", env)
 	}
-	if _, leaked := env["HTTPS_PROXY"]; leaked {
-		t.Errorf("an env variable that is no credential was offered as one: %v", env)
-	}
 	if err := guardOn(t, c, seat, sandbox.E2B, env); err != nil {
 		t.Errorf("a remote run carrying its env key was refused: %v", err)
+	}
+	// THE REST OF env TRAVELS BESIDE IT, and is no sign-in: an entry whose
+	// env holds a proxy alone reaches the box with it, and is refused a
+	// remote one as signed in to nothing.
+	if env["HTTPS_PROXY"] != "http://proxy.example.com" {
+		t.Errorf("the entry's proxy did not reach the run environment: %v", env)
+	}
+	c, seat = company(map[string]string{"HTTPS_PROXY": "http://proxy.example.com"})
+	if err := guardOn(t, c, seat, sandbox.E2B, runOn(t, c, seat, nil).env); err == nil {
+		t.Error("a remote run whose entry's env holds a proxy alone was launched as signed in")
 	}
 
 	// THE KEY IN THE SEAT'S OWN SANDBOX ENV passes too: which variable this

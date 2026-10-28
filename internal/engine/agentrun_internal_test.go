@@ -47,6 +47,8 @@ type chainMember struct {
 	// spent sits the entry out on this node before the launch, as a text
 	// call that met the CLI's usage-limit line leaves it.
 	spent bool
+	// env is the entry's env, as resolved.
+	env map[string]string
 }
 
 // cliProvider is a REAL cliagent provider for m: the question every case here
@@ -81,7 +83,7 @@ func cliProvider(t *testing.T, m chainMember) *cliagent.Provider {
 	}
 	provider, err := cliagent.New(cliagent.Config{
 		Key: m.key, Agent: m.agent, Model: m.model, StateDir: t.TempDir(),
-		Overrides: overrides, Timeout: time.Minute, Auth: auth,
+		Overrides: overrides, Timeout: time.Minute, Auth: auth, Env: m.env,
 	})
 	if err != nil {
 		t.Fatalf("cliagent.New(%s): %v", m.key, err)
@@ -108,7 +110,7 @@ func chainCompany(t *testing.T, members ...chainMember) (*Company, *org.Role) {
 	for _, m := range members {
 		entries = append(entries, phase.Entry{Key: m.key, Provider: cliProvider(t, m)})
 		configured[m.key] = config.LLMProvider{
-			Agent: config.CLIAgentName(m.agent), Model: m.model, RunIn: m.runIn,
+			Agent: config.CLIAgentName(m.agent), Model: m.model, RunIn: m.runIn, Env: m.env,
 		}
 		keys = append(keys, m.key)
 	}

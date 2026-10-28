@@ -7,8 +7,9 @@
 // the CLI's own shell and file tools denied by its profile. A seat's EXECUTOR
 // is not a call through it — it is the same CLI's own agentic run in a box
 // (internal/sandbox/codingagent), which reads this entry's identity from here
-// ([Provider.Agent], [Provider.ModelArgument], the Sandbox* credentials) and,
-// at launch, whether the entry sits out ([Provider.SittingOut]).
+// ([Provider.Agent], [Provider.ModelArgument], the Sandbox* environment and
+// credentials) and, at launch, whether the entry sits out
+// ([Provider.SittingOut]).
 //
 // WHICH CLIs is the profile table's answer, not this comment's —
 // [cliprofile.BuiltinNames] reads the shipped table and config's tests hold it

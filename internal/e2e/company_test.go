@@ -338,7 +338,7 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(spec.env), SandboxPollInterval: runPollInterval,
-		BridgeHostURL: hostBridgeURL(ln),
+		BoxHostURL: listenerURL(ln),
 	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)

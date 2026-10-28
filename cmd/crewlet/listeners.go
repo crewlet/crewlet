@@ -84,26 +84,50 @@ func bindListeners(ctx context.Context, boot *config.Bootstrap, nodeID string,
 	return l, nil
 }
 
-// bridgeHostURL is where a box on this node's own host — the `direct` cell —
-// reaches the fleet's tool bridge: this node's own listener that serves the
-// bridge route, as this host dials it ([engine.Options.BridgeHostURL]). Empty
-// where the node serves no route a direct box of its own would dial: it binds
-// no listener (api.port 0), it serves no API (the route is the ingress
-// role's, [api.PublicListener]), or it runs no seat and so launches no box.
-// Such a node's direct boxes dial CREWLET_MCP_BRIDGE_URL like any other.
+// boxHostURL is where a box on this node's own host — the `direct` cell —
+// reaches the two routes a box dials, the tool bridge and the telemetry
+// receiver: this node's own listener that serves them, as this host dials it
+// ([engine.Options.BoxHostURL]). Empty where the node runs no seat, and so
+// launches no box, or binds no listener a box of its own reaches (api.port 0):
+// such a node's boxes dial CREWLET_MCP_BRIDGE_URL like any other.
 //
-// THE LISTENER THE BRIDGE IS SERVED ON, which is api.public where this node
-// binds one — the bridge is a public route — and api.port otherwise.
-func (l *nodeListeners) bridgeHostURL(boot *config.Bootstrap, nodeID string) string {
+// THE LISTENER THEY ARE SERVED ON. An ingress node serves them to anyone:
+// on api.public where it binds one — they are public routes — and on api.port
+// otherwise, dialled at the address it bound ([loopbackURL]). A node without
+// the role serves them on api.port beside its probes, to this host's loopback
+// ALONE (internal/api's Probes): a seat pool with no route in from the
+// network, which is what such a node is for, still runs every seat a direct
+// box serves. So its listener must be one loopback reaches — bound on every
+// interface or on loopback — and one bound to a single address that is not
+// loopback derives none: a call from this host to that address arrives from
+// it, not from loopback, and would be refused as from off the host.
+func (l *nodeListeners) boxHostURL(boot *config.Bootstrap, nodeID string) string {
 	profile := boot.Profile(nodeID)
-	if l == nil || !profile.RunsIngress() || !profile.RunsSeats() {
+	if l == nil || !profile.RunsSeats() {
 		return ""
+	}
+	if !profile.RunsIngress() {
+		if !reachedOnLoopback(l.api.socket.Addr()) {
+			return ""
+		}
+		return loopbackURL(l.api.socket.Addr())
 	}
 	served := l.api
 	if l.public != nil {
 		served = l.public
 	}
 	return loopbackURL(served.socket.Addr())
+}
+
+// reachedOnLoopback reports whether a process on this host reaches a TCP
+// listener over the loopback interface: one bound to every interface, or to a
+// loopback address.
+func reachedOnLoopback(addr net.Addr) bool {
+	tcp, ok := addr.(*net.TCPAddr)
+	if !ok {
+		return false
+	}
+	return tcp.IP == nil || tcp.IP.IsUnspecified() || tcp.IP.IsLoopback()
 }
 
 // loopbackURL is the URL a process on this host dials a TCP listener at: the

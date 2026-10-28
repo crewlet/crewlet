@@ -492,7 +492,9 @@ providers:
       env: {}                           # optional — extra child env, ${ENV_VAR}-resolved. The
                                         #   child gets an ALLOWLISTED environment, never the
                                         #   engine's, so declare anything else the CLI needs here —
-                                        #   for opencode, the key of the provider its model names
+                                        #   for opencode, the key of the provider its model names.
+                                        #   An executor run's box gets it too, beneath the seat's
+                                        #   role.sandbox.env
       auth:
         mode: subscription              # subscription (default) | api-key | inherit-env.
                                         #   subscription: the CLI's own login, or a headless token.
@@ -548,7 +550,8 @@ providers:
                                         #   above: every seat's executor runs as its CLI's own run,
                                         #   in a box from this catalogue (code-sandbox.md)
     local:
-      state_dir: "./acme-data/sandboxes"  # box directories, removed at teardown
+      state_dir: "./acme-data/sandboxes"  # the box root: every box this host makes, a seat's
+                                        #   and deep work's, each removed at teardown
       # image: ""                       # required only where a run is placed in a container
       # runtime: auto                   # auto | docker | podman
       # network: ""                     # the container network; "none" cuts the box off
@@ -1573,8 +1576,9 @@ link a person follows stays on `api.external_url`. The per-run sandbox
 endpoints are not: a box is handed its bridge at `CREWLET_MCP_BRIDGE_URL` and
 its telemetry receiver at `CREWLET_SANDBOX_OTEL_RECEIVER_URL`. Publish
 `api.public.port`, keep `api.port` private, and point both variables at the
-public address (a `direct` box on an ingress node dials the public listener on
-loopback, with nothing to set) — see
+public address (a `direct` box dials its own node on loopback with nothing to
+set: an ingress node's public listener, or `api.port` on a node without the
+role) — see
 [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api).
 A node without the `ingress` role binds no public listener at all, so one file
 still serves every role: its seats' executor runs reach their tools through an
@@ -1916,7 +1920,7 @@ units:
 | `timezone` | string | no | IANA timezone this one schedule fires in (default: the company's [`timezone`](#the-companys-clock)). Not `Local` or `localtime` |
 | `target` | string | no | **Unit schedules only**: `each` (default — every direct member) or `lead` (the effective unit lead). Ignored for role schedules; for a per-person task, use a role schedule |
 | `enabled` | bool | no | `false` keeps the schedule in config without firing (default `true`) |
-| `timeout_seconds` | int | no | Hard wall-clock cap on the scheduled turn (default `180`) |
+| `timeout_seconds` | int | no | Hard wall-clock cap on the scheduled turn, its executor's run included (default `1800`, half an hour: [why](../concepts/scheduling.md#hard-wall-clock-timeout)) |
 | `catchup` | bool | no | Fire one recent missed tick on restart (default `true`) |
 
 > Scheduling requires a database (for the at-most-once `scheduled_runs`

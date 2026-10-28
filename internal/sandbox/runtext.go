@@ -18,14 +18,15 @@ import (
 // failure, and its activity transcript.
 //
 // BYTES, because what it bounds is an EVENT. Every one of these rides the
-// run's `agent_phase_completed{phase: sandbox}` record (and the report rides
-// the resumed executor's too, as the tool result it reads), and an event over
-// the queue's 8 MiB [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes]
-// is refused — so an unbounded report does not arrive long, it does not arrive
-// at all, and it takes the run's only spend record with it. It was 100 000
-// RUNES, which is anything from 100 KB to 400 KB on the wire depending on the
-// script the output was written in: a bound on the wrong unit for the only
-// limit that matters.
+// run's `agent_phase_completed{phase: sandbox}` record (and the report and the
+// failure detail ride the collected executor's record too, as the run's report
+// its reviewer judges, [runReport]), and an event over the queue's 8 MiB
+// [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes] is refused — so
+// an unbounded report does not arrive long, it does not arrive at all, and it
+// takes the run's only spend record with it. It was 100 000 RUNES, which is
+// anything from 100 KB to 400 KB on the wire depending on the script the
+// output was written in: a bound on the wrong unit for the only limit that
+// matters.
 //
 // THE WHOLE RECORD FITS, and this is its arithmetic. The record's variable
 // text is the report, the failure detail and the transcript (each at most
@@ -39,9 +40,9 @@ import (
 // promise is no longer one.
 //
 // WHAT HAPPENS PAST IT DEPENDS ON WHO READS THE PIECE. The report and the
-// failure detail are what the resumed executor acts on — what to tell the
-// requester, what blocked the run — so one past the bound is CONDENSED by the
-// seat's auxiliary model ([Condenser]) rather than cut. A cut used to keep the
+// failure detail are what the run's reviewer judges the round on — what it
+// did, what blocked it — so one past the bound is CONDENSED by the seat's
+// auxiliary model ([Condenser]) rather than cut. A cut used to keep the
 // report's head, which a reader takes for the whole report: a run that seems
 // to have said less than it did. The transcript is read by a PERSON — no model
 // and no prompt reads it — so it is not condensed: it keeps whole lines from
@@ -132,10 +133,13 @@ func readLimit(capped int) int {
 // other than a regular file where it lies — a named pipe, a device, a socket,
 // a directory or a symbolic link. A backend that reads a box's files from the
 // engine host refuses one, because opening it there could block the reader or
-// never end ([NotRegularFileError] says which it was). It refuses a WRITE to
-// one too ([NotRegularFileError.Write]), which could block or follow a link
-// out of the box; a write refused is the launch's failure, since what it was
-// writing is something the run needs.
+// never end ([NotRegularFileError] says which it was). It refuses a WRITE over
+// one too ([NotRegularFileError.Write]): a write replaces a regular file whole
+// ([Sandbox.WriteFile]), and anything else at the path is the box's own doing
+// — a link it points somewhere, a pipe or a socket something uses — which a
+// replacement would destroy, so it is left as the box made it. A write refused
+// is the launch's failure, since what it was writing is something the run
+// needs.
 //
 // A REFUSAL OF THAT PIECE, NOT A BOX THAT COULD NOT BE READ. What the path
 // names is fixed by what the box holds, so a collection that retried it would
@@ -179,8 +183,9 @@ func (e *NotRegularFileError) Reason() string {
 
 func (e *NotRegularFileError) Error() string {
 	if e.Write {
-		return e.Path + " " + e.Reason() + ": what the engine writes into a box is a file, and " +
-			"writing anything else from the engine host could block it or write past the box"
+		return e.Path + " " + e.Reason() + ": the engine writes a box's file by replacing it whole, " +
+			"and replaces nothing else the box put at a path — a link, a directory, a named pipe — " +
+			"which is left as the box made it"
 	}
 	return e.Path + " " + e.Reason() + ": a box's markers, reports and streams are files " +
 		"its runner writes, and reading anything else from the engine host could block it, " +
@@ -238,13 +243,20 @@ func (p RunPart) Valid() bool { return slices.Contains(RunParts, p) }
 // announcement, a field of the run's coordination row — read and written whole
 // on every status flip and every listing of active runs for as long as it
 // waits — the banner a person answers it from, the operator's `answer_run`
-// reply, and the resumed executor's answer text, which re-sends it on every
-// later round of the turn. 16 KiB is about four thousand tokens: a page of
-// prose, room for a question, its context and its options with plenty to
-// spare. A question longer than a page is the report put in the wrong place —
-// the report has 256 KiB of its own — and the shim's own route already stops
-// near 128 KiB, the most one argument can carry. Past it the question is
-// condensed by the seat's auxiliary model, never cut.
+// reply, and, once answered, the prompt of the run that carries the work on:
+// the asking run's next message in its own CLI session, or a fresh run's
+// brief, which that run's CLI re-sends with every request it makes from then
+// on. 16 KiB is about four thousand tokens: a page of prose, room for a
+// question, its context and its options with plenty to spare. A question
+// longer than a page is the report put in the wrong place — the report has
+// 256 KiB of its own — and the shim's own route already stops near 128 KiB,
+// the most one argument can carry. Past it the question is condensed by the
+// seat's auxiliary model, never cut.
+//
+// AN ANSWER BY TURN IS HELD TO THE SAME PAGE
+// ([github.com/crewlet/crewlet/internal/agent/builtin.MaxRunAnswerBytes]): it
+// rides beside the question, on the row until the run is carried on and in
+// that prompt after it, so a bound changed here moves that one with it.
 const MaxQuestionBytes = 16 << 10
 
 // MaxDeliveredRefBytes bounds the branches and pull requests a run's record
@@ -257,8 +269,8 @@ const MaxQuestionBytes = 16 << 10
 // entry per line. A pull-request URL is typically under a hundred bytes, so
 // 16 KiB lists more than a hundred and sixty of them, past what any one run
 // delivers; the refs are deduplicated first, and what does not fit is COUNTED
-// on the record and in the resumed executor's text rather than dropped
-// unsaid.
+// on the record and in the run's report its reviewer reads ([runReport])
+// rather than dropped unsaid.
 const MaxDeliveredRefBytes = 16 << 10
 
 // MaxBranchBytes bounds the branch a parked run records with its question
@@ -266,9 +278,10 @@ const MaxDeliveredRefBytes = 16 << 10
 //
 // SIZED TO WHERE IT TRAVELS AND TO WHAT A BRANCH IS. It rides the run's
 // coordination row beside the question ([MaxQuestionBytes]) — read and written
-// whole on every status flip and every listing of active runs — and the
-// answer's text, which the resumed executor re-sends on every later round of
-// the turn. Git keeps a branch as a path under refs/heads, every part of which
+// whole on every status flip and every listing of active runs — and, where the
+// asking run's own session cannot be continued, the brief of the fresh run that
+// carries the work on from it, which that run's CLI re-sends with every request
+// it makes. Git keeps a branch as a path under refs/heads, every part of which
 // a filesystem holds to 255 bytes, and a work-in-progress branch is a few
 // parts at most: 1 KiB is four parts at their longest, past any name a person
 // or an agent gives one, and a sixteenth of the question it is parked beside.
@@ -313,7 +326,7 @@ const failureReserve = 1 << 10
 // error — and gives the error stream only what is left, so a failure built
 // around a long stderr is one a model can still be shown whole. Composed past
 // it, every such failure was a few hundred bytes over the compactor's input,
-// refused before a model was asked, and the resumed executor read the
+// refused before a model was asked, and the run's record carried the
 // uncondensed fallback although a model was configured.
 const MaxFailureBytes = MaxCondenseBytes - failureReserve
 
@@ -345,8 +358,8 @@ type Condenser interface {
 //
 // Applied ONCE, where every collected result enters the coordinator, and
 // before anything is published or resumed — so the run's phase record, the
-// resumed executor's tool result and the record's retries all carry the same
-// text.
+// run's report its resumed turn files for the reviewer ([runReport]) and the
+// record's retries all carry the same text.
 //
 // THE TRANSCRIPT TOO, and here rather than in the runner: this is the one
 // home of the rule that the run's record fits its event, and the coordinator
@@ -503,8 +516,8 @@ func questionRefusal(bytes int) string {
 // REDACTED FIRST, here rather than trusted to the runner, for the reason the
 // transcript is ([Coordinator.fitResult]): a ref is whatever word a run's
 // report put on its `Delivered:` line, which a box can make a credential, and
-// every reader of the record — its event, the resumed executor's text — reads
-// these. First, so the bound measures what is carried.
+// every reader of the record — its event, the run's report — reads these.
+// First, so the bound measures what is carried.
 func boundRefs(refs []string) ([]string, int) {
 	seen := make(map[string]bool, len(refs))
 	var kept []string

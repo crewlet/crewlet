@@ -867,8 +867,8 @@ export function TurnCard({
 }
 
 /**
- * The turn running on this task now: "SWE is on turn 2 · executing · round 7
- * of 25 · for 2m", and the way to watch it.
+ * The turn running on this task now: "SWE is on turn 2 · coding run · for
+ * 2m", and the way to watch it.
  */
 function LiveRow({
   item,

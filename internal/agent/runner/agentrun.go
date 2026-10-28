@@ -139,11 +139,13 @@ type AgentRunRequest struct {
 	OnFallback func(chain.Fallback)
 
 	// Continue is set when this launch CARRIES ON a run that parked on a
-	// person's question, now answered — the same round, relaunched: the
-	// asking run's CLI session, and the prompt that continues it, which the
-	// launch uses where it runs in the asking run's box. Brief is then what
-	// a fresh run is told instead, the question and the answer included —
-	// see [Asked]. Nil for every other launch.
+	// person's question, now answered, or whose job was lost with its host —
+	// the same round, relaunched: the asking run's CLI session, and the
+	// prompt that continues it, which the launch uses where it runs in the
+	// asking run's box (a lost job's session is never continued, and names
+	// none). Brief is then what a fresh run is told instead, the question and
+	// the answer, or how the run before it was cut off, included — see
+	// [Asked] and [Lost]. Nil for every other launch.
 	Continue *Continuation
 
 	// Fence is the turn's own fence ([Config.Fence]), which the launch asks
@@ -274,33 +276,38 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 }
 
 // continueAgentRun carries on a run that parked on a person's question, now
-// answered ([Asked]): the SAME round, relaunched rather than collected — in
-// the asking run's box, continuing its own conversation, where that box is
-// still there, and as a fresh run told the question and the answer where it is
-// not. The launch decides which, once it knows which box it has.
+// answered ([Asked]), or whose job was lost with its host ([Lost]): the SAME
+// round, relaunched rather than collected — in the run's box, continuing the
+// asking run's own conversation, where that box is still there, and as a fresh
+// run told what happened where it is not, or where the conversation was cut
+// off. The launch decides which, once it knows which box it has.
 //
-// THE ROUND'S SURFACE AND CLOCK CARRY ON. The surface is the asking run's —
-// the tools its launch had active, the skills the turn had loaded, and what
-// its bridged calls did to it since: every tool it activated and every skill
-// it loaded, which a run continuing its own session goes on calling ([Runner.
-// ReopenAgentRun] rebuilds a running run's the same way) — and its calls so
-// far are seeded into the turn's call log through that surface before the
-// relaunch ([seedCalls]), so the relaunched run's writes go on counting from
-// them; the round's launch time keeps accumulating from the instant the round
-// first launched. No new phase is opened: the round's started record was
-// published when it first launched, and its completion is the collection that
-// finally closes it — unless this relaunch is refused, which closes it here.
+// A ROUND THAT MAY NOT BE CARRIED ON AGAIN ([Lost.Limit]) is not relaunched:
+// its phase is closed here as failed, saying why, and the turn ends with it.
+//
+// THE ROUND'S SURFACE AND CLOCK CARRY ON. The surface is the asking run's as
+// it left it — the tools its launch had active, the skills the turn had
+// loaded, and what its bridged calls did to it since: every tool it activated
+// and every skill it loaded, which a run continuing its own session goes on
+// calling — and its calls so far are seeded into the turn's call log through
+// that surface before the relaunch, so the relaunched run's writes go on
+// counting from them: the one rebuild every segment that re-enters a run
+// makes ([Runner.rebuiltSurface]). The round's launch time keeps accumulating
+// from the instant the round first launched. No new phase is opened: the
+// round's started record was published when it first launched, and its
+// completion is the collection that finally closes it — unless this relaunch
+// is refused, which closes it here.
 func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteration,
-	state execstate.State, asked *Asked, logged []ledger.Call,
+	state execstate.State, carry carried, logged []ledger.Call,
 ) (turn.Work, turn.Surface, error) {
 	began := time.Now()
 	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot())
 	var surface *tools.Surface
-	// A SUBMISSION CITES THE ASKING RUN'S CALLS TOO: the relaunched run is
+	// A SUBMISSION CITES THE CARRIED RUN'S CALLS TOO: the relaunched run is
 	// the same round, and the collection judges its submission against
 	// every call the round made ([Runner.resumeAgentRun]) — so the check it
 	// gets as it submits reads them as well, or a delivery made before the
-	// question would be refused here and accepted there.
+	// question, or before the loss, would be refused here and accepted there.
 	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
 		decodeWork(r.cfg.Reply,
 			func() []ledger.Call {
@@ -308,18 +315,31 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			},
 			func() turn.Surface { return describe(surface) }))
 	bridged := NewBridgedSpend()
-	built, err := r.surfaceWith(ctx, r.meterFor(bridged), phase.Execute, state.Round, snapshot,
-		submit, replayedActive(state, logged), state.LoadedSkills...)
+	// THE TURN'S CALL LOG STARTS FROM WHAT THE TURN ALREADY CALLED, the
+	// carried run's calls included, as the surface is rebuilt and so BEFORE
+	// the launch: the relaunched run's bridged calls are admitted against
+	// this log from its first one.
+	built, err := r.rebuiltSurface(ctx, r.meterFor(bridged), state, snapshot, submit, history, logged)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
 	surface = built
-	// THE TURN'S CALL LOG STARTS FROM WHAT THE TURN ALREADY CALLED, the
-	// asking run's calls included, through the surface the relaunched run
-	// is served ([seedCalls]), and BEFORE the launch: the relaunched run's
-	// bridged calls are admitted against this log from its first one.
-	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, logged)
-	r.observeLoads(surface, logged)
+
+	emit := r.emitter()
+	caps := roundCaps{max: runRound, ceiling: runRound}
+	if refused := carry.refusal(); refused != nil {
+		// THE ROUND ENDS HERE, and its phase with it: it was opened when the
+		// round first launched, and nothing else will close it now.
+		refusedErr := fmt.Errorf("runner: %s: %w", phase.Execute, refused)
+		emit.completed(ctx, phaseRecord{
+			Phase: phase.Execute, Iteration: state.Round,
+			Available: surface.Active(),
+			Elapsed:   time.Duration(state.LaunchMS)*time.Millisecond + time.Since(began),
+			StartedAt: began.UTC(), Caps: caps,
+			Failed: true, Err: refusedErr,
+		})
+		return turn.Work{Calls: logged}, describe(surface), refusedErr
+	}
 
 	// THE NOTES WAITING SINCE THE RUN ASKED, which either brief carries:
 	// a fresh run's after every note the turn read, as any brief does; the
@@ -331,20 +351,19 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		r.steerReturn(ctx, Launched{}, fresh)
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, refused)
 	}
-	emit := r.emitter()
-	caps := roundCaps{max: runRound, ceiling: runRound}
-	continued := asked.Continuation()
+	continued := carry.continuation()
 	if rendered := renderedNotes(fresh); len(rendered) > 0 {
 		continued += "\n\n" + strings.Join(rendered, "\n\n")
 	}
 	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
 		System: system.Text,
-		// A FRESH RUN'S BRIEF is the round's own, and what the run before it
-		// asked and was told: it remembers neither.
-		Brief: user.Text + "\n\n" + asked.Reseed(),
+		// A FRESH RUN'S BRIEF is the round's own, and what became of the run
+		// before it — what it asked and was told, or how it was cut off: it
+		// remembers neither.
+		Brief: user.Text + "\n\n" + carry.reseed(),
 		Notes: fresh,
 		Continue: &Continuation{
-			SessionID: asked.SessionID, Brief: continued,
+			SessionID: carry.session(), Brief: continued,
 		},
 		Surface:    surface,
 		Spend:      bridged,
@@ -354,7 +373,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	})
 	if err != nil {
 		r.steerReturn(ctx, launched, fresh)
-		err = fmt.Errorf("runner: %s: carrying on the run with its answer: %w", phase.Execute, err)
+		err = fmt.Errorf("runner: %s: %s: %w", phase.Execute, carry.what(), err)
 		emit.completed(ctx, phaseRecord{
 			Phase: phase.Execute, Iteration: state.Round, System: system, User: user,
 			Available: surface.Active(),
@@ -372,10 +391,10 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	}
 	r.recordAgentSuspension(state.Round, surface, history, launchedAt,
 		time.Duration(state.LaunchMS)*time.Millisecond+time.Since(began))
-	// THE ROUND'S CALLS SO FAR, the run's before it asked: they happened and
-	// stay on the round's record, as an EARLIER ATTEMPT's
-	// ([turn.Work.Inherited]) — the asking job made them, and a retry of
-	// this continuation relaunches the run rather than making them again.
+	// THE ROUND'S CALLS SO FAR, the run's before it asked or was cut off:
+	// they happened and stay on the round's record, as an EARLIER ATTEMPT's
+	// ([turn.Work.Inherited]) — the job before made them, and a retry of this
+	// continuation relaunches the run rather than making them again.
 	return turn.Work{Calls: logged, Inherited: len(logged), Suspended: true}, describe(surface), nil
 }
 
@@ -417,24 +436,22 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // session can be opened again (internal/api/mcpbridge). It returns the
 // surface, and the meter the session's calls are counted on.
 //
-// FROM THE RUN'S OWN STATE, as [Runner.continueAgentRun] rebuilds a run a
-// person's answer carries on: the surface its launch recorded — its active
-// tools and the skills it had loaded — and then what the run did to it since,
-// read off the calls it made over the bridge, every tool it activated and
-// every skill it loaded. A collection ([Runner.resumeAgentRun]) rebuilds the
-// launch's record alone, because it makes no gated call: it replays the run's
-// submission and judges its record. Rebuilt
-// from the launch's record alone, the box would find tools it had activated
-// gone and the tools a loaded skill unlocked refused again.
+// FROM THE RUN'S OWN STATE, by the one rebuild every segment that re-enters a
+// run makes ([Runner.rebuiltSurface]): the surface its launch recorded — its
+// active tools and the skills it had loaded — and then what the run did to it
+// since, read off the calls it made over the bridge, every tool it activated
+// and every skill it loaded. Rebuilt from the launch's record alone, the box
+// would find tools it had activated gone and the tools a loaded skill
+// unlocked refused again.
 //
 // AND ITS PLACE IN THE RUN. The turn's call log is seeded with its closed
 // rounds and every call the run has made over the bridge, through the surface
-// it is served, by canonical arguments ([seedCalls]), so a call made from
-// here counts its repeats from the whole run and derives the operation id the
-// run's own process would have; a submission cites those calls as well as the
-// ones made from here; and the meter starts from what the row says the run's
-// bridged calls have cost so far ([NewBridgedSpendFrom]). spent is that total
-// and bridged the row's calls, in any order.
+// it is served, by canonical arguments, in that same rebuild, so a call made
+// from here counts its repeats from the whole run and derives the operation
+// id the run's own process would have; a submission cites those calls as
+// well as the ones made from here; and the meter starts from what the row
+// says the run's bridged calls have cost so far ([NewBridgedSpendFrom]).
+// spent is that total and bridged the row's calls, in any order.
 //
 // It launches nothing and parks nothing: the run is going already, and its
 // collection resumes the turn as it would have. THE SUBMISSION IT CAPTURES IS
@@ -457,17 +474,50 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 			func() turn.Surface { return describe(surface) }))
 
 	meter := NewBridgedSpendFrom(spent)
-	built, err := r.surfaceWith(ctx, r.meterFor(meter), phase.Execute, state.Round, snapshot, submit,
-		replayedActive(state, called), state.LoadedSkills...)
+	built, err := r.rebuiltSurface(ctx, r.meterFor(meter), state, snapshot, submit, history, called)
 	if err != nil {
 		return nil, nil, err
 	}
 	surface = built
-	// THE RUN'S CALL LOG STARTS FROM WHAT IT ALREADY CALLED, through the
-	// surface it is served ([seedCalls]).
+	return surface, meter, nil
+}
+
+// rebuiltSurface is a run's surface rebuilt by a later segment, as the run
+// left it, and the turn's call log seeded with the run's place in the turn —
+// the one rebuild every segment that re-enters a run makes: the one that
+// collects it ([Runner.resumeAgentRun]), one that carries it on
+// ([Runner.continueAgentRun]) and one that reopens it while it works
+// ([Runner.ReopenAgentRun]).
+//
+// AS THE RUN LEFT IT: the tools its launch recorded and the skills its guard
+// held then, and what the run did to both since over the bridge, read off
+// called — every tool a successful activation named ([replayedActive]) and
+// every skill it loaded ([Runner.observeLoads]). AND ITS PLACE IN THE TURN:
+// the closed rounds in history and the run's calls, seeded into the call log
+// through the rebuilt surface ([seedCalls]), so a count read from here sees
+// every call made before it.
+//
+// ONE REBUILD FOR ALL THREE, because they drifted apart when each made its
+// own: the collection rebuilt the launch's record alone, on the reasoning that
+// it makes no gated call. That much is true, and it is beside the point,
+// because the collected surface is also what the round's record states the
+// run held (tools_available) and could still have discovered
+// (tool_catalogue). Every tool the run had activated over the bridge was
+// published as one it never found, and the record contradicted the run's own
+// calls listed beside it. The guard is replayed too, although nothing calls
+// through the collection's surface: a rebuild that replays half of what the
+// run did is the drift this rule exists to stop.
+func (r *Runner) rebuiltSurface(ctx context.Context, m meter, state execstate.State,
+	snapshot tools.Snapshot, submit tools.Callable, history []ledger.Iteration, called []ledger.Call,
+) (*tools.Surface, error) {
+	surface, err := r.surfaceWith(ctx, m, phase.Execute, state.Round, snapshot, submit,
+		replayedActive(state, called), state.LoadedSkills...)
+	if err != nil {
+		return nil, err
+	}
 	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, called)
 	r.observeLoads(surface, called)
-	return surface, meter, nil
+	return surface, nil
 }
 
 // replayedActive is the tools a run's surface holds once its bridged calls
@@ -533,10 +583,11 @@ func thawed(f execstate.Frozen) (prefetch.Blocks, string) {
 //
 // THE RUN'S OWN TOOL CALLS ARE THE RECORD, replayed from the durable log the
 // bridge wrote rather than from the surface: the process that resumes may not
-// be the one that launched, so the surface here is fresh and remembers
-// nothing. That log is also where the submission is: the CLI ended its run by
-// calling submit_work over the bridge, and replaying that call through a fresh
-// submission tool is what recovers the outcome it declared.
+// be the one that launched, so the surface here is rebuilt as the run left it
+// ([Runner.rebuiltSurface]) and has served no call of its own. That log is
+// also where the submission is: the CLI ended its run by calling submit_work
+// over the bridge, and replaying that call through a fresh submission tool is
+// what recovers the outcome it declared.
 //
 // An absent submission is NOT a value. A run that stopped without saying what
 // it did is rescued as incomplete and judged on its record, rather than having
@@ -564,15 +615,15 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 			func() []ledger.Call { return turn.Record(history, logged) },
 			func() turn.Surface { return describe(surface) }))
 
-	built, err := r.surfaceWith(ctx, r.ownMeter(), phase.Execute, state.Round, snapshot, submit,
-		state.ActiveTools, state.LoadedSkills...)
+	// THE SURFACE THE RUN LEFT, the tools it activated over the bridge
+	// included, which the round's record states as what the run held and
+	// what it could still have discovered ([Runner.finishWork]); and the
+	// turn's call log, which starts from what the turn already called.
+	built, err := r.rebuiltSurface(ctx, r.ownMeter(), state, snapshot, submit, history, logged)
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
 	surface = built
-	// THE RUN'S CALL LOG STARTS FROM WHAT THE TURN ALREADY CALLED, through
-	// the surface it resumes on ([seedCalls]); see [Runner.Resume].
-	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, logged)
 
 	replaySubmission(ctx, submit, logged)
 

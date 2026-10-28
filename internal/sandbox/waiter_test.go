@@ -164,6 +164,14 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 // at until something re-stamps it.
 func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
 	r.t.Helper()
+	return r.launchingAs(turnID, lease, func(*PendingRun) {})
+}
+
+// launchingAs is [waiterRig.launchingUnder] for a row the case shapes before
+// the write that opens it — a turn a colleague's ask woke, say, whose row the
+// launch writes the ask onto.
+func (r *waiterRig) launchingAs(turnID string, lease Fence, shape func(*PendingRun)) PendingRun {
+	r.t.Helper()
 	ctx := r.t.Context()
 	box, err := r.provider.Create(ctx, Spec{})
 	if err != nil {
@@ -187,6 +195,7 @@ func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
 		// phase record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
 	}
+	shape(&run)
 	if _, err := r.pending.BeginLaunch(ctx, run, lease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
@@ -428,10 +437,10 @@ func TestAVanishedBoxFiresCompletionOnceTheStreakIsLongEnough(t *testing.T) {
 	run := rig.launch("t1")
 	rig.provider.Vanished[run.SandboxID] = true
 
-	// Two failures, but no time has passed: giving up is TERMINAL — the
-	// completion fires, collect cannot reconnect either, and the run is
-	// settled failed — so a burst of probes must not be able to spend the
-	// window on its own.
+	// Two failures, but no time has passed: giving up is TERMINAL for the
+	// job — the completion fires, and a box that is gone has its job lost
+	// and its round started again — so a burst of probes must not be able to
+	// spend the window on its own.
 	for i := range MinConnectFailures + 2 {
 		if fired := rig.tick(); fired != 0 {
 			t.Fatalf("gave up on probe %d with no time elapsed", i+1)

@@ -711,43 +711,6 @@ describe("what a seat is doing", () => {
         { now },
       ),
     ).toBe("Executing ENG-412");
-    // A FAN-OUT IN FLIGHT is the call the seat is waiting on: a `delegate`
-    // with three tasks is three workers, on the turn's own item — and two
-    // fan-outs a CLI runs side by side are every worker of both.
-    const delegatingAll = (...calls: { args: string; name?: string }[]) =>
-      stateLine(
-        {
-          id: "a",
-          agent_id: "a",
-          role: "Dev A",
-          activity: "working",
-          current_phase: "execute",
-          live_call: {
-            phase: "execute",
-            work_item: { backend: "native", id: "t", key: "ENG-405", project: "ENG" },
-            running_calls: calls.map(({ args, name = "delegate" }, i) => ({
-              id: `call-${i}`,
-              round: 2,
-              name,
-              arguments: args,
-              started_at: "",
-            })),
-          } as never,
-        },
-        { now },
-      );
-    const delegating = (args: string, name = "delegate") => delegatingAll({ args, name });
-    const three = JSON.stringify({ tasks: [{ id: "a" }, { id: "b" }, { id: "c" }] });
-    expect(delegating(three)).toBe("3 workers on ENG-405");
-    const two = JSON.stringify({ tasks: [{ id: "d" }, { id: "e" }] });
-    expect(delegatingAll({ args: three }, { args: "{}", name: "read_file" }, { args: two })).toBe(
-      "5 workers on ENG-405",
-    );
-    // Any other call is the phase; arguments that are not the schema count
-    // nothing rather than a guess.
-    expect(delegating(three, "search_work_items")).toBe("Executing ENG-405");
-    expect(delegating("not json")).toBe("Executing ENG-405");
-    expect(delegating('{"tasks": "three"}')).toBe("Executing ENG-405");
     expect(
       stateLine(
         { id: "a", agent_id: "a", role: "Dev A", activity: "stopped", stopped_reason: "unplaced" },

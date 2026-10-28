@@ -498,7 +498,7 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	e, err := engine.New(ctx, engine.Options{
 		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(nil), Backends: backends,
-		SandboxPollInterval: runPollInterval, BridgeHostURL: hostBridgeURL(ln),
+		SandboxPollInterval: runPollInterval, BoxHostURL: listenerURL(ln),
 	})
 	if err != nil {
 		return fail(refusal("engine.New", err))

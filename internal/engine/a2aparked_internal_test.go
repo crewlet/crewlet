@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A COLLEAGUE'S ASK IS ANSWERED BY THE FRAME THAT ENDS THE TURN, WHEREVER IT
@@ -196,5 +197,83 @@ func TestARunNoAskWokeCarriesNoAsk(t *testing.T) {
 	parkOnRun(t, e)
 	if carried := rig.row(t, "run-1").ColleagueAsk; carried != nil {
 		t.Fatalf("a task's turn carries ask %+v on its run's record", *carried)
+	}
+}
+
+// loseRun loses turnID's parked run the way a box that vanished does: its box
+// is gone when its completion is collected, so the collection gives the run up
+// at once and ends it as `collect_unreachable` ([sandbox.Coordinator]) — with
+// the turn still suspended into it, and no frame of that turn left to end it.
+func (r *runRig) loseRun(t *testing.T, turnID string) {
+	t.Helper()
+	row := r.row(t, turnID)
+	provider, err := r.engine.Company().catalogue.Provider(sandbox.Placement(row.Placement))
+	if err != nil {
+		t.Fatalf("the provider of run %s's box: %v", turnID, err)
+	}
+	if err := provider.Kill(t.Context(), row.SandboxID); err != nil {
+		t.Fatalf("killing run %s's box: %v", turnID, err)
+	}
+	completion := types.SandboxRunCompleted{
+		Agent: row.AgentID, AgentHandle: row.AgentHandle, RoleName: row.Role,
+		TurnID: row.TurnID, WorkKey: row.WorkKey, LaunchID: row.LaunchID,
+		SandboxID: row.SandboxID, CodingAgent: row.CodingAgent,
+	}
+	ev := events.New(completion, events.TraceContext{TraceID: row.TraceID, ParentSpanID: row.SpanID})
+	if err := r.engine.sandbox.Load().coordinator.OnCompleted(t.Context(), completion, ev); err != nil {
+		t.Fatalf("delivering run %s's completion: %v", turnID, err)
+	}
+	if _, found, err := r.engine.sandbox.Load().pending.Get(t.Context(), turnID); err != nil || found {
+		t.Fatalf("run %s is still on the record after its box was lost (%v): it was not ended", turnID, err)
+	}
+}
+
+// A TURN LOST WITH ITS RUN TELLS ITS ASKER SO: the run's loss ends the parked
+// turn with no frame of it left to answer, so the run's ending answers — once,
+// as the answering seat and run, saying the coding run was lost and why, the
+// question echoed — and closes the channel, rather than leaving the asker to an
+// idle sweep that wakes nobody.
+//
+// Mutation: drop the ending's hand-over ([sandbox.CoordinatorOptions.TurnLost])
+// or the engine's answer from it, and the asker waits on an open channel; drop
+// the loss from [answerContent], and the asker is asked for more detail about a
+// question nobody got to.
+func TestALostRunsTurnTellsItsAskerItWasLost(t *testing.T) {
+	t.Parallel()
+	e, _ := spendingEngine(t)
+	q := e.backends.Queue.(*memory.Queue)
+	askingCompany(t, e)
+	rig := rigRuns(t, e, halfwayPlay)
+	channelID, ask := askSwe(t, e, q, "Which branch carries the fix?", events.TraceContext{})
+
+	res, err := e.runTurn(t.Context(), Request{
+		Handle: "swe", WorkKey: "wk-ask", RunID: "run-ask", WorkSince: time.Now().UTC(),
+		Events: []*events.Event{ask},
+		// AS THE DISPATCH STATES THEM, off the trigger ([delegationOf]).
+		Depth: ask.DelegationDepth, DelegationChain: ask.DelegationChain,
+	})
+	if err != nil || !res.Suspended {
+		t.Fatalf("runTurn = %+v, %v; want the turn parked on its executor's run", res, err)
+	}
+
+	rig.loseRun(t, "run-ask")
+
+	got := answersOn(q, channelID)
+	if len(got) != 1 {
+		t.Fatalf("the lost turn answered %d time(s), want once", len(got))
+	}
+	msg, _ := events.DataAs[*types.A2AMessage](got[0])
+	if msg.Sender != "swe" || msg.Question != "Which branch carries the fix?" {
+		t.Errorf("the reply is %+v, want swe's, echoing the question", msg)
+	}
+	if !strings.Contains(msg.Content, "was lost") ||
+		!strings.Contains(msg.Content, types.SandboxFailureCollect) {
+		t.Errorf("the asker was told %q, want that the coding run was lost, and why", msg.Content)
+	}
+	if got[0].ParentTurnID != "run-ask" {
+		t.Errorf("the reply names parent %q, want the answering run", got[0].ParentTurnID)
+	}
+	if channelOpen(t, e, channelID) {
+		t.Error("the lost turn's channel was left open for the idle sweep")
 	}
 }

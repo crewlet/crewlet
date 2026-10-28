@@ -599,7 +599,7 @@ engine renews it wherever something holds one:
 |---|---|---|
 | The seat's tool servers on the engine host | a token with at least 10 minutes left | the seat's servers are passed again when it reaches 10 minutes, and each one carrying it is restarted with a fresh token, as a rotated secret restarts it |
 | A coding run's environment (`$GITHUB_TOKEN` in the box) | a token with at least 50 minutes left | it does not: a process's environment cannot change under it, so a run longer than 50 minutes reads the token from a file |
-| A setup file whose whole body is the token | the same token, at launch | the completion poll that drives the box — its launching node's for a `direct` or `container` box, the fleet's for an `e2b` one — rewrites the file every time the token behind it is renewed, for as long as the job runs; and a job that continues in its turn's kept box, which runs no setup and which no poll reached while it was paused for the reviewer or a person's answer, has the file rewritten by its launch before it starts. So it always holds a token with at least 10 minutes left, unless the file cannot be written: a job that made it read-only or replaced it with a link or a directory, or a box out of disk, keeps the token it holds until that expires, and the poll says so once for the file (`sandbox_token_refresh_failed`, with the box's error) rather than on every pass, and writes the current token the first time a write succeeds |
+| A setup file whose whole body is the token | the same token, at launch | the completion poll that drives the box — its launching node's for a `direct` or `container` box, the fleet's for an `e2b` one — rewrites the file every time the token behind it is renewed, for as long as the job runs; and a job that continues in its turn's kept box, which runs no setup and which no poll reached while it was paused for the reviewer or a person's answer, has the file rewritten by its launch before it starts. Each rewrite replaces the file whole, so a read never finds it empty or half written. So it always holds a token with at least 10 minutes left, unless the file cannot be written: a job that replaced it with a link or a directory, or made the directory it lies in read-only, or a box out of disk, keeps the token it holds until that expires, and the poll says so once for the file (`sandbox_token_refresh_failed`, with the box's error) rather than on every pass, and writes the current token the first time a write succeeds |
 | A tool server rendered into the box | the run's token | it does not: the server is started inside the box once. Past 50 minutes its calls are refused by GitHub; the seat's executor reaches the seat's own GitHub server, which is renewed, through the [tool bridge](../concepts/llm-backends.md#the-tool-bridge) instead |
 
 The [git-auth recipe](../concepts/code-sandbox.md#the-git-auth-recipe) reads the
@@ -1100,6 +1100,13 @@ them to the app. The bot user id is not the app id: it is the `id` GitHub
 answers for `GET /users/<slug>[bot]` once the app exists. The run is detached:
 the turn suspends at launch and resumes with the run's report, so the agent
 reports the pull request in the same turn.
+
+An issue assigned to the agent says the same in its prompt
+(`issue.assigned`): any code change the issue needs is the agent's own to
+make, in its own checkout, and it opens the pull request under its own
+identity, since the executor reading the prompt is that run. An assigned
+pull request already exists, and its prompt says only how the assignment is
+declined here: reassign it.
 
 GitHub stays in the picture on the read/review/track side. Once the pull
 request exists, its `review_requested` event wakes the reviewer through

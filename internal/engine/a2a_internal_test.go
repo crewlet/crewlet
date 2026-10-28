@@ -248,7 +248,7 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 	}
 
 	// One ask, one answer, then CLOSED — rather than left to the idle
-	// sweep an hour later.
+	// sweep.
 	ch, err := a2a.NewCoordStore(e.Backends().Fleet).Get(t.Context(), channelID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -317,9 +317,9 @@ func TestASuspendedTurnDoesNotAnswerYet(t *testing.T) {
 
 // A TURN THAT PRODUCED NOTHING STILL OWES AN ANSWER.
 //
-// Silence leaves the asker waiting on a channel the sweep closes an hour
-// later with no explanation, which is strictly worse than a short "I could
-// not" the asker can act on.
+// Silence leaves the asker waiting on a channel the idle sweep closes later
+// with no explanation and without waking it, which is strictly worse than a
+// short "I could not" the asker can act on.
 func TestATurnThatDeliveredNothingStillAnswers(t *testing.T) {
 	t.Parallel()
 	e := watchdogEngine(t)

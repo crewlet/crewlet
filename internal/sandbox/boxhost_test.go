@@ -180,38 +180,43 @@ func TestABoxItsHostFoundGoneIsSettledAtOnce(t *testing.T) {
 	}
 }
 
-// A COMPLETION AFTER THE FLEET FOUND THE BOX'S HOST GONE ENDS THE RUN AS LOST,
-// with no read asked of anybody: there is no box, anywhere. Ended through the
-// one ending, so the seat is freed and the loss said, naming why.
+// A COMPLETION AFTER THE FLEET FOUND THE BOX'S HOST GONE CARRIES THE ROUND ON,
+// with no read asked of anybody: there is no box, anywhere, and what the job did
+// went with it. The turn resumes told what was lost and that no box was kept,
+// and nothing is announced as a failure — the turn goes on.
 //
 // Mutation: collect a run whose row carries the verdict, and the host that is
-// gone is asked — and, silent, the run is handed back for ever.
-func TestACompletionAfterTheHostWasFoundGoneEndsTheRunAsLost(t *testing.T) {
+// gone is asked — and, silent, the run is handed back for ever; settle it as
+// lost, and the turn the park acknowledged is never started again.
+func TestACompletionAfterTheHostWasFoundGoneCarriesTheRoundOn(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	asks := &boxAsks{err: ErrBoxHostSilent}
 	rig.onNode(t, "node-b", asks, nil)
 	run := rig.launchedBy("t1", "node-a")
-	if marked, err := rig.pending.MarkLaunchNodeGone(t.Context(), "t1", run.LaunchID, "node-a",
-		rig.now); err != nil || !marked {
-		t.Fatalf("MarkLaunchNodeGone = %v, %v", marked, err)
+	if marked, err := rig.pending.MarkLost(t.Context(), "t1", run.LaunchID,
+		JobLoss{Cause: LossLaunchNodeGone, Node: "node-a", At: rig.now}); err != nil || !marked {
+		t.Fatalf("MarkLost = %v, %v", marked, err)
 	}
 
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}
-	rig.finished("t1")
-	failed := rig.failures()
-	if len(failed) != 1 || failed[0].Reason != types.SandboxFailureLaunchNodeGone ||
-		!strings.Contains(failed[0].Detail, "node-a") {
-		t.Fatalf("announced %+v; want one %s naming node-a", failed, types.SandboxFailureLaunchNodeGone)
-	}
 	if got := asks.reads(); len(got) != 0 {
 		t.Errorf("asked the gone host for %v", got)
 	}
-	if len(rig.resumer.requests) != 0 {
-		t.Error("a run whose box went with its host resumed its turn")
+	if failed := rig.failures(); len(failed) != 0 {
+		t.Errorf("announced %+v; a lost job's round is carried on, not failed", failed)
+	}
+	requests := rig.resumer.calls()
+	if len(requests) != 1 {
+		t.Fatalf("the turn was resumed %d times, want once", len(requests))
+	}
+	lost := requests[0].Lost
+	if lost == nil || lost.Cause != LossLaunchNodeGone || lost.BoxKept ||
+		lost.Losses != 1 || lost.Limit != MaxRoundLosses || lost.Why != LossLaunchNodeGone.Why() {
+		t.Errorf("resumed with %+v; want the gone node's loss, no box kept, the round's first", lost)
 	}
 }
 

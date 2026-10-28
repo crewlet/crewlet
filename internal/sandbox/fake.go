@@ -10,7 +10,9 @@ import (
 	"path"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // The in-process test doubles.
@@ -116,14 +118,15 @@ func (s *FakeSandbox) StartBackground(ctx context.Context, cmd string, opts Exec
 	return strconv.Itoa(len(s.background)), nil
 }
 
-// JobRunning answers through [FakeSandbox.Exec], the way a remote box does,
-// so a test scripts liveness with ExecFunc.
-func (s *FakeSandbox) JobRunning(ctx context.Context, commandID string) (bool, error) {
-	return probeByKill(ctx, s, commandID)
+// Job answers through [FakeSandbox.Exec], the way a remote box does, so a
+// test scripts liveness with ExecFunc ([remoteJob]).
+func (s *FakeSandbox) Job(ctx context.Context, commandID string) (JobState, error) {
+	return remoteJob(ctx, s, commandID)
 }
 
 // WriteFile stores the content in memory, where [FakeSandbox.Put] and
-// ReadFile can see it.
+// ReadFile can see it — replaced whole under the box's lock, so a read never
+// finds a write half done, as no real backend's does ([Sandbox.WriteFile]).
 func (s *FakeSandbox) WriteFile(ctx context.Context, p string, content []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -411,6 +414,9 @@ type FakeRunner struct {
 
 	done   bool
 	result Result
+	// lost is what [FakeRunner.Lose] took down with its engine, nil before
+	// it is called.
+	lost *fakeLoss
 
 	// Player, when set, is what each job started on this runner DOES: called
 	// once per job with the request it was started with, and its answer is
@@ -445,7 +451,7 @@ type FakeRunner struct {
 	// and is called WITHOUT the runner's lock — so one box's poll can be
 	// held while another's runs, as a real runner's are, rather than every
 	// poll queueing behind the fake's own mutex.
-	PollFunc func(ctx context.Context, box Sandbox) (bool, error)
+	PollFunc func(ctx context.Context, box Sandbox) (JobState, error)
 	// CollectErr, when set, fails every Collect.
 	CollectErr error
 	// CollectFunc, when set, is called by every Collect with its context,
@@ -486,7 +492,12 @@ type fakePlay struct {
 	req    RunRequest
 	once   sync.Once
 	result Result
+	// finished is set once the play has answered.
+	finished atomic.Bool
 }
+
+// played reports whether the job's play has answered.
+func (p *fakePlay) played() bool { return p.finished.Load() }
 
 // NewFakeRunner returns a runner under the given name.
 func NewFakeRunner(name string) *FakeRunner {
@@ -510,7 +521,10 @@ func (r *FakeRunner) play(ctx context.Context, handle RunHandle) (Result, bool) 
 	// ONCE, under the job's own guard rather than the runner's lock: the
 	// play can take as long as its work does, and every other job's poll —
 	// and every read of what was started — must not queue behind it.
-	p.once.Do(func() { p.result = player(ctx, p.req) })
+	p.once.Do(func() {
+		p.result = player(ctx, p.req)
+		p.finished.Store(true)
+	})
 	return p.result, true
 }
 
@@ -546,24 +560,32 @@ func (r *FakeRunner) Start(ctx context.Context, box Sandbox, req RunRequest) (Ru
 	return handle, nil
 }
 
-// Poll reports done once [FakeRunner.Finish] has been called — or, under a
-// [FakeRunner.Player], once the job has been played, which this poll does.
-func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (bool, error) {
+// Poll reports the job ended once [FakeRunner.Finish] has been called — or,
+// under a [FakeRunner.Player], once the job has been played, which this poll
+// does — and lost once [FakeRunner.Lose] took it down with its engine.
+func (r *FakeRunner) Poll(ctx context.Context, box Sandbox, handle RunHandle) (JobState, error) {
 	r.mu.Lock()
 	poll := r.PollFunc
+	_, lost := r.lostJob(handle)
 	r.mu.Unlock()
 	if poll != nil {
 		return poll(ctx, box)
 	}
+	if lost {
+		return JobLost, nil
+	}
 	if _, played := r.play(ctx, handle); played {
-		return true, nil
+		return JobEnded, nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.PollErr != nil {
-		return false, r.PollErr
+		return "", r.PollErr
 	}
-	return r.done, nil
+	if r.done {
+		return JobEnded, nil
+	}
+	return JobRunning, nil
 }
 
 // Collect returns the result a test queued with [FakeRunner.Finish], or the
@@ -580,6 +602,12 @@ func (r *FakeRunner) Collect(ctx context.Context, box Sandbox, handle RunHandle)
 		if err := collect(ctx); err != nil {
 			return Result{}, err
 		}
+	}
+	r.mu.Lock()
+	partial, lost := r.lostJob(handle)
+	r.mu.Unlock()
+	if lost {
+		return partial, nil
 	}
 	if result, played := r.play(ctx, handle); played {
 		return result, nil
@@ -694,6 +722,46 @@ func (r *FakeRunner) Finish(result Result) {
 	defer r.mu.Unlock()
 	r.done = true
 	r.result = result
+}
+
+// Lose takes every job running now down with its engine — the jobs a host's
+// restart killed mid-step: each this runner has started so far and not played,
+// and each it is asked about that it never started, which a previous process
+// of the engine did. A poll of one reports it [JobLost], and a collection of
+// one reads partial, what it had said before it went. A job started after it
+// is not lost.
+func (r *FakeRunner) Lose(partial Result) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lost = &fakeLoss{before: len(r.started), partial: partial}
+}
+
+// fakeLoss is what [FakeRunner.Lose] took down: the jobs started before it,
+// and what each had said.
+type fakeLoss struct {
+	before  int
+	partial Result
+}
+
+// lostJob is what a lost job had said, and whether the job handle names was
+// lost. Called under the runner's lock.
+func (r *FakeRunner) lostJob(handle RunHandle) (Result, bool) {
+	if r.lost == nil {
+		return Result{}, false
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(handle.CommandID, "cmd-"))
+	switch {
+	case err != nil || !strings.HasPrefix(handle.CommandID, "cmd-") || n < 1 || n > len(r.started):
+		// NOT THIS RUNNER'S: a previous process started it, and it went
+		// with that process.
+		return r.lost.partial, true
+	case n > r.lost.before:
+		return Result{}, false
+	}
+	if p := r.plays[handle.CommandID]; p != nil && p.played() {
+		return Result{}, false
+	}
+	return r.lost.partial, true
 }
 
 // Installed reports whether the agent was installed in this box.

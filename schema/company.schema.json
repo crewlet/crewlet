@@ -1335,7 +1335,7 @@
             ],
             "x-crewlet-secret": true
           },
-          "description": "Extra environment for the CLI child process.",
+          "description": "Extra environment for the CLI, on this host and in every executor run's box (beneath the seat's role.sandbox.env).",
           "type": [
             "object",
             "null"
@@ -1507,7 +1507,7 @@
           ]
         },
         "state_dir": {
-          "description": "Parent directory for box directories; used by both local placements.",
+          "description": "Parent directory for box directories; used by both local placements and by deep work on the engine host.",
           "type": [
             "string",
             "number",

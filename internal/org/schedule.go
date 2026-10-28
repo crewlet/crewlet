@@ -32,14 +32,54 @@ const (
 	TargetLead ScheduleTarget = "lead"
 )
 
-// DefaultScheduleTimeout caps a single scheduled turn.
+// DefaultScheduleTimeout caps a single scheduled turn: its whole wall clock,
+// from the moment the fire's turn begins, its executor's run included — the
+// run carries the same instant on its row, and the poll ends one that
+// outlasts it (internal/agent/turn's Settings.Deadline).
 //
-// Three minutes: a scheduled turn is a ritual — post a standup, compile a
-// weekly report — not open-ended work, and the cap exists so a wedged turn
-// releases its seat long before the next fire rather than holding it until
-// someone notices. It is comfortably above a normal multi-phase turn, so
-// hitting it means stuck, not busy.
-const DefaultScheduleTimeout = 3 * time.Minute
+// A scheduled turn is a ritual — post a standup, compile a weekly report —
+// not open-ended work, and the cap exists so a wedged one releases its seat
+// long before the next fire rather than holding it until someone notices. So
+// it sits well above a slow ritual, and hitting it means stuck, not busy.
+//
+// # What a ritual's turn is
+//
+// Every agent seat's executor is its coding CLI's own run in a box, so the
+// turn is that run and what surrounds it: the turn-start prefetch, whose
+// blocks run side by side, each auxiliary call held to thirty seconds
+// (internal/agent/prefetch's AuxTimeout), and on a seat's first turn its
+// onboarding pass; the launch — the box started, a container within the local
+// backend's two-minute control bound with a cold image pull inside it
+// (internal/sandbox's ControlTimeout), an e2b box within its one-minute
+// client bound, a direct box at once, and the seat's setup applied, each
+// command allowed [DefaultSetupTimeoutSeconds] though the git-auth recipe
+// takes seconds; the run — for a ritual, read what it needs, post once and
+// submit, some five to ten of its CLI's rounds at the twenty to sixty seconds
+// a round the shipped Claude Code example sizes its own round cap by, so ten
+// minutes at the slow end; and the reviewer, one CLI run on the engine host.
+// About a quarter of an hour for a slow ritual that is not stuck, and a
+// reviewer's send-back runs the executor again in the same box, its setup
+// spared.
+//
+// # Half an hour
+//
+// Twice that, so a send-back still fits. Not more, because a longer cap is
+// not free: a seat takes no other work while its run works, so the messages
+// sent to a seat whose ritual is wedged wait until the cap ends it. Half an
+// hour still frees a daily or weekly ritual's seat hours before its next
+// fire; a schedule that fires more often than that sits out the cap behind a
+// wedged turn, its fires queued on the seat's inbox, unless it sets a
+// timeout_seconds below its period.
+//
+// The three minutes this replaces were sized for an executor that ran in the
+// engine's own loop, "comfortably above a normal multi-phase turn"; around a
+// run in a box they ran out inside one setup command's own allowance, so a
+// scheduled run could be ended before it had done anything.
+// TestADefaultScheduleCapOutlastsTheTurnBeforeItsRun (internal/engine) holds
+// the order against the bounds a turn spends before its run, which live in
+// packages that know nothing of schedules. A judgment without production
+// data.
+const DefaultScheduleTimeout = 30 * time.Minute
 
 // Schedule is recurring work a seat or a unit owns, fired on a cron
 // expression.

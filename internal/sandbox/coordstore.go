@@ -222,7 +222,17 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		if existing.SandboxID == "" {
 			existing.LaunchNode = run.LaunchNode
 		}
-		existing.LaunchNodeGone = time.Time{}
+		// A LOSS IS COUNTED BY THE ROUND IT CARRIES ON, and the verdict
+		// itself was the previous job's: a relaunch that continues the round
+		// adds that job to the round's losses where it was lost, and a new
+		// round has lost nothing ([PendingRun.RoundLosses]).
+		switch {
+		case !run.Continues:
+			existing.RoundLosses = 0
+		case existing.Lost != nil:
+			existing.RoundLosses++
+		}
+		existing.Lost = nil
 		// AND THE PREVIOUS JOB'S COMMAND AND SESSION ARE NOT THIS JOB'S.
 		existing.CommandID, existing.SessionID = "", ""
 		// A hold was on the previous job's resume, which is over.
@@ -800,34 +810,38 @@ func (s *CoordStore) ExpirePause(ctx context.Context, turnID string) (bool, erro
 	return won, err
 }
 
-// MarkLaunchNodeGone records the fleet's verdict that a running job's launch
-// node is gone. See the contract on [PendingStore].
+// MarkLost records the verdict that a running job was lost with the host it
+// ran on. See the contract on [PendingStore].
 //
-// NO FENCE: the verdict is the fleet waiter's, which holds no seat, and it is a
-// fact about a node rather than an ownership decision — what it licenses is the
-// seat holder's own ending, made under that holder's lease. What guards it is
-// the job, the status and the node the caller judged.
-func (s *CoordStore) MarkLaunchNodeGone(ctx context.Context, turnID, launch, node string, at time.Time) (bool, error) {
-	if launch == "" || node == "" {
+// NO FENCE: the verdict is the waiter's, which holds no seat, and it is a fact
+// about a job and its host rather than an ownership decision — what it licenses
+// is the seat holder's own carrying on of the round, made under that holder's
+// lease. What guards it is the job, the status and the node the caller judged.
+func (s *CoordStore) MarkLost(ctx context.Context, turnID, launch string, loss JobLoss) (bool, error) {
+	if launch == "" {
 		return false, nil
 	}
 	stands := false
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		if run.LaunchID != launch || run.LaunchNode != node || run.Status != StatusRunning {
+		if run.LaunchID != launch || run.Status != StatusRunning ||
+			(loss.Node != "" && run.LaunchNode != loss.Node) {
 			return false
 		}
-		if !run.LaunchNodeGone.IsZero() {
+		if run.Lost != nil {
 			stands = true
 			return false
 		}
+		at := loss.At
 		if at.IsZero() {
 			at = s.clock()
 		}
-		run.LaunchNodeGone = at.UTC()
+		recorded := loss
+		recorded.At = at.UTC()
+		run.Lost = &recorded
 		return true
 	})
 	if err != nil {
-		return false, fmt.Errorf("sandbox: record run %s's launch node as gone: %w", turnID, err)
+		return false, fmt.Errorf("sandbox: record run %s's job as lost: %w", turnID, err)
 	}
 	return won || stands, nil
 }

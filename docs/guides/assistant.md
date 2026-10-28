@@ -296,15 +296,31 @@ A run goes to the first of these the company configures:
    (`apt install bubblewrap`) or run on a kernel with Landlock, or configure a
    cell above.
 
+   Its box is made under the company's box root, where a seat's `direct`
+   boxes are made too: `providers.sandbox.local.state_dir`, else
+   `$CREWLET_SANDBOX_LOCAL_HOME`, else `~/.crewlet/sandboxes`, in a directory
+   of its own there (`<box root>/assistant/boxes/<id>`), which a seat's
+   backend never lists or reaps. So what a run checks out, installs and builds
+   lands on the volume you sized for boxes and never on the one holding the
+   store and the stream ([Where a box writes](deployment.md#where-a-box-writes)).
+   A revision that moves `state_dir` leaves a box kept for a proposal where it
+   is: for as long as the node runs, the approval continues the run in it and
+   its earlier box root stays denied to every other run.
+
 A run dials `CREWLET_MCP_BRIDGE_URL`, the fleet's address for the tool bridge
 ([Code Sandbox](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)),
 and its call is relayed to the node that opened its session wherever it lands.
-Where every box runs on the engine host, as on a single node with no sandbox
-cell, point that variable at the node's loopback address
-(`http://127.0.0.1:<api.port>`). A confined run's bridge token is then admitted
-from that host's loopback only, and never relayed to another node. A run in a
-`container` box on the same host is handed the runtime's name for the engine
-host in place of loopback
+Where every box runs on the engine host — a single node whose
+`providers.sandbox` configures no `e2b` cell, such as one with only the
+`direct` cell the [Quickstart](../getting-started/quickstart.md) sets up —
+point that variable at the node's loopback address
+(`http://127.0.0.1:<api.port>`; `[::1]`, `localhost` and a name under it,
+such as `engine.localhost`, are loopback too). A confined run's bridge token
+is then admitted from that host's loopback only, under a loopback host name or
+a container runtime's name for the engine host, so a page in a browser on the
+host cannot spend a leaked one under a name of its own, and it is never
+relayed to another node. A run in a `container` box on the same host is
+handed the runtime's name for the engine host in place of loopback
 ([Local sandboxes](../concepts/code-sandbox.md#local-sandboxes)) and is held to
 loopback all the same, so it can do nothing a confined run cannot. A runtime
 that delivers the box's calls over the host's loopback (Docker Desktop, and

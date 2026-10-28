@@ -94,8 +94,8 @@ func completesOnEveryCLI(t *testing.T, manager *sandbox.Manager, want string) {
 		if err != nil {
 			t.Fatalf("%s: Start: %v", cli, err)
 		}
-		if done, err := runner.Poll(t.Context(), box, handle); err != nil || !done {
-			t.Fatalf("%s: the run is done %v (%v), want a run that finishes", cli, done, err)
+		if state, err := runner.Poll(t.Context(), box, handle); err != nil || state != sandbox.JobEnded {
+			t.Fatalf("%s: the run is %v (%v), want a run that finishes", cli, state, err)
 		}
 		res, err := runner.Collect(t.Context(), box, handle)
 		if err != nil || !res.Success || res.Text != want {

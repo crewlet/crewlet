@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,11 +37,17 @@ const WorkspaceSubdir = "workspace"
 // identifiable — and greppable in `docker ps` — without consulting Crewlet.
 const ContainerPrefix = "crewlet-sbx-"
 
-// controlTimeout bounds a CONTROL-PLANE command: mkdir, `docker exec`, the
-// liveness probe. Never the coding job itself, which is detached and
-// deliberately uncapped. Sized for a container runtime under load, not for
-// work.
-const controlTimeout = 120 * time.Second
+// ControlTimeout bounds a CONTROL-PLANE command: mkdir, `docker exec`, the
+// liveness probe, and a container box's start — its `docker run`, with the
+// pull of an image the host does not hold yet inside it. Never the coding job
+// itself, which is detached and deliberately uncapped. Sized for a container
+// runtime under load, not for work.
+//
+// EXPORTED for the one reader outside this package: a scheduled turn's
+// default cap (internal/org's DefaultScheduleTimeout) has to outlast what its
+// turn spends before its run starts, the box's start among it, and a test in
+// internal/engine holds the two in order.
+const ControlTimeout = 120 * time.Second
 
 // termGrace is how long a direct box's process group gets between SIGTERM and
 // SIGKILL.
@@ -65,7 +72,25 @@ func localErrorf(format string, args ...any) error {
 	return &LocalError{msg: fmt.Sprintf(format, args...)}
 }
 
-// DefaultBoxRoot is the parent directory local boxes are created under.
+// BoxRoot is the directory local boxes are made under for a company whose
+// `providers.sandbox.local.state_dir` is stateDir: the state_dir as written,
+// else [DefaultBoxRoot].
+//
+// ONE RULE for every box the engine makes on its host: a seat's boxes, in
+// either local cell ([NewLocal]), and the Dashboard Assistant's confined
+// deep-work boxes, which the engine keeps in a directory of their own beneath
+// it. The volume an operator gives this directory is the one sized for boxes;
+// a box root derived from anything else (the store's directory, which it once
+// was for deep work) puts a run's writes on a volume nobody sized for them.
+func BoxRoot(stateDir string) string {
+	if stateDir == "" {
+		return DefaultBoxRoot()
+	}
+	return stateDir
+}
+
+// DefaultBoxRoot is the parent directory local boxes are created under when
+// the company names no `providers.sandbox.local.state_dir` ([BoxRoot]).
 func DefaultBoxRoot() string {
 	if override := strings.TrimSpace(os.Getenv(BoxRootEnv)); override != "" {
 		return override
@@ -198,6 +223,11 @@ func (l boxLayout) runFile() string { return filepath.Join(l.records(), runRecor
 // envFile is the container runtime's --env-file. See containerBox.envArgs.
 func (l boxLayout) envFile() string { return filepath.Join(l.records(), envRecord) }
 
+// witnessFile records the engine process that last saw the box's job running,
+// which is how a job its engine's restart killed is told from one that ended
+// ([jobEnd]).
+func (l boxLayout) witnessFile() string { return filepath.Join(l.records(), witnessRecord) }
+
 // The records' names in the box's records ([boxLayout.openRecords]), each the
 // last element of the path its method above names.
 const (
@@ -206,6 +236,7 @@ const (
 	credentialsRecord = "credentials.json"
 	runRecord         = "run.json"
 	envRecord         = "env"
+	witnessRecord     = "witness"
 )
 
 // seededCredential is one login file a box was seeded with, as the box's
@@ -360,13 +391,13 @@ func seedLogin(ctx context.Context, l boxLayout, login boxLogin) (map[string]see
 }
 
 // writeBoxFile puts one seeded login file at name in a box's home, its parents
-// created, through a temporary file and a rename — every step through the
-// home's root ([hostbox.ReplaceFileIn]).
+// created, as every file of a box is written: replaced whole, every step
+// through the home's root ([replaceIn]).
 func writeBoxFile(home *os.Root, name string, content []byte) error {
 	if err := home.MkdirAll(filepath.Dir(name), hostbox.DirMode); err != nil {
 		return err
 	}
-	return hostbox.ReplaceFileIn(home, name, bytes.NewReader(content))
+	return replaceIn(home, name, content)
 }
 
 // digestOf is the SHA-256 of content in [hostbox.Digest]'s form.
@@ -715,14 +746,10 @@ func touchAlive(l boxLayout) {
 	if records.Chtimes(aliveRecord, now, now) == nil {
 		return
 	}
-	f, err := openWritableIn(records, aliveRecord)
-	if err != nil {
-		localLog.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
-		return
-	}
-	if err := f.Close(); err != nil {
-		// A keepalive that did not land is a box the reaper will treat as
-		// an orphan, so the failure is worth the same line as the open.
+	// The stamp is made, empty, where there is none yet: a keepalive that
+	// did not land is a box the reaper will treat as an orphan, so the
+	// failure is worth the same line as the records' open.
+	if err := replaceIn(records, aliveRecord, nil); err != nil {
 		localLog.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
 	}
 }
@@ -736,31 +763,19 @@ func recordLeader(l boxLayout, leader procgroup.Leader) error {
 	return writeRecord(l, pidRecord, []byte(leader.String()))
 }
 
-// writeRecord puts blob at the engine's record called name about a box, whole, in
-// place, through the box's records ([boxLayout.openRecords]) and only as a
-// regular file where it lies ([openWritableIn]). The records directory must
-// exist.
+// writeRecord puts blob at the engine's record called name about a box,
+// through the box's records ([boxLayout.openRecords]): replaced whole, and
+// only over a regular file where it lies ([replaceIn]), so a reader — another
+// goroutine's poll, the next engine after a restart, the runtime's CLI reading
+// the env file — finds the record before the write or after it, never half of
+// one. The records directory must exist.
 func writeRecord(l boxLayout, name string, blob []byte) error {
 	records, err := l.openRecords()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = records.Close() }()
-	return writeIn(records, name, blob)
-}
-
-// writeIn puts blob at name beneath root, whole, in place, only as a regular
-// file where it lies ([openWritableIn]). name's directory must exist.
-func writeIn(root *os.Root, name string, blob []byte) error {
-	f, err := openWritableIn(root, name)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(blob); err != nil {
-		_ = f.Close()
-		return err
-	}
-	return f.Close()
+	return replaceIn(records, name, blob)
 }
 
 // jobGroup is the box's recorded job group when that group is still the job,
@@ -850,7 +865,7 @@ type LocalOptions struct {
 	// the ask shim — is identical.
 	Placement Placement
 
-	// StateDir is where boxes are created. Empty takes [DefaultBoxRoot].
+	// StateDir is where boxes are created: [BoxRoot] of it.
 	StateDir string
 
 	// Image is the container image. REQUIRED for Container, and it must have
@@ -923,10 +938,7 @@ func NewLocal(opts LocalOptions) (*Local, error) {
 		return nil, localErrorf("a confined local box needs both what it is kept from and " +
 			"the mechanism that keeps it; one was given without the other")
 	}
-	root := opts.StateDir
-	if root == "" {
-		root = DefaultBoxRoot()
-	}
+	root := BoxRoot(opts.StateDir)
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, localErrorf("providers.sandbox.local.state_dir %q is not a usable path: %v", root, err)
@@ -1122,6 +1134,19 @@ func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []st
 	argv = append(argv, l.cli.hostAliasArgs()...)
 	if l.opts.Network != "" {
 		argv = append(argv, "--network", l.opts.Network)
+	}
+	// AHEAD OF THE ENGINE FOR THE KERNEL'S OOM KILLER ([boxOOMScore]), for
+	// every process in the box and not only its first: both runtimes start an
+	// `exec` from the container's own process specification, the value
+	// included (Docker's daemon/exec.go, Podman's
+	// libpod/oci_conmon_exec_common.go), so the coding job and every setup
+	// command take it too. Neither raises it unasked: Docker runs a container
+	// at 0, and Podman at its own CLI's value, which is the engine's. A
+	// container on the engine's own kernel competes with the engine for the
+	// host's memory; one in a VM of its own (Docker Desktop) is merely ordered
+	// within it. Before run_args, so an operator's own --oom-score-adj wins.
+	if score, ok := boxOOMScore(); ok {
+		argv = append(argv, "--oom-score-adj", strconv.Itoa(score))
 	}
 	// LAST, so an operator's own flags win. Both runtimes take the final
 	// occurrence of a repeated flag, which makes run_args the escape hatch

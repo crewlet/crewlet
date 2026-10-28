@@ -487,8 +487,8 @@ func TestAttachingToAPausedBoxLeavesItPaused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
-	if running, err := attached.JobRunning(t.Context(), handle); err != nil || !running {
-		t.Fatalf("the stopped job reads as running=%v, %v; want it alive and readable", running, err)
+	if state, err := attached.Job(t.Context(), handle); err != nil || state != JobRunning {
+		t.Fatalf("the stopped job reads as %v, %v; want it running and readable", state, err)
 	}
 	time.Sleep(200 * time.Millisecond)
 	if after := fileSize(counter); after != stopped {
@@ -1177,26 +1177,28 @@ func TestTheJobProbeFollowsTheJobAndNotItsPid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
-	if running, err := box.JobRunning(t.Context(), handle); err != nil || !running {
-		t.Fatalf("JobRunning of a live job = %v, %v; want true", running, err)
+	if state, err := box.Job(t.Context(), handle); err != nil || state != JobRunning {
+		t.Fatalf("Job of a live job = %v, %v; want running", state, err)
 	}
 
 	// The job's pid now names a stranger: a live process that is not the job.
 	stranger := startStranger(t)
 	recordAsJob(t, box, recycled(stranger))
-	if running, err := box.JobRunning(t.Context(), strconv.Itoa(stranger.PID)); err != nil || running {
-		t.Fatalf("JobRunning of a recycled pid = %v, %v; want false: a stranger held the run open", running, err)
+	if state, err := box.Job(t.Context(), strconv.Itoa(stranger.PID)); err != nil || state != JobEnded {
+		t.Fatalf("Job of a recycled pid = %v, %v; want ended: a stranger held the run open", state, err)
 	}
 	// And a handle the record does not name is a job this box has replaced.
-	if running, err := box.JobRunning(t.Context(), handle); err != nil || running {
-		t.Fatalf("JobRunning of a handle the record no longer names = %v, %v; want false", running, err)
+	if state, err := box.Job(t.Context(), handle); err != nil || state != JobEnded {
+		t.Fatalf("Job of a handle the record no longer names = %v, %v; want ended", state, err)
 	}
-	if _, err := box.JobRunning(t.Context(), "not-a-pid"); err == nil {
+	if _, err := box.Job(t.Context(), "not-a-pid"); err == nil {
 		t.Fatal("a handle that is not a pid was answered rather than refused")
 	}
 }
 
 // An exited wrapper is not running, and the answer does not wait for the reap.
+// It ENDED, not lost: the engine process that started it — this one — is still
+// here, so it went in an engine's sight and what it left is its result.
 func TestAFinishedJobIsNotRunning(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)
@@ -1205,10 +1207,14 @@ func TestAFinishedJobIsNotRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartBackground: %v", err)
 	}
+	var state JobState
 	waitFor(t, 5*time.Second, func() bool {
-		running, err := box.JobRunning(t.Context(), handle)
-		return err == nil && !running
+		state, err = box.Job(t.Context(), handle)
+		return err == nil && state != JobRunning
 	}, "a finished job still reads as running")
+	if state != JobEnded {
+		t.Fatalf("a job that died while its engine ran reads as %v; want ended", state)
+	}
 }
 
 // A job record that exists and cannot be read is the unknown answer, not an

@@ -42,7 +42,7 @@ const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 //
 // hostURL is where a box on this node's own host reaches it — the node's own
 // listener on loopback ([Options.HostURL]), derived by whoever bound that
-// listener on a node that serves the route, "" anywhere else.
+// listener on a node that runs seats, "" anywhere else.
 //
 // NEITHER BUILDS NOTHING, and that is a real configuration rather than an
 // error. The route is then absent, and every executor launch on this node is

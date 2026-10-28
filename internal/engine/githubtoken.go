@@ -238,7 +238,10 @@ func issuedAtUse(kind integration.Kind) bool { return kind == integration.KindGi
 // any other) is rewritten here, on the poll, with the token the issuer holds
 // once it renews it, and a credential helper reading that file at the moment
 // of use always reads a token that is good. The documented git-auth recipe
-// reads it that way (docs/concepts/code-sandbox.md).
+// reads it that way (docs/concepts/code-sandbox.md). The rewrite REPLACES the
+// file whole ([sandbox.Sandbox.WriteFile]): written in place, it was empty and
+// then half written for as long as the write took, and a push whose helper
+// read it then authenticated with nothing.
 //
 // ON WHICHEVER WAITER POLLS THE BOX, and so on both of a node's
 // ([Engine.sandboxWaiterOptions]): a `direct` or `container` box is polled by
@@ -313,9 +316,9 @@ func (e *Engine) refreshTokenFiles(
 		}
 		if err := box.WriteFile(ctx, path, []byte(value)); err != nil {
 			// ONCE FOR THE FILE, like every other story here: a file the
-			// job made read-only, replaced with a link or a directory, or a
-			// box out of disk, fails the same way on every poll and every
-			// nudge for the life of the job.
+			// job replaced with a link or a directory, a directory it made
+			// read-only around the file, or a box out of disk, fails the
+			// same way on every poll and every nudge for the life of the job.
 			story := tokenWait{held: len(held) > 0, unwritable: err.Error()}
 			e.tokenWaits.tell(ctx, file, story, e.tokenWaitForget(),
 				[]any{"seat", seat.Handle(), "turn_id", run.TurnID, "file", path})
@@ -360,11 +363,13 @@ func tokenFileJob(job, path string) string { return job + "\x00" + path }
 // AND ONE OF A FILE THE POLL CANNOT WRITE: the token is issued, and writing
 // it into the file failed, so the job goes on with what the file holds — a
 // token nothing renews any more, which GitHub refuses once it expires, or
-// nothing at all. The job made the file read-only, replaced it with a link
-// or a directory (a local box refuses to follow either), or the box ran out
-// of disk; each fails the same way on every poll, so the failure is told
-// once for the file, and again only when its error changes. A write that
-// succeeds settles it.
+// nothing at all. The job replaced the file with a link or a directory (a
+// local box replaces only a regular file, and leaves either as the job made
+// it), made the directory around it read-only (a file is replaced by one
+// written beside it, so a file made read-only itself is no obstacle), or the
+// box ran out of disk; each fails the same way on every poll, so the failure
+// is told once for the file, and again only when its error changes. A write
+// that succeeds settles it.
 //
 // THE REFUSAL'S REASON IS PART OF THE STORY, so a job is told each reason
 // GitHub gives once, and told again only when GitHub's answer changes.
@@ -406,9 +411,9 @@ func (w tokenWait) detail() string {
 	case w.unwritable != "" && w.held:
 		return "the seat's GitHub App token was renewed and could not be written into this " +
 			"file: " + w.unwritable + "; the token the file holds is no longer renewed, and " +
-			"GitHub refuses it once it expires. A file the job made read-only or replaced " +
-			"with a link or a directory is never rewritten; the first poll whose write " +
-			"succeeds puts the current token there"
+			"GitHub refuses it once it expires. A file the job replaced with a link or a " +
+			"directory, or whose directory it made read-only, is never rewritten; the first " +
+			"poll whose write succeeds puts the current token there"
 	case w.unwritable != "":
 		return "the seat's GitHub App token was issued and could not be written into this " +
 			"file, so the run has no token there: " + w.unwritable + "; the first poll " +

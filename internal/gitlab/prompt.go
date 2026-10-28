@@ -19,10 +19,11 @@ import (
 //
 // WHAT IT SAYS IS WHAT ONLY THE ENGINE KNOWS: why the seat is reading this,
 // the item by the reference a person would paste, the product facts a model
-// would not assume (a close that means stop, where an issue's code changes
-// go), and how each ask is declined on this host. How to review a diff or
-// fix a red pipeline is the model's own, and that a direct ask may not end in
-// silence is the executor's contract — neither is restated here.
+// would not assume (a close that means stop, who makes an issue's code change
+// and under whose name), and how each ask is declined on this host. How to
+// review a diff or fix a red pipeline is the model's own, and that a direct
+// ask may not end in silence is the executor's contract — neither is restated
+// here.
 //
 // NOTHING HERE NAMES A TOOL — the deployed MCP server's tool names are not
 // knowable by the engine. See docs/concepts/tool-capabilities.md.
@@ -198,11 +199,17 @@ func assigned(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 	b.WriteString("**Assigned by:** " + senderLabel(n, parties) + "\n\n" +
 		"**Description:**\n" + orElse(n.Body, "(no description)") + "\n\n")
 	if !mr {
-		// A FACT ABOUT THIS ENGINE, not advice: where code changes go, and
-		// whose name the merge request they produce carries.
-		b.WriteString("Code changes go through your sandboxed coding runtime," +
-			" which opens a merge request under your own identity on the code" +
-			" host. ")
+		// A FACT ABOUT THIS ENGINE, not advice: who makes the change, and
+		// whose name the merge request carries. The executor reading this IS
+		// the seat's coding run, with its own checkout, shell and git, so the
+		// change is its own to make: there is no other runtime to hand it
+		// to, and a prompt that names one has the seat look for something
+		// that does not exist. The request opens under the seat's own
+		// identity, so what the code host says about it afterwards — a
+		// review, a merge — reaches the seat that wrote it.
+		b.WriteString("You make any code change the issue needs yourself, in" +
+			" your own checkout, and open the merge request under your own" +
+			" identity on the code host. ")
 	}
 	b.WriteString("If the work is not yours, reassign it to whoever it belongs to.\n")
 }

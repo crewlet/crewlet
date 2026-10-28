@@ -243,6 +243,72 @@ func undeclaredIdentities(t *testing.T, data []byte) []string {
 	return missing
 }
 
+// THE README'S COMPANY LOADS. README.md is the repository's front page, and
+// the company on it is the first YAML most readers copy and run — and no case
+// read it. When providers.sandbox became required of every company with an
+// agent seat and a model, that company was refused by `crewlet validate` and
+// nothing went red: a sweep of the docs is what found it.
+//
+// EVERY yaml block on the page is held as a company document, so a second one
+// is covered the day it is added, and a block of another kind fails here until
+// this case is given its loader rather than being certified by nobody. A
+// failure names the line of README.md the block starts on.
+func TestTheReadmeCompanyLoads(t *testing.T) {
+	t.Parallel()
+	blocks := yamlBlocksOf(string(readRepoFile(t, "README.md")))
+	if len(blocks) == 0 {
+		t.Fatal("README.md shows no yaml block, so this case certifies nothing: " +
+			"the company moved or its fence changed, and the case has to follow it")
+	}
+	for _, block := range blocks {
+		at := fmt.Sprintf("README.md:%d", block.line)
+		t.Run(at, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := ParseCompany(block.doc)
+			if err != nil {
+				t.Fatalf("%s: the company here is refused — a reader copying it gets "+
+					"a document `crewlet validate` rejects:\n%v", at, err)
+			}
+			o, err := cfg.Organization()
+			if err != nil {
+				t.Fatalf("%s: the company here does not build an org:\n%v", at, err)
+			}
+
+			// WHAT THE PAGE SAYS OF IT, which validation does not hold. "A
+			// four-agent company, with a seat for you": a company with no
+			// human seat is valid — one its agents run alone — and admits
+			// nobody, the reader included, since every person joins on one.
+			var agents, humans int
+			for r := range o.AllRoles() {
+				if r.IsHuman() {
+					humans++
+					continue
+				}
+				agents++
+			}
+			if agents == 0 || humans == 0 {
+				t.Errorf("%s: the company should model both kinds of seat, an agent's "+
+					"and the reader's own: %d agents, %d humans", at, agents, humans)
+			}
+			// "a handle is the seat's identity for good": a file is minted
+			// afresh from its names on every import, so one a reader keeps
+			// states every identity.
+			if missing := undeclaredIdentities(t, block.doc); len(missing) > 0 {
+				t.Errorf("%s: the company leaves identities to be minted from names, "+
+					"which a re-import of an edited copy mints again:\n  %s",
+					at, strings.Join(missing, "\n  "))
+			}
+			// "manages: and lead: name a seat by its handle and a unit by its
+			// key": the block is the page's example of that rule, so every
+			// reference in it resolves. Validation only warns of one that
+			// does not, because a company assembled in pieces carries them.
+			for _, w := range cfg.ReferenceWarnings() {
+				t.Errorf("%s: %s: %s", at, w.Path, w.Message)
+			}
+		})
+	}
+}
+
 // A reader follows the page top to bottom, so every ${VAR} the config
 // references must appear in an export line somewhere on it. An unset one
 // resolves to the empty string and fails much later, somewhere else.
@@ -407,6 +473,30 @@ func quickstartText(t *testing.T) string {
 }
 
 var yamlBlockRE = regexp.MustCompile("(?s)```yaml\n(.*?)```")
+
+// pageYAMLBlock is one ```yaml block of a markdown page, ready to parse.
+type pageYAMLBlock struct {
+	// line is the line of the page the block's first line is on.
+	line int
+	// doc is the block AT ITS PLACE ON THE PAGE: its text behind one empty
+	// line for every page line above it, which YAML reads as nothing, so a
+	// line the parser names (an unknown key, a value of the wrong type) is
+	// the page's own rather than one counted from the fence.
+	doc []byte
+}
+
+// yamlBlocksOf is every ```yaml block of a markdown page, in page order.
+func yamlBlocksOf(page string) []pageYAMLBlock {
+	var out []pageYAMLBlock
+	for _, m := range yamlBlockRE.FindAllStringSubmatchIndex(page, -1) {
+		line := strings.Count(page[:m[2]], "\n") + 1
+		out = append(out, pageYAMLBlock{
+			line: line,
+			doc:  []byte(strings.Repeat("\n", line-1) + page[m[2]:m[3]]),
+		})
+	}
+	return out
+}
 
 // quickstartCompanyBlock finds the Tier B block: the only one with a
 // top-level name, which is exactly what distinguishes the tiers.

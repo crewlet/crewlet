@@ -42,7 +42,7 @@ func runHost(ctx context.Context, cmd hostCommand) (ExecResult, error) {
 	}
 	timeout := cmd.timeout
 	if timeout <= 0 {
-		timeout = controlTimeout
+		timeout = ControlTimeout
 	}
 	// Not exec.CommandContext: its Cancel kills the immediate child only,
 	// and the whole reason for the session is that the tree outlives it.

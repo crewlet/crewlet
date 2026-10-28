@@ -212,12 +212,12 @@ func TestAWaiterStopsAfterAPollMeetsABoxWithAPipeForARecord(t *testing.T) {
 		t.Fatalf("mkfifo: %v", err)
 	}
 	polled := make(chan struct{}, 1)
-	rig.runner.PollFunc = func(context.Context, Sandbox) (bool, error) {
+	rig.runner.PollFunc = func(context.Context, Sandbox) (JobState, error) {
 		select {
 		case polled <- struct{}{}:
 		default:
 		}
-		return false, nil
+		return JobRunning, nil
 	}
 	manager, err := NewManager(ManagerOptions{
 		Providers: map[Placement]Provider{Direct: local},

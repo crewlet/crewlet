@@ -149,12 +149,18 @@ func budgetFor(cfg Config) int {
 	return maxDeliver
 }
 
-// ackWait bounds how long a fetched-unacked message stays invisible.
+// DefaultAckWait bounds how long a fetched-unacked message stays invisible.
 //
 // Sized to a wait behind a running turn plus one worst-case turn. It is a
 // backstop, not the handoff path: a seat that loses its lease Naks
 // explicitly and the successor sees the message in about a millisecond.
-const ackWait = 30 * time.Minute
+//
+// EXPORTED because it is the longest a delivery a node that died was holding
+// stays silent before it is redelivered, which another package's clock is
+// sized against: internal/maintenance's ChannelIdleTimeout, which must not
+// close the channel of a colleague's ask that is about to come round again
+// (internal/engine holds the order between the two).
+const DefaultAckWait = 30 * time.Minute
 
 // defaultEventRetention bounds the audit/event stream.
 //

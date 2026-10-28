@@ -167,6 +167,22 @@ type ResumeRequest struct {
 	// incomplete and the executor never saw the reply.
 	Asked *AskedRun
 
+	// Lost is set when the job a completion announced was LOST with the host
+	// it ran on rather than ended ([PendingRun.Lost]): what was lost, and how
+	// often the round has been. Nil for every other resume.
+	//
+	// THE TURN CARRIES THE ROUND ON, as it does a question's: the job was cut
+	// off mid-step, so what it left is no account of the round, and the
+	// resumed turn relaunches its executor for the same round — in the lost
+	// job's box where that is still there and this node may continue in it,
+	// else in a fresh one — told that a run before it was cut off and where
+	// to look for what it left. Except where the round's calls already hold
+	// its submission: the job had finished its work and was lost on its way
+	// out, so the round is collected, and Answer is the job's account of
+	// itself, marked cut off. And past [LostRun.Limit] losses the round is not
+	// carried on again, and the turn's executor phase ends saying why.
+	Lost *LostRun
+
 	// Success is whether the sandbox run itself succeeded, for the resumed
 	// phase's own record.
 	Success bool
@@ -471,6 +487,38 @@ type CoordinatorOptions struct {
 	// is still announced and the run still ended.
 	CloseStopped func(ctx context.Context, run PendingRun) error
 
+	// TurnLost is handed every run whose decided ending is a LOSS
+	// ([PendingRun.lost]) — its box gone or unreadable, its suspension never
+	// recorded, its claim stranded, its tail abandoned by a node that died,
+	// its seat retired, its resume broken before the turn began — for the
+	// engine to settle what the turn that parked on it still owed somebody
+	// outside the run: the colleague whose a2a_ask woke it
+	// ([PendingRun.ColleagueAsk]) is told the turn was lost, and why.
+	//
+	// THE ONE TERMINAL OF A PARKED TURN THAT NO FRAME OF THE TURN ENDS. A
+	// collected run's turn is ended by its resume, a person's stop by
+	// [CoordinatorOptions.CloseStopped], and both answer the ask from the
+	// record; a loss ends the run with the turn still suspended into it,
+	// and the frame that parked it answered nothing, because a parked turn
+	// had not finished. Without this the ask went unanswered and its
+	// channel waited for the idle sweep.
+	//
+	// A STEP OF THE ENDING, as SteersExpired is: made after the
+	// announcement, before the record is deleted, once per attempt — so a
+	// repeat after a crash is made again, and finds the channel its first
+	// attempt answered and closed. BEST EFFORT, with no error: the turn is
+	// over whatever the asker hears, and keeping a lost run's ending — and
+	// the seat's inbox behind it — on a reply the broker refused would hold
+	// the seat's mail for a courtesy.
+	//
+	// ONLY A LOSS, which is an ending that announces a reason: an ending
+	// whose turn came back — collected and resumed, or an abandoned resume
+	// whose turn ran and published its own end — announces nothing, and the
+	// turn's own frame answered; a stop is [CoordinatorOptions.CloseStopped]'s.
+	// Nil hands over nothing — a coordinator built without an engine (a
+	// test's).
+	TurnLost func(ctx context.Context, run PendingRun)
+
 	// SteersExpired publishes, as expired, every note a person sent the run's
 	// turn that no job ran with ([PendingRun.UnreadNotes]): the ones still
 	// WAITING on the run's record ([RunSteer]), which nothing will read now
@@ -701,6 +749,8 @@ type Coordinator struct {
 	stopped   func(ctx context.Context, handle, turnID string)
 	// closeStopped is [CoordinatorOptions.CloseStopped].
 	closeStopped func(ctx context.Context, run PendingRun) error
+	// turnLost is [CoordinatorOptions.TurnLost].
+	turnLost func(ctx context.Context, run PendingRun)
 	// steersExpired is [CoordinatorOptions.SteersExpired].
 	steersExpired func(ctx context.Context, run PendingRun) error
 	// node, boxes and nudge are [CoordinatorOptions.Node], Boxes and Nudge.
@@ -855,6 +905,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		recovered:     opts.Recovered,
 		stopped:       opts.Stopped,
 		closeStopped:  opts.CloseStopped,
+		turnLost:      opts.TurnLost,
 		steersExpired: opts.SteersExpired,
 		node:          opts.Node,
 		boxes:         opts.Boxes,
@@ -1270,16 +1321,11 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.SandboxRunComplete
 		return nil
 	}
 
-	if !run.LaunchNodeGone.IsZero() {
-		// THE FLEET FOUND ITS BOX'S HOST GONE ([PendingRun.LaunchNodeGone]),
-		// and this completion is the waiter's announcement of that: there
-		// is no box to read, anywhere. Ended through the one ending, as a
-		// loss that says why.
-		c.settleFailed(ctx, run, types.SandboxFailureLaunchNodeGone, fmt.Sprintf(
-			"the coding run's box was on the host of node %s, which left the fleet and did not "+
-				"come back within the box timeout, so its result is lost; the work it pushed, if "+
-				"any, is on its branch", run.LaunchNode))
-		return nil
+	if run.Lost != nil {
+		// THE JOB WAS LOST WITH ITS HOST ([PendingRun.Lost]), and this
+		// completion is the waiter's announcement of that: what it left is
+		// no result, and its round is carried on.
+		return c.carryOnLost(adm, run, trigger)
 	}
 
 	result, ended, err := c.collect(ctx, run)
@@ -1373,8 +1419,10 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.SandboxRunComplete
 // box that answered, and its next failure starts a run of its own.
 //
 // A BOX THAT IS GONE ([ErrBoxGone]) is settled at once: no attempt can read a
-// box its provider reclaimed, and by the time the poll gives a vanished box up
-// it has already waited out that same window.
+// box its provider reclaimed. It went between the poll that found its job over
+// and this collection — a poll that finds a RUNNING job's box gone has already
+// waited out that same window, and records the job lost so that its round is
+// carried on instead ([LossBoxGone]).
 //
 // A COLLECTION THIS NODE ITSELF CANCELLED is handed back WITHOUT being
 // counted. A drain, a restart and a seat moving to another node all end the
@@ -1419,7 +1467,7 @@ func (c *Coordinator) collectFailed(ctx context.Context, run PendingRun, cause e
 		since = now
 	}
 	gone := errors.Is(cause, ErrBoxGone)
-	if gone || (attempts >= MinConnectFailures && now.Sub(since) >= ConnectGiveUp) {
+	if c.collectGivenUp(run, cause, now) {
 		log.ErrorContext(ctx, "sandbox_collect_failed", "turn_id", run.TurnID,
 			"attempts", attempts, "failing_for_s", now.Sub(since).Seconds(),
 			"box_gone", gone, "error", cause.Error())
@@ -1470,6 +1518,9 @@ type runOutcome struct {
 	// Asked is the question a person's answer resumes the run from — see
 	// [ResumeRequest.Asked].
 	Asked *AskedRun
+	// Lost is the loss a lost job's round is carried on from — see
+	// [ResumeRequest.Lost].
+	Lost *LostRun
 }
 
 // parkedEngineSpend is what the engine spent on a parked job outside every
@@ -1587,8 +1638,8 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	}
 	ended := false
 	if read == BoxReadCollect && run.PastDeadline(c.now()) {
-		done, pollErr := runner.Poll(ctx, box, run.Handle())
-		ended = pollErr == nil && !done
+		state, pollErr := runner.Poll(ctx, box, run.Handle())
+		ended = pollErr == nil && state == JobRunning
 	}
 	result, err := runner.Collect(ctx, box, run.Handle())
 	if err != nil {
@@ -1805,6 +1856,11 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		// ([Coordinator.StopSeat]), and a record marked failed would list
 		// it with the runs that broke. Who stopped it is the note.
 		rec.Notes = "stopped by " + run.Stop.By + " before it finished"
+	case run.Lost != nil && !result.NeedsInput:
+		// LOST, NOT FAILED: its host cut it off mid-step ([JobLoss]), which
+		// says nothing about the run, and its round is carried on. What
+		// happened is the note.
+		rec.Notes = lostNote(*run.Lost)
 	case result.NeedsInput:
 		// STOPPED, NOT FAILED: the run is parked on a question and will
 		// be resumed by its answer. The question is the note a reader
@@ -2419,8 +2475,9 @@ func declinedCopy(declined []string, delivery string) bool {
 func answerGivenOf(given types.SandboxAnswerGiven, trigger *events.Event, now time.Time,
 ) (AnswerWords, RecordedAnswer) {
 	words := AnswerWords{
-		// Redacted HERE, as a chat reply is: it is spliced into a phase
-		// record verbatim.
+		// Redacted HERE, as a chat reply is: it is sealed onto the run's
+		// row and handed as it is to the run's coding CLI, whose box and
+		// session keep it.
 		Text: redact.Secrets(given.Answer), Via: types.AnswerViaOperator,
 		By: given.AnsweredBy, ByKind: given.AnsweredByKind, OperatorID: given.OperatorID,
 	}
@@ -2633,7 +2690,8 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
 		InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
 		CacheReadTokens: outcome.CacheReadTokens, CacheWriteTokens: outcome.CacheWriteTokens,
-		Engine: outcome.Engine, Ended: outcome.Ended, Asked: outcome.Asked, Begin: begin,
+		Engine: outcome.Engine, Ended: outcome.Ended, Asked: outcome.Asked, Lost: outcome.Lost,
+		Begin: begin,
 	}); err != nil {
 		if errors.Is(err, ErrResumeAbandoned) && !began.Load() {
 			// BROKEN BEFORE ITS TURN BEGAN — a panic re-entering the
@@ -3541,12 +3599,14 @@ var errAskAway = errors.New("sandbox: the run's box is read on another node's ho
 //     to this node's retry ([errAskAway]);
 //  4. the box is reclaimed, where the ending reclaims it after its decision;
 //  5. the announcement is published, under the ending's own identity;
-//  6. for a stop, the turn that was parked on the run is closed on the record
+//  6. for a loss, the run is handed to the engine, which answers the
+//     colleague whose ask its turn took up ([CoordinatorOptions.TurnLost]);
+//  7. for a stop, the turn that was parked on the run is closed on the record
 //     as stopped ([CoordinatorOptions.CloseStopped]);
-//  7. every note a person sent the turn that no job ran with — still waiting on
+//  8. every note a person sent the turn that no job ran with — still waiting on
 //     the record, or read by the brief of a job that never started — is
 //     published expired ([CoordinatorOptions.SteersExpired]);
-//  8. the record is deleted ([PendingStore.Finish]).
+//  9. the record is deleted ([PendingStore.Finish]).
 //
 // # Across a crash at each step
 //
@@ -3554,8 +3614,9 @@ var errAskAway = errors.New("sandbox: the run's box is read on another node's ho
 // before the delete, and every step is one a repeat makes harmless: the let-go
 // finds nothing left to let go of, the copies go out again under the same
 // derived ids (the inbox's same-id dedupe and the completion ledger collapse
-// them), a box already reclaimed is a kill of nothing, and the announcement is
-// the same event again. Stopped anywhere before the delete, the row still
+// them), a box already reclaimed is a kill of nothing, the announcement is the
+// same event again, and a lost turn's asker finds the channel its first answer
+// closed. Stopped anywhere before the delete, the row still
 // carries the ending, and whoever reads it next — this node's retry, or the
 // seat's next holder ([Coordinator.RecoverSeat]) — finishes it from the step it
 // stopped at.
@@ -3568,7 +3629,7 @@ var errAskAway = errors.New("sandbox: the run's box is read on another node's ho
 // does not land is returned, and the caller keeps the ending.
 func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk bool) error {
 	var handed []string
-	reclaimed, announced, closed, expired := false, false, false, false
+	reclaimed, announced, answered, closed, expired := false, false, false, false, false
 	for range endingRounds {
 		if run.answerOwed() {
 			owing, err := c.letGoAnswer(ctx, run)
@@ -3621,6 +3682,13 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 				return err
 			}
 			announced = true
+		}
+		if run.lost() && !answered && c.turnLost != nil {
+			// AFTER THE ANNOUNCEMENT, which is the record of the loss the
+			// answer tells somebody about, and BEST EFFORT: see
+			// [CoordinatorOptions.TurnLost].
+			c.turnLost(ctx, run)
+			answered = true
 		}
 		if run.Stop != nil && !closed && c.closeStopped != nil && len(run.ExecuteState) > 0 {
 			if err := c.closeStopped(ctx, run); err != nil {
@@ -4578,7 +4646,8 @@ func runReport(result Result) string {
 
 // AskedRun is what a person's answer resumes a parked run with — see
 // [ResumeRequest.Asked]. Redacted, as everything a resume hands the turn is:
-// the turn publishes it and hands it to the run.
+// the turn hands it as it is to the run it carries on, whose box and CLI
+// session keep it.
 type AskedRun struct {
 	// Question is what the run asked and Answer the reply; By is who gave
 	// it, where the route knows — an answer by turn names the person, while

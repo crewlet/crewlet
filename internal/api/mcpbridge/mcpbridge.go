@@ -108,17 +108,44 @@
 // neither a proxy to the holder's address nor an MCP session on the node a
 // call lands on would hold it.
 //
+// A BOX ON ITS LAUNCHING NODE'S OWN HOST — the `direct` cell — needs no fleet
+// address at all: it dials that node's own listener on loopback
+// ([Options.HostURL]), which every node that runs seats and binds a listener
+// serves it — an ingress node on the listener it serves the route on to
+// anyone, and a node without the role on api.port to this host's loopback
+// alone ([FromLoopback]), beside its probes. The route is the same handler
+// there, so a call for a seat the node has since handed on is relayed to the
+// seat's holder exactly as a call that landed on an ingress node is.
+//
 // # The Host a call may name
 //
-// ITS OWN GUARD AGAINST DNS REBINDING, in place of the SDK's: a call that
-// arrives on a loopback address is admitted under a loopback host name or a
-// container runtime's name for the engine host, and refused 403 under any
-// other ([hostAdmitted]), on a box's own request and a relayed one alike, to
-// the MCP endpoint and to the run's notes route ([refusedHost]). The
-// SDK's guard admitted loopback names alone, and Docker Desktop and Podman's
-// machine deliver a container box's call to the host's loopback under the
-// runtime's name, so every executor in a container there had none of its
-// seat's tools.
+// ANY, ON A TOKEN THAT RESOLVES, for every session but one held to this host's
+// loopback. The route is authenticated by the signed per-run token in its own
+// path, which a page in a browser cannot make, so the SDK's guard against DNS
+// rebinding — a call on a loopback address refused under any Host that is not
+// loopback — is off ([mcp.StreamableHTTPOptions.DisableLocalhostProtection]),
+// and no guard of this package's stands in its place for a seat. That guard
+// refused the hop an executor's call commonly takes into a node: a reverse
+// proxy or tunnel on the engine host that connects to the node on 127.0.0.1
+// and passes the public Host on, which Caddy, cloudflared and ngrok all do
+// unless told otherwise, so every call of an e2b executor behind one was
+// refused and the run had none of its seat's tools. Nor did it ever hold a
+// seat's token to an address: such a token is good wherever the route is
+// served, and what bounds one that leaks is its run — it stops resolving the
+// moment the run's session closes, and expires in any case ([DefaultTTL]).
+//
+// A SESSION HELD TO LOOPBACK ([Session.Loopback]) is the one whose token is
+// worth nothing anywhere but this host's loopback, and there the Host is
+// judged beside the address ([loopbackRefusal]): a call is admitted only from
+// loopback, under a loopback host name ([sandbox.LoopbackHost]) or a container
+// runtime's name for the engine host ([sandbox.EngineHostName]) — the name
+// Docker Desktop and Podman's machine deliver a container box's call under —
+// so a page in a browser on this host, under a name its author points at
+// loopback, cannot spend a token leaked from such a run either. Judged in the
+// routing both routes share ([Bridge.routed]), so the MCP endpoint and the
+// run's notes route cannot come to disagree about it, and never on a relayed
+// call, because a session held to loopback is never relayed
+// ([Bridge.admitRelayed]).
 package mcpbridge
 
 import (
@@ -228,9 +255,13 @@ type Session struct {
 	// Zero takes the bridge's.
 	TTL time.Duration
 
-	// Loopback admits a call only from this host's loopback interface: a
-	// run confined on the engine host dials the engine there, so a token
-	// it leaks is worth nothing from anywhere else.
+	// Loopback admits a call only from this host's loopback interface,
+	// under a loopback host name or a container runtime's name for the
+	// engine host ([loopbackRefusal]): a run confined on the engine host
+	// dials the engine there, so a token it leaks is worth nothing from
+	// anywhere else, nor to a page in a browser on this host under a name
+	// its author points at loopback. The one kind of session whose call's
+	// Host is judged at all — see the package doc.
 	Loopback bool
 
 	// OnHost is whether the run's box is on this node's own host — the
@@ -412,14 +443,17 @@ type Options struct {
 	// own listener that serves the route, on loopback, e.g.
 	// "http://127.0.0.1:8080".
 	//
-	// DERIVED, NEVER CONFIGURED, by the process that bound the listener, and
-	// only on a node that serves the route — the ingress role and a bound
-	// listener: a box on the host can always dial the host's own socket, so
-	// asking the operator for an address there — the one setting the
-	// quickstart's company would otherwise need before its first turn —
-	// asked for something this node already knows. PREFERRED to BaseURL for
-	// such a box, because loopback never leaves the host. Empty on a node
-	// that serves no route, whose direct boxes dial BaseURL like any other.
+	// DERIVED, NEVER CONFIGURED, by the process that bound the listener, on
+	// every node that runs seats and binds one: an ingress node serves the
+	// route there to anyone, and a node without the role serves it on
+	// api.port to this host's loopback alone, beside its probes. A box on
+	// the host can always dial the host's own socket, so asking the operator
+	// for an address there — the one setting the quickstart's company, and
+	// every seat pool with no address of its own, would otherwise need
+	// before its first turn — asked for something this node already knows.
+	// PREFERRED to BaseURL for such a box, because loopback never leaves the
+	// host. Empty on a node that binds no listener its own boxes reach on
+	// loopback, whose direct boxes dial BaseURL like any other.
 	HostURL string
 
 	// TTL bounds a minted endpoint. Zero takes [DefaultTTL].
@@ -468,10 +502,11 @@ func New(opts Options) (*Bridge, error) {
 	// test suite takes, so an idle clock here would cut a live run off from
 	// its tools mid-job for no reason the run could see.
 	//
-	// THE HOST CHECK IS THIS PACKAGE'S OWN ([admitHosts]), in front of the
-	// handler every request reaches, a box's own and a relayed one alike,
-	// in place of the SDK's: see [hostAdmitted] for what the SDK's refused.
-	b.streamable = admitHosts(mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+	// NO HOST CHECK, the SDK's included: the token in the path is the
+	// route's credential, and the one session whose call's Host is judged
+	// — one held to this host's loopback — is judged in the routing in
+	// front of this handler ([loopbackRefusal]). See the package doc.
+	b.streamable = mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		sub, ok := b.parse(r.PathValue("token"))
 		if !ok {
 			return nil
@@ -481,88 +516,48 @@ func New(opts Options) (*Bridge, error) {
 			return nil
 		}
 		return opened.server.MCP()
-	}, &mcp.StreamableHTTPOptions{DisableLocalhostProtection: true}))
+	}, &mcp.StreamableHTTPOptions{DisableLocalhostProtection: true})
 	return b, nil
 }
 
-// admitHosts is next behind the bridge's DNS-rebinding guard ([refusedHost]),
-// before the MCP machinery sees the request.
-func admitHosts(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if refusedHost(w, r) {
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// refusedHost is the bridge's DNS-rebinding guard, for every route under its
-// prefix: a request that arrived on a loopback address and names a Host
-// [hostAdmitted] does not admit is refused 403, as the SDK's own guard refuses
-// it, and reported refused. Judged on the node that serves the call — the MCP
-// endpoint's handler ([admitHosts]) and the notes route's ([Bridge.serveSteer])
-// alike, a relayed call's included — so the two routes cannot come to disagree
-// about which names reach the bridge.
-func refusedHost(w http.ResponseWriter, r *http.Request) bool {
-	if hostAdmitted(r) {
-		return false
-	}
-	// DEBUG, as every refusal anyone who reaches the listener can cause is
-	// ([Bridge.refuse]).
-	log.DebugContext(r.Context(), "mcp_bridge_host_refused", "host", r.Host,
-		"detail", "a request on a loopback address named a host that is neither "+
-			"loopback nor a container runtime's name for the engine host")
-	http.Error(w, fmt.Sprintf("Forbidden: invalid Host header %q", r.Host), http.StatusForbidden)
-	return true
-}
-
-// hostAdmitted reports whether r's Host may reach the bridge over the
-// connection r arrived on.
+// loopbackRefusal says why a call may not reach a session held to this host's
+// loopback ([Session.Loopback]), or nothing where it may: it must arrive from
+// loopback ([FromLoopback]) and name a loopback host ([sandbox.LoopbackHost])
+// or one of the names a container runtime gives the engine host inside a box
+// ([sandbox.EngineHostName]).
 //
-// DNS REBINDING is what this guards against: a page in a browser on the engine
-// host, under a name its author points at 127.0.0.1, can send requests to a
-// loopback listener, and every one carries that page's own name as its Host.
-// So a request that arrived on a loopback address is admitted only under a
-// Host that is loopback ([sandbox.LoopbackHost]) — which is where the SDK's
-// guard stops — or one of the names a container runtime gives the engine host
-// inside a box ([sandbox.EngineHostName]).
+// THE ADDRESS, because the hold is what makes such a run's token worth nothing
+// from any other machine: read from the connection and never from a header.
+//
+// THE HOST, because an address on this host's loopback is not yet this host's
+// own caller. A page in a browser on the engine host, under a name its author
+// points at 127.0.0.1, sends its requests to the loopback listener under that
+// page's own name (DNS rebinding), so a token leaked from a held run would be
+// spendable by any page a person on the host opens. A process on the host
+// can name any Host it likes, and is not what the hold keeps out; a page can
+// name only its own.
 //
 // THE RUNTIME'S NAMES, because a container box dials the engine host by one
 // ([sandbox.EngineAddress]), and Docker Desktop and Podman's machine on macOS
-// and Windows deliver that call to the host's loopback, under the name the
-// box dialled. The SDK's guard refused every one of them with 403, so a seat's
-// executor in a container on such a host started with none of its seat's
-// tools. Neither name is one a page from the internet is served under: both
-// are in `.internal`, reserved for private use, and resolve, where they
-// resolve at all, through the runtime. Docker Engine and Podman on Linux
-// deliver the same call from the container's bridge network, to an address
-// this guard does not judge.
-//
-// A request on any other address came over a network the operator chose to
-// bind, and is the token's to admit or refuse. Read from the connection's own
-// address, which a relayed request carries from the node it landed on
-// (internal/httprelay), never from a header.
-func hostAdmitted(r *http.Request) bool {
-	local, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
-	if !ok || local == nil || !loopbackAddr(local.String()) {
-		return true
+// and Windows deliver that call to the host's loopback, under the name the box
+// dialled — so a held container run on such a host has its tools. Neither is
+// a name a page from the internet is served under: both are in `.internal`,
+// reserved for private use, and resolve, where they resolve at all, through
+// the runtime.
+func loopbackRefusal(r *http.Request) string {
+	if !FromLoopback(r) {
+		return "the session admits only this host's loopback, and the call came from " + r.RemoteAddr
 	}
 	host := r.Host
 	if name, _, err := net.SplitHostPort(host); err == nil {
 		host = name
 	}
-	return sandbox.LoopbackHost(host) || sandbox.EngineHostName(host)
-}
-
-// loopbackAddr reports whether addr, a host and port or a bare host, is a
-// loopback address.
-func loopbackAddr(addr string) bool {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		host = addr
+	if sandbox.LoopbackHost(host) || sandbox.EngineHostName(host) {
+		return ""
 	}
-	ip := net.ParseIP(strings.Trim(host, "[]"))
-	return ip != nil && ip.IsLoopback()
+	return fmt.Sprintf("the session admits only this host's loopback, and the call named "+
+		"the host %q, which is neither loopback nor a container runtime's name for the "+
+		"engine host", r.Host)
 }
 
 // Open registers a run's session and returns the URL its box should dial.
@@ -685,9 +680,8 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 }
 
 // Reaches is the base URL a box dials this bridge at — this node's own
-// listener for a box on its host where it serves the route
-// ([Options.HostURL]), and [BaseURLVar]'s address otherwise — or "" where it
-// has none to dial.
+// listener for a box on its host where it has one ([Options.HostURL]), and
+// [BaseURLVar]'s address otherwise — or "" where it has none to dial.
 func (b *Bridge) Reaches(onHost bool) string {
 	if b == nil {
 		return ""
@@ -979,6 +973,14 @@ func (b *Bridge) Miss(token string) (runID, reason string) {
 // LoopbackBase reports whether the URL a box dials names this host's loopback
 // interface: the one base a run confined on the engine host can be held to
 // ([Session.Loopback]), because its calls then arrive from loopback alone.
+//
+// LOOPBACK AS [sandbox.LoopbackHost] READS IT — `localhost` or a name under
+// it, in any case, or a loopback address in either family — because that is
+// the predicate that hands a container box the runtime's name for the engine
+// host in this base's place ([sandbox.EngineAddress]), and the one the hold
+// judges a call's Host by. A narrower one here moved a container run on a
+// base such as `http://engine.localhost:8000` to the runtime's name without
+// holding it to loopback.
 func (b *Bridge) LoopbackBase() bool {
 	if b == nil {
 		return false
@@ -987,18 +989,18 @@ func (b *Bridge) LoopbackBase() bool {
 	if err != nil {
 		return false
 	}
-	host := u.Hostname()
-	if host == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return sandbox.LoopbackHost(u.Hostname())
 }
 
-// fromLoopback reports whether a request arrived on this host's loopback
+// FromLoopback reports whether a request arrived on this host's loopback
 // interface, read from the connection's own address and never from a header
 // a caller could write.
-func fromLoopback(r *http.Request) bool {
+//
+// EXPORTED for the one other place that admits a caller by it: the listener of
+// a node without the ingress role, which serves the routes its own boxes dial
+// to this host's loopback alone (internal/api's probe surface). One predicate,
+// so "a caller on this host" cannot mean two things on two routes a box dials.
+func FromLoopback(r *http.Request) bool {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return false
@@ -1115,14 +1117,16 @@ func (b *Bridge) routed(serve func(http.ResponseWriter, *http.Request, *binding)
 			return
 		}
 		opened := b.held(sub)
-		// A LOOPBACK SESSION ADMITS THIS HOST'S LOOPBACK ALONE
-		// ([Session.Loopback]), read from the connection and never from a
-		// header, and is never forwarded: a call that reached another node
-		// is refused by this one's relay ([Bridge.admitRelayed]).
-		if opened != nil && opened.session.Loopback && !fromLoopback(r) {
-			b.refuse(w, r, sub.run, "the session admits only this host's loopback, and the "+
-				"call came from "+r.RemoteAddr)
-			return
+		// A LOOPBACK SESSION ADMITS THIS HOST'S LOOPBACK ALONE, under a
+		// loopback name or a runtime's for the engine host
+		// ([loopbackRefusal]), and is never forwarded: a call that reached
+		// another node is refused by this one's relay ([Bridge.admitRelayed]).
+		// Every other session takes any Host its token arrives under.
+		if opened != nil && opened.session.Loopback {
+			if reason := loopbackRefusal(r); reason != "" {
+				b.refuse(w, r, sub.run, reason)
+				return
+			}
 		}
 		if opened != nil && fence(opened.session) == nil {
 			serve(w, r, opened)

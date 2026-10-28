@@ -299,15 +299,16 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // ask file. Without clearing them the completion poll fires immediately on the
 // stale marker and Collect reads the old result. Its brief, system text,
 // settings and configuration go too: a run's instructions are its own — a
-// previous job's hooks name a bridge session that job's end closed — and a file
-// this run writes is then always created fresh, at the mode a backend creates a
-// file with. OpenCode's values ([Paths.OpenCodeValues]) and its notes plugin
-// ([Paths.OpenCodeSteerPlugin]) are DIRECTORIES, removed whole: a run writes one
-// file per value, so one with fewer values than the last would otherwise keep
-// the last one's beside its own, and a run wired to no notes would otherwise
-// leave a plugin no configuration names. THE CHECKOUT IS LEFT INTACT — that
-// disk state is the continued context, and it is the whole reason to reuse a
-// box.
+// previous job's hooks name a bridge session that job's end closed. (Whatever
+// mode a previous run left on one, the file this run writes has the box's
+// own: a box write replaces a file whole ([sandbox.Sandbox.WriteFile]).)
+// OpenCode's values ([Paths.OpenCodeValues]) and its notes plugin
+// ([Paths.OpenCodeSteerPlugin]) are DIRECTORIES, removed whole: a run writes
+// one file per value, so one with fewer values than the last would otherwise
+// keep the last one's beside its own, and a run wired to no notes would
+// otherwise leave a plugin no configuration names. THE CHECKOUT IS LEFT INTACT
+// — that disk state is the continued context, and it is the whole reason to
+// reuse a box.
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.cli.Output(p)
@@ -481,23 +482,30 @@ func withShimPath(cmd string, paths Paths) string {
 	return "PATH=" + shellQuote(paths.BinDir()) + `:"$PATH" ` + cmd
 }
 
-// Poll reports whether the detached job has finished.
+// Poll reports what is known of the detached job ([sandbox.JobState]).
 //
 // TWO SIGNALS, because a finished or dead job must not be able to wedge the
 // run — and there is no run-time TTL to fall back on, since the waiter keeps
 // the box alive for exactly as long as the job needs:
 //
 //  1. THE DONE MARKER. The wrapper returned, cleanly or not, and wrote its
-//     exit code.
-//  2. PROCESS LIVENESS. The wrapper is gone yet no marker was written: the
-//     whole process group died abnormally, before the tail echo ran. Without
-//     this the run hangs forever; with it, Collect surfaces the partial result
-//     and the failure. The box answers it ([sandbox.Sandbox.JobRunning]),
-//     because only the backend knows whether its handle is a pid in the box's
-//     own namespace or a host pid the kernel may since have handed to a
-//     stranger. The wrapper is the right process to ask about: while the
-//     coding agent runs the wrapper is alive, and once it exits it has
-//     already written the done marker, which is checked first.
+//     exit code: the job ENDED.
+//  2. THE BOX'S ACCOUNT OF THE JOB ([sandbox.Sandbox.Job]). The wrapper is
+//     gone yet no marker was written: the whole process group died
+//     abnormally, before the tail echo ran. Without this the run hangs
+//     forever. The box answers it, because only the backend knows whether its
+//     handle is a pid in the box's own namespace or a host pid the kernel may
+//     since have handed to a stranger — and whether the job went while an
+//     engine watched it, so that what it left is its result, which Collect
+//     surfaces with the failure (ENDED), or went with the engine that last saw
+//     it running, so that what it left is not (LOST). The wrapper is the right
+//     process to ask about: while the coding agent runs the wrapper is alive,
+//     and once it exits it has already written the done marker, which is
+//     checked first.
+//
+// THE MARKER IS READ AGAIN before a job is answered lost: a wrapper that wrote
+// it and exited between the first read and the box's answer finished, and is
+// collected like any job that did.
 //
 // There was a third — a terminal event read off the end of the stream, for an
 // agent that finished its work and did not exit, which was OpenCode 1.x. No
@@ -507,30 +515,36 @@ func withShimPath(cmd string, paths Paths) string {
 // A READ THAT FAILS NEVER SKIPS THE LIVENESS PROBE. It used to return before
 // it: a read the box refused made a dead job poll as still running for good,
 // with its keepalive refreshed every tick and its seat busy until a person
-// stopped it. The read's error is still reported — beside a "not done" — once
+// stopped it. The read's error is still reported — beside a "running" — once
 // the probe has had its say.
 //
-// A still-alive wrapper reports NOT DONE, whether it is working or hung: a
+// A still-alive wrapper reports RUNNING, whether it is working or hung: a
 // genuinely hung-but-alive process is indistinguishable from a working one
 // without a timer, and imposing one is exactly what this design refuses.
-func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (bool, error) {
+func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.JobState, error) {
 	paths := PathsFor(box)
 	marker, readErr := box.ReadFile(ctx, paths.Done())
 	if readErr == nil && len(marker) > 0 {
-		return true, nil
+		return sandbox.JobEnded, nil
 	}
-	if handle.CommandID != "" {
-		alive, err := box.JobRunning(ctx, handle.CommandID)
+	if handle.CommandID == "" {
+		return sandbox.JobRunning, readErr
+	}
+	state, err := box.Job(ctx, handle.CommandID)
+	if err != nil || !state.Over() {
 		// An unreadable liveness probe is not proof of death, and declaring
 		// the run over on one would collect a partial result from a job
 		// that is still working. The next tick asks again.
-		if err == nil && !alive {
-			log.WarnContext(ctx, "coding_agent_process_gone",
-				"agent", r.cli.Name(), "pid", handle.CommandID)
-			return true, nil
+		return sandbox.JobRunning, readErr
+	}
+	if state == sandbox.JobLost {
+		if again, err := box.ReadFile(ctx, paths.Done()); err == nil && len(again) > 0 {
+			return sandbox.JobEnded, nil
 		}
 	}
-	return false, readErr
+	log.WarnContext(ctx, "coding_agent_process_gone",
+		"agent", r.cli.Name(), "pid", handle.CommandID, "job", string(state))
+	return state, nil
 }
 
 // Collect reads the finished job's result out of the box.

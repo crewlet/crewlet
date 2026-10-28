@@ -207,11 +207,11 @@ func (w *Waiter) holdsDuty() bool {
 // engine's keepalive, which on E2B is when the provider reclaims it — its
 // runs are ended for it:
 //
-//   - A RUNNING JOB has the verdict recorded on its row
-//     ([PendingStore.MarkLaunchNodeGone]) and its completion announced, which
-//     the seat's holder claims and ends as
-//     [types.SandboxFailureLaunchNodeGone] — announced again on every pass
-//     until a claim takes it, as a finished job's is.
+//   - A RUNNING JOB has the verdict recorded on its row as lost
+//     ([PendingStore.MarkLost], [LossLaunchNodeGone]) and its completion
+//     announced, which the seat's holder claims and carries the job's round
+//     on from in a box of its own ([Coordinator.carryOnLost]) — announced
+//     again on every pass until a claim takes it, as a finished job's is.
 //   - A RUN PARKED ON A QUESTION, or answered and waiting on its resume, has
 //     its box released as an expired pause's is ([PendingStore.ExpirePause]),
 //     with nothing to kill: the run waits for its answer without a box, and
@@ -301,7 +301,8 @@ func (w *Waiter) endGone(ctx context.Context, run PendingRun, since, now time.Ti
 		}
 		return
 	}
-	marked, err := w.pending.MarkLaunchNodeGone(ctx, run.TurnID, run.LaunchID, run.LaunchNode, now)
+	marked, err := w.pending.MarkLost(ctx, run.TurnID, run.LaunchID,
+		JobLoss{Cause: LossLaunchNodeGone, Node: run.LaunchNode, At: now})
 	switch {
 	case err != nil:
 		log.WarnContext(ctx, "sandbox_launch_node_gone_unrecorded", "turn_id", run.TurnID,
@@ -312,13 +313,13 @@ func (w *Waiter) endGone(ctx context.Context, run PendingRun, since, now time.Ti
 		// ending — and what it holds now was not judged.
 		return
 	}
-	if run.LaunchNodeGone.IsZero() {
+	if run.Lost == nil {
 		log.WarnContext(ctx, "sandbox_launch_node_gone", "turn_id", run.TurnID,
 			"agent", run.AgentHandle, "node", run.LaunchNode, "sandbox_id", run.SandboxID,
 			"absent_for_s", now.Sub(since).Seconds(),
 			"detail", "the run's box was on the host of a node that left the fleet and did not "+
 				"come back within the box timeout; its completion is announced so the seat's "+
-				"holder ends it as lost")
+				"holder carries its round on in a box of its own")
 	}
 	if run.Held(now) {
 		// Its resume is held back for now ([PendingRun.Held]): announced
@@ -329,6 +330,39 @@ func (w *Waiter) endGone(ctx context.Context, run PendingRun, since, now time.Ti
 		log.WarnContext(ctx, "sandbox_completion_publish_failed", "turn_id", run.TurnID,
 			"error", err.Error())
 	}
+}
+
+// lose records on a running job's row that a poll found it lost with the host
+// it ran on ([PendingStore.MarkLost]), reporting whether the row carries a
+// loss for the job now, so that its completion may be announced.
+//
+// THE WAITER THAT DRIVES THE BOX IS THE ONE THAT CAN TELL: its poll asked the
+// box ([JobState]) or found it gone. The seat's holder, wherever it is, acts on
+// the row. A row that moved on since the listing — claimed, relaunched, ended —
+// holds a job this poll did not judge, and nothing is announced for it; a
+// store that did not answer is asked again by the next pass.
+func (w *Waiter) lose(ctx context.Context, manager *Manager, run PendingRun, cause LossCause) bool {
+	loss := JobLoss{Cause: cause, At: w.now()}
+	if manager.OnLaunchHost(run) {
+		loss.Node = run.LaunchNode
+	}
+	marked, err := w.pending.MarkLost(ctx, run.TurnID, run.LaunchID, loss)
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "sandbox_run_lost_unrecorded", "turn_id", run.TurnID,
+			"launch_id", run.LaunchID, "cause", string(cause), "error", err.Error())
+		return false
+	case !marked:
+		return false
+	}
+	if run.Lost == nil {
+		log.WarnContext(ctx, "sandbox_run_lost", "turn_id", run.TurnID,
+			"agent", run.AgentHandle, "launch_id", run.LaunchID, "sandbox_id", run.SandboxID,
+			"node", loss.Node, "cause", string(cause),
+			"detail", "the run's job was lost before anything saw it end: "+cause.Why()+
+				"; its completion is announced so the seat's holder carries its round on")
+	}
+	return true
 }
 
 // sweep is a node's own waiter reclaiming the boxes on its host that no run

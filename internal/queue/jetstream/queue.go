@@ -987,7 +987,7 @@ func (q *Queue) ackWait() time.Duration {
 	if q.cfg.AckWait > 0 {
 		return q.cfg.AckWait
 	}
-	return ackWait
+	return DefaultAckWait
 }
 
 // tooLarge names a message the connection refused as larger than the server

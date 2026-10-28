@@ -83,7 +83,7 @@ func TestANodeWithNoCompanySignsInAndServesWorkAfterItsFirstApply(t *testing.T) 
 	ln := bridgeListener(t, "")
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Environment: nodeEnvironment(nil), SandboxPollInterval: runPollInterval,
-		BridgeHostURL: hostBridgeURL(ln),
+		BoxHostURL: listenerURL(ln),
 	})
 	if err != nil {
 		t.Fatalf("engine.New with no company: %v", err)
