@@ -969,7 +969,7 @@ func (r *Reader) pushesPhase(ctx context.Context, tx *sql.Tx, repoID string, out
 		rows, err = tx.QueryContext(ctx, pushesAboveSQL, repoID, cur.Since.Packed(), cur.From.Packed(),
 			pg.left())
 	} else {
-		position, pushID, ok := cutPushCursor(cur.After)
+		position, pushID, ok := cutLogCursor(cur.After)
 		if !ok {
 			return false, fmt.Errorf("%w: after %q", ErrBadCursor, cur.After)
 		}
@@ -988,7 +988,7 @@ func (r *Reader) pushesPhase(ctx context.Context, tx *sql.Tx, repoID string, out
 		}
 		out.Pushes = append(out.Pushes, in)
 		served++
-		cur.After = pushCursor(in.Position, in.PushID)
+		cur.After = logCursor(in.Position.Packed(), in.PushID)
 		if pg.add(cost) {
 			return false, rows.Err()
 		}
@@ -1105,7 +1105,7 @@ func checkCursor(c *StateCursor) error {
 			return bad("after " + c.After)
 		}
 	case c.Phase == phasePushes:
-		if _, _, ok := cutPushCursor(c.After); !ok {
+		if _, _, ok := cutLogCursor(c.After); !ok {
 			return bad("after " + c.After)
 		}
 	}
@@ -1251,17 +1251,35 @@ func scanIntroduced(rows *sql.Rows) (IntroducedRow, int, error) {
 //   - a refs listing: 200 by default, a screen of branches, and 1 000 at
 //     most, which at the longest ref (MaxRefNameBytes) and its oid is about
 //     385 KB, under a megabyte for names JSON writes as themselves — and
-//     ends at the byte budget like every page where it spells them longer.
+//     ends at the byte budget like every page where it spells them longer;
+//   - a listing of changes: 50 by default, a screen of them, and 200 at
+//     most, a push history's bounds for the same reader — a person's screen
+//     or a seat's tool — over rows of 0.6–0.9 KB (a person's change with a
+//     short title, and a seat's naming the turn, the run and the work item
+//     it was opened for), so under 200 KB, while a page of the widest
+//     (titles, refs and close reasons every byte of which JSON writes as six)
+//     ends at the byte budget first. The bound is on the rows a page READS,
+//     whatever its filters keep of them, so a page a seat reads little of
+//     costs what a full one does and no more;
+//   - a change's revisions: 200 by default and 1 000 at most, a refs
+//     listing's bounds, for rows as narrow as a ref's — an oid, a handle, a
+//     push id, a position and an instant, about 250 bytes — so a page of
+//     1 000 is about 250 KB, and a change pushed two hundred times is one
+//     page.
 //
 // The maxima are exported for a client that pages: the most a page may ask
 // for of each, which a page past them is refused naming.
 const (
-	defaultRepoLimit = 100
-	MaxReposPerPage  = 500
-	defaultPushLimit = 50
-	MaxPushesPerPage = 200
-	defaultRefLimit  = 200
-	MaxRefsPerPage   = 1_000
+	defaultRepoLimit     = 100
+	MaxReposPerPage      = 500
+	defaultPushLimit     = 50
+	MaxPushesPerPage     = 200
+	defaultRefLimit      = 200
+	MaxRefsPerPage       = 1_000
+	defaultChangeLimit   = 50
+	MaxChangesPerPage    = 200
+	defaultRevisionLimit = 200
+	MaxRevisionsPerPage  = 1_000
 )
 
 // BriefCommands is how many of a push's commands a row of its history read
@@ -1322,6 +1340,23 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// later page is the listing's, a set.
 		query = fresh.Resolved(resolver(q.Repo), q.Cursor != "")
 		serve = func(tx *sql.Tx, cp statelog.Position) error { return r.refsListing(ctx, tx, q, chart, cp, &out) }
+	case ReadChanges:
+		// A SET READ: of the repository it names, resolved by its name as
+		// a push history is, or of the domain, as a listing of
+		// repositories is — a change a deferred record holds back is
+		// listed as its rows stand.
+		if q.Repo != "" {
+			query = fresh.Resolved(resolver(q.Repo), true)
+		} else {
+			query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		}
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.changes(ctx, tx, q, chart, &out) }
+	case ReadChange:
+		// A FIRST PAGE IS READ AS THE DETAIL IT CARRIES, a point read of the
+		// repository whose records write the change, as a first page of
+		// refs is; a later page is a page of revisions, a set.
+		query = fresh.Resolved(resolver(q.Repo), q.Cursor != "")
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.change(ctx, tx, q, chart, &out) }
 	case ReadIntroduced:
 		// A POINT READ OF THE REPOSITORY, as a snapshot is: an index built
 		// past a record this node deferred on the repository would miss the
@@ -1369,8 +1404,10 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 // principal can be, a repository that cannot be one, a limit past its bound —
 // refused naming it, never clamped — or a field outside the kind that reads
 // it: a status filter outside a listing of repositories, a prefix outside a
-// refs listing, a brief or one push outside a push history, a range outside
-// an `introduced` read, a floor of live packs outside a `compaction_due` read.
+// refs listing, a brief or one push outside a push history, a change's number
+// outside a change read, a state, an owner or a work item outside a listing
+// of changes, a range outside an `introduced` read, a floor of live packs
+// outside a `compaction_due` read.
 func (q ReadQuery) validate() error {
 	if !q.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %v", ErrInvalid, q.Kind, ReadKinds())
@@ -1413,22 +1450,41 @@ func (q ReadQuery) validate() error {
 			ErrInvalid, q.Push)
 	case q.Push != "" && (q.Cursor != "" || q.Limit != 0 || q.Brief):
 		return fmt.Errorf("%w: push: one push is read whole, never paged, cut or read in brief", ErrInvalid)
+	case q.Change != 0 && q.Kind != ReadChange:
+		return fmt.Errorf("%w: change: only a change read names a change's number", ErrInvalid)
+	case q.State != "" && q.Kind != ReadChanges:
+		return fmt.Errorf("%w: state: only a listing of changes is narrowed to a change's state", ErrInvalid)
+	case q.Owner != "" && q.Kind != ReadChanges:
+		return fmt.Errorf("%w: owner: only a listing of changes is narrowed to a change's owner", ErrInvalid)
+	case q.Work != "" && q.Kind != ReadChanges:
+		return fmt.Errorf("%w: work: only a listing of changes is narrowed to a work item", ErrInvalid)
 	}
-	if q.Kind != ReadRepos {
-		if !ValidName(q.Repo) {
-			return fmt.Errorf("%w: repo: %q is not a repository name", ErrInvalid, q.Repo)
-		}
-		if len(q.Status) > 0 {
-			return fmt.Errorf("%w: status: only a listing of repositories filters by status", ErrInvalid)
-		}
+	switch {
+	case q.Kind == ReadRepos, q.Kind == ReadChanges && q.Repo == "":
+	case !ValidName(q.Repo):
+		return fmt.Errorf("%w: repo: %q is not a repository name", ErrInvalid, q.Repo)
+	}
+	if q.Kind != ReadRepos && len(q.Status) > 0 {
+		return fmt.Errorf("%w: status: only a listing of repositories filters by status", ErrInvalid)
 	}
 	for _, s := range q.Status {
 		if !s.Valid() {
 			return fmt.Errorf("%w: status: %q is not one of %v", ErrInvalid, s, RepoStatuses())
 		}
 	}
+	switch q.Kind {
+	case ReadChanges:
+		if err := q.validateChanges(); err != nil {
+			return err
+		}
+	case ReadChange:
+		if q.Change < 1 {
+			return fmt.Errorf("%w: change: %d is no change's number: a repository numbers its changes "+
+				"from 1", ErrInvalid, q.Change)
+		}
+	}
 	bound := map[ReadKind]int{ReadRepos: MaxReposPerPage, ReadPushes: MaxPushesPerPage,
-		ReadRefs: MaxRefsPerPage}[q.Kind]
+		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: MaxRevisionsPerPage}[q.Kind]
 	switch {
 	case q.Limit < 0:
 		return fmt.Errorf("%w: limit: %d", ErrInvalid, q.Limit)
@@ -1467,6 +1523,14 @@ func (q ReadQuery) validateIntroduced() error {
 		return refused("push", "an introduced read names its pushes by its range alone")
 	case q.MinPacks != 0:
 		return refused("min_packs", "only a compaction_due read names a floor of live packs")
+	case q.Change != 0:
+		return refused("change", "only a change read names a change's number")
+	case q.State != "":
+		return refused("state", "only a listing of changes is narrowed to a change's state")
+	case q.Owner != "":
+		return refused("owner", "only a listing of changes is narrowed to a change's owner")
+	case q.Work != "":
+		return refused("work", "only a listing of changes is narrowed to a work item")
 	case !onLog(in.After) || !onLog(in.Through) || !onLog(in.Before):
 		return refused("introduced", "every position it names is on the code log")
 	case in.Descending && in.Before.IsZero():
@@ -1505,7 +1569,8 @@ func (q ReadQuery) validateCompactionDue() error {
 	}{
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"limit", q.Limit != 0},
-		{"brief", q.Brief}, {"push", q.Push != ""},
+		{"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0}, {"state", q.State != ""},
+		{"owner", q.Owner != ""}, {"work", q.Work != ""},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -1536,7 +1601,8 @@ func (q ReadQuery) validatePublicationDue() error {
 	}{
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0},
-		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
+		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
+		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -1563,7 +1629,8 @@ func (q ReadQuery) validateExpungeDue() error {
 	}{
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0},
-		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
+		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
+		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_due read lists every repository with an expunge open or a "+
@@ -1824,7 +1891,7 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if q.Cursor == "" {
 		rows, err = tx.QueryContext(ctx, pushesFirstSQL, id, limit)
 	} else {
-		position, pushID, ok := cutPushCursor(q.Cursor)
+		position, pushID, ok := cutLogCursor(q.Cursor)
 		if !ok {
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
@@ -1854,7 +1921,7 @@ func (r *Reader) pushes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		}
 		out.Pushes = append(out.Pushes, row)
 		if pg.add(charge) {
-			out.Next = pushCursor(row.Position, row.PushID)
+			out.Next = logCursor(row.Position.Packed(), row.PushID)
 			break
 		}
 	}
@@ -1970,7 +2037,7 @@ func (r *Reader) introduced(ctx context.Context, tx *sql.Tx, q ReadQuery, cp sta
 	limit := min(limitOr(q.Limit, r.pageRows), r.pageRows)
 	var rows *sql.Rows
 	var err error
-	switch position, pushID, keyed := cutPushCursor(q.Cursor); {
+	switch position, pushID, keyed := cutLogCursor(q.Cursor); {
 	case q.Cursor != "" && (!keyed || (in.Descending && position >= in.Before.Packed()) ||
 		(!in.Descending && position <= in.After.Packed())):
 		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
@@ -1996,7 +2063,7 @@ func (r *Reader) introduced(ctx context.Context, tx *sql.Tx, q ReadQuery, cp sta
 		}
 		out.Introduced = append(out.Introduced, row)
 		if pg.add(cost) {
-			out.Next = pushCursor(row.Position, row.PushID)
+			out.Next = logCursor(row.Position.Packed(), row.PushID)
 			break
 		}
 	}
@@ -2382,43 +2449,59 @@ func liveRefIn(ctx context.Context, tx *sql.Tx, id, ref string) (string, statelo
 
 // mayReadIn refuses an asker that may not read repository id — or the seat it
 // reads for, ceilingSeat, that may not ([JudgeRead]) — judged from what a
-// grant reads of its row in tx — its name, its owner and its visibility — by
-// one primary-key read.
+// grant reads of its row in tx ([grantRefIn]).
 func mayReadIn(ctx context.Context, tx *sql.Tx, id string, asker Principal, ceilingSeat string,
 	chart Roster) error {
-	var (
-		ref                = RepoRef{ID: id}
-		owners, visibility string
-	)
-	err := tx.QueryRowContext(ctx, repoGrantSQL, id).Scan(&ref.Name, &owners, &ref.Owner.Ref, &visibility)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return fmt.Errorf("%w: %s", ErrRepoNotFound, id)
-	case err != nil:
-		return fmt.Errorf("code: read repository %s's grant: %w", id, err)
+	ref, err := grantRefIn(ctx, tx, id)
+	if err != nil {
+		return err
 	}
-	ref.Owner.Kind, ref.Visibility = OwnerKind(owners), Visibility(visibility)
 	_, err = JudgeRead(asker, ceilingSeat, ref, chart)
 	return err
 }
 
-// pushCursor is "<packed position>/<push_id>": a push's place in log order,
-// the keyset of the push listing and of the `introduced` read alike.
-func pushCursor(position statelog.Position, pushID string) string {
-	return strconv.FormatInt(position.Packed(), 10) + "/" + pushID
+// grantRefIn is what a grant reads of repository id's row in tx — its name, its
+// owner and its visibility — and its status beside them, by one primary-key
+// read: [ErrRepoNotFound] where no row is there.
+func grantRefIn(ctx context.Context, tx *sql.Tx, id string) (RepoRef, error) {
+	var (
+		ref                        = RepoRef{ID: id}
+		status, owners, visibility string
+	)
+	err := tx.QueryRowContext(ctx, repoGrantSQL, id).Scan(&ref.Name, &status, &owners, &ref.Owner.Ref,
+		&visibility)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return RepoRef{}, fmt.Errorf("%w: %s", ErrRepoNotFound, id)
+	case err != nil:
+		return RepoRef{}, fmt.Errorf("code: read repository %s's grant: %w", id, err)
+	}
+	ref.Status, ref.Owner.Kind, ref.Visibility = RepoStatus(status), OwnerKind(owners), Visibility(visibility)
+	return ref, nil
 }
 
-// cutPushCursor reads a [pushCursor].
-func cutPushCursor(s string) (int64, string, bool) {
-	at, pushID, ok := strings.Cut(s, "/")
-	if !ok || pushID == "" {
+// logCursor is "<packed position>/<id>": a row's place in log order — a
+// push's, by the position of the record that carried it and its push id, the
+// keyset of the push listing and of the `introduced` read alike; and a
+// change's, by the position of the record that opened it and its id, the
+// keyset of a listing of changes across repositories. The id is part of the
+// place because one record holds several of either: up to 64 pushes, each
+// opening a change of its own.
+func logCursor(packed int64, id string) string {
+	return strconv.FormatInt(packed, 10) + "/" + id
+}
+
+// cutLogCursor reads a [logCursor].
+func cutLogCursor(s string) (int64, string, bool) {
+	at, id, ok := strings.Cut(s, "/")
+	if !ok || id == "" {
 		return 0, "", false
 	}
 	position, err := strconv.ParseInt(at, 10, 64)
 	if err != nil {
 		return 0, "", false
 	}
-	return position, pushID, true
+	return position, id, true
 }
 
 // RepoLife is one repository as a reconcile of code.repos reads it: its id and
@@ -2693,8 +2776,9 @@ const (
 	protectionsOfSQL = `SELECT repo_id, pattern, allow_force, allow_delete, direct_push
 		FROM code_protections WHERE repo_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))
 		ORDER BY repo_id, pattern`
-	// repoGrantSQL is what a grant reads of one repository's row.
-	repoGrantSQL = `SELECT name, owner_kind, owner, visibility FROM code_repos WHERE id = ?`
+	// repoGrantSQL is what a grant reads of one repository's row, and its
+	// status ([grantRefIn]).
+	repoGrantSQL = `SELECT name, status, owner_kind, owner, visibility FROM code_repos WHERE id = ?`
 	// liveRefSQL is one live ref's target and the position it last moved at,
 	// by its whole name: a repository's head, and a ref a RefQuery names
 	// (liveRefIn).

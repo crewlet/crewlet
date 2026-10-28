@@ -196,14 +196,17 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 
 // opCodeRead is a read of the code host by its kind (code.ReadKinds): the REST
 // routes' repository listing, one repository's detail and its push history,
-// which the operator's CLI reads too; a repository's refs; its pushes in log
-// order, which a git node's index of which push introduced each commit is
-// built from; the repositories a compaction may be due in, most live packs
-// first, which a git node polls for the ones it is home for; the repositories
-// a publication may be due in, least recently published first; and the
-// repositories an expunge is owed in, an expunge open or a purge requested. A
-// seat's read on a node that holds no chart is that node's
-// code.ErrNotServing — it ran nothing — so the walk asks the next.
+// which the operator's CLI reads too; a repository's refs; a listing of
+// changes — of a repository, a work item or a state — and one change by its
+// number, each held to the grant on the change's repository as a read of the
+// repository is; its pushes in log order, which a git node's index of which
+// push introduced each commit is built from; the repositories a compaction
+// may be due in, most live packs first, which a git node polls for the ones
+// it is home for; the repositories a publication may be due in, least
+// recently published first; and the repositories an expunge is owed in, an
+// expunge open or a purge requested. A seat's read on a node that holds no
+// chart is that node's code.ErrNotServing — it ran nothing — so the walk asks
+// the next.
 //
 // A SEAT'S READ JUDGES ITS GRANT from the serving node's chart (which
 // repositories it lists, and whether it reads one: code.JudgeRead) — and the

@@ -5,6 +5,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -404,6 +405,87 @@ func (s RepoSummary) encodedBytes() int {
 		n += field("last_push_at", timeBytes(s.LastPushAt), false)
 	}
 	return n
+}
+
+// members is the length of the change's own members, without the braces that
+// close them — what a ChangeSummary flattens beside its own.
+func (r ChangeRow) members() int {
+	n := field("id", stringBytes(r.ID), true) +
+		field("repo_id", stringBytes(r.RepoID), false) +
+		field("number", intBytes(r.Number), false) +
+		field("title", stringBytes(r.Title), false) +
+		field("state", stringBytes(string(r.State)), false) +
+		field("source_ref", stringBytes(r.SourceRef), false) +
+		field("target_ref", stringBytes(r.TargetRef), false) +
+		field("head", stringBytes(r.Head), false) +
+		field("revision", intBytes(r.Revision), false) +
+		field("owner", stringBytes(r.Owner), false) +
+		field("owner_kind", stringBytes(string(r.OwnerKind)), false)
+	if r.OwnerOperatorID != "" {
+		n += field("owner_operator_id", stringBytes(r.OwnerOperatorID), false)
+	}
+	if r.WorkItem != nil {
+		n += field("work_item", workItemBytes(*r.WorkItem), false)
+	}
+	if r.CreatedTurn != "" {
+		n += field("created_turn", stringBytes(r.CreatedTurn), false)
+	}
+	if r.CreatedRun != "" {
+		n += field("created_run", stringBytes(r.CreatedRun), false)
+	}
+	n += field("opened_at", timeBytes(r.OpenedAt), false) +
+		field("opened_position", positionBytes(r.OpenedPosition), false)
+	if !r.ClosedAt.IsZero() {
+		n += field("closed_at", timeBytes(r.ClosedAt), false)
+	}
+	if r.CloseReason != "" {
+		n += field("close_reason", stringBytes(r.CloseReason), false)
+	}
+	if !r.MergedAt.IsZero() {
+		n += field("merged_at", timeBytes(r.MergedAt), false)
+	}
+	if r.MergedVia != "" {
+		n += field("merged_via", stringBytes(string(r.MergedVia)), false)
+	}
+	if r.MergeOID != "" {
+		n += field("merge_oid", stringBytes(r.MergeOID), false)
+	}
+	if r.BodyBytes != 0 {
+		n += field("body_bytes", intBytes(r.BodyBytes), false)
+	}
+	return n + field("version", intBytes(r.Version), false) +
+		field("position", positionBytes(r.Position), false)
+}
+
+// workItemBytes is the length of a work item's JSON encoding: its four
+// fields, none of them omitted.
+func workItemBytes(w types.WorkItem) int {
+	return 2 + field("backend", stringBytes(string(w.Backend)), true) +
+		field("id", stringBytes(w.ID), false) +
+		field("key", stringBytes(w.Key), false) +
+		field("project", stringBytes(w.Project), false)
+}
+
+// encodedBytes is the length of the listing row's JSON encoding.
+func (s ChangeSummary) encodedBytes() int {
+	n := 2 + s.ChangeRow.members() + field("repo", stringBytes(s.Repo), false) +
+		field("ref", stringBytes(s.Ref), false)
+	if s.Access != "" {
+		n += field("access", stringBytes(s.Access), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the revision's JSON encoding.
+func (r RevisionRow) encodedBytes() int {
+	n := 2 + field("n", intBytes(r.N), true) +
+		field("head", stringBytes(r.Head), false) +
+		field("pusher", stringBytes(r.Pusher), false) +
+		field("pusher_kind", stringBytes(string(r.PusherKind)), false)
+	if r.PushID != "" {
+		n += field("push_id", stringBytes(r.PushID), false)
+	}
+	return n + field("position", positionBytes(r.Position), false) + field("at", timeBytes(r.At), false)
 }
 
 // encodedBytes is the length of the command's JSON encoding.

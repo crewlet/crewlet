@@ -22,13 +22,13 @@ import (
 // would have to catch two statements disagreeing across a concurrent write,
 // a race a test can only lose reliably. It holds two things: every statement
 // in every file that serves a Reader's reads — reader.go, and each file
-// declaring a method of the Reader beside it, as retire.go's listing of the
-// repositories holding retired packs does — is issued on a parameter declared
+// declaring a method of the Reader beside it, as changeread.go's reads of
+// changes and retire.go's listing do — is issued on a parameter declared
 // *sql.Tx, and the Reader holds no handle a statement could reach the estate
 // through instead.
 //
-// Mutation: issue retire.go's listing on a transaction of its own, and this
-// names the statement.
+// Mutation: issue changeread.go's listing on a transaction of its own, and
+// this names the statement.
 func TestNoCodeReadEscapesItsTransaction(t *testing.T) {
 	t.Parallel()
 
@@ -67,7 +67,7 @@ func (r *Reader) f(ctx context.Context, db *sql.DB) error {
 
 	fset := token.NewFileSet()
 	files := readerFiles(t, fset)
-	for _, name := range []string{"reader.go", "retire.go"} {
+	for _, name := range []string{"reader.go", "retire.go", "changeread.go"} {
 		if files[name] == nil {
 			t.Fatalf("%s declares no method of the Reader, so this guard no longer reads it", name)
 		}

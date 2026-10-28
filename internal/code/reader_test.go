@@ -1344,7 +1344,12 @@ func TestACodeRowReadServesSessionAtItsFloor(t *testing.T) {
 	t.Parallel()
 	a, b := newTwoNodes(t)
 	id := a.ensure("app", described("app"), t1).RepoID
-	a.push(id, entry("p1", set("refs/heads/main", code.ZeroOID, oidOf("c1"))))
+	a.push(id, entry("p1", set("refs/heads/main", code.ZeroOID, oidOf("c1")),
+		set("refs/heads/release", code.ZeroOID, oidOf("r1"))))
+	// A CHANGE OF MAIN INTO RELEASE, whose head every push to main moves.
+	c, _ := committerOn(t, a, a.pub)
+	opened, err := c.ProposeChange(t.Context(), opening(id, "refs/heads/main", "refs/heads/release", asker))
+	requireChanged(t, opened, err)
 	b.drain()
 	b.hold()
 	at := a.push(id, entry("p2", set("refs/heads/main", oidOf("c1"), oidOf("c2")))).Position
@@ -1355,6 +1360,9 @@ func TestACodeRowReadServesSessionAtItsFloor(t *testing.T) {
 		q := code.ReadQuery{Asker: asker, Kind: kind, Fresh: fresh}
 		if kind != code.ReadRepos {
 			q.Repo = "app"
+		}
+		if kind == code.ReadChange {
+			q.Change = opened.Number
 		}
 		return q
 	}
@@ -1369,10 +1377,15 @@ func TestACodeRowReadServesSessionAtItsFloor(t *testing.T) {
 			return answer.Repo.Head
 		case len(answer.Pushes) > 0:
 			return answer.Pushes[0].Commands[0].New
+		case len(answer.Changes) == 1:
+			return answer.Changes[0].Head
+		case answer.Change != nil:
+			return answer.Change.Head
 		}
 		return ""
 	}
-	kinds := []code.ReadKind{code.ReadRepos, code.ReadRepo, code.ReadPushes, code.ReadRefs}
+	kinds := []code.ReadKind{code.ReadRepos, code.ReadRepo, code.ReadPushes, code.ReadRefs, code.ReadChanges,
+		code.ReadChange}
 	session := statelog.FloorAt(statelog.ReadSession, at)
 	for _, kind := range kinds {
 		_, err := b.reader.Read(t.Context(), asked(kind, session))

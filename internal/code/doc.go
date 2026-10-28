@@ -110,6 +110,20 @@
 // that fits only alone is carried, with the pushes behind it, to lead the
 // committer's next batch.
 //
+// ITS READS ARE ITS REPOSITORY'S (changeread.go). A listing ([ReadChanges])
+// names a repository, a work item or a state, and walks the ONE index its
+// filters lead — a work item's changes, an owner's in a state, a repository's
+// in a state (replicated 0068), a repository's, the company's in a state —
+// newest first, testing every filter that index does not seek on the rows the
+// page read, so a page is the rows it read and never scans past its limit
+// for the few it keeps. One change ([ReadChange]) is read by its number on
+// its repository, its revisions paged newest first beside it. Both are held to
+// the asker's grant on the change's repository ([JudgeRead]): a listing that
+// names a repository, and a read of one change, are refused whole where the
+// asker or the seat it reads for may not read it; a listing that names none
+// leaves out the changes of every repository either may not, and of a
+// deleted one.
+//
 // # Group commit
 //
 // Because every push to a repository contends on its one subject, a

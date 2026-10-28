@@ -27,7 +27,8 @@ import (
 // among them, and the fences it reads: an eviction's, the activation's), the
 // lifecycle store's decides, the push decide's reads, a change's lifecycle's
 // decide, apply and answer, the live changes a push record moves and the
-// authors its pushers already are of them, the reader's pages in
+// authors its pushers already are of them, every walk a listing of changes
+// takes and one change's reads, the reader's pages in
 // their first and keyset forms — a snapshot's retired phase and its layers
 // phase among them — and its bounded counts, the purge's bounded count, its
 // parts and its statements over a repository's changes and its published
@@ -72,7 +73,9 @@ import (
 // states in another order and it seeks code_changes_state_idx; lead
 // code_ref_drops' key with the position again (replicated 0061 moved the
 // instant ahead of it) and the drops' expiry and a purge part sort what they
-// seek rather than read it in order.
+// seek rather than read it in order; key code_changes_work_idx by the item
+// alone again (replicated 0068 ordered it) and a work item's listing sorts
+// every change the item ever carried.
 func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := seededPlanEstate(t)
@@ -500,6 +503,44 @@ func registeredStatements() map[string]statement {
 		"next change":        {nextChangeSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"opened":             {openedSQL, []any{3000, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"touched":            {touchedSQL, []any{3000, "repo-1"}, []string{repoKey + " (id=?)"}},
+		// THE READS OF CHANGES: each walk a listing's filters choose
+		// (changeread.go's walkOf), a first page and a page after a cursor,
+		// newest first in its index's own order — a repository's by
+		// number, every other by the opening record's position and the id —
+		// one change by its number, its authors and its revisions by their
+		// keys, and the repositories a page across repositories names,
+		// driven from their list.
+		"changes of a repository": {changesOfRepoSQL, []any{"repo-1", 50},
+			[]string{changesNumberKey + " (repo_id=?)"}},
+		"changes of a repository after": {changesOfRepoAfterSQL, []any{"repo-1", 30, 50},
+			[]string{changesNumberKey + " (repo_id=? AND number<?)"}},
+		"changes of a repository in a state": {changesInRepoStateSQL, []any{"repo-1", "open", 50},
+			[]string{changesRepoStateKey + " (repo_id=? AND state=?)"}},
+		"changes of a repository in a state after": {changesInRepoStateAfterSQL, []any{"repo-1", "open", 30, 50},
+			[]string{changesRepoStateKey + " (repo_id=? AND state=? AND number<?)"}},
+		"changes in a state": {changesInStateSQL, []any{"open", 50},
+			[]string{changesStateKey + " (state=?)"}},
+		"changes in a state after": {changesInStateAfterSQL,
+			[]any{"open", 2030, 2030, "repo-1-change-000031", 50},
+			[]string{changesStateKey + " (state=? AND opened_position<=?)"}},
+		"changes of an owner": {changesOfOwnerSQL, []any{"seat-1", "open", 50},
+			[]string{changesOwnerKey + " (owner=? AND state=?)"}},
+		"changes of an owner after": {changesOfOwnerAfterSQL,
+			[]any{"seat-1", "open", 2030, 2030, "repo-1-change-000031", 50},
+			[]string{changesOwnerKey + " (owner=? AND state=? AND opened_position<=?)"}},
+		"changes of a work item": {changesOfWorkSQL, []any{"native", "work-3", 50},
+			[]string{changesWorkKey + " (work_backend=? AND work_id=?)"}},
+		"changes of a work item after": {changesOfWorkAfterSQL,
+			[]any{"native", "work-3", 2030, 2030, "repo-1-change-000004", 50},
+			[]string{changesWorkKey + " (work_backend=? AND work_id=? AND opened_position<=?)"}},
+		"change by number": {changeByNumberSQL, []any{"repo-1", 3},
+			[]string{changesNumberKey + " (repo_id=? AND number=?)"}},
+		"change authors": {changeAuthorsSQL, []any{"repo-1-change-000001"}, []string{authorKey + " (change_id=?)"}},
+		"revisions": {revisionsSQL, []any{"repo-1-change-000001", 200},
+			[]string{revisionKey + " (change_id=?)"}},
+		"revisions after": {revisionsAfterSQL, []any{"repo-1-change-000001", 2, 200},
+			[]string{revisionKey + " (change_id=? AND n<?)"}},
+		"listed repos": {listedReposSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
 		// THE FENCES the applier and a writer read — a node's eviction
 		// window and the readmission that closes one, and the activation
 		// fence every config-managed record is held to — each a point read
@@ -676,7 +717,9 @@ func planShapes() map[string]shape {
 // migration that declares the index rather than from whichever change first
 // issues the read. A change's indexes land with its tables (replicated 0058),
 // one migration for the rows rather than one an index, and their reads — the
-// lifecycle's, the listings', a commit's page — are each a change's of its own.
+// lifecycle's, the listings', a commit's page — are each a change's of its own:
+// the listings' are registered now (changeread.go), and a commit's page's are
+// still claims.
 //
 // TWO-SIDED, as every allowance here is: a claim whose index a registered
 // statement reaches fails, because the change that issues the read registers
@@ -690,15 +733,6 @@ func planShapes() map[string]shape {
 // sees a claim, which no code issues yet.
 func claimedReads() map[string]statement {
 	return map[string]statement{
-		"code_changes_state_idx": {`SELECT id FROM code_changes WHERE state = ?
-			ORDER BY opened_position DESC, id DESC LIMIT ?`, []any{string(ChangeStateOpen), 50},
-			[]string{"code_changes_state_idx (state=?)"}},
-		"code_changes_owner_idx": {`SELECT id FROM code_changes WHERE owner = ? AND state = ?
-			ORDER BY opened_position DESC, id DESC LIMIT ?`, []any{"seat-1", string(ChangeStateOpen), 50},
-			[]string{"code_changes_owner_idx (owner=? AND state=?)"}},
-		"code_changes_work_idx": {`SELECT id FROM code_changes WHERE work_backend = ? AND work_id = ?
-			AND work_id != ''`, []any{"native", "work-3"},
-			[]string{"code_changes_work_idx (work_backend=? AND work_id=?)"}},
 		"code_changes_merge_idx": {`SELECT id FROM code_changes WHERE repo_id = ? AND merge_oid = ?
 			AND merge_oid != ''`, []any{"repo-1", oid("head-3-3")},
 			[]string{"code_changes_merge_idx (repo_id=? AND merge_oid=?)"}},

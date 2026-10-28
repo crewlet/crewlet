@@ -907,7 +907,8 @@ func (c *Committer) refusedChange(ctx context.Context, p ChangeProposal, err err
 }
 
 // changeRow is one change's row of code_changes, as a decide, an apply and an
-// answer read it.
+// answer read it — and a read of the change ([changeRow.wire]), which serves
+// every column of it.
 type changeRow struct {
 	id, repoID string
 	number     int64
@@ -920,7 +921,15 @@ type changeRow struct {
 	revision   int64
 	owner      string
 	ownerKind  PartyKind
-	work       types.WorkItem
+	// operator is the credential a person opened it with, "" for a seat's.
+	operator string
+	work     types.WorkItem
+	// turn and run are the turn and the sandbox run that opened it, each ""
+	// where there was none.
+	turn, run string
+	// openedAt is the broker instant (store.EncodeTime) the change was opened
+	// at, and opened the packed position of the record that opened it.
+	openedAt, opened int64
 	// closedAt and mergedAt are the broker instants (store.EncodeTime) the
 	// change was closed and merged at, each set exactly while it is.
 	closedAt    sql.NullInt64
@@ -938,8 +947,9 @@ func scanChange(scan func(...any) error) (changeRow, error) {
 	var r changeRow
 	var state, ownerKind, backend, via string
 	err := scan(&r.id, &r.repoID, &r.number, &r.title, &r.bodyBytes, &state, &r.source, &r.target, &r.head,
-		&r.revision, &r.owner, &ownerKind, &backend, &r.work.ID, &r.work.Key, &r.work.Project, &r.closedAt,
-		&r.closeReason, &r.mergedAt, &via, &r.mergeOID, &r.version, &r.position)
+		&r.revision, &r.owner, &ownerKind, &r.operator, &backend, &r.work.ID, &r.work.Key, &r.work.Project,
+		&r.turn, &r.run, &r.openedAt, &r.opened, &r.closedAt, &r.closeReason, &r.mergedAt, &via, &r.mergeOID,
+		&r.version, &r.position)
 	r.state, r.ownerKind, r.work.Backend, r.mergedVia = ChangeState(state), PartyKind(ownerKind),
 		types.WorkBackend(backend), MergedVia(via)
 	return r, err
@@ -990,10 +1000,12 @@ func bodyOf(ctx context.Context, tx *sql.Tx, changeID string) (string, error) {
 // declares it ([liveChanges]), and a change's body by its key.
 const (
 	// changeColumns is every column of a change [scanChange] reads, in its
-	// order.
+	// order: every column code_changes holds, so a decide, an apply and a read
+	// of the change scan one row alike.
 	changeColumns = `id, repo_id, number, title, body_bytes, state, source_ref, target_ref, head_oid, revision,
-		owner, owner_kind, work_backend, work_id, work_key, work_project, closed_at, close_reason, merged_at,
-		merged_via, merge_oid, version, position`
+		owner, owner_kind, owner_operator_id, work_backend, work_id, work_key, work_project, created_turn,
+		created_run, opened_at, opened_position, closed_at, close_reason, merged_at, merged_via, merge_oid,
+		version, position`
 	changeRowSQL    = `SELECT ` + changeColumns + ` FROM code_changes WHERE id = ?`
 	liveChangeOnSQL = `SELECT number FROM code_changes WHERE repo_id = ? AND source_ref = ? AND ` +
 		liveChanges + ` LIMIT 1`

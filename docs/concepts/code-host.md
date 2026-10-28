@@ -59,11 +59,12 @@ This is the product's current shape, not a configuration choice:
   repository is one `code.repos` declares.
 - **Nothing asks for a change yet, and there are no reviews or checks.** A
   repository's committer decides a [change](#changes)'s opening, its edits and
-  its close, and a push to a change's branches writes its revisions, merges it
-  or closes it — but no tool, route or push opens one in this release, and no
-  change is reviewed or gated in front of a protected branch. A protection
-  rule decides what a push may do to a ref, and nothing else stands in front
-  of one.
+  its close, a push to a change's branches writes its revisions, merges it or
+  closes it, and a data node answers a listing of changes and one change in
+  detail ([Reading changes](#reading-changes)) — but no tool, route or push
+  opens or reads one in this release, and no change is reviewed or gated in
+  front of a protected branch. A protection rule decides what a push may do to
+  a ref, and nothing else stands in front of one.
 - **Nothing publishes a repository's layers.** A git node installs the chain
   the rows name ([Published layers](#published-layers)), and no row names one
   yet, so each node serves from the index and graph it writes itself.
@@ -819,6 +820,58 @@ moves — and each push of a record sees what the ones before it did.
   next record and is decided first in it, the pushes behind it after it; one
   whose changes would not fit even a record of its own is refused
   `too_many_changes` — see [What git prints](#what-git-prints-and-what-it-means).
+
+### Reading changes
+
+The code host answers two reads of changes, each from a data node's own rows
+at the read level its caller asks for, as every read of the rows is: stale
+unless asked, `session` beside the position a write answered with, so a list
+just changed is read back with the change in it, and linearizable for an
+answer that holds every record the code log had committed when it was asked.
+
+- **A listing of changes**, newest first, a page at a time. It names a
+  **repository**, a **work item** — by its identity across trackers,
+  `<backend>:<id>`, such as `native:<task id>` — or a **state**, and may
+  narrow further by an **owner** (a seat by its handle, or a person by the
+  human seat they hold) and by whichever of the three it did not name. One
+  that names none of the three is refused: no index holds every change the
+  company has, and an owner's changes are kept by state, so an owner's are
+  listed in a state, or in a repository, or on a work item. A repository's
+  changes are listed by number; every other listing in the order the records
+  that opened its changes landed on the code log.
+- **One change**, by its number on its repository — `web!42` — with its row
+  (title, state, branches, head and revision, version, owner, the work item it
+  carries, when it was opened, closed or merged and how), its description and
+  its authors, beside its revisions, newest first; a later page carries its
+  revisions alone, after the revision the page before it ended at. A number
+  the repository does not hold is "no such change", naming it (`web!43`).
+
+**A listing reads the one index its filters lead with** — a work item's
+changes; an owner's in a state; a repository's in a state; a repository's;
+the company's in a state — so a repository's open changes are read without
+its closed and merged history, however long that grows. A filter that index
+does not hold — a repository beside a work item or an owner, a state beside a
+work item, an owner beside a repository with no state — is tested on each
+change the page read, never by reading further: a page is the changes it
+**read**, not the changes it kept, so it can be short, or empty with a cursor,
+and a reader pages until no cursor comes back. A page reads 50 changes unless
+asked for fewer or more, 200 at most; a change's revisions come 200 a page,
+1 000 at most.
+
+**Every read of changes is held to the reader's grant** on the change's
+repository, as the repository's own reads are ([Who may read and
+push](#who-may-read-and-push)):
+
+- A listing that names no repository lists the changes of every repository
+  the reader may read — and of an active or archived one only: a deleted
+  repository's changes are no work anybody can do until it is restored.
+- A listing that names a repository, and a read of one change, are refused
+  `not_permitted` where the reader may not read the repository, naming the
+  visibility and who does read it — a number in it too, which is never
+  answered "no such change" — and are otherwise served whatever the
+  repository's state, a deleted one's included, since it was named.
+- A seat reading for a colleague is held to both grants, as every code read in
+  such a turn is ([Reads made for somebody else](#reads-made-for-somebody-else)).
 
 ---
 
@@ -1981,8 +2034,10 @@ seat the chart relates to the repository in no other way — and nothing else:
 - **`unit`**: only the seats the rows above relate to it read it — the owning
   unit's members and the leads above them, or the owning seat and the leads
   above its unit. Every other seat reads **nothing**: the repository is
-  absent from its listing, and its detail and its push history are refused
-  `not_permitted`, naming the visibility and who does read it. That a
+  absent from its listing and its changes from every listing of changes, and
+  its detail, its push history, a listing of its changes and any one of them
+  are refused `not_permitted`, naming the visibility and who does read it
+  ([Reading changes](#reading-changes)). That a
   `visibility: unit` repository exists is no secret — its name is in the
   company document, so asking for one that does not exist is still answered
   "not found" — and what it holds is.

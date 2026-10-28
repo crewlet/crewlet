@@ -18,6 +18,13 @@ var (
 	// which it names ([RefAnswer.Err]).
 	ErrRefNotFound = errors.New("code: no such ref")
 
+	// ErrChangeNotFound is a change a repository does not hold under the
+	// number a read named, which it names (web!42) — of a repository the
+	// asker may read: one it may not is [ErrNotPermitted] whatever its
+	// changes are, so a number is never an answer about a repository the
+	// grant guards.
+	ErrChangeNotFound = errors.New("code: no such change")
+
 	// ErrPurging is a repository being removed part by part: its name
 	// returns when the purge completes.
 	ErrPurging = errors.New("code: the repository is being purged; its name returns when the purge completes")

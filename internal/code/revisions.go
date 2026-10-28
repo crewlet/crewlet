@@ -383,8 +383,9 @@ func (b *changeBook) move(e PushEntry) {
 // TestTheQualifiedChangeColumnsAreTheChangeColumns holds them to.
 const (
 	qualifiedChangeColumns = `c.id, c.repo_id, c.number, c.title, c.body_bytes, c.state, c.source_ref,
-		c.target_ref, c.head_oid, c.revision, c.owner, c.owner_kind, c.work_backend, c.work_id, c.work_key,
-		c.work_project, c.closed_at, c.close_reason, c.merged_at, c.merged_via, c.merge_oid, c.version, c.position`
+		c.target_ref, c.head_oid, c.revision, c.owner, c.owner_kind, c.owner_operator_id, c.work_backend,
+		c.work_id, c.work_key, c.work_project, c.created_turn, c.created_run, c.opened_at, c.opened_position,
+		c.closed_at, c.close_reason, c.merged_at, c.merged_via, c.merge_oid, c.version, c.position`
 	liveBySourceSQL = `SELECT ` + qualifiedChangeColumns + ` FROM json_each(?2) AS j
 		CROSS JOIN code_changes AS c INDEXED BY code_changes_open_idx
 		WHERE c.repo_id = ?1 AND c.source_ref = CAST(j.value AS TEXT) AND ` + liveChanges

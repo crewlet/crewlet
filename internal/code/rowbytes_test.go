@@ -89,12 +89,21 @@ func TestARowsComputedSizeIsItsEncodingsLength(t *testing.T) {
 		var layer LayerRow
 		fill(rng, reflect.ValueOf(&layer).Elem())
 		check("layer row", layer, layer.encodedBytes())
+
+		var change ChangeSummary
+		fill(rng, reflect.ValueOf(&change).Elem())
+		check("change listing row", change, change.encodedBytes())
+
+		var revision RevisionRow
+		fill(rng, reflect.ValueOf(&revision).Elem())
+		check("revision", revision, revision.encodedBytes())
 	}
 }
 
-// fill sets every field v holds to a random value — or, half the time for a
-// field that may be omitted, its zero, so both spellings of every omitempty
-// field are measured.
+// fill sets every field v holds to a random value — or, a quarter of the time
+// for a field that may be omitted, its zero, so both spellings of every
+// omitempty field are measured; a slice and a pointer are nil a quarter of the
+// time too.
 func fill(rng *rand.Rand, v reflect.Value) {
 	switch v.Type() {
 	case reflect.TypeFor[time.Time]():
@@ -140,6 +149,15 @@ func fill(rng *rand.Rand, v reflect.Value) {
 			fill(rng, s.Index(i))
 		}
 		v.Set(s)
+	case reflect.Pointer:
+		// A POINTER IS AN OPTIONAL VALUE — a change's work item — so nil a
+		// quarter of the time, and otherwise a value filled like any other.
+		if rng.IntN(4) == 0 {
+			return
+		}
+		p := reflect.New(v.Type().Elem())
+		fill(rng, p.Elem())
+		v.Set(p)
 	default:
 		panic("fill: a row field of kind " + v.Kind().String() + " — teach fill and rowbytes.go its encoding")
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/org"
@@ -626,6 +627,16 @@ const (
 	// ReadRefs is one repository's live refs under a prefix, by name; its
 	// first page carries the repository in detail too.
 	ReadRefs ReadKind = "refs"
+	// ReadChanges lists changes, NEWEST FIRST: one repository's in number
+	// order, or those of every repository the asker may read in the order
+	// the records that opened them landed — narrowed by state, by owner and
+	// by work item ([ReadQuery.State]), each listing walking the one index
+	// its filters lead.
+	ReadChanges ReadKind = "changes"
+	// ReadChange is one change by its number on its repository (web!42):
+	// its row, its description and its authors in detail, and its revisions
+	// newest first, a page at a time — a later page its revisions alone.
+	ReadChange ReadKind = "change"
 	// ReadIntroduced is one repository's pushes in log order, as a git
 	// node's index of which push introduced each commit reads them: the
 	// engine's own read, which no principal makes.
@@ -657,9 +668,15 @@ const (
 )
 
 // ReadKinds is the closed set.
+//
+// A KIND IS NEW TO A BUILD THAT PREDATES IT, and such a build refuses it as a
+// kind it does not know ([ErrInvalid]) — never answers it as another — so the
+// fields only a newer kind reads ride a request that build refuses whole, and
+// take no versionedFields row: `changes` and `change` are the only kinds that
+// read [ReadQuery.Change], State, Owner and Work.
 func ReadKinds() []ReadKind {
-	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRefs, ReadIntroduced, ReadCompactionDue,
-		ReadPublicationDue, ReadExpungeDue}
+	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRefs, ReadChanges, ReadChange, ReadIntroduced,
+		ReadCompactionDue, ReadPublicationDue, ReadExpungeDue}
 }
 
 // Valid reports a kind this build knows.
@@ -711,7 +728,9 @@ type ReadQuery struct {
 	// of its own, which such a build refuses as operations it does not know,
 	// rather than ride a field it ignores.
 	CeilingSeat string `json:"ceiling_seat,omitempty"`
-	// Repo is the repository's NAME, for repo, pushes and refs.
+	// Repo is the repository's NAME: required for repo, pushes, refs and
+	// change, and for changes the one repository the listing is of — where
+	// it names none, every repository the asker may read.
 	Repo string `json:"repo,omitempty"`
 	// Status filters a repos listing; empty is active and archived.
 	Status []RepoStatus `json:"status,omitempty"`
@@ -752,6 +771,29 @@ type ReadQuery struct {
 	// which such a build refuses as a kind it does not know, rather than ride
 	// a field it ignores.
 	Push string `json:"push,omitempty"`
+	// Change is a `change` read's number: the change's on the repository
+	// Repo names, web!42's 42 — REQUIRED there, at least 1, and refused on
+	// every other kind.
+	Change int64 `json:"change,omitempty"`
+	// State, Owner and Work narrow a `changes` listing, each refused on every
+	// other kind: the changes in one state; the changes one principal opened,
+	// by the handle their rows name it by — a seat's own, or the human seat a
+	// person holds; and the changes carrying one work item, by its identity
+	// across trackers, `<backend>:<id>` ([types.WorkItem.Ref]). Repo, where
+	// set, narrows the listing to one repository.
+	//
+	// A LISTING NAMES A REPOSITORY, A WORK ITEM OR A STATE — what the indexes
+	// it walks lead with — and is refused naming none: there is no index of
+	// every change the company holds, and an owner's changes are kept by
+	// state. It walks the ONE index its filters lead (changeread.go): a work
+	// item's changes; an owner's in a state; a repository's in a state; a
+	// repository's; the company's in a state — and tests every filter that
+	// index does not seek on the rows the page read, so a page is the rows
+	// it READ, never the rows it kept, and may be short, or empty with a
+	// cursor, as a listing of repositories a seat reads little of is.
+	State ChangeState `json:"state,omitempty"`
+	Owner string      `json:"owner,omitempty"`
+	Work  string      `json:"work,omitempty"`
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
 	Introduced *IntroducedQuery `json:"introduced,omitempty"`
@@ -761,19 +803,26 @@ type ReadQuery struct {
 	MinPacks int    `json:"min_packs,omitempty"`
 	Cursor   string `json:"cursor,omitempty"`
 	// Limit is repos 1..500 (0 = 100), pushes 1..200 (0 = 50), refs
-	// 1..1 000 (0 = 200) and introduced 1..MaxSnapshotItems (0 = the most);
-	// a page of a duty listing — `compaction_due`, `publication_due`,
-	// `expunge_due` — is MaxSnapshotItems and names none.
+	// 1..1 000 (0 = 200), changes 1..200 (0 = 50) — the rows a page READS,
+	// whatever its filters keep of them — a change's revisions 1..1 000 (0 =
+	// 200) and introduced 1..MaxSnapshotItems (0 = the most); a page of a
+	// duty listing — `compaction_due`, `publication_due`, `expunge_due` — is
+	// MaxSnapshotItems and names none.
 	Limit int                `json:"limit,omitempty"`
 	Fresh statelog.Freshness `json:"fresh"`
 }
 
-// ReadAnswer is a [ReadQuery]'s answer.
+// ReadAnswer is a [ReadQuery]'s answer: Changes is a `changes` listing's page;
+// Change a `change` read's detail, on its first page alone; and Revisions a
+// page of that change's revisions, newest first, on every page of it.
 type ReadAnswer struct {
 	Repos      []RepoSummary          `json:"repos,omitempty"`
 	Repo       *RepoDetail            `json:"repo,omitempty"`
 	Pushes     []PushRow              `json:"pushes,omitempty"`
 	Refs       []RefRow               `json:"refs,omitempty"`
+	Changes    []ChangeSummary        `json:"changes,omitempty"`
+	Change     *ChangeDetail          `json:"change,omitempty"`
+	Revisions  []RevisionRow          `json:"revisions,omitempty"`
 	Introduced []IntroducedRow        `json:"introduced,omitempty"`
 	Due        []CompactionCandidate  `json:"due,omitempty"`
 	Publish    []PublicationCandidate `json:"publish,omitempty"`
@@ -1026,6 +1075,111 @@ type RepoDetail struct {
 	CreatedAt  time.Time `json:"created_at"`
 	// Limits are the SERVING node's epoch's: what an import chunks to.
 	Limits Limits `json:"limits"`
+}
+
+// ChangeRow is a change as its row holds it (code_changes): every column, as
+// every read of one serves it — what a listing renders ([ChangeSummary]) and
+// a read of one change details ([ChangeDetail]).
+type ChangeRow struct {
+	ID     string `json:"id"`
+	RepoID string `json:"repo_id"`
+	// Number is the change's on its repository — web!42's 42 — the
+	// repository's next_change at the apply that opened it.
+	Number int64       `json:"number"`
+	Title  string      `json:"title"`
+	State  ChangeState `json:"state"`
+	// SourceRef is the branch whose head the change proposes, and TargetRef
+	// the branch it proposes it into, each in full (refs/heads/feature).
+	SourceRef string `json:"source_ref"`
+	TargetRef string `json:"target_ref"`
+	// Head is the source branch's head at the change's latest revision, and
+	// Revision that revision's number: how many revisions it has.
+	Head     string `json:"head"`
+	Revision int64  `json:"revision"`
+	// Owner is who opened it — a seat by its handle, or a person by the
+	// human seat they hold — and OwnerKind which; OwnerOperatorID is the
+	// credential a person opened it with, the change's own attribution as
+	// every record a write leaves names it, and "" for a seat's.
+	Owner           string    `json:"owner"`
+	OwnerKind       PartyKind `json:"owner_kind"`
+	OwnerOperatorID string    `json:"owner_operator_id,omitempty"`
+	// WorkItem is the work item the change carries, nil for none.
+	WorkItem *types.WorkItem `json:"work_item,omitempty"`
+	// CreatedTurn and CreatedRun are the turn and the sandbox run that opened
+	// it, each "" where there was none — a person's open has neither.
+	CreatedTurn string `json:"created_turn,omitempty"`
+	CreatedRun  string `json:"created_run,omitempty"`
+	// OpenedAt is the broker instant of the record that opened it, and
+	// OpenedPosition where on the code log that record landed: what a listing
+	// across repositories orders its changes by.
+	OpenedAt       time.Time         `json:"opened_at"`
+	OpenedPosition statelog.Position `json:"opened_position"`
+	// ClosedAt is set exactly while the change is closed, with CloseReason —
+	// SourceDeleted for one a push closed by deleting its source — and
+	// MergedAt exactly while it is merged, with how (MergedVia) and the commit
+	// its target was merged at (MergeOID).
+	ClosedAt    time.Time `json:"closed_at,omitzero"`
+	CloseReason string    `json:"close_reason,omitempty"`
+	MergedAt    time.Time `json:"merged_at,omitzero"`
+	MergedVia   MergedVia `json:"merged_via,omitempty"`
+	MergeOID    string    `json:"merge_oid,omitempty"`
+	// BodyBytes is how long its description is, 0 for none: a listing says a
+	// change has one without carrying it ([ChangeDetail.Body]).
+	BodyBytes int64 `json:"body_bytes,omitempty"`
+	// Version counts the records that changed the row — 1 at its open — and
+	// is what a write of the change's lifecycle names as its expectation
+	// ([ChangeProposal.ExpectedVersion]); Position is where the last of them
+	// landed.
+	Version  int64             `json:"version"`
+	Position statelog.Position `json:"position"`
+}
+
+// ChangeSummary is a change as a listing renders it: its row, its repository's
+// name and its reference (web!42), and the asker's standing on the repository.
+type ChangeSummary struct {
+	ChangeRow
+	Repo string `json:"repo"`
+	// Ref is [ChangeRef] of the repository's name and the change's number.
+	Ref string `json:"ref"`
+	// Access is the asker's access to the change's repository ([Grant.Access]
+	// by name: read, review, write or maintain) — never none, since a change
+	// of a repository the asker may not read is not listed at all.
+	Access string `json:"access,omitempty"`
+}
+
+// ChangeDetail is one change in detail: its summary, its description and its
+// authors. Its revisions are paged beside it ([ReadAnswer.Revisions]).
+type ChangeDetail struct {
+	ChangeSummary
+	// Body is its description, "" for none.
+	Body string `json:"body,omitempty"`
+	// Authors is everyone who wrote it — whoever opened it, and everyone whose
+	// push moved its head — by handle.
+	Authors []ChangeAuthor `json:"authors"`
+}
+
+// ChangeAuthor is one author of a change (code_change_authors): a seat by its
+// handle or a person by the human seat they hold, from the revision they
+// first wrote. An author's approval of their own change counts for nothing.
+type ChangeAuthor struct {
+	Author        string            `json:"author"`
+	Kind          PartyKind         `json:"kind"`
+	FirstRevision int64             `json:"first_revision"`
+	Position      statelog.Position `json:"position"`
+}
+
+// RevisionRow is one revision of a change (code_revisions): a move of its
+// source branch's head while it was live — the new head, who moved it and
+// the push that did, empty for a revision an open or a reopen made — where
+// its record landed and the record's broker instant.
+type RevisionRow struct {
+	N          int64             `json:"n"`
+	Head       string            `json:"head"`
+	Pusher     string            `json:"pusher"`
+	PusherKind PartyKind         `json:"pusher_kind"`
+	PushID     string            `json:"push_id,omitempty"`
+	Position   statelog.Position `json:"position"`
+	At         time.Time         `json:"at"`
 }
 
 // THE READS BY OBJECT ID: what a git node answers about a repository's content
