@@ -1315,8 +1315,13 @@ const (
 	// 4624.2 KiB, all of it in the lazy chunks that render Markdown: the
 	// flattening moved out of the renderer (`lib/markdownText.ts`), so the
 	// first load fell to 349.1 KiB. 4625 KiB, which still refuses a doubled
-	// baseline.
-	treeBudget = 4<<20 + 529<<10
+	// baseline. Linking only what the dashboard built in the assistant and the
+	// Inbox (each address rebuilt on the company's own host), placing a bare
+	// `#11` by its message, a bare `owner/repo` under the company's owners and
+	// uilet 0.75.1's smaller marks took it to 4629.4 KiB, again all in the lazy
+	// chunks that render Markdown: the first load is 348.9 KiB. 4630 KiB, which
+	// still refuses a doubled baseline.
+	treeBudget = 4<<20 + 534<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
