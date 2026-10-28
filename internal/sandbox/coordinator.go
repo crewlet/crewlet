@@ -1192,6 +1192,18 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// condition decides what the caller does with this delivery. What was
 	// signalled is read first, for the reason [Coordinator.keepRefused] gives.
 	seen := c.signalsSeen()
+	// HELD BY THIS NODE, before its gate is asked: the job's last resume here
+	// met a refusal after its claim that lifts at an instant, which the gate
+	// cannot see and would admit into again ([Coordinator.keepRefused]).
+	// Refused as the gate refuses, so the announcement is acknowledged and
+	// the waiter's next one asks again; quietly, since the hold itself was
+	// said when it was taken and the waiter repeats it every poll.
+	if refusal, held := c.stillRefused(ev); held {
+		log.DebugContext(ctx, "sandbox_completion_held_here",
+			"turn_id", ev.TurnID, "agent", ev.AgentHandle, "condition", string(refusal.Condition),
+			"until", refusal.Until.UTC().Format(time.RFC3339))
+		return fmt.Errorf("%w: %w", ErrResumeUnavailable, &TurnRefused{Refusal: refusal})
+	}
 	adm, err := c.admitTurn(ctx, ev.AgentHandle, ResumeCompletion)
 	if err != nil {
 		log.InfoContext(ctx, "sandbox_completion_not_admitted",
@@ -1199,7 +1211,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 			"detail", "this node may not start the turn the completion resumes, so the "+
 				"run is left unclaimed for the waiter to announce again, here once the "+
 				"condition clears or on the seat's next holder")
-		c.keepRefused(ev, trigger, refusalOf(err).Condition, seen)
+		c.keepRefused(ev, trigger, refusalOf(err), false, seen)
 		return fmt.Errorf("%w: %w", ErrResumeUnavailable, err)
 	}
 	defer adm.release()
@@ -1210,8 +1222,19 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		// later: kept for the signal that ends it, and handed back by the
 		// condition it names, as the gate's own is. Against what was
 		// signalled before the gate was asked, so a signal that landed
-		// while the resume ran re-fires it at once.
-		c.keepRefused(ev, trigger, refusal.Condition, seen)
+		// while the resume ran re-fires it at once. And HELD HERE until the
+		// instant it names, because the gate admitted it and would again:
+		// this node's own, and never the run's row ([Coordinator.keepRefused]).
+		held := !refusal.Until.IsZero()
+		if held {
+			log.InfoContext(ctx, "sandbox_completion_held_here",
+				"turn_id", ev.TurnID, "agent", ev.AgentHandle, "condition", string(refusal.Condition),
+				"reason", refusal.Reason, "until", refusal.Until.UTC().Format(time.RFC3339),
+				"detail", "the resume met a condition its gate could not see; this node refuses "+
+					"the job's announcements until the condition's instant or its signal, and a "+
+					"restart or the seat's next holder asks its own models")
+		}
+		c.keepRefused(ev, trigger, refusal, held, seen)
 	}
 	return err
 }
@@ -2702,39 +2725,33 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		// its seat's budget held) is a wait rather than a failure, and is
 		// said as one; its caller waits on it.
 		//
-		// AND A COMPLETION'S IS HELD until the instant the refusal names,
-		// beside being kept for its signal ([Coordinator.keepRefused]): the
-		// gate can admit a resume whose relaunch then meets the limit (a
+		// HANDED BACK UNHELD, A COMPLETION'S TOO: what refused it is this
+		// node's models, which only this node knows are at their limit, and
+		// the run's row is read by every node. The completion is held here
+		// instead, until the instant the refusal names, beside being kept
+		// for its signal ([Coordinator.OnCompleted], [Coordinator.keepRefused]):
+		// the gate can admit a resume whose relaunch then meets the limit (a
 		// review on a ready member of the chain, sending back to runners
-		// every one of which sits out), and the waiter's next poll announced
-		// the job again, so the box was collected and the review run again,
-		// into the same refusal, every poll for as long as the limit lasted.
-		// Held, the poll is quiet until the instant, and the signal that ends
-		// the wait both lifts the hold and re-fires the kept completion
-		// ([Coordinator.Readmit]). An answer's is its own series, which
-		// waits without a hold.
-		var hold *Refusal
+		// every one of which sits out), and unheld, every announcement of the
+		// job collected its box and ran the review again, into the same
+		// refusal, for as long as the limit lasted. Written onto the row, the
+		// hold silenced every waiter until the instant, whoever held the seat
+		// next: a restarted node, or the peer the seat moved to, whose own
+		// models may know of no limit at all, left the job unannounced for up
+		// to the hour a vendor's window is benched for. An answer's is its
+		// own series, which waits in this node's memory already.
 		if refusal, refused := waitingRefusal(err); refused {
 			log.InfoContext(ctx, "sandbox_resume_refused",
 				"turn_id", run.TurnID, "revert_to", claimedFrom(run),
 				"condition", string(refusal.Condition), "reason", refusal.Reason,
 				"detail", "the resumed turn met a condition that ends by waiting; the run is "+
 					"reverted and resumed once the condition clears")
-			if !claimedAnswer(run) && !refusal.Until.IsZero() {
-				hold = &refusal
-			}
 		} else {
 			log.ErrorContext(ctx, "sandbox_resume_failed",
 				"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
 		}
 		c.uncountRun(run.AgentHandle, StatusResumed)
-		var unclaimErr error
-		if hold != nil {
-			unclaimErr = c.unclaimHeld(ctx, run, *hold)
-		} else {
-			unclaimErr = c.unclaim(ctx, run, false, resumeUnrevertedDetail)
-		}
-		if unclaimErr != nil {
+		if unclaimErr := c.unclaim(ctx, run, false, resumeUnrevertedDetail); unclaimErr != nil {
 			//nolint:nilerr // Deliberate, and the same answer the
 			// acted-and-broke branch above gives for the same reason:
 			// the run has been settled, so the completion is not sent

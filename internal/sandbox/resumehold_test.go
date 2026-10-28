@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
@@ -291,23 +292,17 @@ func TestAnAnswerWhoseResumeItsBudgetHeldWaitsUncharged(t *testing.T) {
 	}
 }
 
-// A COMPLETION WHOSE RESUME MEETS A LIMIT IT CAN NAME THE END OF IS HELD UNTIL
-// THEN, as well as kept for the signal that ends it. The gate can admit a resume
-// whose relaunch then meets the limit (a review on a ready member of the chain,
-// sending back to runners every one of which sits out); unheld, the waiter's
-// next poll announced the job again, and the box was collected and the review
-// run again, into the same refusal, every poll for as long as the limit lasted.
-// The signal lifts the hold and re-fires the kept completion, once.
-//
-// Mutation: hand the claim back unheld, and the next poll announces the job.
-func TestACompletionRefusedForALimitIsHeldUntilItsInstant(t *testing.T) {
-	t.Parallel()
-	rig := newCoordRig(t)
+// limitedAfterClaim is a rig whose swe run has finished and whose resume met
+// its models' limit after its claim, until until: the review ran on a ready
+// member of the chain and sent the run back to runners every one of which sits
+// out, which the gate, asked again, would admit into again. The case gets the
+// completion's payload and event back, as the waiter announces them.
+func limitedAfterClaim(t *testing.T, rig *coordRig, until time.Time) (types.SandboxRunCompleted, *events.Event) {
+	t.Helper()
 	gated(rig)
 	rig.launch("t1")
 	rig.coordinator.countRun("swe", StatusRunning)
 	rig.runner.Finish(Result{Success: true, Text: "fixed the flake"})
-	until := rig.now.Add(time.Hour)
 	rig.resumer.failWith(&TurnRefused{Cause: errors.New("llm chain exhausted: usage limit"),
 		Refusal: Refusal{Condition: conditionLimit, Reason: "provider limit: default", Until: until}})
 	rig.resumer.failsInTurn = true
@@ -317,19 +312,105 @@ func TestACompletionRefusedForALimitIsHeldUntilItsInstant(t *testing.T) {
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); !errors.As(err, &refused) {
 		t.Fatalf("OnCompleted = %v, want the resume's refusal", err)
 	}
-	got := rig.get("t1")
-	if got.Status != StatusRunning || got.HeldFor != conditionLimit || !got.HeldUntil.Equal(until) {
-		t.Fatalf("row = %s held for %q until %v, want running and held until %v",
-			got.Status, got.HeldFor, got.HeldUntil, until)
+	if begun := rig.resumer.turnsBegun(); begun != 1 {
+		t.Fatalf("the premise: %d resumed turns began, want the one that met the limit", begun)
 	}
-	if fired := rig.tick(); fired != 0 {
-		t.Fatalf("the poll announced %d completions for a resume held on its limit", fired)
+	return payload, ev
+}
+
+// A COMPLETION WHOSE RESUME MEETS A LIMIT IT CAN NAME THE END OF IS HELD BY ITS
+// NODE UNTIL THEN, as well as kept for the signal that ends it. The gate
+// admitted the resume and would admit it again; unheld, every announcement of
+// the job collected its box and ran the review again, into the same refusal,
+// for as long as the limit lasted. So this node refuses the waiter's
+// announcements itself, before its gate and its claim, until the instant: the
+// signal that ends the wait re-fires the kept completion once, and past the
+// instant the next announcement is asked of the gate again.
+//
+// Mutation: drop the node's own check from OnCompleted, and the announcement
+// made inside the window is claimed and resumed into the same limit.
+func TestACompletionRefusedForALimitIsHeldHereUntilItsInstant(t *testing.T) {
+	t.Parallel()
+	for _, lift := range []string{"its signal", "its instant"} {
+		t.Run(lift, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			until := rig.now.Add(time.Hour)
+			payload, ev := limitedAfterClaim(t, rig, until)
+
+			if fired := rig.tick(); fired != 1 {
+				t.Fatalf("the poll announced %d completions, want the job's: the hold is not on its row", fired)
+			}
+			err := rig.coordinator.OnCompleted(t.Context(), payload, ev)
+			var refused *TurnRefused
+			if !errors.Is(err, ErrResumeUnavailable) || !errors.As(err, &refused) ||
+				refused.Condition != conditionLimit || !refused.Until.Equal(until) {
+				t.Fatalf("an announcement inside the window = %v, want this node's refusal "+
+					"until %v", err, until)
+			}
+			if begun := rig.resumer.turnsBegun(); begun != 1 {
+				t.Fatalf("an announcement inside the window was resumed: %d resumed turns, want 1", begun)
+			}
+
+			rig.resumer.failWith(nil)
+			switch lift {
+			case "its signal":
+				rig.coordinator.Readmit(conditionLimit, "swe")
+				eventually(t, func() bool { return len(rig.resumer.calls()) == 1 },
+					"the kept completion never resumed on its condition's signal")
+				rig.coordinator.inflight.Wait()
+				if calls := rig.resumer.calls(); len(calls) != 1 {
+					t.Fatalf("the signal resumed the completion %d times, want once", len(calls))
+				}
+			case "its instant":
+				rig.now = until.Add(time.Second)
+				if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+					t.Fatalf("the announcement past the instant: %v", err)
+				}
+				if calls := rig.resumer.calls(); len(calls) != 1 {
+					t.Fatalf("%d resumes past the instant, want the announcement's", len(calls))
+				}
+			}
+		})
+	}
+}
+
+// A LIMIT A RESUME MET IS ITS NODE'S ALONE, AND SO IS THE HOLD. The models'
+// sit-out is the node's own, which no peer shares and a restart forgets
+// (ADR-0064), so the hold is kept in the node's memory and never written to
+// the run's row, which every node reads: written there, it silenced the job
+// for whoever held the seat next, a restarted node or the peer the seat moved
+// to, whose own models may know of no limit at all, until the instant — up to
+// the hour a vendor's window is benched for. Here the seat moves on inside the
+// window, and its next holder resumes the job on the waiter's next
+// announcement.
+//
+// Mutation: write the refusal onto the row as a hold (unclaimHeld), and the
+// waiter announces nothing, and the next holder resumes nothing, until the
+// instant.
+func TestALimitAResumeMetIsHeldByItsNodeAlone(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	until := rig.now.Add(time.Hour)
+	limitedAfterClaim(t, rig, until)
+	if got := rig.get("t1"); got.Status != StatusRunning || got.HeldFor != "" || got.Held(rig.now) {
+		t.Fatalf("row = %s held for %q until %v, want it running and unheld: the limit is "+
+			"the resuming node's models'", got.Status, got.HeldFor, got.HeldUntil)
 	}
 
-	rig.resumer.failWith(nil)
-	rig.coordinator.Readmit(conditionLimit, "swe")
-	eventually(t, func() bool { return len(rig.resumer.calls()) == 1 },
-		"the kept completion never resumed on its condition's signal")
+	next := successorOf(t, rig, rig.pending)
+	next.coordinator.manager = rig.manager
+	gated(next)
+	if fired := rig.tick(); fired != 1 {
+		t.Fatalf("the poll announced %d completions inside the first node's window, want the job's", fired)
+	}
+	payload, ev := rig.completion("t1")
+	if err := next.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the next holder's OnCompleted inside the first node's window: %v", err)
+	}
+	if calls := next.resumer.calls(); len(calls) != 1 {
+		t.Fatalf("the next holder resumed %d times inside the first node's window, want once", len(calls))
+	}
 }
 
 // A JOB COLLECTED AGAIN IS READ AS IT WAS WHEN IT WAS FIRST COLLECTED. Its

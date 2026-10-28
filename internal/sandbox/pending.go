@@ -1171,6 +1171,16 @@ type PendingRun struct {
 	// the broker to redeliver, re-announced by the next poll — every retry
 	// re-collected the job and ran its review again, spending what the
 	// window had left on a relaunch the same refusal was waiting for.
+	//
+	// ONLY WHAT EVERY NODE READS ALIKE, because every node reads the row
+	// and every waiter honours it: the budget's counters are the fleet's.
+	// A model's limit, which a resume can meet after its claim as well (a
+	// relaunch whose every runner sits out), is not held here: it is the
+	// resuming node's models', which no peer shares and a restart forgets,
+	// so that node holds the completion in its own memory instead
+	// ([Coordinator.keepRefused]) and whoever holds the seat next asks its
+	// own models. Written here, it silenced the job for every holder until
+	// HeldUntil, up to the hour a vendor's window is benched for.
 	HeldFor   Condition `json:"held_for,omitempty"`
 	HeldUntil time.Time `json:"held_until,omitzero"`
 

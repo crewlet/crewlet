@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -161,10 +162,18 @@ type refusedCompletion struct {
 	cond    Condition
 	ev      types.SandboxRunCompleted
 	trigger *events.Event
+
+	// heldUntil, where set, is the instant before which this node refuses the
+	// job's announcements itself, without asking its gate or claiming the
+	// run, and reason is what it refuses them with: a resume refused AFTER
+	// its claim, on a condition the gate could not see ([Coordinator.keepRefused]).
+	heldUntil time.Time
+	reason    string
 }
 
-// keepRefused keeps a completion the gate refused on cond, for
-// [Coordinator.Readmit] to re-fire the moment cond clears.
+// keepRefused keeps a completion refused on refusal's condition, for
+// [Coordinator.Readmit] to re-fire the moment that condition clears, and, where
+// held, holds its announcements off on this node until refusal.Until.
 //
 // # Why it is kept, when the waiter announces it again anyway
 //
@@ -183,12 +192,40 @@ type refusedCompletion struct {
 // back to running as the gate would have left it, and its refusal names the
 // condition ([Coordinator.OnCompleted]).
 //
+// # Why one refused after its claim is also held here
+//
+// The gate admitted it, and would admit its next announcement too: a review on
+// a ready member of the seat's reviewer chain that sent the run back to
+// runners every one of which sits out met the limit a round in, at its
+// relaunch. Asked again, the gate says the same, and every announcement of the
+// job collected its box and ran the review again into the same refusal, for
+// as long as the limit lasted. So such a completion is kept held (held, and
+// the refusal's Until is the instant): its announcements are refused HERE,
+// before the gate and the claim ([Coordinator.stillRefused]), until that
+// instant, and the signal that ends the wait re-fires it as it does any kept
+// completion. A refusal that names no instant holds nothing: the gate is asked
+// again on every announcement, as for a completion it refused itself.
+//
+// IN THIS NODE'S MEMORY, NEVER ON THE RUN'S ROW. The refusal is this node's
+// models', whose limits are its own: the sit-out is not shared with the fleet,
+// and a restart, or the seat moving to a peer, asks the models again on the
+// first delivery (ADR-0064). The row is read by every node, and a hold written
+// there silenced every waiter until its instant, whoever held the seat next: a
+// restarted node, or the seat's next holder, whose models may know of no limit
+// at all, left the job unannounced for up to the hour a vendor's window is
+// benched for. Held here, it goes with the node: its restart forgets it, and
+// so does its letting go of the seat ([Coordinator.ReleaseSeat]), so the job's
+// next announcement asks whoever holds the seat then. The waiter announces the
+// job on every poll meanwhile, as it does for any refused completion; each
+// announcement costs this node a lookup, not a collection and a review. A seat's
+// budget, which every node reads alike, holds on the row instead ([HeldError]).
+//
 // A SIGNAL THAT LANDS WHILE THE GATE IS REFUSING IS NOT LOST. Readmit re-fires
 // only what is kept when it runs, so a condition that cleared between the
 // gate's answer and the keep would leave the completion kept for a signal that
 // has already been and gone, until the next poll. So the caller reads what was
 // signalled BEFORE it asks the gate (seen), and the keep, under the lock
-// Readmit takes, re-fires at once instead of keeping when cond has been
+// Readmit takes, re-fires at once instead of keeping when the condition has been
 // signalled for the seat since: the same rule [Coordinator.waitOwed] applies
 // to an answer.
 //
@@ -197,10 +234,10 @@ type refusedCompletion struct {
 // waiter that drives its box announces it to the seat's next holder. A drain's
 // is kept and never re-fired, since nothing signals a drain's end, until that
 // release drops it.
-func (c *Coordinator) keepRefused(ev types.SandboxRunCompleted, trigger *events.Event, cond Condition,
-	seen map[signal]uint64,
+func (c *Coordinator) keepRefused(ev types.SandboxRunCompleted, trigger *events.Event, refusal Refusal,
+	held bool, seen map[signal]uint64,
 ) {
-	if cond == "" {
+	if refusal.Condition == "" {
 		return
 	}
 	c.mu.Lock()
@@ -208,12 +245,39 @@ func (c *Coordinator) keepRefused(ev types.SandboxRunCompleted, trigger *events.
 	if c.closed {
 		return
 	}
-	kept := refusedCompletion{cond: cond, ev: ev, trigger: trigger}
-	if c.signalledSinceLocked(cond, ev.AgentHandle, seen) {
+	kept := refusedCompletion{cond: refusal.Condition, ev: ev, trigger: trigger}
+	if held {
+		kept.heldUntil, kept.reason = refusal.Until, refusal.Reason
+	}
+	if c.signalledSinceLocked(refusal.Condition, ev.AgentHandle, seen) {
 		c.refireLocked(kept)
 		return
 	}
 	c.refused[ev.TurnID] = kept
+}
+
+// stillRefused reports whether this node holds ev's job off itself, and the
+// refusal it holds it with: a completion whose resume was refused after its
+// claim, kept with the instant that refusal lifts ([Coordinator.keepRefused]),
+// announced again before that instant and before any signal re-fired it.
+//
+// ANOTHER JOB OF THE SAME TURN IS NOT HELD: a hold is the one job's whose
+// resume met the refusal, and a turn that launched again since has a new job,
+// whose own completion is the next question. The stale keep is dropped.
+func (c *Coordinator) stillRefused(ev types.SandboxRunCompleted) (Refusal, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	kept, ok := c.refused[ev.TurnID]
+	switch {
+	case !ok || kept.heldUntil.IsZero():
+		return Refusal{}, false
+	case kept.ev.LaunchID != ev.LaunchID:
+		delete(c.refused, ev.TurnID)
+		return Refusal{}, false
+	case !c.now().Before(kept.heldUntil):
+		return Refusal{}, false
+	}
+	return Refusal{Condition: kept.cond, Reason: kept.reason, Until: kept.heldUntil}, true
 }
 
 // forgetRefused drops a kept completion of turnID's run, once a completion of

@@ -1373,11 +1373,12 @@ func (c *Coordinator) owedRefused(ctx context.Context, run PendingRun, refusal R
 // costs nothing but the attempts it can actually release, and one that turns
 // out not to have released them waits again on whatever refuses it now.
 //
-// The attempts are an owed answer's retry, a completion the node's gate
-// refused on cond ([Coordinator.keepRefused]), which is re-fired at once rather
-// than at the waiter's next announcement of it, and a resume held on cond after
-// its run was collected ([PendingRun.HeldFor]), whose hold is lifted so the
-// next poll announces the job again ([Coordinator.liftHoldsLocked]).
+// The attempts are an owed answer's retry, a completion this node refused on
+// cond, at its gate or held here after its claim ([Coordinator.keepRefused]),
+// which is re-fired at once rather than at the waiter's next announcement of
+// it, and a resume held on cond on its run's row after its run was collected
+// ([PendingRun.HeldFor]), whose hold is lifted so the next poll announces the
+// job again ([Coordinator.liftHoldsLocked]).
 //
 // Safe from any goroutine, and cheap enough to call on every occurrence of the
 // event: with nothing waiting it is one pass over this node's owed answers and
