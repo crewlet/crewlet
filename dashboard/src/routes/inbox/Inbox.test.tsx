@@ -26,6 +26,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { installScreen } from "~/testing.tsx";
 import { withDerived } from "~/test/org.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -875,6 +876,9 @@ describe("the pane", () => {
       pause_ttl_seconds: 3_600,
       declined_answers: [] as string[],
     };
+    // How often the run record was asked for before the press, for a case
+    // about what the press makes the pane ask again.
+    let runsAskedAtPress = 0;
     const answerRun = async (
       after: Record<string, unknown>,
       others: object[] = [],
@@ -906,6 +910,7 @@ describe("the pane", () => {
       fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the run" }), {
         target: { value: "Yes, delete it." },
       });
+      runsAskedAtPress = asked.filter((a) => a.kind === "sandbox_runs").length;
       fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
       await settle();
       await settle();
@@ -964,21 +969,31 @@ describe("the pane", () => {
         },
       );
       await settle();
+      // THE REFUSAL'S ONE SENTENCE, drawn as every refusal of its code is,
+      // and only the time beside it, on the reader's clock.
       const strip = document.querySelector(".crewlet-refusal-strip")?.firstChild?.textContent ?? "";
-      expect(strip).toMatch(
-        /^This question was already answered by miles at \S+, so your answer was not used\.$/,
+      expect(strip).toBe(ACT_ERRORS.already_answered);
+      const when = screen.getByText(/^Answered by @miles at /).textContent ?? "";
+      expect(when).toMatch(/^Answered by @miles at \S+\.$/);
+      expect(when).not.toContain("UTC");
+      // ASKED AGAIN FOR THE RECORD, by the refusal's own look-again.
+      expect(asked.filter((a) => a.kind === "sandbox_runs").length).toBeGreaterThan(
+        runsAskedAtPress,
       );
-      expect(strip).not.toContain("UTC");
     });
 
     test("is refused, naming whose answer was used, when another was recorded first", async () => {
-      await answerRun({ status: "answered", answer_ids: ["a0"], answered_by: "jane" });
+      await answerRun({
+        status: "answered",
+        answer_ids: ["a0"],
+        answered_by: "jane",
+        answered_at: "2026-09-30T11:35:00Z",
+      });
       expect(outcome()).toBeUndefined();
       expect(
-        screen.getByText(
-          "This question was already answered by jane, so your answer was not used.",
-        ),
+        screen.getByText("Your answer was not used: another answer was recorded first."),
       ).toBeTruthy();
+      expect(screen.getByText(/^Answered by @jane at \S+\.$/)).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Send answer" })).toBeNull();
     });
 

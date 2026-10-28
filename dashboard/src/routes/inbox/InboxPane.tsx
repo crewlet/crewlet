@@ -724,7 +724,7 @@ function RunPane({
     // NOT USED, so the person is told so and why, never left looking at
     // "Sent" for an answer the run will not read.
     if (fate === "superseded") {
-      setUnused(answeredAlready(record, now));
+      setUnused("Your answer was not used: another answer was recorded first.");
       setSuperseded(true);
     } else {
       setUnused(
@@ -753,11 +753,11 @@ function RunPane({
       { turn_id: run.turn_id, answer },
       { done: `Sent your answer to ${frame.name}’s coding run` },
     );
-    const answeredFirst = result?.kind === "refused" && result.code === "already_answered";
-    setRefusedAnswered(answeredFirst);
-    // A REFUSAL RAISES NO READ FLOOR, so the record is asked again for who
-    // answered and when.
-    if (answeredFirst) runs.refetch();
+    // THE RECORD IS ASKED AGAIN by the refusal itself: already_answered is a
+    // code that looks again at what the press would have moved
+    // (protocol/writeOutcome.ts), sandbox_runs among it, so who answered and
+    // when arrive without a read of this pane's own.
+    setRefusedAnswered(result?.kind === "refused" && result.code === "already_answered");
     if (result && (result.kind === "applied" || result.kind === "pending")) {
       const receipt = (result.receipt ?? {}) as { launch_id?: unknown; answer_id?: unknown };
       setUnused(null);
@@ -802,7 +802,14 @@ function RunPane({
           )}
         </ReadingPaneOutcome>
       ) : superseded ? (
-        unused && <RefusalStrip onDismiss={() => setUnused(null)}>{unused}</RefusalStrip>
+        <Stack gap={2}>
+          {unused && <RefusalStrip onDismiss={() => setUnused(null)}>{unused}</RefusalStrip>}
+          {record?.answered_at && (
+            <Text as="p" variant="caption">
+              {answeredAt(record, now)}
+            </Text>
+          )}
+        </Stack>
       ) : hidden ? (
         <Text as="p" variant="body">
           Its lead or an admin can answer it.
@@ -830,17 +837,13 @@ function RunPane({
               </WriteButton>
             }
           />
-          {refusedAnswered && record?.answered_by ? (
-            <RefusalStrip
-              onDismiss={() => {
-                setRefusedAnswered(false);
-                write.dismiss();
-              }}
-            >
-              {answeredAlready(record, now)}
-            </RefusalStrip>
-          ) : (
-            <RefusalNote write={write} />
+          {/* THE ENGINE'S SENTENCE (the refusal catalog's), and only the
+              time beside it on the reader's clock, off the run's record. */}
+          <RefusalNote write={write} />
+          {refusedAnswered && record?.answered_at && (
+            <Text as="p" variant="caption">
+              {answeredAt(record, now)}
+            </Text>
           )}
         </Stack>
       )}
@@ -855,13 +858,13 @@ function RunPane({
 }
 
 /**
- * A question somebody else's answer was recorded against first: by whom, and
- * when on the READER's clock ([moment]), never the engine's.
+ * When the answer that was used was recorded, and by whom, on the READER's
+ * clock ([moment]): a value beside the engine's own sentence, never a second
+ * wording of it.
  */
-function answeredAlready(record: SandboxRun | undefined, now: number): string {
-  const by = record?.answered_by ? ` by ${record.answered_by}` : "";
-  const at = record?.answered_at ? ` at ${moment(record.answered_at, now)}` : "";
-  return `This question was already answered${by}${at}, so your answer was not used.`;
+function answeredAt(record: SandboxRun, now: number): string {
+  const by = record.answered_by ? ` by @${record.answered_by}` : "";
+  return `Answered${by} at ${moment(record.answered_at ?? "", now)}.`;
 }
 
 /**
