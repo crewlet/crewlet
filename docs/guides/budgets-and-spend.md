@@ -46,12 +46,18 @@ is the floor at its launch.
 launch needs `turn_engine.executor_min_budget_tokens` (default 25 000 — one
 run's opening request) left in every capped window of its seat and of the
 company, and a seat short of it is parked until the window turns over. That
-holds for a launch in the middle of a turn too — a reviewer sending the work
-back for another run, or a person's answer carrying a parked run on: the job
-the turn just collected is **held**, collected in its paused box with its seat
-held behind it, and the turn resumes once the window turns over or a revision
-raises the ceiling (`sandbox_resume_held` in the log), rather than reviewing it
-again on every retry into the same refusal. A
+holds for a launch in the middle of a turn too. A reviewer sending the work
+back for another run on a window that cannot pay for it **holds** the job the
+turn just collected: it waits collected in its paused box, with its seat held
+behind it, and the turn resumes once the window turns over or a revision raises
+the ceiling (`sandbox_resume_held` in the log), rather than reviewing it again
+on every retry into the same refusal. A run that finishes while its window is
+full is held the same way once it is collected, its tokens charged in the
+window it ran in, since its review is refused too. A person's answer carrying a
+parked run on is not let in while the window is full or too short for a launch,
+and one whose relaunch is refused all the same is turned back to wait, uncharged,
+in its own series of attempts (`sandbox_resume_refused`), until the window turns
+over or a revision raises the ceiling (see [Mid-run clarification](../concepts/code-sandbox.md#mid-run-clarification-crewlet-ask)). A
 ceiling below that floor never has it left, so on a seat that runs an executor,
 or on a company that has one, it is refused when the document is validated,
 at the ceiling: raise it to the floor, or lower the floor (`0` turns it off).
