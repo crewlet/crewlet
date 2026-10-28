@@ -72,12 +72,10 @@ import { useRecents, type Recent } from "~/lib/recents.ts";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useConfigWriteAccess, type ConfigWriteAccess } from "~/lib/useWriteAccess.ts";
-import { unfinished } from "~/lib/work.ts";
+import { PROJECT_PAGE, unfinished } from "~/lib/work.ts";
 import { rankProjects } from "~/lib/projectRank.ts";
 import type { WorkProjectRow, WorkProjectsAnswer } from "~/protocol/index.ts";
 
-/** The listing's cap: the engine's own page of projects. */
-export const PROJECT_PAGE = 200;
 /** How long typing rests before a search is sent to the engine. */
 const SEARCH_DELAY_MS = 150;
 /** Past this many active projects the panel leads with the ones opened last. */

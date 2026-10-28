@@ -3,6 +3,7 @@ package engine_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -109,6 +111,15 @@ type spentHolder struct {
 
 func (w *spentWorld) holder(t *testing.T, lease sandbox.Fence, resume sandbox.Resumer) *spentHolder {
 	t.Helper()
+	return w.leasedBy(t, func(string) (sandbox.Fence, bool) { return lease, true }, resume)
+}
+
+// leasedBy is [spentWorld.holder] for a node whose hold on the seat is lease's
+// answer: a node that has let it go answers not held.
+func (w *spentWorld) leasedBy(t *testing.T, lease func(string) (sandbox.Fence, bool),
+	resume sandbox.Resumer,
+) *spentHolder {
+	t.Helper()
 	h := &spentHolder{retries: &handCranked{}, ordinary: &turns{}}
 	h.dispatcher = &engine.Dispatcher{
 		Ledgered: inbox.Ledgered, Turn: h.ordinary.run, Completions: w.ledger,
@@ -122,7 +133,7 @@ func (w *spentWorld) holder(t *testing.T, lease sandbox.Fence, resume sandbox.Re
 		Audience: noAudience{}, Queue: w.board, Pending: w.store, Manager: w.manager,
 		Resume: resume, After: h.retries.after, Spent: h.dispatcher.SpendAnswer,
 		WasSpent: h.dispatcher.AnswerWorked,
-		Lease:    func(string) (sandbox.Fence, bool) { return lease, true },
+		Lease:    lease,
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -353,4 +364,138 @@ func TestALetGosCopyOfAnAnswerByTurnIsAnnouncedOnce(t *testing.T) {
 		t.Fatalf("announced %v, want the let-go announced once, as declined", got)
 	}
 	w.redeliveredSilently(t, h, original, types.AnswerDeclined)
+}
+
+// AN ANSWER REFUSED BY A NODE THAT LET THE SEAT GO SURVIVES TO BE RECORDED BY
+// THE SEAT'S HOLDER. The stale node still consumes the seat's control topic
+// for a moment after its lease is gone, and it refuses the answer for want of
+// the seat. Naked, the answer came back to it on every backoff, one delivery
+// each, until the broker dead-lettered it and the person's answer was gone.
+// The refusal names the seat as lost, so the delivery is handed on, once,
+// with nothing written on the run; the holder records it and resumes the run.
+func TestAnAnswerRefusedForTheSeatSurvivesToItsHolder(t *testing.T) {
+	t.Parallel()
+	w := newSpentWorld(t)
+	first := w.holder(t, sandbox.Fence{Owner: "node-x", Epoch: 1}, &takingResumer{})
+	run := w.parked(t, first)
+	first.coordinator.Stop()
+
+	given := answerAgainst(run, "use main")
+	stale := w.leasedBy(t, func(string) (sandbox.Fence, bool) { return sandbox.Fence{}, false }, &takingResumer{})
+	err := stale.coordinator.OnEvent(t.Context(), given)
+	if !errors.Is(err, sandbox.ErrSeatNotHeld) {
+		t.Fatalf("the node that let the seat go answered %v, want it refused for the seat", err)
+	}
+	if got := engine.ControlOutcome(err).Outcome; got != queue.OutcomeDefer {
+		t.Fatalf("the refused answer leaves the control topic as %s, want it handed on (defer)", got)
+	}
+	if now := mustRun(t, w.store, "t1"); now.Answer != nil || now.Status != sandbox.StatusAwaiting {
+		t.Fatalf("the refusing node wrote %q with answer %+v, want the run left waiting", now.Status, now.Answer)
+	}
+
+	resumer := &takingResumer{}
+	holder := w.holder(t, sandbox.Fence{Owner: "node-y", Epoch: 2}, resumer)
+	if err := holder.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
+	holder.deliver(t, given)
+	holder.retries.fire()
+	if resumer.count() != 1 {
+		t.Fatalf("the holder resumed the run %d times with the handed-on answer, want once", resumer.count())
+	}
+}
+
+// A REFUSAL ON THE STORE'S WORD ALONE IS NOT A LOST SEAT. The node still holds
+// the seat at its lease, and the run's row carries a newer one: the two
+// disagree, and the heartbeat settles which is right within a beat. Named a
+// lost seat, the delivery would be deferred and this node's control attachment
+// quiesced, and a seat it does hold would hear no answer or completion again,
+// since nothing resumes the attachment. So it is handed back on the backoff,
+// and the holder of the newer lease records it.
+//
+// Mutation: name every ErrSeatNotHeld a lost seat without asking the node's
+// own lease, and the refusal is deferred.
+func TestARefusalOnTheStoresWordAloneIsNotALostSeat(t *testing.T) {
+	t.Parallel()
+	w := newSpentWorld(t)
+	older := w.holder(t, sandbox.Fence{Owner: "node-x", Epoch: 1}, &takingResumer{})
+	run := w.parked(t, older)
+	resumer := &takingResumer{}
+	newer := w.holder(t, sandbox.Fence{Owner: "node-y", Epoch: 2}, resumer)
+	if err := newer.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
+
+	given := answerAgainst(run, "use main")
+	err := older.coordinator.OnEvent(t.Context(), given)
+	if !errors.Is(err, sandbox.ErrSeatNotHeld) {
+		t.Fatalf("the node whose lease the row outranks answered %v, want it refused for the seat", err)
+	}
+	var refused *sandbox.TurnRefused
+	if errors.As(err, &refused) && refused.Condition == sandbox.SeatLost {
+		t.Fatalf("a refusal on the store's word was named a lost seat while the node's lease stands: %v", err)
+	}
+	if got := engine.ControlOutcome(err).Outcome; got != queue.OutcomeNak {
+		t.Fatalf("the refusal leaves the control topic as %s, want nak: a deferral quiesces "+
+			"the attachment of a seat this node holds", got)
+	}
+
+	newer.deliver(t, given)
+	newer.retries.fire()
+	if resumer.count() != 1 {
+		t.Fatalf("the newer lease's holder resumed the run %d times, want once", resumer.count())
+	}
+}
+
+// A COMPLETION REFUSED BY A NODE THAT LET THE SEAT GO SURVIVES TO THE HOLDER,
+// as an answer does: the refusal names the seat as lost, so the delivery is
+// handed on, once, with the run left running and unclaimed, and the holder
+// settles it.
+//
+// Mutation: route the completion past the lost-seat naming in OnEvent, and it
+// is handed back on the backoff to the node that keeps refusing it.
+func TestACompletionRefusedForTheSeatSurvivesToItsHolder(t *testing.T) {
+	t.Parallel()
+	w := newSpentWorld(t)
+	first := w.holder(t, sandbox.Fence{Owner: "node-x", Epoch: 1}, &takingResumer{})
+	if _, err := first.coordinator.Launch(t.Context(), w.manager, sandbox.LaunchRequest{
+		Turn:  sandbox.TurnRef{TurnID: "t1", AgentID: fixtureSeat("swe").String(), AgentHandle: "swe", Role: "SWE"},
+		Brief: "fix the flaky test", Task: "get CI green",
+		Spec: sandbox.Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
+	}); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if _, err := w.store.MarkSuspended(t.Context(), "t1", sandbox.Suspension{State: []byte(`{"messages":[]}`)}); err != nil {
+		t.Fatalf("MarkSuspended: %v", err)
+	}
+	first.coordinator.Stop()
+	w.runner.Finish(sandbox.Result{Success: true, Text: "done"})
+	run := mustRun(t, w.store, "t1")
+	done := types.SandboxRunCompleted{Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
+		TurnID: "t1", LaunchID: run.LaunchID, SandboxID: run.SandboxID, CodingAgent: run.CodingAgent}
+	completion := events.New(done, events.TraceContext{})
+
+	stale := w.leasedBy(t, func(string) (sandbox.Fence, bool) { return sandbox.Fence{}, false }, &takingResumer{})
+	err := stale.coordinator.OnEvent(t.Context(), completion)
+	var refused *sandbox.TurnRefused
+	if !errors.As(err, &refused) || refused.Condition != sandbox.SeatLost {
+		t.Fatalf("the node that let the seat go answered %v, want the completion refused as a lost seat", err)
+	}
+	if got := engine.ControlOutcome(err).Outcome; got != queue.OutcomeDefer {
+		t.Fatalf("the refused completion leaves the control topic as %s, want it handed on (defer)", got)
+	}
+	if now := mustRun(t, w.store, "t1"); now.Status != sandbox.StatusRunning {
+		t.Fatalf("the refusing node left the run %q, want it running and unclaimed", now.Status)
+	}
+
+	resumer := &takingResumer{}
+	holder := w.holder(t, sandbox.Fence{Owner: "node-y", Epoch: 2}, resumer)
+	if err := holder.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
+	holder.deliver(t, completion)
+	holder.retries.fire()
+	if resumer.count() != 1 {
+		t.Fatalf("the holder resumed the completed run %d times, want once", resumer.count())
+	}
 }

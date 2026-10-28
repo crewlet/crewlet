@@ -32,12 +32,11 @@ import {
   plural,
   readerDay,
 } from "./format.ts";
-// THE ONE IMPORT THAT REACHES A RENDERING FILE, and it is not a breach of the
-// rule above: `plainText` is a pure string→string function that happens to live
-// beside the grammar it has to agree with. A private stripper here instead would
-// be a second copy of markdown's rules, which is the drift `textcut` and `whsec`
-// each record.
-import { plainText } from "./markdown.ts";
+// MARKDOWN AS TEXT, from the pure half of the markdown files, never the
+// renderer: `plainText` walks the grammar the renderer walks, and a private
+// stripper here instead would be a second copy of its rules, which is the drift
+// `textcut` and `whsec` each record.
+import { plainText } from "./markdownText.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import type {
   WorkActivityRecord,
@@ -107,6 +106,36 @@ export interface ItemRef {
  */
 export function itemAddress(ref: ItemRef): string {
   return ref.key && !ref.key_collision ? ref.key : ref.id;
+}
+
+/**
+ * The project listing's cap: the engine's own page of projects (200), so no
+ * company's live project is missing from a read of them. ONE VALUE for every
+ * reader of the listing: the project switcher, the palette's create step,
+ * the chart's unit keys and the keys prose links by (`lib/projectKeys.ts`).
+ */
+export const PROJECT_PAGE = 200;
+
+/**
+ * A cited task's evidence label without a leading copy of one of its `keys`
+ * and the separator after it, as the Inbox draws it: after the task's
+ * current key, a label that starts with a key read it twice ("GP-20 GP-20
+ * sitemap fix").
+ *
+ * THE WRITE'S RULE, drawn: the engine stores a label this way
+ * (`worklet.labelAfterKey`), and this keeps a label stored before it did
+ * from reading the key twice. A whole key only: GP-2 is not the start of
+ * GP-20, nor GP-20 of GP-20-b. Both read one case table
+ * (`internal/worklet/testdata/evidence_labels.json`).
+ */
+export function labelAfterKey(label: string, keys: readonly string[]): string {
+  for (const key of keys) {
+    if (key === "" || !label.startsWith(key)) continue;
+    const rest = label.slice(key.length);
+    if (/^[\p{L}\p{N}_-]/u.test(rest)) continue;
+    return rest.replace(/^[\s:,.\-\u2013\u2014\u00b7|]+/u, "");
+  }
+  return label;
 }
 
 /** Where a task's page is: `#/worklet/{address}`. See [itemAddress]. */

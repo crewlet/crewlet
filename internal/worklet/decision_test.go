@@ -2,8 +2,11 @@ package worklet_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -135,7 +138,9 @@ func TestADecisionIsValidatedField(t *testing.T) {
 func TestValidateDecisionResolvesTasksAndRequiresPages(t *testing.T) {
 	t.Parallel()
 	lookup := fakeEvidence{
-		tasks: map[string]string{"ENG-7": "task-uuid-7"},
+		tasks: map[string]worklet.CitedTask{
+			"ENG-7": {ID: "task-uuid-7", Keys: []string{"ENG-7"}},
+		},
 		pages: map[string]string{"KB/Audit plan": "page-uuid-1"},
 	}
 	d := *decisionFixture()
@@ -177,6 +182,50 @@ func TestValidateDecisionResolvesTasksAndRequiresPages(t *testing.T) {
 		if errors.Is(err, worklet.ErrInvalid) != c.invalid {
 			t.Errorf("%s: %v marked invalid %v, want %v", name, err,
 				errors.Is(err, worklet.ErrInvalid), c.invalid)
+		}
+	}
+}
+
+// A TASK'S LABEL IS WHAT FOLLOWS ITS KEY: the Inbox draws a cited task as its
+// current key and then its label, so a label that repeats the key read it
+// twice ("GP-20 GP-20 sitemap fix"). A former key is the task's too; a key
+// that only starts like it (GP-2 of GP-20, GP-20 of GP-20-b) is the label's
+// own words. The cases are the dashboard's too (`lib/work.ts`'s
+// labelAfterKey draws an evidence label by the same rule), read from one
+// file so the two cannot drift.
+//
+// Mutation: store the label as written and every stripping case fails.
+func TestATaskEvidenceLabelIsStoredWithoutTheKeyTheLinkSays(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("testdata", "evidence_labels.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var table struct {
+		Keys  []string `json:"keys"`
+		Cases []struct {
+			Label string `json:"label"`
+			Want  string `json:"want"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(raw, &table); err != nil {
+		t.Fatal(err)
+	}
+	if len(table.Cases) < 10 {
+		t.Fatalf("the shared table holds %d cases, so this certifies nothing", len(table.Cases))
+	}
+	lookup := fakeEvidence{tasks: map[string]worklet.CitedTask{
+		"GP-20": {ID: "task-20", Keys: table.Keys},
+	}}
+	for _, c := range table.Cases {
+		d := *decisionFixture()
+		d.Evidence = []worklet.Evidence{{Kind: worklet.EvidenceTask, Ref: "GP-20", Label: c.Label}}
+		got, err := worklet.ValidateDecision(t.Context(), d, lookup)
+		if err != nil {
+			t.Fatalf("%q: refused: %v", c.Label, err)
+		}
+		if got.Evidence[0].Label != c.Want {
+			t.Errorf("the label %q is stored as %q, want %q", c.Label, got.Evidence[0].Label, c.Want)
 		}
 	}
 }
@@ -456,15 +505,15 @@ func decisionFixture() *worklet.Decision {
 }
 
 type fakeEvidence struct {
-	tasks map[string]string
+	tasks map[string]worklet.CitedTask
 	pages map[string]string
 }
 
-func (f fakeEvidence) TaskID(_ context.Context, ref string) (string, error) {
-	if id, ok := f.tasks[ref]; ok {
-		return id, nil
+func (f fakeEvidence) Task(_ context.Context, ref string) (worklet.CitedTask, error) {
+	if task, ok := f.tasks[ref]; ok {
+		return task, nil
 	}
-	return "", fmt.Errorf("resolve %s: %w", ref, worklet.ErrNoTask)
+	return worklet.CitedTask{}, fmt.Errorf("resolve %s: %w", ref, worklet.ErrNoTask)
 }
 
 func (f fakeEvidence) PageID(_ context.Context, ref string) (string, bool, error) {

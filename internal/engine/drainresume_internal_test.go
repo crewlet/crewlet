@@ -370,6 +370,8 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 		"a provider's limit":         {err: refusal("provider_limit", errors.New("provider limit reached")), want: queue.OutcomeAck},
 		"a refusal naming no wait":   {err: refusal("", errors.New("refused")), want: queue.OutcomeNak},
 		"the seat is held elsewhere": {err: fmt.Errorf("%w: seat held elsewhere", sandbox.ErrResumeUnavailable), want: queue.OutcomeNak},
+		"the seat was let go of":     {err: refusal(sandbox.SeatLost, sandbox.ErrSeatNotHeld), want: queue.OutcomeDefer},
+		"a newer lease, unconfirmed": {err: fmt.Errorf("record: %w", sandbox.ErrSeatNotHeld), want: queue.OutcomeNak},
 		"the store failed":           {err: errors.New("store unavailable"), want: queue.OutcomeNak},
 	} {
 		t.Run(name, func(t *testing.T) {

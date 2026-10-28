@@ -68,22 +68,25 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
 import { answerFate, type GivenAnswer } from "./answerFate.ts";
 import { fmtDateTime } from "~/lib/format.ts";
-import { renderMarkdown } from "~/lib/markdown.ts";
+import { TokenScope } from "~/components/InlineToken.tsx";
+import { CHECKED_WORDS, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
 import type { Attention } from "~/lib/attention.ts";
-import { describeFollowUp, detailItem, itemAddress } from "~/lib/work.ts";
+import { describeFollowUp, detailItem, itemAddress, labelAfterKey } from "~/lib/work.ts";
 import type {
   AnsweredDecision,
   SandboxRun,
   WorkAskRow,
   WorkDecisionEvidence,
+  WorkItem,
   WorkInboxNotice,
 } from "~/protocol/index.ts";
 import {
   answerWords,
   askContext,
+  askTexts,
   askQuestion,
   followThrough,
   budgetLine,
@@ -328,65 +331,67 @@ function AskPane({
   };
 
   return (
-    <ReadingPane>
-      {frame.byline(
-        <>
-          <strong>{frame.name}</strong>
-          {` ${(decision && ASKED[decision.role]) || "asks you"}`}
-          {frame.task && <> on {frame.task}</>}
-        </>,
-      )}
-      <ReadingPaneTitle>{askQuestion(ask)}</ReadingPaneTitle>
-      {context && <ReadingPaneLead>{renderMarkdown(context)}</ReadingPaneLead>}
-      {reasoning ? (
-        <ReadingPaneReasoning
-          title={
-            <>
-              {`${frame.name} recommends `}
-              <strong>{reasoning.label}</strong>
-            </>
-          }
-          footer={chips}
-        >
-          <p>{reasoning.text}</p>
-        </ReadingPaneReasoning>
-      ) : (
-        chips
-      )}
-      {answer ? (
-        <ReadingPaneOutcome>{answeredWith(answer)}</ReadingPaneOutcome>
-      ) : (
-        <AnswerAsk
-          layout="buttons"
+    <TokenScope texts={askTexts(ask)}>
+      <ReadingPane>
+        {frame.byline(
+          <>
+            <strong>{frame.name}</strong>
+            {` ${(decision && ASKED[decision.role]) || "asks you"}`}
+            {frame.task && <> on {frame.task}</>}
+          </>,
+        )}
+        <ReadingPaneTitle>{renderTokens(askQuestion(ask), "question")}</ReadingPaneTitle>
+        {context && <ReadingPaneLead>{renderMarkdown(context, CHECKED_WORDS)}</ReadingPaneLead>}
+        {reasoning ? (
+          <ReadingPaneReasoning
+            title={
+              <>
+                {`${frame.name} recommends `}
+                <strong>{renderTokens(reasoning.label, "recommended")}</strong>
+              </>
+            }
+            footer={chips}
+          >
+            <p>{renderTokens(reasoning.text, "reasoning", "checked")}</p>
+          </ReadingPaneReasoning>
+        ) : (
+          chips
+        )}
+        {answer ? (
+          <ReadingPaneOutcome>{answeredWith(answer)}</ReadingPaneOutcome>
+        ) : (
+          <AnswerAsk
+            layout="buttons"
+            item={frame.address}
+            label={frame.itemKey}
+            comment={ask.comment}
+            asker={frame.name}
+            options={options}
+            recommended={decision?.recommended}
+            open={open}
+            onOpenChange={setOpen}
+            onAnswered={answered}
+          />
+        )}
+        {decision?.inform && !answer && (
+          <Text as="p" variant="caption">
+            {`Your answer is also posted to #${decision.inform.channel}.`}
+          </Text>
+        )}
+        <RefusalNote write={mark} />
+        <Conversation
           item={frame.address}
-          label={frame.itemKey}
-          comment={ask.comment}
-          asker={frame.name}
-          options={options}
-          recommended={decision?.recommended}
-          open={open}
-          onOpenChange={setOpen}
-          onAnswered={answered}
+          itemKey={frame.itemKey}
+          of={{ kind: "ask", comment: ask.comment, options }}
+          label="Replies to this question"
+          to={frame.name}
+          replyTo={inWords && !answer ? null : ask.comment}
+          placeholder="Reply without answering. @mention to bring someone in."
+          index={index}
+          now={now}
         />
-      )}
-      {decision?.inform && !answer && (
-        <Text as="p" variant="caption">
-          {`Your answer is also posted to #${decision.inform.channel}.`}
-        </Text>
-      )}
-      <RefusalNote write={mark} />
-      <Conversation
-        item={frame.address}
-        itemKey={frame.itemKey}
-        of={{ kind: "ask", comment: ask.comment, options }}
-        label="Replies to this question"
-        to={frame.name}
-        replyTo={inWords && !answer ? null : ask.comment}
-        placeholder="Reply without answering. @mention to bring someone in."
-        index={index}
-        now={now}
-      />
-    </ReadingPane>
+      </ReadingPane>
+    </TokenScope>
   );
 }
 
@@ -430,56 +435,58 @@ function AnsweredPane({
   const said =
     words.kind === "resolved" ? null : words.kind === "choice" ? words.said : `“${words.said}”`;
   return (
-    <ReadingPane>
-      {frame.byline(
-        <>
-          <strong>{frame.name}</strong>
-          {` ${(ask.decision && WAS_ASKED[ask.decision.role]) || "asked you"}`}
-          {frame.task && <> on {frame.task}</>}
-        </>,
-      )}
-      <ReadingPaneTitle>{askQuestion(ask)}</ReadingPaneTitle>
-      <ReadingPaneOutcome>
-        {`${words.who} ${words.verb}`}
-        {said && (
+    <TokenScope texts={askTexts(ask)}>
+      <ReadingPane>
+        {frame.byline(
           <>
-            {" "}
-            <strong>{said}</strong>
-          </>
+            <strong>{frame.name}</strong>
+            {` ${(ask.decision && WAS_ASKED[ask.decision.role]) || "asked you"}`}
+            {frame.task && <> on {frame.task}</>}
+          </>,
         )}
-        {words.recommended && " (Recommended)"}
-      </ReadingPaneOutcome>
-      {words.who !== "You" && words.kind !== "resolved" && (
-        <Text as="p" variant="caption">
-          {`${words.who} answered for you at ${moment(answered.answer.at, now)}. Reply below if you see it differently.`}
-        </Text>
-      )}
-      {follow ? (
-        <ReadingPaneSection label="What happened next">
-          <Stepper
-            label={`What ${frame.name} did with the answer`}
-            orientation="vertical"
-            steps={followSteps(answered, follow, frame.name, words, now, index)}
-            current={
-              follow.state === "acted" ? null : follow.state === "acting" ? "done" : "picked"
-            }
-            tone={follow.state === "held" ? "warning" : "info"}
-            pulse={follow.state === "acting"}
-          />
-        </ReadingPaneSection>
-      ) : null}
-      <Conversation
-        item={frame.address}
-        itemKey={frame.itemKey}
-        of={{ kind: "ask", comment: ask.comment, options: ask.decision?.options ?? [] }}
-        label="Replies to this question"
-        to={frame.name}
-        replyTo={ask.comment}
-        placeholder={`Add to your answer for ${frame.name}. @mention to bring someone in.`}
-        index={index}
-        now={now}
-      />
-    </ReadingPane>
+        <ReadingPaneTitle>{renderTokens(askQuestion(ask), "question")}</ReadingPaneTitle>
+        <ReadingPaneOutcome>
+          {`${words.who} ${words.verb}`}
+          {said && (
+            <>
+              {" "}
+              <strong>{said}</strong>
+            </>
+          )}
+          {words.recommended && " (Recommended)"}
+        </ReadingPaneOutcome>
+        {words.who !== "You" && words.kind !== "resolved" && (
+          <Text as="p" variant="caption">
+            {`${words.who} answered for you at ${moment(answered.answer.at, now)}. Reply below if you see it differently.`}
+          </Text>
+        )}
+        {follow ? (
+          <ReadingPaneSection label="What happened next">
+            <Stepper
+              label={`What ${frame.name} did with the answer`}
+              orientation="vertical"
+              steps={followSteps(answered, follow, frame.name, words, now, index)}
+              current={
+                follow.state === "acted" ? null : follow.state === "acting" ? "done" : "picked"
+              }
+              tone={follow.state === "held" ? "warning" : "info"}
+              pulse={follow.state === "acting"}
+            />
+          </ReadingPaneSection>
+        ) : null}
+        <Conversation
+          item={frame.address}
+          itemKey={frame.itemKey}
+          of={{ kind: "ask", comment: ask.comment, options: ask.decision?.options ?? [] }}
+          label="Replies to this question"
+          to={frame.name}
+          replyTo={ask.comment}
+          placeholder={`Add to your answer for ${frame.name}. @mention to bring someone in.`}
+          index={index}
+          now={now}
+        />
+      </ReadingPane>
+    </TokenScope>
   );
 }
 
@@ -609,9 +616,17 @@ function TaskEvidence({ id, label }: { id: string; label?: string }) {
       leadingIcon={<SquareKanbanGlyph size="sm" />}
       onClick={peekClickHandler(() => peek.open(ref))}
     >
-      {task ? `${task.key} ${label || task.title}` : label || "Task"}
+      {task ? `${task.key} ${citedLabel(task, label)}` : label || "Task"}
     </ButtonLink>
   );
+}
+
+/**
+ * What a cited task's button says after its key: the asker's label without a
+ * copy of the key it already follows ([labelAfterKey]), or the task's title.
+ */
+function citedLabel(task: WorkItem, label: string | undefined): string {
+  return labelAfterKey(label ?? "", [task.key, ...(task.former_keys ?? [])]) || task.title;
 }
 
 /** The conversation under the answer, with the reply box at its end. */
@@ -984,11 +999,11 @@ function NoticePane({
       {said &&
         (comment ? (
           <ReadingPaneQuote>
-            <p>{said}</p>
+            <p>{renderTokens(said, "said", "checked")}</p>
           </ReadingPaneQuote>
         ) : (
           <ReadingPaneLead>
-            <p>{said}</p>
+            <p>{renderTokens(said, "said", "checked")}</p>
           </ReadingPaneLead>
         ))}
       {ask && (

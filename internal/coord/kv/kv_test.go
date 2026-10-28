@@ -723,7 +723,7 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 				"the broker is not filtering and the membership read is moving "+
 				"every seat in the fleet", c.class, got, c.want)
 		}
-		if got := count(s.epochs, c.class); got != c.want {
+		if got := count(s.counter.kv, c.class); got != c.want {
 			t.Errorf("the %s epoch walk was handed %d records for the %d it wanted; "+
 				"that bucket has no TTL, so an unnarrowed read here grows with "+
 				"the deployment's whole history", c.class, got, c.want)

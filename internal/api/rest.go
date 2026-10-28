@@ -90,6 +90,9 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/sandbox-runs/{turn_id}/tail", what: "sandbox_tail", path: map[string]string{"turn_id": "turn_id"}},
 	{method: "GET", pattern: "/budgets", what: "budgets"},
 	{method: "GET", pattern: "/integrations", what: "integrations"},
+	// WHERE THE COMPANY'S APPS LIVE IN A BROWSER, everybody's where
+	// `/integrations` is an administrator's: a kind and a base address per app.
+	{method: "GET", pattern: "/link-hosts", what: "link_hosts"},
 	// WHAT EACH MCP SERVER DID ON EACH NODE. Not under /config/mcp-servers,
 	// which is the configuration's own collection — this is what the fleet
 	// did with it, from the heartbeats.

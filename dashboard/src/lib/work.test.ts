@@ -8,6 +8,8 @@
  * visible in a diff and none of them throws.
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect, test } from "vitest";
 // THE ONE MARK, from the design system rather than re-spelled here: a test
 // carrying its own copy of the glyph goes green on whatever is written.
@@ -72,6 +74,7 @@ import {
   answersAddress,
   itemAddress,
   turnItem,
+  labelAfterKey,
 } from "./work.ts";
 import type {
   WorkActivityRecord,
@@ -1841,4 +1844,20 @@ test("a turn's task is addressed by its id where it is Worklet's, and by its key
   expect(answersAddress("OPS-3", "", "OPS-3")).toBe(true);
   expect(answersAddress("t-dup", "t-claimant", "ENG-7")).toBe(false);
   expect(answersAddress("", "", "")).toBe(false);
+});
+
+// A CITED TASK'S LABEL IS DRAWN WITHOUT THE KEY BEFORE IT, by the rule the
+// engine stores it by: one case table, read by both, so a label stored before
+// the engine stripped it ("GP-20 GP-20 sitemap fix") reads once too.
+//
+// Mutation: return the label as given and every stripping case fails.
+test("an evidence label loses a leading copy of the task's key, by the engine's own cases", () => {
+  const table = JSON.parse(
+    readFileSync(
+      join(process.cwd(), "..", "internal", "worklet", "testdata", "evidence_labels.json"),
+      "utf8",
+    ),
+  ) as { keys: string[]; cases: { label: string; want: string }[] };
+  expect(table.cases.length).toBeGreaterThanOrEqual(10);
+  for (const c of table.cases) expect(labelAfterKey(c.label, table.keys), c.label).toBe(c.want);
 });

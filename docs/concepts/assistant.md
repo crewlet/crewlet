@@ -273,9 +273,16 @@ These limits are structural: they hold whatever the model is asked or reads.
   standing instruction that such text is data. Even if a model were misled by
   it, the worst it could do is prepare a proposal, which you would see and
   decline.
-- **Links and pictures in its answers are inert.** A link the model writes is
-  shown as its label and the address it points to, never as something you can
-  click, and a picture is shown as its description and never loaded.
+- **No address the model writes is opened.** A link is live only where the
+  dashboard built it, from parts it checked, to a place that is your
+  company's: a task's key opens the task, a seat's handle the seat, a pull
+  request or a repository your configured code host, and an address on a host
+  your company configured (GitHub, GitLab, Jira, Confluence, Mattermost) opens
+  as the dashboard rebuilds it from what it names, with nothing else the
+  model wrote. Any other address is shown as its words and the host it names,
+  which you can read and copy but not click, and a picture is shown as its
+  description and never loaded. The Inbox reads an agent's words by the same
+  rule.
 
 **What is proved, and what is not.** The engine's own tests prove the limits
 above by structure: with a scripted model that obeys an injected instruction

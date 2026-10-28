@@ -1313,17 +1313,26 @@ const (
 	// recorded while its seat is busy and on what, answered, or not used and
 	// why) off the run's own record, drawn with uilet 0.74.0's pending tone
 	// while it is on its way, took it to 4610.7 KiB. 4611 KiB, which still
-	// refuses a doubled baseline. Saying that a person's stop ended a seat's
-	// coding run (a stopped turn's tag and a stopped run's span drawn closed
-	// rather than failed in the live view's chunk and the runs board's, a
-	// seat whose last turn "was stopped" in the profile's, the task's
-	// "stopped by a person" pill in the worklet's, and the pause dialog's
-	// words in the writes chunk) and steering a turn whose coding run is out
-	// (Steer offered on a parked turn with the toast saying when the note is
-	// read, and a note read inside a run drawn on the run's bar in the words
-	// of its step), merged beside it, took it to 4613.5 KiB. 4614 KiB, which
-	// still refuses a doubled baseline.
-	treeBudget = 4<<20 + 518<<10
+	// refuses a doubled baseline. Drawing what prose names with its mark
+	// (the recogniser, the link hosts and project keys the frame reads, and
+	// uilet 0.75.0's InlineRef with every vendor's mark) took it to
+	// 4624.2 KiB, all of it in the lazy chunks that render Markdown: the
+	// flattening moved out of the renderer (`lib/markdownText.ts`), so the
+	// first load fell to 349.1 KiB. 4625 KiB, which still refuses a doubled
+	// baseline. Linking only what the dashboard built in the assistant and the
+	// Inbox (each address rebuilt on the company's own host), placing a bare
+	// `#11` by its message, a bare `owner/repo` under the company's owners and
+	// uilet 0.75.1's smaller marks took it to 4629.3 KiB, again all in the lazy
+	// chunks that render Markdown: the first load is 348.9 KiB. 4630 KiB, which
+	// still refuses a doubled baseline. Saying that a person's stop ended a
+	// seat's coding run (a stopped turn's tag and a stopped run's span drawn
+	// closed rather than failed, a seat whose last turn "was stopped", the
+	// task's "stopped by a person" pill and the pause dialog's words) and
+	// steering a turn whose coding run is out (Steer offered on a parked turn,
+	// and a note read inside a run drawn on the run's bar in the words of its
+	// step), merged beside it, took it to 4631.8 KiB. 4632 KiB, which still
+	// refuses a doubled baseline.
+	treeBudget = 4<<20 + 536<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

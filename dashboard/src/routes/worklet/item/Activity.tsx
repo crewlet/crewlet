@@ -78,7 +78,8 @@ import { useViewer } from "~/lib/viewer.ts";
 import { WORKLET, needsWords } from "~/lib/access.ts";
 import { AnswerAsk } from "~/components/writes.tsx";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
-import { renderMarkdown, plainText } from "~/lib/markdown.ts";
+import { renderMarkdown } from "~/lib/markdown.ts";
+import { plainText } from "~/lib/markdownText.ts";
 import {
   fmtCount,
   fmtDateCompact,

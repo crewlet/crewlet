@@ -208,6 +208,9 @@ var contract = []Entry{
 	{"IntegrationTool", ReadInterface, "internal/api/queries.TestTheIntegrationsRoomReadsWhatThisAnswerSends"},
 	{"IntegrationToolState", ReadUnion, "internal/integration.TestTheDashboardKnowsExactlyTheRollupStates"},
 	{"INTEGRATION_TOOLS", ReadLiteral, "internal/integration.TestTheDashboardGroupsSurfacesAsTheEngineDoes"},
+	{"LinkHost", ReadInterface, "internal/api/queries.TestTheLinkHostsAnswerCarriesHostsAndNothingElse"},
+	{"LinkHostsAnswer", ReadInterface, "internal/api/queries.TestTheLinkHostsAnswerCarriesHostsAndNothingElse"},
+	{"LinkHostKind", ReadUnion, "internal/api/queries.TestTheDashboardKnowsExactlyTheLinkHostKinds"},
 
 	// memory.ts
 	{"AgentMemory", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},

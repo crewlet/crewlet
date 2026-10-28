@@ -531,6 +531,53 @@ describe("the pane", () => {
     expect(screen.getByText("The only cost is the webinar slot.")).toBeTruthy();
   });
 
+  // AN ASK IS ONE MESSAGE: its question's bare `#11` is placed by the
+  // repository its context names; an address its asker wrote opens only as
+  // the dashboard rebuilt it on the company's own host; and a cited task's
+  // button names its key once, whatever an older label repeats.
+  test("an ask's words link only what the dashboard built, and name a cited key once", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    const ask = askItem({
+      ...DECISION,
+      question: "How should the guard patch from the #11 PR body be applied?",
+      evidence: [{ kind: "task", ref: "t-20", label: "GP-20 sitemap fix, blocked on this access" }],
+    });
+    ask.ask.body =
+      "Assigned to you in gophrase/backend. See https://evil.example.net/c?q=secret and " +
+      "https://github.com/gophrase/backend/pull/11?x=1.";
+    mount({
+      answers: {
+        decisions: decisionsOf(ask),
+        link_hosts: {
+          hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }],
+        },
+        work_item: {
+          task: {
+            id: "t-20",
+            key: "GP-20",
+            project: "GP",
+            title: "Sitemap fix",
+            status: "todo",
+            version: 1,
+          },
+        },
+      },
+    });
+    await settle();
+    const pane = document.querySelector(".crewlet-reading-pane")!;
+    const title = pane.querySelector(".crewlet-reading-pane__title")!;
+    expect(title.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
+    const hrefs = [...pane.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    expect(hrefs).toContain("https://github.com/gophrase/backend");
+    expect(hrefs).toContain("https://github.com/gophrase/backend/pull/11");
+    expect(hrefs.some((h) => h?.includes("evil.example.net"))).toBe(false);
+    expect(pane.textContent).toContain("https://evil.example.net/c?q=secret");
+    expect(
+      screen.getByRole("link", { name: /GP-20 sitemap fix, blocked on this access/ }),
+    ).toBeTruthy();
+    expect(pane.textContent).not.toContain("GP-20 GP-20");
+  });
+
   test("an option answers with one press, through the one write, and marks its notice read", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";
     mount({
@@ -729,6 +776,26 @@ describe("the pane", () => {
     expect(document.querySelector("blockquote")?.textContent).toBe(long);
     expect(byline()).toBe("CTO on PROD-91");
     expect(screen.getByRole("region", { name: "Replies to this comment" })).toBeTruthy();
+    // QUOTED WHOLE ABOVE, so its thread is the replies alone.
+    const read = asked.find((a) => a.kind === "work_comments")!;
+    expect(read.params).toMatchObject({ item: "PROD-91", thread: "c-40" });
+    expect(read.params.with_root).toBeUndefined();
+  });
+
+  test("a comment quoted only in preview is read whole in its thread", async () => {
+    location.hash = "#/inbox?row=r-1";
+    mount({
+      answers: {
+        work_inbox: inboxes({
+          unread: [
+            notice("r-1", { reason: "mention", comment_id: "c-40", excerpt: "Can you check…" }),
+          ],
+        }),
+      },
+    });
+    await settle();
+    const read = asked.find((a) => a.kind === "work_comments")!;
+    expect(read.params).toMatchObject({ thread: "c-40", with_root: true });
   });
 
   test("an update that only informs says why it reached you", async () => {
@@ -742,6 +809,9 @@ describe("the pane", () => {
     expect(screen.getByRole("heading", { name: "Changed its status" })).toBeTruthy();
     expect(byline()).toBe("CTO on PROD-91 · you follow this task");
     expect(screen.getByRole("region", { name: "Conversation on this task" })).toBeTruthy();
+    // NOT ABOUT A COMMENT, so the conversation is the task's whole thread.
+    const read = asked.find((a) => a.kind === "work_comments")!;
+    expect(read.params.thread).toBeUndefined();
   });
 
   test("the conversation is read a page at a time and names each comment's author", async () => {
@@ -770,7 +840,7 @@ describe("the pane", () => {
     });
     await settle();
     const read = asked.find((a) => a.kind === "work_comments")!;
-    expect(read.params).toMatchObject({ item: "LEAD-12", limit: 50 });
+    expect(read.params).toMatchObject({ item: "LEAD-12", thread: "c-12", limit: 50 });
     expect(read.params.cursor).toBeUndefined();
     const thread = within(screen.getByRole("region", { name: "Replies to this question" }));
     expect(thread.getByText("Maya Ops")).toBeTruthy();
@@ -784,6 +854,48 @@ describe("the pane", () => {
     expect(asked.some((a) => a.kind === "work_comments" && a.params.cursor === "1:c-19")).toBe(
       true,
     );
+  });
+
+  // "EARLIER COMMENTS" OVER NO REPLIES: the pane paged the task's whole
+  // thread and kept the question's replies, so the TASK's cursor offered
+  // earlier replies to a question nobody had replied to. The engine here
+  // answers as it does: the question's own thread is empty, the task is not.
+  // Mutation: read `work_comments` without `thread`.
+  test("a question nobody replied to offers no earlier comments", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(askItem()),
+        work_comments: async (params: Record<string, unknown>) => ({
+          item: "t-12",
+          key: "LEAD-12",
+          title: "Q4 release plan",
+          ...(params.thread === "c-12"
+            ? { comments: [] }
+            : {
+                comments: [
+                  {
+                    id: "c-30",
+                    task: "t-12",
+                    author: "maya",
+                    author_kind: "human",
+                    body: "Unrelated to the question.",
+                    created_at: new Date().toISOString(),
+                  },
+                ],
+                next_cursor: "1:c-29",
+              }),
+        }),
+      },
+    });
+    await settle();
+    const region = screen.getByRole("region", { name: "Replies to this question" });
+    const thread = within(region);
+    expect(thread.queryByRole("button", { name: "Earlier comments" })).toBeNull();
+    expect(thread.getByText("No replies yet.")).toBeTruthy();
+    // NO EMPTY LIST between the heading and the line: an empty <ol> is a flex
+    // item, and the thread's gap around it doubled the space above the line.
+    expect(region.querySelector(".inbox-thread-list")).toBeNull();
   });
 
   // A QUESTION THE READER CAN'T SEE IS NOT ASKED OF THEM: the pane asked for

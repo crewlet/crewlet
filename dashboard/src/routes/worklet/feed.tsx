@@ -20,7 +20,7 @@
 import { Card, EmptyValue, Tag } from "@crewlethq/ui";
 import { TrashGlyph } from "@crewlethq/icons/glyphs";
 import { fmtDateTime, relTime } from "~/lib/format.ts";
-import { plainText } from "~/lib/markdown.ts";
+import { plainText } from "~/lib/markdownText.ts";
 import { pageCount } from "~/lib/work.ts";
 import type { WorkActivityAnswer, WorkActivityRecord } from "~/protocol/index.ts";
 

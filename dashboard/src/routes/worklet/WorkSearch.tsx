@@ -91,7 +91,7 @@ import { ClockGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { plainText } from "~/lib/markdown.ts";
+import { plainText } from "~/lib/markdownText.ts";
 import type { WorkRanked } from "~/protocol/index.ts";
 import { itemAddress } from "~/lib/work.ts";
 

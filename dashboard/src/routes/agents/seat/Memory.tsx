@@ -34,7 +34,7 @@ import { reveal } from "~/lib/scroller.ts";
 import { QueryState } from "~/components/common.tsx";
 import { cutThen, DiaryCard, EpisodesCard, heldWords, pageWords } from "~/components/memory.tsx";
 import { conversationLabel, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
-import { plainText } from "~/lib/markdown.ts";
+import { plainText } from "~/lib/markdownText.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { Seat } from "~/lib/seats.ts";
 import type { CounterpartyProfile } from "~/contract/memory.ts";

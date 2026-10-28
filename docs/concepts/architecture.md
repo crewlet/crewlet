@@ -671,7 +671,7 @@ to the adopted log.
 |---|---|
 | **`crewlet_leases`** | `node:` · `seat:` ownership, and nothing else. The bucket's age **is** the lease TTL |
 | **`crewlet_duties`** | `worker:` ownership, and every other lease, Worklet's `move:` · `merge:` · `bulk:` claims among them. Each record is judged by its own deadline; the bucket's age only has to outlive the longest duty |
-| **`crewlet_epochs`** | The monotonic fencing counter. No age at all — see below |
+| **`crewlet_epochs`** | The monotonic fencing counter, which a single node's in-process leases mint from too, since their tokens are written into records that outlive the process. No age at all (see below) |
 | **`crewlet_config`** | The activation pointer and its payload — the pointer's own revision **is** the epoch |
 | **`crewlet_status`** | One key per node: the epoch and revision it last attempted, how that went (`error` or `degraded` is a refusal), and the revision it serves. A refused re-activation of the revision a node already runs names one revision in both, so a refusal is read from the status, never from the two differing |
 | **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |

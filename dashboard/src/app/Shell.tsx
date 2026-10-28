@@ -75,6 +75,8 @@ import { usePeek } from "./frame/peekAddress.ts";
 import { peekable } from "./frame/peeks.tsx";
 import { StateBar, degradationOf } from "./frame/StateBar.tsx";
 import { useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
+import { LinkHostsProvider } from "~/lib/linkHosts.ts";
+import { ProjectKeysProvider } from "~/lib/projectKeys.ts";
 import { ViewerProvider, useHeldGrants, useViewer } from "~/lib/viewer.ts";
 import { SessionReading, useFrameSession } from "~/lib/frameSession.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
@@ -354,7 +356,9 @@ export function useOwnStar(): void {
 
 /**
  * What the frame reads ONCE for every surface in it: who this browser is,
- * how much is waiting on them, and how much open work is on them.
+ * how much is waiting on them, how much open work is on them, and where the
+ * company's apps live and which project keys are real, which every rendered
+ * link and key reads (`lib/linkHosts.ts`, `lib/projectKeys.ts`).
  *
  * All three are standing reads, and the first two used to be made per caller
  * — the viewer by the frame, the sidebar and the Inbox count, the count by the
@@ -371,7 +375,11 @@ export function FrameReadings({ children }: { children: ReactNode }) {
   return (
     <ViewerProvider>
       <InboxCountsProvider>
-        <QueueCountProvider>{children}</QueueCountProvider>
+        <QueueCountProvider>
+          <LinkHostsProvider>
+            <ProjectKeysProvider>{children}</ProjectKeysProvider>
+          </LinkHostsProvider>
+        </QueueCountProvider>
       </InboxCountsProvider>
     </ViewerProvider>
   );

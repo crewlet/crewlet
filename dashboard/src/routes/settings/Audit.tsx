@@ -129,7 +129,7 @@ import { linkedSeat, plainSeat } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { rangePickerProps } from "~/lib/rangePicker.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
-import { plainText } from "~/lib/markdown.ts";
+import { plainText } from "~/lib/markdownText.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { OPERATOR_SOURCE, RUNTIME_AUDIT_TYPES } from "~/contract/audit.ts";

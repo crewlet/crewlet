@@ -491,6 +491,28 @@ export function indexOrg(org: OrgProjection | null | undefined): OrgIndex {
   return built;
 }
 
+/** Each org projection's index, built once however many readers ask. */
+const indexed = new WeakMap<OrgProjection, OrgIndex>();
+
+/**
+ * The org projection's index, SHARED: built once per projection for every
+ * reader of it, where a `useMemo` per component builds one per component. A
+ * page of prose draws a seat for every handle it mentions (`InlineToken`),
+ * and an index each was the whole chart walked once per mention.
+ */
+export function useOrgIndex(): OrgIndex {
+  const org = useOrg();
+  return useMemo(() => {
+    if (!org) return indexOrg(org);
+    let index = indexed.get(org);
+    if (index === undefined) {
+      index = indexOrg(org);
+      indexed.set(org, index);
+    }
+    return index;
+  }, [org]);
+}
+
 // ---------------------------------------------------------------------------
 // A unit's headcount, and a seat's
 // ---------------------------------------------------------------------------

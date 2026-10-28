@@ -20,7 +20,7 @@ So attachment has to be exclusive, and exclusivity has to be provable across pro
 
 ## The lease
 
-Ownership is a lease in the fleet's coordination store (`internal/coord`): a record with a TTL and a monotonic `epoch`. On a fleet (`coordination.type: embedded-kv`) the record lives in the `crewlet_leases` KV bucket, whose age limit is the lease TTL, and the epoch counter in the untimed `crewlet_epochs` bucket; a single node runs the in-memory twin of the same contract.
+Ownership is a lease in the fleet's coordination store (`internal/coord`): a record with a TTL and a monotonic `epoch`. On a fleet (`coordination.type: embedded-kv`) the record lives in the `crewlet_leases` KV bucket, whose age limit is the lease TTL, and the epoch counter in the untimed `crewlet_epochs` bucket; a single node runs the in-memory twin of the same contract for its leases, and mints its epochs from that same untimed bucket, because the tokens it hands out are written into records that outlive its process (see [Coordination](coordination.md#the-leases-follow-coordinationtype-the-shared-state-does-not)).
 
 ```
 seat:{seat-id}   owner=node-a:9f3c1e70   epoch=7   acquired_at=…   expires_at=…   preferred=node-a
@@ -608,7 +608,7 @@ The current protocol is **1**: no build that held a lease to another meaning was
 
 ## Single node
 
-Everything above runs unchanged on one node: it is the degenerate case, not a second code path. On the default `coordination.type: local` the leases never leave the process, which means it believes it owns the whole company. That is correct for one node and catastrophic for two, which is why the Tier A file refuses the combination at load: `local` coordination beside a clustered embedded stream or an external NATS stream fails validation on `coordination.type`, naming `embedded-kv` as the fix.
+Everything above runs unchanged on one node: it is the degenerate case, not a second code path. On the default `coordination.type: local` the leases never leave the process, which means it believes it owns the whole company. The epochs do leave it: they are minted from the persistent `crewlet_epochs` bucket on `stream.store_dir`, so a seat re-claimed after a restart holds a token above every one its runs were stamped with before it. That is correct for one node and catastrophic for two, which is why the Tier A file refuses the combination at load: `local` coordination beside a clustered embedded stream or an external NATS stream fails validation on `coordination.type`, naming `embedded-kv` as the fix.
 
 A fleet sets `coordination.type: embedded-kv` and gives the nodes one stream to share, either a clustered embedded server or an external NATS. The two go together by construction: the coordination KV lives on the stream's own broker, so refusing the mixed pairing keeps the halves from drifting apart. See [Running a Fleet](../guides/fleet.md#what-a-fleet-needs).
 

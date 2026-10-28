@@ -1115,6 +1115,11 @@ func (c *Coordinator) seatFreed(handle string, was, now seatRuns) {
 }
 
 // OnEvent routes a seat's control-topic delivery.
+//
+// A REFUSAL FOR A SEAT THIS NODE NO LONGER HOLDS NAMES [SeatLost], so the
+// caller settling the delivery hands it on to the seat's holder by the
+// condition, as it hands on a draining node's, rather than retrying it here
+// until the broker dead-letters it.
 func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	if ev == nil {
 		return nil
@@ -1123,11 +1128,24 @@ func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	case *types.SandboxRunStarted:
 		return c.OnStarted(ctx, *payload)
 	case *types.SandboxRunCompleted:
-		return c.OnCompleted(ctx, *payload, ev)
+		return c.lost(payload.AgentHandle, c.OnCompleted(ctx, *payload, ev))
 	case *types.SandboxAnswerGiven:
-		return c.OnAnswerGiven(ctx, *payload, ev)
+		return c.lost(payload.AgentHandle, c.OnAnswerGiven(ctx, *payload, ev))
 	}
 	return nil
+}
+
+// lost names a refusal of a seat this node no longer holds as [SeatLost],
+// asking the node's own lease rather than taking the refusal's word: see
+// [SeatLost] for the refusal that names no loss.
+func (c *Coordinator) lost(handle string, err error) error {
+	if err == nil || !errors.Is(err, ErrSeatNotHeld) {
+		return err
+	}
+	if _, held := c.leaseOf(handle); held {
+		return err
+	}
+	return &TurnRefused{Refusal: Refusal{Condition: SeatLost, Reason: err.Error()}, Cause: err}
 }
 
 // OnStarted recounts the seat from the store.

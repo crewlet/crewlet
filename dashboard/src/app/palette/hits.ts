@@ -124,13 +124,6 @@ export const ALL_ROWS_UNDER_ANSWER = 2;
 export const SOURCE_CHIPS = 4;
 
 /**
- * How many projects the palette reads to say where a create lands and to
- * offer when it cannot tell: the engine's own cap on the listing (200), so
- * no company's project is missing from the step that picks one.
- */
-export const PROJECT_PAGE = 200;
-
-/**
  * The longest text the engine resolves to a colleague, in UTF-8 bytes:
  * `queries.ColleagueQueryMax`, held by the contract (`contract/wire.ts`). A
  * pasted log line is refused `bad_params` there, and that refusal would only

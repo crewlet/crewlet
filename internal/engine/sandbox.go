@@ -2969,13 +2969,21 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 //     drain, as a mailbox's is, and the completion goes back to the head of the
 //     topic for the seat's next holder. It costs one delivery, as every handoff
 //     does, which the delivery budget is sized for.
+//   - A SEAT THIS NODE HAS LET GO OF ([sandbox.SeatLost]) DEFERS for the same
+//     reason, and it is the condition a person's answer is refused on as well
+//     as a completion: the delivery belongs to the seat's holder. Naked, it
+//     came back here on every backoff while the attachment outlived the lease,
+//     one delivery each, and an answer walked to the dead-letter subject; the
+//     deferral hands it to the holder for one, and the release that follows
+//     detaches the quiesced attachment, so a later claim attaches a fresh one.
 //
 // # Everything else NAKs
 //
-// A completion this node could not settle (the seat held elsewhere, the store
-// failing, a refusal that names no condition) comes back on the broker's
-// backoff: to this node once its store recovers, or to the seat's next owner.
-// Acking it would lose the turn.
+// A completion this node could not settle (the store failing, a refusal that
+// names no condition, a row the store says a newer lease owns while this
+// node's lease still stands, which the heartbeat settles within a beat) comes
+// back on the broker's backoff: to this node once its store recovers, or to
+// the seat's next owner. Acking it would lose the turn.
 func controlOutcome(err error) queue.Result {
 	if err == nil {
 		return queue.Ack()
@@ -2984,7 +2992,7 @@ func controlOutcome(err error) queue.Result {
 	if !errors.As(err, &refused) || refused.Condition == "" {
 		return queue.Nak(err)
 	}
-	if refused.Condition == waitDrain {
+	if refused.Condition == waitDrain || refused.Condition == sandbox.SeatLost {
 		return queue.Defer(err.Error())
 	}
 	return queue.Ack()

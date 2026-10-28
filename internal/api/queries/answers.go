@@ -173,8 +173,9 @@ type Sources struct {
 	// the same fields through it: an id sealed in the store, read here from
 	// the process environment, was a person the screen showed no id for
 	// while every delivery to them was routed by it. It resolves contact
-	// ids and nothing else — who a caller IS is the identity directory's
-	// answer, never a field of the chart.
+	// ids and the browser addresses `link_hosts` reports, and nothing else:
+	// who a caller IS is the identity directory's answer, never a field of
+	// the chart.
 	Env org.EnvLookup
 
 	// CompanyWriters is Tier A's `api.auth.company_writers`: the ids of
@@ -676,6 +677,12 @@ func Register(r *Registry, s Sources) {
 		// searched for, and refuses a caller with neither app — see
 		// [Sources.knowledgeSearch].
 		r.Register("knowledge", Everybody(), s.knowledgeSearch)
+		// WHERE THE COMPANY'S APPS LIVE IN A BROWSER, the least of the
+		// integrations a reader needs to draw a vendor's mark beside a link
+		// and to link a bare reference: a kind and a base address per app.
+		// Everybody's, unlike `integrations`, because it carries nothing
+		// else; see [Sources.linkHosts].
+		r.Register("link_hosts", Everybody(), s.linkHosts)
 		// A NAME TO A SEAT, through the tiers an agent's own lookup uses —
 		// the command palette's assign and ask pickers. A projection of
 		// the chart, so it rides the company like the others here, and is

@@ -7,6 +7,7 @@ import { render } from "@testing-library/react";
 import { expect, test } from "vitest";
 import type { AssistantCardEvent } from "~/contract/assistant.ts";
 import { ASSISTANT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
+import { TestClient } from "~/test/client.tsx";
 import { mentionsOf, readsOf, type Read } from "./mentions.ts";
 
 let n = 0;
@@ -51,7 +52,13 @@ function mark(markdown: string, reads: readonly Read[]) {
     </b>
   ));
   const nodes = renderMarkdown(markdown, { ...ASSISTANT_WORDS, prose });
-  const { container } = render(<div>{nodes}</div>);
+  // INSIDE A CLIENT, as every answer is drawn: a handle the answer writes is
+  // drawn from the chart in the store.
+  const { container } = render(
+    <TestClient>
+      <div>{nodes}</div>
+    </TestClient>,
+  );
   return { text: container.textContent ?? "", html: container.innerHTML, named };
 }
 
@@ -148,6 +155,8 @@ test("a key in a path or a bare address is part of it, never a mention", () => {
   expect(mark("Filed under worklet/GOP-11 and /worklet/GOP-11.", reads).named.size).toBe(0);
   expect(mark("Open ./GOP-11 or ../GOP-11 (/items/GOP-11).", reads).named.size).toBe(0);
   expect(mark("See www.x.test/GOP-11 for it.", reads).named.size).toBe(0);
+  // The address is drawn as a model's is on no host of the company's: as
+  // written, and no link; the key after it is still the record's mention.
   expect(mark("See https://x.test/a, then GOP-11.", reads).text).toBe(
     "See https://x.test/a, then [task:GOP-11|GOP-11].",
   );
