@@ -241,9 +241,10 @@ func TestAnAnsweredQuestionRefusesTheNextAnswerAndSaysWhose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Failed || tools.RefusalOf(result) != tools.RefusalNotRunning ||
-		!strings.Contains(result.Output, "already answered by miles at 00:35 UTC on 28 Oct") {
-		t.Fatalf("answer_run = %+v, want a not_running refusal naming who answered and when", result)
+	if !result.Failed || tools.RefusalOf(result) != tools.RefusalAlreadyAnswered ||
+		!strings.Contains(result.Output, "already answered by miles at 2026-10-28T00:35:06Z") {
+		t.Fatalf("answer_run = %+v, want an already_answered refusal naming who answered and "+
+			"when, in RFC 3339", result)
 	}
 	if len(desk.delivered) != 0 {
 		t.Fatalf("delivered %+v for a question already answered", desk.delivered)
@@ -253,5 +254,30 @@ func TestAnAnsweredQuestionRefusesTheNextAnswerAndSaysWhose(t *testing.T) {
 	if person := result.PersonRefusal.Person(); !strings.Contains(person, "@miles") ||
 		strings.Contains(person, "UTC") {
 		t.Fatalf("a person is told %q, want who answered and no engine clock", person)
+	}
+}
+
+// WHAT THE REFUSAL SAYS BECAME OF THE ANSWER IS WHAT THE RECORD SAYS: waiting
+// on its seat while the run is answered, used once it was resumed, and nothing
+// claimed once the run has moved on to something else.
+func TestTheAnsweredRefusalSaysOnlyWhatTheRecordSays(t *testing.T) {
+	t.Parallel()
+	for status, want := range map[string]string{
+		sandbox.StatusAnswered: "resumes with that answer once its seat is free",
+		sandbox.StatusResumed:  "was resumed with that answer",
+		sandbox.StatusRunning:  "",
+	} {
+		run := parked(t, "t1", status)
+		run.Answer = &sandbox.RecordedAnswer{Text: "use main", By: "miles"}
+		desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}}
+		result, err := answerRunTool(t, desk).Call(t.Context(),
+			map[string]any{"turn_id": "t1", "answer": "use the release branch"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		claims := strings.Contains(result.Output, "resume")
+		if (want == "") == claims || (want != "" && !strings.Contains(result.Output, want)) {
+			t.Errorf("a %s run's refusal says %q, want %q", status, result.Output, want)
+		}
 	}
 }

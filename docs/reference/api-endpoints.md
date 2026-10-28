@@ -5277,7 +5277,7 @@ waiting.
 
 **Who may answer**: whoever asked for the run — the seat its requester holds — or whoever leads the run's seat, or `admin`. Everybody else is refused `forbidden`, as the authority table refuses a lead's verb, because everybody signed in holds a credential and an answer steers somebody else's work.
 
-It refuses `not_running` for a run that is not waiting for an answer, or has no
+It refuses `already_answered` for a question another answer was recorded against first (the first recorded answer wins), naming who gave it and when; the run's row in `GET /sandbox-runs` carries both as values (`answered_by`, `answered_at`). It refuses `not_running` for a run that is not waiting for an answer, or has no
 record at all (a run that ended has none). It is
 served on every company, whether it runs Worklet and Doclet or not: the run record is the
 fleet's, and a company on Jira runs coding agents too.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -196,7 +197,7 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// was and when, rather than taken quietly: an answer is recorded the
 		// moment the seat takes it, so a second person answering the same
 		// question finds it answered here.
-		return toPerson(refused(tools.RefusalNotRunning, answeredAlready(run)),
+		return toPerson(refused(tools.RefusalAlreadyAnswered, answeredAlready(run)),
 			caveat.AnsweredAlready(run.Answer.By)), nil
 	case !slices.Contains(sandbox.Awaiting, run.Status):
 		return refused(tools.RefusalNotRunning, fmt.Sprintf("Run %s is %s, not "+
@@ -249,7 +250,10 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // answeredAlready is the refusal an answer gets for a question already
-// answered: by whom and when, from the answer recorded on the run.
+// answered, as the model reads it: by whom, when (RFC 3339, the instant as the
+// record holds it), and what became of that answer as far as the record says.
+// A person's surface shows [caveat.AnsweredAlready] instead, with the instant
+// read off the run's row on the person's own clock.
 func answeredAlready(run sandbox.PendingRun) string {
 	by := run.Answer.By
 	if by == "" {
@@ -257,10 +261,17 @@ func answeredAlready(run sandbox.PendingRun) string {
 	}
 	when := ""
 	if !run.Answer.RecordedAt.IsZero() {
-		when = " at " + run.Answer.RecordedAt.UTC().Format("15:04 UTC on 2 Jan")
+		when = " at " + run.Answer.RecordedAt.UTC().Format(time.RFC3339)
 	}
-	return fmt.Sprintf("This question was already answered by %s%s, so your answer was not "+
-		"used. The run resumes with that answer.", by, when)
+	said := fmt.Sprintf("This question was already answered by %s%s, so your answer was not used.",
+		by, when)
+	switch run.Status {
+	case sandbox.StatusAnswered:
+		return said + " The run resumes with that answer once its seat is free."
+	case sandbox.StatusResumed:
+		return said + " The run was resumed with that answer."
+	}
+	return said
 }
 
 // errUnreadableSeatID is the error a pending run's row carries when the seat
