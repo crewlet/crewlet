@@ -26,7 +26,13 @@ import (
 //   - a message past a max_payload the server lowered by a LIVE RELOAD, which
 //     the server answers with `Maximum Payload Violation` and the client treats
 //     as final ([carriesTheContract] says why nothing on this side can see
-//     such a limit before it is crossed);
+//     such a limit before it is crossed). Final only where the client READS
+//     that answer: a message larger than the socket takes at once can have its
+//     write fail part way when the server closes the connection, and the
+//     client (since nats.go 1.55.0) then closes the socket itself, drops the
+//     unread refusal and reconnects. That connection is not closed for good,
+//     and it reads the lowered limit on the reconnect, which [reconnectWatch]
+//     names and every later write past it is refused against;
 //   - an authorization error the server repeats on the reconnect after it —
 //     credentials revoked or expired, or the server's own authorization
 //     reloaded under a running node — since two identical ones in a row are
