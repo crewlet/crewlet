@@ -66,6 +66,23 @@ var ErrNoType = errors.New("worklet: no such type")
 // would go looking for the wrong thing.
 var ErrNoComment = errors.New("worklet: no such comment")
 
+// CommentThread is the conversation around one comment on a task: what
+// replied to it, and what answered it when it is an ask.
+//
+// PAGED BY THE READ, never filtered after it. A pane that drew one question's
+// replies used to page the task's whole thread and keep the replies, so its
+// cursor answered "the task has older comments" and the pane offered earlier
+// replies to a question nobody had replied to. Narrowed in the query, the
+// cursor is present only when an older page of THIS conversation exists.
+type CommentThread struct {
+	// Root is the comment's id. Empty is no narrowing: the whole task.
+	Root string
+
+	// WithRoot keeps the root itself in the thread, for a reader that is
+	// not already showing it in full. Ignored without a Root.
+	WithRoot bool
+}
+
 // DetailWants says which parts of the answer to assemble.
 //
 // EXPLICIT rather than "everything", because the parts have very different
@@ -89,6 +106,10 @@ type DetailWants struct {
 
 	// CommentCursor pages the thread. Empty starts at the newest.
 	CommentCursor string
+
+	// CommentThread narrows the pages to the conversation around one
+	// comment. Its zero value pages every comment on the task.
+	CommentThread CommentThread
 
 	// CommentLimit is how many comments one page holds. Zero takes
 	// [DetailComments], the detail's own page; anything above
@@ -492,7 +513,7 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 			}
 		case want.Comments:
 			out.Comments, out.CommentsCursor, err = readComments(ctx, tx, id,
-				want.CommentCursor, commentPage(want.CommentLimit))
+				want.CommentThread, want.CommentCursor, commentPage(want.CommentLimit))
 			if err != nil {
 				return err
 			}
@@ -842,9 +863,12 @@ const CommentPageBytes = 16 << 10
 // A REMOVED COMMENT KEEPS ITS ROW with a blank body, which is what lets a
 // reply still resolve against something — so it is returned rather than
 // filtered, and its `removed` flag is what a renderer reads.
-func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string, limit int) (
-	[]Comment, string, error) {
-	return readCommentPage(ctx, tx, taskID, cursor, limit, CommentPageBytes)
+//
+// A [CommentThread] with a root narrows the page to that conversation; see
+// the type for why that happens here rather than in the caller.
+func readComments(ctx context.Context, tx *sql.Tx, taskID string, thread CommentThread,
+	cursor string, limit int) ([]Comment, string, error) {
+	return readCommentPage(ctx, tx, taskID, thread, cursor, limit, CommentPageBytes)
 }
 
 // readCommentPage is [readComments] with the byte budget a parameter, so the
@@ -854,8 +878,8 @@ func readComments(ctx context.Context, tx *sql.Tx, taskID, cursor string, limit 
 // the page past it is the first of the next page, and the cursor names the
 // last comment this page RETURNED — the same rule the count follows, for the
 // same reason.
-func readCommentPage(ctx context.Context, tx *sql.Tx, taskID, cursor string, limit, maxBytes int) (
-	[]Comment, string, error) {
+func readCommentPage(ctx context.Context, tx *sql.Tx, taskID string, thread CommentThread,
+	cursor string, limit, maxBytes int) ([]Comment, string, error) {
 
 	// ONE MORE THAN THE PAGE, which is how the cursor knows whether there
 	// IS a next page without a second count over a table that grows for
@@ -863,8 +887,10 @@ func readCommentPage(ctx context.Context, tx *sql.Tx, taskID, cursor string, lim
 	rows, err := tx.QueryContext(ctx, `
 		SELECT document, created_at, id FROM tracker_comments
 		WHERE task_id = ? AND (? = '' OR (created_at, id) < (?, ?))
+		  AND (? = '' OR reply_to = ? OR answers = ? OR (? AND id = ?))
 		ORDER BY created_at DESC, id DESC
 		LIMIT ?`, taskID, cursor, cursorAt(cursor), cursorID(cursor),
+		thread.Root, thread.Root, thread.Root, thread.WithRoot, thread.Root,
 		limit+1)
 	if err != nil {
 		return nil, "", fmt.Errorf("worklet: read the thread on %s: %w", taskID, err)
