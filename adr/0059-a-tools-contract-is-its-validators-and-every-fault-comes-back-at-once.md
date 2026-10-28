@@ -66,18 +66,17 @@ the branch; the run is logged (`tool_policy_refusal_loop`) and counted
 is a phase's: a resumed phase counts again. The call still runs: never a
 silent cap.
 
-**Every first-party tool's call is held to the schema it advertises,
-whoever makes it.** Every caller calls a tool through `tools.Invoke`: a
-phase's surface (a seat's executor run over the tool bridge,
-`internal/api/mcpbridge`, and every other phase over its tool session, and a
-worker), the operator surface (an
+**Every first-party tool's call is held to the schema it advertises, whoever
+makes it.** Every caller calls a tool through `tools.Invoke`: a phase's surface
+(a seat's executor run, over the tool bridge in `internal/api/mcpbridge`; every
+other phase, over its tool session; a worker), the operator surface (an
 operator's assistant over `/operator/mcp`, the work API's dispatch) and a
-replay of a run's submission. A test walks the tree and refuses a tool's
-own call made anywhere else, so a caller added later inherits the check by
-calling a tool at all. `tools.CheckArgs` checks the call against the tool's
-`Parameters`, every finding in one pass with its path and the shape read
-there, and `tools.Invoke` acts on three kinds of finding. Third-party MCP
-servers hold their own schemas and are not checked.
+replay of a run's submission. A test walks the tree and refuses a tool's own
+call made anywhere else, so a caller added later inherits the check by calling
+a tool at all. `tools.CheckArgs` checks the call against the tool's
+`Parameters`, every finding in one pass with its path and the shape read there,
+and `tools.Invoke` acts on three kinds of finding. Third-party MCP servers hold
+their own schemas and are not checked.
 
 THE CHECK IS ON THE CALL PATH, NOT ON ONE CALLER: its first version sat in
 `tools.Surface`, and the operator surface, which calls the same builtins
