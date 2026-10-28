@@ -1692,11 +1692,14 @@ no seat reaches those only through `admin`.
 
 **An argument a tool does not take is refused, naming it** — on this surface,
 in a seat's turn and on the HTTP routes alike, because the refusal is the
-tools' own rather than any one surface's. A tool reads what its schema
-declares and nothing else, so an argument it does not declare used to be
-dropped: an assistant still sending `save_work_view`'s retired `owner` had a
-personal view saved as a shared tab under an answer saying it had worked, and
-a model that misspelt an argument was never told which one.
+tools' own rather than any one surface's. One sent as `null` is read as one
+nobody sent, and is not refused (see
+[how a call is read](tools-and-mcp.md#a-call-is-held-to-the-schema-its-tool-advertises)).
+A tool reads what its schema declares and nothing else, so an argument it does
+not declare used to be dropped: an assistant still sending `save_work_view`'s
+retired `owner` had a personal view saved as a shared tab under an answer
+saying it had worked, and a model that misspelt an argument was never told
+which one.
 
 A credential the identity directory **binds** to a human seat acts as that
 seat everywhere a tool asks about the caller: who wrote, which project a
