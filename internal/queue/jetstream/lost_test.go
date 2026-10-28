@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -266,37 +265,52 @@ func TestOnlyTheQueuesOwnConnectionClosingLosesTheAcks(t *testing.T) {
 // recorded the other way round, a reader woken in between promised an operator
 // that turns finish while the drain was cancelling them.
 //
-// The reader POLLS rather than parks, because a parked goroutine wakes
-// microseconds after the close and the window it has to land in is the few
-// instructions between the two; a poller on another processor is in it often
-// enough that the misordered record fails this within a few hundred rounds.
+// THE WINDOW IS HELD OPEN rather than raced for. Left to the scheduler, a
+// reader parked on Lost landed between the two closes in under one round in
+// twenty under -race and about one in twenty thousand without it, which is a
+// case that passes over the very defect it names. So the case enters the acks
+// close itself, through the same sync.Once record goes through, and holds it:
+// record is then stopped exactly where the acks are about to close, and Lost
+// must not be closed while it waits. Released, both are closed.
 //
-// Mutation: close done before acks in record and this goes red.
+// Mutation: close done before acks in record and this goes red on every run.
 func TestAReaderThatHasSeenTheLossSeesWhetherItLostTheAcks(t *testing.T) {
 	t.Parallel()
-	if runtime.GOMAXPROCS(0) < 2 {
-		t.Fatal("this case needs a second processor for its reader to watch " +
-			"the record from")
-	}
 	cause := lostConnection(lostServer(false, "nats://nats-1.internal:4222"),
 		nats.ErrAuthorization, false)
-	for round := range 2000 {
-		l := newConnectionLoss()
-		watching := make(chan struct{})
-		sawAcks := make(chan bool, 1)
-		go func() {
-			close(watching)
-			for !closedYet(l.done) {
-			}
-			sawAcks <- closedYet(l.acks)
-		}()
-		<-watching
+	l := newConnectionLoss()
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	go l.acksOnce.Do(func() {
+		close(entered)
+		<-release
+		close(l.acks)
+	})
+	<-entered
+	recorded := make(chan struct{})
+	go func() {
+		defer close(recorded)
 		l.record(cause, true)
-		if !<-sawAcks {
-			t.Fatalf("round %d: a reader saw the queue's own connection lost and "+
-				"its acks still standing, so the drain line would promise the "+
-				"running turns finish while the drain cancels them", round)
-		}
+	}()
+
+	select {
+	case <-l.done:
+		// The acks close is held, so it cannot have happened yet.
+		t.Fatal("a reader woken by Lost found the queue's own connection " +
+			"lost and its acks still standing, so the drain line would " +
+			"promise the running turns finish while the drain cancels them")
+	case <-time.After(quietFor):
+	}
+
+	close(release)
+	select {
+	case <-recorded:
+	case <-time.After(lostWithin):
+		t.Fatalf("record did not return within %s of the acks closing", lostWithin)
+	}
+	if !closedYet(l.done) || !closedYet(l.acks) {
+		t.Fatalf("record returned with Lost closed %v and AcksLost closed %v, "+
+			"want both", closedYet(l.done), closedYet(l.acks))
 	}
 }
 
