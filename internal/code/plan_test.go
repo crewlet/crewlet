@@ -74,7 +74,7 @@ import (
 // code_ref_drops' key with the position again (replicated 0061 moved the
 // instant ahead of it) and the drops' expiry and a purge part sort what they
 // seek rather than read it in order; key code_changes_work_idx by the item
-// alone again (replicated 0068 ordered it) and a work item's listing sorts
+// alone again (replicated 0069 ordered it) and a work item's listing sorts
 // every change the item ever carried.
 func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()

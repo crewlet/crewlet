@@ -113,7 +113,7 @@
 // ITS READS ARE ITS REPOSITORY'S (changeread.go). A listing ([ReadChanges])
 // names a repository, a work item or a state, and walks the ONE index its
 // filters lead — a work item's changes, an owner's in a state, a repository's
-// in a state (replicated 0068), a repository's, the company's in a state —
+// in a state (replicated 0069), a repository's, the company's in a state —
 // newest first, testing every filter that index does not seek on the rows the
 // page read, so a page is the rows it read and never scans past its limit
 // for the few it keeps. One change ([ReadChange]) is read by its number on

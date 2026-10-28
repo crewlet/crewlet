@@ -30,13 +30,13 @@ import (
 // ([walkOf]):
 //
 //   - a work item named: code_changes_work_idx (recreated in its order by
-//     replicated 0068), the item's changes — the narrowest set a listing
+//     replicated 0069), the item's changes — the narrowest set a listing
 //     names, and still paged, since a recurring item gathers a change every
 //     time it is worked;
 //   - an owner and a state: code_changes_owner_idx, the owner's changes in
 //     that state;
 //   - a repository and a state: code_changes_repo_state_idx (replicated
-//     0068), the repository's changes in that state;
+//     0069), the repository's changes in that state;
 //   - a repository: code_changes_number_idx, the repository's changes;
 //   - a state: code_changes_state_idx, the company's changes in that state.
 //
@@ -504,7 +504,7 @@ func cutWork(ref string) (types.WorkBackend, string, string) {
 // its first run — and held by plan_test.go to the seek each is written for.
 const (
 	// changesRepoStateKey is code_changes_repo_state_idx, (repo_id, state,
-	// number) (replicated 0068).
+	// number) (replicated 0069).
 	changesRepoStateKey = "code_changes_repo_state_idx"
 	// changesStateKey is code_changes_state_idx, (state, opened_position,
 	// id) (replicated 0058 and 0066).
@@ -513,7 +513,7 @@ const (
 	// opened_position, id) (replicated 0058 and 0066).
 	changesOwnerKey = "code_changes_owner_idx"
 	// changesWorkKey is code_changes_work_idx, (work_backend, work_id,
-	// opened_position, id) WHERE work_id != '' (replicated 0068).
+	// opened_position, id) WHERE work_id != '' (replicated 0069).
 	changesWorkKey = "code_changes_work_idx"
 )
 
