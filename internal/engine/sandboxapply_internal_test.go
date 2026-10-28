@@ -433,8 +433,6 @@ func newSandboxNode(t *testing.T, company *config.Company) *Engine {
 	return e
 }
 
-// sandboxDoc is [sandboxCompanyDoc] with extra lines in its providers.sandbox
-// block.
 // e2bExecutorDoc is a one-seat company whose executor's entry runs its runs in
 // the remote cell, keyed by key — the one cell whose backend a catalogue can
 // fail to build for want of a credential.
@@ -460,6 +458,8 @@ roles:
 `, t.TempDir(), key)
 }
 
+// sandboxDoc is [sandboxCompanyDoc] with extra lines in its providers.sandbox
+// block.
 func sandboxDoc(extra string) string {
 	return fmt.Sprintf(sandboxCompanyDoc, extra)
 }
