@@ -720,6 +720,13 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		return *refused, nil
 	}
 
+	// A RENAME IS ASKED FOR BY A `title`, and decided ONCE, here, for the
+	// ask below and the rename after the save alike: two tests of the
+	// argument could drift apart, and a rename the ask had not decided would
+	// land without anybody asking whether the caller may. (A null `title`
+	// never reaches a tool: the entry leaves it out, toolargs.Of.)
+	_, renaming := args["title"]
+
 	// A RENAME IS THE CONTAINER LEAD'S OR THE PAGE'S CREATOR'S, however it
 	// is asked for. The tool's own gate decided the SAVE, which is anybody's
 	// who uses Doclet; an address change is
@@ -728,7 +735,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	// so a caller who may not rename lands nothing rather than half of what
 	// they sent. Without it a `title` on this tool was a way round the rule
 	// the rename verb itself is held to.
-	if _, renaming := args["title"]; renaming {
+	if renaming {
 		if refused := t.deps.mayWrite(ctx, authz.ActionPageRename,
 			PageObject(detail.Page)); refused != nil {
 			return *refused, nil
@@ -781,7 +788,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	// so one record cannot arbitrate both — and doing the content first
 	// means a refused rename leaves the edit saved under the old name
 	// rather than the reverse, which is the half a person can act on.
-	if title, renaming := args["title"]; renaming {
+	if renaming {
 		// AND IT WAITS FOR THE SAVE FIRST. A rename decides from this
 		// node's own applied rows, so one issued before the save has
 		// reached them reads the PRE-SAVE head and answers with its
@@ -789,7 +796,10 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 		// the model passes back as `base_version`, where it is refused
 		// as stale. See [PageDeps.Await], which exists for exactly this.
 		t.deps.settle(ctx, at)
-		want := strings.TrimSpace(fmt.Sprint(title))
+		// BY THE CHECK'S OWN READER ([argString]), as every other argument
+		// here is read (ADR-0059), and never by fmt.Sprint, a reader of its
+		// own, which writes a float by `%g`: 1000000 as "1e+06".
+		want := strings.TrimSpace(argString(args, "title"))
 		// A RENAME STATES A TITLE, so the page's title says which way it
 		// went and renaming to it again is harmless either way.
 		const renameNext = "Read the page with " + GetPageTool + ": its title says " +

@@ -1087,3 +1087,23 @@ func TestSavePageRefusesAWatchThatIsNotABoolean(t *testing.T) {
 		t.Fatalf("the unwatch reached the store as %+v", kb.saved)
 	}
 }
+
+// A RENAME IS TO THE TITLE THE CHECK READS (ADR-0059): one reader per declared
+// type, so a string argument is read by argString, which writes a number as
+// JSON writes it. The rename read its title with fmt.Sprint, a reader of its
+// own, which writes a float by `%g`.
+//
+// Mutation: read the title with fmt.Sprint again and the rename is to "1e+06".
+func TestARenameIsToTheTitleTheCheckReads(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+	if got := callWork(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "title": 1000000.0,
+	}); got.Failed {
+		t.Fatalf("the rename failed: %s", got.Output)
+	}
+	if len(kb.renames) != 1 || kb.renames[0].title != "1000000" {
+		t.Errorf("the title 1000000 renamed the page as %+v, want \"1000000\"", kb.renames)
+	}
+}
