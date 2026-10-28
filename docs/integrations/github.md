@@ -1101,6 +1101,13 @@ answers for `GET /users/<slug>[bot]` once the app exists. The run is detached:
 the turn suspends at launch and resumes with the run's report, so the agent
 reports the pull request in the same turn.
 
+An issue assigned to the agent says the same in its prompt
+(`issue.assigned`): any code change the issue needs is the agent's own to
+make, in its own checkout, and it opens the pull request under its own
+identity, since the executor reading the prompt is that run. An assigned
+pull request already exists, and its prompt says only how the assignment is
+declined here: reassign it.
+
 GitHub stays in the picture on the read/review/track side. Once the pull
 request exists, its `review_requested` event wakes the reviewer through
 exactly the path above — there is nothing special about a pull request an

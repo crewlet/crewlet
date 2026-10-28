@@ -673,6 +673,54 @@ func TestTheDirectedPromptsSayDifferentThings(t *testing.T) {
 	}
 }
 
+// AN ASSIGNED ISSUE'S CODE CHANGE IS THE SEAT'S OWN TO MAKE.
+//
+// The executor reading the wake is the seat's coding run, with its own
+// checkout, shell and git, so the prompt sends it to no other runtime, and the
+// pull request it opens carries its own name. An assigned pull request already
+// exists and is not told where one comes from. Both say how an assignment is
+// declined on this host: it is moved to whoever it belongs to.
+func TestAnAssignedIssueIsTheSeatsOwnToChange(t *testing.T) {
+	t.Parallel()
+	build := func(reason, numberKey, number string) string {
+		return (github.Prompt{}).Build(notify.Inbound{
+			Source: github.Backend, Subject: "Add the rate limiter",
+			Body: "The API has none", Sender: "lead",
+			Metadata: map[string]string{
+				"event_type": reason, "repo": "acme/api", numberKey: number,
+			},
+		}, nil)
+	}
+
+	issue := build(github.IssueAssigned, "issue_number", "3")
+	for _, want := range []string{
+		"been assigned an issue", "acme/api#3",
+		"You make any code change the issue needs yourself, in your own checkout",
+		"open the pull request under your own identity",
+		"reassign it",
+	} {
+		if !strings.Contains(issue, want) {
+			t.Errorf("the assigned issue does not say %q:\n%s", want, issue)
+		}
+	}
+	for _, elsewhere := range []string{"runtime", "sandbox"} {
+		if strings.Contains(issue, elsewhere) {
+			t.Errorf("the assigned issue sends the seat to a %s other than its own run:\n%s",
+				elsewhere, issue)
+		}
+	}
+
+	pr := build(github.PRAssigned, "pr_number", "7")
+	for _, want := range []string{"been assigned a pull request", "acme/api#7", "reassign it"} {
+		if !strings.Contains(pr, want) {
+			t.Errorf("the assigned pull request does not say %q:\n%s", want, pr)
+		}
+	}
+	if strings.Contains(pr, "in your own checkout") {
+		t.Errorf("the assigned pull request is told where a pull request comes from:\n%s", pr)
+	}
+}
+
 // A MENTION IS ADDRESSED, SO IT IS NOT ASKED WHETHER IT WAS ASKED.
 //
 // The delivery check holds a mention to an answer. The evaluation block tells
