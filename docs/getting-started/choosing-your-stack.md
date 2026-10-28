@@ -13,7 +13,10 @@ surface you add when you want your company working where your people already
 are. Every agent seat's executor runs in a [code sandbox](#code-sandbox-where-every-executor-runs)
 cell, and `local: {}` with `default_run_in: direct` is the engine host itself,
 with nothing to sign up for — so a company with one signed-in coding CLI, that
-cell, and nothing else runs.
+cell, and nothing else runs. That cell is for a first run on your own machine
+while its seats take work from you alone; before a seat takes work from anyone
+else, its runs move into a container ([Code
+sandbox](#code-sandbox-where-every-executor-runs)).
 
 A useful mental model: for each integration there is usually
 
@@ -382,9 +385,9 @@ page.
 | **E2B cloud** | `e2b: {api_key: "${E2B_API_KEY}"}` + `CREWLET_MCP_BRIDGE_URL` | Sign up at <https://e2b.dev>, create an API key in the dashboard. The run is on E2B's network and calls its seat's tools back at `CREWLET_MCP_BRIDGE_URL`, so the engine's API has to be published where E2B's cloud reaches it — see the caveat below. |
 | **Self-hosted E2B** | `e2b: {api_key: …, domain: "${E2B_DOMAIN}"}` + `CREWLET_MCP_BRIDGE_URL` | Deploy [e2b-dev/infra](https://github.com/e2b-dev/infra) on your own cloud account, then point the same SDK/code path at it via `domain`. Your cluster issues its own `E2B_API_KEY`, and the bridge address has to be one your cluster reaches. |
 | **Local — container** (recommended on one host) | `local: {image: …}` + an entry's `run_in: container` (or `default_run_in`) + `CREWLET_MCP_BRIDGE_URL` | Docker/Podman on the engine host. Real host isolation, no E2B account. You [bring the image](../concepts/code-sandbox.md#bring-your-own-image), with the coding CLI in it, or a stock one plus a setup step that installs it. A loopback `CREWLET_MCP_BRIDGE_URL` reaches the box under the runtime's name for the engine host, and on Linux `api.host` must not be loopback. Can use a [plan's login](../concepts/llm-backends.md#authentication) instead of an API key. |
-| **Local — direct** | `local: {}` + an entry's `run_in: direct` (or `default_run_in`) | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up and the natural pair for an entry signed in on a plan — but the coding agent runs fully permissioned as the engine user, so it isolates *state*, not the host: it can read whatever your account can. Only on a dedicated VM, or for the entry that needs the host itself. |
+| **Local — direct** | `local: {}` + an entry's `run_in: direct` (or `default_run_in`) | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up and the natural pair for an entry signed in on a plan — but the coding agent runs fully permissioned as the engine user, so it isolates *state*, not the host: it can read whatever your account can. Only on a dedicated host you are willing to hand to an autonomous agent, for the entry that needs the host itself, or for a first run on your own machine while its seats take work from you alone. |
 
-For a local instance, a workstation included, put code work in a container:
+For any other local instance, a workstation included, and before a seat takes work from anyone else, put code work in a container:
 
 ```yaml
 providers:
@@ -460,7 +463,8 @@ is the **short path**: every pick that costs nothing extra to stand up — chat
 on **Mattermost**, the model **Claude Code on your own Claude plan**, the
 tracker and knowledge base the **engine's own**, and the code sandbox on the
 **engine host** (`run_in: direct`), which reuses that same plan login
-rather than needing an account of its own. Every seat runs that CLI's
+rather than needing an account of its own — a first run on your own machine
+while its seats take work from you alone. Every seat runs that CLI's
 [own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box) as
 its executor, so the executor *is* the CLI's own agentic loop with a real shell. The rows that need
 somebody else's service are deliberately empty, which is what lets the whole

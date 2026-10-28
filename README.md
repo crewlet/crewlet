@@ -155,8 +155,10 @@ providers:
       model: sonnet
       auth: { mode: api-key }   # reads ANTHROPIC_API_KEY; drop it to run on your plan
   sandbox:               # where every agent seat's executor runs: Claude Code's
-    local: {}            #   own fully permissioned run, as you on this host;
-    default_run_in: direct   # container or e2b on a host others share
+    local: {}            #   own fully permissioned run, as you on this host —
+    default_run_in: direct   # a first run on your own machine while its seats
+                             #   take work from you alone; container or e2b
+                             #   before a seat takes work from anyone else
 
 roles:
   - name: Your Name

@@ -335,7 +335,12 @@ providers:
     # each providers.llm entry places its runs in one with its `run_in`.
     # This company configures the ENGINE HOST only — each run is a process
     # tree on the machine running `crewlet run`, with no remote account,
-    # no API key and nothing to provision.
+    # no API key and nothing to provision — as a first run on your own
+    # machine while its seats take work from you alone.  Every run is
+    # Claude Code's own, fully permissioned, as the engine's user, so
+    # before a seat takes work from anyone else (a chat other people are
+    # in, a code host), or on a host others share, move the runs into
+    # `container` (below): a local cell, so the plan login still seeds it.
     local:
       # The local backend serves two cells, chosen by an entry's `run_in`:
       #
@@ -345,8 +350,11 @@ providers:
       #                      and file steps writing outside the box are
       #                      refused — but the coding agent runs as the
       #                      engine's user with the engine's filesystem
-      #                      access.  The right trade for your own
-      #                      machine, the wrong one for a shared host.
+      #                      access.  The right trade for a first run
+      #                      on your own machine while its seats take
+      #                      work from you alone, the wrong one once a
+      #                      seat takes work from anyone else, or on a
+      #                      host others share.
       #
       #   run_in: container  real host isolation.  Needs an image carrying
       #                      the coding-agent CLI, and is where a local

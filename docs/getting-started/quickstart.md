@@ -160,10 +160,11 @@ providers:
                                         # node's own listener, so nothing else to set.
                                         # Every seat's executor is Claude Code's own
                                         # run, fully permissioned (its shell and editor,
-                                        # bypassPermissions) as your own account; to
-                                        # take the runs off it, move them into a
-                                        # container (see Code Sandbox, "Bring your
-                                        # own image")
+                                        # bypassPermissions) as your own account: a
+                                        # first run on your own machine while its
+                                        # seats take work from you alone. Before a
+                                        # seat takes work from anyone else, move the
+                                        # runs into a container (Next steps below)
 
 # Org-wide roles — these sit above all teams and manage team leads.
 roles:
@@ -754,8 +755,9 @@ it. Until it is done the company runs and no agent seat takes a turn; whatever
 is sent to a seat waits on its inbox. The builder's next steps give it: with
 `crewlet run` stopped, write the company to a file with `crewlet config
 export`, add `providers.llm` and `providers.sandbox` to it (`local: {}` with
-`default_run_in: direct` runs every executor on this host — a company with
-agent seats and a model is refused without a sandbox), sign the CLI in with
+`default_run_in: direct` runs every executor on this host, as you — a first
+run on your own machine while its seats take work from you alone; a company
+with agent seats and a model is refused without a sandbox), sign the CLI in with
 `crewlet llm login`
 (a captured token goes into the fleet's secret store through the node's own
 broker, which the command starts while the node is stopped), import the file
@@ -880,6 +882,22 @@ through external surfaces — pick yours in
 base, code host, chat, sandbox — with the hosted vs self-hosted options for
 each), then wire them in:
 
+- Move the runs into a container before a seat takes work from anyone else
+  — a chat other people are in, a shared tracker, a code host. `direct` is
+  for a first run on your own machine while its seats take work from you
+  alone: every executor run is Claude Code's own, fully permissioned, as
+  your account, and once other people can give a seat work it acts on what
+  they send. Give `providers.sandbox.local`
+  an `image` with Claude Code installed ([Bring your own
+  image](../concepts/code-sandbox.md#bring-your-own-image) has two recipes,
+  one with no image to build) and set `default_run_in: container`, with
+  Docker or Podman on this machine; then stop the node, export
+  `CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"`, which the node reads as
+  it starts, and start it again with `crewlet run -import-company
+  company.yaml`. The boxes dial that address under the runtime's name for
+  this host, and `api.host` above is already off loopback, which Docker and
+  Podman on Linux need. A local box is seeded with the same `crewlet llm
+  login`
 - Connect chat — on Slack or on Mattermost, both below — so agents
   collaborate in channels and you can DM them. Whichever you pick, first add
   the integration's block to `company.yaml` — the page's *Configure in YAML*
@@ -939,11 +957,9 @@ each), then wire them in:
   [GitHub](../integrations/github.md) — and give each seat that pushes its
   code-host token in `role.sandbox.env` plus the git-auth setup step
   ([code sandbox](../concepts/code-sandbox.md#the-git-auth-recipe)), so its
-  executor's run opens real merge requests under its own identity; to take the
-  runs off your own account, move them from `direct` into a container with
-  [an image of your own](../concepts/code-sandbox.md#bring-your-own-image),
-  which dials `CREWLET_MCP_BRIDGE_URL` (on Linux with `api.host` not bound to
-  loopback)
+  executor's run opens real merge requests under its own identity, in the
+  container the first step above moved it into; the image needs `git` (and
+  `gh` for GitHub pull requests)
 - Bring your team in: add a human seat for each person who is to sign in
   (**Org chart › Edit org › Add human seat**), then invite them onto it or create
   them on it from its card in **Company › Org chart**, every person holds a
@@ -969,7 +985,8 @@ each), then wire them in:
 - Explore the [Nimbus example](../../examples/) — a seven-seat company on
   Mattermost, running on Claude Code with your Claude plan rather than an API
   key (`nimbus-claude-cli`), every seat running that CLI as its own agentic
-  loop, in a `direct` box on the engine host.
+  loop, in a `direct` box on the engine host — a first run on your own
+  machine while its seats take work from you alone, like this page's.
   It is the next step up from this page and still needs nothing but the chat
   server in this repo's compose file; every integration above adds on top of
   it

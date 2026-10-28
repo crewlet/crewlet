@@ -248,6 +248,13 @@ crewlet run
   `container` or `e2b` cell, or a seats node without `ingress`, instead needs
   `CREWLET_MCP_BRIDGE_URL`, the fleet's address as that box reaches it (see
   [Code Sandbox](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
+  The CLI runs fully permissioned there, so `direct` is for a first run on
+  your own machine while its seats take work from you alone, a dedicated host
+  you are willing to hand to an autonomous agent, or the entry that needs the
+  host itself; before a seat takes work from anyone else, place the runs in
+  `container` with [an image of your
+  own](../concepts/code-sandbox.md#bring-your-own-image) (see [Choosing a
+  cell](../concepts/code-sandbox.md#choosing-a-cell)).
 - **The import is offline**, with the node stopped: it makes the file what
   the node boots on, built on the fleet's revision the export came from, and
   the node publishes it to the fleet as it starts — as long as the fleet

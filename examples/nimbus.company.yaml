@@ -151,8 +151,12 @@ providers:
     #
     # This company configures the ENGINE HOST only: each coding job runs as a
     # process tree on the machine running `crewlet run` — no remote account,
-    # no API key, nothing to provision, which is what makes it right for a
-    # company running on your own machine against your own checkouts.
+    # no API key, nothing to provision — as a first run on your own machine
+    # while its seats take work from you alone.  Every run is the coding
+    # CLI's own, fully permissioned, as the engine's user, so before a seat
+    # takes work from anyone else (a chat other people are in, a shared
+    # tracker or code host), or on a host others share, move the runs into
+    # `container` (below) or `e2b`.
     #
     # For anything shared, add `e2b:` with its `api_key` (and `domain` for a
     # self-hosted cluster) and give the entry those seats run on
@@ -183,8 +187,10 @@ providers:
       #                      and writes outside the box are refused — but
       #                      the agent runs as the engine's user with the
       #                      engine's filesystem access. The right trade for
-      #                      your own machine, the wrong one for a shared
-      #                      host.
+      #                      a first run on your own machine while its
+      #                      seats take work from you alone, the wrong one
+      #                      once a seat takes work from anyone else, or
+      #                      on a host others share.
       #
       #   run_in: container  real host isolation. Needs an image carrying
       #                      the coding-agent CLI, and is where a local box
