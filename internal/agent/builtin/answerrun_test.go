@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -221,5 +222,30 @@ func TestARunIsAnsweredByItsRequesterOrItsSeatsLead(t *testing.T) {
 				t.Errorf("a refused answer was delivered: %+v", desk.delivered)
 			}
 		})
+	}
+}
+
+// A QUESTION ANSWERED ALREADY REFUSES THE NEXT ANSWER, AND SAYS WHOSE IT WAS.
+// The first recorded answer wins; a person answering after it is told it was
+// answered, by whom and when, and nothing is delivered. Four people answering
+// one run used to be told `pending` four times while three of the answers went
+// nowhere they could see.
+func TestAnAnsweredQuestionRefusesTheNextAnswerAndSaysWhose(t *testing.T) {
+	t.Parallel()
+	run := parked(t, "t1", sandbox.StatusAnswered)
+	run.Answer = &sandbox.RecordedAnswer{Text: "use main", By: "miles",
+		RecordedAt: time.Date(2026, 10, 28, 0, 35, 6, 0, time.UTC)}
+	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}}
+	result, err := answerRunTool(t, desk).Call(t.Context(),
+		map[string]any{"turn_id": "t1", "answer": "use the release branch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Failed || tools.RefusalOf(result) != tools.RefusalNotRunning ||
+		!strings.Contains(result.Output, "already answered by miles at 00:35 UTC on 28 Oct") {
+		t.Fatalf("answer_run = %+v, want a not_running refusal naming who answered and when", result)
+	}
+	if len(desk.delivered) != 0 {
+		t.Fatalf("delivered %+v for a question already answered", desk.delivered)
 	}
 }

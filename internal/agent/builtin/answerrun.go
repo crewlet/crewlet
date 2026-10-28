@@ -190,9 +190,15 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalNotRunning, fmt.Sprintf("No coding run is "+
 			"parked under turn %s: it has finished or ended, or the id names no run.",
 			clip(turnID))), nil
+	case !slices.Contains(sandbox.Awaiting, run.Status) && run.Answer != nil:
+		// THE FIRST RECORDED ANSWER WINS, and a later one is told whose it
+		// was and when, rather than taken quietly: an answer is recorded the
+		// moment the seat takes it, so a second person answering the same
+		// question finds it answered here.
+		return refused(tools.RefusalNotRunning, answeredAlready(run)), nil
 	case !slices.Contains(sandbox.Awaiting, run.Status):
 		return refused(tools.RefusalNotRunning, fmt.Sprintf("Run %s is %s, not "+
-			"waiting for an answer — there is no question for this to answer.",
+			"waiting for an answer, so there is no question for this to answer.",
 			clip(turnID), run.Status)), nil
 	}
 	parties, refusal := t.parties(ctx, run)
@@ -238,6 +244,21 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		result["answer_id"] = answerID.String()
 	}
 	return jsonResult(result)
+}
+
+// answeredAlready is the refusal an answer gets for a question already
+// answered: by whom and when, from the answer recorded on the run.
+func answeredAlready(run sandbox.PendingRun) string {
+	by := run.Answer.By
+	if by == "" {
+		by = "someone else"
+	}
+	when := ""
+	if !run.Answer.RecordedAt.IsZero() {
+		when = " at " + run.Answer.RecordedAt.UTC().Format("15:04 UTC on 2 Jan")
+	}
+	return fmt.Sprintf("This question was already answered by %s%s, so your answer was not "+
+		"used. The run resumes with that answer.", by, when)
 }
 
 // errUnreadableSeatID is the error a pending run's row carries when the seat
