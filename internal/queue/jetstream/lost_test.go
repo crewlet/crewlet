@@ -286,19 +286,9 @@ func TestAReaderThatHasSeenTheLossSeesWhetherItLostTheAcks(t *testing.T) {
 		sawAcks := make(chan bool, 1)
 		go func() {
 			close(watching)
-			for {
-				select {
-				case <-l.done:
-					select {
-					case <-l.acks:
-						sawAcks <- true
-					default:
-						sawAcks <- false
-					}
-					return
-				default:
-				}
+			for !closedYet(l.done) {
 			}
+			sawAcks <- closedYet(l.acks)
 		}()
 		<-watching
 		l.record(cause, true)
@@ -307,6 +297,16 @@ func TestAReaderThatHasSeenTheLossSeesWhetherItLostTheAcks(t *testing.T) {
 				"its acks still standing, so the drain line would promise the "+
 				"running turns finish while the drain cancels them", round)
 		}
+	}
+}
+
+// closedYet reports whether ch is closed, without waiting for it.
+func closedYet(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
 	}
 }
 
