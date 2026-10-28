@@ -96,8 +96,14 @@ var ErrSeatBusy = errors.New("node: another turn is running on the seat")
 // seat's next holder.
 var ErrDraining = errors.New("node: this node is draining")
 
-// HoldSeatTurn is the reason a seat's inbox is held while a turn that did not
-// come from it runs on the seat ([Node.AdmitTurn]).
+// HoldSeatTurn prefixes the reason a seat's inbox is held under while a turn
+// that did not come from it runs on the seat ([Node.AdmitTurn]).
+//
+// ONE REASON PER ADMISSION, `seat_turn:<n>`, never one shared by every such
+// turn: a queue's holds are a SET of reasons, and a turn admitted in the
+// moment between the previous turn freeing the seat and lifting its hold
+// would have its own hold lifted with it, and run with the mailbox fetching
+// beside it.
 const HoldSeatTurn = "seat_turn"
 
 // admission is one turn's hold on its seat's admission, carried on the turn's
@@ -108,6 +114,9 @@ type admission struct {
 	// done is closed when the admission is released, for a mailbox delivery
 	// waiting for the seat.
 	done chan struct{}
+	// hold is the reason this admission holds the seat's inbox under, its
+	// own ([HoldSeatTurn]).
+	hold string
 	// released is set when the hold is let go, after which a context that
 	// still carries it admits nothing.
 	released atomic.Bool
@@ -164,7 +173,8 @@ func (n *Node) AdmitTurn(ctx context.Context, handle string) (context.Context, f
 		}
 		// THE SEAT, once the turn has a slot: a second turn on a seat that
 		// is mid-turn gives its slot straight back.
-		held := &admission{node: n, handle: handle, done: make(chan struct{})}
+		held := &admission{node: n, handle: handle, done: make(chan struct{}),
+			hold: fmt.Sprintf("%s:%d", HoldSeatTurn, n.admissions.Add(1))}
 		n.mu.Lock()
 		running, busy := n.running[handle]
 		if !busy {
@@ -178,14 +188,23 @@ func (n *Node) AdmitTurn(ctx context.Context, handle string) (context.Context, f
 			}
 			// A MAILBOX DELIVERY WAITS, unspent, and asks again once the
 			// running turn is released.
-			select {
-			case <-running.done:
-				continue
-			case <-ctx.Done():
-				return nil, nil, fmt.Errorf("node: admitting a turn on %q: %w", handle, ctx.Err())
+			if err := n.waitForSeat(ctx, handle, running); err != nil {
+				return nil, nil, err
 			}
+			continue
 		}
 		return n.admitted(ctx, held, fromMailbox), held.release(free, fromMailbox), nil
+	}
+}
+
+// waitForSeat waits for the turn running on a seat to be released, for a
+// mailbox delivery that met it.
+func (n *Node) waitForSeat(ctx context.Context, handle string, running *admission) error {
+	select {
+	case <-running.done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("node: admitting a turn on %q: %w", handle, ctx.Err())
 	}
 }
 
@@ -194,7 +213,7 @@ func (n *Node) AdmitTurn(ctx context.Context, handle string) (context.Context, f
 // the mailbox holds the seat's inbox from here.
 func (n *Node) admitted(ctx context.Context, held *admission, fromMailbox bool) context.Context {
 	if !fromMailbox {
-		n.holdInbox(ctx, held.handle, true)
+		n.holdInbox(ctx, held.handle, held.hold, true)
 	}
 	ctx, cancel := context.WithCancel(context.WithValue(ctx, admissionKey{}, held))
 	held.cancel = cancel
@@ -228,7 +247,7 @@ func (held *admission) release(free func(), fromMailbox bool) func() {
 			free()
 			held.node.freeSeat(held)
 			if !fromMailbox {
-				held.node.holdInbox(context.Background(), held.handle, false)
+				held.node.holdInbox(context.Background(), held.handle, held.hold, false)
 			}
 			if hook := held.node.cfg.SeatTurnEnded; hook != nil {
 				hook(held.handle)
@@ -237,12 +256,13 @@ func (held *admission) release(free func(), fromMailbox bool) func() {
 	}
 }
 
-// holdInbox takes or lifts [HoldSeatTurn] on the seat's inbox. A seat whose
+// holdInbox takes or lifts one admission's [HoldSeatTurn] reason on the seat's
+// inbox. A seat whose
 // mailbox this node has not attached has no inbox here to hold. A queue that
 // refuses is logged and left: the mailbox's own wait for the seat
 // ([Node.admit]) still keeps its turn from starting beside this one, at the
 // cost of one in-flight delivery's ack window rather than a delivery.
-func (n *Node) holdInbox(ctx context.Context, handle string, hold bool) {
+func (n *Node) holdInbox(ctx context.Context, handle, reason string, hold bool) {
 	n.mu.Lock()
 	var seatID uuid.UUID
 	for id, h := range n.attached {
@@ -259,9 +279,9 @@ func (n *Node) holdInbox(ctx context.Context, handle string, hold bool) {
 	ctx = context.WithoutCancel(ctx)
 	var err error
 	if hold {
-		err = n.cfg.Queue.PauseTopic(ctx, inbox, group, HoldSeatTurn)
+		err = n.cfg.Queue.PauseTopic(ctx, inbox, group, reason)
 	} else {
-		err = n.cfg.Queue.ResumeTopic(ctx, inbox, group, HoldSeatTurn)
+		err = n.cfg.Queue.ResumeTopic(ctx, inbox, group, reason)
 	}
 	if err != nil {
 		n.log.Warn("seat_turn_hold_failed", "handle", handle, "hold", hold, "error", err.Error())

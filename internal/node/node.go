@@ -31,6 +31,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -228,6 +229,9 @@ type Node struct {
 	// by handle: a seat runs one turn at a time ([ErrSeatBusy]). Guarded by
 	// mu.
 	running map[string]*admission
+	// admissions numbers the admissions that hold a seat's inbox, so each
+	// holds it under a reason of its own ([HoldSeatTurn]).
+	admissions atomic.Uint64
 
 	// acksLost is the queue's [acksLoss] signal, and nil — never closed —
 	// for a queue without one.

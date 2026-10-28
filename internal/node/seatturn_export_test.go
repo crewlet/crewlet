@@ -6,5 +6,10 @@ import "context"
 // turn that took it is still running, so a case can stand in for a mailbox
 // delivery fetched before that hold took effect.
 func (n *Node) ReleaseSeatTurnHoldForTest(handle string) {
-	n.holdInbox(context.Background(), handle, false)
+	n.mu.Lock()
+	held := n.running[handle]
+	n.mu.Unlock()
+	if held != nil {
+		n.holdInbox(context.Background(), handle, held.hold, false)
+	}
 }

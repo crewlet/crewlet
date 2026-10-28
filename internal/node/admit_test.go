@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -470,5 +471,78 @@ func TestAMailboxDeliveryWaitsForABusySeat(t *testing.T) {
 		}
 	case <-time.After(gateWaitBound):
 		t.Fatal("the waiting delivery never ran once the seat was free")
+	}
+}
+
+// resumeHook is a queue that runs a hook once, inside the first lift of a
+// seat_turn hold, before the lift itself.
+type resumeHook struct {
+	queue.EventQueue
+	mu   sync.Mutex
+	hook func()
+}
+
+func (q *resumeHook) ResumeTopic(ctx context.Context, topic, group, reason string) error {
+	q.mu.Lock()
+	hook := q.hook
+	if strings.HasPrefix(reason, node.HoldSeatTurn) {
+		q.hook = nil
+	}
+	q.mu.Unlock()
+	if hook != nil && strings.HasPrefix(reason, node.HoldSeatTurn) {
+		hook()
+	}
+	return q.EventQueue.ResumeTopic(ctx, topic, group, reason)
+}
+
+// A TURN ADMITTED AS THE LAST ONE LETS GO KEEPS ITS OWN HOLD. The release frees
+// the seat before it lifts its inbox hold (so held mail dispatched inline finds
+// the seat free), and a turn admitted in between takes the inbox hold too.
+// Under one reason shared by every such turn, the first turn's lift took the
+// second's hold with it: the second ran with the mailbox fetching beside it,
+// and the fetched delivery waited on the seat, its ack window running out.
+//
+// Mutation: hold every admission under the one reason, and the message sent
+// while the second turn runs is fetched and waits on it.
+func TestATurnAdmittedAsTheLastLetsGoKeepsItsOwnHold(t *testing.T) {
+	t.Parallel()
+	hooked := &resumeHook{}
+	ran := make(chan string, 4)
+	turn := func(_ context.Context, _ string, evs []*events.Event) queue.Result {
+		p, _ := events.DataAs[*trigger](evs[0])
+		ran <- p.Work
+		return queue.Ack()
+	}
+	g := gatedFleetOn(t, 4, func(q queue.EventQueue) queue.EventQueue {
+		hooked.EventQueue = q
+		return hooked
+	}, turn, "ceo")
+
+	_, first := admit(t.Context(), t, g.n, "ceo")
+	var second func()
+	hooked.mu.Lock()
+	hooked.hook = func() {
+		// THE NEXT TURN, admitted between the seat freeing and the hold lifting.
+		_, second = admit(t.Context(), t, g.n, "ceo")
+	}
+	hooked.mu.Unlock()
+	first()
+	if second == nil {
+		t.Fatal("the premise: no turn was admitted inside the first one's lift")
+	}
+
+	// FETCHED IS THE FAILURE, not run: a delivery fetched beside the second
+	// turn waits on the seat inside its handler, and its ack window runs.
+	g.send("ceo", "while the second runs")
+	time.Sleep(300 * time.Millisecond)
+	if n := hooked.InFlightCount(); n != 0 {
+		t.Fatalf("the mailbox fetched %d delivery while the second turn ran: its hold went "+
+			"with the first's", n)
+	}
+	second()
+	select {
+	case <-ran:
+	case <-time.After(gateWaitBound):
+		t.Fatal("the held message never ran once the second turn let go")
 	}
 }
