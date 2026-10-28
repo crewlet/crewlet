@@ -561,9 +561,10 @@ dispatcher around it: the socket, the tool list, the withheld answers and the
 release are on the way of every real call. Test
 files sit beside what they cover, as Go expects, and a test file that is not Go
 is no exception: the dashboard's Vitest suites sit beside their modules in
-`dashboard/src`, and `internal/e2e`'s client replay is
-`internal/e2e/replay.mjs`, beside the `golden_test.go` that runs it. There is
-no top-level `tests/` tree.
+`dashboard/src`, `internal/e2e`'s client replay is `internal/e2e/replay.mjs`,
+beside the `golden_test.go` that runs it, and the OpenCode notes plugin's probe
+is `internal/sandbox/codingagent/opencode_steer_probe.mjs`, beside the
+`opencode_steer_test.go` that runs it. There is no top-level `tests/` tree.
 
 A test that opens a store on a fresh path opens it through
 `storetest.OpenNode` or `storetest.OpenEstate`, and one that boots an engine on
