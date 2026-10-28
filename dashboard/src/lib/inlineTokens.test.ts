@@ -487,8 +487,8 @@ describe("cost", () => {
   // stalled sample decides nothing.
   //
   // Mutation: count the brackets again per character trimmed, bring back the
-  // lazy pattern around a word, or scan the text before every bound number,
-  // and its case exceeds it.
+  // lazy pattern around a word, scan the text before every bound number, or
+  // look every reference up again for each commit, and its case exceeds it.
   const OWNERS = new Set(["a", "gp"]);
   const sample = (text: string, calls: number) => {
     const start = performance.now();
@@ -517,6 +517,7 @@ describe("cost", () => {
     ["keys between slashes", (n) => "GP-1/".repeat(n / 5)],
     ["handles", (n) => "@a".repeat(n / 2)],
     ["the word commit", (n) => "commit ".repeat(n / 7)],
+    ["commits after references", (n) => "a/b#1 commit abcdef1 ".repeat(n / 21)],
     ["bound numbers", (n) => "#1 in a/b ".repeat(n / 10)],
     ["repositories before a number", (n) => "a/b PR ".repeat(n / 7)],
     ["repositories and numbers", (n) => "a/b #1 ".repeat(n / 7)],

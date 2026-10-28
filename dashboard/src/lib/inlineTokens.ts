@@ -329,12 +329,21 @@ export function inlineTokens(
   const chosen = settle(found);
   // RULE 4 READS THE SETTLED REFERENCES, so a commit follows a reference the
   // run actually names rather than one an address swallowed.
+  //
+  // ONE WALK, alongside the commits: both are in order, so the reference
+  // before each commit is the last one the walk has passed. Looking every
+  // reference up again for each commit made a run of references and commits
+  // take more than a second at 420,000 characters.
   const commits: InlineToken[] = [];
+  let next = 0;
+  let before: InlineToken | undefined;
   for (const m of text.matchAll(COMMIT_AFTER)) {
     const sha = m[2]!;
     if (!mixed(sha)) continue;
     const at = m.index + m[0].length - sha.length;
-    const before = chosen.filter((t) => t.kind === "reference" && t.end <= m.index).at(-1);
+    for (; next < chosen.length && chosen[next]!.end <= m.index; next++) {
+      if (chosen[next]!.kind === "reference") before = chosen[next];
+    }
     if (m[1] !== "commit" && before === undefined) continue;
     commits.push({
       kind: "commit",
