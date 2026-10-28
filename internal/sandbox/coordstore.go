@@ -805,27 +805,14 @@ func (s *CoordStore) ListActive(ctx context.Context) ([]PendingRun, error) {
 // write ([coord/kv.Epochs.Floor] is what the engine raises it with at boot).
 // A row naming no seat, or written by no lease, carries no epoch to keep above.
 //
-// A RECORD THAT DOES NOT DECODE IS SKIPPED, loudly, and the rest are still
-// read. Its epoch cannot be known, and no lease can write it either, since
-// every write decodes the row first; failing the whole read over it stopped
-// every node of the company starting, on one record. A listing that fails as
-// a whole is still an error.
+// A record that does not decode is skipped, as every listing skips it ([CoordStore.list]).
 func (s *CoordStore) OwnerEpochs(ctx context.Context) (map[uuid.UUID]int64, error) {
-	records, err := s.runs.SandboxRuns(ctx)
+	runs, err := s.list(ctx, func(PendingRun) bool { return true })
 	if err != nil {
-		return nil, fmt.Errorf("sandbox: list runs: %w", err)
+		return nil, err
 	}
 	out := map[uuid.UUID]int64{}
-	for _, record := range records {
-		run, err := decodeRun(record)
-		if err != nil {
-			log.ErrorContext(ctx, "sandbox_run_undecodable", "key", record.Key, "error", err,
-				"detail", "this run record cannot be read, so the seat's fencing epoch is "+
-					"not floored above it; no lease can write it either",
-				"remedy", "remove the record from the sandbox runs bucket once you know "+
-					"its run is over (see the deployment guide)")
-			continue
-		}
+	for _, run := range runs {
 		seat := seatOf(run.AgentID)
 		if seat == uuid.Nil || run.OwnerEpoch <= 0 {
 			continue
@@ -994,6 +981,17 @@ func (s *CoordStore) write(ctx context.Context, turnID string, live bool,
 // set is bounded by the seats that can be mid-run at once, which is what makes
 // one read and a local filter the right shape rather than a scan to apologise
 // for.
+//
+// # A record that does not decode is skipped, never the listing failed
+//
+// Its seat, status and owner cannot be known, so no filter can match it, and
+// no write can touch it, since every write decodes the row first. Failing the
+// whole listing over it failed every reader of every seat's runs on one
+// record: the boot's epoch floor (so no node started), each seat's recovery
+// (so every seat this node claimed was handed back), the waiter's poll, the
+// answer lookup, a retirement and the dashboard. Skipped, it is left exactly as
+// it is for the documented repair, and every reader says so ([decodedOrSkipped]).
+// A listing that fails as a whole is still an error.
 func (s *CoordStore) list(ctx context.Context, match func(PendingRun) bool) ([]PendingRun, error) {
 	records, err := s.runs.SandboxRuns(ctx)
 	if err != nil {
@@ -1001,9 +999,9 @@ func (s *CoordStore) list(ctx context.Context, match func(PendingRun) bool) ([]P
 	}
 	var out []PendingRun
 	for _, record := range records {
-		run, err := decodeRun(record)
-		if err != nil {
-			return nil, err
+		run, ok := decodedOrSkipped(ctx, record)
+		if !ok {
+			continue
 		}
 		if match(run) {
 			out = append(out, run)
@@ -1072,6 +1070,22 @@ func encodeRun(run PendingRun) ([]byte, error) {
 
 // decodeRun reads a run and KEEPS what it cannot read — see
 // [PendingRun.Extra] for the rolling upgrade that loses it otherwise.
+// decodedOrSkipped decodes a record a listing returned, or logs it as one no
+// reader can act on and reports false: the one place a listing decides that
+// ([CoordStore.list]).
+func decodedOrSkipped(ctx context.Context, record coord.Record) (PendingRun, bool) {
+	run, err := decodeRun(record)
+	if err != nil {
+		log.ErrorContext(ctx, "sandbox_run_undecodable", "key", record.Key, "error", err,
+			"detail", "this run record cannot be read, so no listing returns it: no recovery, "+
+				"poll, answer, retirement or epoch floor acts on it, and no write can change it",
+			"remedy", "remove the record from the sandbox runs bucket once you know its run "+
+				"is over (see the deployment guide)")
+		return PendingRun{}, false
+	}
+	return run, true
+}
+
 func decodeRun(record coord.Record) (PendingRun, error) {
 	var run PendingRun
 	if err := json.Unmarshal(record.Value, &run); err != nil {
