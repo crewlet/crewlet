@@ -807,8 +807,8 @@ server's `max_payload`.
 a reloaded `max_payload` to the connections it already holds without telling
 their clients, so a node goes on believing its server carries 8 MiB, and the
 first message past the new limit makes the server close the connection with
-`Maximum Payload Violation`. The NATS client treats that refusal as final and
-does not reconnect, so the node
+`Maximum Payload Violation`. Where the NATS client reads that refusal, it
+treats it as final and does not reconnect, so the node
 [stops itself](#an-external-nats-server) and exits with status 1, naming the
 setting:
 
@@ -817,10 +817,21 @@ crewlet: the node stopped itself: engine: stream: jetstream: the NATS server str
 ```
 
 Restarted against a server still below 8 MiB, it refuses to start with the
-boot refusal above. So a reload that lowers the limit takes down every node
-whose next large message reaches it, and they stay down until the limit is
-raised again — which is the outcome to want from a broker that can no longer
-carry what they send, and the reason not to lower it.
+boot refusal above.
+
+The client does not always read the refusal. A message larger than the
+connection's socket takes at once is still being written when the server
+closes the connection, and when that write fails part way the client closes
+the connection itself, without reading the refusal, and reconnects. The
+reconnect reads the lowered limit, so the node goes on as it does after
+reconnecting to a member configured apart from the others: it logs
+`jetstream_max_payload_below_contract`, and every later message past the limit
+is refused when it is written, a state-log write answering `record_too_large`.
+
+So a reload that lowers the limit either takes down every node whose next
+large message reaches it, until the limit is raised again, or leaves them
+running and refusing every large write. Neither is a broker that carries what
+they send, which is the reason not to lower it.
 
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it

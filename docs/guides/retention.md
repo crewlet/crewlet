@@ -994,9 +994,11 @@ and a NATS server's `max_payload` — never that of the server a node started
 against, since a node refuses to start against one that holds it to less than
 8 MiB, but that of one it has reconnected to since: a cluster member
 configured apart from the others, or a server restarted with a smaller limit.
-A limit lowered by a live reload is never such a refusal, because the client
-is not told of it: the server closes the connection over the record, and the
-node [stops itself](deployment.md#an-external-nats-server). See
+A limit lowered by a live reload is not told to the client: the server closes
+the connection over the record, and the node
+[stops itself](deployment.md#an-external-nats-server), unless the client
+reconnected without reading why, in which case it reads the lowered limit on
+the reconnect and the refusals that follow are this one. See
 [Read consistency](consistency.md#a-writes-refusals).
 
 A full log costs `linearizable` reads, because those append a barrier — which
