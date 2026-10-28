@@ -207,8 +207,18 @@ The assistant's rounds are charged to the company's token budget windows like
 any other spend, recorded under the operator stage and the asking person's
 seat, so the [spend views](budgets-and-spend.md) show who used how much.
 `assistant.token_budget` adds a per-person ceiling per day, week or month on
-top of the company's own. A turn whose budget is spent stops before its next
-round and tells the person when the window resets.
+top of the company's own, edited on Company › Budgets under **Each person's
+assistant**; a raised ceiling holds from the next question once the node has
+applied the revision, with no restart. A question whose budget is spent is
+refused before its first round, and a turn whose budget runs out stops before
+its next one. Either way the drawer says whose ceiling it is (the person's own,
+or the company's), when its window resets, and that raising the ceiling clears
+it sooner; to a reader who may raise it, it offers **Open assistant budget** (or
+**Open company budget**), which opens that ceiling on Company › Budgets, and it
+tells anybody else who can. A refused question goes back in the box, ready to
+send again; only the person's own question limit (`assistant_busy`) also holds
+the box until its wait passes, since a raised ceiling clears a spent budget at
+once.
 
 These limits are fixed, not configured:
 

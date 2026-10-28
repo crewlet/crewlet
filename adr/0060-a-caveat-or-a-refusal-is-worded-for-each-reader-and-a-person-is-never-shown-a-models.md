@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/caveat`
-- **Enforced-by:** `internal/caveat.TestEveryCaveatAPersonCanBeShownIsWordedForAPerson`, `internal/caveat.TestTheWalkCoversEveryConstructorAndCode`, `internal/caveat.TestEveryCodeStatesWhatItAsksOfAPerson`, `internal/caveat.TestTheDashboardReadsWhatACaveatAsks`, `internal/agent/builtin.TestOnlyTheCaveatHelperWritesAToolsWarnings`, `internal/api/operator.TestAnActAnswersCaveatsInAPersonsWordsAndNeverTheModels`, `internal/caveat.TestEveryRefusalAPersonCanBeShownIsWordedForAPerson`, `internal/caveat.TestTheCheckRefusesAModelsRefusal`, `internal/caveat.TestARefusalsWordsRideItsError`, `internal/api/operator.TestEveryRefusalTheActRouteAnswersIsWordedForAPerson`, `internal/api/operator.TestAnActRefusalIsAPersonsWordsOrItsCodes`, `internal/estate.TestARefusalsPersonWordsCrossTheRouter`, `internal/caveat.TestNoTextBecomesAPersonsWordsByBeingDecoded`, `internal/caveat.TestOnlyTheEstateRouterRebuildsAPeersWords`, `internal/caveat.TestACaveatCrossesTheEstateRouterWhole`, `internal/api/operator.TestEveryAnswerTheActRouteGivesIsWordedForAPerson`, `internal/api/workapi.TestTheWorkSurfaceAnswersAPersonInAPersonsWords`, `internal/agent/builtin.TestEveryAnswerAPersonCanBeGivenIsWordedForAPerson`, `internal/api.TestARefusedAssistedWriteTellsTheModelAndNeverTheAnswer`, and the compile errors a caveat or a refusal phrasing built outside its package meets (their fields are unexported), and a free sentence handed to `operator.Fail` meets (it takes a `caveat.Refusal`)
+- **Enforced-by:** `internal/caveat.TestEveryCaveatAPersonCanBeShownIsWordedForAPerson`, `internal/caveat.TestTheWalkCoversEveryConstructorAndCode`, `internal/caveat.TestEveryCodeStatesWhatItAsksOfAPerson`, `internal/caveat.TestTheDashboardReadsWhatACaveatAsks`, `internal/agent/builtin.TestOnlyTheCaveatHelperWritesAToolsWarnings`, `internal/api/operator.TestAnActAnswersCaveatsInAPersonsWordsAndNeverTheModels`, `internal/caveat.TestEveryRefusalAPersonCanBeShownIsWordedForAPerson`, `internal/caveat.TestTheCheckRefusesAModelsRefusal`, `internal/caveat.TestARefusalsWordsRideItsError`, `internal/api/operator.TestEveryRefusalTheActRouteAnswersIsWordedForAPerson`, `internal/api/operator.TestAnActRefusalIsAPersonsWordsOrItsCodes`, `internal/estate.TestARefusalsPersonWordsCrossTheRouter`, `internal/caveat.TestNoTextBecomesAPersonsWordsByBeingDecoded`, `internal/caveat.TestOnlyTheEstateRouterRebuildsAPeersWords`, `internal/caveat.TestACaveatCrossesTheEstateRouterWhole`, `internal/api/operator.TestEveryAnswerTheActRouteGivesIsWordedForAPerson`, `internal/api/workapi.TestTheWorkSurfaceAnswersAPersonInAPersonsWords`, `internal/agent/builtin.TestEveryAnswerAPersonCanBeGivenIsWordedForAPerson`, `internal/api.TestARefusedAssistedWriteTellsTheModelAndNeverTheAnswer`, `internal/caveat.TestEveryRemedyNamesAKnownSetting`, `internal/caveat.TestARefusalCrossesToAPeerWithItsRemedy`, `internal/caveat.TestTheDashboardKnowsEverySettingARemedyNames`, `internal/caveat.TestTheDashboardReadsARemedyAsTheEngineWritesIt`, `internal/assistant.TestASpentBudgetNamesTheCeilingToRaise`, `internal/api/assistantapi.TestABudgetRefusalIsATooManyRequestsWithItsReset`, `internal/api/operator.TestASpentBudgetAnswersBudgetExhausted`, and the compile errors a caveat or a refusal phrasing built outside its package meets (their fields are unexported), and a free sentence handed to `operator.Fail` meets (it takes a `caveat.Refusal`)
 - **Cost-when-tried:** answering a decision in the dashboard Inbox left a warning toast that never went away, telling a person "backend-engineer is woken by this but is not asked to answer it. Use ask: backend-engineer, or @-mention them, if you are expecting a reply." The sentence was `comment_on_work_item`'s `warnings`, written for a model, and `useAct` showed every receipt warning verbatim as a sticky toast. The same path carried a project's default-assignee advice naming `write_project` and `default_assignee`, internal task ids from a retried create, and a near-duplicate tag sentence appended into the `labels_created` list of slugs. PR #408 fixed the one branch that fired on an answer, and the class stayed open. Refusals took the same route: `operator.Fail` put the tool's sentence in `detail` and the dashboard's `RefusalNote` drew it, so a decision answered with a choice the question did not offer was refused with "comment_on_work_item was refused: … change the argument this names (`answers`, or `choice`) and comment again".
 - **Tag-status:** unreleased
 
@@ -65,6 +65,24 @@ acts on as values (`reason`, `grants`, `fields`, `action`, `op_id`). The act
 route's own refusals (a tool it does not serve, a read, a body it cannot
 take) answer their code and `tool`, and log what a developer needs.
 
+**A refusal a configurable limit caused names where the limit is changed.**
+The words say what happened; a person who can raise the limit then still has to
+find it. So such a refusal carries a **remedy** beside its words: a value naming
+the setting (`caveat.Setting`: the company's `token_budget`, a seat's, or
+`assistant.token_budget`) and, for a seat's, the seat. It rides the
+`caveat.Refusal` it belongs to (constructed by the catalog's
+`TokenBudgetSpent`, and carried across the estate router with the words), and
+`operator.Fail` answers it as `remedy` beside `detail`. The Dashboard
+Assistant's own refusals answer it too, with no `caveat.Refusal` of their own:
+the turn route's `429 budget_exhausted` and a turn's `budget_exhausted` error
+frame name the ceiling the meter refused by, through one mapping from the
+meter's scope (`org` or `person`) to the setting. The remedy is a value, not a
+sentence and not an address: the dashboard's link table (`lib/remedy.ts`)
+resolves each setting to the screen and the section that edit it, and draws the
+way there behind the same write gate as the editor it opens, so a reader who
+may not change the setting is told who can and is never handed a link to a
+screen whose controls are locked for them.
+
 The person phrasings this record ships are for the refusals a person meets
 most on the dashboard: a work item with no title or a text over its cap
 (title, description, comment), an answer to a question that asks nothing, was
@@ -93,6 +111,14 @@ the caveat, so it is stated with the code rather than guessed by a renderer.
 rewording caveats did, and twice over: about 500 refusal sites are prompt text
 tuned against model behaviour ("call get_work_item again"), and a sentence
 that serves a person drops exactly what the model acts on.
+
+**An address in the refusal** (a URL, or a screen and an anchor written by the
+engine) puts the dashboard's routes in the engine, where nothing moves them
+with the router; a screen renamed there would leave every refusal pointing at
+Not Found. **Grants in the remedy** would be a second statement of who may
+change the setting beside the gate the editor is drawn by, and the two would
+disagree for exactly the readers that matter: a lead inside their own unit, and
+an administrator of a document another system manages.
 
 **Showing the floor in the dashboard only** (its own sentence for every code,
 the engine's detail ignored) would hold one client and leave every other
@@ -130,6 +156,14 @@ that ships this record on, its wire shapes (a caveat's `{code, agent,
 person}`, a refusal phrasing on `caveat.Said`, the act answer's `caveats`) are
 a released surface, and changing them is owed what RELEASING.md says a
 shipped surface is owed.
+
+**Remedies for the limits a person cannot change from the dashboard** are not
+part of this record. The artifact and datastore storage quotas
+(`ArtifactQuotaReached`, `data_quota`) and the per-node write, read and check
+budgets are Tier A, set in each node's own file by whoever runs the nodes, and
+no dashboard screen edits them, so a link would open a page with nothing to
+change on it. Their refusals keep their words; a remedy is added with the
+setting's first editor.
 
 The operation key's own refusals (`op_id_invalid`) and an unknown outcome's
 `detail` (`opkey.UnknownDetail`) are a protocol's rule for a client sending

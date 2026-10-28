@@ -121,6 +121,7 @@ export function sendRefusalOf(err: RestError): SendRefusal {
     sentence: refusalWords(err),
     hint: err.code === "assistant_model_not_ready" && err.hint !== "" ? err.hint : null,
     retryAfterSeconds: typeof retry === "number" && retry > 0 ? Math.ceil(retry) : null,
+    remedy: err.code === "budget_exhausted" ? err.remedy : null,
   };
 }
 
@@ -140,7 +141,11 @@ function refusalWords(err: RestError): string {
       // spent), the one a failed answer would have carried.
       return err.detail || err.sentence;
     case "budget_exhausted":
-      return "The assistant's budget for now is spent. Try again when it resets.";
+      // WHOSE CEILING, by the remedy the engine named: a person's own is
+      // theirs to have raised, and the company's binds everybody.
+      return err.remedy?.setting === "assistant_token_budget"
+        ? "Your own assistant budget for this window is spent."
+        : "The company's token budget for this window is spent.";
     default:
       if (err.unanswered)
         return "The question could not be sent. Check your connection and try again.";
@@ -380,6 +385,7 @@ export async function send(
             sentence: "The question could not be sent.",
             hint: null,
             retryAfterSeconds: null,
+            remedy: null,
           };
     dispatch({ type: "refused", key, refusal });
     // A MODEL THE ENGINE KNOWS IS NOT READY: the drawer's notice is drawn now,
@@ -622,9 +628,29 @@ export function pageMoved(revision: string, revisions: Readonly<Record<string, s
 }
 
 /** Test seam: a fresh store, as a fresh page has. */
+/**
+ * The refused questions the drawer has decided about, by turn key, and whether
+ * the question went back in the box: decided ONCE per turn for the life of the
+ * tab, here rather than in the drawer, which is unmounted when it closes. A
+ * drawer opened again never puts back a question the reader deleted, and still
+ * says it is in the box where it went there.
+ */
+const restores = new Map<string, boolean>();
+
+/** Whether a refused turn's question went back in the box, or undefined before the drawer decided. */
+export function restoreOf(turnKey: string): boolean | undefined {
+  return restores.get(turnKey);
+}
+
+/** Record that the drawer decided about a refused turn's question, and whether it went back. */
+export function recordRestore(turnKey: string, inBox: boolean): void {
+  restores.set(turnKey, inBox);
+}
+
 export function resetSessionForTest(): void {
   generation += 1;
   creating = null;
+  restores.clear();
   asked.clear();
   approvals.clear();
   declines.clear();

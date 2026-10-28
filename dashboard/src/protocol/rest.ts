@@ -32,6 +32,7 @@
 
 import { confirmStepUp, needSession } from "./signin.ts";
 import type { LogRefusal, QueryRefusal } from "./types.ts";
+import { remedyOf, type Remedy } from "./remedy.ts";
 
 /**
  * What the engine said when it refused.
@@ -99,6 +100,11 @@ export class RestError extends Error {
   /** The grants a refusal on authority named — see [refusedGrants]. */
   get grants(): string[] {
     return refusedGrants(this.body);
+  }
+
+  /** Where the limit that caused the refusal is changed, or null ([remedyOf]). */
+  get remedy(): Remedy | null {
+    return remedyOf(this.body.remedy);
   }
 
   /**

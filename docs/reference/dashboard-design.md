@@ -7402,7 +7402,13 @@ seat at once; **Agent seats** follow as one table with a column per window, so
 the one seat near its ceiling is found down a column. The company's row stands
 on the table's own columns (one track list handed to both), so each window
 sits over its column, and its first track says once what the windows are:
-every seat together, on the company clock, and when each turns over. A window's bar is a kit
+every seat together, on the company clock, and when each turns over. **Each
+person's assistant** follows the company, on the same tracks: the ceiling every
+person's Dashboard Assistant questions are held to (`assistant.token_budget`),
+each person on their own. Its figures are the reader's own spend against it,
+drawn only where the engine counts one (`counted`: a person, under a company
+that caps a person's spend); elsewhere the row draws the ceilings and no figure,
+since a zero nobody measured is not "0 tokens". A window's bar is a kit
 `Meter` handed the engine's `state`, and the page divides nothing itself; a
 window with no ceiling draws no bar, because a bar needs something to be a
 fraction of. A
@@ -7416,7 +7422,10 @@ save is **checked first**, against the revision it was read from, and only the
 warnings the change *introduces* are shown — a seat ceiling at or above the
 company's, which can never refuse a turn, is the one this screen exists to
 catch — with **Save anyway** to store it regardless. The company's ceilings are
-written as a merge patch of the windows that changed (`null` removes one); a
+written as a merge patch of the windows that changed (`null` removes one), and
+each person's assistant's as the same patch one level down
+(`{assistant: {token_budget: {...}}}`), which leaves the rest of the
+`assistant:` block as it was; a
 seat's by replacing that seat (`PUT /config/roles/{handle}`, its check the same
 request with `dry_run=true`), because a patch cannot address one seat in a
 roster. The revision's summary says whose ceiling, which window, and from what
@@ -7438,10 +7447,28 @@ the lead of the unit it sits in, whom the engine admits to that seat's write
 (`useOrgWriteAccess`, `lib/leadScope.ts`).
 
 **There is no reset.** A window's `used` is what it spent; the room comes back
-when it turns over, or now by raising its ceiling. Home's and the Inbox's
-**Raise budget** open the same write as a dialog of one scope's three ceilings
-(`RaiseBudgetDialog`), each field captioned with what that window has spent and
-when it resets.
+when it turns over, or now by raising its ceiling. The Inbox's and a stopped
+seat's **Raise budget** open the same write as a dialog of one scope's three
+ceilings (`RaiseBudgetDialog`), each field captioned with what that window has
+spent and when it resets. A reader who may not raise that scope's ceiling is
+not handed the button: the row says who can instead ("An admin can raise this
+ceiling.", the units a lead leads, or who manages the document).
+
+**Each ceiling is a section a refusal opens.** A refusal or a notice a token
+budget caused names the setting behind it (ADR-0060's remedy), and
+`lib/remedy.ts` is the one table from a setting to this screen and its
+section: `section=company`, `section=assistant`, or `section=seat:<handle>`
+for a seat's row. The section is brought into view, focused, and marked as the
+one the reader came for (the card's `selected`, the seat's row as current); a
+press on the address already open arrives again; and a section the screen does
+not draw for the reader (a seat it no longer lists) reveals nothing. The press
+is offered by the gate the editor there is drawn by (`useOrgWriteAccess`), so
+the link and the pencils it opens cannot disagree: a reader the gate refuses
+for who they are is told who can raise it, and never handed a link to a screen
+whose controls are all locked for them. It is drawn on the assistant's refusal
+of a question and on a turn a budget stopped, on a refused act (the palette's
+knowledge answer among them), on the Inbox's company budget condition, and on
+Home's spent week.
 
 ## Account: the reader's own page
 

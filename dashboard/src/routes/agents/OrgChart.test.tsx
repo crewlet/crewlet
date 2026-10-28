@@ -223,7 +223,7 @@ test("every seat of the applied chart is a node with its state word and state li
   expect(caption("FE")).toBe("Needs you");
   expect(caption("PM")).toBe("Stopped");
   expect(card("PM").getAttribute("title")).toBe(
-    "Stopped: its token budget is spent until the window resets · @pm",
+    "Stopped: its token budget is spent until the window resets or the ceiling is raised · @pm",
   );
   expect(caption("Jane Founder")).toBe("Human seat");
   expect(card("Jane Founder").getAttribute("title")).toBe("Human · reviews releases · @jane");

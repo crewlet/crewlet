@@ -47,7 +47,8 @@ import type { ConfigWarning, TokenBudget } from "~/protocol/types.ts";
 import {
   ceilingSummary,
   changesFrom,
-  companyPatch,
+  documentCeilings,
+  documentPatch,
   refusalWords,
   seatWithCeilings,
   type CeilingChanges,
@@ -137,9 +138,9 @@ export function useCeilingWrite(
     async (write: Prepared, signal: AbortSignal) => {
       setState({ kind: "saving" });
       const outcome =
-        scope.kind === "company"
-          ? await savePatch(write.body, write.etag, write.summary, signal)
-          : await putEntity("roles", scope.handle, write.body, write.etag, write.summary, signal);
+        scope.kind === "seat"
+          ? await putEntity("roles", scope.handle, write.body, write.etag, write.summary, signal)
+          : await savePatch(write.body, write.etag, write.summary, signal);
       prepared.current = null;
       if (outcome.kind === "saved") {
         setState({
@@ -178,16 +179,16 @@ export function useCeilingWrite(
           let held: TokenBudget;
           let unchanged: Record<string, unknown>;
           let build: (changes: CeilingChanges) => Record<string, unknown>;
-          if (scope.kind === "company") {
+          if (scope.kind !== "seat") {
             const read = await getConfig(signal);
             if (read.kind !== "document") {
               setState({ kind: "refused", ...refusalWords(read, scope) });
               return;
             }
             etag = read.etag;
-            held = budgetOf(read.document.token_budget);
+            held = budgetOf(documentCeilings(scope, read.document));
             unchanged = {};
-            build = companyPatch;
+            build = (changes) => documentPatch(scope, changes);
           } else {
             const read = await getEntity("roles", scope.handle, signal);
             if (read.kind !== "entity") {
@@ -215,9 +216,9 @@ export function useCeilingWrite(
           // 3. The check, beside the company's own warnings as they stand, so
           // only what THIS change introduces is shown.
           const check = (body: Record<string, unknown>): Promise<ConfigWriteOutcome> =>
-            scope.kind === "company"
-              ? dryRunPatch(body, etag, signal)
-              : dryRunEntity("roles", scope.handle, body, etag, signal);
+            scope.kind === "seat"
+              ? dryRunEntity("roles", scope.handle, body, etag, signal)
+              : dryRunPatch(body, etag, signal);
           const [before, after] = await Promise.all([check(unchanged), check(write.body)]);
           if (after.kind === "saved") {
             // A CHECK THE ENGINE STORED. No route this page sends a check to

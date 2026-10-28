@@ -37,6 +37,8 @@ import {
   type NameOf,
 } from "./seats.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "./access.ts";
+import { fmtDateTime } from "./format.ts";
+import type { Remedy } from "~/protocol/remedy.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -172,6 +174,12 @@ export interface Attention {
   /** Where the answer is. */
   path?: string[];
   query?: Record<string, string>;
+  /**
+   * Where the limit behind the condition is raised, for a condition a limit
+   * caused (a spent budget): drawn in place of `path`, behind the gate of the
+   * editor it opens (`components/LimitRemedy.tsx`).
+   */
+  remedy?: Remedy;
   /** The instant this became true, for ordering within a severity. */
   at?: string;
   who?: string;
@@ -300,8 +308,10 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "budget",
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgRefusing.period]} token budget is refusing charges`,
-      detail: `${refusalWords(orgRefusing)} Raise the company limit, or wait until ${orgRefusing.resets_at}.`,
-      path: ["settings", "spend"],
+      detail: `${refusalWords(orgRefusing)} Raise the company limit, or wait until ${fmtDateTime(orgRefusing.resets_at)}.`,
+      // THE CEILING ITSELF, where it is raised: Token spend says what was
+      // spent, and has nothing on it that clears this.
+      remedy: { setting: "company_token_budget" },
       at: orgRefusing.refused_at,
     });
   } else if (orgNear) {
@@ -311,8 +321,8 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "budget",
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgNear.period]} token budget is nearly spent`,
-      detail: `${spentWords(orgNear)} Raise the company limit, or wait until ${orgNear.resets_at}.`,
-      path: ["settings", "spend"],
+      detail: `${spentWords(orgNear)} Raise the company limit, or wait until ${fmtDateTime(orgNear.resets_at)}.`,
+      remedy: { setting: "company_token_budget" },
     });
   }
 
@@ -463,11 +473,13 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         subject: "budget",
         icon: "coins",
         title: `${agent.role}'s ${PERIOD_ADJECTIVE[refusing.period]} token budget is refusing charges`,
-        detail: `${tokensOf(refusing)} spent. Raise the limit, or wait until ${refusing.resets_at}.`,
-        // THE SETTINGS TAB, where the ceiling that refused is written beside
-        // each window's live meter.
-        path: ["company", "org", "seats", String(agent.handle ?? agent.id)],
-        query: { tab: "settings" },
+        detail: `${tokensOf(refusing)} spent. Raise the limit, or wait until ${fmtDateTime(refusing.resets_at)}.`,
+        // THE SEAT'S OWN CEILING, where it is raised: its row on Budgets.
+        // A seat a remedy cannot name (no handle) keeps its profile's
+        // Settings tab, where the ceiling is read beside its meter.
+        ...(agent.handle
+          ? { remedy: { setting: "seat_token_budget" as const, seat: agent.handle } }
+          : { path: ["company", "org", "seats", agent.id], query: { tab: "settings" } }),
         at: refusing.refused_at,
       });
     }
@@ -534,7 +546,7 @@ function tokensOf(w: BudgetWindow): string {
 function refusalWords(w: BudgetWindow): string {
   const spent = `${tokensOf(w)} in ${w.window}.`;
   return w.refused_at
-    ? `Turns are being declined at the budget gate; last refusal ${w.refused_at}. ${spent}`
+    ? `Turns are being declined at the budget gate; last refusal ${fmtDateTime(w.refused_at)}. ${spent}`
     : `No further charge fits, so turns are being declined at the gate. ${spent}`;
 }
 

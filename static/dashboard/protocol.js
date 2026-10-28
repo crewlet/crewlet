@@ -1,32 +1,3 @@
-//#region src/protocol/equal.ts
-/**
-* Whether two values decoded off the wire say the same thing: the same JSON,
-* compared structurally rather than by identity.
-*
-* WHY IT EXISTS: every live push decodes into new objects, so a row the engine
-* sent again unchanged (a seat's state re-sent beside another seat's change,
-* the same refusal reported once a second) was a new row to every screen
-* keyed on identity, which drew it again. The store keeps the row it holds
-* when the push says nothing new, and a screen deriving rows from it keeps
-* the rows it drew, so nothing a person sees moves unless something did.
-*
-* JSON's own values only: objects, arrays, strings, numbers, booleans and
-* null. A key whose value is `undefined` reads as a missing key, as
-* `JSON.stringify` would write it.
-*/
-function sameValue(a, b) {
-	if (a === b) return true;
-	if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
-	if (Array.isArray(a) !== Array.isArray(b)) return false;
-	if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((v, i) => sameValue(v, b[i]));
-	const left = a;
-	const right = b;
-	const keys = (o) => Object.keys(o).filter((k) => o[k] !== void 0);
-	const lk = keys(left);
-	if (lk.length !== keys(right).length) return false;
-	return lk.every((k) => Object.hasOwn(right, k) && sameValue(left[k], right[k]));
-}
-//#endregion
 //#region src/contract/wire.ts
 /**
 * A live call's HEAVY fields, by the version that numbers each — the engine's
@@ -306,22 +277,14 @@ var Store = class {
 				live_call_seq: patchSeq ?? heldSeq
 			};
 		};
-		let moved = false;
-		const next = this.state.agents.map((a) => {
+		this.state.agents = this.state.agents.map((a) => {
 			const patch = byID.get(a.agent_id);
-			if (!patch) return a;
-			const merged = {
+			return patch ? {
 				...a,
 				...merge(a, patch)
-			};
-			if (sameValue(a, merged)) return a;
-			moved = true;
-			return merged;
+			} : a;
 		});
-		if (moved) {
-			this.state.agents = next;
-			this.emit("agents");
-		}
+		this.emit("agents");
 		return stale;
 	}
 	/**
@@ -666,6 +629,48 @@ function confirmStepUp() {
 	return confirming;
 }
 //#endregion
+//#region src/contract/remedies.ts
+/**
+* The configurable limits a refusal names as where to change it, as the engine
+* names them (`internal/caveat`'s `Setting`, ADR-0060).
+*
+* A refusal a limit caused (a token budget spent) carries a `remedy` naming
+* one of these, and `lib/remedy.ts` resolves each to the screen and the section
+* that edit it. HELD AGAINST `caveat.Settings` by
+* `internal/caveat.TestTheDashboardKnowsEverySettingARemedyNames`: a setting
+* added there and not here would be a refusal with nothing to open.
+*/
+var LIMIT_SETTINGS = [
+	"company_token_budget",
+	"seat_token_budget",
+	"assistant_token_budget"
+];
+//#endregion
+//#region src/protocol/remedy.ts
+/**
+* A refusal's remedy, read off the wire: where a person changes the limit a
+* refusal was caused by (ADR-0060). The engine sends it beside a budget
+* refusal's words, on a question the assistant refused (`429
+* budget_exhausted`), a turn's error frame, and an act's refusal.
+*
+* READ, NEVER TRUSTED AS TYPED: a setting this build does not know, or a seat
+* remedy naming no seat, reads as no remedy at all, so a refusal from a newer
+* engine draws its words and nothing to open rather than a link to nowhere.
+*/
+/** The remedy `raw` carries, or null where it carries none this build reads. */
+function remedyOf(raw) {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+	const { setting, seat } = raw;
+	const known = LIMIT_SETTINGS.find((s) => s === setting);
+	if (known === void 0) return null;
+	const handle = typeof seat === "string" ? seat.trim() : "";
+	if (known === "seat_token_budget" !== (handle !== "")) return null;
+	return handle === "" ? { setting: known } : {
+		setting: known,
+		seat: handle
+	};
+}
+//#endregion
 //#region src/protocol/rest.ts
 /**
 * The dashboard's one REST transport: every write, and the guarded reads the
@@ -761,6 +766,10 @@ var RestError = class extends Error {
 	/** The grants a refusal on authority named — see [refusedGrants]. */
 	get grants() {
 		return refusedGrants(this.body);
+	}
+	/** Where the limit that caused the refusal is changed, or null ([remedyOf]). */
+	get remedy() {
+		return remedyOf(this.body.remedy);
 	}
 	/**
 	* This refusal in the shape `QueryState` renders from — the one the
@@ -3325,6 +3334,7 @@ function writeFailed(err) {
 		hint: err.hint,
 		grants: err.grants,
 		retryable: err.retryHint !== null && retryAfterMs(err.retryHint) !== null,
+		remedy: err.remedy,
 		lookAgain: LOOK_AGAIN.has(code)
 	};
 }

@@ -1129,12 +1129,8 @@ const (
 	// rather than drawn as a card (ADR-0061): the renderer saying which run
 	// of prose opens its block, in the shared Markdown module the entry
 	// loads, took it to 349.1 KiB. 350 KiB, still under two seconds on that
-	// link. A model's usage limit as one condition per entry (ADR-0063): the
-	// queue's wording of it and the CLI names it is said in, the time of day
-	// it lifts, and the store keeping a row a push leaves as it was, all in
-	// the attention queue and the store the frame loads, took it to 350.1
-	// KiB. 351 KiB, still under two seconds on that link.
-	initialBudget = 351 << 10
+	// link.
+	initialBudget = 350 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1287,12 +1283,17 @@ const (
 	// rather than drawn as a card (ADR-0061): its chip and peek, the mention
 	// rule, the oversize card and a page that says it is one, less the folded
 	// read cards they replace, took it to 4591.9 KiB. 4592 KiB, which still
-	// refuses a doubled baseline. A model's usage limit as one condition per
-	// entry (ADR-0063): its wording and the CLI names, the store keeping a
-	// row a push leaves as it was, and the Inbox keeping the rows it drew,
-	// took it to 4596.5 KiB. 4597 KiB, which still refuses a doubled
-	// baseline.
-	treeBudget = 4<<20 + 501<<10
+	// refuses a doubled baseline. A limit's refusal naming where its ceiling
+	// is raised (ADR-0060's remedy): the link table and its gate, the press
+	// drawn on every surface a spent budget is shown on, a section arrived
+	// at on Budgets, each person's assistant ceiling edited there, and the
+	// one rule a refused question goes back in the box by, took it to
+	// 4601.7 KiB. 4602 KiB, which still refuses a doubled baseline. The
+	// review's fixes (a restore decided once per turn in the session, a
+	// section matched by its path and name, Home's spent week through the
+	// remedy gate) took it to 4602.0 KiB, past it by bytes. 4603 KiB, which
+	// still refuses a doubled baseline.
+	treeBudget = 4<<20 + 507<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

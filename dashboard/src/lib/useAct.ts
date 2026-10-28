@@ -45,6 +45,7 @@ import {
   type Caveat,
 } from "~/protocol/act.ts";
 import { useWriteAccess, type WriteAccess } from "./useWriteAccess.ts";
+import type { Remedy } from "~/protocol/remedy.ts";
 
 /** A refusal as a control draws it. */
 export interface Refusal {
@@ -59,6 +60,8 @@ export interface Refusal {
   grants: readonly string[];
   /** Sending it again may succeed; the Retry reuses the operation key. */
   retryable: boolean;
+  /** Where the limit that caused it is changed, for a refusal a limit caused (a spent budget). */
+  remedy: Remedy | null;
 }
 
 /** What a press is called, for the sentence that reports it. */
@@ -262,6 +265,7 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
               hint: result.hint,
               grants: result.grants,
               retryable: result.retryable,
+              remedy: result.remedy,
             },
             press,
           });

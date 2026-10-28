@@ -536,6 +536,8 @@ var contract = []Entry{
 	{"ARTIFACT_ANSWER_VERSION", ReadScalar, "internal/agent/builtin.TestATranscriptLinksTheArtifactAPublishWrote"},
 	{"RUNTIME_CONTRACT", ReadScalar, "internal/artifactupload.TestTheEmbeddedArtifactTreeServesWhatTheDashboardBuilds"},
 	{"CAVEAT_ACTIONS", ReadLiteral, "internal/caveat.TestTheDashboardReadsWhatACaveatAsks"},
+	{"LIMIT_SETTINGS", ReadLiteral, "internal/caveat.TestTheDashboardKnowsEverySettingARemedyNames"},
+	{"Remedy", ReadInterface, "internal/caveat.TestTheDashboardReadsARemedyAsTheEngineWritesIt"},
 }
 
 // Contract is every declaration the engine's gates read out of the

@@ -42,12 +42,19 @@ import {
   Modal,
   Popover,
   returnFocus,
+  Text,
   useToast,
 } from "@crewlethq/ui";
 import { PencilGlyph, SlidersVerticalGlyph } from "@crewlethq/icons/glyphs";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_ADJECTIVE, PERIOD_WORDS, readCeiling, waitedOn, windowOf } from "~/lib/budget.ts";
-import { ceilingText, whoseCeiling, type CeilingScope, type Period } from "~/lib/ceilings.ts";
+import {
+  ceilingText,
+  scopeName,
+  whoseCeiling,
+  type CeilingScope,
+  type Period,
+} from "~/lib/ceilings.ts";
 import { companyDateLabel, fmtCount, fmtDateTime, fmtExact } from "~/lib/format.ts";
 import { dayLabelIn } from "~/lib/range.ts";
 import { useOrgBudget } from "~/lib/store-hooks.ts";
@@ -57,6 +64,7 @@ import { useOrgWriteAccess, type OrgTarget } from "~/lib/useWriteAccess.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
 import { refuse, useAssistantDraft } from "~/app/assistant/draft.ts";
+import { remedyOffer, scopeRemedy } from "~/lib/remedy.ts";
 
 /**
  * A ceiling the assistant prepared, for the editor of its scope and window to
@@ -197,7 +205,7 @@ export function CeilingEditor({
   // in the field, as the pencil opens it with the current one: the warning,
   // the save and its step-up stay the person's.
   const prefill = useContext(CeilingPrefillContext);
-  const scopeId = scope.kind === "company" ? "company" : scope.handle;
+  const scopeId = scope.kind === "seat" ? scope.handle : scope.kind;
   const prefilled = useRef(0);
   const { reset: resetWrite } = write;
   useEffect(() => {
@@ -291,7 +299,7 @@ export function CeilingEditor({
   // once it has refused it, or a later activation has passed it.
   const drawsSaved = saved && (saved.standing === "applying" || saved.standing === "applied");
   const shown = drawsSaved && expected !== undefined ? expected : (limit ?? null);
-  const who = scope.kind === "company" ? "The company" : scope.name;
+  const who = scopeName(scope);
 
   // WHAT IS OPEN, for the assistant, while the field is: the ceiling as
   // typed, set as typing sets it and refused in the field's own words; the
@@ -453,7 +461,9 @@ export function RaiseBudgetDialog({
   const windows =
     scope.kind === "company"
       ? budgets.data?.org?.windows
-      : budgets.data?.seats?.find((s) => s.handle === scope.handle)?.windows;
+      : scope.kind === "assistant"
+        ? budgets.data?.assistant?.windows
+        : budgets.data?.seats?.find((s) => s.handle === scope.handle)?.windows;
 
   // PREFILLED ONCE, from the first answer: a poll landing while somebody types
   // would otherwise put the old ceiling back under their cursor.
@@ -524,8 +534,7 @@ export function RaiseBudgetDialog({
     if (warned) write.confirm();
     else if (!blocked) write.submit(values);
   };
-  const title =
-    scope.kind === "company" ? "Raise the company's budget" : `Raise ${scope.name}'s budget`;
+  const title = `Raise ${whoseCeiling(scope)} budget`;
 
   return (
     <Modal
@@ -635,6 +644,19 @@ export function RaiseBudgetButton({
   const scope: CeilingScope = company ? { kind: "company" } : { kind: "seat", handle, name };
   const access = useOrgWriteAccess(targetOf(scope));
   const focus = (own ?? company)?.period;
+  // WHO MAY RAISE IT, by the rule every remedy is offered by: a reader the
+  // gate refuses for who they are is told who can, never handed a button that
+  // is locked for them. A reader held for a moment (offline, a hold) keeps
+  // the button, disabled with the reason, since the moment passes.
+  const offer = remedyOffer(scopeRemedy(scope), access);
+  if (offer.kind === "pending") return null;
+  if (offer.kind === "who") {
+    return (
+      <Text variant="caption" tone="secondary">
+        {offer.sentence}
+      </Text>
+    );
+  }
   return (
     <>
       <Button

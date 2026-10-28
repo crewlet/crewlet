@@ -18,6 +18,8 @@
  * still read it, and a screen that needs one by name exports it then.
  */
 
+import type { Remedy } from "./remedies.ts";
+
 /** The protocol version every frame and every request carries. */
 export const ASSISTANT_PROTOCOL_VERSION = 1;
 /** The longest question a turn takes, in characters (Unicode code points). */
@@ -330,6 +332,8 @@ export interface AssistantErrorEvent {
   hint?: string;
   retryable: boolean;
   retry_after_seconds?: number;
+  /** Where the limit that caused the error is changed (a token budget spent). */
+  remedy?: Remedy;
 }
 
 /** What a resuming client redraws when the frame log cannot serve it. */

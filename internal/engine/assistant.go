@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -163,10 +164,21 @@ func (b assistantBudget) Meter(ctx context.Context, person iam.Principal) (tooll
 // personCaps is the ceilings a company sets each person's assistant spend to,
 // empty where it sets none.
 func personCaps(c *Company) coord.Caps {
-	if c == nil || c.Config == nil {
+	if c == nil {
 		return nil
 	}
-	return coord.Caps(c.Config.Assistant.TokenBudget.Ceilings())
+	return AssistantCaps(c.Config)
+}
+
+// AssistantCaps is the ceilings the company document cfg holds every person's
+// assistant spend to (`assistant.token_budget`), empty where it sets none: the
+// ONE reading the turn's meter and the budgets answer share, so the ceiling a
+// person is refused by is the ceiling the Budgets screen draws.
+func AssistantCaps(cfg *config.Company) coord.Caps {
+	if cfg == nil {
+		return nil
+	}
+	return coord.Caps(cfg.Assistant.TokenBudget.Ceilings())
 }
 
 // personMeter is a [meter] whose seat scope is a person's: what it answers
