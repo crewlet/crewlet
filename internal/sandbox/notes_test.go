@@ -151,12 +151,15 @@ func TestAnEndingWhoseNotesCouldNotBeRecordedKeepsItsRecord(t *testing.T) {
 }
 
 // ONLY A NOTE NO JOB RAN WITH IS UNREAD: one still waiting, or one the brief of
-// the record's job recorded read while that job never started — its command
-// never attached. A read by a job that started, a read by an earlier job, and a
-// take inside the job are reads, and their records say so.
+// the record's job recorded read while that job never started — its record
+// never took its command. A read by a job that started, a read by an earlier
+// job, and a take inside the job are reads, and their records say so — and a
+// job that started still started once its box, and the row's command with it,
+// is forgotten.
 //
-// Mutation: count a brief read unread whatever the job's command, or leave the
-// never-started job's out, and this goes red.
+// Mutation: count a brief read unread whatever the job's record, read the
+// witness off the row's command, or leave the never-started job's out, and this
+// goes red.
 func TestOnlyANoteNoJobRanWithIsUnread(t *testing.T) {
 	t.Parallel()
 	read := func(launch, boundary string) *NoteRead {
@@ -183,10 +186,23 @@ func TestOnlyANoteNoJobRanWithIsUnread(t *testing.T) {
 	}
 	started := neverStarted
 	started.CommandID = "4242"
+	started.Launch.Started = true
 	if got := unread(started); !slices.Equal(got, []string{"waiting"}) {
 		t.Errorf("a record whose job started has %v unread, want the waiting note alone", got)
 	}
-	if !neverStarted.unreadNotes() || (PendingRun{LaunchID: "job-2", CommandID: "4242",
+	boxForgotten := started
+	boxForgotten.CommandID = ""
+	if got := unread(boxForgotten); !slices.Equal(got, []string{"waiting"}) {
+		t.Errorf("a record whose started job's box was forgotten has %v unread, want the waiting note "+
+			"alone", got)
+	}
+	attachedNoStart := neverStarted
+	attachedNoStart.CommandID = "4242"
+	if got := unread(attachedNoStart); !slices.Equal(got, []string{"waiting", "briefed"}) {
+		t.Errorf("a record naming a command its job's record never took has %v unread, want the "+
+			"waiting note and its brief's", got)
+	}
+	if !neverStarted.unreadNotes() || (PendingRun{LaunchID: "job-2", Launch: LaunchRecord{Started: true},
 		Steer: RunSteer{Notes: notes[1:]}}).unreadNotes() {
 		t.Error("unreadNotes disagrees with UnreadNotes")
 	}
@@ -236,5 +252,70 @@ func TestAFailedLaunchsEndingReportsTheNotesItsWriteHeld(t *testing.T) {
 	}
 	if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
 		t.Error("the failed launch's record was not deleted")
+	}
+}
+
+// A PARKED RUN'S ENDING NEVER REPORTS EXPIRED THE NOTES ITS JOB'S BRIEF CARRIED,
+// whatever forgot its box first. A launch whose job started records the job
+// started ([LaunchRecord.Started]), and its turn's runner has recorded the
+// brief's notes delivered by then; a run parked past its pause, or one whose box
+// a park's teardown released, no longer names that job's command, and its
+// ending — the seat leaving the company here — must hand over the note still
+// waiting and nothing its job ran with. Reported again, one note would read
+// `delivered` and then `expired`.
+//
+// Mutation: read the job's start off the row's command (briefNeverRan), or
+// clear it with the box, and the ending hands over the brief's note.
+func TestAParkedRunsEndingNeverExpiresTheNotesItsJobsBriefCarried(t *testing.T) {
+	t.Parallel()
+	for name, forget := range map[string]func(t *testing.T, s PendingStore){
+		"its pause expired": func(t *testing.T, s PendingStore) {
+			if won, err := s.ExpirePause(t.Context(), "t1"); err != nil || !won {
+				t.Fatalf("ExpirePause = %v, %v", won, err)
+			}
+		},
+		"its box was released at the park": func(t *testing.T, s PendingStore) {
+			if err := s.ReleaseBox(t.Context(), "t1"); err != nil {
+				t.Fatalf("ReleaseBox: %v", err)
+			}
+			if err := s.SetStatus(t.Context(), "t1", StatusReseed, rigLease); err != nil {
+				t.Fatalf("SetStatus: %v", err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			spy := watchExpiry(rig)
+			req := launchReq("t1")
+			req.BriefNotes = []RunNote{{ID: "briefed", Sealed: []byte("sealed:briefed"),
+				Read: &NoteRead{Phase: "execute", Iteration: 1, Round: 1, Boundary: "brief"}}}
+			if _, err := rig.coordinator.Launch(t.Context(), rig.manager, req); err != nil {
+				t.Fatalf("Launch: %v", err)
+			}
+			rig.suspend("t1")
+			if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
+				Question: "which branch?", Audience: "requester", Branch: "wip/t1", AskedAt: rig.now,
+			}); err != nil {
+				t.Fatalf("MarkAwaiting: %v", err)
+			}
+			forget(t, rig.pending)
+			if run := rig.get("t1"); run.CommandID != "" {
+				t.Fatalf("the park left the job's command %q on the row", run.CommandID)
+			}
+			fileNote(t, rig.pending, "t1", "waiting")
+
+			if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 12); err != nil {
+				t.Fatalf("RetireSeat: %v", err)
+			}
+
+			calls := spy.seen()
+			if len(calls) != 1 || !calls[0].recorded || !slices.Equal(calls[0].unread, []string{"waiting"}) {
+				t.Errorf("the ending handed over %+v, want the waiting note alone, before the delete", calls)
+			}
+			if _, found, _ := rig.pending.Get(t.Context(), "t1"); found {
+				t.Error("the ending did not delete the record")
+			}
+		})
 	}
 }

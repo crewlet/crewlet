@@ -586,7 +586,10 @@ the turn ends — still waiting, or read into the brief of a launch that failed
 after writing the record, whose job never started — by the node that finishes
 the run's ending, and by nothing else: before the record is deleted, under an
 id derived from the ending, so a retried ending records it once. A park is
-never an ending.
+never an ending. Whether a job started is on that job's own record, written when
+its command is attached and kept when a park or an expired pause lets its box
+go, so a note a started job's brief carried, recorded `delivered`, is never
+then recorded `expired`.
 
 A proxy between the boxes and `CREWLET_MCP_BRIDGE_URL` holds a poll open for
 up to those ten seconds, so it needs a request timeout of at least fifteen —

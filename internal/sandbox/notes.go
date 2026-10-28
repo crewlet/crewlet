@@ -125,10 +125,15 @@ func (n RunNote) Waiting() bool { return n.Read == nil }
 
 // UnreadNotes is every note on the run's record that no job ran with: the ones
 // still WAITING, and the ones the BRIEF OF THE RECORD'S CURRENT JOB recorded
-// read where that job never started — its command was never attached
-// ([PendingRun.CommandID]), because the launch failed, or was ended, between
+// read where that job never started — the job's record never took its command
+// ([LaunchRecord.Started]), because the launch failed, or was ended, between
 // the write that opened the job and the job's start. What the run's ending
 // reports expired ([CoordinatorOptions.SteersExpired]).
+//
+// NEVER THE ROW'S COMMAND ([PendingRun.CommandID]): that is the box's, and goes
+// with the box — a park's teardown and an expired pause clear it from a job
+// that ran — so a turn ending after either would report expired the notes its
+// job's brief carried, which its runner had already recorded delivered.
 //
 // THE RECORD IS THE ONE WITNESS. A launch records its brief's notes read in the
 // write that opens its job ([PendingStore.BeginLaunch]), before it knows whether
@@ -152,7 +157,7 @@ func (r PendingRun) UnreadNotes() []RunNote {
 // briefNeverRan reports whether n was read by the brief of the record's job
 // while that job has not started.
 func (r PendingRun) briefNeverRan(n RunNote) bool {
-	return n.Read != nil && r.CommandID == "" && r.LaunchID != "" &&
+	return n.Read != nil && !r.Launch.Started && r.LaunchID != "" &&
 		n.Read.Launch == r.LaunchID && n.Read.Boundary == string(types.SteerBoundaryBrief)
 }
 

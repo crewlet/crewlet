@@ -44,6 +44,8 @@ var noteCases = []struct {
 	{"ALaunchFilesTheBoxsNotesWaitingAfterItsBrief", testALaunchFilesTheBoxsNotesWaitingAfterItsBrief},
 	{"EveryWriteThatRecordsAReadTakesTheNextPlace", testEveryWriteThatRecordsAReadTakesTheNextPlace},
 	{"APullIsRecordedOnceAndOnlyForItsJob", testAPullIsRecordedOnceAndOnlyForItsJob},
+	{"AStartedJobsBriefStaysReadThroughEveryWriteThatForgetsItsBox",
+		testAStartedJobsBriefStaysReadThroughEveryWriteThatForgetsItsBox},
 	{"NotesRideABridgedCallStorm", testNotesRideABridgedCallStorm},
 	{"AWatchSeesEveryNoteChange", testAWatchSeesEveryNoteChange},
 }
@@ -584,6 +586,103 @@ func testAPullIsRecordedOnceAndOnlyForItsJob(t *testing.T, s sandbox.PendingStor
 	}
 	if got := mustGet(t, s, "t-pull").Steer.Pulled; got != launch {
 		t.Errorf("pulled = %q, want %q", got, launch)
+	}
+}
+
+// A STARTED JOB'S BRIEF STAYS READ THROUGH EVERY WRITE THAT FORGETS ITS BOX.
+// What tells the notes a job's brief carried from ones read into the brief of a
+// launch that never started its job is the job's own record: the attach naming
+// the job's command records it started ([sandbox.LaunchRecord.Started]), and
+// nothing that forgets the box — the teardown of a park, an expired pause —
+// unsays it, though both clear the row's command. Only the next launch, whose
+// job is new, starts unstarted.
+//
+// Mutation: read the witness off the row's command, clear it with the box, or
+// let an attach naming no command unsay it, and the parked runs here report
+// their brief's note unread.
+func testAStartedJobsBriefStaysReadThroughEveryWriteThatForgetsItsBox(t *testing.T, s sandbox.PendingStore) {
+	briefed := func(turnID string) sandbox.PendingRun {
+		r := run(turnID)
+		r.BriefNotes = []sandbox.RunNote{{ID: "briefed", Sealed: []byte("sealed:briefed"), At: base,
+			Read: &sandbox.NoteRead{Phase: "execute", Iteration: 1, Round: 1, Boundary: "brief"}}}
+		return r
+	}
+	unread := func(turnID string) []string {
+		var out []string
+		for _, n := range mustGet(t, s, turnID).UnreadNotes() {
+			out = append(out, n.ID)
+		}
+		return out
+	}
+	// started opens a job with a brief note, attaches its box and then its
+	// command, as a launch does, and parks it on a question.
+	started := func(turnID string) {
+		ctx := t.Context()
+		mustBeginLaunch(t, s, briefed(turnID))
+		if err := s.AttachSandbox(ctx, turnID, sandbox.BoxRef{SandboxID: "box-" + turnID,
+			CodingAgent: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
+			t.Fatalf("AttachSandbox: %v", err)
+		}
+		if got := unread(turnID); !slices.Equal(got, []string{"briefed"}) || mustGet(t, s, turnID).Launch.Started {
+			t.Fatalf("a job whose command is not attached has %v unread, want its brief's note", got)
+		}
+		if err := s.AttachSandbox(ctx, turnID, sandbox.BoxRef{SandboxID: "box-" + turnID, CommandID: "cmd-1",
+			CodingAgent: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
+			t.Fatalf("AttachSandbox: %v", err)
+		}
+		// AN ATTACH NAMING NO COMMAND UNSAYS NOTHING: the job's record
+		// keeps what the attach before it recorded.
+		if err := s.AttachSandbox(ctx, turnID, sandbox.BoxRef{SandboxID: "box-" + turnID,
+			CodingAgent: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
+			t.Fatalf("AttachSandbox: %v", err)
+		}
+		if ok, err := s.MarkSuspended(ctx, turnID, suspension()); err != nil || !ok {
+			t.Fatalf("MarkSuspended = %v, %v", ok, err)
+		}
+		if err := s.MarkAwaiting(ctx, turnID, sandbox.Clarification{Question: "which branch?",
+			Audience: "requester", Branch: "wip/" + turnID, AskedAt: base}); err != nil {
+			t.Fatalf("MarkAwaiting: %v", err)
+		}
+		if run := mustGet(t, s, turnID); !run.Launch.Started || len(unread(turnID)) != 0 {
+			t.Fatalf("a parked job that started reads started=%v with %v unread", run.Launch.Started,
+				unread(turnID))
+		}
+	}
+
+	ctx := t.Context()
+	started("t-expired")
+	if won, err := s.ExpirePause(ctx, "t-expired"); err != nil || !won {
+		t.Fatalf("ExpirePause = %v, %v", won, err)
+	}
+	if run := mustGet(t, s, "t-expired"); run.CommandID != "" || !run.Launch.Started {
+		t.Errorf("an expired pause left command %q and started=%v, want the box forgotten and the job "+
+			"still started", run.CommandID, run.Launch.Started)
+	}
+	if got := unread("t-expired"); len(got) != 0 {
+		t.Errorf("after its pause expired the run has %v unread, want nothing: its job ran with its brief", got)
+	}
+
+	started("t-released")
+	if err := s.ReleaseBox(ctx, "t-released"); err != nil {
+		t.Fatalf("ReleaseBox: %v", err)
+	}
+	if err := s.SetStatus(ctx, "t-released", sandbox.StatusReseed, sandbox.Fence{}); err != nil {
+		t.Fatalf("SetStatus: %v", err)
+	}
+	if run := mustGet(t, s, "t-released"); run.CommandID != "" || !run.Launch.Started {
+		t.Errorf("a released box left command %q and started=%v, want the box forgotten and the job "+
+			"still started", run.CommandID, run.Launch.Started)
+	}
+	if got := unread("t-released"); len(got) != 0 {
+		t.Errorf("after its box was released the run has %v unread, want nothing", got)
+	}
+
+	// THE NEXT JOB IS NEW: a relaunch's record starts unstarted.
+	if _, err := s.BeginLaunch(ctx, run("t-released"), sandbox.Fence{}); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	if mustGet(t, s, "t-released").Launch.Started {
+		t.Error("a relaunch kept the previous job's start")
 	}
 }
 

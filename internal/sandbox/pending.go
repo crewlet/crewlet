@@ -1509,7 +1509,10 @@ type PendingStore interface {
 	// with no error is that, and so is a row that is gone.
 	MarkLaunchNodeGone(ctx context.Context, turnID, launch, node string, at time.Time) (bool, error)
 
-	// AttachSandbox records the box and the command a run is using.
+	// AttachSandbox records the box and the command a run is using. An
+	// attach naming a command records the job STARTED on the job's record
+	// ([LaunchRecord.Started]) in the same write, and no later write of the
+	// job unsays it: the box and its command may go, the job still ran.
 	AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error
 
 	// MarkBoxPaused and ReleaseBox are the two halves of the box record:
@@ -2172,6 +2175,21 @@ type LaunchRecord struct {
 	// StartedAt is when the job was launched, on the store's clock —
 	// written by [PendingStore.BeginLaunch], the moment the launch exists.
 	StartedAt time.Time `json:"started_at,omitzero"`
+
+	// Started is whether the job's CLI was started in its box: written by
+	// the attach that names the job's command ([PendingStore.AttachSandbox]),
+	// the write a launch makes once its job exists and before it returns.
+	// What tells a brief's notes a job ran with from ones read into the
+	// brief of a launch that failed before its job ([PendingRun.UnreadNotes]).
+	//
+	// ON THE JOB'S RECORD, AND NEVER CLEARED FOR THE JOB — never read off
+	// the row's command ([PendingRun.CommandID]), which is the BOX's: a
+	// park's teardown ([PendingStore.ReleaseBox]) and an expired pause
+	// ([PendingStore.ExpirePause]) forget the box and its command, and a
+	// job that ran in it still ran. Read that way, the ending of a turn
+	// parked past its pause reported the notes its job's brief had carried
+	// expired, after its runner had recorded them delivered.
+	Started bool `json:"started,omitempty"`
 
 	// Model is the model the coding agent was pointed at, empty when the
 	// launch named none and the CLI chose its own.

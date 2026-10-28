@@ -843,6 +843,13 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 		}
 		run.SandboxID = box.SandboxID
 		run.CommandID = box.CommandID
+		// A COMMAND IS A JOB THAT STARTED, recorded on the job's own record
+		// where nothing that forgets the box reaches it — see
+		// [LaunchRecord.Started]. Only ever set: the attach before the job
+		// names no command, and unsays nothing.
+		if box.CommandID != "" {
+			run.Launch.Started = true
+		}
 		// The box's cell moves with the box — see [BoxRef.Placement] — and
 		// so does its host ([BoxRef.Node]).
 		if box.Placement != "" {

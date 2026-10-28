@@ -718,7 +718,7 @@ func TestALaunchThatFailsAfterItsWriteLeavesItsNotesToTheRecordsEnding(t *testin
 		t.Fatalf("the segment's close returned %+v, want nothing: the record holds them", expired)
 	}
 	run := mustRow(t, store, "run-1")
-	if run.LaunchID != opened.LaunchID || run.CommandID != "" {
+	if run.LaunchID != opened.LaunchID || run.Launch.Started {
 		t.Fatalf("the record is %+v, want the job the launch opened, never started", run)
 	}
 	run.Ending = &sandbox.RecordedEnding{ID: "abandoned", At: time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)}
