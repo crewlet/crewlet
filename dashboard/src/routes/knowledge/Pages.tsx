@@ -121,6 +121,8 @@ interface Level {
   total: number | null;
   more: boolean;
   paging: boolean;
+  /** The level's first window is held while more are loaded (`usePagedPages`). */
+  held: boolean;
   error: QueryErrorCode | null;
   pageError: QueryErrorCode | null;
 }
@@ -289,11 +291,11 @@ function LevelReader({
     [space, parent],
   );
   const level = usePagedPages(params, { pollMs: LEVEL_POLL_MS });
-  const { rows, total, more, paging, error, pageError, loadMore } = level;
+  const { rows, total, more, paging, held, error, pageError, loadMore } = level;
   const ready = level.data !== null || error !== null;
   useEffect(() => {
-    onLevel(parent, { ready, rows, total, more, paging, error, pageError });
-  }, [onLevel, parent, ready, rows, total, more, paging, error, pageError]);
+    onLevel(parent, { ready, rows, total, more, paging, held, error, pageError });
+  }, [onLevel, parent, ready, rows, total, more, paging, held, error, pageError]);
   // THE NEXT WINDOW'S PRESS, held where the outline reaches it without a
   // render: a function is a new value on every render, and publishing it as
   // state would publish the level again for nothing.
@@ -421,6 +423,9 @@ function SpaceOutline({ space }: { space: PageContainer }) {
               {(level?.rows.length ?? 0).toLocaleString()} of {(level?.total ?? 0).toLocaleString()}{" "}
               in {where}
             </span>
+            {/* SAID ONLY ONCE IT IS TRUE: until then the first window is read
+                again on its poll (`usePagedPages`). */}
+            {level?.held && <span className="knowledge-note">Paused while more are loaded.</span>}
             {level?.pageError && (
               <span className="knowledge-note" role="alert">
                 The next pages could not be read ({level.pageError}).

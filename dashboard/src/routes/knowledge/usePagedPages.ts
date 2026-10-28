@@ -7,32 +7,33 @@
  * existed. The answer carries the TOTAL and an `after` cursor now; this is the
  * reader of both, shared by the browse and every level of the tree.
  *
- * # The first window polls and the rest are held
+ * # The first window polls until "Load more", and is then held
  *
  * The first window is an ordinary `useQuery`, polled. The windows after it are
- * asked ONCE, on "Load more", and held against the question they were asked
- * under — a different container or filter is a different list, so they are
- * dropped rather than appended to it. Re-asking every held window on each poll
- * would multiply the listing's cost by its length. The same rule
- * `routes/work/usePagedItems.ts` keeps for the board, for the same reason.
+ * asked ONCE, on "Load more", and a different container or filter is a
+ * different list, so they are dropped rather than appended to it. Re-asking
+ * every held window on each poll would multiply the listing's cost by its
+ * length. The same rule `routes/work/usePagedItems.ts` keeps for the board, for
+ * the same reason.
+ *
+ * So from "Load more" the first window is HELD too (`lib/usePaged.ts`): the
+ * next one starts after the last page the first was answered with, and a page
+ * filed into its range would push that one out of both when the first was read
+ * again on its poll. A write from this tab still reads it again, and the
+ * windows loaded are then read again from it.
  *
  * # A page is drawn once
  *
  * The cursor resumes strictly after the last row it was minted on, so a page
  * renamed between two asks can land on both windows. The merge keeps the FIRST
- * occurrence by id.
+ * occurrence by id (`lib/usePaged.ts`).
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useClient } from "~/lib/store-hooks.ts";
+import { usePageHold, usePaged } from "~/lib/usePaged.ts";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
-import {
-  queryErrorCode,
-  type LogRefusal,
-  type PageSummary,
-  type PagesAnswer,
-  type QueryRefusal,
-} from "~/protocol/index.ts";
+import type { LogRefusal, PageSummary, PagesAnswer, QueryRefusal } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { SkillLoad } from "~/contract/pages.ts";
 
@@ -46,7 +47,7 @@ import type { SkillLoad } from "~/contract/pages.ts";
 export const PAGES_WINDOW = 500;
 
 export interface PagedPages {
-  /** The first window as the engine answered it — total, coverage. */
+  /** The first window as the engine answered it — total, coverage: the one held, while one is. */
   data: PagesAnswer | null;
   loading: boolean;
   error: QueryErrorCode | null;
@@ -61,6 +62,8 @@ export interface PagedPages {
   /** Ask for the next window. A no-op when there is none or one is in flight. */
   loadMore: () => void;
   paging: boolean;
+  /** Whether the first window is held, so the listing is one reading: see the file's doc. */
+  held: boolean;
   /** Why the last "Load more" failed, until the next one. */
   pageError: QueryErrorCode | null;
   /**
@@ -71,21 +74,10 @@ export interface PagedPages {
   loadedBy: Record<string, SkillLoad[]> | null;
 }
 
-/** Pages from several windows, each once, first occurrence kept. */
-export function mergeWindows(windows: readonly (readonly PageSummary[])[]): PageSummary[] {
-  const seen = new Set<string>();
-  const out: PageSummary[] = [];
-  for (const window of windows) {
-    for (const row of window) {
-      if (seen.has(row.id)) continue;
-      seen.add(row.id);
-      out.push(row);
-    }
-  }
-  return out;
-}
-
-const NO_WINDOWS: PagesAnswer[] = [];
+/** A window's pages, each page's id, and the cursor to the window after. */
+const pagesOf = (w: PagesAnswer) => w.pages ?? [];
+const pageIdOf = (row: PageSummary) => row.id;
+const pagesAfter = (w: PagesAnswer) => w.after ?? "";
 
 export function usePagedPages(
   params: Record<string, unknown>,
@@ -93,64 +85,44 @@ export function usePagedPages(
 ): PagedPages {
   const { socket } = useClient();
   const asked = useMemo(() => ({ limit: PAGES_WINDOW, ...params }), [params]);
+  const hold = usePageHold<PagesAnswer>(asked);
   const first = useQuery("pages", asked, {
     pollMs: options.pollMs,
     enabled: options.enabled ?? true,
+    hold: hold.holding,
   });
-  const question = JSON.stringify(asked);
-  const [held, setHeld] = useState<{ question: string; windows: PagesAnswer[] } | null>(null);
-  const [paging, setPaging] = useState(false);
-  const [pageError, setPageError] = useState<QueryErrorCode | null>(null);
-  const windows = held && held.question === question ? held.windows : NO_WINDOWS;
-  const last = windows.length > 0 ? windows[windows.length - 1] : first.data;
-  const after = last?.after ?? "";
-
-  const load = useCallback(async () => {
-    if (!after || paging) return;
-    setPaging(true);
-    setPageError(null);
-    try {
-      const window = await socket.query(
-        "pages",
-        withFloor("pages", JSON.stringify({ ...asked, after })),
-      );
-      setHeld((prev) =>
-        prev && prev.question === question
-          ? { question, windows: [...prev.windows, window] }
-          : { question, windows: [window] },
-      );
-    } catch (err) {
-      setPageError(queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed");
-    } finally {
-      setPaging(false);
-    }
-  }, [socket, asked, question, after, paging]);
-
-  const rows = useMemo(
-    () => mergeWindows([first.data?.pages ?? [], ...windows.map((w) => w.pages ?? [])]),
-    [first.data, windows],
+  const paged = usePaged(
+    hold,
+    first,
+    (after) => socket.query("pages", withFloor("pages", JSON.stringify({ ...asked, after }))),
+    pagesOf,
+    pageIdOf,
+    pagesAfter,
   );
 
   const loadedBy = useMemo(() => {
-    const answers = [first.data, ...windows].filter((w): w is PagesAnswer => Boolean(w));
-    if (!answers.some((w) => w.skill_loaded_by)) return null;
-    return Object.assign({}, ...answers.map((w) => w.skill_loaded_by ?? {})) as Record<
+    if (!paged.answers.some((w) => w.skill_loaded_by)) return null;
+    return Object.assign({}, ...paged.answers.map((w) => w.skill_loaded_by ?? {})) as Record<
       string,
       SkillLoad[]
     >;
-  }, [first.data, windows]);
+  }, [paged.answers]);
 
+  // THE FIRST WINDOW AS DRAWN: the one held, while one is, so the total is the
+  // one the rows were read under.
+  const data = paged.answers[0] ?? null;
   return {
     loadedBy,
-    data: first.data,
-    loading: first.loading,
-    error: first.error,
-    refusal: first.refusal,
-    rows,
-    total: first.data ? (first.data.total ?? rows.length) : null,
-    more: after !== "",
-    loadMore: () => void load(),
-    paging,
-    pageError,
+    data,
+    loading: paged.loading,
+    error: paged.error,
+    refusal: paged.refusal,
+    rows: paged.items,
+    total: data ? (data.total ?? paged.items.length) : null,
+    more: paged.more,
+    loadMore: paged.older,
+    paging: paged.paging,
+    held: paged.held,
+    pageError: paged.pageError,
   };
 }

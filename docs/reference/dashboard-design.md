@@ -1938,11 +1938,14 @@ out and the changes between two pages belong to neither, which is a silent
 hole in the middle of a log. The reader's own write still reads it again, so
 the screen they acted on shows the act, and the pages held are then read again
 from it, in order, and swapped in together; a read again that fails lets the
-hold go and the first page is live again. Once it is true the screen says so —
-"Paused while you page back." One pager does all of it, `lib/usePaged.ts`, and
-a list paged by a cursor in another order holds the same way, since its first
-page read again pushes rows out alike: Code's Repositories, by name, is paused
-while more are loaded.
+hold go and the first page is live again. Once it is true a screen with a foot
+to say it in says so — "Paused while you page back." The pager is one,
+`lib/usePaged.ts`, under every paged list: a list paged by a cursor in another
+order holds the same way, since its first page read again pushes rows out
+alike — Code's Repositories, Work's task lists, Knowledge's listings, the
+Inbox's Snoozed and Earlier, and the artifact gallery and its folders — and
+where its foot counts what is loaded, that count says the list is "paused
+while more are loaded".
 
 **A date is a band, not a wider cell.** A row's time column is sized for a wall
 clock, which is right for every row in a log but the first of each day — and

@@ -33,7 +33,6 @@ import {
   tagFilter,
   viewQuery,
 } from "./work.ts";
-import { mergePages } from "~/routes/work/usePagedItems.ts";
 import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
 
 const row = (key: string, over: Partial<WorkSummary> = {}): WorkSummary => ({
@@ -178,16 +177,9 @@ test("hidden lanes round-trip through hide=, the unset lane as a dash", () => {
 // Every row reachable
 // ---------------------------------------------------------------------------
 
-// A CURSOR RESUMES AFTER THE LAST ROW IT WAS MINTED ON, so a task that moved
-// between two asks can arrive on both pages — and is drawn once, where it was
-// first drawn.
-test("rows past the first page are merged in once each", () => {
-  expect(
-    mergePages([
-      [row("ENG-1"), row("ENG-2")],
-      [row("ENG-2"), row("ENG-3")],
-    ]).map((r) => r.key),
-  ).toEqual(["ENG-1", "ENG-2", "ENG-3"]);
+// WHAT IS LOADED OUT OF HOW MANY MATCH — the pages themselves are merged by
+// the one pager every paged list shares (`lib/usePaged.test.tsx`).
+test("the loaded count says what is loaded out of how many match", () => {
   expect(loadedOf(100, 240)).toBe("100 of 240 loaded");
   expect(loadedOf(100, 10000, true)).toBe("100 of 10,000+ loaded");
   expect(loadedOf(100, 100)).toBe("100 loaded");

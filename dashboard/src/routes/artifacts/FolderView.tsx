@@ -431,7 +431,7 @@ export function FolderView({
               items={listing.items}
               view={view}
               name={folder ? "artifacts-folder" : "artifacts-top-level"}
-              loadMore={listing.after ? listing.loadMore : undefined}
+              loadMore={listing.more ? listing.loadMore : undefined}
               loadingMore={listing.loadingMore}
               total={listing.first.data?.total}
             />

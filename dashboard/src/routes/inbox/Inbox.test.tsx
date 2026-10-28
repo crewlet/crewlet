@@ -338,6 +338,56 @@ describe("the list", () => {
     expect(earlier.queryByText("something about r-1")).toBeNull();
   });
 
+  // FROM "SHOW MORE" THE FIRST PAGE IS HELD: the next page starts after the
+  // last notice the first was answered with, and the first read again under a
+  // newer notice pushes that one out of both — so neither its poll, an inbox
+  // push nor a reconnect asks it again. Mutation: ask it without the pager's
+  // hold, and the tick asks it again.
+  test("after Show more, a poll, a push and a reconnect ask nothing of Earlier's first page", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { store } = mount({
+        answers: {
+          work_inbox: (p: Record<string, unknown>) =>
+            Promise.resolve(
+              p.unread !== false
+                ? inboxOf([])
+                : p.cursor === "e-2"
+                  ? inboxOf([notice("r-1", { read: true, excerpt: "the oldest one" })])
+                  : inboxOf(
+                      [
+                        notice("r-3", { read: true, excerpt: "a newer one" }),
+                        notice("r-2", { read: true, excerpt: "an older one" }),
+                      ],
+                      { next_cursor: "e-2" },
+                    ),
+            ),
+        },
+      });
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: "Earlier updates" }));
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+      await settle();
+      const earlier = within(screen.getByRole("region", { name: "Earlier updates" }));
+      expect(earlier.getByText("the oldest one")).toBeTruthy();
+      const firsts = () =>
+        asked.filter(
+          (a) => a.kind === "work_inbox" && a.params.unread === false && !a.params.cursor,
+        ).length;
+      const before = firsts();
+      await act(async () => void vi.advanceTimersByTime(5 * 30_000));
+      act(() => store.applyInboxChanged({ handle: "jane" }));
+      act(() => store.setConnected(false));
+      act(() => store.setConnected(true));
+      await settle();
+      expect(firsts()).toBe(before);
+      expect(earlier.getByText("a newer one")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the directory binds
   // to a seat writes AS the seat, so their row draws as the seat, never as the
   // credential they wrote through; a principal bound to none writes under its

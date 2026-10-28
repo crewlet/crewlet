@@ -10,8 +10,8 @@
  * hides that its real work is still out in a box.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -20,6 +20,7 @@ import type { TurnRow } from "~/protocol/index.ts";
 import { Turns } from "./Turns.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks, settled } from "~/test/settle.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -36,6 +37,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   location.hash = "";
 });
 
@@ -83,7 +85,7 @@ function mountWith(
   answers: Record<string, unknown | ((p: Record<string, unknown>) => unknown)>,
   hash = "#/live/turns",
   org: unknown = { roles: [{ name: "CEO", handle: "ceo" }] },
-): { asked: Asked[] } {
+): { asked: Asked[]; store: Store } {
   location.hash = hash;
   const store = new Store();
   store.applyHealth(healthFrame());
@@ -110,7 +112,7 @@ function mountWith(
       </Router>
     </ClientContext.Provider>,
   );
-  return { asked };
+  return { asked, store };
 }
 
 function mount(turns: TurnRow[], agents: unknown[] = []) {
@@ -343,6 +345,40 @@ test("Load older asks for the page past the cursor and lists it", async () => {
   expect(asked.filter((q) => q.kind === "turns").at(-1)?.params).toMatchObject({
     before: "cursor-1",
   });
+});
+
+// FROM THE PRESS OF LOAD OLDER THE FIRST PAGE IS HELD: its cursor was minted
+// from its last turn, and read again under turns that ended since it would
+// push its last ones out of both pages — so neither its poll nor a reconnect
+// asks it, and the list says it is paused. Mutation: ask the turns without the
+// pager's hold, and the tick asks the first page again.
+test("after Load older, neither a poll tick nor a reconnect asks the first page", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const { asked, store } = mountWith({
+      turns: (p: Record<string, unknown>) =>
+        p.before
+          ? { turns: [row("t-2", "the older one", { complete: true })], next: null }
+          : { turns: [row("t-1", "the newer one", { complete: true })], next: "cursor-1" },
+      event_series: series(2),
+    });
+    // SETTLED ON THE READS, never `findBy…`: the testing library's wait ends
+    // on a timer this case fakes.
+    await settled(() => asked.length);
+    fireEvent.click(screen.getByRole("button", { name: "Load older" }));
+    await settled(() => asked.length);
+    expect(screen.getByText("the older one")).toBeTruthy();
+    const firsts = () => asked.filter((q) => q.kind === "turns" && !q.params.before).length;
+    const before = firsts();
+    await act(async () => void vi.advanceTimersByTime(5 * 20_000));
+    act(() => store.setConnected(false));
+    act(() => store.setConnected(true));
+    await afterMicrotasks();
+    expect(firsts()).toBe(before);
+    expect(screen.getByText("Paused while you page back.")).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // A BAR PICKED IN THE PAST IS ASKED FOR AS ITSELF.

@@ -14,7 +14,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Work } from "./Work.tsx";
 import { patchedHref } from "./ItemsView.tsx";
@@ -27,6 +27,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { calendarWeeks, dayKey, dayLabel, filterPatchForGroup } from "~/lib/work.ts";
 import type { QueryName, WorkGroup, WorkProjectRow, WorkSummary } from "~/protocol/index.ts";
 import { installWindow } from "~/testing.tsx";
+import { afterMicrotasks, settled } from "~/test/settle.ts";
 import { withDerived } from "~/test/org.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
@@ -46,6 +47,7 @@ vi.mock("~/lib/store-hooks.ts", async () => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.useRealTimers();
   location.hash = "#/";
 });
 
@@ -1938,4 +1940,56 @@ test("rows past the first page are reachable", async () => {
   expect(next?.[1]?.limit).toBe(100);
   // AND THE LIST IS WHOLE: no way to more, and the foot says it is all of it.
   await waitFor(() => expect(screen.queryByRole("button", { name: "Load more" })).toBeNull());
+});
+
+// FROM "LOAD MORE" THE FIRST PAGE IS HELD: the next page starts after the last
+// task the first was answered with, and a task filed or moved into its range
+// would push that one out of both when the first was read again on its poll.
+// Mutation: ask the items without the pager's hold, and the tick asks the
+// first page again.
+test("after Load more, the list's poll asks nothing of the first page", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const pages: Record<string, unknown> = {
+      "": {
+        items: [row("1"), row("2")],
+        groups: [],
+        total_hint: 5,
+        next_cursor: "c-2",
+        complete: true,
+      },
+      "c-2": {
+        items: [row("3"), row("4")],
+        groups: [],
+        total_hint: 5,
+        next_cursor: "c-4",
+        complete: true,
+      },
+    };
+    const query = vi.fn(async (what: string, params?: Record<string, unknown>) =>
+      what === "work_items" ? pages[String(params?.cursor ?? "")] : {},
+    );
+    vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
+    vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
+    vi.mocked(useOrg).mockReturnValue(withDerived({ name: "Acme", roles: [] }) as never);
+    mountWork();
+    // SETTLED ON THE READS, never `waitFor`: the testing library's wait ends
+    // on a timer this case fakes.
+    await settled(() => query.mock.calls.length);
+    expect(screen.getByText("a task called 2")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await settled(() => query.mock.calls.length);
+    expect(screen.getByText("a task called 4")).toBeTruthy();
+    const firsts = () =>
+      (query.mock.calls as unknown as [string, Record<string, unknown>?][]).filter(
+        ([what, params]) => what === "work_items" && !params?.cursor,
+      ).length;
+    const before = firsts();
+    await act(async () => void vi.advanceTimersByTime(5 * 20_000));
+    await afterMicrotasks();
+    expect(firsts()).toBe(before);
+    expect(screen.getByText("4 of 5 loaded, paused while more are loaded")).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
 });

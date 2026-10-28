@@ -751,12 +751,16 @@ export function ItemsView({
   // THE REST OF A PAGED ANSWER: "Load more", and what is loaded out of how
   // many match. Absent on a complete answer and on a grouped one, which has no
   // cursor.
-  const pageMore = paged.next
+  const pageMore = paged.more
     ? {
-        load: paged.more,
+        load: paged.loadMore,
         note: paged.pageError
           ? "Couldn’t load more. Try again."
-          : loadedOf(rows.length, data?.total_hint ?? 0, data?.total_capped),
+          : `${loadedOf(rows.length, data?.total_hint ?? 0, data?.total_capped)}${
+              // SAID ONLY ONCE IT IS TRUE: until then the first page is read
+              // again every twenty seconds (`usePagedItems`).
+              paged.held ? ", paused while more are loaded" : ""
+            }`,
       }
     : undefined;
   // A BUSY CALENDAR DAY, as this list narrowed to that day and drawn as a

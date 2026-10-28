@@ -23,6 +23,7 @@ import { LiveNow, stripOf } from "./LiveNow.tsx";
 import { PHASE_PAGE } from "./RecentPhases.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { afterMicrotasks } from "~/test/settle.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
 class InertWebSocket {
@@ -430,6 +431,44 @@ test("Load older asks phases again with the cursor the page carried", async () =
     limit: PHASE_PAGE,
   });
   expect(asked.some((q) => q.kind === "event")).toBe(false);
+});
+
+// FROM THE PRESS OF "OLDER" THE FIRST PAGE IS HELD: it polls nothing, but a
+// reconnect read it again, and under phases that finished since it pushed its
+// last ones out of both pages — finished before the tab opened, they are not
+// among those the push brings either. Mutation: ask the phases without the
+// pager's hold, and the reconnect asks the first page again.
+test("after Load older, a reconnect asks nothing of the first page of phases", async () => {
+  const { asked, store } = mount({
+    answers: {
+      phases: (p: Record<string, unknown>) =>
+        p.before_id
+          ? { phases: [phaseEvent("p-2", "t-2", "id")], next: {}, exhausted: true }
+          : {
+              phases: [phaseEvent("p-1", "t-1", "id")],
+              next: { before_time: "2026-09-28T10:00:00Z", before_id: "p-1" },
+              exhausted: false,
+            },
+    },
+  });
+  const card = await phasesCard(asked);
+  const more = await waitFor(() => {
+    const button = within(card).getByRole<HTMLButtonElement>("button", {
+      name: `Load ${PHASE_PAGE} older`,
+    });
+    expect(button.disabled).toBe(false);
+    return button;
+  });
+  act(() => more.click());
+  await within(card).findByText("Start of the record.");
+  const firsts = () => asked.filter((q) => q.kind === "phases" && !q.params.before_id).length;
+  const before = firsts();
+  act(() => store.setConnected(false));
+  act(() => store.setConnected(true));
+  await afterMicrotasks();
+  await afterMicrotasks();
+  expect(firsts()).toBe(before);
+  expect(within(card).getByText("Paused while you page back.")).toBeTruthy();
 });
 
 // THE EVENT LOG IS A LINK TO THE LOG, carrying the seat. It was a button

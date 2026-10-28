@@ -75,7 +75,7 @@ import { useAttention } from "~/lib/useAttention.ts";
 import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
 import { InboxColumn, taskTitleOf, titleOf } from "./InboxColumn.tsx";
 import { InboxPane } from "./InboxPane.tsx";
-import { usePagedInbox } from "./pages.tsx";
+import { usePagedInbox } from "./pages.ts";
 import {
   earlierOf,
   inboxQuiet,
@@ -357,8 +357,6 @@ export function Inbox() {
         </Callout>
       ) : null}
 
-      {snoozed.readers}
-      {earlier.readers}
       <div className="inbox-panes">
         {showList && (
           <InboxColumn

@@ -195,6 +195,9 @@ function ToolSkills() {
                 {rows.length.toLocaleString()} of {(listing.total ?? 0).toLocaleString()} skills
                 loaded.
               </span>
+              {/* SAID ONLY ONCE IT IS TRUE: until then the first window is
+                  read again every minute (`usePagedPages`). */}
+              {listing.held && <span>Paused while more are loaded.</span>}
               <Button
                 size="small"
                 variant="secondary"
