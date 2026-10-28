@@ -126,10 +126,12 @@ func planOf(t *testing.T, c *Company) *cliagent.Provider {
 // A RESUME WAITS ON THE CHAIN ITS FIRST CALL TAKES. A completion's first model
 // call is its reviewer's, and an answer's is the relaunch that carries its run
 // on, so a seat whose executor sits out a spent plan while its own reviewer
-// answers has a finished run to review and deliver: the gate admits its
-// completion at once, and holds an answer, whose relaunch would find every
-// runner sitting out, until the first is tried again. Spend the reviewer
-// instead and the two swap.
+// answers has a finished run to review and deliver: its completion is resumed
+// at once, and an answer, whose relaunch would find every runner sitting out,
+// is held at the gate until the first is tried again. Spend the reviewer
+// instead and the two swap. Each is asked where it is asked: an answer at the
+// turn gate, before its claim, and a completion once its job is collected
+// (collectedRefusal), the gate admitting it to be collected first.
 //
 // Mutation: ask the executor chain for both routes, and the completion of the
 // seat whose reviewer answers waits on its executor's limit.
@@ -150,10 +152,20 @@ func TestAResumeWaitsOnTheChainItsFirstCallTakes(t *testing.T) {
 			)
 			seat.LLM, seat.LLMReview = org.ProviderKeys{"plan"}, org.ProviderKeys{"review"}
 			e := launchReadyEngine(t, c)
-			for route, want := range map[sandbox.ResumeRoute]bool{
-				sandbox.ResumeCompletion: tc.completion, sandbox.ResumeAnswer: tc.answer,
-			} {
+			// THE ANSWER FIRST: a completion refused once collected parks the
+			// seat, and a park refuses every resume at the gate.
+			for _, route := range []sandbox.ResumeRoute{sandbox.ResumeAnswer, sandbox.ResumeCompletion} {
+				want := map[sandbox.ResumeRoute]bool{
+					sandbox.ResumeCompletion: tc.completion, sandbox.ResumeAnswer: tc.answer,
+				}[route]
 				refusal, refused := e.seatCannotRun(t.Context(), "swe", route)
+				if route == sandbox.ResumeCompletion {
+					if refused {
+						t.Errorf("a completion's gate on a seat with %s refused it before its "+
+							"collection: %+v", name, refusal)
+					}
+					refusal, refused = e.collectedRefusal(t.Context(), e.Company(), "swe")
+				}
 				if refused != want {
 					t.Errorf("a %s's resume on a seat with %s: refused = %v (%+v), want %v",
 						route, name, refused, refusal, want)

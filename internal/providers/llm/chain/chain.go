@@ -471,6 +471,38 @@ func Unready(ctx context.Context, members []llm.Provider) error {
 	return failures[0]
 }
 
+// KnownLimit is the limit a call through members would meet as far as they
+// already know without a call ([Unready]), read as [Limited] reads a call's
+// failure: every member refusing for a rate limit with an instant it is tried
+// again. False where any member may answer or cannot say, and where any refuses
+// for another reason, which no park waits out.
+//
+// THE LIMIT, NOT ONLY ITS INSTANT, because a caller with no call of its own to
+// fail parks on it: a coding run's completion, collected while its review's
+// chain sits out the plan its run spent, parks its seat on the same limit a
+// call through that chain would have met, keys, reset and sentence alike,
+// without a process being started to hear it.
+func KnownLimit(ctx context.Context, members []Member) (Limit, bool) {
+	if len(members) == 0 {
+		return Limit{}, false
+	}
+	keys := make([]string, 0, len(members))
+	failures := make([]error, 0, len(members))
+	for _, m := range members {
+		u, ok := m.Provider.(unready)
+		if !ok {
+			return Limit{}, false
+		}
+		err := u.Unready(ctx)
+		if err == nil {
+			return Limit{}, false
+		}
+		keys = append(keys, m.Key)
+		failures = append(failures, err)
+	}
+	return Limited(&Error{Attempted: keys, Failures: failures, Err: failures[len(failures)-1]})
+}
+
 // clearsAt ranks a failure by how soon it clears without anybody acting: a
 // spent plan first, then a login, then anything else.
 func clearsAt(err error) int {

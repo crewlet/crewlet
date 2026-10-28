@@ -129,7 +129,10 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// whose spec the apply left unchanged keeps its predecessor's
 		// sit-out ([carrySitOuts]), so a limit that still holds parks the
 		// seat again at the cost of one delivery and no process: the
-		// entry refuses before any CLI is started.
+		// entry refuses before any CLI is started. A seat whose mail its
+		// run holds is parked again by its run's completion, which the
+		// readmit below re-fires: collected again, and refused on the
+		// carried limit before its turn runs ([Engine.collectedRefusal]).
 		e.reconcileProviderParks(ctx, c)
 		// AND A RESUME WAITING ON ANY OF THEM: a published company is the
 		// event that brings a model, the one that moves a ceiling and the

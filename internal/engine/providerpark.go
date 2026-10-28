@@ -102,7 +102,13 @@ import (
 // and no process: the entry refuses before any CLI is started. The park is not
 // carried across instead, because whether the seat's chain is still the one
 // that refused is the new company's to say (its `llm`, the entries it names),
-// and its first turn is what asks.
+// and its first turn is what asks. A SEAT WHOSE MAIL ITS RUN HOLDS has no
+// delivery to come: the release re-fires its run's held completion
+// ([Engine.readmitResumes]), which is collected again and refused on the
+// carried limit before its turn runs, and that parks the seat again
+// ([Engine.collectedRefusal]), at the cost of one collection and no process.
+// Parked by nothing until then, it read released, left the probe, and its job
+// was collected and reviewed into the vendor's window once the sit-out ended.
 //
 // A RESUME THAT MEETS THE LIMIT PARKS ITS SEAT TOO ([Engine.parkResumeOnLimit]).
 // A seat's executor is its coding CLI's own run in a box, so the usual way a
@@ -116,12 +122,21 @@ import (
 // backend benched the entry until, an hour at a time. The resume parks the seat
 // as the dispatcher would, and its job waits for the park.
 //
+// SO DOES A COMPLETION WHOSE REVIEW'S MODELS ALREADY KNOW THE LIMIT, once its job
+// is collected ([Engine.collectedRefusal]): the entry one seat's run spent is
+// benched for every seat on it, and each of their completions is collected,
+// charged in its window and its box paused, then refused before its turn runs
+// and its seat parked, rather than refused at the turn gate before its claim,
+// uncollected, its box kept awake, its seat parked by nothing.
+//
 // A PARKED SEAT STARTS NO TURN, whatever road the turn comes by: its mail waits
 // on its inbox, and the turn gate refuses every resume on it until the park is
 // released ([Engine.providerParkRefusal]), whichever chain the resume's first
 // call would take. A probe that meets the limit again keeps it so; the
 // instant a completion's own refusal named passes under a park that still
-// stands.
+// stands. A completion it refuses before its claim is one already collected:
+// a parked seat holds no job no collection has read (see
+// [Engine.seatCannotRun]).
 //
 // A PARK OUTLIVES NO SEAT. A seat's release takes the seat out of this node's
 // hands, detaches its inbox, which drops every hold on it, and forgets its
@@ -310,20 +325,25 @@ func (e *Engine) unparkReleased(ctx context.Context, seat uuid.UUID, handle stri
 // the review of a run that spent its plan, or a relaunch whose every runner
 // member sits out. See the file's doc for why the resume parks the seat as a
 // dispatch does, and [Engine.providerParkRefusal] for what the park then holds.
-// Nothing for any other error, and nothing for a limit that names no instant,
-// which no probe could be armed for.
+// Nothing for any other error.
+func (e *Engine) parkResumeOnLimit(ctx context.Context, handle string, err error) {
+	if limit, limited := chain.Limited(err); limited {
+		e.parkOnLimit(ctx, handle, limit)
+	}
+}
+
+// parkOnLimit parks handle's seat on limit for a resume, which no delivery
+// carries: the limit its segment met ([Engine.parkResumeOnLimit]), or the one
+// its collected completion's review would meet ([Engine.collectedRefusal]).
+// Nothing for a limit that names no instant, which no probe could be armed for.
 //
 // THE PARK IS NO DELIVERY'S, so a hold it could not take is said and
 // otherwise left: the resume is reverted and waits on its refusal either way,
 // as it did before it parked anything.
-func (e *Engine) parkResumeOnLimit(ctx context.Context, handle string, err error) {
-	limit, limited := chain.Limited(err)
-	if !limited {
-		return
-	}
-	if _, _, parkErr := e.providerPark(ctx, handle, limit); parkErr != nil {
+func (e *Engine) parkOnLimit(ctx context.Context, handle string, limit chain.Limit) {
+	if _, _, err := e.providerPark(ctx, handle, limit); err != nil {
 		log.WarnContext(ctx, "seat_provider_park_not_taken", "seat", handle,
-			"providers", strings.Join(limit.Keys, ","), "error", parkErr.Error(),
+			"providers", strings.Join(limit.Keys, ","), "error", err.Error(),
 			"detail", "the resume met its models' limit and the seat could not be parked "+
 				"on it; the resume waits for the limit's instant instead")
 	}
@@ -590,14 +610,13 @@ func (e *Engine) probeModels(ctx context.Context, c *Company, handle string, key
 }
 
 // providerRefusing reports whether every model the first call of route's turn
-// on handle's seat could take is at a usage limit it already reported, the
-// reason naming them and when the first is tried again: the provider stage's
-// question ASKED WITHOUT PARKING, for a caller with no mail of its own to hold
-// (the turn gate a resume passes), which waits for the instant rather than
-// parks, as [Engine.budgetHold] answers for the budget. Asked of what the
-// entries already know ([chain.Unready]), so it launches nothing; a chain
-// whose entries know of no limit is not refusing, and the resume finds out by
-// running.
+// on handle's seat could take is at a usage limit it already reported, refusing
+// on [waitProvider] with the reason naming them and when the first is tried
+// again: the provider stage's question ASKED WITHOUT A DELIVERY, for a resume,
+// which has no mail of its own to hold, as [Engine.budgetHold] answers for the
+// budget. Asked of what the entries already know ([chain.Unready]), so it
+// launches nothing; a chain whose entries know of no limit is not refusing, and
+// the resume finds out by running.
 //
 // THE CHAIN OF THE ROUTE'S FIRST CALL ([firstCallMembers]), because the two
 // differ wherever the seat names a reviewer of its own: a seat whose executor
@@ -606,19 +625,26 @@ func (e *Engine) probeModels(ctx context.Context, c *Company, handle string, key
 // vendor's window, an hour at a time, with its mail behind it. A call the turn
 // makes later, a review's send-back to a spent runner, meets its own limit
 // mid-turn and waits there ([resumeRefusal]).
+//
+// AND THE CHAIN'S LIMIT, where every member sits one out with an instant it is
+// tried again ([chain.KnownLimit]): the limit a call through the chain would
+// have met, which a completion's collected resume parks its seat on
+// ([Engine.collectedRefusal]). No keys where a member refuses for another
+// reason, a login somebody has to mend, which no park waits out: the refusal
+// stands, until the instant the spent member is tried again.
 func (e *Engine) providerRefusing(ctx context.Context, c *Company, handle string,
 	route sandbox.ResumeRoute,
-) (string, time.Time, bool) {
+) (sandbox.Refusal, chain.Limit, bool) {
 	if c == nil || c.Models == nil || c.Org == nil {
-		return "", time.Time{}, false
+		return sandbox.Refusal{}, chain.Limit{}, false
 	}
 	role := c.Org.AgentSeatByHandle(handle)
 	if role == nil {
-		return "", time.Time{}, false
+		return sandbox.Refusal{}, chain.Limit{}, false
 	}
 	members, err := firstCallMembers(c, role, route)
 	if err != nil {
-		return "", time.Time{}, false
+		return sandbox.Refusal{}, chain.Limit{}, false
 	}
 	providers := make([]llm.Provider, 0, len(members))
 	keys := make([]string, 0, len(members))
@@ -628,9 +654,51 @@ func (e *Engine) providerRefusing(ctx context.Context, c *Company, handle string
 	}
 	retry, _, limited := llm.LimitedUntil(chain.Unready(ctx, providers))
 	if !limited || retry.IsZero() {
-		return "", time.Time{}, false
+		return sandbox.Refusal{}, chain.Limit{}, false
 	}
-	return limitReason(keys, retry), retry, true
+	limit, _ := chain.KnownLimit(ctx, members)
+	return sandbox.Refusal{Condition: waitProvider, Reason: limitReason(keys, retry), Until: retry},
+		limit, true
+}
+
+// collectedRefusal is what a coding run's completion is refused for once its
+// job is collected, and before its turn runs: a usage limit every model its
+// review could take already reported ([Engine.providerRefusing], for
+// [sandbox.ResumeCompletion]), on which the seat is parked at once, as the turn
+// that called through the chain would have parked it ([Engine.parkOnLimit]).
+// The coordinator holds the job on this node until the instant the refusal
+// names ([sandbox.Coordinator.OnCompleted]), and from then the seat's park
+// refuses it at the turn gate, before its claim, until the park's release.
+//
+// AFTER THE COLLECTION, AND NEVER AT THE GATE. The job is over and its tokens are
+// spent, so the claim collects it first: charged in the window it ran in, its
+// box paused and left asleep by the waiter from then on, its run on the
+// record as read back. Refused at the gate instead, before the claim, the
+// usual case was every seat on a shared plan: the plan is spent inside runs,
+// so every run on it ends on the vendor's limit, the first completion's resume
+// sits the entry out, and every later one whose review takes that entry was
+// refused there and left uncollected, uncharged, its box kept awake by the
+// waiter at every poll, for as long as the entry sat out: up to the hour the
+// backend benches it, and another hour each time a probe re-benched it. Its
+// seat was never parked either, so it read idle with no steady condition and
+// joined no probe, and an apply that released a park carrying the entry's
+// sit-out left the seat whose mail its run held parked by nothing.
+//
+// A SEAT A PERSON STOPPED is refused nothing here: its turn is closed as
+// stopped at its first round, before any model call, so no limit can refuse
+// it (see [Engine.seatCannotRun]).
+func (e *Engine) collectedRefusal(ctx context.Context, c *Company, handle string) (sandbox.Refusal, bool) {
+	if e.seatStopping(handle) {
+		return sandbox.Refusal{}, false
+	}
+	refusal, limit, limited := e.providerRefusing(ctx, c, handle, sandbox.ResumeCompletion)
+	if !limited {
+		return sandbox.Refusal{}, false
+	}
+	if len(limit.Keys) > 0 {
+		e.parkOnLimit(ctx, handle, limit)
+	}
+	return refusal, true
 }
 
 // firstCallMembers is the chain the first model call of route's turn on

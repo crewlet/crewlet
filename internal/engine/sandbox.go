@@ -984,6 +984,18 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// vendor's spent plan sits its entry out here, on the node whose launch
 	// the turn's next run is — see [Engine.noteRunEnded].
 	e.noteRunEnded(ctx, company, in.Run, in.Ended)
+	// A COMPLETION'S MODELS ARE ASKED HERE, its job collected and charged and
+	// its box asleep, and before anything of its turn runs: a limit its
+	// review's chain already knows refuses it, which the coordinator holds on
+	// this node, and parks its seat on that limit, a sit-out this very run's
+	// ending may just have started. A RETRY, like every early return below.
+	// An answer's were asked at its gate, before its claim, with nothing to
+	// collect. See [Engine.collectedRefusal].
+	if in.Asked == nil {
+		if refusal, refused := e.collectedRefusal(ctx, company, in.Turn.Handle()); refused {
+			return &sandbox.TurnRefused{Refusal: refusal}
+		}
+	}
 	input, tel, err := e.parkedTurnRunner(ctx, company, in)
 	if err != nil {
 		// A RETRY, like every early return here: nothing ran, and the
@@ -2497,20 +2509,31 @@ func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.R
 // BY ROUTE, because the first call differs, and so does what the resume has
 // to do before it makes it:
 //
-//   - a COMPLETION is asked no budget. Its job is over and its tokens are
-//     spent, so it is claimed and collected first: charged in the window it
-//     ran in and its box paused, and only then held on its row if the budget
-//     refuses its review or its relaunch ([Engine.heldByBudget],
-//     [sandbox.ErrResumeHeld]). Refused here, before its claim, a completion
-//     on a full window stayed uncollected until that window turned over: its
-//     spend was charged into the next window, and the waiter kept its box
-//     awake polling it for the rest of the day, week or month. Its models
+//   - a COMPLETION is asked no budget and no limit its models know. Its job
+//     is over and its tokens are spent, so it is claimed and collected first:
+//     charged in the window it ran in and its box paused, and only then held
+//     on its row if the budget refuses its review or its relaunch
+//     ([Engine.heldByBudget], [sandbox.ErrResumeHeld]), or on this node, its
+//     seat parked, if its review's models sit out a limit
+//     ([Engine.collectedRefusal]). Refused here, before its claim, a
+//     completion stayed uncollected until the condition cleared: its spend
+//     was charged late, into the next window, and the waiter kept its box
+//     awake polling it meanwhile, for the rest of a full window or the hour a
+//     limit's entry sits out, and a limited seat was never parked. Its models
 //     are the reviewer's chain, `llm_review` where the seat names one.
 //   - an ANSWER'S first call is the relaunch that carries the run on, and it
 //     has nothing to collect: its budget refuses on a window full or too
 //     short for that launch ([Engine.budgetHold]), which would refuse the
 //     launch as surely, and its models are the members of the executor chain
 //     a launch can take ([executorRunners]).
+//
+// THE PARK REFUSES BOTH, before the claim. A seat parked here holds no job no
+// collection has read: only a turn of the seat parks it, a delivery's, which
+// runs only while none of the seat's jobs holds it, or a resume's, which
+// collected its job before it parked, and a parked seat starts no turn that
+// could launch another. So a completion the park refuses is one already
+// collected, charged and asleep, and refused here it is not collected again at
+// each probe the limit outlasts.
 //
 // A call the turn makes later (a review's send-back to a spent runner, a
 // relaunch below the floor) meets its own refusal mid-turn, and the resume
@@ -2543,8 +2566,10 @@ func (e *Engine) seatCannotRun(ctx context.Context, handle string, route sandbox
 	if refusal, parked := e.providerParkRefusal(handle); parked {
 		return refusal, true
 	}
-	if reason, retry, limited := e.providerRefusing(ctx, c, handle, route); limited {
-		return sandbox.Refusal{Condition: waitProvider, Reason: reason, Until: retry}, true
+	if route == sandbox.ResumeAnswer {
+		if refusal, _, limited := e.providerRefusing(ctx, c, handle, route); limited {
+			return refusal, true
+		}
 	}
 	return sandbox.Refusal{}, false
 }

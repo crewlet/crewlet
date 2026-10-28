@@ -426,12 +426,15 @@ func (m knownLimit) Unready(context.Context) error {
 }
 
 // A RETRIED RESUME WAITS FOR A LIMIT THE MODELS ALREADY KNOW, until the first
-// is tried again, rather than running a turn to meet it: the turn gate's
-// provider condition, beside the budget's. A chain whose entries know of no
-// limit is not refused, and the resume finds out by running.
+// is tried again, rather than running a turn to meet it: the provider
+// condition an answer's gate and a completion's collected resume ask, beside
+// the budget's. A chain whose entries know of no limit is not refused, and the
+// resume finds out by running. The refusal carries the chain's limit, keys
+// and instant, which a completion's resume parks its seat on.
 //
 // Mutation: ask the chain nothing (answer not refusing), and the limited seat
-// is admitted.
+// is admitted; drop the limit from the answer, and nothing names what to park
+// on.
 func TestARetriedResumeWaitsForALimitItsModelsKnow(t *testing.T) {
 	t.Parallel()
 	retry := parkedAt.Add(14 * time.Minute)
@@ -452,12 +455,20 @@ func TestARetriedResumeWaitsForALimitItsModelsKnow(t *testing.T) {
 			}
 			c.Models = reg
 			r.e.epoch.current.Store(c)
-			reason, until, refused := r.e.providerRefusing(t.Context(), c, "lead", sandbox.ResumeCompletion)
+			refusal, limit, refused := r.e.providerRefusing(t.Context(), c, "lead", sandbox.ResumeCompletion)
 			if refused != tc.refused {
-				t.Fatalf("refused = %v (%q), want %v", refused, reason, tc.refused)
+				t.Fatalf("refused = %v (%q), want %v", refused, refusal.Reason, tc.refused)
 			}
-			if refused && (!until.Equal(retry) || !strings.Contains(reason, "default")) {
-				t.Errorf("refusal (%q) lifts at %v, want the entry's retry %v", reason, until, retry)
+			if !refused {
+				return
+			}
+			if refusal.Condition != waitProvider || !refusal.Until.Equal(retry) ||
+				!strings.Contains(refusal.Reason, "default") {
+				t.Errorf("refusal %+v, want one on %q lifting at the entry's retry %v",
+					refusal, waitProvider, retry)
+			}
+			if !slices.Equal(limit.Keys, []string{"default"}) || !limit.RetryAt.Equal(retry) {
+				t.Errorf("the chain's limit is %+v, want default's, tried again at %v", limit, retry)
 			}
 		})
 	}

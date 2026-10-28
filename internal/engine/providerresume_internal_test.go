@@ -13,6 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -28,15 +30,18 @@ import (
 // broker redelivered into the same limit 25 times in about ten minutes.
 
 // spentEntry is a model whose CLI already reported its usage limit, as
-// cliagent's entry knows it ([chain.Unready]), until the case lifts it.
+// cliagent's entry knows it ([chain.Unready]), until the case lifts it. calls
+// counts what reached it, which a limit its entry knows should keep out.
 type spentEntry struct {
 	limited atomic.Bool
 	retry   time.Time
+	calls   atomic.Int32
 }
 
 func (*spentEntry) Model() string { return "opus" }
 
 func (m *spentEntry) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
+	m.calls.Add(1)
 	if err := m.Unready(ctx); err != nil {
 		return nil, err
 	}
@@ -51,25 +56,32 @@ func (m *spentEntry) Unready(context.Context) error {
 		Err: errors.New("You've hit your 5-hour limit")}
 }
 
-// THE GATE REFUSES A RESUME WHOSE MODELS ARE AT A LIMIT THEY KNOW, before the
+// THE GATE REFUSES AN ANSWER WHOSE MODELS ARE AT A LIMIT THEY KNOW, before the
 // claim and with the instant they are tried again, and the control topic
-// acknowledges that refusal; a resume that met the limit mid-turn is refused
-// the same way, and a spent window as its own wait.
+// acknowledges that refusal. A COMPLETION it admits: its job is over, so it is
+// collected first, and its resume is refused the same way once it is
+// (collectedRefusal), which parks its seat on the limit. A resume that met the
+// limit mid-turn is refused the same way, and a spent window as its own wait.
 //
-// Mutation: drop the seat's conditions from admitResume and the limited seat
-// is admitted; drop the mapping from the resume's failure and a limit met
-// mid-turn is a plain error, which the control topic NAKs.
+// Mutation: drop the seat's conditions from admitResume and the limited answer
+// is admitted; ask a completion's gate the limit again (seatCannotRun) and it
+// is refused before its claim; drop the park from collectedRefusal and the
+// seat is not parked; drop the mapping from the resume's failure and a limit
+// met mid-turn is a plain error, which the control topic NAKs.
 func TestAResumeAtItsModelsLimitIsAWaitNotAFailure(t *testing.T) {
 	t.Parallel()
 	r := newDrainRig(t)
 	e := r.start(t)
-	retry := time.Now().Add(14 * time.Minute).UTC().Truncate(time.Second)
-	entry := &spentEntry{retry: retry}
-	entry.limited.Store(true)
-	withModels(t, e, entry)
+	e.providerParks.after = (&fakeAlarms{}).after
+	spent := cliProvider(t, chainMember{key: "default", agent: "claude-code", model: "opus", spent: true})
+	retry, _, limited := llm.LimitedUntil(spent.SittingOut())
+	if !limited {
+		t.Fatalf("the premise: the spent entry sits out nothing (%v)", spent.SittingOut())
+	}
+	withLaunchModels(t, e, spent)
 	turns := e.node.InFlightTurns()
 
-	_, release, err := e.admitResume(t.Context(), "swe", sandbox.ResumeCompletion)
+	_, release, err := e.admitResume(t.Context(), "swe", sandbox.ResumeAnswer)
 	if err == nil {
 		// Admitted: the slot is given back before the case fails, so the
 		// engine's stop does not wait on it.
@@ -77,18 +89,26 @@ func TestAResumeAtItsModelsLimitIsAWaitNotAFailure(t *testing.T) {
 	}
 	var refused *sandbox.TurnRefused
 	if !errors.As(err, &refused) || refused.Condition != waitProvider || !refused.Until.Equal(retry) {
-		t.Fatalf("admitResume on a limited seat = %v, want a refusal waiting on %q until %v",
-			err, waitProvider, retry)
+		t.Fatalf("admitResume of an answer on a limited seat = %v, want a refusal waiting on "+
+			"%q until %v", err, waitProvider, retry)
 	}
 	if got := e.node.InFlightTurns(); got != turns {
 		t.Errorf("a refused resume kept the node's admission: %d turns in flight, want %d", got, turns)
 	}
 	if got := controlOutcome(err).Outcome; got != queue.OutcomeAck {
-		t.Errorf("the control topic hands a limited completion back as %s, want ack", got)
+		t.Errorf("the control topic hands a limited resume back as %s, want ack", got)
 	}
 
+	// A COMPLETION IS ADMITTED, to be collected before its limit is asked.
+	_, release, err = e.admitResume(t.Context(), "swe", sandbox.ResumeCompletion)
+	if err != nil {
+		t.Fatalf("admitResume of a completion on a limited seat = %v, want it admitted to be "+
+			"collected first", err)
+	}
+	release()
+
 	limitedChain := &chain.Error{Attempted: []string{"default"},
-		Failures: []error{entry.Unready(t.Context())}, Err: entry.Unready(t.Context())}
+		Failures: []error{spent.SittingOut()}, Err: spent.SittingOut()}
 	if refusal, ok := resumeRefusal(limitedChain); !ok ||
 		refusal.Condition != waitProvider || !refusal.Until.Equal(retry) {
 		t.Errorf("a resume that met the limit = %+v (%v), want it waiting on %q until %v",
@@ -104,89 +124,156 @@ func TestAResumeAtItsModelsLimitIsAWaitNotAFailure(t *testing.T) {
 		t.Error("a failure that is not a wait was read as one")
 	}
 
-	entry.limited.Store(false)
-	if _, release, err := e.admitResume(t.Context(), "swe", sandbox.ResumeCompletion); err != nil {
-		t.Fatalf("admitResume once the limit lifted: %v", err)
-	} else {
-		release()
+	// AND ONCE COLLECTED, the completion's resume is refused on the limit its
+	// review's chain knows, and its seat parked on it.
+	refusal, ok := e.collectedRefusal(t.Context(), e.Company(), "swe")
+	if !ok || refusal.Condition != waitProvider || !refusal.Until.Equal(retry) {
+		t.Fatalf("collectedRefusal = %+v (%v), want a refusal waiting on %q until %v",
+			refusal, ok, waitProvider, retry)
+	}
+	if e.providerParks.parking(seatIn(t, e, "swe")) == nil {
+		t.Error("a collected completion refused on its models' limit left its seat unparked")
 	}
 }
 
-// A COMPLETION THAT ARRIVES DURING A LIMIT IS NEVER HANDED BACK, AND RESUMES
-// ONCE WHEN IT LIFTS.
+// A COMPLETION THAT ARRIVES DURING A LIMIT ITS MODELS KNOW IS COLLECTED ONCE,
+// PARKS ITS SEAT, IS NEVER HANDED BACK, AND RESUMES ONCE WHEN IT LIFTS.
 //
-// Every announcement the waiter makes while the limit holds is refused at the
-// gate and acknowledged: none comes back from the broker, the control topic is
-// never quiesced, and the run stays unclaimed with its box uncollected. When
-// the limit lifts, the signal the provider park's release sends re-fires the
-// kept completion, and the run is collected once.
+// The seat's review's chain is an entry that already knows its limit, as every
+// seat's on a shared plan does once the first run that spent it is collected.
+// The completion is admitted and collected all the same: its job is over, so
+// its tokens are charged in the window it ran in and its box is paused. Its
+// resume is then refused on the limit before its turn runs, held on this node,
+// and the seat is parked on the limit (`seat_provider_parked`, the chain's
+// probe). An announcement meanwhile is refused before the gate and the claim
+// and acknowledged, never handed back to the broker, and the waiter leaves the
+// box asleep. When the probe finds the model answering, the park's release
+// re-fires the job, which is collected again and resumed, once.
 //
-// Mutation: NAK a refusal in controlOutcome and the broker hands the refused
-// completions back after the waiter has stopped announcing them.
+// Mutation: refuse the completion at the gate for its known limit again
+// (seatCannotRun), and it is never collected while the limit holds; ask it
+// nothing once collected (resumeTurn), and its turn runs into the limit; drop
+// the park from collectedRefusal, and nothing is published or probed; NAK a
+// refusal in controlOutcome, and the held announcement is handed back.
 func TestACompletionDuringALimitIsNeverHandedBackAndResumesOnce(t *testing.T) {
 	t.Parallel()
 	r := newDrainRig(t)
-	var refusals atomic.Int32
+	var admitted atomic.Int32
 	r.gate = func(next sandbox.TurnGate) sandbox.TurnGate {
 		return func(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
 			ctx, release, err := next(ctx, handle, route)
-			var refused *sandbox.TurnRefused
-			if errors.As(err, &refused) && refused.Condition == waitProvider {
-				refusals.Add(1)
+			if err == nil {
+				admitted.Add(1)
 			}
 			return ctx, release, err
 		}
 	}
 	e := r.start(t)
-	entry := &spentEntry{retry: time.Now().Add(time.Hour)}
+	alarms := &fakeAlarms{}
+	e.providerParks.after = alarms.after
+	entry := &spentEntry{retry: time.Now().Add(time.Hour).UTC().Truncate(time.Second)}
 	entry.limited.Store(true)
 	withModels(t, e, entry)
-	var announced atomic.Int32
+	var mu sync.Mutex
+	var parks []types.SeatProviderParked
 	e.backends.Queue.AddPublishListener(func(_ context.Context, _ string, ev *events.Event) {
-		if ev.Type == (types.SandboxRunCompleted{}).EventType() {
-			announced.Add(1)
+		if parked, ok := events.DataAs[*types.SeatProviderParked](ev); ok && parked != nil {
+			mu.Lock()
+			parks = append(parks, *parked)
+			mu.Unlock()
 		}
 	})
-	r.seedRun(t, e, "t1")
-	handlers := e.backends.Queue.InFlightCount()
-
-	r.runner.Finish(sandbox.Result{Success: true, Text: "fixed the flaky test"})
-	eventually(t, "the waiter's completions to be refused for the limit", func() bool {
-		return refusals.Load() >= 2
-	})
-	stopWaiters(e)
-	eventually(t, "the refused completions' handlers to return", func() bool {
-		return e.backends.Queue.InFlightCount() == handlers
-	})
-	settled, sent := refusals.Load(), announced.Load()
-	if settled > sent {
-		t.Fatalf("%d refusals for %d announcements: the broker handed refused completions back",
-			settled, sent)
+	published := func() []types.SeatProviderParked {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(parks)
 	}
-	// THE BROKER'S FAILURE BACKOFF IS A SECOND, doubling: a NAKed
-	// completion would be back well inside this, with nothing announcing it.
-	time.Sleep(2500 * time.Millisecond)
-	if got := refusals.Load(); got != settled {
-		t.Fatalf("refusals rose from %d to %d after the waiter stopped: a refused completion "+
-			"was handed back", settled, got)
+	agentID, _ := org.DeriveAgentID("Nimbus", "swe")
+	scope := coord.AgentScope(agentID.String())
+	r.seedRun(t, e, "t1")
+	box := r.provider.Box(r.boxID)
+
+	r.runner.Finish(sandbox.Result{Success: true, Text: "fixed the flaky test",
+		InputTokens: 70, OutputTokens: 30})
+	eventually(t, "the seat to be parked on the limit its review's models know", func() bool {
+		return len(published()) > 0
+	})
+	eventually(t, "the collected job to be given back to running", func() bool {
+		run := r.run(t, e, "t1")
+		return run.Status == sandbox.StatusRunning && run.Launch.Collected
+	})
+	if got := published(); got[0].AgentHandle != "swe" ||
+		!slices.Equal(got[0].ProviderKeys, []string{"default"}) || !got[0].RetryAt.Equal(entry.retry) {
+		t.Fatalf("published %+v, want the swe seat parked on default until %v", got, entry.retry)
+	}
+	if e.providerParks.parking(seatIn(t, e, "swe")) == nil || len(alarms.live()) != 1 {
+		t.Fatalf("the seat is parked %v with %d probe alarms, want it parked and probed",
+			e.providerParks.parking(seatIn(t, e, "swe")) != nil, len(alarms.live()))
+	}
+	if n := r.collected.Load(); n != 1 {
+		t.Fatalf("the box was collected %d times, want once", n)
+	}
+	used, err := e.backends.Fleet.Used(t.Context(), scope, coord.WindowsAt(time.Now(), time.UTC))
+	if err != nil {
+		t.Fatalf("Used: %v", err)
+	}
+	if got := used.In(period.Day).Used; got != 100 {
+		t.Fatalf("the seat's day holds %d tokens, want the run's 100, charged as it was collected", got)
+	}
+	if !box.Paused() {
+		t.Fatal("the collected box was not paused")
+	}
+	if n := entry.calls.Load(); n != 0 {
+		t.Fatalf("the model was asked %d times, want none: the resumed turn ran into a limit "+
+			"its entry already knew", n)
+	}
+
+	// HELD HERE: the waiter's polls leave the box asleep and collect nothing,
+	// and an announcement is refused before the gate and acknowledged.
+	keepalives, settled := box.Keepalives(), admitted.Load()
+	time.Sleep(time.Second)
+	if n := r.collected.Load(); n != 1 || !box.Paused() || box.Keepalives() != keepalives {
+		t.Errorf("while held the box was collected %d times, paused %v and kept alive %d more "+
+			"times, want it collected once and left asleep", n, box.Paused(), box.Keepalives()-keepalives)
+	}
+	run := r.run(t, e, "t1")
+	payload := types.SandboxRunCompleted{Agent: run.AgentID, AgentHandle: run.AgentHandle,
+		RoleName: run.Role, TurnID: run.TurnID, WorkKey: run.WorkKey, LaunchID: run.LaunchID,
+		SandboxID: run.SandboxID, CodingAgent: run.CodingAgent}
+	err = e.sandbox.Load().coordinator.OnCompleted(t.Context(), payload,
+		events.New(payload, events.TraceContext{}))
+	var refused *sandbox.TurnRefused
+	if !errors.As(err, &refused) || refused.Condition != waitProvider {
+		t.Fatalf("an announcement of the held job = %v, want the limit's refusal", err)
+	}
+	if got := controlOutcome(err).Outcome; got != queue.OutcomeAck {
+		t.Fatalf("the control topic hands the held job back as %s, want ack", got)
+	}
+	if got := admitted.Load(); got != settled {
+		t.Fatalf("%d resumes admitted while the job was held, want none", got-settled)
 	}
 	if deferred(t, e) {
 		t.Fatal("a completion refused for a limit quiesced the seat's control topic")
 	}
-	if got := r.run(t, e, "t1"); got.Status != sandbox.StatusRunning || got.Collected {
-		t.Fatalf("run = %q (collected %v) while the limit held, want it unclaimed", got.Status, got.Collected)
-	}
 
+	// THE LIMIT LIFTS: the probe finds the model answering, and the park's
+	// release re-fires the job, which is collected again to be resumed, once.
+	// The waiters are stopped first, so nothing but that signal brings the job
+	// back, and every admission counted is the release's.
+	stopWaiters(e)
+	settled = admitted.Load()
 	entry.limited.Store(false)
-	e.readmitResumes(waitProvider)
-	eventually(t, "the run to be collected once the limit lifted", func() bool {
-		return r.collected.Load() > 0
-	})
-	eventually(t, "the run to leave running", func() bool {
+	alarms.live()[0].fire()
+	eventually(t, "the run to leave running once the limit lifted", func() bool {
 		return r.run(t, e, "t1").Status != sandbox.StatusRunning
 	})
-	if got := r.collected.Load(); got != 1 {
-		t.Fatalf("the run was collected %d times, want once", got)
+	time.Sleep(500 * time.Millisecond)
+	if got := admitted.Load() - settled; got != 1 {
+		t.Fatalf("the held job was admitted %d times once the limit lifted, want once", got)
+	}
+	if n := r.collected.Load(); n != 2 {
+		t.Fatalf("the box was collected %d times, want once while the limit held and once "+
+			"to resume", n)
 	}
 }
 
@@ -406,15 +493,13 @@ func TestACompletionAtALimitWaitsForItsParkNotItsInstant(t *testing.T) {
 }
 
 // A PUBLISHED COMPANY BUILDS EVERY ENTRY AFRESH, so a completion kept for a
-// limit is re-checked under it at once rather than at the waiter's next poll:
-// one its resume met, whose park the new models release, and one the gate
-// refused before its claim for a limit its entry knew, which the company's own
-// signal re-fires.
+// limit is re-checked under it at once rather than at the waiter's next poll or
+// the park's probe: one its resume met mid-turn, and one whose collected
+// resume met a limit its entry already knew. Each parked its seat, and the new
+// models release the park and re-fire the job.
 //
 // Mutation: drop the release of a park whose models changed from the converge
-// (reconcileProviderParks), and the parked seat's completion waits for a probe;
-// drop the provider readmit from the converge, and the gate's kept completion
-// waits for a poll that never comes.
+// (reconcileProviderParks), and each parked seat's completion waits for a probe.
 func TestAPublishedCompanyResumesACompletionKeptForALimit(t *testing.T) {
 	t.Parallel()
 	t.Run("met by its resume", func(t *testing.T) {
@@ -425,47 +510,113 @@ func TestAPublishedCompanyResumesACompletionKeptForALimit(t *testing.T) {
 			lr.e.followCompany(t.Context(), lr.e.Company())
 		})
 	})
-	t.Run("refused at the gate", func(t *testing.T) {
+	t.Run("known once collected", func(t *testing.T) {
 		t.Parallel()
 		r := newDrainRig(t)
-		var admitted, refusals atomic.Int32
+		var admitted atomic.Int32
 		r.gate = func(next sandbox.TurnGate) sandbox.TurnGate {
 			return func(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
 				ctx, release, err := next(ctx, handle, route)
-				var refused *sandbox.TurnRefused
-				switch {
-				case err == nil:
+				if err == nil {
 					admitted.Add(1)
-				case errors.As(err, &refused) && refused.Condition == waitProvider:
-					refusals.Add(1)
 				}
 				return ctx, release, err
 			}
 		}
 		e := r.start(t)
+		e.providerParks.after = (&fakeAlarms{}).after
 		entry := &spentEntry{retry: time.Now().Add(time.Hour)}
 		entry.limited.Store(true)
 		withModels(t, e, entry)
 		r.seedRun(t, e, "t1")
 		r.runner.Finish(sandbox.Result{Success: true, Text: "fixed the flaky test"})
-		eventually(t, "the completion to be refused at the gate for the limit", func() bool {
-			return refusals.Load() > 0
+		eventually(t, "the collected completion to park its seat on the limit", func() bool {
+			return e.providerParks.parking(seatIn(t, e, "swe")) != nil
+		})
+		eventually(t, "the collected job to be given back to running", func() bool {
+			run := r.run(t, e, "t1")
+			return run.Status == sandbox.StatusRunning && run.Launch.Collected
 		})
 		stopWaiters(e)
 		time.Sleep(time.Second)
-		if got := admitted.Load(); got != 0 {
-			t.Fatalf("%d resumes admitted while the entry knew its limit", got)
-		}
+		settled := admitted.Load()
 
 		withModels(t, e, answers{})
 		e.followCompany(t.Context(), e.Company())
 		eventually(t, "the kept completion to resume under the published company", func() bool {
 			return r.run(t, e, "t1").Status != sandbox.StatusRunning
 		})
-		if got := admitted.Load(); got != 1 {
+		if got := admitted.Load() - settled; got != 1 {
 			t.Fatalf("the kept completion was admitted %d times under the new company, want once", got)
 		}
 	})
+}
+
+// countedLimit is a [knownLimit] that counts the calls that reached it, none of
+// which should: its entry already knows its limit.
+type countedLimit struct {
+	knownLimit
+	calls atomic.Int32
+}
+
+func (m *countedLimit) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	m.calls.Add(1)
+	return m.knownLimit.Complete(ctx, req)
+}
+
+// AN APPLY THAT CARRIES ITS ENTRY'S SIT-OUT PARKS A SEAT WHOSE MAIL ITS RUN HOLDS
+// AGAIN AT ONCE. The seat's resume met the limit mid-turn and parked it, and its
+// node holds the job. A published company releases every park decided under the
+// models it replaces and re-fires the job; its entry, left unchanged by the
+// apply, keeps the sit-out its predecessor was serving (carrySitOuts), so the job
+// is collected again and its resume refused on that limit before its turn runs,
+// and the seat is parked on it once more, its probe armed: no review, no model
+// call, and no job collected and reviewed into the vendor's window once the
+// sit-out ends. Before, nothing parked such a seat again (the redelivery that
+// re-parks a dispatched seat never comes to one whose mail its run holds): it
+// read released, left the probe, and its job was reviewed into the window when
+// the sit-out ended.
+//
+// Mutation: drop the park from collectedRefusal, and the seat stays released
+// after the apply.
+func TestAnApplyThatCarriesTheSitOutParksTheSeatAgain(t *testing.T) {
+	t.Parallel()
+	lr := newLimitedResume(t, time.Hour)
+	swe := seatIn(t, lr.e, "swe")
+	if lr.e.providerParks.parking(swe) == nil {
+		t.Fatal("the premise: the resume parked the seat")
+	}
+
+	// THE APPLY: an entry that knows its limit stands for the one the apply
+	// carried the sit-out to.
+	carried := &countedLimit{knownLimit: knownLimit{
+		retry: time.Now().Add(time.Hour).UTC().Truncate(time.Second)}}
+	withModels(t, lr.e, carried)
+	lr.e.followCompany(t.Context(), lr.e.Company())
+	eventually(t, "the seat to be parked again on the carried limit", func() bool {
+		parks := lr.parks()
+		return len(parks) == 2 && parks[1].RetryAt.Equal(carried.retry)
+	})
+	if parking := lr.e.providerParks.parking(swe); parking == nil ||
+		parking.basis.models != lr.e.Company().Models {
+		t.Fatal("the seat is not parked under the published company's models")
+	}
+	if live := lr.alarms.live(); len(live) != 1 {
+		t.Fatalf("%d probe alarms armed, want the new park's", len(live))
+	}
+	eventually(t, "the job to be held collected", func() bool {
+		run := lr.r.run(t, lr.e, "t1")
+		return run.Status == sandbox.StatusRunning && run.Launch.Collected
+	})
+	time.Sleep(500 * time.Millisecond)
+	if got := carried.calls.Load(); got != 0 {
+		t.Errorf("the published company's model was asked %d times, want none: the review "+
+			"ran into the carried limit", got)
+	}
+	if got := lr.admitted.Load() - lr.settled; got != 1 {
+		t.Errorf("the job was admitted %d times after the apply, want once: the collection "+
+			"that found the carried limit", got)
+	}
 }
 
 // A PERSON WHO STOPS A SEAT WHOSE FINISHED RUN WAITS FOR A LIMIT STOPS IT NOW.

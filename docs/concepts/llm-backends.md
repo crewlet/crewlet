@@ -742,7 +742,11 @@ because nothing says that failure lasts. An apply that changes the company's
 models releases every park at once, so the redelivery asks the new entries; an
 entry whose specification the apply left unchanged keeps its sit-out (below)
 and refuses before any CLI starts, so a limit that still holds parks the seat
-again at the cost of one delivery and no process.
+again at the cost of one delivery and no process. A seat whose mail its coding
+run holds has no delivery to come: the release re-fires the run's held
+completion instead, which is collected again and refused on the carried limit
+before its turn runs, and that parks the seat again at the cost of one
+collection and no process.
 A coding run's completion, or a person's answer to one, that arrives while the
 models its first call would take are at a limit they reported waits for it
 rather than resuming into it, and resumes once the park lifts or the first
@@ -750,15 +754,24 @@ entry is tried again. Those are the reviewer's chain for a completion, whose
 first call is its review (`llm_review`, else `llm`), and the members a launch
 can take for an answer, whose first call is the relaunch that carries the run
 on: a seat whose executor sits out while its reviewer answers has its
-finished run reviewed and delivered at once. **A resumed segment that meets the
-limit itself parks the seat**, as a dispatch's turn does: a review whose chain
-is spent, or a send-back or an answer whose relaunch finds every runner member
-sitting out, which is how a plan spent inside a coding run is usually met. And
-**a parked seat runs no resume** until its park is released, whichever chain
-the resume's first call would take: a completion its review sent back to
-spent runners waits for the probe that finds them answering, rather than being
-reviewed again, and its box launched again, every time the backend's hour-long
-sit-out of the entry ends inside a longer vendor window.
+finished run reviewed and delivered at once. **A completion is collected
+before it is refused**: its job is over, so its tokens are charged in the
+window it ran in and its box is paused, and a limit its reviewer's chain
+already knows then refuses its resume before its turn runs, holds it on the
+node that collected it, and parks the seat on that limit, as the review's call
+would have: a plan spent inside one seat's run benches the entry for every seat
+on it, and each of their completions is collected, charged and parked rather
+than left uncollected, its box kept awake, for as long as the entry sat out.
+An answer has nothing to collect and waits at the admission. **A resumed
+segment that meets the limit itself parks the seat**, as a dispatch's turn
+does: a review whose chain is spent, or a send-back or an answer whose relaunch
+finds every runner member sitting out, which is how a plan spent inside a
+coding run is usually met. And **a parked seat runs no resume** until its park
+is released, whichever chain the resume's first call would take: a completion
+its review sent back to spent runners waits for the probe that finds them
+answering, rather than being collected and reviewed again, and its box
+launched again, every time the backend's hour-long sit-out of the entry ends
+inside a longer vendor window.
 
 The sit-out is the entry's own, on the node that heard the sentence: every other
 node learns the same thing from its own calls, once per window. A later sit-out

@@ -194,12 +194,14 @@ type refusedCompletion struct {
 //
 // # Why one refused after its claim is also held here
 //
-// The gate admitted it, and would admit its next announcement too: a review on
-// a ready member of the seat's reviewer chain that sent the run back to
-// runners every one of which sits out met the limit a round in, at its
-// relaunch. Asked again, the gate says the same, and every announcement of the
-// job collected its box and ran the review again into the same refusal, for
-// as long as the limit lasted. So such a completion is kept held (held, and
+// The gate admitted it, and would admit its next announcement too: a
+// completion's gate asks no limit its models know, since its job is collected
+// first and its resume refused once it is (the engine's), and a review on a
+// ready member of the seat's reviewer chain that sent the run back to runners
+// every one of which sits out met the limit a round in, at its relaunch. Asked
+// again, the gate says the same, and every announcement of the job collected
+// its box and ran the review again into the same refusal, for as long as the
+// limit lasted. So such a completion is kept held (held, and
 // the refusal's Until is the instant): its announcements are refused HERE,
 // before the gate and the claim ([Coordinator.stillRefused]), until that
 // instant, and the signal that ends the wait re-fires it as it does any kept
