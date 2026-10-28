@@ -1257,14 +1257,14 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
  * pair is what says whether a heavy prompt is heavy because of what was
  * prefetched or in spite of it.
  *
- * EVERY TERM OF THE APPROXIMATION GETS A COLUMN, so the total is a figure the
- * row can be checked against rather than one to be taken on trust. Tools is
- * usually the largest of them and was the one the engine did not measure at
- * all: a turn reporting ~6,900 tokens here had been billed 205,000. Messages
- * is zero on every phase that opens its own conversation and is what a RESUMED
- * one — a detached coding run collected later — sends instead of a system and
- * user pair, so leaving it out would leave that row's approximation with no
- * visible source.
+ * EVERY TERM OF THE APPROXIMATION GETS A COLUMN — System, User and Tools, the
+ * three `PromptSize` measures — so the total is a figure the row can be
+ * checked against rather than one to be taken on trust. Tools is usually the
+ * largest of them and was the one the engine did not measure at all: a turn
+ * reporting ~6,900 tokens here had been billed 205,000. Every row is a phase
+ * opening a conversation of its own: an executor's is the system prompt and
+ * the brief its run is launched with, and the run's collection, which opens
+ * none, measures nothing.
  *
  * The tool COUNT is the hover rather than a column of its own: forty
  * definitions and four at the same byte count are different problems, but the

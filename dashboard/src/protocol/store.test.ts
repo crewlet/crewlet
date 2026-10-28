@@ -516,19 +516,20 @@ describe("a live call's heavy fields", () => {
     expect(stale).toEqual(["a-pm"]);
   });
 
-  // A CALL BUILT AGAIN UNDER ITS OWN KEY IS NEWER IN EVERY FIELD. A suspended
-  // Execute phase's checkpoint clears its call, and its resumed rounds stream
-  // under the same turn, phase and iteration; a tab that missed the push
-  // clearing it and the first push after holds the call from before the
-  // suspension. The engine never hands a version out twice, so the next push
-  // names versions past every one the tab holds: a field it carries is taken,
-  // and one it leaves out says the tab is behind, and is fetched whole. Counted
-  // per call, the resumed versions were below the held ones, and the tab kept
-  // the old call and asked for nothing — the engine's half of that is
+  // A CALL BUILT AGAIN UNDER ITS OWN KEY IS NEWER IN EVERY FIELD. A parked
+  // turn's resume that runs again — held for its seat's budget, or retried —
+  // opens its review again under the turn, phase and iteration the attempt
+  // before it used, whose completion cleared the call; a tab that missed the
+  // push clearing it and the first push after holds the earlier attempt's
+  // call. The engine never hands a version out twice, so the next push names
+  // versions past every one the tab holds: a field it carries is taken, and one
+  // it leaves out says the tab is behind, and is fetched whole. Counted per
+  // call, the later attempt's versions were below the held ones, and the tab
+  // kept the old call and asked for nothing — the engine's half of that is
   // livestate's TestACallBuiltAgainUnderItsKeyIsNewerThanTheOneBefore.
   //
   // Mutation: stop reporting a field left out at a newer version, and the
-  // prompt from before the suspension stays on screen.
+  // earlier attempt's prompt stays on screen.
   test("takes a call built again under its key, after missing its clearing", () => {
     const store = seated();
     store.applyAgents([
@@ -537,7 +538,7 @@ describe("a live call's heavy fields", () => {
         { ...prompt, ...narration(3), response: "old" },
       ),
     ]);
-    // The clearing push and the resumed call's first push were dropped.
+    // The clearing push and the later attempt's first push were dropped.
     const stale = store.applyAgents([
       pushed({ prompt: 9, response: 11, narration: 11 }, { ...narration(1), response: "new" }),
     ]);
@@ -546,19 +547,19 @@ describe("a live call's heavy fields", () => {
     expect(call?.round_narration).toHaveLength(1);
     expect(stale).toEqual(["a-pm"]);
 
-    const resumed = { prompt: "resume it", prompt_messages: [{ role: "system", content: "lead" }] };
+    const again = { prompt: "judge it", prompt_messages: [{ role: "system", content: "lead" }] };
     store.applyLiveCall({
       agent_id: "a-pm",
       handle: "pm",
       live_call:
         pushed(
           { prompt: 9, response: 11, narration: 11 },
-          { ...resumed, ...narration(1), response: "new" },
+          { ...again, ...narration(1), response: "new" },
         ).live_call ?? null,
       live_call_seq: 0,
     });
     call = store.state.agents[0]?.live_call;
-    expect(call?.prompt).toBe("resume it");
+    expect(call?.prompt).toBe("judge it");
     expect(call?.versions).toMatchObject({ prompt: 9, response: 11, narration: 11 });
   });
 

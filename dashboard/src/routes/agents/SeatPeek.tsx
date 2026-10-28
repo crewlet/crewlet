@@ -169,7 +169,7 @@ export function turnOrdinal(
   return newest.ordinal + 1;
 }
 
-/** "Turn 2 · round 7 of 25 · coding run in progress". */
+/** "Turn 2 · round 2 of 4", "Turn 2 · coding run in progress". */
 function turnFacts(
   turn: LiveTurn | null | undefined,
   call: LiveCall | null | undefined,
