@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -56,6 +57,11 @@ type drainRig struct {
 	// gate, when set, wraps the gate each engine on the rig resumes through
 	// ([Options.resumeGate]).
 	gate func(sandbox.TurnGate) sandbox.TurnGate
+
+	// doc, when set, is the company each engine on the rig boots with, in
+	// place of companyWithoutSandboxDoc: its swe seat is the one the rig's
+	// runs are on.
+	doc string
 }
 
 func newDrainRig(t *testing.T) *drainRig {
@@ -85,7 +91,7 @@ func (r *drainRig) start(t *testing.T) *Engine {
 	t.Helper()
 	b := r.b
 	e, err := New(t.Context(), Options{
-		Bootstrap: &b, Company: parseCompany(t, companyWithoutSandboxDoc),
+		Bootstrap: &b, Company: parseCompany(t, cmp.Or(r.doc, companyWithoutSandboxDoc)),
 		SandboxPollInterval: 50 * time.Millisecond,
 		resumeGate:          r.gate,
 	})

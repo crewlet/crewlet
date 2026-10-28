@@ -449,7 +449,7 @@ func (e *Engine) probeModels(ctx context.Context, c *Company, handle string, key
 // reason naming them and when the first is tried again: the provider stage's
 // question ASKED WITHOUT PARKING, for a caller with no mail of its own to hold
 // (the turn gate a resume passes), which waits for the instant rather than
-// parks, as [Engine.budgetRefusing] answers for the budget. Asked of what the
+// parks, as [Engine.budgetHold] answers for the budget. Asked of what the
 // entries already know ([chain.Unready]), so it launches nothing; a chain
 // whose entries know of no limit is not refusing, and the resume finds out by
 // running.

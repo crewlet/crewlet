@@ -167,50 +167,32 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 	return reason, true, nil
 }
 
-// budgetRefusing is the budget stage's first question ASKED WITHOUT PARKING:
-// whether one of a seat's capped windows is refusing outright, as the refusal
-// that lifts when that window turns over. For a caller that is not a delivery
-// (the turn gate every resume passes, [Engine.seatCannotRun]) and so has no
-// mail of its own to hold: it waits for the window's end rather than parks, and
-// a delivery that arrives meanwhile takes the park itself. An unreadable
-// counter is not a refusal, for the reason [Engine.budgetPark] gives.
+// budgetHold is what a seat's budget holds a resumed turn back for: a capped
+// window refusing outright, or one leaving less room than an executor launch
+// needs ([meter.starved]) — the two conditions the budget stage parks a seat's
+// mail on — as a refusal that lifts when that window turns over. False where
+// neither holds, and where the counters cannot be read, for the reason
+// [Engine.budgetPark] gives.
 //
-// A FULL WINDOW ONLY, and not one merely too short for a launch, which
-// [Engine.budgetHold] asks as well: the gate asks this of a completion, whose
-// first model call is its reviewer's, which a window below the launch floor
-// can still pay for. The floor refuses a launch, and a review that sends its
-// run back is held at that relaunch ([Engine.heldByBudget]).
-func (e *Engine) budgetRefusing(ctx context.Context, c *Company, handle string) (sandbox.Refusal, bool) {
+// FOR A RESUME THAT WILL LAUNCH, which has no mail to park, and so waits for
+// the window's end rather than parks; a delivery that arrives meanwhile takes
+// the park itself. The turn gate asks it of every attempt at a recorded
+// answer's resume ([Engine.seatCannotRun]) — an answer always relaunches its
+// executor, so a starved window refuses it as surely as a full one — and a
+// collected job's resume that its review or relaunch was refused for is held
+// on it ([sandbox.ErrResumeHeld]). A completion's gate asks it nothing: the
+// job is collected and charged first.
+func (e *Engine) budgetHold(ctx context.Context, c *Company, handle string) (sandbox.Refusal, bool) {
 	m := e.meterFor(c, handle)
 	if m == nil || !m.basis.capped() {
 		return sandbox.Refusal{}, false
 	}
 	r, refusing, err := m.refusing(ctx)
-	if err != nil || !refusing {
+	if err != nil {
 		return sandbox.Refusal{}, false
 	}
-	return sandbox.Refusal{Condition: waitBudget, Reason: refusingReason(r), Until: r.Window.End}, true
-}
-
-// budgetHold is what a seat's budget holds a resumed turn back for: a capped
-// window refusing outright ([Engine.budgetRefusing]), or one leaving less room
-// than an executor launch needs ([meter.starved]) — the two conditions the
-// budget stage parks a seat's mail on — as a refusal that lifts when that
-// window turns over. False where neither holds, and where the counters cannot
-// be read, for the reason [Engine.budgetPark] gives.
-//
-// FOR A RESUME THAT WILL LAUNCH, which has no mail to park. The turn gate asks
-// it of every attempt at a recorded answer's resume ([Engine.seatCannotRun]) —
-// an answer always relaunches its executor, so a starved window refuses it as
-// surely as a full one — and a collected job's resume that its relaunch was
-// refused for is held on it ([sandbox.ErrResumeHeld]).
-func (e *Engine) budgetHold(ctx context.Context, c *Company, handle string) (sandbox.Refusal, bool) {
-	if refusal, refusing := e.budgetRefusing(ctx, c, handle); refusing {
-		return refusal, true
-	}
-	m := e.meterFor(c, handle)
-	if m == nil || !m.basis.capped() {
-		return sandbox.Refusal{}, false
+	if refusing {
+		return sandbox.Refusal{Condition: waitBudget, Reason: refusingReason(r), Until: r.Window.End}, true
 	}
 	r, starved, err := m.starved(ctx)
 	if err != nil || !starved {

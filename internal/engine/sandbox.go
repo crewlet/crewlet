@@ -2487,18 +2487,23 @@ func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.R
 // on: the seat's budget, or a usage limit every model its first call could take
 // already reported ([Engine.providerRefusing]).
 //
-// BY ROUTE, because the first call differs, and each half asks what that call
-// needs:
+// BY ROUTE, because the first call differs, and so does what the resume has
+// to do before it makes it:
 //
-//   - a COMPLETION'S first call is its reviewer's. Its budget refuses only on
-//     a full window ([Engine.budgetRefusing]), not one merely below the
-//     launch floor, which a review can still run on; and its models are the
-//     reviewer's chain, `llm_review` where the seat names one.
-//   - an ANSWER'S first call is the relaunch that carries the run on. Its
-//     budget refuses on a window too short for that launch as well
-//     ([Engine.budgetHold]), which would refuse the launch as surely as a
-//     full one; and its models are the members of the executor chain a
-//     launch can take ([executorRunners]).
+//   - a COMPLETION is asked no budget. Its job is over and its tokens are
+//     spent, so it is claimed and collected first: charged in the window it
+//     ran in and its box paused, and only then held on its row if the budget
+//     refuses its review or its relaunch ([Engine.heldByBudget],
+//     [sandbox.ErrResumeHeld]). Refused here, before its claim, a completion
+//     on a full window stayed uncollected until that window turned over: its
+//     spend was charged into the next window, and the waiter kept its box
+//     awake polling it for the rest of the day, week or month. Its models
+//     are the reviewer's chain, `llm_review` where the seat names one.
+//   - an ANSWER'S first call is the relaunch that carries the run on, and it
+//     has nothing to collect: its budget refuses on a window full or too
+//     short for that launch ([Engine.budgetHold]), which would refuse the
+//     launch as surely, and its models are the members of the executor chain
+//     a launch can take ([executorRunners]).
 //
 // A call the turn makes later (a review's send-back to a spent runner, a
 // relaunch below the floor) meets its own refusal mid-turn, and the resume
@@ -2514,12 +2519,10 @@ func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.R
 // NAKed through its whole delivery budget in about ten minutes.
 func (e *Engine) seatCannotRun(ctx context.Context, handle string, route sandbox.ResumeRoute) (sandbox.Refusal, bool) {
 	c := e.Company()
-	budget := e.budgetRefusing
 	if route == sandbox.ResumeAnswer {
-		budget = e.budgetHold
-	}
-	if refusal, refusing := budget(ctx, c, handle); refusing {
-		return refusal, true
+		if refusal, held := e.budgetHold(ctx, c, handle); held {
+			return refusal, true
+		}
 	}
 	if reason, retry, limited := e.providerRefusing(ctx, c, handle, route); limited {
 		return sandbox.Refusal{Condition: waitProvider, Reason: reason, Until: retry}, true
