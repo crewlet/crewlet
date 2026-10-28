@@ -210,17 +210,23 @@ type boxConfine struct {
 }
 
 // argv is a shell command line as this box runs it: confined where the box
-// is, as written where it is not.
+// is, as written where it is not, and either way ahead of the engine for the
+// kernel's OOM killer ([oomFirst]) — every setup and exec command, and the
+// detached job, since all of them start here.
+//
+// Every first word it hands [oomFirst] is an absolute path — /bin/sh, or the
+// confinement's helper as [ProbeConfinement] resolved it — so the raise
+// searches no PATH of the box's.
 func (b *directBox) argv(cmd string) ([]string, error) {
 	argv := []string{"/bin/sh", "-c", cmd}
-	if b.confine == nil {
-		return argv, nil
+	if b.confine != nil {
+		wrapped, err := b.confine.host.wrap(b.confine.rules, argv)
+		if err != nil {
+			return nil, localErrorf("local sandbox %s: %v", b.layout.id, err)
+		}
+		argv = wrapped
 	}
-	wrapped, err := b.confine.host.wrap(b.confine.rules, argv)
-	if err != nil {
-		return nil, localErrorf("local sandbox %s: %v", b.layout.id, err)
-	}
-	return wrapped, nil
+	return oomFirst(argv), nil
 }
 
 func (b *directBox) ID() string   { return b.layout.id }

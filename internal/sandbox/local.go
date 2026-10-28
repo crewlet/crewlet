@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1128,6 +1129,19 @@ func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []st
 	argv = append(argv, l.cli.hostAliasArgs()...)
 	if l.opts.Network != "" {
 		argv = append(argv, "--network", l.opts.Network)
+	}
+	// AHEAD OF THE ENGINE FOR THE KERNEL'S OOM KILLER ([boxOOMScore]), for
+	// every process in the box and not only its first: both runtimes start an
+	// `exec` from the container's own process specification, the value
+	// included (Docker's daemon/exec.go, Podman's
+	// libpod/oci_conmon_exec_common.go), so the coding job and every setup
+	// command take it too. Neither raises it unasked: Docker runs a container
+	// at 0, and Podman at its own CLI's value, which is the engine's. A
+	// container on the engine's own kernel competes with the engine for the
+	// host's memory; one in a VM of its own (Docker Desktop) is merely ordered
+	// within it. Before run_args, so an operator's own --oom-score-adj wins.
+	if score, ok := boxOOMScore(); ok {
+		argv = append(argv, "--oom-score-adj", strconv.Itoa(score))
 	}
 	// LAST, so an operator's own flags win. Both runtimes take the final
 	// occurrence of a repeated flag, which makes run_args the escape hatch

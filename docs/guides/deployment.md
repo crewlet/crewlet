@@ -1196,6 +1196,45 @@ pushed where its box does not survive, and the restart of the run that
 carries it on. Keep `state_dir` on a volume that outlives the engine's
 container where a run's working tree is worth keeping across a deploy.
 
+### When the host runs out of memory
+
+A `direct` box is a process tree of the node's own host, in the engine's own
+container or systemd unit, so its coding CLI and everything that CLI builds
+are counted against the same memory as the engine. Size a node that runs
+`direct` boxes for all of it at once: the engine, its host-run CLI calls
+(each `providers.llm` entry's `max_concurrent` of them, at 200–400 MB a call)
+and one run per seat at work, a build included (see
+[Replica count](#replica-count)). A `container` box can be bounded on its
+own with `run_args: ["--memory", "4g"]`, and one that outgrows that limit is
+killed inside its container and nowhere else.
+
+When memory does run out, the kernel kills the process with the highest
+score, and on Linux every process a box runs stands ahead of the engine: the
+engine's own `oom_score_adj` plus 1000, held to the kernel's ceiling of 1000
+(see [Local sandboxes](../concepts/code-sandbox.md#local-sandboxes)). So the
+kernel takes the largest process of a box, whose run then fails, rather than
+the engine. What happens next is up to whatever supervises the engine, and
+two defaults take the engine down with the box anyway:
+
+- **systemd** stops the whole unit when the kernel kills any process in it
+  (`OOMPolicy=stop`, the default), and a `direct` box's processes are in the
+  engine's unit. Set `OOMPolicy=continue` on the engine's unit, so a box's
+  OOM kill ends that box's run and nothing else; an OOM kill of the engine
+  itself still ends the unit, for `Restart=` to bring back. systemd-oomd,
+  where a host enables it for the engine's slice, kills whole units by
+  design.
+- **Kubernetes** on cgroup v2 sets `memory.oom.group` on every container, so
+  the kernel's kill of any process in it, a `direct` box's included, takes
+  every process in the container, the engine with it. The kubelet's
+  `singleProcessOOMKill: true` keeps one kill to one process; without it,
+  give the pod a memory limit with room for the engine and every box it runs
+  at once.
+
+A container runtime sets neither for a container it starts, so the engine
+in Docker or Podman loses the one process the kernel picked. On macOS a box
+and the engine compete on size alone, since macOS gives an unprivileged
+process no such priority to set.
+
 ### Probes
 
 Every node with an `api.port` answers `/health` and `/ready` on it, whatever
