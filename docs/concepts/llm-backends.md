@@ -684,18 +684,31 @@ sentence, until the window ends:
   **1, 2, 5, then 15 minutes**, and back to the first step once a call through
   the entry answers. A limit that lifts in a minute costs a minute, and one that
   lasts all afternoon costs four probes an hour. A probe costs at most the
-  entry's `max_concurrent` process launches — the calls that take a slot once
-  the window ends, before the first of them answers; every call queued behind
+  entry's `max_concurrent` process launches (the calls that take a slot once
+  the window ends, before the first of them answers); every call queued behind
   them is refused as soon as one reports the plan still spent.
 
 **What the vendor said is held, not the window.** The limit report stands from
 the first refusal until a call through the entry answers, or until the reset it
 named has passed, so the seats and the dashboard read one steady fact ("limit
 reached, resumes at 4:30 PM", or "resume time unknown") rather than one that
-blinks at every probe. A seat whose whole chain is sat out is **parked** until
-the entry is tried again: its mail waits on its inbox, in order, and is
-delivered once when the park lifts. See
-[A limit parks the seats that cannot run](../guides/budgets-and-spend.md#a-provider-limit-parks-the-seats-that-cannot-run).
+blinks at every probe.
+
+**A seat whose whole chain is limited is parked, not retried.** When every
+entry of the chain a turn ran on refused for a rate limit, the engine holds the
+seat's inbox until the first entry is tried again (`seat_provider_parked`), the
+way a spent token window parks it: the delivery keeps its place at the head of
+the inbox, a message that arrives meanwhile waits behind it, and when the park
+lifts each is delivered once, in order. The turn that runs then is the probe: a
+limit that still holds parks the seat again until the next instant, and one
+that has lifted answers. Throughout, the seat reads `stopped` with the reason
+`provider`, and the dashboard's Inbox draws one condition for the entry ("Claude
+Code subscription limit reached. Agents resume at 4:30 PM.") rather than a row
+per seat. A seat whose chain has an entry that still answers is never parked: it
+runs on that entry, and the condition says so. A chain whose head is limited and
+whose fallback failed for another reason is retried as any failed turn is,
+because nothing says that failure lasts. An apply that changes the company's
+models releases every park at once: the new entries have sat nothing out.
 
 The sit-out is the entry's own, on the node that heard the sentence: every other
 node learns the same thing from its own calls, once per window. A later sit-out
@@ -3416,7 +3429,7 @@ it runs on.
 | `stdin_login` | `{args, stdin_template, password_env}`: a real credential login, where the CLI has one. |
 | `credential_store` | `{export_args, import_args}`: a login the CLI keeps in a database of its own, moved as the document its export prints (stdout) and its import reads (stdin). Both, and never `{file}`. |
 | `limit_events` | The CLI's own structured limit report, matched before any sentinel: `match` (conditions on the event, naming the `event_type_path` discriminator and at least one field beside it), `said_path` (the vendor's sentence) and `reset_separator`/`reset_unit` (the reset in that sentence). `jsonl` output only. |
-| `limit_markers` | Sentences recognising a spent plan — see above. Each may carry `reset_separator` and `reset_unit` (`epoch`, `seconds` or `clock`). |
+| `limit_markers` | Sentences recognising a spent plan; see above. Each may carry `reset_separator` and `reset_unit` (`epoch`, `seconds` or `clock`). |
 | `auth_markers` | Sentences recognising an expired login. |
 | `marker_scope` | Where markers match: `answer-and-stderr` (default), `stderr`, or `events` (the class in the CLI's own failure events, compared by equality; `jsonl` only, and stderr is not searched). |
 | `marker_events` | Under `marker_scope: events`, the event kinds (read through `event_type_path`) the CLI reports a failure in. Refused beside any other scope. |

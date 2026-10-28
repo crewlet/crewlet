@@ -2620,6 +2620,7 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// released the inbox already dropped the hold; the alarm would only
 	// fire into a seat a peer now serves.
 	e.forgetBudgetPark(seat.ID)
+	e.forgetProviderPark(ctx, seat.ID)
 	// AND THE TOOL SESSIONS OF ITS BOX-MODE RUNS, which the seat's next
 	// holder serves from now on: left open here they would pin the seat's
 	// surface in a process that no longer speaks for it, and every box

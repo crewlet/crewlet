@@ -186,6 +186,7 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 	}
 
 	var last error
+	failures := make([]error, 0, len(c.members))
 	for i, m := range c.members {
 		if streamed {
 			req.Send(llm.Delta{Restart: true, Model: m.Provider.Model()})
@@ -244,9 +245,10 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 			c.onFallback(Fallback{From: m.Key, To: next, Kind: kind, Err: err})
 		}
 		last = err
+		failures = append(failures, err)
 	}
 
-	return nil, &Error{Attempted: c.Keys(), Err: last}
+	return nil, &Error{Attempted: c.Keys(), Failures: failures, Err: last}
 }
 
 // Error reports that every member failed retryably.
@@ -258,8 +260,82 @@ type Error struct {
 	// Attempted is every key that was tried, in order.
 	Attempted []string
 
+	// Failures is every member's failure, in the order Attempted names
+	// them: what [Limited] reads to tell a chain every member of which is
+	// sat out from one whose last member happened to be.
+	Failures []error
+
 	// Err is the last member's failure.
 	Err error
+}
+
+// Limit is a chain every member of which refused for a rate limit: the keys,
+// when the first of them is tried again, and when the vendors said the limits
+// lift.
+type Limit struct {
+	// Keys are the members, in the chain's order.
+	Keys []string
+	// RetryAt is the earliest instant any member is tried again: before it,
+	// a call through the chain is refused by every member without one of
+	// them being asked.
+	RetryAt time.Time
+	// ResetsAt is the earliest instant a member's vendor said its limit
+	// lifts, where every member named one; zero where any did not, since a
+	// member that named none may lift sooner than the named ones, and a
+	// person told "4:30 PM" would wait for nothing.
+	ResetsAt time.Time
+	// Said is the head member's own sentence, for whoever is shown why.
+	Said string
+}
+
+// Limited reports whether err is a chain whose every member refused for a rate
+// limit with an instant it is tried again, and what that limit is.
+//
+// EVERY MEMBER, and not the last one: a chain whose head is spent and whose
+// fallback failed for a reason nothing says will last (a server error, a
+// timeout) is worth trying again on the ordinary retry, and treating it as
+// spent would hold a seat for an hour over a blip of its fallback's. A member
+// that names no instant it is tried again is not one this can wait out either.
+func Limited(err error) (Limit, bool) {
+	var exhausted *Error
+	if !errors.As(err, &exhausted) || len(exhausted.Failures) == 0 ||
+		len(exhausted.Failures) != len(exhausted.Attempted) {
+		return Limit{}, false
+	}
+	limit := Limit{Keys: slices.Clone(exhausted.Attempted)}
+	unnamed := false
+	for i, failure := range exhausted.Failures {
+		retryAt, resetsAt, ok := llm.LimitedUntil(failure)
+		if !ok || retryAt.IsZero() {
+			return Limit{}, false
+		}
+		if limit.RetryAt.IsZero() || retryAt.Before(limit.RetryAt) {
+			limit.RetryAt = retryAt
+		}
+		switch {
+		case resetsAt.IsZero():
+			unnamed = true
+		case limit.ResetsAt.IsZero() || resetsAt.Before(limit.ResetsAt):
+			limit.ResetsAt = resetsAt
+		}
+		if i == 0 {
+			limit.Said = saidOf(failure)
+		}
+	}
+	if unnamed {
+		limit.ResetsAt = time.Time{}
+	}
+	return limit, true
+}
+
+// saidOf is a member's failure as its backend worded it, without the frame
+// [llm.Error.Error] adds.
+func saidOf(err error) string {
+	var failure *llm.Error
+	if errors.As(err, &failure) && failure.Err != nil {
+		return failure.Err.Error()
+	}
+	return err.Error()
 }
 
 func (e *Error) Error() string {

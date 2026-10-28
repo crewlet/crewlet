@@ -277,6 +277,11 @@ type Engine struct {
 	// the window turns over. See budgetpark.go.
 	budgetParks budgetParks
 
+	// providerParks is every seat inbox this node holds because every model
+	// of the seat's chain is limited, each with the alarm that lifts it for
+	// a probe when the first is tried again. See providerpark.go.
+	providerParks providerParks
+
 	// clock is the instant every token-budget window this engine cuts is
 	// read at, and nil is the wall clock — which is what every engine [New]
 	// builds runs on. See [Engine.now] for why there is one and why it is
@@ -2001,6 +2006,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Budget == nil {
 		d.Budget = e.budgetPark
 	}
+	if d.Provider == nil {
+		d.Provider = e.providerPark
+	}
 	if d.Answer == nil {
 		// THE CALLER THIS METHOD NEVER HAD. TryResumeFromAnswer has been
 		// exported and tested since the clarification path was written, and
@@ -2480,6 +2488,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// Before the node's stop detaches the inboxes: an alarm firing into a
 	// client that is closing would log a release it could not make.
 	e.stopBudgetParks()
+	e.stopProviderParks()
 	// And the pause watch, for the same reason: a resume landing on a
 	// client that is closing would lift a hold on nothing.
 	e.stopSeatPauses()

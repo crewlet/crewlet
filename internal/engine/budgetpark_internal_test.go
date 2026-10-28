@@ -86,6 +86,9 @@ type parkRig struct {
 	noted int
 	// handed counts deliveries the dispatcher was handed.
 	handed int
+	// worked is every trigger a turn was run on, in the order the turns
+	// ran.
+	worked []uuid.UUID
 	turnFn func() (turn.Result, error)
 }
 
@@ -131,17 +134,22 @@ func newParkRig(t *testing.T, dayCeiling string) *parkRig {
 	// meter the question is asked through all read.
 	r.e.clock = r.clock
 	r.e.budgetParks.after = r.alarms.after
+	r.e.providerParks.after = r.alarms.after
 
 	d := &Dispatcher{
-		Budget: r.e.budgetPark,
+		Budget:   r.e.budgetPark,
+		Provider: r.e.providerPark,
 		NoteDeferred: func(string) {
 			r.mu.Lock()
 			r.noted++
 			r.mu.Unlock()
 		},
-		Turn: func(context.Context, Request) (turn.Result, error) {
+		Turn: func(_ context.Context, req Request) (turn.Result, error) {
 			r.mu.Lock()
 			r.ran++
+			for _, ev := range req.Events {
+				r.worked = append(r.worked, ev.ID)
+			}
 			fn := r.turnFn
 			r.mu.Unlock()
 			if fn != nil {

@@ -781,6 +781,13 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 	if !e.on() {
 		return
 	}
+	// WHEN THE HEAD IS BACK, where its vendor said: what a screen showing
+	// the seat carried onto its fallback names.
+	var resets *time.Time
+	if _, at, limited := llm.LimitedUntil(f.Err); limited && !at.IsZero() {
+		utc := at.UTC()
+		resets = &utc
+	}
 	e.publish(ctx, events.New(types.ProviderFallback{
 		Agent:     e.turn.AgentID,
 		RoleName:  e.role,
@@ -794,6 +801,7 @@ func (e emitter) fallback(ctx context.Context, ph phase.Phase, iteration int, f 
 		FromProviderKey: f.From,
 		ToProviderKey:   f.To,
 		ErrorKind:       f.Kind.String(),
+		ResetsAt:        resets,
 	}, e.traceFor(ctx)))
 }
 

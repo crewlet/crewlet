@@ -122,6 +122,10 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// thing a released inbox does is judge a delivery against the
 		// counters, and it must do so under the ceilings now current.
 		e.reconcileBudgetParks(ctx, c)
+		// AND A SEAT PARKED ON ITS MODELS' LIMIT, when this company's
+		// models are not the ones that refused it: they are built afresh
+		// with each company, and have sat nothing out.
+		e.reconcileProviderParks(ctx, c)
 		// AND A RETRIED RESUME WAITING ON EITHER: a published company is
 		// the event that brings a model and the one that moves a ceiling,
 		// so the answers waiting on them are re-checked under the company
