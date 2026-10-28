@@ -166,13 +166,13 @@ func (r artifactRequesters) Requester(ctx context.Context, handle string) (iam.P
 //
 // THE RUN READS ITS OWN BOX, WHILE IT WORKS. A seat's executor is its coding
 // CLI's own run in that box, and every call that names a box source reaches
-// here from it — its CLI over the tool bridge, or a worker it delegated to —
-// while the run's record reads running: a collected run's resumed segment
-// calls no artifact tool (its reviewer holds one submission tool, and the
-// delivery check none). So a running record is the one a box is read for, and
-// the run says by calling when its build is ready. A record past it has no
-// reader left: one parked on a question has its job paused, which a read
-// would wake; a collected one is over; a reaped pause has no box.
+// here from its CLI over the tool bridge — a worker it delegates to holds no
+// artifact write — while the run's record reads running: a collected run's
+// resumed segment calls no artifact tool (its reviewer holds one submission
+// tool, and the delivery check none). So a running record is the one a box is
+// read for, and the run says by calling when its build is ready. A record past
+// it has no reader left: one parked on a question has its job paused, which a
+// read would wake; a collected one is over; a reaped pause has no box.
 type artifactBoxes struct{ engine *Engine }
 
 func (b artifactBoxes) Box(ctx context.Context, t *turnctx.Turn) (builtin.ArtifactBox, error) {

@@ -292,10 +292,12 @@ back verified. A sandbox is never handed an upload URL; the engine lists the
 directory through the box itself, holds every path to the workspace, and
 refuses one file more than a version holds rather than truncating. The engine
 reads a box only for the run working in it — a call the run makes over its own
-bridge while its record reads `running`, or one a worker it delegated to makes
-— attached as a reader, never resumed; a run parked on a question, collected or
-torn down, and anybody else's call, is refused `not_running`
-([Code Sandbox](../concepts/code-sandbox.md#how-a-coding-task-runs)), so a
+bridge while its record reads `running` — attached as a reader, never resumed.
+A call from another seat's turn, or from a run parked on a question, collected
+or torn down, is refused `not_running`; a caller that is not an agent seat is
+refused `forbidden`; and a seat's call on a node that runs no sandbox is refused
+`unavailable`
+([Code Sandbox](../concepts/code-sandbox.md#how-a-coding-task-runs)). So a
 seat's executor publishes a build larger than the inline bound from its box
 before it finishes.
 
