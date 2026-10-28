@@ -2069,6 +2069,12 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// as stopped, by whichever node finishes the run's ending — see
 		// runstop.go.
 		CloseStopped: e.closeStoppedTurn,
+		// AND A TURN LOST WITH ITS RUN — the run's box gone, its
+		// suspension never recorded, its tail abandoned — tells the
+		// colleague whose ask it took up that it was lost, by whichever
+		// node finishes the run's ending: no frame of that turn is left to
+		// answer. See a2a.go.
+		TurnLost: e.answerLostTurn,
 		// A seat's inbox is held while one of its runs holds it or an
 		// answer's resume is owed, and a retried resume asks the seat's
 		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].

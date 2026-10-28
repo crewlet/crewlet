@@ -365,9 +365,10 @@ type RecordedEnding struct {
 // saw the ask: the turn parks on its executor's run at the launch, and the
 // segment that ends it is resumed off the seat's control topic — on whichever
 // node holds the seat when the run is collected, possibly days later — or
-// closed by a person's stop of the run, with no trigger left to read the ask
-// from. Without it every ask an agent seat took up went unanswered, its channel
-// closed by the idle sweep an hour later.
+// closed by a person's stop of the run, or ended by the run's loss
+// ([CoordinatorOptions.TurnLost]), with no trigger left to read the ask from.
+// Without it every ask an agent seat took up went unanswered, its channel
+// closed by the idle sweep.
 //
 // ONLY WHAT THE REPLY NEEDS: the channel it goes to, the question it echoes,
 // the chain the ask carried, and the ask's trace, which the reply's wake
@@ -468,6 +469,15 @@ type StopCollection struct {
 // loss names its reason, and a stop names who stopped it.
 func (r PendingRun) announces() bool {
 	return r.Ending != nil && (r.Ending.Reason != "" || r.Stop != nil)
+}
+
+// lost reports whether a run's decided ending is a LOSS: one that names the
+// reason the run was lost, and so ends the turn suspended into it with no frame
+// of that turn left to end it ([CoordinatorOptions.TurnLost]). An ordinary
+// ending names none — its turn came back — and a stop names who stopped it
+// instead.
+func (r PendingRun) lost() bool {
+	return r.Ending != nil && r.Ending.Reason != "" && r.Stop == nil
 }
 
 // answerOwed reports whether a run whose ending is decided still holds a

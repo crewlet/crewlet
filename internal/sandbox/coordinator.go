@@ -477,6 +477,38 @@ type CoordinatorOptions struct {
 	// is still announced and the run still ended.
 	CloseStopped func(ctx context.Context, run PendingRun) error
 
+	// TurnLost is handed every run whose decided ending is a LOSS
+	// ([PendingRun.lost]) — its box gone or unreadable, its suspension never
+	// recorded, its claim stranded, its tail abandoned by a node that died,
+	// its seat retired, its resume broken before the turn began — for the
+	// engine to settle what the turn that parked on it still owed somebody
+	// outside the run: the colleague whose a2a_ask woke it
+	// ([PendingRun.ColleagueAsk]) is told the turn was lost, and why.
+	//
+	// THE ONE TERMINAL OF A PARKED TURN THAT NO FRAME OF THE TURN ENDS. A
+	// collected run's turn is ended by its resume, a person's stop by
+	// [CoordinatorOptions.CloseStopped], and both answer the ask from the
+	// record; a loss ends the run with the turn still suspended into it,
+	// and the frame that parked it answered nothing, because a parked turn
+	// had not finished. Without this the ask went unanswered and its
+	// channel waited for the idle sweep.
+	//
+	// A STEP OF THE ENDING, as SteersExpired is: made after the
+	// announcement, before the record is deleted, once per attempt — so a
+	// repeat after a crash is made again, and finds the channel its first
+	// attempt answered and closed. BEST EFFORT, with no error: the turn is
+	// over whatever the asker hears, and keeping a lost run's ending — and
+	// the seat's inbox behind it — on a reply the broker refused would hold
+	// the seat's mail for a courtesy.
+	//
+	// ONLY A LOSS, which is an ending that announces a reason: an ending
+	// whose turn came back — collected and resumed, or an abandoned resume
+	// whose turn ran and published its own end — announces nothing, and the
+	// turn's own frame answered; a stop is [CoordinatorOptions.CloseStopped]'s.
+	// Nil hands over nothing — a coordinator built without an engine (a
+	// test's).
+	TurnLost func(ctx context.Context, run PendingRun)
+
 	// SteersExpired publishes, as expired, every note a person sent the run's
 	// turn that no job ran with ([PendingRun.UnreadNotes]): the ones still
 	// WAITING on the run's record ([RunSteer]), which nothing will read now
@@ -694,6 +726,8 @@ type Coordinator struct {
 	stopped   func(ctx context.Context, handle, turnID string)
 	// closeStopped is [CoordinatorOptions.CloseStopped].
 	closeStopped func(ctx context.Context, run PendingRun) error
+	// turnLost is [CoordinatorOptions.TurnLost].
+	turnLost func(ctx context.Context, run PendingRun)
 	// steersExpired is [CoordinatorOptions.SteersExpired].
 	steersExpired func(ctx context.Context, run PendingRun) error
 	// node, boxes and nudge are [CoordinatorOptions.Node], Boxes and Nudge.
@@ -846,6 +880,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		recovered:     opts.Recovered,
 		stopped:       opts.Stopped,
 		closeStopped:  opts.CloseStopped,
+		turnLost:      opts.TurnLost,
 		steersExpired: opts.SteersExpired,
 		node:          opts.Node,
 		boxes:         opts.Boxes,
@@ -3346,12 +3381,14 @@ var errAskAway = errors.New("sandbox: the run's box is read on another node's ho
 //     to this node's retry ([errAskAway]);
 //  4. the box is reclaimed, where the ending reclaims it after its decision;
 //  5. the announcement is published, under the ending's own identity;
-//  6. for a stop, the turn that was parked on the run is closed on the record
+//  6. for a loss, the run is handed to the engine, which answers the
+//     colleague whose ask its turn took up ([CoordinatorOptions.TurnLost]);
+//  7. for a stop, the turn that was parked on the run is closed on the record
 //     as stopped ([CoordinatorOptions.CloseStopped]);
-//  7. every note a person sent the turn that no job ran with — still waiting on
+//  8. every note a person sent the turn that no job ran with — still waiting on
 //     the record, or read by the brief of a job that never started — is
 //     published expired ([CoordinatorOptions.SteersExpired]);
-//  8. the record is deleted ([PendingStore.Finish]).
+//  9. the record is deleted ([PendingStore.Finish]).
 //
 // # Across a crash at each step
 //
@@ -3359,8 +3396,9 @@ var errAskAway = errors.New("sandbox: the run's box is read on another node's ho
 // before the delete, and every step is one a repeat makes harmless: the let-go
 // finds nothing left to let go of, the copies go out again under the same
 // derived ids (the inbox's same-id dedupe and the completion ledger collapse
-// them), a box already reclaimed is a kill of nothing, and the announcement is
-// the same event again. Stopped anywhere before the delete, the row still
+// them), a box already reclaimed is a kill of nothing, the announcement is the
+// same event again, and a lost turn's asker finds the channel its first answer
+// closed. Stopped anywhere before the delete, the row still
 // carries the ending, and whoever reads it next — this node's retry, or the
 // seat's next holder ([Coordinator.RecoverSeat]) — finishes it from the step it
 // stopped at.
@@ -3373,7 +3411,7 @@ var errAskAway = errors.New("sandbox: the run's box is read on another node's ho
 // does not land is returned, and the caller keeps the ending.
 func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk bool) error {
 	var handed []string
-	reclaimed, announced, closed, expired := false, false, false, false
+	reclaimed, announced, answered, closed, expired := false, false, false, false, false
 	for range endingRounds {
 		if run.answerOwed() {
 			owing, err := c.letGoAnswer(ctx, run)
@@ -3426,6 +3464,13 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 				return err
 			}
 			announced = true
+		}
+		if run.lost() && !answered && c.turnLost != nil {
+			// AFTER THE ANNOUNCEMENT, which is the record of the loss the
+			// answer tells somebody about, and BEST EFFORT: see
+			// [CoordinatorOptions.TurnLost].
+			c.turnLost(ctx, run)
+			answered = true
 		}
 		if run.Stop != nil && !closed && c.closeStopped != nil && len(run.ExecuteState) > 0 {
 			if err := c.closeStopped(ctx, run); err != nil {

@@ -164,6 +164,14 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 // at until something re-stamps it.
 func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
 	r.t.Helper()
+	return r.launchingAs(turnID, lease, func(*PendingRun) {})
+}
+
+// launchingAs is [waiterRig.launchingUnder] for a row the case shapes before
+// the write that opens it — a turn a colleague's ask woke, say, whose row the
+// launch writes the ask onto.
+func (r *waiterRig) launchingAs(turnID string, lease Fence, shape func(*PendingRun)) PendingRun {
+	r.t.Helper()
 	ctx := r.t.Context()
 	box, err := r.provider.Create(ctx, Spec{})
 	if err != nil {
@@ -187,6 +195,7 @@ func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
 		// phase record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
 	}
+	shape(&run)
 	if _, err := r.pending.BeginLaunch(ctx, run, lease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
