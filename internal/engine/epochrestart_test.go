@@ -79,7 +79,7 @@ func (r *restartRig) parkUnder(t *testing.T, fence sandbox.Fence) (sandbox.Pendi
 // answeredAfter is the seat's claim on the next boot: strictly above every
 // epoch the run carries, the run recovered under it, and the person's answer,
 // given on the seat's control topic, recorded and resuming the run.
-func (r *restartRig) answeredAfter(t *testing.T, run sandbox.PendingRun) {
+func (r *restartRig) answeredAfter(t *testing.T, run sandbox.PendingRun) *coord.Lease {
 	t.Helper()
 	back := r.boot(t)
 	t.Cleanup(func() { back.Close(context.WithoutCancel(t.Context())) })
@@ -100,6 +100,7 @@ func (r *restartRig) answeredAfter(t *testing.T, run sandbox.PendingRun) {
 	if resumer.count() != 1 {
 		t.Fatalf("the run parked before the restart was resumed %d times, want once", resumer.count())
 	}
+	return after
 }
 
 // A SEAT'S FENCING EPOCH OUTLIVES A GRACEFUL RESTART ON LOCAL COORDINATION, and
@@ -130,7 +131,7 @@ func TestAnAnswerToARunParkedBeforeAGracefulRestartIsRecordedAfterIt(t *testing.
 	r.release(t, first, before)
 	first.Close(context.WithoutCancel(t.Context()))
 
-	r.answeredAfter(t, run)
+	_ = r.answeredAfter(t, run)
 }
 
 // AN UPGRADE OWNS THE RUNS ITS PREDECESSOR'S COUNTER STAMPED. A node that ran a
@@ -143,12 +144,16 @@ func TestAnUpgradeOwnsTheRunsItsPredecessorsCounterStamped(t *testing.T) {
 	t.Parallel()
 	r := newRestartRig(t)
 
-	// Stamped at 5 by a counter this deployment's bucket never held: no
-	// claim is made on this boot, so the bucket knows nothing of the seat.
+	// Stamped at 2 by a counter this deployment's bucket never held, as the
+	// live runs were: no claim is made on this boot, so the bucket knows
+	// nothing of the seat.
 	first := r.boot(t)
-	run, old := r.parkUnder(t, sandbox.Fence{Owner: "node-0/old-build", Epoch: 5})
+	run, old := r.parkUnder(t, sandbox.Fence{Owner: "node-0/old-build", Epoch: 2})
 	old.coordinator.Stop()
 	first.Close(context.WithoutCancel(t.Context()))
 
-	r.answeredAfter(t, run)
+	if after := r.answeredAfter(t, run); after.Epoch != 3 {
+		t.Errorf("the first claim over runs at epoch 2 minted %d, want 3: the counter "+
+			"starts just above the highest epoch the seat's rows carry", after.Epoch)
+	}
 }
