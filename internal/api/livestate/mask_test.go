@@ -98,9 +98,8 @@ var nested = map[reflect.Type]map[string]class{
 		"outcome": status},
 	reflect.TypeFor[Paused](): {"by": status, "by_kind": status,
 		"operator_id": status, "at": status, "reason": status, "stop_running": status},
-	reflect.TypeFor[ProviderLimit](): {"provider_key": status, "provider_keys": status,
-		"parked": status, "running_on": status, "resets_at": status, "retry_at": status,
-		"since": status, "said": status, "cli": status, "subscription": status},
+	reflect.TypeFor[ProviderLimit](): {"parked": status, "resets_at": status,
+		"since": status, "cli": status, "subscription": status},
 }
 
 // jsonField is one field a type puts on the wire.
