@@ -238,7 +238,7 @@ func refusalOf(request exec.Request, resp exec.Response) wire.Refusal {
 	}
 	route := exec.RefusalOf(resp)
 	shown := cards.PersonRefusal(route, resp.Status)
-	shown.Hint = cards.RefusalResumes
+	shown.Hint = cards.RefusalHint(route.Code)
 	return shown
 }
 

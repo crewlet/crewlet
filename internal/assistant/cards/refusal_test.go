@@ -52,3 +52,43 @@ func TestEveryRefusalAPersonReadsIsTheEnginesSentence(t *testing.T) {
 		}
 	}
 }
+
+// A REFUSAL THAT IS NO COLLISION IS NEVER WORDED AS ONE. A 409 says the request
+// met a state of the target, and most of those states are not a race: a turn
+// holding as many notes as it may, or one that has taken all it takes, a turn
+// that ended, an item handed on as often as it may be, a full inbox, a spent
+// budget, a question already answered. Each reads as what it is, and one no
+// change to the request can mend is not promised a change that can apply. A
+// conflict with no code of its own is still a collision.
+//
+// Mutation: drop a code from personSentence, or give a settled refusal the
+// hint that promises a change, and this goes red.
+func TestARefusalThatIsNoCollisionIsNeverWordedAsOne(t *testing.T) {
+	t.Parallel()
+	collision := cards.PersonRefusal(wire.Refusal{Code: string(httpjson.CodeConflict)}, http.StatusConflict).Message
+	for code, want := range map[httpjson.Code]struct {
+		says    string
+		settled bool
+	}{
+		httpjson.CodeNotesFull:          {"Send it again once it has read them", false},
+		httpjson.CodeNotesSpent:         {"Put the rest on its work item", true},
+		httpjson.CodeNotRunning:         {"not running any more", true},
+		httpjson.CodeAlreadyAnswered:    {"already answered", true},
+		httpjson.CodeReassignmentBudget: {"A person has to pick it up", false},
+		httpjson.CodeInboxFull:          {"Mark everything up to here read", false},
+		httpjson.CodeBudgetExhausted:    {"budget for this window is spent", false},
+	} {
+		got := cards.PersonRefusal(wire.Refusal{Code: string(code)}, http.StatusConflict).Message
+		if got == collision || !strings.Contains(got, want.says) {
+			t.Errorf("%s reads %q, want its own sentence saying %q", code, got, want.says)
+		}
+		hint := cards.RefusalHint(string(code))
+		if settled := hint == cards.RefusalSettled; settled != want.settled ||
+			(!want.settled && hint != cards.RefusalResumes) {
+			t.Errorf("%s is hinted %q, want settled=%v", code, hint, want.settled)
+		}
+	}
+	if !strings.Contains(collision, "same moment") || cards.RefusalHint(string(httpjson.CodeConflict)) != cards.RefusalResumes {
+		t.Errorf("a collision reads %q and is hinted %q", collision, cards.RefusalHint(string(httpjson.CodeConflict)))
+	}
+}

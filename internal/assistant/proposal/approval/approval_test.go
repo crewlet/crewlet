@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
@@ -820,5 +821,45 @@ func TestARacedCreateIsRefusedAsStale(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A REFUSAL NO CHANGE MENDS IS NOT PROMISED ONE. A steered turn that has taken
+// every note a turn takes answers its next one `409 notes_spent`: the failed
+// proposal reads as what happened — the turn has taken all it takes, the rest
+// belongs on its work item — never as a change that collided with another, and
+// its hint does not say the assistant will suggest a change that can apply,
+// since none can. The turn is handed the route's own refusal.
+//
+// Mutation: hint every refusal with cards.RefusalResumes, or word every 409 as
+// a collision, and this goes red.
+func TestARefusalNoChangeMendsIsNotPromisedOne(t *testing.T) {
+	t.Parallel()
+	spent, _ := json.Marshal(map[string]any{"error": "notes_spent",
+		"message": "The turn has taken as many notes as a turn takes, so nothing was sent."})
+	f := approvaltest.NewFleet()
+	f.API.AnswerNext(exec.Response{Status: http.StatusConflict, Body: spent})
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	p := f.Propose(t, ada, func(d *proposal.Draft) {
+		d.Tool, d.Act = "steer_turn", "steer_turn"
+		d.Preview.Title, d.Preview.ApproveLabel = "Send a note", "Approve and send"
+		d.Preview.SourceRevision = ""
+		d.Preview.Request = exec.Request{Method: http.MethodPost, Path: "/operator/act/steer_turn",
+			Body: []byte(`{"args":{"turn_id":"run-1","note":"use staging"}}`)}
+	})
+	got, err := f.Node(t).Approve(approvaltest.As(t.Context(), ada), approvaltest.Approve(p))
+	if err != nil || got.Proposal.State != wire.ProposalFailed {
+		t.Fatalf("the refused note answered %v, %v", got.Proposal.State, err)
+	}
+	r := f.Turns.Resumed()
+	if len(r) != 1 || r[0].Failure == nil || r[0].Failure.Refusal.Code != "notes_spent" {
+		t.Fatalf("the turn was handed %+v, want the route's notes_spent", r)
+	}
+	refusal := r[0].Failure.Refusal
+	if strings.Contains(refusal.Message, "same moment") || !strings.Contains(refusal.Message, "work item") {
+		t.Errorf("the spent turn reads %q, want what happened, never a collision", refusal.Message)
+	}
+	if refusal.Hint != cards.RefusalSettled {
+		t.Errorf("the spent turn is hinted %q, want %q", refusal.Hint, cards.RefusalSettled)
 	}
 }
