@@ -23,21 +23,26 @@ import (
 //     head costs at most a repository planned a poll late — a compaction
 //     syncs at its repository's own version and its committer holds every
 //     input to the rows.
-//  2. BEHIND: every listed repository at code.MaxPacksPerRepo that this node
-//     is home for is what the alarm reading names — asked before the memory
+//  2. HOMES, judged against ONE READING of who serves git ([Compactor.homesOf])
+//     for every listed repository the pass must judge — each it may plan, and
+//     each at the bound — so a repository this node is not home to costs the
+//     pass its share of one reading, and one its home remembers as not due a
+//     lookup.
+//  3. BEHIND: every listed repository at code.MaxPacksPerRepo that this node
+//     is home for is what the alarm reading names — judged before the memory
 //     and whatever its compaction decides, because at the bound a refused push
 //     records nothing, so the repository's version stands still and a reading
 //     taken only of what reached a compaction would clear while every push is
 //     refused.
-//  3. THE STORE'S ROOM, read once a pass, and only while a repository is held
-//     back for a full store ([Compactor.releaseHeld]).
-//  4. Every listed repository in the listing's order, until the next tick
+//  4. THE STORE'S ROOM, read once a pass, and only while a repository is held
+//     back for a full store and the pass may compact ([Compactor.releaseHeld]).
+//  5. Every listed repository in the listing's order, until the next tick
 //     would begin: skipped when a plan of it was found not due at its version
 //     and cap ([memo]), when it is held back for a full store, or when this
 //     node is not its home; and COMPACTED otherwise, one at a time. A
-//     placement this node cannot read skips every remaining repository — a
-//     compactor that cannot tell compacts nothing rather than guess — logged
-//     once a pass.
+//     placement this node cannot read compacts nothing that pass — a
+//     compactor that cannot tell does none of a home's work rather than guess
+//     — logged once a pass.
 //
 // A listing that fails is the pass's error, and the alarm reading is left as
 // the last pass found it. The pass is logged code_compaction_pass, at DEBUG
@@ -51,32 +56,27 @@ func (c *Compactor) Poll(ctx context.Context) (PollReport, error) {
 	}
 	report.Listed = len(listed)
 	c.forget(listed)
-	behind := c.behindOf(listed)
+	homes, unknown := c.homesOf(listed)
+	behind := c.behindOf(listed, homes, unknown)
 	c.setBehind(behind)
 	for _, b := range behind {
 		report.Behind = append(report.Behind, b.name)
 	}
-	released, err := c.releaseHeld(ctx)
-	if err != nil {
+	var released map[string]bool
+	if unknown != nil {
+		c.log.Warn("code_compaction_home_unknown", "listed", len(listed), "error", unknown,
+			"detail", "who serves git could not be read, so this pass compacts nothing")
+	} else if released, err = c.releaseHeld(ctx); err != nil {
 		c.log.Warn("code_compaction_store_unread", "error", err,
 			"detail", "the object store's room could not be read, so every repository held back for a full "+
 				"store waits for the next pass")
 	}
 	until := began.Add(Poll)
 	for _, cand := range listed {
-		if ctx.Err() != nil || !c.now().Before(until) {
+		if unknown != nil || ctx.Err() != nil || !c.now().Before(until) {
 			break
 		}
-		if c.notDueAt(cand) || (c.isHeld(cand.ID) && !released[cand.ID]) {
-			continue
-		}
-		home, err := c.o.Homes.IsHome(cand.ID)
-		if err != nil {
-			c.log.Warn("code_compaction_home_unknown", "repo", cand.Name, "error", err,
-				"detail", "who serves git could not be read, so this pass compacts nothing more")
-			break
-		}
-		if !home {
+		if c.notDueAt(cand) || (c.isHeld(cand.ID) && !released[cand.ID]) || !homes[cand.ID] {
 			continue
 		}
 		report.Home++
@@ -153,12 +153,39 @@ func (c *Compactor) forget(listed []code.CompactionCandidate) {
 	}
 }
 
+// homesOf is which listed repositories this node is the home of, off ONE
+// READING of who serves git: asked of every repository the pass must judge —
+// each at the pack bound, whose alarm it raises whatever its plan, and each it
+// may plan — and of no other, so a repository its home remembers as not due
+// costs the pass a lookup and nothing more. An error is UNKNOWN for every one
+// of them, never "home to none".
+//
+// ONE READING, NEVER ONE A REPOSITORY: only a repository's home ever plans it,
+// so only its home remembers it as not due, and on every other git node every
+// listed repository is judged at every pass — a pass asking who serves git
+// once a repository read the presence view, decoded every node's lease and
+// sorted the git nodes ten thousand times a minute on a node home to an
+// eighth of ten thousand repositories, to learn it was home to none of the
+// rest.
+func (c *Compactor) homesOf(listed []code.CompactionCandidate) (map[string]bool, error) {
+	var ask []string
+	for _, cand := range listed {
+		if cand.LivePacks >= code.MaxPacksPerRepo || !c.notDueAt(cand) {
+			ask = append(ask, cand.ID)
+		}
+	}
+	if len(ask) == 0 {
+		return nil, nil
+	}
+	return c.o.Homes.HomeOf(ask)
+}
+
 // behindOf is every listed repository at the pack bound this node is home
-// for. One whose home cannot be read now keeps its place in the reading where
-// the last pass named it — unknown is not "no longer behind", and an alarm
-// cleared by a placement this node could not read would go silent exactly
-// while every push to the repository is refused.
-func (c *Compactor) behindOf(listed []code.CompactionCandidate) []behindRepo {
+// for, as homes judged them. With who serves git unknown, one keeps its place
+// in the reading where the last pass named it — unknown is not "no longer
+// behind", and an alarm cleared by a placement this node could not read would
+// go silent exactly while every push to the repository is refused.
+func (c *Compactor) behindOf(listed []code.CompactionCandidate, homes map[string]bool, unknown error) []behindRepo {
 	c.mu.Lock()
 	last := make(map[string]bool, len(c.behind))
 	for _, b := range c.behind {
@@ -170,8 +197,7 @@ func (c *Compactor) behindOf(listed []code.CompactionCandidate) []behindRepo {
 		if cand.LivePacks < code.MaxPacksPerRepo {
 			continue
 		}
-		home, err := c.o.Homes.IsHome(cand.ID)
-		if (err == nil && home) || (err != nil && last[cand.ID]) {
+		if (unknown == nil && homes[cand.ID]) || (unknown != nil && last[cand.ID]) {
 			out = append(out, behindRepo{id: cand.ID, name: cand.Name, packs: cand.LivePacks})
 		}
 	}

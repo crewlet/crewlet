@@ -37,13 +37,15 @@ type Estate interface {
 	Compact(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error)
 }
 
-// Homes answers whether this node is a repository's HOME — the first git node
-// of its rendezvous order over the live git nodes (ADR-0059) — three-valued:
-// (true, nil), (false, nil), or an error where who serves git cannot be read,
-// on which the compactor compacts nothing rather than guess. The router
-// satisfies it.
+// Homes answers which of repoIDs this node is the HOME of — the first git node
+// of each one's rendezvous order over the live git nodes (ADR-0059) — every
+// one judged against ONE READING of who serves git: the set it is home for,
+// or an error where who serves git cannot be read, on which the compactor
+// compacts nothing rather than guess. A pass asks it once, for every listed
+// repository it must judge ([Compactor.Poll]). The router satisfies it
+// (estate.Router.HomeOf).
 type Homes interface {
-	IsHome(repoID string) (bool, error)
+	HomeOf(repoIDs []string) (map[string]bool, error)
 }
 
 // Uploader is the object store as the compactor reaches it: the put every

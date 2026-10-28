@@ -111,6 +111,63 @@ func TestACompactorThatCannotReadThePlacementCompactsNothing(t *testing.T) {
 	}
 }
 
+// A PASS JUDGES ITS HOMES AGAINST ONE READING: a pass asks who serves git ONCE,
+// for every listed repository it must judge — on a node home to none of them,
+// every one, which no plan of it is ever made on to remember — and plans none
+// it is not home to; and once its home has found a plan of each not due at its
+// version, a pass asks nothing at all: a repository it remembers costs the
+// pass a lookup.
+//
+// Mutation: ask who serves git once a repository, and the first pass reads
+// it twice.
+func TestAPassJudgesItsHomesAgainstOneReading(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t)
+	x.pushN(2, 4<<10)
+	x.fleet.Declare(t, code.Declared{Name: "other", Settings: codetest.Settings()})
+	other := x.p.Init()
+	x.p.Commit(other, map[string]string{"README.md": "other\n"}, "other")
+	if res := x.p.Push(t.Context(), other, x.node().URL()+"/git/other", "main"); res.Err != nil {
+		t.Fatalf("the push to other: %s", res)
+	}
+	cc := countedOver(x.node().Cache())
+	h := &askedHomes{}
+	c, _, _ := x.compactorOf(func(o *compact.Options) {
+		o.Cache, o.Estate, o.Homes = cc, &listed{Estate: served{x.fleet}}, h
+	})
+
+	report, err := c.Poll(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Listed != 2 {
+		t.Fatalf("the pass listed %d repositories, want both", report.Listed)
+	}
+	if got := h.readings(); len(got) != 1 || len(got[0]) != 2 {
+		t.Errorf("a pass over two repositories on a node home to neither asked who serves git %v, want once, "+
+			"of both", got)
+	}
+	if syncs, _ := cc.counts(); syncs != 0 || report.Home != 0 {
+		t.Errorf("a pass on a node home to neither repository synced %d times and counted %d its own, want none",
+			syncs, report.Home)
+	}
+
+	h.setHome(true)
+	if report, err := c.Poll(t.Context()); err != nil || report.Home != 2 || report.Due != 0 {
+		t.Fatalf("the pass on their home = %+v, %v; want both planned and found not due", report, err)
+	}
+	if got := h.readings(); len(got) != 2 || len(got[1]) != 2 {
+		t.Errorf("the second pass asked who serves git %v, want once more, of both", got)
+	}
+	if _, err := c.Poll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.readings(); len(got) != 2 {
+		t.Errorf("a pass over two repositories remembered as not due asked who serves git %v, want nothing more",
+			got)
+	}
+}
+
 // A COMPACTION THE NODE CANNOT HOLD IS ADMITTED WHEN THE NODE GROWS: a build
 // whose charge the node's memory refuses is counted and never remembered —
 // the node's budget is read again at every pass, a container resized in place

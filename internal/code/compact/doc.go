@@ -49,17 +49,20 @@
 //
 // The HOME, with no lease and no epoch: two nodes that both believe they are
 // home — a presence view split for a moment — both build, and the committer
-// refuses the second `stale`, one wasted build. A node that cannot read who
-// serves git compacts nothing that pass rather than guess (Homes is
-// three-valued). ONE COMPACTION AT A TIME A NODE, and a pass compacts every
+// refuses the second `stale`, one wasted build. A pass judges every listed
+// repository it must against ONE READING of who serves git (Homes), and a
+// node that cannot read it compacts nothing that pass rather than guess (Homes
+// is three-valued). ONE COMPACTION AT A TIME A NODE, and a pass compacts every
 // due repository it is home for, most live packs first, until the next tick
 // would begin: a bound in count would leave a repository at two thousand packs
 // behind a queue of barely due ones, while the order is the bound. A
 // repository a plan found NOT DUE is remembered at its row's version and its
 // byte cap — every input a plan reads but the live packs, which move only with
-// the version — so an idle repository costs a pass a map lookup, never a
-// sync; an admission the node's memory refused is never remembered, since the
-// node's budget is read again at every pass.
+// the version — so an idle repository costs its home's pass a map lookup,
+// never a sync, and every other git node's — where no plan of it is ever made
+// to remember — its rendezvous order over the pass's one reading; an
+// admission the node's memory refused is never remembered, since the node's
+// budget is read again at every pass.
 //
 // THE SYNC IS AT SESSION, floored at the repository's own version the listing
 // read, never linearizable: the committer holds every input to its own
@@ -135,7 +138,14 @@
 // no statistics gathered; two E-cores of an Intel Core Ultra 7 265U,
 // 2026-10-27, five reads), under the 100 ms past which two listings a minute
 // from each of sixteen git nodes would hold over a twentieth of one reader and
-// a listing of what changed since the last poll would have to be priced; and a
-// pass over those 10 000, none of them due, cost 387 ns a repository (op=pass:
-// a lookup in the memory of plans found not due, 3.9 ms the pass).
+// a listing of what changed since the last poll would have to be priced. And a
+// pass over those 10 000, none of them due here, cost 342 ns a repository on
+// their home (op=pass/home=all: a lookup in the memory of plans found not due,
+// 3.4 ms the pass) and 340 ns of its own on a git node home to an eighth of
+// them (op=pass/home=1of8: the rest judged against the pass's one reading of
+// who serves git), beside which the router's judging of every one of those
+// costs 575 ns a repository over eight git nodes and 1.28 µs over sixteen
+// (internal/estate's BenchmarkHomeOf) — under a microsecond a repository, some
+// 9 ms a pass, on each of a fleet of eight (the poll arms and BenchmarkHomeOf
+// at -benchtime 20x, one count, on the same machine, 2026-10-28).
 package compact

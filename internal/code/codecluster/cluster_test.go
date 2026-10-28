@@ -366,17 +366,32 @@ func (m *member) compact(ctx context.Context, p code.CompactionProposal) (code.C
 	return m.router.Load().Code().Compact(ctx, p)
 }
 
-// memberHomes is whether the member is a repository's home, as its
-// compactor asks: its own router — the incarnation's, read again at every
-// question — unless a case split the fleet's view of the repository's home
-// (SplitHomes), in which case every member it named answers yes.
+// memberHomes is which repositories the member is the home of, as its
+// compactor asks once a pass: its own router — the incarnation's, read again
+// at every question — but for a repository whose home a case split the
+// fleet's view of (SplitHomes), of which every member it named is home.
 type memberHomes struct{ m *member }
 
-func (h memberHomes) IsHome(repoID string) (bool, error) {
-	if split, ok := h.m.c.splitOf(repoID); ok {
-		return slices.Contains(split, h.m.id), nil
+func (h memberHomes) HomeOf(repoIDs []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	var rest []string
+	for _, id := range repoIDs {
+		if split, ok := h.m.c.splitOf(id); ok {
+			if slices.Contains(split, h.m.id) {
+				out[id] = true
+			}
+			continue
+		}
+		rest = append(rest, id)
 	}
-	return h.m.router.Load().IsHome(repoID)
+	homes, err := h.m.router.Load().HomeOf(rest)
+	if err != nil {
+		return nil, err
+	}
+	for id, home := range homes {
+		out[id] = home
+	}
+	return out, nil
 }
 
 // backend is the member's object store, its incarnation's.

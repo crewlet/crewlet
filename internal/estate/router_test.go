@@ -479,15 +479,25 @@ type fakePlacement struct {
 	said       map[string]int64
 	err        error
 	unanswered []string
+	// reads counts the Holders it answered: how often a router read it.
+	reads int
 }
 
 func (p *fakePlacement) Holders() ([]string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.reads++
 	if p.err != nil {
 		return nil, p.err
 	}
 	return slices.Clone(p.nodes), nil
+}
+
+// readsSoFar is how many times Holders has been asked.
+func (p *fakePlacement) readsSoFar() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.reads
 }
 
 // Listing is the nodes it names and what each of them says, as one listing.

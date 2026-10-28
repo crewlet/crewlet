@@ -290,10 +290,14 @@
 // own rather than a read the walk routes: the first node of the same
 // rendezvous order with NO demotion — one function builds both, so on a quiet
 // fleet a repository's reads and its own git work meet on one git node — and
-// UNKNOWN, never a guess, where who serves git cannot be read ([Router.IsHome]
-// is three-valued). A home that went quiet is still the home; work two homes
-// of a split presence view both do is work its repository's committer takes
-// once.
+// UNKNOWN, never a guess, where who serves git cannot be read.
+// [Router.HomeOf] answers which of many repositories this node is the home of
+// off ONE reading of who serves git, three-valued as Home is — the set, or
+// unknown for every one — for a caller that judges many at once, a
+// compactor's pass over its listing, which read the presence view again for
+// every repository it asked about one at a time. A home that went quiet is
+// still the home; work two homes of a split presence view both do is work its
+// repository's committer takes once.
 //
 // [Router.Maintainer] names the git node a repository's MAINTENANCE — the
 // compaction of its packs, the publication of its layers — is placed on, which
@@ -315,7 +319,7 @@
 // starting with a cold sync of its whole history only for its own admission to
 // refuse the work — and keeps the repositories it is home to, as a quiet home
 // keeps them, since the home holds their copies. [Router.IsMaintainer] is
-// three-valued like IsHome, and a maintainer two nodes both believe in is one
+// three-valued like HomeOf, and a maintainer two nodes both believe in is one
 // the committer takes once, as a home's work is.
 //
 // # Which data nodes to ask is answered from memory

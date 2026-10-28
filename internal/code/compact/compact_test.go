@@ -142,14 +142,57 @@ func (s served) Compact(ctx context.Context, p code.CompactionProposal) (code.Co
 	return s.f.Data().Served().ProposeCompaction(ctx, p)
 }
 
-// homes answers every question of whether this node is a repository's home
-// with home and err.
+// homes answers every question of which repositories this node is the home
+// of with home for every one asked, or err.
 type homes struct {
 	home bool
 	err  error
 }
 
-func (h homes) IsHome(string) (bool, error) { return h.home, h.err }
+func (h homes) HomeOf(repoIDs []string) (map[string]bool, error) {
+	if h.err != nil {
+		return nil, h.err
+	}
+	out := map[string]bool{}
+	for _, id := range repoIDs {
+		out[id] = h.home
+	}
+	return out, nil
+}
+
+// askedHomes is a compactor's homes that records every question it is asked —
+// the ids of each, one entry a reading — and answers home for every one while
+// home is set.
+type askedHomes struct {
+	mu    sync.Mutex
+	home  bool
+	asked [][]string
+}
+
+func (h *askedHomes) HomeOf(repoIDs []string) (map[string]bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.asked = append(h.asked, slices.Clone(repoIDs))
+	out := map[string]bool{}
+	for _, id := range repoIDs {
+		out[id] = h.home
+	}
+	return out, nil
+}
+
+// readings is every question asked so far.
+func (h *askedHomes) readings() [][]string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.asked)
+}
+
+// setHome makes every later answer home, or not.
+func (h *askedHomes) setHome(home bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.home = home
+}
 
 // compactorOf builds a compactor over x's git node's cache and the fleet's
 // store, listing and proposing through the data node, home for every

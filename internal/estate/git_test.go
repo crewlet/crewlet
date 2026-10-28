@@ -234,10 +234,11 @@ func TestAGitOperationIsAskedOfItsRepositorysHome(t *testing.T) {
 // git nodes, the home every router names — one on a node that holds nothing,
 // and one on a git node whose own half is built, asked in process — is the git
 // node the walk asks a read of the repository first on a quiet fleet, the one
-// that answers it stamped home, and a git node is home (IsHome) for exactly the
-// repositories that name it. With no demotion: a home that answered nothing is
-// still the home. A placement that cannot say who serves git is an error —
-// unknown, never "this node" — and a fleet with no git node is ErrNoGitNode.
+// that answers it stamped home, and a git node is home (HomeOf) for exactly
+// the repositories that name it. With no demotion: a home that answered
+// nothing is still the home. A placement that cannot say who serves git is an
+// error — unknown, never "this node" or "home to none" — and a fleet with no
+// git node is ErrNoGitNode.
 //
 // Mutations: key Home on the asking node's id rather than the repository's —
 // most homes are not the node the reads ask first, red; order Home with the
@@ -249,6 +250,7 @@ func TestHomeIsTheReadsFirstGitNode(t *testing.T) {
 	halves := f.gitNodes(t, holders)
 	ownHalf := f.gitRouter(t, "git-c", gitHalf{node: halves["git-c"]})
 	homes := map[string]int{}
+	homeOf := map[string]string{}
 	for i := range 200 {
 		repo := repoID(i)
 		before := asks(halves)
@@ -268,14 +270,23 @@ func TestHomeIsTheReadsFirstGitNode(t *testing.T) {
 		if q := halves[read.Rev].reads(); after[read.Rev] != before[read.Rev]+1 || !q[len(q)-1].Home {
 			t.Fatalf("the home %s of %s was not the one node asked, stamped home", read.Rev, repo)
 		}
-		isHome, err := ownHalf.IsHome(repo)
-		if err != nil || isHome != (read.Rev == "git-c") {
-			t.Fatalf("git-c's IsHome(%s) = (%v, %v), and the home is %s", repo, isHome, err, read.Rev)
-		}
 		homes[read.Rev]++
+		homeOf[repo] = read.Rev
 	}
 	if len(homes) != len(holders) {
 		t.Fatalf("two hundred repositories are homed on %v, want every git node home to some", homes)
+	}
+	own, err := ownHalf.HomeOf(slices.Collect(maps.Keys(homeOf)))
+	if err != nil {
+		t.Fatalf("git-c's HomeOf the two hundred repositories: %v", err)
+	}
+	for repo, home := range homeOf {
+		if own[repo] != (home == "git-c") {
+			t.Fatalf("git-c's HomeOf names %s %t, and the home is %s", repo, own[repo], home)
+		}
+	}
+	if len(own) != homes["git-c"] {
+		t.Fatalf("git-c's HomeOf names %d repositories, and it is the home of %d", len(own), homes["git-c"])
 	}
 
 	// NO DEMOTION: a home the router remembers silent keeps its
@@ -298,12 +309,61 @@ func TestHomeIsTheReadsFirstGitNode(t *testing.T) {
 	if home, err := ownHalf.Home(repo); err == nil || errors.Is(err, ErrNoGitNode) {
 		t.Fatalf("Home with the git placement unknown = (%s, %v), want the placement's error", home, err)
 	}
-	if isHome, err := ownHalf.IsHome(repo); err == nil || isHome {
-		t.Fatalf("IsHome with the git placement unknown = (%v, %v), want (false, an error)", isHome, err)
+	if own, err := ownHalf.HomeOf([]string{repo}); err == nil || own != nil {
+		t.Fatalf("HomeOf with the git placement unknown = (%v, %v), want no answer and an error", own, err)
 	}
 	none := newFleet(t)
 	if home, err := none.client.Home(repo); !errors.Is(err, ErrNoGitNode) {
 		t.Fatalf("Home on a fleet with no git node = (%s, %v), want ErrNoGitNode", home, err)
+	}
+	if own, err := none.client.HomeOf([]string{repo}); !errors.Is(err, ErrNoGitNode) || own != nil {
+		t.Fatalf("HomeOf on a fleet with no git node = (%v, %v), want ErrNoGitNode", own, err)
+	}
+}
+
+// HOMES ARE JUDGED AGAINST ONE READING: HomeOf over a thousand repositories
+// reads who serves git ONCE, and names exactly the repositories Home names
+// this node for — a compactor's pass over its listing pays one read of the
+// presence view, never one a repository — and asked of no repository it reads
+// nothing and names none.
+//
+// Mutation: read who serves git again for every repository (HomeOf over
+// Home), and the placement is read a thousand times.
+func TestHomeOfJudgesEveryRepositoryAgainstOneReading(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	holders := []string{"git-a", "git-b", "git-c", "git-d", "git-e"}
+	halves := f.gitNodes(t, holders)
+	ownHalf := f.gitRouter(t, "git-c", gitHalf{node: halves["git-c"]})
+	repos := make([]string, 1000)
+	for i := range repos {
+		repos[i] = repoID(i)
+	}
+	before := f.git.readsSoFar()
+	own, err := ownHalf.HomeOf(repos)
+	if err != nil {
+		t.Fatalf("HomeOf a thousand repositories: %v", err)
+	}
+	if reads := f.git.readsSoFar() - before; reads != 1 {
+		t.Errorf("HomeOf a thousand repositories read who serves git %d times, want once", reads)
+	}
+	for _, repo := range repos {
+		home, err := ownHalf.Home(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if own[repo] != (home == "git-c") {
+			t.Fatalf("HomeOf names %s %t, and Home names %s", repo, own[repo], home)
+		}
+	}
+	if len(own) == 0 || len(own) == len(repos) {
+		t.Fatalf("the premise: git-c is the home of %d of %d repositories, want some and not all", len(own),
+			len(repos))
+	}
+	before = f.git.readsSoFar()
+	if none, err := ownHalf.HomeOf(nil); err != nil || len(none) != 0 || f.git.readsSoFar() != before {
+		t.Errorf("HomeOf no repository = (%v, %v) after %d reads of who serves git, want none and no read", none,
+			err, f.git.readsSoFar()-before)
 	}
 }
 

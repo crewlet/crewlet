@@ -414,7 +414,8 @@ decides a push
 ([ADR-0060](https://github.com/crewlet/crewlet/blob/main/adr/0060-a-compaction-merges-packs-without-judging-reachability.md)).
 
 **The roll.** Once a minute every git node lists the repositories holding
-eight live packs or more, most packs first, and for each it is home for it
+eight live packs or more, most packs first, judges whose home each is against
+one reading of the live git nodes, and for each it is home for it
 plans git's own geometric split — the one `git repack --geometric=2` makes —
 over the packs that are not FULL: the lightest are merged until every pack
 left weighs at least twice the objects of all the lighter ones together. A
@@ -424,8 +425,9 @@ A repository holding more than 50 packs that are not full is merged two packs
 at a time even when they already stand in that progression, so it shrinks at
 every poll. One merge takes at most 1 024 packs and 8 GiB of pack bytes, the
 lightest first. A repository whose plan finds nothing worth merging is not
-planned again until its rows move, so an idle repository costs the minute's
-poll a lookup.
+planned again until its rows move, so an idle repository costs its home's
+minute a lookup, and every other git node's the one judgment of whose home it
+is.
 
 **The build.** One `git pack-objects --stdin-packs` over the packs merged,
 run in a scratch repository — never in the copy — whose one alternate holds
@@ -2922,7 +2924,7 @@ reference](../reference/metrics.md)).
 | `code_pack_rejected`, `code_push_invalid` | `ERROR` | The receiving git wrote a pack the engine's own checks refuse, or the engine built a proposal its own check or its committer refused: a bug, and the push fails. A proposal is checked as soon as the commits it introduces are listed, and its bundle's upload is ended there; a bundle already stored is named by no row, and the object collector removes it after its grace. A push past what one push may carry is never this: it is refused before its work, in git's words. |
 | `code_compaction_pass` | `INFO` | A git node's minute's poll of the repositories a compaction may be due in that compacted, refused or failed something: how many it `listed`, how many it is `home` for, how many were `due`, `compacted`, `refused` and `failed`, and how many are `behind` — at the most live packs a repository may hold; `DEBUG` when it did none of those. |
 | `code_compaction_pass_failed` | `WARN` | A poll's listing of the repositories a compaction may be due in failed: nothing was compacted, and the alarm reading stays as the last pass left it until the next poll, a minute on. |
-| `code_compaction_home_unknown` | `WARN` | Who serves git could not be read, so the poll compacted nothing more rather than guess which repositories this node is home for. |
+| `code_compaction_home_unknown` | `WARN` | Who serves git could not be read, so the poll compacted nothing rather than guess which repositories this node is home for; `listed` is how many repositories its listing named. |
 | `code_compaction_applied` | `INFO` | This node's compaction of a `repo` landed: its `compaction` id, how many `inputs` it merged into how many `outputs`, the `objects`, `bytes_in` and `bytes_out`, the record's `position` and how long it `took`, from its plan to its answer. |
 | `code_compaction_refused` | `WARN` | A compaction this node built was refused — by the repository's committer (`refusal`: `repo_deleted`, `upload_expired`, `pack_too_large`, `not_applied`) or by an object store with no room for its outputs (`store_full`: the repository is held back until the store has the room, and the line names the room to make). `pack_too_large` and `upload_expired` are a build past its own bounds or longer than twelve hours, and say so in `detail`. |
 | `code_compaction_failed` | `WARN` | A compaction this node began did not land: the `step` that failed — `sync`, `admit`, `build`, `upload`, `propose`, `adopt` — and why. `reason` `outputs`: the build wrote more packs than one compaction records; `bundle_too_large`: an output stayed past the bundle rule at a smaller cut too. Either uploaded nothing and halves what the repository's next plan merges. Tried again at the next poll. |

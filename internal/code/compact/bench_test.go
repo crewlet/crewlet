@@ -108,9 +108,14 @@ import (
 //     next directory, of links: its wall clock, its download of the one output
 //     included, and the files it links (links/swap), which follow the pack
 //     count, never the bytes.
-//   - poll/repos={1000,10000}/op=pass: one pass over that many listed
-//     repositories none of which is due — the memory's steady state — whose
-//     ns/repo is what a repository that is not due costs a pass: a lookup.
+//   - poll/repos={1000,10000}/op=pass/home={all,1of8}: one pass over that
+//     many listed repositories none of which is due here — the memory's
+//     steady state — on the home of every one (all: each remembered as not
+//     due, a lookup) and on a node home to an eighth of them, as each node of
+//     a fleet of eight is (1of8: the eighth remembered, the rest judged
+//     against the pass's ONE reading of who serves git — a set's lookup here,
+//     the router's own judging priced by estate's BenchmarkHomeOf); ns/repo
+//     is what a repository costs a pass.
 //   - poll/repos={1000,10000}/op=page: the serving data node's read of ONE
 //     page of the listing of that many repositories (code_repos_packs_idx,
 //     at stale, as every pass reads it). Past 100 ms at 10 000 — two listings
@@ -1093,32 +1098,54 @@ func benchPoll(b *testing.B, n int) {
 	slices.SortFunc(listed, func(x, y code.CompactionCandidate) int {
 		return cmp.Or(cmp.Compare(y.LivePacks, x.LivePacks), strings.Compare(y.ID, x.ID))
 	})
-	b.Run("op=pass", func(b *testing.B) {
-		store, err := objstore.NewStore(memobj.New())
-		if err != nil {
-			b.Fatal(err)
-		}
-		reached := &unreached{}
-		c, err := compact.New(compact.Options{Cache: reached, Objects: countingPuts{Store: store, t: &traffic{}},
-			Estate: pagedListing{due: listed}, Homes: homes{home: true}, NodeID: "bench", Limits: code.DefaultLimits,
-			Logger: slog.New(slog.DiscardHandler)})
-		if err != nil {
-			b.Fatal(err)
-		}
-		for _, cand := range listed {
-			compact.RememberNotDue(c, cand)
-		}
-		for b.Loop() {
-			report, err := c.Poll(b.Context())
-			if err != nil || report.Listed != n || report.Home != 0 {
-				b.Fatalf("a pass over %d repositories none of which is due: %+v, %v", n, report, err)
+	// THE PASS, on the home of every listed repository and on a git node home
+	// to an eighth of them, as each node of a fleet of eight is: only a
+	// repository's home ever plans it, so only its home remembers it as not
+	// due, and every other listed repository is judged against the pass's one
+	// reading of who serves git — here a set's lookup, the router's own
+	// judging priced apart (estate's BenchmarkHomeOf).
+	for _, arm := range []struct {
+		name string
+		home func(i int) bool
+	}{
+		{"home=all", func(int) bool { return true }},
+		{fmt.Sprintf("home=1of%d", eightNodes), func(i int) bool { return i%eightNodes == 0 }},
+	} {
+		b.Run("op=pass/"+arm.name, func(b *testing.B) {
+			store, err := objstore.NewStore(memobj.New())
+			if err != nil {
+				b.Fatal(err)
 			}
-		}
-		if calls := reached.calls.Load(); calls > 0 {
-			b.Fatalf("a pass over repositories none of which is due reached the cache %d times", calls)
-		}
-		b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(n), "ns/repo")
-	})
+			home := homeTo{}
+			for i, cand := range listed {
+				if arm.home(i) {
+					home[cand.ID] = true
+				}
+			}
+			reached := &unreached{}
+			c, err := compact.New(compact.Options{Cache: reached, Objects: countingPuts{Store: store, t: &traffic{}},
+				Estate: pagedListing{due: listed}, Homes: home, NodeID: "bench", Limits: code.DefaultLimits,
+				Logger: slog.New(slog.DiscardHandler)})
+			if err != nil {
+				b.Fatal(err)
+			}
+			for _, cand := range listed {
+				if home[cand.ID] {
+					compact.RememberNotDue(c, cand)
+				}
+			}
+			for b.Loop() {
+				report, err := c.Poll(b.Context())
+				if err != nil || report.Listed != n || report.Home != 0 {
+					b.Fatalf("a pass over %d repositories none of which is due here: %+v, %v", n, report, err)
+				}
+			}
+			if calls := reached.calls.Load(); calls > 0 {
+				b.Fatalf("a pass over repositories none of which is due here reached the cache %d times", calls)
+			}
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(n), "ns/repo")
+		})
+	}
 	b.Run("op=page", func(b *testing.B) {
 		r := seededListing(b, listed)
 		q := code.ReadQuery{Kind: code.ReadCompactionDue, MinPacks: code.CompactMinMerge, Fresh: codetest.Stale}
@@ -1133,6 +1160,21 @@ func benchPoll(b *testing.B, n int) {
 		}
 		b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/1e6, "page-ms")
 	})
+}
+
+// homeTo is a node's homes from a fixed set — the repositories it is the home
+// of, as one reading of who serves git names them — answered by a lookup each,
+// so a pass's own share of what its homes cost is what the poll arms price.
+type homeTo map[string]bool
+
+func (h homeTo) HomeOf(repoIDs []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	for _, id := range repoIDs {
+		if h[id] {
+			out[id] = true
+		}
+	}
+	return out, nil
 }
 
 // pagedListing is a code log whose due listing is due, served in the pages a

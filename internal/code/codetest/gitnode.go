@@ -144,9 +144,10 @@ type GitOptions struct {
 	// again at every call — the engine hands its compactor the router's code
 	// seam, whose Compact this is.
 	Compactions func(context.Context, code.CompactionProposal) (code.CompactResult, error)
-	// Homes is whether the node is a repository's home, as its compactor
-	// asks: the node's own router in every topology, as the engine hands its
-	// compactor the router — or a fixed answer a case hands it (SplitHomes).
+	// Homes is which repositories the node is the home of, as its compactor
+	// asks once a pass: the node's own router in every topology, as the
+	// engine hands its compactor the router — or a fixed answer a case hands
+	// it (SplitHomes).
 	Homes compact.Homes
 	// Objects is the object store's backend for each incarnation: asked
 	// again at every start, because a backend riding a broker connection

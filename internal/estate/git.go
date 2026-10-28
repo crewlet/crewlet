@@ -380,28 +380,84 @@ var ErrNoGitNode = errors.New("estate: no live git node")
 // and a home's work done by a node that could not tell is work two nodes may
 // do. A fleet that lists no git node answers [ErrNoGitNode].
 func (r *Router) Home(repoID string) (string, error) {
-	nodes, err := r.gitPlacement.Holders()
+	h, err := r.readHomes()
 	if err != nil {
-		return "", fmt.Errorf("estate: the home of repository %s: read who serves git: %w", repoID, err)
+		return "", fmt.Errorf("estate: the home of repository %s: %w", repoID, err)
 	}
-	_, own := r.gitHalf()
-	order := r.keyed(repoID, nodes, own)
-	if len(order) == 0 {
-		return "", fmt.Errorf("estate: the home of repository %s: %w", repoID, ErrNoGitNode)
-	}
-	return order[0], nil
+	return h.home(r, repoID), nil
 }
 
-// IsHome reports whether this node is repoID's home ([Router.Home]): (true,
-// nil), (false, nil), or (false, err) where who serves git cannot be read —
-// three facts, so a node that cannot tell does none of a home's work rather
-// than guess.
-func (r *Router) IsHome(repoID string) (bool, error) {
-	home, err := r.Home(repoID)
-	if err != nil {
-		return false, err
+// HomeOf answers which of repoIDs this node is the HOME of ([Router.Home]),
+// every one judged against ONE READING of who serves git: the set holds
+// exactly the ids this node is home for. An error is UNKNOWN for every one of
+// them — who serves git could not be read, or it names no git node
+// ([ErrNoGitNode]) — never "home to none", so a node that cannot tell does
+// none of a home's work rather than guess. No ids read nothing.
+//
+// ONE READING FOR MANY REPOSITORIES, because what reads it — a compactor's
+// pass, over every repository its due listing names, every minute on every
+// git node — is a question about the whole listing: asked a repository at a
+// time, each answer read the presence view again (its leases cloned under its
+// lock, every node's profile decoded, the git nodes copied and sorted) before
+// the one rendezvous order that is the answer, so a git node home to an
+// eighth of ten thousand repositories paid all of that every minute for each
+// of the rest, to find out that it is not their home. Read once, a repository
+// costs its rendezvous order alone — 575 ns over eight git nodes and 1.28 µs
+// over sixteen, 5.8 ms and 12.8 ms for ten thousand, the one read of the
+// placement included (BenchmarkHomeOf, -benchtime 20x and one count, two
+// E-cores of an Intel Core Ultra 7 265U, 2026-10-28) — and a pass judges every
+// repository against one fleet rather than a fleet that moved part way through
+// it. Two nodes whose readings differ may each judge themselves a repository's
+// home, as they may a repository at a time: a home's work is decided by its
+// repository's committer, which takes it once (ADR-0059).
+func (r *Router) HomeOf(repoIDs []string) (map[string]bool, error) {
+	if len(repoIDs) == 0 {
+		return map[string]bool{}, nil
 	}
-	return home == r.self, nil
+	h, err := r.readHomes()
+	if err != nil {
+		return nil, fmt.Errorf("estate: the homes of %d repositories: %w", len(repoIDs), err)
+	}
+	out := map[string]bool{}
+	for _, id := range repoIDs {
+		if h.home(r, id) == r.self {
+			out[id] = true
+		}
+	}
+	return out, nil
+}
+
+// homeReading is one reading of who serves git, as [Router.Home] and
+// [Router.HomeOf] order a repository's git nodes over it: every live git node
+// the placement names, and whether this node's own git half is built — which
+// places it in the order where the placement does not yet name it, so its
+// reads are answered in process.
+type homeReading struct {
+	nodes []string
+	own   bool
+}
+
+// readHomes reads who serves git once: the placement's live git nodes and this
+// node's own half. An error is the placement's, UNKNOWN; a reading that names
+// no git node at all — none listed, and no half of this node's — is
+// [ErrNoGitNode].
+func (r *Router) readHomes() (homeReading, error) {
+	nodes, err := r.gitPlacement.Holders()
+	if err != nil {
+		return homeReading{}, fmt.Errorf("read who serves git: %w", err)
+	}
+	_, own := r.gitHalf()
+	if !own && !slices.ContainsFunc(nodes, func(n string) bool { return n != "" && n != r.self }) {
+		return homeReading{}, ErrNoGitNode
+	}
+	return homeReading{nodes: nodes, own: own}, nil
+}
+
+// home is repoID's home under h: the first node of the git walk's own order
+// ([Router.keyed]) before the router's memory reorders it — never empty, since
+// readHomes refuses a reading that names no git node.
+func (h homeReading) home(r *Router, repoID string) string {
+	return r.keyed(repoID, h.nodes, h.own)[0]
 }
 
 // Maintainer is the git node a repository's MAINTENANCE is placed on — the

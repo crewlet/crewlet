@@ -204,9 +204,9 @@ type SoloOptions struct {
 	// Reads) — its cache's backfill's pages of pushes among them: the window
 	// a case has onto them, to fail or count them; nil reads the data node.
 	WrapReads func(Reads) Reads
-	// Homes is the git node id's answer to whether it is a repository's home
-	// in place of its own router's — a case's fixed answer, a split presence
-	// view (SplitHomes); nil asks every node's own router.
+	// Homes is the git node id's answer to which repositories it is the home
+	// of in place of its own router's — a case's fixed answer, a split
+	// presence view (SplitHomes); nil asks every node's own router.
 	Homes func(id string) compact.Homes
 	// LogBytes is the code log's ceiling; 0 is soloLogBytes. A benchmark
 	// whose history outgrows what that ceiling admits beside its gate
@@ -391,21 +391,21 @@ func (f *SoloFleet) route(t testing.TB) {
 	}
 }
 
-// soloHomes is whether a solo fleet's i-th git node is a repository's home,
-// as its compactor asks it: that node's own router, read again at every
-// question, so a restarted fleet's is the one asked — and none while the
-// fleet is killed, which is an error rather than an answer.
+// soloHomes is which repositories a solo fleet's i-th git node is the home
+// of, as its compactor asks it once a pass: that node's own router, read again
+// at every question, so a restarted fleet's is the one asked — and none while
+// the fleet is killed, which is an error rather than an answer.
 type soloHomes struct {
 	f *SoloFleet
 	i int
 }
 
-func (h soloHomes) IsHome(repoID string) (bool, error) {
+func (h soloHomes) HomeOf(repoIDs []string) (map[string]bool, error) {
 	r := h.f.homes[h.i].Load()
 	if r == nil {
-		return false, errors.New("codetest: the solo fleet routes nothing while it is killed")
+		return nil, errors.New("codetest: the solo fleet routes nothing while it is killed")
 	}
-	return r.IsHome(repoID)
+	return r.HomeOf(repoIDs)
 }
 
 // compact is what every git node's compactor proposes a compaction to: the
