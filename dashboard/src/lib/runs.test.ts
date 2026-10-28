@@ -70,7 +70,12 @@ test("an answer's fate is the run record's, not the press's", () => {
   });
   expect(answerFate(given, run({}), true)).toBe("sent");
   expect(answerFate(given, run({ status: "reseed" }), true)).toBe("sent");
-  expect(answerFate(given, run({ status: "answered" }), true)).toBe("taken");
+  expect(answerFate(given, run({ status: "answered", answer_ids: ["a1"] }), true)).toBe("recorded");
+  expect(answerFate(given, run({ status: "answered" }), true)).toBe("recorded");
+  // THE FIRST RECORDED ANSWER WINS: another one on the same question was used.
+  expect(answerFate(given, run({ status: "answered", answer_ids: ["a9"] }), true)).toBe(
+    "superseded",
+  );
   expect(answerFate(given, run({ status: "resumed" }), true)).toBe("taken");
   expect(answerFate(given, run({ status: "running" }), true)).toBe("taken");
   expect(answerFate(given, undefined, true)).toBe("taken");

@@ -676,6 +676,8 @@ function RunPane({
   const [given, setGiven] = useState<GivenAnswer | null>(null);
   // WHY THE LAST ANSWER WAS NOT USED, said until the person answers again.
   const [unused, setUnused] = useState<string | null>(null);
+  // ANSWERED BY SOMEBODY ELSE FIRST: nothing is left to answer here.
+  const [superseded, setSuperseded] = useState(false);
   const runs = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
   const record = runs.data?.runs.find((r) => r.turn_id === run.turn_id);
   const fate = given ? answerFate(given, record, runs.data !== undefined) : null;
@@ -697,20 +699,41 @@ function RunPane({
     if (told.current === given.answerId + fate) return;
     told.current = given.answerId + fate;
     const answer: AskAnswer = { kind: "reply", text: given.text };
+    if (fate === "recorded") {
+      // RECORDED ON THE RUN, its resume waiting for the seat: answered, and
+      // kept open, saying what the seat is doing first.
+      onSettled("Answered", answer, true);
+      return;
+    }
     if (fate === "taken") {
       onSettled("Answered", answer);
       return;
     }
-    // NOT USED, so the person is told so and asked again, never left looking
-    // at "Sent" for an answer the run will not read.
-    setUnused(
-      fate === "declined"
-        ? `${frame.name}’s run could not use your answer and is waiting on its question again. Answer it again.`
-        : `${frame.name}’s run moved on to a new question before your answer reached it. Answer the question above.`,
-    );
+    // NOT USED, so the person is told so and why, never left looking at
+    // "Sent" for an answer the run will not read.
+    if (fate === "superseded") {
+      const by = record?.answered_by ? ` by ${record.answered_by}` : "";
+      setUnused(`This question was already answered${by}, so your answer was not used.`);
+      setSuperseded(true);
+    } else {
+      setUnused(
+        fate === "declined"
+          ? `${frame.name}’s run could not use your answer and is waiting on its question again. Answer it again.`
+          : `${frame.name}’s run moved on to a new question before your answer reached it. Answer the question above.`,
+      );
+    }
     setGiven(null);
     onSettled(null, undefined, true);
-  }, [fate, given, frame.name, onSettled]);
+  }, [fate, given, frame.name, onSettled, record?.answered_by]);
+
+  // THE SEAT'S OTHER JOB, while this answer waits for it: another of the
+  // seat's coding runs holding the seat.
+  const busyOn = runs.data?.runs.find(
+    (r) =>
+      r.agent_handle === run.agent_handle &&
+      r.turn_id !== run.turn_id &&
+      (r.status === "launching" || r.status === "running" || r.status === "resumed"),
+  );
 
   const send = async () => {
     if (!pressable(write, blocked)) return;
@@ -746,10 +769,23 @@ function RunPane({
       {question.trim() !== heading && <ReadingPaneQuote verbatim>{question}</ReadingPaneQuote>}
       {given !== null ? (
         <ReadingPaneOutcome>
-          {fate === "taken" ? "Answered " : "Sent "}
-          <strong>{`“${given.text}”`}</strong>
-          {fate === "taken" ? "" : `. Waiting for ${frame.name}’s run to take it.`}
+          {fate === "taken" ? (
+            <>
+              Answered <strong>{`“${given.text}”`}</strong>
+            </>
+          ) : fate === "recorded" ? (
+            <>
+              Answer recorded: <strong>{`“${given.text}”`}</strong>.{" "}
+              {busyOn ? busyLine(busyOn, frame.name) : `${frame.name}’s run picks it up next.`}
+            </>
+          ) : (
+            <>
+              Sent <strong>{`“${given.text}”`}</strong>. Waiting for {frame.name}’s run to take it.
+            </>
+          )}
         </ReadingPaneOutcome>
+      ) : superseded ? (
+        unused && <RefusalStrip onDismiss={() => setUnused(null)}>{unused}</RefusalStrip>
       ) : hidden ? (
         <Text as="p" variant="body">
           Its lead or an admin can answer it.
@@ -788,6 +824,16 @@ function RunPane({
       </Text>
     </ReadingPane>
   );
+}
+
+/**
+ * What a seat busy on another coding run is doing, for an answer waiting on it:
+ * "The Senior Backend Engineer is busy on GP-4’s run and picks this up next."
+ */
+function busyLine(busy: SandboxRun, name: string): string {
+  const who = busy.role ? `The ${busy.role}` : name;
+  const on = busy.work_item?.key ? `on ${busy.work_item.key}’s run` : "on another coding run";
+  return `${who} is busy ${on} and picks this up next.`;
 }
 
 function SeatPane({ seat, frame }: { seat: SeatCondition; frame: Frame }) {

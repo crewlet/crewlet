@@ -850,7 +850,7 @@ describe("the pane", () => {
       pause_ttl_seconds: 3_600,
       declined_answers: [] as string[],
     };
-    const answerRun = async (after: Record<string, unknown>) => {
+    const answerRun = async (after: Record<string, unknown>, others: object[] = []) => {
       actAnswers = {
         answer_run: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
       };
@@ -863,6 +863,7 @@ describe("the pane", () => {
             Promise.resolve({
               runs: [
                 posted.some((p) => p.tool === "answer_run") ? { ...parked, ...after } : parked,
+                ...others,
               ],
             }),
         },
@@ -884,9 +885,35 @@ describe("the pane", () => {
       expect(screen.queryByRole("button", { name: /Answered$/ })).toBeNull();
     });
 
-    test("is answered once the run's record says it was taken", async () => {
-      await answerRun({ status: "answered" });
+    test("is answered once the run was resumed with it", async () => {
+      await answerRun({ status: "resumed", answer_ids: ["a1"] });
       expect(outcome()).toBe("Answered “Yes, delete it.”");
+    });
+
+    test("says what the seat is doing while the recorded answer waits for it", async () => {
+      const busy = {
+        ...parked,
+        turn_id: "turn-9",
+        launch_id: "q9",
+        status: "running",
+        role: "Senior Backend Engineer",
+        work_item: { backend: "native", id: "t-4", key: "GP-4", project: "GP" },
+      };
+      await answerRun({ status: "answered", answer_ids: ["a1"] }, [busy]);
+      expect(outcome()).toBe(
+        "Answer recorded: “Yes, delete it.”. The Senior Backend Engineer is busy on GP-4’s run and picks this up next.",
+      );
+    });
+
+    test("is refused, naming whose answer was used, when another was recorded first", async () => {
+      await answerRun({ status: "answered", answer_ids: ["a0"], answered_by: "jane" });
+      expect(outcome()).toBeUndefined();
+      expect(
+        screen.getByText(
+          "This question was already answered by jane, so your answer was not used.",
+        ),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Send answer" })).toBeNull();
     });
 
     test("is asked again, with the reason, when the question let it go", async () => {

@@ -37,8 +37,11 @@ export interface GivenAnswer {
  * the run's seat, which records it on the run when it takes it. So "sent" is
  * all the press itself can say, and the RECORD says the rest:
  *
- *  - `taken`: the run is answered or resumed on the question the answer was
- *    given against, or its record is gone (the run took it and ended);
+ *  - `recorded`: the run is answered with this answer, and its resume waits
+ *    for the seat;
+ *  - `taken`: the run was resumed with it, or its record is gone (the run took
+ *    it and ended);
+ *  - `superseded`: another answer was recorded first, so this one was not used;
  *  - `declined`: the question let this very answer go, and the run waits on it
  *    again, so the person must answer again;
  *  - `overtaken`: the run moved on to another question first, so this answer
@@ -48,19 +51,22 @@ export interface GivenAnswer {
  * A record that was never read (`undefined` with `loaded` false) is `sent`:
  * nothing is known yet, and nothing is claimed.
  */
-export type AnswerFate = "sent" | "taken" | "declined" | "overtaken";
+export type AnswerFate = "sent" | "recorded" | "taken" | "superseded" | "declined" | "overtaken";
 
 export function answerFate(
   given: GivenAnswer,
-  run: Pick<SandboxRun, "status" | "launch_id" | "declined_answers"> | undefined,
+  run: Pick<SandboxRun, "status" | "launch_id" | "declined_answers" | "answer_ids"> | undefined,
   loaded: boolean,
 ): AnswerFate {
   if (!run) return loaded ? "taken" : "sent";
   if (given.answerId && run.declined_answers?.includes(given.answerId)) return "declined";
+  const recorded = run.answer_ids ?? [];
+  const ours = given.answerId !== "" && recorded.includes(given.answerId);
+  if (recorded.length > 0 && !ours && run.launch_id === given.launchId) return "superseded";
   if (run.launch_id && given.launchId && run.launch_id !== given.launchId) return "overtaken";
-  if (run.status === "answered" || run.status === "resumed") return "taken";
+  if (run.status === "answered") return "recorded";
   if (run.status === "awaiting_clarification" || run.status === "reseed") return "sent";
-  // LAUNCHING OR RUNNING on the same question: it was resumed and its turn
-  // launched the next job before any new question was asked.
+  // RESUMED, OR LAUNCHING OR RUNNING on the same question: it was resumed
+  // with the answer, and its turn may have launched the next job.
   return "taken";
 }

@@ -1283,8 +1283,12 @@ const (
 	// rather than drawn as a card (ADR-0061): its chip and peek, the mention
 	// rule, the oversize card and a page that says it is one, less the folded
 	// read cards they replace, took it to 4591.9 KiB. 4592 KiB, which still
+	// refuses a doubled baseline. Saying what became of an answer to a parked
+	// coding run (sent, recorded while its seat is busy and on what, answered,
+	// or not used and why) off the run's own record, rather than calling a
+	// `pending` press answered, took it to 4594.4 KiB. 4595 KiB, which still
 	// refuses a doubled baseline.
-	treeBudget = 4<<20 + 496<<10
+	treeBudget = 4<<20 + 499<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

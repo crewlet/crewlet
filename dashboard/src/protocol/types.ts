@@ -777,6 +777,14 @@ export interface SandboxRun {
    * engine that does not say.
    */
   declined_answers?: string[];
+  /**
+   * The answer recorded on the run, by the deliveries it arrived in, who gave
+   * it and when. The first recorded answer wins: an answer whose id is not
+   * here was not used. Empty on a run with no recorded answer.
+   */
+  answer_ids?: string[];
+  answered_by?: string;
+  answered_at?: string;
   /** The item the launching turn was charged to; null when it was on none. */
   work_item?: WorkItemRef | null;
 
