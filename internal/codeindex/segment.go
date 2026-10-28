@@ -667,7 +667,17 @@ func (u *union) end() {
 // ordinal once. It is u's own storage, valid until u is next used.
 func (u *union) merged() []uint32 {
 	for len(u.ends) > 1 {
-		u.spare, u.spareEnds = slices.Grow(u.spare[:0], len(u.buf)), u.spareEnds[:0]
+		if cap(u.spare) < len(u.buf) {
+			// Made afresh, never grown: nothing it holds is read again, and
+			// growing it copies what an earlier round merged into it — and,
+			// built with the race detector, which does not elide the append
+			// of a make that slices.Grow is, allocates the growth twice. As
+			// long as buf can hold, which append grows a factor at a time,
+			// so the spare too is made a logarithmic number of times however
+			// the unions it merges grow from one to the next.
+			u.spare = make([]uint32, 0, cap(u.buf))
+		}
+		u.spare, u.spareEnds = u.spare[:0], u.spareEnds[:0]
 		from := 0
 		for i := 0; i < len(u.ends); i += 2 {
 			if i+1 < len(u.ends) {
