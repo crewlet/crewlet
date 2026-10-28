@@ -458,7 +458,7 @@ describe("where a condition is shown", () => {
     expect(WHERE_OF[stalled!.subject]).toBe("live");
     // THE INBOX'S ROWS: the stopped seat, and neither the engine's own
     // condition nor the round.
-    expect(conditionsToDecide(items).map((i) => i.id)).toEqual(["stopped-c"]);
+    expect(conditionsToDecide(items).map((i) => i.id)).toEqual(["seat-state-c"]);
   });
 });
 
@@ -546,7 +546,7 @@ describe("a stopped seat's row", () => {
         nameOf: (key) => (key === "jane-founder" ? "Jane Founder" : key),
       }),
     );
-    expect(items.find((i) => i.id === "stopped-devrel")?.detail).toBe(
+    expect(items.find((i) => i.id === "seat-state-devrel")?.detail).toBe(
       "The seat cannot take work: paused by Jane Founder.",
     );
   });
@@ -576,9 +576,85 @@ describe("a stopped seat's row", () => {
         ],
       }),
     );
-    expect(items.filter((i) => i.id.startsWith("stopped-")).map((i) => i.id)).toEqual([
-      "stopped-one",
-      "stopped-two",
+    expect(items.filter((i) => i.id.startsWith("seat-state-")).map((i) => i.id)).toEqual([
+      "seat-state-one",
+      "seat-state-two",
     ]);
+  });
+});
+
+// A MODEL AT ITS USAGE LIMIT IS ONE ROW FOR ITS ENTRY, NOT ONE PER SEAT, and a
+// seat's own row keeps its id whichever condition it is in. While the engine
+// retried a spent subscription every second, each seat flipped between a
+// "stopped" row and a "last turn failed" row under two ids, which a list keyed
+// on the id drew as one row leaving and another arriving.
+describe("a model at its usage limit", () => {
+  const limit = {
+    provider_key: "default",
+    provider_keys: ["default"],
+    parked: true,
+    running_on: null,
+    resets_at: "2026-01-01T12:30:00Z",
+    retry_at: "2026-01-01T12:30:00Z",
+    since: "2026-01-01T11:59:00Z",
+    said: "You've hit your 5-hour limit",
+    cli: "claude-code",
+    subscription: true,
+  };
+  const failed = {
+    kind: "rate_limit",
+    message: "llm chain exhausted after 1 providers (default)",
+    phase: "execute",
+    turn_id: "t1",
+    at: "2026-01-01T11:59:30Z",
+    event_id: "e1",
+  };
+
+  test("is one condition for the entry, and no row of each seat's", () => {
+    const items = attentionQueue(
+      input({
+        agents: [
+          {
+            id: "pm",
+            agent_id: "pm",
+            role: "PM",
+            activity: "stopped",
+            stopped_reason: "provider",
+            provider_limit: limit,
+            last_error: failed,
+          },
+          {
+            id: "qa",
+            agent_id: "qa",
+            role: "QA",
+            activity: "idle",
+            provider_limit: limit,
+            last_error: failed,
+          },
+        ],
+      }),
+    );
+    const decide = conditionsToDecide(items);
+    expect(decide.map((i) => i.id)).toEqual(["provider-limit-default"]);
+    expect(decide[0]?.title).toBe("Claude Code subscription limit reached");
+    expect(decide[0]?.technical).toBe("You've hit your 5-hour limit");
+    expect(decide[0]?.path).toEqual(["settings", "models"]);
+  });
+
+  test("a seat's own row keeps its id between stopped and failed", () => {
+    const stopped = attentionQueue(
+      input({
+        agents: [
+          { id: "a", agent_id: "a", role: "A", activity: "stopped", stopped_reason: "unplaced" },
+        ],
+      }),
+    );
+    const failedTurn = attentionQueue(
+      input({
+        agents: [{ id: "a", agent_id: "a", role: "A", activity: "idle", last_error: failed }],
+      }),
+    );
+    expect(stopped.map((i) => i.id)).toEqual(["seat-state-a"]);
+    expect(failedTurn.map((i) => i.id)).toEqual(["seat-state-a"]);
   });
 });

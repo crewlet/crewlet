@@ -17,7 +17,7 @@
  * kind in a different shape would make a reader learn four lists to read one.
  */
 
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import {
   Button,
   EmptyState,
@@ -148,7 +148,7 @@ export function InboxColumn({
       settled={settled.get(row.key)}
       reader={reader}
       selected={row.key === selected}
-      onOpen={() => onOpen(row.key)}
+      onOpen={onOpen}
     />
   );
   const snoozedLabel = snoozedCount
@@ -312,7 +312,14 @@ function whenOf(row: InboxRow, now: number): string {
   return shortWhen(row.at, now);
 }
 
-function InboxItem({
+/**
+ * One row, drawn again only when what it shows can have changed: its row, its
+ * selection, its settlement, the clock its age is read on. MEMOISED because the
+ * list around it is redrawn for every live push the Inbox reads, and a row
+ * whose props are the ones it was drawn with has nothing new to say
+ * ([useStableList] keeps them so).
+ */
+const InboxItem = memo(function InboxItem({
   row,
   index,
   now,
@@ -331,7 +338,9 @@ function InboxItem({
   /** The reader's own record name, so their answers read "You". */
   reader: string;
   selected: boolean;
-  onOpen: () => void;
+  /** Opens a row by its key: one function for every row, so a row's props
+   *  are the same from one draw to the next. */
+  onOpen: (key: string) => void;
 }) {
   const who = rowWho(row, index);
   const item = rowItem(row);
@@ -367,7 +376,7 @@ function InboxItem({
       done={done}
       doneLabel={settled?.label ?? (answered?.kind === "resolved" ? "Resolved" : "Answered")}
       selected={selected}
-      onClick={onOpen}
+      onClick={() => onOpen(row.key)}
       aside={
         item ? (
           <TaskLink item={item} label={rowKey(row)} title={title ?? taskTitleOf(row)} />
@@ -377,7 +386,7 @@ function InboxItem({
       {words.text}
     </Row>
   );
-}
+});
 
 /** The answer this visit gave, in the words an answered row says it with. */
 function givenWords(answer: AskAnswer): AnswerWords {

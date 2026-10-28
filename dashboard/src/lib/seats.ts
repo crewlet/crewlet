@@ -1468,7 +1468,7 @@ export function stoppedLine(row: AgentRow | null | undefined, nameOf: NameOf = A
     case "budget":
       return "its token budget is spent until the window resets";
     case "provider":
-      return "its model provider is unreachable";
+      return "its models are at their usage limit";
     default:
       return "stopped";
   }

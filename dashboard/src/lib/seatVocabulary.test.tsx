@@ -95,7 +95,7 @@ describe("a seat a fault stopped", () => {
     expect(screen.getByText("Stopped")).toBeTruthy();
     const [item] = queue([PROVIDER_STOP]);
     expect(item?.title).toBe("SRE is stopped");
-    expect(item?.detail).toBe("The seat cannot take work: its model provider is unreachable.");
+    expect(item?.detail).toBe("The seat cannot take work: its models are at their usage limit.");
   });
 });
 
