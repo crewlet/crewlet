@@ -273,11 +273,17 @@ func (p pieces) layer() code.Pieces {
 }
 
 // repairAction is what a repair does about the checkable file at rel found
-// failing: a derived file is dropped, a pack's file installed again.
-func (im *image) repairAction(rel string) string {
+// failing: a derived file is dropped, a pack's file installed again — and a
+// file of the installed chain written again or fetched again, but for the
+// node's tip (tip, its id where the copy holds one, recordedTip), which is a
+// file the node writes as it writes its own graph: dropped, the chain file
+// written again without it (planChain), and written again at once.
+func (im *image) repairAction(rel, tip string) string {
 	switch i, o := im.owner(rel); {
 	case i < 0:
 		return "reinstalled"
+	case tip != "" && rel == tipRel(tip):
+		return "dropped"
 	case im.decls[i].chained() && o.Main:
 		// A chain file is written again from the ids installed (planChain).
 		return "rewritten"
@@ -379,6 +385,28 @@ func trailerSound(ctx context.Context, path string, p pieces, want expect) (hash
 		return hashDamaged, id, read, nil
 	}
 	return hashSound, id, read, nil
+}
+
+// chainVerdict is v, a reader's verdict of a file held to want, as it stands
+// once its reading is over: no verdict (hashNone) for a CHAIN FILE (want.whole)
+// whose incarnation's chain files did not stand still from m — the mark the
+// reader took with what it held the file to (chainWants) — to now
+// (chainStill). A chain file is held to what the incarnation's record names,
+// and an in-place write of it — the node's tip, a cut that drops the tip —
+// moves the file and the record at two moments, so a hash across one may
+// compare a file of one moment with a record of another: neither sound nor
+// damaged. Every other verdict is the file's own. e.mu is NOT held.
+func chainVerdict(e *entry, inc *incarnation, want expect, m chainMark, v hashVerdict) hashVerdict {
+	if !want.whole || v == hashNone {
+		return v
+	}
+	e.mu.Lock()
+	still := chainStill(inc, m)
+	e.mu.Unlock()
+	if !still {
+		return hashNone
+	}
+	return v
 }
 
 // contentSound holds the file at path, Lstat'ed at id, to want byte for byte —
@@ -718,10 +746,13 @@ func vouchedRels(inc *incarnation) []string {
 // ended, on Options.Now's clock and as a time.Now() reading: a forced check's
 // verdict, which its round records once it ends (incarnation.forcedAt).
 type checked struct {
-	trigger   checkTrigger
-	forced    bool
-	sound     int
-	damaged   []checkedFile
+	trigger checkTrigger
+	forced  bool
+	sound   int
+	damaged []checkedFile
+	// tip is the node's tip the copy held as the check read what it holds
+	// (recordedTip): what a finding of its file says was done about it.
+	tip       string
 	bytes     int64
 	at, ended time.Time
 }
@@ -793,7 +824,8 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 	// them, and the provenance runs and the memo are not.
 	present = slices.DeleteFunc(present, func(f ownedFile) bool { return !f.of.gitReads() })
 	e.mu.Lock()
-	chains := chainWants(inc)
+	chains, mark := chainWants(inc), markChain(inc)
+	ck.tip = recordedTip(inc)
 	e.mu.Unlock()
 	derived, err := heldFiles(present, wants, chains)
 	if err != nil {
@@ -821,6 +853,7 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 			c.knobs.hashing(path)
 		}
 		v, id, n, err := trailerSound(ctx, path, p, wants[f.rel])
+		v = chainVerdict(e, inc, wants[f.rel], mark, v)
 		ck.bytes += n
 		f.id = id
 		switch {
@@ -841,7 +874,7 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 			f.trigger = trigger
 			ck.damaged = append(ck.damaged, f)
 			c.log.Warn("code_cache_check_damaged", "repo", e.id, "incarnation", inc.n, "file", f.rel,
-				"trigger", string(trigger), "action", c.image.repairAction(f.rel), "error", err)
+				"trigger", string(trigger), "action", c.image.repairAction(f.rel, ck.tip), "error", err)
 			continue
 		case v == hashNone:
 			c.countCheck(f.kind, checkReplaced, trigger)
@@ -858,7 +891,7 @@ func (c *Cache) checkIndexes(ctx context.Context, e *entry, inc *incarnation, sn
 		f.trigger = trigger
 		ck.damaged = append(ck.damaged, f)
 		c.log.Warn("code_cache_check_damaged", "repo", e.id, "incarnation", inc.n, "file", f.rel,
-			"trigger", string(trigger), "action", c.image.repairAction(f.rel))
+			"trigger", string(trigger), "action", c.image.repairAction(f.rel, ck.tip))
 	}
 	e.mu.Lock()
 	inc.checkedOnce = true
@@ -1011,7 +1044,7 @@ func (ck checked) findings(im *image) []string {
 			continue
 		}
 		action := "dropped it to be written again"
-		switch im.repairAction(f.rel) {
+		switch im.repairAction(f.rel, ck.tip) {
 		case "reinstalled":
 			action = "fetched its pack again"
 		case "refetched":

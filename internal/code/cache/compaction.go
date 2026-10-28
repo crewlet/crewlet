@@ -84,10 +84,11 @@ type Compacting struct {
 //   - ErrStopped, and ErrInvalid for a Synced this cache did not hand out or
 //     a negative count.
 //
-// The charge is charge(inputs, CompactBytesPerObject) — the merged packs'
-// objects, with room beside them for one transfer of the repository, as every
-// background step is charged — and CompactWindowBytes(limits), the build's
-// delta window, which no count of objects charges.
+// The charge is chargeOver(inputs, CompactBytesPerObject, inputs) — the
+// merged packs' objects, with room beside them for one transfer of the
+// repository, as every background step is charged — and
+// CompactWindowBytes(limits), the build's delta window, which no count of
+// objects charges.
 //
 // ITS PIN, ITS SLOT AND ITS RELEASE are a check's (Cache.AdmitVerify): a slot
 // held from the admission to the build's last process, so the build and the
@@ -112,7 +113,7 @@ func (c *Cache) AdmitCompaction(s Synced, inputs int64, limits code.Limits) (*Co
 		return nil, err
 	}
 	label := cmp.Or(s.Repo.Name, s.entry.id)
-	mem := charge(inputs, CompactBytesPerObject) + CompactWindowBytes(limits)
+	mem := chargeOver(inputs, CompactBytesPerObject, inputs) + CompactWindowBytes(limits)
 	if budget := c.maint.budgetNow(); mem > budget {
 		c.compactionRefused(s, mem)
 		return nil, fmt.Errorf("cache: compact %s: %w: its build needs about %d bytes, and this node can give "+

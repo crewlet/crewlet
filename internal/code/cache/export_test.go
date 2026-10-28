@@ -384,7 +384,7 @@ func chargeOf(c *Cache, repoID string, perObject int64) int64 {
 	e := lookup(c, repoID)
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return charge(e.current.objects, perObject)
+	return chargeOver(e.current.objects, perObject, e.current.objects)
 }
 
 // ObjectsOf is how many objects repoID's current incarnation holds, as its
@@ -1240,8 +1240,13 @@ func StatingWith(f func(rel string)) func(*Options) {
 }
 
 // WriteCharge is what w is admitted at over repoID's current incarnation:
-// its own memory an object, and the room for one transfer beside it.
+// its own memory an object of what it covers — the repository, or the tail
+// for the node's tip — and the room for one transfer of the repository
+// beside it.
 func WriteCharge(c *Cache, repoID string, w Write) int64 {
+	if w.Step == StepTipGraph {
+		return TipCharge(c, repoID)
+	}
 	return chargeOf(c, repoID, w.BytesPerObject)
 }
 

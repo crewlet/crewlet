@@ -168,8 +168,11 @@ func TestValidateRefusesAnUnsaidDeclaration(t *testing.T) {
 // done on a report, since no report can name such a file; at most one main
 // file, its presence otherwise its record's; and every file of one no git
 // reads under crewlet/, never objects/, the namespace a push's scratch names
-// as its alternate. A declaration's writes are of one kind. Each row breaks
-// one of those on the provenance index's valid declaration.
+// as its alternate. And a git write beside its in-process ones is held to what
+// git writing a declaration's files asks of it — a file whose presence is its
+// own, and a part a damage report names it by — so no git process writes a
+// file no git process reads. Each row breaks one of those on the provenance
+// index's valid declaration.
 //
 // Mutation: let an in-process write name a lane (drop validateInProcess's lane
 // case) — the "a lane" row passes.
@@ -195,8 +198,8 @@ func TestValidateRefusesAnInProcessDeclarationThatClaimsAGitWrite(t *testing.T) 
 		{"a charge an object", func(d *Derived) { d.Writes[1].BytesPerObject = 8 }, "Writes[1].BytesPerObject"},
 		{"an argument list", func(d *Derived) { d.Writes[0].Args = []string{"x"} }, "Writes[0].Args"},
 		{"no charge said", func(d *Derived) { d.Writes[1].Charge = " " }, "Writes[1].Charge"},
-		{"writes of both kinds", func(d *Derived) { d.Writes[1] = DerivedFiles()[0].Writes[0] },
-			"Writes[1].Writer.Subcommand"},
+		{"a git write of files no git reads", func(d *Derived) { d.Writes[1] = DerivedFiles()[0].Writes[0] },
+			"Owns"},
 		{"a drop on a report", func(d *Derived) { d.OnReported = Drop }, "OnReported"},
 		{"two main files", func(d *Derived) {
 			for _, name := range []string{"first", "second"} {
@@ -268,16 +271,20 @@ func TestValidateRefusesAnInProcessDeclarationThatClaimsAGitWrite(t *testing.T) 
 // write of files every git process reads, so a declaration whose every write
 // is in-process may name a part a report drops — and then lives under
 // objects/ — where one NO git reads names none and keeps its files on a
-// report; one git writes names a part, whatever else it says. And what the
-// installed chain's declarations hold beside it: a name carrying its own
-// checksum (Named) has the one group Prior has and is never both; the chain
-// file, the one Main, carries neither; a chain is cut to a prefix of itself
-// and dropped on nothing; and no other declaration cuts. Each row breaks one
-// of those on a valid declaration of the build.
+// report; one git writes names a part, whatever else it says. A declaration
+// git reads may be written by both kinds of writer: the installed
+// commit-graph layers by the cache's install and the node's tip over them by
+// git, one chain file listing both. And what the installed chain's
+// declarations hold beside it: a name carrying its own checksum (Named) has
+// the one group Prior has and is never both; the chain file, the one Main,
+// carries neither; a chain is cut to a prefix of itself and dropped on
+// nothing; and no other declaration cuts. Each row breaks one of those on a
+// valid declaration of the build.
 //
 // Mutation: restore P2's "an in-process declaration has Part 0" — the
 // installed chain's own declaration is refused (the accepted rows fail, and
-// Open of every cache with them).
+// Open of every cache with them); restore "a declaration's writes are of one
+// kind" — the graph's, its install's and its tip's, is refused.
 func TestValidateHoldsAPartToWhoReadsTheFiles(t *testing.T) {
 	t.Parallel()
 	of := func(name DerivedName) Derived {
@@ -289,14 +296,19 @@ func TestValidateHoldsAPartToWhoReadsTheFiles(t *testing.T) {
 		t.Fatalf("the build declares no %s", name)
 		return Derived{}
 	}
-	for _, name := range []DerivedName{DerivedLayers, DerivedGraphLayers} {
-		d := of(name)
-		if !d.inProcess() || !d.gitReads() {
-			t.Fatalf("%s is in-process %t and read by git %t: the installed chain is both", name, d.inProcess(),
-				d.gitReads())
+	for _, tc := range []struct {
+		name     DerivedName
+		gitWrite bool
+	}{{DerivedLayers, false}, {DerivedGraphLayers, true}} {
+		d := of(tc.name)
+		installs := slices.ContainsFunc(d.Writes, func(w Write) bool { return w.Writer.Subcommand == "" })
+		if !installs || !d.gitReads() || d.gitWritten() != tc.gitWrite {
+			t.Fatalf("%s is installed by the cache %t, read by git %t and written by git %t: the installed chain "+
+				"is the first two, and its graph's the third besides, for the node's tip", tc.name, installs,
+				d.gitReads(), d.gitWritten())
 		}
 		if err := d.Validate(); err != nil {
-			t.Errorf("an in-process declaration git reads, %s: %v", name, err)
+			t.Errorf("a declaration git reads that the cache installs, %s: %v", tc.name, err)
 		}
 	}
 	// Validate alone accepts a part on an in-process write — the chain's

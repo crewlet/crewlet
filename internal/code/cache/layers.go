@@ -42,8 +42,12 @@ import (
 // node-local tips would be the whole rewrite paid more often. So the packs
 // that arrived since the last publication stay OUTSIDE the chain, the TAIL,
 // which git reads beside it (0.03–0.35 s of walk at 1 to 16 packs outside
-// it, nothing a clone measures), their commits read from the packs rather
-// than a graph until a publication covers them.
+// it, nothing a clone measures). Their commits are the one thing the node
+// writes over the chain: its own TIP commit-graph layer (maintain.go), git's
+// split write of just the commits the installed layers lack, over exactly
+// them, so a walk into the tail goes by generation too — a commit-graph
+// layer, unlike a multi-pack-index layer, costs its new commits alone and
+// turns nothing beneath it off.
 //
 // TWO MODES, PER INCARNATION, NEVER BOTH. An incarnation holding a non-empty
 // installed chain is in CHAIN mode; one holding none is in OWN mode — the
@@ -53,10 +57,12 @@ import (
 // chain file (midx-write.c's clear_midx_files), it loads a whole commit-graph
 // before the chain, and a whole graph write unlinks the chain and expires its
 // layers. So a chain placed drops own mode's files first (EventLayersMoved),
-// the maintainer plans no own-mode write while a chain is installed
-// (maintain.go), a round writes no index of its own beside one (indexRound's
-// indexed), and a chain cut to nothing leaves the copy in own mode, its index
-// the maintainer's to write.
+// the maintainer plans no own-mode write while a chain is installed — only
+// the tip over it (maintain.go) — a round writes no index of its own beside
+// one (indexRound's indexed), and a chain cut to nothing leaves the copy in
+// own mode, its index the maintainer's to write. The tip goes with every
+// change to the chain beneath it and with every pack removed, and stays
+// across a retirement that keeps the whole chain (tipGoes).
 //
 // A FULL ROUND INSTALLS THE CHAIN BEFORE IT ANSWERS: it keeps the longest
 // prefix of the chain the copy holds whole and sound — every file there at its
@@ -255,31 +261,71 @@ func prefixOf(installed []code.LayerRow, ev Event, d eventDetail) int {
 // (installable) — and the packs the chain then holds keep those figures
 // whatever becomes of their rows (incarnation.installedPacks).
 func (c *Cache) recordInstalled(inc *incarnation, rows []code.LayerRow, held map[string]livePack) {
+	was := inc.installedPacks
 	inc.installed = slices.Clone(rows)
 	inc.installedPacks = map[string]livePack{}
 	for cs := range layerPacks(rows) {
 		inc.installedPacks[cs] = held[cs]
 	}
-	midx, graph := chainIDs(rows)
+	if !maps.EqualFunc(was, inc.installedPacks, func(livePack, livePack) bool { return true }) {
+		// The packs the chain names moved, and the tail is every live pack
+		// it does not name.
+		recountTail(inc)
+	}
+	c.recordChains(inc)
+}
+
+// recordChains makes the declarations' records of inc's chain what it holds
+// — its installed rows and its tip — keeping the cache's total in step through
+// setDerived; e.mu is held. Each record lists the ids its chain file lists
+// (derivedState.Layers, and the graph's Tip) and counts its files' bytes —
+// every installed layer's sections from its row, the tip's file as the write
+// that made it found it, and the chain file — so a boot restores both halves
+// of what the copy holds without measuring a file, and a declaration with no
+// file has no entry. The graph's record is made by the install where a layer
+// carries a graph, and by the tip's write where only the tip does
+// (StepTipGraph): its Step is the write of its chain file's first line. It
+// also carries the digest of the tail the last write covered (TipOver), so
+// the next boot knows the tip it keeps needs no write while the tail is the
+// same.
+func (c *Cache) recordChains(inc *incarnation) {
+	midx, graph := chainIDs(inc.installed)
 	var midxBytes, graphBytes int64
-	for _, r := range rows {
+	for _, r := range inc.installed {
 		midxBytes += r.Layer.MidxBytes + r.Layer.BitmapBytes
 		graphBytes += r.Layer.GraphBytes
 	}
+	lines := graph
+	graphStep := StepLayer
+	if inc.tip.id != "" {
+		lines = append(slices.Clone(graph), inc.tip.id)
+		graphBytes += inc.tip.bytes
+		if len(graph) == 0 {
+			graphStep = StepTipGraph
+		}
+	}
+	var over string
+	if inc.tipWritten {
+		over = inc.tipOver.String()
+	}
 	for _, d := range []struct {
-		name  DerivedName
-		ids   []string
-		bytes int64
-	}{{DerivedLayers, midx, midxBytes}, {DerivedGraphLayers, graph, graphBytes}} {
+		name      DerivedName
+		ids       []string
+		lines     []string
+		step      Step
+		bytes     int64
+		tip, over string
+	}{{DerivedLayers, midx, midx, StepLayer, midxBytes, "", ""},
+		{DerivedGraphLayers, graph, lines, graphStep, graphBytes, inc.tip.id, over}} {
 		if c.image.decl(d.name) == nil {
 			continue
 		}
-		if len(d.ids) == 0 {
+		if len(d.lines) == 0 {
 			c.setDerived(inc, d.name, derivedState{}, false)
 			continue
 		}
-		c.setDerived(inc, d.name, derivedState{Bytes: d.bytes + int64(len(chainText(d.ids))),
-			Covers: len(inc.installedPacks), Step: StepLayer, Layers: d.ids}, true)
+		c.setDerived(inc, d.name, derivedState{Bytes: d.bytes + int64(len(chainText(d.lines))),
+			Covers: len(inc.installedPacks), Step: d.step, Layers: d.ids, Tip: d.tip, TipOver: d.over}, true)
 	}
 }
 
@@ -334,14 +380,32 @@ func (c *Cache) noteChained(e *entry) {
 }
 
 // recordedIDs is the chain inc's records name — the ids each chain file
-// lists — from its installed rows, or, before a round of this process has
-// read the chain (a boot's copy), from the declarations' records the state
-// carried. e.mu is held.
+// lists, the graph's ending in the node's tip where it holds one — from its
+// installed rows and its tip, or, before a round of this process has read the
+// chain (a boot's copy), from the declarations' records the state carried.
+// e.mu is held.
 func recordedIDs(inc *incarnation) (midx, graph []string) {
 	if len(inc.installed) > 0 || inc.chainRead {
-		return chainIDs(inc.installed)
+		midx, graph = chainIDs(inc.installed)
+	} else {
+		midx, graph = inc.derived[DerivedLayers].Layers, slices.Clone(inc.derived[DerivedGraphLayers].Layers)
 	}
-	return inc.derived[DerivedLayers].Layers, inc.derived[DerivedGraphLayers].Layers
+	if tip := recordedTip(inc); tip != "" {
+		graph = append(graph, tip)
+	}
+	return midx, graph
+}
+
+// recordedTip is the node's tip inc holds, "" for none: its own, or, before a
+// round of this process has read the chain (a boot's copy), the one the
+// graph's record names — which that round keeps only where the copy kept
+// every layer it was written over and holds its file sound (planChain).
+// e.mu is held.
+func recordedTip(inc *incarnation) string {
+	if len(inc.installed) > 0 || inc.chainRead {
+		return inc.tip.id
+	}
+	return inc.derived[DerivedGraphLayers].Tip
 }
 
 // chainWants is what each chain file of inc holds when it is sound — the ids
@@ -351,6 +415,66 @@ func recordedIDs(inc *incarnation) (midx, graph []string) {
 func chainWants(inc *incarnation) map[string][]byte {
 	midx, graph := recordedIDs(inc)
 	return map[string][]byte{layersChainRel: chainText(midx), graphChainRel: chainText(graph)}
+}
+
+// tipRel is where the tip layer id lives in an incarnation, as git names a
+// split commit-graph layer (derived.go's graphLayerName).
+func tipRel(id string) string {
+	return filepath.Join(filepath.FromSlash(graphLayersDir), "graph-"+id+".graph")
+}
+
+// dropTip takes inc's tip off what it records: none held, and none written
+// over any tail, so the maintainer writes one at once (GRAPH FIRST) over what
+// is left of the tail — its file and its chain line the caller's to take out,
+// its declaration's record the caller's to write again (recordChains). e.mu is
+// held.
+func dropTip(inc *incarnation) {
+	inc.tip, inc.tipOver, inc.tipWritten = tipLayer{}, tailDigest{}, false
+}
+
+// tipGoes reports whether a change ev the installed chain answers Prefix,
+// keeping k of installed's layers, takes the node's tip with it — every one
+// but a retirement that keeps the whole chain beneath it: a layer cut is a
+// base gone, the chain moving is a base the tip was not written over, a pack
+// removed may take commits the tip names, and a file found failing is cut
+// with the tip above it, where a retirement merges packs and drops no commit,
+// and the tip names commits by id (X04).
+func tipGoes(installed []code.LayerRow, k int, ev Event) bool {
+	return k < len(installed) || ev != EventPackRetired
+}
+
+// chainMark is what a reader of inc's chain files reads beside what its record
+// names of them (chainWants), under the same lock: the count of in-place
+// writes of them begun and ended, and whether one is in flight.
+type chainMark struct {
+	seq     uint64
+	writing bool
+}
+
+// markChain is inc's chainMark now; e.mu is held.
+func markChain(inc *incarnation) chainMark {
+	return chainMark{seq: inc.chainSeq, writing: inc.chainWriting > 0}
+}
+
+// chainStill reports whether inc's chain files stood still from m to now: no
+// in-place write of them was in flight at m, and none has begun or ended
+// since (incarnation.chainSeq). A chain file's verdict reached between the two
+// is the file's; otherwise it is no verdict, the expectation and the file
+// perhaps of two different moments. e.mu is held.
+func chainStill(inc *incarnation, m chainMark) bool {
+	return !m.writing && inc.chainSeq == m.seq
+}
+
+// chainWrite marks an in-place write of inc's chain files — the tip's run, a
+// cut — as begun, and its answer marks it ended (chainStill). e.mu is held
+// for each.
+func chainWrite(inc *incarnation) func() {
+	inc.chainSeq++
+	inc.chainWriting++
+	return func() {
+		inc.chainSeq++
+		inc.chainWriting--
+	}
 }
 
 // bootInstalled is the chain inc holds as its record names it, read against
@@ -438,8 +562,11 @@ type chainPlan struct {
 	// rewrite: a chain file is not what the incarnation's record says — it
 	// failed its check, or is absent where layers are installed, or present
 	// where none are — so the chain files are written again even where
-	// nothing else of the chain moves.
-	rewrite bool
+	// nothing else of the chain moves. dropTip: the node's tip the copy holds
+	// is no file to serve — failing, gone, or not the one checked — and goes,
+	// the chain files written again without it, even where nothing else
+	// moves.
+	rewrite, dropTip bool
 	// held is the packs the copy holds once the round's install has run, by
 	// checksum, at the figures their rows count: the snapshot's. tips is the
 	// object ids the snapshot's refs name, each once: what a placement in
@@ -469,9 +596,10 @@ func (p chainPlan) rows(fetched []*stagedLayer) []code.LayerRow {
 
 // moves reports whether placing rows, fetched among them, changes what the
 // incarnation holds of its chain: another chain, a layer's files fetched
-// again over ones that failed, or chain files that are not the record's.
+// again over ones that failed, chain files that are not the record's, or a
+// tip that goes.
 func (p chainPlan) moves(rows []code.LayerRow, fetched []*stagedLayer) bool {
-	return p.rewrite || len(fetched) > 0 || !sameChain(rows, p.installed)
+	return p.rewrite || p.dropTip || len(fetched) > 0 || !sameChain(rows, p.installed)
 }
 
 // placeChain is a FULL round's placement of the chain it planned (planChain),
@@ -480,9 +608,10 @@ func (p chainPlan) moves(rows []code.LayerRow, fetched []*stagedLayer) bool {
 // is valid only over its exact base, so whatever was fetched above a failure
 // goes from tmp/ — and nothing where that is what the copy holds already.
 //
-//   - Chain files alone not the record's are written again IN PLACE, even on a
-//     copy a reader may hold — one rename each — and anything of the two
-//     directories no layer kept names goes (cutChain).
+//   - Chain files alone not the record's, or a tip alone that goes, are
+//     written again IN PLACE, even on a copy a reader may hold — one rename
+//     each — and anything of the two directories no layer kept names goes,
+//     the tip's file with it (cutChain).
 //   - Any other change to a copy a reader may hold is answered as a SWAP's
 //     layer step (swap.go): the step returned, which the round's swap takes.
 //   - On one nobody holds — a boot's first round, a rebuild's product — it is
@@ -597,6 +726,15 @@ func (c *Cache) planChain(e *entry, inc *incarnation, snap snapshot, found []che
 			}
 		}
 	}
+	// The node's tip the copy holds — a boot's copy's as its record names it —
+	// and its file as it is now.
+	e.mu.Lock()
+	tipID := recordedTip(inc)
+	e.mu.Unlock()
+	var tipFile fileID
+	if tipID != "" {
+		tipFile = lstatID(filepath.Join(inc.dir, tipRel(tipID)))
+	}
 	holds := func(r code.LayerRow) bool {
 		return !slices.ContainsFunc(r.Layer.Packs, func(cs string) bool { _, ok := p.held[cs]; return !ok })
 	}
@@ -611,7 +749,33 @@ func (c *Cache) planChain(e *entry, inc *incarnation, snap snapshot, found []che
 		if i := slices.IndexFunc(boot, func(r code.LayerRow) bool { return !holds(r) }); i >= 0 {
 			boot = boot[:i]
 		}
+		// And the node's tip its record names, where the copy keeps every
+		// layer the tip was written over and holds its file: a tip is valid
+		// only over its exact base. Held to its check by the round's check
+		// like every file a previous process left, and dropped below where it
+		// failed. With it, the tail the last write covered (TipOver), so a
+		// tail the restart left as it was owes the tip nothing.
+		_, graph := chainIDs(boot)
+		rec := inc.derived[DerivedGraphLayers]
+		if len(boot) == len(inc.derived[DerivedLayers].Layers) && slices.Equal(graph, rec.Layers) &&
+			(tipID == "" || tipFile.present) {
+			if tipID != "" {
+				inc.tip = tipLayer{id: tipID, bytes: tipFile.size}
+			}
+			// The state's check refused a record whose TipOver is no digest.
+			if over, err := parseTailDigest(rec.TipOver); rec.TipOver != "" && err == nil {
+				inc.tipOver, inc.tipWritten = over, true
+			}
+		}
 		c.setInstalled(e, inc, boot, p.held)
+	}
+	// THE NODE'S TIP stays only as the file this process wrote or its round's
+	// check found sound, still at that identity and named failing by no
+	// finding; any other is dropped, with the chain files written again over
+	// what the copy keeps, and the maintainer writes the tip again at once.
+	if inc.tip.id != "" {
+		rel := tipRel(inc.tip.id)
+		p.dropTip = failingFiles[rel] || !vouchedAt(inc, rel, tipFile)
 	}
 	p.installed = slices.Clone(inc.installed)
 	for _, row := range p.installed {
@@ -970,7 +1134,7 @@ func (c *Cache) placeInPlace(ctx context.Context, e *entry, inc *incarnation, ro
 			return kept, err
 		}
 	}
-	if err := c.writeChains(inc.dir, rows, syncDir); err != nil {
+	if err := c.writeChains(inc.dir, rows, "", syncDir); err != nil {
 		c.trashRels(inc.dir, moved)
 		return kept, err
 	}
@@ -998,7 +1162,7 @@ func (c *Cache) placeInPlace(ctx context.Context, e *entry, inc *incarnation, ro
 					}
 				}
 			}
-			if werr := c.writeChains(inc.dir, rows[:first], syncDir); werr != nil {
+			if werr := c.writeChains(inc.dir, rows[:first], "", syncDir); werr != nil {
 				return kept, errors.Join(err, werr)
 			}
 			c.trashRels(inc.dir, gone)
@@ -1107,78 +1271,117 @@ func (c *Cache) trashRels(dir string, rels []string) {
 }
 
 // writeChains writes both chain files of the incarnation (or the staged one)
-// at dir over rows — staged in tmp/, durable, renamed in — or, for an empty
-// chain, removes them and the directories left empty: an incarnation with no
-// chain holds no file of one. sync makes the directory a chain file lands in
-// durable, before the file is renamed in — so every layer file renamed into it
-// before is durable before a chain file names it — and after: syncDir for an
-// incarnation a reader may open now or once it is current, and unsynced for a
-// swap's staging, which nothing reads before its rename and which syncs every
-// directory it wrote in once, with the rest of it (syncStaged).
-func (c *Cache) writeChains(dir string, rows []code.LayerRow, sync func(dir string) error) error {
+// at dir over rows — the commit-graph's ending in the node's tip where tip
+// names one (a swap carrying it, maintain.go) — each by writeChain. sync is
+// writeChain's.
+func (c *Cache) writeChains(dir string, rows []code.LayerRow, tip string, sync func(dir string) error) error {
 	midx, graph := chainIDs(rows)
 	if c.knobs != nil && c.knobs.chainLines != nil {
 		midx = c.knobs.chainLines(midx)
 	}
-	for _, f := range []struct {
-		rel string
-		ids []string
-	}{{layersChainRel, midx}, {graphChainRel, graph}} {
-		path := filepath.Join(dir, f.rel)
-		if len(f.ids) == 0 {
-			if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return fmt.Errorf("cache: removing %s: %w", path, err)
-			}
-			// Left only where something else is still in it.
-			if err := os.Remove(filepath.Dir(path)); err != nil && !errors.Is(err, fs.ErrNotExist) &&
-				!errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
-				return fmt.Errorf("cache: removing %s: %w", filepath.Dir(path), err)
-			}
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(path), hostbox.DirMode); err != nil {
-			return fmt.Errorf("cache: making %s: %w", filepath.Dir(path), err)
-		}
-		text := chainText(f.ids)
-		staged, err := c.stage(hostbox.FileMode, func(w *os.File) error {
-			_, werr := w.Write(text)
-			return werr
-		})
-		if err != nil {
-			return err
-		}
-		// The layers' files renamed in before the chain file are made durable
-		// by this sync of their directory too: the rule "what a file names is
-		// durable before that file is renamed in" (durable.go).
-		if err = sync(filepath.Dir(path)); err != nil {
-			return removeStaged(staged, err)
-		}
-		if err = c.place(staged, path); err != nil {
-			return err
-		}
-		if err = sync(filepath.Dir(path)); err != nil {
-			return err
-		}
+	if tip != "" {
+		graph = append(graph, tip)
 	}
-	return nil
+	if err := c.writeChain(dir, layersChainRel, midx, sync); err != nil {
+		return err
+	}
+	return c.writeChain(dir, graphChainRel, graph, sync)
+}
+
+// writeChain writes the chain file at rel of the incarnation (or the staged
+// one) at dir listing ids, a line each — staged in tmp/, durable, renamed in
+// — or, for none, removes it and its directory where that is left empty: an
+// incarnation with no chain holds no file of one. sync makes the directory
+// the chain file lands in durable, before the file is renamed in — so every
+// layer file renamed into it before is durable before a chain file names it
+// — and after: syncDir for an incarnation a reader may open now or once it is
+// current, and unsynced for a swap's staging, which nothing reads before its
+// rename and which syncs every directory it wrote in once, with the rest of
+// it (syncStaged), and for the node's tip's chain written over the layers
+// installed (maintain.go's writeTip), which names nothing new.
+func (c *Cache) writeChain(dir, rel string, ids []string, sync func(dir string) error) error {
+	path := filepath.Join(dir, rel)
+	if len(ids) == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("cache: removing %s: %w", path, err)
+		}
+		// Left only where something else is still in it.
+		if err := os.Remove(filepath.Dir(path)); err != nil && !errors.Is(err, fs.ErrNotExist) &&
+			!errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
+			return fmt.Errorf("cache: removing %s: %w", filepath.Dir(path), err)
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), hostbox.DirMode); err != nil {
+		return fmt.Errorf("cache: making %s: %w", filepath.Dir(path), err)
+	}
+	text := chainText(ids)
+	staged, err := c.stage(hostbox.FileMode, func(w *os.File) error {
+		_, werr := w.Write(text)
+		return werr
+	})
+	if err != nil {
+		return err
+	}
+	// The layers' files renamed in before the chain file are made durable
+	// by this sync of their directory too: the rule "what a file names is
+	// durable before that file is renamed in" (durable.go).
+	if err = sync(filepath.Dir(path)); err != nil {
+		return removeStaged(staged, err)
+	}
+	if err = c.place(staged, path); err != nil {
+		return err
+	}
+	return sync(filepath.Dir(path))
 }
 
 // cutChain cuts inc's installed chain to its first k layers IN PLACE — the
 // chain files written over what is kept first, so no reader opening them
 // from then on names what goes, then every file of the two chain directories
 // that no kept layer owns moved into trash/ (what a layer above the cut held,
-// and anything a crash or a previous process left there under a layer's name
-// that no record accounts for) — and records what is kept. e.mu is not held;
-// the caller holds the repository's write lock. dropFor's one cut, for every
-// change a chain answers Prefix.
+// the node's tip, and anything a crash or a previous process left there under
+// a layer's name that no record accounts for) — and records what is kept.
+// e.mu is not held; the caller holds the repository's write lock, and has
+// stopped a maintenance run writing the chain (dropFor; a full round stops
+// every run). dropFor's one cut, for every change a chain answers Prefix.
+//
+// THE NODE'S TIP GOES WITH EVERY CUT (tipGoes): a layer cut takes the base it
+// stood on, a chain placed over the kept ones is a base it was not written
+// over, a pack removed may take commits it names, and chain files written
+// again are a repair, in which a node-written tip is the one file worth
+// nothing to keep — the maintainer writes it again at once, over the tail
+// alone.
+//
+// THE CUT IS MARKED IN FLIGHT (chainWrite) from before its chain files are
+// written to after its record names what they list: a check, a scrub or
+// Verify of a copy a reader holds reads that record and hashes the chain
+// files beside the cut, holding no lock it takes, and a file of one moment
+// held to a record of the other would be named damaged, its repair a round
+// that writes again what was sound.
 func (c *Cache) cutChain(e *entry, inc *incarnation, k int, why Event) error {
 	e.mu.Lock()
 	installed := slices.Clone(inc.installed)
+	ended := chainWrite(inc)
 	e.mu.Unlock()
+	// What the chain files name from their write on is what the record names
+	// however the cut ends: no tip, and no tail a tip covers. Ended under the
+	// same lock as that record, so no reader takes the record's word without
+	// its mark.
+	written := false
+	defer func() {
+		e.mu.Lock()
+		if written && (inc.tip.id != "" || inc.tipWritten) {
+			dropTip(inc)
+			c.recordChains(inc)
+		}
+		ended()
+		e.mu.Unlock()
+	}()
 	kept := installed[:min(k, len(installed))]
-	if err := c.writeChains(inc.dir, kept, syncDir); err != nil {
+	if err := c.writeChains(inc.dir, kept, "", syncDir); err != nil {
 		return err
 	}
+	written = true
 	keep := map[string]bool{layersChainRel: len(kept) > 0}
 	for _, r := range kept {
 		for _, rel := range layerRels(r.Layer) {
@@ -1221,6 +1424,7 @@ func (c *Cache) cutChain(e *entry, inc *incarnation, k int, why Event) error {
 		c.wrote(inc, c.image.set(DerivedLayers, DerivedGraphLayers))
 		repaired(inc)
 	}
+	dropTip(inc)
 	c.setInstalled(e, inc, kept, inc.installedPacks)
 	e.mu.Unlock()
 	if cut := len(installed) - len(kept); cut > 0 {

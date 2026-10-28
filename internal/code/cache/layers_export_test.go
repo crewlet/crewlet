@@ -116,15 +116,49 @@ func PrefixOf(installed []code.LayerRow, ev Event, packs []string, want []code.L
 	return prefixOf(installed, ev, d)
 }
 
+// TipGoes reports whether a change ev the installed chain answers by keeping
+// k of installed's layers takes the node's tip over it (tipGoes).
+func TipGoes(installed []code.LayerRow, k int, ev Event) bool { return tipGoes(installed, k, ev) }
+
 // PlanSteps is what the maintainer would plan for repoID's current
 // incarnation now on an unbounded budget, due or not: whether an index (of
-// either kind) and the graph.
-func PlanSteps(c *Cache, repoID string) (index, graph bool) {
+// either kind), own mode's graph, and the node's tip over an installed chain.
+func PlanSteps(c *Cache, repoID string) (index, graph, tip bool) {
 	e := lookup(c, repoID)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	p, _, _ := c.plan(e.current, 1<<62, true)
-	return p.index != 0, p.graph
+	return p.index != 0, p.graph, p.tip
+}
+
+// Tip is the node's tip commit-graph layer repoID's current incarnation
+// holds (incarnation.tip), "" for none, and whether its tail has moved since
+// the tip — or the write that found the tail held no commit — was written
+// over it (tipWanted).
+func Tip(c *Cache, repoID string) (string, bool) {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.current.tip.id, tipWanted(e.current)
+}
+
+// TailPacks is how many packs repoID's current incarnation's tail holds, as
+// it counts them (incarnation.tail).
+func TailPacks(c *Cache, repoID string) int {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.current.tail.packs
+}
+
+// TipCharge is what the node's tip over repoID's current incarnation's tail
+// is admitted at (chargeOver): TipGraphBytesPerObject an object of the tail,
+// and room for a clone of the whole repository.
+func TipCharge(c *Cache, repoID string) int64 {
+	e := lookup(c, repoID)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return chargeOver(e.current.tail.objects, TipGraphBytesPerObject, e.current.objects)
 }
 
 // WantsRun reports whether the maintainer wants a run of repoID's current

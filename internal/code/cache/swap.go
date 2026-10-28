@@ -343,6 +343,14 @@ type swapping struct {
 	chain       []code.LayerRow
 	added       []code.LayerRow
 	chainShared map[DerivedName]int64
+	// tip is the node's tip commit-graph layer the next incarnation carries,
+	// linked, with the tail the last write of it covered (tipOver,
+	// tipWritten): inc's where the swap keeps the whole chain beneath it and
+	// every pack leaving is a retirement (tipGoes) — none otherwise, and none
+	// for a placement, which moves the chain beneath it.
+	tip        tipLayer
+	tipOver    tailDigest
+	tipWritten bool
 	// placedLayers is the staged layers the layer step renamed in,
 	// keptLayers how many it linked, and cutLayers how many layers of inc's
 	// installed chain the next incarnation carries no file of — replaced by
@@ -429,12 +437,15 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 		leaving[key] = true
 	}
 	installed, chainPacks := slices.Clone(inc.installed), maps.Clone(inc.installedPacks)
+	s.tip, s.tipOver, s.tipWritten = inc.tip, inc.tipOver, inc.tipWritten
+	hadTip := inc.tip.id != ""
 	e.mu.Unlock()
 	// 0. THE CHAIN the next incarnation holds, decided before anything is
 	// staged: the placement's, or inc's own carried — cut where a pack
 	// leaving names a layer of it, which the chain's holding its packs means
 	// none does (prefixOf, the one cut) — and every pack it names joins what
-	// the next incarnation holds, live or not: the chain holds its packs.
+	// the next incarnation holds, live or not: the chain holds its packs; and
+	// whether the node's tip crosses over it.
 	if err := s.chainOf(installed, chainPacks, leaving); err != nil {
 		s.step = stepLayers
 		return nil, err
@@ -530,10 +541,11 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 		_, gerr := os.Lstat(filepath.Join(inc.dir, rel))
 		s.heldGraph = gerr == nil
 	}
-	if _, graph := chainIDs(installed); len(graph) > 0 {
-		// A chain's graph layers are the copy's commit-graph as much as an
-		// own one is: a swap whose next incarnation holds no chain and no
-		// graph took them, and the maintainer writes a whole graph again.
+	if _, graph := chainIDs(installed); len(graph) > 0 || hadTip {
+		// A chain's graph layers and the node's tip over them are the copy's
+		// commit-graph as much as an own one is: a swap whose next incarnation
+		// holds no chain and no graph took them, and the maintainer writes a
+		// whole graph again.
 		s.heldGraph = true
 	}
 	if err = s.carryDerived(); err != nil {
@@ -725,9 +737,11 @@ func unsynced(string) error { return nil }
 // an installed layer names stays while the layer does, whether or not a live
 // row still names it (layers.go, the chain holds its packs). A pack the chain
 // names that inc holds neither as a live row nor for its chain fails the swap:
-// a layer is valid only over every pack it names. installed, held and
-// leaving are inc's, read under e.mu: its chain, the packs its chain holds,
-// and the pack files leaving.
+// a layer is valid only over every pack it names. The node's tip — s.tip and
+// the tail its last write covered, inc's as step 0 read them — crosses only
+// where the chain beneath it does, whole, and every pack leaving is a
+// retirement (tipGoes). installed, held and leaving are inc's, read under
+// e.mu: its chain, the packs its chain holds and the pack files leaving.
 func (s *swapping) chainOf(installed []code.LayerRow, held map[string]livePack, leaving map[string]bool) error {
 	if s.layers != nil {
 		s.chain = slices.Clone(s.layers.rows)
@@ -738,6 +752,11 @@ func (s *swapping) chainOf(installed []code.LayerRow, held map[string]livePack, 
 		s.chain = installed[:k]
 		if k < len(installed) {
 			s.events[EventLayersMoved] = true
+		}
+	}
+	for ev := range s.events {
+		if tipGoes(installed, len(s.chain), ev) {
+			s.tip, s.tipOver, s.tipWritten = tipLayer{}, tailDigest{}, false
 		}
 	}
 	// CUT is every layer of inc whose files the next incarnation does not
@@ -777,9 +796,10 @@ func (s *swapping) chainOf(installed []code.LayerRow, held map[string]livePack, 
 // incarnation holds placed in the staged directory — renamed in from tmp/
 // where the placement fetched it (a layer new to the copy, or one fetched
 // again over files that failed their check), linked from inc otherwise, the
-// same inodes — then both chain files written over the chain, and the next
-// incarnation's record of it set (recordInstalled) at the bytes the rows
-// count. Nothing is synced here: the directories of what it wrote and linked
+// same inodes — then the node's tip linked where it crosses (chainOf), both
+// chain files written over the chain, the commit-graph's ending in that tip,
+// and the next incarnation's record of it set (recordInstalled) at the bytes
+// the rows count. Nothing is synced here: the directories of what it wrote and linked
 // are synced once with the rest of the staging (syncStaged), since nothing
 // reads the staging before its rename, where synced as an incarnation's are
 // in place its two chain files would cost four more directory syncs at every
@@ -822,12 +842,33 @@ func (s *swapping) placeLayers() error {
 		s.chainShared[DerivedLayers] += r.Layer.MidxBytes + r.Layer.BitmapBytes
 		s.chainShared[DerivedGraphLayers] += r.Layer.GraphBytes
 	}
-	if err := c.writeChains(s.staged, s.chain, unsynced); err != nil {
+	if s.tip.id != "" {
+		// THE NODE'S TIP, linked over the whole chain it was written over —
+		// or, gone from inc's directory (a run that ended before the swap
+		// stopped it wrote another), carried as none, and as no write of one:
+		// the maintainer writes one at once over the next incarnation's tail.
+		rel := tipRel(s.tip.id)
+		err := os.MkdirAll(filepath.Join(s.staged, filepath.Dir(rel)), hostbox.DirMode)
+		if err == nil {
+			err = c.link(filepath.Join(s.inc.dir, rel), filepath.Join(s.staged, rel))
+		}
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			s.tip, s.tipOver, s.tipWritten = tipLayer{}, tailDigest{}, false
+		case err != nil:
+			return err
+		default:
+			s.linked[rel] = true
+			s.carried |= c.image.set(DerivedGraphLayers)
+			s.chainShared[DerivedGraphLayers] += s.tip.bytes
+		}
+	}
+	if err := c.writeChains(s.staged, s.chain, s.tip.id, unsynced); err != nil {
 		return err
 	}
 	if len(s.chain) > 0 {
 		wrote = append(wrote, layersChainRel)
-		if _, graph := chainIDs(s.chain); len(graph) > 0 {
+		if _, graph := chainIDs(s.chain); len(graph) > 0 || s.tip.id != "" {
 			wrote = append(wrote, graphChainRel)
 		}
 	}
@@ -839,6 +880,7 @@ func (s *swapping) placeLayers() error {
 	s.e.mu.Lock()
 	defer s.e.mu.Unlock()
 	s.next.chainGen = s.inc.chainGen + 1
+	s.next.tip, s.next.tipOver, s.next.tipWritten = s.tip, s.tipOver, s.tipWritten
 	c.recordInstalled(s.next, s.chain, s.packs)
 	for i, rel := range wrote {
 		vouch(s.next, rel, ids[i])
@@ -1070,6 +1112,17 @@ func (s *swapping) promote() {
 			f.carry(s)
 		}
 	}
+	// THE TAIL of next, counted afresh from the live set just carried into it
+	// and the chain its layer step placed (recordInstalled counted it before
+	// the live set was next's). The tip the swap carried keeps the digest of
+	// the tail its last write covered, so it stands where next's tail is that
+	// tail — the packs leaving are retirements, which take no commit with
+	// them (X04) — and is wanted again where it is not: a compaction's own
+	// output is a pack the tail gains, whose commits the digest cannot tell
+	// from a push's, so the tip is written again at the ordinary cadence over
+	// the tail's commits alone — once too often for a merge, never once too
+	// few for a push.
+	recountTail(next)
 	inc.successor = next
 	e.current = next
 	c.noteChained(e)
@@ -1364,6 +1417,21 @@ var swapFields = []swapField{
 		"the repository: the next copy would meet the same bytes — a canary that abandoned the swap's own " +
 		"placement among them",
 		carry: func(s *swapping) { s.next.refused = maps.Clone(s.inc.refused) }},
+	{name: "tip", class: recomputed, why: "the layer step's: inc's tip linked where the whole chain beneath it " +
+		"crosses and every pack leaving is a retirement (chainOf), else none"},
+	{name: "tipOver", class: recomputed, why: "the layer step's: the digest of the tail inc's last tip write " +
+		"covered, with the tip it describes, where that tip crosses; else none, which the maintainer's next " +
+		"pass answers"},
+	{name: "tipWritten", class: recomputed, why: "the layer step's, with tipOver"},
+	{name: "tipFailed", class: carried, why: "a tip-first run that failed waits for the ordinary rules whichever " +
+		"directory it would write in",
+		carry: func(s *swapping) { s.next.tipFailed = s.inc.tipFailed }},
+	{name: "tail", class: recomputed, why: "counted afresh at the promote from the live set it carries and the " +
+		"chain the layer step placed (recountTail)"},
+	{name: "chainSeq", class: own, why: "next's chain files are the swap's, written before anybody read them in " +
+		"place: no reader of next began its read before them"},
+	{name: "chainWriting", class: own, why: "none: no write of next's chain files in place is in flight as it " +
+		"is promoted"},
 }
 
 // filterDrops is drops for the declarations the swap carries.

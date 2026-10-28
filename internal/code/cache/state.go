@@ -159,6 +159,22 @@ type derivedState struct {
 	// nothing installed — what such a copy holds. IMMUTABLE once stored, as
 	// Provenance is.
 	Layers []string `json:"layers,omitempty"`
+	// Tip is the node's tip commit-graph layer (maintain.go), which only the
+	// commit-graph chain's entry carries: its id, the last line its chain file
+	// lists after Layers — what a boot's first round holds that file to, and
+	// keeps the tip by where the copy keeps every layer it was written over
+	// (planChain). Its bytes are counted in Bytes. A state written before any
+	// tip was carries none, which reads as no tip — what such a copy holds.
+	Tip string `json:"tip,omitempty"`
+	// TipOver is the digest of the TAIL the last tip write that succeeded
+	// covered (incarnation.tipOver, thirty-two hex digits), which only the
+	// commit-graph chain's entry carries — with its tip, or with none where
+	// that write found the tail held no commit the layers lack. A boot that
+	// keeps the tip and every layer beneath it reads the copy's tail as
+	// covered while it is still that tail, and writes the tip again only once
+	// it moves: absent, a quiet copy's tip is written again after every
+	// restart.
+	TipOver string `json:"tip_over,omitempty"`
 }
 
 // covers is how many packs d covers: the packs the write that made it
@@ -230,6 +246,8 @@ func (st *state) check() error {
 			}
 		case d.Layers != nil && name != DerivedLayers && name != DerivedGraphLayers:
 			return fmt.Errorf("it records published layers for derived file %q, which installs none", name)
+		case (d.Tip != "" || d.TipOver != "") && name != DerivedGraphLayers:
+			return fmt.Errorf("it records a tip commit-graph layer for derived file %q, which keeps none", name)
 		case d.Layers != nil || name == DerivedLayers || name == DerivedGraphLayers:
 			if err := checkLayers(d); err != nil {
 				return fmt.Errorf("it records derived file %q as %w", name, err)
@@ -240,23 +258,44 @@ func (st *state) check() error {
 }
 
 // checkLayers refuses an installed chain's record no write of this build
-// leaves: ids recorded without the install's step or a step without ids
-// (the record is what says the chain was installed), more of them than a
-// published chain holds, one that is no layer's checksum, or one twice.
+// leaves: its chain file's lines recorded by another write than the one that
+// made its first — the install's (StepLayer) where it lists a published layer,
+// the tip's (StepTipGraph) where it lists the node's tip alone, and none where
+// it lists nothing, since the record is what says the chain was made — more
+// layers than a published chain holds, a line that is no layer's checksum, or
+// one twice; and a tail's digest that is none, or recorded beside a chain file
+// that lists nothing (recordChains keeps no record of one).
 func checkLayers(d derivedState) error {
+	var made Step
 	switch {
-	case (len(d.Layers) > 0) != (d.Step != ""):
-		return fmt.Errorf("a chain of %d layers made by step %q: a chain is recorded by the install that made it",
-			len(d.Layers), d.Step)
+	case len(d.Layers) > 0:
+		made = StepLayer
+	case d.Tip != "":
+		made = StepTipGraph
+	}
+	switch {
+	case d.Step != made:
+		return fmt.Errorf("a chain of %d layers and a tip %q made by step %q: a chain is recorded by the write "+
+			"of its first line, %q", len(d.Layers), d.Tip, d.Step, made)
 	case len(d.Layers) > code.MaxPublishedLayers:
 		return fmt.Errorf("a chain of %d layers, past the %d a published chain holds (code.MaxPublishedLayers)",
 			len(d.Layers), code.MaxPublishedLayers)
+	case d.TipOver != "" && made == "":
+		return fmt.Errorf("a tail's digest %q beside a chain file that lists nothing", d.TipOver)
+	case d.TipOver != "":
+		if _, err := parseTailDigest(d.TipOver); err != nil {
+			return fmt.Errorf("a tip written over %w", err)
+		}
 	}
-	for i, id := range d.Layers {
+	lines := d.Layers
+	if d.Tip != "" {
+		lines = append(slices.Clone(d.Layers), d.Tip)
+	}
+	for i, id := range lines {
 		switch {
 		case !gitref.ValidOID(id) || id == gitref.ZeroOID:
 			return fmt.Errorf("a chain naming %q, which is no layer's checksum", id)
-		case slices.Contains(d.Layers[:i], id):
+		case slices.Contains(lines[:i], id):
 			return fmt.Errorf("a chain naming %s twice", id)
 		}
 	}

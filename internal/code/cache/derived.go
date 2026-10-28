@@ -75,8 +75,13 @@ import (
 // charge an object; the cache's OWN GO CODE writes the provenance index, the
 // memo and the installed published chain (an IN-PROCESS write:
 // Writer.Subcommand ""), which runs no git, holds no slot and is bounded by its
-// caller's context, so its row says what it holds instead (Write.Charge). A
-// declaration's writes are all of one kind.
+// caller's context, so its row says what it holds instead (Write.Charge). Each
+// WRITE is of one kind, and a declaration git reads may have writes of both:
+// the installed commit-graph layers are placed by the cache's own code and the
+// node's TIP commit-graph over them is git's (maintain.go), both under one
+// chain file in one directory, which ownership by name cannot divide. One
+// git does NOT read is the cache's own code's alone — no git process writes a
+// file no git process reads (Validate).
 //
 // WHO READS A DECLARATION'S FILES IS ITS PART'S TO SAY, never who writes them:
 // a declaration git READS names the part a damage report names it by (Part),
@@ -123,10 +128,14 @@ const (
 	DerivedLayers DerivedName = "layers"
 	// DerivedGraphLayers is the incarnation's split commit-graph over the same
 	// chain: each installed layer's commit-graph layer, installed with it from
-	// the same parts, and the commit-graph-chain the cache writes from the
-	// rows. Its own declaration, because the graph's files live in a directory
-	// of their own under a chain file of their own; cut at the one place the
-	// multi-pack-index chain is (prefixOf), so the two chains never disagree.
+	// the same parts, the node's own TIP layer over the commits no installed
+	// layer holds — the tail's (maintain.go) — and the commit-graph-chain
+	// listing them. Its own declaration, because the graph's files live in a
+	// directory of their own under a chain file of their own; cut at the one
+	// place the multi-pack-index chain is (prefixOf), so the two chains never
+	// disagree. The published layers and the tip are ONE declaration, with a
+	// write of each kind, because both are graph-<checksum>.graph under one
+	// chain file, which ownership by name cannot divide.
 	DerivedGraphLayers DerivedName = "graph-layers"
 )
 
@@ -150,8 +159,9 @@ const (
 	// InputPacks is the incarnation's pack files — what an index merges, and
 	// what a graph reads its commits from.
 	InputPacks Input = "packs"
-	// InputRefs is packed-refs — a bitmap's selected commits, and the graph's
-	// --reachable tips.
+	// InputRefs is packed-refs — a bitmap's selected commits, and a graph's
+	// --reachable tips (own mode's whole graph, and the node's tip over the
+	// tail).
 	InputRefs Input = "refs"
 	// InputPushRows is the code domain's push rows: those a delta's pushes
 	// phase serves (code.StateQuery.Pushes), and those the backfill reads a
@@ -451,6 +461,10 @@ const (
 	StepBitmap Step = "bitmap"
 	// StepGraph is the commit-graph.
 	StepGraph Step = "graph"
+	// StepTipGraph is the node's TIP commit-graph layer over an installed
+	// chain (maintain.go): the commits of the tail, the packs no installed
+	// layer names, written over exactly the installed commit-graph layers.
+	StepTipGraph Step = "tip-graph"
 	// StepProvenance is a run of the provenance index — a round's fold, a
 	// backfilled page or a merge. Never refused for memory: it is no value of
 	// the maintenance refusals' counter or gauge, which name git's steps.
@@ -466,7 +480,7 @@ const (
 )
 
 // Steps is every Step, in the order a line or a count names them.
-var Steps = []Step{StepBitmap, StepIndex, StepGraph, StepProvenance, StepMemo, StepLayer}
+var Steps = []Step{StepBitmap, StepIndex, StepGraph, StepTipGraph, StepProvenance, StepMemo, StepLayer}
 
 // Valid reports whether s is one of Steps.
 func (s Step) Valid() bool { return slices.Contains(Steps, s) }
@@ -504,10 +518,12 @@ type Write struct {
 	// Deadline is the write's process bound over what it covers; nil for an
 	// in-process write, which its caller's context bounds.
 	Deadline func(Covers) time.Duration
-	// BytesPerObject is the write's own memory an object of what it covers:
-	// it is admitted at charge(objects, BytesPerObject), which adds room for
-	// one transfer of the same repository (memory.go). Zero for an in-process
-	// write, which no admission charges: its Charge says what it holds.
+	// BytesPerObject is the write's own memory an object of what it covers
+	// (Covers.Objects: the repository's for own mode's writes, the tail's for
+	// the node's tip): it is admitted at chargeOver(those objects,
+	// BytesPerObject, the repository's), which adds room for one transfer of
+	// the whole repository (memory.go). Zero for an in-process write, which no
+	// admission charges: its Charge says what it holds.
 	BytesPerObject int64
 	Writer         Writer
 	// Args is the argument list its writer hands git: one of the writer
@@ -616,11 +632,20 @@ func (d Derived) On(e Event) Change {
 	return ""
 }
 
-// inProcess reports whether d's files are the cache's own Go code's to write
-// — every write of it an in-process one (Write.Charge) — rather than git's.
-// Validate refuses a declaration whose writes are of both kinds.
+// inProcess reports whether d's files are the cache's own Go code's alone to
+// write — every write of it an in-process one (Write.Charge) — and no git
+// process's.
 func (d *Derived) inProcess() bool {
-	return len(d.Writes) > 0 && d.Writes[0].Writer.Subcommand == ""
+	return len(d.Writes) > 0 && !d.gitWritten()
+}
+
+// gitWritten reports whether a git process writes any of d's files: a write
+// of it git runs (Writer.Subcommand), beside any the cache's own code makes.
+// git writes what it reads, so Validate holds such a declaration to a part a
+// damage report names it by, to one file whose presence is its own, and to
+// no directory owned whole.
+func (d *Derived) gitWritten() bool {
+	return slices.ContainsFunc(d.Writes, func(w Write) bool { return w.Writer.Subcommand != "" })
 }
 
 // gitReads reports whether a git process reads d's files: whether it names a
@@ -677,6 +702,14 @@ var (
 	layerBitmapName = regexp.MustCompile(`^multi-pack-index-[0-9a-f]{40}\.bitmap$`)
 	graphChainName  = regexp.MustCompile(`^commit-graph-chain$`)
 	graphLayerName  = regexp.MustCompile(`^graph-([0-9a-f]{40})\.graph$`)
+	// What the node's TIP write holds while it runs, as git 2.56.0's
+	// commit-graph.c writes a split layer (write_commit_graph_file): the
+	// chain file's lock, held from the layer's start to the chain's commit,
+	// and the layer itself as a temporary file (mks_tempfile_m of
+	// "tmp_graph_XXXXXX", six of git's mkstemp letters and digits) until it
+	// is renamed graph-<checksum>.graph.
+	graphChainLock = regexp.MustCompile(`^commit-graph-chain\.lock$`)
+	tmpGraph       = regexp.MustCompile(`^tmp_graph_[A-Za-z0-9]{6}$`)
 )
 
 // The installed chain's two directories, relative to an incarnation.
@@ -728,11 +761,22 @@ const (
 // keeps its files and makes the copy's scrub due (a drop could only cut the
 // chain, and no git process says which layer it met), and a log gone back
 // reaches it as the rows' chain moving, which the full round that reads the
-// copy whole cuts it by. Its write holds no file in the incarnation: every
+// copy whole cuts it by. Its install holds no file in the incarnation: every
 // file is staged in tmp/ and renamed in. Kept by a rebuild where every pack a
 // layer names is seeded and the layer passes code.CheckLayer there and then —
 // the rows name it, and a cold copy's first clone would otherwise walk
 // without a bitmap until the chain was fetched again.
+//
+// THE NODE'S TIP is git's own split commit-graph layer over the installed
+// commit-graph layers (maintain.go): the commits of the TAIL, the packs pushed
+// since the last publication, which no installed layer holds — written by the
+// maintainer, in its lane, at a charge an object of the tail with room for a
+// clone of the whole repository beside it, holding the chain file's lock and
+// its temporary layer while it runs. A function of the packs and the refs
+// over exactly the layers beneath it, so it goes with any layer that goes,
+// with any chain placed and with any pack removed (commits may go with it);
+// a retirement that keeps the whole chain keeps it (X04: a merge drops no
+// commit, and the tip names commits by id). A rebuild writes it again.
 func DerivedFiles() []Derived {
 	maintained := func(c Covers) time.Duration { return gitproc.PackWorkDeadline(c.DiskBytes) }
 	return []Derived{{
@@ -864,10 +908,23 @@ func DerivedFiles() []Derived {
 		Seed: SeedLink,
 	}, {
 		Name:   DerivedGraphLayers,
-		Inputs: []Input{InputPacks, InputLayers},
-		Writes: []Write{{Step: StepLayer, Trigger: TriggerInstall, Writer: Writer{File: layersFile},
-			Charge: "installed with its layer, from the same parts — the commit-graph layer is the last section " +
-				"of a layer's bytes — and the commit-graph-chain from the rows, a line a layer that carries one"}},
+		Inputs: []Input{InputPacks, InputRefs, InputLayers},
+		Writes: []Write{
+			{Step: StepLayer, Trigger: TriggerInstall, Writer: Writer{File: layersFile},
+				Charge: "installed with its layer, from the same parts — the commit-graph layer is the last " +
+					"section of a layer's bytes — and the commit-graph-chain from the rows, a line a layer that " +
+					"carries one"},
+			// THE NODE'S TIP over the tail (maintain.go), git's: its Covers are
+			// the tail's — its packs, their objects and their bytes — since a
+			// split write walks only the commits no layer beneath it holds, so
+			// its time and its own memory follow the tail, never the history.
+			{Step: StepTipGraph, Trigger: TriggerMaintainer, Lane: gitproc.ClassMaintenance,
+				Deadline: func(c Covers) time.Duration {
+					return gitproc.PackWorkDeadline(c.DiskBytes) + gitproc.HistoryWalk(c.Objects)
+				},
+				BytesPerObject: TipGraphBytesPerObject, Writer: Writer{maintainFile, procGraph}, Args: tipGraphArgs,
+				Holds: []FilePattern{{graphLayersDir, graphChainLock}, {graphLayersDir, tmpGraph}}},
+		},
 		Owns: []Owned{
 			{FilePattern: FilePattern{graphLayersDir, graphChainName}, File: "graph-chain", Main: true},
 			{FilePattern: FilePattern{graphLayersDir, graphLayerName}, File: "graph-layer", Named: true},
@@ -876,9 +933,16 @@ func DerivedFiles() []Derived {
 		Part:      gitproc.PartCommitGraph,
 		Freshness: FreshInstalled,
 		// Cut wherever the multi-pack-index chain is (prefixOf): a graph layer
-		// is its layer's, over the same packs, and names its base's.
+		// is its layer's, over the same packs, and names its base's. The
+		// node's tip goes with every cut, every placement and every pack
+		// removed, and stays across a retirement that keeps the whole chain
+		// (layers.go's tipGoes); the refs moving keep it, since it covers the
+		// commits it covers whatever the refs name next.
 		OnPackAdded: Keep, OnPackRemoved: Prefix, OnRefsMoved: Keep, OnReported: Keep, OnHistoryGone: Keep,
 		OnPackRetired: Prefix, OnLayersMoved: Prefix,
+		// The published graph layers only, with their layers (rebuild.go's
+		// seedLayers): no row names the node's tip, so a rebuild writes it
+		// again over its new copy's tail, at once.
 		Seed: SeedLink,
 	}}
 }
@@ -908,16 +972,15 @@ func (d Derived) Validate() error {
 		step    Step
 	}
 	seen := map[key]bool{}
-	inProcess := d.inProcess()
+	// EACH WRITE IS OF ONE KIND, said whole for its kind; a declaration may
+	// have writes of both (the installed commit-graph layers and the node's
+	// tip over them), and what git writing any of its files asks of the
+	// declaration is held below (gitWritten).
+	git := d.gitWritten()
 	for i, w := range d.Writes {
 		field := fmt.Sprintf("Writes[%d]", i)
-		if (w.Writer.Subcommand == "") != inProcess {
-			return bad(field+".Writer.Subcommand", "is %q beside a write of the other kind: a derived file is "+
-				"written by git or by the cache's own code, never both, since who writes it says who reads it",
-				w.Writer.Subcommand)
-		}
 		var err error
-		if inProcess {
+		if w.Writer.Subcommand == "" {
 			err = w.validateInProcess(field, bad)
 		} else {
 			err = w.validateGit(field, bad)
@@ -976,7 +1039,7 @@ func (d Derived) Validate() error {
 		if o.Tree {
 			_, whole := o.Name.LiteralPrefix()
 			switch {
-			case !inProcess:
+			case git:
 				return bad(field+".Tree", "is set on a derived file git writes: git writes no directory the "+
 					"cache owns whole")
 			case !whole:
@@ -990,22 +1053,22 @@ func (d Derived) Validate() error {
 		}
 	}
 	switch {
-	case !inProcess && mains != 1:
+	case git && mains != 1:
 		return bad("Owns", "has %d main files, and a declaration git writes has one: the file whose presence "+
 			"is its", mains)
-	case inProcess && mains > 1:
+	case mains > 1:
 		return bad("Owns", "has %d main files, and a declaration has at most one", mains)
 	}
 	// A DAMAGE REPORT NAMES ONLY WHAT GIT READS, and who reads a declaration's
 	// files is its Part's to say (gitReads), never who writes them. Every
-	// declaration git WRITES is one git reads, so it names a part a report
-	// drops; one the cache's own code writes names one too where git reads its
-	// files (the installed chain) and none where nothing but the cache does
-	// (the provenance index, the memo), which then keeps its files on a report
-	// — no report can be about them, and the check and the scrub hold them to
-	// their Check instead.
+	// declaration git WRITES — any write of it — is one git reads, so it
+	// names a part a report drops; one the cache's own code writes names one
+	// too where git reads its files (the installed chain) and none where
+	// nothing but the cache does (the provenance index, the memo), which then
+	// keeps its files on a report — no report can be about them, and the
+	// check and the scrub hold them to their Check instead.
 	switch {
-	case !inProcess && !d.gitReads():
+	case git && !d.gitReads():
 		return bad("Part", "is none on a derived file git writes, and git reads what it writes: name the part a "+
 			"damage report names it by (gitproc.Damage.Drops)")
 	case d.gitReads() && (&gitproc.Damage{Kind: gitproc.ErrCorrupt, Parts: d.Part}).Drops() != d.Part:

@@ -74,6 +74,22 @@ import (
 //     written without the table is read as git always read one.
 //     Unconditional, never a knob: every request that opens the bitmap is
 //     the cheaper for it, and no git at the node floor lacks it.
+//   - commitGraph.changedPathsVersion: 2 — the changed-path filters every
+//     commit-graph this cache writes carries (own mode's whole graph and the
+//     node's tip, maintain.go) are VERSION 2 (git 2.46, below every node's
+//     floor). Version 1 hashes a path's bytes by the signedness of the C
+//     compiler's char, so for a path past ASCII a filter one git build wrote
+//     answers wrong to a build whose char differs — amd64's is signed,
+//     arm64's is not, and a fleet may run both, a published layer written on
+//     one being read on the other — saying a path did not change where it
+//     did, and a path's log skipping the commit; version 2 hashes alike on
+//     every build. git writes version 1 where nothing says otherwise and a
+//     repository holds no filters yet (its default, -1, keeps whatever
+//     version a repository's filters have). A reader under 2 reads only
+//     version-2 filters, which is every filter the code host writes, its
+//     published commit-graph layers' included (code.CheckLayer holds each
+//     to version 2). Unconditional, never a knob: version 1's answer is
+//     wrong for paths a repository may hold.
 //   - uploadpack.allowFilter: partial clones (--filter=blob:none), and the
 //     uploadpackfilter keys after it: ONLY THE FILTERS A BITMAP CAN ANSWER.
 //     uploadpackfilter.allow=false refuses every filter the keys after it do
@@ -123,6 +139,7 @@ func (c *Cache) ServeConfig() []gitproc.KV {
 		{Key: "pack.windowMemory", Value: strconv.FormatInt(2*c.limits().MaxBlobBytes, 10)},
 		{Key: "pack.useBitmaps", Value: "true"},
 		{Key: "pack.writeBitmapLookupTable", Value: strconv.FormatBool(!c.noLookupTable.Load())},
+		{Key: "commitGraph.changedPathsVersion", Value: "2"},
 		{Key: "uploadpack.allowFilter", Value: "true"},
 		{Key: "uploadpackfilter.allow", Value: "false"},
 		{Key: "uploadpackfilter.blob:none.allow", Value: "true"},

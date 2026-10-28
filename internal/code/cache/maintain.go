@@ -118,6 +118,40 @@ import (
 // slow and never refused (gitproc.HistoryWalk bounds every walk by the
 // history as well as the push).
 //
+// EVERY GRAPH CARRIES CHANGED-PATH FILTERS (--changed-paths, version 2 under
+// the serve configuration's commitGraph.changedPathsVersion): a `git log --
+// <path>` or a blame then skips every commit whose filter says the path did
+// not change rather than diffing it — 0.044 s with them against 0.399 s with
+// no commit-graph, over a synthetic history of 40 000 commits on git 2.56.0 —
+// and a write computes at most MaxNewFilters new ones (--max-new-filters), so
+// what one write spends on filters is bounded whatever the history it walks:
+// own mode's whole graph keeps every filter the graph it replaces holds, and
+// the next write computes more; the tip computes its own afresh at each
+// write (constants.go says what that leaves of a long tail).
+//
+// THE TIP. In CHAIN mode — an installed published chain (layers.go) — the
+// maintainer writes no own-mode file; its one write is the node's TIP
+// commit-graph layer over the TAIL, the packs pushed since the last
+// publication, which no installed layer names and whose commits no
+// installed commit-graph layer holds: git's own split write (`commit-graph
+// write --reachable --split=no-merge`), which reads every layer beneath it
+// and writes a layer of just the commits they lack. It is DUE once the tail
+// holds a pack and is no longer the tail the last write covered
+// (incarnation.tipOver, the tail's digest, persisted with the tip, so a
+// restart or a full round over the same packs owes it nothing): at once
+// where the copy has no tip — GRAPH FIRST, in any slot of the lane — and
+// otherwise by the ordinary cadence above. It is written WHOLE each time,
+// over the whole tail and exactly the installed layers: the chain file is
+// written first naming exactly those (writeTip), so the old tip is off the
+// chain git writes over and its file is expired by git's own write, rather
+// than a new tip stacked on the old one — a stack would grow without bound
+// while the tail waits for its publication — and a whole rewrite costs only
+// the tail's commits (0.29 s over 5 000 with every filter, 0.04 s at 100, on
+// git 2.56.0), charged at TipGraphBytesPerObject an object of the tail with
+// room for a clone of the whole repository beside it (chargeOver). A tip's
+// failure costs speed and never an answer: the tail's commits are read from
+// their packs, as they are before the tip is written.
+//
 // WHAT A DUE RUN WRITES is the PLAN the node's memory allows (plan): the
 // bitmap where the budget holds it; where it does not, the index WITHOUT a
 // bitmap, once no index covers the packs or enough have gathered outside one
@@ -234,7 +268,7 @@ func (c *Cache) indexRound(ctx context.Context, e *entry, inc *incarnation, snap
 		covers.IndexBytes += p.IndexBytes
 		covers.Objects += p.Objects
 	}
-	mem := charge(covers.Objects, w.BytesPerObject)
+	mem := chargeOver(covers.Objects, w.BytesPerObject, covers.Objects)
 	switch c.maint.admitOther(mem) {
 	case pastBudget:
 		// Refused as the maintainer's own index without a bitmap would be:
@@ -306,15 +340,21 @@ type maintRun struct {
 // runPlan is what a run was started to do, fixed when it is started under
 // the entry's mu (plan): the index it writes — the declared write with its
 // bitmap, the one without, or none — and whether it writes the commit-graph,
-// and FIRST, before the index, what the run covers — the packs that index
-// will cover, the objects its charges are of and the bytes its deadlines are
-// sized by — the memory it was admitted at (maintFlight), the graph's own
+// or, in chain mode, the node's tip and nothing else; and FIRST, before the
+// index, what the run covers — the packs that index will cover, the objects
+// its charges are of and the bytes its deadlines are sized by, the tail's
+// for the tip — the memory it was admitted at (maintFlight), the graph's own
 // charge, and when it started on the cache's clock.
 type runPlan struct {
 	index maintStep // the maintainer's bitmap or plain write (maintWrites), or 0
 	graph bool
-	// first: the incarnation has no commit-graph, so the graph is the run's
-	// first step, due at once (GRAPH FIRST above).
+	// tip: the node's tip commit-graph over the tail (THE TIP above), the
+	// one step a run in chain mode takes; tipOver is the digest of the tail
+	// it is written over (incarnation.tail).
+	tip     bool
+	tipOver tailDigest
+	// first: the incarnation has no commit-graph — no tip, in chain mode —
+	// so the graph is the run's first step, due at once (GRAPH FIRST above).
 	first       bool
 	covers      Covers
 	memory      int64
@@ -323,7 +363,7 @@ type runPlan struct {
 }
 
 // steps reports whether the plan takes any step at all.
-func (p runPlan) steps() bool { return p.index != 0 || p.graph }
+func (p runPlan) steps() bool { return p.index != 0 || p.graph || p.tip }
 
 // graphOnly is a graph-first plan without its index: what a run takes when
 // no slot of the maintainer's own is free for the whole plan — the graph
@@ -454,7 +494,11 @@ func (c *Cache) maintainerPass(ctx context.Context) []*maintRun {
 			}
 			if p.steps() && c.runnable(e) {
 				uncovered := inc.packs
-				if inc.bitmapped() {
+				switch {
+				case len(inc.installed) > 0:
+					// A chained copy's packs outside every index are its tail.
+					uncovered = inc.tail.packs
+				case inc.bitmapped():
 					uncovered -= inc.covered()
 				}
 				// An index repair is sorted with the graph-first runs: the
@@ -729,10 +773,12 @@ func (c *Cache) owedWake(e *entry) bool {
 // graph-first run is due whatever this says (plan).
 func (c *Cache) due(e *entry, now time.Time) bool {
 	inc := e.current
-	if inc.indexRepair {
+	if inc.indexRepair && len(inc.installed) == 0 {
 		// A multi-pack-index dropped as damaged (sync.go apply): every
 		// clone of the copy walks without a bitmap until it is written
-		// again, so no debounce and no interval hold it back.
+		// again, so no debounce and no interval hold it back. Own mode's
+		// alone: a chained copy writes no index, and its tip waits for
+		// nothing a repair of an index owed.
 		return true
 	}
 	settled := now.Sub(e.lastAdded) >= MidxDebounce ||
@@ -754,12 +800,30 @@ func (c *Cache) holdsWork(e *entry) bool {
 // commit-graph. One in CHAIN mode — an installed published chain (layers.go)
 // — wants no own-mode write: a whole index written beside the chain deletes
 // every layer of it and the chain file, a whole graph the graph chain, and
-// its index is its maintainer's to publish. runnable and due add WHEN — no
-// round, run or verify in flight, the debounce and the interval passed — and
-// plan WHAT, on the node's memory. e.mu is held.
+// its index is its maintainer's to publish; it wants its TIP over a tail that
+// moved since the tip was written (tipWanted). runnable and due add WHEN —
+// no round, run or verify in flight, the debounce and the interval passed —
+// and plan WHAT, on the node's memory. e.mu is held.
 func (c *Cache) wantsRun(e *entry) bool {
-	return c.holdsWork(e) && len(e.current.installed) == 0 &&
-		(c.indexDue(e.current) || !e.current.graphed())
+	if !c.holdsWork(e) {
+		return false
+	}
+	if inc := e.current; len(inc.installed) > 0 {
+		return tipWanted(inc)
+	}
+	return c.indexDue(e.current) || !e.current.graphed()
+}
+
+// tipWanted reports whether a chained inc wants its tip written: its tail
+// holds a pack, and is not the tail the last write that succeeded covered —
+// writing the tip it holds, or finding the tail held no commit the layers
+// lack. A tail of the same packs holds the same commits, so its tip stands
+// until the tail's packs change, and a quiet repository is written nothing
+// at every pass, every full round and every restart. A digest compared,
+// under the cache's lock as a pass reads every entry, rather than a walk of
+// the packs (incarnation.tail). e.mu is held.
+func tipWanted(inc *incarnation) bool {
+	return inc.tail.packs > 0 && !(inc.tipWritten && inc.tipOver == inc.tail.digest)
 }
 
 // indexDue reports whether inc wants the maintainer's BITMAPPED index
@@ -773,8 +837,9 @@ func (c *Cache) indexDue(inc *incarnation) bool {
 
 // plan decides what a run over inc would take on a budget of budget, and
 // answers it with the steps the budget refused and every step's charge
-// (charge: its own figure an object of the repository, and room beside it
-// for one transfer of it). e.mu is held.
+// (chargeOver: its own figure an object of what it covers — the repository,
+// or the tail for the node's tip — and room beside it for one transfer of the
+// whole repository). e.mu is held.
 //
 //   - THE INDEX. Where the bitmapped index is due (indexDue) and its charge
 //     fits the budget, the bitmap. Where it is due and does not fit, the
@@ -804,26 +869,45 @@ func (c *Cache) indexDue(inc *incarnation) bool {
 // other.
 //
 // IN CHAIN MODE — an installed published chain (layers.go) — NO OWN-MODE STEP
-// IS EVER PLANNED, nor refused: the two modes never coexist (wantsRun).
+// IS EVER PLANNED, nor refused: the two modes never coexist (wantsRun). The
+// one step is the node's TIP over the tail (THE TIP above), wanted while the
+// tail is not the one its last write covered (tipWanted) and refused where
+// its charge alone is past the budget: due at once where the copy holds no
+// tip — unless its first write failed (tipFailed), which waits for the
+// ordinary rules — and otherwise when due says the ordinary run is.
 func (c *Cache) plan(inc *incarnation, budget int64, due bool) (p runPlan, refused maintStep,
 	charges map[maintStep]int64) {
 
 	mw := &c.mw
 	charges = make(map[maintStep]int64, len(mw.all))
 	for i, w := range mw.all {
-		charges[maintStep(1)<<i] = charge(inc.objects, w.BytesPerObject)
+		s, over := maintStep(1)<<i, inc.objects
+		if s == mw.tipGraph {
+			// The tip covers the tail; the clone beside it, the repository.
+			over = inc.tail.objects
+		}
+		charges[s] = chargeOver(over, w.BytesPerObject, inc.objects)
 	}
 	p = runPlan{covers: Covers{Packs: inc.packs, Objects: inc.objects, DiskBytes: inc.diskBytes}, startedAt: c.now(),
 		graphCharge: charges[mw.graph]}
-	if len(inc.installed) > 0 {
-		return p, 0, charges
-	}
 	fits := func(s maintStep) bool {
 		if charges[s] > budget {
 			refused |= s
 			return false
 		}
 		return true
+	}
+	if len(inc.installed) > 0 {
+		p.covers = inc.tail.covers()
+		if !tipWanted(inc) || !fits(mw.tipGraph) {
+			return p, refused, charges
+		}
+		first := inc.tip.id == "" && !inc.tipFailed
+		if due || first {
+			p.tip, p.first, p.tipOver = true, first, inc.tail.digest
+			p.memory = charges[mw.tipGraph]
+		}
+		return p, refused, charges
 	}
 	var index maintStep
 	if c.indexDue(inc) && fits(mw.bitmap) {
@@ -983,7 +1067,7 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 
 	began := time.Now()
 	steps := c.mw.steps(p)
-	out := c.runMaintenance(ctx, e, inc, p.covers, steps)
+	out := c.runMaintenance(ctx, e, inc, p, steps)
 	took := time.Since(began)
 	refused := errors.Is(out.err, gitproc.ErrBusy)
 	if refused && out.step == c.mw.all[c.mw.index(steps[0])].Writer.Subcommand {
@@ -1040,13 +1124,31 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 	case out.graphed:
 		c.made(inc, DerivedGraph, p.covers.Packs, Step(c.mw.name(c.mw.graph)))
 		inc.graphFailed = false
-	case p.first && out.step == procGraph && out.err != nil && !refused && !stopped:
+	case p.first && p.graph && out.step == procGraph && out.err != nil && !refused && !stopped:
 		// A GRAPH-FIRST RUN THAT FAILED waits for the ordinary rules
 		// (plan), so a step that keeps failing is not asked again every
 		// pass.
 		inc.graphFailed = true
 	}
-	if out.indexed || out.graphed {
+	switch {
+	case out.tipped:
+		// The tip is recorded by its write (writeTip). The tail it covers is
+		// the one planned: a pack a delta added while it was written arrived
+		// after the run began, and is the oldest the next tip covers.
+		inc.tipFailed = false
+		switch {
+		case e.current != inc:
+		case inc.tail.digest != p.tipOver:
+			e.uncoveredSince = p.startedAt
+		default:
+			e.uncoveredSince = time.Time{}
+		}
+	case p.first && p.tip && out.err != nil && !refused && !stopped:
+		// A TIP-FIRST RUN THAT FAILED waits for the ordinary rules, as a
+		// graph-first one does.
+		inc.tipFailed = true
+	}
+	if out.indexed || out.graphed || out.tipped {
 		// A file no rebuild wrote: the incarnation no longer holds exactly
 		// what the last rebuild attempt read, and one may make something
 		// else of it — a bitmap the run wrote damaged among it (rebuild.go).
@@ -1073,7 +1175,7 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 	}
 	m.maintained = true
 	c.log.Debug("code_cache_maintained", "repo", e.id, "packs", p.covers.Packs, "index", c.mw.name(p.index),
-		"graph", p.graph, "first", p.first, "took", took)
+		"graph", p.graph, "tip", p.tip, "first", p.first, "took", took)
 }
 
 // maintOutcome is how a run's steps ended: which it wrote, and the step it
@@ -1081,10 +1183,10 @@ func (c *Cache) maintain(ctx context.Context, m *maintRun, p runPlan) {
 // when every step ran), and whether that step's git process began (what the
 // run's writes hold may then be left, clearWriting).
 type maintOutcome struct {
-	indexed, graphed bool
-	step             string
-	err              error
-	began            bool
+	indexed, graphed, tipped bool
+	step                     string
+	err                      error
+	began                    bool
 }
 
 // The maintainer's two processes, by the name a knob a case holds a run with
@@ -1101,31 +1203,42 @@ const (
 const maintainFile = "internal/code/cache/maintain.go"
 
 // The argument lists of the declared writes (derived.go) — a full round's
-// index, the maintainer's index with its bitmap and without one, and the
-// graph — spelled as literals in the file that runs them, which is how
-// TestNothingButSyncWritesACache reads which git writer a file runs.
+// index, the maintainer's index with its bitmap and without one, own mode's
+// graph and the node's tip over an installed chain — spelled as literals in
+// the file that runs them, which is how TestNothingButSyncWritesACache reads
+// which git writer a file runs. Both graphs carry changed-path filters, at
+// most MaxNewFilters new ones a write: its flag is spelled whole for the same
+// reason, and TestTheFilterFlagIsTheConstant holds it to the constant. The
+// tip is a SPLIT write that never merges (--split=no-merge): one layer of the
+// commits the installed layers lack, over exactly those layers — merging, it
+// would write the published layers again into a layer of the node's own.
 var (
 	roundIndexArgs = []string{"multi-pack-index", "write", "--stdin-packs", "--no-progress"}
 	bitmapArgs     = []string{"multi-pack-index", "write", "--bitmap", "--no-progress"}
 	plainArgs      = []string{"multi-pack-index", "write", "--no-progress"}
-	graphArgs      = []string{"commit-graph", "write", "--reachable", "--no-progress"}
+	graphArgs      = []string{"commit-graph", "write", "--reachable", "--changed-paths", "--max-new-filters=1024",
+		"--no-progress"}
+	tipGraphArgs = []string{"commit-graph", "write", "--reachable", "--split=no-merge", "--changed-paths",
+		"--max-new-filters=1024", "--no-progress"}
 )
 
 // maintWrites is the maintainer's declared writes — every Write of the
 // cache's declarations whose Trigger is TriggerMaintainer, in declaration
-// order, a maintStep's bit i being all[i] — and the four the plan and a full
+// order, a maintStep's bit i being all[i] — and the five the plan and a full
 // round name by what they ARE: the multi-pack-index with its bitmap and
-// without one, the commit-graph, and the round's own index. The declarations
-// say what each step is — its argument list, lane, deadline and charge — and
-// this file when each runs (plan): no step's name, charge, lane, deadline or
-// argument list is spelled outside derived.go.
+// without one, the commit-graph, the node's tip over an installed chain, and
+// the round's own index. The declarations say what each step is — its
+// argument list, lane, deadline and charge — and this file when each runs
+// (plan): no step's name, charge, lane, deadline or argument list is spelled
+// outside derived.go.
 type maintWrites struct {
 	all []Write
 	// of is the declaration each of all is a write of.
 	of []DerivedName
 	// bitmap and plain are DerivedMidx's maintainer writes of StepBitmap and
-	// StepIndex, and graph DerivedGraph's of StepGraph, as their bits.
-	bitmap, plain, graph maintStep
+	// StepIndex, graph DerivedGraph's of StepGraph, and tipGraph
+	// DerivedGraphLayers' of StepTipGraph, as their bits.
+	bitmap, plain, graph, tipGraph maintStep
 	// round is DerivedMidx's round write (indexRound).
 	round Write
 }
@@ -1163,10 +1276,12 @@ func newMaintWrites(im *image) (maintWrites, error) {
 	}
 	mw.bitmap, mw.plain, mw.graph = bit(DerivedMidx, StepBitmap), bit(DerivedMidx, StepIndex), bit(DerivedGraph,
 		StepGraph)
-	if mw.bitmap == 0 || mw.plain == 0 || mw.graph == 0 || !roundFound {
+	mw.tipGraph = bit(DerivedGraphLayers, StepTipGraph)
+	if mw.bitmap == 0 || mw.plain == 0 || mw.graph == 0 || mw.tipGraph == 0 || !roundFound {
 		return mw, fmt.Errorf("the maintainer's plan takes %s's maintainer writes of steps %s and %s, %s's of step "+
-			"%s and %s's round write of step %s, and the declarations lack one of them", DerivedMidx, StepBitmap,
-			StepIndex, DerivedGraph, StepGraph, DerivedMidx, StepIndex)
+			"%s, %s's of step %s and %s's round write of step %s, and the declarations lack one of them",
+			DerivedMidx, StepBitmap, StepIndex, DerivedGraph, StepGraph, DerivedGraphLayers, StepTipGraph,
+			DerivedMidx, StepIndex)
 	}
 	return mw, nil
 }
@@ -1191,7 +1306,8 @@ func (mw *maintWrites) name(s maintStep) string {
 }
 
 // steps is the writes a run of p takes, in order, as their bits: the graph
-// first on a graph-first run, else after the index.
+// first on a graph-first run, else after the index; and the tip, the one step
+// of a run in chain mode.
 func (mw *maintWrites) steps(p runPlan) []maintStep {
 	var steps []maintStep
 	if p.graph && p.first {
@@ -1202,6 +1318,9 @@ func (mw *maintWrites) steps(p runPlan) []maintStep {
 	}
 	if p.graph && !p.first {
 		steps = append(steps, mw.graph)
+	}
+	if p.tip {
+		steps = append(steps, mw.tipGraph)
 	}
 	return steps
 }
@@ -1217,12 +1336,12 @@ func (mw *maintWrites) written(im *image, steps []maintStep) derivedSet {
 	return s
 }
 
-// runMaintenance runs steps in inc, in order, each a declared write: its
-// argument list in its lane with the serve configuration, under its deadline
-// over what the run covers. What a step that succeeds writes is vouched
-// (check.go): this process wrote it, so no check of this process hashes it
-// again.
-func (c *Cache) runMaintenance(ctx context.Context, e *entry, inc *incarnation, covers Covers,
+// runMaintenance runs the steps of p in inc, in order, each a declared write:
+// its argument list in its lane with the serve configuration, under its
+// deadline over what the run covers — the node's tip by its own steps
+// (writeTip). What a step that succeeds writes is vouched (check.go): this
+// process wrote it, so no check of this process hashes it again.
+func (c *Cache) runMaintenance(ctx context.Context, e *entry, inc *incarnation, p runPlan,
 	steps []maintStep) maintOutcome {
 
 	var out maintOutcome
@@ -1237,9 +1356,18 @@ func (c *Cache) runMaintenance(ctx context.Context, e *entry, inc *incarnation, 
 			out.step, out.err = name, context.Cause(ctx)
 			return out
 		}
+		if s == c.mw.tipGraph {
+			began, err := c.writeTip(ctx, e, inc, w, p)
+			if err != nil {
+				out.step, out.err, out.began = name, err, began
+				return out
+			}
+			out.tipped = true
+			continue
+		}
 		before := c.image.ids(inc.dir)
 		res, err := c.git.Run(ctx, gitproc.Cmd{
-			Dir: inc.dir, Args: w.Args, Config: c.ServeConfig(), Class: w.Lane, Deadline: w.Deadline(covers),
+			Dir: inc.dir, Args: w.Args, Config: c.ServeConfig(), Class: w.Lane, Deadline: w.Deadline(p.covers),
 		})
 		if err != nil {
 			out.step, out.err, out.began = name, err, !res.Began.IsZero()
@@ -1254,6 +1382,95 @@ func (c *Cache) runMaintenance(ctx context.Context, e *entry, inc *incarnation, 
 		}
 	}
 	return out
+}
+
+// writeTip is the node's TIP write over a chained inc (THE TIP above), the
+// tail p planned it over, and answers whether its git process began and how
+// it failed. In a slot of the maintenance lane it RESERVES FIRST, so a lane
+// with no slot free refuses it before anything of the copy moves — and then:
+//
+//  1. commit-graph-chain written in place naming EXACTLY the installed
+//     layers' commit-graph layers, the old tip off it: git writes its split
+//     layer over the chain file it finds, so the new tip is a layer of every
+//     commit those layers lack rather than one stacked on the old tip, whose
+//     file git's own write expires (every .graph its chain does not name, as
+//     old as the write). A reader that read the old chain and opens the old
+//     tip once it is gone is told "unable to find all commit-graph files" and
+//     goes on with the layers below it — git's own split writes do the same
+//     to their readers, and that sentence is no damage (gitproc's format
+//     table refuses it as a row: a healthy repository prints it).
+//  2. git's split write (tipGraphArgs), under the declaration's deadline over
+//     the tail.
+//  3. commit-graph-chain read back: a line past the layers is the new tip,
+//     and none is a tail that held no commit the layers lack, which leaves no
+//     tip and the tail recorded as written over, so it is not due again until
+//     it moves.
+//  4. recorded (recordChains), whatever git did — the chain file is what the
+//     record must name — and only a write that succeeded records the tail it
+//     covered (tipOver); one that failed records none, whatever tip it left,
+//     so the tip is wanted again.
+//
+// The chain files are written IN PLACE while readers hold the copy, so the
+// whole write is marked in flight (chainWrite): a check or a scrub that read
+// what the record named before it, or hashes the chain file across it, has no
+// verdict of the file. Holding no lock of the entry; the run's pin keeps the
+// directory, and nothing else writes a chain file of a copy a run is on: a
+// cut and a placement stop the run first (dropFor, a swap's stopRun, a full
+// round's stopMaintenance).
+func (c *Cache) writeTip(ctx context.Context, e *entry, inc *incarnation, w Write, p runPlan) (bool, error) {
+	slot, err := c.git.Reserve()
+	if err != nil {
+		return false, err
+	}
+	defer slot.Release()
+	e.mu.Lock()
+	_, layers := chainIDs(inc.installed)
+	ended := chainWrite(inc)
+	e.mu.Unlock()
+	before := c.image.ids(inc.dir)
+	// Written unsynced: it names nothing new — every layer it lists is a file
+	// of the installed chain, durable since its placement — and a crash that
+	// loses it leaves a chain file the boot's round holds to the record and
+	// writes again (planChain).
+	err = c.writeChain(inc.dir, graphChainRel, layers, unsynced)
+	var res gitproc.Result
+	if err == nil {
+		res, err = slot.Run(ctx, gitproc.Cmd{
+			Dir: inc.dir, Args: w.Args, Config: c.ServeConfig(), Class: w.Lane, Deadline: w.Deadline(p.covers),
+		})
+	}
+	tip := readTip(inc.dir, layers)
+	if err == nil {
+		c.vouchWritten(e, inc, before)
+	}
+	e.mu.Lock()
+	inc.tip = tip
+	inc.tipOver, inc.tipWritten = p.tipOver, err == nil
+	c.recordChains(inc)
+	ended()
+	e.mu.Unlock()
+	return !res.Began.IsZero(), err
+}
+
+// readTip is the tip the commit-graph-chain of the incarnation at dir names
+// above layers, the installed commit-graph layers it was written over: its one
+// line past them, with that layer's bytes — or none, where it lists no more
+// than them, lists them otherwise, or names a file that is not there.
+func readTip(dir string, layers []string) tipLayer {
+	raw, err := os.ReadFile(filepath.Join(dir, graphChainRel))
+	if err != nil {
+		return tipLayer{}
+	}
+	lines := strings.Fields(string(raw))
+	if len(lines) != len(layers)+1 || !slices.Equal(lines[:len(layers)], layers) {
+		return tipLayer{}
+	}
+	id := lines[len(layers)]
+	info, err := os.Lstat(filepath.Join(dir, tipRel(id)))
+	if err != nil || !info.Mode().IsRegular() || !graphLayerName.MatchString(filepath.Base(tipRel(id))) {
+		return tipLayer{}
+	}
+	return tipLayer{id: id, bytes: info.Size()}
 }
 
 // clearWriting removes what a run of writes whose git process began and did

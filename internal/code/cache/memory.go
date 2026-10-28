@@ -17,10 +17,14 @@ import (
 // (BitmapBytesPerObject an object), the same index without one — the
 // maintainer's where the bitmap cannot be had, and a full round's own
 // (IndexBytesPerObject) — the commit-graph (GraphBytesPerObject), and
-// Verify's connectivity check (FsckBytesPerObject). The first three are the
-// declared writes' own figures (derived.go, Write.BytesPerObject), which the
-// plan and a refusal's line read from the declaration, never beside it; the
-// check is no write and keeps its own. The largest repository
+// Verify's connectivity check (FsckBytesPerObject). A fifth, the node's TIP
+// commit-graph over an installed chain (TipGraphBytesPerObject), holds memory
+// in proportion to the TAIL it covers — the commits no installed layer holds
+// — and is charged so (chargeOver), with the room for a clone of the whole
+// repository beside it that every step keeps. Each write's figure is its
+// declaration's own (derived.go, Write.BytesPerObject), which the plan and a
+// refusal's line read from the declaration, never beside it; the check is no
+// write and keeps its own. The largest repository
 // the defaults admit is some 60 million objects, which no node holds a bitmap
 // of; and on a node with less memory than a run needs, every duty cycle's run
 // was killed by the kernel, which may as well have chosen the engine. So each
@@ -50,8 +54,8 @@ import (
 // everything past what its other work is sized to hold.
 //
 // WHAT IT ADMITS is every step whose CHARGE fits the budget alone, together
-// with everything in flight (maintFlight): a step's own figure an object, and
-// room beside it for one transfer of the same repository
+// with everything in flight (maintFlight): a step's own figure an object of
+// what it covers, and room beside it for one transfer of the whole repository
 // (gitproc.TransferBytesPerObject an object). The transfer lane's reserve is
 // sized for repositories of about a hundred thousand objects, since no lane
 // knows which repository a slot will serve; a run is over one of the
@@ -70,21 +74,31 @@ import (
 // bitmap it wrote before standing until MidxRoundPacks packs gather outside
 // it (maintain.go says why). Each step refused is logged and counted once an
 // incarnation (code_cache_maintenance_refused,
-// crewlet.code.cache.maintenance.refusals{step}); a refused BITMAP and a
-// refused GRAPH are each kept on a gauge while they stay refused
+// crewlet.code.cache.maintenance.refusals{step}); a refused BITMAP, a refused
+// GRAPH and a refused TIP are each kept on a gauge while they stay refused
 // (crewlet.code.cache.maintenance.refused{step}) — a repository refused its
 // graph walks by date for as long, and a push of a commit dated before its
 // parent walks its whole history — and a refused bitmap raises
 // code_maintenance_refused, whose threshold is the budget: a measurement,
 // never a knob. The alarm stands for a refused graph too, since a graph's
 // charge is a fraction of the bitmap's over the same objects: no repository
-// is refused its graph and not its bitmap.
+// is refused its graph and not its bitmap. A refused TIP raises nothing: its
+// copy is served through its installed chain's bitmap and its commit-graph
+// layers, and only the commits pushed since the last publication walk by
+// date — those of the tail, which a publication bounds — so the alarm's
+// "served without a bitmap" would be false of it, and the gauge says it.
 
-// charge is what a whole-repository process over objects objects is admitted
-// at: its own perObject bytes an object, and room beside it for one transfer
-// of the same repository at gitproc.TransferBytesPerObject.
-func charge(objects, perObject int64) int64 {
-	return objects * (perObject + gitproc.TransferBytesPerObject)
+// chargeOver is what a git process the cache starts is admitted at, writing
+// over stepObjects objects of a repository of repoObjects: its own perObject
+// bytes an object of what it covers, and room beside it for one transfer of
+// the WHOLE repository at gitproc.TransferBytesPerObject. Every step but one
+// covers the whole repository (stepObjects is repoObjects); the node's tip
+// commit-graph covers the tail alone (maintain.go), so its own memory follows
+// the tail, while the clone it shares the node with is of the repository —
+// charged by the tail alone, a large repository's tip would be admitted
+// beside a clone the budget kept no room for.
+func chargeOver(stepObjects, perObject, repoObjects int64) int64 {
+	return stepObjects*perObject + repoObjects*gitproc.TransferBytesPerObject
 }
 
 // perBackedCore is share for each core of cores that memory backs at
@@ -221,9 +235,9 @@ type refusal struct {
 
 // refusalWalk gathers what one walk of the entries finds refused.
 type refusalWalk struct {
-	bitmaps, graphs int
-	largest         int64
-	fresh           []refusal
+	bitmaps, graphs, tips int
+	largest               int64
+	fresh                 []refusal
 }
 
 // note records inc's steps refused on the walk's budget — refused, with each
@@ -239,6 +253,9 @@ func (w *refusalWalk) note(mw *maintWrites, id string, inc *incarnation, refused
 	if refused&mw.graph != 0 {
 		w.graphs++
 	}
+	if refused&mw.tipGraph != 0 {
+		w.tips++
+	}
 	for i := range mw.all {
 		s := maintStep(1) << i
 		if refused&s != 0 && inc.memoryRefused&s == 0 {
@@ -249,10 +266,10 @@ func (w *refusalWalk) note(mw *maintWrites, id string, inc *incarnation, refused
 }
 
 // noteRefusals records what one walk of the entries found: the repositories
-// refused their bitmap — and their graph — and the largest of the bitmaps'
-// charges, for the gauge and the alarm, and every step refused for the first
-// time on its incarnation — each logged, and counted once. Holding no lock of
-// the cache or an entry.
+// refused their bitmap — and their graph, and their tip — and the largest of
+// the bitmaps' charges, for the gauge and the alarm, and every step refused
+// for the first time on its incarnation — each logged, and counted once.
+// Holding no lock of the cache or an entry.
 func (c *Cache) noteRefusals(w refusalWalk) {
 	slices.SortFunc(w.fresh, func(a, b refusal) int {
 		if n := strings.Compare(a.repo, b.repo); n != 0 {
@@ -272,6 +289,8 @@ func (c *Cache) noteRefusals(w refusalWalk) {
 	c.metrics.Set(metrics.CodeCacheMaintenanceRefused, float64(w.bitmaps),
 		metrics.Attrs{"step": c.mw.name(c.mw.bitmap)})
 	c.metrics.Set(metrics.CodeCacheMaintenanceRefused, float64(w.graphs), metrics.Attrs{"step": c.mw.name(c.mw.graph)})
+	c.metrics.Set(metrics.CodeCacheMaintenanceRefused, float64(w.tips),
+		metrics.Attrs{"step": c.mw.name(c.mw.tipGraph)})
 }
 
 // logRefusal logs and counts one step refused an incarnation for the first

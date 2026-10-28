@@ -79,23 +79,26 @@ func TestEveryDerivedFileIsDeclared(t *testing.T) {
 			// The installed published chain (layers.go): each layer's
 			// multi-pack-index and bitmap and the chain file the cache writes
 			// from the rows, as git 2.56.0 names them, and each layer's
-			// commit-graph layer under the graph's own chain file. Beside
-			// them, names no install of this build makes: a layer's reverse
-			// index as a file (git writes it as the RIDX chunk), a
-			// publisher's temporary layer (the sweep trashes one), a name
-			// whose checksum is short, and a split graph's lock and
-			// temporary layer, which no write of this build holds.
+			// commit-graph layer — and the node's tip over them, a layer of the
+			// same name — under the graph's own chain file, whose lock and
+			// temporary layer the tip's write holds while git writes it
+			// (maintain.go). Beside them, names no write of this build makes:
+			// a layer's reverse index as a file (git writes it as the RIDX
+			// chunk), a publisher's temporary layer (the sweep trashes one), a
+			// name whose checksum is short, and a temporary layer of another
+			// length than git's mkstemp gives.
 			{rel: "objects/pack/multi-pack-index.d/multi-pack-index-chain", owner: cache.DerivedLayers},
 			{rel: "objects/pack/multi-pack-index.d/multi-pack-index-" + cs + ".midx", owner: cache.DerivedLayers},
 			{rel: "objects/pack/multi-pack-index.d/multi-pack-index-" + cs + ".bitmap", owner: cache.DerivedLayers},
 			{rel: "objects/info/commit-graphs/commit-graph-chain", owner: cache.DerivedGraphLayers},
 			{rel: "objects/info/commit-graphs/graph-" + cs + ".graph", owner: cache.DerivedGraphLayers},
+			{rel: "objects/info/commit-graphs/commit-graph-chain.lock", holder: cache.DerivedGraphLayers},
+			{rel: "objects/info/commit-graphs/tmp_graph_AbC123", holder: cache.DerivedGraphLayers},
 			{rel: "objects/pack/multi-pack-index.d/multi-pack-index-" + cs + ".rev"},
 			{rel: "objects/pack/multi-pack-index.d/tmp_midx_AbC123"},
 			{rel: "objects/pack/multi-pack-index.d/multi-pack-index-abc.midx"},
 			{rel: "objects/info/commit-graphs/graph-abc.graph"},
-			{rel: "objects/info/commit-graphs/commit-graph-chain.lock"},
-			{rel: "objects/info/commit-graphs/tmp_graph_AbC123"},
+			{rel: "objects/info/commit-graphs/tmp_graph_AbC1234"},
 			// The image's fixed files, a pack's own, and names beside the
 			// declared ones that no write of this build makes: an
 			// alternates file, a bitmap whose name carries no checksum.
@@ -175,11 +178,18 @@ func TestEveryDerivedFileIsDeclared(t *testing.T) {
 		w.log.publish(chained, []code.LayerRef{build.layer(t, p, false)}, nil)
 		installed := derivedOnDisk(t, w.sync(t, c, chained).Dir)
 		published := derivedOnDisk(t, build.bare)
+		// And the node's tip over that chain, written over a push since.
+		w.push(t, chained, "refs/heads/main", nil)
+		tipped := w.sync(t, c, chained).Dir
+		if ran := cache.MaintainerPass(c); !slices.Contains(ran, chained) {
+			t.Fatalf("the maintainer ran %v, want %s's tip", ran, chained)
+		}
+		tip := derivedOnDisk(t, tipped)
 		t.Logf("the suite's git and the cache wrote, of the derived files: %v after the round, %v after the "+
-			"maintainer and a delta, %v of a published layer and %v where the cache installed it", roundWrote,
-			maintained, published, installed)
+			"maintainer and a delta, %v of a published layer, %v where the cache installed it and %v with the "+
+			"node's tip", roundWrote, maintained, published, installed, tip)
 		owned := map[cache.DerivedName]int{}
-		for _, rel := range slices.Concat(maintained, published, installed) {
+		for _, rel := range slices.Concat(maintained, published, installed, tip) {
 			got := cache.OwnersOf(rel)
 			if len(got) != 1 {
 				t.Errorf("real git wrote %s, owned by %v: a file under objects/ that is no row's pack is one "+

@@ -938,8 +938,8 @@ func (c *Cache) sweepPacks(e *entry, inc *incarnation, strays []string) (bool, e
 // every caller calls it BEFORE its change, whatever the declarations say of
 // that change today, and a declaration changing its answer needs no new call.
 //
-// A maintenance run writing what it drops is STOPPED first, and waited for
-// (stopWriting, below). It moves what a declaration OWNS and never what a
+// A maintenance run writing what it drops or cuts is STOPPED first, and
+// waited for (stopWriting, below). It moves what a declaration OWNS and never what a
 // write of it holds while it runs (Write.Holds): that is a running writer's
 // own, whose rename it would break, and a writer that does not succeed —
 // one it stopped among them — removes it as it ends (clearWriting). Its
@@ -950,8 +950,9 @@ func (c *Cache) sweepPacks(e *entry, inc *incarnation, strays []string) (bool, e
 // it the change cuts (image.cutting) keeps the longest prefix of the chain
 // that d's packs, its failing layers and — for EventLayersMoved — the chain
 // it wants leave valid (prefixOf, the one cut both chains share), and the
-// rest goes (cutChain). A change that keeps the whole chain moves nothing of
-// it. d names what the change takes out: for EventReported and
+// rest goes (cutChain), the node's tip with it. A change that keeps the whole
+// chain moves nothing of it but the tip, which every change but a retirement
+// takes (tipGoes). d names what the change takes out: for EventReported and
 // eventFailedCheck the declarations named (d.named), for a pack's leaving its
 // checksums (d.packs), for the chain moving the chain wanted (d.want), and
 // for a failed check the layers whose files failed (d.failing).
@@ -961,13 +962,22 @@ func (c *Cache) dropFor(e *entry, inc *incarnation, ev Event, d eventDetail) (de
 		drop &= d.named
 	}
 	if cut := c.image.cutting(ev); cut != 0 && (ev != eventFailedCheck || cut&d.named != 0) {
+		// A RUN WRITING THE NODE'S TIP is stopped first, and waited for, as a
+		// run writing what a drop takes is (below): it writes over the chain
+		// files a cut writes again, and over packs the change takes out —
+		// recorded after the change, its tip would name what is gone.
+		c.stopWriting(e, inc, cut)
 		e.mu.Lock()
-		installed := slices.Clone(inc.installed)
+		installed, tip := slices.Clone(inc.installed), inc.tip.id
 		e.mu.Unlock()
 		// THE CHAIN MOVING makes the chain's directories exactly the prefix it
 		// keeps, whatever the cut: a placement in place is where a previous
-		// process's files no record names, or a crashed placement's, go.
-		if k := prefixOf(installed, ev, d); k < len(installed) || ev == EventLayersMoved {
+		// process's files no record names, or a crashed placement's, go. And
+		// a change that keeps every layer still takes the node's tip where it
+		// takes the tip's base or commits the tip names (tipGoes): a pack
+		// removed from the tail.
+		k := prefixOf(installed, ev, d)
+		if k < len(installed) || ev == EventLayersMoved || (tip != "" && tipGoes(installed, k, ev)) {
 			if err := c.cutChain(e, inc, k, ev); err != nil {
 				return 0, err
 			}

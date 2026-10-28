@@ -1241,7 +1241,7 @@ func (c *Cache) seedLayers(ctx context.Context, e *entry, replaced, inc *incarna
 	if len(seeded) == 0 {
 		return nil
 	}
-	if err := c.writeChains(inc.dir, seeded, syncDir); err != nil {
+	if err := c.writeChains(inc.dir, seeded, "", syncDir); err != nil {
 		c.trashRels(inc.dir, rels)
 		return err
 	}

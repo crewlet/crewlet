@@ -351,13 +351,18 @@ func TestTheSweepKeepsExactlyTheDeclaredImage(t *testing.T) {
 // installed chain's own answer to a change is a CUT to the longest prefix it
 // leaves valid (Prefix): a layer naming a pack that leaves goes with every
 // layer above it, a pack outside the chain cuts nothing, and the chain moving
-// keeps the layers the rows still name in turn.
+// keeps the layers the rows still name in turn — and the node's tip over the
+// chain goes with every one of those changes but a retirement that keeps the
+// whole chain beneath it (tipGoes): a retirement drops no commit (X04), where
+// a pack removed may take commits the tip names and a cut or a chain moved is
+// a base it was not written over.
 //
 // Mutations: declare the multi-pack-index dropped on a pack added, and the
 // first delta takes it; declare the graph dropped on a retirement
 // (OnPackRetired), and the compaction's swap leaves it behind; let prefixOf
 // keep a layer above one a removed pack cuts, and the Prefix table's cut is
-// past it.
+// past it; let tipGoes keep the tip over a removed tail pack, or take it on a
+// retired one, and the table's tip column says so.
 func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 	t.Parallel()
 	// THE PREFIX TABLE: a three-layer chain — packs a and b under layer 1, c
@@ -375,19 +380,26 @@ func TestADerivedFileFollowsItsDeclarationOnEveryEvent(t *testing.T) {
 		want    []code.LayerRow
 		failing []string
 		keep    int
+		// tip: the node's tip over the chain stays.
+		tip bool
 	}{
-		{"a retired pack in layer 2", cache.EventPackRetired, []string{"c"}, nil, nil, 1},
-		{"a removed pack in the root", cache.EventPackRemoved, []string{"b"}, nil, nil, 0},
-		{"a retired tail pack", cache.EventPackRetired, []string{"e"}, nil, nil, 3},
-		{"a removed tail pack", cache.EventPackRemoved, []string{"e"}, nil, nil, 3},
-		{"the rows' chain as it is", cache.EventLayersMoved, nil, chain, nil, 3},
-		{"the rows' chain without its top", cache.EventLayersMoved, nil, chain[:2], nil, 2},
-		{"the rows' chain moved at layer 2", cache.EventLayersMoved, nil, moved, nil, 1},
-		{"no chain in the rows", cache.EventLayersMoved, nil, nil, nil, 0},
-		{"layer 3's files failing their check", cache.EventPackAdded, nil, nil, []string{chain[2].Layer.LayerID}, 2},
+		{"a retired pack in layer 2", cache.EventPackRetired, []string{"c"}, nil, nil, 1, false},
+		{"a removed pack in the root", cache.EventPackRemoved, []string{"b"}, nil, nil, 0, false},
+		{"a retired tail pack", cache.EventPackRetired, []string{"e"}, nil, nil, 3, true},
+		{"a removed tail pack", cache.EventPackRemoved, []string{"e"}, nil, nil, 3, false},
+		{"the rows' chain as it is", cache.EventLayersMoved, nil, chain, nil, 3, false},
+		{"the rows' chain without its top", cache.EventLayersMoved, nil, chain[:2], nil, 2, false},
+		{"the rows' chain moved at layer 2", cache.EventLayersMoved, nil, moved, nil, 1, false},
+		{"no chain in the rows", cache.EventLayersMoved, nil, nil, nil, 0, false},
+		{"layer 3's files failing their check", cache.EventPackAdded, nil, nil, []string{chain[2].Layer.LayerID}, 2,
+			false},
 	} {
-		if got := cache.PrefixOf(chain, tc.ev, tc.packs, tc.want, tc.failing); got != tc.keep {
+		got := cache.PrefixOf(chain, tc.ev, tc.packs, tc.want, tc.failing)
+		if got != tc.keep {
 			t.Errorf("the prefix %s keeps is %d layers, want %d", tc.name, got, tc.keep)
+		}
+		if stays := !cache.TipGoes(chain, got, tc.ev); stays != tc.tip {
+			t.Errorf("the node's tip over the chain stays across %s: %t, want %t", tc.name, stays, tc.tip)
 		}
 	}
 

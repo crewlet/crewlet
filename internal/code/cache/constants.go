@@ -427,8 +427,55 @@ const IndexBytesPerObject = 80
 // 56 BYTES, a fifth past the larger measurement: 112 MiB over the gigabyte
 // (39.5 bytes an object) and 12.7 MiB over 100 MB (45). It reads every commit,
 // a seventh of a source repository's objects, so it is charged by the objects
-// the rows count, as the rest are.
+// the rows count, as the rest are. Measured before the graph carried
+// changed-path filters (MaxNewFilters), which add a bounded amount a write
+// rather than an amount an object: a write computes at most MaxNewFilters new
+// filters, and reads every filter an earlier write left from the graph it
+// replaces, which git maps rather than holds. BenchmarkMidx's step=whole
+// measures the graph with its filters on the node pin, and that figure
+// replaces this one.
 const GraphBytesPerObject = 56
+
+// TipGraphBytesPerObject is the memory the node's TIP commit-graph layer
+// (maintain.go) holds for every object of the TAIL it is written over — the
+// packs no installed published layer names — beside the room for one clone of
+// the whole repository every whole-repository step is charged (memory.go's
+// chargeOver): a split write walks only the commits no layer beneath it holds,
+// so its own memory follows the tail, and the clone it shares the node with
+// is of the repository.
+//
+// 1 700 BYTES, PROVISIONAL (M3-decisions M3-O39): git 2.56.0 held 40 MiB
+// writing a tip over 5 000 commits, about 25 000 objects of a source
+// repository's composition, with every changed-path filter (0.29 s; 0.04 s at
+// 100 filters) — a figure dominated by what any commit-graph write loads
+// whatever it writes, so an object's share of it over-charges a large tail
+// rather than under-charging a small one. BenchmarkMidx's step=tip-graph
+// re-derives it, and adds a fixed term beside it only where the fit's
+// intercept passes a tenth of the charge at the publication's tail bound.
+const TipGraphBytesPerObject = 1700
+
+// MaxNewFilters is the most changed-path filters one commit-graph write
+// computes — the node's tip and own mode's whole graph alike, git's
+// --max-new-filters, spelled whole in the argument lists that run it
+// (maintain.go's graphArgs and tipGraphArgs, held to this by
+// TestTheFilterFlagIsTheConstant). A commit without a filter is answered by
+// `git log -- <path>` diffing it, as every commit was before the filters. Own
+// mode's whole graph keeps every filter the graph it replaces holds, so each
+// write computes up to this many more until every commit has one. The node's
+// tip is written whole over the installed layers alone, so it computes its
+// filters afresh at every write, and a tail of more commits than this leaves
+// the rest without one until a publication covers them.
+//
+// 1 024, PROVISIONAL (M3-decisions M3-O39): a filter is a diff of a commit
+// against its first parent — about 0.05 ms a commit over the synthetic
+// history of the tip's measurement above (0.29 s for 5 000 commits with every
+// filter, 0.04 s with 100), so 1 024 are some 60 ms there and more where a
+// commit changes more paths — a bound on what one write spends on filters
+// whatever the history it walks. BenchmarkLogPath and BenchmarkBlame
+// re-derive it: the smallest of 100, 1 024 and every filter that keeps a
+// path's log and a file's blame under half of gitproc.ReadDeadline with a tail
+// of the publication's bound outside the chain.
+const MaxNewFilters = 1024
 
 // FsckBytesPerObject is the memory Verify's connectivity check (fsck
 // --connectivity-only) holds for every object of its repository.

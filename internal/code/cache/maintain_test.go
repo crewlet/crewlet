@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -1748,15 +1750,55 @@ func TestStopEndsAMaintenanceRun(t *testing.T) {
 	layout.Release()
 }
 
+// THE FILTER FLAG IS THE CONSTANT: every commit-graph write the cache
+// declares — own mode's whole graph and the node's tip — computes changed-path
+// filters (--changed-paths), at most MaxNewFilters new ones a write, spelled
+// in its argument list as the one --max-new-filters the writers gate reads
+// where git runs it. The flag and the constant are one figure, so a
+// re-derivation of either moves both.
+//
+// Mutations: change the constant alone, or the flag in either argument list
+// alone, or drop --changed-paths from one — each is red.
+func TestTheFilterFlagIsTheConstant(t *testing.T) {
+	t.Parallel()
+	want := "--max-new-filters=" + strconv.Itoa(cache.MaxNewFilters)
+	graphs := 0
+	for _, d := range cache.DerivedFiles() {
+		for _, wr := range d.Writes {
+			if wr.Writer.Subcommand != "commit-graph" {
+				continue
+			}
+			graphs++
+			var flags []string
+			for _, a := range wr.Args {
+				if strings.HasPrefix(a, "--max-new-filters") {
+					flags = append(flags, a)
+				}
+			}
+			if !slices.Equal(flags, []string{want}) {
+				t.Errorf("%s's %s write spells %q, want the one %q", d.Name, wr.Step, flags, want)
+			}
+			if !slices.Contains(wr.Args, "--changed-paths") {
+				t.Errorf("%s's %s write %q writes no changed-path filters", d.Name, wr.Step, wr.Args)
+			}
+		}
+	}
+	if graphs != 2 {
+		t.Errorf("the cache declares %d commit-graph writes, want own mode's graph and the node's tip", graphs)
+	}
+}
+
 // THE MAINTAINER'S STEPS ARE THE DECLARED WRITES (ADR-0056). What a pass and
 // a round run, and what a refusal is said and counted as, are read from the
 // declarations (cache.DerivedFiles): every multi-pack-index and commit-graph
 // process the cache starts runs exactly one declared write's argument list —
 // the round's index the round write's, the maintainer's its bitmap, index and
-// graph writes' — and every declared write runs, since an argument list that
-// no process ran is one somebody changed beside its declaration. And when the
-// node's memory refuses everything, the refusals name exactly the declared
-// maintainer steps, each line's estimate the write's own charge.
+// graph writes', and the node's tip over an installed chain the tip's — and
+// every declared write runs, since an argument list that no process ran is one
+// somebody changed beside its declaration. And when the node's memory refuses
+// everything — of a copy in own mode and of one in chain mode — the refusals
+// name exactly the declared maintainer steps, each line's estimate the write's
+// own charge.
 //
 // Mutation: hard-code the graph's argument list in runMaintenance with
 // --split, and the recorded process is no declared write's; give the round's
@@ -1813,6 +1855,14 @@ func TestTheMaintainersStepsAreTheDeclaredWrites(t *testing.T) {
 			t.Fatalf("%s holds an index over %d packs (bitmap %t) and graph %t; the case needs both packs "+
 				"indexed without a bitmap, and the graph", plain, packs, bitmap, graph)
 		}
+		// And the node's tip over an installed chain.
+		chained := w.repo(t, 3)
+		p := w.pushN(t, chained, 3)
+		w.log.publish(chained, w.buildChain(t, p[:2]), nil)
+		w.sync(t, c, chained).Release()
+		if ran := cache.MaintainerPass(c); len(ran) != 1 || ran[0] != chained {
+			t.Fatalf("the third pass ran %v, want %s's tip", ran, chained)
+		}
 
 		ran := map[int]int{}
 		for _, call := range calls() {
@@ -1838,11 +1888,16 @@ func TestTheMaintainersStepsAreTheDeclaredWrites(t *testing.T) {
 		t.Parallel()
 		w := newSyncWorld(t, onMemory)
 		clk := newClock()
-		repo := w.repo(t, 1)
+		// A copy in own mode, refused its index, its bitmap and its graph,
+		// and one in chain mode, refused its tip.
+		repo, chained := w.repo(t, 1), w.repo(t, 2)
 		w.push(t, repo, "refs/heads/main", nil)
 		w.push(t, repo, "refs/heads/main", nil)
+		p := w.pushN(t, chained, 3)
+		w.log.publish(chained, w.buildChain(t, p[:2]), nil)
 		c := w.open(t, clk.on)
 		w.sync(t, c, repo).Release()
+		w.sync(t, c, chained).Release()
 		cache.SetMaintenanceBudget(c, 1)
 		clk.Add(cache.MidxDebounce)
 		if ran := cache.MaintainerPass(c); len(ran) != 0 {
@@ -1851,7 +1906,11 @@ func TestTheMaintainersStepsAreTheDeclaredWrites(t *testing.T) {
 
 		want := map[string]int64{}
 		for wr := range maintainer {
-			want[string(wr.Step)] = cache.WriteCharge(c, repo, wr)
+			over := repo
+			if wr.Step == cache.StepTipGraph {
+				over = chained
+			}
+			want[string(wr.Step)] = cache.WriteCharge(c, over, wr)
 		}
 		counted := map[string]uint64{}
 		gauged := map[string]float64{}

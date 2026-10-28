@@ -613,7 +613,7 @@ func (c *Cache) checkRuns(ctx context.Context, t *backfillTask) {
 			c.countCheck(kind, checkDamaged, triggerFirst)
 		}
 		c.log.Warn("code_cache_check_damaged", "repo", t.e.id, "incarnation", t.inc.n, "file", rel,
-			"trigger", string(triggerFirst), "action", c.image.repairAction(rel), "error", err)
+			"trigger", string(triggerFirst), "action", c.image.repairAction(rel, ""), "error", err)
 		t.e.mu.Lock()
 		if t.inc.repair.found == nil {
 			t.inc.repair.found = map[string]checkedFile{}

@@ -184,6 +184,90 @@ func TestAGraphTheNodesMemoryCannotHoldIsGaugedAsABitmapIs(t *testing.T) {
 	}
 }
 
+// A TIP THE NODE'S MEMORY CANNOT HOLD IS GAUGED, AND RAISES NOTHING. A copy
+// serving from an installed chain writes one thing of its own, its tip over
+// the tail, charged TipGraphBytesPerObject an object of the tail with room
+// for a clone of the whole repository beside it (chargeOver). Past the budget
+// it never runs: its refusal is logged and counted once for the incarnation
+// and kept on the refused gauge under its own step while it stands — and the
+// alarm, which says a repository is served without a bitmap, does not stand
+// for it, since the copy is served through its chain's bitmap and graph
+// layers and only the tail's commits walk by date. At a budget of the tip's
+// own charge it is written at once, and the gauge falls back.
+//
+// Mutations: count no refused tip in refusalWalk.note, and the tip's gauge
+// stays at zero; count it with the bitmaps, and the alarm reading names the
+// repository; charge the tip by the repository's objects (plan's tip case
+// dropped), and the budget of its charge holds no run.
+func TestATipTheNodesMemoryCannotHoldIsGaugedAndRaisesNoAlarm(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	p := w.pushN(t, repo, 3)
+	w.log.publish(repo, w.buildChain(t, p[:2]), nil)
+	c := w.open(t, clk.on)
+	defer w.sync(t, c, repo).Release()
+	tip := cache.TipCharge(c, repo)
+	objects := cache.ObjectsOf(c, repo)
+	if repoWide := objects * (cache.TipGraphBytesPerObject + gitproc.TransferBytesPerObject); tip >= repoWide ||
+		tip <= objects*gitproc.TransferBytesPerObject {
+		t.Fatalf("the tip's charge is %d over a repository of %d objects: want its figure over the tail alone, "+
+			"under %d, and the clone's room over the whole repository, %d", tip, objects, repoWide,
+			objects*gitproc.TransferBytesPerObject)
+	}
+	cache.SetMaintenanceBudget(c, tip-1)
+	for range 2 {
+		if ran := cache.MaintainerPass(c); len(ran) != 0 {
+			t.Fatalf("on a budget a byte short of the tip's charge the maintainer ran %v", ran)
+		}
+		clk.Add(cache.MidxMinInterval)
+	}
+	for step, want := range map[string]float64{"tip-graph": 1, "bitmap": 0, "graph": 0} {
+		if got := gaugeAt(t, w.rec, metrics.CodeCacheMaintenanceRefused, "step", step); got != want {
+			t.Errorf("%s{step=%s} = %v while the tip is refused, want %v", metrics.CodeCacheMaintenanceRefused,
+				step, got, want)
+		}
+	}
+	if got := counter(w.rec, metrics.CodeCacheMaintenanceRefusals, "step", "tip-graph"); got != 1 {
+		t.Errorf("%s{step=tip-graph} = %d after two passes, want the incarnation counted once",
+			metrics.CodeCacheMaintenanceRefusals, got)
+	}
+	var lines []map[string]any
+	for _, l := range w.logs.lines(t, "code_cache_maintenance_refused") {
+		if l["step"] == "tip-graph" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) != 1 || lines[0]["repo"] != repo || lines[0]["estimate"] != float64(tip) {
+		t.Errorf("the tip's refusal was logged as %v, want once with its charge %d", lines, tip)
+	}
+	var r statelog.Reading
+	c.AlarmReading(&r)
+	if r.CodeMaintenanceRefused != 0 || r.CodeMaintenanceLargest != 0 {
+		t.Errorf("the alarm reading counts %d repositories refused, the largest %d: want none, a copy refused "+
+			"its tip being served through its chain's bitmap", r.CodeMaintenanceRefused, r.CodeMaintenanceLargest)
+	}
+	tracker := statelog.NewTracker(nil, clk.Now)
+	tracker.Observe(t.Context(), statelog.Evaluate(r))
+	if _, firing := tracker.Firing()[statelog.KindCodeMaintenanceRefused]; firing {
+		t.Errorf("%s fires with only a tip refused", statelog.KindCodeMaintenanceRefused)
+	}
+
+	cache.SetMaintenanceBudget(c, tip)
+	if ran := cache.MaintainerPass(c); !slices.Equal(ran, []string{repo}) {
+		t.Fatalf("at a budget of the tip's own charge the maintainer ran %v, want the repository's tip", ran)
+	}
+	if id, _ := cache.Tip(c, repo); id == "" {
+		t.Error("at the tip's charge the run wrote no tip")
+	}
+	cache.MaintainerPass(c)
+	if got := gaugeAt(t, w.rec, metrics.CodeCacheMaintenanceRefused, "step", "tip-graph"); got != 0 {
+		t.Errorf("%s{step=tip-graph} = %v once the tip was written, want 0", metrics.CodeCacheMaintenanceRefused,
+			got)
+	}
+}
+
 // A REFUSED REPOSITORY KEEPS ITS PUSHES INDEXED. A repository whose bitmap the
 // node cannot hold is one that only grows, usually the most pushed-to, and a
 // pack outside every index is one more .idx every lookup searches: refused for
@@ -876,8 +960,9 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 // and this holds the words to the constants, so a retune cannot leave the
 // alarm reference or the metrics reference stale.
 //
-// Mutation: change IndexBytesPerObject, GraphBytesPerObject or MidxDebounce,
-// and the catalogue no longer says what the cache does.
+// Mutation: change IndexBytesPerObject, GraphBytesPerObject,
+// TipGraphBytesPerObject or MidxDebounce, and the catalogue no longer says
+// what the cache does.
 func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 	t.Parallel()
 	bitmap := fmt.Sprintf("%d bytes an object", cache.BitmapBytesPerObject)
@@ -897,6 +982,7 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 			bitmap, transfer,
 			fmt.Sprintf("`index` (%d)", cache.IndexBytesPerObject),
 			fmt.Sprintf("`graph` (%d)", cache.GraphBytesPerObject),
+			fmt.Sprintf("`tip-graph` (%d an object of the tail", cache.TipGraphBytesPerObject),
 		},
 		metrics.CodeCacheMaintenanceRefused: {reread},
 	} {
@@ -926,7 +1012,8 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 //
 // Mutation: change any constant the page names — BitmapBytesPerObject,
 // FsckBytesPerObject, gitproc.TransferMemory, MaintenanceMemoryPerCore,
-// MidxPacks — and the page no longer says what the cache does.
+// MidxPacks, TipGraphBytesPerObject, MaxNewFilters — and the page no longer
+// says what the cache does.
 func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "code-host.md")
@@ -981,6 +1068,9 @@ func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 			"time", cache.MidxPacks, spell(t, cache.MidxMinInterval), fraction(t, cache.MidxDutyCycle)),
 		fmt.Sprintf("until %d packs have gathered outside it", cache.MidxRoundPacks),
 		fmt.Sprintf("holding %d packs or more gets an index", cache.MidxRoundPacks),
+		fmt.Sprintf("charged by the tail rather than the repository: %s bytes an object of the tail",
+			spaced(cache.TipGraphBytesPerObject)),
+		fmt.Sprintf("One write computes at most %s new filters", spaced(cache.MaxNewFilters)),
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("%s does not say %q", path, want)

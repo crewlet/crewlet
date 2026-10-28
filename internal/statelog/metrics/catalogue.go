@@ -1108,41 +1108,50 @@ func Catalogue() []Instrument {
 				"git cache found it will not run, counted once for each copy " +
 				"of a repository the cache holds and each step, by `reason` " +
 				"and `step`. `memory`: the step's charge — its own figure an " +
-				"object of the repository, and 240 more for room beside it " +
-				"for a clone of the repository — is more than this node can " +
-				"give its background work, which is its memory (its cgroup's " +
-				"limit where one is set) less what it keeps for its git " +
-				"lanes, the store, the broker and the engine. `bitmap` (1000 " +
-				"bytes an object): the repository is indexed without one, and " +
-				"a clone walks its history; `index` (80): it is served from " +
-				"its packs' own indexes, a round's index included; `graph` " +
-				"(56): its walks go by date, and a push of a commit dated " +
-				"before its parent walks every commit. Slower, never wrong. " +
-				"`compact` (300 bytes an object of the packs merged, beside " +
-				"the clone's room and twice max_blob_bytes for the build's " +
-				"delta window): the repository's home cannot merge its small " +
-				"packs, so its pack count grows with its pushes until a git " +
-				"node with more memory is its home or this one is given more " +
-				"— and at the pack bound its pushes are refused, which " +
+				"object of what it walks, and 240 more an object of the " +
+				"repository for room beside it for a clone of the repository " +
+				"— is more than this node can give its background work, which " +
+				"is its memory (its cgroup's limit where one is set) less what " +
+				"it keeps for its git lanes, the store, the broker and the " +
+				"engine. `bitmap` (1000 bytes an object of the repository): " +
+				"the repository is indexed without one, and a clone walks its " +
+				"history; `index` (80): it is served from its packs' own " +
+				"indexes, a round's index included; `graph` (56): its walks go " +
+				"by date, and a push of a commit dated before its parent walks " +
+				"every commit; `tip-graph` (1700 an object of the tail, the " +
+				"packs pushed since the repository's last publication): a copy " +
+				"serving from a published chain walks those packs' commits by " +
+				"date. Slower, never wrong. `compact` (300 bytes an object of " +
+				"the packs merged, beside the clone's room and twice " +
+				"max_blob_bytes for the build's delta window): the " +
+				"repository's home cannot merge its small packs, " +
+				"so its pack count grows with its pushes until a git node with " +
+				"more memory is its home or this one is given more — and at " +
+				"the pack bound its pushes are refused, which " +
 				"code_compaction_behind raises. Rising is repositories " +
 				"outgrowing the node; the code_maintenance_refused alarm " +
-				"stands while any bitmap is refused.",
+				"stands while any bitmap is refused, and never for a tip, " +
+				"whose copy is served through its chain's bitmap.",
 		},
 		{
 			Name: CodeCacheMaintenanceRefused, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"step"},
 			Shows: "Repositories this node's git cache cannot write a bitmap " +
-				"(`step` `bitmap`) or a commit-graph (`graph`) of now, because " +
-				"one needs more memory than the node can give its background " +
-				"work — as its latest pass found them. Each refused a bitmap is " +
-				"indexed without one; each refused a commit-graph walks its " +
-				"history by date, so a push of a commit dated before its parent " +
-				"walks every commit — slower, never refused. Either above zero " +
-				"raises code_maintenance_refused, since a repository refused " +
-				"its graph is refused its bitmap too; falling back is a " +
-				"repository purged, evicted or rebuilt smaller, or a node " +
-				"given more memory, which the cache reads again every ten " +
-				"seconds.",
+				"(`step` `bitmap`), a commit-graph (`graph`) or, serving from " +
+				"a published chain, its own tip commit-graph over the chain " +
+				"(`tip-graph`) of now, because one needs more memory than the " +
+				"node can give its background work — as its latest pass found " +
+				"them. Each refused a bitmap is indexed without one; each " +
+				"refused a commit-graph walks its history by date, so a push " +
+				"of a commit dated before its parent walks every commit; each " +
+				"refused its tip walks the commits pushed since its last " +
+				"publication by date — slower, never refused. A bitmap or a " +
+				"graph above zero raises code_maintenance_refused, since a " +
+				"repository refused its graph is refused its bitmap too; a tip " +
+				"raises nothing, its copy served through its chain's bitmap. " +
+				"Falling back is a repository purged, evicted, rebuilt smaller " +
+				"or published, or a node given more memory, which the cache " +
+				"reads again every ten seconds.",
 		},
 		{
 			Name: CodeCacheMemoBytes, Kind: KindGauge, Unit: UnitBytes,

@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -550,6 +552,114 @@ type incarnation struct {
 	installed      []code.LayerRow
 	installedPacks map[string]livePack
 	refused        map[string]layerRefusal
+
+	// THE NODE'S TIP (maintain.go): its own commit-graph layer over the
+	// commits no installed layer holds, the last line of commit-graph-chain.
+	// tip is that layer — none in own mode, and none until the maintainer
+	// writes one over a tail that holds a commit. tipOver is the digest of
+	// the tail the last write that succeeded covered — writing the tip, or
+	// finding the tail held no commit the layers lack — and tipWritten
+	// whether one has since the tip last went: the tail moving off tipOver
+	// is what makes the tip due again. Both are persisted with the tip
+	// (derivedState.TipOver), so neither a restart nor a full round that
+	// reads the same tail writes a quiet copy's tip again. tipFailed: a tip
+	// the copy had none of failed to be written (not a slot refused, not a
+	// run stopped from outside), so it is due by the ordinary rules from then
+	// on rather than at every pass, as graphFailed is own mode's; never
+	// persisted.
+	tip        tipLayer
+	tipOver    tailDigest
+	tipWritten bool
+	tipFailed  bool
+	// tail is the TAIL as its rows count it — the live packs no installed
+	// layer names, with their digest — kept in step wherever the live set or
+	// the installed chain changes (setLive, deleteLive, liveWhole,
+	// recordInstalled), so the maintainer reads it in one load rather than a
+	// walk of every pack under the cache's lock.
+	tail tailCount
+	// chainSeq counts the beginnings and ends of the writes of its chain files
+	// IN PLACE — the tip's run, a cut — and chainWriting is how many are in
+	// flight: the scrub and Verify hold a chain file to what its record
+	// names, which such a write moves apart from the file between the two
+	// (git renames the tip's chain file in before its run's end records it,
+	// and a cut writes the chain files before its record), so a chain file's
+	// verdict stands only where none was in flight as its expectation was
+	// read and the count has not moved by the end of its hash (chainStill).
+	chainSeq     uint64
+	chainWriting int
+}
+
+// tipLayer is the node's tip commit-graph layer as an incarnation holds it:
+// its id — the graph file's own trailing checksum, its name and the last line
+// of commit-graph-chain — and its file's bytes; the zero value is none.
+type tipLayer struct {
+	id    string
+	bytes int64
+}
+
+// tailCount is the tail of an incarnation as its rows count it: the live packs
+// no installed layer names, their objects and their bundles' bytes — what
+// the node's tip covers, its charge and its deadline are sized by
+// (maintain.go) — and their digest, what says whether the tip covers them.
+type tailCount struct {
+	packs          int
+	objects, bytes int64
+	digest         tailDigest
+}
+
+// add counts p into the tail, or out of it.
+func (t *tailCount) add(p livePack, sign int64) {
+	t.packs += int(sign)
+	t.objects += sign * p.objects
+	t.bytes += sign * p.size
+	t.digest.flip(p.checksum)
+}
+
+// tailDigest is a TAIL's identity: which packs it holds, as a set, whatever
+// order they arrived in and however it was reached — the XOR of the first
+// sixteen bytes of every pack's git checksum, which a pack added or taken out
+// moves in one step (tailCount.add) and which reads the same in every process
+// for the same packs, so it is what the node's tip persists of the tail it
+// covers. A git checksum is a SHA-1 of the pack's own bytes, as uniform as any
+// hash of them, so two tails of different packs share a digest with a chance
+// of one in 2^128 a comparison; and what that would cost is a tip not written
+// again over a tail it does not cover — that tail's commits walked by date
+// until it next moves, speed and never an answer. Not the tail's generation:
+// a count of its changes moves at every full round's live set and every
+// restart, and a quiet copy's tip would be written again at each.
+type tailDigest [16]byte
+
+// flip moves d by the pack checksum names, in or out: XOR is its own inverse,
+// and a tail counts each pack's files once (setLive), so a pack is flipped in
+// at most once while the tail holds it.
+func (d *tailDigest) flip(checksum string) {
+	var p tailDigest
+	// A row's checksum is forty hex digits (code's bundle check, the one way a
+	// pack enters a live set), so its first thirty-two decode whole.
+	_, _ = hex.Decode(p[:], []byte(checksum[:min(len(checksum), 2*len(p))]))
+	for i := range d {
+		d[i] ^= p[i]
+	}
+}
+
+// String is d as the state records it: thirty-two lowercase hex digits.
+func (d tailDigest) String() string { return hex.EncodeToString(d[:]) }
+
+// parseTailDigest reads a digest as String writes one, or refuses it.
+func parseTailDigest(s string) (tailDigest, error) {
+	var d tailDigest
+	if len(s) != hex.EncodedLen(len(d)) || strings.ToLower(s) != s {
+		return d, fmt.Errorf("%q is no tail's digest: %d lowercase hex digits", s, hex.EncodedLen(len(d)))
+	}
+	if _, err := hex.Decode(d[:], []byte(s)); err != nil {
+		return d, fmt.Errorf("%q is no tail's digest: %w", s, err)
+	}
+	return d, nil
+}
+
+// covers is the tail as the tip's write covers it (derived.go's Covers).
+func (t tailCount) covers() Covers {
+	return Covers{Packs: t.packs, Objects: t.objects, DiskBytes: t.bytes}
 }
 
 // livePack is one live row as the swap and a compaction's plan read it: the
@@ -591,8 +701,40 @@ func setLive(inc *incarnation, id string, p livePack) {
 		inc.live, inc.byChecksum = map[string]livePack{}, map[string]int{}
 	}
 	inc.live[id] = p
-	inc.byChecksum[p.checksum]++
+	if inc.byChecksum[p.checksum]++; inc.byChecksum[p.checksum] == 1 {
+		// THE TAIL counts a pack's files once, whichever rows name them.
+		tailMoved(inc, p, 1)
+	}
 	delete(inc.leaving, p.checksum)
+}
+
+// tailMoved counts the pack p a live set gained (sign 1) or lost (-1) into
+// inc's tail when no installed layer names it — one an installed layer names
+// is the chain's, never the tail's. e.mu is held.
+func tailMoved(inc *incarnation, p livePack, sign int64) {
+	if _, chained := inc.installedPacks[p.checksum]; chained {
+		return
+	}
+	inc.tail.add(p, sign)
+}
+
+// recountTail counts inc's tail afresh — every live pack's files once, those
+// no installed layer names — for an installed chain set whole
+// (recordInstalled) or a live set carried into a swap's next incarnation
+// (promote). e.mu is held.
+func recountTail(inc *incarnation) {
+	var t tailCount
+	counted := make(map[string]bool, len(inc.byChecksum))
+	for _, p := range inc.live {
+		if counted[p.checksum] {
+			continue
+		}
+		counted[p.checksum] = true
+		if _, chained := inc.installedPacks[p.checksum]; !chained {
+			t.add(p, 1)
+		}
+	}
+	inc.tail = t
 }
 
 // deleteLive takes the row id names out of inc's live set, and answers the
@@ -610,6 +752,7 @@ func deleteLive(inc *incarnation, id string) string {
 		return ""
 	}
 	delete(inc.byChecksum, p.checksum)
+	tailMoved(inc, p, -1)
 	return p.checksum
 }
 
@@ -618,6 +761,7 @@ func deleteLive(inc *incarnation, id string) string {
 func liveWhole(inc *incarnation, packs map[packKey]code.PackRow) {
 	inc.live = make(map[string]livePack, len(packs))
 	inc.byChecksum = make(map[string]int, len(packs))
+	inc.tail = tailCount{}
 	for _, p := range packs {
 		setLive(inc, p.PackID, liveOf(p.Ref()))
 	}

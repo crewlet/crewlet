@@ -666,7 +666,7 @@ func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger c
 	var out scrubbed
 	began := time.Now()
 	e.mu.Lock()
-	chains := chainWants(inc)
+	chains, mark, tip := chainWants(inc), markChain(inc), recordedTip(inc)
 	e.mu.Unlock()
 	files, wants, err := scrubFiles(c.image, inc.dir, chains)
 	if err != nil {
@@ -698,6 +698,10 @@ func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger c
 			c.knobs.hashing(path)
 		}
 		v, id, n, err := trailerSound(ctx, path, p, wants[f.rel])
+		// A chain file the node's tip or a cut wrote in place while the
+		// scrub ran — the maintainer's runs go on beside a scrub — is no
+		// verdict, its record and its bytes of two moments (chainVerdict).
+		v = chainVerdict(e, inc, wants[f.rel], mark, v)
 		out.bytes += n
 		f.id = id
 		switch {
@@ -708,7 +712,7 @@ func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger c
 			f.trigger, f.scrubbed = trigger, true
 			out.damaged = append(out.damaged, f)
 			c.log.Warn("code_cache_check_damaged", "repo", e.id, "incarnation", inc.n, "file", f.rel,
-				"trigger", string(trigger), "action", c.image.repairAction(f.rel), "error", err)
+				"trigger", string(trigger), "action", c.image.repairAction(f.rel, tip), "error", err)
 			continue
 		case v == hashNone:
 			c.countCheck(f.kind, checkReplaced, trigger)
@@ -728,7 +732,7 @@ func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger c
 		f.trigger, f.scrubbed = trigger, true
 		out.damaged = append(out.damaged, f)
 		c.log.Warn("code_cache_check_damaged", "repo", e.id, "incarnation", inc.n, "file", f.rel,
-			"trigger", string(trigger), "action", c.image.repairAction(f.rel))
+			"trigger", string(trigger), "action", c.image.repairAction(f.rel, tip))
 	}
 	for cs, n := range soundOf {
 		if n == 3 {

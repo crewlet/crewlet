@@ -256,12 +256,13 @@
 // damaged, the installed published chain moving — does to it. There are six:
 // the INSTALLED CHAIN's two halves (below, "The installed chain": the
 // published multi-pack-index layers with their bitmaps, and the commit-graph
-// layers, each with the chain file the cache writes from the rows, which a
-// change CUTS — Prefix — rather than drops), and four of the node's own: the
-// MULTI-PACK-INDEX (a full round's, without a bitmap, once the snapshot names
-// MidxRoundPacks packs; the maintainer's, with its bitmap and lookup table
-// where the node's memory holds one and without one where it does not), the
-// COMMIT-GRAPH (the maintainer's, written first on a copy that has none), the
+// layers with the node's own TIP over them, each with the chain file the cache
+// writes, which a change CUTS — Prefix — rather than drops), and four of the
+// node's own: the MULTI-PACK-INDEX (a full round's, without a bitmap, once the
+// snapshot names MidxRoundPacks packs; the maintainer's, with its bitmap and
+// lookup table where the node's memory holds one and without one where it
+// does not), the COMMIT-GRAPH (the maintainer's, with changed-path filters,
+// written first on a copy that has none), the
 // INDEX OF PUSHES (below: runs under crewlet/, written by the cache's own
 // code and no git — a round's fold and the backfill) and the MEMO (below: the
 // answers of reads by object id, one file an answer in crewlet/memo, a
@@ -818,7 +819,11 @@
 //
 // The maintainer writes a multi-pack-index with its bitmap — the bitmap
 // carrying git's lookup table, so a request that opens it loads only the
-// bitmaps it asks for (ServeConfig) — and a commit-graph
+// bitmaps it asks for (ServeConfig) — and a commit-graph with version-2
+// changed-path filters, at most [MaxNewFilters] new ones a write, so a
+// path's log and a file's blame skip every commit that did not touch the
+// path — or, on a copy serving from an installed chain, the node's TIP
+// commit-graph over it alone (below, "The installed chain") —
 // once a repository's packs have gathered and stood still for
 // [MidxDebounce] — or the oldest has waited [MidxMaxWait], so a repository
 // that is never still is indexed too — in the pool's maintenance lane: half
@@ -848,9 +853,12 @@
 // a bitmap about [BitmapBytesPerObject] an object, some 60 GB for the largest
 // repository the defaults admit; the index without one [IndexBytesPerObject];
 // the commit-graph [GraphBytesPerObject]; Verify's check
-// [FsckBytesPerObject] — so each is charged its own figure, and room beside it
-// for one transfer of the same repository (gitproc.TransferBytesPerObject),
-// against the node's BUDGET: its memory as the git pool read it (the least of
+// [FsckBytesPerObject] — so each is charged its own figure an object of what
+// it walks — the repository's, but for the node's tip, which walks only the
+// commits an installed chain lacks and is charged by the tail's objects
+// ([TipGraphBytesPerObject]) — and room beside it for one transfer of the
+// whole repository (gitproc.TransferBytesPerObject; chargeOver), against the
+// node's BUDGET: its memory as the git pool read it (the least of
 // the machine's and every cgroup limit above the process, v2's and v1's),
 // read again at every maintainer pass so a container resized in place is held
 // to its new limit, less gitproc.TransferMemory for every transfer the pool
@@ -862,9 +870,10 @@
 // indexed WITHOUT one, so a repository that outgrew the node's memory still
 // keeps its pushes inside an index (a bitmap written while it could be kept
 // until [MidxRoundPacks] packs gather outside it); each step refused is
-// logged once an incarnation and counted, a refused bitmap and a refused
-// graph are each kept on a gauge while they stay refused, and a refused
-// bitmap is raised as code_maintenance_refused
+// logged once an incarnation and counted, a refused bitmap, a refused graph
+// and a refused tip are each kept on a gauge while they stay refused, and a
+// refused bitmap — never a tip, whose copy is still served through its
+// chain's bitmap — is raised as code_maintenance_refused
 // ([Cache.AlarmReading]), at the budget's own threshold: a git node's largest
 // repository with a bitmap is bound by its memory before its disk. The budget
 // itself is ADVERTISED as it stands ([Cache.BackgroundBudget], which the
@@ -1008,13 +1017,22 @@
 // layer of its own: on the node pin a bitmapped layer costs the walk of the
 // whole history however few objects it adds, and a layer without one turns
 // off every bitmap beneath it, so the packs since the last publication stay
-// outside the chain, the TAIL, which git reads beside it.
+// outside the chain, the TAIL, which git reads beside it. A commit-graph
+// layer costs only the commits it adds and turns nothing beneath it off, so
+// each node writes ONE thing over the chain: its TIP, git's split
+// commit-graph layer of the tail's commits over exactly the installed graph
+// layers, written whole again once the tail's packs are no longer those it
+// covered rather than stacked — which packs those were persisted beside it as
+// their digest, so a restart writes a quiet copy's tip no more than a pass
+// does (maintain.go, THE TIP); it goes with every change to the chain beneath it
+// and every pack removed, and crosses a retirement that keeps the whole chain
+// (tipGoes).
 //
 // An incarnation holding a chain is in CHAIN mode, one holding none in OWN
 // mode (the maintainer's whole index and graph); git refuses the two side by
 // side, so a placement drops own mode's files (EventLayersMoved), the
-// maintainer plans no write in chain mode, and a round writes no index beside
-// either shape (indexed). A FULL round installs the chain before it answers,
+// maintainer plans no own-mode write in chain mode — the tip alone — and a
+// round writes no index beside either shape (indexed). A FULL round installs the chain before it answers,
 // keeping the longest prefix the copy holds sound — held to its Check by the
 // round's check — and fetching the rest in its one download queue behind its
 // packs. A DELTA never downloads a layer: it records the chain the snapshot

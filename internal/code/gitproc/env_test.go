@@ -729,7 +729,7 @@ func TestAConfigKeyOutsideTheAllowlistIsRefused(t *testing.T) {
 	fake := fakePool(t, "exit 0", gitproc.Options{})
 	for _, key := range []string{
 		"core.multiPackIndex", "pack.allowPackReuse", "pack.windowMemory", "pack.useBitmaps",
-		"pack.writeBitmapLookupTable",
+		"pack.writeBitmapLookupTable", "commitGraph.changedPathsVersion",
 		"uploadpack.allowFilter", "uploadpack.keepAlive",
 		"uploadpackfilter.allow", "uploadpackfilter.blob:none.allow", "uploadpackfilter.blob:limit.allow",
 		"uploadpackfilter.tree.maxDepth", "uploadpackfilter.object:type.allow", "uploadpackfilter.combine.allow",

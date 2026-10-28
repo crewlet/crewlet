@@ -148,3 +148,56 @@ func BenchmarkReadState(b *testing.B) {
 		}
 	}
 }
+
+// A TAIL IS KNOWN BY ITS PACKS, WHATEVER THEIR ORDER (tailDigest): the node's
+// tip persists the digest of the tail it covered, and a boot, a full round and
+// a swap each count the tail afresh — so the same packs counted in any order
+// read the same digest, a pack counted in and out again leaves it where it
+// was, a pack more or less is another tail, and the digest a state records
+// reads back as itself and nothing else does.
+//
+// Mutation: let flip add a pack's bytes rather than XOR them — the pack
+// counted in and out again leaves the digest moved.
+func TestATailIsKnownByItsPacksWhateverTheirOrder(t *testing.T) {
+	t.Parallel()
+	packs := []livePack{
+		{checksum: strings.Repeat("1", 40), size: 10, objects: 3},
+		{checksum: "0123456789abcdef0123456789abcdef01234567", size: 20, objects: 5},
+		{checksum: strings.Repeat("e", 40), size: 30, objects: 7},
+	}
+	count := func(order ...int) tailCount {
+		var c tailCount
+		for _, i := range order {
+			c.add(packs[i], 1)
+		}
+		return c
+	}
+	whole := count(0, 1, 2)
+	if reversed := count(2, 1, 0); reversed != whole {
+		t.Errorf("the same packs counted in two orders read %+v and %+v", whole, reversed)
+	}
+	less := whole
+	less.add(packs[1], -1)
+	if less.digest == whole.digest || less != count(0, 2) {
+		t.Errorf("the tail less a pack reads %+v, want %+v and another digest than %+v", less, count(0, 2), whole)
+	}
+	less.add(packs[1], 1)
+	if less != whole {
+		t.Errorf("the pack counted in again reads %+v, want the whole tail's %+v", less, whole)
+	}
+	var none tailCount
+	none.add(packs[0], 1)
+	none.add(packs[0], -1)
+	if none != (tailCount{}) {
+		t.Errorf("a pack counted in and out of an empty tail leaves %+v", none)
+	}
+	if got, err := parseTailDigest(whole.digest.String()); err != nil || got != whole.digest {
+		t.Errorf("the recorded digest %s reads back as %x, %v", whole.digest, got, err)
+	}
+	for _, bad := range []string{"", strings.Repeat("a", 31), strings.Repeat("a", 40), strings.Repeat("A", 32),
+		strings.Repeat("g", 32)} {
+		if _, err := parseTailDigest(bad); err == nil {
+			t.Errorf("%q reads as a tail's digest", bad)
+		}
+	}
+}

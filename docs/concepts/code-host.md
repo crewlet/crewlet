@@ -841,7 +841,24 @@ commits, about 3.4 seconds over a gigabyte of source history, so that window
 lasts seconds rather than as long as the node's queue of other repositories'
 bitmaps. Reading a copy whole does not write the graph itself: the request
 it was read for would wait those seconds to spare the rare skewed push the
-same.
+same. A copy that serves from a published chain gets its node's **tip**
+over the chain the same way ([Published layers](#published-layers)).
+
+**Changed-path filters.** Every commit-graph a git node writes carries git's
+changed-path filters, one a commit: a `git log -- <path>` or a blame skips
+each commit whose filter says the path did not change rather than diffing it
+against its parent — 0.044 seconds with them against 0.399 with no
+commit-graph, for one path over a synthetic history of 40 000 commits on git
+2.56.0. One write computes at most 1 024 new filters, so what it spends on
+them is bounded whatever the history; a commit without one is diffed as
+before. A copy's own graph keeps every filter the graph it replaces holds,
+so its background indexing's next write computes more; a node's tip over a
+published chain ([Published layers](#published-layers)) computes its own
+afresh at each write, so the commits of a tail longer than that go without
+one until a publication covers them. They are git's version 2:
+version 1 hashes a path by whether the platform's `char` is signed, so its
+filters disagree between an `amd64` and an `arm64` build for every path
+outside ASCII, and every git a node runs reads and writes version 2.
 
 **When packs leave a copy.** A [compaction](#compaction) merges a repository's
 packs and retires the ones it merged, and a whole read can find a pack no row
@@ -931,8 +948,13 @@ refuses one — never `provenance`, `memo` or `layer`, which the engine's own
 code writes, holding no git slot and charged against no memory budget. The
 `layers` and `graph-layers` files are git's own, written once by the
 repository's maintainer and installed byte for byte from the object store
-([Published layers](#published-layers)); a copy holds them or `midx` and
+([Published layers](#published-layers)) — all but the node's **tip**, the
+one `graph-layers` file its own background indexing writes (`tip-graph`), over
+the commits the installed layers lack. A copy holds them or `midx` and
 `commit-graph`, never both, and placing a chain drops the other two first.
+The tip stays when a compaction retires a pack and the chain beneath it stays
+whole, and goes with every other change to the chain or the packs below,
+written again at once.
 
 | Declared file | Its files, in the repository's directory | Written by | When a compaction retires a pack | When any other pack leaves |
 |---|---|---|---|---|
@@ -941,7 +963,7 @@ repository's maintainer and installed byte for byte from the object store
 | `provenance`, the index of which push introduced each commit | `crewlet/provenance.<n>` | a sync, before it answers: `provenance`; the backfill: `provenance` | kept | kept |
 | `memo`, the answers of seats' reads by object id — a directory, one file an answer | `crewlet/memo` | a seat's read by object id: `memo` | kept | kept |
 | `layers`, the installed published multi-pack-index chain — each layer's index and bitmap, and the chain file the node writes from the rows | `objects/pack/multi-pack-index.d/multi-pack-index-chain`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.midx`, `objects/pack/multi-pack-index.d/multi-pack-index-<checksum>.bitmap` | the install of the maintainer's published layers: `layer` | cut first, below the layer that names it | cut first, below the layer that names it |
-| `graph-layers`, the installed published commit-graph layers, one a layer, and their chain file | `objects/info/commit-graphs/commit-graph-chain`, `objects/info/commit-graphs/graph-<checksum>.graph` | the install of the maintainer's published layers: `layer` | cut first, below the layer that names it | cut first, below the layer that names it |
+| `graph-layers`, the installed published commit-graph layers, one a layer, the node's tip over them, and their chain file | `objects/info/commit-graphs/commit-graph-chain`, `objects/info/commit-graphs/graph-<checksum>.graph` | the install of the maintainer's published layers: `layer`; the background indexing: `tip-graph` | cut first, below the layer that names it | cut first, below the layer that names it |
 
 **Memory.** Every git process a node runs over a whole repository holds memory
 in proportion to the repository's objects, measured on git 2.43 over a source
@@ -950,7 +972,10 @@ three million objects, more the larger the repository), 80 for the index
 without one, 56 for the commit-graph, 192 for `crewlet code verify`'s
 connectivity check, and a clone about 240 more than the 224 MiB its git
 transfer slot keeps for it — the clone of a repository with no bitmap walks
-its whole history. A git node reads its memory — the least of the machine's
+its whole history. The node's tip over a published chain is the one step
+that walks less than the whole history, the commits the chain lacks, so it is
+charged by the tail rather than the repository: 1 700 bytes an object of the
+tail, from 40 MiB over 5 000 new commits on git 2.56.0. A git node reads its memory — the least of the machine's
 and any cgroup limit set on its container — and keeps 224 MiB of it for every
 git transfer it admits at once and 896 MiB for each core its git runs on, for
 the store, the broker, the engine and its reads. Both count only the cores the
@@ -958,18 +983,22 @@ memory backs at 2 GiB a core: a container limited in memory and not in CPU sees
 its host's every core, so a node of 64 cores and 16 GiB admits 32 transfers
 rather than 256, and runs as the eight-core node its memory makes it. What is
 left is the budget of its background work, and every step of it — the
-bitmap, the index without one (a cold cache's included), the commit-graph, a
-connectivity check — is held to the budget together with everything in flight,
-each charged its own figure an object and room beside it for one clone of the
-same repository. A step whose charge alone is past the budget never runs on
-the node, and the repository is served without it: a bitmap refused leaves
-the repository indexed without one — its pushes keep joining an index, so
-lookups stay fast, while a clone walks its history — keeping the bitmap the
-node wrote while it could until 256 packs have gathered outside it. Each step
-refused is logged once as `code_cache_maintenance_refused` with its charge
-and the budget and counted by `crewlet.code.cache.maintenance.refusals`, and
-a refused bitmap raises the [`code_maintenance_refused`](../reference/alarms.md)
-alarm for as long as it stays refused. A connectivity check the budget cannot
+bitmap, the index without one (a cold cache's included), the commit-graph, the
+tip, a connectivity check — is held to the budget together with everything in
+flight, each charged its own figure an object of what it walks and room beside
+it for one clone of the whole repository. A step whose charge alone is past
+the budget never runs on the node, and the repository is served without it: a
+bitmap refused leaves the repository indexed without one — its pushes keep
+joining an index, so lookups stay fast, while a clone walks its history —
+keeping the bitmap the node wrote while it could until 256 packs have
+gathered outside it. Each step refused is logged once as
+`code_cache_maintenance_refused` with its charge and the budget and counted
+by `crewlet.code.cache.maintenance.refusals`, and a refused bitmap raises the
+[`code_maintenance_refused`](../reference/alarms.md) alarm for as long as it
+stays refused. A refused tip raises nothing: the copy is still served through
+its chain's bitmap and graph layers, and only the commits pushed since the
+last publication go by date — `crewlet.code.cache.maintenance.refused{step=tip-graph}`
+counts the copies. A connectivity check the budget cannot
 hold is refused to whoever asked for it, and one that the work in flight
 leaves no room for is busy, as a full lane is. A step that fits the budget
 alone but not beside what is running waits for it, and the first such
@@ -1287,7 +1316,8 @@ engine writing into the cache, and `damaged` under `file=pack` or
 disk losing data under the cache, `again` one that keeps losing it, `crash` a
 git process dying on something in a copy, `request` requests failing on
 damage they then had repaired under them — `crewlet.code.cache.maintenance.refused`, above zero a
-repository whose bitmap the node's memory cannot hold —
+repository whose bitmap the node's memory cannot hold, or under `step=tip-graph` a chained copy whose
+tip it cannot —
 `crewlet.code.cache.chained` against `crewlet.code.cache.repos`, the
 repositories served from an installed published chain rather than in their
 own mode ([Published layers](#published-layers)) —
@@ -1337,10 +1367,11 @@ commit-graph its background indexing writes (above). git refuses the two side
 by side: it reads a whole index before a chain, and writing either whole
 deletes every layer and its chain file. So placing a chain drops the copy's
 own index and graph first; the background indexing writes neither while a
-chain is installed, and a sync writes no index of its own beside one; and a
-chain cut to nothing leaves the copy in own mode, its index and graph the
-background indexing's to write again. `crewlet.code.cache.chained` counts the
-repositories a node serves in chain mode.
+chain is installed — only the node's tip over it (below) — and a sync writes
+no index of its own beside one; and a chain cut to nothing leaves the copy in
+own mode, its index and graph the background indexing's to write again.
+`crewlet.code.cache.chained` counts the repositories a node serves in chain
+mode.
 
 **No node writes a layer of its own.** On git 2.56 a layer with a bitmap
 costs the walk of the whole history however few objects it adds. Over a
@@ -1353,9 +1384,32 @@ outside the chain, and git reads them beside it through each pack's own
 index. A bitmapped walk of every object took 0.004 seconds with no pack
 outside the chain, 0.03 with one, 0.09 with four and 0.35 with sixteen, and a
 clone's pack ran in the same 2.7 to 3.0 seconds with four packs outside it as
-with none (4.6 with no index at all). The tail's commits are outside the
-commit-graph layers too, read from their packs until a publication covers
-them.
+with none (4.6 with no index at all).
+
+**Each node writes its own tip commit-graph.** The tail's commits are outside
+the published commit-graph layers, and a walk into them would go by date. A
+commit-graph layer, unlike a multi-pack-index layer, costs only the commits it
+adds and switches off nothing beneath it, so each node's background indexing
+writes one over the chain, the copy's **tip**: git's own split write of just
+the commits the installed graph layers lack, over exactly those layers, with
+changed-path filters — 0.29 seconds over 5 000 new commits with every filter,
+0.04 with 100, on git 2.56.0. A copy holding no tip gets one at once, as a copy
+with no graph does ([The commit-graph first](#the-cache-on-a-git-node)); once
+the tail's packs change, the tip is written again by the background indexing's
+usual pace, **whole** — over the installed layers alone and every commit of the
+tail — rather than a new tip stacked on the old, which would grow without bound
+while the tail waits for its publication. While the tail holds the packs the
+tip was written over, nothing writes it again: the node records which packs
+those were beside the tip, so neither a restart nor a full sync of a quiet
+repository costs it a write. The old tip's file goes with git's
+own write; a request that read the old chain file and opens the old tip after
+that is told `unable to find all commit-graph files` and goes on through the
+layers beneath it, as git's own split writes leave their readers, and the node
+counts that as no damage. The tip is valid only over its exact base and the
+commits it names: a placement, a cut, or a pack leaving that no compaction
+retired takes it, and the background indexing writes it again at once over
+what the tail then holds; a compaction's retirement keeps it, since a merge
+drops no commit.
 
 **A full sync installs the chain before it answers.** A full read of a
 repository — a cold cache, a node's first sync of it after a restart, a
@@ -1424,7 +1478,13 @@ finding asks at once: before it answers, the sync fetches that layer and every
 layer above it, since a layer is valid only over its exact base, and places
 them as any layer is placed. A layer the sync cannot fetch is cut, with every
 one above it, and the copy serves from the layers below. A chain file that
-fails is written again from the rows, in place. A git process that names a
+fails is written again from the rows, in place, without the node's tip. The
+tip is held to the checksum its name carries as a layer's `.graph` is, and one
+that fails is dropped — the chain file written again without it — and written
+again at once by the background indexing, never fetched: no row names it. A
+tip a previous process left is kept only over the very layers it was written
+over, and is written again only once the tail it covered has changed. A git
+process that names a
 chain's files damaged drops nothing: it makes the copy's scrub due instead,
 which holds every file of the chain to its checksum. A rebuild links into its
 new copy every layer whose files pass and whose packs it linked, and fetches
@@ -2834,9 +2894,9 @@ A git node's [cache](#the-cache-on-a-git-node) logs under the component `code.ca
 | `code_layers_cut` | `INFO` | A repository's installed chain was cut in place (`incarnation` the copy's number), the `kept` layers beneath the `cut` ones staying: `why` is `layers-moved` — the rows name another chain, or a layer's file failed its checksum, its layers then fetched again — or `pack-removed` or `pack-retired`, a pack a cut layer names leaving. |
 | `code_layer_install_failed` | `WARN` | A published layer could not be installed (`error`). The installer logs it when the object store failed to answer or this node's disk refused a write, with `retry_in` — a minute, doubling to half an hour; a full sync logs it for any layer it could not fetch, with the layer's `seq` and `outcome`, and leaves the layer to the installer (one `corrupt` is refused at once). The copy serves as it is meanwhile. |
 | `code_cache_adopt_failed` | `WARN` | The node that received a push could not link the push's pack into its cache; its next sync downloads the pack instead. Recurring, the disk is refusing writes. |
-| `code_cache_maintenance_failed` | `WARN` | A background indexing run failed at its `step` (`multi-pack-index`, `commit-graph`, or `state` when its record could not be written). The repository is served without the index — slower, never wrong — and the next run waits out the interval. |
+| `code_cache_maintenance_failed` | `WARN` | A background indexing run failed at its `step` (`multi-pack-index`, `commit-graph` — the copy's own graph, or its tip over a published chain — or `state` when its record could not be written). The repository is served without what the step writes — slower, never wrong — and the next run waits out the interval. |
 | `code_cache_compaction_refused` | `WARN` | A compaction of a `repo` needs more memory than this node can give its background work — its `estimate`, against the `budget`, with the `memory` it was taken from and what was `reserved` — so this node does not build it; logged once for the copy however many polls ask again, and counted `crewlet.code.cache.maintenance.refusals{step=compact}`. The next poll asks again, so a node given more memory builds it; at the pack bound the repository's pushes are refused meanwhile, which `code_compaction_behind` raises. |
-| `code_cache_maintenance_refused` | `WARN` | One `step` of a repository's background work needs more memory than the node can give it — its `estimate`, the step's figure an object and room for a clone beside it, against the `budget`, with the `memory` it was taken from and what was `reserved` — so it never runs on this node. `bitmap`: the repository is indexed without one, and a clone walks its history; `index`: it is served from its packs' own indexes, a cold cache's index included; `graph`: its walks go by date, and a push of a commit dated before its parent walks every commit. Slower, never wrong. Once for each copy of the repository the cache holds and each step, while [`code_maintenance_refused`](../reference/alarms.md) stands for as long as a bitmap stays refused. Give the node more memory, or — where `git.max_transfers` is set — fewer transfers, each of which keeps 224 MiB of it. |
+| `code_cache_maintenance_refused` | `WARN` | One `step` of a repository's background work needs more memory than the node can give it — its `estimate`, the step's figure an object and room for a clone beside it, against the `budget`, with the `memory` it was taken from and what was `reserved` — so it never runs on this node. `bitmap`: the repository is indexed without one, and a clone walks its history; `index`: it is served from its packs' own indexes, a cold cache's index included; `graph`: its walks go by date, and a push of a commit dated before its parent walks every commit; `tip-graph`: a copy serving from a published chain walks the commits pushed since its last publication by date, and the rest by generation. Slower, never wrong. Once for each copy of the repository the cache holds and each step, while [`code_maintenance_refused`](../reference/alarms.md) stands for as long as a bitmap stays refused — never for a tip. Give the node more memory, or — where `git.max_transfers` is set — fewer transfers, each of which keeps 224 MiB of it. |
 | `code_cache_provenance_gap` | `WARN` | A sync applied pushes it could not fold into the repository's index of which push introduced each commit (`from`, `through`, `error`: a delta that served no pushes, or one beginning above where the index ends), so it left that range to the backfill, as a full sync does; until it is read, an answer naming a commit in it says the index does not hold it. One now and then is a page the sync could not read; a run of them, `error` says why. |
 | `code_cache_provenance_lost` | `WARN` | A full sync found a run the repository's index names missing from the disk or at another size, so the index was made anew at that sync's position and the backfill reads back below it as far as it is wanted — or a move into the copy's next directory ([When packs leave a copy](#the-cache-on-a-git-node)) found one missing, so the next directory starts with no index until its next full sync makes one. Something outside the engine removing files in the cache, or a disk losing them. |
 | `code_cache_provenance_unlisted` | `WARN` | A full sync could not list the repository's `crewlet/` directory (`error`), so it kept the index as its record names it; the next full sync lists it again. A disk refusing reads. |

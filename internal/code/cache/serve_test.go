@@ -35,6 +35,7 @@ func TestTheServeConfigIsWhatTheHostRuns(t *testing.T) {
 		{Key: "pack.windowMemory", Value: strconv.FormatInt(2*code.DefaultLimits().MaxBlobBytes, 10)},
 		{Key: "pack.useBitmaps", Value: "true"},
 		{Key: "pack.writeBitmapLookupTable", Value: "true"},
+		{Key: "commitGraph.changedPathsVersion", Value: "2"},
 		{Key: "uploadpack.allowFilter", Value: "true"},
 		{Key: "uploadpackfilter.allow", Value: "false"},
 		{Key: "uploadpackfilter.blob:none.allow", Value: "true"},

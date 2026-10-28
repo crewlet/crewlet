@@ -54,6 +54,12 @@ type derivedDoc struct {
 	// Layers is an installed published chain's record — the ids its chain
 	// file lists — which only the two chains' entries carry.
 	Layers []string `json:"layers,omitempty"`
+	// Tip is the node's tip commit-graph layer, which only the commit-graph
+	// chain's entry carries: the line its chain file lists after Layers.
+	Tip string `json:"tip,omitempty"`
+	// TipOver is the digest of the tail the last tip write covered, on the
+	// same entry.
+	TipOver string `json:"tip_over,omitempty"`
 }
 
 // cohortDoc is one cohort of a memo as the state records it.
@@ -265,6 +271,49 @@ func TestAStateOfAnotherFormatIsDiscarded(t *testing.T) {
 			id := strings.Repeat("2", 40)
 			doc.Derived[string(cache.DerivedGraphLayers)] = derivedDoc{Bytes: 4096, Step: string(cache.StepLayer),
 				Layers: []string{id, id}}
+		},
+		// The node's tip on a declaration that keeps none; a tip alone recorded
+		// by the install, which wrote no line of that chain file; a tip over
+		// layers recorded by the tip's write, which wrote none of them; a tip
+		// that is no checksum; and a tip that is a layer of the chain beneath
+		// it.
+		"f8d6a4c7-1e6b-4f7d-8c8a-7b0e2d4f5a69": func(doc *stateDoc) {
+			midx := doc.midx()
+			midx.Tip = strings.Repeat("3", 40)
+			doc.Derived[string(cache.DerivedMidx)] = midx
+		},
+		"a9e7b5d8-2f7c-4a8e-9d9b-8c1f3e5a6b70": func(doc *stateDoc) {
+			doc.Derived[string(cache.DerivedGraphLayers)] = derivedDoc{Bytes: 4096, Step: string(cache.StepLayer),
+				Tip: strings.Repeat("3", 40)}
+		},
+		"b0f8c6e9-3a8d-4b9f-8e0c-9d2a4f6b7c81": func(doc *stateDoc) {
+			doc.Derived[string(cache.DerivedGraphLayers)] = derivedDoc{Bytes: 4096,
+				Step: string(cache.StepTipGraph), Layers: []string{strings.Repeat("2", 40)}, Tip: strings.Repeat("3", 40)}
+		},
+		"c1a9d7f0-4b9e-4c0a-9f1d-0e3b5a7c8d92": func(doc *stateDoc) {
+			doc.Derived[string(cache.DerivedGraphLayers)] = derivedDoc{Bytes: 4096,
+				Step: string(cache.StepTipGraph), Tip: "abc"}
+		},
+		"d2b0e8a1-5c0f-4d1b-8a2e-1f4c6b8d9e03": func(doc *stateDoc) {
+			id := strings.Repeat("2", 40)
+			doc.Derived[string(cache.DerivedGraphLayers)] = derivedDoc{Bytes: 4096, Step: string(cache.StepLayer),
+				Layers: []string{id}, Tip: id}
+		},
+		// The digest of the tail a tip covered on a declaration that keeps no
+		// tip; one that is no digest; and one beside a chain file that lists
+		// nothing.
+		"e3c1f9b2-6d1a-4e2c-9b3f-2a5d7c9e0f14": func(doc *stateDoc) {
+			midx := doc.midx()
+			midx.TipOver = strings.Repeat("4", 32)
+			doc.Derived[string(cache.DerivedMidx)] = midx
+		},
+		"f4d2a0c3-7e2b-4f3d-8c4a-3b6e8d0f1a25": func(doc *stateDoc) {
+			doc.Derived[string(cache.DerivedGraphLayers)] = derivedDoc{Bytes: 4096,
+				Step: string(cache.StepTipGraph), Tip: strings.Repeat("3", 40), TipOver: strings.Repeat("4", 40)}
+		},
+		"a5e3b1d4-8f3c-4a4e-9d5b-4c7f9e1a2b36": func(doc *stateDoc) {
+			doc.Derived[string(cache.DerivedGraphLayers)] = derivedDoc{Bytes: 4096,
+				TipOver: strings.Repeat("4", 32)}
 		},
 	}
 	unreadables := []string{repoB, c3, c4}

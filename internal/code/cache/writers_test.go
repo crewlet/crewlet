@@ -429,19 +429,22 @@ var cacheWriters = []writerRow{
 		nil},
 	{"internal/code/cache/maintain.go", kindOS,
 		"the files a declared write holds while it runs (Write.Holds): what a maintenance run that did " +
-			"not succeed, or a round's index that failed, leaves behind",
-		[]cache.DerivedName{cache.DerivedMidx, cache.DerivedGraph}},
+			"not succeed — the node's tip's lock and temporary layer among them — or a round's index that " +
+			"failed, leaves behind",
+		[]cache.DerivedName{cache.DerivedMidx, cache.DerivedGraph, cache.DerivedGraphLayers}},
 	{"internal/code/cache/maintain.go", kindGit + " multi-pack-index",
 		"the declared writes of the multi-pack-index — a full round's without a bitmap (indexRound) and the " +
 			"maintainer's with one and without — in one file so the writer of an index is one file",
 		[]cache.DerivedName{cache.DerivedMidx}},
 	{"internal/code/cache/maintain.go", kindGit + " commit-graph",
-		"the declared write of the maintainer's commit-graph", []cache.DerivedName{cache.DerivedGraph}},
+		"the declared writes of the maintainer's commit-graph — own mode's whole graph, and the node's tip " +
+			"layer over an installed chain (writeTip) — in one file so the writer of a graph is one file",
+		[]cache.DerivedName{cache.DerivedGraph, cache.DerivedGraphLayers}},
 	{"internal/code/cache/maintain.go", kindRuntime,
-		"indexRound and runMaintenance run declared writes (derived.go), whose argument lists are this " +
-			"file's four literals above: the round's index, the maintainer's with its bitmap and without one, " +
-			"and the graph",
-		[]cache.DerivedName{cache.DerivedMidx, cache.DerivedGraph}},
+		"indexRound, runMaintenance and writeTip run declared writes (derived.go), whose argument lists are " +
+			"this file's five literals above: the round's index, the maintainer's with its bitmap and without " +
+			"one, own mode's graph and the node's tip",
+		[]cache.DerivedName{cache.DerivedMidx, cache.DerivedGraph, cache.DerivedGraphLayers}},
 	{"internal/code/cache/scratch.go", kindOS,
 		"a push's scratch repository and an advertisement view under scratch/: their directories, HEAD, " +
 			"config and alternates, and a view's packed-refs linked from its incarnation; and a request's " +
@@ -454,8 +457,10 @@ var cacheWriters = []writerRow{
 	{"internal/code/cache/layers.go", kindOS,
 		"the installed published chain: a layer's three files staged in tmp/ from its parts or from its " +
 			"maintainer's own, made durable and renamed — or, kept across a swap or a rebuild, linked — into " +
-			"an incarnation, the two chain files written from the rows (staged, synced, renamed), and a " +
-			"placement given up on or a layer cut moved into trash/: a function of the code_layers rows the " +
+			"an incarnation, the two chain files written from the rows (staged, synced, renamed) — the " +
+			"commit-graph's ending in the node's tip where one is held, and written over the installed layers " +
+			"alone before the maintainer writes the tip over them (writeChain) — and a placement given up on, " +
+			"a layer cut or the tip dropped moved into trash/: a function of the code_layers rows the " +
 			"incarnation installed from", []cache.DerivedName{cache.DerivedLayers, cache.DerivedGraphLayers}},
 	{"internal/code/cache/provenance.go", kindOS,
 		"the index of pushes, the cache's own derived file under the incarnation's crewlet/: the directory " +
@@ -475,7 +480,8 @@ var cacheWriters = []writerRow{
 			"names — HEAD, config, the packed-refs and each derived file a retirement keeps but the memo and " +
 			"the chain HARD-LINKED from the incarnation it replaces — the same inodes, written by nothing " +
 			"here — and the whole renamed into repos/ under its number; its state goes through durable.go, " +
-			"the memo's tree moves whole through memo.go, and the chain is placed through layers.go", nil},
+			"the memo's tree moves whole through memo.go, and the chain is placed through layers.go, the " +
+			"node's tip a retirement keeps linked beside its layers", nil},
 	{"internal/code/cache/compaction.go", kindRuntime,
 		"Compacting.Run hands a compaction's build — internal/code/compact's pack-objects literal, which its own " +
 			"row judges — unchanged to the maintenance slot its admission reserved (gitproc.Reserved.Run): the " +

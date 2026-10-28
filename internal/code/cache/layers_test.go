@@ -1089,10 +1089,11 @@ func TestARoundWritesNoIndexBesideAChain(t *testing.T) {
 // A CHAINED COPY RUNS NO OWN-MODE WRITE (incidental (c)): the maintainer plans
 // neither its whole index nor its whole graph on a copy that serves from an
 // installed chain, however many packs gather beside it — either would delete
-// the chain — and wants no run of it at all.
+// the chain — and its plan is the node's tip over the tail alone, which once
+// written over a tail that does not move is wanted no more.
 //
-// Mutation: let the plan ignore the mode (plan's and wantsRun's chained case
-// dropped) — the whole index is planned.
+// Mutation: let the plan ignore the mode (plan's chained case dropped) — the
+// whole index is planned.
 func TestAChainedIncarnationRunsNoOwnModeWrite(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -1108,19 +1109,373 @@ func TestAChainedIncarnationRunsNoOwnModeWrite(t *testing.T) {
 	}
 	w.sync(t, c, repo).Release()
 	clk.Add(cache.MidxDebounce)
-	if index, graph := cache.PlanSteps(c, repo); index || graph {
+	index, graph, tip := cache.PlanSteps(c, repo)
+	if index || graph {
 		t.Errorf("the plan for a chained copy writes an index (%t) and a graph (%t): no own-mode write", index,
 			graph)
 	}
-	if cache.WantsRun(c, repo) {
-		t.Error("the maintainer wants a run of a chained copy")
+	if !tip {
+		t.Error("the plan for a chained copy with a tail is not its tip: the tip alone, and nothing else")
 	}
-	if ran := cache.MaintainerPass(c); len(ran) != 0 {
-		t.Errorf("the maintainer ran %v", ran)
+	if ran := cache.MaintainerPass(c); !slices.Equal(ran, []string{repo}) {
+		t.Errorf("the maintainer ran %v, want the repository's tip", ran)
 	}
 	s := w.sync(t, c, repo)
 	if midx, _ := chainFiles(t, s.Dir); !slices.Equal(midx, layerIDs(chain)) {
 		t.Errorf("the copy lists %v, want the chain %v", midx, layerIDs(chain))
+	}
+	for _, own := range []string{"objects/pack/multi-pack-index", "objects/info/commit-graph"} {
+		if exists(filepath.Join(s.Dir, filepath.FromSlash(own))) {
+			t.Errorf("the chained copy holds own mode's %s", own)
+		}
+	}
+	// Its tip written, a tail that has not moved wants nothing more.
+	if cache.WantsRun(c, repo) {
+		t.Error("the maintainer wants another run of a chained copy whose tip covers its tail")
+	}
+	if ran := cache.MaintainerPass(c); len(ran) != 0 {
+		t.Errorf("the maintainer ran %v over a tail its tip covers", ran)
+	}
+}
+
+// tipOf is the node's tip over chain in the incarnation at dir — the last
+// line of its commit-graph-chain, listed after exactly chain's commit-graph
+// layers — and what its file says of itself, failing t where the chain file
+// lists anything else or the file is no commit-graph layer.
+func tipOf(t testing.TB, dir string, chain []code.LayerRef) (string, code.GraphInfo) {
+	t.Helper()
+	_, lines := chainFiles(t, dir)
+	layers := graphIDs(chain)
+	if len(lines) != len(layers)+1 || !slices.Equal(lines[:len(layers)], layers) {
+		t.Fatalf("commit-graph-chain lists %v, want the installed layers %v and one tip above them", lines, layers)
+	}
+	tip := lines[len(layers)]
+	path := filepath.Join(dir, "objects", "info", "commit-graphs", "graph-"+tip+".graph")
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("the tip the chain lists: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := code.ParseGraph(t.Context(), f, fi.Size(), code.Pieces{})
+	if err != nil {
+		t.Fatalf("the tip %s is no commit-graph layer: %v", tip, err)
+	}
+	return tip, info
+}
+
+// THE NODE'S TIP IS WRITTEN OVER THE TAIL ALONE (maintain.go's THE TIP): a
+// chained copy's maintainer writes git's split commit-graph layer of exactly
+// the commits the installed layers lack — the tail's, every push since the
+// publication — over exactly those layers, its BASE their ids, with version-2
+// changed-path filters; at once where the copy holds no tip, its packs not yet
+// standing still (GRAPH FIRST); and WHOLE again once the tail moves, by the
+// ordinary cadence, over every commit of the tail and the installed layers
+// alone, the old tip off the chain and its file gone, never a tip stacked on a
+// tip. The installed layer's file and line stay as they were, and the state
+// records the tip.
+//
+// Mutations: write the tip without --split=no-merge (tipGraphArgs) — git
+// merges the installed layer into a layer of its own, its id leaves the chain;
+// write it over the chain as it stands (writeTip's reset of the chain file
+// dropped) — the second tip is stacked on the first.
+func TestTheTipIsWrittenOverTheTailAlone(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	p := w.pushN(t, repo, 4)
+	chain := w.buildChain(t, p[:2])
+	w.log.publish(repo, chain, nil)
+	c := w.open(t, clk.on)
+	s := w.sync(t, c, repo)
+	layer := filepath.Join(s.Dir, "objects", "info", "commit-graphs", "graph-"+chain[0].GraphID+".graph")
+	before := stat(t, layer)
+
+	// GRAPH FIRST: no tip, so due with the clock never moved.
+	if tip, wanted := cache.Tip(c, repo); tip != "" || !wanted {
+		t.Fatalf("before any pass the copy holds tip %q, wanted %t: want none, wanted", tip, wanted)
+	}
+	if ran := cache.MaintainerPass(c); !slices.Equal(ran, []string{repo}) {
+		t.Fatalf("the first pass ran %v, want the repository's tip at once", ran)
+	}
+	first, info := tipOf(t, s.Dir, chain)
+	if !slices.Equal(info.Bases, graphIDs(chain)) || info.Commits != 2 || info.BloomVersion != 2 {
+		t.Errorf("the tip is over %v with %d commits and filters of version %d; want over %v, the tail's 2 "+
+			"commits, version 2", info.Bases, info.Commits, info.BloomVersion, graphIDs(chain))
+	}
+	if got, _ := cache.Tip(c, repo); got != first {
+		t.Errorf("the copy records tip %q, and its chain file lists %s", got, first)
+	}
+	if doc := readStateDoc(t, s.Dir).Derived[string(cache.DerivedGraphLayers)]; doc.Tip != first ||
+		!slices.Equal(doc.Layers, graphIDs(chain)) || doc.Step != string(cache.StepLayer) || doc.TipOver == "" {
+		t.Errorf("the state records the graph chain as %+v, want the layer %v, the tip %s and the tail it "+
+			"covered", doc, graphIDs(chain), first)
+	}
+	if ran := cache.MaintainerPass(c); len(ran) != 0 {
+		t.Errorf("a second pass over a tail that has not moved ran %v", ran)
+	}
+
+	// THE TAIL MOVES: the ordinary cadence, then the tip whole again.
+	w.push(t, repo, "refs/heads/main", nil)
+	w.sync(t, c, repo).Release()
+	if ran := cache.MaintainerPass(c); len(ran) != 0 {
+		t.Errorf("a tip already held was written again before its packs stood still: %v", ran)
+	}
+	clk.Add(cache.MidxDebounce)
+	if ran := cache.MaintainerPass(c); !slices.Equal(ran, []string{repo}) {
+		t.Fatalf("once the tail stood still the pass ran %v, want the repository's tip", ran)
+	}
+	second, info := tipOf(t, s.Dir, chain)
+	if !slices.Equal(info.Bases, graphIDs(chain)) || info.Commits != 3 {
+		t.Errorf("the tip written again is over %v with %d commits; want over %v alone with every commit of the "+
+			"tail, 3", info.Bases, info.Commits, graphIDs(chain))
+	}
+	if second == first || exists(filepath.Join(s.Dir, "objects", "info", "commit-graphs", "graph-"+first+".graph")) {
+		t.Errorf("the first tip %s is still on disk beside the second %s: git expires a layer its chain no "+
+			"longer names", first, second)
+	}
+	if after := stat(t, layer); !os.SameFile(before, after) {
+		t.Errorf("the installed layer's file moved under the tip's writes")
+	}
+	readsThroughTheBitmap(t, s.Dir)
+}
+
+// A RETIREMENT KEEPS THE NODE'S TIP, AND EVERY OTHER CHANGE TO THE CHAIN TAKES
+// IT (tipGoes): a compaction of the tail retires packs whose commits its
+// output holds (X04), so the copy's next incarnation links the very tip, its
+// chain file listing it; a log gone back removes a pack no retirement accounts
+// for, which may take commits the tip names, so the next copy holds none; and
+// a publication's placement moves the chain beneath any tip, so the copy it
+// places holds none either — and each copy without one has it written again
+// at once.
+//
+// Mutations: let the swap carry the tip whatever leaves (chainOf's tipGoes
+// dropped) — the copy after the removal lists the old tip; let a swap carry no
+// tip at all — the compaction's copy holds none.
+func TestARetirementKeepsTheTipAndEveryOtherChangeTakesIt(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	p := w.pushN(t, repo, 4)
+	chain := w.buildChain(t, p[:2])
+	w.log.publish(repo, chain, nil)
+	c := w.open(t, clk.on)
+	held := w.sync(t, c, repo)
+	if ran := cache.MaintainerPass(c); !slices.Equal(ran, []string{repo}) {
+		t.Fatalf("the maintainer ran %v, want the repository's tip", ran)
+	}
+	tip, _ := tipOf(t, held.Dir, chain)
+	tipFile := func(dir string) string {
+		return filepath.Join(dir, "objects", "info", "commit-graphs", "graph-"+tip+".graph")
+	}
+	before := stat(t, tipFile(held.Dir))
+	state := w.log.state()
+
+	// A COMPACTION OF THE TAIL: the copy a reader holds is swapped.
+	w.compacted(t, repo, p[2].row, p[3].row)
+	retired := w.sync(t, c, repo)
+	if retired.Dir == held.Dir {
+		t.Fatalf("the compaction answered the copy a reader holds, %s: no swap", retired.Dir)
+	}
+	if got, _ := tipOf(t, retired.Dir, chain); got != tip {
+		t.Errorf("after the retirement the copy lists tip %s, want the one it carried, %s", got, tip)
+	}
+	if after, err := os.Lstat(tipFile(retired.Dir)); err != nil || !os.SameFile(before, after) {
+		t.Errorf("the retirement's copy holds the tip as %v (%v), want the very file it linked", after, err)
+	}
+	// Wanted again all the same: the compaction's output is a pack added to
+	// the tail, which nothing the copy counts tells from a push's — written
+	// once too often for a merge, never once too few for a push.
+	if got, wanted := cache.Tip(c, repo); got != tip || !wanted {
+		t.Errorf("the retirement's copy records tip %q, wanted %t: want %s, wanted", got, wanted, tip)
+	}
+
+	// A LOG GONE BACK: the compaction's output is no row's any more, a pack
+	// removed with no retirement — and the tip goes with it.
+	w.log.recreate(state)
+	removed := w.sync(t, c, repo)
+	if got, wanted := cache.Tip(c, repo); got != "" || !wanted {
+		t.Errorf("after a pack was removed the copy records tip %q, wanted %t: want none, wanted", got, wanted)
+	}
+	if _, lines := chainFiles(t, removed.Dir); !slices.Equal(lines, graphIDs(chain)) {
+		t.Errorf("after a pack was removed commit-graph-chain lists %v, want the installed layers alone %v", lines,
+			graphIDs(chain))
+	}
+	if ran := cache.MaintainerPass(c); !slices.Equal(ran, []string{repo}) {
+		t.Fatalf("after the removal the maintainer ran %v, want the tip again at once", ran)
+	}
+	tipOf(t, removed.Dir, chain)
+
+	// A PUBLICATION over the whole tail, placed by the installer's swap: the
+	// chain beneath the tip moved.
+	published := w.newChainBuild(t, p)
+	moved := []code.LayerRef{published.layer(t, p[:2], false), published.layer(t, p[2:], false)}
+	w.log.publish(repo, moved, nil)
+	w.sync(t, c, repo).Release()
+	cache.InstallPass(c)
+	placed := w.sync(t, c, repo)
+	if got := layerIDs(cache.Installed(c, repo)); !slices.Equal(got, layerIDs(moved)) {
+		t.Fatalf("the placement left the chain %v, want %v", got, layerIDs(moved))
+	}
+	if got, _ := cache.Tip(c, repo); got != "" {
+		t.Errorf("the placed copy records tip %q over a chain it was not written over", got)
+	}
+	if _, lines := chainFiles(t, placed.Dir); !slices.Equal(lines, graphIDs(moved)) {
+		t.Errorf("the placed copy's commit-graph-chain lists %v, want the new chain's %v", lines, graphIDs(moved))
+	}
+}
+
+// A FAILING TIP IS DROPPED AND WRITTEN AGAIN AT ONCE: the node's tip a previous
+// process left is held to its check by the boot's first round like every file
+// it left, and kept where it passes — the very file, its chain line, its
+// record, and the tail it covered (TipOver), so a restart over the same tail
+// owes it no write; where it fails, it is no file to serve: the round writes
+// the chain files again without it and takes its file out, and the
+// maintainer writes it again at once (GRAPH FIRST) — the same bytes, git's
+// split write being a function of the commits and the layers beneath it.
+//
+// Mutations: keep a tip whatever the round's check found of it (planChain's
+// dropTip dropped) — the damaged tip stays listed; say a failing tip is
+// fetched again as a published layer's file is (repairAction's tip case
+// dropped) — the line says refetched; restore no TipOver at the boot
+// (planChain's parse dropped) — the restart's pass writes the tip again.
+func TestAFailingTipIsDroppedAndWrittenAgain(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	repo := w.repo(t, 1)
+	p := w.pushN(t, repo, 3)
+	chain := w.buildChain(t, p[:2])
+	w.log.publish(repo, chain, nil)
+	c := w.open(t, clk.on)
+	dir := w.sync(t, c, repo).Dir
+	if ran := cache.MaintainerPass(c); !slices.Equal(ran, []string{repo}) {
+		t.Fatalf("the maintainer ran %v, want the repository's tip", ran)
+	}
+	tip, _ := tipOf(t, dir, chain)
+	tipFile := filepath.Join(dir, "objects", "info", "commit-graphs", "graph-"+tip+".graph")
+
+	// SOUND, across a restart: kept as it is — and, its tail unmoved, owing
+	// no write, the ordinary cadence passed included.
+	before := stat(t, tipFile)
+	c = w.reopen(t, c, clk.on)
+	if s := w.sync(t, c, repo); s.Dir != dir {
+		t.Fatalf("the restart's first round answered %s, want the copy at %s", s.Dir, dir)
+	}
+	if got, wanted := cache.Tip(c, repo); got != tip || wanted {
+		t.Errorf("after a restart the copy records tip %q, wanted %t: want the sound one it held, %s, owing "+
+			"nothing over the tail it covered", got, wanted, tip)
+	}
+	clk.Add(cache.MidxDebounce + cache.MidxMinInterval)
+	if ran := cache.MaintainerPass(c); len(ran) != 0 {
+		t.Errorf("after a restart the maintainer ran %v over a tail its tip still covers", ran)
+	}
+	if after := stat(t, tipFile); !os.SameFile(before, after) {
+		t.Error("after a restart the sound tip's file was written again")
+	}
+
+	// FAILING its check: dropped, and written again at once.
+	flipAt(t, tipFile, 12)
+	c = w.reopen(t, c, clk.on)
+	s := w.sync(t, c, repo)
+	if got, wanted := cache.Tip(c, repo); got != "" || !wanted {
+		t.Errorf("after its tip failed its check the copy records tip %q, wanted %t: want none, wanted", got, wanted)
+	}
+	if _, lines := chainFiles(t, s.Dir); !slices.Equal(lines, graphIDs(chain)) {
+		t.Errorf("after its tip failed commit-graph-chain lists %v, want the installed layer alone %v", lines,
+			graphIDs(chain))
+	}
+	if exists(tipFile) {
+		t.Error("the failing tip's file is still in the copy")
+	}
+	// Logged as what was done about it: dropped, as a file the node writes
+	// itself is — never refetched, which no row of the log could answer.
+	var actions []any
+	for _, l := range w.logs.lines(t, "code_cache_check_damaged") {
+		if l["file"] == filepath.Join("objects", "info", "commit-graphs", "graph-"+tip+".graph") {
+			actions = append(actions, l["action"])
+		}
+	}
+	if !slices.Equal(actions, []any{"dropped"}) {
+		t.Errorf("code_cache_check_damaged named the failing tip with actions %v, want [dropped]", actions)
+	}
+	if ran := cache.MaintainerPass(c); !slices.Equal(ran, []string{repo}) {
+		t.Fatalf("after the failing tip was dropped the maintainer ran %v, want its tip again at once", ran)
+	}
+	if again, _ := tipOf(t, s.Dir, chain); again != tip {
+		t.Errorf("the tip written again is %s, want the same bytes, %s", again, tip)
+	}
+	readsThroughTheBitmap(t, s.Dir)
+}
+
+// A SCRUB ACROSS THE TIP'S WRITE GIVES THE CHAIN FILE NO VERDICT (chainVerdict):
+// a scrub holds commit-graph-chain to what the copy's record names of it, read
+// before its first hash, while the maintainer's tip run rewrites that file IN
+// PLACE — a reader may hold the copy, and neither takes a lock the other
+// holds — and records the new tip once git has renamed the file in. A hash
+// begun across the run holds a file of one moment to a record of another,
+// which is neither sound nor damaged: the file is no finding, the repair owes
+// nothing, and the next scrub finds it sound.
+//
+// Mutation: drop chainVerdict from the scrub — the rewritten chain file is a
+// finding, and its repair is pending.
+func TestAScrubAcrossTheTipsWriteGivesTheChainFileNoVerdict(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	clk := newClock()
+	hold := newHeldHash()
+	repo := w.repo(t, 1)
+	p := w.pushN(t, repo, 3)
+	chain := w.buildChain(t, p[:2])
+	w.log.publish(repo, chain, nil)
+	c := w.open(t, clk.on, func(o *cache.Options) { cache.WhileHashing(o, hold.at) })
+	dir := w.sync(t, c, repo).Dir
+	if ran := cache.MaintainerPass(c); !slices.Equal(ran, []string{repo}) {
+		t.Fatalf("the maintainer ran %v, want the repository's tip", ran)
+	}
+	first, _ := tipOf(t, dir, chain)
+
+	// The scrub due by its interval, held as it is about to hash
+	// commit-graph-chain: the record it holds the file to is read.
+	clk.Add(cache.ScrubInterval)
+	w.sync(t, c, repo)
+	hold.armed.Store("commit-graph-chain")
+	scrubbed := make(chan []string, 1)
+	go func() { scrubbed <- cache.ScrubPass(c) }()
+	select {
+	case <-hold.reached:
+	case <-time.After(hangDetector):
+		t.Fatal("the scrub never hashed the copy's commit-graph-chain")
+	}
+	// Beside it, the tail moves and the tip is written again in place.
+	w.push(t, repo, "refs/heads/main", nil)
+	if s := w.sync(t, c, repo); s.Dir != dir {
+		t.Fatalf("the push was answered in %s, want the copy at %s in place", s.Dir, dir)
+	}
+	clk.Add(cache.MidxDebounce + cache.MidxMinInterval)
+	if ran := cache.MaintainerPass(c); !slices.Equal(ran, []string{repo}) {
+		t.Fatalf("beside the held scrub the maintainer ran %v, want the repository's tip", ran)
+	}
+	if second, _ := tipOf(t, dir, chain); second == first {
+		t.Fatalf("the tip written over the moved tail is %s, the one the scrub's record names", second)
+	}
+	close(hold.release)
+	select {
+	case <-scrubbed:
+	case <-time.After(hangDetector):
+		t.Fatal("the scrub never ended once released")
+	}
+
+	if cache.RepairPending(c, repo) {
+		t.Error("the scrub across the tip's write left a repair pending")
+	}
+	for _, l := range w.logs.lines(t, "code_cache_check_damaged") {
+		t.Errorf("the scrub across the tip's write named %v damaged (%v)", l["file"], l["action"])
 	}
 }
 

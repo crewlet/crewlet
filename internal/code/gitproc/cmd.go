@@ -519,6 +519,11 @@ var allowedConfig = map[string]string{
 	// it rides the serve configuration and changes no other process.
 	"pack.writebitmaplookuptable": "the maintainer's bitmap write: a table of its commits, so a reader loads " +
 		"only the bitmaps it asks for (git 2.38)",
+	// The version of the changed-path filters a commit-graph write writes and
+	// a reader reads: it names a format and runs nothing.
+	"commitgraph.changedpathsversion": "the cache's serve configuration: its commit-graph writes write " +
+		"version-2 changed-path filters, which hash a path alike on every build (correct past ASCII), and " +
+		"read only those",
 	"uploadpack.allowfilter": "the cache's serve configuration",
 	// Which partial-clone filters upload-pack serves. A subsection — the
 	// filter's name — is the one part of a key git reads case-sensitively, so

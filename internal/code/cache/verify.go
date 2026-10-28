@@ -182,7 +182,7 @@ func (c *Cache) AdmitVerify(repoID string) (*Verification, error) {
 	}
 	held := c.pin(e, inc, SyncNone)
 	label := cmp.Or(inc.repo.Name, repoID)
-	mem := charge(inc.objects, FsckBytesPerObject)
+	mem := chargeOver(inc.objects, FsckBytesPerObject, inc.objects)
 	e.mu.Unlock()
 
 	slot, err := c.git.Reserve()
@@ -227,7 +227,7 @@ func (c *Cache) admitCheck(label string, mem, already int64) error {
 // meanwhile.
 func (v *Verification) charge(s Synced) error {
 	s.entry.mu.Lock()
-	mem := charge(s.inc.objects, FsckBytesPerObject)
+	mem := chargeOver(s.inc.objects, FsckBytesPerObject, s.inc.objects)
 	s.entry.mu.Unlock()
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -685,7 +685,7 @@ func (c *Cache) check(ctx context.Context, s Synced, slot *gitproc.Reserved) (Ve
 	if err != nil {
 		return r, whole, fmt.Errorf("cache: verify %s: %w", r.label(), err)
 	}
-	problems, err := c.checkDerived(ctx, inc.dir, l)
+	problems, err := c.checkDerived(ctx, e, inc, l)
 	r.Problems = append(r.Problems, problems...)
 	r.damaged = r.damaged || len(problems) > 0
 	if err != nil {
@@ -737,10 +737,14 @@ type listing struct {
 	derived []ownedFile
 	// installed is the published chain the incarnation holds (layers.go),
 	// each layer with the row it was installed from; chains what each chain
-	// file holds when it is sound (chainWants); and chained every pack an
-	// installed layer names, which the chain holds whatever its rows say.
+	// file holds when it is sound (chainWants), and mark the chain files'
+	// writes in place as chains was read (markChain) — the node's tip is
+	// written in place by a run the listing leaves to finish; and chained
+	// every pack an installed layer names, which the chain holds whatever its
+	// rows say.
 	installed []code.LayerRow
 	chains    map[string][]byte
+	mark      chainMark
 	chained   map[string]bool
 	// problems is what the grammar does not admit, and what it requires that
 	// is missing.
@@ -776,7 +780,7 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 	l := &listing{packs: map[string]map[string]int64{}, chained: map[string]bool{}}
 	e.mu.Lock()
 	l.at, l.stream, l.repo, l.digest = inc.at, inc.stream, inc.repo, inc.refsDigest
-	l.installed, l.chains = slices.Clone(inc.installed), chainWants(inc)
+	l.installed, l.chains, l.mark = slices.Clone(inc.installed), chainWants(inc), markChain(inc)
 	for cs := range inc.installedPacks {
 		l.chained[cs] = true
 	}
@@ -1010,13 +1014,15 @@ func checkPacks(ctx context.Context, dir string, l *listing, snap snapshot) (int
 // index that answers wrong rather than failing. A file replaced or removed
 // since the listing (a repair round may run between the listing and the hash:
 // the check holds rounds off for its listing alone) gives no verdict and is
-// no finding. No read slot is taken a piece at a time: the check holds its
-// maintenance slot across the whole of it. A declaration whose every read
-// holds its files (Check.hashed: the memo's tree, admitted whole) has nothing
-// for a hash to add, and is passed over.
-func (c *Cache) checkDerived(ctx context.Context, dir string, l *listing) ([]string, error) {
+// no finding, and so does a chain file written in place since its record was
+// read (chainVerdict). No read slot is taken a piece at a time: the check
+// holds its maintenance slot across the whole of it. A declaration whose
+// every read holds its files (Check.hashed: the memo's tree, admitted whole)
+// has nothing for a hash to add, and is passed over.
+func (c *Cache) checkDerived(ctx context.Context, e *entry, inc *incarnation, l *listing) ([]string, error) {
 	var problems []string
 	p := c.pieces(nil)
+	dir := inc.dir
 	for _, f := range l.derived {
 		if !f.of.Check.hashed() {
 			continue
@@ -1029,6 +1035,7 @@ func (c *Cache) checkDerived(ctx context.Context, dir string, l *listing) ([]str
 			c.knobs.hashing(filepath.Join(dir, f.rel))
 		}
 		v, _, _, err := trailerSound(ctx, filepath.Join(dir, f.rel), p, want)
+		v = chainVerdict(e, inc, want, l.mark, v)
 		switch {
 		case err != nil:
 			return problems, fmt.Errorf("hashing %s: %w", filepath.ToSlash(f.rel), err)
