@@ -42,10 +42,13 @@ import (
 //
 // The markers are DERIVED from this package's own exported constants rather
 // than typed out again, so a new piece of grammar is covered by adding it to
-// topics.go and nothing else. A marker with a dot is matched by containment,
-// which is safe because the dotted forms (crewlet.agent, crewlet.events,
-// crewlet.notifications, crewlet.config, dlq., .inbox, .control) appear in no
-// other kind of string. A marker without one (agent-, -control) is matched by
+// topics.go and nothing else. A marker with a dot is matched where a subject
+// could continue ([containsSubject]): a prefix (crewlet.agent, crewlet.events,
+// crewlet.notifications, crewlet.config, dlq.) where the value goes on as a
+// subject would, a leaf suffix (.inbox, .control, .reflect) only where the
+// value ends with it, since a subject ends at its leaf and another grammar's
+// dotted name (OpenCode's session.inbox.list) may carry the same word mid-name.
+// A marker without one (agent-, -control) is matched by
 // SHAPE instead — the literal is exactly the marker, or is made only of the
 // characters a wire name may contain — because "agent-" is also ordinary
 // English hyphenation and "agent-only field set on a human seat" is a
@@ -113,6 +116,9 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.pages.log.%s.%s", "crewlet.usage.log.day",
 		"crewlet.iam.log.person.0f3c", "crewlet.iam.log.session.0f3c",
 		"crewlet.iam.log.>",
+		// A leaf suffix: the base of a concatenation, and the end of a
+		// format string a seat's subject would come from.
+		".inbox", "crewlet.agent.%s.control", "crewlet.agent.%s.reflect",
 	} {
 		if _, hit := violation(markers, positive); !hit {
 			t.Errorf("control: %q is a hand-built name and the matcher did not flag it", positive)
@@ -157,6 +163,11 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"CREWLET_LOG_FILE",
 		"crewlet.log",
 		"crewlet.tracker.logged",
+		// Another grammar's dotted name carrying a leaf suffix's word
+		// mid-name: OpenCode's API methods, in the script that cancels a
+		// run's undelivered notes. A subject never continues past its leaf.
+		`opencode api --server "$url" session.inbox.list --param sessionID=`,
+		"session.inbox.cancel",
 	} {
 		if marker, hit := violation(markers, negative); hit {
 			t.Errorf("control: %q is not a subject but the matcher flagged it on %q",
@@ -358,9 +369,19 @@ func violation(markers markerSet, value string) (string, bool) {
 // resource-attribute key, was the first — and a guard that cries wolf on
 // those is one somebody eventually silences with an allowance entry.
 //
+// A LEAF SUFFIX ENDS ITS SUBJECT: a marker that starts with a separator
+// (`.inbox`, `.control`, `.reflect`) names a seat's subject only where the
+// value ends with it — `".inbox"` as a concatenation's base, or the end of
+// `crewlet.agent.%s.inbox`. Followed by another segment it is some other
+// grammar's dotted name; OpenCode's `session.inbox.list` API method was the
+// first.
+//
 // This NARROWS the matcher, so every literal it flagged before that really
 // is a subject is still flagged: the positives above cover each shape.
 func containsSubject(value, marker string) bool {
+	if strings.HasPrefix(marker, ".") {
+		return strings.HasSuffix(value, marker)
+	}
 	// A marker that already ENDS in a separator carries its own boundary —
 	// `dlq.` cannot be the start of a longer word — so containment is the
 	// whole test for it.
