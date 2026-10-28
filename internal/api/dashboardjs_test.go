@@ -1301,8 +1301,12 @@ const (
 	// condition per entry (ADR-0064): its wording, the CLI names and its
 	// remedy, the store keeping a row a push leaves as it was, and the Inbox
 	// keeping the rows it drew, took it to 4606.9 KiB. 4607 KiB, which still
-	// refuses a doubled baseline.
-	treeBudget = 4<<20 + 511<<10
+	// refuses a doubled baseline. The review's fixes (a failure's own text
+	// and the spend by model entry kept to an admin, the provider split
+	// offered to an admin alone, and the card that says so) took it to
+	// 4607.0 KiB, past it by bytes. 4608 KiB, which still refuses a doubled
+	// baseline.
+	treeBudget = 4<<20 + 512<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
