@@ -32,9 +32,11 @@ import "context"
 // at whichever delivery happens to arrive next: a launch, from the write that
 // opens its row ([Coordinator.Launch]) — not from the started event a separate
 // subscription processes later, which left a window for the seat's next mail
-// to run beside the job — a park on a question, a run that settles, a resume
-// that frees the seat, and a seat recovered mid-run, whose hold is taken in
-// its preparation, before its mailbox is attached.
+// to run beside the job. Then a park on a question, a run that settles, a
+// resumed turn that has RETURNED (never one that is starting: the resumed turn
+// is the seat's work, and the hold lasts through it, see
+// [Coordinator.resumeAndSettle]), and a seat recovered mid-run, whose hold is
+// taken in its preparation, before its mailbox is attached.
 //
 // A delivery that reaches a held seat anyway — one that raced the hold, or a
 // hold the queue refused — is DEFERRED by the screening, which asks for the

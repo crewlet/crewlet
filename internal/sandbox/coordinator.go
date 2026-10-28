@@ -2089,10 +2089,14 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		// the ending handed it back through the row.
 		return AnswerNotMine, nil
 	}
-	// Freed only NOW, immediately before the resume, so no queued event can
-	// take the slot first. The claim holds the row in [StatusResumed]
-	// whichever set it was claimed from, so that is the count to give back.
-	c.uncountRun(run.AgentHandle, StatusResumed)
+	// THE SEAT STAYS HELD THROUGH THE RESUMED TURN. The claim holds the row
+	// in [StatusResumed], which is a [Holding] status, and it is counted so
+	// until the turn has returned: every branch below recounts the seat from
+	// the store once it has. The count used to be given back HERE, before the
+	// resumer ran, which lifted the seat's inbox hold for the length of the
+	// resumed turn, and the seat's next mail ran as a second turn beside it.
+	// Two of the seat's turns in flight at once is what the hold exists to
+	// prevent (seathold.go).
 
 	// WHETHER THE TURN BEGAN, which the resumer reports by calling Begin —
 	// see [ResumeRequest.Begin]. Atomic because nothing here promises the
@@ -2202,8 +2206,11 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		// UN-CLAIM so a retry can win the flip again. Without this the NAK'd
 		// completion redelivers, the claim refuses, and the suspended
 		// conversation is permanently lost with the row stranded in resumed.
+		// The claim's count is given back first, and the hand-back counts
+		// the run in the set it returns to.
 		log.ErrorContext(ctx, "sandbox_resume_failed",
 			"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
+		c.uncountRun(run.AgentHandle, StatusResumed)
 		if unclaimErr := c.unclaim(ctx, run, false, resumeUnrevertedDetail); unclaimErr != nil {
 			//nolint:nilerr // Deliberate, and the same answer the
 			// acted-and-broke branch above gives for the same reason:
@@ -2251,15 +2258,15 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		// rest: the phase is done with whatever box it still names.
 		log.InfoContext(ctx, "sandbox_reused_in_turn",
 			"turn_id", run.TurnID, "status", latest.Status)
+		// RECOUNTED: the claim's count and the relaunch's are the same row,
+		// which the store holds once.
+		c.syncSeat(ctx, run.AgentHandle)
 		return AnswerConsumed, nil
 	}
 	c.finish(ctx, latest, ending{fence: fenceOf(run)})
-	// RECOUNTED, not assumed free. The count was cleared before the resume,
-	// but a start event redelivered while the turn ran recomputes it from
-	// the store, where this run, claimed, still held the seat; with no
-	// recount here that seat stayed parked on a run that no longer exists
-	// until the seat changed hands. The store now has no record of this run,
-	// so the recount keeps only the seat's other live runs.
+	// RECOUNTED, not assumed free: the store now has no record of this run,
+	// so the recount keeps only the seat's other live runs, and the seat's
+	// inbox hold lifts here, once the resumed turn is over.
 	c.syncSeat(ctx, run.AgentHandle)
 	// The ordinary ending: the turn came back and the run is finished, so
 	// whatever drove the resume did its whole job.
