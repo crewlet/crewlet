@@ -276,6 +276,10 @@ func TestThePostureMatrix(t *testing.T) {
 			[len(shapes)]int{unath, unath, ok, ok, ok, ok, ok, ok, unath, ok, ok, ok, unath, ok, ok}},
 		{"the whole snapshot", "GET", "/stream/snapshot", "",
 			[len(shapes)]int{unath, unath, ok, ok, ok, ok, ok, ok, unath, ok, ok, ok, unath, ok, ok}},
+		// WHERE THE COMPANY'S APPS LIVE: every principal the guard resolves,
+		// as the overview is, and never somebody it cannot.
+		{"the hosts a link is drawn by", "GET", "/link-hosts", "",
+			[len(shapes)]int{unath, unath, ok, ok, ok, ok, ok, ok, unath, ok, ok, ok, unath, ok, ok}},
 
 		// --- each app's own questions -------------------------------- //
 		{"the tracker's projects", "GET", "/query/work_projects", "",

@@ -42,6 +42,7 @@ import type { EngineHealth } from "../contract/health.ts";
 import type { StopReason } from "../contract/stops.ts";
 import type {
   IntegrationsAnswer,
+  LinkHostsAnswer,
   ReconcileFinding,
   ReconcileStatus,
 } from "../contract/integrations.ts";
@@ -6669,6 +6670,7 @@ export interface QueryMap {
   schedules: SchedulesAnswer;
   schedule_runs: ScheduleRunsAnswer;
   integrations: IntegrationsAnswer;
+  link_hosts: LinkHostsAnswer;
   sandbox_runs: { runs: SandboxRun[] };
   sandbox_tail: SandboxTailAnswer;
   retention: RetentionReport;

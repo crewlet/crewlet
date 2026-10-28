@@ -91,6 +91,19 @@ func TestTheIntegrationsMapIsNotServedAnonymously(t *testing.T) {
 	}
 }
 
+// AND /link-hosts, which every principal of the company may read, is still
+// read by one: "everybody" is everybody the guard resolves, never a caller
+// presenting nothing. What it carries is only hosts, but whose hosts they are
+// is the company's to show its own people.
+func TestTheLinkHostsAreNotServedAnonymously(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	restApp(t).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/link-hosts", nil))
+	if got := rec.Result().StatusCode; got != http.StatusUnauthorized {
+		t.Errorf("GET /link-hosts = %d, want 401: a caller presenting nothing is nobody", got)
+	}
+}
+
 // A ROUTE WHOSE SOURCE IS ABSENT IS STILL A ROUTE. It answers the query
 // layer's own "no such question" rather than the mux's "no such path", and
 // the difference matters: one says this node cannot answer, the other says

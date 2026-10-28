@@ -229,3 +229,29 @@ export interface IntegrationsAnswer {
    *  whichever node received it — or null when no store could be read. */
   coverage?: Coverage | null;
 }
+
+/**
+ * The apps a link can belong to, as `link_hosts` names them
+ * (`queries.LinkHostKind`).
+ */
+export type LinkHostKind = "github" | "gitlab" | "mattermost" | "jira" | "confluence";
+
+/**
+ * Where one of the company's apps lives in a browser: its kind and base
+ * address, and nothing else. Every reader may ask for these (`link_hosts`),
+ * where the `integrations` answer is an administrator's, so it carries no
+ * organization, repository, project, team, credential or health.
+ *
+ * Held against what the engine sends by
+ * `internal/api/queries.TestTheLinkHostsAnswerCarriesHostsAndNothingElse`.
+ */
+export interface LinkHost {
+  kind: LinkHostKind;
+  /** Scheme, host, port and path, with no trailing slash: `https://gitlab.example.com/scm`. */
+  url: string;
+}
+
+/** The `link_hosts` answer. */
+export interface LinkHostsAnswer {
+  hosts: LinkHost[];
+}
