@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from "vitest";
 import { SESSION_QUERIES } from "../contract/domains.ts";
-import { domainsOf, isLater, parsePosition, SessionFloors } from "./session.ts";
+import { domainsOf, isLater, parsePosition, SessionFloors, spellPosition } from "./session.ts";
 
 describe("a position", () => {
   test("reads the engine's own spelling", () => {
@@ -15,6 +15,14 @@ describe("a position", () => {
       generation: 2,
       seq: 4711,
     });
+  });
+
+  // AND SPELLS ONE BACK AS IT READS ONE, so a floor taken from an answer's
+  // position is one the engine accepts.
+  test("spells a position the way it reads one", () => {
+    const at = { stream: "CREWLET_CODE_LOG", generation: 3, seq: 90 };
+    expect(spellPosition(at)).toBe("CREWLET_CODE_LOG@3:90");
+    expect(parsePosition(spellPosition(at))).toEqual(at);
   });
 
   test.each(["", "CREWLET_TRACKER_LOG", "@1:2", "L@1", "L@-1:2", "L@1:2x", "L @1:2"])(

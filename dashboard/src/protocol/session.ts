@@ -63,6 +63,15 @@ export function parsePosition(raw: string | null | undefined): LogPosition | nul
 }
 
 /**
+ * A position as the engine spells it, `<stream>@<generation>:<sequence>` —
+ * [parsePosition]'s inverse: what a read floored at a position an answer
+ * carried (a push row's own, say) names as its `min_position`.
+ */
+export function spellPosition(at: LogPosition): string {
+  return `${at.stream}@${at.generation}:${at.seq}`;
+}
+
+/**
  * Whether `next` is later than `held` on one log.
  *
  * GENERATION FIRST, as the engine orders them (`statelog.Later`): a log

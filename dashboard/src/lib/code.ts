@@ -7,8 +7,8 @@
  * cannot say one thing two ways.
  */
 
-import { REPO_NAME, REPO_STATUSES } from "~/contract/code.ts";
-import type { CodePushCommand, CodeRepoStatus } from "~/protocol/index.ts";
+import { COMMAND_OUTCOMES, REPO_NAME, REPO_STATUSES } from "~/contract/code.ts";
+import type { CodePushCommand, CodePushCounts, CodeRepoStatus } from "~/protocol/index.ts";
 
 /** The engine's repository grammar, compiled once. */
 const REPO_NAME_PATTERN = new RegExp(REPO_NAME);
@@ -53,8 +53,9 @@ export function refName(ref: string): { name: string; kind: "branch" | "tag" | "
 /**
  * What one command of a push did, in a word: what became of the ref — made,
  * moved, moved by force, removed — or that it was asked for the value it had,
- * or refused. ONE WORD PER OUTCOME, the order the engine decides them in: a
- * refusal is a refusal whatever it asked, and an unchanged ref moved nowhere.
+ * or refused. ONE WORD PER OUTCOME (`contract/code.ts`'s `COMMAND_OUTCOMES`),
+ * the order the engine decides them in: a refusal is a refusal whatever it
+ * asked, and an unchanged ref moved nowhere.
  */
 export function commandWord(c: CodePushCommand): string {
   if (c.result === "ng") return "refused";
@@ -63,6 +64,43 @@ export function commandWord(c: CodePushCommand): string {
   if (c.old === ZERO_OID) return "created";
   if (c.new === ZERO_OID) return "deleted";
   return c.forced ? "forced" : "moved";
+}
+
+/**
+ * The order a push's counts are said in: the REFUSALS FIRST, as a push read in
+ * brief lists its refused commands first — what did not happen is what a
+ * reader acts on — then the rest in the engine's order.
+ */
+const COUNT_ORDER: readonly string[] = [
+  "refused",
+  ...COMMAND_OUTCOMES.filter((outcome) => outcome !== "refused"),
+];
+
+/** One outcome's count, as a summary says it. */
+export interface OutcomeCount {
+  outcome: string;
+  count: number;
+}
+
+/**
+ * The commands a push read in brief left out (`omitted`): how many, and each
+ * outcome's count in the order a summary says them — an outcome a newer
+ * engine counts by, which this build has no word for, after the rest by its
+ * own key, never dropped from the sum.
+ */
+export function omittedOf(counts: CodePushCounts | undefined): {
+  total: number;
+  outcomes: OutcomeCount[];
+} {
+  if (!counts) return { total: 0, outcomes: [] };
+  const keys = [
+    ...COUNT_ORDER.filter((outcome) => outcome in counts),
+    ...Object.keys(counts).filter((outcome) => !COUNT_ORDER.includes(outcome)),
+  ];
+  const outcomes = keys
+    .map((outcome) => ({ outcome, count: counts[outcome] ?? 0 }))
+    .filter((c) => Number.isSafeInteger(c.count) && c.count > 0);
+  return { total: outcomes.reduce((n, c) => n + c.count, 0), outcomes };
 }
 
 /** A state the engine knows (`contract/code.ts`). */

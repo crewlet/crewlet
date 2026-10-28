@@ -17,6 +17,26 @@
 export const REPO_STATUSES = ["active", "archived", "deleted", "purging"] as const;
 
 /**
+ * What became of one command of a push, in the engine's order
+ * (`code.CommandCounts`' fields): a ref made, moved, moved by force or
+ * removed; asked for the value it already had; or refused. The words a row
+ * says of each ref (`lib/code.ts`'s `commandWord`), and the keys a push read
+ * in brief counts the commands it leaves out by (`omitted`). HELD BOTH WAYS,
+ * in order, by `internal/code.TestTheDashboardKnowsEveryOutcomeOfACommand`:
+ * an outcome the engine grew that this lacks is a count a summary says in the
+ * engine's raw key, and one this keeps that the engine dropped is a word no
+ * push is ever counted by.
+ */
+export const COMMAND_OUTCOMES = [
+  "created",
+  "moved",
+  "forced",
+  "deleted",
+  "unchanged",
+  "refused",
+] as const;
+
+/**
  * A repository's name, as the engine holds it (`code.ValidName`, over
  * `gitref.ValidRepoName`): one host-name label in lowercase — letters, digits
  * and hyphens, beginning and ending with a letter or a digit, at most 63 in all.

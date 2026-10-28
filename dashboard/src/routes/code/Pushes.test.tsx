@@ -4,16 +4,19 @@
  *
  * The invariants worth breaking a build over: no history is asked until a
  * repository is named, and never for a name no repository can have; a row says
- * who pushed and what became of each ref, a refusal in the danger tone; a
- * repository nobody declared is said with the engine's own sentence; and the
- * log reaches its older pushes by fetching them, holding its first page still
- * while it does.
+ * who pushed and what became of its refs, a refusal in the danger tone; the
+ * history is asked in brief, a push of many refs drawn five at most with the
+ * rest counted, and read whole only when the reader asks for every ref; the
+ * clock re-renders no ref; a repository nobody declared is said with the
+ * engine's own sentence; and the log reaches its older pushes by fetching
+ * them, holding its first page still while it does.
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
+import { commandWord } from "~/lib/code.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
@@ -22,6 +25,13 @@ import { withDerived } from "~/test/org.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { Pushes } from "./Pushes.tsx";
+
+// EVERY REF A ROW DRAWS, WATCHED: a pass-through, so every case draws the
+// real words, and the clock's case can count which refs a tick drew again.
+vi.mock("~/lib/code.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("~/lib/code.ts")>();
+  return { ...real, commandWord: vi.fn(real.commandWord) };
+});
 
 afterEach(() => {
   cleanup();
@@ -198,6 +208,155 @@ test("a repository's history says who pushed and what became of each ref", async
   expect(within(grid).getByText("refused: non_fast_forward")).toBeTruthy();
 });
 
+/** A push's id, as its receiving node mints one: a UUIDv7. */
+const IMPORT = "019a2f4e-0000-7000-8000-000000000001";
+
+/** A tag a push created. */
+const tagged = (name: string) => ({ ref: `refs/tags/${name}`, old: ZERO, new: A, result: "ok" });
+
+/** The tags t00, t01, … an import pushed, `n` of them. */
+const tags = (n: number) =>
+  Array.from({ length: n }, (_, i) => tagged(`t${String(i).padStart(2, "0")}`));
+
+/** A history page holding one push. */
+const page = (row: Record<string, unknown>, level = "stale") =>
+  json({ pushes: [row], position: POSITION, level });
+
+// THE HISTORY IS ASKED IN BRIEF, and a push of more refs than a row gives it
+// is drawn five at most — its refusals first, as the engine cut it — with
+// what became of the rest in one line, a refusal in the danger tone, and
+// every ref one press away. Mutation: ask the history whole, and `brief` is
+// not on the request; draw the counts in the engine's order, and the line
+// reads refused last.
+test("a push of many refs is drawn in brief: five, its refusals first, and the rest counted", async () => {
+  const asked = stubFetch(() =>
+    page(
+      push(IMPORT, {
+        commands: [
+          { ref: "refs/heads/main", old: B, new: C, result: "ng", reason: "protected_force" },
+          { ref: "refs/tags/v0", old: A, new: B, result: "ng", reason: "tag_moved" },
+          ...tags(3),
+        ],
+        omitted: { created: 990, deleted: 3, refused: 2 },
+        introduced_count: 40,
+      }),
+    ),
+  );
+  mount("#/code/pushes?repo=web");
+  const grid = await screen.findByRole("table", { name: "Pushes to web" });
+  expect(histories(asked)[0]!.searchParams.get("brief")).toBe("true");
+  expect(within(grid).getByText("refused: protected_force")).toBeTruthy();
+  expect(within(grid).getByText("refused: tag_moved")).toBeTruthy();
+  expect(within(grid).getByText("tag t02")).toBeTruthy();
+  expect(within(grid).getByText(/and 995 more:/).textContent).toBe(
+    "and 995 more: 2 refused, 990 created, 3 deleted",
+  );
+  expect(within(grid).getByText("2 refused").closest(".crewlet-tag--danger")).toBeTruthy();
+  expect(within(grid).getByRole("button", { name: "Show all 1,000 refs" })).toBeTruthy();
+  expect(within(grid).getByText("40")).toBeTruthy();
+});
+
+// EVERY REF IS ONE READ OF THE PUSH AWAY, made when the reader asks: that
+// push alone, whole, at its own position — a copy behind the page it came
+// from waits for it — and read once, however often it is folded and opened.
+// Mutation: ask the push without its position, or read it again on every
+// opening, and the requests below differ.
+test("Show all reads that one push whole at its own position, once, and Show fewer folds it", async () => {
+  const asked = stubFetch((url) =>
+    url.searchParams.has("push")
+      ? page(push(IMPORT, { commands: tags(17), introduced: [C], introduced_count: 1 }), "session")
+      : page(push(IMPORT, { commands: tags(5), omitted: { created: 12 } })),
+  );
+  mount("#/code/pushes?repo=web");
+  const grid = await screen.findByRole("table", { name: "Pushes to web" });
+  expect(within(grid).queryByText("tag t16")).toBeNull();
+
+  fireEvent.click(within(grid).getByRole("button", { name: "Show all 17 refs" }));
+  expect(await within(grid).findByText("tag t16")).toBeTruthy();
+  const reads = () => histories(asked).filter((u) => u.searchParams.has("push"));
+  expect(reads()).toHaveLength(1);
+  expect(Object.fromEntries(reads()[0]!.searchParams)).toEqual({
+    name: "web",
+    push: IMPORT,
+    read_level: "session",
+    min_position: "CREWLET_CODE_LOG@1:30",
+  });
+  expect(within(grid).queryByText(/more:/)).toBeNull();
+
+  const fewer = within(grid).getByRole("button", { name: "Show fewer" });
+  expect(fewer.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(fewer);
+  expect(within(grid).queryByText("tag t16")).toBeNull();
+  expect(within(grid).getByText(/and 12 more:/)).toBeTruthy();
+  fireEvent.click(within(grid).getByRole("button", { name: "Show all 17 refs" }));
+  expect(within(grid).getByText("tag t16")).toBeTruthy();
+  expect(reads()).toHaveLength(1);
+});
+
+// A PUSH THE HISTORY NO LONGER HOLDS — past its days, or its repository
+// purged since the page was read — is said, never drawn as a push with no
+// refs.
+test("a push the history no longer holds says so", async () => {
+  stubFetch((url) =>
+    url.searchParams.has("push")
+      ? json({ position: POSITION, level: "session" })
+      : page(push(IMPORT, { commands: tags(5), omitted: { created: 4 } })),
+  );
+  mount("#/code/pushes?repo=web");
+  const grid = await screen.findByRole("table", { name: "Pushes to web" });
+  fireEvent.click(within(grid).getByRole("button", { name: "Show all 9 refs" }));
+  expect(await within(grid).findByText("The history no longer holds this push.")).toBeTruthy();
+  expect(within(grid).queryByRole("button", { name: /Show all/ })).toBeNull();
+});
+
+// A PUSH THAT COULD NOT BE READ is said beside Show all, which asks it again:
+// it is the reader's to ask again, so nothing promises a retry on its own.
+// Mutation: draw the failure in the control's place, and there is nothing to
+// press.
+test("a push that could not be read says so beside Show all, which asks it again", async () => {
+  let failures = 1;
+  const asked = stubFetch((url) => {
+    if (!url.searchParams.has("push")) {
+      return page(push(IMPORT, { commands: tags(5), omitted: { created: 4 } }));
+    }
+    return failures-- > 0
+      ? json({ error: "query_failed" }, 500)
+      : page(push(IMPORT, { commands: tags(9) }), "session");
+  });
+  mount("#/code/pushes?repo=web");
+  const grid = await screen.findByRole("table", { name: "Pushes to web" });
+  fireEvent.click(within(grid).getByRole("button", { name: "Show all 9 refs" }));
+  expect(
+    await within(grid).findByText("Could not read this push (query_failed). Try again."),
+  ).toBeTruthy();
+  fireEvent.click(within(grid).getByRole("button", { name: "Show all 9 refs" }));
+  expect(await within(grid).findByText("tag t08")).toBeTruthy();
+  expect(within(grid).queryByText(/Could not read this push/)).toBeNull();
+  expect(histories(asked).filter((u) => u.searchParams.has("push"))).toHaveLength(2);
+});
+
+// THE CLOCK RE-RENDERS THE TIME A PUSH LANDED AND NO REF: the refs are the
+// tallest thing a row draws, and a grid re-rendered every second drew every
+// one of them again. Mutation: read the clock in the screen again and drop
+// the refs' memo, and every tick draws every ref.
+test("the clock's tick re-renders the time a push landed and no ref", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  stubFetch(() =>
+    json({
+      pushes: [push("p2", { commands: tags(4) }), push("p1")],
+      position: POSITION,
+      level: "stale",
+    }),
+  );
+  mount("#/code/pushes?repo=web");
+  await screen.findByRole("table", { name: "Pushes to web" });
+  await afterMicrotasks();
+  const drawn = vi.mocked(commandWord).mock.calls.length;
+  expect(drawn).toBeGreaterThan(0);
+  await act(async () => void vi.advanceTimersByTime(3_000));
+  expect(vi.mocked(commandWord).mock.calls.length).toBe(drawn);
+});
+
 // A REPOSITORY NOBODY DECLARED is said with the engine's own sentence, which
 // names the setting that declares one.
 test("a repository nobody declared is said with the engine's sentence", async () => {
@@ -238,6 +397,8 @@ test("Load older asks the next page by its cursor, and the first page is then he
   fireEvent.click(screen.getByRole("button", { name: "Load older" }));
   await screen.findByText("That is every push the repository keeps.");
   expect(histories(asked).at(-1)!.searchParams.get("cursor")).toBe("c1");
+  // AN OLDER PAGE IS ASKED IN BRIEF as the first is.
+  expect(histories(asked).at(-1)!.searchParams.get("brief")).toBe("true");
   expect(screen.getByText("Paused while you page back.")).toBeTruthy();
   const before = histories(asked).length;
   await act(async () => void vi.advanceTimersByTime(5 * 60_000));

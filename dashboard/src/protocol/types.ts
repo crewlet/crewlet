@@ -35,7 +35,7 @@ import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
-import type { REPO_STATUSES } from "../contract/code.ts";
+import type { COMMAND_OUTCOMES, REPO_STATUSES } from "../contract/code.ts";
 import type { LimitsAnswer } from "../contract/limits.ts";
 import type { SignInPolicyAnswer } from "../contract/signin.ts";
 import type { EngineHealth } from "../contract/health.ts";
@@ -6550,6 +6550,16 @@ export interface CodePushCommand {
   detail?: string;
 }
 
+/**
+ * Commands of a push counted by what became of each (`code.CommandCounts`),
+ * keyed by the outcome's word (`contract/code.ts`'s `COMMAND_OUTCOMES`) — or by
+ * one a newer engine names, which a summary says as it is. Each count is
+ * absent at zero.
+ */
+export type CodePushCounts = Readonly<
+  Partial<Record<(typeof COMMAND_OUTCOMES)[number], number>> & Record<string, number | undefined>
+>;
+
 /** What made a seat's push, as the engine stamped it from the call (`code.RunProvenance`). */
 export interface CodePushRun {
   turn_id: string;
@@ -6577,11 +6587,24 @@ export interface CodePushRow {
   run?: CodePushRun;
   node?: string;
   atomic?: boolean;
-  /** Every ref update it asked for — null only where the engine kept none. */
+  /**
+   * Every ref update it asked for — null only where the engine kept none. On a
+   * row read in brief (`brief`), at most five of them: its refused ones first,
+   * then the first it sent, with the rest counted in `omitted`.
+   */
   commands: CodePushCommand[] | null;
+  /**
+   * The ref updates a row read in brief leaves out of `commands`, counted by
+   * what became of each; absent where nothing is left out, so `commands` and
+   * this are every update the push asked for.
+   */
+  omitted?: CodePushCounts;
   pack_id?: string;
   pack_bytes?: number;
-  /** The commits it introduced, at most a bounded list of them; `introduced_count` is the whole. */
+  /**
+   * The commits it introduced, at most a bounded list of them, and never on a
+   * row read in brief; `introduced_count` is the whole.
+   */
   introduced?: string[];
   introduced_count?: number;
   received_at: string;

@@ -1266,7 +1266,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/work/{KEY}` | **Project**: one project as Work's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
 | `#/code/repos` | **Code › Repositories**, Code's landing: every repository the engine hosts that the reader may read, by name — its state, owner, which seats read it, default branch and head, last push, pushes, size and protection — a page at a time, each row opening its pushes *(hidden where the company hosts no code; see [The Code workspace](#the-code-workspace))*. Code's bare head names no section and is Not Found, saying Code opens on Repositories | `status=active\|archived\|deleted\|purging` (none is active and archived) |
-| `#/code/pushes` | **Code › Pushes**: one repository's pushes, newest first in log order — when, who pushed (the seat, or the credential and the seat it acts as), what became of each ref, the commits it brought, the turn and work item behind a seat's push, how it was built and its pack — with Load older | `repo=` (a repository's name; without one, the section asks for it) |
+| `#/code/pushes` | **Code › Pushes**: one repository's pushes, newest first in log order — when, who pushed (the seat, or the credential and the seat it acts as), what became of its refs (five at most, its refusals first, the rest counted, every ref one press away), the commits it brought, the turn and work item behind a seat's push, how it was built and its pack — with Load older | `repo=` (a repository's name; without one, the section asks for it) |
 | `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): the mission and the vision as two equal cards side by side, then the standing policies every agent reads on every turn, numbered in one card across the page, each card under its own glyph (a target, a telescope, a scroll), then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so inside its card. Each card carries its own Edit, and each unwritten part its Add, for a reader who may write the charter, and nothing for anybody else; either opens the part for writing in place in its card (`?edit=mission`, `vision` or `policies`, a comma list for several). Read from the org projection by every reader | |
 | `#/company/brand` | **Brand**: how the company looks and sounds in every doc, deck and page its agents make: the adopted version of the company's brand kit, as four cards (Logos, Colours, Typography, Voice and tone) beside a sticky preview of a sample doc or slide in light or dark. Every reader reads it, downloads a logo and copies a colour *(changing a card, adopting a newer version of the kit and stopping the brand are an Admin's, a person's, with a recent sign-in)* | |
 | `#/company/brand/setup` | **Brand › Set up**: the company's brand set up in six steps (Identity, Logos, Colours, Typography, Voice, Review) on a page of its own, never a dialog: a vertical step rail, the step's fields in one column under a lead sentence saying why the part matters, and the Brand page's preview beside them labelled "Preview of your draft" (under the content at 1024; a Preview disclosure and a horizontal step row on a phone). Every Continue saves the step into a draft version of the company's kit (a keyed publish, never an adoption; the first makes the kit, shared with the company to view), and opening the page again resumes at the first step not done. Colours carries the contrast panel: the pair that refuses an adoption (text on the light ground) in danger tone, the advisory pairs in warning tone with their reason, and one-click shades that keep the hue. Review lists a summary card per step with Edit, the full preview and an acknowledgement for each contrast warning; an Admin, a person, finishes with **Adopt as the company brand**, and a person the kit is shared with to edit with **Save for review**. Entered from the Brand page's empty state, the Make row chip an Admin sees with no brand, the notice over an unadopted draft ("Continue setting up") and the Brand page's **Run setup again** | |
@@ -6929,12 +6929,25 @@ section mounts.
   name no repository can have (`REPO_NAME`, held to `code.ValidName`) is said
   in place rather than asked about. A row is when it landed, who pushed (the
   seat, or the credential a person pushed through with the seat it acts as),
-  what became of each ref (created, moved, forced, deleted, unchanged, or
+  what became of its refs (created, moved, forced, deleted, unchanged, or
   refused, in the danger tone with the engine's reason), the commits it
   brought, a seat's turn and work item as the engine stamped them, how it was
   built (a client's `git push`, or a commit the engine built from a tool's
-  call) and its pack. It is a log, so it reaches its older rows by fetching
-  them and holds its first page still from the press of Load older
+  call) and its pack. **The history is asked in brief** (`brief`): a push
+  carries up to a thousand ref updates — `crewlet code import` sends that many
+  at a time — and the commits it introduced, which no row draws, so read whole
+  a page of an imported repository was megabytes that every poll sent again,
+  and twenty thousand lines a render. A row draws five refs at most, its
+  refused ones first, and says what became of the rest in one line ("and 995
+  more: 990 created, 5 deleted", a refusal in the danger tone); **Show all**
+  reads that one push whole (`push`) at its own position — a copy behind the
+  page waits for it rather than answering that it holds no such push — and
+  draws every ref until **Show fewer**; a push that could not be read is said
+  beside **Show all**, which asks it again. The time a push landed reads the
+  clock itself and the refs are memoised on their row, so the second hand
+  re-renders one cell a row and no ref. It is a log, so it reaches its older
+  rows by fetching them and holds its first page still from the press of Load
+  older
   ([A log is an axis, then its rows](#a-log-is-an-axis-then-its-rows)). It
   draws no axis: the engine counts no series of pushes, and one folded from
   the pages held would be true of those pages alone.

@@ -1,6 +1,7 @@
 package code_test
 
 import (
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -38,6 +39,40 @@ func TestTheDashboardKnowsEveryRepositoryState(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("the dashboard's REPO_STATUSES is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
+// THE DASHBOARD KNOWS EVERY OUTCOME OF A COMMAND, in the engine's order, and
+// no other.
+//
+// A push read in brief counts the commands it leaves out by what became of
+// each (`PushRow.Omitted`), keyed by the outcome's word, and the Code
+// workspace says each count by `COMMAND_OUTCOMES` (`contract/code.ts`) — the
+// words its rows say of each ref. An outcome the engine grew that the list
+// lacks is a count said in the engine's raw key; one the list keeps that the
+// engine dropped is a word no push is ever counted by. Read from the client's
+// own source and from CommandCounts' JSON keys, both ways, in order.
+//
+// Mutation: drop an outcome from either side, or reorder the dashboard's,
+// and this fails.
+func TestTheDashboardKnowsEveryOutcomeOfACommand(t *testing.T) {
+	t.Parallel()
+	body, err := clientsource.Literal(clientsource.Tree(t), "COMMAND_OUTCOMES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := clientsource.Strings(body)
+	if len(got) == 0 {
+		t.Fatal("COMMAND_OUTCOMES reads as empty, so this gate certifies nothing")
+	}
+	counts := reflect.TypeFor[code.CommandCounts]()
+	want := make([]string, 0, counts.NumField())
+	for i := range counts.NumField() {
+		key, _, _ := strings.Cut(counts.Field(i).Tag.Get("json"), ",")
+		want = append(want, key)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's COMMAND_OUTCOMES is %v, want the engine's, in order: %v", got, want)
 	}
 }
 
