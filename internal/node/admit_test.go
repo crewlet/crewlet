@@ -302,7 +302,7 @@ func TestTheDrainsCutEndsATurnAdmittedOutsideTheMailbox(t *testing.T) {
 const gateWaitBound = 2 * time.Second
 
 // A SEAT RUNS ONE TURN AT A TIME, whichever road each arrives by, and says so
-// when the one running ends.
+// when the one running ends, to whoever was refused behind it.
 //
 // The road this is about: a person's answer reaches the run it names on the
 // seat's control topic, which no mailbox turn waits for, so its resume used to
@@ -312,8 +312,14 @@ const gateWaitBound = 2 * time.Second
 // waiting work tries again then rather than on a timer. A turn inside the
 // running one is the same turn, and another seat is another turn.
 //
+// AND ONLY THEN: a release nobody was refused behind announces nothing. The
+// engine's gate releases an admission at once when the seat's model is at its
+// limit, and announcing those woke the seat's other waiting resumes for
+// nothing.
+//
 // Mutation: drop the per-seat check and the second admission is granted; drop
-// the hook call from the release and the ending is never announced.
+// the hook call from the release and the ending is never announced; announce
+// every release, and cto's uncontended turn is announced.
 func TestASeatRunsOneTurnAtATime(t *testing.T) {
 	t.Parallel()
 	ended := make(chan string, 4)
@@ -337,11 +343,8 @@ func TestASeatRunsOneTurnAtATime(t *testing.T) {
 	other()
 	select {
 	case handle := <-ended:
-		if handle != "cto" {
-			t.Fatalf("the ending announced is %q, want cto's: ceo's turn is still running", handle)
-		}
-	case <-time.After(gateWaitBound):
-		t.Fatal("the end of cto's turn was not announced")
+		t.Fatalf("the end of %s's turn was announced, and nobody was refused behind it", handle)
+	case <-time.After(200 * time.Millisecond):
 	}
 
 	release()
@@ -351,10 +354,15 @@ func TestASeatRunsOneTurnAtATime(t *testing.T) {
 			t.Fatalf("the ending announced is %q, want ceo's", handle)
 		}
 	case <-time.After(gateWaitBound):
-		t.Fatal("the end of ceo's turn was not announced")
+		t.Fatal("the end of ceo's turn was not announced to the turn refused behind it")
 	}
 	_, again := admit(t.Context(), t, g.n, "ceo")
 	again()
+	select {
+	case handle := <-ended:
+		t.Fatalf("the end of %s's second turn was announced, and nobody was refused behind it", handle)
+	case <-time.After(200 * time.Millisecond):
+	}
 }
 
 // A SEAT BUSY WITH A TURN THAT DID NOT COME FROM ITS MAILBOX SPENDS NONE OF ITS

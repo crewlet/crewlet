@@ -120,6 +120,10 @@ type admission struct {
 	// hold is the reason this admission holds the seat's inbox under, its
 	// own ([HoldSeatTurn]).
 	hold string
+	// contended is set when another turn was refused for the seat while this
+	// admission held it ([ErrSeatBusy]): somebody is waiting for the seat,
+	// and its release says so ([Config.SeatTurnEnded]).
+	contended atomic.Bool
 	// released is set when the hold is let go, after which a context that
 	// still carries it admits nothing.
 	released atomic.Bool
@@ -187,6 +191,7 @@ func (n *Node) AdmitTurn(ctx context.Context, handle string) (context.Context, f
 		if busy {
 			free()
 			if !fromMailbox {
+				running.contended.Store(true)
 				return nil, nil, fmt.Errorf("%w %q", ErrSeatBusy, handle)
 			}
 			// A MAILBOX DELIVERY WAITS, unspent, and asks again once the
@@ -258,7 +263,8 @@ func (n *Node) admitted(ctx context.Context, held *admission, fromMailbox bool) 
 
 // release is the admission's release: idempotent, and in this order, the
 // context ended, the slot freed, the seat freed, the inbox hold lifted, and
-// the seat's turn announced as ended ([Config.SeatTurnEnded]).
+// the seat's turn announced as ended ([Config.SeatTurnEnded]) where another
+// turn was refused behind it.
 //
 // THE SEAT IS FREED BEFORE THE HOLD IS LIFTED: lifting it can dispatch the
 // held mail on this very goroutine (the in-memory broker delivers inline), and
@@ -272,7 +278,12 @@ func (held *admission) release(free func(), fromMailbox bool) func() {
 			if !fromMailbox {
 				held.node.holdInbox(context.Background(), held.handle, held.hold, false)
 			}
-			if hook := held.node.cfg.SeatTurnEnded; hook != nil {
+			// ONLY WHERE SOMEBODY WAITS FOR THE SEAT: an admission nobody
+			// was refused behind frees nothing anybody asked for, and one
+			// released before any turn ran (a resume the engine's gate
+			// refused after the node admitted it) would otherwise wake the
+			// seat's other waiting resumes for nothing.
+			if hook := held.node.cfg.SeatTurnEnded; hook != nil && held.contended.Load() {
 				hook(held.handle)
 			}
 		}

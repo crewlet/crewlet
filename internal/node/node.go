@@ -152,9 +152,10 @@ type Config struct {
 	SeatAdmitted func(ctx context.Context, seat placement.Seat)
 
 	// SeatTurnEnded runs when a turn admitted on a seat ([Node.AdmitTurn])
-	// is released, so whatever was refused for the seat being busy
-	// ([ErrSeatBusy]) learns at that moment that it may try again. Nil does
-	// nothing. It never fails anything: the turn is already over.
+	// is released after another turn was refused behind it ([ErrSeatBusy]),
+	// so what was refused learns at that moment that it may try again. Not
+	// for a release nobody waited behind. Nil does nothing. It never fails
+	// anything: the turn is already over.
 	//
 	// The engine's is a recorded answer whose resume arrived while another
 	// of the seat's turns was running, and waits for it to end rather than
