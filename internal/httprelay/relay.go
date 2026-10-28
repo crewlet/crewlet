@@ -242,10 +242,6 @@ func (rl *Relay) rebuild(in *Request) (*http.Request, context.CancelFunc, error)
 		return nil, nil, errors.New("httprelay: an open reached a relay that is not serving")
 	}
 	ctx, cancel := context.WithCancel(base)
-	if in.LocalAddr != "" {
-		ctx = context.WithValue(ctx, http.LocalAddrContextKey,
-			addr{network: in.LocalNetwork, address: in.LocalAddr})
-	}
 	req, err := http.NewRequestWithContext(ctx, in.Method, in.URI, bytesReader(in.Body))
 	if err != nil {
 		cancel()
