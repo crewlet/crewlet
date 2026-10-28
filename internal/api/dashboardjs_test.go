@@ -1296,8 +1296,10 @@ const (
 	// parked coding run (sent, recorded while its seat is busy and on what,
 	// answered, or not used and why) off the run's own record, rather than
 	// calling a `pending` press answered, took it to 4604.9 KiB. 4605 KiB,
-	// which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 509<<10
+	// which still refuses a doubled baseline. uilet 0.74.0's pending tone on
+	// the reading pane's outcome, drawn while such an answer is on its way,
+	// took it to 4605.7 KiB. 4606 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 510<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
