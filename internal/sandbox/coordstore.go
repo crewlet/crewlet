@@ -1131,8 +1131,8 @@ func (u *undecodableReport) skipped(ctx context.Context, key string, err error) 
 			"is over (see the deployment guide)")
 }
 
-// decodeRun reads a run and KEEPS what it cannot read — see
-// [PendingRun.Extra] for the rolling upgrade that loses it otherwise.
+// decodeRun reads a run and KEEPS what it cannot read (see
+// [PendingRun.Extra] for the rolling upgrade that loses it otherwise).
 func decodeRun(record coord.Record) (PendingRun, error) {
 	var run PendingRun
 	if err := json.Unmarshal(record.Value, &run); err != nil {
