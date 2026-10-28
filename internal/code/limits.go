@@ -172,11 +172,11 @@ const (
 	// what this log takes a day at the reference company once seats push:
 	// 3 000 pushes at the MEASURED 1 481 bytes a seat's push alone in its
 	// record (BenchmarkPushLogBytes), 4.4 MB, the compactions that merge
-	// their packs at the MEASURED 43 to 108 bytes a push
-	// (internal/code/compact's steady arms), 0.1–0.3 MB, and its git clients'
-	// barriers at BarrierRecordBytes, 2.4–5.0 MB, against the tracker's
-	// measured 9.9 MB of records and 2.2 MB of barriers, every record in its
-	// signed frame.
+	// their packs and the sweeps of what those retired at the MEASURED 108
+	// and 44 bytes a push (internal/code/compact's steady arm at the floor),
+	// 0.5 MB, and its git clients' barriers at BarrierRecordBytes,
+	// 2.4–5.0 MB, against the tracker's measured 9.9 MB of records and
+	// 2.2 MB of barriers, every record in its signed frame.
 	// It was the tracker's whole sixteen, on an estimate of 2 KiB a push and
 	// no barriers, which put the two logs on "the same order" rather than at
 	// the ratio a blocked trim fills both in the same time.

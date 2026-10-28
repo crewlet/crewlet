@@ -285,12 +285,20 @@
 // floor's sixteen, a quiet repository's, and 43 where it takes a minute's
 // hundreds, a busy one's — a compaction's record is its envelope and its
 // output's row, shared by every pack it merges, and a few dozen bytes a pack,
-// so the more it merges at once the less a push pays. The log keeps the trim's
-// window of records rather than the history, so the reference company's 3 000
-// pushes a day, every one a seat's, hold about 31 MB of it over the default
-// seven-day min_age, and their compactions at most about 2.3 MB beside them —
-// about 33 MB, a thirty-second of the log's 1 GiB floor — and the bytes of a
-// push's pack are never on it: a record names its bundle.
+// so the more it merges at once the less a push pays. A day later the
+// code-retention duty's sweep removes the rows a merge retired: one record of
+// about 700 bytes for each repository holding a row past the grace at each of
+// its quarter-hourly passes, so 44 bytes a push where every merge's rows are
+// swept apart, a quiet repository's (75 sweeps of 77 merges, MEASURED by the
+// same arm), and a fraction of a byte where a busy one's quarter hour of
+// merges is swept together, a record for every [RetireSweepRows] of its rows
+// whatever pushes they came from. The log keeps the trim's window of records
+// rather than the history, so the reference company's 3 000 pushes a day,
+// every one a seat's, hold about 31 MB of it over the default seven-day
+// min_age, and the records that merge their packs and sweep what those
+// merges retired at most about 3.2 MB beside them — about 34 MB, under a
+// thirtieth of the log's 1 GiB floor — and the bytes of a push's pack are
+// never on it: a record names its bundle.
 //
 // # The activation fence
 //

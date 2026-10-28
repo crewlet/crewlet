@@ -54,7 +54,21 @@ const (
 // figure for a person's push (BenchmarkPushLogBytes, its package doc's "What
 // a push costs, measured") and what a seat's principal, its way and the
 // company day its quota counted it on take of the log beyond it (its
-// push=agent arm). The barriers are its git clients'
+// push=agent arm). The COMPACTIONS that merge those pushes' packs take the
+// log a push too, and so do the code-retention duty's SWEEPS of the rows they
+// retired, a day later: internal/code/compact's measured figures
+// (BenchmarkCompact's steady/pushes=1200/rate=1/min/min-merge=16 arm, its
+// record-B/push and sweep-B/push, in its package doc's "Measured"), a
+// repository pushed once a minute, so every merge takes the floor's
+// code.CompactMinMerge packs and is about a quarter hour from the next —
+// every merge's retirements swept by a record of their own. That is the
+// reference company's shape: 3 000 pushes a day over its repositories are a
+// few a minute, which never leave a pass more than the floor to merge. A
+// merge of more costs less a push (43 bytes where a minute's merge takes
+// three hundred), and so do a quarter hour's merges swept together, so these
+// two figures are the most the reference company's pushes cost the log, and
+// the day prices both terms at them, at its least as at its most. The
+// barriers are its git clients'
 // linearizable reads: a seat's push asks the log three times (its
 // advertisement, its receive's sync and the fetch before it), thirty people
 // fetch every three minutes of an eight-hour day, and a CI polls ten
@@ -62,26 +76,34 @@ const (
 const (
 	referencePushesADay  = 3_000
 	codePushRecordBytes  = 1_481
+	codeCompactionBytes  = 108
+	codeSweepBytes       = 44
 	referencePushReads   = 3 * referencePushesADay
 	referencePeopleReads = 30 * 8 * 60 / 3
 	referenceCIReads     = 10 * 60 * 24
 )
 
 // codeLogTerm is one term of the code log's day: the bytes a day one op's
-// records take at the reference company, at their least (no CI) and their
-// most.
+// records take at the reference company, at the least of its day and at the
+// most — the barriers without a CI and with one, every other term the same at
+// both.
 type codeLogTerm struct{ least, most float64 }
 
 // codeLogDay is the code log's day, by the op whose records each term is: its
-// pushes, and its git clients' barriers at code.BarrierRecordBytes. What the
+// pushes, the compactions that merge their packs, the sweeps of what those
+// retired, and its git clients' barriers at code.BarrierRecordBytes. What the
 // day is summed from, so a term priced here is a term of every figure
 // TestTheDocsPrintTheMeasuredDay holds.
 func codeLogDay() map[code.OpKind]codeLogTerm {
 	pushes := float64(referencePushesADay * codePushRecordBytes)
+	compactions := float64(referencePushesADay * codeCompactionBytes)
+	sweeps := float64(referencePushesADay * codeSweepBytes)
 	git := float64((referencePushReads + referencePeopleReads) * code.BarrierRecordBytes)
 	return map[code.OpKind]codeLogTerm{
-		code.OpPush:    {least: pushes, most: pushes},
-		code.OpBarrier: {least: git, most: git + float64(referenceCIReads*code.BarrierRecordBytes)},
+		code.OpPush:        {least: pushes, most: pushes},
+		code.OpCompact:     {least: compactions, most: compactions},
+		code.OpRetireSweep: {least: sweeps, most: sweeps},
+		code.OpBarrier:     {least: git, most: git + float64(referenceCIReads*code.BarrierRecordBytes)},
 	}
 }
 
@@ -118,15 +140,11 @@ var codeLogNegligible = map[code.OpKind]string{
 // and how: the day leaves the op out while that writer does not exist, and
 // TestTheCodeLogsDayPricesEveryRecordItTakes fails the day it does.
 var codeLogUnwritten = map[code.OpKind]struct{ writer, how string }{
-	code.OpCompact: {"internal/code/compact", "a compaction is proposed by a " +
-		"repository's compactor alone, through the estate's code.compact"},
-	code.OpRetireSweep: {"internal/code/compact", "a sweep removes the pack rows a " +
-		"compaction retired, and nothing is retired while nothing compacts"},
-	// THE EXPUNGER'S OWN FILE, not its package: the compactor's package
-	// arrives first, and an expunge's records are appended only by the
-	// expunger beside it, whose begin can list a thousand packs — what the
-	// day must price once they exist, which its writer is the one to
-	// measure.
+	// THE EXPUNGER'S OWN FILE, not its package: the compactor's package is
+	// there already, its compactions and sweeps priced into the day, and an
+	// expunge's records are appended only by the expunger beside it, whose
+	// begin can list a thousand packs — what the day must price once they
+	// exist, which its writer is the one to measure.
 	code.OpExpungeBegin: {"internal/code/compact/expunge.go", "an expunge is begun by a " +
 		"repository's maintainer alone, through the estate's code.expunge"},
 	code.OpExpungeCommit: {"internal/code/compact/expunge.go", "an expunge is committed by " +
@@ -136,9 +154,9 @@ var codeLogUnwritten = map[code.OpKind]struct{ writer, how string }{
 // codeLogKinds is every kind of object the code log's records are on, and how
 // its day counts the records on it.
 var codeLogKinds = map[code.ObjectKind]string{
-	code.KindRepo: "a push is on its repository (codeLogDay); so are its settings, deletion, " +
-		"restore, purge and a person's purge of its unreachable objects (codeLogNegligible), and " +
-		"a compaction, its sweep and an expunge's begin and commit (codeLogUnwritten)",
+	code.KindRepo: "a push, a compaction and its sweep are on their repository (codeLogDay); so " +
+		"are its settings, deletion, restore, purge and a person's purge of its unreachable " +
+		"objects (codeLogNegligible), and an expunge's begin and commit (codeLogUnwritten)",
 	code.KindBarrier:    "a git client's read (codeLogDay)",
 	code.KindName:       "a repository's create, on the name it claims (codeLogNegligible)",
 	code.KindEviction:   "an operator's eviction or readmission (codeLogNegligible)",
@@ -559,7 +577,10 @@ func TestABarrierCostsTheMutationLogWhatTheForecastPricesItAt(t *testing.T) {
 // this day (config's DerivedCodeLogNumerator and its prose in
 // docs/guides/replication.md, code's CodeLogMaxBytes and GitReadsShare), the
 // count of barriers a day that is the reference company's line for a code log
-// at half this log's ceiling among them. Each figure is computed here from the
+// at half this log's ceiling among them — and what the code log keeps of the
+// reference company's day beside its barriers (internal/code's "What a push
+// costs, measured" and the code log's column in docs/concepts/scaling.md's
+// table of what every data node holds). Each figure is computed here from the
 // published costs, the corpus's rates, the published barriers, the code log's
 // day (codeLogDay, every term of it), code.BarrierRecordBytes and
 // config.DefaultMinAge, and rounded as the pages round it; the few the pages
@@ -584,6 +605,8 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 	// every term it prices, summed.
 	terms := codeLogDay()
 	pushes := terms[code.OpPush].most
+	compactions, sweeps := terms[code.OpCompact].most, terms[code.OpRetireSweep].most
+	merges := compactions + sweeps
 	gitLeast, gitMost := terms[code.OpBarrier].least, terms[code.OpBarrier].most
 	var codeLeastBytes, codeMostBytes, besideBarriers float64
 	for op, term := range terms {
@@ -594,6 +617,7 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		}
 	}
 	codeLeast, codeMost := codeLeastBytes/day, codeMostBytes/day
+	middle := (codeLeast + codeMost) / 2
 	share := float64(config.DerivedCodeLogNumerator) / config.DerivedCodeLogDenominator
 	// THE BARRIERS UNDER WHICH HALF SUFFICES, for a code log that takes them
 	// beside its other terms at their most: the count a day that makes the
@@ -632,10 +656,15 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		{"half of the records are the turns", referenceTurnsADay * whole.turn / records, 0.45, 0.55},
 		{"the keys a five-year-old project writes are under a tenth of one percent of the day",
 			keyBytes / records, 0, 0.001},
-		{"the code log takes a little over half of this log's day at its least", codeLeast, 0.5, 0.6},
-		{"and about three quarters at its most", codeMost, 0.72, 0.8},
-		{"two thirds is the middle of that range, never past its top",
-			(share - codeLeast) / (codeMost - codeLeast), 0.45, 0.55},
+		{"the code log takes about three fifths of this log's day at its least", codeLeast, 0.58, 0.62},
+		{"and about four fifths at its most", codeMost, 0.78, 0.82},
+		{"two thirds is under the middle of that range, about three tenths of the way up it",
+			(share - codeLeast) / (codeMost - codeLeast), 0.25, 0.35},
+		{"so a code log at two thirds of this log's ceiling fills after this log with no CI",
+			share / codeLeast, 1, math.Inf(1)},
+		{"and in about four fifths of this log's time with one", share / codeMost, 0.77, 0.83},
+		{"the compactions and their sweeps moved the middle up by about four hundredths",
+			merges / day, 0.035, 0.045},
 		{"half suffices under fewer barriers than the reference company's git clients " +
 			"append with no CI, and under some", halfCount / float64(leastReads), 0, 1},
 		{"git's barriers over min_age are under a thirtieth of the tenth of the derived ceiling",
@@ -741,8 +770,11 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			fmt.Sprintf("the code log %s–%s MB a day: %s pushes at %s bytes",
 				mb(codeLeastBytes, 1), mb(codeMostBytes, 1), spaced(referencePushesADay),
 				spaced(codePushRecordBytes)),
-			fmt.Sprintf("%s MB; and the barriers of its git clients, %s–%s MB", mb(pushes, 1),
-				mb(gitLeast, 1), mb(gitMost, 1)),
+			fmt.Sprintf("%s MB; the compactions that merge those pushes' packs, %s MB at %d bytes a push, "+
+				"and the code-retention duty's sweeps of what they retired, %s MB at %d", mb(pushes, 1),
+				mb(compactions, 2), codeCompactionBytes, mb(sweeps, 2), codeSweepBytes),
+			fmt.Sprintf("; and the barriers of its git clients, %s–%s MB", mb(gitLeast, 1),
+				mb(gitMost, 1)),
 			fmt.Sprintf("so a seat's push three times, %s a day, beside thirty people fetching every "+
 				"three minutes of a working day (%s) and, where one runs, a CI polling ten "+
 				"repositories a minute (%s)", spaced(referencePushReads),
@@ -750,35 +782,61 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			fmt.Sprintf("So the code log takes %.2f–%.2f of the mutation log's day — %.2f on its push "+
 				"records alone (%.2f of the tracker's records)", codeLeast, codeMost, pushes/day,
 				pushes/records),
-			fmt.Sprintf("beside the reference company's %s MB of pushes, ABOUT %s BARRIERS A DAY, %s MB, "+
-				"make half the mutation log's %s MB day", mb(pushes, 1), hundreds(halfCount),
-				mb(halfBarriers, 1), mb(day, 1)),
+			fmt.Sprintf("TWO THIRDS is under the middle of that range (%.2f), about three tenths of "+
+				"the way up it", middle),
+			fmt.Sprintf("beside the reference company's %s MB of pushes and %s MB of their compactions "+
+				"and sweeps, ABOUT %s BARRIERS A DAY, %s MB, make half the mutation log's %s MB day",
+				mb(pushes, 1), mb(merges, 1), hundreds(halfCount), mb(halfBarriers, 1), mb(day, 1)),
 			fmt.Sprintf("with no CI at all (%s)", spaced(leastReads)),
 		},
 		"internal/code/limits.go": {
 			fmt.Sprintf("against the tracker's measured %s MB of records and %s MB of barriers",
 				mb(records, 1), mb(barriers, 1)),
 			fmt.Sprintf("%s pushes at the MEASURED %s bytes a seat's push alone in its record "+
-				"(BenchmarkPushLogBytes), %s MB, and its git clients' barriers at "+
-				"BarrierRecordBytes, %s–%s MB", spaced(referencePushesADay),
-				spaced(codePushRecordBytes), mb(pushes, 1), mb(gitLeast, 1), mb(gitMost, 1)),
+				"(BenchmarkPushLogBytes), %s MB, the compactions that merge their packs and the "+
+				"sweeps of what those retired at the MEASURED %d and %d bytes a push "+
+				"(internal/code/compact's steady arm at the floor), %s MB, and its git clients' "+
+				"barriers at BarrierRecordBytes, %s–%s MB", spaced(referencePushesADay),
+				spaced(codePushRecordBytes), mb(pushes, 1), codeCompactionBytes, codeSweepBytes,
+				mb(merges, 1), mb(gitLeast, 1), mb(gitMost, 1)),
 			fmt.Sprintf("git barriers beside its pushes: %s–%s MB a day, %.0f–%.0f MB over the default "+
 				"seven days — under a thirtieth of the tenth of a derived 10⅔ GiB ceiling, and "+
 				"about a third of the tenth of even the 1 GiB floor", mb(gitLeast, 1), mb(gitMost, 1),
 				window*gitLeast/1e6, window*gitMost/1e6),
 		},
 		"docs/guides/replication.md": {
-			fmt.Sprintf("a company's push records (%s bytes a seat's push, measured) and the barriers "+
-				"its git clients' reads append (%d bytes a read) take a little over half to about three "+
-				"quarters of what its tracker writes and its seats' reads take a day, and the ratio is "+
-				"taken at the middle of that range", spaced(codePushRecordBytes), code.BarrierRecordBytes),
+			fmt.Sprintf("a company's push records (%s bytes a seat's push, measured), the records that "+
+				"compact their packs and sweep what each compaction retired (%d bytes a push, measured) "+
+				"and the barriers its git clients' reads append (%d bytes a read) take about three "+
+				"fifths to about four fifths of what its tracker writes and its seats' reads take a day, "+
+				"and the ratio is taken under the middle of that range", spaced(codePushRecordBytes),
+				codeCompactionBytes+codeSweepBytes, code.BarrierRecordBytes),
 			fmt.Sprintf("Beside the reference company's %s pushes a day, that is **about %s barriers a "+
-				"day**: its pushes' %s MB — every one a seat's, %s bytes alone in its record — and "+
-				"those barriers' %s MB are half the %s MB a day its tracker writes and its seats' reads "+
-				"take", spaced(referencePushesADay), hundreds(halfCount), mb(pushes, 1),
-				spaced(codePushRecordBytes), mb(halfBarriers, 1), mb(day, 1)),
+				"day**: its pushes' %s MB — every one a seat's, %s bytes alone in its record — the %s "+
+				"MB of the records that", spaced(referencePushesADay), hundreds(halfCount),
+				mb(pushes, 1), spaced(codePushRecordBytes), mb(merges, 1)),
+			fmt.Sprintf("their packs and sweep what each compaction retired a day later, %d bytes a "+
+				"push, and those barriers' %s MB are half the %s MB a day its tracker writes and its "+
+				"seats' reads take", codeCompactionBytes+codeSweepBytes, mb(halfBarriers, 1),
+				mb(day, 1)),
 			fmt.Sprintf("with no CI at all — %s, three reads a push and thirty people fetching every "+
 				"three minutes of a working day", spaced(leastReads)),
+		},
+		"internal/code/doc.go": {
+			fmt.Sprintf("%d bytes where a merge takes the floor's sixteen", codeCompactionBytes),
+			fmt.Sprintf("%d bytes a push where every merge's rows are swept apart", codeSweepBytes),
+			fmt.Sprintf("hold about %.0f MB of it over the default seven-day min_age, and the records "+
+				"that merge their packs and sweep what those merges retired at most about %.1f MB "+
+				"beside them — about %.0f MB", window*pushes/1e6, window*merges/1e6,
+				window*besideBarriers/1e6),
+		},
+		"docs/concepts/scaling.md": {
+			fmt.Sprintf("takes %s bytes for a seat's push in a record of its own",
+				spaced(codePushRecordBytes)),
+			fmt.Sprintf("43 to %d bytes a push more", codeCompactionBytes),
+			fmt.Sprintf("and the sweeps that remove the rows a merge retired, a day later, up to %d more",
+				codeSweepBytes),
+			fmt.Sprintf("| about %.0f MB |", window*besideBarriers/1e6),
 		},
 	} {
 		page := prose(t, file)
@@ -813,7 +871,7 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 // TestTheDocsPrintTheMeasuredDay holds — or argued negligible.
 //
 // Mutation: declare an op or a kind in the code domain, or make
-// internal/code/compact, and this fails naming it.
+// internal/code/compact/expunge.go, and this fails naming it.
 func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 	t.Parallel()
 	const remedy = "price its records into codeLogDay — and restate the code log's share and " +

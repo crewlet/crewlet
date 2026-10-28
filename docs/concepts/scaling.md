@@ -422,17 +422,21 @@ rows for that one-day question would have kept an entry of some 40 bytes for
 every seat's push for its 181 days, about 1.8 GB at 250 000 pushes a day. The
 code log, which keeps only the trim's window of records, takes 1 481 bytes
 for a seat's push in a record of its own and about 890 for each of a burst
-group commit holds together, and the merges of the packs those pushes add
-43 to 108 bytes a push more — the more a merge takes at once, the less. The
-table prices every push as a seat's: the reference company's 3 000 pushes a
-day are all its seats', a hundred seats
-pushing thirty times a day while its people fetch, and a larger company's are
-its thousands of seats'. So:
+group commit holds together, the merges of the packs those pushes add
+43 to 108 bytes a push more — the more a merge takes at once, the less —
+and the sweeps that remove the rows a merge retired, a day later, up to 44
+more: a record of about 700 bytes for each repository a quarter-hourly pass
+finds a row past its day in, which is 44 bytes a push where each merge's rows
+are swept apart and a fraction of a byte where a busy repository's sweep takes
+the rows of thousands of pushes at once. The table prices every push as a seat's:
+the reference company's 3 000 pushes a day are all its seats', a hundred
+seats pushing thirty times a day while its people fetch, and a larger
+company's are its thousands of seats'. So:
 
 | Pushes a day | Push rows at the 181-day horizon | Retired pack rows, at most | On the code log, over the default seven days |
 |---|---|---|---|
-| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 369 MB | about 3 200, 2.0 MB | about 33 MB |
-| 250 000 — a company of thousands of seats | about 45 million, 30.8 GB | about 269 000, 164 MB | 1.6 to 2.8 GB |
+| 3 000 — a hundred seats pushing thirty times a day | about 543 000, 369 MB | about 3 200, 2.0 MB | about 34 MB |
+| 250 000 — a company of thousands of seats | about 45 million, 30.8 GB | about 269 000, 164 MB | 1.6 to 2.9 GB |
 
 The live pack rows are not a column, because they follow the repositories and
 not the pushes: some 29 KB a repository, 29 MB for every thousand. So the code
@@ -445,9 +449,9 @@ These rows come on top of what the tracker, the knowledge base and the rest of
 the estate hold: [the storage forecast](../guides/retention.md#the-storage-forecast)
 counts them on a line of their own for a company that hosts code, and every
 data node's snapshot volume holds about 4.2 times them, as it does the rest of
-its estate. The code log's column is its push and compaction records alone;
-each linearizable read a git client makes — an advertisement, a push's sync, a
-fetch's ls-refs — appends a 176-byte barrier beside them, which is why the
+its estate. The code log's column is its push, compaction and sweep records
+alone; each linearizable read a git client makes — an advertisement, a push's
+sync, a fetch's ls-refs — appends a 176-byte barrier beside them, which is why the
 log's ceiling is derived at two thirds of the mutation log's rather than from
 its pushes alone
 ([how the ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)).

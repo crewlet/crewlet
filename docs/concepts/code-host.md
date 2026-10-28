@@ -530,7 +530,8 @@ the repository downloads each output once, so over a repository's life a git
 node downloads, and writes, at most about 16 times what is pushed to it at
 20 KB pushes, fewer the more pushes a merge takes at once
 ([Scaling Out](scaling.md#git-nodes) has what that bills); a merge's record
-takes 43 to 108 bytes a push on the code log; a merged pack's row is kept a
+takes 43 to 108 bytes a push on the code log, and the record that sweeps its
+retired rows a day later up to 44 more; a merged pack's row is kept a
 day, about 608 bytes; and a git node drops the merged packs by a move into a
 next directory that links three files a pack it keeps, whatever the packs'
 bytes (a sync that downloaded a merge's output and moved a copy of 50 packs
