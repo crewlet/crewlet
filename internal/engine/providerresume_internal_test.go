@@ -7,13 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/agent/execstate"
-	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -50,19 +46,6 @@ func (m *spentEntry) Unready(context.Context) error {
 	}
 	return &llm.Error{Kind: llm.KindRateLimit, Key: "default", RetryAt: m.retry,
 		Err: errors.New("You've hit your 5-hour limit")}
-}
-
-// withModels serves e's current company with a registry of the one entry
-// given, as an apply that configured it would.
-func withModels(t *testing.T, e *Engine, entry llm.Provider) {
-	t.Helper()
-	reg, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: entry}})
-	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
-	}
-	c := *e.Company()
-	c.Models = reg
-	e.epoch.current.Store(&c)
 }
 
 // THE GATE REFUSES A RESUME WHOSE MODELS ARE AT A LIMIT THEY KNOW, before the
@@ -256,7 +239,7 @@ func newLimitedResume(t *testing.T) *limitedResume {
 	model := &midTurnLimit{retry: time.Now().Add(time.Hour)}
 	model.limited.Store(true)
 	withModels(t, e, model)
-	seedResumableRun(t, r, e, "t1")
+	r.seedRun(t, e, "t1")
 	handlers := e.backends.Queue.InFlightCount()
 
 	r.runner.Finish(sandbox.Result{Success: true, Text: "fixed the flaky test"})
@@ -284,43 +267,6 @@ func newLimitedResume(t *testing.T) *limitedResume {
 		t.Fatal("a completion refused for a limit quiesced the seat's control topic")
 	}
 	return lr
-}
-
-// seedResumableRun records the rig's coding run on the swe seat as
-// [drainRig.seedRun] does, suspended into a conversation this build resumes: the
-// executor's round that called run_sandbox, the call still open.
-func seedResumableRun(t *testing.T, r *drainRig, e *Engine, turnID string) {
-	t.Helper()
-	ctx := t.Context()
-	store := sandbox.NewCoordStore(e.backends.Fleet)
-	agentID, _ := org.DeriveAgentID("Nimbus", "swe")
-	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
-		TurnID: turnID, AgentID: agentID.String(), AgentHandle: "swe", Role: "SWE",
-		CodingAgent: "claude-code", CreatedAt: time.Now().UTC(),
-		Reply: "tool", TaskDescription: "fix the flaky test",
-	}, sandbox.Fence{}); err != nil {
-		t.Fatalf("BeginLaunch: %v", err)
-	}
-	if err := store.AttachSandbox(ctx, turnID, sandbox.BoxRef{
-		SandboxID: r.boxID, CommandID: "cmd-1", CodingAgent: "claude-code",
-	}, sandbox.Fence{}); err != nil {
-		t.Fatalf("AttachSandbox: %v", err)
-	}
-	blob, err := execstate.Encode(execstate.State{
-		Version: execstate.Version, Round: 1, ActiveTools: []string{builtin.RunSandboxTool},
-		Messages: []llm.Message{
-			{Role: llm.RoleUser, Content: "fix the flaky test"},
-			{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call-1",
-				Name: builtin.RunSandboxTool, Arguments: map[string]any{"brief": "fix the flaky test"}}}},
-		},
-		PendingCallID: "call-1", PendingCallName: builtin.RunSandboxTool,
-	})
-	if err != nil {
-		t.Fatalf("Encode: %v", err)
-	}
-	if suspended, err := store.MarkSuspended(ctx, turnID, sandbox.Suspension{State: blob, Iteration: 1}); err != nil || !suspended {
-		t.Fatalf("MarkSuspended = (%v, %v), want the run open to the poll", suspended, err)
-	}
 }
 
 // resumedOnce lifts the limit with lift, which must signal the wait itself,
