@@ -22,6 +22,11 @@ type Limits struct {
 	MaxPushBytes int64 `json:"max_push_bytes"`
 	MaxBlobBytes int64 `json:"max_blob_bytes"`
 	RepoMaxBytes int64 `json:"repo_max_bytes"`
+	// PushesPerSeatDay is how many pushes one SEAT may land in one company
+	// day, every repository together (code.limits.pushes_per_seat_day): a
+	// runaway bound on what a seat costs the code log, which the push decide
+	// holds every seat's push to ([RefusalPushQuota]) and no person's.
+	PushesPerSeatDay int `json:"pushes_per_seat_day"`
 }
 
 // DefaultLimits are the limits of a company that sets none.
@@ -34,8 +39,32 @@ func DefaultLimits() Limits { return LimitsOf(config.Code{}) }
 // read one document one way (TestLimitsOfIsConfigsReading).
 func LimitsOf(c config.Code) Limits {
 	r := c.Limits.Resolved()
-	return Limits{MaxPushBytes: r.MaxPushBytes, MaxBlobBytes: r.MaxBlobBytes, RepoMaxBytes: r.RepoMaxBytes}
+	return Limits{MaxPushBytes: r.MaxPushBytes, MaxBlobBytes: r.MaxBlobBytes, RepoMaxBytes: r.RepoMaxBytes,
+		PushesPerSeatDay: r.PushesPerSeatDay}
 }
+
+// OutsideSeatShare divides what a seat OUTSIDE a repository's owning unit may
+// fill of it — a seat whose relation to the repository is below write, which
+// pushes only into its own namespace there ([SeatNamespace]): the
+// repository's live refs ([MaxRefsPerRepo]) and its packed bytes
+// (code.limits.repo_max_bytes), each to 1/OutsideSeatShare, judged on the
+// repository's whole counts. Every full_access seat owns a namespace on every
+// repository it may read, and every object a ref reaches stays in the
+// repository's packs — its own branches' among them — so without a share one
+// seat from another unit could fill a repository it merely reads — its refs
+// in a hundred pushes of MaxCommandsPerPush creates, its bytes in a score of
+// the largest pushes — and refuse its owners every push there until somebody
+// removed what it pushed.
+//
+// TWO — HALF — is the engine's rule for an untrusted class beside a trusted
+// one (a git node's seat git work holds half its read lane, [GitShare]): the
+// owners always keep half, and the outside seats share the other half among
+// themselves. A JUDGMENT CALL, taken as the product's: half, and no per-seat
+// bound within it — one outside seat can take the outside half from the
+// others, which a per-seat count would stop at the cost of a counter table
+// this build does not keep. A quarter would keep owners more and turn
+// cross-unit pushes away sooner.
+const OutsideSeatShare = 2
 
 // BarrierRecordBytes is what one code-log barrier costs its stream, as the
 // broker counts it against the log's ceiling: the encoded record

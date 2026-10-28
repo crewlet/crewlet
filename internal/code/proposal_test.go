@@ -101,31 +101,35 @@ func TestAProposalCarriesEveryRefInItsRecordedForm(t *testing.T) {
 // refs at the longest take under half the room for every command a push may
 // carry. And for a SEAT'S push, whose principal carries the run behind it,
 // every field of the run at MaxProvenanceBytes of what JSON spells six times
-// over and the longest way: the principal and the way are measured as their
-// proposer stamped them, so the room they take is room the commands are not
-// admitted to.
+// over, the way — the longest, and a coding box's — and the company day its
+// committer stamps on the entry at its longest: the principal and the way are
+// measured as their proposer stamped them, so the room they take is room the
+// commands are not admitted to, and so is the day's, which no proposer sends.
 //
-// Mutation: measure the completed entry with the principal's run dropped
+// Mutations: measure the completed entry with the principal's run dropped
 // (completed() clearing w.Principal.Run) — the seat's push is admitted
-// commands its run then has no room beside, and its entry runs past EntryRoom.
+// commands its run then has no room beside, and its entry runs past EntryRoom;
+// measure a seat's entry without its day — the entry its committer stamps
+// outgrows the bound, red.
 func TestTheCommandsBoundHoldsWhateverAPushsWorkAdds(t *testing.T) {
 	t.Parallel()
 	node := strings.Repeat("n", 64)
 	costliest := strings.Repeat("&", code.MaxProvenanceBytes)
+	seat := code.Principal{Kind: code.PrincipalAgent, Seat: strings.Repeat("s", 64),
+		Run: code.RunProvenance{TurnID: costliest, WorkBackend: costliest, WorkKey: costliest, Model: costliest}}
 	for _, arm := range []struct {
 		name      string
 		principal code.Principal
 		via       code.PushVia
 		// proposal is whether the completed push is one Validate takes
-		// whole: a seat's is held to the record's budget alone, since the
-		// decide takes no seat's push until it judges the seat's grant.
+		// whole: one the engine built moves one ref, so one of hundreds of
+		// commands is held to the record's budget alone.
 		proposal bool
 	}{
 		{"a person's", code.Principal{Kind: code.PrincipalOperator, OperatorID: strings.Repeat("o", 64),
 			Seat: strings.Repeat("s", 64)}, code.ViaGit, true},
-		{"a seat's", code.Principal{Kind: code.PrincipalAgent, Seat: strings.Repeat("s", 64),
-			Run: code.RunProvenance{TurnID: costliest, WorkBackend: costliest, WorkKey: costliest,
-				Model: costliest}}, code.ViaEngine, false},
+		{"a seat's the engine built", seat, code.ViaEngine, false},
+		{"a seat's git received", seat, code.ViaGit, true},
 	} {
 		t.Run(arm.name, func(t *testing.T) {
 			t.Parallel()
@@ -194,6 +198,16 @@ func TestTheCommandsBoundHoldsWhateverAPushsWorkAdds(t *testing.T) {
 				t.Errorf("a push of %d commands ValidateCommands admitted, completed by the most its work adds, "+
 					"takes %d bytes of its record, past EntryRoom (%d)", admitted, bound, code.EntryRoom)
 			}
+			// THE ENTRY ITS COMMITTER WRITES — a seat's stamped with the day
+			// it is counted on, at its longest — within that bound.
+			stamped, err := json.Marshal(code.EntryOf(p, code.LongestDay))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(stamped) + len(p.Commands)*code.CommandResultBound + 1; got > bound {
+				t.Errorf("the entry its committer writes takes %d bytes of its record, past the %d it was "+
+					"measured at", got, bound)
+			}
 			if !arm.proposal {
 				return
 			}
@@ -210,8 +224,13 @@ func TestTheCommandsBoundHoldsWhateverAPushsWorkAdds(t *testing.T) {
 // is the proposer's bug and refused naming via — by ValidateCommands too, whose
 // measure would otherwise be short of the entry; a push the engine built moving
 // two refs, or --atomic, is refused naming what it broke; and a person's push
-// the engine built of one command is a proposal. A seat's push is still none,
-// whatever built it, since the decide judges no seat's grant.
+// the engine built of one command is a proposal. So is a seat's, whichever way
+// it was built, since the decide judges a seat's grant — one naming the run
+// that made it, which the engine stamps on every seat's push: a seat's push
+// naming none is its proposer's bug, refused naming principal.run.
+//
+// Mutation: refuse every principal but an operator's again (validFields'
+// refusal the decide's grant lifts) — the seat's pushes are refused, red.
 func TestAProposalNamesHowItsPackWasBuilt(t *testing.T) {
 	t.Parallel()
 	one := proposal("0190f3c4-0000-7000-8000-00000000c0de", update("refs/heads/main", code.ZeroOID, oidOf("B")))
@@ -243,7 +262,23 @@ func TestAProposalNamesHowItsPackWasBuilt(t *testing.T) {
 			p.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer",
 				Run: code.RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001"}}
 			return p
-		}(), "principal.kind"},
+		}(), ""},
+		{"a seat's push git received", func() code.Proposal {
+			p := two
+			p.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer",
+				Run: code.RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001"}}
+			return p
+		}(), ""},
+		{"a seat's push naming no run", func() code.Proposal {
+			p := one
+			p.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer"}
+			return p
+		}(), "principal.run"},
+		{"a token bound to nobody's push", func() code.Proposal {
+			p := one
+			p.Principal = code.Principal{Kind: code.PrincipalOperator, OperatorID: "ci"}
+			return p
+		}(), "principal.seat"},
 	} {
 		err := tc.p.Validate()
 		switch {
@@ -261,7 +296,7 @@ func TestAProposalNamesHowItsPackWasBuilt(t *testing.T) {
 			t.Errorf("ValidateCommands of a push naming the way %q: %v, want ErrInvalidProposal naming via", via, err)
 		}
 	}
-	if got := code.EntryOf(func() code.Proposal { p := one; p.Via = code.ViaEngine; return p }()).Via; got != code.ViaEngine {
+	if got := code.EntryOf(func() code.Proposal { p := one; p.Via = code.ViaEngine; return p }(), "").Via; got != code.ViaEngine {
 		t.Errorf("a proposal's entry names the way %q, want the proposal's own", got)
 	}
 }

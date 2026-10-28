@@ -85,24 +85,36 @@ func decideRound(t *testing.T, e *estate, limits Limits, v *verdicts, batch ...P
 }
 
 // decideOn runs one round of the decide over e's rows for repoID, on an epoch
-// whose code.deleted_retention_days is retention.
+// whose code.deleted_retention_days is retention and which holds no chart —
+// the cases of persons' pushes, whose decide reads none.
 func decideOn(t *testing.T, e *estate, repoID string, limits Limits, retention time.Duration,
 	v *verdicts, batch ...Proposal) ([]PushEntry, []decided) {
 
 	t.Helper()
+	entries, answers, err := decideErr(e, repoID, limits, retention, SeatRules{}, decideAt, v, batch...)
+	if err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	return entries, answers
+}
+
+// decideErr is one round of the decide over e's rows for repoID, on an epoch
+// whose code.deleted_retention_days is retention and whose chart and
+// calendar are seats, at the instant now — answering its error.
+func decideErr(e *estate, repoID string, limits Limits, retention time.Duration, seats SeatRules,
+	now time.Time, v *verdicts, batch ...Proposal) ([]PushEntry, []decided, error) {
+
 	var (
 		entries []PushEntry
 		answers []decided
 	)
-	if err := e.db.Read(context.Background(), func(tx *sql.Tx) error {
+	err := e.db.Read(context.Background(), func(tx *sql.Tx) error {
 		var err error
 		entries, answers, _, err = decideBatch(context.Background(), tx, repoID, batch, limits,
-			retention, decideAt, v)
+			retention, seats, now, v)
 		return err
-	}); err != nil {
-		t.Fatalf("decide: %v", err)
-	}
-	return entries, answers
+	})
+	return entries, answers, err
 }
 
 // A PROTECTION VERDICT OUTLIVES ITS ROUND ONLY UNDER THE RULES IT WAS FORMED

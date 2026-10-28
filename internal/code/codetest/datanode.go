@@ -146,6 +146,9 @@ func withDefaults(l code.Limits) code.Limits {
 	if l.RepoMaxBytes == 0 {
 		l.RepoMaxBytes = defaults.RepoMaxBytes
 	}
+	if l.PushesPerSeatDay == 0 {
+		l.PushesPerSeatDay = defaults.PushesPerSeatDay
+	}
 	return l
 }
 
@@ -266,6 +269,10 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		Publisher: &faultPublisher{inner: pub, faults: d.o.Faults, appends: &d.appends},
 		DB:        p.estate.Reader(), NodeID: d.o.ID, Limits: limits,
 		Retention: func() time.Duration { return deletedRetention },
+		// NO CHART, as the node's reader holds none: every case of the
+		// suite pushes as a person, whose decide reads no chart, and a
+		// seat's push here would be handed on as by a node with no epoch.
+		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{}, false },
 	}); err != nil {
 		t.Fatalf("codetest: %s: build the committer: %v", d.o.ID, err)
 	}

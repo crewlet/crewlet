@@ -98,6 +98,14 @@ import (
 // or a repeat inside this record, which no decide forms — is skipped rather
 // than allowed to abort the insert on its primary key, which would stall the
 // log on every node.
+//
+// # A seat's pushes are counted on its company day
+//
+// Every seat's entry the record applies is counted on the day its decide
+// stamped on it, in code_seat_days, the counter the decide holds a seat's
+// pushes_per_seat_day to — a row a seat and day, two statements a record, and
+// the rows they touch counted in the record's before any horizon takes what
+// is left ([countSeatDays]).
 func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p PushBatch) (int, error) {
 	ids := make([]string, 0, len(p.Pushes))
 	for _, e := range p.Pushes {
@@ -173,6 +181,16 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 	}
 	slices.Sort(refs)
 	rows := len(refs) + len(packRows) + len(pushRows) + len(drops) + 1
+
+	// THE SEATS' DAYS BEFORE ANY HORIZON, the rows they touch counted in the
+	// record's before a horizon takes what the record leaves: the committer
+	// counts a seat's entry seatDayRows more (rowBound), so what it kept for
+	// a deletion's tombstone is still the sweep's.
+	counted, err := countSeatDays(ctx, tx, at, pushRows)
+	if err != nil {
+		return 0, err
+	}
+	rows += counted
 
 	// THE PUSH HISTORY FIRST, before any ref is written: what it removes is
 	// rows of the record's budget the tombstones cannot have, and the
@@ -476,6 +494,88 @@ func recordedCommands(cmds []Command) (string, error) {
 func pushRowBytes(commands, introduced string, run RunProvenance) int {
 	return len(commands) + len(introduced) + len(run.TurnID) + len(run.WorkBackend) + len(run.WorkKey) +
 		len(run.Model)
+}
+
+// countSeatDays counts each SEAT'S entry of the record that the apply
+// inserts — pushes, the redelivered ones already left out — on the company day
+// its decide stamped on it ([PushEntry.Day]), in code_seat_days, the counter
+// the decide reads a seat's day's quota from; and forgets, for every seat it
+// counts, that seat's oldest day before the newest the record counts it on.
+// It answers the rows it touched.
+//
+// # The record decides what is old, so every node counts alike
+//
+// The day is the decide's, never the applier's clock: so the count is a pure
+// function of the log, and every data node holds the same rows whatever its
+// own clock says. What is OLD is the record's own day too — a seat's rows
+// before the newest day the record counts it on — so a record decided late,
+// on the day before the one a record already applied counted the seat on
+// (two committers whose clocks straddle midnight), re-creates its day's row,
+// and the seat's next entry of a newer day forgets it, alike on every node.
+// Only the inserted entries count, because M2's redelivery rule skips a push
+// id code_pushes already holds, and its count with it.
+//
+// # One older day at most, so the rows a record touches are bounded
+//
+// A seat holds its row of the day and, after a late record, at most the row
+// that record re-created — so forgetting one older day an entry keeps the
+// table at about a row a seat that ever pushed. ONE, not every older day: the
+// committer bounds a seat's entry at [seatDayRows], the day's row and one
+// forgotten, and an unbounded forget — a seat that met records of several
+// older days in a row, which only clocks days apart make — could take rows
+// the record's tombstone sweep was promised. A row it leaves is read by no
+// decide, which asks for a seat's newest day alone, and the seat's next entry
+// forgets it. Two statements a record, never one a seat: the counts driven
+// from their list, and the forgetting from the seats'.
+func countSeatDays(ctx context.Context, tx *sql.Tx, at applyContext, pushes []PushEntry) (int, error) {
+	type seatDay struct{ seat, day string }
+	var counted []seatDay
+	counts := map[seatDay]int{}
+	var seats []string
+	newest := map[string]string{}
+	for _, e := range pushes {
+		if e.Principal.Kind != PrincipalAgent || e.Day == "" {
+			continue
+		}
+		k := seatDay{e.Principal.Seat, e.Day}
+		if counts[k] == 0 {
+			counted = append(counted, k)
+		}
+		counts[k]++
+		switch day, seen := newest[k.seat]; {
+		case !seen:
+			seats = append(seats, k.seat)
+			newest[k.seat] = k.day
+		case k.day > day:
+			newest[k.seat] = k.day
+		}
+	}
+	if len(counted) == 0 {
+		return 0, nil
+	}
+	if _, err := store.InsertRows(ctx, tx, at.maxVariables,
+		`INSERT INTO code_seat_days (seat, day, pushes) VALUES `, `(?, ?, ?)`,
+		`ON CONFLICT (seat, day) DO UPDATE SET pushes = pushes + excluded.pushes`,
+		len(counted), func(i int) []any {
+			k := counted[i]
+			return []any{k.seat, k.day, counts[k]}
+		}); err != nil {
+		return 0, fmt.Errorf("code: count the seats' pushes at %s: %w", at.position, err)
+	}
+	pairs := make([][2]string, len(seats))
+	for i, seat := range seats {
+		pairs[i] = [2]string{seat, newest[seat]}
+	}
+	list, err := json.Marshal(pairs)
+	if err != nil {
+		return 0, fmt.Errorf("code: encode the seats a record counts: %w", err)
+	}
+	res, err := tx.ExecContext(ctx, forgetSeatDaysSQL, string(list))
+	if err != nil {
+		return 0, fmt.Errorf("code: forget the seats' older days at %s: %w", at.position, err)
+	}
+	forgotten, _ := res.RowsAffected()
+	return len(counted) + int(forgotten), nil
 }
 
 // expirePushes removes, inside the record's own repository and within the
@@ -962,6 +1062,12 @@ const (
 		live_bytes = live_bytes + ?, live_objects = live_objects + ?, pushes = pushes + ?,
 		last_push_at = ?, version = ?, tombstones_through = MAX(tombstones_through, ?) WHERE id = ?`
 	tombstonesHeldSQL = `SELECT tombstones FROM code_repos WHERE id = ?`
+	// forgetSeatDaysSQL forgets, for each [seat, day] of its list, the seat's
+	// oldest day before day — one row a seat at most, each the first a seek
+	// of the counter's key finds, driven from the list.
+	forgetSeatDaysSQL = `DELETE FROM code_seat_days WHERE rowid IN (SELECT (SELECT d.rowid
+		FROM code_seat_days AS d WHERE d.seat = CAST(j.value ->> 0 AS TEXT) AND d.day < CAST(j.value ->> 1 AS TEXT)
+		ORDER BY d.day LIMIT 1) FROM json_each(?) AS j)`
 	// expiredPushesSQL reads a repository's oldest pushes in log order with
 	// the instant expirePushes stops at — no filter on it: see there.
 	expiredPushesSQL = `SELECT push_id, row_bytes, at FROM code_pushes WHERE repo_id = ?

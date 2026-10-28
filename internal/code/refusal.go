@@ -16,7 +16,7 @@ import (
 type Refusal string
 
 // The codes. The first seventeen may be RECORDED on a command ([Refusal.Recorded]);
-// the last eight are answers ABOUT a push, never part of one.
+// the last nine are answers ABOUT a push, never part of one.
 const (
 	// RefusalStale is a ref that is not where the client thought.
 	RefusalStale Refusal = "stale"
@@ -88,6 +88,26 @@ const (
 	// the receiver in [PushAnswer.Refused], where a build that does not know
 	// the code says it by its name, beside the decide's sentence.
 	RefusalCompactionBehind Refusal = "compaction_behind"
+	// RefusalPushQuota is a SEAT'S push past the pushes its seat may make in
+	// one company day, every repository together
+	// (code.limits.pushes_per_seat_day, [Limits.PushesPerSeatDay]): nothing
+	// of the push was decided, and it lands when it is run again once the
+	// day has turned — the sentence names the instant ([quotaDetail]). A
+	// person's push and a token's are never counted: the bound is on what a
+	// RUNAWAY seat costs the code log, a record a push, which a person's
+	// own hand already bounds.
+	//
+	// UNRECORDED, for that reason: a recorded refusal costs the log an entry
+	// a refused push, so a seat pushing in a loop past its quota would still
+	// cost the log a record a push — the very cost the quota exists to
+	// bound. The push decide refuses the whole push, its record carries
+	// nothing of it, and the batch's other entries go on.
+	//
+	// AN ANSWER ABOUT A PUSH, never recorded on a command ([Refusal.Recorded]),
+	// as compaction_behind is: no field of the code domain's records and no
+	// versionedFields row, carried by the estate router in
+	// [PushAnswer.Refused].
+	RefusalPushQuota Refusal = "push_quota"
 	// RefusalExpunging is a push its receiver checked against the
 	// repository at another drop epoch than the repository's
 	// ([Proposal.DropEpoch]): an expunge began on it since ([ExpungeBegin]),
@@ -141,8 +161,8 @@ func Refusals() []Refusal {
 		RefusalProtectedDirect, RefusalTagMoved, RefusalReservedRef, RefusalNotPermitted, RefusalBadRef,
 		RefusalRepoArchived, RefusalRepoDeleted, RefusalRepoSize, RefusalRepoRefs, RefusalRefConflict,
 		RefusalUploadExpired, RefusalAtomic, RefusalBlobTooLarge, RefusalPackTooLarge,
-		RefusalBusy, RefusalCompactionBehind, RefusalExpunging, RefusalUnavailable, RefusalStoreFull,
-		RefusalNotApplied, RefusalUnknown, RefusalPending,
+		RefusalBusy, RefusalCompactionBehind, RefusalPushQuota, RefusalExpunging, RefusalUnavailable,
+		RefusalStoreFull, RefusalNotApplied, RefusalUnknown, RefusalPending,
 	}
 }
 
@@ -150,12 +170,12 @@ func Refusals() []Refusal {
 func (r Refusal) Valid() bool { return slices.Contains(Refusals(), r) }
 
 // Recorded reports a code that may appear on a recorded command: every one but
-// the eight that are answers ABOUT a push — whether it could be committed at
+// the nine that are answers ABOUT a push — whether it could be committed at
 // all — rather than a verdict on one of its commands.
 func (r Refusal) Recorded() bool {
 	switch r {
-	case RefusalBusy, RefusalCompactionBehind, RefusalExpunging, RefusalUnavailable, RefusalStoreFull,
-		RefusalNotApplied, RefusalUnknown, RefusalPending:
+	case RefusalBusy, RefusalCompactionBehind, RefusalPushQuota, RefusalExpunging, RefusalUnavailable,
+		RefusalStoreFull, RefusalNotApplied, RefusalUnknown, RefusalPending:
 		return false
 	}
 	return r.Valid()
@@ -167,8 +187,9 @@ var sentences = map[Refusal]string{
 	RefusalStale:           "the ref is at another commit; fetch first",
 	RefusalProtectedForce:  "a protection on this ref refuses a force-push (allow_force)",
 	RefusalProtectedDelete: "a protection on this ref refuses its deletion (allow_delete)",
-	RefusalProtectedDirect: "a protection on this ref takes no direct push (direct_push: none)",
-	RefusalTagMoved:        "a tag does not move: delete it and push it again",
+	RefusalProtectedDirect: "a protection on this ref takes no direct push (direct_push: none), or a " +
+		"person's alone (direct_push: persons)",
+	RefusalTagMoved: "a tag does not move: delete it and push it again",
 	RefusalReservedRef: "only refs/heads/ and refs/tags/ are pushed; refs/crewlet/ is the engine's, and " +
 		"refs/heads/seats holds only each seat's own namespace, refs/heads/seats/<handle>/",
 	RefusalNotPermitted: "the caller's grant on this repository does not cover this command",
@@ -187,6 +208,8 @@ var sentences = map[Refusal]string{
 	RefusalBusy: "the repository is taking pushes faster than they are committed; run git push again",
 	RefusalCompactionBehind: "the repository holds as many live packs as one may until compaction catches up, " +
 		"and nothing was decided; run git push again in a minute",
+	RefusalPushQuota: "the seat has pushed as many times today as code.limits.pushes_per_seat_day allows, " +
+		"and nothing was decided; the count starts again when the company's day turns",
 	RefusalExpunging: "an expunge of the repository's unreachable objects began after the push was checked, " +
 		"and nothing was decided; run git push again",
 	RefusalUnavailable: "the code log or the object store refused the write; run git push again",
@@ -396,32 +419,42 @@ func ParseProtections(rules []Protection) (Protections, error) {
 }
 
 // ProtectionRefusal is the protection rule of the push decide over EVERY rule
-// whose pattern matches the command's ref — the refusal and the rule that
-// refuses it, the first in the rules' order to refuse it for that reason; ""
-// and the zero Protection when none fires. Every matching rule is consulted,
-// because two rules written for two reasons both hold: any rule with
-// direct_push none refuses protected_direct; a deletion any rule does not
-// allow is protected_delete; a force-push any rule does not allow is
-// protected_force — in that order of precedence.
+// whose pattern matches the command's ref, for a push made by a principal of
+// kind by — the refusal and the rule that refuses it, the first in the rules'
+// order to refuse it for that reason; "" and the zero Protection when none
+// fires. Every matching rule is consulted, because two rules written for two
+// reasons both hold: any rule with direct_push none, and for anybody but a
+// person any rule with direct_push persons, refuses protected_direct; a
+// deletion any rule does not allow is protected_delete; a force-push any rule
+// does not allow is protected_force — in that order of precedence.
+//
+// DIRECT_PUSH PERSONS IS A PERSON'S AND NOBODY ELSE'S. Its own words are "a
+// person may push to it", and once seats push it must refuse a seat, or
+// `persons` would mean what a ref no rule matches already means — anyone who
+// may push. So every protection rule refuses every seat's direct push (unset
+// reads persons, and none refuses everybody): a seat's work reaches a
+// protected ref when a person pushes it. by is an operator for a person's
+// push — a credential bound to nobody is refused by its grant before any
+// protection is asked — so only a person passes it.
 //
 // ONE WALK, answering the rule with the refusal. The sentence a refusal
 // carries names that rule, and finding it with a second walk over the rules
 // asked every rule before it about the ref again: twice the cost of the
 // costliest round a repository's rules can make (3.4 s against 1.8 s,
-// doc.go's measured section), every command of it refused. A rule with
-// direct_push none ends the walk, since nothing after it outranks it.
+// doc.go's measured section), every command of it refused. A rule that
+// refuses protected_direct ends the walk, since nothing after it outranks it.
 //
 // c.Ref is a ref: [StatelessRefusal] refuses anything else first, in the
 // decide and in the receiver alike, so the ref is not checked again for every
 // rule — for anything else the answer means nothing (and is never a panic).
-func ProtectionRefusal(c Command, rules Protections) (Refusal, Protection) {
+func ProtectionRefusal(c Command, rules Protections, by PrincipalKind) (Refusal, Protection) {
 	deletion, force := -1, -1
 	for i, p := range rules.patterns {
 		if !p.Match(c.Ref) {
 			continue
 		}
 		rule := rules.rules[i]
-		if rule.DirectPush == DirectNone {
+		if rule.DirectPush == DirectNone || (rule.DirectPush == DirectPersons && by != PrincipalOperator) {
 			return RefusalProtectedDirect, rule
 		}
 		if deletion < 0 && !rule.AllowDelete {

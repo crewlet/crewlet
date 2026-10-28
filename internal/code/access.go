@@ -14,8 +14,9 @@ import (
 // chart, and it would drift from the first the day a seat moved units; so a
 // principal's standing on a repository is computed, every time it is asked,
 // from the repository's row and the epoch's chart, through ONE function
-// ([GrantOf]) that every judge of it calls: the code host's admission, and in
-// later parts the push decide, the read tools and a box's admission.
+// ([GrantOf]) that every judge of it calls: the code host's admission, the
+// push decide (its rule 2b, decide.go, the authority, from the DECIDING node's
+// chart) and the read tools — and in a later part a box's admission.
 //
 // A PERSON — an operator credential bound to a human seat — maintains every
 // repository, and a token bound to nobody reads every one: ADR-0055's rules,
@@ -362,6 +363,15 @@ func (g Grant) ownsNamespace() bool {
 	return g.Principal.Kind == PrincipalAgent && g.none == "" && g.Tier == TierFullAccess &&
 		g.Relation >= AccessRead
 }
+
+// outside reports a seat OUTSIDE the repository's owners: an agent whose
+// relation to it is below write — every seat but the owning unit's subtree
+// and its effective lead, or but the owning seat — which may push nothing but
+// its own namespace there, and which the push decide holds to
+// [OutsideSeatShare] of the repository's refs and bytes. A person and a token
+// are no seat, and a seat of the owners is held to the repository's whole
+// bounds as a person is.
+func (g Grant) outside() bool { return g.Principal.Kind == PrincipalAgent && g.Relation < AccessWrite }
 
 // ReadRefusal is the sentence a read below read is refused with
 // ([ErrNotPermitted]): who asked, which repository, and why the principal

@@ -128,8 +128,13 @@ func RowBound(p Proposal) int { return rowBound(p) }
 // RecordRows is the row bound of a record whose entries bound rows rows.
 func RecordRows(rows int) int { return recordRows(rows) }
 
-// EntryOf is the record entry p becomes with its commands as decided.
-func EntryOf(p Proposal) PushEntry { return p.entryWith(p.Commands) }
+// EntryOf is the record entry p becomes with its commands as decided — a
+// seat's counted against day, as its committer stamps it.
+func EntryOf(p Proposal, day string) PushEntry { return p.entryWith(p.Commands, day) }
+
+// LongestDay is a company day's label at its longest, which a seat's entry is
+// measured carrying.
+const LongestDay = longestDay
 
 // CostliestRules is n distinct rules of gitref's costliest shape — the worst
 // asking a rule about a ref can be (decide_bench_test.go), for the cases that

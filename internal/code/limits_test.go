@@ -214,7 +214,7 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 	// THE LIMITS A COMPANY DOES NOT SET ARE CONFIG'S, one value.
 	if got := code.DefaultLimits(); got != (code.Limits{
 		MaxPushBytes: config.DefaultCodeMaxPushBytes, MaxBlobBytes: config.DefaultCodeMaxBlobBytes,
-		RepoMaxBytes: config.DefaultCodeRepoMaxBytes,
+		RepoMaxBytes: config.DefaultCodeRepoMaxBytes, PushesPerSeatDay: config.DefaultCodePushesPerSeatDay,
 	}) {
 		t.Errorf("DefaultLimits is %+v, and config's defaults differ", got)
 	}
@@ -494,6 +494,27 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 		t.Errorf("MaxPushesPerRecord (%d) minimal pushes bound %d rows, past MaxRecordRows (%d)",
 			code.MaxPushesPerRecord, got, code.MaxRecordRows)
 	}
+	// A SEAT'S PUSH IS COUNTED TWO ROWS MORE — its day's row and the older
+	// day it forgets (code_seat_days) — and a full batch of the smallest
+	// still fits; the bytes of the day its committer stamps are in its bound.
+	seat := minimal
+	seat.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: strings.Repeat("s", 64),
+		Run: code.RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001"}}
+	if got, want := code.RowBound(seat), code.RowBound(minimal)+2; got != want {
+		t.Errorf("a seat's minimal push bounds %d rows, want a person's %d and its day's two", got, want)
+	}
+	if got := code.RecordRows(code.MaxPushesPerRecord * code.RowBound(seat)); got > code.MaxRecordRows {
+		t.Errorf("MaxPushesPerRecord (%d) minimal seats' pushes bound %d rows, past MaxRecordRows (%d)",
+			code.MaxPushesPerRecord, got, code.MaxRecordRows)
+	}
+	stamped, err := json.Marshal(code.EntryOf(seat, code.LongestDay))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bound, err := code.EntryBound(seat); err != nil || len(stamped)+code.CommandResultBound+1 > bound {
+		t.Errorf("a seat's entry stamped with its day takes %d bytes beside its decision, past its bound %d (%v)",
+			len(stamped)+code.CommandResultBound+1, bound, err)
+	}
 
 	// DECIDING GROWS A COMMAND BY AT MOST CommandResultBound, at the longest
 	// code a record may carry.
@@ -519,11 +540,11 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 	// A RECORD'S OWN BYTES FIT RecordOverheadBytes: a real encoded record of
 	// one entry, with the longest node id, the widest generation and an
 	// authored instant in a zone, less its entry.
-	entry, err := json.Marshal(code.EntryOf(minimal))
+	entry, err := json.Marshal(code.EntryOf(minimal, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, err := json.Marshal(code.PushBatch{RepoID: repo, Pushes: []code.PushEntry{code.EntryOf(minimal)}})
+	payload, err := json.Marshal(code.PushBatch{RepoID: repo, Pushes: []code.PushEntry{code.EntryOf(minimal, "")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,7 +587,8 @@ func TestLimitsOfIsConfigsReading(t *testing.T) {
 	}
 	resolved := config.CodeLimits{}.Resolved()
 	if got := code.LimitsOf(config.Code{}); got.MaxPushBytes != resolved.MaxPushBytes ||
-		got.MaxBlobBytes != resolved.MaxBlobBytes || got.RepoMaxBytes != resolved.RepoMaxBytes {
+		got.MaxBlobBytes != resolved.MaxBlobBytes || got.RepoMaxBytes != resolved.RepoMaxBytes ||
+		got.PushesPerSeatDay != resolved.PushesPerSeatDay {
 		t.Errorf("an unset code.limits is held to %+v, and config resolves it to %+v",
 			got, resolved)
 	}
@@ -579,17 +601,26 @@ func TestLimitsOfIsConfigsReading(t *testing.T) {
 		"a push limit alone": {
 			set: config.CodeLimits{MaxPushBytes: 512 << 20},
 			want: code.Limits{MaxPushBytes: 512 << 20,
-				MaxBlobBytes: config.DefaultCodeMaxBlobBytes, RepoMaxBytes: config.DefaultCodeRepoMaxBytes},
+				MaxBlobBytes: config.DefaultCodeMaxBlobBytes, RepoMaxBytes: config.DefaultCodeRepoMaxBytes,
+				PushesPerSeatDay: config.DefaultCodePushesPerSeatDay},
 		},
 		"a file limit alone": {
 			set: config.CodeLimits{MaxBlobBytes: 10 << 20},
 			want: code.Limits{MaxPushBytes: config.DefaultCodeMaxPushBytes,
-				MaxBlobBytes: 10 << 20, RepoMaxBytes: config.DefaultCodeRepoMaxBytes},
+				MaxBlobBytes: 10 << 20, RepoMaxBytes: config.DefaultCodeRepoMaxBytes,
+				PushesPerSeatDay: config.DefaultCodePushesPerSeatDay},
 		},
 		"a repository limit alone": {
 			set: config.CodeLimits{RepoMaxBytes: 4 << 30},
 			want: code.Limits{MaxPushBytes: config.DefaultCodeMaxPushBytes,
-				MaxBlobBytes: config.DefaultCodeMaxBlobBytes, RepoMaxBytes: 4 << 30},
+				MaxBlobBytes: config.DefaultCodeMaxBlobBytes, RepoMaxBytes: 4 << 30,
+				PushesPerSeatDay: config.DefaultCodePushesPerSeatDay},
+		},
+		"a seat's daily quota alone": {
+			set: config.CodeLimits{PushesPerSeatDay: 40},
+			want: code.Limits{MaxPushBytes: config.DefaultCodeMaxPushBytes,
+				MaxBlobBytes: config.DefaultCodeMaxBlobBytes, RepoMaxBytes: config.DefaultCodeRepoMaxBytes,
+				PushesPerSeatDay: 40},
 		},
 	} {
 		if got := code.LimitsOf(config.Code{Native: true, Limits: tc.set}); got != tc.want {

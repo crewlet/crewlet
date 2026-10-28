@@ -111,14 +111,14 @@ type PushAnswer struct {
 	// is the decision's, tentative until the record resolves.
 	Commands []Command `json:"commands"`
 	// Refused is a refusal of the whole push — busy, compaction_behind,
-	// expunging, unavailable, not_applied, repo_deleted, repo_archived —
-	// with every command it covers ng under the same code.
+	// push_quota, expunging, unavailable, not_applied, repo_deleted,
+	// repo_archived — with every command it covers ng under the same code.
 	Refused Refusal `json:"refused,omitempty"`
 	// Detail is a whole-push refusal's one sentence of specifics, and every
 	// command the refusal covers carries the SAME sentence as its own
 	// Detail — one placement whichever path formed the refusal (the decide,
-	// for a repository deleted or archived, at its pack bound, or at another
-	// drop epoch than the push was checked at; the
+	// for a repository deleted or archived, at its pack bound, at a seat's
+	// day's quota, or at another drop epoch than the push was checked at; the
 	// committer, for busy, unavailable, not_applied and a deletion the log
 	// refused), so a reader of the answer or of a command finds it. A
 	// command the receiver had already refused keeps its own. Empty when
@@ -134,8 +134,9 @@ type PushAnswer struct {
 // reason anyway — and at most one protection's pattern, which may be as long
 // as a ref (MaxRefNameBytes, gitref's pattern grammar), beside its words. So
 // the bound is that pattern and room for the words of the longest sentence a
-// receiver forms ([ProtectionDetail]'s, 52 bytes); every sentence the code
-// host writes into a proposal is held under it by a test, at its longest.
+// receiver forms ([ProtectionDetail]'s, 61 bytes: a seat's push under a
+// direct_push persons rule); every sentence the code host writes into a
+// proposal is held under it by a test, at its longest.
 const maxDetailBytes = MaxRefNameBytes + 64
 
 // Validate refuses a proposal this domain cannot decide, wrapping
@@ -180,7 +181,8 @@ const EntryRoom = MaxRecordBytes - recordOverheadBytes
 // [EntryRoom] with everything the work may yet add at its largest
 // ([Proposal.completed]): every command forced and decided, a pack, the most
 // introduced ids a row lists, the push's id and the receive instant at their
-// longest spellings, and the push --atomic. p is the proposal as the receiver
+// longest spellings, the push --atomic, and for a seat's push the company day
+// its committer stamps ([entryBound]). p is the proposal as the receiver
 // holds it once it has read the client's commands, before receive-pack runs:
 // its principal — a seat's run with it — how it is being built ([Proposal.Via]), its
 // node and its commands, with the receiver's refusals that need no object;
@@ -333,18 +335,24 @@ func (p Proposal) validFields() error {
 		return fmt.Errorf("%w: repo_id: %q is not a UUID in its canonical lowercase spelling",
 			ErrInvalidProposal, p.RepoID)
 	}
+	// WHO PUSHES: a person, through a credential bound to their human seat,
+	// or a seat, by its handle and the run that made the push — whichever
+	// way it was built. The decide holds a seat's push to its grant on the
+	// chart (rule 2b, decide.go) before any protection, so a seat's push is
+	// a proposal like a person's; a token bound to nobody fetches only.
 	switch why := p.Principal.invalid(); {
 	case why != "":
 		return fmt.Errorf("%w: %s", ErrInvalidProposal, why)
-	case p.Principal.Kind != PrincipalOperator:
-		// THE DECIDE JUDGES NO SEAT'S GRANT, so it takes no seat's push: a
-		// proposal is decided by the protections alone, and a grant never
-		// replaces them, nor they a grant.
-		return fmt.Errorf("%w: principal.kind: %q — a push is a person's, through the token "+
-			"bound to them (%s)", ErrInvalidProposal, p.Principal.Kind, PrincipalOperator)
-	case p.Principal.Seat == "":
+	case p.Principal.Kind == PrincipalOperator && p.Principal.Seat == "":
 		return fmt.Errorf("%w: principal.seat: a push names the person its token is bound to — a "+
 			"token bound to nobody fetches only", ErrInvalidProposal)
+	case p.Principal.Kind == PrincipalAgent && p.Principal.Run.IsZero():
+		// THE SERVER STAMPS THE RUN on every seat's push — its turn, at
+		// least — from the call that made it: a seat's push naming none is
+		// its proposer's bug, and a row naming no run would say nothing of
+		// what made it.
+		return fmt.Errorf("%w: principal.run: a seat's push names the run that made it — its turn at "+
+			"least, stamped by the engine from the call", ErrInvalidProposal)
 	case !p.Via.Valid():
 		return fmt.Errorf("%w: via: %q is not one of %v — a push names how its pack was built",
 			ErrInvalidProposal, p.Via, PushVias())
@@ -465,21 +473,32 @@ func (p Proposal) validPack() error {
 	return nil
 }
 
-// entryWith is the record entry p becomes with cmds as its decided commands:
-// every field of the proposal, and no Detail on any command — a sentence is
-// an answer, not state.
-func (p Proposal) entryWith(cmds []Command) PushEntry {
+// entryWith is the record entry p becomes with cmds as its decided commands,
+// counted against day: every field of the proposal, no Detail on any command
+// — a sentence is an answer, not state — and, on a SEAT'S entry alone, the
+// company day its decide counted it against ([PushEntry.Day]), which the
+// committer stamps and no proposer sends.
+func (p Proposal) entryWith(cmds []Command, day string) PushEntry {
 	stored := make([]Command, len(cmds))
 	for i, c := range cmds {
 		c.Detail = ""
 		stored[i] = c
 	}
-	return PushEntry{
+	e := PushEntry{
 		PushID: p.PushID, Principal: p.Principal, Via: p.Via, Node: p.Node, Atomic: p.Atomic,
 		Commands: stored, Pack: p.Pack, Introduced: p.Introduced,
 		IntroducedCount: p.IntroducedCount, ReceivedAt: p.ReceivedAt,
 	}
+	if p.Principal.Kind == PrincipalAgent {
+		e.Day = day
+	}
+	return e
 }
+
+// longestDay is a company day's label at its longest, period.Day's spelling
+// of any day a label can spell ("YYYY-MM-DD", ten bytes): what a seat's entry
+// is measured carrying before its decide stamps the day it is counted against.
+const longestDay = "9999-12-31"
 
 // THE BOUNDS A COMMITTER FORMS BATCHES BY, so a record's budgets are met
 // before the record exists.
@@ -501,10 +520,11 @@ const (
 )
 
 // entryBound is the most bytes p's entry can take in a push record: the
-// entry encoded as proposed, plus what deciding can add to each command, plus
-// the comma between it and the next entry.
+// entry encoded as proposed — a seat's carrying the day its decide stamps, at
+// its longest ([longestDay]) — plus what deciding can add to each command,
+// plus the comma between it and the next entry.
 func entryBound(p Proposal) (int, error) {
-	b, err := json.Marshal(p.entryWith(p.Commands))
+	b, err := json.Marshal(p.entryWith(p.Commands, longestDay))
 	if err != nil {
 		return 0, fmt.Errorf("encode the push's entry: %w", err)
 	}
@@ -512,8 +532,8 @@ func entryBound(p Proposal) (int, error) {
 }
 
 // rowBound is the most rows p's entry can make its record's apply touch: its
-// push row, its pack, and [commandRows] for every command the receiver did
-// not refuse.
+// push row, its pack, [commandRows] for every command the receiver did not
+// refuse, and for a SEAT'S push the [seatDayRows] its day's count takes.
 //
 // # A deletion keeps a row for the sweep so no record this committer forms removes
 //
@@ -542,8 +562,20 @@ func rowBound(p Proposal) int {
 	if p.Pack != nil {
 		rows++
 	}
+	if p.Principal.Kind == PrincipalAgent {
+		rows += seatDayRows
+	}
 	return rows
 }
+
+// seatDayRows is the most rows a seat's entry makes its record's apply touch
+// in code_seat_days ([Applier.countSeatDays]): the seat's row of the day its
+// entry is counted against, and the one older day the count forgets. COUNTED
+// ONCE AN ENTRY, which overstates a record carrying a seat's entries twice —
+// they share the seat's two rows — and so only closes a batch earlier at the
+// row bound, never lets its apply pass it. The ONE count the batcher
+// ([rowBound]) and the decide's own check ([withinRecord]) take.
+const seatDayRows = 2
 
 // commandRows is the most rows one command that applies makes its record's
 // apply touch: its ref; the object it moved its ref off ([leavesObject], a

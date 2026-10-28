@@ -362,7 +362,7 @@ func (s *Server) receiveOver(ctx context.Context, w http.ResponseWriter, r *http
 		}
 		cmd := code.Command{Ref: c.Ref, Old: c.Old, New: c.New}
 		judged[judgedKey{c.Ref, c.Old, c.New}] = true
-		if reason, rule := code.ProtectionRefusal(cmd, rules); reason != "" {
+		if reason, rule := code.ProtectionRefusal(cmd, rules, adm.principal().Kind); reason != "" {
 			pre[c.Ref] = answered{Ref: c.Ref, Reason: reason, Detail: code.ProtectionDetail(rule, reason)}
 		}
 	}

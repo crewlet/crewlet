@@ -298,6 +298,7 @@ const (
 	evictionKey   = "sqlite_autoindex_code_evictions_1"
 	layersKey     = "sqlite_autoindex_code_layers_1"
 	layerPartsKey = "sqlite_autoindex_code_layer_parts_1"
+	seatDaysKey   = "sqlite_autoindex_code_seat_days_1"
 )
 
 // registeredStatements is every statement this package spells against its
@@ -390,7 +391,14 @@ func registeredStatements() map[string]statement {
 		"count a gate reject": {countRejectSQL, []any{1, "repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"decide repo":         {decideRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"decide deletion":     {decideDeletionSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
-		"pushes named":        {pushesNamedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
+		// A SEAT'S DAY IS ONE ROW, read by its key for every seat a round
+		// names, and an older day forgotten by the same key — never a count
+		// over the push history.
+		"seat days": {seatDaysSQL, []any{"2031-04-02", `["seat-1","seat-2"]`},
+			[]string{"SCAN json_each AS j", seatDaysKey + " (seat=? AND day=?)"}},
+		"forget seat days": {forgetSeatDaysSQL, []any{`[["seat-1","2031-04-03"],["seat-2","2031-04-03"]]`},
+			[]string{"SCAN json_each AS j", seatDaysKey + " (seat=? AND day<?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"pushes named": {pushesNamedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
 		"gaps holding": {gapsHoldingSQL, []any{"repo-1", `[["refs/heads/r/","refs/heads/r0"],["refs/heads/r000001/","refs/heads/r0000010"]]`},
 			[]string{"SCAN json_each AS j", liveRefsKey + " (repo_id=? AND ref>? AND ref<?)"}},
 		"first live in": {firstLiveInSQL, []any{"repo-1", `[["refs/heads/r/","refs/heads/r0"],["refs/heads/r000001/","refs/heads/r0000010"]]`},
@@ -665,7 +673,8 @@ const retiredRepoIdx = "code_packs_retired_repo_idx"
 // seededPlanEstate is an estate holding five repositories of 500 refs, 50
 // packs, 200 pushes, 200 retired packs, 200 ref drops, 50 changes — forty of
 // them with a body — and a published chain of three layers of two parts
-// each, with no statistics gathered — the state every node's estate is in.
+// each, and fifty seats' push counts of three days each, with no statistics
+// gathered — the state every node's estate is in.
 func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 	t.Helper()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -853,6 +862,15 @@ func seededPlanEstate(t *testing.T) store.ReplicatedHandle {
 					return err
 				}
 			}
+		}
+		// FIFTY SEATS' COUNTS OF THREE DAYS EACH: the counter a seat's day's
+		// quota is read from, a row a seat and day.
+		if _, err := store.InsertRows(ctx, tx, vars,
+			`INSERT INTO code_seat_days (seat, day, pushes) VALUES `, `(?, ?, ?)`, ``, 150,
+			func(i int) []any {
+				return []any{fmt.Sprintf("seat-%d", i/3), fmt.Sprintf("2031-04-%02d", i%3+1), i}
+			}); err != nil {
+			return err
 		}
 		return nil
 	}); err != nil {

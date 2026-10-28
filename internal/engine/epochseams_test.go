@@ -28,14 +28,18 @@ const (
 	// one sound: told to answer anyway, a node behind would judge it by the
 	// chart the fleet replaced, which may be the revision that revoked it.
 	// So a grant field is judged only where a node behind the
-	// configuration REFUSES it rather than answers it last. TWO exist, the
-	// chart a SEAT's read of a repository is judged by on the serving node:
-	// code.ReaderOptions.Roster, a read of the rows, and query.Options.Roster,
-	// a read by object id on a git node. The git node's own gate,
+	// configuration REFUSES it rather than answers it last. THREE exist, the
+	// chart a SEAT is judged by on the serving node: code.ReaderOptions.Roster,
+	// a read of the rows; query.Options.Roster, a read by object id on a git
+	// node; and code.CommitterOptions.SeatRules, a seat's push on the
+	// committer that decides it. The git node's own gate,
 	// query.Options.Current, refuses a seat's read there itself (unready,
-	// behind_config) rather than judging it; a data node refuses a seat's
-	// read of the rows by the operation's own declaration (the estate's
-	// op.judgesGrant on code.read and code.resolve_ref, held by
+	// behind_config) rather than judging it; the committer's,
+	// code.CommitterOptions.Current, refuses a seat's push there as a node
+	// that ran nothing, so the repository's next committer decides it, even
+	// when this node is asked last; a data node refuses a seat's read of the
+	// rows by the operation's own declaration (the estate's op.judgesGrant
+	// on code.read and code.resolve_ref, held by
 	// estate.TestEveryOperationThatJudgesAGrantIsDeclared), even asked last
 	// (M3-O8's hard arm). The tracker's own permission checks read an
 	// authority the ASKING node forms from its own.
@@ -165,11 +169,16 @@ var classified = map[string]struct {
 	"code.CommitterOptions.Publisher": {seamNone, "the code log's write authority"},
 	"code.CommitterOptions.DB":        {seamNone, "the replicated rows a batch's answers are read from"},
 	"code.CommitterOptions.NodeID":    {seamNone, "the deciding node"},
-	"code.CommitterOptions.Limits":    {seamValue, "the size limits a push is decided under"},
+	"code.CommitterOptions.Limits": {seamValue, "the size limits a push is decided under and a seat's " +
+		"day's quota, a count: a push decided under a bound a revision then lowered leaves the same rows"},
 	"code.CommitterOptions.Retention": {seamValue, "the instant a repo_deleted refusal names"},
-	"code.CommitterOptions.Now":       {seamNone, "the decide's clock"},
-	"code.CommitterOptions.Metrics":   {seamNone, "the node's instruments"},
-	"code.CommitterOptions.Logger":    {seamNone, "where a failed batch is reported"},
+	"code.CommitterOptions.SeatRules": {seamGrant, "the chart a seat's push is judged by — its grant, " +
+		"its share of a repository outside its unit — and the calendar its day is counted on"},
+	"code.CommitterOptions.Current": {seamGate, "whether this node serves the company's configuration: " +
+		"a seat's push behind it is handed to the repository's next committer, decided nowhere here"},
+	"code.CommitterOptions.Now":     {seamNone, "the decide's clock"},
+	"code.CommitterOptions.Metrics": {seamNone, "the node's instruments"},
+	"code.CommitterOptions.Logger":  {seamNone, "where a failed batch is reported"},
 
 	"code.StoreOptions.Publisher": {seamNone, "the code log's write authority"},
 	"code.StoreOptions.DB":        {seamNone, "the replicated rows a lifecycle write decides from"},

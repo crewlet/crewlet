@@ -1478,7 +1478,7 @@ func TestTheHookAsksTheProtectionsOnlyWhatForcedChanges(t *testing.T) {
 	// One the handler never judged: a command git handed the hook as it
 	// stands — a protection asked about it all the same.
 	cmds[1].New = oidN(3 * code.MaxCommandsPerPush)
-	asked, err := host.ProtectAfterForce(cmds, rules, judged)
+	asked, err := host.ProtectAfterForce(cmds, rules, code.PrincipalOperator, judged)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -73,6 +73,22 @@ func (e *Engine) codeInForce() config.Code {
 // ([Engine.codeInForce]), the defaults applied.
 func (e *Engine) codeLimits() code.Limits { return code.LimitsOf(e.codeInForce()) }
 
+// codeSeatRules is the chart and the calendar the committer judges a SEAT'S
+// push by ([code.CommitterOptions.SeatRules]) — the current epoch's roster,
+// the one a seat's code read is judged by ([Engine.codeRoster]), and the
+// company's clock its day's quota is counted on — both off ONE epoch, so a
+// revision that moves a seat and the clock together is judged by both or by
+// neither, and false where no epoch is installed yet: no chart, on which the
+// committer hands a seat's push to the repository's next committer rather
+// than judge it. Read once a batch that carries a seat's push.
+func (e *Engine) codeSeatRules() (code.SeatRules, bool) {
+	c := e.Company()
+	if c == nil || c.roster == nil {
+		return code.SeatRules{}, false
+	}
+	return code.SeatRules{Roster: c.roster(), Zone: c.Config.Location()}, true
+}
+
 // codeDeletedRetention is how long a deleted repository waits for its purge at
 // the current epoch ([Engine.codeInForce]), the default applied. Two readers,
 // one reading: the code-retention pass's [code.Retention.Retention], read at

@@ -204,7 +204,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 			refuse(i, r, "")
 		}
 	}
-	protectAfterForce(cmds, rules, l.Judged)
+	protectAfterForce(cmds, rules, l.Principal.Kind, l.Judged)
 
 	// 3 BLOBS, over the push's own pack — of a push with anything left to
 	// decide. One refused whole by now (a force-push of a protected branch,
@@ -411,15 +411,18 @@ type judgedKey struct{ ref, old, new string }
 // it; asked again, a push walked every rule once more for every command for
 // answers already known — at the costliest rules a repository may carry,
 // 1.8 s for three thousand commands (internal/code's measured section), about
-// 0.6 s of a maximal push's own.
-func protectAfterForce(cmds []code.Command, rules code.Protections, judged map[judgedKey]bool) (asked int) {
+// 0.6 s of a maximal push's own. by is the kind of the landing's principal,
+// whose push a direct_push persons rule takes only from a person.
+func protectAfterForce(cmds []code.Command, rules code.Protections, by code.PrincipalKind,
+	judged map[judgedKey]bool) (asked int) {
+
 	for i := range cmds {
 		c := &cmds[i]
 		if c.Result != "" || (!c.Forced && judged[judgedKey{c.Ref, c.Old, c.New}]) {
 			continue
 		}
 		asked++
-		if r, rule := code.ProtectionRefusal(*c, rules); r != "" {
+		if r, rule := code.ProtectionRefusal(*c, rules, by); r != "" {
 			c.Result, c.Reason, c.Detail = code.ResultNG, r, code.ProtectionDetail(rule, r)
 		}
 	}

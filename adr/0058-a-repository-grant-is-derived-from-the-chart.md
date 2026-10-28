@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/code`
-- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/code/query.TestAGitNodeBehindItsConfigurationServesNoSeat`, `internal/code.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/code.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/code/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`, `internal/agent/builtin.TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo`
+- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/code/query.TestAGitNodeBehindItsConfigurationServesNoSeat`, `internal/code.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/code.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/code/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`, `internal/agent/builtin.TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo`, `internal/code.TestTheDecideRefusesWhatTheGrantRefuses`, `internal/code.TestASeatOutsideTheUnitFillsAtMostHalfARepository`, `internal/code.TestACommitterBehindTheConfigurationDecidesNoSeatsPush`
 - **Measured:** nothing a figure decides: the grant is a pure function of the chart and the repository row
 - **Cost-when-tried:** not tried here. The alternative — access rows per repository — was rejected on paper: a list of who may push is a second chart that drifts from the first the day a seat moves units
 - **Tag-status:** unreleased
@@ -22,13 +22,18 @@ beside a directory of its own name (`ref_conflict`: no clone can hold a file and
 branch named `seats` would block every seat's namespace and one named `seats/<x>` the namespace of the seat `x`.
 Both shapes are `gitref`'s (`SeatsRoot`, `ReservedSeatBranch`), the one grammar the decide and the configuration
 read (ADR-0008). The grant is judged by the node that answers or decides, from ITS epoch's chart, through one
-function (`code.GrantOf`); M2's protection rules are judged after it and are never skipped for a grant. A node
+function (`code.GrantOf`); M2's protection rules are judged after it and are never skipped for a grant. A seat's
+PUSH is held to it at the decide, by the repository's committer from its own chart, command by command before
+anything about the ref is read (`not_permitted`, recorded like every verdict on a command); and a seat outside a
+repository's owning unit — its relation below write, so it pushes only into its own namespace there — may fill
+at most half of the repository's refs and bytes (`code.OutsideSeatShare`), so its owners always keep half. A node
 CONFIRMED behind the company's configuration — shed or stuck, never lag alone — judges no seat's grant at all,
 even as the last node left to ask, since the revision it failed to apply may be the one that revoked it: a data
 node answers such a read `behind_config` (the estate's `judgesGrant` declaration, on every operation whose asker
-is a seat) and a git node answers it unready, so a current node answers instead, or nobody does, while a
-person's read consults no chart and is answered there as before. The window in which a stale chart can still
-judge is the control plane's confirmation of the lag: about a minute after an activation at worst.
+is a seat), a git node answers it unready and a committer hands a seat's push to the repository's next committer
+(`code.CommitterOptions.Current`), so a current node answers instead, or nobody does, while a person's read and
+push consult no chart and are answered there as before. The window in which a stale chart can still judge is the
+control plane's confirmation of the lag: about a minute after an activation at worst.
 
 A seat's read made inside a turn somebody woke is decided AGAIN for whoever woke it — the requester ceiling
 (`authz.DecideWithin`) on a repository's grant. The tool's own row is asked for the requester first, so a turn a
@@ -51,9 +56,8 @@ and a Tier A token is the deployment's own credential.
 
 ## What this does not decide
 
-The decide's enforcement of the push rows for seats (M3 P5), a box's own grant on top of the seat's (M3 P6),
-read-side directory access lists (not planned: sensitive code goes in its own repository with
-`visibility: unit`), the review and merge levels' use (M4, M5). Nor the requester ceiling of a seat's code
+A box's own grant on top of the seat's (M3 P6), read-side directory access lists (not planned: sensitive code
+goes in its own repository with `visibility: unit`), the review and merge levels' use (M4, M5). Nor the requester ceiling of a seat's code
 WRITES (M3 P5's write tools, each held at the relation its write needs): the ceiling above bounds what a seat
 reads for somebody, and nothing it writes. Nor a ceiling carried past its turn: a colleague a seat asks answers
 in a turn the asking seat woke, and the answer wakes the asking seat in a turn of its own work, so each turn is

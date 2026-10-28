@@ -344,6 +344,18 @@
 // any other, carried whole by every create, settings and restore record, so
 // changing it is one settings record and the reconcile's comparison sees it.
 //
+// A SEAT'S PUSH is held to its grant AT THE DECIDE, by the repository's
+// committer from the chart and the calendar of its own epoch ([SeatRules]),
+// and to three rules a person's push never meets: direct_push persons takes a
+// person's push alone ([ProtectionRefusal]), a seat outside the owning unit
+// fills at most [OutsideSeatShare] of the repository's refs and bytes, and a
+// seat lands at most [Limits.PushesPerSeatDay] pushes a company day, counted
+// by the push apply in code_seat_days and refused past it unrecorded
+// ([RefusalPushQuota]) — decide.go holds each, and why. A committer that
+// cannot judge a seat, holding no chart yet or confirmed behind the
+// company's configuration ([CommitterOptions.Current]), decides none of its
+// pushes and hands them to the repository's next committer.
+//
 // # Reads are held to who asks
 //
 // Every read a principal makes names its ASKER ([ReadQuery.Asker], refused

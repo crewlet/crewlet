@@ -147,6 +147,15 @@
             "null"
           ]
         },
+        "pushes_per_seat_day": {
+          "description": "How many pushes one seat may land in one day on the company's calendar, every repository together: 1..100000; unset is 1000. A runaway bound on what a seat pushing in a loop costs the code log, not a budget; a person's pushes are never counted.",
+          "maximum": 100000,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "repo_max_bytes": {
           "description": "The most packed bytes one repository may hold, at least max_push_bytes; unset is 20 GiB. Every git node serving a repository caches it whole.",
           "maximum": 1099511627776,
@@ -220,7 +229,7 @@
           ]
         },
         "direct_push": {
-          "description": "Who may push to a matching ref directly: persons (unset) or none, which freezes it — nothing pushes to it.",
+          "description": "Who may push to a matching ref directly: persons (unset), a person and never a seat, whose push is refused; or none, which freezes it — nothing pushes to it.",
           "enum": [
             "persons",
             "none",

@@ -391,8 +391,14 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				// THE DECIDING NODE'S EPOCH, read per decision, so a
 				// limit an activation moves holds from that activation
 				// on — on every committer at once, since each reads its
-				// own node's current epoch.
-				Limits: e.codeLimits, Retention: e.codeDeletedRetention,
+				// own node's current epoch. And the chart and the
+				// calendar a seat's push is judged by, from the same
+				// current epoch, read once a batch that carries one.
+				Limits: e.codeLimits, Retention: e.codeDeletedRetention, SeatRules: e.codeSeatRules,
+				// THE POSTURE GATE: a node confirmed behind the company's
+				// configuration decides no seat's push (Reconciler.Admits
+				// through SetAdmits, read per proposal).
+				Current: e.admits,
 				Metrics: e.metrics, Logger: logging.Get("code"),
 			}); err != nil {
 				return fmt.Errorf("engine: code committer: %w", err)

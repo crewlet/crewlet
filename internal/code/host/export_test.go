@@ -121,9 +121,11 @@ func SetRequestMemoryAllowance(s *Server, limit int64) { s.heads = newAllowance(
 // RequestMemoryInUse is the bytes s's request memory allowance holds now.
 func RequestMemoryInUse(s *Server) int64 { return s.heads.inUse() }
 
-// ProtectAfterForce is protectAfterForce over rules, every command in judged
-// as the receive handler judged it: how many commands it asked.
-func ProtectAfterForce(cmds []code.Command, rules []code.Protection, judged []code.Command) (int, error) {
+// ProtectAfterForce is protectAfterForce over rules for a push by a principal
+// of kind by, every command in judged as the receive handler judged it: how
+// many commands it asked.
+func ProtectAfterForce(cmds []code.Command, rules []code.Protection, by code.PrincipalKind,
+	judged []code.Command) (int, error) {
 	parsed, err := code.ParseProtections(rules)
 	if err != nil {
 		return 0, err
@@ -132,7 +134,7 @@ func ProtectAfterForce(cmds []code.Command, rules []code.Protection, judged []co
 	for _, c := range judged {
 		seen[judgedKey{c.Ref, c.Old, c.New}] = true
 	}
-	return protectAfterForce(cmds, parsed, seen), nil
+	return protectAfterForce(cmds, parsed, by, seen), nil
 }
 
 // TestLanding is a landing (land.go) as a case forms one — a push the relay

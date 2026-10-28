@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1091,9 +1092,21 @@ func TestAGitReadInProcessIsHeldToTheAttemptARemoteOneIs(t *testing.T) {
 // answers it as its last resort. In process alike: this node's own copy behind
 // the configuration refuses its own seat's read and serves its person's.
 //
+// A SEAT'S PUSH likewise, whose decide judges its grant from the COMMITTER's
+// chart: a committer behind the configuration decides none of it, asked first
+// or asked last. The node behind runs a REAL committer gated as the engine
+// gates one — its Current is the node's posture — so its repository's
+// committer first in the key's order, the seat's push is decided by the
+// current runner-up; and the only data node left, told to answer anyway, the
+// committer hands it on and the walk ends unserved, its log untouched — while
+// a person's push, whose decide reads no chart, reaches that committer's log
+// as the last resort. In process alike.
+//
 // Mutations: drop the hard arm — the seat's read runs on the node behind, red;
 // let the last resort skip it (a request told to answer anyway judged with no
-// posture) — the asked-last seat read runs, red.
+// posture) — the asked-last seat read runs, red; drop the committer's gate
+// (code.CommitterOptions.Current) — the asked-last seat's push reaches the
+// log of the committer behind, red.
 func TestANodeBehindTheConfigurationDecidesNoGrant(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -1155,7 +1168,106 @@ func TestANodeBehindTheConfigurationDecidesNoGrant(t *testing.T) {
 				"answered", tc.op, err)
 		}
 	}
+
+	// THE PROPOSAL HALF: a seat's push and a person's, to a repository whose
+	// committer — first in the key's order — is behind the configuration.
+	const repo = "019a0c2e-0000-7000-8000-0000000000b1"
+	pushes := 0
+	push := func(asker code.Principal, ref string) code.Proposal {
+		pushes++
+		p := proposalTo(repo, fmt.Sprintf("019a0c2e-0000-7000-8000-%012x", pushes))
+		p.Principal, p.Commands[0].Ref = asker, ref
+		return p
+	}
+	seatPush := code.Principal{Kind: code.PrincipalAgent, Seat: "dev",
+		Run: code.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d"}}
+	f := newFleet(t, "data-a", "data-b")
+	o := rendezvous.Order(repo, []string{"data-a", "data-b"})
+	behind, current := f.nodes[o[0]], f.nodes[o[1]]
+	behind.set(func(n *fakeNode) { n.behindConfig = true })
+	log := gatedCommitter(t, behind)
+	got, err := f.client.Code().Propose(ctx, push(seatPush, "refs/heads/seats/dev/a"))
+	if err != nil || got.OpID != current.name || log.appends() != 0 {
+		t.Fatalf("a seat's push whose committer %s is behind the configuration = (%+v, %v), its log asked "+
+			"%d times; want the current runner-up %s's answer and nothing of it on the committer behind",
+			behind.name, got, err, log.appends(), current.name)
+	}
+
+	f.placement.set(func(p *fakePlacement) { p.nodes = []string{behind.name} })
+	_, err = f.client.Code().Propose(ctx, push(seatPush, "refs/heads/seats/dev/b"))
+	var unserved *ErrUnserved
+	behind.mu.Lock()
+	anyway := behind.anyway
+	behind.mu.Unlock()
+	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "behind the company's configuration") ||
+		log.appends() != 0 || anyway == 0 {
+		t.Fatalf("a seat's push whose only committer is behind the configuration = %v, its log asked %d "+
+			"times, %d asks told to answer anyway; want it unserved, the committer saying it is behind, "+
+			"its log untouched, asked as the last resort", err, log.appends(), anyway)
+	}
+	if got, err := f.client.Code().Propose(ctx, push(person, "refs/heads/main")); err != nil ||
+		got.Answer.Refused != code.RefusalBusy || log.appends() != 1 {
+		t.Fatalf("a person's push to the same committer = (%+v, %v), its log asked %d times; want it "+
+			"decided there as the last resort — its log asked once, and busy, the answer of a log that "+
+			"takes no record", got, err, log.appends())
+	}
+
+	alone := &fakeNode{name: "data-a", units: chartOf("a"), behindConfig: true}
+	ownLog := gatedCommitter(t, alone)
+	own := newFleet(t).router(t, "data-a", alone)
+	if _, err := own.Code().Propose(ctx, push(seatPush, "refs/heads/seats/dev/c")); !errors.As(err, &unserved) ||
+		ownLog.appends() != 0 {
+		t.Errorf("this node's own committer behind the configuration, its own seat's push = %v, its log "+
+			"asked %d times; want it unserved and the log untouched", err, ownLog.appends())
+	}
+	if got, err := own.Code().Propose(ctx, push(person, "refs/heads/main")); err != nil ||
+		got.Answer.Refused != code.RefusalBusy || ownLog.appends() != 1 {
+		t.Errorf("this node's own committer behind the configuration, its person's push = (%+v, %v), its "+
+			"log asked %d times; want it decided there", got, err, ownLog.appends())
+	}
 }
+
+// gatedCommitter makes n's code half a REAL committer, gated as the engine
+// gates one — confirmed behind the company's configuration exactly while n
+// is — and judging a seat's push by [platform]'s chart, over a code log that
+// takes no record: every append it is asked answers a conflict, which the
+// committer answers busy, and is counted — so a push that reached it was
+// decided on n, and one that did not was handed on before any decide.
+func gatedCommitter(t *testing.T, n *fakeNode) *refusingLog {
+	t.Helper()
+	log := &refusingLog{}
+	c, err := code.NewCommitter(code.CommitterOptions{
+		Publisher: log, DB: codeRows(t, statelog.Position{Stream: codeStream, Generation: 1, Seq: 1}).Reader(),
+		NodeID: n.name, Limits: code.DefaultLimits,
+		Retention: func() time.Duration { return code.DefaultDeletedRetention },
+		SeatRules: func() (code.SeatRules, bool) {
+			return code.SeatRules{Roster: platform{}, Zone: time.UTC}, true
+		},
+		Current: func() bool {
+			n.mu.Lock()
+			defer n.mu.Unlock()
+			return !n.behindConfig
+		},
+	})
+	if err != nil {
+		t.Fatalf("the committer of %s: %v", n.name, err)
+	}
+	t.Cleanup(func() { c.Stop(context.Background()) })
+	n.set(func(n *fakeNode) { n.codeHalf = code.Served{Committer: c} })
+	return log
+}
+
+// refusingLog is a code log that takes no record, counting every append a
+// committer asks of it.
+type refusingLog struct{ asked atomic.Int32 }
+
+func (l *refusingLog) Publish(context.Context, statelog.Request) (statelog.Result, error) {
+	l.asked.Add(1)
+	return statelog.Result{}, statelog.ErrConflict
+}
+
+// appends is how many appends the log was asked.
+func (l *refusingLog) appends() int { return int(l.asked.Load()) }
 
 // EVERY OPERATION THAT JUDGES A GRANT IS DECLARED. The hard arm is a
 // declaration rather than a list kept beside the registry: every operation on

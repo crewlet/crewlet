@@ -108,6 +108,26 @@ const (
 	// caches it whole, so a ceiling past any one node's volume is not a
 	// setting anybody can run.
 	CodeMaxRepoBytesCeiling int64 = 1 << 40
+
+	// DefaultCodePushesPerSeatDay is an unset code.limits.pushes_per_seat_day:
+	// a THOUSAND pushes one seat may land in one company day, every
+	// repository together — a RUNAWAY bound, never a budget: the reference
+	// company's seats push about thirty times a day each, so a thousand is
+	// some thirty-three times that, which no seat working as intended meets,
+	// and it caps what a seat pushing in a loop costs the code log at a
+	// thousand push records a day — a push alone in its record is 1 344
+	// bytes (internal/code's BenchmarkPushLogBytes), a seat's carrying its
+	// run beside — rather than without bound.
+	DefaultCodePushesPerSeatDay = 1_000
+
+	// CodeMinPushesPerSeatDay and CodePushesPerSeatDayCeiling bound
+	// code.limits.pushes_per_seat_day: at least one push, since a quota of
+	// none would make a seat a reader everywhere, which its role.code.access
+	// says rather than a limit; and at most a hundred thousand, a typo guard
+	// a hundred times the default — past it the count bounds nothing a
+	// seat's own tool calls and token budget do not already bound.
+	CodeMinPushesPerSeatDay     = 1
+	CodePushesPerSeatDayCeiling = 100_000
 )
 
 // Code is the company's own git host: whether it hosts its repositories in
@@ -243,7 +263,7 @@ type CodeProtection struct {
 	Tag         string         `yaml:"tag,omitempty" json:"tag,omitempty" desc:"A tag name or glob, as for branch. Exactly one of branch and tag."`
 	AllowForce  bool           `yaml:"allow_force,omitempty" json:"allow_force,omitempty" desc:"Let a push move a matching branch to a commit that does not descend from it. Not on a tag rule: a tag never moves."`
 	AllowDelete bool           `yaml:"allow_delete,omitempty" json:"allow_delete,omitempty" desc:"Let a push delete a matching ref."`
-	DirectPush  CodeDirectPush `yaml:"direct_push,omitempty" json:"direct_push,omitempty" js:"enum=persons|none" desc:"Who may push to a matching ref directly: persons (unset) or none, which freezes it — nothing pushes to it."`
+	DirectPush  CodeDirectPush `yaml:"direct_push,omitempty" json:"direct_push,omitempty" js:"enum=persons|none" desc:"Who may push to a matching ref directly: persons (unset), a person and never a seat, whose push is refused; or none, which freezes it — nothing pushes to it."`
 }
 
 // Pattern is the rule as the domain records it: the namespaced protection
@@ -265,7 +285,9 @@ func (rule CodeProtection) Pattern() string {
 type CodeDirectPush string
 
 const (
-	// CodeDirectPersons lets a person push to it — what unset reads as.
+	// CodeDirectPersons lets a person push to it, and nobody else: a seat's
+	// push is refused protected_direct, so a seat's work reaches the ref when
+	// a person pushes it — what unset reads as.
 	CodeDirectPersons CodeDirectPush = "persons"
 	// CodeDirectNone lets nobody push to it: the ref is frozen.
 	CodeDirectNone CodeDirectPush = "none"
@@ -295,6 +317,10 @@ type CodeLimits struct {
 	MaxPushBytes int64 `yaml:"max_push_bytes,omitempty" json:"max_push_bytes,omitempty" js:"min=1048576;max=1073741824" desc:"The largest pack one push may send; unset is 1 GiB, the most it may be."`
 	MaxBlobBytes int64 `yaml:"max_blob_bytes,omitempty" json:"max_blob_bytes,omitempty" js:"min=1024;max=1073741824" desc:"The largest file (blob) a push may carry, at most max_push_bytes; unset is 50 MiB. A larger binary belongs in tracker files."`
 	RepoMaxBytes int64 `yaml:"repo_max_bytes,omitempty" json:"repo_max_bytes,omitempty" js:"min=1048576;max=1099511627776" desc:"The most packed bytes one repository may hold, at least max_push_bytes; unset is 20 GiB. Every git node serving a repository caches it whole."`
+	// PushesPerSeatDay is how many pushes one seat may land in one company
+	// day, every repository together; 0 is unset, the default
+	// ([DefaultCodePushesPerSeatDay]). Persons are never counted.
+	PushesPerSeatDay int `yaml:"pushes_per_seat_day,omitempty" json:"pushes_per_seat_day,omitempty" js:"min=1;max=100000" desc:"How many pushes one seat may land in one day on the company's calendar, every repository together: 1..100000; unset is 1000. A runaway bound on what a seat pushing in a loop costs the code log, not a budget; a person's pushes are never counted."`
 }
 
 // Resolved is the limits with their defaults applied — THE ONE PLACE they are
@@ -310,6 +336,9 @@ func (l CodeLimits) Resolved() CodeLimits {
 	}
 	if l.RepoMaxBytes == 0 {
 		l.RepoMaxBytes = DefaultCodeRepoMaxBytes
+	}
+	if l.PushesPerSeatDay == 0 {
+		l.PushesPerSeatDay = DefaultCodePushesPerSeatDay
 	}
 	return l
 }
@@ -394,17 +423,23 @@ func (c Code) validateAdmission(path Path) error {
 }
 
 // validate holds code.limits' rules at path: each limit inside its bounds, and
-// the three in the order a push meets them — a file inside a push, a push
-// inside a repository.
+// the three sizes in the order a push meets them — a file inside a push, a
+// push inside a repository.
 //
 // THE ORDER IS OF THE RESOLVED LIMITS, because that is what a push is held to:
 // a push limit set alone below the default file limit admits no push carrying
 // a file the default allows. Each such problem is reported AT THE FIELD THE
 // DOCUMENT SETS — the line its author can find — naming the default it met.
-// And only once every limit is in range: a value outside its bounds is one
-// mistake, and an order problem beside it would be the same mistake twice.
+// And only once every size is in range: a value outside its bounds is one
+// mistake, and an order problem beside it would be the same mistake twice. The
+// seat's daily quota is a count no order rule reads, judged on its own.
 func (l CodeLimits) validate(limits Path) error {
 	var p problems
+	if n := l.PushesPerSeatDay; n != 0 && (n < CodeMinPushesPerSeatDay || n > CodePushesPerSeatDayCeiling) {
+		p.add(at(limits, "pushes_per_seat_day"), ErrOutOfRange,
+			"%d is outside %d..%d pushes a seat a day, or unset for the default %d", n,
+			CodeMinPushesPerSeatDay, CodePushesPerSeatDayCeiling, DefaultCodePushesPerSeatDay)
+	}
 	before := len(p)
 	bytesInRange(&p, limits, "max_push_bytes", l.MaxPushBytes, CodeMinPushBytes, CodeMaxPushBytesCeiling)
 	bytesInRange(&p, limits, "max_blob_bytes", l.MaxBlobBytes, CodeMinBlobBytes, CodeMaxPushBytesCeiling)

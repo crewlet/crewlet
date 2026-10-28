@@ -122,8 +122,10 @@ func suitePack(id string) *code.PackRef {
 
 // suitePush is two pushes of id: a person's of its main branch with its pack,
 // received by git, and a seat's of a branch in its namespace, built by the
-// engine, whose run carries every field at its bound — so every column a push
-// row has is one the suite's replays and identity claims compare.
+// engine, whose run carries every field at its bound and which its committer
+// counted on the company day of the suite's instant — so every column a push
+// row has, and the seat's count of its day (code_seat_days), are ones the
+// suite's replays and identity claims compare.
 func suitePush(id string) code.PushBatch {
 	bound := strings.Repeat("r", code.MaxProvenanceBytes)
 	return code.PushBatch{RepoID: id, Pushes: []code.PushEntry{{
@@ -150,6 +152,7 @@ func suitePush(id string) code.PushBatch {
 		}},
 		Pack:       suitePack("seat-" + id),
 		ReceivedAt: suiteAt,
+		Day:        suiteAt.Format(time.DateOnly),
 	}}}
 }
 

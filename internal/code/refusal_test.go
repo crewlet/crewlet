@@ -10,15 +10,15 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// EVERY REFUSAL HAS ITS SENTENCE, and the eight answers ABOUT a push are never
+// EVERY REFUSAL HAS ITS SENTENCE, and the nine answers ABOUT a push are never
 // recorded on one of its commands: a client sees "<code>: <sentence>", and a
 // code with no sentence is a client reading its own name back.
 func TestEveryRefusalHasItsSentence(t *testing.T) {
 	t.Parallel()
 	about := map[code.Refusal]bool{
-		code.RefusalBusy: true, code.RefusalCompactionBehind: true, code.RefusalExpunging: true,
-		code.RefusalUnavailable: true, code.RefusalStoreFull: true, code.RefusalNotApplied: true,
-		code.RefusalUnknown: true, code.RefusalPending: true,
+		code.RefusalBusy: true, code.RefusalCompactionBehind: true, code.RefusalPushQuota: true,
+		code.RefusalExpunging: true, code.RefusalUnavailable: true, code.RefusalStoreFull: true,
+		code.RefusalNotApplied: true, code.RefusalUnknown: true, code.RefusalPending: true,
 	}
 	seen := map[code.Refusal]bool{}
 	for _, r := range code.Refusals() {
@@ -42,8 +42,8 @@ func TestEveryRefusalHasItsSentence(t *testing.T) {
 				"about a push never is", r, r.Recorded())
 		}
 	}
-	if len(seen) != 25 {
-		t.Errorf("%d refusal codes, and the closed set is twenty-five", len(seen))
+	if len(seen) != 26 {
+		t.Errorf("%d refusal codes, and the closed set is twenty-six", len(seen))
 	}
 	if unknown := code.Refusal("something_new"); unknown.Valid() || unknown.Recorded() ||
 		unknown.Sentence() != "something_new" {
@@ -119,7 +119,7 @@ func TestEveryMatchingProtectionHolds(t *testing.T) {
 		{code.Command{Ref: "refs/heads/release/1/x", Old: a, New: b}, code.RefusalProtectedDirect,
 			"refs/heads/release/**"},
 	} {
-		got, rule := code.ProtectionRefusal(tc.cmd, parsed(t, rules...))
+		got, rule := code.ProtectionRefusal(tc.cmd, parsed(t, rules...), code.PrincipalOperator)
 		if got != tc.want || rule.Pattern != tc.by {
 			t.Errorf("ProtectionRefusal(%s) = %q by %q, want %q by %q", tc.cmd.Ref, got,
 				rule.Pattern, tc.want, tc.by)
@@ -177,7 +177,7 @@ func TestAProtectionVerdictAllocatesNothing(t *testing.T) {
 		ps := parsed(t, tc.rules...)
 		var got code.Refusal
 		if allocs := testing.AllocsPerRun(100, func() {
-			got, _ = code.ProtectionRefusal(deletion, ps)
+			got, _ = code.ProtectionRefusal(deletion, ps, code.PrincipalOperator)
 		}); allocs != 0 {
 			t.Errorf("%s: ProtectionRefusal allocated %v times a command, want none", tc.what, allocs)
 		}
@@ -224,7 +224,7 @@ func TestAParsedProtectionMatchesWhatMatchPatternMatches(t *testing.T) {
 		for _, ref := range refs {
 			want := gitref.MatchPattern(pattern, ref)
 			r, _ := code.ProtectionRefusal(code.Command{Ref: ref, Old: code.ZeroOID,
-				New: strings.Repeat("b", 40)}, rules)
+				New: strings.Repeat("b", 40)}, rules, code.PrincipalOperator)
 			got := r == code.RefusalProtectedDirect
 			if got != want {
 				t.Errorf("%s against %s: the parsed rule matched = %v, MatchPattern = %v",
@@ -258,7 +258,7 @@ func TestAProtectionThatIsNotAPatternIsRefused(t *testing.T) {
 		}
 	}
 	if got, rule := code.ProtectionRefusal(code.Command{Ref: "refs/heads/main", Old: code.ZeroOID,
-		New: strings.Repeat("b", 40)}, code.Protections{}); got != "" || rule != (code.Protection{}) {
+		New: strings.Repeat("b", 40)}, code.Protections{}, code.PrincipalAgent); got != "" || rule != (code.Protection{}) {
 		t.Errorf("no rules refused %q by %+v", got, rule)
 	}
 }
@@ -385,10 +385,16 @@ func TestAGoneRepositorysSentenceNamesItsState(t *testing.T) {
 
 // EVERY SENTENCE A RECEIVER WRITES INTO A PROPOSAL FITS IT, at its longest:
 // a ref of MaxRefNameBytes refused under each protection flag of a rule whose
-// pattern is as long as a pattern may be, and stale at an id the repository
-// does not hold. Each names no ref — git prints the ref beside it — and a
-// proposal carrying it beside an update still standing validates, so the code
-// host never has a push refused whole for a sentence of its own.
+// pattern is as long as a pattern may be — a seat's push under a rule that
+// takes a person's alone among them, the longest of them, which a receiver of
+// a seat's push forms — and stale at an id the repository does not hold. Each
+// names no ref — git prints the ref beside it — and a proposal carrying it
+// beside an update still standing validates, so the code host never has a
+// push refused whole for a sentence of its own.
+//
+// Mutation: spell the persons rule's sentence with the remedy the code host's
+// table gives ("…; a seat's change reaches it when a person pushes it") and it
+// no longer fits.
 func TestEveryReceiverSentenceFitsAProposal(t *testing.T) {
 	t.Parallel()
 	ref := "refs/heads/" + strings.Repeat("r", code.MaxRefNameBytes-len("refs/heads/"))
@@ -398,21 +404,28 @@ func TestEveryReceiverSentenceFitsAProposal(t *testing.T) {
 			gitref.ValidRef(ref), gitref.ValidPattern(pattern))
 	}
 	rule := code.Protection{Pattern: pattern, DirectPush: code.DirectNone}
-	for reason, detail := range map[code.Refusal]string{
-		code.RefusalProtectedDirect: code.ProtectionDetail(rule, code.RefusalProtectedDirect),
-		code.RefusalProtectedDelete: code.ProtectionDetail(rule, code.RefusalProtectedDelete),
-		code.RefusalProtectedForce:  code.ProtectionDetail(rule, code.RefusalProtectedForce),
-		code.RefusalStale:           code.UnheldDetail(oidOf("an id this repository never held")),
+	persons := code.Protection{Pattern: pattern, DirectPush: code.DirectPersons}
+	for _, tc := range []struct {
+		what   string
+		reason code.Refusal
+		detail string
+	}{
+		{"direct_push none", code.RefusalProtectedDirect, code.ProtectionDetail(rule, code.RefusalProtectedDirect)},
+		{"direct_push persons, to a seat", code.RefusalProtectedDirect,
+			code.ProtectionDetail(persons, code.RefusalProtectedDirect)},
+		{"allow_delete", code.RefusalProtectedDelete, code.ProtectionDetail(rule, code.RefusalProtectedDelete)},
+		{"allow_force", code.RefusalProtectedForce, code.ProtectionDetail(rule, code.RefusalProtectedForce)},
+		{"an id never held", code.RefusalStale, code.UnheldDetail(oidOf("an id this repository never held"))},
 	} {
-		if strings.Contains(detail, "refs/heads/") {
-			t.Errorf("%s's sentence names a ref: %q", reason, detail)
+		if strings.Contains(tc.detail, "refs/heads/") {
+			t.Errorf("%s's sentence names a ref: %q", tc.what, tc.detail)
 		}
 		p := proposal("0190f3c4-0000-7000-8000-00000000c0de",
-			code.Command{Ref: ref, Old: oidOf("A"), New: oidOf("B"), Result: code.ResultNG, Reason: reason,
-				Detail: detail},
+			code.Command{Ref: ref, Old: oidOf("A"), New: oidOf("B"), Result: code.ResultNG, Reason: tc.reason,
+				Detail: tc.detail},
 			update("refs/heads/main", oidOf("A"), oidOf("C")))
 		if err := p.Validate(); err != nil {
-			t.Errorf("a proposal carrying %s's sentence at its longest (%d bytes): %v", reason, len(detail), err)
+			t.Errorf("a proposal carrying %s's sentence at its longest (%d bytes): %v", tc.what, len(tc.detail), err)
 		}
 	}
 }

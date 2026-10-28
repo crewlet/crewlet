@@ -66,7 +66,11 @@ func (m ManagedBy) Valid() bool { return slices.Contains(ManagedBys(), m) }
 type DirectPush string
 
 const (
-	// DirectPersons lets a person push to it directly.
+	// DirectPersons lets a person push to it directly, and NOBODY ELSE: a
+	// seat's push to it is refused protected_direct ([ProtectionRefusal]),
+	// so a seat's work reaches it when a person pushes it. Before seats
+	// pushed it refused nothing, and read as "anyone who may push" it would
+	// mean what a ref no rule matches already means.
 	DirectPersons DirectPush = "persons"
 	// DirectNone lets nobody push to it directly.
 	DirectNone DirectPush = "none"
@@ -123,6 +127,18 @@ func PrincipalKinds() []PrincipalKind { return []PrincipalKind{PrincipalOperator
 
 // Valid reports a value this build knows.
 func (p PrincipalKind) Valid() bool { return slices.Contains(PrincipalKinds(), p) }
+
+// readsChart reports a principal whose push is judged from the CHART: every
+// kind but an operator's. A person maintains every repository and a token
+// bound to nobody reads every one — rules that need no chart (ADR-0055), so
+// [GrantOf] never consults one for them — while a seat's standing is its
+// relation on the chart, and so is everything the push decide holds a seat's
+// push to beside it: its grant, the protections that take a person's push
+// alone, its share of a repository outside its unit, its day's quota. A node
+// that holds no chart, or one confirmed behind the company's configuration,
+// decides none of such a push ([CommitterOptions.SeatRules],
+// [CommitterOptions.Current]).
+func (p PrincipalKind) readsChart() bool { return p != PrincipalOperator }
 
 // CommandResult is what became of one ref update.
 type CommandResult string
@@ -406,6 +422,25 @@ type PushEntry struct {
 	Introduced      []string  `json:"introduced,omitempty"`
 	IntroducedCount int       `json:"introduced_count,omitempty"`
 	ReceivedAt      time.Time `json:"received_at"`
+	// Day is the company day a SEAT'S entry was counted against by its
+	// decide's quota (code.limits.pushes_per_seat_day): period.Day's label
+	// on the deciding node's clock in the company's zone, STAMPED BY THE
+	// COMMITTER on every agent entry its record carries and never sent by a
+	// proposer — so the apply adds the entry to the seat's count of that day
+	// (code_seat_days) with no clock and no zone of its own, identically on
+	// every node. Empty on every other entry.
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this field — none of the domain is on main, so
+	// no image and no release holds it — and while that is so, every build
+	// that meets a push record reads it. Once a build without it has run, it
+	// takes {Name: "PushEntry.Day", Since: 2, Op: "push", Path:
+	// []string{"mutation", "pushes", "day"}} in versionedFields, with
+	// RecordVersion at 2, its line under "What each version added" and a
+	// Carrying record in the statelogtest candidate — such a build would
+	// apply a seat's push without counting it, and every committer of it
+	// would read the seat's day short by that push.
+	Day string `json:"day,omitempty"`
 }
 
 // Principal is who acts on a repository: an operator credential and the

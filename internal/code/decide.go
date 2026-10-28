@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -31,25 +32,70 @@ import (
 //
 //  1. a command the receiver already refused stays refused;
 //  2. the rules no state decides ([StatelessRefusal]);
+//     2b. a command the principal's GRANT does not cover ([Grant.RefRule],
+//     not_permitted) — a seat's judged from the deciding epoch's chart
+//     ([SeatRules]), a person's and a token's from rules that need none;
 //  3. the ref already at the new value is a noop;
 //  4. the ref not at the old value is stale;
-//  5. a protection ([ProtectionRefusal]), every matching rule consulted;
+//  5. a protection ([ProtectionRefusal]), every matching rule consulted —
+//     and a rule that takes a person's push alone refuses everybody else's;
 //  6. a create beside a live ref above it or with a live ref below it
 //     (ref_conflict, [working.beside]);
-//  7. a create past MaxRefsPerRepo live refs (repo_refs) — this and 6
-//     judged after every other command of its push, so the push's own
+//  7. a create past MaxRefsPerRepo live refs (repo_refs) — past HALF of them
+//     for a seat outside the repository's owners ([OutsideSeatShare]) — this
+//     and 6 judged after every other command of its push, so the push's own
 //     deletions free their room and their names whatever order git sent
 //     them in;
 //  8. otherwise ok.
 //
 // Then over the push's ok commands, a pack named longer ago than a write may
 // still name it is refused upload_expired, and one that takes the repository
-// past code.limits.repo_max_bytes repo_size; and an --atomic push with any
-// refusal is refused whole ([Atomic]). A push with an ok command left is an
-// entry of the record — unless the pack bound refuses it whole (below); one
-// with none is answered here and writes nothing. A push checked at another
-// drop epoch than the repository's meets none of these rules: it is refused
-// whole before them (below).
+// past code.limits.repo_max_bytes — past half of it, for a seat outside the
+// repository's owners — repo_size; and an --atomic push with any refusal is
+// refused whole ([Atomic]). A push with an ok command left is an entry of the
+// record — unless a seat's day's quota or the pack bound refuses it whole
+// (below); one with none is answered here and writes nothing. A push checked
+// at another drop epoch than the repository's meets none of these rules: it
+// is refused whole before them (below).
+//
+// # A seat's push is held to its grant, recorded, and to its day, not
+//
+// A grant's refusal is RECORDED on its command (not_permitted, rule 2b): who
+// tried to move what past their grant is an audit fact, and the receiving
+// node's own check of the grant before the bytes moved makes it rare — it
+// arises only where the chart moved between the two. The day's quota is NOT
+// ([RefusalPushQuota]): a seat whose pushes this company day — every
+// repository together, [Limits.PushesPerSeatDay] — reach the bound has its
+// push refused WHOLE, no entry of the record, the batch's other entries going
+// on, because a recorded refusal would cost the log a record a push of a
+// seat pushing in a loop, the very cost the quota bounds. The quota is judged
+// on a push that would otherwise be an entry — after every rule of the push's
+// own, so a stale, protected, oversized or --atomic push is told the reason
+// running it again tomorrow would not change, and is no entry to count — and
+// before the pack bound, so a push past both is told the bound that lasts a
+// day rather than sent to run again in a minute.
+//
+// THE COUNT IS ONE ROW A SEAT AND DAY (code_seat_days), read once a round for
+// every seat the batch names, which the push apply keeps from the day this
+// decide stamps on every seat's entry ([PushEntry.Day]) — never a count over
+// the push history, whose index would cost every seat's push an entry for the
+// 181 days the history keeps, on every data node, to answer a question about
+// one day. Nor the usage domain's days: they count no push, and each is one
+// node's own derivation that a read joins later, which no decide can be held
+// to; the counter is the applier's, a function of this log alone, so every
+// data node's decide reads the same count.
+//
+// It counts across REPOSITORIES, and a repository's committer does not see the
+// seat's pushes that other repositories' committers decided and this node has
+// not applied, so a seat may land past its bound by at most (C − 1) × min(the
+// room left, its entries in one batch, at most MaxPushesPerRecord) for C
+// committers deciding its pushes in one instant — never more than its pushes
+// in flight at once less one, since a turn's tool calls run one after another,
+// and never cumulative: once its count passes the bound every later batch
+// refuses it. ACCEPTED as the product's call: an exact count would make every
+// repository's decide of one seat arbitrate on one subject, putting the
+// pushes of a seat working in many repositories behind one another to bound
+// an overshoot that is a few pushes on a bound of a thousand.
 //
 // # A push checked before an expunge began is refused whole, before any rule
 //
@@ -114,7 +160,9 @@ import (
 // lane; the APPLY does, and reads the same way for that reason,
 // apply_push.go.) A batch that may CREATE a ref reads two statements more —
 // the directories its creates would make, and the refs under each create —
-// and one that creates none reads neither.
+// and one that creates none reads neither; a batch carrying a SEAT'S push
+// reads one more, every seat's count of the day over the counter's key, and
+// one of persons' pushes alone reads none.
 //
 // # A ref is never beside a directory of its name
 //
@@ -203,14 +251,16 @@ func (v *verdicts) under(stored []Protection) error {
 }
 
 // verdict is command (the place of c in the proposal at push) under the
-// rules, formed the first time a round asks and kept for the rest.
-func (v *verdicts) verdict(push, command int, c Command) (Refusal, string) {
+// rules, for a push its principal of kind by makes, formed the first time a
+// round asks and kept for the rest — KEYED BY THE PUSH, unchanged by the kind,
+// since a push has one principal and is the same proposal in every round.
+func (v *verdicts) verdict(push, command int, c Command, by PrincipalKind) (Refusal, string) {
 	key := [2]int{push, command}
 	if got, ok := v.of[key]; ok {
 		return got.refusal, got.detail
 	}
 	var got verdict
-	if r, rule := ProtectionRefusal(c, v.rules); r != "" {
+	if r, rule := ProtectionRefusal(c, v.rules, by); r != "" {
 		got = verdict{refusal: r, detail: ProtectionDetail(rule, r)}
 	}
 	v.of[key] = got
@@ -280,7 +330,7 @@ func (v *verdicts) formBefore(ctx context.Context, db store.ReplicatedReader, re
 		first[p.PushID] = true
 		for command, c := range p.Commands {
 			if c.Result != ResultNG && StatelessRefusal(c) == "" {
-				v.verdict(push, command, c)
+				v.verdict(push, command, c, p.Principal.Kind)
 			}
 		}
 	}
@@ -310,13 +360,22 @@ type decided struct {
 
 // decideBatch is one round's decision over the rows tx holds, for the batch in
 // order: the entries of the record, every proposal's answer, and the version
-// the decision read. Pure over (the rows, the batch, limits, retention, now):
-// retention is code.deleted_retention_days on the deciding node's epoch, from
-// which a deleted repository's refusal names when its purge may begin; v is
-// the protection verdicts the batch's earlier rounds formed, which this round
-// reads only where its own snapshot holds the rules they were formed under.
+// the decision read. Pure over (the rows, the batch, limits, retention, seats,
+// now): retention is code.deleted_retention_days on the deciding node's epoch,
+// from which a deleted repository's refusal names when its purge may begin;
+// seats is that epoch's chart and calendar, which a seat's push is judged by
+// and which a batch carrying none may leave unset; v is the protection
+// verdicts the batch's earlier rounds formed, which this round reads only
+// where its own snapshot holds the rules they were formed under.
+//
+// A SEAT'S PUSH IS DECIDED ONLY WITH A CHART. The committer hands every one on
+// to the repository's next committer before a batch with no chart is decided
+// ([Committer.commit]), so a seat's push reaching here with none is the
+// caller's bug, refused as one — never a refusal recorded that no chart made,
+// and never a push let through by the grant nobody judged ([GrantOf] answers
+// an agent nothing on a nil roster).
 func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposal,
-	limits Limits, retention time.Duration, now time.Time, v *verdicts) (entries []PushEntry,
+	limits Limits, retention time.Duration, seats SeatRules, now time.Time, v *verdicts) (entries []PushEntry,
 	answers []decided, version int64, err error) {
 
 	answers = make([]decided, len(batch))
@@ -392,6 +451,12 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		return true
 	})
 
+	if seats.Roster == nil && slices.ContainsFunc(open, func(i int) bool {
+		return batch[i].Principal.Kind.readsChart()
+	}) {
+		return nil, nil, 0, fmt.Errorf("code: a seat's push to %s reached the decide with no chart to judge "+
+			"it by — the committer hands such a push to the repository's next committer", repoID)
+	}
 	stored, err := protectionsIn(ctx, tx, repoID)
 	if err != nil {
 		return nil, nil, 0, err
@@ -405,26 +470,145 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	if err != nil {
 		return nil, nil, 0, err
 	}
+	quota, err := newSeatQuota(ctx, tx, batch, open, seats.Zone, now, limits.PushesPerSeatDay)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	// THE REPOSITORY AS A GRANT READS IT, from the round's own row: its
+	// owner and its visibility, which a seat's relation is judged on.
+	ref := repo.grantRef(repoID)
 	for _, i := range open {
 		p := batch[i]
-		cmds := w.decide(i, p, v, limits)
+		cmds := w.decide(i, p, v, limits, GrantOf(p.Principal, ref, seats.Roster))
 		answers[i].commands = cmds
 		if !slices.ContainsFunc(cmds, isOK) {
 			continue
 		}
-		// THE PACK BOUND, LAST: the push whole — what the receiver refused
-		// kept, every other command under the bound's sentence, the ones found
-		// ok here among them, since nothing of it is decided.
+		// A SEAT'S DAY, then THE PACK BOUND, LAST: each the push whole —
+		// what the receiver refused kept, every other command under the
+		// one sentence, the ones found ok here among them, since nothing of
+		// it is decided.
+		if detail, over := quota.over(p); over {
+			answers[i].refused, answers[i].detail = RefusalPushQuota, detail
+			answers[i].commands = refuseEvery(p.Commands, RefusalPushQuota, detail)
+			continue
+		}
 		if detail, behind := w.behind(p); behind {
 			answers[i].refused, answers[i].detail = RefusalCompactionBehind, detail
 			answers[i].commands = refuseEvery(p.Commands, RefusalCompactionBehind, detail)
 			continue
 		}
 		w.apply(p, cmds)
+		quota.count(p)
 		answers[i].inRecord = true
-		entries = append(entries, p.entryWith(cmds))
+		entries = append(entries, p.entryWith(cmds, quota.day.Label))
 	}
 	return entries, answers, repo.version, nil
+}
+
+// seatQuota is one round's count of each seat's pushes on the deciding
+// company day ([Limits.PushesPerSeatDay]): what the counter holds for every
+// seat the round's open proposals name — code_seat_days, read ONCE a round
+// inside its snapshot, for a round carrying a seat's push at all — and the
+// entries of each seat the round's record carries so far.
+type seatQuota struct {
+	// day is the company day the round counts against, on the deciding
+	// node's clock in the company's zone; its zero value for a round that
+	// carries no seat's push, which counts nothing.
+	day period.Window
+	// limit is code.limits.pushes_per_seat_day on the deciding epoch.
+	limit int
+	// held is each seat's count of the day as the counter holds it, no row
+	// being zero; carried, each seat's entries this round's record carries
+	// so far.
+	held, carried map[string]int
+}
+
+// newSeatQuota reads the counts of the day now falls on, on the calendar of
+// zone, for every seat whose push is among the open proposals of batch, in ONE
+// statement over the counter's key — none at all for a round of persons'
+// pushes alone.
+func newSeatQuota(ctx context.Context, tx *sql.Tx, batch []Proposal, open []int, zone *time.Location,
+	now time.Time, limit int) (seatQuota, error) {
+
+	q := seatQuota{limit: limit, held: map[string]int{}, carried: map[string]int{}}
+	var seats []string
+	for _, i := range open {
+		if p := batch[i].Principal; p.Kind == PrincipalAgent && !slices.Contains(seats, p.Seat) {
+			seats = append(seats, p.Seat)
+		}
+	}
+	if len(seats) == 0 {
+		return q, nil
+	}
+	if q.day = period.At(period.Day, now, zone); q.day.Label == "" {
+		// A CLOCK NO LABEL SPELLS — past the year 9999 — has no company
+		// day to count a seat's push against, and a day of "" would count
+		// every such push against nothing.
+		return seatQuota{}, fmt.Errorf("code: the deciding node's clock reads %s, which no company day "+
+			"spells, so no seat's push can be counted against one", now.UTC().Format(time.RFC3339))
+	}
+	list, err := jsonList(seats)
+	if err != nil {
+		return seatQuota{}, err
+	}
+	rows, err := tx.QueryContext(ctx, seatDaysSQL, q.day.Label, list)
+	if err != nil {
+		return seatQuota{}, fmt.Errorf("code: read the seats' pushes on %s: %w", q.day.Label, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var seat string
+		var pushes int
+		if err := rows.Scan(&seat, &pushes); err != nil {
+			return seatQuota{}, fmt.Errorf("code: read the seats' pushes on %s: %w", q.day.Label, err)
+		}
+		q.held[seat] = pushes
+	}
+	if err := rows.Err(); err != nil {
+		return seatQuota{}, fmt.Errorf("code: read the seats' pushes on %s: %w", q.day.Label, err)
+	}
+	return q, nil
+}
+
+// over reports a SEAT'S push its day's count refuses, with the sentence: the
+// seat's pushes this day as the counter holds them, its entries this round's
+// record carries ahead of p, at the bound or past it. A push by anybody else
+// is never counted.
+func (q seatQuota) over(p Proposal) (string, bool) {
+	if p.Principal.Kind != PrincipalAgent {
+		return "", false
+	}
+	pushed := q.held[p.Principal.Seat] + q.carried[p.Principal.Seat]
+	if pushed < q.limit {
+		return "", false
+	}
+	return quotaDetail(p.Principal.Seat, pushed, q.limit, q.day), true
+}
+
+// count counts p, an entry of the round's record, against its seat's day.
+func (q seatQuota) count(p Proposal) {
+	if p.Principal.Kind == PrincipalAgent {
+		q.carried[p.Principal.Seat]++
+	}
+}
+
+// quotaDetail is the sentence of a seat's push refused push_quota: who, how
+// many pushes it has made since its company day began, the bound, and the
+// instant the count starts again — the day's end on the company's calendar,
+// in its zone. Formed by the push decide alone, the one judge of the count.
+func quotaDetail(seat string, pushed, limit int, day period.Window) string {
+	return fmt.Sprintf("seat %s has landed %s since %s began on the company's calendar, and "+
+		"code.limits.pushes_per_seat_day lets a seat land %s a day: nothing was decided; the count starts "+
+		"again at %s", seat, pushCount(pushed), day.Label, pushCount(limit), day.End.Format(time.RFC3339))
+}
+
+// pushCount is n pushes as a sentence counts them.
+func pushCount(n int) string {
+	if n == 1 {
+		return "1 push"
+	}
+	return fmt.Sprintf("%d pushes", n)
 }
 
 // isOK reports a command that moves its ref.
@@ -463,22 +647,34 @@ type pushRepo struct {
 	// purge requested: a request forms its record whatever is open.
 	dropEpoch int64
 	expungeID string
+	// owner and visibility are what a seat's grant on the repository is
+	// judged by ([GrantOf]): its relation through the owner, and the row
+	// visibility decides.
+	owner      Owner
+	visibility Visibility
+}
+
+// grantRef is the repository id names as a grant reads it: its name, which a
+// refusal names, its owner and its visibility.
+func (r pushRepo) grantRef(id string) RepoRef {
+	return RepoRef{ID: id, Name: r.name, Owner: r.owner, Visibility: r.visibility}
 }
 
 // pushRepoIn reads a repository's row for a decide.
 func pushRepoIn(ctx context.Context, tx *sql.Tx, id string) (pushRepo, bool, error) {
 	var r pushRepo
-	var status string
+	var status, ownerKind, visibility string
 	var deleted sql.NullInt64
 	err := tx.QueryRowContext(ctx, decideRepoSQL, id).Scan(&r.name, &status, &r.refs,
-		&r.liveBytes, &r.livePacks, &r.version, &deleted, &r.dropEpoch, &r.expungeID)
+		&r.liveBytes, &r.livePacks, &r.version, &deleted, &r.dropEpoch, &r.expungeID, &ownerKind,
+		&r.owner.Ref, &visibility)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return pushRepo{}, false, nil
 	case err != nil:
 		return pushRepo{}, false, fmt.Errorf("code: read repository %s for its pushes: %w", id, err)
 	}
-	r.status = RepoStatus(status)
+	r.status, r.owner.Kind, r.visibility = RepoStatus(status), OwnerKind(ownerKind), Visibility(visibility)
 	if deleted.Valid {
 		r.deletedAt = store.DecodeTime(deleted.Int64)
 	}
@@ -966,9 +1162,19 @@ func conflictDetail(other string) string {
 
 // decide is one push's commands with their results, judged against the
 // working state — which it does not change ([working.apply] does, for a push
-// that becomes an entry). push is p's place in the batch, which its
-// protection verdicts are kept under.
-func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) []Command {
+// that becomes an entry) — and against g, its principal's grant on the
+// repository. push is p's place in the batch, which its protection verdicts
+// are kept under.
+//
+// A SEAT OUTSIDE THE REPOSITORY'S OWNERS ([Grant.outside]) is held to
+// [OutsideSeatShare] of its live refs and of code.limits.repo_max_bytes,
+// judged on the repository's whole counts as everybody's are, and every other
+// principal to the whole of each.
+func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits, g Grant) []Command {
+	refBound, byteBound := MaxRefsPerRepo, limits.RepoMaxBytes
+	if g.outside() {
+		refBound, byteBound = MaxRefsPerRepo/OutsideSeatShare, limits.RepoMaxBytes/OutsideSeatShare
+	}
 	cmds := slices.Clone(p.Commands)
 	// EVERY COMMAND BUT A CREATE IS JUDGED FIRST, so the live refs the push's
 	// own deletions free are known before any create is judged against the
@@ -990,6 +1196,12 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) []Com
 			refuse(c, r, statelessDetail(*c, r))
 			continue
 		}
+		// 2b THE GRANT, before any state of the ref is read: a command the
+		// principal may not make is refused for that, whatever the ref holds.
+		if r, why := g.RefRule(*c); r != "" {
+			refuse(c, r, why)
+			continue
+		}
 		current := w.current(c.Ref)
 		switch {
 		case current == c.New:
@@ -999,7 +1211,7 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) []Com
 			refuse(c, RefusalStale, fmt.Sprintf("%s is at %s; fetch first", c.Ref, short(current)))
 			continue
 		}
-		if r, detail := v.verdict(push, i, *c); r != "" {
+		if r, detail := v.verdict(push, i, *c, p.Principal.Kind); r != "" {
 			refuse(c, r, detail)
 			continue
 		}
@@ -1027,9 +1239,8 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) []Com
 			refuse(c, RefusalRefConflict, conflictDetail(other))
 			continue
 		}
-		if held := w.live - deletes + creates; held >= MaxRefsPerRepo {
-			refuse(c, RefusalRepoRefs, fmt.Sprintf("%s holds %d live refs, the most one "+
-				"repository may", w.name, held))
+		if held := w.live - deletes + creates; held >= refBound {
+			refuse(c, RefusalRepoRefs, refsDetail(w.name, held, refBound, g))
 			continue
 		}
 		creates++
@@ -1041,15 +1252,49 @@ func (w *working) decide(push int, p Proposal, v *verdicts, limits Limits) []Com
 		switch {
 		case expired:
 			refuseOK(cmds, RefusalUploadExpired, detail)
-		case w.bytes+p.Pack.Size > limits.RepoMaxBytes:
-			refuseOK(cmds, RefusalRepoSize, fmt.Sprintf("%s would hold %s of packs, past %s "+
-				"(code.limits.repo_max_bytes)", w.name, gib(w.bytes+p.Pack.Size), gib(limits.RepoMaxBytes)))
+		case w.bytes+p.Pack.Size > byteBound:
+			refuseOK(cmds, RefusalRepoSize, sizeDetail(w.name, w.bytes+p.Pack.Size, byteBound, limits, g))
 		}
 	}
 	if p.Atomic {
 		cmds = Atomic(cmds)
 	}
 	return cmds
+}
+
+// refsDetail is the sentence of a create refused repo_refs: the repository
+// holds held live refs, at or past bound — the most it holds, or for a seat
+// outside its owners the half of that such a seat may fill, which the
+// sentence then says, naming whose the rest is.
+func refsDetail(name string, held, bound int, g Grant) string {
+	if !g.outside() {
+		return fmt.Sprintf("%s holds %d live refs, the most one repository may", name, held)
+	}
+	return fmt.Sprintf("%s holds %d live refs, and %s creates refs there only while %s holds fewer than %d: "+
+		"half of the %d one repository may, the other half kept for its owners", name, held,
+		outsider(g.Owner), name, bound, MaxRefsPerRepo)
+}
+
+// sizeDetail is the sentence of a push refused repo_size: the repository
+// would hold would of packs, past bound — code.limits.repo_max_bytes, or for
+// a seat outside its owners the half of it such a seat may fill, which the
+// sentence then says, naming whose the rest is.
+func sizeDetail(name string, would, bound int64, limits Limits, g Grant) string {
+	if !g.outside() {
+		return fmt.Sprintf("%s would hold %s of packs, past %s (code.limits.repo_max_bytes)", name,
+			gib(would), gib(bound))
+	}
+	return fmt.Sprintf("%s would hold %s of packs, past %s: %s fills at most half of "+
+		"code.limits.repo_max_bytes (%s), the other half kept for its owners", name, gib(would), gib(bound),
+		outsider(g.Owner), gib(limits.RepoMaxBytes))
+}
+
+// outsider names a seat outside a repository's owners, by who owns it.
+func outsider(o Owner) string {
+	if o.Kind == OwnerSeat {
+		return fmt.Sprintf("a seat other than %s, which owns it,", o.Ref)
+	}
+	return fmt.Sprintf("a seat outside unit %s, which owns it,", o.Ref)
 }
 
 // uploadExpired is the one rule a decide holds a stored object's key to: an
@@ -1187,14 +1432,22 @@ func statelessDetail(c Command, r Refusal) string {
 // carries this sentence in a proposal, whose every Detail is bounded
 // (maxDetailBytes) — a ref and a pattern of MaxRefNameBytes each could never
 // fit there beside the words, and a push whose sentence did not fit was
-// refused whole as the receiver's own bug.
+// refused whole as the receiver's own bug. So each sentence is its pattern
+// and at most 64 bytes of words, the persons rule's included, which says what
+// the rule takes rather than why a seat's change reaches the ref only through
+// a person: that is the code host's "What git prints" row.
 func ProtectionDetail(rule Protection, r Refusal) string {
-	switch r {
-	case RefusalProtectedDirect:
+	switch {
+	case r == RefusalProtectedDirect && rule.DirectPush == DirectPersons:
+		// A PUSH BY ANYBODY BUT A PERSON under a rule that takes a
+		// person's: the only way a persons rule refuses anything
+		// ([ProtectionRefusal]).
+		return fmt.Sprintf("takes a person's push only (protection %s: direct_push persons)", rule.Pattern)
+	case r == RefusalProtectedDirect:
 		return fmt.Sprintf("takes no direct push (protection %s: direct_push none)", rule.Pattern)
-	case RefusalProtectedDelete:
+	case r == RefusalProtectedDelete:
 		return fmt.Sprintf("may not be deleted (protection %s: allow_delete)", rule.Pattern)
-	case RefusalProtectedForce:
+	case r == RefusalProtectedForce:
 		return fmt.Sprintf("refuses a force-push (protection %s: allow_force)", rule.Pattern)
 	}
 	return r.Sentence()
@@ -1214,9 +1467,15 @@ func UnheldDetail(old string) string {
 // batch names are read by the applier's own statement (refsNamedSQL).
 const (
 	decideRepoSQL = `SELECT name, status, refs, live_bytes, live_packs, version, deleted_at,
-		drop_epoch, expunge_id FROM code_repos WHERE id = ?`
+		drop_epoch, expunge_id, owner_kind, owner, visibility FROM code_repos WHERE id = ?`
 	decideDeletionSQL = `SELECT name FROM code_deletions WHERE repo_id = ?`
-	pushesNamedSQL    = `SELECT ` + pushColumns + ` FROM code_pushes
+	// seatDaysSQL is each named seat's pushes counted on one company day: ONE
+	// row a seat of the counter the push apply keeps (code_seat_days), each
+	// a seek of its key driven from the round's list of seats — never a count
+	// over the push history.
+	seatDaysSQL = `SELECT s.seat, s.pushes FROM json_each(?2) AS j CROSS JOIN code_seat_days AS s
+		WHERE s.seat = CAST(j.value AS TEXT) AND s.day = ?1`
+	pushesNamedSQL = `SELECT ` + pushColumns + ` FROM code_pushes
 		WHERE push_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
 	// gapsHoldingSQL is the place of each [lo, hi] gap of its list that
 	// holds a live ref, and firstLiveInSQL the first such ref of each gap:

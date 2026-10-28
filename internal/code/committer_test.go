@@ -58,9 +58,10 @@ func (g *gatePublisher) pass() { g.gate <- struct{}{} }
 // open lets every publish through, now and later.
 func (g *gatePublisher) open() { g.once.Do(func() { close(g.gate) }) }
 
-// committerOn is a committer on n over pub, at the harness's clock, with a
-// recorder of its own. A gate is opened before the committer stops, so a case
-// that fails while holding one still ends.
+// committerOn is a committer on n over pub, at the harness's clock, judging a
+// seat's push by the grant tests' chart on UTC's calendar, with a recorder of
+// its own. A gate is opened before the committer stops, so a case that fails
+// while holding one still ends.
 func committerOn(t testing.TB, n *node, pub code.Publisher,
 	tune ...func(*code.CommitterOptions)) (*code.Committer, *metrics.Recorder) {
 
@@ -72,6 +73,7 @@ func committerOn(t testing.TB, n *node, pub code.Publisher,
 	o := code.CommitterOptions{
 		Publisher: pub, DB: n.db.Reader(), NodeID: n.id, Limits: code.DefaultLimits,
 		Retention: func() time.Duration { return code.DefaultDeletedRetention },
+		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{Roster: testChart(), Zone: time.UTC}, true },
 		Now:       func() time.Time { return harnessAt }, Metrics: rec,
 	}
 	for _, f := range tune {
@@ -1339,11 +1341,13 @@ func TestACommitterRefusesWhatItCannotWorkWithout(t *testing.T) {
 		"no node id":   {func(o *code.CommitterOptions) { o.NodeID = "" }, "deciding node's id"},
 		"no limits":    {func(o *code.CommitterOptions) { o.Limits = nil }, "code.limits"},
 		"no retention": {func(o *code.CommitterOptions) { o.Retention = nil }, "code.deleted_retention_days"},
+		"no chart":     {func(o *code.CommitterOptions) { o.SeatRules = nil }, "SeatRules"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			o := code.CommitterOptions{
 				Publisher: n.pub, DB: n.db.Reader(), NodeID: n.id, Limits: code.DefaultLimits,
 				Retention: func() time.Duration { return code.DefaultDeletedRetention },
+				SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{}, false },
 			}
 			tc.unset(&o)
 			c, err := code.NewCommitter(o)

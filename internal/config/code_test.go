@@ -35,10 +35,24 @@ func TestTheCodeBlocksRules(t *testing.T) {
 	}{
 		"native alone": {code: "code:\n  native: true\n"},
 		"native with every limit at its bound": {code: "code:\n  native: true\n  limits:\n" +
-			"    max_push_bytes: 1073741824\n    max_blob_bytes: 1024\n    repo_max_bytes: 1099511627776\n"},
+			"    max_push_bytes: 1073741824\n    max_blob_bytes: 1024\n    repo_max_bytes: 1099511627776\n" +
+			"    pushes_per_seat_day: 100000\n"},
+		"a seat's quota of one push a day": {code: "code:\n  native: true\n  limits:\n    pushes_per_seat_day: 1\n"},
 		"limits with nothing hosting code": {
 			code: "code:\n  limits:\n    max_blob_bytes: 1048576\n",
 			path: "code.limits", kind: "conflict", says: []string{"code.native"},
+		},
+		"a seat's quota with nothing hosting code": {
+			code: "code:\n  limits:\n    pushes_per_seat_day: 50\n",
+			path: "code.limits", kind: "conflict", says: []string{"code.native"},
+		},
+		"a seat's quota below one push": {
+			code: "code:\n  native: true\n  limits:\n    pushes_per_seat_day: -1\n",
+			path: "code.limits.pushes_per_seat_day", kind: "out_of_range", says: []string{"1..100000", "1000"},
+		},
+		"a seat's quota past its ceiling": {
+			code: "code:\n  native: true\n  limits:\n    pushes_per_seat_day: 100001\n",
+			path: "code.limits.pushes_per_seat_day", kind: "out_of_range", says: []string{"100001", "1..100000"},
 		},
 		"a push limit below a mebibyte": {
 			code: "code:\n  native: true\n  limits:\n    max_push_bytes: 512\n",
@@ -114,6 +128,7 @@ func TestTheCodeLimitsAreTheSchemasBounds(t *testing.T) {
 		{"MaxPushBytes", config.CodeMinPushBytes, config.CodeMaxPushBytesCeiling},
 		{"MaxBlobBytes", config.CodeMinBlobBytes, config.CodeMaxPushBytesCeiling},
 		{"RepoMaxBytes", config.CodeMinRepoBytes, config.CodeMaxRepoBytesCeiling},
+		{"PushesPerSeatDay", config.CodeMinPushesPerSeatDay, config.CodePushesPerSeatDayCeiling},
 	} {
 		field, ok := reflect.TypeFor[config.CodeLimits]().FieldByName(tc.field)
 		if !ok {
@@ -148,14 +163,16 @@ func TestTheCodeLimitsResolveToTheirDefaults(t *testing.T) {
 	t.Parallel()
 	got := config.CodeLimits{}.Resolved()
 	want := config.CodeLimits{
-		MaxPushBytes: config.DefaultCodeMaxPushBytes,
-		MaxBlobBytes: config.DefaultCodeMaxBlobBytes,
-		RepoMaxBytes: config.DefaultCodeRepoMaxBytes,
+		MaxPushBytes:     config.DefaultCodeMaxPushBytes,
+		MaxBlobBytes:     config.DefaultCodeMaxBlobBytes,
+		RepoMaxBytes:     config.DefaultCodeRepoMaxBytes,
+		PushesPerSeatDay: config.DefaultCodePushesPerSeatDay,
 	}
 	if got != want {
 		t.Errorf("the unset limits resolve to %+v, want the defaults %+v", got, want)
 	}
-	set := config.CodeLimits{MaxPushBytes: 1 << 25, MaxBlobBytes: 1 << 20, RepoMaxBytes: 1 << 31}
+	set := config.CodeLimits{MaxPushBytes: 1 << 25, MaxBlobBytes: 1 << 20, RepoMaxBytes: 1 << 31,
+		PushesPerSeatDay: 7}
 	if got := set.Resolved(); got != set {
 		t.Errorf("set limits resolve to %+v, want them as written %+v", got, set)
 	}

@@ -156,7 +156,7 @@ What a rule does to a push of a ref it matches:
 |---|---|---|
 | `allow_force` | A push that moves the branch to a commit not descending from it is refused | Allowed. Refused on a tag rule: a tag never moves |
 | `allow_delete` | Deleting the ref is refused | Allowed |
-| `direct_push` | `persons`: a person may push to it | `none`: nothing pushes to it — the ref is frozen |
+| `direct_push` | `persons`: a person may push to it, and nobody else — a seat's push is refused `protected_direct` ([A seat's push](#a-seats-push)) | `none`: nothing pushes to it — the ref is frozen |
 
 **Every rule that matches holds**, because two rules written for two reasons
 both mean something: a ref matched by a rule allowing deletion and another
@@ -320,9 +320,12 @@ either a push is refused `busy` undecided and the client pushes again (the
 ## Limits
 
 [`code.limits`](../getting-started/configuration.md#code) — the largest pack
-one push may send, the largest file it may carry, and the most one repository
-may hold — is read off the **deciding node's current revision** at every
-decision, so a change holds from its activation with no restart. A repository
+one push may send, the largest file it may carry, the most one repository
+may hold, and how many pushes one seat may land in a day ([A seat's
+push](#a-seats-push)) — is read off the **deciding node's current revision**
+at every decision, so a change holds from its activation with no restart. A
+seat outside a repository's owning unit is held to half of its live refs and
+half of `repo_max_bytes` ([A seat's push](#a-seats-push)). A repository
 also holds at most 100 000 live refs, and a push moves at most 1 000 of them;
 the refs it deleted within 48 hours are kept apart, up to another 100 000, the
 oldest forgotten sooner past that — a node last synced before them reads the
@@ -1692,6 +1695,70 @@ last. In this release a seat reads a repository through its code tools
 ([Server-side reads](#server-side-reads)) and pushes to none
 ([What it does not do yet](#what-it-does-not-do-yet)).
 
+### A seat's push
+
+A seat's push is decided by its repository's [committer](#the-committer), as
+a person's is, and held to four rules a person's is not — each judged from
+the chart and the calendar of the data node that decides it. Nothing in this
+release pushes as a seat yet ([What it does not do yet](#what-it-does-not-do-yet));
+these are the rules the committer holds one to.
+
+- **Its grant, at the decide.** Every command is judged against the seat's
+  grant (the table above) before anything about its ref is read, and one the
+  grant does not cover is refused **`not_permitted`**, with the grant's own
+  sentence. It is a verdict on the command, recorded with the push's other
+  commands where any of them lands, as every such verdict is: who tried to
+  move what past their grant is a fact the push history keeps.
+- **A protection takes a person's push alone.** `direct_push: persons` — what
+  every protection rule says unless it says `none` — lets a person push to the
+  ref and **nobody else**: a seat's push to it is refused **`protected_direct`**
+  whatever the seat's grant, its unit's lead included, and `direct_push: none`
+  refuses everybody. A seat's work reaches a protected branch when a person
+  pushes it.
+- **A seat outside the owning unit fills at most half.** A seat whose
+  relation to the repository is below write — one that reads it and pushes
+  only into its own branches there — creates a ref only while the repository
+  holds fewer than 50 000 live refs, half of the 100 000 one may hold, and
+  lands a pack only while the repository's packs stay within half of
+  `code.limits.repo_max_bytes`. Its own branches are on every repository it
+  reads, so without the bound one seat of another unit could fill a
+  repository its owners work in and refuse them every push. The other half is
+  the owners': a person, and a seat of the owning unit, are held to the whole
+  of each. The seats outside share their half, with no bound on any one of
+  them. The refusals are `repo_refs` and `repo_size`, each saying which half
+  it met.
+- **A daily quota.** A seat lands at most `code.limits.pushes_per_seat_day`
+  pushes in one day on the company's calendar
+  ([`timezone`](../getting-started/configuration.md#the-companys-clock)),
+  every repository together: 1 000 unless set, some thirty-three times the
+  reference company's thirty pushes a seat a day — a bound on a seat pushing
+  in a loop, not a budget. Past it a push is refused **`push_quota`**, whole and
+  **unrecorded**: nothing of it is decided and no record carries it, because a
+  refusal recorded for every push of a runaway seat would cost the log the
+  record a push the quota exists to bound. Its sentence names the instant the
+  count starts again, the company's next midnight. A person's pushes are never
+  counted. A push the quota refuses has already stored its pack; nothing names
+  it, and the [object collector](object-store.md#collection-and-audit) deletes
+  it a day later — the quota bounds what a seat costs the log, not its git
+  work.
+
+The quota counts a seat across repositories, and each repository's committer
+counts what the code log has applied on its own node, so a seat pushing to
+several repositories in one instant may land past the bound by its pushes in
+flight at that instant, less one — never more, and never again that day: once
+the count is past the bound, every later push is refused. An exact count
+would put every push of a seat working in many repositories behind one
+another, on one arbitration, to save a few pushes on a bound of a thousand.
+
+A data node that cannot judge a seat decides none of its pushes, and says so
+about itself, so the repository's next committer decides the push under the
+same push id: one that holds no chart yet, from its start until it installs
+its first company configuration, and one [confirmed behind the company's
+configuration](control-plane.md#where-the-gate-sits), which decides no seat's
+push even as the last committer left to ask — the revision it failed to apply
+may be the one that revoked the seat's grant, so the push is decided by a
+current node or by nobody. A person's push it decides as before.
+
 ### Reads made for somebody else
 
 A turn somebody woke — a person's message, a colleague seat's message or ask,
@@ -2746,21 +2813,22 @@ words, since git does not read the header.
 | More ref updates than one push's record holds — some six hundred of the longest refs whose characters the code log spells long (`&`, `<`, `>`) | `(this push's ref updates take up to <size> of its record, past the 1023.5 KiB one push may; push them in parts …)` | Push the refs in groups. Nothing of the push was run or stored. |
 | A push carries a push certificate — a signed push, from a client built by hand (`git push --signed` stops in git itself, since the engine advertises none) | `this push carries a push certificate (a signed push), which this engine never advertises and does not take: push without --signed` (400) | Push without `--signed`. Nothing of the push was run or stored. |
 | A ref moved since you fetched | `(stale: refs/heads/main is at <id>; fetch first)`, or `(stale: was at <id>, which this repository does not hold; fetch first)` when the commit you pushed from was never pushed here | Fetch, integrate, push again. |
-| A protection refused it | `(protected_force: refuses a force-push (protection <pattern>: allow_force))`, `(protected_delete: may not be deleted (protection <pattern>: allow_delete))`, or `(protected_direct: takes no direct push (protection <pattern>: direct_push none))` | The rule named says what it allows; a change to it is a change to `code.repos`. |
+| A protection refused it | `(protected_force: refuses a force-push (protection <pattern>: allow_force))`, `(protected_delete: may not be deleted (protection <pattern>: allow_delete))`, or `(protected_direct: takes no direct push (protection <pattern>: direct_push none))`; for a seat's push to a ref a rule takes a person's push to alone, `(protected_direct: takes a person's push only (protection <pattern>: direct_push persons))` | The rule named says what it allows; a change to it is a change to `code.repos`. A seat's work reaches a ref under `direct_push: persons` — every rule that does not say `none` — when a person pushes it ([A seat's push](#a-seats-push)). |
 | A tag moved, a reserved ref — outside `refs/heads/` and `refs/tags/`, under `refs/crewlet/`, or `refs/heads/seats` or `refs/heads/seats/<name>` as a branch | `(tag_moved: …)`, `(reserved_ref: …)` | Create a new tag; push under `refs/heads/` or `refs/tags/`, and not as `seats` or `seats/<name>`, which hold seats' own branches. |
 | A ref the engine does not take — longer than 255 bytes, or one git's rules refuse | `(bad_ref: not a ref: git's check-ref-format rules, at most 255 bytes of UTF-8 under refs/<namespace>/)` | Name the ref within 255 bytes. git takes longer refs; the engine does not. |
 | One ref of an `--atomic` push refused | the refused ref's reason, and `(atomic: …)` on every other | Fix the refused ref; nothing of the push landed. |
 | A blob over the limit | `(blob_too_large: blob <id> (<path>) is <size>, past code.limits.max_blob_bytes …)` | Remove it from the history you push. |
 | A push that would store more than one push may — the pack it sends completed against the repository, with its index | `(pack_too_large: the push stores <size>, past the <size> one push may store; push fewer commits at once, or without thin packs (git push --no-thin))` | Push fewer commits at once, or with `git push --no-thin`. Nothing was uploaded. |
-| A new ref past the most live refs a repository holds | `(repo_refs: <repo> holds <n> live refs, the most one repository may)` | Delete the refs nobody needs, in the same push as the new ones or before it: a deletion stops counting at once, even against the push that makes it, and the refs a repository deleted never refuse a push. |
+| A new ref past the most live refs a repository holds | `(repo_refs: <repo> holds <n> live refs, the most one repository may)`; for a seat outside the owning unit, past the half it may fill ([A seat's push](#a-seats-push)), `(repo_refs: <repo> holds <n> live refs, and a seat outside unit <owner>, which owns it, creates refs there only while <repo> holds fewer than 50000: half of the 100000 one repository may, the other half kept for its owners)` — or `a seat other than <owner>, which owns it,` for a repository a seat owns | Delete the refs nobody needs, in the same push as the new ones or before it: a deletion stops counting at once, even against the push that makes it, and the refs a repository deleted never refuse a push. A seat outside the owning unit deletes its own branches it no longer needs; the other half of the refs is the owners'. |
 | A new ref beside a live ref of the directory it would make — `feature/x` beside the branch `feature`, or `feature` beside `feature/x` ([a ref and a directory of refs](#a-ref-and-a-directory-of-refs)) | `(ref_conflict: refs/heads/feature is in the way: a ref is never also a directory of refs, so a clone holding one could not fetch the other; delete it first, or choose another name)` | Delete the ref in the way in the same push (`git push origin :feature HEAD:feature/x`), or choose another name. A clone holding the old ref fetches the change with `git fetch --prune`. |
-| A pack that would take the repository past its size | `(repo_size: <repo> would hold <size> of packs, past <limit> (code.limits.repo_max_bytes))` | Raise `code.limits.repo_max_bytes`, or push less. What a repository holds is its packs as they were pushed ([Limits](#limits)). Nothing landed. |
+| A pack that would take the repository past its size | `(repo_size: <repo> would hold <size> of packs, past <limit> (code.limits.repo_max_bytes))`; for a seat outside the owning unit, past the half it may fill ([A seat's push](#a-seats-push)), `(repo_size: <repo> would hold <size> of packs, past <half>: a seat outside unit <owner>, which owns it, fills at most half of code.limits.repo_max_bytes (<limit>), the other half kept for its owners)` | Raise `code.limits.repo_max_bytes`, or push less. What a repository holds is its packs as they were pushed ([Limits](#limits)). Nothing landed. A seat outside the owning unit is held to half of the limit whatever it is raised to: the other half is the owners'. |
 | The push's pack was uploaded too long before its commit | `(upload_expired: the pack was uploaded at <instant>, 12h0m0s or more before this decision; run git push again)` | Run the push again; nothing landed. |
 | The push is pending | `(pending: durable at <position>, unresolved here; re-run git push …)` | Run the push again. |
 | The outcome is unknown | `(unknown: outcome unknown (op …); fetch, then re-run git push)` | Fetch, then push again. |
 | The push was recorded and every node dropped it | `(not_applied: the push was durable at <position> and applied nowhere; re-run git push)` | Run the push again; nothing landed ([what a refusal names](#a-push-end-to-end)). |
 | The repository is taking pushes faster than its committer commits them | `(busy: <n> pushes are queued for this repository on this node, the most it holds)`, or the same of the bytes queued for it or held across the node's repositories; `(busy: the push's asker stops waiting in <t>, and a batch started now may take 30s and its answer 1s more; run git push again)`, or `(busy: the push waited <t> behind this repository's earlier pushes on this node, …)`; or `(busy: the repository kept changing for every round the write may take; run git push again)` | Run the push again; nothing of it landed. One repository's pushes meet at one node, which commits them a batch at a time ([The committer](#the-committer)). |
 | A push carrying objects into a repository holding the most live packs one may until a compaction merges them — 2 048 ([Limits](#limits)) | `(compaction_behind: <repo> holds <n> live packs, and a push adds none past 2048 until compaction catches up: nothing was decided; run git push again in a minute)` | Nothing of the push was decided, and no row names anything it uploaded; it lands once the repository's home git node has merged its packs, which the home tries every minute ([Compaction](#compaction)) — run the push again a minute later. A push carrying none — deletions, refs moved onto commits the repository already holds — still lands. Refused for longer, the home's `code_compaction_behind` alarm stands and its log says what keeps the merge from landing. |
+| A seat's push past the pushes one seat may land in a day on the company's calendar, every repository together — `code.limits.pushes_per_seat_day`, 1 000 unless set ([A seat's push](#a-seats-push)) | `(push_quota: seat <handle> has landed <n> pushes since <day> began on the company's calendar, and code.limits.pushes_per_seat_day lets a seat land <limit> pushes a day: nothing was decided; the count starts again at <the company's next midnight>)` | Nothing of the push was decided and no record carries it; run it again once the instant named has passed. A seat that meets it is pushing in a loop: look at what its turns are doing before raising the bound. A pack the push stored is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. A person's pushes are never counted. |
 | A push its node checked against the repository just before an expunge of the repository's unreachable objects began — which nothing in this build begins yet ([what it does not do yet](#what-it-does-not-do-yet)) | `(expunging: an expunge of <repo>'s unreachable objects began after this push was checked against it (drop epoch <n>, now <m>): nothing was decided; run git push again)` | Run the push again: nothing of it was decided, and its node checks it again against the repository as the expunge left it. A pack it uploaded is named by no row, and the [object collector](object-store.md#collection-and-audit) deletes it a day later. |
 | Nothing took the push | `(unavailable: no data node took push <id>: …)` | Nothing landed; push again, or once the fleet has a data node serving. |
 | The object store has no room — the fleet's NATS bucket holds as many bytes as it [reserves](object-store.md#its-byte-reservation), or an S3-compatible bucket's provider [refuses the write for room](object-store.md#an-s3-bucket--s3) | `(store_full: the object store has no room for the <size> this push stores, and nothing was stored; it lands only once <room>)`, the room the store names: on NATS, `an operator makes room — moves the files to a bucket (crewlet objects migrate -to s3), raises the bucket's byte reservation on an external broker, or lets the collector remove what nothing names`; on S3, `an operator makes room in the bucket — frees space on the storage its provider keeps it on, or raises the quota the provider holds it to — or lets the collector remove what nothing names` | Nothing was stored, and pushing again is refused the same until room is made: tell an operator. The node logs `code_push_store_full` at `WARN` with the store's own answer; on NATS, the [`objects_bucket_near_ceiling`](object-store.md#alarms) alarm says how full the bucket is. |

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -117,6 +118,23 @@ import (
 // and so does an eviction found at another operation's record, and none of
 // them is a record of the push.
 //
+// # A seat's push is decided only by a node that can judge it
+//
+// A seat's push is judged from the chart and the calendar of the deciding
+// node's epoch ([SeatRules]): its grant, the protections that take a person's
+// push alone, its share of a repository outside its unit and its company
+// day's quota (decide.go). So a node that cannot judge one decides none, and
+// says so about ITSELF — [ErrNotServing], under which the router asks the
+// repository's runner-up with the same push id — in two states: confirmed
+// behind the company's configuration ([CommitterOptions.Current]: checked as
+// the push is queued and again as its batch forms, since the revision it
+// failed to apply may be the one that revoked the seat), and holding no chart
+// yet ([CommitterOptions.SeatRules], read once a batch). A person's push reads
+// no chart and is decided in both, and a batch of both kinds decides the
+// persons' and hands the seats' on. Never a seat's push judged by a nil chart:
+// let through, it would land unjudged; refused not_permitted, it would record
+// a refusal no chart made.
+//
 // # A compaction waits in the same queue, and is decided alone
 //
 // A repository's COMPACTION — proposed by the git node that built one
@@ -162,14 +180,55 @@ type CommitterOptions struct {
 	// default here would name the wrong instant to every company that set
 	// its own.
 	Retention func() time.Duration
-	// Now is the decide's clock — what upload_expired judges a pack's age by
-	// and a record's authored instant; nil takes the wall clock in UTC.
+	// SeatRules is the deciding node's epoch's chart and calendar, which a
+	// SEAT'S push is judged by — its grant (decide rule 2b), its share of a
+	// repository outside its unit and its day's quota — read once a batch
+	// that carries one. False where this node has installed no epoch yet
+	// (its boot, before the first): every seat's push of the batch is then
+	// answered [ErrNotServing], a refusal about THIS node, so the router
+	// hands it to the repository's runner-up under the same push id, and a
+	// person's is decided as ever — never a seat's push let through by a nil
+	// roster, nor refused not_permitted by one, which would RECORD a refusal
+	// no chart made. REQUIRED: a seat's push is never decided by a default.
+	SeatRules func() (SeatRules, bool)
+	// Current is whether this node serves the company's configuration: the
+	// engine's posture gate (configplane's Reconciler.Admits), false exactly
+	// while the node is CONFIRMED behind that configuration — shed or stuck,
+	// never lag alone — and nil is current. While it answers false, every
+	// proposal carrying a seat's push is answered [ErrNotServing] — as it is
+	// queued and again as its batch forms, decided by nobody — so the router
+	// hands it to the repository's runner-up under the same push id, as for
+	// a stopping committer. A person's push is decided as ever, since no rule
+	// of a person's reads the chart; like every data operation on such a
+	// node it is asked of this one only after every current data node.
+	// Without the gate, a node that failed to apply a revision revoking a seat
+	// went on landing that seat's pushes on every repository it commits for,
+	// for as long as it stayed stuck.
+	Current func() bool
+	// Now is the decide's clock — what upload_expired judges a pack's age by,
+	// the company day a seat's push is counted on, and a record's authored
+	// instant; nil takes the wall clock in UTC.
 	Now func() time.Time
 	// Metrics records the batch sizes and the busy refusals; nil records
 	// nothing.
 	Metrics *metrics.Recorder
 	// Logger is where a failed batch is reported; nil is the package's.
 	Logger *slog.Logger
+}
+
+// SeatRules is the chart and the calendar a SEAT'S push is decided by, read
+// from the DECIDING node's epoch ([CommitterOptions.SeatRules]) — so two nodes
+// on different activations may judge one seat's command differently only while
+// one's lag is unconfirmed, about a minute at worst (configplane.LagGrace,
+// 45 s, from its first read of the activation's pointer, and its next posture
+// decision): a node CONFIRMED behind decides no seat's push at all
+// ([CommitterOptions.Current], ADR-0058).
+type SeatRules struct {
+	// Roster is the chart a seat's grant is judged by ([GrantOf]).
+	Roster Roster
+	// Zone is the company's clock (its timezone, ADR-0018), which the day a
+	// seat's pushes are counted on is cut by: nil is UTC.
+	Zone *time.Location
 }
 
 // Committer is this node's group commit of pushes, a goroutine a repository
@@ -180,6 +239,8 @@ type Committer struct {
 	nodeID    string
 	limits    func() Limits
 	retention func() time.Duration
+	seatRules func() (SeatRules, bool)
+	current   func() bool
 	now       func() time.Time
 	metrics   *metrics.Recorder
 	log       *slog.Logger
@@ -302,6 +363,23 @@ func (q *queued) kind() string {
 // pushes.
 func (q *queued) alone() bool { return q.compaction != nil || q.expunge != nil }
 
+// judgedByChart reports a push whose decide reads the chart — a seat's
+// ([PrincipalKind.readsChart]) — which a node behind the company's
+// configuration, or one with no chart yet, never decides. A compaction and an
+// expunge record judge no principal by any chart.
+func (q *queued) judgedByChart() bool { return !q.alone() && q.p.Principal.Kind.readsChart() }
+
+// behindFor is why this node may not decide q now, or "": a push whose
+// decide reads the chart, while the node is confirmed behind the company's
+// configuration ([CommitterOptions.Current]).
+func (c *Committer) behindFor(q *queued) string {
+	if !q.judgedByChart() || c.current == nil || c.current() {
+		return ""
+	}
+	return "this node is behind the company's configuration and decides no seat's push from the chart " +
+		"the fleet replaced; the repository's next committer decides it"
+}
+
 // again is what q's asker does after a refusal that decided nothing: a person
 // runs git push again, or asks for a purge again, and a compactor's or a
 // maintainer's next pass plans the repository again from its rows.
@@ -383,12 +461,16 @@ func NewCommitter(o CommitterOptions) (*Committer, error) {
 		return nil, errors.New("code: a committer needs the epoch's code.deleted_retention_days — " +
 			"a push to a deleted repository is told when its purge may begin, which a default " +
 			"would misstate for every company that set its own")
+	case o.SeatRules == nil:
+		return nil, errors.New("code: a committer needs the epoch's chart and calendar (SeatRules) — " +
+			"a seat's push is judged by its grant on the chart and counted on the company's day, " +
+			"never by a default")
 	}
 	c := &Committer{
 		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, limits: o.Limits, retention: o.Retention,
-		now: o.Now, metrics: o.Metrics, log: o.Logger, idle: CommitterIdle,
-		nodeBytes: CommitterNodeBytes, clock: time.Now, repos: map[string]*repoCommitter{},
-		stopping: make(chan struct{}),
+		seatRules: o.SeatRules, current: o.Current, now: o.Now, metrics: o.Metrics, log: o.Logger,
+		idle: CommitterIdle, nodeBytes: CommitterNodeBytes, clock: time.Now,
+		repos: map[string]*repoCommitter{}, stopping: make(chan struct{}),
 	}
 	if c.now == nil {
 		c.now = func() time.Time { return time.Now().UTC() }
@@ -407,7 +489,9 @@ func NewCommitter(o CommitterOptions) (*Committer, error) {
 // [ReplyMargin]) answers busy undecided — at once, or the moment that is so
 // while it waits — and one whose caller has no deadline answers busy once it
 // has waited a whole CommitBudget; a stopping committer answers
-// [ErrNotServing]; a proposal that is not one answers [ErrInvalidProposal].
+// [ErrNotServing], and so does one that cannot judge a seat's push — behind
+// the company's configuration, or holding no chart yet; a proposal that is
+// not one answers [ErrInvalidProposal].
 // ctx bounds only this caller's wait: a push whose caller has gone before its
 // batch starts is never decided, and the batch it joined goes on without it.
 func (c *Committer) Propose(ctx context.Context, p Proposal) (ProposeResult, error) {
@@ -424,6 +508,11 @@ func (c *Committer) Propose(ctx context.Context, p Proposal) (ProposeResult, err
 // queue puts q on its repository's queue and waits for its answer — the one
 // path every proposal's caller takes, a push's and a compaction's alike.
 func (c *Committer) queue(ctx context.Context, q *queued) answered {
+	if why := c.behindFor(q); why != "" {
+		// A REFUSAL ABOUT THIS NODE, before the push takes a place in the
+		// queue: the router hands it to the repository's runner-up.
+		return answered{err: fmt.Errorf("%w: %s", ErrNotServing, why)}
+	}
 	if refusal := q.late(q.arrived); refusal != "" {
 		// TOO LATE BEFORE IT IS QUEUED: answered without taking the place
 		// in the queue a proposal that can still be decided needs.
@@ -686,6 +775,11 @@ func (c *Committer) gather(rc *repoCommitter, first *queued) ([]*queued, *queued
 // here is waiting for. A push that is LATE ([queued.late]) is answered busy:
 // a batch started now could answer it only after its asker stopped waiting.
 // None is decided, and none appends anything; the client runs git push again.
+//
+// A SEAT'S PUSH IS JUDGED AGAIN HERE against the node's posture: queued while
+// the node served the company's configuration, it may meet its batch after
+// the node was confirmed behind it, and is then answered [ErrNotServing] —
+// decided by nobody, so the runner-up decides it under the same push id.
 func (c *Committer) admit(q *queued) bool {
 	if !q.take() {
 		return false
@@ -694,6 +788,10 @@ func (c *Committer) admit(q *queued) bool {
 	case <-q.gone:
 		return false
 	default:
+	}
+	if why := c.behindFor(q); why != "" {
+		q.answer <- answered{err: fmt.Errorf("%w: %s", ErrNotServing, why)}
+		return false
 	}
 	if refusal := q.late(c.clock()); refusal != "" {
 		q.answer <- c.busy(q, refusal)
@@ -750,6 +848,27 @@ type round struct {
 
 // commit publishes one batch as ONE record and answers every proposal in it.
 func (c *Committer) commit(repoID string, batch []*queued) {
+	// THE EPOCH'S CHART AND CALENDAR, READ ONCE A BATCH that carries a seat's
+	// push — every round of the batch judges by the same — and on a node
+	// that holds none yet, every such push handed on, decided by nobody,
+	// while the batch's persons' pushes are decided as ever.
+	var seats SeatRules
+	if slices.ContainsFunc(batch, (*queued).judgedByChart) {
+		var held bool
+		if seats, held = c.seatRules(); !held {
+			batch = slices.DeleteFunc(batch, func(q *queued) bool {
+				if !q.judgedByChart() {
+					return false
+				}
+				q.answer <- answered{err: fmt.Errorf("%w: this node holds no chart yet to judge a seat's "+
+					"push by; the repository's next committer decides it", ErrNotServing)}
+				return true
+			})
+			if len(batch) == 0 {
+				return
+			}
+		}
+	}
 	ctx, cancel := context.WithTimeout(c.life, CommitBudget)
 	defer cancel()
 	proposals := make([]Proposal, len(batch))
@@ -790,7 +909,7 @@ func (c *Committer) commit(repoID string, batch []*queued) {
 			now := c.now()
 			formed := verdicts.formed
 			entries, answers, version, err := decideBatch(ctx, tx, repoID, proposals, limits,
-				retention, now, &verdicts)
+				retention, seats, now, &verdicts)
 			if c.formedInRound != nil {
 				c.formedInRound(verdicts.formed - formed)
 			}
@@ -822,9 +941,9 @@ func (c *Committer) commit(repoID string, batch []*queued) {
 // withinRecord refuses a decision past a record's bytes or rows, which the
 // batching keeps from ever forming — the check makes the invariant the
 // record's own rather than the batcher's. Rows are counted as [rowBound]
-// counts them, each command that applies by [commandRows]: its ref, the
+// counts them, each command that applies by [commandRows] — its ref, the
 // object a forced update or a deletion left, and the sweep's room for the
-// tombstone a deletion makes.
+// tombstone a deletion makes — and a seat's entry by [seatDayRows] more.
 func withinRecord(d statelog.Decision, entries []PushEntry) error {
 	rows := 0
 	for _, e := range entries {
@@ -836,6 +955,9 @@ func withinRecord(d statelog.Decision, entries []PushEntry) error {
 		}
 		if e.Pack != nil {
 			rows++
+		}
+		if e.Principal.Kind == PrincipalAgent {
+			rows += seatDayRows
 		}
 	}
 	switch {

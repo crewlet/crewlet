@@ -90,7 +90,8 @@ A name is lowercase letters, digits and hyphens, at most 63 — it is the
 address, so **renaming a repository deletes it and creates another**. A rule
 protects the branches or tags its pattern matches: without `allow_force` a
 branch cannot be moved to a commit that does not descend from it, without
-`allow_delete` it cannot be deleted, and `direct_push: none` freezes it.
+`allow_delete` it cannot be deleted, and `direct_push: none` freezes it — while
+the default, `persons`, takes a person's push to it and never a seat's.
 `crewlet validate` warns about every repository whose default branch no rule
 protects, since anybody who may push could then force-push or delete it. Every
 field, the pattern grammar and what each change does at its activation are in
