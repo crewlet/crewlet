@@ -2419,8 +2419,10 @@ const (
 	waitSeatBusy sandbox.Condition = "seat_busy"
 
 	// waitProvider: every model of the seat's chain is at a usage limit it
-	// already reported. Lifted on the clock when the first is tried again,
-	// which the refusal names (see providerpark.go).
+	// already reported, or this node holds the seat parked on one. Signalled
+	// by every release of a provider park and by every published company,
+	// and otherwise lifted on the clock when the first is tried again, which
+	// the refusal names (see providerpark.go).
 	waitProvider sandbox.Condition = "provider"
 
 	// waitDrain: this node is draining, and starts no turn. Nothing
