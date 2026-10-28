@@ -364,6 +364,16 @@ describe.each([
     ]);
   });
 
+  test("a Confluence page's own canonical address opens where links are checked", async () => {
+    const el = await draw(
+      md("See https://acme.atlassian.net/wiki/spaces/ENG/pages/123.", options),
+      {
+        hosts: [{ kind: "confluence", url: "https://acme.atlassian.net/wiki" }],
+      },
+    );
+    expect(hrefs(el)).toEqual(["https://acme.atlassian.net/wiki/spaces/ENG/pages/123"]);
+  });
+
   // Mutation: let `checked` open an address as written and every case here
   // grows an anchor.
   test.each([

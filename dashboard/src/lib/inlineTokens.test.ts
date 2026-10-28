@@ -216,6 +216,20 @@ describe("what an address is", () => {
     ).toBe("D page 2");
   });
 
+  // THE DASHBOARD'S OWN REBUILT ADDRESS, cited back, is a page too: the
+  // canonical form carries no title, and a page needs none to be one.
+  //
+  // Mutation: require a title after the id and the canonical form is inert.
+  test("a Confluence page with no title in its address is the same page", () => {
+    const own: LinkHost[] = [{ kind: "confluence", url: "https://acme.atlassian.net/wiki" }];
+    expect(describeLink("https://acme.atlassian.net/wiki/spaces/ENG/pages/123", own)).toMatchObject(
+      {
+        label: "ENG page 123",
+        canonical: "https://acme.atlassian.net/wiki/spaces/ENG/pages/123",
+      },
+    );
+  });
+
   // A LABEL IS ONLY WHAT AN ADDRESS IS REBUILT FROM: a Confluence page's
   // title and a path segment no app allows are the writer's words, and a
   // label made of them says whatever the writer chose beside a vendor's mark.
