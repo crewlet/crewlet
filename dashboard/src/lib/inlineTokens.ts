@@ -673,19 +673,34 @@ function describeJira({ parts, own }: Under, url: URL): LinkDescription | null {
   };
 }
 
+/**
+ * A Confluence page's address on the company's own site, rebuilt as
+ * `spaces/<KEY>/pages/<id>` (after Cloud's `wiki`, where the site's base
+ * stops above it), or null.
+ *
+ * NOTHING ELSE OF THE WRITTEN PATH: the title after the id is the writer's
+ * words, and so is any segment before `spaces`, which a page never needs and
+ * which could carry anything a writer chose to the company's own host.
+ */
+function confluencePage(parts: readonly string[], own: LinkHost | null): string | null {
+  const from = parts[0] === "wiki" ? 1 : 0;
+  const [spaces, key, pages, id] = parts.slice(from);
+  if (spaces !== "spaces" || pages !== "pages" || !key || !id) return null;
+  if (!/^~?[A-Za-z0-9]+$/u.test(key) || !/^\d+$/u.test(id)) return null;
+  return rebuilt(own?.url ?? null, [...parts.slice(0, from), "spaces", key, "pages", id]);
+}
+
 function describeConfluence({ parts, own }: Under, url: URL): LinkDescription | null {
   const at = parts.indexOf("pages");
   const slug = at < 0 ? undefined : parts[at + 2];
   if (slug) {
     const title = slug.replace(/\+/g, " ");
-    const id = parts[at + 1] ?? "";
     return {
       vendor: "atlassian",
       label: onTenant(title, own === null ? url.host : null),
       code: false,
       kind: "Confluence",
-      // A PAGE BY ITS ID: the title in its address is the writer's words.
-      canonical: /^\d+$/.test(id) ? rebuilt(own?.url ?? null, parts.slice(0, at + 2)) : null,
+      canonical: confluencePage(parts, own),
       place: null,
     };
   }

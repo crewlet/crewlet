@@ -216,6 +216,26 @@ describe("what an address is", () => {
     ).toBe("Brand tokens");
   });
 
+  // A CONFLUENCE PAGE IS REBUILT AS ITS SPACE AND ID ALONE: a segment before
+  // `spaces` is the writer's, and so is the title after the id.
+  //
+  // Mutation: rebuild from the written path up to the id and the first two
+  // carry the writer's segment to the company's host.
+  test("a Confluence page on the company's site is rebuilt as spaces/<key>/pages/<id>", () => {
+    const wiki: LinkHost[] = [{ kind: "confluence", url: "https://acme.atlassian.net/wiki" }];
+    const site: LinkHost[] = [{ kind: "confluence", url: "https://acme.atlassian.net" }];
+    const canonical = (raw: string, hosts: LinkHost[]) => describeLink(raw, hosts)?.canonical;
+    expect(canonical("https://acme.atlassian.net/wiki/SECRET/spaces/D/pages/2/T", wiki)).toBeNull();
+    expect(canonical("https://acme.atlassian.net/wiki/x/y/spaces/D/pages/2/T", site)).toBeNull();
+    expect(canonical("https://acme.atlassian.net/wiki/spaces/D/pages/2/Title?x=1", wiki)).toBe(
+      "https://acme.atlassian.net/wiki/spaces/D/pages/2",
+    );
+    expect(canonical("https://acme.atlassian.net/wiki/spaces/~me/pages/2/T", site)).toBe(
+      "https://acme.atlassian.net/wiki/spaces/~me/pages/2",
+    );
+    expect(canonical("https://acme.atlassian.net/wiki/spaces/D/pages/abc/T", wiki)).toBeNull();
+  });
+
   test("a segment that decodes to a slash, or that no code host allows, labels nothing", () => {
     // `a%2Fevil` decoded read as two segments, labelling another repository.
     const spoof = describeLink("https://github.com/a%2Fevil/b/pull/1", []);
