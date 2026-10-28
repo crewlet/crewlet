@@ -1,20 +1,21 @@
 /**
- * How the engine reads one `providers.llm` entry: the closed sets of its
- * `auth.mode` and `mode`, and what each field the entry leaves out comes to.
+ * How the engine reads one `providers.llm` entry: the closed set of its
+ * `auth.mode`, and what each field the entry leaves out comes to.
  *
  * Settings › Models & keys draws every entry off the company document, which
- * holds what an operator WROTE — and an entry that names no `agent`, no `mode`
- * or no `auth.mode` still runs as something. What it runs as is the engine's
+ * holds what an operator WROTE — and an entry that names no `agent` or no
+ * `auth.mode` still runs as something. What it runs as is the engine's
  * default, so the screen says it from here rather than guessing, and the words
- * for each mode are keyed on these unions so a mode the engine adds is a
+ * for each sign-in are keyed on this union so a mode the engine adds is a
  * typecheck failure rather than a row drawn with nothing said.
  *
- * HELD AGAINST `config.CLIAgentAuthModes`, `config.CLIModes` and an unset
- * `config.LLMProvider`'s `AgentName`, `Box`, `ResolvedAuthMode`, `Timeout` and
+ * HELD AGAINST `config.CLIAgentAuthModes`, `config.CodingAgents` and an unset
+ * `config.LLMProvider`'s `AgentName`, `ResolvedAuthMode`, `Timeout` and
  * `Concurrency` by
  * `internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes`: a default
  * that drifted would name a CLI, a sign-in or a cap the engine does not apply
- * to the entry on screen.
+ * to the entry on screen, and an executor set that drifted would say a model
+ * runs an executor that the engine skips.
  */
 
 /**
@@ -25,15 +26,6 @@
  * environment holds.
  */
 export type CLIAuthMode = "subscription" | "api-key" | "inherit-env";
-
-/**
- * WHERE the engine runs an entry's CLI — in either mode the CLI drives its own
- * loop, calling the seat's tools over MCP. `host`: on this engine's host, turn
- * by turn, a subprocess of the turn. `box`: the seat's executor runs detached
- * in a box of `providers.sandbox` — the cell `run_in` names — with the seat's
- * tools bridged in.
- */
-export type CLIMode = "host" | "box";
 
 /**
  * What each built-in CLI is called where a person reads it: "Claude Code
@@ -61,8 +53,14 @@ export const CLI_PRODUCTS: Readonly<Record<string, string>> = {
 /** The CLI an entry that names no `agent` drives. */
 export const DEFAULT_CLI_AGENT = "claude-code";
 
-/** An entry's `mode` when it names none. */
-export const DEFAULT_CLI_MODE: CLIMode = "host";
+/**
+ * The CLIs that can run a seat's executor: the coding agents with an in-box
+ * runner. Every agent seat's executor is its CLI's own run, placed by the
+ * launching entry's `run_in`, and a member of an executor chain on any other
+ * CLI is skipped at launch — that entry serves the text phases alone (the
+ * reviewer, workers, onboarding and side passes).
+ */
+export const EXECUTOR_CLI_AGENTS = ["claude-code", "opencode"] as const;
 
 /** An entry's `auth.mode` when it names none. */
 export const DEFAULT_CLI_AUTH_MODE: CLIAuthMode = "subscription";

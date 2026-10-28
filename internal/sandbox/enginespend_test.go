@@ -37,7 +37,7 @@ func condensingRig(t *testing.T, turnID string) *coordRig {
 // FOR IT.
 //
 // Two things the engine pays for happen while no segment of the turn is
-// running: the calls a box-mode run makes through the tool bridge, after the
+// running: the calls a run makes through the tool bridge, after the
 // segment that launched it ended, and the condensation of a collected run's
 // report, which the coordinator makes before any segment resumes. Neither has
 // a segment's tally to add to, so both ride the resume request to the segment

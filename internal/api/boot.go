@@ -75,10 +75,15 @@ import (
 // exactly as [partition] answers there; on api.port of an ingress node with
 // api.public set, the 404 naming that listener for a route outside parties
 // call; and on a node without the ingress role, everything but its probes,
-// which its mux refuses with a 404 once it serves. So a socket says nothing more while it starts than it does
-// afterwards, and no caller is sent back to wait for a route that will never
-// be there. And nothing here asks for a credential, since nothing is served:
-// there is nothing a caller could be refused that it would otherwise read.
+// which its mux refuses with a 404 once it serves — but for the two routes
+// its own boxes dial on a node that runs seats, which it serves to this
+// host's loopback alone ([Probes]) and so tells a caller there to come back,
+// as a box on the host whose run outlived the node's last process calls back
+// while it restarts. So a socket says nothing more while it starts than it
+// does afterwards, and no caller is sent back to wait for a route that will
+// never be there. And nothing here asks for a credential, since nothing is
+// served: there is nothing a caller could be refused that it would otherwise
+// read.
 //
 // THE ARTIFACT ORIGIN (api.artifacts) IS BOUND WITH THEM on a node that serves
 // one ([ArtifactsListener]), and answers as the origin answers: an empty
@@ -155,14 +160,20 @@ func NewBoot(bootstrap *config.Bootstrap, nodeID string) (*Boot, error) {
 	}
 	// WHAT api.port WILL SERVE once the node does. An ingress node serves
 	// every route there — but the ones outside parties call, when api.public
-	// is set ([partition]). A node without the role serves its probes
-	// ([Probes]); every other path is the mux's own 404 or 405, which says no
-	// more than the mux's 404 does once it serves.
+	// is set ([partition]). A node without the role serves its probes, and,
+	// where it runs seats, the two routes its own boxes dial to this host's
+	// loopback alone ([Probes]); every other path is the mux's own 404 or
+	// 405, which says no more than the mux's 404 does once it serves.
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", b.serveHealth)
 	mux.HandleFunc("GET /ready", b.serveReady)
-	if ingress {
+	switch {
+	case ingress:
 		mux.HandleFunc("/", b.refuse)
+	case profile.RunsSeats():
+		boxes := thisHostAlone(http.HandlerFunc(b.refuse))
+		mux.Handle(mcpbridge.PathPrefix, boxes)
+		mux.Handle(auth.OTLPPrefix, boxes)
 	}
 	served := posture(httpjson.Mux(mux))
 	b.api = servedOn(bootstrap, false, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -321,10 +332,12 @@ func loggedRoute(path string) string {
 // with the ingress role, for the routes outside parties call. api.port 0 is the
 // hard off switch for it, as everywhere.
 //
-// NEVER A NODE WITHOUT THE ROLE, its box-mode seats included: a box's call
-// reaches the fleet's bridge on any node that serves the API, which relays it
-// to the seat's holder over the broker (internal/api/mcpbridge), so a node
-// that serves no API has no route a box needs it to serve.
+// NEVER A NODE WITHOUT THE ROLE, its seats included: a box off the node's host
+// reaches the fleet's bridge on any node that serves the API, which relays
+// its call to the seat's holder over the broker (internal/api/mcpbridge), and
+// a box on the host dials the node's api.port on loopback, which the node
+// serves its own host alone ([Probes]) — so a node that serves no API has no
+// route a caller off its host needs it to serve.
 //
 // ONE PREDICATE for the two moments that need it — `crewlet run` binding the
 // listener before there is an engine, and serving it once there is one — so a

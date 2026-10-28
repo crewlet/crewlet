@@ -190,7 +190,7 @@ It closes on the **epoch**, not on membership, because a seat can be lost and re
 |---|---|
 | An unreachable coordination store | Says nothing about ownership, so the heartbeat keeps the seat. Closing here would tear a healthy company's turns down over a two-second blip during which no peer could have claimed anything — the three-valued rule paying for itself |
 | A seat whose teardown could not be proven | The lease is kept and renewed precisely so no peer can take it, so the grant has not moved and the in-flight turn is racing nobody |
-| A detached run — a coding CLI in box mode, or a sandbox job | It outlives its turn by design; its placement is on its own row and the process that collects it is often not the one that launched it. What is fenced is the **resume**, under the grant the collecting node holds |
+| A detached run — a seat's executor, its coding CLI's own run in a box | It outlives its turn by design; its placement is on its own row and the process that collects it is often not the one that launched it. What is fenced is the **resume**, under the grant the collecting node holds, and every call the run makes over the bridge, before and after. A seat that moves leaves its run running — a `direct` or `container` box stays on the node that launched it — and a person's stop ends it at once |
 
 **The same fence carries a person's stop.** A pause that asked for the running turn to stop closes it the same way, at its next tool call, with `turn.ErrStoppedByPerson` — ownership is checked first, since a turn on a seat that moved is the successor's to stop or not. That turn is not deferred: the trigger is recorded in the completion ledger and acked, because the person stopped it so that it would not go on. See [Agent Runtime § Pausing a seat](agent-runtime.md#pausing-a-seat).
 
@@ -340,7 +340,7 @@ crash.
 
 A turn with no ledgerable trigger — a scheduled fire, a worker, a sandbox resume — carries an empty key, skips the guard entirely, and writes exactly as it always did. It has no cross-node duplicate to collapse.
 
-**Fencing protects database state. It cannot protect outbound effects.** `run_sandbox` makes this concrete: it acquires a real, billed sandbox *before* the pending row is written, so no epoch-fenced insert can undo a box that is already pushing commits. The property the design offers is **bounded duplication**, not none — and what bounds it is the in-turn fence.
+**Fencing protects database state. It cannot protect outbound effects.** An executor run makes this concrete: the launch opens the run's row before its box exists, but the box's pushes and pull requests are made from the box, where no epoch-fenced write reaches. The property the design offers is **bounded duplication**, not none — and what bounds it is the in-turn fence the launch asks again once its row exists, the seat fence the bridge holds every bridged call to, before and after, and a person's stop.
 
 ## The completion ledger
 
@@ -362,7 +362,7 @@ It is deliberately **not** a claim, and the absences are the design:
 Two notes on coverage:
 
 - **Only trigger types that run a turn are consulted** (`inbox.Ledgered`: `task_assigned`, `external_notification`, and the two A2A wakes `a2a_request` and `a2a_message`), besides an answer by turn, which runs no turn and is settled off the seat's control topic, where the coordinator consults it. Everything else that reaches a seat's inbox, an observability event or a wake already answered, is logged and dropped, so recording it would be bookkeeping about nothing. The set is closed: a type outside it contributes nothing to the work key and is never recorded, so its redeliveries re-run, which is why a new trigger type is added there rather than merely published.
-- **A suspended sandbox turn IS recorded, at the suspend.** Past that point the pending run's own at-most-once flip is the authority for the rest of the work, and the trigger itself is finished with.
+- **A parked turn IS recorded, at the park.** Every turn parks when its executor launches; past that point the pending run's own at-most-once flip is the authority for the rest of the work, and the trigger itself is finished with.
 
 [A2A](event-system.md#ephemeral-a2a-channels-internala2a) was exempt while its content rode a process-local queue that the old A2A inbox handler drained destructively: a re-run found an empty channel whatever the ledger said, so neither branch of the choice could be honoured. The content rides the durable wake event now, and the exemption is gone. The hop that carries the **answer back** is the one that needs it: the responder is guarded twice over (it replies and closes, and a closed channel refuses a second answer), but the reply reaching the asker lands on a channel that is already closed by design, so the ledger is the only thing between a redelivery and a second turn spent acting on the same answer.
 
@@ -379,8 +379,8 @@ That used to hand the delivery straight back — a NAK, on the reasoning that
 recorded, and that is exactly the problem: the completion ledger is skipped on
 the error path, and the two writes a `work_key` guards are an agent's episode
 row and its counterparty profile. Every MCP write, every chat post, every
-`a2a_ask` (a fresh channel per call) and every `run_sandbox` is keyed on
-nothing at all. So one deterministic mid-turn failure replayed round one's
+`a2a_ask` (a fresh channel per call) and everything an executor run does from
+its box is keyed on nothing at all. So one deterministic mid-turn failure replayed round one's
 external effects across the broker's whole delivery budget — **25 attempts a
 second apart**, each one a real comment on a real issue.
 
@@ -391,14 +391,14 @@ record rather than from `err != nil`:
 |---|---|
 | nothing reached outside the engine | **redelivered**, exactly as before — a provider that never answered, a runner that could not be built, a refused budget, a seat handed to another node mid-call. None of them wrote anything, and every one is worth trying again. |
 | a call reached outside the engine | **recorded and acked.** The rest of the turn is lost; its writes are not un-doable, and only one of those two is recoverable by trying again. |
-| a resumed turn broke before writing anything new | **retried**, whatever the attempt that parked wrote. The record is judged per attempt: the writes the round that called `run_sandbox` made before it suspended are on the record and stay there, but a retry re-enters the conversation they are part of and makes none of them again. A resume that met its model's usage limit at its first round used to be settled as a turn that had written, and the coding run's result never reached the seat. A resume that wrote again in its own attempt and then broke is recorded and acked like any other. |
+| a resumed turn broke before writing anything new | **retried**, whatever was written before it. The record is judged per attempt: what the executor run did over its bridge before the turn collected it is on the record and stays there, but a retry collects the same run and calls none of it again. A collection that met its model's usage limit before it wrote anything (at the reviewer that judges the run, say) used to be settled as a turn that had written, and the coding run's result never reached the seat. A resume that wrote again in its own attempt and then broke is recorded and acked like any other. |
 | the turn panicked | **recorded and acked**, whatever the record proves. A panic is a defect in the engine, so a redelivery runs the same code on the same input and panics again, having repeated whatever came before it. The panicking round's own record is lost with it, so "nothing reached outside" could not be established anyway. Before panics were recovered, one unwound into the queue backend's handler guard, which NAKs, and the trigger came back for the whole delivery budget. |
 
 The proof is deliberately narrow, because a true answer *spends* a trigger.
 A call counts only when it is MCP-backed and not positively annotated
 read-only — the same rule the [delivery gate](turn-engine.md) has always used —
 or when the tool's own annotations say it is open-world, which is how
-`a2a_ask` and `run_sandbox` count despite being first-party. A tool nobody
+`a2a_ask` counts despite being first-party. A tool nobody
 classified proves nothing. In particular the executor's own `submit_work`, the
 discovery pair and the sub-agent spawner carry no annotations at all, so they
 cannot trip it; a predicate written as "not proven read-only" would fire on
@@ -413,13 +413,14 @@ on the seat as its `last_error`, and the log line that recovered it
 carries the stack.
 
 The same decision guards the other path a turn can arrive by. A **resumed**
-turn re-enters the executor's suspended conversation, so a redelivery repeats
-every call the resumed round made — and a turn coming back from a coding box is
+turn collects the executor's run from its parked state and runs the engine
+check and the reviewer, possibly relaunching the run, so a retried resume
+repeats every call the resumed segment made — and a turn coming back from a coding box is
 the one most likely to have pushed a branch already. A resume that broke after
 acting, or that panicked, therefore keeps its claim, which is what stops a retry
 winning the flip, and its run is settled like one that finished: the box is
 reclaimed and the seat is free for its next turn. Every other resume failure
-still un-claims and comes back, because the suspended conversation is the
+still un-claims and comes back, because the run's collected work is the
 expensive thing there and a resume that proved nothing has lost nothing by
 trying again.
 
@@ -527,9 +528,9 @@ Either way, the leases it cannot release over a closed connection lapse at the T
 
 ## Sandbox control is owner-routed
 
-A detached coding run outlives the node that started it, so its completion has to reach whichever node owns the seat *now*. Each seat has a control topic, `crewlet.agent.{seat-id}.control`, attached and detached alongside the inbox — so routing emerges from who subscribes, exactly as it does for the inbox, rather than from any "which node" computation.
+An executor's detached run outlives the node that started it, so its completion has to reach whichever node owns the seat *now*. Each seat has a control topic, `crewlet.agent.{seat-id}.control`, attached and detached alongside the inbox — so routing emerges from who subscribes, exactly as it does for the inbox, rather than from any "which node" computation.
 
-It cannot ride the inbox itself: while a run holds the seat, every inbox delivery is parked (requeued and acked), and a completion riding the inbox would be parked behind the very busy state it exists to clear.
+It cannot ride the inbox itself: while a run holds the seat — every turn's run, for as long as it works — the seat's inbox is held and fetches nothing, so a completion riding the inbox would wait behind the very hold it exists to lift.
 
 The run record carries `owner` and `owner_epoch`, so a run is recovered by the node that owns the seat, under that node's epoch, as a step inside the acquire hook. The record lives in the [coordination store](coordination.md), which is what makes that possible at all: on the node's own database the successor's recovery pass listed nothing, and the run's box was neither resumed nor reaped.
 
@@ -558,11 +559,11 @@ Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**,
 
 | Duty | What it does | Why once |
 |---|---|---|
-| `sandbox-waiter` | Polls live sandbox boxes, keeps them alive, reaps expired pauses | Each poll is a reconnect, so N nodes means N reconnects per box per tick — and N racing reapers |
+| `sandbox-waiter` | Polls the live sandbox boxes every node reaches (`e2b`), keeps them alive, reaps expired pauses, and ends the local runs of a node that left the fleet for good. A `direct` or `container` box is polled by the node that launched it, on every node, under no duty — see [Code Sandbox](code-sandbox.md#durability-completion-and-observability) | Each poll is a reconnect, so N nodes means N reconnects per box per tick — and N racing reapers |
 | `scheduler` | Evaluates every schedule and fires what is due | The fleet's fire claim already makes a dispatch at-most-once, so peers are not *wrong* — they lose the race on every fire, having walked the whole org to get there |
 | `learning` | All four learning background passes: clustering skills out of episodes, the active → stale → archived lifecycle, episode compaction, and cross-agent promotion | Clustering reads every agent's episodes and **writes** skills, so N nodes produce N sets of near-identical pages and N× the LLM spend; the curator publishes a lifecycle event per transition and races its own optimistic-concurrency guard. One lease for all four because they run on one loop |
 | `integration-reconcile` | Runs every connected third-party app's [reconcile pass](integration-reconcile.md) on its own cadence | N nodes would each sweep every surface on every tick. What stops two writers at one third-party app is a different lease, `worker:setup-provision-<kind>`, which every writer at a surface holds around one pass and gives back when it ends, so it is mutual exclusion rather than a duty; this one keeps the sweep itself on one node |
-| `maintenance` | Retention sweeps for every short-horizon table in the node's own database (`events`, `scheduled_runs`, `conversation_sessions`, the expired and over-cap `agent_diary` rows, `counterparty_profiles`), plus both halves of the A2A channel sweep: the idle-close of an ask no turn ever answered, and the delete of one closed long enough. And the retirement of a [removed seat's mailbox](#the-removed-seat) and its coding runs once the seat has been absent for 24 hours. And the coordination store's [removal markers](coordination.md#removal-markers-are-swept), from every shared-state bucket with no age, once they are three hours old — each purged through its own revision, so a key written again since is untouched. The channel and mailbox records and the markers are the *shared* things swept here, and the [coordination store](coordination.md#retention-is-a-buckets-age) says why: its other slots expire on a bucket's age, which cannot tell an open channel from a closed one, or a present seat from a removed one | Idempotent range deletes, so peers are harmless, just N times the write amplification and vacuum churn. The mailbox retirement is not idempotent in the same way, so it takes its own compare-and-set on every record and claims the seat's own lease while it deletes, rather than relying on the duty's lease |
+| `maintenance` | Retention sweeps for every short-horizon table in the node's own database (`events`, `scheduled_runs`, `conversation_sessions`, the expired and over-cap `agent_diary` rows, `counterparty_profiles`), plus both halves of the A2A channel sweep: the idle-close of an ask nothing will answer any more — a channel whose seat still owes its answer, on a coding run's record or in an inbox held by a run, a pause or a spent budget window, is [spared](event-system.md#ephemeral-a2a-channels-internala2a) — and the delete of one closed long enough. And the retirement of a [removed seat's mailbox](#the-removed-seat) and its coding runs once the seat has been absent for 24 hours. And the coordination store's [removal markers](coordination.md#removal-markers-are-swept), from every shared-state bucket with no age, once they are three hours old — each purged through its own revision, so a key written again since is untouched. The channel and mailbox records and the markers are the *shared* things swept here, and the [coordination store](coordination.md#retention-is-a-buckets-age) says why: its other slots expire on a bucket's age, which cannot tell an open channel from a closed one, or a present seat from a removed one | Idempotent range deletes, so peers are harmless, just N times the write amplification and vacuum churn. The mailbox retirement is not idempotent in the same way, so it takes its own compare-and-set on every record and claims the seat's own lease while it deletes, rather than relying on the duty's lease |
 | `retention` | The state-log **trim**: every 15 minutes it evaluates each domain's floor across every data node's position, the backups and the holds, purges what they all permit, and publishes what it concluded and which term is holding it (see [Retention](../guides/retention.md)) | Two nodes purging and publishing at once would publish two conclusions about one log, and how long a term has been holding is a property of a series of ticks that must be one node's |
 | `embeddings` | Computes the embedding of every page and task whose vector is missing or stale and publishes it to the vectors log, which every data node applies | Each node embedding the corpus would be one provider bill per node for one company — the cost the vectors log exists to pay once |
 | `object-collector` | Runs the [object store's](object-store.md#collection-and-audit) two passes against the one store the fleet's files are in: hourly, deletes every object stored and keyed more than a day ago that no row names (and stops deleting when this node's estate is incomplete), and abandons uploads that never finished; daily, audits that every object a row names is in the store and whole, raising `objects_missing` when one is not. Records each pass in the coordination store | Two collectors are safe — a key is named only by the write that uploaded it, and deleting an object that is gone is not an error — but each would list the whole store and read every row naming an object, for one answer |

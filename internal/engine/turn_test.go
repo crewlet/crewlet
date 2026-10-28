@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -2712,6 +2713,7 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 		t.Fatalf("NewManager: %v", err)
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Answers:  fleetAnswers(),
 		Audience: noAudience{},
 		Queue:    discardPublisher{}, Pending: blindLookupStore{PendingStore: store, blind: blind}, Manager: manager,
 		// A RESUMER THAT PANICS, because these cases never reach one:
@@ -2797,6 +2799,17 @@ type noAudience struct{}
 func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
 	return sandbox.Audience{}
 }
+
+// fleetAnswers is the seal these coordinators seal and open answers under
+// ([sandbox.CoordinatorOptions.Answers]): one fleet keyring for every one of
+// them, as a fleet shares one, so a node opens what another recorded.
+var fleetAnswers = sync.OnceValue(func() *sandbox.AnswerSeal {
+	seal, err := sandbox.NewAnswerSeal(statelog.OneKey("answers", "the engine cases' fleet key material"))
+	if err != nil {
+		panic(err)
+	}
+	return seal
+})
 
 // unpackReply is a [sandbox.Reply] as the three values the answer seam used to
 // be handed: the conversation, the text, and the delivery's leading event.

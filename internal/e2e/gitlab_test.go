@@ -88,9 +88,8 @@ roles:
 // detect.
 func withSeatCredential(url string) func(string) string {
 	return func(doc string) string {
-		return strings.Replace(gitlabCompany(url)(doc),
-			"    handle: ceo\n    llm: scripted\n",
-			"    handle: ceo\n    llm: scripted\n    mcp_env:\n      gitlab:\n"+
+		return strings.Replace(gitlabCompany(url)(doc), ceoSeat,
+			ceoSeat+"    mcp_env:\n      gitlab:\n"+
 				"        GITLAB_TOKEN: glpat-ceo\n", 1)
 	}
 }

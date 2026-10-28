@@ -549,7 +549,7 @@ func TestAReadToolIsRefusedOnTheActTransport(t *testing.T) {
 	if acts, _ := s.Acts(t.Context(), reader); slices.Contains(acts, worklet.CreateWorkItemTool) {
 		t.Errorf("a reader is offered %v, including a create the table refuses them", acts)
 	}
-	status, answer = act(t, guarded(s), "founder", "run_sandbox",
+	status, answer = act(t, guarded(s), "founder", "no_such_tool",
 		"application/json", body, newKey())
 	if status != http.StatusNotFound || answer["error"] != string(httpjson.CodeUnknownTool) {
 		t.Fatalf("an unknown tool answered %d %v, want 404 unknown_tool", status, answer)

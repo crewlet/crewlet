@@ -7,10 +7,16 @@ self-hosted path. This page is the decision guide: what each choice implies,
 what you must create **yourself** in the external service, and where the
 detailed setup steps live.
 
-**Only the LLM is required.** The tracker and the knowledge base ship with the
-engine and are on by default; everything else is a surface you add when you
-want your company working where your people already are. A company with one
-signed-in coding CLI and nothing else runs.
+**Only the LLM, and a place for its runs, is required.** The tracker and the
+knowledge base ship with the engine and are on by default; everything else is a
+surface you add when you want your company working where your people already
+are. Every agent seat's executor runs in a [code sandbox](#code-sandbox-where-every-executor-runs)
+cell, and `local: {}` with `default_run_in: direct` is the engine host itself,
+with nothing to sign up for — so a company with one signed-in coding CLI, that
+cell, and nothing else runs. That cell is for a first run on your own machine
+while its seats take work from you alone; before a seat takes work from anyone
+else, its runs move into a container ([Code
+sandbox](#code-sandbox-where-every-executor-runs)).
 
 A useful mental model: for each integration there is usually
 
@@ -39,10 +45,10 @@ and how you pay for them:
 
 | Models | Config | Pay with | Notes |
 |---|---|---|---|
-| **Anthropic's** (Claude) | `model: sonnet` — Claude Code is the default `agent` | a Claude Pro / Max plan, or an Anthropic API key (`auth.mode: api-key`) | The one CLI that mints a headless token (`crewlet llm login -capture-token`), the best sign-in for a container. Runs the executor itself in [box mode](../concepts/llm-backends.md#box-mode), and is a sandbox coding agent. |
-| **OpenAI's** (GPT) | `agent: codex` | a ChatGPT Plus / Pro plan, or an OpenAI API key (`auth.mode: api-key`) | Host mode only: its own loop on this host, the seat's tools as its only working tools; a seat on it that writes code takes its sandbox work to a Claude Code or OpenCode entry. |
-| **Open models** — OpenRouter, a hosted provider, your own server | `agent: opencode`, `model: <provider>/<model>` | the provider's key in `env`, or a login of OpenCode's own; nothing at all for a server that takes no key | OpenCode 2. Fully self-hostable: a vLLM, llama.cpp or Ollama server is a provider declared in OpenCode's own configuration ([how](../concepts/llm-backends.md#open-models-openrouter-and-local-servers-opencode)). Box mode and a sandbox coding agent, like Claude Code. |
-| **Gemini, Qwen, Cursor, Copilot, Grok, Muse, Kimi, Hermes, Pi** | `agent:` the profile's name | the vendor's login or key | Host mode only. [Supported CLIs](../concepts/llm-backends.md#supported-clis) pairs each profile with its binary (`gemini-cli` drives `gemini`, `kimi-code` drives `kimi`, …). |
+| **Anthropic's** (Claude) | `model: sonnet` — Claude Code is the default `agent` | a Claude Pro / Max plan, or an Anthropic API key (`auth.mode: api-key`) | The one CLI that mints a headless token (`crewlet llm login -capture-token`), the best sign-in for a container. Runs a seat's executor as [its own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box). |
+| **OpenAI's** (GPT) | `agent: codex` | a ChatGPT Plus / Pro plan, or an OpenAI API key (`auth.mode: api-key`) | No executor: its own loop on this host, the seat's tools as its only working tools, for a seat's reviewer, workers and side passes; the seat's `llm` points at a Claude Code or OpenCode entry for its executor. |
+| **Open models** — OpenRouter, a hosted provider, your own server | `agent: opencode`, `model: <provider>/<model>` | the provider's key in `env`, or a login of OpenCode's own; nothing at all for a server that takes no key | OpenCode 2. Fully self-hostable: a vLLM, llama.cpp or Ollama server is a provider declared in OpenCode's own configuration ([how](../concepts/llm-backends.md#open-models-openrouter-and-local-servers-opencode)). Runs a seat's executor, like Claude Code. |
+| **Gemini, Qwen, Cursor, Copilot, Grok, Muse, Kimi, Hermes, Pi** | `agent:` the profile's name | the vendor's login or key | No executor: a seat's reviewer, workers and side passes. [Supported CLIs](../concepts/llm-backends.md#supported-clis) pairs each profile with its binary (`gemini-cli` drives `gemini`, `kimi-code` drives `kimi`, …). |
 
 Whichever you pick, the CLI's binary has to be installed on the engine host —
 the container image ships none, see [Installation](installation.md#a-coding-cli)
@@ -69,17 +75,18 @@ any backend, or via a local cell (`providers.sandbox.local` plus `run_in:
 direct`), which runs the coding agent on the engine host against the same
 login.
 
-**And the CLI can run the executor in a box.** In either mode the CLI drives
-its own loop and calls the seat's tools over MCP; `mode: box` moves the seat's
-executor into a sandbox box — a real shell, a real editor, a real checkout —
-with the seat's tools reaching it over an MCP bridge, as a detached run that
-outlives the turn. It needs more than a sign-in: a CLI with a coding-agent runner
-(`claude-code` or `opencode`), a `providers.sandbox` catalogue to place the run
-in, and `CREWLET_MCP_BRIDGE_URL` set to the API's address as a box can dial it. `crewlet llm
-doctor` checks all three. Host mode stays the default and is the better answer
-when you want every step to be the turn's own — its rounds capped, a person's
-note reaching it between runs, no sandbox needed. See
-[LLM Backends § Two modes](../concepts/llm-backends.md#two-modes-on-this-host-or-in-a-box).
+**And the CLI runs the turn itself.** Every agent seat's executor is its CLI's
+own agentic loop — a real shell, a real editor, a real checkout — with the
+seat's tools reaching it over an MCP bridge, as a detached run that outlives
+the turn. It needs more than a sign-in: a CLI with a coding-agent runner
+(`claude-code` or `opencode`) in the seat's chain, a `providers.sandbox`
+catalogue to place the run in, and a bridge its box can dial — a `direct` box
+dials the node's own listener on loopback wherever the node binds `api.port`,
+while a `container` or `e2b` box, or a `direct` one on a node started with
+`api.port: 0`, needs `CREWLET_MCP_BRIDGE_URL`, the fleet's address. `crewlet llm doctor` checks all three. Every other phase —
+the reviewer, delegated workers and the side passes — runs the same CLI on this
+host, its shell and editor denied, calling the seat's tools over MCP. See
+[LLM Backends § Where the CLI runs](../concepts/llm-backends.md#where-the-cli-runs).
 
 **Embeddings** (`providers.embeddings`) power the semantic half of a Doclet
 or Worklet search (the company's own pages and work items, embedded once for
@@ -363,21 +370,24 @@ Details (scopes, Events API, thread routing, the working-status indicator):
 
 ---
 
-## Code sandbox (optional but recommended for engineer roles)
+## Code sandbox (where every executor runs)
 
-Lets a role's Execute phase run a real coding agent (Claude Code or OpenCode)
-with a shell, a filesystem, and a git checkout, inside an isolated sandbox —
-see the [Code Sandbox](../concepts/code-sandbox.md) concept page.
+Every agent seat's executor is its coding CLI's own run — Claude Code or
+OpenCode — fully permissioned, with a shell, a filesystem and a git checkout,
+in a box from this catalogue, which a company with an agent seat and a model
+must configure. `direct` is the engine host itself; `container` and `e2b` keep
+the run off it. See the [Code Sandbox](../concepts/code-sandbox.md) concept
+page.
 
 | Option | How | Notes |
 |---|---|---|
-| **None** | omit `providers.sandbox` | Roles use the native executor tool-loop; no code authoring. |
-| **E2B cloud** | `e2b: {api_key: "${E2B_API_KEY}"}` | Sign up at <https://e2b.dev>, create an API key in the dashboard. Fastest path. |
-| **Self-hosted E2B** | `e2b: {api_key: …, domain: "${E2B_DOMAIN}"}` | Deploy [e2b-dev/infra](https://github.com/e2b-dev/infra) on your own cloud account, then point the same SDK/code path at it via `domain`. Your cluster issues its own `E2B_API_KEY`. |
-| **Local — container** (recommended on one host) | `local: {image: …}` + `run_in: container` | Docker/Podman on the engine host. Real host isolation, no E2B account. You [bring the image](../concepts/code-sandbox.md#bring-your-own-image), with the coding CLI in it, or a stock one plus a setup step that installs it. Can use a [plan's login](../concepts/llm-backends.md#authentication) instead of an API key. |
-| **Local — direct** | `local: {}` + `run_in: direct` | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up, but the coding agent runs as the engine user with every permission, so it isolates *state*, not the host: it can read whatever your account can. A dedicated VM only. |
+| **None** | omit `providers.sandbox` | Only for a company with no agent seat, or no `providers.llm` entry yet; any other is refused at `providers.sandbox`. |
+| **E2B cloud** | `e2b: {api_key: "${E2B_API_KEY}"}` + `CREWLET_MCP_BRIDGE_URL` | Sign up at <https://e2b.dev>, create an API key in the dashboard. The run is on E2B's network and calls its seat's tools back at `CREWLET_MCP_BRIDGE_URL`, so the engine's API has to be published where E2B's cloud reaches it — see the caveat below. |
+| **Self-hosted E2B** | `e2b: {api_key: …, domain: "${E2B_DOMAIN}"}` + `CREWLET_MCP_BRIDGE_URL` | Deploy [e2b-dev/infra](https://github.com/e2b-dev/infra) on your own cloud account, then point the same SDK/code path at it via `domain`. Your cluster issues its own `E2B_API_KEY`, and the bridge address has to be one your cluster reaches. |
+| **Local — container** (recommended on one host) | `local: {image: …}` + an entry's `run_in: container` (or `default_run_in`) + `CREWLET_MCP_BRIDGE_URL` | Docker/Podman on the engine host. Real host isolation, no E2B account. You [bring the image](../concepts/code-sandbox.md#bring-your-own-image), with the coding CLI in it, or a stock one plus a setup step that installs it. A loopback `CREWLET_MCP_BRIDGE_URL` reaches the box under the runtime's name for the engine host, and on Linux `api.host` must not be loopback. Can use a [plan's login](../concepts/llm-backends.md#authentication) instead of an API key. |
+| **Local — direct** | `local: {}` + an entry's `run_in: direct` (or `default_run_in`) | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up and the natural pair for an entry signed in on a plan — but the coding agent runs fully permissioned as the engine user, so it isolates *state*, not the host: it can read whatever your account can. Only on a dedicated host you are willing to hand to an autonomous agent, for the entry that needs the host itself, or for a first run on your own machine while its seats take work from you alone. |
 
-For a local instance, a workstation included, put code work in a container:
+For any other local instance, a workstation included, and before a seat takes work from anyone else, put code work in a container:
 
 ```yaml
 providers:
@@ -386,36 +396,49 @@ providers:
       image: node:22-bookworm       # plus the setup step that installs the CLI:
                                     #   see "Bring your own image"
     default_run_in: container
-    default_coding_agent: claude-code
 ```
 
+
 `providers.sandbox` is a **catalogue**, so these are not exclusive: configure
-`e2b:` and `local:` together and give each seat its own `run_in` — the seat
-that needs the host's plan login runs `direct`, the seat whose
-generated code must never touch that host runs `e2b`. Where a seat that names
-none goes is `default_run_in`, which is required whenever some seat (or
-box-mode entry) would fall to it on a catalogue offering more than one cell
-(and `local:` alone offers two); a company whose every seat names its own
-needs none — as long as *something* names a cell, since a backend is only
-built for a cell that is reached.
+`e2b:` and `local:` together and give each `providers.llm` entry its own
+`run_in`, pointing each seat at the entry that is right for it — the entry
+signed in on the host's plan runs `direct`, the entry for work that must never
+touch that host runs `e2b`. Where an entry that names none goes is
+`default_run_in`, which is required whenever some seat's executor entry would
+fall to it on a catalogue offering more than one cell (and `local:` alone
+offers two); a company whose every such entry names its own needs none — as
+long as *something* names a cell, since a backend is only built for a cell
+that is reached.
 
 Coding-agent choice: the coding agent **is** the CLI of the entry the seat's
-code work runs on (`role.llm_sandbox`, else its `llm`), with that entry's model
-and that entry's sign-in, so it needs no extra secret. **Claude Code** runs a
-`claude-code` entry; **OpenCode** — version 2, the `@opencode/cli` package, in
-the box — runs an `opencode` entry and so any model OpenCode reaches, which
-takes `coding_agent: opencode` on the seat (or as the provider default). Any
-other pairing is [refused](../concepts/code-sandbox.md#failure-modes), and a
-seat whose own model is on a CLI with no coding-agent runner — Codex, Gemini
-CLI, the rest — points `role.llm_sandbox` at a `claude-code` or `opencode`
-entry. A sign-in the seat carries itself in `role.sandbox.env` — a Claude Code
+executor launches on (the first member of its `llm` chain that can run one),
+with that entry's model, its `env` and its sign-in, so it needs no extra secret.
+**Claude Code** runs a `claude-code` entry; **OpenCode** — version 2, the
+`@opencode/cli` package, in the box — runs an `opencode` entry and so any model
+OpenCode reaches. A seat whose `llm` chain holds no `claude-code` or `opencode`
+entry is [refused](../concepts/code-sandbox.md#failure-modes); a CLI with no
+coding-agent runner — Codex, Gemini CLI, the rest — serves the seat's reviewer,
+workers and side passes instead. A sign-in the seat carries itself in `role.sandbox.env` — a Claude Code
 token, say — counts toward the check that refuses a remote box its entry's login
 cannot follow.
 
 One networking caveat for local development: a **cloud** E2B sandbox cannot
-reach services on your laptop (`localhost` GitLab) — in-sandbox tool
-access to those needs a reachable deployment, a tunnel, or self-hosted E2B on
-the same network.
+reach anything on your laptop, and that includes the engine. Every `e2b` run
+calls all of its seat's tools back through the bridge at
+`CREWLET_MCP_BRIDGE_URL`, so that has to be an address E2B's cloud reaches —
+the engine's API published to the internet, its
+[public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api)
+behind your proxy, or a tunnel to it — and never `localhost` or `127.0.0.1`.
+A proxy or tunnel on your laptop (ngrok, cloudflared, Caddy) works as it
+comes: it may reach the engine on `127.0.0.1` and pass the public `Host` on,
+since the bridge admits a call on the token in its path
+([The tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
+Left unset, every `e2b` launch is refused; set to an address the VM cannot
+reach, every call the run makes over the bridge fails, so the run has none of
+its seat's tools, cannot call `submit_work`, and is rescued as `incomplete`.
+Services on your laptop the run would use directly (`localhost` GitLab) need
+the same: a reachable deployment, a tunnel, or self-hosted E2B on the same
+network.
 
 ---
 
@@ -436,10 +459,10 @@ is the **short path**: every pick that costs nothing extra to stand up — chat
 on **Mattermost**, the model **Claude Code on your own Claude plan**, the
 tracker and knowledge base the **engine's own**, and the code sandbox on the
 **engine host** (`run_in: direct`), which reuses that same plan login
-rather than needing an account of its own. Its three
-engineering seats run that CLI in
-[box mode](../concepts/llm-backends.md#box-mode), so their
-executor *is* the CLI's own agentic loop with a real shell. The rows that need
+rather than needing an account of its own — a first run on your own machine
+while its seats take work from you alone. Every seat runs that CLI's
+[own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box) as
+its executor, so the executor *is* the CLI's own agentic loop with a real shell. The rows that need
 somebody else's service are deliberately empty, which is what lets the whole
 thing run from one compose profile and one `crewlet llm login`:
 

@@ -8,7 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// reopenAgentRun serves a box-mode run's tool bridge again on this node, which
+// reopenAgentRun serves an executor run's tool bridge again on this node, which
 // has just taken the run over while it works: the coordinator's
 // [sandbox.CoordinatorOptions.Recovered], as this node recovers the run's
 // seat and before the seat's mailbox opens.
@@ -35,26 +35,61 @@ import (
 //
 // # How the box reaches it here
 //
-// The box dials the fleet's bridge address, whichever node answers it, and
-// the node it reaches relays the call to this one by the seat's lease
+// The box dials the fleet's bridge address, whichever node answers it — or,
+// for a direct box, the launching node's own listener on loopback — and the
+// node it reaches relays the call to this one by the seat's lease
 // ([mcpbridge.Bridge.Join]) — so a run this node took over from a peer is
 // served here as surely as one it launched.
+//
+// # Not a run whose ending is decided, nor one a person stopped
+//
+// A run a person stopped, or one being failed, has its ending recorded on its
+// row before its steps run ([sandbox.PendingRun.Ending]), and those steps close
+// its session and reclaim its box. Reopened, the box would get its tools back
+// for the moments before its reclaim, as a seat whose stop said otherwise.
+//
+// The same holds a step earlier, for a run on a seat whose pause asks for its
+// running work to stop and whose stop has not been decided yet: the seat's
+// acquisition ends it right after this recovery ([Engine.prepareSeatSandbox]),
+// so a session opened here would serve the seat's tools to a run the person
+// asked to end — every call refused by the session's fence, which reads the
+// same pause, but the box's handshake answered and its surface rebuilt for
+// nothing. A pause this node has not read yet is no stop: the session is
+// opened, and the stop that arrives with the pauses closes it.
+//
+// # Nor one whose job was lost with its host
+//
+// A run whose job was lost — killed with its engine by a restart, its box gone
+// from its host, or its launch node gone from the fleet — carries that verdict
+// on its row ([sandbox.PendingRun.Lost]): nothing in a box is left to call
+// anything, and the completion announced for it carries its round on in a job
+// of its own, which opens a session of its own, the moment the seat's mailbox
+// opens. A session opened for the lost job would serve nobody.
 //
 // NEVER AN ERROR to the recovery that calls it: the seat is this node's
 // whatever becomes of one run's bridge, and the run is still collected when it
 // ends. What could not be opened is said, with why.
 func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
+	if run.Ending != nil || run.Lost != nil {
+		return
+	}
+	if seat, err := e.seatID(run.AgentHandle); err == nil && e.stopFor(seat, run.AgentHandle) != nil {
+		log.InfoContext(ctx, "bridge_not_reopened", "run_id", run.TurnID, "launch_id", run.LaunchID,
+			"seat", run.AgentHandle, "detail", "a person paused the seat and asked for its running "+
+				"work to stop, so the run is ended rather than served its tools again")
+		return
+	}
 	state, ok, err := execstate.Decode(run.ExecuteState)
 	if err != nil {
 		log.WarnContext(ctx, "bridge_not_reopened", "run_id", run.TurnID, "seat", run.AgentHandle,
 			"error", err.Error(), "detail", "the run's parked state is one this build cannot "+
-				"read, so whether its box calls a bridge is unknown; a node on the build "+
+				"read, so its tool surface cannot be rebuilt here; a node on the build "+
 				"that wrote it serves it when it holds the seat")
 		return
 	}
-	if !ok || !state.AgentRun {
-		// A run_sandbox job of an executor on this host: its box calls no
-		// bridge, and its turn's conversation is re-entered when it ends.
+	if !ok {
+		// No park on the row: the launch's turn was lost before it parked,
+		// and the recovery that fails the run answers it.
 		return
 	}
 	refuse := func(detail string, args ...any) {
@@ -65,7 +100,8 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	}
 	switch {
 	case e.bridge == nil:
-		refuse("this node serves no tool bridge: " + mcpbridge.BaseURLVar + " is unset here")
+		refuse("this node serves no tool bridge: " + mcpbridge.BaseURLVar + " is unset here, " +
+			"and this node serves no bridge route of its own")
 		return
 	case !e.bridge.Reachable():
 		refuse("nothing reaches this node's tool bridge: " + mcpbridge.BaseURLVar + " is set but " +
@@ -110,19 +146,30 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 		return
 	}
 	ledger := newBridgeLedger(rt.pending, meter)
+	ledger.nudge = e.nudgeRun
 	// THE RUN'S CALLS GO ON IN ITS OWN ORDER: the session numbers its calls
 	// after the last one the row records, and a resume reads them by it.
-	lastSeq := 0
-	for _, call := range run.BridgeCalls {
-		lastSeq = max(lastSeq, call.Seq)
-	}
-	if _, err := e.openBridge(ctx, &mcpbridge.Session{
-		RunID: run.TurnID, LastSeq: lastSeq, Handle: handle, Role: seat.Name,
+	job := sandbox.OpenedJob{LaunchID: run.LaunchID, LastSeq: run.LastBridgeSeq()}
+	session := &mcpbridge.Session{
+		RunID: run.TurnID, Handle: handle, Role: seat.Name,
 		Surface: surface, Ledger: ledger,
+		// AS THE LAUNCH OPENED IT, so the opening is refused or made on the
+		// same terms; the box already holds its endpoint and is never handed
+		// the one this opening mints.
+		OnHost: sandbox.Placement(run.Placement) == sandbox.Direct,
 		// THE SEAT'S FENCE AS THIS NODE HOLDS IT NOW: the grant the launch
 		// was fenced on is another node's, or this one's before a restart.
 		Fence: e.seatFence(handle),
-	}, ledger, run.LaunchID); err != nil {
+	}
+	// AND THE RUN'S NOTE INBOX, built from its record alone — its turn, its
+	// job and its round — so a note to the turn reaches the run between its
+	// steps here as it did on the node that launched it (runsteer.go).
+	inbox := e.runSteers.inbox(identityOfRun(run), state.Round)
+	if inbox != nil {
+		session.Steer = inbox
+	}
+	if _, err := e.openBridge(ctx, session, ledger, inbox, job); err != nil {
+		inbox.Close()
 		refuse("the bridge opened no session for the run's job", "error", err.Error())
 		return
 	}

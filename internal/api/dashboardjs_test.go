@@ -1134,8 +1134,12 @@ const (
 	// it lifts, its remedy in the link table, and the store keeping a row a
 	// push leaves as it was, all in the attention queue and the store the
 	// frame loads, took it to 351.0 KiB. 352 KiB, still under two seconds on
-	// that link.
-	initialBudget = 352 << 10
+	// that link. Steering a turn whose coding run is out, merged beside it (the
+	// shared write hook reading a press label's own sentence for its receipt,
+	// `landed`, which says when a note is read, in the seats chunk the entry
+	// loads), measured 350.9 KiB with it (359,293 bytes), under 351 KiB:
+	// 351 KiB again, still under two seconds on that link.
+	initialBudget = 351 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1320,13 +1324,21 @@ const (
 	// `#11` by its message, a bare `owner/repo` under the company's owners and
 	// uilet 0.75.1's smaller marks took it to 4629.3 KiB, again all in the lazy
 	// chunks that render Markdown: the first load is 348.9 KiB. 4630 KiB, which
-	// still refuses a doubled baseline. The hardening after it (a cited
-	// address drawn by the checked rule, a reply scoped by its own words,
-	// references linked only under the company's owners and a Confluence page
-	// rebuilt from its space and id) took it to 4630.0 KiB, past it by bytes
-	// and again in those lazy chunks, the first load still 348.9 KiB.
-	// 4631 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 535<<10
+	// still refuses a doubled baseline. Saying that a person's stop ended a
+	// seat's coding run (a stopped turn's tag and a stopped run's span drawn
+	// closed rather than failed, a seat whose last turn "was stopped", the
+	// task's "stopped by a person" pill and the pause dialog's words) and
+	// steering a turn whose coding run is out (Steer offered on a parked turn,
+	// and a note read inside a run drawn on the run's bar in the words of its
+	// step), merged beside it, took it to 4631.8 KiB. 4632 KiB, which still
+	// refuses a doubled baseline. The hardening of inline links merged beside
+	// that (a cited address drawn by the checked rule, a reply scoped by its
+	// own words, references linked only under the company's owners, a
+	// Confluence page rebuilt from its space and id, and uilet 0.75.2's
+	// unclipped marks) took it to 4632.7 KiB, again in the lazy chunks that
+	// render Markdown, the first load 348.8 KiB. 4633 KiB, which still
+	// refuses a doubled baseline.
+	treeBudget = 4<<20 + 537<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

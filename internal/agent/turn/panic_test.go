@@ -186,14 +186,15 @@ func TestRecoveredIsNilWithoutAPanic(t *testing.T) {
 	}
 }
 
-// A RESUME IS ANSWERABLE FOR ITS OWN WRITES, NOT FOR THE ATTEMPT THAT PARKED.
-// A resumed round's record opens with what the round that called run_sandbox
-// wrote before it suspended ([turn.Work.Inherited]); a resume that broke before
-// writing anything new (its model at a usage limit, the first thing it met)
-// repeats none of that on a retry, which re-enters the same conversation. It
-// used to be abandoned for those inherited writes, settling the coding run for
-// good with its result never reaching the seat. A resume that wrote again in
-// this attempt and then broke is abandoned still: its retry would write twice.
+// A RESUME IS ANSWERABLE FOR ITS OWN WRITES, NOT FOR ITS RUN'S EARLIER ONES.
+// A resumed executor's record opens with what its coding run wrote over the
+// bridge before the segment that collects it ([turn.Work.Inherited]); a resume
+// that broke before writing anything new (its model at a usage limit, the first
+// thing it met) repeats none of that on a retry, which collects the same run.
+// It used to be abandoned for those inherited writes, settling the coding run
+// for good with its result never reaching the seat. A resume that wrote again
+// in this attempt and then broke is abandoned still: its retry would write
+// twice.
 //
 // Mutation: compute Acted over every call of the round, and the first case is
 // abandoned.

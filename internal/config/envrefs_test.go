@@ -20,6 +20,7 @@ import (
 const referenceDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -118,6 +119,7 @@ func TestAnEntrysFallbackCredentialIsReportedAsRead(t *testing.T) {
 	cfg, err := ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     plan:
       model: sonnet
@@ -203,6 +205,7 @@ roles:
     handle: ceo
     goal: Run the company
 providers:
+  sandbox: {fake: true}
   llm:
     gpt-5:
       agent: codex

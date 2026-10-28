@@ -126,14 +126,20 @@ func TestEveryRoundRecordsItsOwnSpanAndTokens(t *testing.T) {
 // as the model's time.
 func TestARunsFirstRoundStartsWithTheRun(t *testing.T) {
 	t.Parallel()
-	const gap = 60 * time.Millisecond
-	surf := newSurface("delegate", "submit_work")
-	surf.delay = gap
+	surf := newSurface("slow", "submit_work")
+	// The slow call is answered "still running" at 300ms and runs to 600, so
+	// the engine holds the next run for the rest of it: the gap.
+	surf.hook = func(_ context.Context, call llm.ToolCall) {
+		if call.Name == "slow" {
+			time.Sleep(600 * time.Millisecond)
+		}
+	}
 	prov := script(
-		runOf(calling("", "delegate")),
+		runOf(calling("", "slow")),
 		runOf(llmtest.Response{Writing: pause(10 * time.Millisecond), Calls: []llmtest.Call{{Name: "submit_work"}}}),
 	)
-	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, ParkLocally: []string{"delegate"},
+	prov.ToolTimeout = 5300 * time.Millisecond
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf,
 		TerminateAfter: []string{"submit_work"}})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -395,8 +401,45 @@ func TestProgressIsPublishedAsARunOpensAnswersAndAroundEachCall(t *testing.T) {
 	}
 }
 
+// A CALL IS TOLD ITS ROUND, on the scale its records use, which is what the
+// assistant's brief turn holds its reads to; and a context no loop stamped
+// answers none, so a tool called outside a loop is never read as in round 0.
+//
+// Mutation: drop the stamp in the dispatcher's execute and every call answers
+// no round.
+func TestACallIsToldItsRound(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("read")
+	var mu sync.Mutex
+	var rounds []int
+	surf.hook = func(ctx context.Context, _ llm.ToolCall) {
+		round, ok := toolloop.CallRound(ctx)
+		if !ok {
+			round = -1
+		}
+		mu.Lock()
+		rounds = append(rounds, round)
+		mu.Unlock()
+	}
+	prov := script(runOf(calling("one", "read"), calling("two", "read"), says("done")))
+	cfg := toolloop.Config{Provider: prov, Surface: surf, MaxRounds: 4, Host: host(t), Messages: opening()}
+	if _, err := toolloop.Run(t.Context(), cfg); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !slices.Equal(rounds, []int{1, 2}) {
+		t.Errorf("calls were told rounds %v, want [1 2], the rounds their records name", rounds)
+	}
+	if _, ok := toolloop.CallRound(t.Context()); ok {
+		t.Error("a context no loop stamped answers a round")
+	}
+}
+
 // A CALL IS TOLD ITS ROUND ON THE PHASE'S SCALE: an extension continuing a phase
-// twenty rounds in has its calls nest under rounds 21 and 22, not 1 and 2.
+// twenty rounds in has its calls told rounds 21 and 22, the rounds the phase's
+// records renumber them onto, not 1 and 2.
+//
+// Mutation: stamp the invocation's round without the declared offset and the
+// calls are told [1 2].
 func TestACallIsToldItsRoundOnThePhasesScale(t *testing.T) {
 	t.Parallel()
 	surf := newSurface("read")
@@ -418,9 +461,6 @@ func TestACallIsToldItsRoundOnThePhasesScale(t *testing.T) {
 	}
 	if !slices.Equal(rounds, []int{21, 22}) {
 		t.Errorf("calls were told rounds %v, want [21 22] — the phase's numbers, not the invocation's", rounds)
-	}
-	if _, ok := toolloop.CallRound(t.Context()); ok {
-		t.Error("a context no loop stamped answers a round")
 	}
 }
 

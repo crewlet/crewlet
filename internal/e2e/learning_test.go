@@ -105,11 +105,21 @@ func TestACompletedTurnLeavesWhatReflectionLearnsFrom(t *testing.T) {
 	// worth learning from — silently, with the dispatcher reporting a clean
 	// pass.
 	t.Run("TheCompletedTurnEventCarriesWhatReflectionGatesOn", func(t *testing.T) {
+		// THE TURN THAT SETTLED, not the segment that parked: the executor
+		// is a detached run, so the turn publishes a completion as it parks
+		// on the launch — marked suspended, before the run has done
+		// anything — and the one that carries what reflection learns from
+		// when the collected run's review ends it.
 		var tc types.TurnCompleted
-		select {
-		case tc = <-completed:
-		case <-time.After(waitBudget):
-			t.Fatalf("no turn was completed within %s", waitBudget)
+		for deadline := time.After(waitBudget); ; {
+			select {
+			case tc = <-completed:
+			case <-deadline:
+				t.Fatalf("no turn was completed within %s", waitBudget)
+			}
+			if !tc.Suspended {
+				break
+			}
 		}
 		if len(tc.ToolSequence) == 0 && tc.ReviewOutcome == "done" {
 			t.Error("a done turn published no tool sequence, which every " +

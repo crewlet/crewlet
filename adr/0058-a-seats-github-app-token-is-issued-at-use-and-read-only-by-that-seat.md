@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestASeatsAppTokenIsAnsweredOnlyByItsOwnResolution`, `internal/engine.TestADisabledGitHubIssuesNoToken`, `internal/engine.TestAServerNamingAnUninstalledAppsTokenWaitsForTheInstall`, `internal/engine.TestALongRunsTokenFileIsKeptCurrent`, `internal/github.TestAnIssuedTokenIsScopedToTheTierAndRepositoriesItWasMintedFor`, `internal/github.TestAnIssuerHandsOutTheHeldTokenUntilItRunsShort`
+- **Enforced-by:** `internal/engine.TestASeatsAppTokenIsAnsweredOnlyByItsOwnResolution`, `internal/engine.TestADisabledGitHubIssuesNoToken`, `internal/engine.TestAServerNamingAnUninstalledAppsTokenWaitsForTheInstall`, `internal/engine.TestALongRunsTokenFileIsKeptCurrent`, `internal/engine.TestAJobCarriedOnInItsKeptBoxStartsOnACurrentTokenFile`, `internal/github.TestAnIssuedTokenIsScopedToTheTierAndRepositoriesItWasMintedFor`, `internal/github.TestAnIssuerHandsOutTheHeldTokenUntilItRunsShort`, `internal/github.TestARefusedMintIsHeldForItsWaitAndAskedAgainAfter`, `internal/engine.TestARefusedMintIsAskedOfGitHubOnceAWaitByEveryPoll`
 - **Cost-when-tried:** the agents' own apps were created, installed and scoped to a tier, and then used for one thing: reading who had commented on a thread. Every push, pull request and review an agent made went through a personal access token in `role.sandbox.env`, so a company needed one GitHub account per agent, the tiers bounded nothing an agent wrote, and two seats sharing one account were routed as one.
 - **Tag-status:** unreleased
 
@@ -15,7 +15,12 @@ credentials are read: its tool servers' `mcp_env`, its coding box's
 environment and setup files, and the servers rendered into that box. The
 process-wide `github.Issuer` mints it from the app's sealed key, narrowed to
 the seat's tier and repositories, and holds it in memory for as long as it has
-life left for the reader asking.
+life left for the reader asking. A mint GitHub refuses is held too, for the
+wait of the restart schedule the seat's tool servers retry it on, and every
+reader of that installation meets the held answer until the wait ends: a
+refusal that lasts until a person acts at GitHub costs one request a wait,
+however many tool servers, launches, running boxes and deliveries read the
+token.
 
 **Only the seat's own resolution answers it.** Each of those reads goes
 through `Engine.seatResolver`, which lays one source for that seat in front of
@@ -26,8 +31,10 @@ reads a chain in which it does not exist.
 servers are passed again at `github.RenewAt` and restarted with a fresh token.
 A coding run's environment is issued a token good for `github.RunTokenLife`,
 and the completion poll rewrites every setup file whose whole body names the
-token whenever the token behind it is renewed, so a credential helper reading
-that file never reads an expired one.
+token whenever the token behind it is renewed. So does the launch of a job
+that continues in its turn's kept box, before the job starts: that box runs no
+setup, and no poll reached it while it was paused. So a credential helper
+reading that file never reads an expired one.
 
 **Nothing is issued while `integrations.github` is off.** Switching it off is
 how an operator stops every token the engine hands out.

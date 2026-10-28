@@ -111,17 +111,10 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		want       []string
 	}{
 		{"LLMProvider", "agent", strs(CLIAgentNames)},
-		{"LLMProvider", "mode", strs(CLIModes)},
 		{"CLIAgentAuth", "mode", strs(CLIAgentAuthModes)},
 		{"EmbeddingProvider", "type", strs(EmbeddingProviderTypes)},
-		// TWO DIFFERENT CLOSED SETS, deliberately. A seat may name `self`
-		// — code work inside its own box-mode executor run — and a
-		// company default may not, because it would silently turn code
-		// work off for every seat that is not in box mode.
-		{"SandboxProvider", "default_run_in", strs(BackendPlacements())},
-		{"LLMProvider", "run_in", strs(BackendPlacements())},
-		{"SandboxProvider", "default_coding_agent", strs(CodingAgents)},
-		{"RoleSandbox", "run_in", strs(Placements)},
+		{"SandboxProvider", "default_run_in", strs(Placements)},
+		{"LLMProvider", "run_in", strs(Placements)},
 		{"RoleAvatar", "character", strs(AvatarCharacters)},
 		{"RoleAvatar", "color", strs(AvatarColors)},
 		{"LocalSandbox", "runtime", strs(ContainerRuntimes)},
@@ -467,12 +460,13 @@ providers:
     oc:
       agent: opencode
       model: anthropic/claude-sonnet-5
+      run_in: direct
       env: {ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"}
   embeddings: {type: openai, model: text-embedding-3-small, api_key: "${OPENAI_API_KEY}", dimensions: 1536}
   sandbox:
     local: {image: acme/box, runtime: auto}
     default_run_in: container
-    default_coding_agent: opencode
+    default_max_turns: 120
     setup:
       - name: git-auth
         commands: ["git config --global user.name \"$CREWLET_AGENT_HANDLE\""]
@@ -481,6 +475,8 @@ providers:
 turn_engine:
   max_iterations: 3
   extension_enabled: true
+  onboarding_max_tool_rounds: 12
+  executor_min_budget_tokens: 30000
 learning:
   enabled: true
   skill_synthesis: {scheduler_enabled: true}
@@ -528,10 +524,11 @@ units:
     roles:
       - name: CTO
         handle: cto
-        llm_sandbox: oc
+        llm: [oc, default]
         integrations: {mattermost: {bot_token: "${MM_CTO}", username: cto-bot}}
         sandbox:
-          enabled: true
+          max_turns: 0
+          pause_ttl_seconds: 600
           env: {GITHUB_TOKEN: "${GH_CTO}"}
           mcp: {servers: [gitlab]}
 `,
@@ -1075,7 +1072,7 @@ units:
 		// holds and what an exported chart carries back.
 		{name: "shared names on distinct addresses", tier: TierCompany, yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev-one}\n  - {name: Dev, handle: dev-two}\nunits:\n  - {name: Core, id: core, children: [{name: Platform, id: core-platform}]}\n  - {name: Edge, id: edge, children: [{name: Platform, id: edge-platform}]}\n"},
 		{name: "duplicate setup step names", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nproviders:\n  sandbox:\n    fake: true\n    setup:\n      - {name: registry, commands: [\"true\"]}\n      - {name: registry, commands: [\"true\"]}\n"},
-		{name: "a ceiling below its base", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nturn_engine: {max_tool_rounds: 20, execute_max_tool_rounds_ceiling: 10}\n"},
+		{name: "a ceiling below its base", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nturn_engine: {onboarding_max_tool_rounds: 20, onboarding_max_tool_rounds_ceiling: 10}\n"},
 		// A TIER A TOKEN'S ID AT ITS BOUND AND ONE PAST IT. The bound is
 		// the validator's — the id composes `token:<id>`, a login held to
 		// iam.MaxLogin — and an editor has to say it too, or a config the
@@ -1149,8 +1146,8 @@ func TestShippedExamplesValidateAgainstTheSchema(t *testing.T) {
 	schema := compileSchema(t, TierCompany)
 	// BOTH, because they exercise different halves of the model: the
 	// full-stack one every integration block, the subscription one a
-	// signed-in CLI, box mode, its sandbox cell and the seat-level
-	// `run_in`.
+	// signed-in CLI, the cell its entry's `run_in` places executor runs in
+	// and the company-wide round cap.
 	for _, name := range shippedCompanies {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

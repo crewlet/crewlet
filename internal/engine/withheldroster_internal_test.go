@@ -3,25 +3,24 @@ package engine
 import (
 	"context"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // A TURN SHOWS ITS AGENT ONLY THE PEOPLE WHO MAY BE REACHED — through the
 // wiring a real turn goes through, from the live registry's reading to the
-// prompt the model is sent.
+// standing instructions its executor's run is launched with.
 //
 // The party registry withholds a suspended person's contact identities, so an
 // inbound message from them resolves to an outside party. A lead's prompt that
@@ -43,8 +42,7 @@ func TestATurnShowsItsAgentOnlyThePeopleWhoMayBeReached(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			prov := &promptCapture{}
-			e := leadEngine(t, prov, tc.standing)
+			e, rig := leadEngine(t, tc.standing)
 			tick := events.New(types.TaskAssigned{
 				TaskID: "t-1", RoleName: "Lead", Description: "plan the week",
 			}, events.TraceContext{})
@@ -55,7 +53,12 @@ func TestATurnShowsItsAgentOnlyThePeopleWhoMayBeReached(t *testing.T) {
 				Handle: "lead", WorkKey: "wk-1", WorkSince: time.Now().UTC(),
 				Events: []*events.Event{tick},
 			})
-			system := prov.system(t)
+			started := rig.started()
+			if len(started) != 1 {
+				t.Fatalf("%d runs launched, want the lead's executor: there is no prompt to read",
+					len(started))
+			}
+			system := started[0].System
 			if !strings.Contains(system, tc.want) {
 				t.Errorf("the lead's prompt does not say %q", tc.want)
 			}
@@ -67,8 +70,9 @@ func TestATurnShowsItsAgentOnlyThePeopleWhoMayBeReached(t *testing.T) {
 }
 
 // leadEngine is an engine running one agent lead with a human report, over a
-// registry built from the reading given.
-func leadEngine(t *testing.T, prov llm.Provider, standing notify.Standing) *Engine {
+// registry built from the reading given, and the runtime its executor
+// launches in.
+func leadEngine(t *testing.T, standing notify.Standing) (*Engine, *runRig) {
 	t.Helper()
 	lead := &org.Role{Name: "Lead", DeclaredHandle: "lead", LLM: org.ProviderKeys{"only"}}
 	o := &org.Organization{Name: "Acme", Units: []*org.Unit{{
@@ -79,60 +83,21 @@ func leadEngine(t *testing.T, prov llm.Provider, standing notify.Standing) *Engi
 		}},
 	}}}
 	o.Normalize()
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: prov}})
-	if err != nil {
-		t.Fatalf("phase.NewRegistry: %v", err)
-	}
+	models := runnable(t, []phase.Entry{{Key: "only", Provider: refusingProvider{}}}, lead)
 	q := memory.New()
 	if err := q.Start(t.Context()); err != nil {
 		t.Fatalf("queue.Start: %v", err)
 	}
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
-	e := withSessions(t, &Engine{backends: &Backends{Queue: q}})
+	e := withSessions(t, &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}})
 	e.epoch.current.Store(&Company{
 		Org: o, Models: models, Tools: tools.NewRegistry(),
 		Config: &config.Company{Name: "Acme", TurnEngine: config.TurnEngine{
-			MaxIterations: 1, DelegationDepthLimit: 3, MaxToolRounds: 1,
+			MaxIterations: 1, DelegationDepthLimit: 3,
 		}},
 	})
 	reg := notify.NewRegistry(o, nil)
 	reg.ReconcileHumanContacts(o, func(string) (string, bool) { return "", false }, standing)
 	e.notify.registry = reg
-	return e
-}
-
-// promptCapture records the system prompt of the first request and refuses
-// it: the prompt is the whole of what a case reads, and a refused call ends
-// the turn without a second round.
-type promptCapture struct {
-	mu       sync.Mutex
-	requests []llm.Request
-}
-
-func (*promptCapture) Model() string { return "capture" }
-
-func (p *promptCapture) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
-	p.mu.Lock()
-	p.requests = append(p.requests, req)
-	p.mu.Unlock()
-	return nil, &llm.Error{Kind: llm.KindFatal, Provider: "test", Model: "capture"}
-}
-
-func (p *promptCapture) system(t *testing.T) string {
-	t.Helper()
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if len(p.requests) == 0 {
-		t.Fatal("the turn never reached the model, so there is no prompt to read")
-	}
-	var b strings.Builder
-	for _, m := range p.requests[0].Messages {
-		if m.Role == "system" {
-			b.WriteString(m.Content)
-		}
-	}
-	if b.Len() == 0 {
-		t.Fatal("the first request carries no system prompt")
-	}
-	return b.String()
+	return e, rigRuns(t, e, nil)
 }

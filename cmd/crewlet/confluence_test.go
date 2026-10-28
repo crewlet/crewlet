@@ -57,6 +57,7 @@ func confluenceCompany(t *testing.T, url, skillsSpace string) string {
 	doc := `
 name: Nimbus
 providers:
+  sandbox: {fake: true}
   llm:
     main:
       model: claude-sonnet-5

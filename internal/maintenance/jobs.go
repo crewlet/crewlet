@@ -56,19 +56,49 @@ const (
 	// the dashboard after a weekend.
 	ChannelRetention = 7 * 24 * time.Hour
 
-	// ChannelIdleTimeout is how long an OPEN channel may stay open with
-	// nothing happening.
+	// ChannelIdleTimeout is how long an OPEN channel may stay quiet before
+	// the sweep closes it, where nothing still owes its answer.
 	//
-	// A channel is closed by the answering turn. A turn that crashes, or a
-	// node that dies between the wake and the answer, leaves one open
-	// forever — and an open channel is not free: it is a row, and it is a
-	// promise to the requester that a reply may still arrive.
+	// A channel is closed by the turn that answers it, or by the ending of
+	// a coding run lost under that turn. A turn that crashes, or a node that
+	// dies between the wake and the answer, leaves one open forever — and an
+	// open channel is not free: it is a row, and it is a promise to the
+	// requester that a reply may still arrive.
 	//
-	// One hour, against a turn whose own worst case is around twenty
-	// minutes under the Execute extension ceiling. Three times the longest
-	// thing that could legitimately still be running, so the sweep never
-	// closes a channel somebody is about to answer on.
-	ChannelIdleTimeout = time.Hour
+	// # What is left to this clock
+	//
+	// Every wait with no end a clock could be sized to is SPARED rather than
+	// timed (internal/a2a's Owed, which the engine answers): an ask on the
+	// record of the coding run its turn launched — a run has no clock bound
+	// and can wait days on a person's question — and one waiting in its
+	// seat's inbox while a run, a person's pause or a spent budget window
+	// holds it. What this timeout still covers is an ask in flight where
+	// none of those can see it, and the longest silence such an ask can show
+	// and still be answered is a delivery a node that died held
+	// unacknowledged: invisible for the broker's ack wait
+	// (jetstream.DefaultAckWait, thirty minutes), redelivered once the
+	// seat's next holder takes its lease (seat.SeatLeaseTTL, forty-five
+	// seconds), and then up to two dispatch segments before a launch writes
+	// a run's record — one ahead of it in the seat's mail, whose launch then
+	// holds the inbox and so spares it, and its own. A segment before its
+	// launch is turn-start reads of seconds each and, on a seat's first
+	// turn, its onboarding pass, which the pass's own claim bounds with
+	// slack (runner.ClaimTTL, fifteen minutes). About an hour in all.
+	//
+	// # Two hours
+	//
+	// Twice that, and the asymmetry is the reason for the margin rather
+	// than its size: closing too early drops an answer that is on its way
+	// and leaves the asker, whose turn ended when it asked, never woken;
+	// closing late keeps one row open and delays by an hour the
+	// a2a_channel_closed an operator reads as "nobody answered". The sweep
+	// wakes nobody either way. The one hour this replaces was three times a
+	// twenty-minute turn under the Execute extension ceiling, which no
+	// longer exists: a turn now parks on a run with no clock bound, which is
+	// what the spare is for. TestAnIdleAskOutlastsTheSilenceOfOneStillOwed
+	// (internal/engine) holds the order against the three constants above,
+	// which live in packages that know nothing of this one.
+	ChannelIdleTimeout = 2 * time.Hour
 
 	// CounterpartyRetention is how long a profile survives with no
 	// interaction.
@@ -385,23 +415,26 @@ func CounterpartyJobs(c CounterpartyStore) []Job {
 //
 // DECLARED HERE, by the caller, and narrowed to two methods — which is what
 // changed the shape of this job rather than only its type. It used to take
-// a2a.Store and call CloseIdle on it directly, and that method returns the
-// channels it closed precisely so its caller can announce them; this one threw
-// the list away, so a swept close was the one channel ending that published no
-// event at all. Closing is now asked of the SERVICE, which owns what a close
-// means on the wire, and internal/maintenance stays a scheduler of jobs rather
-// than a second author of event payloads. a2a.Service is the implementation.
+// a2a.Store and close idle channels through it directly, and that close
+// returned the channels it closed precisely so its caller could announce them;
+// this one threw the list away, so a swept close was the one channel ending
+// that published no event at all. Closing is now asked of internal/a2a, which
+// owns what a close means on the wire — and which asks, before each one,
+// whether the channel's answer is still owed — and internal/maintenance stays a
+// scheduler of jobs rather than a second author of event payloads. a2a.Sweeper
+// is the implementation.
 type Channels interface {
-	// SweepIdle closes every channel idle since before cutoff, announces
-	// each one, and reports how many it closed.
+	// SweepIdle closes every channel idle since before cutoff whose answer
+	// is no longer owed, announces each one, and reports how many it
+	// closed.
 	SweepIdle(ctx context.Context, cutoff time.Time) (int, error)
 
 	// Purge deletes channels closed before cutoff.
 	Purge(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
-// ChannelJobs is the sweep for agent-to-agent channels: close what nobody
-// answered, then delete what has been closed long enough.
+// ChannelJobs is the sweep for agent-to-agent channels: close what nobody will
+// answer, then delete what has been closed long enough.
 //
 // TWO jobs rather than one, and the order matters only in that both run
 // every tick. Closing is a state change and deleting is garbage collection —
@@ -423,7 +456,7 @@ func ChannelJobs(c Channels) []Job {
 	return []Job{
 		{
 			// The CUTOFF is what this job acts on and the tick's `now` is
-			// not: the service reads its own clock for the close instant,
+			// not: the sweeper reads its own clock for the close instant,
 			// so a channel's closed_at and the event's duration come from
 			// one reading rather than two.
 			Name: "a2a_channels_idle", Scope: Fleet, Horizon: Fixed(ChannelIdleTimeout),

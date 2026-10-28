@@ -495,6 +495,75 @@ func TestABuildIsPublishedFromTheBoxThroughAnUpload(t *testing.T) {
 	}
 }
 
+// askedBoxes is a node's box source that counts what asks it for a box.
+type askedBoxes struct {
+	boxes
+	asked *int
+}
+
+func (b askedBoxes) Box(ctx context.Context, turn *turnctx.Turn) (builtin.ArtifactBox, error) {
+	*b.asked++
+	return b.boxes.Box(ctx, turn)
+}
+
+// A BOX IS READ FOR A SEAT'S OWN RUN, AND FOR NO OTHER CALLER. A person, or
+// their own assistant, calling through the operator catalogue has no coding
+// run: both box sources are refused `forbidden`, and the node's box source is
+// never asked, whatever box it could hand over. A seat's call on a node that
+// runs no sandbox is refused `unavailable`, never answered as though the seat's
+// run had stopped. Mutation: drop the caller check from fileSources.openBox and
+// the person's create publishes the box the node hands it; drop the check for
+// a node with no box source and the seat's call never reaches a refusal.
+func TestABoxSourceIsReadForASeatsOwnRunAlone(t *testing.T) {
+	t.Parallel()
+	f := newFakeArtifacts()
+	chart := artifactChart{}
+	deps := artifactDeps(f, chart, requesters{})
+	company := organization(t)
+	deps.Org = func() *org.Organization { return company }
+	asked := 0
+	deps.Boxes = askedBoxes{boxes: boxes{box: &fakeBox{files: map[string]string{
+		"dist/index.html": "<p>built</p>"}}}, asked: &asked}
+	var create tools.Callable
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{Artifacts: deps,
+		Authorize: builtin.Decide(chart)}) {
+		if tool.Name() == builtin.CreateArtifactTool {
+			create = tool
+		}
+	}
+	if create == nil {
+		t.Fatal("the operator catalogue serves no create_artifact")
+	}
+	ctx := iam.WithPrincipal(context.Background(), founderPrincipal(iam.Apps...))
+	for _, args := range []map[string]any{
+		{"kind": "html", "title": "Site", "source": map[string]any{"sandbox": "dist"}},
+		{"kind": "html", "title": "Page", "files": map[string]any{
+			"index.html": map[string]any{"from_sandbox": "dist/index.html"}}},
+	} {
+		got, err := create.Call(ctx, args)
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if tools.RefusalOf(got) != tools.RefusalForbidden {
+			t.Errorf("a person's box source %v answered %v %q", args, tools.RefusalOf(got), got.Output)
+		}
+	}
+	if asked != 0 || len(f.creates) != 0 {
+		t.Fatalf("a person's call asked the node for a box %d times and created %d artifacts",
+			asked, len(f.creates))
+	}
+
+	// THE SEAT'S OWN CALL, on a node that runs no sandbox.
+	none := newArtifactRig(t, artifactChart{}, requesters{}, nil)
+	h := none.f.seed("agent-cto", iam.ActorAgent, cto, nil, [2]string{"index.html", "x"})
+	got := none.call(t, turnFor(t, "agent-cto"), builtin.PublishArtifactTool, map[string]any{
+		"artifact": h.ID.String(), "base_version": 1, "source": map[string]any{"sandbox": "dist"}})
+	if tools.RefusalOf(got) != tools.RefusalUnavailable {
+		t.Fatalf("a seat's box source on a node with no sandbox answered %v %q",
+			tools.RefusalOf(got), got.Output)
+	}
+}
+
 // A FILE THE ARTIFACT ALREADY HOLDS IS CARRIED: the intent finds its digest and
 // the publish names it again, so nothing moves.
 func TestAFileTheArtifactHoldsIsCarriedNotUploaded(t *testing.T) {

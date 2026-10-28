@@ -149,6 +149,8 @@ func SandboxRecords(runs []sandbox.PendingRun) []livestate.SandboxRecord {
 		entry := livestate.SandboxEntry{
 			TurnID: run.TurnID, Role: run.Role, AgentHandle: run.AgentHandle,
 			AgentID: run.AgentID, CodingAgent: run.CodingAgent, SandboxID: run.SandboxID,
+			// THE MEMBER THAT TOOK THE JOB, as the launch recorded it.
+			ProviderKey: run.Launch.ProviderKey, Model: run.Launch.Model,
 			// The label the announcement carried, kept on the record for
 			// exactly this: an entry this process never saw announced is
 			// named as the one it did see would have been.

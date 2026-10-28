@@ -398,7 +398,7 @@ describe("the round ledger", () => {
   });
 
   test("a row nothing timed reads as not recorded, never as instant", () => {
-    const [untimed] = toolCalls([{ name: "run_sandbox", round: 1 }]);
+    const [untimed] = toolCalls([{ name: "create_work_item", round: 1 }]);
     expect(untimed).toMatchObject({ durationMs: 0, origin: "", server: "" });
   });
 });
@@ -681,12 +681,12 @@ describe("delegated workers", () => {
     expect(live.key).toBe(done.key);
   });
 
-  // TWO CODING RUNS IN ONE ITERATION ARE TWO ROWS. A resumed executor that
-  // calls run_sandbox again launches a second run of the same iteration, and
-  // keyed on the three parts alone the map kept the last one to arrive — the
-  // first run, its report and its spend simply were not on the page. The
-  // executor that resumed from a run names it too, and keeps its three-part
-  // key, or it would stop matching the live call it replaces.
+  // TWO CODING RUNS IN ONE ITERATION ARE TWO ROWS. A run that parked on a
+  // question and is relaunched on its answer is a second launch of the same
+  // iteration, and keyed on the three parts alone the map kept the last one to
+  // arrive — the first run, its report and its spend simply were not on the
+  // page. The executor that resumed from a run names it too, and keeps its
+  // three-part key, or it would stop matching the live call it replaces.
   test("a coding run is keyed on its launch, and the executor that collected it is not", () => {
     const first = fromPhaseEvent(phaseEvent({ phase: "sandbox", launch_id: "job-1" }))!;
     const second = fromPhaseEvent(phaseEvent({ phase: "sandbox", launch_id: "job-2" }))!;
@@ -893,7 +893,7 @@ describe("a phase's duration", () => {
   });
 
   test("an unmeasured phase reports nothing rather than zero", () => {
-    // A box-mode executor's rounds ran inside a coding CLI's own loop in
+    // An executor run's rounds ran inside its coding CLI's own loop in
     // another process, so the engine measured no loop of its own and the
     // field is 0. Rendering that as "0ms" would put a confident number on a
     // phase that took four minutes.

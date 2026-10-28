@@ -162,7 +162,7 @@ before it, and the sentence beside it says what they are doing.
 
 | Status (pill tone) | `activity` | Label |
 |---|---|---|
-| `working` (`info`) | `working`: mid-turn, or a coding run it launched is running | "Working"; the state line names the phase and the item ("Executing ENG-412"), the workers ("3 workers on ENG-405" — the tasks of the `delegate` call the seat is waiting on, read off its call in flight, the one record that exists while they run), or a parked run ("Coding run on ENG-9") |
+| `working` (`info`) | `working`: mid-turn, or a coding run it launched is running | "Working"; the state line names the phase and the item ("Executing ENG-412"), or a parked run ("Coding run on ENG-9") — which is what it says for as long as the run works, workers it delegated to included: a seat's workers run under its executor's run, whose calls the engine does not stream |
 | `needs` (`warning`) | `needs`: a coding run it launched waits on a question only a person can answer | "Needs you", "Needs you · run parked" |
 | `stopped` (`danger`) | `stopped`: paused, placed on no node, its budget window refusing, or its provider unreachable | "Paused by Jane Founder · 12m" (the pauser by the name the chart gives their handle; a token nobody bound, by its own name), "Not placed on any node", "Stopped · budget", "Stopped · provider" |
 | **none** — a neutral pill | `idle`, no row from the engine yet, or a human seat | "Idle · last turn 24m ago", "No state from the engine yet" |
@@ -1206,10 +1206,10 @@ a screen, and every workspace and section the code declares is below.
 | `#/artifacts/new/doc` · `#/artifacts/new/slides` · `#/artifacts/new/sheet` · `#/artifacts/new/design` · `#/artifacts/new/dashboard` · `#/artifacts/new/html` | **New doc**, **New slide deck**, **New sheet**, **New design**, **New dashboard**, **New HTML page**: each kind's own create page, in one shared frame (the artifact page's slim bar, then a full-bleed body the kind draws), each a chunk of its own. A doc or a deck starts from the engine's starter and a sheet blank or from the Review sheet template, owned by the reader *(needs Artifacts access)*. A design starts as the canvas a person lays out: a starting layout (landing page, app screens, one screen at three sizes, a presentation or a blank canvas), then boards shaped on the canvas (Frame `F` places one; Text and Sticky place notes) with a panel that follows the selection (a board's name, frame preset or size, order and brief) and the hand-off panel beside it (the design's name, brief and references and who builds it); Create and ask publishes the boards as placeholder pages, shares the design with the chosen agent as an editor, files the agent a task carrying the brief and every board, links the design to it, and opens the design, whose boards fill in as the agent publishes. Every page offers **Ask an agent** in its bar, which opens the hand-off panel beside the page rather than replacing it ([Asking an agent from a create page is a panel, not a mode](#asking-an-agent-from-a-create-page-is-a-panel-not-a-mode)); a design and an HTML page arrive with it open where it fits beside the page. The gallery's Make row and its New menu open them. The bar's first control is **Save in**, the folder the new artifact is filed in (the folder page New was pressed on), which opens Move to… to choose another and writes nothing until the artifact is made; the way back leads to that folder, and a task asking an agent names it by its id alone (a task is read by people a private folder is not shown to, so it never carries the path) | `item=` (the task it is made for, which lists it on that task's Artifacts card) · `folder=` (the folder it is filed in, by id) · `panel=ask\|closed` (the hand-off panel; `closed` on a design or an HTML page, which open with it) |
 | `#/artifacts/new` | Not a page: an earlier link, rewritten in place to its kind's page when it carries `kind=`, and to the gallery when it does not | `kind=` (read once, then dropped) |
 | `#/artifacts/{id}` | **Artifact**: addressed by its id, drawn under ONE slim bar in the frame's place ([An open artifact is the screen](#an-open-artifact-is-the-screen)). A page runs in a sandboxed frame on the artifact origin, edge to edge, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (the text in place, in the rich editor, and the tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree with Edit, Grid and Present in the bar, a sheet is drawn from its schema. The bar holds the way back (to the folder it is kept in, named, where the reader can see it), the title (renamed in place by an editor), the version chip, the kind's views, who is here, and the controls that open a panel at the side: Details (what the page header and its fact line used to say, and the Folder it is kept in, a link where the reader can see it, with Move…), History (versions, Compare, Restore, labels and the change record), Data where it keeps any (rows, the schema editor and every write, with Undo), People (who is here, with Follow) and, from More, Settings (details, what it can do, its owner, the trash); Share and More close the bar. A reader with no relation is told it is not there or not theirs, in one card | `panel=details\|history\|data\|people\|settings` (pushes; the old `tab=` and `rail=people` are read as the panel they became and rewritten) · `expand=1` (the panel takes the workspace) · `version=` · `against=` · `lens=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` · `mode=grid\|present\|presenter` · `slide=` · `follow=` |
-| `#/settings/models` · `#/settings/models/{id}` | **Settings › Models & keys**, the column's landing and the Settings row's address for a reader who may open it (one who may not is taken to the first section they can, Token spend for a reader holding Worklet), every `providers.llm` entry (the coding CLI it drives, its model, its mode and how it signs in, by the variable each credential names) read off the company document (`config`), and the seats whose chain names it; one model's facts, its sign-in and its seats, and its **Edit** *(needs Admin access)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
+| `#/settings/models` · `#/settings/models/{id}` | **Settings › Models & keys**, the column's landing and the Settings row's address for a reader who may open it (one who may not is taken to the first section they can, Token spend for a reader holding Worklet), every `providers.llm` entry (the coding CLI it drives, its model, what it runs as — a seat's executor, in its `run_in` cell, or text phases only — and how it signs in, by the variable each credential names) read off the company document (`config`), and the seats whose chain names it; one model's facts, its sign-in and its seats, and its **Edit** *(needs Admin access)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
 | `#/settings/mcp-tools` · `#/settings/mcp-tools/{tool}` · `#/settings/mcp-tools/servers/{name}` | **MCP Tools**, the engine's runtime beside the models, every MCP server with what each node did with it, and every tool a seat can call, by origin *(needs Admin access, like every company setting: it is where MCP servers are added and their templates read; which tools a seat has is on that seat's page, from the overview's `tools` push)*. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(needs Admin access)* | |
-| `#/settings/limits` | **Limits**, the caps the engine holds every turn to, as it enforces them: the turn's guardrails (review rounds, tool rounds, delegation depth), delegation, notifications and a scheduled turn's timeout, one read-only settings table a group, each cap with its key in the company document, its value and whether it is the engine's default or changed from it *(needs Admin access)*. Read-only | |
+| `#/settings/limits` | **Limits**, the caps the engine holds every turn to, as it enforces them: the turn's guardrails (review rounds, tool rounds on a first turn, delegation depth), delegation, notifications and a scheduled turn's timeout, one read-only settings table a group, each cap with its key in the company document, its value and whether it is the engine's default or changed from it *(needs Admin access)*. Read-only | |
 | `#/settings/spend` | **Settings › Token spend**: the window's tokens against the one before, the monthly budget, the prompt-cache share and the median task; daily tokens by phase (or model, provider, seat, unit, worker); then by agent beside by provider and by team, and the three most expensive tasks beside the auxiliary model by purpose (tokens only) | `window=7d\|30d\|90d\|<from>/<to>` (whole company days, kept across Settings' sections) · `group=phase\|model\|provider\|seat\|unit\|worker` |
 | `#/settings/spend/tasks` | **Settings › Token spend › Expensive tasks**, the tasks last changed inside the window, most tokens first, each with what drove it: turns, workers, reopens and send-backs *(needs Worklet access; not offered where the company does not run Worklet)* | `window=7d\|30d\|90d\|<from>/<to>` (kept across the sections) |
 | `#/settings/people` | **People**, the identity directory but its service accounts: every person with their stage, login, access and the seat they are bound to, their credentials and sessions, the invitations nobody has redeemed (`/iam/invitations`), the directory's report on them (`/iam/check`), and every human seat with whatever holds it, a person, a service account or an open invitation (`/iam/seats`) *(needs Admin access)*. An admin changes, suspends, resets, signs out and removes people, and cancels invitations. It invites and creates nobody: a person comes from the vacant human seat they will hold, on the org chart. An invitation's link and a reset link are shown once and never read back. No tail: a row opens in the peek (`peek=person:{id}`, by the directory's id), which is the only page a directory row has | `peek=person:{id}` (the opened person, closed when a removal made from it lands; an id the directory does not hold is said in the peek) |
@@ -2732,7 +2732,7 @@ company did.** That is Home until its reader arranges it (see
   longest-running four whose turn has an id — the very rows the sidebar's
   Running group names, in its order — what each is on (the item the turn is
   charged to, never a work key), how long, where it is in context → execute →
-  review ("Execute · round 7 of 25"), and the last call it made, each a way
+  review ("Execute · coding run"), and the last call it made, each a way
   into its turn. **Open live view** for the rest, including a working seat
   whose turn has no id yet: it is counted here and listed there.
 - **Tasks completed** per company day over the last fourteen (today in the
@@ -3112,16 +3112,16 @@ turn broke in wears a cross in the danger tone, and its pill says "failed in
 review" — a pill for a send-back ("sent back for another pass") or a park, what
 it did in the agent's own words (a turn that failed or parked before it wrote an
 account of itself says "No summary. See the trace." in one quiet line), the reviewer's request on the raised rung with the
-caution ink on its mark, the tools it called as chips ("run_sandbox ×4"), and under them, on
+caution ink on its mark, the tools it called as chips ("comment_on_work_item ×4"), and under them, on
 a line of its own read from the left, its wall time and tokens and **Trace**. The number is the TASK's count of turns,
 so the newest card and the cost panel agree. While a seat's turn is running on
 this task — joined on the item the engine charges it to, and only while the
 seat is `working` — the foot of the timeline is the live row in the working
-state's own ground ("SWE is on turn 3 · executing · round 7 of 25 · for 2m",
+state's own ground ("SWE is on turn 3 · coding run · for 2m",
 with a pulse that is static under reduced motion) linking to the live trace.
 The words after the turn are the task card's strip's own, from one derivation
 — the round counted from one, as the stepper counts it, and the phase named
-("reading context", "reviewing", "3 workers running", "coding run") — so the
+("reading context", "reviewing", "coding run") — so the
 card, the row and the seat's profile never name different rounds of one turn.
 The composer is last: a comment, a reply, or **Ask…** — a question put to one
 seat, optionally with two to six options, the one recommended and whether the
@@ -3329,8 +3329,8 @@ tabs draw). Those sections, and Schedules, open on their work, with no
 introduction above it.
 
 **The seat peek answers "who is this, and what is it doing".** A state card
-tinted by the state — the line, how long the turn has run, "Turn 2 · round 7 of
-25 · coding run in progress", where the turn number is the task's own count
+tinted by the state — the line, how long the turn has run, "Turn 2 · coding
+run in progress", where the turn number is the task's own count
 (`work_item_turns`, asked by the task's id — see [An item's
 address](#an-items-address)) — then Reports to, Model (the phase chain from
 the org projection, which carries it only to an admin —
@@ -3464,7 +3464,7 @@ for a reader who cannot make it:
   holds still offers eight it could be handed.
 - **Pause** (agents only) asks why, and whether to **also stop the current
   turn**: without it the turn the seat is on finishes first, and only a ticked
-  box sends `stop_running` (see [pausing a
+  box sends `stop_running`, which also ends a coding run the turn has out (see [pausing a
   seat](../concepts/agent-runtime.md#pausing-a-seat)). A paused seat's profile
   says who paused it, when and why, and offers **Resume**.
 
@@ -3495,7 +3495,7 @@ has no ceiling of its own — "company cap 60M/day +1" (and "no seat cap" on hov
 company's own budget caps a window, because that ceiling binds every seat (one
 line in the tile, the whole sentence on hover). A shortened token count carries
 no zero fraction: `60M`, never `60.0M`. The **current turn** card shows where the turn is — Context, Execute
-("round 7 of 25", against the cap the phase was granted), Review; there is no
+("coding run" once the turn parks on its run), Review; there is no
 delivery step, because whether a turn reached anybody is decided as it
 closes — the turn's number on its task and the task's title (read by the
 turn's own task, by its id — see [An item's address](#an-items-address) —
@@ -3575,7 +3575,7 @@ beside the running clock as a second unlabelled figure. A phase that finishes wh
 tab is open reaches its transcripts off the push, matched on the seat's own id
 as Live's recent phases are — never on its role name, which two unit seats
 stamped from one template share. A row for a turn still running says what the seat is doing
-and what it is on, from the push ("running — executing · round 2 of 24",
+and what it is on, from the push ("running — reviewing · round 2 of 4",
 ENG-32), and draws its iterations and tokens as not settled rather than as
 zeros — `#/live/turns` does the same. On a phone a row's summary takes two
 lines with its item under it, and a settled turn has no State line at all. And
@@ -4801,9 +4801,9 @@ rules fix it, and each one names a specific mechanism:
    report, whose rounds happened in its box.
 
    **A round that answered in prose where a call was owed says what became of
-   it.** A phase that finishes only by a tool call — the executor's
-   `submit_work`, the reviewer's `submit_review`, a worker's `submit_result` —
-   can still get words and no call, and the commonest form is the model
+   it.** A phase of the engine's tool loop that finishes only by a tool call —
+   the reviewer's `submit_review`, a worker's `submit_result`, the onboarding
+   pass's `mark_onboarded` — can still get words and no call, and the commonest form is the model
    printing its own submission as a fenced JSON block. Without a word about it
    the reader saw that block, then "incomplete, no report" and "rescued" on
    the header, and nothing connecting the two. The engine flags such a round
@@ -5310,8 +5310,8 @@ be read at a glance:
   Home's Live now draws (`LiveTurnRow`): what it is doing and on what — the
   item's key, or on a turn charged to no item the trigger's own summary
   ("Executing · Drafting the 2.4 launch brief") rather than a bare verb —
-  where the turn is (Context → Execute "round 7 of 25" → Review, and "round 1
-  of 25" from the phase's opening frame, before the model has answered once;
+  where the turn is (Context → Execute "coding run" → Review, and "round 1
+  of 1" from the executor's opening frame, while its run is being launched;
   on a phone the round leads the call line instead, so Review keeps its place
   on the stepper's one line),
   how long it has run from the turn's own start —
@@ -5721,8 +5721,8 @@ Four rules replace it, and each one names what it fixes.
    self-iterating turns where the question gets asked — and so does every
    **nested** call, a delegate's worker and the round-cap judge included, which
    publish no start and so could never have been given one. Zero means *not
-   measured*, never *took no time*: a box-mode executor's rounds ran inside
-   a coding CLI's own loop in another process, and that run's wall clock is on
+   measured*, never *took no time*: an executor's rounds ran inside its
+   coding CLI's own loop in another process, and that run's wall clock is on
    `sandbox_run_started` / `sandbox_run_completed` instead.
 
    **And the page says where each one went.** *Relocated* is only better than
@@ -5799,17 +5799,14 @@ Four rules replace it, and each one names what it fixes.
    tiles above already report that — nor any single thing that was ever sent.
 
    Every term of the approximation gets a column — **System**, **User**,
-   **Messages**, **Tools**, **Approx. tokens** — so the total can be checked
-   against the row rather than taken on trust. *Tools* is the
-   tool-definition array as compact JSON, with the definition count on its
-   hover, and it is usually the largest: while the engine did not measure it, a
-   turn reported ~6,900 tokens on a prompt the provider billed 205,000 input
-   tokens for. *Messages* is what a **resumed** phase sends in place of a
-   system and user pair — a detached coding run re-enters its saved
-   conversation, counted as its messages' text and the arguments of its tool
-   calls — and reads 0 on every phase that opens one of
-   its own. Five fixed columns overflow a phone, which is what the sideways
-   scroll on `.num-block` is for.
+   **Tools**, **Approx. tokens** — so the total can be checked against the row
+   rather than taken on trust. *Tools* is the tool-definition array as compact
+   JSON, with the definition count on its hover, and it is usually the
+   largest: while the engine did not measure it, a turn reported ~6,900 tokens
+   on a prompt the provider billed 205,000 input tokens for. For the executor,
+   *System* and *User* are the system prompt and the brief its run was
+   launched with. Four fixed columns beside the phase overflow a phone, which
+   is what the sideways scroll on `.num-block` is for.
 
    **One row per measurement**, and the phase key is deliberately not the
    row's identity. This half used to collapse a repeated
@@ -5822,25 +5819,18 @@ Four rules replace it, and each one names what it fixes.
    attempts land on two Turn screens, which is what the attempt banner at the
    top of the page is for. A re-run cannot put two rows in this table at all.
 
-   What can is a **suspend**, which that ADR excludes by name: a detached
-   coding run re-enters the run that parked it. The executor publishes its
-   opening frame, parks mid-loop, and the resume re-enters the *same* phase at
-   the *same* iteration and publishes the parked conversation it sends
-   instead. Measured on a real suspend and resume, that pair is
-   `system=3,166 user=31 message=0 ~1,753 tokens` and
-   `system=0 user=0 message=3,329 ~1,814 tokens`. Collapsed it drew one row
-   reading `EXECUTE ×2`, System 0 B, User 0 B, over a tooltip saying the phase
-   "ran 2 times" and "ranged ~1,753–1,814 tokens" — and every clause of that
-   is false. The phase ran once; its opening carried 3,166 bytes of system
-   prompt, not zero; and the two figures are not a range of one quantity but
-   two different prompts, both sent and both billed, which is the whole of
-   what this panel is for. So both are drawn, in publish order, and the second
-   is marked **resumed** — which is also what makes its empty System and User
-   columns read as a fact about a re-entered phase rather than as a failed
-   render.
+   Nor does a parked turn put two there: the executor publishes its prompt
+   once, when it launches its run, and the collection that re-enters the
+   *same* phase at the *same* iteration sends no prompt of its own — the
+   run's was the one it was launched with — while a send-back's relaunch is
+   the next iteration, a row of its own. So a row is one prompt this turn
+   sent, and the panel draws every measurement it is given, in publish order,
+   rather than folding any under a phase key: a fold reads two different
+   prompts as a range of one quantity, which is the one thing this panel must
+   never say.
 
    The figures are **bytes** — `len()` of a Go string, and the wire keys say
-   so (`system_bytes`, `user_bytes`, `message_bytes`, `tool_bytes`). They only
+   so (`system_bytes`, `user_bytes`, `tool_bytes`). They only
    agree with a character count on ASCII, so a roster of non-Latin names or a
    chat thread with emoji in it would make "the count" a different quantity
    per company under a character label. See `PromptSize`.
@@ -6532,7 +6522,7 @@ is one of the rules on this page applied to a tracker.
   predicate that decides restates each mark's own emptiness rule — the price of
   asking BEFORE rendering — so a mark that gains a field adds it there. The
   last row is a STATE and the only part of a card with a hue: blue while a
-  seat's turn is on the task ("SWE · executing · round 7 of 20 · 6m"), amber
+  seat's turn is on the task ("SWE · coding run · 6m"), amber
   while a coding run on it is parked waiting for the READER. The turn is joined
   on the item the engine CHARGES it to (`live_call.work_item`), never on the
   trigger's `work_key`, which names whatever a webhook mentioned; and a run
@@ -6843,8 +6833,8 @@ tab, then open the phase, to read a word of it.
 
 **A parked turn is watched on the same tab.** Its executor launched a detached
 coding run and suspended, so no phase is in flight while the engine still
-calls the seat working — for the whole of a box-mode executor's turn, and
-for hours on a long native run. So while the turn is parked the Transcript
+calls the seat working — for most of the turn, and for hours on a long
+one. So while the turn is parked the Transcript
 leads with a **Coding run** card: the run's live output (the same
 `sandbox_tail` poll the Timeline's run span opens, read off the waterfall's
 own open run span), the coding agent, and **Open the run** to the run's page
@@ -6892,11 +6882,19 @@ that can.
   its own value (`.fact-body`), never on a band a neighbour's two-line value
   can push away from it.
 - **The actions are the turn's.** *Steer* sends a note the turn reads at its
-  next round (`steer_turn`); it is held, with the reason, on a turn that has
-  ended and on one parked inside a coding agent's own loop, which reads no
-  notes. What became of a note is the turn's own `agent_turn_steered`, drawn
-  under the waterfall and at the round that read it — *delivered*, or
-  *expired — the turn finished before it read your note*. *Pause* is the seat's
+  next step (`steer_turn`) — offered on every turn still going, a turn parked
+  on its coding run included, whose note waits on the run's record, and held,
+  with the reason, only on a turn that has ended. The toast says when the turn
+  reads it, from the answer's `reads`: *at its next step*, or, for a run waiting
+  on a question, *once that is answered* (`lib/steer.ts`). What became of a note
+  is the turn's own `agent_turn_steered`, drawn under the waterfall and where it
+  was read — at the round (*read at round 2 of Review*), or for a read inside a
+  coding run on the run's bar, in the words of its step, owned by the phase
+  whose run it was: *read by the coding run of Execute in its brief*, *after a
+  tool batch*, *as it was finishing*, *at its next step*; a step a newer build
+  names and this one does not is *read by the turn in Execute*, on the run's
+  bar where its record names the run and never drawn or said as a round — or
+  *expired — the turn finished before it read the note*. *Pause* is the seat's
   (with *Also stop the current turn*), *Open task* its item — by the task's
   id, since a turn's item carries no word on whether its key is one another
   task claimed first — and one menu
@@ -6959,12 +6957,12 @@ that can.
   read as that call's alone; a coding run's box facts, and its transcript once
   collected.
 - **A running coding run is watched, not replayed.** While its span is open
-  the trace asks the node that owns the run for its live output every three
-  seconds (`sandbox_tail`, see [Watching a run
+  the trace asks the node that can read the run's box for its live output
+  every three seconds (`sandbox_tail`, see [Watching a run
   live](../concepts/code-sandbox.md#watching-a-run-live)), and only then:
   closing the span or the job stopping ends the poll — and only
   `not_running` is stopping: a job still being set up (`launching`), a box
-  paused before its record moves on (`box_paused`), a silent owner and a
+  paused before its record moves on (`box_paused`), a silent node and a
   failed read all keep asking, and keep what is on screen.
   - **The view holds what it was sent.** It asks by CURSOR — the reading it
     holds, how far and the owner's digest there — and APPENDS what the owner
@@ -8349,7 +8347,7 @@ field, and the panel says so.
 through the same Admin-only `config` question the Configuration screen asks,
 in config order (the order a seat that names no model falls back through), each
 **as the engine will run it**: a field the entry leaves out is said as the
-default the engine applies — the CLI (`claude-code`), the mode (`host`), the
+default the engine applies — the CLI (`claude-code`), the
 sign-in (`subscription`), the 600-second timeout and four processes at once —
 from `contract/models.ts`, which
 `internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes` holds to the
@@ -8358,10 +8356,12 @@ sign-in the engine does not apply. There is **no per-key state** to draw and
 nothing is asked of a node: a model is one CLI, which holds one sign-in and
 rotates nothing, so what an operator needs is how it signs in and whether
 anything still runs on it. Three tiles count the models (and how many no seat
-names), the models in **box mode**, which run the executor in their CLI, and
-the models **on an API key**, the ones billed to a metered account. Each row is the entry's key over its CLI and model
-(`claude-code · sonnet`), its mode (*Text*, or *Agent* with the cell its
-`run_in` names), how it **signs in** — *Subscription*, *API key* or *Engine
+names), the models that can run a seat's **executor** — a CLI with an in-box
+runner, whose own run in a box every agent seat's executor is — and the models
+**on an API key**, the ones billed to a metered account. Each row is the
+entry's key over its CLI and model (`claude-code · sonnet`), what the engine
+runs it for (*Executor* with the cell its `run_in` names, or *Text phases* for
+a CLI with no in-box runner, which a launch skips), how it **signs in** — *Subscription*, *API key* or *Engine
 environment* — over where that credential comes from: the variable the entry's
 `auth.token` or `auth.api_key` names, or, where it names none, what the CLI
 reads instead (*CLI login*, *from a bundle*; *the CLI's own key variable*; *the
@@ -8373,8 +8373,9 @@ be *written inline* and never drawn. The list is read again on every company the
 engine publishes — the org projection the seats ride on moves with it — and
 never on a clock, since the document changes only with a revision.
 
-A row opens the **model's page** (`models/{id}`): its facts (model, CLI, mode,
-timeout, processes at once, seats — each default said as one), a **Signing
+A row opens the **model's page** (`models/{id}`): its facts (model, CLI, what
+it runs as — *Executor* in its `run_in` cell, or *Text phases* — timeout,
+processes at once, seats — each default said as one), a **Signing
 in** card naming the mode, the credential that mode reads (the token under
 `subscription`, the API key under `api-key`, none under `inherit-env`) or, where
 the entry names none, the sentence saying what the engine reads instead (the
@@ -8384,8 +8385,8 @@ bundle's variable, where the login is kept (`state_dir`, or a directory derived
 from the key on each node) and each `env` variable with the name its value
 comes from; then **Seats on it** — each seat and which phases run on it or fall
 back to it. A seat's model chain on its Settings tab links here. Changing the
-CLI, the mode or the sign-in is Configuration's, where the whole entry is in
-view, and the card links to that entry there. **Edit** (the page's action, and
+CLI, where its runs happen (`run_in`) or the sign-in is Configuration's, where
+the whole entry is in view, and the card links to that entry there. **Edit** (the page's action, and
 a row's pencil) is drawn for every reader and disabled with the reason for one
 who cannot change the configuration: it reads the entry (`GET
 /config/llm-providers/{id}`) and edits its model, the ONE credential its

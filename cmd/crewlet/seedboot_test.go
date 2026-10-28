@@ -24,7 +24,7 @@ import (
 // liveRevisionDoc is a company changed live: one seat, and an embedding model
 // three thousand dimensions wide.
 const liveRevisionDoc = `{"name":"Live",` +
-	`"providers":{"llm":{"primary":{"model":"claude-sonnet-5",` +
+	`"providers":{"sandbox":{"fake":true},"llm":{"primary":{"model":"claude-sonnet-5",` +
 	`"auth":{"mode":"api-key","api_key":"${ANTHROPIC_API_KEY}"}}},` +
 	`"embeddings":{"type":"openai","model":"text-embedding-3-large",` +
 	`"api_key":"${OPENAI_API_KEY}","dimensions":3072}},` +
@@ -40,6 +40,7 @@ tracker:
 knowledge:
   backend: none
 providers:
+  sandbox: {fake: true}
   llm:
     primary:
       model: claude-sonnet-5
@@ -211,20 +212,20 @@ func TestAManagedNodeOnAnEmptyStoreRunsNoCompany(t *testing.T) {
 }
 
 // unbuildableCompanyYAML is a company valid on paper that no node without the
-// key can build: its one seat codes in an E2B box, whose key resolves to
-// nothing.
+// key can build: its one seat's executor runs in an E2B box, whose key
+// resolves to nothing.
 const unbuildableCompanyYAML = `
 name: Unbuildable
 providers:
   sandbox:
     e2b:
       api_key: "${CREWLET_TEST_E2B_KEY_NEVER_SET}"
+  llm:
+    coder: {agent: claude-code, model: sonnet, run_in: e2b}
 roles:
   - name: SWE
     handle: swe
-    sandbox:
-      enabled: true
-      run_in: e2b
+    llm: coder
 `
 
 // A FIRST BOOT WHOSE FILE THIS NODE CANNOT BUILD IS REFUSED WITH NOTHING

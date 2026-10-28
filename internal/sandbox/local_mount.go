@@ -39,7 +39,7 @@ import (
 // containerProbeTimeout bounds the runtime queries around a box's creation:
 // the rootless probe and the in-box half of the mount proof.
 //
-// Short on purpose, and shorter than [controlTimeout]. Both run against a
+// Short on purpose, and shorter than [ControlTimeout]. Both run against a
 // daemon this process is about to ask for a container anyway, so a daemon slow
 // enough to blow this is a create that is about to fail regardless — the only
 // thing a longer bound would buy is a later error. Ten seconds is well past a
@@ -130,18 +130,28 @@ type execer interface {
 // file. Unlinking a file needs write permission on its PARENT, not on the
 // file, so an engine that removes a root-owned file proves nothing at all; it
 // is the box-made DIRECTORY that the engine cannot write into or empty.
+//
+// EVERY FILE OF IT THROUGH THE BOX'S HOME ([boxLayout.openHome]): the container
+// is running by now, and the directory the proof writes into is one the
+// container made.
 func verifyMount(ctx context.Context, box execer, layout boxLayout) error {
-	if err := os.MkdirAll(layout.meta(), hostbox.DirMode); err != nil {
+	home, err := layout.openHome()
+	if err != nil {
+		return localErrorf("container sandbox %s could not prepare %s: %v",
+			layout.id, layout.meta(), err)
+	}
+	defer func() { _ = home.Close() }()
+	if err = home.MkdirAll(metaName, hostbox.DirMode); err != nil {
 		return localErrorf("container sandbox %s could not prepare %s: %v",
 			layout.id, layout.meta(), err)
 	}
 	token := uuid.NewString()
-	fromEngine := filepath.Join(layout.meta(), "mount-probe")
-	if err := os.WriteFile(fromEngine, []byte(token), hostbox.FileMode); err != nil {
+	fromEngine := filepath.Join(metaName, "mount-probe")
+	if err = replaceIn(home, fromEngine, []byte(token)); err != nil {
 		return localErrorf("container sandbox %s could not write its mount probe: %v",
 			layout.id, err)
 	}
-	defer func() { _ = os.Remove(fromEngine) }()
+	defer func() { _ = home.Remove(fromEngine) }()
 
 	// Unquoted, because every path here is a compile-time constant under
 	// DefaultHome — there is no operator input in this command line.
@@ -163,9 +173,9 @@ func verifyMount(ctx context.Context, box execer, layout boxLayout) error {
 	}
 
 	// The box made this directory; the engine now has to live in it.
-	made := filepath.Join(layout.meta(), "mount-probe.d")
-	writeErr := os.WriteFile(filepath.Join(made, "from-engine"), []byte(token), hostbox.FileMode)
-	removeErr := os.RemoveAll(made)
+	made := filepath.Join(metaName, "mount-probe.d")
+	writeErr := replaceIn(home, filepath.Join(made, "from-engine"), []byte(token))
+	removeErr := home.RemoveAll(made)
 	if writeErr != nil || removeErr != nil {
 		detail := writeErr
 		if detail == nil {
@@ -177,7 +187,7 @@ func verifyMount(ctx context.Context, box execer, layout boxLayout) error {
 			"the agent's shim or reclaim the box's disk. Run the container as this user by "+
 			"passing `--user %d:%d` in providers.sandbox.local.run_args, or use a rootless "+
 			"container runtime",
-			layout.id, made, detail, os.Getuid(), os.Getgid())
+			layout.id, filepath.Join(layout.home(), made), detail, os.Getuid(), os.Getgid())
 	}
 	return nil
 }

@@ -143,7 +143,7 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 		{"a put that does not parse", http.MethodPut, "name: [", true, http.StatusBadRequest},
 		{"a valid patch", http.MethodPatch, `{"mission": "checked"}`, true, http.StatusOK},
 		{"a patch the validator refuses", http.MethodPatch,
-			`{"providers": {"llm": {"zulu": {"agent": "nowhere", "model": "m"}}}}`,
+			`{"providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"agent": "nowhere", "model": "m"}}}}`,
 			true, http.StatusBadRequest},
 		{"a patch naming an unknown key", http.MethodPatch, `{"missionn": "typo"}`, true, http.StatusBadRequest},
 		// THE ORG IS PART OF THE DOCUMENT, so a dry run checks it too.

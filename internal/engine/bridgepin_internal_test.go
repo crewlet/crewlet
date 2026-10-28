@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -11,11 +12,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/runner"
-	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -48,19 +49,23 @@ func (h *heldTool) Call(ctx context.Context, _ map[string]any) (tools.Result, er
 	return tools.Result{Output: h.name + " done"}, nil
 }
 
-// bridgedRun is a box-mode run launched through the real launcher onto a
+// bridgedRun is an executor run launched through the real launcher onto a
 // bridge a test can dial: the engine, the run's row store, and the client
-// session its box would hold.
+// session its box would hold — and the launcher, the surface and the jobs a
+// relaunch of the same turn goes through again ([bridgedRun.launch]).
 type bridgedRun struct {
 	engine  *Engine
 	handle  string
 	pending sandbox.PendingStore
 	session *mcp.ClientSession
+
+	launcher *agentLauncher
+	surface  *tools.Surface
+	jobs     *sandbox.FakeRunner
 }
 
-// launchBridged launches turnID's executor as a box-mode run over a surface
-// offering the given tools, and dials its bridge the way the box's own coding
-// agent would.
+// launchBridged launches turnID's executor over a surface offering the given
+// tools, and dials its bridge the way the box's own coding agent would.
 func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridgedRun {
 	t.Helper()
 	server := httptest.NewServer(http.NotFoundHandler())
@@ -72,7 +77,7 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
 	server.Config.Handler = mux
 
-	c, seat := splitLoginCompany(t, "api", "codex")
+	c, seat := executorCompany(t)
 	e, jobs := launchRig(t, c, bridge)
 	reg := tools.NewRegistry()
 	var names []string
@@ -82,24 +87,36 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 		}
 		names = append(names, tool.Name())
 	}
-	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{RunID: turnID, Seat: seat, Org: c.Org}, seat: seat,
-		codingAgent: "claude-code", placement: sandbox.E2B,
-	}
-	if err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
-		Brief: "fix the failing test", Round: 1,
+	launcher := launcherOn(e, c, seat, turnID)
+	run := bridgedRun{engine: e, handle: seat.Handle(), pending: e.sandbox.Load().pending,
+		launcher: launcher, jobs: jobs,
 		// BOUND TO THE LAUNCHER'S OWN TURN, as the runner binds every
 		// phase surface: the bridge acts as that turn's seat on every call
 		// and refuses a surface that names none.
-		Surface: tools.NewSurface("execute", reg.Snapshot(), names).ForTurn(launcher.turn),
+		surface: tools.NewSurface("execute", reg.Snapshot(), names).ForTurn(launcher.turn)}
+	return run.launch(t, nil)
+}
+
+// launch launches the run's executor job — the turn's next job when one has
+// run, carrying on the one that asked a person where cont is set — and dials
+// the bridge of the job it started, the way that job's coding agent would.
+func (b bridgedRun) launch(t *testing.T, cont *runner.Continuation) bridgedRun {
+	t.Helper()
+	before := len(b.jobs.Started())
+	if _, err := b.launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
+		Brief: "fix the failing test", Round: 1,
+		Surface:    b.surface,
+		OnFallback: func(chain.Fallback) {},
+		Fence:      b.engine.seatFence(b.handle),
+		Continue:   cont,
 	}); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}
-	started := jobs.Started()
-	if len(started) != 1 {
-		t.Fatalf("%d jobs started, want 1", len(started))
+	started := b.jobs.Started()
+	if len(started) != before+1 {
+		t.Fatalf("%d jobs started, want %d", len(started), before+1)
 	}
-	endpoint := started[0].MCPServers[config.ToolServerName].URL
+	endpoint := started[before].MCPServers[config.ToolServerName].URL
 	if endpoint == "" {
 		t.Fatal("the job was handed no bridge to dial")
 	}
@@ -113,8 +130,8 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(func() { _ = session.Close() })
-	return bridgedRun{engine: e, handle: seat.Handle(), pending: e.sandbox.Load().pending,
-		session: session}
+	b.session = session
+	return b
 }
 
 // call makes one bridged call and waits for its answer.
@@ -205,6 +222,46 @@ func TestALaunchedRunsBridgedCallIsFiledUnderItsJob(t *testing.T) {
 	if row.LaunchID != job || len(row.BridgeCalls) != 1 || row.BridgeCalls[0].Name != "read_page" {
 		t.Fatalf("the job's log after one bridged call: job %q (was %q), calls %+v",
 			row.LaunchID, job, row.BridgeCalls)
+	}
+}
+
+// A RUN CARRIED ON AFTER A PERSON'S ANSWER NUMBERS ITS CALLS AFTER THE ASKING
+// RUN'S. The row keeps the asking job's calls as the round's, and the
+// collection that closes the round reads them by their place: a continuation
+// whose bridge session counted from one again put its first call beside the
+// asking run's first, and every reader of the round — its record, the log its
+// reviewer reads, its submissions, where the last one made wins — had the two
+// runs' calls interleaved. Driven through the real launcher, store and bridge,
+// because the number reaches the session through the launch's own wiring.
+//
+// Mutation: open the job's session without the LastSeq the launch was told,
+// and the carried-on call is numbered 1.
+func TestACarriedOnRunsCallsAreNumberedAfterTheAskingRuns(t *testing.T) {
+	t.Parallel()
+	read := newHeldTool("read_page")
+	close(read.release)
+	asking := launchBridged(t, "t-carried", read)
+	asking.call(t, "read_page")
+	asking.call(t, "read_page")
+
+	carried := asking.launch(t, &runner.Continuation{SessionID: "sess-ask", Brief: "use main"})
+	carried.call(t, "read_page")
+
+	row := carried.row(t, "t-carried")
+	var seqs []int
+	for _, call := range row.BridgeCalls {
+		seqs = append(seqs, call.Seq)
+	}
+	if !slices.Equal(seqs, []int{1, 2, 3}) {
+		t.Fatalf("the round's calls are numbered %v, want the carried-on run's after the "+
+			"asking run's two: [1 2 3]", seqs)
+	}
+
+	// A NEW ROUND'S RUN COUNTS FROM ONE: its row starts the log afresh.
+	next := carried.launch(t, nil)
+	next.call(t, "read_page")
+	if calls := next.row(t, "t-carried").BridgeCalls; len(calls) != 1 || calls[0].Seq != 1 {
+		t.Fatalf("the next round's log is %+v, want its one call numbered 1", calls)
 	}
 }
 

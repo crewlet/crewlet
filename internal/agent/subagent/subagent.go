@@ -134,21 +134,6 @@ var controlDenylist = map[string]struct{}{
 	// A sub-agent that can spawn sub-agents has no depth bound at all.
 	ToolName: {},
 
-	// Launching a detached coding run is engine control keyed to the
-	// PARENT: the pending row carries the parent's turn id, and the
-	// completion re-enters the parent's own suspended executor. A
-	// sub-agent's loop cannot suspend, so the parent turn would finish
-	// normally, never persist an execute state, and the run would come back
-	// to a seat with nothing to resume into.
-	//
-	// The annotation filter below happens to catch it too — a coding run is
-	// open-world, and internal/agent/builtin says so. Named here anyway,
-	// and the redundancy is the point: that reason is about pushing
-	// branches other people read, and this one is about a turn that can
-	// never be resumed. Either alone would deny it; only this one survives
-	// somebody deciding a sandbox is private.
-	"run_sandbox": {},
-
 	// The PARENT's discovery pair. Both close over the parent's surface, so
 	// a child that inherited them would activate tools onto the surface of
 	// the phase that spawned it — the one escalation the grant exists to
@@ -360,6 +345,18 @@ type Config struct {
 	// under the turn that spawned it.
 	Trace events.TraceContext
 
+	// Round is the parent phase's round every call of this tool is made
+	// in, which the batch record names so a reader nests the batch under
+	// the call that made it.
+	//
+	// STATED BY THE CALLER rather than read off the call's context: the
+	// tool is offered only on an executor run's surface, whose calls arrive
+	// over the bridge from the run's coding CLI — no engine loop is
+	// iterating when they do, so there is no frame to ask, and the caller
+	// is the one that knows which round of its phase the run's calls are
+	// recorded on.
+	Round int
+
 	// Turn binds the child's surface to the parent turn.
 	//
 	// Without it every seat-bound tool in the grant fails at call time
@@ -386,8 +383,11 @@ type Config struct {
 	// required skills.
 	Guard func(*tools.Surface) tools.Guard
 
-	// Counter is where the worker's surface counts its refusal-loop
-	// decisions, the parent turn's recorder. Nil counts nothing.
+	// Counter is where the worker's surface counts what it decides, the
+	// parent turn's recorder: its refusal-loop decisions
+	// (`crewlet.tools.policy_refusal_loops`) and the calls answered outside
+	// their schema (`crewlet.tools.args_outside_schema`), which
+	// [tools.Invoke] counts from the surface's counter. Nil counts nothing.
 	Counter tools.Counter
 
 	// Telemetry receives every child's Result, once, on every path a child
@@ -785,9 +785,6 @@ func run(ctx context.Context, began time.Time, cfg Config, provider llm.Provider
 		// what it just submitted — on the parent's budget, for output
 		// nobody reads.
 		TerminateAfter: terminators(submit),
-		// No AllowSuspend: a worker's conversation is never persisted, so
-		// a suspended one could never be resumed — the tool loop turns
-		// the attempt into an ordinary tool failure it can react to.
 	})
 	res.ToolsAvailable = surface.Active()
 
@@ -1111,10 +1108,6 @@ func publishCall(ctx context.Context, cfg Config, tasks []resolved, results []Re
 	if cfg.Turn != nil {
 		batchRun, batchWork = cfg.Turn.RunID, cfg.Turn.WorkKey
 	}
-	// The parent's round, off the context its tool loop handed this call:
-	// the one frame that knows which round is running is the loop, and the
-	// delegate tool is called from inside it.
-	round, _ := toolloop.CallRound(ctx)
 	ev := events.New(types.SubagentBatched{
 		ParentHandle: cfg.Seat.Role.Handle(),
 		TurnID:       batchRun,
@@ -1126,7 +1119,7 @@ func publishCall(ctx context.Context, cfg Config, tasks []resolved, results []Re
 		Graph:        graphOf(tasks),
 		Statuses:     statuses,
 		StartedAt:    began,
-		Round:        round,
+		Round:        cfg.Round,
 	}, cfg.Trace)
 	// The payload carries no role, so the envelope's source is the only
 	// attribution this event has — without it every fan-out in the company

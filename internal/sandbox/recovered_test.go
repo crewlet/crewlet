@@ -8,7 +8,7 @@ import (
 )
 
 // A RUN STILL WORKING IN ITS BOX IS HANDED TO THE NODE THAT RECOVERS ITS SEAT,
-// so what its box calls on the engine is served there again: a box-mode run's
+// so what its box calls on the engine is served there again: a run's
 // tool bridge lived in the process that launched it, and a restart or a seat
 // move left the box calling a session nobody held. A run parked on a question
 // has a paused box that calls nothing, so it is not handed over; nor is a run

@@ -3,13 +3,17 @@ package engine
 import (
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // noAudience resolves every question to nobody: the coordinators built with
@@ -19,6 +23,17 @@ type noAudience struct{}
 func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
 	return sandbox.Audience{}
 }
+
+// testAnswers is the seal a coordinator a case builds by hand seals and opens
+// answers under ([sandbox.CoordinatorOptions.Answers]): one fleet keyring for
+// every such coordinator, as a fleet shares one.
+var testAnswers = sync.OnceValue(func() *sandbox.AnswerSeal {
+	seal, err := sandbox.NewAnswerSeal(statelog.OneKey("answers", "the engine cases' fleet key material"))
+	if err != nil {
+		panic(err)
+	}
+	return seal
+})
 
 // audienceChart is a founder over one unit: its lead, the seat whose runs ask
 // the questions, a person beside it, and another agent.
@@ -110,6 +125,14 @@ func TestTheAskBriefNamesWhomTheParkCanResolve(t *testing.T) {
 	if !strings.Contains(brief, "crewlet-ask") {
 		t.Fatalf("the brief does not tell the coding agent how to ask:\n%s", brief)
 	}
+	// AND THE WAY THAT DOES NOT WAIT: a question the run can go on without
+	// is asked with the seat's own tools and answered in its next turn, so a
+	// run told only of the shim parks — holding its box — on every question.
+	if !strings.Contains(brief, "`"+builtin.CommentOnWorkTool+"` with `ask`") ||
+		!strings.Contains(brief, runner.SubmitWorkTool) {
+		t.Fatalf("the brief does not tell the coding agent to ask with its tools and "+
+			"finish when it can go on without the answer:\n%s", brief)
+	}
 	if !strings.Contains(brief, "Teammates you can name: cto, ada, qa.") ||
 		!strings.Contains(brief, "Your manager: cto.") {
 		t.Fatalf("the brief does not name the seat's teammates and manager by handle:\n%s", brief)
@@ -152,7 +175,7 @@ func TestTheRequesterIsWhoseWakeStartedTheTurn(t *testing.T) {
 // paths share — the park that resolves "requester" reads nothing else.
 func TestALaunchedRunRecordsWhoWokeItsTurn(t *testing.T) {
 	t.Parallel()
-	ref := sandboxTurnRef(t.Context(), &turnctx.Turn{RunID: "run-1", Requester: "ada"}, "SWE")
+	ref := sandboxTurnRef(t.Context(), &turnctx.Turn{RunID: "run-1", Requester: "ada"}, "SWE", nil)
 	if ref.Requester != "ada" {
 		t.Fatalf("the run's turn reference names requester %q, want ada", ref.Requester)
 	}

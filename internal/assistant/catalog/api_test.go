@@ -183,14 +183,14 @@ func TestAGenericChangeIsPreviewedFromTheResource(t *testing.T) {
 	t.Parallel()
 	_, _, change := generic(t, admin)
 	document := map[string]any{"name": "Acme", "mission": "Make every invoice add up.",
-		"turn_engine": map[string]any{"max_tool_rounds": 16, "temperature": 0.2},
+		"turn_engine": map[string]any{"onboarding_max_tool_rounds": 16, "temperature": 0.2},
 		"roles":       []any{map[string]any{"handle": "ceo", "name": "CEO"}},
 		"labels":      []any{"billing", "core"}}
 	read := resource("/config", `"rev-7"`, document)
 	secret := "ghp_" + strings.Repeat("b", 36)
 	p, err := change.Preview(t.Context(), read, wednesday, map[string]any{
 		"route": "PATCH /config", "body": map[string]any{
-			"turn_engine": map[string]any{"max_tool_rounds": 32, "temperature": nil},
+			"turn_engine": map[string]any{"onboarding_max_tool_rounds": 32, "temperature": nil},
 			"roles": []any{map[string]any{"handle": "ceo", "name": "CEO"},
 				map[string]any{"handle": "crewlet-swe", "name": "crewlet-swe",
 					"responsibilities": []any{"Build", "Review"}}},
@@ -204,12 +204,12 @@ func TestAGenericChangeIsPreviewedFromTheResource(t *testing.T) {
 		kind     wire.ChangeKind
 		from, to string
 	}{
-		"turn_engine.max_tool_rounds":        {wire.ChangeChanged, "16", "32"},
-		"turn_engine.temperature":            {wire.ChangeRemoved, "0.2", ""},
-		"roles.crewlet-swe.name":             {wire.ChangeAdded, "", "crewlet-swe"},
-		"roles.crewlet-swe.responsibilities": {wire.ChangeAdded, "", "Build, Review"},
-		"labels":                             {wire.ChangeChanged, "billing, core", "billing, growth"},
-		"_summary":                           {wire.ChangeAdded, "", "raise the cap with [REDACTED:github-token]"},
+		"turn_engine.onboarding_max_tool_rounds": {wire.ChangeChanged, "16", "32"},
+		"turn_engine.temperature":                {wire.ChangeRemoved, "0.2", ""},
+		"roles.crewlet-swe.name":                 {wire.ChangeAdded, "", "crewlet-swe"},
+		"roles.crewlet-swe.responsibilities":     {wire.ChangeAdded, "", "Build, Review"},
+		"labels":                                 {wire.ChangeChanged, "billing, core", "billing, growth"},
+		"_summary":                               {wire.ChangeAdded, "", "raise the cap with [REDACTED:github-token]"},
 	} {
 		c, ok := got[field]
 		if !ok || c.Kind != want.kind || c.From != want.from || c.To != want.to {
@@ -232,7 +232,7 @@ func TestAGenericChangeIsPreviewedFromTheResource(t *testing.T) {
 	}
 	if p.Technical == nil || p.Technical.Method != http.MethodPatch || p.Technical.Path != "/config" ||
 		strings.Contains(p.Technical.Body, secret) ||
-		!strings.Contains(p.Technical.Body, `"max_tool_rounds": 32`) {
+		!strings.Contains(p.Technical.Body, `"onboarding_max_tool_rounds": 32`) {
 		t.Errorf("the card's technical details are %+v, not the request redacted", p.Technical)
 	}
 	for field := range got {

@@ -116,8 +116,13 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// silently disarming it: built as a Service with an empty
 		// Options, this construction began failing the day the directory
 		// became mandatory, and both jobs vanished behind a warning.
+		//
+		// AND WITH THE ENGINE'S ANSWER TO WHETHER A QUIET CHANNEL IS STILL
+		// OWED, so the ask a coding run is working on — or one waiting in a
+		// seat's held inbox — is not closed under it: see [colleagueOwed].
 		if queue := e.backends.Queue; queue != nil {
-			sweeper, err := a2a.NewSweeper(a2a.NewCoordStore(fleet), queue, nil)
+			sweeper, err := a2a.NewSweeper(a2a.NewCoordStore(fleet), queue,
+				colleagueOwed{engine: e, runs: sandbox.NewCoordStore(fleet)}, nil)
 			if err != nil {
 				// Logged rather than fatal, matching a2aService: a
 				// company whose channels are not swept is degraded,

@@ -369,6 +369,7 @@ func TestDatadogFallbackMustNameAnAgentSeat(t *testing.T) {
 	doc := `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     fast:
       model: claude-golden
@@ -452,6 +453,7 @@ func TestDatadogRefusesAFallbackNamingAHumanSeat(t *testing.T) {
 	doc := `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     fast:
       model: claude-golden

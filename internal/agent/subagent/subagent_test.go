@@ -288,15 +288,13 @@ func newWorld(t *testing.T) *world {
 	// which its own TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead
 	// pins. Mirrored rather than imported because registering the real set
 	// needs eight dependency doubles; kept HONEST because the previous
-	// mirror had a2a_ask and run_sandbox carrying no annotations at all,
+	// mirror had a2a_ask carrying no annotations at all,
 	// which is what a comment in this file claimed for years after it
 	// stopped being true.
 	add(subagent.ToolName, tools.OriginBuiltin, tools.Annotations{})
 	add("activate_tool", tools.OriginBuiltin, tools.Annotations{})
 	add("list_mcp_server_tools", tools.OriginBuiltin, tools.Annotations{})
 	add("a2a_ask", tools.OriginBuiltin,
-		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes})
-	add("run_sandbox", tools.OriginBuiltin,
 		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes})
 	// The private-state writes. Each says OpenWorld explicitly, which is
 	// what makes it reachable by a worker its parent granted it to.
@@ -462,7 +460,7 @@ func TestAGrantRefusesTheEngineControlDenylist(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
 	denied := []string{
-		subagent.ToolName, "run_sandbox", "activate_tool",
+		subagent.ToolName, "activate_tool",
 		"list_mcp_server_tools", "a2a_ask",
 	}
 	// The parent holds every one of these; the request names every one.
@@ -547,9 +545,9 @@ func TestAWorkerMayBeGrantedAWriteToItsParentsOwnMemory(t *testing.T) {
 func TestAWorkerIsStillRefusedTheToolsThatLeaveTheProcess(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
-	g := subagent.Permit(w.snapshot, w.parentAll(), []string{"a2a_ask", "run_sandbox"})
+	g := subagent.Permit(w.snapshot, w.parentAll(), []string{"a2a_ask"})
 
-	for _, name := range []string{"a2a_ask", "run_sandbox"} {
+	for _, name := range []string{"a2a_ask"} {
 		if slices.Contains(g.Active, name) {
 			t.Errorf("%s leaves the process and was granted", name)
 		}

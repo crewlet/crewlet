@@ -287,7 +287,7 @@ func TestANoteNeverTouchesTheToolsOutput(t *testing.T) {
 	if !strings.Contains(res.Note, "`tittle` is not an argument") {
 		t.Errorf("the note is %q", res.Note)
 	}
-	if got := tools.Rendered(res.Result); !strings.HasPrefix(got, receipt+"\n\nNote: make_thing ran") {
+	if got := tools.Rendered(res); !strings.HasPrefix(got, receipt+"\n\nNote: make_thing ran") {
 		t.Errorf("rendered for a reader of text as %q", got)
 	}
 }

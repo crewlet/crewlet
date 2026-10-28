@@ -75,7 +75,7 @@ func onboardingRunner(t *testing.T, store runner.Markers, latch *runner.Latch, p
 		Seat:     prompts.Seat{Org: organization, Role: role},
 		Registry: reg,
 		Models:   models,
-		Caps:     runner.Caps{ExecutorRounds: 2},
+		Launcher: &playLauncher{},
 		Onboarding: runner.Onboarding{
 			Markers: store, Latch: latch, Rounds: 3, Ceiling: 0,
 		},
@@ -115,42 +115,6 @@ func TestAnUnmarkedSeatRunsThePassAndMarks(t *testing.T) {
 		t.Errorf("claims %d, releases %d — the lease must be taken and given "+
 			"back, or a crashed pass blocks re-onboarding until the TTL",
 			store.claims, store.released)
-	}
-}
-
-// THE PASS CANNOT REACH run_sandbox, by catalogue or by activation.
-//
-// A call of it launches a box and starts a coding job before anything asks
-// whether the phase can suspend, and this pass cannot: the loop marks the call
-// failed only once the job has started, leaving a run no recorded suspension
-// points to and nothing collects. A tool in the pass's snapshot is one its
-// catalogue lists and activate_tool reaches, so the pass asks to activate it
-// here, and is never offered it on a later round.
-func TestTheOnboardingPassIsNotShownRunSandbox(t *testing.T) {
-	t.Parallel()
-	prov := &scriptedProvider{onboarding: []llmtest.Response{
-		activate(runner.RunSandboxTool),
-		markOnboarded(),
-	}}
-	r := onboardingRunner(t, &markers{claimHeld: true}, runner.NewLatch(), prov, runner.RunSandboxTool)
-	if _, err := r.Onboard(context.Background()); err != nil {
-		t.Fatalf("Onboard: %v", err)
-	}
-	system := systemOf(t, prov, "onboarding")
-	if strings.Contains(system, runner.RunSandboxTool) {
-		t.Error("the onboarding pass's catalogue lists run_sandbox, which would start a run nothing collects")
-	}
-	if !strings.Contains(system, "reflect_and_persist") {
-		t.Error("the onboarding pass's catalogue lost the tools it can call")
-	}
-	offered := prov.offeredFor("onboarding")
-	if len(offered) < 2 {
-		t.Fatalf("the pass made %d requests; the activation never got a round after it", len(offered))
-	}
-	for i, names := range offered {
-		if slices.Contains(names, runner.RunSandboxTool) {
-			t.Errorf("onboarding round %d was offered run_sandbox, which activate_tool reached", i+1)
-		}
 	}
 }
 
@@ -344,7 +308,7 @@ func TestAZeroBudgetDisablesThePass(t *testing.T) {
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
 	disabled, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
-		Registry: reg, Models: models,
+		Registry: reg, Models: models, Launcher: &playLauncher{},
 		Onboarding: runner.Onboarding{Markers: store, Latch: runner.NewLatch(), Rounds: 0},
 		Sessions:   sessions,
 	})

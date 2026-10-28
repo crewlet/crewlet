@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -92,6 +93,30 @@ func TestTheArtifactSkillsNameOnlyRegisteredTools(t *testing.T) {
 				!slices.Contains(builtin.ArtifactDataTools(), m[1]) {
 				t.Errorf("%s names `%s`, which is no artifacts tool", rel, m[1])
 			}
+		}
+	}
+}
+
+// A SEAT IS TAUGHT EVERY SOURCE THE INLINE BOUND SENDS IT TO. Past the bound a
+// publish is refused, naming the sources that carry a larger build; a seat
+// that learned one only from that refusal would have spent the call and the
+// bytes it carried. So each source the refusal names is in the Tool Skill a
+// seat loads before its first publish. Mutation: drop `from_sandbox` from the
+// skill's contract and this fails.
+func TestASeatIsTaughtTheSourcesTheInlineBoundNames(t *testing.T) {
+	t.Parallel()
+	r := newArtifactRig(t, artifactChart{}, requesters{}, nil)
+	got := r.call(t, turnFor(t, "agent-cto"), builtin.CreateArtifactTool, map[string]any{
+		"kind": "html", "title": "Big", "content": strings.Repeat("a", int(artifacts.MaxInlineBytes+1))})
+	named := regexp.MustCompile("`(from_[a-z_]+)`").FindAllStringSubmatch(got.Output, -1)
+	if !got.Failed || len(named) == 0 {
+		t.Fatalf("an over-bound inline publish answered %q, want a refusal naming its sources", got.Output)
+	}
+	seat := readRepoFile(t, artifactToolSkill)
+	for _, m := range named {
+		if !strings.Contains(seat, "`"+m[1]+"`") {
+			t.Errorf("%s does not teach `%s`, which the inline bound's refusal sends a seat to",
+				artifactToolSkill, m[1])
 		}
 	}
 }

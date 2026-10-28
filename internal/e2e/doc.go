@@ -13,8 +13,11 @@
 // is stubbed except the model itself: the CLI every model call goes through is
 // a real backend launching a real process — this test binary, re-executed,
 // driving its own loop as Claude Code does, calling the seat's tools over the
-// real relay and session and asking the script for each model response —
-// because a stub anywhere else is a stub of the thing under test.
+// real relay and session and asking the script for each model response — and
+// every seat's executor is a real run in a real `direct` box, launched by the
+// real Claude Code runner, whose `claude` is this binary again, calling the
+// seat's tools over the node's real bridge and asking the same script
+// (codingcli_test.go). A stub anywhere else is a stub of the thing under test.
 //
 // The package has no exported surface. It exists as a package rather than as
 // more files under internal/api because its subject is the composition, and a

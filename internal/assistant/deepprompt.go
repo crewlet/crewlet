@@ -13,7 +13,7 @@ import (
 
 // THE DEEP-WORK RUN'S PROMPT: the standing instructions a coding CLI is given
 // beside its vendor's own (which teach it its shell, files and web tools, and
-// which box mode keeps), and the brief it runs.
+// which a CLI's own run in a box keeps), and the brief it runs.
 
 // DeepPromptVersion names the deep-work run's standing instructions, stamped
 // into them, so a run's behaviour can be read against the text it ran under.

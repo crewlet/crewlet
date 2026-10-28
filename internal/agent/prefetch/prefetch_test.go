@@ -951,14 +951,14 @@ func TestRecallRendersWhatAPastTurnWasAndHowItWent(t *testing.T) {
 	got := fetch(t, prefetch.Sources{
 		Episodes: episodes{hits: []learning.Hit{{Episode: learning.Episode{
 			TaskSummary:   "fixed a redirect loop on staging",
-			ToolSequence:  []string{"read_file", "run_sandbox"},
+			ToolSequence:  []string{"read_file", "delegate"},
 			ReviewOutcome: "done",
 		}}}},
 		Embed: embeds,
 	}, request(t)).EpisodeRecall
 
 	for _, want := range []string{"redirect loop", "outcome: done",
-		"read_file → run_sandbox"} {
+		"read_file → delegate"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("recall is missing %q:\n%s", want, got)
 		}

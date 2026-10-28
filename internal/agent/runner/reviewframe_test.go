@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
@@ -39,16 +40,14 @@ func TestTheReviewerReceivesTheTriggerFramedAsTheTurnsOwn(t *testing.T) {
 }
 
 // The EXECUTOR is still handed it bare, which is the other half of the same
-// fact: the executor is being given the trigger as the thing to do, and a
-// frame saying "you were already working on this" would be false on round 1
+// fact: the executor's run is being given the trigger as the thing to do, and
+// a frame saying "you were already working on this" would be false on round 1
 // and would cost the prompt-prefix cache on every round after.
 func TestTheExecutorIsStillHandedTheTriggerBare(t *testing.T) {
 	t.Parallel()
-	r, prov, _ := fixture(t, &scriptedProvider{execute: []llmtest.Response{submitWork(t)}})
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	user := prov.requestsFor("execute")[0].Messages[1].Content
+	_, req := launch(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{}, 1, "", nil)
+	user := req.Brief
 	if strings.Contains(user, "ALREADY working on") {
 		t.Errorf("the executor was handed the reviewer's frame:\n%s", user)
 	}

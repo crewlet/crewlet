@@ -2,8 +2,8 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/mcpbridge`
-- **Enforced-by:** `internal/api/mcpbridge.TestTheRelayedBridgeKeepsTheToolSessionContract`, `internal/api/mcpbridge.TestARunWhoseSeatMovedIsServedByItsNewHolder`, `internal/api/mcpbridge.TestAFencedOpeningDefersToTheSeatsHolder`, `internal/api/mcpbridge.TestACallersOwnSessionIsServedByItsOpenerThroughAnyNode`, `internal/api/mcpbridge.TestACallersOwnSessionEndsWithItsOpener`, `internal/api/mcpbridge.TestALoopbackSessionIsNeverRelayed`, `internal/httprelay.TestAStreamReachesTheClientAsItIsWritten`, `internal/engine.TestTheBridgeFollowsTheSeat`
-- **Cost-when-tried:** the box dialled its launching node's own address. A load balancer in front of several nodes sent calls to peers that never held the session, and they answered 401 to a live run. A run whose seat moved to a peer kept dialling the node that lost it, which answered that the run's tools were closed until the run ended. And a node without the ingress role had to bind a public listener for its seats' bridge alone, so a satellite that accepts no inbound connection could run no box-mode seat.
+- **Enforced-by:** `internal/api/mcpbridge.TestTheRelayedBridgeKeepsTheToolSessionContract`, `internal/api/mcpbridge.TestARunWhoseSeatMovedIsServedByItsNewHolder`, `internal/api/mcpbridge.TestAFencedOpeningDefersToTheSeatsHolder`, `internal/api/mcpbridge.TestACallersOwnSessionIsServedByItsOpenerThroughAnyNode`, `internal/api/mcpbridge.TestACallersOwnSessionEndsWithItsOpener`, `internal/api/mcpbridge.TestALoopbackSessionIsNeverRelayed`, `internal/httprelay.TestAStreamReachesTheClientAsItIsWritten`, `internal/engine.TestTheBridgeFollowsTheSeat`, `internal/api.TestTheProbeSurfaceServesItsOwnBoxesOnThisHostAlone`, `cmd/crewlet.TestADirectBoxDialsTheListenerItsNodeBound`, `cmd/crewlet.TestASeatsNodeServesItsOwnBoxesTheirToolsOnLoopback`, `internal/e2e.TestAStatelessNodesBoxReachesItsToolsOnItsOwnListener`
+- **Cost-when-tried:** the box dialled its launching node's own address. A load balancer in front of several nodes sent calls to peers that never held the session, and they answered 401 to a live run. A run whose seat moved to a peer kept dialling the node that lost it, which answered that the run's tools were closed until the run ended. And a node without the ingress role had to bind a public listener for its seats' bridge alone, so a satellite that accepts no inbound connection could run no seat whose executor ran in a box.
 - **Tag-status:** unreleased
 
 ## The decision
@@ -80,3 +80,29 @@ What a call may do once it reaches the holder: that is the dispatcher's
 the holder that served it. After a move, the box's next request is answered
 404 by the new holder, and the MCP protocol has the client open a new session
 through the same address.
+
+## Amendment: a node serves its own host's boxes on loopback
+
+The fleet's address is for a box off its launching node's host. A `direct`
+box is a process of that host, so every node that runs seats and binds
+`api.port` hands it that listener on loopback, and builds its bridge from that
+address when `CREWLET_MCP_BRIDGE_URL` is unset. A node with the `ingress` role
+serves the route there as it always did. A node without the role serves the
+same route on `api.port` beside its probes, to a caller on this host's
+loopback alone, read from the connection's address. Every other caller meets
+the route's absence, so the network still reaches that node's probes and
+nothing else. It derives the address only where loopback reaches the listener:
+`api.host` on every interface or on loopback. The telemetry receiver follows
+the same rule where the node forwards to an upstream
+(`OTEL_EXPORTER_OTLP_ENDPOINT`).
+
+The handler is the bridge's own, so a call for a seat the node has since
+handed on is relayed to the seat's holder exactly as a call that landed on an
+`ingress` node is. Nothing about where a session lives or who answers it
+changes.
+
+**Cost-when-tried:** a node without the role derived no address and mounted no
+route, so its direct boxes needed `CREWLET_MCP_BRIDGE_URL`. That is the one
+address a seat pool may not have: a satellite on a private host, or a
+Kubernetes seat pool with no route in. Without it, every executor launch on the
+node was refused, with only a warning at apply.

@@ -26,7 +26,7 @@ var log = logging.Get("agent.toolloop")
 // before every model request, a person's note entering as a user message and
 // never inside a tool's result, a phase that finishes by a call, the round
 // budget, arguments that did not parse answered rather than run, a detached
-// run that parks the phase with its call unanswered: each is the same rule it
+// call left unanswered as it parks the phase: each is the same rule it
 // was, enforced at the one place every call now passes. What is new is only
 // what a CLI's loop forces:
 //
@@ -47,7 +47,7 @@ var log = logging.Get("agent.toolloop")
 //     of the response is answered.
 //   - CALLS ARRIVE TOGETHER. A CLI may issue a response's calls at once, in
 //     any order. Ordinary calls run side by side; a call that ENDS the phase
-//     or PARKS it — a terminator, a detached run — runs alone, after every
+//     or PARKS it — a terminator, a detached call — runs alone, after every
 //     other call its response declared has run, so a delivery the model made
 //     beside its submission is recorded before the submission is judged.
 //   - A CALL IS THE MODEL'S, AS IT ASKED FOR IT. The engine runs a call only
@@ -336,7 +336,6 @@ type dispatcher struct {
 	cfg         Config
 	ctx         context.Context
 	terminators map[string]struct{}
-	parkLocal   map[string]struct{}
 
 	// gate is held SHARED by every ordinary call while it runs and
 	// EXCLUSIVELY by a call that ends or parks the phase, which therefore
@@ -365,7 +364,6 @@ type dispatcher struct {
 	rounds    int // model requests so far, on this invocation's scale
 	spent     llm.Usage
 	suspended *callRec
-	payload   map[string]any
 
 	// active is a run in progress — between [dispatcher.reopen] and
 	// [dispatcher.finish] — and began when it was started.
@@ -396,7 +394,6 @@ func newDispatcher(ctx context.Context, cfg Config, firstRound int) *dispatcher 
 		cfg:         cfg,
 		ctx:         ctx,
 		terminators: make(map[string]struct{}, len(cfg.TerminateAfter)),
-		parkLocal:   make(map[string]struct{}, len(cfg.ParkLocally)),
 		done:        make(chan struct{}),
 		rounds:      firstRound,
 		invRounds:   firstRound,
@@ -404,9 +401,6 @@ func newDispatcher(ctx context.Context, cfg Config, firstRound int) *dispatcher 
 	d.cond = sync.NewCond(&d.mu)
 	for _, name := range cfg.TerminateAfter {
 		d.terminators[name] = struct{}{}
-	}
-	for _, name := range cfg.ParkLocally {
-		d.parkLocal[name] = struct{}{}
 	}
 	return d
 }
@@ -728,13 +722,6 @@ func (d *dispatcher) call(r *run, in toolsession.Call) toolsession.Result {
 		result <- res
 	}()
 
-	if _, longOne := d.parkLocal[c.name]; longOne {
-		// A CALL THAT WAITS ON OTHER MODEL RUNS — delegated workers — ends
-		// the run at once: the CLI would hold its slot, and its memory,
-		// idle for as long as they take.
-		d.parkLocally(c)
-		return d.withheld(c.run, toolsession.Result{Output: stillRunning})
-	}
 	var timeout <-chan time.Time
 	if r := c.run; r != nil && r.opts.ToolTimeout > 0 {
 		timer := time.NewTimer(r.opts.ToolTimeout - parkMargin(r.opts.ToolTimeout))
@@ -1029,7 +1016,8 @@ func (d *dispatcher) exclusive(name string) bool {
 	if _, ok := d.terminators[name]; ok {
 		return true
 	}
-	return d.cfg.Surface.Detached(name)
+	detacher, ok := d.cfg.Surface.(Detacher)
+	return ok && detacher.Detached(name)
 }
 
 // awaitSiblings holds an exclusive call until every other ordinary call of its
@@ -1127,6 +1115,7 @@ func (d *dispatcher) execute(c *callRec) (res ToolResult) {
 	if c.run != nil {
 		ctx = newCallContext(c.run.ctx, d.ctx)
 	}
+	// Every call is told the round it runs in ([CallRound]).
 	out, err := c.exec(withCallRound(ctx, c.round), llm.ToolCall{
 		ID: c.id, Name: c.name, Arguments: c.args,
 	})
@@ -1173,7 +1162,7 @@ func (d *dispatcher) conclude(c *callRec, res ToolResult, before uint64) {
 	case res.Suspend:
 		// THE PARK IS AT ONCE: its call stays unanswered, so nothing more
 		// of its response can come.
-		d.state, d.pend, d.suspended, d.payload = stateParked, stateOpen, c, res.SuspendPayload
+		d.state, d.pend, d.suspended = stateParked, stateOpen, c
 		d.closeDoneLocked()
 	case terminator && !res.Failed:
 		// A SUBMISSION THAT RAN FINISHED THE PHASE, whatever the run was
@@ -1379,7 +1368,7 @@ func (d *dispatcher) frame() {
 // answered with: what went wrong, and what to do about it, in words a model
 // acts on.
 //
-// EXPORTED FOR THE BRIDGE, which answers a box-mode run's calls with it: the
+// EXPORTED FOR THE BRIDGE, which answers an executor run's calls with it: the
 // rule — such a call is answered, never run on an empty object — is this
 // loop's, and a second copy of its wording is the one a model would learn to
 // fix differently depending on where its CLI ran.

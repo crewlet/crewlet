@@ -129,6 +129,7 @@ func (w *spentWorld) leasedBy(t *testing.T, lease func(string) (sandbox.Fence, b
 		NoteDeferred: func(string) {},
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Answers:  fleetAnswers(),
 		Audience: noAudience{}, Queue: w.board, Pending: w.store, Manager: w.manager,
 		Resume: resume, After: h.retries.after, Spent: h.dispatcher.SpendAnswer,
 		WasSpent: h.dispatcher.AnswerWorked,
@@ -188,12 +189,17 @@ func (w *spentWorld) claimedBy(t *testing.T, run sandbox.PendingRun, given *even
 	if err != nil {
 		t.Fatalf("encode the answer: %v", err)
 	}
-	if _, ok, err := w.store.RecordAnswer(ctx, "t1", run.LaunchID, sandbox.RecordedAnswer{
+	answer, err := fleetAnswers().Seal(run, sandbox.AnswerWords{
 		Text: payload.Answer, Via: types.AnswerViaOperator, By: payload.AnsweredBy,
 		ByKind: payload.AnsweredByKind, OperatorID: payload.OperatorID,
+	}, sandbox.RecordedAnswer{
 		EventIDs: []string{given.ID.String()},
 		Events:   []json.RawMessage{raw}, PostedAt: given.Timestamp, RecordedAt: time.Now().UTC(),
-	}, lease); err != nil || !ok {
+	})
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	if _, ok, err := w.store.RecordAnswer(ctx, "t1", run.LaunchID, answer, lease); err != nil || !ok {
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}
 	if _, ok, err := w.store.ClaimForResume(ctx, "t1", sandbox.RecordedAnswerTail(run.LaunchID), lease); err != nil || !ok {

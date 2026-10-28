@@ -25,7 +25,7 @@ import (
 // handler answers for nobody.
 func TestBudgetsRefuseACallerTheNodeCouldNotCheck(t *testing.T) {
 	t.Parallel()
-	cfg, err := config.ParseCompany([]byte("name: Acme\nproviders:\n  llm:\n    p: {model: m}\n" +
+	cfg, err := config.ParseCompany([]byte("name: Acme\nproviders:\n  llm:\n    p: {model: m}\n  sandbox: {fake: true}\n" +
 		"roles:\n  - name: CEO\n    handle: ceo\n    llm: p\nassistant:\n  token_budget: {day: 1000}\n"))
 	if err != nil {
 		t.Fatal(err)

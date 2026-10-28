@@ -36,17 +36,26 @@ import (
 // own loop over MCP and every call it makes through them, each model request
 // and its usage read off the CLI's record, and the fallback chain.
 //
-// The `%s` is that entry, under the key `scripted` every seat here names —
-// rendered by [goldenCompany], which is the one way to fill it.
+// The model entry is one of TWO, because the executor is not a run on this
+// host. Every
+// agent seat's executor is its coding CLI's own run in a box, and only a CLI
+// with an in-box runner can take one — which `custom` has not. So every seat
+// here names the chain `[scripted, coder]`: the scripted CLI at the head, which
+// every phase on this host takes (onboarding, the reviewer, workers, side passes), and
+// `coder`, a Claude Code entry, which the executor's launch takes, skipping the
+// head. Its run happens in a real `direct` box whose `claude` is this binary
+// again ([codingCLIEnv]), asking the SAME scripted model each round.
+//
+// The three `%s` are the box catalogue, the scripted entry and the coder entry
+// — rendered by [goldenCompany], which is the one way to fill them.
 const companyDoc = `
 name: Nimbus
 providers:
-  llm:
-%s
-roles:
+%s  llm:
+%s%sroles:
   - name: CEO
     handle: ceo
-    llm: scripted
+    llm: [scripted, coder]
   - name: Founder
     kind: human
     contact:
@@ -80,14 +89,26 @@ units:
     lead: ceo
 turn_engine:
   max_iterations: 1
-  max_tool_rounds: 3
 `
 
-// goldenCompany is the golden company document with its model entry driving
-// model's scripted CLI.
+// goldenCompany is the golden company document with its model entries driving
+// model's scripted CLI and its executor runs asking model too.
 func goldenCompany(model *scriptedModel) string {
-	return fmt.Sprintf(companyDoc, model.entry("scripted"))
+	return fmt.Sprintf(companyDoc, model.sandbox(), model.entry("scripted"), model.coder("coder"))
 }
+
+// ceoSeat is how the golden company's agent seat opens, for a fixture that
+// extends the seat by replacing it: its handle and the chain every seat here
+// names (see [companyDoc]).
+const ceoSeat = "    handle: ceo\n    llm: [scripted, coder]\n"
+
+// runPollInterval is how often a node here polls its executor runs for
+// completion ([engine.Options.SandboxPollInterval]).
+//
+// Sized in production against coding jobs that run for minutes; at that
+// cadence every turn here — each one's executor a run in a box that finishes
+// in a moment — would wait out a real tick before its review.
+const runPollInterval = 100 * time.Millisecond
 
 // tickInterval is the shared tick's cadence on a single node here. Short enough
 // that the spend rollup lands inside a test, long enough not to drown the
@@ -313,9 +334,11 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 	}
 	seedStore(t, &boot)
 
+	ln := bridgeListener(t, "")
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
-		Environment: nodeEnvironment(spec.env),
+		Environment: nodeEnvironment(spec.env), SandboxPollInterval: runPollInterval,
+		BoxHostURL: listenerURL(ln),
 	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
@@ -325,7 +348,7 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 		t.Fatalf("engine.Start: %v", err)
 	}
 
-	app, srv := serveAPI(t, e, &boot, nil)
+	app, srv := serveAPI(t, e, &boot, ln, nil)
 
 	return &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID()}
 }
@@ -373,8 +396,14 @@ type scriptedModel struct {
 
 	// stateDir is where the entry driving this model's CLI keeps its seats'
 	// homes ([scriptedEntry]) — this model's own, so no two nodes' entries
-	// share one unless they share the model.
+	// share one unless they share the model. The coder entry keeps its own
+	// beside them ([codingEntry]; each CLI under <state_dir>/<agent>), and
+	// the boxes its runs happen in and the shim they run live under it too.
 	stateDir string
+
+	// shim is the stand-in coding CLI a box's setup installs as its
+	// `claude`, answering from this model ([codingShim]).
+	shim string
 
 	// close shuts this model's HTTP server down. See [scriptedModel.listen]
 	// for why it is a field as well as a t.Cleanup.
@@ -507,7 +536,36 @@ func newScriptedModelIn(t *testing.T, stateDir string) *scriptedModel {
 	t.Helper()
 	m := &scriptedModel{stateDir: stateDir}
 	m.listen(t, m.serve)
+	m.installShim(t)
 	return m
+}
+
+// installShim writes the stand-in coding CLI answering from this model
+// ([codingShim]), for its company's boxes to install.
+//
+// ERRORF, NOT FATALF: a cluster member's model is built off the test's
+// goroutine, where Fatalf ends only that goroutine. A shim that is not there
+// fails every run's setup with the reason, and this says it first.
+func (m *scriptedModel) installShim(t *testing.T) {
+	t.Helper()
+	shim, err := writeCodingShim(filepath.Join(m.stateDir, "coding-cli"), m.url)
+	if err != nil {
+		t.Errorf("installing the stand-in coding CLI: %v", err)
+	}
+	m.shim = shim
+}
+
+// sandbox is the providers.sandbox block this model's company runs its
+// executors under: its boxes beside the model's state, each installing the
+// shim answering from this model ([codingSandbox]).
+func (m *scriptedModel) sandbox() string {
+	return codingSandbox(filepath.Join(m.stateDir, "boxes"), m.shim)
+}
+
+// coder is the providers.llm entry, under key, every seat's executor launches
+// on ([codingEntry]).
+func (m *scriptedModel) coder(key string) string {
+	return codingEntry(key, m.stateDir)
 }
 
 // listen serves handler as this model, for as long as the test runs.
@@ -730,18 +788,24 @@ func (m *scriptedModel) misrouted() []string {
 	return bad
 }
 
-// saw records a phase alone, for a scripted model that keeps no prompts —
-// see [newSandboxModel], whose handler never recorded them.
-func (m *scriptedModel) saw(phase string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.calls = append(m.calls, phase)
-}
-
 func (m *scriptedModel) seen() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]string(nil), m.calls...)
+}
+
+// promptsOf is the transcript every request of phase ran on, as the CLI read
+// it on stdin — where a note the turn read before the phase opens it.
+func (m *scriptedModel) promptsOf(phase string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	for i, seen := range m.calls {
+		if seen == phase {
+			out = append(out, m.prompts[i])
+		}
+	}
+	return out
 }
 
 // systemPrompts is what the model was actually shown, per request.

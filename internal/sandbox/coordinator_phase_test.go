@@ -53,7 +53,7 @@ func TestACollectedRunIsPublishedOnceWithItsTokens(t *testing.T) {
 	rig.runner.Finish(Result{
 		Success: true, Text: "fixed the flake", DeliveredRefs: []string{"pr/42"},
 		InputTokens: 9000, OutputTokens: 700, CacheReadTokens: 6000, CacheWriteTokens: 1500,
-		CostUSD: 0.42,
+		CostUSD: 0.42, Turns: 31,
 	})
 	rig.resumer.failWith(errors.New("the node lost the seat mid-resume"))
 
@@ -86,6 +86,11 @@ func TestACollectedRunIsPublishedOnceWithItsTokens(t *testing.T) {
 	}
 	if rec.CostUSD != 0.42 {
 		t.Errorf("cost_usd = %v, want what the run's CLI reported", rec.CostUSD)
+	}
+	// AND ITS CALLS: the model turns its CLI's loop took, as it reported
+	// them, which every spend figure counts this record by.
+	if rec.CLITurns != 31 {
+		t.Errorf("cli_turns = %d, want the run's 31", rec.CLITurns)
 	}
 	// THE IDENTITY: the executor iteration that launched it and the job.
 	if rec.TurnID != "t1" || rec.Iteration != rigIteration || rec.LaunchID != launched.LaunchID {
@@ -202,7 +207,7 @@ func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 			rig := newCoordRig(t)
 			run := rig.launch("t1")
 			rig.coordinator.countRun("swe", StatusRunning)
-			endpoint := receiver.RunEnv(run.TraceID, run.SpanID, run.TurnID, run.AgentHandle, time.Hour)["OTEL_EXPORTER_OTLP_ENDPOINT"]
+			endpoint := receiver.RunEnv(run.TraceID, run.SpanID, run.TurnID, run.AgentHandle, false, time.Hour)["OTEL_EXPORTER_OTLP_ENDPOINT"]
 			tokens := []string{
 				strings.TrimPrefix(endpoint, engine+"/otlp/"),
 				bridge.Mint("7c9e6679f4a14f3a9d1c0b2e8f5a6d3b~"+run.TurnID, time.Hour),
@@ -246,7 +251,7 @@ func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 
 // TWO LAUNCHES IN ONE TURN ARE TWO SPANS.
 //
-// A resumed executor may call run_sandbox again in the same iteration, which
+// A resumed turn may relaunch its executor in the same iteration, which
 // is a second job with its own start, its own spend and its own record. The
 // record of the first must not tell the second it was already published, and
 // the second's clock starts at its own launch rather than the row's creation.
@@ -261,7 +266,6 @@ func TestTwoLaunchesInOneTurnAreTwoSpans(t *testing.T) {
 		rig.resumer.mu.Unlock()
 		rig.now = rig.now.Add(time.Minute)
 		req := launchReq(r.TurnID)
-		req.ReuseBox = r.SandboxID
 		req.Model = "claude-opus-5"
 		if _, err := rig.launchVia(ctx, rig.manager, req); err != nil {
 			t.Errorf("relaunch: %v", err)
@@ -399,7 +403,7 @@ func TestARunsNegativeUsageIsReadAsNothingSpent(t *testing.T) {
 	rig.runner.Finish(Result{
 		Success: true, Text: "done",
 		InputTokens: -50_000, OutputTokens: 700, CacheReadTokens: -1, CacheWriteTokens: 300,
-		CostUSD: -4.2,
+		CostUSD: -4.2, Turns: -3,
 	})
 
 	payload, ev := rig.completion("t1")
@@ -420,5 +424,10 @@ func TestARunsNegativeUsageIsReadAsNothingSpent(t *testing.T) {
 		t.Errorf("the record reads %d in / %d out / %d total, cache %d/%d, $%v; want "+
 			"0/700/700, 0/300, $0", rec.InputTokens, rec.OutputTokens, rec.TotalTokens,
 			rec.CacheReadTokens, rec.CacheWriteTokens, rec.CostUSD)
+	}
+	// A NEGATIVE TURN COUNT IS NONE REPORTED, which counts the run as the
+	// one call the engine asked for rather than as calls taken off.
+	if rec.CLITurns != 0 {
+		t.Errorf("cli_turns = %d, want a negative count read as none", rec.CLITurns)
 	}
 }

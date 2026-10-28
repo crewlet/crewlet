@@ -51,8 +51,8 @@ import (
 // ([Engine.withCards]). A resumed segment adds the collected coding run it
 // resumed from, which no phase of the engine's own ran — and what the ENGINE
 // spent on that run while no segment was running (turnTelemetry.jobEngine):
-// a box-mode run's bridged calls, whose auxiliary rewrites and delegated
-// workers are counted on the run's own meter and written to its row with
+// a run's bridged calls, whose auxiliary rewrites and delegated workers are
+// counted on the run's own meter and written to its row with
 // every call ([runner.BridgedSpend]), and the condensation of the run's
 // report, failure or question at collection, which the coordinator carries to
 // this resume ([sandbox.ResumeRequest.Engine]). Each figure lands beside the
@@ -131,16 +131,42 @@ func (c segmentCharge) onWorklet() bool {
 // segment's spend lost; and the rebase is recorded before the attempt writes
 // anything, so a retry of the same segment reads it back and derives the same
 // id, which is what collapses a charge landed twice.
-func segmentOpID(runID, launch string, resumed bool, rebasedTo time.Time) string {
+func segmentOpID(runID, launch string, segment segmentKind, rebasedTo time.Time) string {
 	at := rebasedTo
 	if at.IsZero() {
 		at, _ = statelog.OpMintedAt(runID)
 	}
-	segment := "dispatch"
-	if resumed {
-		segment = "resume"
+	return statelog.DeriveOpID(at, "turn-spend", runID, string(segment), launch)
+}
+
+// segmentKind is which segment of a run a charge is for — part of its
+// operation id ([segmentOpID]).
+type segmentKind string
+
+const (
+	// segmentDispatch is the segment a trigger started.
+	segmentDispatch segmentKind = "dispatch"
+	// segmentResume is a segment re-entered from a collected run or a
+	// person's answer, told apart by the launch it resumed from.
+	segmentResume segmentKind = "resume"
+	// segmentStop is the segment that only CLOSES a turn a person stopped
+	// while it was parked on its run, or before its park could land
+	// ([Engine.closeStopped]). Its own kind, because it follows a segment
+	// that already charged under the dispatch's or a resume's id: under
+	// either, the tracker's ledger would collapse the close into the park
+	// and the task's card would go on saying the turn is parked.
+	segmentStop segmentKind = "stop"
+)
+
+// segment is which segment this telemetry describes.
+func (t turnTelemetry) segment() segmentKind {
+	switch {
+	case t.closesStop:
+		return segmentStop
+	case t.resumed:
+		return segmentResume
 	}
-	return statelog.DeriveOpID(at, "turn-spend", runID, segment, launch)
+	return segmentDispatch
 }
 
 // chargeFor decides what this segment charges: its item from the turn's rules,
@@ -159,13 +185,15 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 			job.WorkerInput,
 		Output: spend.OutputTokens + spend.WorkerOutput + spend.JudgeOutput + t.jobOutput +
 			job.WorkerOutput,
-		CacheRead:  spend.CacheRead,
-		CacheWrite: spend.CacheWrite,
+		CacheRead:  spend.CacheRead + t.jobCacheRead,
+		CacheWrite: spend.CacheWrite + t.jobCacheWrite,
 		WallMs:     int(max(ended.Sub(t.startedAt), 0) / time.Millisecond),
 		Workers:    spend.Workers + job.Workers,
 		SentBack:   spend.SentBack,
 	}, t.auxSpent.Total()), auxSpentOf(job.Aux))
-	if !t.resumed {
+	// ONE TURN, COUNTED BY ITS DISPATCH: a resumed segment and a stop's
+	// close are more of a turn already counted.
+	if t.segment() == segmentDispatch {
 		own.Turns = 1
 	}
 	total := addUncharged(own, t.uncharged)
@@ -179,7 +207,7 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 	// the seat's counters like any call the meter does not carry.
 	cardUse := t.aux()
 	cardUse.Tally, cardUse.Budget = nil, nil
-	charge := segmentCharge{item: item, opID: segmentOpID(t.runID, t.launchID, t.resumed, t.rebasedTo),
+	charge := segmentCharge{item: item, opID: segmentOpID(t.runID, t.launchID, t.segment(), t.rebasedTo),
 		aux: cardUse, ended: ended}
 	if res.Suspended && t.measuredWhole() {
 		// WHAT THE TURN HAS MEASURED OF ITSELF, handed on — but only by a
@@ -218,17 +246,46 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 	return charge
 }
 
+// closingAfter is the telemetry of the segment that CLOSES a turn on the frame
+// whose park a person's stop refused ([Engine.closeStoppedAtPark]): the turn's
+// identity and what it is on, with nothing of the parking segment's own spend —
+// no collected job, no engine spend on one, a fresh auxiliary tally and a span
+// that starts at the close — and what that segment handed on to the segment
+// that ends the turn: its carry, where its charge went to nothing, and its
+// measurement of the turn.
+func (t turnTelemetry) closingAfter(parked segmentCharge, at time.Time) turnTelemetry {
+	t.jobInput, t.jobOutput, t.jobCacheRead, t.jobCacheWrite = 0, 0, 0, 0
+	t.jobEngine = sandbox.EngineSpend{}
+	t.auxSpent = auxspend.NewTally()
+	t.startedAt = at
+	t.uncharged = parked.carry
+	t.soFar = parked.soFar
+	t.closesStop = true
+	return t
+}
+
 // segmentOutcome is how a segment ended, in the vocabulary a task's turn list
-// reads: parked on a coding run, failed, or the turn's own decision.
+// reads: parked on a coding run, stopped by a person, failed, or the turn's own
+// decision.
+//
+// STOPPED IS NOT FAILED, here as on the turn's completion
+// ([Engine.publishTurnCompleted]): a stop reaches this frame as an error, and
+// read as one the task's card drew a turn somebody deliberately ended as a
+// turn that broke.
 func segmentOutcome(res turn.Result, err error) string {
 	switch {
 	case res.Suspended:
 		return "suspended"
+	case turn.Stopped(err):
+		return segmentStopped
 	case err != nil || res.Decision == phase.Failed:
 		return string(phase.Failed)
 	}
 	return string(res.Decision)
 }
+
+// segmentStopped is the outcome of a segment a person's stop ended.
+const segmentStopped = "stopped"
 
 // withAux adds a segment's in-turn auxiliary spend to its charge. Tokens only:
 // an auxiliary call is not a round, and the cache counts are a breakdown of the
@@ -264,7 +321,7 @@ func addUncharged(s worklet.TurnSpend, u *execstate.Uncharged) worklet.TurnSpend
 	return s
 }
 
-// unchargedOf is a spend in the suspended conversation's own shape.
+// unchargedOf is a spend in the parked turn state's own shape.
 func unchargedOf(s worklet.TurnSpend) *execstate.Uncharged {
 	return &execstate.Uncharged{
 		Turns: s.Turns, Rounds: s.Rounds, Input: s.Input, Output: s.Output,

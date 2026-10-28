@@ -24,7 +24,7 @@
 // A gate only one of them has BY DESIGN stays in that package's own tests: the
 // tool loop's round cap, its terminator barrier, its pause for a person's note
 // and its answers withheld from a CLI it is stopping; the bridge's credential,
-// its route and the durable ledger a resume reads. A box-mode run's loop is its
+// its route and the durable ledger a resume reads. A detached run's loop is its
 // CLI's own, and its phase is settled when the run is collected.
 //
 // # Through a real session, as a CLI calls
@@ -95,10 +95,11 @@ type Tool struct {
 	// Run is what the tool does, and its output.
 	Run func(ctx context.Context, call ToolCall) string
 
-	// Suspends marks a tool whose work outlives its call, as run_sandbox's
-	// does: its result asks the run to park with the call unanswered. The
-	// run a factory serves is one that cannot be resumed — a tool loop's
-	// that may not suspend, a box's — so the dispatcher refuses it.
+	// Suspends marks a tool whose work outlives its call, as a Dashboard
+	// Assistant proposal's does: its result asks the run to park with the
+	// call unanswered. The run a factory serves is one that cannot be
+	// resumed — a tool loop's that may not suspend, a box's — so the
+	// dispatcher refuses it.
 	Suspends bool
 }
 

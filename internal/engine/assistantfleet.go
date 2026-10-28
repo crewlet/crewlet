@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE DASHBOARD ASSISTANT ACROSS THE FLEET: this node's half of a turn's
@@ -25,26 +26,45 @@ func AssistantFleet(e *Engine) (*live.Fleet, error) {
 	if e.backends == nil || e.backends.Queue == nil || e.backends.Coord == nil {
 		return nil, nil
 	}
-	ring := recordKeyring(e.boot)
-	frames, err := signedask.NewOneWay[live.Sealed](live.FrameChannel, ring)
+	wires, err := newAssistantWires(recordKeyring(e.boot))
 	if err != nil {
-		return nil, fmt.Errorf("engine: the assistant's frame channel: %w", err)
-	}
-	replays, err := signedask.New[live.ReplayRequest, live.ReplayReply](live.ReplayChannel, ring)
-	if err != nil {
-		return nil, fmt.Errorf("engine: the assistant's replay channel: %w", err)
-	}
-	stops, err := signedask.New[live.StopRequest, live.StopReply](live.StopChannel, ring)
-	if err != nil {
-		return nil, fmt.Errorf("engine: the assistant's stop channel: %w", err)
+		return nil, err
 	}
 	return live.NewFleet(live.FleetOptions{Node: e.Node().ID(), Broker: e.backends.Queue,
-		Roster: nodeRoster{coord: e.backends.Coord}, Cipher: e.cipher, Frames: frames,
-		Replays: replays, Stops: stops,
+		Roster: nodeRoster{coord: e.backends.Coord}, Cipher: e.cipher, Frames: wires.frames,
+		Replays: wires.replays, Stops: wires.stops,
 		// THE FLEET'S READ BUDGET, the one every scatter a person waits on
 		// is bounded by: a resumed stream waits no longer for the running
 		// node than a history read does.
 		AskBudget: eventfan.FleetReadBudget})
+}
+
+// assistantWires are the assistant's three channels across the fleet, each
+// over the fleet keyring in a key domain of its own: a turn's frames, sealed
+// one way, and the replay and stop a node asks the running node for.
+type assistantWires struct {
+	frames  *signedask.OneWay[live.Sealed]
+	replays *signedask.Channel[live.ReplayRequest, live.ReplayReply]
+	stops   *signedask.Channel[live.StopRequest, live.StopReply]
+}
+
+// newAssistantWires builds the three, where [AssistantFleet] builds them and
+// where the gate that holds every signed channel's domains apart reads them.
+func newAssistantWires(ring statelog.Keyring) (assistantWires, error) {
+	var (
+		w   assistantWires
+		err error
+	)
+	if w.frames, err = signedask.NewOneWay[live.Sealed](live.FrameChannel, ring); err != nil {
+		return assistantWires{}, fmt.Errorf("engine: the assistant's frame channel: %w", err)
+	}
+	if w.replays, err = signedask.New[live.ReplayRequest, live.ReplayReply](live.ReplayChannel, ring); err != nil {
+		return assistantWires{}, fmt.Errorf("engine: the assistant's replay channel: %w", err)
+	}
+	if w.stops, err = signedask.New[live.StopRequest, live.StopReply](live.StopChannel, ring); err != nil {
+		return assistantWires{}, fmt.Errorf("engine: the assistant's stop channel: %w", err)
+	}
+	return w, nil
 }
 
 // nodeRoster is the fleet's roster as the assistant asks it: whether a node

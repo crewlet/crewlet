@@ -137,7 +137,13 @@ function mount(turns: TurnRow[], agents: unknown[] = []) {
   );
 }
 
-const SUMMARIES = ["the finished one", "the parked one", "the running one", "the stopped one"];
+const SUMMARIES = [
+  "the finished one",
+  "the parked one",
+  "the running one",
+  "the stopped one",
+  "the halted one",
+];
 
 /** The widest element around one summary that holds no other row's — its row,
  *  whatever markup the table draws a row with. */
@@ -161,6 +167,11 @@ test("a parked turn is marked parked, and an open one running or not settled by 
       row("t-parked", "the parked one", { parked: true, duration_ms: 3_000 }),
       row("t-live", "the running one", {}),
       row("t-dead", "the stopped one", {}),
+      row("t-halted", "the halted one", {
+        complete: true,
+        stopped: true,
+        duration_ms: 2_000,
+      }),
     ],
     [
       {
@@ -182,6 +193,10 @@ test("a parked turn is marked parked, and an open one running or not settled by 
   expect(rowOf("the stopped one").textContent).toContain("not settled");
   expect(rowOf("the stopped one").textContent).not.toContain("running");
   expect(rowOf("the finished one").textContent).not.toMatch(/parked|running|settled/);
+  // A TURN A PERSON STOPPED SAYS SO, and never as a failure.
+  expect(rowOf("the halted one").textContent).toContain("stopped");
+  expect(rowOf("the halted one").textContent).not.toMatch(/failure|parked|running/);
+  expect(rowOf("the finished one").textContent).not.toContain("stopped");
 });
 
 /**

@@ -108,7 +108,7 @@ func ToolReply(surface string) Reply { return Reply{Kind: ReplyTool, Surface: su
 // Valid reports whether this is one of the three real answers.
 //
 // [ReplyUnset] is not one, deliberately — see its own doc. An unrecognised
-// value off the wire is not one either: a pending sandbox run carries its
+// value off the wire is not one either: a pending run carries its
 // Reply as a stored string, and a build that reads a value it does not know
 // must say so rather than fall through to whichever branch happens to be
 // last.
@@ -117,7 +117,7 @@ func (r Reply) Valid() bool {
 }
 
 // String encodes the obligation for the one place it is stored rather than
-// passed: a suspended sandbox run's row, which outlives the process that
+// passed: a parked run's row, which outlives the process that
 // parked it. `tool:mattermost`, or the bare kind when no surface is named.
 func (r Reply) String() string {
 	if r.Surface == "" {

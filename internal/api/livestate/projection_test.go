@@ -196,7 +196,7 @@ func sandboxPayload(turnID string) map[string]any {
 	return map[string]any{
 		"turn_id": turnID, "role": "Coder", "agent_handle": "coder",
 		"agent_id": "a-9", "coding_agent": "claude", "sandbox_id": "sb-1",
-		"task": "fix the build",
+		"task": "fix the build", "provider_key": "spare", "model": "claude-haiku",
 	}
 }
 
@@ -211,6 +211,11 @@ func TestASandboxRunIsTrackedThenDropped(t *testing.T) {
 	}
 	if runs[0].Status != "running" || runs[0].Task != "fix the build" {
 		t.Errorf("entry = %+v", runs[0])
+	}
+	// THE MEMBER THE RUN WAS LAUNCHED ON, which a running run is drawn with.
+	if runs[0].ProviderKey != "spare" || runs[0].Model != "claude-haiku" {
+		t.Errorf("entry names %q/%q, want the member the run was launched on",
+			runs[0].ProviderKey, runs[0].Model)
 	}
 
 	s.Apply(env("sandbox_run_completed", map[string]any{"turn_id": "tn-1"}))
@@ -330,6 +335,25 @@ func TestAFailedRunLeavesTheSandboxesSet(t *testing.T) {
 	}
 	if runs := s.ActiveSandboxes(); len(runs) != 0 {
 		t.Errorf("runs = %+v, want the lost run gone", runs)
+	}
+}
+
+// A STOPPED RUN LEAVES THE SET AT ONCE: a person who paused the seat to stop
+// it is looking at the panel, and a run drawn as running until the next
+// reconcile reads as a stop that did not work.
+func TestAStoppedRunLeavesTheSandboxesSetAtOnce(t *testing.T) {
+	t.Parallel()
+	s := sandboxState(t)
+	s.Apply(env("sandbox_run_started", sandboxPayload("tn-1")))
+	change := s.Apply(env("sandbox_run_stopped", map[string]any{
+		"turn_id": "tn-1", "role": "Coder", "stopped_by": "jane", "stopped_by_kind": "human",
+	}, id("e-stopped")))
+
+	if !change.Sandboxes {
+		t.Error("a stopped run did not move the sandbox set")
+	}
+	if runs := s.ActiveSandboxes(); len(runs) != 0 {
+		t.Errorf("runs = %+v, want the stopped run gone", runs)
 	}
 }
 

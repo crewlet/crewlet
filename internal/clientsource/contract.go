@@ -140,9 +140,8 @@ var contract = []Entry{
 
 	// models.ts
 	{"CLIAuthMode", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
-	{"CLIMode", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"DEFAULT_CLI_AGENT", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
-	{"DEFAULT_CLI_MODE", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"EXECUTOR_CLI_AGENTS", ReadLiteral, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"DEFAULT_CLI_AUTH_MODE", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"DEFAULT_CLI_TIMEOUT_SECONDS", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"DEFAULT_CLI_MAX_CONCURRENT", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
@@ -281,11 +280,11 @@ var contract = []Entry{
 	{"MAX_ARTIFACT_ROOMS", ReadScalar, "internal/api/stream.TestTheDashboardJoinsNoMoreRoomsThanTheEngineHolds"},
 	{"SeatActivity", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
 	{"StoppedReason", ReadUnion, "internal/api/livestate.TestTheDashboardKnowsExactlyTheSeatStatesTheEngineSends"},
-	{"DELEGATE_TOOL", ReadScalar, "internal/agent/subagent.TestTheDashboardCountsWorkersOnTheCallTheEngineMakes"},
-	{"DELEGATE_TASKS", ReadScalar, "internal/agent/subagent.TestTheDashboardCountsWorkersOnTheCallTheEngineMakes"},
 
 	// steer.ts
 	{"STEER_NOTE_MAX_RUNES", ReadScalar, "internal/agent/steer.TestTheDashboardBoundsANoteAtTheEnginesCap"},
+	{"STEER_READS", ReadLiteral, "internal/agent/steer.TestTheDashboardKnowsWhenANoteIsRead"},
+	{"STEER_BOUNDARIES", ReadLiteral, "internal/events/types.TestTheDashboardNamesEverySteerBoundary"},
 
 	// sandbox.ts
 	{"SANDBOX_TAIL_OUTCOMES", ReadLiteral, "internal/sandbox.TestTheDashboardKnowsEveryTailOutcome"},

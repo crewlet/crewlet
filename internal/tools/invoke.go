@@ -17,9 +17,11 @@ import (
 // dispatch), and a replay of a run's submission. So a first-party call is
 // held to its tool's schema whoever makes it, and a caller added later
 // inherits the check by calling a tool at all: a test walks the tree and
-// refuses a tool's Call, CallForTurn or CallDetached invoked anywhere else
-// (a tool delegating to its own variant, and a wrapper forwarding to the tool
-// it wraps, excepted).
+// refuses a tool's Call or CallForTurn invoked anywhere else (a tool
+// delegating to its own variant, and a wrapper forwarding to the tool it
+// wraps, excepted). A seat's executor run is a phase's surface too: every call
+// its CLI makes over the tool bridge (internal/api/mcpbridge) is admitted to
+// the run's surface and comes here, with no check of the bridge's own.
 
 // Invocation is one call of a tool, as its caller makes it.
 type Invocation struct {
@@ -31,10 +33,9 @@ type Invocation struct {
 	// entry made of them ([ArgsOf]), the form every step of the call reads.
 	Args toolargs.Args
 
-	// AsSeat calls the tool as a phase's surface does: a [Detached] tool
-	// detached, a [SeatCallable] one for Turn, any other through its Call.
-	// False calls every tool through its Call, the MCP contract, as a
-	// caller with no turn does.
+	// AsSeat calls the tool as a phase's surface does: a [SeatCallable]
+	// one for Turn, any other through its Call. False calls every tool
+	// through its Call, the MCP contract, as a caller with no turn does.
 	AsSeat bool
 	Turn   *turnctx.Turn
 
@@ -67,7 +68,7 @@ func ArgsOf(tool Callable, thirdParty bool, raw map[string]any) toolargs.Args {
 // it runs (refused is true, and the tool was never called), and every other
 // finding rides on the tool's own answer ([withFaults]). An error is the
 // caller's context ending, as a tool's own call reports it.
-func Invoke(ctx context.Context, in Invocation) (res DetachedResult, refused bool, err error) {
+func Invoke(ctx context.Context, in Invocation) (res Result, refused bool, err error) {
 	var faults []ArgFault
 	if !in.ThirdParty {
 		faults = CheckArgs(in.Name, in.Tool.Parameters(), in.Args.Map())
@@ -76,15 +77,14 @@ func Invoke(ctx context.Context, in Invocation) (res DetachedResult, refused boo
 		// THE PERSON'S WORDS beside the model's (ADR-0060): a surface
 		// answering a person answers this, never the sentence above,
 		// which names arguments.
-		return DetachedResult{Result: Result{Output: misreadAnswer(in.Name, faults), Failed: true,
-			Cause: RefusalInvalid, PersonRefusal: caveat.ValueInWrongForm()}}, true, nil
+		return Result{Output: misreadAnswer(in.Name, faults), Failed: true,
+			Cause: RefusalInvalid, PersonRefusal: caveat.ValueInWrongForm()}, true, nil
 	}
 	res, err = call(ctx, in)
 	if err != nil {
 		return res, false, err
 	}
-	res.Result = withFaults(in, res.Result, faults)
-	return res, false, nil
+	return withFaults(in, res, faults), false, nil
 }
 
 // call is THE ONE PLACE a tool's own call is made, telling the tool who is
@@ -101,21 +101,11 @@ func Invoke(ctx context.Context, in Invocation) (res DetachedResult, refused boo
 // widening the signature would put a turn-shaped argument on every bridged
 // tool to be ignored. This way the two kinds of tool coexist under one
 // registry, and the one that needs the fact asks for it.
-func call(ctx context.Context, in Invocation) (DetachedResult, error) {
-	if !in.AsSeat {
-		res, err := in.Tool.Call(ctx, in.Args.Map())
-		return DetachedResult{Result: res}, err
+func call(ctx context.Context, in Invocation) (Result, error) {
+	if t, ok := in.Tool.(SeatCallable); ok && in.AsSeat {
+		return t.CallForTurn(ctx, in.Turn, in.Args.Map())
 	}
-	switch t := in.Tool.(type) {
-	case Detached:
-		return t.CallDetached(ctx, in.Turn, in.Args.Map())
-	case SeatCallable:
-		res, err := t.CallForTurn(ctx, in.Turn, in.Args.Map())
-		return DetachedResult{Result: res}, err
-	default:
-		res, err := in.Tool.Call(ctx, in.Args.Map())
-		return DetachedResult{Result: res}, err
-	}
+	return in.Tool.Call(ctx, in.Args.Map())
 }
 
 // withFaults is a tool's answer carrying the findings its call's arguments

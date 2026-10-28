@@ -113,15 +113,16 @@ type Role struct {
 	// phase without restating the block.
 	//
 	// There is no executor entry, and that is not an omission: `llm` IS the
-	// executor's chain. The turn's work happens in one conversation, so a
-	// second field naming the model that conversation runs on would be two
-	// spellings of one setting — and the phases that remain here are the
-	// SATELLITES an operator points somewhere cheaper.
+	// executor's chain. The turn's work happens in one run, so a second
+	// field naming the model that run is on would be two spellings of one
+	// setting — and the phases that remain here are the SATELLITES an
+	// operator points somewhere cheaper. They are also where a CLI with no
+	// in-box runner serves a seat: only claude-code and opencode can be its
+	// executor ([CodingAgents]), and any CLI can be its reviewer.
 	LLMReview    ProviderKeys `yaml:"llm_review,omitempty" json:"llm_review,omitzero" desc:"Provider chain for the reviewer."`
 	LLMSubagent  ProviderKeys `yaml:"llm_subagent,omitempty" json:"llm_subagent,omitzero" desc:"Provider chain for spawned sub-agents."`
 	LLMAuxiliary ProviderKeys `yaml:"llm_auxiliary,omitempty" json:"llm_auxiliary,omitzero" desc:"Cheap model for reflection and summaries."`
 	LLMJudge     ProviderKeys `yaml:"llm_judge,omitempty" json:"llm_judge,omitzero" desc:"Cheap model for the round-cap extension judge."`
-	LLMSandbox   ProviderKeys `yaml:"llm_sandbox,omitempty" json:"llm_sandbox,omitzero" desc:"Model the sandboxed coding agent runs on."`
 
 	// LearningEnabled overrides the system-wide learning setting for this
 	// seat alone. Unset inherits it; false skips reflection for this
@@ -136,9 +137,9 @@ type Role struct {
 	// once per seat.
 	MCPEnv org.MCPEnv `secret:"true" yaml:"mcp_env,omitempty" json:"mcp_env,omitempty" desc:"Per-seat MCP credentials: env vars (stdio) or headers (http)."`
 
-	// Sandbox is the per-seat code-runtime gate. Absent means the seat is
-	// never offered the sandbox tool at all.
-	Sandbox *RoleSandbox `yaml:"sandbox,omitempty" json:"sandbox,omitempty" desc:"Per-seat code sandbox gate. Absent = never offered."`
+	// Sandbox is what this seat's executor box reads beyond the engine-wide
+	// catalogue. See [RoleSandbox].
+	Sandbox *RoleSandbox `yaml:"sandbox,omitempty" json:"sandbox,omitempty" desc:"What this seat's executor box reads beyond providers.sandbox: setup, env, optional_keys, mcp, pause_ttl_seconds, max_turns. Absent = the engine-wide settings only."`
 
 	// Placement constrains which nodes may run this seat; absent is
 	// anywhere, which is what a single-process deployment always means.
@@ -254,52 +255,48 @@ func (p *RolePlacement) validate(path Path) error {
 	return probs.err()
 }
 
-// RoleSandbox is the authored per-seat code-runtime gate.
+// RoleSandbox is the authored settings of one seat's EXECUTOR BOX: what it
+// reads beyond the engine-wide catalogue.
+//
+// NOT A GATE, and nothing here places the box. Every agent seat's executor is
+// its coding CLI's own run, in the cell the providers.llm entry it launches on
+// names (that entry's `run_in`, else providers.sandbox.default_run_in), on
+// that entry's own CLI — so neither the cell nor the runner is a seat's to
+// say. What is left is what differs from one seat's work to another's: its
+// own provisioning and environment, the tool servers its box is given, how
+// long a box blocked on a person stays paused, and how many rounds one run
+// may take.
 type RoleSandbox struct {
-	Enabled bool `yaml:"enabled,omitempty" json:"enabled" desc:"Offer this seat the sandbox tool."`
-
-	// RunIn is WHERE this seat's code work runs, naming one cell of
-	// providers.sandbox. Empty inherits providers.sandbox.default_run_in.
-	//
-	// This is per-seat because it is a decision about ONE SEAT'S WORK: the
-	// seat that must use the operator's own subscription login and the seat
-	// whose generated code must never touch the engine host are different
-	// seats, and the block-wide `type:` this replaced could answer only for
-	// both at once.
-	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b|self" desc:"Where this seat's code work runs; self = inside its own box-mode executor run. Empty inherits providers.sandbox.default_run_in."`
-
-	// CodingAgent overrides the provider-wide default for this seat only.
-	// Empty inherits it, resolved at LAUNCH rather than at config time, so
-	// a provider swap reaches seats that never named one.
-	CodingAgent CodingAgent `yaml:"coding_agent,omitempty" json:"coding_agent,omitempty" js:"enum=claude-code|opencode" desc:"Override the provider default for this seat."`
-
-	// PauseTTLSeconds bounds how long this seat's blocked sandbox stays
-	// paused. UNSET inherits the provider default; an explicit 0 means
-	// never pause — tear the box down as soon as the run blocks, and
-	// re-seed from the pushed branch when the answer arrives.
+	// PauseTTLSeconds bounds how long this seat's box, blocked on a
+	// person's answer, stays paused. UNSET inherits the provider default;
+	// an explicit 0 means never pause — tear the box down as soon as the
+	// run blocks, and re-seed from the pushed branch when the answer
+	// arrives.
 	//
 	// A POINTER, because those are three states and a float64 has only
 	// two: an unset field's zero value would read as "never pause", so
 	// every seat that said nothing would silently lose its checkout the
-	// moment a coding agent asked a question.
+	// moment its run asked a question.
 	//
 	// A NEGATIVE VALUE IS REFUSED. It is never "no expiry" — an unbounded
 	// pause is the leak this knob exists to prevent — and inherit is said by
 	// leaving the field out.
 	PauseTTLSeconds *float64 `yaml:"pause_ttl_seconds,omitempty" json:"pause_ttl_seconds,omitempty" js:"min=0" desc:"Paused-box TTL. Unset = provider default; 0 = never pause."`
 
-	// MaxTurns caps how many agentic rounds this seat's coding runs may
-	// take. UNSET inherits providers.sandbox.default_max_turns; an explicit
-	// 0 means uncapped, which is how a seat opts OUT of a company-wide cap.
+	// MaxTurns caps how many agentic rounds one of this seat's executor
+	// runs may take. UNSET inherits providers.sandbox.default_max_turns; an
+	// explicit 0 means uncapped, which is how a seat opts OUT of a
+	// company-wide cap.
 	//
 	// A POINTER, for the same reason pause_ttl_seconds is one: those are
 	// three states and an int has two. Without it, the one seat whose work
 	// legitimately runs long — a migration, a large refactor — could not
 	// escape a cap set for everybody else, because its "no cap" and its
 	// "say nothing" would be the same zero.
-	MaxTurns *int `yaml:"max_turns,omitempty" json:"max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for this seat's coding runs. Unset = provider default; 0 = uncapped."`
+	MaxTurns *int `yaml:"max_turns,omitempty" json:"max_turns,omitempty" js:"min=0" desc:"Agentic-round cap for one of this seat's executor runs. Unset = providers.sandbox.default_max_turns; 0 = uncapped."`
 
-	// MCP scopes which of the seat's MCP servers the coding agent gets.
+	// MCP scopes which of the seat's MCP servers its box gets, beside the
+	// seat's own tool bridge, which every executor box is given.
 	//
 	// Scoping is at the SERVER level only, and that is a platform fact
 	// rather than a simplification: the coding CLIs offer no per-tool
@@ -307,32 +304,36 @@ type RoleSandbox struct {
 	// it is given.
 	MCP RoleSandboxMCP `yaml:"mcp,omitempty" json:"mcp,omitzero"`
 
-	// Env is injected into this seat's sandbox run. External service
+	// Env is injected into this seat's executor run. External service
 	// tokens are DECLARED here — the engine names no tool-specific
 	// variable of its own, and only LLM credentials derive automatically.
-	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Env for this seat's sandbox run; declare external tokens here."`
+	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Env for this seat's executor run; declare external tokens here."`
 
 	// OptionalKeys names the keys of Env whose value may resolve to nothing,
-	// such a key then being left out of the run environment rather than
-	// refusing the coding run.
+	// such a key then being left out of the run environment quietly.
 	//
-	// The same declaration a tool server makes ([MCPServer.OptionalKeys]),
-	// and for the same reason: every other reference in a coding run's
-	// environment must resolve before a `run_sandbox` box is started, since
-	// a run handed an empty code-host token clones nothing and pushes
-	// nothing after spending its box, and nothing in a value can say that a
-	// setting — a test DATABASE_URL, a proxy — may be absent. A setup step's
-	// env and files declare theirs on the step.
-	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty" desc:"Keys of env whose value may resolve to nothing; such a key is left out of the run rather than refusing it."`
+	// AN EXECUTOR RUN STARTS EITHER WAY. It is the seat's turn itself rather
+	// than a tool call the turn chose, so refusing it for a code-host token
+	// a pass may mint in a minute would fail every message the seat could
+	// answer meanwhile. Any other key that resolves to nothing is left out
+	// too, and the run's start is logged naming it
+	// (sandbox_env_unresolved), because a run handed no code-host token
+	// clones nothing and pushes nothing, and that line is how an operator
+	// finds out why. What this list says is which absences are expected —
+	// a test DATABASE_URL, a proxy — so the line names only the ones that
+	// are not: the declaration a tool server makes
+	// ([MCPServer.OptionalKeys]). A setup step's env and files declare
+	// theirs on the step.
+	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty" desc:"Keys of env whose value may resolve to nothing; such a key is left out quietly rather than logged as a gap in the run's environment."`
 
 	// Setup is this seat's own provisioning, applied after the
 	// engine-wide steps.
 	Setup []SandboxSetupStep `yaml:"setup,omitempty" json:"setup,omitempty" desc:"Per-seat provisioning steps, applied after the engine-wide ones."`
 }
 
-// RoleSandboxMCP is the server-level scope for a seat's coding agent.
+// RoleSandboxMCP is the server-level scope for a seat's executor box.
 type RoleSandboxMCP struct {
-	Servers []string `yaml:"servers,omitempty" json:"servers,omitempty" desc:"MCP server names the coding agent may use."`
+	Servers []string `yaml:"servers,omitempty" json:"servers,omitempty" desc:"MCP server names this seat's executor box is given, beside its tool bridge."`
 }
 
 // IsZero lets an unset scope drop out of a round trip.
@@ -340,17 +341,6 @@ func (m RoleSandboxMCP) IsZero() bool { return len(m.Servers) == 0 }
 
 func (s *RoleSandbox) validate(path Path) error {
 	var p problems
-	if s.RunIn != "" && !slices.Contains(Placements, s.RunIn) {
-		// Only the SPELLING is checked here. Whether the cell is actually
-		// configured is a question about providers.sandbox, and a seat is
-		// validated without it — see (*Company).validateSandboxPlacement.
-		p.add(at(path, "run_in"), ErrUnknownValue, "%q (want %s)",
-			s.RunIn, names(Placements))
-	}
-	if s.CodingAgent != "" && !slices.Contains(CodingAgents, s.CodingAgent) {
-		p.add(at(path, "coding_agent"), ErrUnknownValue, "%q (want %s)",
-			s.CodingAgent, names(CodingAgents))
-	}
 	if s.PauseTTLSeconds != nil && *s.PauseTTLSeconds < 0 {
 		p.add(at(path, "pause_ttl_seconds"), ErrOutOfRange,
 			"%g (a paused box cannot be kept a negative time, and an unbounded "+
@@ -363,9 +353,6 @@ func (s *RoleSandbox) validate(path Path) error {
 			"%d (a round cap cannot be negative; omit the field to inherit "+
 				"the provider default, or set 0 for uncapped)", *s.MaxTurns)
 	}
-	// A gate that is off with provisioning under it is refused by the
-	// company ([Company.validateSandboxGates]), not here: whether any of it
-	// is read turns on how the seat's executor runs, which a gate cannot see.
 	for i := range s.Setup {
 		p.wrap(s.Setup[i].validate(idx(at(path, "setup"), i)))
 	}
@@ -744,7 +731,6 @@ func (r *Role) Seat() *org.Role {
 		LLMSubagent:          pick(r.LLMSubagent, r.LLM.Subagent),
 		LLMAuxiliary:         pick(r.LLMAuxiliary, r.LLM.Auxiliary),
 		LLMJudge:             pick(r.LLMJudge, r.LLM.Judge),
-		LLMSandbox:           pick(r.LLMSandbox, r.LLM.Sandbox),
 		LearningEnabled:      r.LearningEnabled,
 		Workers:              append([]string(nil), r.Workers...),
 		MCPEnv:               r.MCPEnv.Clone(),
@@ -792,9 +778,6 @@ func (r *Role) Seat() *org.Role {
 			env = nil
 		}
 		seat.Sandbox = &org.RoleSandbox{
-			Enabled:         s.Enabled,
-			RunIn:           string(s.RunIn),
-			CodingAgent:     string(s.CodingAgent),
 			PauseTTLSeconds: s.PauseTTLSeconds,
 			MaxTurns:        s.MaxTurns,
 			Setup:           seatSetupSteps(s.Setup),

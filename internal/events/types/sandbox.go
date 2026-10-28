@@ -16,6 +16,7 @@ func init() {
 	events.Register[SandboxRunCompleted]()
 	events.Register[SandboxClarificationRequested]()
 	events.Register[SandboxRunFailed]()
+	events.Register[SandboxRunStopped]()
 	events.Register[SandboxAnswerGiven]()
 	events.Register[SandboxRunAnswered]()
 }
@@ -31,9 +32,17 @@ type SandboxRunStarted struct {
 	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
 	// work-key filter answers with a run's WHOLE record rather than only
 	// its phases.
-	WorkKey         string `json:"work_key,omitempty"`
-	SandboxID       string `json:"sandbox_id"`
-	CodingAgent     string `json:"coding_agent"`
+	WorkKey     string `json:"work_key,omitempty"`
+	SandboxID   string `json:"sandbox_id"`
+	CodingAgent string `json:"coding_agent"`
+	// ProviderKey is the providers.llm entry the run was launched on, and
+	// Model the model it runs under: the member of the seat's executor
+	// chain the launch picked, which a fallback makes other than the chain's
+	// head. On the announcement because a running run is drawn from it, and
+	// which entry's plan a job is spending is what a person watching it asks
+	// — the run's own record says so only once it is collected.
+	ProviderKey     string `json:"provider_key,omitempty"`
+	Model           string `json:"model,omitempty"`
 	ConversationKey string `json:"conversation_key"`
 	// WorkItem is the item the launching turn is charged to, absent when
 	// it is on nothing. The run is part of that turn, so a running-runs
@@ -217,12 +226,12 @@ type SandboxRunFailed struct {
 // failed" would chase the wrong one.
 const (
 	// SandboxFailureCollect — the job finished but its box could not be
-	// read back, so there is no result to splice in.
+	// read back, so there is no result for its turn to judge.
 	SandboxFailureCollect = "collect_unreachable"
 
-	// SandboxFailureNoConversation — the row carried no suspended Execute
-	// conversation, so there is nothing to resume into.
-	SandboxFailureNoConversation = "no_execute_state"
+	// SandboxFailureNoExecuteState — the row carried none of its turn's
+	// parked state, so there is no turn to resume into.
+	SandboxFailureNoExecuteState = "no_execute_state"
 
 	// SandboxFailureAbandoned — a tail the previous owner of this seat left
 	// mid-flight, found by the recovery pass. Nothing will ever pick it up.
@@ -284,6 +293,73 @@ func (e SandboxRunFailed) SummaryFor(actor string) string {
 	return lead(actor, "lost a sandbox run to "+reason)
 }
 
+// SandboxRunStopped records a detached coding run a PERSON ended: its seat was
+// paused with `stop_running` while the run was launching or running, and the
+// run was ended there rather than left to finish — its CLI killed with its box,
+// its tool-bridge session closed, and what it had spent by then collected and
+// charged.
+//
+// NOT A FAILURE, which is why it is a type of its own rather than a reason of
+// [SandboxRunFailed]: that type is a failure by its very name (see
+// failureEventTypes), so a stop announced through it would be counted with the
+// runs that broke, end the turn waiting on it as failed, and draw its seat as in
+// trouble for being stopped by somebody who meant to. A stopped turn is never a
+// failed one, here as for a turn stopped at its next round.
+//
+// THE RUN'S OWN ACCOUNT, beside the turn's. The turn that was parked on the run
+// is closed on the record as stopped by the same person, in the shape a turn
+// stopped at its next round takes: [AgentTurnStopped] naming who, and the
+// turn's own completion carrying `stopped`. A run stopped while its turn was
+// still launching it is closed by that turn as it unwinds; one whose turn had
+// parked is closed by whichever node finishes the run's ending.
+//
+// PUBLISHED ONCE, under an id derived from the run and its ending, by whichever
+// node finishes that ending — the one that stopped it, or the seat's next
+// holder if that node stopped first — so a repeat after a crash is the same
+// event to every store that keeps it.
+type SandboxRunStopped struct {
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	TurnID      string `json:"turn_id"`
+	// WorkKey is the unit of work the run this belongs to was dispatched
+	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey     string `json:"work_key,omitempty"`
+	SandboxID   string `json:"sandbox_id"`
+	CodingAgent string `json:"coding_agent"`
+	// LaunchID is the job the stop ended — see [SandboxRunStarted.LaunchID]
+	// — so a reader pairs the stop with the start it ends rather than with
+	// whichever job the turn ran last.
+	LaunchID string `json:"launch_id,omitempty"`
+
+	// StoppedBy, StoppedByKind and OperatorID are who paused the seat with
+	// the stop and the credential they did it through, in the three halves
+	// of [SeatPaused.PausedBy], and Reason is what they gave.
+	StoppedBy     string `json:"stopped_by"`
+	StoppedByKind string `json:"stopped_by_kind"`
+	OperatorID    string `json:"operator_id,omitempty"`
+	Reason        string `json:"reason,omitempty"`
+}
+
+// EventType is the "sandbox_run_stopped" wire type.
+func (SandboxRunStopped) EventType() string { return "sandbox_run_stopped" }
+
+// Role is the seat whose run was stopped.
+func (e SandboxRunStopped) Role() string { return e.RoleName }
+
+// AgentID is the instance whose run was stopped.
+func (e SandboxRunStopped) AgentID() string { return e.Agent }
+
+// SummaryFor names who stopped the run, which is the one question a feed row
+// about it is asked.
+func (e SandboxRunStopped) SummaryFor(actor string) string {
+	by := e.StoppedBy
+	if by == "" {
+		by = "someone"
+	}
+	return lead(actor, "had its coding run stopped by "+by)
+}
+
 // SandboxAnswerGiven is the command an answer BY TURN puts on the seat's
 // control topic: a person answering a parked coding run's question by naming
 // the run, rather than by replying on the conversation it was asked in.
@@ -339,8 +415,8 @@ type SandboxAnswerGiven struct {
 	// identity.
 	AgentHandle string `json:"agent_handle"`
 
-	// Answer is the person's reply, verbatim. Redacted where it is spliced
-	// into the suspended conversation, like a chat reply.
+	// Answer is the person's reply, verbatim. Redacted where it is handed
+	// to the run it carries on, like a chat reply.
 	Answer string `json:"answer"`
 
 	// AnsweredBy, AnsweredByKind and OperatorID are who answered, in the

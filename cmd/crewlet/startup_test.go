@@ -80,6 +80,7 @@ api:
 	// that ends the window and never the engine's bound on the server.
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     held:
       model: claude-startup-probe

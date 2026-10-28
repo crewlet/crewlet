@@ -4,9 +4,10 @@
  * which seats run on it, and the edit form's rules.
  *
  * THE DOCUMENT IS WHAT AN OPERATOR WROTE; WHAT AN UNSET FIELD MEANS IS THE
- * ENGINE'S. An entry that names no `agent`, `mode` or `auth.mode` still runs as
- * something, and what it runs as is read from `contract/models.ts`, which a Go
- * gate holds to the defaults the engine applies. Which seats run on a model is
+ * ENGINE'S. An entry that names no `agent` or `auth.mode` still runs as
+ * something, and what it runs as — and whether its CLI can run a seat's
+ * executor at all — is read from `contract/models.ts`, which a Go gate holds to
+ * what the engine applies. Which seats run on a model is
  * the engine's too — the org projection carries each seat's resolved chain per
  * phase. Nothing here decides either: it names them and builds the one write
  * the screen makes.
@@ -21,10 +22,9 @@ import {
   DEFAULT_CLI_AGENT,
   DEFAULT_CLI_AUTH_MODE,
   DEFAULT_CLI_MAX_CONCURRENT,
-  DEFAULT_CLI_MODE,
   DEFAULT_CLI_TIMEOUT_SECONDS,
+  EXECUTOR_CLI_AGENTS,
   type CLIAuthMode,
-  type CLIMode,
 } from "~/contract/models.ts";
 import type { Seat } from "~/lib/seats.ts";
 import { configValueKind, fmtSetting, REDACTED } from "~/lib/format.ts";
@@ -67,9 +67,13 @@ export interface ModelEntry {
   agentDefault: boolean;
   /** The model, as written, in the CLI's own grammar; a `${VAR}` stays its reference. */
   model: string;
-  /** `host` or `box`, the default applied; a value this build does not know, as written. */
-  mode: string;
-  /** The sandbox cell a box-mode run happens in; "" takes `providers.sandbox`'s default. */
+  /**
+   * Whether its CLI can run a seat's executor ([EXECUTOR_CLI_AGENTS]). One
+   * that cannot serves the text phases alone, and an executor chain naming it
+   * skips it at launch.
+   */
+  executor: boolean;
+  /** The sandbox cell an executor run on this entry happens in; "" takes `providers.sandbox`'s default. */
   runIn: string;
   /** The wall-clock cap on one stretch of the CLI's own work with no tool call in flight, in seconds, the default applied. */
   timeoutSeconds: number;
@@ -131,16 +135,16 @@ export function modelEntry(key: string, raw: Record<string, unknown>): ModelEntr
   const auth = isRecord(raw.auth) ? raw.auth : {};
   const env = isRecord(raw.env) ? raw.env : {};
   const agent = nonEmpty(raw.agent);
-  const mode = nonEmpty(raw.mode);
+  const cli = agent ?? DEFAULT_CLI_AGENT;
   const authMode = nonEmpty(auth.mode);
   const timeout = positive(raw.timeout_seconds);
   const concurrency = positive(raw.max_concurrent);
   return {
     key,
-    agent: agent ?? DEFAULT_CLI_AGENT,
+    agent: cli,
     agentDefault: agent === undefined,
     model: typeof raw.model === "string" ? raw.model : "",
-    mode: mode ?? DEFAULT_CLI_MODE,
+    executor: (EXECUTOR_CLI_AGENTS as readonly string[]).includes(cli),
     runIn: nonEmpty(raw.run_in) ?? "",
     timeoutSeconds: timeout ?? DEFAULT_CLI_TIMEOUT_SECONDS,
     timeoutSet: timeout !== undefined,
@@ -163,27 +167,20 @@ export function modelEntry(key: string, raw: Record<string, unknown>): ModelEntr
 // ---------------------------------------------------------------------------
 
 /**
- * Where the engine runs an entry's CLI, in words — in either mode the CLI
- * drives its own loop over the seat's tools, so what the words name is WHERE
- * and for how long. EXHAUSTIVE OVER THE CONTRACT'S UNION, so a mode the engine
- * adds fails the typecheck here rather than drawing as nothing.
+ * What the engine runs an entry's CLI for, in words: a seat's executor, as the
+ * CLI's own agentic run in a box, or — for a CLI with no in-box runner — the
+ * text phases alone.
  */
-export const MODE_WORDS: Record<CLIMode, { label: string; hint: string }> = {
-  host: {
-    label: "Host",
-    hint: "Runs the CLI on this engine’s host, turn by turn, with the seat’s tools over MCP.",
-  },
-  box: {
-    label: "Box",
-    hint: "Runs the seat’s executor detached, in a box of providers.sandbox, with the seat’s tools bridged in.",
-  },
-};
-
-/** A mode's words, or the value itself for a mode this build does not know. */
-export function modeWords(mode: string): { label: string; hint: string } {
-  return Object.hasOwn(MODE_WORDS, mode)
-    ? MODE_WORDS[mode as CLIMode]
-    : { label: mode, hint: `“${mode}” is a mode this dashboard does not know.` };
+export function roleWords(entry: Pick<ModelEntry, "executor">): { label: string; hint: string } {
+  return entry.executor
+    ? {
+        label: "Executor",
+        hint: "Runs a seat’s executor as the CLI’s own agentic run in a box, with the seat’s tools over MCP; also serves the text phases.",
+      }
+    : {
+        label: "Text phases",
+        hint: "Serves the reviewer, workers, onboarding and side passes; an executor chain skips it at launch.",
+      };
 }
 
 /** How an entry's CLI signs in, in words. Exhaustive for the reason above. */
@@ -296,7 +293,6 @@ const PHASE_WORDS: ReadonlyArray<readonly [string, string]> = [
   ["subagent", "workers"],
   ["auxiliary", "auxiliary"],
   ["judge", "judge"],
-  ["sandbox", "coding runs"],
   ["onboarding", "onboarding"],
 ];
 
@@ -350,9 +346,9 @@ export function usesOf(seats: readonly Seat[], key: string): ModelUse[] {
 
 /**
  * What the form edits: the parts of an entry a person changes by hand. The
- * CLI, the mode and how it signs in are the entry's identity rather than its
- * tuning — changing one changes what the model id means or which account is
- * billed — and are changed in Configuration, where the whole entry is in view.
+ * CLI and how it signs in are the entry's identity rather than its tuning —
+ * changing one changes what the model id means or which account is billed —
+ * and are changed in Configuration, where the whole entry is in view.
  */
 export interface ModelForm {
   model: string;

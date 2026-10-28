@@ -2,36 +2,29 @@ package runner
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
-	"github.com/crewlet/crewlet/internal/agent/phase"
-	"github.com/crewlet/crewlet/internal/agent/structured"
-	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// Suspension is what an Execute phase produced when it parked on a detached
-// sandbox run: everything the resume needs, ready to persist.
+// Suspension is what an Execute phase produced when it launched its run and
+// parked: everything the run's collection needs, ready to persist.
 type Suspension struct {
 	State execstate.State
 }
 
-// Suspended reports the state of a suspended Execute phase, if the last one
-// suspended.
+// Suspended reports the state of the parked Execute phase, if the last one
+// parked.
 //
-// Read by the run_sandbox tool's caller — the engine — immediately after the
-// turn returns Suspended, so the conversation is persisted before the turn's
-// stack unwinds. It is a Runner field rather than a return value because the
-// suspension surfaces through turn.Result, which is the loop's vocabulary and
-// must not grow a wire format in it.
+// Read by the engine immediately after the turn returns Suspended, so the
+// state is persisted before the turn's stack unwinds. It is a Runner field
+// rather than a return value because the park surfaces through turn.Result,
+// which is the loop's vocabulary and must not grow a wire format in it.
 func (r *Runner) Suspended() (Suspension, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -41,206 +34,87 @@ func (r *Runner) Suspended() (Suspension, bool) {
 	return *r.suspension, true
 }
 
-// Resume re-enters the suspended Execute phase with the sandbox result spliced
-// in as the pending call's reply.
+// Resume re-enters the turn the executor's run parked it on, in one of three
+// ways, each read off what drove it.
 //
-// THE SAME TURN CONTINUES. The executor is re-entered rather than restarted —
-// a resumed turn that started over would re-derive work already half done —
-// and the tool surface and skill-guard state are REPLAYED from the state
-// rather than rebuilt, because a phase that rebuilt its surface would lose
-// every activation the pre-suspend rounds made.
+// A COMPLETION COLLECTS THE RUN: what it submitted, the calls it made over the
+// bridge, the branches and pull requests it delivered. The round the run was
+// launched in is collected rather than launched again — a resumed turn that
+// started over would pay for the run twice ([Runner.resumeAgentRun]). Its
+// surface and skill-guard state are rebuilt as the run left them: the tools
+// and skills the state recorded at the launch, and then every tool the run
+// activated and every skill it loaded over the bridge, read off its bridged
+// calls ([Runner.rebuiltSurface]). The run's calls were made against that
+// surface, and the round's record states it: the tools the run held, and
+// apart from them the ones it could still have discovered.
 //
-// AND A NEW CLI RUN CONTINUES IT. The run that parked was stopped the moment
-// its detached call parked the phase, often on another node and days ago; the
-// conversation it left — the parked call its one open call, every call beside
-// it answered — is answered and handed to the next run as its transcript, so
-// the model reads what it did and what the box found, and the loop runs on.
-//
-// THE RECORD IT PUBLISHES COVERS THE WHOLE PHASE, pre-suspend rounds
-// included. This used to carry only the post-resume slice, on the argument
-// that the earlier rounds were already recorded and re-emitting them would
-// redraw a turn the dashboard already had. That premise was false: a
-// suspending phase returns before `emit.completed` runs, so it publishes no
-// completed event at all, and its `agent_turn_progress` frames are stream-only
-// and refused by the event store. Nothing durable held those rounds. What the
-// argument protected against — a double record — could not happen, and what it
-// cost was every round before the suspend, the `run_sandbox` call that caused
-// it included, with the resumed half renumbered from 1 beside token counters
-// covering both halves.
+// A PERSON'S ANSWER CARRIES THE RUN ON ([Asked]), and so does the LOSS OF ITS
+// JOB with the host it ran on ([Lost]): the same round, relaunched with what
+// the run did so far, never collected ([Runner.continueAgentRun]). A lost job
+// whose round's calls already hold its submission is the one exception: it
+// finished its work and was lost on its way out, so the round is collected.
 func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.Work, turn.Surface, error) {
 	if r.cfg.Resume == nil {
-		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: resume with no suspended state")
+		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: resume with no parked state")
 	}
 	state := r.cfg.Resume.State
-	answer := r.cfg.Resume.Answer
-	// THE NOTES THE TURN READ BEFORE IT PARKED, so the phases after this
-	// one open with them as the phases before it did. The re-entered
-	// conversation already holds the ones this phase read.
+	// THE NOTES THE TURN HAS READ, off the run's record in the order read —
+	// so the phases after this one open with them as the phases before it
+	// did. See [Resume.Steered].
 	r.mu.Lock()
-	r.steered = append([]string(nil), state.Steered...)
+	r.steered = slices.Clone(r.cfg.Resume.Steered)
 	r.mu.Unlock()
 
-	if state.AgentRun {
-		// THE STATE DECIDES, NOT THE CONFIG. A run launched as an agentic
-		// one is collected as one however the company's providers have
-		// been applied in the days it was parked — see
-		// [execstate.State.AgentRun].
-		return r.resumeAgentRun(ctx, history, state, answer, r.cfg.Resume.Bridged)
+	// THE CALLS THE RUN MADE OVER THE BRIDGE, in the order they were
+	// admitted. Each branch below seeds the turn's call log from them and
+	// from the closed rounds once its own surface exists ([seedCalls]), so
+	// the seeding reads the universe every later call is admitted against.
+	bridged := inAdmissionOrder(r.cfg.Resume.Bridged)
+
+	// A PERSON'S ANSWER CARRIES THE RUN ON; it is never the run's report.
+	// See [Asked]. And so does a job lost with its host, unless the round it
+	// was lost in was already submitted. See [Lost].
+	logged := bridgedLedger(bridged)
+	if asked := r.cfg.Resume.Asked; asked != nil {
+		return r.continueAgentRun(ctx, history, state, asked, logged)
 	}
-
-	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot(), false)
-
-	// The submission tool is rebuilt, not replayed: it is where the phase
-	// ENDS, and the re-entered conversation has not ended yet. Its checks
-	// read the resumed surface's own record, which resumedCalls widens to
-	// the whole phase — so a delivery made before the suspend is citable
-	// after it, and is never demanded twice — and Record widens to the
-	// whole turn, for the same reason one round further back.
-	var surface *tools.Surface
-	submit := structured.New(SubmitWorkTool, submitWorkDescription, workSchema,
-		decodeWork(r.cfg.Reply,
-			func() []ledger.Call { return turn.Record(history, resumedCalls(surface, state)) },
-			func() turn.Surface { return describe(surface) }))
-
-	built, err := r.surfaceWith(ctx, r.ownMeter(), phase.Execute, state.Round, snapshot, submit,
-		state.ActiveTools, state.LoadedSkills...)
-	if err != nil {
-		return turn.Work{}, turn.Surface{}, err
+	if lost := r.cfg.Resume.Lost; lost != nil && !submitted(logged) {
+		return r.continueAgentRun(ctx, history, state, lost, logged)
 	}
-	surface = built
-	// THE RUN'S CALL LOG STARTS FROM WHAT THE RUN ALREADY CALLED. A resume
-	// is the same run in a fresh process, so a count it derives must see
-	// every call made before it parked (the rounds that closed, the parked
-	// round's own calls and whatever a box-mode run called over the
-	// bridge), or a call made again after a different one would take its
-	// first copy's operation id. See [turnctx.CallLog]. Seeded once the
-	// surface is built, through it ([seedCalls]).
-	seedCalls(r.cfg.Turn.Context.CallLog(), surface, history, parkedCalls(state),
-		bridgedLedger(r.cfg.Resume.Bridged))
+	return r.resumeAgentRun(ctx, history, state, r.cfg.Resume.Answer, bridged)
+}
 
-	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
-		phase: phase.Execute, surface: surface,
-		rounds: r.cfg.Caps.ExecutorRounds, ceiling: r.cfg.Caps.ExecutorCeiling,
-		iteration:      state.Round,
-		seed:           state.Answer(answer),
-		terminateAfter: []string{SubmitWorkTool},
-		// A resumed executor can suspend AGAIN: it may call run_sandbox a
-		// second time to continue in the same box.
-		allowSuspend: true,
-		// A RESUMED EXECUTOR IS STEERABLE like the pass it continues. The
-		// engine hands this runner the turn's note box for exactly this
-		// segment (internal/engine's resume), and a phase that drains
-		// nothing leaves a note offered while it runs waiting in the box
-		// until the reviewer — which then grades work the executor never
-		// got the chance to correct — or until the turn ends and the note
-		// is reported `expired`, unread by the phase it was sent to.
-		steerable: true,
-		prior:     priorRounds(state),
-		// What the pre-suspend half already spent, so this phase's record
-		// reports the whole of it.
-		priorElapsed: time.Duration(state.ElapsedMS) * time.Millisecond,
+// submitted reports whether a round's calls hold a submission its run made:
+// a `submit_work` the bridge did not refuse, which the round's collection
+// replays as its outcome ([replaySubmission]).
+func submitted(calls []ledger.Call) bool {
+	return slices.ContainsFunc(calls, func(call ledger.Call) bool {
+		return call.Name == SubmitWorkTool && !call.Failed
 	})
-	if err != nil {
-		// resumedCalls, not calls: a resumed phase's record has to carry
-		// the PRE-SUSPEND rounds too. The round that called run_sandbox
-		// was never closed — [turn.Run] returns on a suspend without
-		// appending it — so its writes exist in no ledger anywhere, and a
-		// resume that broke would otherwise report a turn that had done
-		// nothing when it is precisely the turn that has done the most.
-		return resumedWork(turn.Work{}, surface, state), describe(surface), err
-	}
-
-	if res.Suspended {
-		r.recordSuspension(state.Round, surface, res.Result, history, res.Elapsed)
-		return resumedWork(turn.Work{Text: res.Text, Suspended: true}, surface, state),
-			describe(surface), nil
-	}
-
-	// The same finish as a fresh pass, including the rescue: an executor
-	// that came back from a coding run and then stopped without reporting
-	// is exactly as unjudged as one that never started.
-	//
-	// No system or user prompt on the record: this phase did not open a
-	// conversation, it re-entered one, and publishing the original opening
-	// again would show a reader a prompt that was not sent this time.
-	work, described, err := r.finishWork(phaseCtx, state.Round, work{
-		submit: submit, res: res, surface: surface, snapshot: snapshot,
-		// WHICH BOX. This phase suspended on a coding run and is being
-		// re-entered with its result, which is the one thing that makes it
-		// a sandbox phase rather than a native one.
-		run: r.cfg.Resume.Run,
-	})
-	if err != nil {
-		return resumedWork(turn.Work{}, surface, state), describe(surface), err
-	}
-	// The WHOLE phase's calls, pre-suspend rounds included (see
-	// resumedCalls), the parked round's marked as an earlier attempt's.
-	return resumedWork(work, surface, state), described, nil
 }
 
-// resumedCalls is what the WHOLE executor phase called, pre-suspend rounds
-// included.
+// seedCalls records into a resumed run's log every call the turn made before
+// this segment: the rounds that closed and whatever its executor run called
+// over the bridge.
 //
-// The delivery check, the submission's own citations and the iteration ledger
-// all read this list, and all three are about the turn rather than about one
-// re-entry: a resumed turn that saw only the post-resume calls would read a
-// delivery made before the suspend as never having happened, and re-fire it.
-func resumedCalls(s *tools.Surface, state execstate.State) []ledger.Call {
-	return resumedWork(turn.Work{}, s, state).Calls
-}
-
-// resumedWork is a resumed phase's work: the whole phase's calls, the parked
-// round's marked as an earlier attempt's ([turn.Work.Inherited]), so the
-// record is whole and the question "did THIS attempt write" is still asked of
-// this attempt alone.
-func resumedWork(w turn.Work, s *tools.Surface, state execstate.State) turn.Work {
-	parked := parkedCalls(state)
-	w.Calls = slices.Concat(parked, calls(s))
-	w.Inherited = len(parked)
-	return w
-}
-
-// parkedCalls is what the parked round called before it suspended, read back
-// off the state's wire rows.
-func parkedCalls(state execstate.State) []ledger.Call {
-	prior := make([]ledger.Call, 0, len(state.ToolExecutions))
-	for _, exec := range state.ToolExecutions {
-		call := ledger.Call{}
-		if name, ok := exec["name"].(string); ok {
-			call.Name = name
-		}
-		if call.Name == "" {
-			continue
-		}
-		if args, ok := exec["arguments"].(string); ok {
-			call.Args = decodeArgs(args)
-		}
-		if ok, present := exec["success"].(bool); present {
-			call.Failed = !ok
-		}
-		if out, ok := exec["result"].(string); ok {
-			call.Result = out
-		}
-		prior = append(prior, call)
-	}
-	return prior
-}
-
-// seedCalls records into a resumed run's log every call it made before it
-// parked. Order does not matter to a count, and a call recorded twice — a
-// bridged call the parked round also holds — only raises one, which is safe.
+// THE RUN'S CALL LOG STARTS FROM WHAT THE TURN ALREADY CALLED. A collection,
+// a continuation after a person's answer and a reopen are the same turn in a
+// fresh segment, so a count it derives must see every call made before it,
+// or a call made again after a different one would take its first copy's
+// operation id. See [turnctx.CallLog]. Order does not matter to a count, and
+// a call recorded twice only raises one, which is safe.
 //
-// BY THE CANONICAL ARGUMENTS, made through the resumed surface itself
-// ([tools.Surface.ArgsOf]), so the seeding and every call made after the
-// resume read one universe by construction, the tools the surface adds
-// (submit_work, the discovery pair) included. The records hold the model's
-// own spelling, which they keep: a parked round's calls and a bridged run's
-// log are what the model sent, and a count read against them as written took
-// a repeat spelt "Draft" after "draft" for another call and wrote it twice.
+// BY THE CANONICAL ARGUMENTS, made through the surface the segment serves
+// ([tools.Surface.ArgsOf]), so the seeding and every call made after it read
+// one universe by construction, the tools the surface adds (submit_work, the
+// discovery pair) included. The records hold the model's own spelling, which
+// they keep: the closed rounds and the bridge's log of the run's calls are
+// what the model sent, and a count read against them as written took a
+// repeat spelt "Draft" after "draft" for another call and wrote it twice.
 //
-// A tool the resumed surface does not hold (one removed since the run
-// parked) is seeded by its arguments as sent, and logged at debug so the
-// fallback is visible: no call made now can reach it to be counted anyway.
+// A tool the surface does not hold (one removed since the run was launched)
+// is seeded by its arguments as sent, and logged at debug so the fallback is
+// visible: no call made now can reach it to be counted anyway.
 func seedCalls(calls *turnctx.CallLog, surface *tools.Surface, history []ledger.Iteration,
 	groups ...[]ledger.Call) {
 
@@ -256,217 +130,6 @@ func seedCalls(calls *turnctx.CallLog, surface *tools.Surface, history []ledger.
 			calls.Seed(turnctx.SeededCall{Tool: call.Name, Args: surface.ArgsOf(call.Name, call.Args)})
 		}
 	}
-}
-
-// priorRounds is what the phase did before it suspended, back in the loop's
-// own shape so the resumed phase can continue it.
-//
-// The wire rows are loose maps ([types.ToolExecution] and
-// [types.RoundNarration] are both `map[string]any`), because the event
-// envelope evolves additive-only and a producer this build predates may have
-// written fields it does not know. A row missing the one field that matters —
-// a call with no name, a round with no number — is dropped rather than
-// defaulted: a call numbered 0 would land in a round no other row shares and
-// render as a round of its own.
-func priorRounds(state execstate.State) toolloop.Result {
-	out := toolloop.Result{
-		RoundsUsed:   state.RoundsUsed,
-		InputTokens:  state.InputTokens,
-		OutputTokens: state.OutputTokens,
-		CacheRead:    state.CacheReadTokens,
-		CacheWrite:   state.CacheWriteTokens,
-	}
-	for _, m := range state.Steers {
-		out.Steers = append(out.Steers, toolloop.SteerMark{Round: m.Round, ID: m.NoteID})
-	}
-	// The CLI runs too, for the reason the rounds travel: the resumed record
-	// is the phase's only account, and a second suspend re-encodes them from
-	// here.
-	for _, inv := range state.Invocations {
-		out.Invocations = append(out.Invocations, toolloop.Invocation{
-			StartedAt:        inv.StartedAt,
-			Duration:         time.Duration(inv.DurationMS) * time.Millisecond,
-			ProviderKey:      inv.ProviderKey,
-			Model:            inv.Model,
-			Outcome:          toolloop.InvocationOutcome(inv.Outcome),
-			RequestsObserved: inv.RequestsObserved,
-			InputTokens:      inv.InputTokens,
-			OutputTokens:     inv.OutputTokens,
-			CacheRead:        inv.CacheReadTokens,
-			CacheWrite:       inv.CacheWriteTokens,
-			Calls:            inv.ToolCalls,
-		})
-	}
-	for _, r := range state.Rounds {
-		out.Rounds = append(out.Rounds, toolloop.Round{
-			Round: r.Round, StartedAt: r.StartedAt,
-			Duration:     time.Duration(r.DurationMS) * time.Millisecond,
-			Model:        r.Model,
-			InputTokens:  r.InputTokens,
-			OutputTokens: r.OutputTokens,
-			CacheRead:    r.CacheReadTokens,
-			CacheWrite:   r.CacheWriteTokens,
-			ToolCalls:    r.ToolCalls,
-			// Why each parked round stopped travels like its timing does:
-			// the resumed record is the only account this phase will ever
-			// have, and a second suspend re-encodes these rows from here —
-			// so a field dropped on this side is lost for good, not merely
-			// for one record.
-			StopReason: llm.StopReason(r.StopReason),
-		})
-	}
-	for _, exec := range state.ToolExecutions {
-		name, _ := exec["name"].(string)
-		round, ok := intField(exec["round"])
-		if name == "" || !ok {
-			continue
-		}
-		ex := toolloop.Execution{Round: round, Name: name}
-		// The call's own id, which the conversation's call carries too: it
-		// is what tells two calls of one response apart on the record.
-		ex.CallID, _ = exec["call_id"].(string)
-		if args, ok := exec["arguments"].(string); ok {
-			ex.Args = decodeArgs(args)
-		}
-		if result, ok := exec["result"].(string); ok {
-			ex.Output = result
-		}
-		if ok, present := exec["success"].(bool); present {
-			ex.Failed = !ok
-		}
-		// THE TIMING AND THE ORIGIN TRAVEL TOO, or the resumed record
-		// states every pre-suspend call as untimed and unattributed — the
-		// run_sandbox call that parked the phase first among them. A row
-		// that carries no start (a call whose arguments did not parse,
-		// which never ran) stays untimed rather than acquiring a zero
-		// duration.
-		if at, ok := exec["started_at"].(string); ok {
-			if parsed, err := time.Parse(time.RFC3339Nano, at); err == nil {
-				ex.StartedAt = parsed
-				if ms, ok := intField(exec["duration_ms"]); ok {
-					ex.Duration = time.Duration(ms) * time.Millisecond
-				}
-			}
-		}
-		ex.Origin, _ = exec["origin"].(string)
-		ex.Server, _ = exec["server"].(string)
-		out.Executions = append(out.Executions, ex)
-	}
-	for _, narr := range state.RoundNarration {
-		round, ok := intField(narr["round"])
-		if !ok {
-			continue
-		}
-		content, _ := narr["content"].(string)
-		// A declined round before the suspend stays one after it, or the
-		// resumed record says the model answered in prose where the phase
-		// allowed it.
-		declined, _ := narr["declined"].(bool)
-		out.Narration = append(out.Narration, toolloop.Narration{
-			Round: round, Content: content, Declined: declined,
-		})
-	}
-	return out
-}
-
-// intField reads a number that has been through JSON, where the state's
-// reader keeps every one of them as the json.Number it was written as — and
-// out of a Go map that never was, where it is still an int. Both shapes reach
-// here: a state serialized to the pending-run row and back, and one handed
-// straight over in the process that wrote it. A float64 is accepted too,
-// because that is what any other plain JSON decode of the same row produces.
-func intField(v any) (int, bool) {
-	switch n := v.(type) {
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	case json.Number:
-		i, err := n.Int64()
-		return int(i), err == nil
-	}
-	return 0, false
-}
-
-// recordSuspension captures the conversation an Execute phase parked on, for
-// the engine to persist the moment the turn returns.
-//
-// Built HERE rather than by the engine because this is the only frame that
-// holds the loop's messages and the phase's live surface. The engine reads it
-// back through [Runner.Suspended] and writes it to the pending-run row.
-//
-// A state that fails its invariants is NOT recorded, and the absence is what
-// the engine reports: a run whose conversation could not be serialized is one
-// nothing can resume, and it must fail while the box is still in the engine's
-// hands rather than at a resume days later.
-func (r *Runner) recordSuspension(round int, surface *tools.Surface,
-	res toolloop.Result, history []ledger.Iteration, elapsed time.Duration,
-) {
-	state := execstate.State{
-		Version:         execstate.Version,
-		Messages:        res.Messages,
-		PendingCallID:   res.PendingToolCallID,
-		PendingCallName: res.PendingToolName,
-		ActiveTools:     surface.Active(),
-		Round:           round,
-		InputTokens:     res.InputTokens,
-		OutputTokens:    res.OutputTokens,
-		ToolExecutions:  toolExecutions(res.Executions),
-		// The rounds themselves, so the resumed phase continues the count
-		// instead of restarting it — and so they reach the store at all.
-		// Nothing else records them: this phase publishes no completed event
-		// (it returns suspended, before the record is written) and its
-		// progress frames are stream-only.
-		RoundsUsed:     res.RoundsUsed,
-		RoundNarration: roundNarration(res.Narration),
-		// Their timing and their cache share, for the same reason — and the
-		// CLI runs they were made in.
-		Rounds:           phaseRounds(res.Rounds),
-		CacheReadTokens:  res.CacheRead,
-		CacheWriteTokens: res.CacheWrite,
-		Invocations:      phaseInvocations(res.Invocations),
-		// THE CLOCK FOLDS TOO, like the rounds above and for the same
-		// reason: this phase publishes no completed event, so a resume that
-		// started its clock at zero would report a run that took minutes as
-		// however long it took to collect the answer.
-		ElapsedMS:  int(elapsed / time.Millisecond),
-		Iterations: history,
-		Task:       r.cfg.Task,
-		// THE SKILL-GUARD STATE, which the field declared and nothing ever
-		// wrote. With it empty, a resumed executor was told to load the
-		// skills it had already loaded — the bodies were in the very
-		// transcript it was re-entering — and every required tool it had
-		// unlocked before the suspend was refused again.
-		LoadedSkills: r.loadedSkills(),
-		// EVERY NOTE THE TURN HAD READ, for the later phases of the turn
-		// the resume continues, and this phase's own marks, for its
-		// record. See [execstate.State.Steered].
-		Steered: r.carriedSteers(),
-		Steers:  phaseSteers(res.Steers),
-	}
-	if err := state.Validate(); err != nil {
-		log.Error("execute_suspension_invalid", "round", round, "error", err.Error())
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.suspension = &Suspension{State: state}
-}
-
-// decodeArgs turns the wire's JSON argument string back into the map the
-// ledger renders from.
-//
-// The ledger elides PER VALUE, so it needs the map; the execution row carries
-// the string because that is what the dashboard reads. [tools.ReadArgs] owns
-// both halves of that contract — json.Number so the id the string was written
-// to preserve survives this decode too, and nil on anything unreadable rather
-// than an error, because a resumed turn's prior-work ledger losing one call's
-// arguments is a worse-rendered line while failing the resume over it loses
-// the whole conversation.
-func decodeArgs(raw string) map[string]any {
-	return tools.ReadArgs(raw)
 }
 
 // loadedSkills is what the running phase's guard has unlocked, or nil where

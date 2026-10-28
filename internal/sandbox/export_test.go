@@ -1,15 +1,24 @@
 package sandbox
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+
+	"github.com/crewlet/crewlet/internal/hostbox"
+)
 
 // NewContainerBoxAt is a container box whose directory is root, for the file
 // contract suite: a container box's reads and writes happen on the HOST side
 // of its bind mount, so its file contract can be certified without a container
 // runtime. Nothing it reaches runs a command. It answers the box and the host
 // directory its home is — the one the mount would carry, which is not root
-// itself, since root also holds the engine's records about the box.
+// itself, since root also holds the engine's records about the box. The home
+// is made as Create makes it: every access to the box goes through it.
 func NewContainerBoxAt(root string) (Sandbox, string) {
 	layout := boxLayout{id: "contract", root: root}
+	if err := os.MkdirAll(layout.home(), hostbox.DirMode); err != nil {
+		panic(fmt.Sprintf("NewContainerBoxAt: %v", err))
+	}
 	return &containerBox{layout: layout, cli: containerCLI{path: "docker"}, container: "contract"}, layout.home()
 }
 

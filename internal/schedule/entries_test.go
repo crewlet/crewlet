@@ -87,8 +87,8 @@ func TestDescribeShapeAndDefaults(t *testing.T) {
 	if want := time.Date(2026, time.June, 8, 0, 0, 0, 0, time.UTC).Add(24 * time.Hour); !nightly.NextRun.Equal(want) {
 		t.Errorf("nightly next run = %v, want %v — 02:00 on the company's clock", nightly.NextRun, want)
 	}
-	if nightly.TimeoutSeconds != 180 {
-		t.Errorf("nightly timeout = %d, want the 180s default", nightly.TimeoutSeconds)
+	if want := int(org.DefaultScheduleTimeout / time.Second); nightly.TimeoutSeconds != want {
+		t.Errorf("nightly timeout = %d, want the %ds default", nightly.TimeoutSeconds, want)
 	}
 	if !nightly.Enabled || !nightly.Catchup {
 		t.Errorf("nightly enabled/catchup = %v/%v, want both true by default", nightly.Enabled, nightly.Catchup)

@@ -164,7 +164,7 @@ func TestTheFirstQualifyingReplyIsTheAnswerWhateverTheResumeDoes(t *testing.T) {
 			"and never a reason to hand the person's message back", disposition, err, AnswerConsumed)
 	}
 	got := rig.get("t1")
-	if got.Status != StatusAnswered || got.Answer == nil || got.Answer.Text != "use main" {
+	if got.Status != StatusAnswered || got.Answer == nil || openedOn(t, got).Text != "use main" {
 		t.Fatalf("run = %q with answer %+v, want R1 recorded and its resume owed",
 			got.Status, got.Answer)
 	}
@@ -189,9 +189,9 @@ func TestTheFirstQualifyingReplyIsTheAnswerWhateverTheResumeDoes(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("%d resumes went through, want 1", len(calls))
 	}
-	if !strings.Contains(calls[0].Answer, "use main") || strings.Contains(calls[0].Answer, "docs") {
-		t.Fatalf("the run was resumed with %q, want R1's answer and nothing of R2's",
-			calls[0].Answer)
+	if asked := askedOf(calls[0]); !strings.Contains(asked.Answer, "use main") ||
+		strings.Contains(asked.Answer, "docs") {
+		t.Fatalf("the run was resumed with %+v, want R1's answer and nothing of R2's", asked)
 	}
 	if calls[0].Trigger == nil || calls[0].Trigger.ID != r1.ID {
 		t.Fatalf("the resume was raised off %v, want R1 itself", calls[0].Trigger)
@@ -259,8 +259,8 @@ func TestAReplyThatCannotShowItCameAfterTheQuestionDoesNotAnswerIt(t *testing.T)
 	}
 }
 
-// R1 CANNOT ANSWER A LATER QUESTION. The run resumes with R1, calls
-// run_sandbox again and parks on a second question; a copy of R1 arriving
+// R1 CANNOT ANSWER A LATER QUESTION. The run resumes with R1, its turn
+// relaunches its executor and the new job parks on a second question; a copy of R1 arriving
 // after that — a redelivery whose acknowledgement was lost — was written
 // before the second question was asked, so it is not its answer.
 func TestAnAnswerIsNeverTheAnswerToTheNextQuestion(t *testing.T) {
@@ -280,7 +280,7 @@ func TestAnAnswerIsNeverTheAnswerToTheNextQuestion(t *testing.T) {
 			return
 		}
 		if ok, err := rig.pending.MarkSuspended(ctx, "t1", Suspension{
-			State: json.RawMessage(`{"version":1,"pending_tool_call_id":"call-2","pending_tool_name":"run_sandbox"}`),
+			State: json.RawMessage(`{"version":4,"iteration":2}`),
 		}); err != nil || !ok {
 			t.Errorf("MarkSuspended = %v, %v", ok, err)
 		}
@@ -413,8 +413,9 @@ func TestAnAnswerARecoveredSeatOwesIsResumedByItsNewHolder(t *testing.T) {
 	asked := rig.get("t1").AskedAt
 	run := rig.get("t1")
 	r1 := replyAt("use main", asked.Add(time.Minute))
+	words, answer := chatReply(answerOnTheDM, "use main", r1).answerOf(rig.now)
 	if _, won, err := rig.pending.RecordAnswer(t.Context(), "t1", run.LaunchID,
-		chatReply(answerOnTheDM, "use main", r1).answerOf(rig.now), rigLease); err != nil || !won {
+		sealedOnto(t, rigAnswers(), run, words, answer), rigLease); err != nil || !won {
 		t.Fatalf("RecordAnswer = %v, %v", won, err)
 	}
 
@@ -432,10 +433,20 @@ func TestAnAnswerARecoveredSeatOwesIsResumedByItsNewHolder(t *testing.T) {
 		t.Fatal("the new holder scheduled no attempt at the answer it inherited")
 	}
 	calls := successor.resumer.calls()
-	if len(calls) != 1 || !strings.Contains(calls[0].Answer, "use main") {
+	if len(calls) != 1 || !strings.Contains(askedOf(calls[0]).Answer, "use main") {
 		t.Fatalf("resumes = %+v, want the recorded answer", calls)
 	}
 	if holds.holding("swe") {
 		t.Fatal("the seat's inbox is still held after the inherited answer resumed")
 	}
+}
+
+// askedOf is the answered question a resume carried its run on with
+// ([ResumeRequest.Asked]), the zero value where it carried none — which a case
+// about a person's answer reads as the answer never having reached the turn.
+func askedOf(req ResumeRequest) AskedRun {
+	if req.Asked == nil {
+		return AskedRun{}
+	}
+	return *req.Asked
 }

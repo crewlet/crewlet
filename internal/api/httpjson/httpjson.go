@@ -603,12 +603,15 @@ const (
 	CodeReassignmentBudget Code = "reassignment_budget"
 	// CodeInboxFull is a person's inbox list at its ceiling.
 	CodeInboxFull Code = "inbox_full"
+	// CodeNotesFull is a note to a running turn that already holds as many
+	// notes as may wait unread; it clears once the turn reads them.
+	CodeNotesFull Code = "notes_full"
+	// CodeNotesSpent is a note to a running turn that has taken as many notes
+	// as a turn takes — the class that must not invite another attempt.
+	CodeNotesSpent Code = "notes_spent"
 	// CodeNotRunning is a run or turn that is not running, or not waiting
 	// for what the call supplies.
 	CodeNotRunning Code = "not_running"
-	// CodeSteerUnsupported is a running turn whose runtime cannot take a
-	// note mid-turn.
-	CodeSteerUnsupported Code = "steer_unsupported"
 	// CodeBudgetExhausted is a call that would spend tokens refused because
 	// a window of the company's budget has no room left; nothing was spent.
 	CodeBudgetExhausted Code = "budget_exhausted"
@@ -1151,9 +1154,13 @@ var codes = map[Code]string{
 		"may be. A person has to pick it up now.",
 	CodeInboxFull: "The inbox holds as many marks as it may. Mark everything " +
 		"up to here read first.",
+	CodeNotesFull: "The turn already holds as many notes as it may before it " +
+		"reads them, so nothing was sent. Send it again once the turn has read " +
+		"them, at its next step.",
+	CodeNotesSpent: "The turn has taken as many notes as a turn takes, so " +
+		"nothing was sent, and sending it again changes nothing. Put the rest on " +
+		"the work item.",
 	CodeNotRunning: "It is not running any more, or not waiting for this.",
-	CodeSteerUnsupported: "That turn cannot take a note: it runs in a coding " +
-		"agent's own loop.",
 	CodeBudgetExhausted: "The token budget for this window is spent, so " +
 		"nothing was spent on this. Raise it, or wait for the window to turn " +
 		"over.",

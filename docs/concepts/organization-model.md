@@ -87,12 +87,13 @@ Role (a SEAT: can live at root level OR inside a unit)
 ├── TokenBudget TokenCeilings          (this seat's own ceiling per window, on
 │                                       top of the company's; absent = uncapped)
 ├── LLM, LLMReview, LLMSubagent,
-│   LLMAuxiliary, LLMJudge,
-│   LLMSandbox ProviderKeys            (the executor's chain and the per-phase
+│   LLMAuxiliary, LLMJudge ProviderKeys (the executor's chain and the per-phase
 │                                       satellites; see Turn Engine)
 ├── Workers []string                   (the worker templates this seat may use)
 ├── LearningEnabled Toggle             (per-seat override for agent learning)
-├── Sandbox *RoleSandbox               (role.sandbox: the code-sandbox gate)
+├── Sandbox *RoleSandbox               (role.sandbox: what the seat's executor
+│                                       box reads: setup, env, optional_keys, mcp,
+│                                       pause_ttl_seconds, max_turns)
 ├── Placement                          (role.placement: which nodes may run it)
 ├── Slack SlackIdentity                (role.integrations.slack: this seat's OWN
 │                                       Slack app, bot_token and signing_secret)

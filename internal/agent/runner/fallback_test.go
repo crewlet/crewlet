@@ -3,6 +3,7 @@ package runner_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
 
@@ -52,27 +54,38 @@ func (c *capture) fallbacks() []*types.ProviderFallback {
 	return out
 }
 
+// reviewing is a provider whose reviewer answers in prose before it decides,
+// so its phase takes two CLI runs — the prose one and the corrected one — and
+// a chain in front of it is walked on more than one.
+func reviewing(t *testing.T) *scriptedProvider {
+	t.Helper()
+	return &scriptedProvider{review: []llmtest.Response{
+		text("Reading the log first."),
+		submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`),
+	}}
+}
+
 func TestAProviderHandOffIsPublishedAgainstTheTurnItHappenedIn(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	prov := &scriptedProvider{execute: deliver(t, "posted the weekly summary")}
+	prov := reviewing(t)
 	r, _ := buildWith(t, []phase.Entry{
 		{Key: "benched", Provider: benched{model: "benched-model"}},
 		{Key: "executor", Provider: prov},
-	}, buildOpts{pub: pub, execChain: org.ProviderKeys{"benched", "executor"}})
+	}, buildOpts{pub: pub, reviewChain: org.ProviderKeys{"benched", "executor"}})
 
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
+	if _, err := r.Review(context.Background(), 1, workFor("posted"), nil); err != nil {
+		t.Fatalf("Review: %v", err)
 	}
 
 	// ONE PER PROVIDER CALL, not one per phase: a chain is walked on every
 	// CLI run, so a benched member is a hand-off on every run. Counting them
 	// per phase would report one flap where there were three, which is the
 	// difference between a blip and a provider to take out of the chain.
-	runs := len(prov.requestsFor("execute"))
+	runs := len(prov.requestsFor("review"))
 	got := pub.fallbacks()
-	if runs == 0 {
-		t.Fatal("the executor never reached its provider")
+	if runs < 2 {
+		t.Fatalf("the reviewer reached its provider %d times, want a hand-off per run to count", runs)
 	}
 	if len(got) != runs {
 		t.Fatalf("published %d provider_fallback events over %d runs, want one each",
@@ -89,7 +102,7 @@ func TestAProviderHandOffIsPublishedAgainstTheTurnItHappenedIn(t *testing.T) {
 		{"turn_id", f.TurnID, "t-1"},
 		{"agent_id", f.Agent, "a-1"},
 		{"role", f.RoleName, "CTO"},
-		{"phase", string(f.Phase), "execute"},
+		{"phase", string(f.Phase), "review"},
 		{"from_provider_key", f.FromProviderKey, "benched"},
 		{"to_provider_key", f.ToProviderKey, "executor"},
 		{"error_kind", f.ErrorKind, llm.KindRateLimit.String()},
@@ -103,19 +116,72 @@ func TestAProviderHandOffIsPublishedAgainstTheTurnItHappenedIn(t *testing.T) {
 	}
 }
 
+// fallingLauncher stands for a launch that skipped a member sitting out before
+// the one that took the run: it reports the hand-off through the request, as
+// the engine's launch does, and starts nothing.
+type fallingLauncher struct{ skipped chain.Fallback }
+
+func (l fallingLauncher) LaunchExecutor(_ context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
+	req.OnFallback(l.skipped)
+	return runner.Launched{LaunchID: "job-1"}, nil
+}
+
+// A LAUNCH-TIME HAND-OFF IS PUBLISHED AGAINST THE TURN TOO.
+//
+// The executor's launch walks the seat's executor chain for a member that can
+// take the run, and a member sitting out is skipped exactly as a failing call
+// is. The pick is the engine's and the engine has no emitter, so the runner
+// hands the launch a route bound to the turn, the phase and the iteration —
+// without it a launch that fell back is a hand-off published nowhere, which
+// is the "type with no producer" this suite exists for.
+//
+// Mutation: drop OnFallback from the request, and the launch panics; publish
+// it without the iteration, and the row names the wrong round.
+func TestALaunchTimeHandOffIsPublishedAgainstTheTurn(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	skipped := chain.Fallback{From: "spent-plan", To: "backup-plan", Kind: llm.KindRateLimit,
+		Err: errors.New("usage limit reached — sitting out until 10:00")}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{pub: pub, launcher: fallingLauncher{skipped: skipped}})
+
+	if _, _, err := r.Execute(context.Background(), 2, "try again", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := pub.fallbacks()
+	if len(got) != 1 {
+		t.Fatalf("published %d provider_fallback events for one skipped member, want 1", len(got))
+	}
+	f := got[0]
+	for _, c := range []struct{ field, got, want string }{
+		{"turn_id", f.TurnID, "t-1"},
+		{"phase", string(f.Phase), "execute"},
+		{"from_provider_key", f.FromProviderKey, "spent-plan"},
+		{"to_provider_key", f.ToProviderKey, "backup-plan"},
+		{"error_kind", f.ErrorKind, llm.KindRateLimit.String()},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %q, want %q", c.field, c.got, c.want)
+		}
+	}
+	if f.Iteration != 2 {
+		t.Errorf("iteration = %d, want the round the run was launched in", f.Iteration)
+	}
+}
+
 func TestTheLastMemberOfAChainFallsBackToNothingAndSaysSo(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
 	r, _ := buildWith(t, []phase.Entry{
 		{Key: "benched", Provider: benched{model: "benched-model"}},
 		{Key: "also-benched", Provider: benched{model: "also-benched-model"}},
-	}, buildOpts{pub: pub, execChain: org.ProviderKeys{"benched", "also-benched"}})
+	}, buildOpts{pub: pub, reviewChain: org.ProviderKeys{"benched", "also-benched"}})
 
 	// The phase fails: no member answered. That is the point — the hand-offs
 	// are what tell an operator WHY, and they are published on the way down
 	// rather than reconstructed from the failure afterwards.
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err == nil {
-		t.Fatal("Execute succeeded with every member benched")
+	if _, err := r.Review(context.Background(), 1, workFor("posted"), nil); err == nil {
+		t.Fatal("Review succeeded with every member benched")
 	}
 
 	got := pub.fallbacks()
@@ -139,12 +205,11 @@ func TestTheLastMemberOfAChainFallsBackToNothingAndSaysSo(t *testing.T) {
 func TestAChainThatDoesNotFallThroughPublishesNothing(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	prov := &scriptedProvider{execute: deliver(t, "posted the weekly summary")}
-	r, _ := buildWith(t, []phase.Entry{{Key: "executor", Provider: prov}},
+	r, _ := buildWith(t, []phase.Entry{{Key: "executor", Provider: reviewing(t)}},
 		buildOpts{pub: pub})
 
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
+	if _, err := r.Review(context.Background(), 1, workFor("posted"), nil); err != nil {
+		t.Fatalf("Review: %v", err)
 	}
 	// A healthy turn is a SILENT one here. An event published per phase
 	// regardless would make the Turn screen's anomaly section permanently
@@ -178,12 +243,12 @@ func (c *capture) sizes() []*types.PromptSize {
 func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 	t.Parallel()
 	pub := newCapture()
-	prov := &scriptedProvider{execute: deliver(t, "posted the weekly summary")}
+	prov := reviewing(t)
 	r, _ := buildWith(t, []phase.Entry{{Key: "executor", Provider: prov}},
 		buildOpts{pub: pub})
 
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
+	if _, err := r.Review(context.Background(), 1, workFor("posted"), nil); err != nil {
+		t.Fatalf("Review: %v", err)
 	}
 
 	got := pub.sizes()
@@ -194,14 +259,14 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 		t.Fatalf("published %d prompt.size events for one phase, want 1", len(got))
 	}
 	m := got[0]
-	if m.TurnID != "t-1" || m.Iteration != 1 || string(m.Phase) != "execute" {
-		t.Errorf("addressed to turn=%q iter=%d phase=%q, want t-1/1/execute",
+	if m.TurnID != "t-1" || m.Iteration != 1 || string(m.Phase) != "review" {
+		t.Errorf("addressed to turn=%q iter=%d phase=%q, want t-1/1/review",
 			m.TurnID, m.Iteration, m.Phase)
 	}
 	// The measurement is of the REAL prompt, so it has to match what the
 	// provider actually received. A builder that measured a draft would
 	// report a number that shrinks every time a section moves.
-	run := prov.runsFor("execute")[0]
+	run := prov.runsFor("review")[0]
 	sent := run.req
 	var system, user int
 	for _, msg := range sent.Messages {
@@ -216,12 +281,6 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 		t.Errorf("measured %d/%d bytes, provider received %d/%d",
 			m.SystemBytes, m.UserBytes, system, user)
 	}
-	// A fresh phase opens the conversation, so there is nothing seeded to
-	// measure. Zero here is the fact that separates it from a resume.
-	if m.MessageBytes != 0 {
-		t.Errorf("message_bytes = %d on a phase that opened its own conversation, want 0",
-			m.MessageBytes)
-	}
 	// AND THE TOOL ARRAY, which the CLI lists over MCP and hands its model
 	// with every request, billed as input. The meter was blind to it: a
 	// measured turn reported ~6,900 tokens against the provider's 205,000,
@@ -233,8 +292,7 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 	// The fixture has to have SENT tools, or the two assertions below hold
 	// nothing: every term on both sides of them is then zero, and a surface
 	// built wrong or a fake that dropped the array would read as a meter
-	// that measured it exactly. Same rule the resumed case applies to its
-	// own terms.
+	// that measured it exactly.
 	if len(offered) == 0 || tools == 0 {
 		t.Fatalf("the provider was handed %d tool definitions at %d chars; a term at "+
 			"zero is a term this case is not holding", len(offered), tools)
@@ -243,7 +301,7 @@ func TestAPhaseMeasuresTheFinalPromptItSends(t *testing.T) {
 		t.Errorf("measured %d tools at %d chars, provider received %d at %d",
 			m.ToolCount, m.ToolBytes, len(offered), tools)
 	}
-	// EQUALITY, NOT "NOT ZERO". Every executor surface carries submit_work,
+	// EQUALITY, NOT "NOT ZERO". Every review surface carries submit_review,
 	// so the tool term alone makes the sum non-zero — a `!= 0` assertion
 	// here would pass with the system and user terms deleted, which is
 	// worse than having no assertion at all.
@@ -281,120 +339,6 @@ func toolArrayBytes(t *testing.T, defs []llm.ToolDef) int {
 	return len(encoded)
 }
 
-// seedChars is what the engine measures a parked conversation as, rebuilt from
-// what the provider was handed: every message's text and the compact JSON of
-// its tool calls' arguments.
-//
-// Restated here rather than reaching for the engine's own unexported helper,
-// for the reason toolArrayBytes gives: this suite is the one thing holding that
-// helper's answer against what a provider actually received, and a test that
-// calls the function it is checking agrees with itself whatever either of them
-// does.
-func seedChars(t *testing.T, msgs []llm.Message) int {
-	t.Helper()
-	total := 0
-	for _, msg := range msgs {
-		total += len(msg.Content)
-		for _, tc := range msg.ToolCalls {
-			if len(tc.Arguments) == 0 {
-				total += len(`{}`)
-				continue
-			}
-			encoded, err := json.Marshal(tc.Arguments)
-			if err != nil {
-				t.Fatalf("the fixture's tool call arguments are not JSON: %v", err)
-			}
-			total += len(encoded)
-		}
-	}
-	return total
-}
-
-// A RESUMED PHASE MEASURES THE CONVERSATION IT RE-ENTERS — ALL OF IT.
-//
-// A detached coding run stops the executor mid-loop with its tool call
-// unanswered, and the resume re-enters that same loop from the saved messages
-// — so `system` and `user` are ignored and were the only thing this meter
-// looked at. Every resumed executor published 0/0, on the one phase that
-// carries the most: a whole pre-suspend conversation plus the array. Counting
-// only the tool term would have made it worse, reading as a phase offered
-// every tool and asked nothing.
-//
-// The parked rounds here carry TOOL-CALL ARGUMENTS, which is what a real one
-// carries — the tool loop stores each round's calls on its assistant message
-// and execstate serialises them into the row — and they were the next term to
-// go missing after the two above: text alone under-reported a resumed executor
-// by the largest thing in its prompt.
-func TestAResumedPhaseMeasuresTheConversationItReEnters(t *testing.T) {
-	t.Parallel()
-	pub := newCapture()
-	prov := &scriptedProvider{execute: []llmtest.Response{
-		submitCall(t, runner.SubmitWorkTool,
-			`{"outcome":"blocked","summary":"the run reported a failing build",`+
-				`"evidence":"the box could not compile it"}`),
-	}}
-	state := suspendedAfterTwoRounds()
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
-		pub: pub,
-		resume: &runner.Resume{
-			State:  state,
-			Answer: "the run succeeded, the merge request is open",
-		},
-	})
-	if _, _, err := r.Resume(context.Background(), nil); err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-
-	got := pub.sizes()
-	if len(got) != 1 {
-		t.Fatalf("published %d prompt.size events for one resumed phase, want 1", len(got))
-	}
-	m := got[0]
-	run := prov.runsFor("execute")[0]
-	sent := run.req
-	messages := seedChars(t, sent.Messages)
-	var text, args int
-	for _, msg := range sent.Messages {
-		text += len(msg.Content)
-		for _, tc := range msg.ToolCalls {
-			args += len(tc.Arguments)
-		}
-	}
-	// Each term has to be present in the fixture, or the case cannot tell a
-	// fix from a bug: the meter would report the same figure either way.
-	if text == 0 || args == 0 {
-		t.Fatalf("the fixture sent text=%d tool-call arguments=%d; a term at "+
-			"zero is a term this case is not holding", text, args)
-	}
-	if m.MessageBytes != messages {
-		t.Errorf("message_bytes = %d, the provider received %d bytes of conversation",
-			m.MessageBytes, messages)
-	}
-	// The two a resume does NOT prepend. Reporting them would report bytes
-	// nothing sent, which is the mirror of the bug above.
-	if m.SystemBytes != 0 || m.UserBytes != 0 {
-		t.Errorf("measured %d/%d system/user chars on a resumed phase, which prepends neither",
-			m.SystemBytes, m.UserBytes)
-	}
-	offered := run.offered[0]
-	tools := toolArrayBytes(t, offered)
-	// The tool array is a term of this case exactly as the two above are,
-	// and it is held to the same bar: at zero the comparison below is 0 == 0
-	// and says nothing about what a resumed phase re-offers.
-	if len(offered) == 0 || tools == 0 {
-		t.Fatalf("the resumed phase was handed %d tool definitions at %d chars; a term "+
-			"at zero is a term this case is not holding", len(offered), tools)
-	}
-	if m.ToolCount != len(offered) || m.ToolBytes != tools {
-		t.Errorf("measured %d tools at %d chars, provider received %d at %d",
-			m.ToolCount, m.ToolBytes, len(offered), tools)
-	}
-	if want := (messages + tools) / 4; m.ApproximateTokens != want {
-		t.Errorf("approximate_tokens = %d, want %d over what the provider received",
-			m.ApproximateTokens, want)
-	}
-}
-
 // THE MEASUREMENT IS IN BYTES, which is what the fields are named for and what
 // every reader of them renders.
 //
@@ -410,19 +354,19 @@ func TestAPhaseMeasuresItsPromptInBytesRatherThanRunes(t *testing.T) {
 	// UTF-8, so the two readings of "size" differ by 16 on this phrase alone.
 	const brief = "投稿してください"
 	pub := newCapture()
-	prov := &scriptedProvider{execute: deliver(t, "posted the weekly summary")}
+	prov := reviewing(t)
 	r, _ := buildWith(t, []phase.Entry{{Key: "executor", Provider: prov}},
 		buildOpts{pub: pub, task: brief})
 
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
+	if _, err := r.Review(context.Background(), 1, workFor("posted"), nil); err != nil {
+		t.Fatalf("Review: %v", err)
 	}
 
 	got := pub.sizes()
 	if len(got) != 1 {
 		t.Fatalf("published %d prompt.size events for one phase, want 1", len(got))
 	}
-	sent := prov.requestsFor("execute")[0]
+	sent := prov.requestsFor("review")[0]
 	var user int
 	for _, msg := range sent.Messages {
 		if msg.Role == llm.RoleUser {
@@ -462,7 +406,8 @@ func userText(req llm.Request) string {
 // rollup is keyed on it — and the phase record left it empty on every turn
 // phase: only a delegated worker set it, and that one named the head it was
 // resolved under whatever took over. A phase that never reached a model names
-// no entry at all, exactly as it names no model.
+// no entry at all, exactly as it names no model. (The executor's record names
+// the member its launch picked — see TestAResumedAgentRunPublishesWhatTheRunDid.)
 func TestAPhaseRecordNamesTheEntryThatServedIt(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -482,18 +427,17 @@ func TestAPhaseRecordNamesTheEntryThatServedIt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			pub := newCapture()
-			prov := &scriptedProvider{execute: deliver(t, "posted the weekly summary")}
 			r, _ := buildWith(t, []phase.Entry{
 				{Key: "benched", Provider: benched{model: "benched-model"}},
 				{Key: "also-benched", Provider: benched{model: "also-benched-model"}},
-				{Key: "executor", Provider: prov},
-			}, buildOpts{pub: pub, execChain: tc.chain})
+				{Key: "executor", Provider: reviewing(t)},
+			}, buildOpts{pub: pub, reviewChain: tc.chain})
 
-			_, _, err := r.Execute(context.Background(), 1, "", nil)
+			_, err := r.Review(context.Background(), 1, workFor("posted"), nil)
 			if (err != nil) != tc.fails {
-				t.Fatalf("Execute: %v, want a failure: %v", err, tc.fails)
+				t.Fatalf("Review: %v, want a failure: %v", err, tc.fails)
 			}
-			if got := completedPhase(t, pub, "execute").ProviderKey; got != tc.want {
+			if got := completedPhase(t, pub, "review").ProviderKey; got != tc.want {
 				t.Errorf("provider_key = %q, want %q", got, tc.want)
 			}
 		})

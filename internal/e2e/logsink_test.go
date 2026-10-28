@@ -29,7 +29,7 @@ import (
 // embedding its own NATS server, in this one process. See
 // `go doc ./internal/solo`.
 //
-// And it is where this binary becomes one of the two processes a model call
+// And it is where this binary becomes one of the three processes a model call
 // re-executes it as — FIRST, before the sink or the framework, so the child's
 // stdout is exactly the stream it speaks, and as a dispatch here rather than a
 // test function, which every ordinary run would otherwise report as a skip:
@@ -40,10 +40,14 @@ import (
 //     CLI's variable: the scripted CLI starts the relay, and hands it its own
 //     environment, that variable included.
 //   - the scripted model's CLI ([scriptedCLIEnv]).
+//   - the executor's coding CLI in its box ([codingCLIEnv]).
 func TestMain(m *testing.M) {
 	mcprelay.DispatchIfRelay()
 	if endpoint := os.Getenv(scriptedCLIEnv); endpoint != "" {
 		os.Exit(runScriptedCLI(endpoint))
+	}
+	if endpoint := os.Getenv(codingCLIEnv); endpoint != "" {
+		os.Exit(runCodingCLI(endpoint))
 	}
 	binary, err := os.Executable()
 	if err != nil {
@@ -254,6 +258,14 @@ func (r *traceRecorder) attribute(t *testing.T) {
 			t.Log(strings.TrimRight(line, "\n"))
 		}
 	})
+}
+
+// loudMark is the number the next loud line will take: what a case hands
+// [traceRecorder.loudSince] to read the lines logged after it.
+func (r *traceRecorder) loudMark() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.loudSeen
 }
 
 // loudSince is every loud line from number from on that the ring still holds,

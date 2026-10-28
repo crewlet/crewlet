@@ -68,21 +68,16 @@ func (p *panicky) Call(context.Context, map[string]any) (tools.Result, error) {
 	panic("a tool fell over")
 }
 
-// launcher starts work that outlives its call, and asks the loop to park with
-// the call unanswered — run_sandbox's shape.
+// launcher starts work that outlives its call. Served on a [parking] surface
+// that names it, its result asks the loop to park with the call unanswered.
 type launcher struct{ calls atomic.Int32 }
 
 func (*launcher) Name() string               { return "launch" }
 func (*launcher) Description() string        { return "starts work that outlives the call" }
 func (*launcher) Parameters() map[string]any { return map[string]any{"type": "object"} }
-func (*launcher) Call(context.Context, map[string]any) (tools.Result, error) {
-	return tools.Result{Output: "unreachable: a detached tool is called for its turn", Failed: true,
-		Cause: tools.RefusalInternalError}, nil
-}
-
-func (l *launcher) CallDetached(context.Context, *turnctx.Turn, map[string]any) (tools.DetachedResult, error) {
+func (l *launcher) Call(context.Context, map[string]any) (tools.Result, error) {
 	l.calls.Add(1)
-	return tools.DetachedResult{Result: tools.Result{Output: "started"}, Suspend: true}, nil
+	return tools.Result{Output: "started"}, nil
 }
 
 // gated is a fixture over a surface of the given tools, on a turn with a call
@@ -94,6 +89,13 @@ type gated struct {
 }
 
 func newGated(t *testing.T, extra ...tools.Callable) *gated {
+	t.Helper()
+	return newGatedParking(t, nil, extra...)
+}
+
+// newGatedParking is [newGated] whose surface parks on the tools parks names
+// ([parking]).
+func newGatedParking(t *testing.T, parks map[string]bool, extra ...tools.Callable) *gated {
 	t.Helper()
 	f := newFixture(t)
 	reg := tools.NewRegistry()
@@ -120,6 +122,10 @@ func newGated(t *testing.T, extra ...tools.Callable) *gated {
 			}
 			return nil
 		},
+	}
+	if len(parks) > 0 {
+		f.session.Surface = parking{Surface: f.surface, parks: parks}
+		f.session.Caller = actingSeat{f.surface}
 	}
 	f.bridge = bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: f.server.URL,
@@ -206,7 +212,7 @@ func TestABoxIsAnsweredAtOnceWhenItsRunsToolsClose(t *testing.T) {
 	}
 }
 
-// A SUSPEND IS REFUSED, AND THE CALL THAT RAN IS RECORDED. A box-mode run's
+// A SUSPEND IS REFUSED, AND THE CALL THAT RAN IS RECORDED. A detached run's
 // loop is its CLI's own, which would wait for ever on a call parked unanswered,
 // so the box is told at once the tool cannot be used from a coding run — and
 // the run goes on. But the tool ran, and started what it would have parked on,
@@ -217,7 +223,7 @@ func TestABoxIsAnsweredAtOnceWhenItsRunsToolsClose(t *testing.T) {
 func TestASuspendIsRefusedAndRecordedAsACallThatRan(t *testing.T) {
 	t.Parallel()
 	launch := &launcher{}
-	g := newGated(t, launch)
+	g := newGatedParking(t, map[string]bool{"launch": true}, launch)
 	sess := dial(t, g.url)
 	res := callTool(t, sess, "launch", map[string]any{})
 	if !res.IsError || !strings.Contains(text(res), "cannot be used from a coding run") {

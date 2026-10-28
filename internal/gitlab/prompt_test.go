@@ -85,12 +85,20 @@ func TestEachReasonAsksForSomethingDifferent(t *testing.T) {
 		{gitlab.MRReview,
 			[]string{"requested to review", "If you are not the right reviewer"},
 			[]string{"deliberately", "Evaluate Before Acting", "go quiet"}},
+		// An assigned merge request already exists, so it is not told where
+		// one comes from.
 		{gitlab.MRAssigned,
 			[]string{"been assigned a merge request", "reassign it"},
-			[]string{"requested to review", "coding runtime", "go quiet"}},
+			[]string{"requested to review", "in your own checkout", "go quiet"}},
+		// AN ISSUE'S CODE CHANGE IS THE SEAT'S OWN TO MAKE. The executor
+		// reading this is its own coding run, with its own checkout, so it
+		// is sent to no other runtime, and the merge request it opens
+		// carries its own name.
 		{gitlab.IssueAssigned,
-			[]string{"been assigned an issue", "coding runtime"},
-			[]string{"go quiet"}},
+			[]string{"been assigned an issue",
+				"You make any code change the issue needs yourself, in your own checkout",
+				"open the merge request under your own identity", "reassign it"},
+			[]string{"runtime", "sandbox", "go quiet"}},
 		// A MENTION IS ADDRESSED: the delivery check holds it to an
 		// answer, so it is not told silence is fine when nothing was asked.
 		{gitlab.NoteMention,

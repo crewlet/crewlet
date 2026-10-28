@@ -161,6 +161,25 @@ const (
 	// serves it and only the incarnation that owns the run answers.
 	ObserveSandboxTail = ObservePrefix + "sandbox_tail"
 
+	// SandboxPrefix prefixes the subjects the code sandbox's nodes reach
+	// each other on about a run's box (internal/sandbox, boxhost.go): a box
+	// on an engine host is its launching node's, and every other node asks
+	// that one.
+	//
+	// NOT EVENTS, for SearchPrefix's reason: a box read is the ephemeral
+	// request and reply of [queue.EventQueue.Ask], and a nudge an ephemeral
+	// broadcast, both worth nothing once their moment has passed — the
+	// run's row is the record, and the poll the guarantee.
+	SandboxPrefix = "crewlet.sandbox."
+	// SandboxBoxRead is where a read of a run's box is asked of the node
+	// whose host the box is on. Every node serves it and only that node
+	// answers.
+	SandboxBoxRead = SandboxPrefix + "box_read"
+	// SandboxNudge is where a node tells whichever waiter drives a run to
+	// look at it now ([queue.EventQueue.Broadcast]): its work was just
+	// submitted, or its box just left to its host.
+	SandboxNudge = SandboxPrefix + "nudge"
+
 	// SteerPrefix prefixes the subjects a person's note to a running turn
 	// crosses (internal/agent/steer).
 	//

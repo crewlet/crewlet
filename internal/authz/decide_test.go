@@ -262,11 +262,8 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		{"a seat asks a colleague holding no permission", seat("sre"),
 			authz.ActionColleagueAsk, authz.Object{Kind: authz.KindPerson, Owner: "cto"},
 			true, authz.ReasonEverybody},
-		{"a seat starts a coding run holding no permission", seat("sre"),
-			authz.ActionSandboxRun, authz.Object{Kind: authz.KindCompany},
-			true, authz.ReasonEverybody},
-		{"a person holding admin does neither", person("jane.doe", admin),
-			authz.ActionSandboxRun, authz.Object{Kind: authz.KindCompany},
+		{"a person holding admin does not", person("jane.doe", admin),
+			authz.ActionColleagueAsk, authz.Object{Kind: authz.KindPerson, Owner: "cto"},
 			false, authz.ReasonSeatOnly},
 
 		// --- own record ---------------------------------------------- //

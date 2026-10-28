@@ -22,10 +22,13 @@ import (
 // engine. A container has a loopback interface of its own, so the same URL
 // reaches the container itself, where nothing listens. A single-host install
 // that sets the bridge to `http://127.0.0.1:8000`, as the examples do, could
-// therefore run box mode in `direct` and in no other local cell, and naming
+// therefore run an executor in `direct` and in no other local cell, and naming
 // the runtime's host alias instead broke `direct`, where that name does not
 // resolve. A company that put one seat in each could not be served by any
-// value.
+// value. (A `direct` box on a node that serves the API dials that node's own
+// listener, which the node derives, and reads no variable at all; the rule
+// here is what keeps every other `direct` box, and every value the seat
+// scopes into it, working as written.)
 //
 // So the address is translated where it crosses into the box's network, and
 // nowhere else: a box whose network is not the host's names the alias its
@@ -57,6 +60,22 @@ func EngineAddress(box Sandbox, raw string) string {
 		return raw
 	}
 	return rehost(raw, aliased.EngineHost())
+}
+
+// EngineHostName reports whether host — a bare name, no port — is one a
+// container runtime gives the engine host inside a box it starts: the name
+// [EngineAddress] hands a box in place of loopback, under Docker or under
+// Podman. In any case, as DNS compares names.
+//
+// For the tool bridge to admit, beside a loopback name, as the Host of a call
+// to a session it holds to this host's loopback (internal/api/mcpbridge):
+// Docker Desktop and Podman's machine on macOS and Windows deliver a
+// container's call to the engine host there, under the name it dialled. Both
+// names are in `.internal`, which ICANN keeps for private use, so no public
+// DNS answers either and no page a browser loads from the internet is served
+// under one.
+func EngineHostName(host string) bool {
+	return strings.EqualFold(host, dockerHostAlias) || strings.EqualFold(host, podmanHostAlias)
 }
 
 // EngineServers is servers as box dials them: [EngineAddress] applied to

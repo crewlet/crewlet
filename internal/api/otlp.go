@@ -39,18 +39,22 @@ const maxOtelBody = 4 << 20
 // sandbox telemetry — and the route is then ABSENT rather than answering
 // 503: an endpoint that exists and refuses everything reads to an operator
 // as broken, while one that is not there matches what the config says.
-func (a *App) mountOTLP(mux httpjson.Router, receiver *sandbox.OtelReceiver) {
+//
+// A FUNCTION OF THE ROUTER, not of the [App], because two surfaces mount it:
+// the App, and the probe surface of a node without the ingress role, which
+// serves it to its own host's boxes alone ([Probes]).
+func mountOTLP(mux httpjson.Router, receiver *sandbox.OtelReceiver) {
 	if receiver == nil {
 		return
 	}
 	mux.Handle("POST "+auth.OTLPPrefix+"{token}/v1/{signal}", http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			a.serveOTLP(w, r, receiver)
+			serveOTLP(w, r, receiver)
 		}))
 	log.Info("sandbox_otlp_receiver_mounted", "forwards", receiver.Forwards())
 }
 
-func (a *App) serveOTLP(w http.ResponseWriter, r *http.Request, receiver *sandbox.OtelReceiver) {
+func serveOTLP(w http.ResponseWriter, r *http.Request, receiver *sandbox.OtelReceiver) {
 	signal := r.PathValue("signal")
 	// THE SIGNAL IS CHECKED AGAINST A CLOSED SET, because it is
 	// concatenated into the upstream URL — an unchecked segment lets a

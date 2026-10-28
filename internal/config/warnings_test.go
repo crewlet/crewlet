@@ -576,7 +576,7 @@ func TestEveryNodeNeedsAStreamThatSurvivesARestart(t *testing.T) {
 // go quiet; walk only the top-level roles and the unit's seat is missed.
 func TestACompanyNobodyCanJoinIsAdvisedNotRefused(t *testing.T) {
 	t.Parallel()
-	const agents = "name: Acme\nproviders:\n  llm:\n    main:\n" +
+	const agents = "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    main:\n" +
 		"      model: claude-sonnet-5\n"
 	for name, tc := range map[string]struct {
 		doc     string

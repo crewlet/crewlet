@@ -63,7 +63,9 @@ func (l *SeatLookup) issuer() *Issuer {
 // CACHED by the issuer, because this is the inbound hot path: a busy
 // repository produces a delivery per app per comment, and minting a token
 // for each would spend one request per delivery to learn something that is
-// valid for an hour.
+// valid for an hour. A seat whose mint GitHub refuses costs the same: the
+// issuer holds the refusal for its wait ([Issuer.RetryWait]), so the next
+// seat is asked without a request to learn the first one's answer again.
 func (l *SeatLookup) token(ctx context.Context, seat SeatApp) (string, error) {
 	minted, err := l.issuer().Token(ctx, l.Opts, seat, ToolTokenLife)
 	if err != nil {

@@ -281,12 +281,11 @@ func TestARunEndingInProseIsCorrectedInTheNextRun(t *testing.T) {
 // and it is the call the CLI named, under the id the resume answers.
 func TestADetachedToolParksThePhaseWithOneDanglingCall(t *testing.T) {
 	t.Parallel()
-	surf := newSurface("run_sandbox", "submit_work")
-	surf.detached["run_sandbox"] = true
-	surf.results["run_sandbox"] = toolloop.ToolResult{Output: "started", Suspend: true,
-		SuspendPayload: map[string]any{"job": "j1"}}
+	surf := newSurface("propose_change", "submit_work")
+	surf.detached["propose_change"] = true
+	surf.results["propose_change"] = toolloop.ToolResult{Output: "proposed", Suspend: true}
 	prov := &llmtest.Script{Runs: []llmtest.Run{{Responses: []llmtest.Response{
-		{Text: "coding it", Calls: []llmtest.Call{{ID: "call-1", Name: "run_sandbox", Args: `{"task":"x"}`}}},
+		{Text: "proposing it", Calls: []llmtest.Call{{ID: "call-1", Name: "propose_change", Args: `{"change":"x"}`}}},
 		{Text: "never reached"},
 	}}}}
 	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, AllowSuspend: true,
@@ -294,9 +293,8 @@ func TestADetachedToolParksThePhaseWithOneDanglingCall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !res.Suspended || res.PendingToolName != "run_sandbox" || res.PendingToolCallID != "call-1" ||
-		res.SuspendPayload["job"] != "j1" {
-		t.Fatalf("result %+v, want parked on run_sandbox call-1 with its payload", res)
+	if !res.Suspended || res.PendingToolName != "propose_change" || res.PendingToolCallID != "call-1" {
+		t.Fatalf("result %+v, want parked on propose_change call-1", res)
 	}
 	answered := map[string]bool{}
 	var calls []string
@@ -322,15 +320,15 @@ func TestADetachedToolParksThePhaseWithOneDanglingCall(t *testing.T) {
 	}
 	// THE CALL THAT PARKED THE PHASE RAN, so it is on the record like any
 	// other call — only its answer is left open. A record without it says
-	// nothing started the run the resume collects.
+	// nothing made the change the resume answers for.
 	var parked *toolloop.Execution
 	for i := range res.Executions {
 		if res.Executions[i].CallID == res.PendingToolCallID {
 			parked = &res.Executions[i]
 		}
 	}
-	if parked == nil || parked.Name != "run_sandbox" || parked.Output != "started" {
-		t.Errorf("executions %+v, want the parked run_sandbox call with what it returned", res.Executions)
+	if parked == nil || parked.Name != "propose_change" || parked.Output != "proposed" {
+		t.Errorf("executions %+v, want the parked propose_change call with what it returned", res.Executions)
 	}
 }
 
@@ -338,7 +336,7 @@ func TestADetachedToolParksThePhaseWithOneDanglingCall(t *testing.T) {
 // and the loop returns the fence's own error. A response is ONE model request
 // and MANY calls, and the calls are what reach outside the engine, so the
 // fence closing between two calls of one response stops the rest of it too —
-// the chat post, the tracker write and the sandbox launch the node would
+// the chat post, the tracker write and the delegation the node would
 // otherwise run on a seat a peer now holds.
 func TestAClosedFenceStopsTheNextCall(t *testing.T) {
 	t.Parallel()
@@ -805,19 +803,21 @@ func TestACallsIDIsReadOnlyUnderTheKeyItsCLIDeclared(t *testing.T) {
 // login unchecked, for as long as the parked call ran.
 func TestARunStopsWaitingOnACallItWasAnsweredStillRunning(t *testing.T) {
 	t.Parallel()
-	surf := newSurface("delegate")
-	surf.holdTool, surf.hold, surf.entered = "delegate", make(chan struct{}), make(chan struct{})
+	surf := newSurface("slow")
+	surf.holdTool, surf.hold, surf.entered = "slow", make(chan struct{}), make(chan struct{})
 	busy := make(chan bool, 8)
 	prov := &llmtest.Script{
 		OnCall: func(_ int, b bool) { busy <- b },
 		Runs: []llmtest.Run{
-			{Responses: []llmtest.Response{{Calls: []llmtest.Call{{Name: "delegate"}}}, {Text: "never"}}},
+			{Responses: []llmtest.Response{{Calls: []llmtest.Call{{Name: "slow"}}}, {Text: "never"}}},
 			{Responses: []llmtest.Response{{Text: "done"}}},
 		},
+		// Answered "still running" at 300ms, while it is held.
+		ToolTimeout: 5300 * time.Millisecond,
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := run(t, toolloop.Config{Provider: prov, Surface: surf, ParkLocally: []string{"delegate"}})
+		_, err := run(t, toolloop.Config{Provider: prov, Surface: surf})
 		done <- err
 	}()
 	<-surf.entered
@@ -844,14 +844,21 @@ func TestARunStopsWaitingOnACallItWasAnsweredStillRunning(t *testing.T) {
 // request was merged into the last run's, and the phase lost a round.
 func TestARequestOfOneRunIsNeverReadAsAnotherRunsRequest(t *testing.T) {
 	t.Parallel()
-	surf := newSurface("delegate", "post")
-	surf.results["delegate"] = toolloop.ToolResult{Output: "the workers' answer"}
-	prov := &llmtest.Script{NumberedRequests: true, Runs: []llmtest.Run{
-		{Responses: []llmtest.Response{{Text: "delegating", Calls: []llmtest.Call{{Name: "delegate"}}}, {Text: "never"}}},
+	surf := newSurface("slow", "post")
+	surf.results["slow"] = toolloop.ToolResult{Output: "the slow call's answer"}
+	// Answered "still running" at 300ms, while it runs to 600: the call ends
+	// the first run, and the second makes the next request.
+	surf.hook = func(_ context.Context, call llm.ToolCall) {
+		if call.Name == "slow" {
+			time.Sleep(600 * time.Millisecond)
+		}
+	}
+	prov := &llmtest.Script{NumberedRequests: true, ToolTimeout: 5300 * time.Millisecond, Runs: []llmtest.Run{
+		{Responses: []llmtest.Response{{Text: "waiting", Calls: []llmtest.Call{{Name: "slow"}}}, {Text: "never"}}},
 		{Responses: []llmtest.Response{{Text: "posting", Calls: []llmtest.Call{{Name: "post"}}}, {Text: "done"}}},
 	}}
 	began := time.Now()
-	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, ParkLocally: []string{"delegate"}})
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -924,46 +931,6 @@ func TestAToolThatPanicsEndsThePhaseAsAPanic(t *testing.T) {
 	var perr *turn.PanicError
 	if !errors.As(err, &perr) {
 		t.Fatalf("Run returned %v, want the panic", err)
-	}
-}
-
-// A CALL THAT WAITS ON OTHER MODEL RUNS ENDS THE RUN AT ONCE, and the next run
-// is handed its real result: the CLI is not held idle, with its slot, for as
-// long as the workers take.
-func TestALongCallEndsTheRunAndTheNextIsHandedItsResult(t *testing.T) {
-	t.Parallel()
-	surf := newSurface("delegate", "submit_work")
-	surf.results["delegate"] = toolloop.ToolResult{Output: "the workers' answer"}
-	prov := &llmtest.Script{Runs: []llmtest.Run{
-		{Responses: []llmtest.Response{
-			{Calls: []llmtest.Call{{Name: "delegate"}}},
-			{Text: "never reached in this run"},
-		}},
-		{Responses: []llmtest.Response{{Calls: []llmtest.Call{{Name: "submit_work"}}}}},
-	}}
-	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf,
-		TerminateAfter: []string{"submit_work"}, ParkLocally: []string{"delegate"}})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if late := prov.Late(); late != 0 {
-		t.Errorf("the CLI asked its model again %d time(s) after the long call ended its run", late)
-	}
-	if strings.Contains(res.Text, "never reached in this run") {
-		t.Errorf("the first run went on past the long call: %q", res.Text)
-	}
-	seen := prov.Seen()
-	if len(seen) != 2 {
-		t.Fatalf("%d runs, want two", len(seen))
-	}
-	found := false
-	for _, m := range seen[1].Messages {
-		if m.Role == llm.RoleTool && m.Content == "the workers' answer" {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("the next run was not handed the long call's real result: %+v", seen[1].Messages)
 	}
 }
 

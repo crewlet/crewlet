@@ -730,7 +730,7 @@ export function CommandPalette({
         ),
         label: name,
         // WHAT IT IS DOING AND ON WHAT, in the words every running-turn row
-        // says ("Executing ENG-412", "3 workers on ENG-405") — while the seat
+        // says ("Executing ENG-412", "Coding run on ENG-9") — while the seat
         // is still on the turn the row was read for.
         hint:
           row && turnIdOf(row) === turnId ? stateLine(row, { now: Date.now(), seat }) : "Finished",

@@ -15,7 +15,7 @@ import (
 // path read "command #0 failed (exit 0)" — no step has a command #0, and exit
 // 0 is success — and a command with no exit status read "failed (exit 0)" as
 // well. Each message here is the one an operator reads in
-// sandbox_setup_failed and an agent reads back from run_sandbox.
+// sandbox_setup_failed and an agent reads back from its failed launch.
 func TestASetupFailureSaysWhatFailed(t *testing.T) {
 	t.Parallel()
 

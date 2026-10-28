@@ -45,14 +45,14 @@ func TestTheJudgeIsNotCalledOnARefusalAlreadyCertain(t *testing.T) {
 	meter := &fullMeter{}
 	r, err := New(Config{
 		Registry: tools.NewRegistry(), Models: &phase.Registry{},
-		Judge: judge, Budget: meter, Sessions: testHost(t),
+		Judge: judge, Budget: meter, Sessions: testHost(t), Launcher: stubLauncher{},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	policy := extension.Policy{Enabled: true, RoundStep: 4, Ceiling: 8}
-	granted, decision := r.consider(context.Background(), phase.Execute, 1, 2, policy,
-		extension.Request{Phase: phase.Execute, RoundsUsed: 2})
+	granted, decision := r.consider(context.Background(), phase.Onboarding, 1, 2, policy,
+		extension.Request{Phase: phase.Onboarding, RoundsUsed: 2})
 	if granted != 0 || decision.Reason != extension.ReasonBudgetExhausted {
 		t.Errorf("consider = %d, %+v; want no rounds, rescued on the budget", granted, decision)
 	}

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/execstate"
+	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/skills"
@@ -14,120 +16,41 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A SEAT IS NEVER SHOWN A TOOL THAT WOULD ONLY REFUSE IT.
-//
-// run_sandbox is registered per EPOCH — the engine wires one launcher for the
-// whole company — so every seat's registry carries it the moment any seat can
-// run code. Two seats can never use it, and before this filter both learned so
-// by calling it: a round spent, on a tool the catalogue vouched for, and
-// sometimes a whole turn planned around a box that was never coming.
-//
-// Out of the UNIVERSE, not only the active list: a surface activates anything
-// in its snapshot by name, and the catalogue is read off the same snapshot, so
-// a tool kept off the active list alone was still listed and one call away.
-//
-// Mutate `offersSandbox` to return true and the first three cases go red.
-func TestExecutorSurfaceHidesRunSandboxFromSeatsThatCannotUseIt(t *testing.T) {
-	t.Parallel()
-
-	gated := &org.Role{Name: "Engineer", Sandbox: &org.RoleSandbox{Enabled: true}}
-	ungated := &org.Role{Name: "Chief of Staff"}
-	offGate := &org.Role{Name: "Analyst", Sandbox: &org.RoleSandbox{Enabled: false}}
-
-	cases := []struct {
-		name     string
-		seat     *org.Role
-		agentRun AgentLauncher
-		want     bool
-	}{
-		{
-			name: "no gate at all — the launcher would answer " +
-				"\"this seat's sandbox is not enabled\"",
-			seat: ungated,
-		},
-		{
-			name: "a gate that is off — same refusal, and the operator " +
-				"turned it off on purpose",
-			seat: offGate,
-		},
-		{
-			name: "a box-mode executor already holds a shell, so a " +
-				"second box would put the work where the turn cannot see it",
-			seat:     gated,
-			agentRun: stubLauncher{},
-			want:     false,
-		},
-		{
-			name: "a gated seat in host mode is the one that can " +
-				"actually launch one",
-			seat: gated,
-			want: true,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			r, err := New(Config{
-				Registry: tools.NewRegistry(),
-				Models:   &phase.Registry{},
-				Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme"}, Role: tc.seat},
-				AgentRun: tc.agentRun,
-				Sessions: testHost(t),
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			snapshot, err := tools.NewRegistry().Snapshot().
-				With(tools.Entry{Tool: stubTool(RunSandboxTool), Origin: tools.OriginBuiltin})
-			if err != nil {
-				t.Fatal(err)
-			}
-			universe := r.executorUniverse(snapshot, tc.agentRun != nil)
-			if got := slices.Contains(executorActive(universe), RunSandboxTool); got != tc.want {
-				t.Errorf("run_sandbox offered = %v, want %v", got, tc.want)
-			}
-			if _, got := universe.Lookup(RunSandboxTool); got != tc.want {
-				t.Errorf("run_sandbox reachable by activation = %v, want %v", got, tc.want)
-			}
-			if got := strings.Contains(universe.Discoverable(nil), RunSandboxTool); got != tc.want {
-				t.Errorf("run_sandbox in the catalogue = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 // THE EXECUTOR NEVER REACHES mark_onboarded, by activation or by catalogue.
 //
 // A seat that marked itself onboarded from inside the executor would skip
 // orientation for ever. It was kept off the executor's active list only, so
 // the catalogue the prompt rendered listed it and activate_tool reached it.
-// Every executor, gated or not and on either runtime, is held to it.
+//
+// Mutation: return the snapshot whole from executorUniverse, and this goes
+// red.
 func TestTheExecutorCannotReachThePhaseScopedTools(t *testing.T) {
 	t.Parallel()
-	for _, agentRun := range []bool{false, true} {
-		r, err := New(Config{
-			Registry: tools.NewRegistry(),
-			Models:   &phase.Registry{},
-			Seat: prompts.Seat{Org: &org.Organization{Name: "Acme"},
-				Role: &org.Role{Name: "Engineer", Sandbox: &org.RoleSandbox{Enabled: true}}},
-			Sessions: testHost(t),
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		snapshot, err := tools.NewRegistry().Snapshot().
-			With(tools.Entry{Tool: stubTool(MarkOnboardedTool), Origin: tools.OriginBuiltin})
-		if err != nil {
-			t.Fatal(err)
-		}
-		universe := r.executorUniverse(snapshot, agentRun)
-		if _, held := universe.Lookup(MarkOnboardedTool); held {
-			t.Errorf("box mode %v: mark_onboarded is in the executor's snapshot, one activation away", agentRun)
-		}
-		if strings.Contains(universe.Discoverable(nil), MarkOnboardedTool) {
-			t.Errorf("box mode %v: the executor's catalogue lists mark_onboarded", agentRun)
-		}
+	r, err := New(Config{
+		Registry: tools.NewRegistry(),
+		Models:   &phase.Registry{},
+		Launcher: stubLauncher{},
+		Sessions: testHost(t),
+		Seat: prompts.Seat{Org: &org.Organization{Name: "Acme"},
+			Role: &org.Role{Name: "Engineer"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := tools.NewRegistry().Snapshot().
+		With(tools.Entry{Tool: stubTool(MarkOnboardedTool), Origin: tools.OriginBuiltin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	universe := r.executorUniverse(snapshot)
+	if _, held := universe.Lookup(MarkOnboardedTool); held {
+		t.Error("mark_onboarded is in the executor's snapshot, one activation away")
+	}
+	if strings.Contains(universe.Discoverable(nil), MarkOnboardedTool) {
+		t.Error("the executor's catalogue lists mark_onboarded")
+	}
+	if slices.Contains(executorActive(universe), MarkOnboardedTool) {
+		t.Error("the executor's run is offered mark_onboarded")
 	}
 }
 
@@ -142,18 +65,20 @@ func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 	return tools.Result{}, nil
 }
 
-// stubLauncher stands for "this executor runs in box mode". Only its
-// presence is read.
+// stubLauncher stands for the engine's launch seam. Only its presence is read:
+// a runner refuses to be built without one.
 type stubLauncher struct{}
 
-func (stubLauncher) LaunchExecutor(context.Context, AgentRunRequest) error { return nil }
+func (stubLauncher) LaunchExecutor(context.Context, AgentRunRequest) (Launched, error) {
+	return Launched{}, nil
+}
 
 // THE OPEN-WORLD HALF OF THE PREDICATE REACHES THE TURN, or it is dead code.
 //
 // [turn.Acted] decides whether a broken turn's trigger is given up rather than
 // redelivered, and its two halves come from different places: MCP-backing off
 // `MCPTools`, and a first-party tool that leaves the process off
-// `KnownOpenWorld`. Only `a2a_ask` and `run_sandbox` carry that annotation, so
+// `KnownOpenWorld`. Only `a2a_ask` carries that annotation among the builtins, so
 // if `describe` stops filling the field the engine silently loses the ability
 // to tell "this turn woke a colleague" from "this turn did nothing" — and
 // every such failure goes back to replaying its ask twenty-five times.
@@ -252,5 +177,76 @@ func TestASkillGuardNeedsItsLoaderActive(t *testing.T) {
 	active := tools.NewSurface(phase.Execute.String(), reg.Snapshot(), []string{skills.LoaderTool})
 	if g := r.guardFor(phase.Execute, 1, active, nil); g.guard == nil {
 		t.Error("no guard was armed although the loader is active and slack_post is in the universe")
+	}
+}
+
+// A COLLECTED RUN'S GUARD HOLDS WHAT THE RUN LOADED. A collection rebuilds the
+// run's surface as the run left it, guard included, by the one rebuild every
+// segment that re-enters a run makes (rebuiltSurface): the skills the launch
+// recorded, and then every skill the run loaded over the bridge. A
+// reopened run and a carried-on run go on calling through that guard; the
+// collection calls nothing through it, and is rebuilt the same way because a
+// rebuild of its own is how the collection came to drift from the other two.
+//
+// Mutation: leave the run's bridged loads out of the collection's rebuild, and
+// its guard holds only what the launch recorded; replay a failed load, and it
+// holds a skill the run never read.
+func TestACollectedRunsGuardHoldsWhatTheRunLoaded(t *testing.T) {
+	t.Parallel()
+	registry := skills.NewRegistry()
+	for _, s := range []skills.Skill{
+		{Key: "chat-conventions", Title: "Chat conventions", Summary: "how to post",
+			Trigger: skills.Trigger{Tool: "slack_post"}, Required: true,
+			SourcePageID: "chat-conventions-page"},
+		{Key: "release-notes", Title: "Release notes", Summary: "how to announce",
+			Trigger: skills.Trigger{Tool: "slack_post"}, Required: true,
+			SourcePageID: "release-notes-page"},
+		{Key: "standups", Title: "Standups", Summary: "how to report",
+			Trigger: skills.Trigger{Tool: "slack_post"}, Required: true,
+			SourcePageID: "standups-page"},
+	} {
+		if _, err := registry.PutPage(s); err != nil {
+			t.Fatalf("PutPage %s: %v", s.Key, err)
+		}
+	}
+	reg := tools.NewRegistry()
+	for _, name := range []string{"slack_post", skills.LoaderTool} {
+		if err := reg.Register(stubTool(name), tools.OriginBuiltin); err != nil {
+			t.Fatalf("Register %s: %v", name, err)
+		}
+	}
+	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
+	r, err := New(Config{
+		Registry: reg,
+		Models:   &phase.Registry{},
+		Launcher: stubLauncher{},
+		Sessions: testHost(t),
+		Skills:   registry,
+		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
+		Resume: &Resume{
+			State: execstate.State{
+				Version: execstate.Version, Round: 1,
+				ActiveTools:  []string{"slack_post", skills.LoaderTool},
+				LoadedSkills: []string{"release-notes"},
+			},
+			Bridged: []BridgedCall{
+				{Call: ledger.Call{Name: skills.LoaderTool, Args: map[string]any{"key": "chat-conventions"},
+					Result: "Always thread your reply."}, Seq: 1},
+				{Call: ledger.Call{Name: skills.LoaderTool, Args: map[string]any{"key": "standups"},
+					Result: "no such skill", Failed: true}, Seq: 2},
+				{Call: ledger.Call{Name: "slack_post", Args: map[string]any{"channel": "C1"},
+					Result: "posted"}, Seq: 3},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, _, err := r.Resume(context.Background(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if got, want := r.loadedSkills(), []string{"chat-conventions", "release-notes"}; !slices.Equal(got, want) {
+		t.Errorf("the collected run's guard holds %v, want what the launch recorded and what "+
+			"the run loaded over the bridge, %v", got, want)
 	}
 }

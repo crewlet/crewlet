@@ -140,40 +140,43 @@ func TestANewCallsVersionsArePastEveryOneHandedOut(t *testing.T) {
 }
 
 // A CALL BUILT AGAIN UNDER THE SAME KEY IS NEWER THAN THE ONE BEFORE IT. A
-// suspended Execute phase publishes a completion checkpoint, which clears its
-// call, and streams its resumed rounds under the same turn, phase and
-// iteration. Counted per call, the rebuilt call's versions began again at one,
-// and a tab that missed the push clearing the call and the first push after
-// it — the hub drops a slow tab's oldest envelopes — took every later push for
-// one overtaken by the copy it held: it kept the call from before the
-// suspension and asked for nothing.
+// parked turn's resume that runs again — held until its seat's budget has room
+// for the relaunch its reviewer sent back, or retried after an attempt that
+// broke — collects the same run into the same turn and round, so its review
+// opens again under the turn, phase and iteration of the attempt before it,
+// whose completion cleared the call. Counted per call, the rebuilt call's
+// versions began again at one, and a tab that missed the push clearing the
+// call and the first push after it — the hub drops a slow tab's oldest
+// envelopes — took every later push for one overtaken by the copy it held: it
+// kept the earlier attempt's review and asked for nothing.
 //
-// Mutation: number a call of its own from one again, and the resumed call's
-// versions are below the suspended call's.
+// Mutation: number a call of its own from one again, and the later attempt's
+// versions are below the earlier attempt's.
 func TestACallBuiltAgainUnderItsKeyIsNewerThanTheOneBefore(t *testing.T) {
 	t.Parallel()
 	for name, restarted := range map[string]bool{
-		"its next round first":                  false,
+		"its first round first":                 false,
 		"the phase opened again, a placeholder": true,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			s := livestate.New()
-			for i := range 5 {
-				s.Apply(round(fmt.Sprintf("2026-10-06T09:00:0%dZ", i+1), i, map[string]any{
+			review := map[string]any{"phase": "review"}
+			for i := range 4 {
+				s.Apply(round(fmt.Sprintf("2026-10-06T09:00:0%dZ", i+1), i, with(review, map[string]any{
 					"round_narration": narrated(i + 1), "response": strings.Repeat("old ", i+1),
-					"prompt":          "fix it",
+					"prompt":          "judge it",
 					"tool_executions": []any{map[string]any{"name": "read_file", "round": float64(i + 1)}},
-				}))
+				})))
 			}
-			suspended := s.AgentOverlay("Lead").LiveCall.Versions
-			key := map[string]any{"agent_id": "Lead", "turn_id": "t1", "phase": "execute", "iteration": float64(0)}
+			earlier := s.AgentOverlay("Lead").LiveCall.Versions
+			key := map[string]any{"agent_id": "Lead", "turn_id": "t1", "phase": "review", "iteration": float64(0)}
 			s.Apply(&livestate.Envelope{
-				ID: "checkpoint", Type: "agent_phase_completed", Timestamp: "2026-10-06T09:00:06Z",
+				ID: "completed", Type: "agent_phase_completed", Timestamp: "2026-10-06T09:00:06Z",
 				Category: "task", Payload: maps.Clone(key),
 			})
 			if o := s.AgentOverlay("Lead"); o != nil && o.LiveCall != nil {
-				t.Fatal("the checkpoint did not clear the call; this case needs it cleared")
+				t.Fatal("the review's completion did not clear the call; this case needs it cleared")
 			}
 			if restarted {
 				// The placeholder a phase's start seeds is a call of its
@@ -183,17 +186,20 @@ func TestACallBuiltAgainUnderItsKeyIsNewerThanTheOneBefore(t *testing.T) {
 					Category: "task", Payload: maps.Clone(key),
 				})
 			}
-			// The resumed loop's first round, under the same key and newer
-			// than the checkpoint.
-			s.Apply(round("2026-10-06T09:05:00Z", 5, map[string]any{"round_narration": narrated(1), "response": "new"}))
-			resumed := s.AgentOverlay("Lead").LiveCall
-			if resumed == nil || resumed.Key() != (livestate.CallKey{TurnID: "t1", Phase: "execute", Iteration: 0}) {
-				t.Fatalf("the resumed call is %+v; want it under the suspended call's key", resumed)
+			// The next attempt's first round, under the same key and newer
+			// than the earlier attempt's completion.
+			s.Apply(round("2026-10-06T09:05:00Z", 0, with(review, map[string]any{
+				"round_narration": narrated(1), "response": "new",
+			})))
+			again := s.AgentOverlay("Lead").LiveCall
+			if again == nil || again.Key() != (livestate.CallKey{TurnID: "t1", Phase: "review", Iteration: 0}) {
+				t.Fatalf("the next attempt's call is %+v; want it under the earlier attempt's key", again)
 			}
-			was := byName(suspended)
-			for field, v := range byName(resumed.Versions) {
+			was := byName(earlier)
+			for field, v := range byName(again.Versions) {
 				if v <= was[field] {
-					t.Errorf("the resumed call's %s is at %d, the suspended call's was %d; want it newer", field, v, was[field])
+					t.Errorf("the next attempt's %s is at %d, the earlier attempt's was %d; want it newer",
+						field, v, was[field])
 				}
 			}
 		})

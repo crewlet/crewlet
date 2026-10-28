@@ -377,20 +377,38 @@ export function turnTokens(
 // ---------------------------------------------------------------------------
 
 /**
- * Where a seat's code work runs, in a reader's words: "not offered", or the
- * cell and the coding agent — "e2b · claude-code". An empty `run_in` or
- * `coding_agent` inherits the provider's default, and says so rather than
- * naming a default this client would have to guess. Every value on the setup
- * card starts the line it stands on, so each is written with its capital, as
- * "No provider configured" beside it is.
+ * What a seat sets for the box its executor runs in, in a reader's words:
+ * "The catalogue's defaults", or what its own `sandbox` block adds — "2 setup
+ * steps · 3 variables · up to 40 turns".
+ *
+ * NOT WHERE THE BOX IS, and never "not offered": every agent seat's executor
+ * is its coding CLI's own run in a box, placed by the `run_in` of whichever
+ * model entry launches it, which the seat's own block does not say — so this
+ * says only what the block does. Every value on the setup card starts the line
+ * it stands on, so each is written with its capital, as "No provider
+ * configured" beside it is.
  */
 export function sandboxWords(role: ConfigRole): string {
-  const box = role.sandbox as
-    { enabled?: boolean; run_in?: string; coding_agent?: string } | undefined;
-  if (!box?.enabled) return "Not offered";
-  return [box.run_in || "The provider's default cell", box.coding_agent]
-    .filter(Boolean)
-    .join(" · ");
+  const box = (role.sandbox ?? {}) as {
+    setup?: unknown[];
+    env?: Record<string, unknown>;
+    mcp?: { servers?: unknown[] };
+    max_turns?: number;
+  };
+  const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const parts: string[] = [];
+  const steps = Array.isArray(box.setup) ? box.setup.length : 0;
+  if (steps > 0) parts.push(count(steps, "setup step", "setup steps"));
+  const vars = box.env && typeof box.env === "object" ? Object.keys(box.env).length : 0;
+  if (vars > 0) parts.push(count(vars, "variable", "variables"));
+  const servers = Array.isArray(box.mcp?.servers) ? box.mcp.servers.length : 0;
+  if (servers > 0) parts.push(count(servers, "tool server", "tool servers"));
+  if (typeof box.max_turns === "number") {
+    parts.push(box.max_turns === 0 ? "no turn cap" : `up to ${box.max_turns} turns`);
+  }
+  if (parts.length === 0) return "The catalogue's defaults";
+  const [first, ...rest] = parts;
+  return [first!.charAt(0).toUpperCase() + first!.slice(1), ...rest].join(" · ");
 }
 
 /**
@@ -451,4 +469,21 @@ export function seatSchedules(rows: readonly ScheduleRow[], handle: string): Sch
 export function sentence(text: string): string {
   const t = text.trim();
   return /[.!?…]$/.test(t) ? t : `${t}.`;
+}
+
+/**
+ * How a seat's last turn ended, as the line under "Not on a turn" says it.
+ *
+ * A PERSON'S STOP IS ITS OWN WORD: a turn somebody ended by pausing the seat
+ * did not fail, and "ended" alone would hide that anybody stopped it.
+ */
+export function lastTurnEnded(outcome: "completed" | "failed" | "stopped"): string {
+  switch (outcome) {
+    case "failed":
+      return "failed";
+    case "stopped":
+      return "was stopped";
+    default:
+      return "ended";
+  }
 }

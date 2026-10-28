@@ -117,6 +117,15 @@ func New(opts Options) (*Relay, error) {
 // Owner is the incarnation this relay answers for.
 func (rl *Relay) Owner() string { return rl.owner }
 
+// Domains is the four key domains this relay signs under — its OPEN's request
+// and reply, and its FRAME's — for the gate that holds every signed channel's
+// domains apart from every other's and from every state log's.
+func (rl *Relay) Domains() []string {
+	openRequest, openReply := rl.opens.Domains()
+	frameRequest, frameReply := rl.frames.Domains()
+	return []string{openRequest, openReply, frameRequest, frameReply}
+}
+
 // Serve makes this process a holder: it answers OPEN and CLOSE on its node's
 // subject until the returned Unsubscribe runs, which also cancels every
 // exchange it is answering.
@@ -233,10 +242,6 @@ func (rl *Relay) rebuild(in *Request) (*http.Request, context.CancelFunc, error)
 		return nil, nil, errors.New("httprelay: an open reached a relay that is not serving")
 	}
 	ctx, cancel := context.WithCancel(base)
-	if in.LocalAddr != "" {
-		ctx = context.WithValue(ctx, http.LocalAddrContextKey,
-			addr{network: in.LocalNetwork, address: in.LocalAddr})
-	}
 	req, err := http.NewRequestWithContext(ctx, in.Method, in.URI, bytesReader(in.Body))
 	if err != nil {
 		cancel()

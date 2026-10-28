@@ -51,28 +51,30 @@ type Work struct {
 	// prose, and the fallback artifact when the reviewer names none.
 	Text string
 
-	// Calls is what the phase actually invoked, engine-recorded.
+	// Calls is what the phase actually invoked, engine-recorded — for the
+	// executor, the calls its run made to the seat's tools over the bridge.
 	Calls []ledger.Call
 
 	// Inherited is how many of Calls, at the front, an EARLIER ATTEMPT
-	// made: a resumed phase's record opens with what the round that parked
-	// called before it suspended, because the delivery check and the
-	// iteration ledger are about the whole phase. Those writes are on the
-	// record and stay there; what they are not is THIS attempt's, so they
-	// do not make it one a retry would repeat ([Result.Acted]).
+	// made. A resumed executor's record is its run's calls over the bridge,
+	// made before the segment that collects it, because the delivery check
+	// and the iteration ledger are about the whole phase. Those writes are
+	// on the record and stay there; what they are not is THIS attempt's, so
+	// they do not make it one a retry would repeat ([Result.Acted]): a retry
+	// collects the same run and calls none of them again.
 	Inherited int
 
-	// MissingTools are names the phase called that the surface did not
-	// have. Surfaced to the reviewer, which is what turns "the model
-	// hallucinated a tool" into a next round naming the real one.
-	MissingTools []string
+	// Refs are the branches and pull requests the executor's run reported
+	// delivering, and RefsElided how many more it reported than Refs lists.
+	// The run's own shell, edit and git work happened in its box and is in
+	// no tool log, so these and its report are what that work is judged on.
+	Refs       []string
+	RefsElided int
 
-	// ExhaustedRounds marks a phase that hit its round cap.
-	ExhaustedRounds bool
-
-	// Suspended marks an executor that parked on a detached sandbox run.
-	// The turn ends here and its completion resumes it, so the loop hands
-	// the accumulated ledger back rather than treating this as an ending.
+	// Suspended marks an executor whose run was launched: the work happens
+	// in the run, detached in its box, and this segment of the turn ends
+	// here. The run's collection resumes the turn, so the loop hands the
+	// accumulated ledger back rather than treating this as an ending.
 	Suspended bool
 
 	// Rescued marks an outcome the ENGINE synthesised because the executor
@@ -119,13 +121,12 @@ type Surface struct {
 	// Separate from Deliveries because the two answer different halves of
 	// the same question and neither contains the other: a deliverable is a
 	// tool whose call reaches somebody WAITING on this turn, and `a2a_ask`
-	// and `run_sandbox` leave the process without answering anybody — one
-	// wakes a colleague, the other starts a billed box.
+	// leaves the process without answering anybody — it wakes a colleague.
 	KnownOpenWorld []string
 	// Discoverable is every tool the phase reaches only by DISCOVERING it
 	// — an MCP server's, which `list_mcp_server_tools` lists and
 	// `activate_tool` promotes onto the next round — as against a
-	// first-party tool, which the executor holds from its first round.
+	// first-party tool, which the executor holds from its launch.
 	//
 	// It exists for one sentence: the one a delivery refusal ends with,
 	// saying how to reach the surface the asker is waiting on (see
@@ -168,12 +169,12 @@ type Phases interface {
 	// Review judges the round against the engine's record of it.
 	Review(ctx context.Context, round int, w Work, history []ledger.Iteration) (Review, error)
 
-	// Resume re-enters an executor that suspended on a detached sandbox
-	// run, with the run's result spliced in as the pending call's reply.
+	// Resume collects the executor run the turn parked on: what it
+	// submitted, the calls it made over the bridge, what it delivered.
 	//
 	// Called INSTEAD OF Execute for the first round of a resumed turn. A
-	// resumed turn that started over would re-derive work already half
-	// done; everything after that round is an ordinary round.
+	// resumed turn that started over would launch the paid-for run again;
+	// everything after that round is an ordinary round.
 	Resume(ctx context.Context, history []ledger.Iteration) (Work, Surface, error)
 }
 
@@ -192,14 +193,14 @@ type Input struct {
 	// get wrong. See [Reply].
 	Reply Reply
 
-	// History is the ledger carried across a sandbox suspend. The resumed
-	// turn re-enters mid-loop, so without this it would forget every round
-	// the suspended one closed and could re-fire their deliveries.
+	// History is the ledger carried across a park. The resumed turn
+	// re-enters mid-loop, so without this it would forget every round the
+	// parked one closed and could re-fire their deliveries.
 	History []ledger.Iteration
 
-	// Resume re-enters a suspended executor rather than starting a fresh
-	// round. The SAME turn id continues: the resumed conversation is the
-	// one the sandbox call left waiting.
+	// Resume collects the executor run the turn parked on rather than
+	// starting a fresh round. The SAME turn id continues: the round being
+	// collected is the one whose run was launched.
 	Resume bool
 
 	// Round is the round that executor parked in, so the resumed turn
@@ -208,12 +209,12 @@ type Input struct {
 	//
 	// SEPARATE FROM History, although the two arrive together, because
 	// they answer different questions and only one of them is a count of
-	// rounds. History is what CLOSED before the suspend, and the round
-	// that called run_sandbox closed nothing — [Run] returns on a suspend
-	// without appending it — so `len(History)+1` is the parked round by
+	// rounds. History is what CLOSED before the park, and the round that
+	// launched the run closed nothing — [Run] returns on a park without
+	// appending it — so `len(History)+1` is the parked round by
 	// coincidence rather than by rule, and stops being it the moment a
 	// round ends any other way. The number itself is already durable:
-	// [execstate.State.Round], which the runner also stamps the resumed
+	// [execstate.State.Round], which the runner also stamps the collected
 	// phase's own record with, so the loop and the phase events agree
 	// about which round this is instead of differing by however many
 	// rounds ran before the box did.
@@ -226,14 +227,14 @@ type Input struct {
 
 // firstRound is the round this turn's counter starts at.
 //
-// One for an ordinary turn. For a resumed one it is the round the suspend
+// One for an ordinary turn. For a resumed one it is the round the park
 // happened in — a RE-ENTRY of that round rather than the one after it, which
 // is what the rest of the engine already says: [Phases.Resume] is called
 // instead of Execute for that round, the round appended no ledger entry when
-// it suspended, and the runner stamps the resumed phase's record with the same
+// it parked, and the runner stamps the collected phase's record with the same
 // number. A counter that restarted at one instead re-used every iteration
-// number the pre-suspend half had already spent, so the resumed phase records
-// collided with them on the one key a screen has for a phase.
+// number the segments before had already spent, so the collected phase
+// records collided with them on the one key a screen has for a phase.
 func (in Input) firstRound() int {
 	if !in.Resume || in.Round < 1 {
 		return 1
@@ -264,16 +265,30 @@ type Settings struct {
 	// drive it without sleeping. Nil takes time.Now.
 	Now func() time.Time
 
-	// MaxWallClock bounds the whole turn. 0 or less is unbounded, which is
-	// every trigger but a scheduled fire.
+	// Deadline is the instant the turn's wall-clock cap ends: a scheduled
+	// fire's TimeoutSeconds from the moment the turn BEGAN, in its first
+	// segment. Zero is unbounded, which is every trigger but a scheduled
+	// fire.
+	//
+	// AN INSTANT, NOT A SPAN FROM THIS CALL, because a turn is several
+	// calls: every executor launch parks the turn, and the segment that
+	// collects the run is a later call — often in another process, hours
+	// on. A cap measured from each call's own start bounded nothing at all:
+	// the launching segment ends at its first round, before the cap can be
+	// read, and every resumed segment started its clock afresh. Fixed once,
+	// when the turn begins, and carried across each park
+	// (execstate.State.Deadline), it bounds the turn the fire started.
 	//
 	// Checked BETWEEN ROUNDS, never mid-phase. A phase that is running has
 	// possibly already fired side effects, and abandoning it there would
 	// leave a post half-written with nothing recording that it happened —
 	// the same reason the drain lets a running turn finish. So the cap
-	// refuses to start another round rather than interrupting one, and a
-	// single round that outruns it is bounded by the phase timeouts beneath.
-	MaxWallClock time.Duration
+	// refuses to start another round rather than interrupting one. The one
+	// phase that can outlast it by much — the executor's run, detached in a
+	// box — carries the same instant on its row, and the poll ends a run
+	// that passes it and hands back what it did (internal/sandbox's
+	// PendingRun.Deadline).
+	Deadline time.Time
 }
 
 // now is the clock, injectable so a test can drive the wall-clock cap without
@@ -297,7 +312,7 @@ type Result struct {
 	Decision phase.Decision
 	Artifact string
 
-	// Iterations is the closed-round ledger. Carried out so a suspend can
+	// Iterations is the closed-round ledger. Carried out so a park can
 	// persist it and the resumed turn can carry on knowing what already
 	// fired.
 	Iterations []ledger.Iteration
@@ -309,8 +324,8 @@ type Result struct {
 	// re-enters the round it parked in and so counts the rounds that ran
 	// before the box did. The turn is what the number describes rather
 	// than this process's share of it: it is published as the completion
-	// event's `iterations`, and a turn that suspended at round three used
-	// to close reporting one.
+	// event's `iterations`, and a turn that parked at round three used to
+	// close reporting one.
 	Rounds int
 
 	// Breach names the guard that ended the turn, if one did.
@@ -325,13 +340,14 @@ type Result struct {
 	LastReview *Review
 	LastWork   *Work
 
-	// Suspended marks a turn parked on a detached sandbox run.
+	// Suspended marks a turn parked on its executor's run.
 	Suspended bool
 
 	// Acted reports that this attempt's own record PROVES it already
 	// reached outside the engine (see [Acted]): what a retry of THIS attempt
 	// would repeat. A resumed attempt answers for its own calls, never for
-	// those of the attempt that parked ([Work.Inherited]).
+	// those its executor's run made before the segment that collects it
+	// ([Work.Inherited]).
 	//
 	// It exists for the callers that have to tell a turn which broke
 	// having done nothing from one which broke having already posted,
@@ -428,48 +444,65 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 	}
 
 	res := Result{Decision: phase.Failed, Iterations: slices.Clone(in.History)}
+	// THE ROUNDS BEFORE THIS SEGMENT COUNT TOWARDS A STALL. Every executor
+	// launch parks the turn, so a segment reviews at most one round before
+	// the next launch parks it again: a detector that saw only its own
+	// segment's rounds could never see two, and a turn re-deriving the same
+	// artifact on every round ran to its round budget instead. Seeded from
+	// the closed rounds, in order, the detector sees the sequence one
+	// uninterrupted run of the loop would have — a closed round is exactly
+	// one the loop observed on its way to closing it.
 	stall := StallDetector{}
+	for _, closed := range in.History {
+		if closed.ArtifactHash != "" {
+			stall.observeHash(closed.ArtifactHash)
+		}
+	}
 	notes := ""
 	maxRounds := set.iterations()
 
-	// WHERE THE BUDGET PICKS UP. A turn that parked on a detached coding
-	// run re-enters the round it suspended in, so the counter starts there
-	// rather than at one: starting at one handed every resumed turn a whole
-	// fresh MaxIterations, and a turn that suspended at round three of three
-	// came back from the box with three more executor→reviewer rounds than
-	// the company had configured. It also re-used iteration numbers the
-	// pre-suspend half had already published phase records under.
+	// WHERE THE BUDGET PICKS UP. A turn that parked on its executor's run
+	// re-enters the round it parked in, so the counter starts there rather
+	// than at one: starting at one handed every resumed turn a whole fresh
+	// MaxIterations, and a turn that parked at round three of three came
+	// back from the box with three more executor→reviewer rounds than the
+	// company had configured. It also re-used iteration numbers the earlier
+	// segments had already published phase records under.
 	first := in.firstRound()
 	if maxRounds < first {
 		// THE RE-ENTERED ROUND ALWAYS RUNS, for the reason the first round
 		// always outruns the wall-clock cap below: it is not a new round
-		// but the second half of one whose executor pass already ran and
-		// whose run_sandbox call is still unanswered. Refusing it would
-		// throw away a coding run the company has already paid for and
-		// leave that conversation answered by nobody. The case is real
-		// rather than theoretical — MaxIterations is founder-owned and
-		// edited live, and a detached run outlives an edit — so the budget
-		// bounds the rounds a turn may START and the parked one already did.
+		// but the second half of one whose executor run already ran and is
+		// waiting to be collected. Refusing it would throw away a run the
+		// company has already paid for and judge nothing it did. The case
+		// is real rather than theoretical — MaxIterations is founder-owned
+		// and edited live, and a detached run outlives an edit — so the
+		// budget bounds the rounds a turn may START and the parked one
+		// already did.
 		maxRounds = first
 	}
 
 	started := set.now()
 	resuming := in.Resume
 	for round := first; round <= maxRounds; round++ {
-		// The wall-clock cap, at a ROUND BOUNDARY. THIS RUN's first round
-		// always runs — which is `first` rather than one, because the clock
-		// starts here and a resumed turn's earlier rounds ran against
-		// somebody else's: a cap that refused before any work started would
-		// report a turn as timed out having done nothing, which is a
-		// misconfiguration rather than a slow turn and reads better as one.
-		if elapsed := set.now().Sub(started); round > first &&
-			set.MaxWallClock > 0 && elapsed >= set.MaxWallClock {
+		// The wall-clock cap, at a ROUND BOUNDARY. THIS SEGMENT's first round
+		// always runs — which is `first` rather than one: on a resumed turn
+		// it is the second half of a round whose run already ran, and
+		// refusing it would throw away a run the company has already paid
+		// for and judge nothing it did; on a fresh turn, a cap that refused
+		// before any work started would report a turn as timed out having
+		// done nothing, which is a misconfiguration rather than a slow turn
+		// and reads better as one. Every round after it is refused once the
+		// TURN's deadline has passed, however little of it this segment
+		// spent.
+		if now := set.now(); round > first && !set.Deadline.IsZero() && !now.Before(set.Deadline) {
 			res.Breach = &Breach{
 				Kind: types.GuardScheduledTimeout,
 				Detail: fmt.Sprintf(
-					"the turn ran %s across %d round(s), past its %s cap, so no "+
-						"further round was started", elapsed.Round(time.Second),
-					round-first, set.MaxWallClock),
+					"the turn passed its wall-clock cap at %s, %s ago, after this segment "+
+						"ran %s across %d round(s), so no further round was started",
+					set.Deadline.UTC().Format(time.RFC3339), now.Sub(set.Deadline).Round(time.Second),
+					now.Sub(started).Round(time.Second), round-first),
 			}
 			return res, nil
 		}
@@ -484,9 +517,9 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		// the error below has to say which phase actually broke.
 		entered := "execute"
 		if resuming {
-			// The first round of a resumed turn re-enters the suspended
-			// conversation, and only this round: if the resumed executor
-			// loops back, round two is an ordinary round.
+			// The first round of a resumed turn collects the parked run,
+			// and only this round: if the reviewer sends the work back,
+			// the next round launches a run of its own.
 			resuming, entered = false, "resume"
 			err = guarded(ctx, in.RunID, entered, round, func() (callErr error) {
 				work, surface, callErr = ph.Resume(ctx, res.Iterations)
@@ -507,12 +540,13 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		// Accumulated with ||, never assigned: a round that read nothing
 		// must not un-say what round one posted.
 		//
-		// THIS ATTEMPT'S CALLS ONLY. A resumed round's record opens with
-		// what the attempt that parked wrote ([Work.Inherited]), and a
-		// retry of the resume does not write those again: it re-enters the
-		// conversation they are part of. Counted, every resume that broke
-		// before its first new round (a model at its usage limit, a runner
-		// that could not be built) was settled for good as a turn that had
+		// THIS ATTEMPT'S CALLS ONLY. A resumed executor's record opens
+		// with its run's calls over the bridge, made before the segment
+		// that collects it ([Work.Inherited]), and a retry of the resume
+		// does not make those again: it collects the same run. Counted,
+		// every resume that broke before writing anything new (a model at
+		// its usage limit, the reviewer's or the relaunch's, a runner that
+		// could not be built) was settled for good as a turn that had
 		// written, and the coding run's result never reached the seat.
 		res.Acted = res.Acted || Acted(work.Calls[min(work.Inherited, len(work.Calls)):], surface)
 		// ASSIGNED, never accumulated — the opposite of the line above, and
@@ -523,7 +557,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		}
 
 		if work.Suspended {
-			// The turn parks here and its completion resumes it. The
+			// The turn parks here and the run's collection resumes it. The
 			// ledger goes out so that turn inherits it — this round is NOT
 			// closed and must not be appended, because its review has not
 			// run and appending it would tell the resumed turn a delivery
@@ -626,13 +660,14 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 			// Only the reads actually CALLED, not the whole surface's
 			// annotation set. Rendering is a membership test either way,
 			// so the block reads the same — but the row is persisted
-			// across a sandbox suspend, and carrying every read-only tool
+			// across a park, and carrying every read-only tool
 			// on a large MCP surface makes it grow with the catalogue
 			// rather than with what the round did.
 			Reads:         calledReads(work.Calls, surface.KnownReads),
 			Text:          work.Text,
 			ReviewNotes:   notes,
 			CompletedWork: rev.CompletedWork,
+			ArtifactHash:  ArtifactHash(artifact),
 		})
 	}
 

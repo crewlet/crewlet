@@ -214,9 +214,6 @@ const (
 	// checking.
 	ActionFleetRead Action = "fleet.read"
 	ActionAuditRead Action = "audit.read"
-	// ActionSandboxRun starts a detached coding run: an agent's, and only
-	// one whose role offers the tool — see [rule.seatOnly].
-	ActionSandboxRun Action = "run_sandbox"
 
 	// --- one seat's own trail, read by somebody else ----------------- //
 	//
@@ -541,17 +538,15 @@ type rule struct {
 	humanOnly bool
 
 	// seatOnly is humanOnly's MIRROR: a verb ONLY AN AGENT SEAT may take —
-	// putting a question to a colleague seat, starting a coding run — with
-	// no permission asked at all. Which seats are offered it is the role's
-	// tool registry's decision, which already says which seat runs which
-	// tool; a person has no turn for a colleague's answer to land in and no
-	// executor for a run to resume.
+	// putting a question to a colleague seat — with no permission asked at
+	// all. Which seats are offered it is the role's tool registry's
+	// decision, which already says which seat runs which tool; a person has
+	// no turn for a colleague's answer to land in.
 	//
-	// IT REPLACED TWO PERMISSIONS. Starting a coding run was a permission
-	// of its own that only agents ever held, and asking a colleague rode on
-	// the permission that wrote work — so a role that did not use the
-	// tracker could not ask anybody anything. Neither was a decision anybody
-	// made about a PERSON, which is what a permission is for.
+	// IT REPLACED A PERMISSION. Asking a colleague rode on the permission
+	// that wrote work — so a role that did not use the tracker could not ask
+	// anybody anything — and that was never a decision anybody made about a
+	// PERSON, which is what a permission is for.
 	//
 	// CHECKED BEFORE THE CLASS, as humanOnly is, so a person holding admin
 	// is told the verb is an agent's ([ReasonSeatOnly]) rather than sent to
@@ -861,13 +856,10 @@ var rules = map[Action]rule{
 	ActionMemoryRefresh: {class: ClassSelf, recency: iam.RecencyAny, assist: AssistRead},
 	ActionMemoryPersist: {class: ClassSelf, recency: iam.RecencyAny, assist: AssistApprove},
 	ActionOnboardedMark: {class: ClassSelf, recency: iam.RecencyAny, assist: AssistApprove},
-	// AN ASK AND A CODING RUN ARE AN AGENT'S, whichever apps it uses: an
-	// ask spends a colleague seat's turn and a run hands a box the seat's
-	// whole tool surface, and the ROLE decides which seats are offered
-	// either. No person takes them — see [rule.seatOnly].
+	// AN ASK IS AN AGENT'S, whichever apps it uses: it spends a colleague
+	// seat's turn, and the ROLE decides which seats are offered it. No
+	// person takes it — see [rule.seatOnly].
 	ActionColleagueAsk: {class: ClassEverybody, seatOnly: true, recency: iam.RecencyAny,
-		assist: AssistApprove},
-	ActionSandboxRun: {class: ClassEverybody, seatOnly: true, recency: iam.RecencyAny,
 		assist: AssistApprove},
 
 	// --- whether a seat works, and what its turn is doing ------------- //
@@ -1353,8 +1345,8 @@ const (
 //   - a gesture whose effect a grant would falsify or hide: a model spend
 //     outside the turn's own meter, and a render only an open page reports;
 //
-// plus the two seat-only verbs, which no person takes either, so parity
-// keeps them from the person's assistant without a reason of its own.
+// plus the one seat-only verb, asking a colleague (`a2a_ask`): no person takes
+// it either, so parity alone keeps it from the person's assistant.
 var assistantNever = map[Action]neverEntry{
 	ActionCredentialWrite: {"a machine token's mint answers the token in clear, and revoking " +
 		"one is a session ceremony", tellToken},
@@ -1383,7 +1375,6 @@ var assistantNever = map[Action]neverEntry{
 	ActionArtifactReady: {"render telemetry an open frame reports; a grant renders nothing, " +
 		"so its report would falsify the service objective", tellReady},
 	ActionColleagueAsk: {"an agent seat's own verb, which no person takes", tellSeat},
-	ActionSandboxRun:   {"an agent seat's own verb, which no person takes", tellSeat},
 }
 
 // Actions is every verb this build authorizes, sorted, for the walks that ask

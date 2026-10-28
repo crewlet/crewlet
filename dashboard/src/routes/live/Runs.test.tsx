@@ -68,11 +68,11 @@ function run(extra: Partial<SandboxRun> = {}): SandboxRun {
   };
 }
 
-test("an ordinary run has no tool-call panel at all", () => {
-  // ABSENT IS NOT EMPTY. A coding run that is not bridged made no calls
-  // THROUGH A BRIDGE, which is not the same as a bridged one that made none —
-  // and "it called nothing" is exactly the shape the delivery check reads as
-  // a turn that did not act.
+test("a run whose log this reader was not sent draws no tool-call panel", () => {
+  // ABSENT IS NOT EMPTY. A live entry whose row is not read yet, or a body
+  // withheld from this reader, is a log nobody here can speak for — and "it
+  // called nothing" is exactly the shape the delivery check reads as a turn
+  // that did not act.
   render(<BridgeLog run={run()} />);
   expect(screen.queryByText("Tool calls")).toBeNull();
 });
@@ -121,12 +121,21 @@ test("an elided middle is said out loud, never left to be inferred", () => {
   expect(screen.getByText("47 calls from the middle aren’t shown.")).toBeTruthy();
 });
 
-test("a bridged run that genuinely made no calls still shows nothing", () => {
-  // The panel is about what the run DID. A bridged run with an empty log and
-  // nothing elided has the same thing to say as an unbridged one, and saying
-  // it twice in two different ways is how a reader learns to distrust both.
-  render(<BridgeLog run={run({ bridge_calls: [], bridge_calls_elided: 0 })} />);
-  expect(screen.queryByText("Tool calls")).toBeNull();
+test("a run that made no calls says so", () => {
+  // EVERY RUN IS BRIDGED, so an empty log is a fact about the run: one that
+  // stopped having called nothing — not even its submission — is the run a
+  // reader opened the page to understand, and a panel that vanished for it
+  // read as a page with nothing to show. While the job runs it is "yet".
+  const { unmount } = render(
+    <BridgeLog run={run({ status: "awaiting_clarification", bridge_calls: [] })} />,
+  );
+  expect(screen.getByText("Tool calls")).toBeTruthy();
+  expect(
+    screen.getByText("Made no calls through the MCP bridge — not even its submission"),
+  ).toBeTruthy();
+  unmount();
+  render(<BridgeLog run={run({ status: "running", bridge_calls: [] })} />);
+  expect(screen.getByText("No calls through the MCP bridge yet")).toBeTruthy();
 });
 
 // THE ROW MOUNTS ITS BLOCKS ON OPENING, so a case about what a block does has
@@ -626,4 +635,36 @@ test("a turn with no coding run is headed as having none", async () => {
   expect(screen.getByRole("heading", { name: "No coding run" })).toBeTruthy();
   expect(screen.queryByText("No task was recorded")).toBeNull();
   expect(screen.getByText("No coding run for this turn")).toBeTruthy();
+});
+
+// A RUN'S PAGE NAMES THE MEMBER IT WAS LAUNCHED ON, and its model: a fallback
+// at launch runs the job on an entry other than the seat's chain head, and
+// which entry's plan a long run is spending is what a person watching it asks.
+//
+// Mutation: drop the fact, and the page names no entry.
+test("a run's page names the member its job was launched on", async () => {
+  mountPage({
+    sandbox_runs: { runs: [run({ provider_key: "spare", model: "claude-haiku" })] },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  expect(screen.getByText("Launched on")).toBeTruthy();
+  expect(screen.getByText("spare")).toBeTruthy();
+  expect(screen.getByText(/claude-haiku/)).toBeTruthy();
+});
+
+// THE ENTRY IS AN ADMIN'S, THE MODEL EVERYBODY'S: the engine sends a run's
+// `provider_key` to an admin alone, and every other reader the model the job
+// runs under, which the page still names rather than dropping the fact.
+//
+// Mutation: draw the fact only where the entry is present, and a reader who
+// is not an admin is told nothing about what the run runs on.
+test("a run's page names its model to a reader the entry is withheld from", async () => {
+  mountPage({
+    sandbox_runs: { runs: [run({ model: "claude-haiku" })] },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  expect(screen.getByText("Launched on")).toBeTruthy();
+  expect(screen.getByText("claude-haiku")).toBeTruthy();
 });

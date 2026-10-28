@@ -303,7 +303,7 @@ func TestTheHumanOnlyListIsExactlyTheIntendedSet(t *testing.T) {
 		// an effect a grant would falsify or hide
 		authz.ActionKnowledgeAnswer, authz.ActionArtifactReady,
 		// an agent seat's own
-		authz.ActionColleagueAsk, authz.ActionSandboxRun,
+		authz.ActionColleagueAsk,
 	}
 	var got []authz.Action
 	for _, a := range authz.Actions() {

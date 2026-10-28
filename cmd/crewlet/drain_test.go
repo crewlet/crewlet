@@ -46,7 +46,9 @@ import (
 // only when the parent says so. That is what makes the drain last long enough
 // to observe, and it is a real turn on the real path: a signed GitLab delivery
 // on the webhook edge, the notification service, the seat's mailbox, and the
-// CLI backend running the model's CLI ([heldCLI]) as a child of the node.
+// CLI backend running the model's CLI ([heldCLI]) as a child of the node — for
+// the seat's first turn's onboarding pass, the one call a turn makes on the
+// seat's own model before its executor's run is launched and the turn parks.
 const (
 	drainProbeEnv     = "CREWLET_RUN_DRAIN_PROBE"
 	drainProbeArgsEnv = "CREWLET_RUN_DRAIN_PROBE_ARGS"
@@ -208,7 +210,9 @@ api:
 		testKeyMaterial(t), port, port, drainProbeToken))
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
+%s
 %s
 integrations:
   gitlab:
@@ -218,14 +222,14 @@ integrations:
 roles:
   - name: CEO
     handle: ceo
-    llm: held
+    llm: [held, coder]
     mcp_env:
       gitlab:
         GITLAB_TOKEN: glpat-ceo
 turn_engine:
   max_iterations: 1
-  max_tool_rounds: 3
-`, model.entry("held", filepath.Join(dir, "llm")), forge.URL, drainProbeSecret))
+`, model.entry("held", filepath.Join(dir, "llm")), unreachableCoder("coder", filepath.Join(dir, "coder")),
+		forge.URL, drainProbeSecret))
 
 	node := startNodeChild(t, "TestASignalledNodeDrainsWithItsProbesUp", socket,
 		[]string{"-config", boot, "-company", company, "-log-format", "json"})
@@ -458,10 +462,11 @@ func (n *nodeChild) exitedWith(t *testing.T, code int) {
 //
 // A FAILURE rather than an answer, because the case is about the node that
 // waits for the turn and not about the turn: a CLI that exits non-zero ends
-// the call as a `server` failure, which the backend does not retry. The seat's
-// chain holds this one entry alone, so there is no second model to fall back
-// to: the chain is exhausted and the turn fails. Nothing in the case turns on
-// the kind, only on the turn ending once the CLI is let go.
+// the call as a `server` failure, which the backend does not retry, and the
+// one member behind it ([unreachableCoder]) has no CLI to start. The
+// onboarding pass fails, which a turn carries on from, and the turn ends at
+// its executor's launch however that goes. Nothing in the case turns on how
+// the turn ends, only on its ending once the CLI is let go.
 //
 // /bin/sh UNDER THE `custom` PROFILE rather than this binary re-executed: a
 // held call computes nothing, and both of its halves — the mark that a call
@@ -546,6 +551,20 @@ func (m *heldCLI) entry(key, stateDir string) string {
         complete_args: ["-c", %q]
         model_args: ["--model", "{model}"]
         output: text`, key, stateDir, script)
+}
+
+// unreachableCoder is the providers.llm entry, under key, that the seat's
+// executor launches on: a claude-code entry, the CLI a run in the fake catalogue
+// is played for, whose binary does not exist — so a call on this host that falls
+// through to it fails at once rather than starting a real CLI on the machine
+// running the suite. Indented to sit under `providers: llm:`.
+func unreachableCoder(key, stateDir string) string {
+	return fmt.Sprintf(`    %s:
+      agent: claude-code
+      model: sonnet
+      state_dir: %q
+      overrides:
+        binary: %q`, key, stateDir, filepath.Join(stateDir, "no-cli-here"))
 }
 
 // newAccountForge is a GitLab that answers the one thing the engine reads a

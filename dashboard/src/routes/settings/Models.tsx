@@ -14,8 +14,8 @@
  *
  * There is no per-key state to show. A model is a CLI, and a CLI holds one
  * sign-in and rotates nothing, so what an operator needs is how it signs in —
- * which mode, and which variable the credential is read from — and whether
- * anything still runs on it.
+ * which mode, and which variable the credential is read from — whether it can
+ * run a seat's executor and where, and whether anything still runs on it.
  *
  * # Names, never values
  *
@@ -64,12 +64,12 @@ import { plural } from "~/lib/format.ts";
 import {
   authWords,
   credentialWords,
-  modeWords,
   modelEntries,
   modelLine,
   signInCredential,
   signInFallback,
   signInSource,
+  roleWords,
   timeoutWords,
   usesOf,
   type Credential,
@@ -166,7 +166,7 @@ function ModelList({
   onEdit: (id: string) => void;
 }) {
   const unused = entries.filter((e) => usesOf(seats, e.key).length === 0).length;
-  const boxMode = entries.filter((e) => e.mode === "box").length;
+  const executors = entries.filter((e) => e.executor).length;
   const metered = entries.filter((e) => e.authMode === "api-key").length;
 
   return (
@@ -189,13 +189,11 @@ function ModelList({
           />
           <StatCard
             icon={<SquareTerminalGlyph size="xs" />}
-            label="Box mode"
-            value={boxMode}
-            sub={
-              boxMode
-                ? `run${boxMode === 1 ? "s" : ""} the executor detached, in a box`
-                : "every model on this engine’s host"
-            }
+            label="Executors"
+            value={executors}
+            // NONE IS A COMPANY WHOSE AGENT SEATS LAUNCH NOTHING: every seat's
+            // executor is a coding CLI's own run, and only these CLIs have one.
+            sub={executors ? `can run a seat’s executor` : "none can run a seat’s executor"}
           />
           <StatCard
             icon={<KeyGlyph size="xs" />}
@@ -250,12 +248,12 @@ function ModelList({
                 ),
               },
               {
-                key: "mode",
-                header: "Mode",
+                key: "runs",
+                header: "Runs as",
                 shrink: true,
                 drop: 1,
-                sortValue: (e) => e.mode,
-                cell: (e) => <ModeLine entry={e} />,
+                sortValue: (e) => roleWords(e).label + e.runIn,
+                cell: (e) => <RoleLine entry={e} />,
               },
               {
                 key: "signin",
@@ -297,7 +295,7 @@ function ModelPage({
   onEdit: (id: string) => void;
 }) {
   const uses = usesOf(seats, entry.key);
-  const mode = modeWords(entry.mode);
+  const role = roleWords(entry);
   const access = useConfigWriteAccess();
   // ON A PHONE EDIT FOLDS INTO THE BAR'S "MORE": beside the trail it took a
   // line of its own under the crumb. The inline button is the wide bar's.
@@ -330,8 +328,12 @@ function ModelPage({
       note: entry.agentDefault ? "The default: the entry names no agent." : undefined,
     },
     {
-      label: "Mode",
-      value: entry.runIn ? `${mode.label}, in ${entry.runIn}` : mode.label,
+      label: "Runs as",
+      value: entry.executor && entry.runIn ? `${role.label}, in ${entry.runIn}` : role.label,
+      note:
+        entry.executor && !entry.runIn
+          ? "In providers.sandbox’s default cell: the entry names no run_in."
+          : undefined,
     },
     {
       label: "Timeout",
@@ -363,7 +365,7 @@ function ModelPage({
         icon="cpu"
         identifier={entry.agent}
         title={entry.key}
-        description={mode.hint}
+        description={role.hint}
         facts={facts}
       />
 
@@ -503,7 +505,7 @@ function SignInCard({ entry }: { entry: ModelEntry }) {
             entity: entry.key,
           })}
         >
-          Change the CLI, its mode or how it signs in under Configuration →
+          Change the CLI, where its runs happen or how it signs in under Configuration →
         </a>
       </p>
     </Card>
@@ -519,13 +521,13 @@ function CredentialName({ value }: { value: Credential }) {
   );
 }
 
-/** "Box · e2b": where the engine runs the CLI, and the cell a box-mode run happens in. */
-function ModeLine({ entry }: { entry: ModelEntry }) {
-  const words = modeWords(entry.mode);
+/** "Executor · e2b": what the engine runs the CLI for, and where its executor runs happen. */
+function RoleLine({ entry }: { entry: ModelEntry }) {
+  const words = roleWords(entry);
   return (
     <span className="truncate" title={words.hint}>
       {words.label}
-      {entry.runIn && <span className="muted"> · {entry.runIn}</span>}
+      {entry.executor && entry.runIn && <span className="muted"> · {entry.runIn}</span>}
     </span>
   );
 }

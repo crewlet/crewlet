@@ -27,7 +27,6 @@ func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
 		// --verbose, without which print mode refuses stream-json.
 		"--output-format stream-json --verbose",
 		"--permission-mode bypassPermissions", // a prompt would hang a headless run
-		"'fix the flake'",                     // the brief, quoted
 	} {
 		if !strings.Contains(cmd, want) {
 			t.Fatalf("the invocation is missing %q:\n%s", want, cmd)
@@ -39,7 +38,7 @@ func TestTheClaudeInvocationIsHeadlessAndMachineReadable(t *testing.T) {
 func TestUnsetClaudeLimitsAppendNoFlags(t *testing.T) {
 	t.Parallel()
 	cmd := claude().Command(sandbox.RunRequest{Brief: "x"}, codingagent.Paths{}, "")
-	for _, absent := range []string{"--max-turns", "--max-budget-usd", "--model", "--mcp-config"} {
+	for _, absent := range []string{"--max-turns", "--max-budget-usd", "--model", "--mcp-config", "--settings"} {
 		if strings.Contains(cmd, absent) {
 			t.Fatalf("%q was added for an unset value:\n%s", absent, cmd)
 		}
@@ -66,18 +65,6 @@ func TestSetClaudeLimitsBecomeFlags(t *testing.T) {
 	}
 }
 
-// The brief is operator- and model-authored text; it must not be able to end
-// the quoting and append a command.
-func TestABriefCannotEscapeItsQuoting(t *testing.T) {
-	t.Parallel()
-	cmd := claude().Command(sandbox.RunRequest{
-		Brief: `fix it'; rm -rf / #`,
-	}, codingagent.Paths{}, "")
-	if strings.Contains(cmd, "; rm -rf / #") && !strings.Contains(cmd, `'\''`) {
-		t.Fatalf("the brief escaped its quoting:\n%s", cmd)
-	}
-}
-
 // ---------------------------------------------------------------------
 // claude-code: the parser
 // ---------------------------------------------------------------------
@@ -91,6 +78,7 @@ func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
 		"is_error": false,
 		"session_id": "sess-1",
 		"total_cost_usd": 0.42,
+		"num_turns": 23,
 		"usage": {"input_tokens": 1200, "output_tokens": 300}
 	}`)
 	if !res.Success {
@@ -98,6 +86,11 @@ func TestTheClaudeParserReadsTheEnvelope(t *testing.T) {
 	}
 	if res.SessionID != "sess-1" || res.CostUSD != 0.42 {
 		t.Fatalf("envelope fields lost: %+v", res)
+	}
+	// THE RUN'S OWN TURNS: the provider calls its loop made, which the
+	// engine never saw and every spend figure counts the run's record by.
+	if res.Turns != 23 {
+		t.Fatalf("turns = %d, want the 23 the CLI reported", res.Turns)
 	}
 	if res.InputTokens != 1200 || res.OutputTokens != 300 {
 		t.Fatalf("usage lost: %+v", res)
@@ -222,12 +215,12 @@ func TestTheOpenCodeInvocationRunsAgainstItsOwnServer(t *testing.T) {
 
 // AN OPENCODE ENTRY'S MODEL REACHES THE BOX AS WRITTEN.
 //
-// It is the string every text call on the same entry passes to `opencode run
+// It is the string every run on the engine host on the same entry passes to `opencode run
 // --model`, which OpenCode splits at its first slash into a provider and a
 // model. The runner used to put a family in front of it, so an entry naming
 // `openrouter/anthropic/claude-sonnet-5` ran its box on
 // `anthropic/openrouter/anthropic/claude-sonnet-5` — a provider-qualified id
-// broke the agent run, and a bare one broke every text call.
+// broke the agent run, and a bare one broke every run on the engine host.
 func TestAnOpenCodeEntrysModelIsPassedAsWritten(t *testing.T) {
 	t.Parallel()
 	for _, model := range []string{
@@ -271,6 +264,13 @@ type openCodeConfig struct {
 
 func writeOpenCodeConfig(t *testing.T, req sandbox.RunRequest) (openCodeConfig, string) {
 	t.Helper()
+	cfg, body, _ := writeOpenCodeConfigIn(t, req)
+	return cfg, body
+}
+
+// writeOpenCodeConfigIn is [writeOpenCodeConfig], with the box it wrote to.
+func writeOpenCodeConfigIn(t *testing.T, req sandbox.RunRequest) (openCodeConfig, string, *sandbox.FakeSandbox) {
+	t.Helper()
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := opencode().WriteConfig(t.Context(), b, req, codingagent.PathsFor(b))
 	if err != nil || path == "" {
@@ -284,7 +284,23 @@ func writeOpenCodeConfig(t *testing.T, req sandbox.RunRequest) (openCodeConfig, 
 	if err := json.Unmarshal(blob, &cfg); err != nil {
 		t.Fatalf("unmarshal: %v\n%s", err, blob)
 	}
-	return cfg, string(blob)
+	return cfg, string(blob), b
+}
+
+// openCodeValue is the value a `{file:<path>}` reference in a run's
+// configuration names: the content of the file it names, which OpenCode reads
+// in its place.
+func openCodeValue(t *testing.T, b sandbox.Sandbox, ref string) string {
+	t.Helper()
+	path, ok := referencedPath(ref)
+	if !ok {
+		t.Fatalf("%q is not a reference to a file", ref)
+	}
+	value, err := b.ReadFile(t.Context(), path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(value)
 }
 
 // NO CREDENTIAL IS WRITTEN INTO THE BOX, where the agent could read it back
@@ -313,7 +329,7 @@ func TestTheOpenCodeConfigCarriesNoCredential(t *testing.T) {
 // cannot complete.
 func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	t.Parallel()
-	cfg, body := writeOpenCodeConfig(t, sandbox.RunRequest{
+	cfg, body, b := writeOpenCodeConfigIn(t, sandbox.RunRequest{
 		MCPServers: map[string]sandbox.MCPServer{
 			"files": {
 				Name: "files", Transport: sandbox.TransportStdio,
@@ -337,18 +353,19 @@ func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	}
 	// The CREDENTIAL reaches the box under this CLI's own key. It is
 	// `environment` here and `env` in Claude Code's file, which is the
-	// whole reason each runner renders its own.
-	if got.Environment["K"] != "v" {
+	// whole reason each runner renders its own — here by a reference to the
+	// file holding it, which OpenCode reads in its place.
+	if got.Environment["K"] == "" || openCodeValue(t, b, got.Environment["K"]) != "v" {
 		t.Errorf("stdio env = %v, want the seat's credential under `environment`", got.Environment)
 	}
 	if got.Codemode == nil || *got.Codemode {
 		t.Errorf("the stdio server's tools are behind Code Mode:\n%s", body)
 	}
 	got = cfg.MCP.Servers["linear"]
-	if got.Type != "remote" || got.URL != "https://example.com/mcp" {
+	if got.Type != "remote" || openCodeValue(t, b, got.URL) != "https://example.com/mcp" {
 		t.Fatalf("http server = %+v", got)
 	}
-	if got.Headers["H"] != "v" {
+	if got.Headers["H"] == "" || openCodeValue(t, b, got.Headers["H"]) != "v" {
 		t.Errorf("http headers = %v, want the seat's credential", got.Headers)
 	}
 	if got.OAuth == nil || *got.OAuth {
@@ -468,11 +485,45 @@ func derefOr[T any](p *T, absent string) any {
 	return *p
 }
 
-// The config carries the run's POSTURE, not just its servers, and
-// this CLI reads it from the checkout rather than from a flag — so a run that
-// wrote none would not fall back to the vendor's defaults. It would inherit
-// whatever the previous run left on a reused box, MCP block and dead per-run
-// bridge URL included.
+// THE RUN'S TURN CAP REACHES OPENCODE, on the agent the run runs as. It is the
+// one bound on an executor's work — Claude Code carries it as --max-turns — so
+// a run on this CLI that dropped it ran uncapped while the setting read as
+// wired. Zero is uncapped, and states no cap at all: OpenCode refuses a step
+// count below one.
+func TestTheOpenCodeConfigCarriesTheRunsTurnCap(t *testing.T) {
+	t.Parallel()
+	type capped struct {
+		DefaultAgent string `json:"default_agent"`
+		Agents       map[string]struct {
+			Steps *int `json:"steps"`
+		} `json:"agents"`
+	}
+	read := func(body string) capped {
+		var c capped
+		if err := json.Unmarshal([]byte(body), &c); err != nil {
+			t.Fatalf("unmarshal: %v\n%s", err, body)
+		}
+		return c
+	}
+
+	_, body := writeOpenCodeConfig(t, sandbox.RunRequest{Limits: sandbox.Limits{MaxTurns: 40}})
+	got := read(body)
+	agent, ok := got.Agents[got.DefaultAgent]
+	if got.DefaultAgent == "" || !ok || agent.Steps == nil || *agent.Steps != 40 {
+		t.Errorf("the run's agent %q carries steps %v, want the cap of 40 on the agent the "+
+			"run runs as:\n%s", got.DefaultAgent, derefOr(agent.Steps, "(absent)"), body)
+	}
+
+	_, body = writeOpenCodeConfig(t, sandbox.RunRequest{})
+	if got := read(body); len(got.Agents) != 0 {
+		t.Errorf("an uncapped run stated a step count:\n%s", body)
+	}
+}
+
+// The config carries the run's POSTURE, not just its servers, so it is written
+// on every run: the run's script refuses to start a server it has no
+// configuration for, and one handed none would run on whatever documents the
+// image and the checkout hold.
 func TestAnOpenCodeConfigIsWrittenEvenWithNoModelAndNoServers(t *testing.T) {
 	t.Parallel()
 	cfg, body := writeOpenCodeConfig(t, sandbox.RunRequest{})
@@ -526,6 +577,42 @@ func TestTheOpenCodeParserRebuildsTheAnswerAndTheTranscript(t *testing.T) {
 	// to say WHAT ran.
 	if !strings.Contains(res.Transcript, "pytest -q") {
 		t.Fatalf("the transcript does not say what ran:\n%s", res.Transcript)
+	}
+}
+
+// THE ANSWER IS THE LAST MESSAGE'S TEXT. Each step of an OpenCode run is a
+// message of its own, and a run handed a person's note after it had answered
+// answers again in a later one — the stream prints nothing for the note, so it
+// reads as two answers in a row (below in the shape OpenCode 2.0.32 prints, its
+// other fields left out and its ids shortened). The result is the later answer
+// alone, and the run's
+// transcript keeps both. A message's text in two events is one answer.
+//
+// Mutation: join every text event, as the decoder did, and the superseded
+// answer leads the result.
+func TestTheAnswerIsTheLastMessagesText(t *testing.T) {
+	t.Parallel()
+	stream := strings.Join([]string{
+		`{"type":"step_start","part":{"messageID":"msg_1","type":"step-start"}}`,
+		`{"type":"tool_use","part":{"messageID":"msg_1","tool":"shell","state":{"input":{"command":"go test ./..."},"status":"completed"}}}`,
+		`{"type":"text","part":{"messageID":"msg_1","type":"text","text":"Running the tests first."}}`,
+		`{"type":"step_finish","part":{"messageID":"msg_1","type":"step-finish","reason":"tool-calls"}}`,
+		`{"type":"text","part":{"messageID":"msg_2","type":"text","text":"answer-1: it targets main."}}`,
+		`{"type":"step_finish","part":{"messageID":"msg_2","type":"step-finish","reason":"stop"}}`,
+		`{"type":"text","part":{"messageID":"msg_3","type":"text","text":"answer-2: it targets release,"}}`,
+		`{"type":"text","part":{"messageID":"msg_3","type":"text","text":"as the note asked. Opened https://github.com/acme/api/pull/9"}}`,
+	}, "\n")
+	res := opencode().Parse(stream)
+	if want := "answer-2: it targets release,\nas the note asked. Opened https://github.com/acme/api/pull/9"; res.Text != want {
+		t.Errorf("the answer is %q, want the last message's text %q", res.Text, want)
+	}
+	if !res.Success || len(res.DeliveredRefs) != 1 {
+		t.Errorf("the last message's answer read as success %v with refs %v", res.Success, res.DeliveredRefs)
+	}
+	for _, kept := range []string{"Running the tests first.", "answer-1: it targets main.", "answer-2: it targets release,"} {
+		if !strings.Contains(res.Transcript, kept) {
+			t.Errorf("the transcript lost %q:\n%s", kept, res.Transcript)
+		}
 	}
 }
 
@@ -626,5 +713,36 @@ func TestAToolOnlyStreamReportsNoAnswer(t *testing.T) {
 	}
 	if res.Error == "" {
 		t.Fatal("the failure says nothing")
+	}
+}
+
+// A RUN THAT CARRIES ON AN ASKING RUN'S WORK CONTINUES ITS OWN CONVERSATION.
+// The run that parked on a person's question knew what it had read, tried and
+// decided; a new conversation told only the answer starts that over. So where
+// the launch names the asking run's session, each runner continues it — Claude
+// Code with `--resume`, OpenCode by working in that session, which it
+// continues when it already holds it — and where it names none, each starts a
+// conversation of its own.
+//
+// Mutation: drop the flag, or mint OpenCode a fresh session whatever the
+// request, and the continued row goes red.
+func TestAContinuedRunResumesTheAskingRunsSession(t *testing.T) {
+	t.Parallel()
+	continued := sandbox.RunRequest{Brief: "the answer: main", Resume: "ses_0123456789abcdef0123456789abcdef"}
+
+	cmd := claude().Command(continued, codingagent.Paths{}, "")
+	if !strings.Contains(cmd, "--resume 'ses_0123456789abcdef0123456789abcdef'") {
+		t.Errorf("Claude Code does not resume the asking run's session: %s", cmd)
+	}
+	if fresh := claude().Command(sandbox.RunRequest{Brief: "x"}, codingagent.Paths{}, ""); strings.Contains(fresh, "--resume") {
+		t.Errorf("a fresh Claude Code run resumes something: %s", fresh)
+	}
+
+	script := scriptOf(t, opencode().Command(continued, codingagent.Paths{}, ""))
+	if !strings.Contains(script, "--session 'ses_0123456789abcdef0123456789abcdef'") {
+		t.Errorf("OpenCode does not work in the asking run's session:\n%s", script)
+	}
+	if fresh := scriptOf(t, opencode().Command(sandbox.RunRequest{Brief: "x"}, codingagent.Paths{}, "")); strings.Contains(fresh, "0123456789abcdef0123456789abcdef") {
+		t.Errorf("a fresh OpenCode run works in the asking run's session:\n%s", fresh)
 	}
 }

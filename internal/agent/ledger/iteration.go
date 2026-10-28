@@ -189,6 +189,19 @@ type Iteration struct {
 	// precisely why the tool-call lists above carry the guarantee and this
 	// field only enriches it.
 	CompletedWork string `json:"completed_work,omitempty"`
+
+	// ArtifactHash is the hash of what the round produced, as the turn's
+	// stall guard observed it when the round was sent back
+	// (internal/agent/turn's ArtifactHash).
+	//
+	// ON THE RECORD because a turn's rounds run in different segments: each
+	// executor launch parks the turn, and the round after it is reviewed
+	// in a segment that never saw the rounds before. The guard that ends a
+	// turn repeating itself has to compare across segments, so the closed
+	// rounds carry what it compares. A hash rather than the text: the record
+	// rides every park, and the text is already on it under Text where it
+	// is the round's own prose rather than the reviewer's chosen artifact.
+	ArtifactHash string `json:"artifact_hash,omitempty"`
 }
 
 // RenderIterations renders accumulated rounds as the shared prior-work block.

@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -36,8 +36,6 @@ providers:
 roles:
   - name: SWE
     handle: swe
-    sandbox:
-      enabled: true
 `
 
 // companyWithoutSandboxDoc is the same company with nothing that runs code.
@@ -49,12 +47,12 @@ roles:
 `
 
 // A NODE THAT BOOTED WITH NO COMPANY BRINGS THE CODE SANDBOX UP WITH THE FIRST
-// ONE THAT CONFIGURES IT — the coordinator, the completion poll, run_sandbox,
-// and the seat's own preparation — with no restart.
+// ONE THAT CONFIGURES IT — the coordinator, the completion poll, and the seat's
+// own preparation — with no restart.
 //
 // The coordinator was built at boot or never, so a node started the way the
-// quickstart starts one served a code-enabled company with no code tool until
-// its process restarted, and a run a peer had left on one of its seats was
+// quickstart starts one served a company with no executor runtime until its
+// process restarted, and a run a peer had left on one of its seats was
 // polled, collected and resumed by nobody here.
 func TestAFirstCompanyWithASandboxBringsTheCoordinatorUpWithoutARestart(t *testing.T) {
 	t.Parallel()
@@ -62,8 +60,10 @@ func TestAFirstCompanyWithASandboxBringsTheCoordinatorUpWithoutARestart(t *testi
 	if e.sandbox.Load() != nil {
 		t.Fatal("the premise: a node with no company runs no sandbox")
 	}
-	// A RUN A PEER LEFT ON THE SEAT, still going, before this node has a
-	// company at all: its recovery is part of what the apply has to bring.
+	// A RUN LEFT ON THE SEAT, still going, before this node has a company
+	// at all — this node's own, from before a restart, since a box in the
+	// direct cell is polled by the node that launched it: its recovery is
+	// part of what the apply has to bring.
 	seedRunningRun(t, e, "wk-before", "box-1")
 
 	status, applied, err := e.Apply(t.Context(), parseCompany(t, sandboxDoc("")), time.Now())
@@ -81,10 +81,6 @@ func TestAFirstCompanyWithASandboxBringsTheCoordinatorUpWithoutARestart(t *testi
 	}
 	if e.sandboxWaiter.Load() == nil {
 		t.Error("the apply started no completion poll, so no detached run ever finishes")
-	}
-	if _, ok := e.Company().Tools.Lookup(builtin.RunSandboxTool); !ok {
-		t.Error("the applied company has no run_sandbox — equip ran before the " +
-			"coordinator it registers against")
 	}
 
 	// THE SEAT, once this node takes it: its control topic attached and
@@ -238,10 +234,18 @@ func TestARevisionWithoutASandboxKeepsTheRuntimeForTheRunsInFlight(t *testing.T)
 			"runs in flight are finished through")
 	}
 	// ...AND LAUNCHES NOTHING NEW on it: the runtime outlives the catalogue
-	// only to finish what that catalogue started.
-	if _, ok := e.Company().Tools.Lookup(builtin.RunSandboxTool); ok {
-		t.Error("a company with no providers.sandbox still registers run_sandbox, " +
-			"launching on a catalogue it no longer configures")
+	// only to finish what that catalogue started, so an executor pinned to
+	// the revision without one is refused rather than given a box.
+	current := e.Company()
+	seat := current.Org.AgentSeatByHandle("swe")
+	executor, _ := executorCompany(t)
+	pinned := &Company{Config: current.Config, Org: current.Org, Models: executor.Models}
+	seat.LLM = executor.Org.Roles[0].LLM
+	l := launcherOn(e, pinned, seat, "t-after")
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err == nil ||
+		!strings.Contains(err.Error(), "providers.sandbox") {
+		t.Errorf("an executor launched for a company with no providers.sandbox (err %v), "+
+			"on a catalogue it no longer configures", err)
 	}
 }
 
@@ -250,23 +254,11 @@ func TestARevisionWithoutASandboxKeepsTheRuntimeForTheRunsInFlight(t *testing.T)
 //
 // It was built only where a coordinator already existed, so on every other
 // node a revision whose providers.sandbox could never mint a box was published,
-// and its code-enabled seats planned around one.
+// and every seat's executor launched into a catalogue that had none.
 func TestABrokenSandboxCatalogueIsRefusedOnANodeWithoutOne(t *testing.T) {
 	t.Parallel()
 	e := sandboxNode(t, nil)
-	broken := `
-name: Nimbus
-providers:
-  sandbox:
-    e2b:
-      api_key: "${CREWLET_TEST_E2B_KEY_NEVER_SET}"
-roles:
-  - name: SWE
-    handle: swe
-    sandbox:
-      enabled: true
-      run_in: e2b
-`
+	broken := e2bExecutorDoc(t, "${CREWLET_TEST_E2B_KEY_NEVER_SET}")
 	status, applied, err := e.Apply(t.Context(), parseCompany(t, broken), time.Now())
 	if err == nil || status != configplane.StatusError {
 		t.Fatalf("Apply = (%s, %v, %v), want a refusal", status, applied, err)
@@ -295,19 +287,7 @@ roles:
 // resolve from the environment alone and the stored key does not.
 func TestBuildableIsTheApplysBuildOverThisNodesChain(t *testing.T) {
 	t.Parallel()
-	company := parseCompany(t, `
-name: Nimbus
-providers:
-  sandbox:
-    e2b:
-      api_key: "${CREWLET_TEST_E2B_KEY}"
-roles:
-  - name: SWE
-    handle: swe
-    sandbox:
-      enabled: true
-      run_in: e2b
-`)
+	company := parseCompany(t, e2bExecutorDoc(t, "${CREWLET_TEST_E2B_KEY}"))
 	// AN EMPTY ENVIRONMENT, so the process's own can answer nothing here.
 	e := &Engine{environ: config.MapSource{}}
 	e.installSecrets(map[string]string{})
@@ -416,6 +396,31 @@ func newSandboxNode(t *testing.T, company *config.Company) *Engine {
 	return e
 }
 
+// e2bExecutorDoc is a one-seat company whose executor's entry runs its runs in
+// the remote cell, keyed by key — the one cell whose backend a catalogue can
+// fail to build for want of a credential.
+func e2bExecutorDoc(t *testing.T, key string) string {
+	t.Helper()
+	return fmt.Sprintf(`
+name: Nimbus
+providers:
+  llm:
+    cc:
+      agent: claude-code
+      model: sonnet
+      run_in: e2b
+      state_dir: %q
+      auth: {mode: api-key, api_key: "sk-ant-not-real"}
+  sandbox:
+    e2b:
+      api_key: %q
+roles:
+  - name: SWE
+    handle: swe
+    llm: cc
+`, t.TempDir(), key)
+}
+
 // sandboxDoc is [sandboxCompanyDoc] with extra lines in its providers.sandbox
 // block.
 func sandboxDoc(extra string) string {
@@ -442,9 +447,12 @@ func applyOK(t *testing.T, e *Engine, doc string) []string {
 	return applied
 }
 
-// seedRunningRun records a running coding job on the swe seat, as the node that
-// launched it would: no command id, so the job never reports itself done and
-// every tick of the poll is a keepalive.
+// seedRunningRun records a running coding job on the swe seat, as e itself
+// launched it — before a restart, say — in the direct cell: no command id, so
+// the job never reports itself done and every tick of the poll is a keepalive.
+//
+// e's OWN, because a box in the direct cell is on the host of the node that
+// launched it and is polled there alone (internal/sandbox, boxhost.go).
 func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	t.Helper()
 	store := sandbox.NewCoordStore(e.backends.Fleet)
@@ -454,17 +462,17 @@ func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	agentID, _ := org.DeriveAgentID("Nimbus", "swe")
 	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: turnID, AgentID: agentID.String(), AgentHandle: "swe", Role: "SWE",
-		CodingAgent: "claude-code", CreatedAt: time.Now().UTC(),
+		CodingAgent: "claude-code", CreatedAt: time.Now().UTC(), LaunchNode: e.id,
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
 	if err := store.AttachSandbox(ctx, turnID, sandbox.BoxRef{
-		SandboxID: sandboxID, CodingAgent: "claude-code",
+		SandboxID: sandboxID, CodingAgent: "claude-code", Placement: string(sandbox.Direct),
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
 	suspended, err := store.MarkSuspended(ctx, turnID, sandbox.Suspension{State: json.RawMessage(
-		`{"version":1,"pending_tool_call_id":"call-1","pending_tool_name":"` + builtin.RunSandboxTool + `"}`)})
+		`{"version":4,"iteration":1}`)})
 	if err != nil || !suspended {
 		t.Fatalf("MarkSuspended = (%v, %v), want the run open to the poll", suspended, err)
 	}

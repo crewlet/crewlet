@@ -77,7 +77,14 @@ func TestANodeWithNoCompanySignsInAndServesWorkAfterItsFirstApply(t *testing.T) 
 	withServingTierA(t, &boot)
 	withSignIn(&boot)
 
-	e, err := engine.New(t.Context(), engine.Options{Bootstrap: &boot})
+	// THE BRIDGE A SEATS NODE SERVES, bound before the company it will run
+	// exists: the company arrives by apply, and its seats' executors call
+	// their tools back over this node's bridge from the first turn.
+	ln := bridgeListener(t, "")
+	e, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: &boot, Environment: nodeEnvironment(nil), SandboxPollInterval: runPollInterval,
+		BoxHostURL: listenerURL(ln),
+	})
 	if err != nil {
 		t.Fatalf("engine.New with no company: %v", err)
 	}
@@ -88,7 +95,7 @@ func TestANodeWithNoCompanySignsInAndServesWorkAfterItsFirstApply(t *testing.T) 
 	if e.Company() != nil {
 		t.Fatal("the premise: this node has no company")
 	}
-	app, srv := serveAPI(t, e, &boot, nil)
+	app, srv := serveAPI(t, e, &boot, ln, nil)
 	n := &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID()}
 
 	operator := newBrowser(t)

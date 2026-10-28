@@ -29,6 +29,7 @@ import (
 const companyDoc = `
 name: Nimbus
 providers:
+  sandbox: {fake: true}
   llm:
     p:
       model: sonnet
@@ -221,11 +222,10 @@ func TestEveryBuiltinDeclaresWhetherItIsARead(t *testing.T) {
 func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 	t.Parallel()
 	shared := map[string]bool{
-		// Leaves the process. Both are ALSO denied to a worker by name,
-		// for reasons narrower than open-world — see the denylist in
+		// Leaves the process. ALSO denied to a worker by name, for a
+		// reason narrower than open-world — see the denylist in
 		// internal/agent/subagent.
-		builtin.A2AAskTool:     true,
-		builtin.RunSandboxTool: true,
+		builtin.A2AAskTool: true,
 
 		// Private state: read back by this seat's own next turn and by
 		// nobody else. A worker writing one of these writes to its
@@ -993,7 +993,7 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// EVERY builtin, so a test that asks "is each one classified"
 		// is asking about the whole set rather than the subset this
 		// helper happened to wire.
-		Sandbox: &launchSpy{}, ToolSkills: toolSkills{}, Knowledge: searcher{},
+		ToolSkills: toolSkills{}, Knowledge: searcher{},
 		// THE TRACKER AND THE KNOWLEDGE BASE INCLUDED. Left out, the
 		// classification table below was silently about eleven builtins
 		// rather than the whole registry — which is how

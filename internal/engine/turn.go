@@ -831,7 +831,7 @@ func (d *Dispatcher) parkOn(ctx context.Context, handle, what string,
 // unconditionally, on the premise that "nothing was recorded, so a redelivery
 // runs it cleanly". That premise holds for the two writes [workkey] guards and
 // for nothing else: every MCP write, every chat post, every `a2a_ask` (a fresh
-// channel per call) and every `run_sandbox` is keyed on nothing at all. A
+// channel per call) and every executor launch is keyed on nothing at all. A
 // deterministic mid-turn failure therefore replayed round one's external
 // effects up to the broker's whole delivery budget: twenty-five attempts spaced
 // by a backoff that doubles from a second to thirty, so about ten minutes of

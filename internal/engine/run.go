@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/skillsync"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -91,8 +92,14 @@ type Engine struct {
 	// memory only. ONE for every reader of a seat's token (its tool
 	// servers, its coding runs, the poll that keeps a long run's token
 	// current and the inbound participant lookup), so an installation
-	// costs one mint an hour however many ask. See githubtoken.go.
+	// costs one mint an hour however many ask, and a refusal one request
+	// per wait of the seats' restart schedule ([Engine.seatRetryDelay],
+	// set in [New]). See githubtoken.go.
 	githubIssuer github.Issuer
+	// tokenWaits is what this node's polls have said of the running jobs
+	// whose seat's app issues no token, so each wait is said once per job
+	// rather than on every pass. See githubtoken.go.
+	tokenWaits tokenWaits
 
 	// authEvents is this node's authentication audit trail, and
 	// stopAuthTrail ends its loop. See authevents.go.
@@ -383,13 +390,21 @@ type Engine struct {
 	// See [Engine.startSandbox].
 	sandbox atomic.Pointer[sandboxRuntime]
 
-	// sandboxWaiter is the completion poll, started once, on a node that
-	// publishes, the first time a runtime exists and the node does.
-	sandboxWaiter atomic.Pointer[sandbox.Waiter]
+	// sandboxWaiter is the fleet's completion poll — the boxes every node
+	// reaches, under the waiter duty — and sandboxHostWaiter this node's own,
+	// for the boxes on its host ([sandbox.Drives]). Each started once, on a
+	// node that publishes, the first time a runtime exists and the node does.
+	sandboxWaiter     atomic.Pointer[sandbox.Waiter]
+	sandboxHostWaiter atomic.Pointer[sandbox.Waiter]
 
 	// sandboxPollInterval is Options.SandboxPollInterval, kept because an
 	// apply can be what starts the poll.
 	sandboxPollInterval time.Duration
+
+	// fakePlay is Options.fakePlay: what a `providers.sandbox.fake`
+	// company's runs do, nil for the double's own demonstration. Kept
+	// because every apply builds the catalogue again.
+	fakePlay fakePlayer
 
 	// sandboxSeats are the seats whose sandbox control topic this node has
 	// attached, so a seat is attached exactly once however it came to be
@@ -441,25 +456,29 @@ type Engine struct {
 	// derived from the fleet's keyring rather than held.
 	sandboxOtel *sandbox.OtelReceiver
 
-	// bridge serves a running seat's tool surface to a coding agent over
-	// MCP. Nil where no bridge URL is configured, which is every
-	// deployment that runs no box mode. leaveBridgeFleet withdraws it from
-	// the fleet it joined — see bridgefleet.go.
+	// bridge serves a running seat's tool surface to its executor's coding
+	// agent over MCP. Nil where neither a bridge URL is configured nor this
+	// node serves the bridge's route itself — which leaves every executor
+	// launch on this node refused, naming the variable, so a node that runs
+	// seats needs one. leaveBridgeFleet withdraws it from the fleet it
+	// joined — see bridgefleet.go.
 	bridge           *mcpbridge.Bridge
 	leaveBridgeFleet queue.Unsubscribe
 
-	// sessions is where every phase's tools are served to the CLI that runs
-	// it, on this host: this PROCESS's one [toolsession.Host], a directory
-	// only the engine's user can open, holding one socket per CLI run, which
-	// the CLI's `crewlet mcp-relay` dials. Every turn's runner is handed it
-	// ([RunnerInput.Sessions]).
+	// sessions is where every phase the engine drives serves its tools to
+	// the CLI that runs it, on this host: this PROCESS's one
+	// [toolsession.Host], a directory only the engine's user can open,
+	// holding one socket per CLI run, which the CLI's `crewlet mcp-relay`
+	// dials. Every turn's runner is handed it ([RunnerInput.Sessions]). The
+	// executor's run is the one phase that does not use it: it is in a box,
+	// and reaches the seat's tools over the bridge above.
 	//
 	// ON THE ENGINE, made once by [New] and removed by the teardown after
 	// every turn has ended, because it is a fact about the process: a
 	// directory per turn would be a directory per turn to clean up, and one
 	// made on first use would have no owner to remove it. Never nil on an
 	// engine [New] built. Nothing here binds a port — a node on `api.port:
-	// 0` serves its seats' tools all the same.
+	// 0` serves its phases' tools all the same.
 	sessions *toolsession.Host
 
 	// reflector is the learning write side: one dispatcher for the life of
@@ -812,10 +831,21 @@ type Engine struct {
 	steers         *steerDesk
 	stopSteerServe queue.Unsubscribe
 
+	// runSteers is this node's half of the notes a turn's coding run holds
+	// on its record, from the run's launch to the turn's end. See
+	// runsteer.go and ADR-0067.
+	runSteers *runSteers
+
 	// presenceWire seals this node's presence frames and opens its peers',
 	// and presence is the hub that holds its rooms. See presence.go.
 	presenceWire *presence.Wire
 	presence     *presence.Hub
+
+	// answers seals a person's answer onto the parked run it answers, and
+	// opens it before a resume reads it: the coordinator's, built here over
+	// the fleet keyring like every other instruction channel
+	// ([sandbox.CoordinatorOptions.Answers]).
+	answers *sandbox.AnswerSeal
 
 	// dataTurns is this node's tally of each turn segment's datastore ops,
 	// shared by every registry it builds ([builtin.DataTurns]).
@@ -845,6 +875,14 @@ type Engine struct {
 	sandboxTails  *sandbox.TailReader
 	sandboxFeeds  *sandbox.LiveFeeds
 	stopTailServe queue.Unsubscribe
+
+	// boxReads asks a box's host to read it back and answers for the boxes
+	// on this node's host; stopBoxReadServe and stopNudgeListen withdraw this
+	// node as an answerer of those reads and a listener for the nudges its
+	// waiters act on. Nil on a node with no broker. See sandboxhost.go.
+	boxReads         *boxReads
+	stopBoxReadServe queue.Unsubscribe
+	stopNudgeListen  queue.Unsubscribe
 
 	// scheduler is the role/unit cron tick. On the ENGINE rather than on an
 	// epoch for the same reason maintenance is: it is a loop this process
@@ -962,13 +1000,26 @@ type Options struct {
 	Metrics *metrics.Recorder
 
 	// OtelReceiver mints the per-run OTLP endpoints a sandbox exports to.
-	// Nil builds one from the environment; see
+	// Nil builds one from the environment and BoxHostURL; see
 	// [sandbox.BuildOtelReceiver].
 	OtelReceiver *sandbox.OtelReceiver
 
 	// Bridge serves a seat's tools to a coding agent. Nil builds one from
-	// the environment; see [mcpbridge.Build].
+	// the environment and BoxHostURL; see [mcpbridge.Build].
 	Bridge *mcpbridge.Bridge
+
+	// BoxHostURL is where a box on this node's own host — the `direct` cell
+	// — reaches the two routes a box dials, the tool bridge and the
+	// telemetry receiver: the node's own listener that serves them, on
+	// loopback ([mcpbridge.Options.HostURL],
+	// [sandbox.OtelReceiverOptions.HostURL]). The caller that bound that
+	// listener derives it, on a node that runs seats: an ingress node serves
+	// the routes there to anyone, and a node without the role serves them
+	// on api.port to this host's loopback alone (internal/api's probe
+	// surface). Empty wherever the node binds no listener its own boxes
+	// reach on loopback, whose boxes then dial [mcpbridge.BaseURLVar] and
+	// [sandbox.OtelReceiverURLVar] like any other.
+	BoxHostURL string
 
 	// Backends may be supplied by a caller that already opened them and
 	// keeps their lifetime. Nil opens them from the bootstrap config, and
@@ -1045,6 +1096,14 @@ type Options struct {
 	// knob exists only so a case can watch a retry bring a server up
 	// without waiting fifteen seconds for it.
 	mcpRetryBase time.Duration
+
+	// fakePlay scripts what a `providers.sandbox.fake` company's runs do
+	// ([sandbox.FakeRunner.Player]); nil plays each as the double's own
+	// demonstration ([demoRun]). UNEXPORTED for the reason usageEvery is:
+	// what a fake run does is the double's answer in a deployment, and the
+	// knob exists only so a case can drive a whole turn — the run's bridged
+	// calls included — through the engine it boots.
+	fakePlay fakePlayer
 
 	// sweepEvery is the seat host's placement cadence
 	// ([node.Config.SweepInterval]), zero for [seat.SweepInterval].
@@ -1134,9 +1193,24 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// AND A NOTE THAT WAITS ON A CODING RUN'S RECORD, which any node files
+	// and any node reads: sealed there, in domains of its own, for the reason
+	// the scatter's are (runsteer.go).
+	steerSeals, err := newSteerSeals(recordKeyring(opts.Bootstrap))
+	if err != nil {
+		return nil, err
+	}
 	// AND THE PRESENCE CHANNEL, which carries no instruction and is sealed
 	// all the same: a frame names a person (presence.go).
 	presenceWire, err := newPresenceWire(recordKeyring(opts.Bootstrap))
+	if err != nil {
+		return nil, err
+	}
+	// AND A PERSON'S ANSWER TO A PARKED RUN, which waits on the run's row in
+	// the coordination store and is handed to the resumed run as their
+	// words: sealed there, like every other instruction (internal/sandbox,
+	// answerseal.go).
+	answers, err := sandbox.NewAnswerSeal(recordKeyring(opts.Bootstrap))
 	if err != nil {
 		return nil, err
 	}
@@ -1167,7 +1241,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	otel := opts.OtelReceiver
 	if otel == nil {
 		otel, err = sandbox.BuildOtelReceiver(getenv(environ),
-			tokenMaterial(opts.Bootstrap))
+			tokenMaterial(opts.Bootstrap), opts.BoxHostURL)
 		if err != nil {
 			// A receiver URL that is set and unusable is a deployment
 			// that asked for in-box telemetry and would get none, so it
@@ -1182,7 +1256,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// keyring — which the keyring check above has already required.
 	bridge := opts.Bridge
 	if bridge == nil {
-		if bridge, err = mcpbridge.Build(getenv(environ), tokenMaterial(opts.Bootstrap)); err != nil {
+		if bridge, err = mcpbridge.Build(getenv(environ), tokenMaterial(opts.Bootstrap),
+			opts.BoxHostURL); err != nil {
 			return nil, fmt.Errorf("engine: tool bridge: %w", err)
 		}
 	}
@@ -1284,14 +1359,20 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// ON THE NODE'S OWN QUEUE, which on a node without `data` is the
 		// publish its custody hands to a data node — so a stateless node's
 		// auxiliary spend reaches the history like its phases do.
-		auxSpend:            auxspend.NewLedger(backends.Queue),
-		steers:              steers,
+		auxSpend: auxspend.NewLedger(backends.Queue),
+		steers:   steers,
+		// OVER THE FLEET'S RUN RECORDS, built here rather than with the
+		// sandbox runtime: a node with no runtime of its own — ingress only —
+		// still files a person's note on a run another node launched.
+		runSteers:           newRunSteers(steerSeals, sandbox.NewCoordStore(backends.Fleet), backends.Queue),
 		presenceWire:        presenceWire,
+		answers:             answers,
 		dataTurns:           builtin.NewDataTurns(nil),
 		folderTurns:         builtin.NewFolderTurns(nil),
 		mcpRetryBase:        opts.mcpRetryBase,
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
+		fakePlay:            opts.fakePlay,
 		usageEvery:          opts.usageEvery,
 		resumeGate:          opts.resumeGate,
 		sandboxSeats:        map[string]bool{},
@@ -1312,6 +1393,10 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// ever on the apply loop's own goroutine.
 		directoryNudge: make(chan struct{}, 1),
 	}
+	// THE DESK FILES ON THE SAME RECORDS: a turn's box, handed over in the
+	// write its launch makes to create the run's record — before any box or
+	// CLI exists — and every late offer to the turn after it (steer.go).
+	steers.runs = e.runSteers
 	// THE TIER A FACTS THE PROCESS HOLDS, read once and before anything below
 	// reads them — the address people and vendors reach this deployment at,
 	// this node's admin posture and the Tier A tokens it declares — because
@@ -1348,6 +1433,13 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// with a changed catalogue is refile this engine's registries; BEFORE
 	// equip, which starts the company's shared servers on it.
 	e.mcp = mcp.NewBridge(nil, e.sharedSupervision())
+	// A MINT GITHUB REFUSED IS HELD on the restart schedule the seats' tool
+	// servers retry that same refusal on, BEFORE anything reads a seat's
+	// token: every reader of one installation (the seat's servers, a launch,
+	// each running box's poll and its nudges, the inbound participant lookup)
+	// meets the held refusal within the wait rather than asking GitHub again
+	// on every read. See [github.Issuer].
+	e.githubIssuer.RetryWait = e.seatRetryDelay
 
 	// THE VIEW OF THE FLEET'S DATA NODES, built before the router that asks
 	// it on every request. Building it lists nothing: it runs
@@ -1372,6 +1464,19 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 			backends.Close(ctx)
 		}
 		return nil, err
+	}
+	// AND A READ OF A BOX ON ANOTHER NODE'S HOST, which that node carries
+	// out — it pauses the box a collection reads — so it is signed like
+	// every other such channel (sandboxhost.go). None without a broker: a
+	// node with none is the whole fleet, and every box is its own.
+	if backends.Queue != nil {
+		if e.boxReads, err = newBoxReads(recordKeyring(opts.Bootstrap), nodeID, backends.Queue,
+			e.sandboxCoordinator); err != nil {
+			if ownsBackends {
+				backends.Close(ctx)
+			}
+			return nil, err
+		}
 	}
 
 	// A NODE WITHOUT `data` HANDS THE DATA NODES THE RECORD OF WHAT IT
@@ -1619,11 +1724,12 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// ([Engine.startNativeFor]) and the sandbox runtime
 	// ([Engine.startSandbox]), each before that apply equips.
 	if company != nil {
-		// BEFORE equip, because equip registers run_sandbox and only a
-		// node with a coordinator can offer it: a tool whose dependency is
-		// absent is OMITTED rather than registered-and-broken, so an
-		// engine that equipped first would build a code-enabled company
-		// whose seats have no code tool and plan around one anyway.
+		// BEFORE equip, because equip hands the artifact tools the boxes
+		// of a turn's runs only on a node with the runtime
+		// ([ArtifactToolDeps]): a dependency that is absent is OMITTED
+		// rather than registered-and-broken, so an engine that equipped
+		// first would build a company whose seats could never publish
+		// what their executors' runs built.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := e.startSandboxFor(ctx, company); err != nil {
 			return nil, fmt.Errorf("engine: sandbox: %w", err)
@@ -1829,7 +1935,12 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err = e.armSandboxTails(ctx); err != nil {
 		return nil, fmt.Errorf("engine: serve coding runs' live output: %w", err)
 	}
-	// AND THE TOOL BRIDGE OF THE BOX-MODE RUNS ITS SEATS LAUNCH, wherever a
+	// AND THE BOXES ON ITS HOST, which no other node can reach — see
+	// sandboxhost.go.
+	if err = e.armSandboxHost(ctx); err != nil {
+		return nil, err
+	}
+	// AND THE TOOL BRIDGE OF THE EXECUTOR RUNS ITS SEATS LAUNCH, wherever a
 	// box's call lands — see bridgefleet.go.
 	if err = e.joinBridgeFleet(ctx, opts.Bootstrap); err != nil {
 		return nil, fmt.Errorf("engine: serve the tool bridge to the fleet: %w", err)
@@ -2574,8 +2685,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	// close.
 	e.stopMemoryReads(ctx)
 	// And a run's live output, read from boxes this node is about to stop
-	// driving.
+	// driving — and a read of a box on its host, asked by a peer.
 	e.stopSandboxTails(ctx)
+	e.stopSandboxHost(ctx)
 	// And the bridge's relay, whose exchanges serve sessions this node is
 	// about to stop holding.
 	e.stopBridgeFleet(ctx)
@@ -2902,7 +3014,15 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// It raises nothing at all for a trigger nobody is watching a composer
 	// for — see [chatMetadataOf] — and a nil session's every method is a
 	// no-op, so there is no branch here and none below.
-	status := e.beginWorkingStatus(ctx, req.Handle, req.WorkKey, req.Ask())
+	//
+	// HELD UNDER THE RUN, not the unit of work: the turn parks on its
+	// executor's run, and what takes the hold back is keyed by the run's row
+	// — the resume that rejoins it ([Engine.resumeWorkingStatus]) and the
+	// stop that releases it ([Engine.releaseWorkingStatus]) both read the
+	// row's turn id, which is this run's id (ADR-0017). Held under the work
+	// key, neither ever found it, and every parked turn's indicator stood
+	// until the backend's own expiry.
+	status := e.beginWorkingStatus(ctx, req.Handle, req.RunID, req.Ask())
 	// ENDED ON EVERY PATH OUT OF THIS FRAME, the runner build failing below
 	// included: that path raised an indicator and never ran a turn, and
 	// nothing else would ever take it down. `working` stays false until a
@@ -2963,11 +3083,16 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	reply := ReplyFor(req.Events)
 	turnIdentity := tel.runnerTurn(company, req.Depth, req.DelegationChain,
 		task, reply, e.WithheldContacts())
-	// The executor's runtime, from the seat's own provider chain — see
+	// The colleague's ask this turn answers, if one woke it: answered from
+	// this frame where the turn ends here, and from its run's record where
+	// it parks on the run its executor launches (a2a.go).
+	ask := colleagueAskOf(askOf(req.Events))
+	// The executor's launcher, over the turn's pinned company — see
 	// [Engine.agentRunFor] — and the box a person's note reaches this turn
-	// through, which that runtime decides can be read at all.
-	agentRun := e.agentRunFor(company, req.Handle, turnIdentity.Context)
-	box := steerBox(agentRun)
+	// through until it launches its coding run, which hands what the box
+	// still holds to the run's record (steer.go).
+	launcher := e.agentRunFor(company, req.Handle, turnIdentity.Context, ask)
+	box := steer.New()
 	r, err := company.RunnerFor(req.Handle, e.seatRegistry(company, req.Handle), RunnerInput{
 		Task:    task,
 		Compact: e.compactorFor(company),
@@ -2982,15 +3107,16 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		Turn:         turnIdentity,
 		Sessions:     e.sessions,
 		Metrics:      e.metrics,
-		AgentRun:     agentRun,
+		Launcher:     launcher,
 		Steer:        box,
 		Markers:      e.markers(),
 		Latch:        e.onboarded,
 		// The meter the context assembly was charged through — see above.
 		Budget: tel.budget.budget(),
-		// The round-cap extension judge, from the same pinned epoch. It
-		// was never supplied, so every exhaustion rescued with "no_judge"
-		// and the extension mechanism was inert.
+		// The round-cap extension judge, from the same pinned epoch, for
+		// the onboarding pass — the one engine loop with a cap above its
+		// budget. It was never supplied, so every exhaustion rescued with
+		// "no_judge" and the extension mechanism was inert.
 		Judge: e.judgeFor(company, req.Handle, tel.aux()),
 		// The seat's headroom, for a sub-agent spawn. Three-valued on
 		// purpose: nil is "no ceiling configured", and a FAILED read
@@ -3034,7 +3160,8 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// returns — before its completion is published, so the record of a note
 	// the turn missed precedes the record that the turn ended — and the
 	// defer is the backstop for every other way out of this frame. Closing
-	// twice records nothing twice. See steer.go.
+	// twice records nothing twice, and a box the turn's launch handed to its
+	// run's record closes nothing here. See steer.go.
 	closeSteer := e.openSteer(req.RunID, req.Handle, box, r)
 	defer closeSteer(ctx)
 
@@ -3074,7 +3201,7 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		log.InfoContext(ctx, "onboarding_pass_ran", "handle", req.Handle)
 	}
 	if !refused {
-		res, err = turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds),
+		res, err = turn.Run(ctx, r, company.TurnSettings(tel.deadline),
 			turnInputFor(req, reply))
 		// WHAT THE TURN ANSWERED WITHOUT BEING WOKEN FOR IT: the waiting
 		// messages its thread block showed it, which the dispatch records as
@@ -3084,25 +3211,14 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		// showed nothing to a model, so nothing was worked through.
 		res.WorkedThrough = workedThroughKeys(threadOf(req.Ask()), blocks.ThreadContextAnswered)
 	}
-	// THE BOX CLOSES THE MOMENT THE TURN RETURNS: no later round will read
-	// a note, and one offered from here on is answered `closed`.
+	// THE BOX CLOSES THE MOMENT THE TURN RETURNS: no later step of this
+	// segment will read a note, and one offered from here on is answered
+	// `closed` — or filed on the run's record, where the turn launched one.
 	closeSteer(ctx)
-	// The moment the turn returns, and before its frame unwinds: the runner
-	// holds the suspended conversation only until then, and a row without
-	// one is a detached run nothing can ever resume.
-	//
-	// ITS ANSWER IS WHAT THE INDICATOR FOLLOWS, not `res.Suspended` — the
-	// intent to park and a run that can actually be resumed are different
-	// facts, and this call is where the second one is established. See
-	// [stillWorking].
-	//
 	// THE SEGMENT'S CHARGE IS DECIDED FIRST, because a segment charged to
-	// nothing hands what it spent to the suspension this call writes.
+	// nothing hands what it spent to the suspension written below.
 	spend := r.Spend()
 	charge := tel.chargeFor(spend, res, err, time.Now().UTC())
-	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, req.RunID, tel.written, charge, tel.ask, tel.senders))
-	}
 	// Published on BOTH paths. An error here means a phase broke, which is
 	// precisely when a dashboard most needs the turn closed: the phase
 	// events already put the seat into `working`, and returning without this
@@ -3112,12 +3228,41 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 	// them — so a reader that asks for the turn as it ends reads its context
 	// and its rewrites beside its phases; and CHARGED to the work item it
 	// was on after the record of its end exists. See [Engine.endSegment].
+	//
+	// AND BEFORE THE PARK IS WRITTEN, as the resumed path has always done:
+	// the write below is what opens the run to everything that can END the
+	// parked turn — its collection, a loss, a person's stop — and each of
+	// those closes the turn on the record with an end that has to be newer
+	// than this park. Published after the write, a stop that landed in
+	// between was dated before the park it closed, and every reader that
+	// takes the newest of a turn's records left the turn parked for good.
+	// The runner holds the parked state until the frame unwinds, which this
+	// does not.
 	e.endSegment(ctx, tel, spend, res, err, charge)
+	if res.Suspended {
+		// ITS ANSWER IS WHAT THE INDICATOR FOLLOWS, not `res.Suspended` —
+		// the intent to park and a run that can actually be resumed are
+		// different facts, and this call is where the second one is
+		// established. See [stillWorking].
+		parked, parkErr := e.persistSuspension(ctx, r, req.RunID, tel, charge)
+		if turn.Stopped(parkErr) {
+			// A PERSON STOPPED THE RUN BETWEEN ITS LAUNCH AND ITS PARK:
+			// the run is ended and announced, the refused park closed the
+			// turn as stopped ([Engine.closeStoppedAtPark]), and this frame
+			// ends as a turn stopped at its next round does — the
+			// dispatcher's own record of who stopped it and that the
+			// trigger is worked ([Dispatcher.stopped]).
+			res.Suspended, err = false, parkErr
+		} else {
+			working = stillWorking(parked, parkErr)
+		}
+	}
 	// AND, if a colleague asked for this turn, the answer they are waiting
-	// for. Here because this is the one frame holding both the result and
-	// the trigger; after the completion event because the reply wakes
-	// another seat and the record of this turn should exist first.
-	e.answerColleague(ctx, company, req, res)
+	// for, where the turn ended here: a turn that parked is answered by the
+	// frame that ends it, off its run's record. After the completion event
+	// because the reply wakes another seat and the record of this turn
+	// should exist first.
+	e.answerColleague(ctx, company, answeringOf(req), ask, res, err)
 	return res, err
 }
 

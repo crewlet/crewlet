@@ -91,10 +91,11 @@ func TestDeliveriesIsDeclaredNotDerived(t *testing.T) {
 func TestAFirstPartyWriteDoesNotDeliverByAnnotationAlone(t *testing.T) {
 	t.Parallel()
 	r := tools.NewRegistry()
-	if err := r.RegisterWith(deliverStub{"run_sandbox"}, tools.OriginBuiltin,
-		// The real run_sandbox annotations: a shared write by the
-		// classifier's reading, and still not an answer anybody is
-		// waiting for — a coding run reports back to its own executor.
+	if err := r.RegisterWith(deliverStub{"a2a_ask"}, tools.OriginBuiltin,
+		// The real a2a_ask annotations: a shared write by the
+		// classifier's reading, and still not an answer the person
+		// waiting on the turn is sent — a question to a colleague seat
+		// reports back to the asking turn, not to them.
 		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}); err != nil {
 		t.Fatal(err)
 	}

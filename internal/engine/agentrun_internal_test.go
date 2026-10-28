@@ -1,141 +1,764 @@
 package engine
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	seatpkg "github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// modeCompany is a one-seat epoch whose executor is the named CLI in the named
-// mode, over a REAL cliagent provider: the question is what the provider's own
-// answer makes the engine do, and a fake would answer whatever the test wanted.
-func modeCompany(t *testing.T, agent string, boxMode bool, runIn config.Placement) (*Company, *org.Role) {
+// chainMember is one entry of a fixture's executor chain: its key, its CLI, the
+// model it names and, for an entry whose plan is spent, that it sits out.
+type chainMember struct {
+	key, agent, model string
+	runIn             config.Placement
+	// subscription signs the entry in with a plan login that never leaves
+	// the engine host, rather than with an API key that travels.
+	subscription bool
+	// spent sits the entry out on this node before the launch, as a text
+	// call that met the CLI's usage-limit line leaves it.
+	spent bool
+	// env is the entry's env, as resolved.
+	env map[string]string
+}
+
+// cliProvider is a REAL cliagent provider for m: the question every case here
+// asks is what the provider's own answer makes the launch do, and a fake would
+// answer whatever the case wanted. Its binary does not exist, so no case can
+// start a CLI on the machine running the suite — except an entry that has to
+// sit out, whose stand-in prints the CLI's own usage-limit line once.
+func cliProvider(t *testing.T, m chainMember) *cliagent.Provider {
 	t.Helper()
+	overrides := map[string]any{"binary": filepath.Join(t.TempDir(), "no-cli-here")}
+	auth := cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-not-real"}
+	if m.subscription {
+		auth = cliagent.Auth{Mode: cliagent.AuthSubscription}
+	}
+	if m.spent {
+		script := filepath.Join(t.TempDir(), "spent-cli")
+		if err := os.WriteFile(script, []byte("#!/bin/sh\ncat >/dev/null\n"+
+			"echo 'Usage limit reached · resets 5pm'\n"), 0o755); err != nil {
+			t.Fatalf("writing the spent CLI: %v", err)
+		}
+		overrides = map[string]any{
+			"binary": script, "complete_args": []any{"run"},
+			"output": "text", "prompt_mode": "stdin",
+			// A text stream has no events to tell apart, so the profile's
+			// event filter goes with it — and so does everything else that
+			// reads such a stream: its requests, its MCP failure events, its
+			// structured limit reports, the cap's signature in it.
+			"event_type_path": []any{}, "text_events": []any{},
+			"requests": nil, "cap": nil, "limit_events": nil,
+			"mcp": map[string]any{"failure_events": []any{}},
+		}
+	}
 	provider, err := cliagent.New(cliagent.Config{
-		Key: "sub", Agent: agent, Box: boxMode,
-		StateDir: t.TempDir(), Timeout: time.Minute,
+		Key: m.key, Agent: m.agent, Model: m.model, StateDir: t.TempDir(),
+		Overrides: overrides, Timeout: time.Minute, Auth: auth, Env: m.env,
 	})
 	if err != nil {
-		t.Fatalf("cliagent.New: %v", err)
+		t.Fatalf("cliagent.New(%s): %v", m.key, err)
 	}
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "sub", Provider: provider}})
+	if m.spent {
+		_, err := provider.Complete(t.Context(), llm.Request{Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: "are you there"},
+		}})
+		if llm.KindOf(err) != llm.KindRateLimit || provider.SittingOut() == nil {
+			t.Fatalf("the spent stand-in answered %v and sits out %v: the fixture could not "+
+				"spend the entry's plan", err, provider.SittingOut())
+		}
+	}
+	return provider
+}
+
+// chainCompany is a one-seat epoch whose seat's `llm` is members, in order, over
+// real cliagent providers and the providers.llm entries that place them.
+func chainCompany(t *testing.T, members ...chainMember) (*Company, *org.Role) {
+	t.Helper()
+	entries := make([]phase.Entry, 0, len(members))
+	configured := make(map[string]config.LLMProvider, len(members))
+	keys := make(org.ProviderKeys, 0, len(members))
+	for _, m := range members {
+		entries = append(entries, phase.Entry{Key: m.key, Provider: cliProvider(t, m)})
+		configured[m.key] = config.LLMProvider{
+			Agent: config.CLIAgentName(m.agent), Model: m.model, RunIn: m.runIn, Env: m.env,
+		}
+		keys = append(keys, m.key)
+	}
+	models, err := phase.NewRegistry(entries)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
-	seat := &org.Role{Name: "SWE", LLM: org.ProviderKeys{"sub"}}
-	mode := config.CLIModeHost
-	if boxMode {
-		mode = config.CLIModeBox
-	}
+	seat := &org.Role{Name: "SWE", LLM: keys}
 	return &Company{
 		Models: models,
 		Org:    &org.Organization{Name: "Acme", Roles: []*org.Role{seat}},
 		Config: &config.Company{Providers: config.Providers{
-			LLM: map[string]config.LLMProvider{"sub": {
-				Agent: config.CLIAgentName(agent), Mode: mode, RunIn: runIn,
-			}},
+			LLM:     configured,
+			Sandbox: &config.SandboxProvider{Fake: true},
 		}},
 	}, seat
 }
 
-// A TYPED NIL IS NOT A NIL INTERFACE, and this is the bug that class of
-// mistake produces here: a nil *agentLauncher assigned into the runner's
-// AgentLauncher field is a NON-nil interface, so every seat in the company —
-// every host-mode seat included — takes the agent branch and dereferences
-// nothing on its first turn.
-func TestAHostModeSeatGetsNoAgentLauncher(t *testing.T) {
-	t.Parallel()
-	c, _ := modeCompany(t, "claude-code", false, "")
-	e := &Engine{}
-	if got := e.agentRunFor(c, "swe", &turnctx.Turn{RunID: "t1"}); got != nil {
-		t.Fatalf("a host-mode seat got %T, want a nil interface", got)
-	}
+// executorCompany is [chainCompany] with one claude-code entry that can take a
+// launch anywhere.
+func executorCompany(t *testing.T) (*Company, *org.Role) {
+	t.Helper()
+	return chainCompany(t, chainMember{key: "api", agent: "claude-code", model: "claude-golden"})
 }
 
-// A BOX-MODE SEAT GETS ONE, carrying the CLI and the cell resolved from its
-// own entry — resolved ONCE, before the turn, so an apply landing mid-turn
-// cannot move a run that is already going.
+// A TYPED NIL IS NOT A NIL INTERFACE, and this is the bug that class of mistake
+// produces here: a nil *agentLauncher assigned into the runner's Launcher field
+// is a NON-nil interface, so the runner is built and dereferences nothing at
+// its first launch, where a nil interface is refused as the assembly mistake it
+// is. A company with no models and a handle no agent seat holds are the two
+// shapes with nothing to launch on.
 //
-// Its PRESENCE is also the whole signal the runner reads to decide that this
-// executor already holds a shell and must not also be offered run_sandbox
-// (see runner.offersSandbox), so these two tests pin that too: there is no
-// second derivation of "is this seat in box mode" to keep in step.
-func TestABoxModeSeatGetsALauncherForItsOwnCLIAndCell(t *testing.T) {
+// AND EVERY AGENT SEAT GETS ONE, over the turn's pinned company: the member,
+// its CLI and its cell are the launch's to choose, from that company, so
+// nothing about them is resolved here.
+func TestEverySeatGetsALauncherOverItsPinnedCompanyAndNoneGetsATypedNil(t *testing.T) {
 	t.Parallel()
-	c, _ := modeCompany(t, "opencode", true, config.PlacementE2B)
+	c, _ := executorCompany(t)
 	e := &Engine{}
-	got := e.agentRunFor(c, "swe", &turnctx.Turn{RunID: "t1"})
-	if got == nil {
-		t.Fatal("a box-mode seat got no launcher, so its executor ran natively")
-	}
+	got := e.agentRunFor(c, "swe", &turnctx.Turn{RunID: "t1"}, nil)
 	launcher, ok := got.(*agentLauncher)
-	if !ok {
-		t.Fatalf("launcher is %T", got)
+	if !ok || launcher == nil {
+		t.Fatalf("an agent seat got %T, want a launcher", got)
 	}
-	if launcher.codingAgent != "opencode" {
-		t.Errorf("coding agent = %q, want the CLI the entry names", launcher.codingAgent)
+	if launcher.company != c {
+		t.Error("the launcher is not over the company the turn was pinned to")
 	}
-	if launcher.placement != sandbox.E2B {
-		t.Errorf("placement = %q, want the entry's own run_in", launcher.placement)
+	for name, company := range map[string]*Company{
+		"no models": {Org: c.Org, Config: c.Config},
+	} {
+		if got := e.agentRunFor(company, "swe", &turnctx.Turn{RunID: "t1"}, nil); got != nil {
+			t.Errorf("%s: got %T, want a nil interface", name, got)
+		}
 	}
-}
-
-// AN ENTRY THAT NAMES NO CELL DEFERS TO THE CATALOGUE, spelled once: the empty
-// placement reaches the manager, which resolves it to the company default. A
-// second fallback here would be a second answer to that question.
-func TestAnAgentEntryWithNoCellDefersToTheCatalogue(t *testing.T) {
-	t.Parallel()
-	c, _ := modeCompany(t, "claude-code", true, "")
-	e := &Engine{}
-	launcher, _ := e.agentRunFor(c, "swe", &turnctx.Turn{RunID: "t1"}).(*agentLauncher)
-	if launcher == nil {
-		t.Fatal("no launcher")
-	}
-	if launcher.placement != "" {
-		t.Errorf("placement = %q, want empty so the manager resolves the default", launcher.placement)
+	if got := e.agentRunFor(c, "nobody", &turnctx.Turn{RunID: "t1"}, nil); got != nil {
+		t.Errorf("a handle no seat holds got %T, want a nil interface", got)
 	}
 }
 
-// A RUN WITH NO REACHABLE BRIDGE IS REFUSED, not started.
-//
-// A coding agent with none of the seat's tools cannot answer anybody, cannot
-// touch a ticket and cannot submit its work: it would burn a subscription
-// producing prose nothing collects, and the turn would be rescued as
-// incomplete with no sign of why. The refusal names the variable that fixes it.
-func TestBoxModeIsRefusedWithNoBridge(t *testing.T) {
-	t.Parallel()
-	c, seat := modeCompany(t, "claude-code", true, config.PlacementDirect)
-	e := &Engine{}
+// launchRig is an engine that can take an executor launch all the way to a
+// box — the in-process double for every cell, the double's runner for every
+// CLI that has one, a durable run store, a queue for the start event and the
+// given bridge, mounted — and the runners every launch starts its job on.
+func launchRig(t *testing.T, c *Company, bridge *mcpbridge.Bridge) (*Engine, *sandbox.FakeRunner) {
+	t.Helper()
+	e, runners := launchRigRunners(t, c, bridge)
+	return e, runners["claude-code"]
+}
+
+// launchRigRunners is [launchRig] answering every CLI's runner, by name: a case
+// about WHICH runner a launch starts its job on has to see the one it did not.
+func launchRigRunners(t *testing.T, c *Company, bridge *mcpbridge.Bridge) (*Engine, map[string]*sandbox.FakeRunner) {
+	t.Helper()
+	runners := map[string]*sandbox.FakeRunner{
+		"claude-code": sandbox.NewFakeRunner("claude-code"),
+		"opencode":    sandbox.NewFakeRunner("opencode"),
+	}
+	providers := map[sandbox.Placement]sandbox.Provider{}
+	for _, p := range sandbox.Placements {
+		providers[p] = sandbox.NewFakeProvider()
+	}
+	// THE COMPANY'S OWN PROVIDER-WIDE STEPS, as buildSandbox hands them to
+	// the manager, so a launch here provisions what a node's would.
+	var defaults []sandbox.SetupStep
+	if spec := c.Config.Providers.Sandbox; spec != nil {
+		defaults = setupSteps(spec.Setup)
+	}
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers: providers, DefaultPlacement: sandbox.Direct,
+		Runners: map[string]sandbox.Runner{
+			"claude-code": runners["claude-code"], "opencode": runners["opencode"],
+		},
+		DefaultSetup: defaults,
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	q := memory.New()
+	pending := sandbox.NewCoordStore(coordmemory.NewFleet())
+	// Mounted, as serveAPI mounts it on a node with a listener: a bridge no
+	// listener took opens no session.
+	_ = bridge.Handler()
+	e := &Engine{
+		backends: &Backends{Queue: q},
+		bridge:   bridge,
+	}
+	// The engine's own resumer, as buildSandboxRuntime hands it over: the
+	// coordinator refuses to be built without one.
+	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Answers:  testAnswers(),
+		Audience: noAudience{},
+		Queue:    q, Pending: pending, Manager: manager, Resume: &resumer{engine: e},
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	e.useSandbox(pending, coordinator)
+	// THE EPOCH'S OWN CATALOGUE, as an apply pins it ([Company.catalogue]):
+	// every launch of c's turns places its box by this manager.
+	c.catalogue = manager
 	e.epoch.current.Store(c)
-	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
-		codingAgent: "claude-code", placement: sandbox.Direct,
+	return e, runners
+}
+
+// launchReadyEngine is [launchRig] over a bridge with somewhere to dial.
+func launchReadyEngine(t *testing.T, c *Company) *Engine {
+	t.Helper()
+	e, _ := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	return e
+}
+
+// launcherOn is the launcher a turn on c's seat would be given.
+func launcherOn(e *Engine, c *Company, seat *org.Role, turnID string) *agentLauncher {
+	return &agentLauncher{
+		engine: e, company: c, seat: seat,
+		turn: &turnctx.Turn{RunID: turnID, Seat: seat, Org: c.Org, Task: "fix the failing test"},
 	}
-	err := launcher.LaunchExecutor(t.Context(), runnerAgentRequest())
-	if err == nil {
-		t.Fatal("a run was launched with no sandbox and no bridge")
+}
+
+// launchRequest is what the runner hands a launcher: the brief and a surface
+// bound to the launcher's own turn, as the runner binds every phase surface —
+// the bridge acts as that turn's seat on every call and refuses a surface that
+// names none — and a hand-off hook that records what it is told.
+func launchRequest(l *agentLauncher, handoffs *[]chain.Fallback) runner.AgentRunRequest {
+	return runner.AgentRunRequest{
+		Brief: "## Task\nfix the failing test", Round: 1,
+		// THE TURN'S FENCE, as the engine builds it for the runner and the
+		// runner hands it on: asked again by the launch.
+		Fence:   l.engine.seatFence(l.seat.Handle()),
+		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).ForTurn(l.turn),
+		OnFallback: func(f chain.Fallback) {
+			if handoffs != nil {
+				*handoffs = append(*handoffs, f)
+			}
+		},
 	}
-	// With no sandbox at all the refusal names THAT, because it is the
-	// nearer of the two missing things and fixing the further one first
-	// would leave the operator exactly where they started.
-	if !strings.Contains(err.Error(), "providers.sandbox") {
-		t.Errorf("the refusal does not name what to configure: %v", err)
+}
+
+// refusedCleanly asserts a refused launch left nothing behind: no row, no live
+// bridge session, no job.
+func refusedCleanly(t *testing.T, e *Engine, turnID string, jobs *sandbox.FakeRunner) {
+	t.Helper()
+	if e.bridge != nil && e.bridge.Live() != 0 {
+		t.Errorf("%d bridge sessions live for a launch that was refused", e.bridge.Live())
 	}
+	if rt := e.sandbox.Load(); rt != nil {
+		if _, found, err := rt.pending.Get(t.Context(), turnID); err != nil || found {
+			t.Errorf("a run row exists for a launch that was refused (found %v, err %v)", found, err)
+		}
+	}
+	if jobs != nil && len(jobs.Started()) != 0 {
+		t.Errorf("%d jobs started for a launch that was refused", len(jobs.Started()))
+	}
+}
+
+// A LAUNCH PLACES ITS RUN IN THE CELL OF THE MEMBER IT RUNS ON: the entry's
+// own `run_in`, else the catalogue's default, spelled once — the empty
+// placement reaches the manager, which resolves it. The row records the cell,
+// which is what the run is collected and reclaimed through on whatever node
+// does that.
+func TestALaunchPlacesTheRunInItsMembersCell(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		runIn config.Placement
+		want  sandbox.Placement
+	}{
+		"its own run_in":        {runIn: config.PlacementE2B, want: sandbox.E2B},
+		"the catalogue default": {want: sandbox.Direct},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, seat := chainCompany(t, chainMember{key: "api", agent: "claude-code",
+				model: "claude-golden", runIn: tc.runIn})
+			e := launchReadyEngine(t, c)
+			l := launcherOn(e, c, seat, "t1")
+			if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+				t.Fatalf("LaunchExecutor: %v", err)
+			}
+			row, _, err := e.sandbox.Load().pending.Get(t.Context(), "t1")
+			if err != nil || sandbox.Placement(row.Placement) != tc.want {
+				t.Fatalf("the run is placed in %q (err %v), want %q", row.Placement, err, tc.want)
+			}
+		})
+	}
+}
+
+// FALLBACK AT LAUNCH. A head whose plan is spent on this node is passed over
+// for the next member that can take the run, and the run is that member's
+// whole: its model, its CLI and the entry the job is recorded under — which is
+// what the run's spend is charged to. The hand-off is the runner's to publish,
+// against the turn, so it is handed to the request's hook naming both entries.
+//
+// Mutation: launch on the chain's head without asking whether it sits out,
+// and the run goes out on the spent entry.
+func TestALaunchFallsPastASpentHeadToTheNextMemberAndRunsOnIt(t *testing.T) {
+	t.Parallel()
+	c, seat := chainCompany(t,
+		chainMember{key: "plan", agent: "claude-code", model: "opus", spent: true},
+		chainMember{key: "spare", agent: "claude-code", model: "haiku"},
+	)
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	l := launcherOn(e, c, seat, "t1")
+	var handoffs []chain.Fallback
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, &handoffs)); err != nil {
+		t.Fatalf("LaunchExecutor: %v", err)
+	}
+	started := jobs.Started()
+	if len(started) != 1 || started[0].Model != "haiku" {
+		t.Fatalf("started %+v, want one run on the spare entry's model", started)
+	}
+	row, _, _ := e.sandbox.Load().pending.Get(t.Context(), "t1")
+	if row.Launch.ProviderKey != "spare" || row.Launch.Model != "haiku" {
+		t.Errorf("the job is recorded under %q/%q, want the member that took it",
+			row.Launch.ProviderKey, row.Launch.Model)
+	}
+	if len(handoffs) != 1 || handoffs[0].From != "plan" || handoffs[0].To != "spare" ||
+		handoffs[0].Kind != llm.KindRateLimit {
+		t.Errorf("hand-offs = %+v, want one from the spent head to the spare", handoffs)
+	}
+}
+
+// A LAUNCH RUNS ON ITS MEMBER'S OWN CLI. The box's runner is the picked
+// member's, never a constant and never the chain head's: an OpenCode entry's
+// model and login handed to Claude Code is a run that can read neither — and
+// on a fallback the head is exactly the member that was NOT picked. So an
+// OpenCode member alone, and one taking the launch from a spent Claude Code
+// head, both start on the OpenCode runner, with the entry's model as written,
+// and the row records the CLI the job runs.
+func TestALaunchRunsOnItsMembersOwnCLI(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		members []chainMember
+	}{
+		{"an opencode member alone", []chainMember{
+			{key: "oc", agent: "opencode", model: "anthropic/claude-sonnet-5"},
+		}},
+		{"an opencode member after a spent claude-code head", []chainMember{
+			{key: "plan", agent: "claude-code", model: "opus", spent: true},
+			{key: "oc", agent: "opencode", model: "anthropic/claude-sonnet-5"},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c, seat := chainCompany(t, tc.members...)
+			e, runners := launchRigRunners(t, c, bridgeFor(t, mcpbridge.Options{
+				Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+			}))
+			l := launcherOn(e, c, seat, "t1")
+			if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+				t.Fatalf("LaunchExecutor: %v", err)
+			}
+			if got := runners["claude-code"].Started(); len(got) != 0 {
+				t.Fatalf("the claude-code runner started %d jobs for an opencode member", len(got))
+			}
+			started := runners["opencode"].Started()
+			if len(started) != 1 || started[0].Model != "anthropic/claude-sonnet-5" {
+				t.Fatalf("the opencode runner started %+v, want one job on the entry's model as written",
+					started)
+			}
+			row, _, _ := e.sandbox.Load().pending.Get(t.Context(), "t1")
+			if row.CodingAgent != "opencode" || row.Launch.ProviderKey != "oc" {
+				t.Errorf("the row records %q on %q, want the opencode job the member took",
+					row.CodingAgent, row.Launch.ProviderKey)
+			}
+		})
+	}
+}
+
+// A MEMBER WITH NO IN-BOX RUNNER IS PASSED OVER SILENTLY. Its CLI can serve the
+// seat's text phases and never its executor, which is a fact of the
+// configuration rather than a refusal of the moment: config says so once, as
+// a warning, and announcing a hand-off on every launch would publish a
+// fallback nothing fell from.
+func TestALaunchPassesOverAMemberWithNoRunnerAndAnnouncesNothing(t *testing.T) {
+	t.Parallel()
+	c, seat := chainCompany(t,
+		chainMember{key: "codex", agent: "codex", model: "gpt-golden"},
+		chainMember{key: "api", agent: "claude-code", model: "claude-golden"},
+	)
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	l := launcherOn(e, c, seat, "t1")
+	var handoffs []chain.Fallback
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, &handoffs)); err != nil {
+		t.Fatalf("LaunchExecutor: %v", err)
+	}
+	if started := jobs.Started(); len(started) != 1 || started[0].Model != "claude-golden" {
+		t.Fatalf("started %+v, want one run on the claude-code entry", started)
+	}
+	if len(handoffs) != 0 {
+		t.Errorf("hand-offs = %+v, want none for a member that could never take the run", handoffs)
+	}
+}
+
+// EVERY RUNNER MEMBER SITTING OUT IS AN EXHAUSTED CHAIN, the same
+// [*chain.Error] an exhausted call reports, each member's refusal on it — so
+// the launch reads as a chain at its limit ([chain.Limited]), on which the seat
+// is parked until the first member is tried again, exactly as for a reviewer's
+// call — and nothing is opened for it.
+//
+// Mutation: drop the refusals from chain.Pick's error, and the launch is no
+// limited chain.
+func TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain(t *testing.T) {
+	t.Parallel()
+	c, seat := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus", spent: true})
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	l := launcherOn(e, c, seat, "t1")
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	var exhausted *chain.Error
+	if !errors.As(err, &exhausted) || len(exhausted.Attempted) != 1 || exhausted.Attempted[0] != "plan" {
+		t.Fatalf("LaunchExecutor = %v, want the chain exhausted on its one runner", err)
+	}
+	if llm.KindOf(err) != llm.KindRateLimit {
+		t.Errorf("the exhausted launch classifies as %v, want the rate limit it sat out on",
+			llm.KindOf(err))
+	}
+	if limit, limited := chain.Limited(err); !limited || limit.RetryAt.IsZero() {
+		t.Errorf("chain.Limited = %+v, %v; want the launch read as a chain at its limit", limit, limited)
+	}
+	refusedCleanly(t, e, "t1", jobs)
+}
+
+// A CHAIN WITH NO RUNNER MEMBER IS REFUSED NAMING IT, and the CLIs that could
+// take it: config refuses this chain on every write, so reaching it is a
+// company built by hand, and the operator's to fix rather than a retry's.
+func TestAChainWithNoRunnerMemberIsRefusedNamingIt(t *testing.T) {
+	t.Parallel()
+	c, seat := chainCompany(t, chainMember{key: "codex", agent: "codex", model: "gpt-golden"})
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	l := launcherOn(e, c, seat, "t1")
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	if err == nil || !strings.Contains(err.Error(), "codex") || !strings.Contains(err.Error(), "claude-code") {
+		t.Fatalf("LaunchExecutor = %v, want a refusal naming the chain and the runners", err)
+	}
+	refusedCleanly(t, e, "t1", jobs)
+}
+
+// THE GUARD JUDGES THE PICKED MEMBER'S LOGIN, the one the box runs under. A
+// remote run on a plan login that cannot follow it is refused before any box
+// exists; the same seat whose plan entry sits out falls back to an API-key
+// entry whose key travels, and launches. A guard that asked the chain's head
+// would refuse the second launch — and wave through a fallback onto a member
+// with nothing to sign in with.
+func TestTheCredentialGuardJudgesThePickedMembersLogin(t *testing.T) {
+	t.Parallel()
+	bridge := func() *mcpbridge.Bridge {
+		return bridgeFor(t, mcpbridge.Options{
+			Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+		})
+	}
+	plan := chainMember{key: "plan", agent: "claude-code", model: "opus",
+		runIn: config.PlacementE2B, subscription: true}
+	key := chainMember{key: "api", agent: "claude-code", model: "claude-golden", runIn: config.PlacementE2B}
+
+	c, seat := chainCompany(t, plan, key)
+	e, jobs := launchRig(t, c, bridge())
+	l := launcherOn(e, c, seat, "t1")
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	var credErr *SandboxCredentialError
+	if !errors.As(err, &credErr) || !strings.Contains(err.Error(), `"plan"`) {
+		t.Fatalf("a remote run on a plan login that cannot follow it = %v, want it refused "+
+			"naming the entry", err)
+	}
+	refusedCleanly(t, e, "t1", jobs)
+
+	plan.spent = true
+	c, seat = chainCompany(t, plan, key)
+	e, jobs = launchRig(t, c, bridge())
+	l = launcherOn(e, c, seat, "t1")
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+		t.Fatalf("the fallback onto an entry whose key travels was refused: %v", err)
+	}
+	if started := jobs.Started(); len(started) != 1 || started[0].Env["ANTHROPIC_API_KEY"] != "sk-ant-not-real" {
+		t.Errorf("the run does not carry the API-key entry's key: %+v", started)
+	}
+}
+
+// THE BUDGET FLOOR IS ASKED AT THE LAUNCH, and below it the launch is a BUDGET
+// refusal — what the dispatcher parks the seat on rather than redelivering into
+// the same refusal — with nothing opened: no row, no session, no box. An
+// unreadable budget is refused too, but not as a budget refusal: it is the
+// store's moment, and a redelivery's backoff rides it out.
+//
+// Mutation: drop the floor from the launch, and the starved seat launches.
+func TestALaunchBelowTheExecutorFloorIsABudgetRefusal(t *testing.T) {
+	t.Parallel()
+	c, seat := executorCompany(t)
+	seat.TokenBudget = org.TokenCeilings{period.Day: 30000}
+	fleet := coordmemory.NewFleet()
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	e.backends.Fleet = fleet
+	id, _ := c.Org.AgentIDFor(seat)
+	if _, err := fleet.PostCharge(t.Context(), coord.AgentScope(id.String()), 10000,
+		coord.WindowsAt(time.Now(), time.UTC)); err != nil {
+		t.Fatalf("PostCharge: %v", err)
+	}
+	l := launcherOn(e, c, seat, "t1")
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	if !errors.Is(err, toolloop.ErrBudgetExhausted) ||
+		!strings.Contains(err.Error(), "executor_min_budget_tokens") {
+		t.Fatalf("a launch with 20000 tokens left under a 25000 floor = %v, want a budget "+
+			"refusal naming the floor", err)
+	}
+	refusedCleanly(t, e, "t1", jobs)
+}
+
+// The floor's three answers, at the boundary the launch asks them at.
+func TestTheExecutorFloorIsThreeValued(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	if err := executorHeadroom(ctx, nil, 25000); err != nil {
+		t.Errorf("an uncapped seat was refused: %v", err)
+	}
+	if err := executorHeadroom(ctx, staticRemaining{left: 1}, 0); err != nil {
+		t.Errorf("a company with the floor off refused a launch: %v", err)
+	}
+	if err := executorHeadroom(ctx, staticRemaining{left: 25000}, 25000); err != nil {
+		t.Errorf("a seat exactly at the floor was refused: %v", err)
+	}
+	if err := executorHeadroom(ctx, staticRemaining{left: 24999}, 25000); !errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Errorf("a seat one token below the floor = %v, want a budget refusal", err)
+	}
+	err := executorHeadroom(ctx, staticRemaining{err: errors.New("store down")}, 25000)
+	if err == nil || errors.Is(err, toolloop.ErrBudgetExhausted) {
+		t.Errorf("an unreadable budget = %v, want refused, and not as an exhausted one", err)
+	}
+}
+
+// staticRemaining is a headroom reader that answers what the case says.
+type staticRemaining struct {
+	left int
+	err  error
+}
+
+func (r staticRemaining) Remaining(context.Context) (int, error) { return r.left, r.err }
+
+// A SEAT A PERSON STOPPED LAUNCHES NOTHING. The runner asked the seat's fence
+// when its phase opened; a stop placed while the turn built its prompt must
+// still keep the box from being bought, so the launch asks again before it
+// opens anything — and its refusal is the stop, which the runner records as a
+// stopped phase rather than a failed one.
+func TestAStoppedSeatLaunchesNothing(t *testing.T) {
+	t.Parallel()
+	c, seat := executorCompany(t)
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	id, _ := c.Org.AgentIDFor(seat)
+	e.pauses.pauses = map[uuid.UUID]coord.SeatPause{id: {
+		Seat: id, By: "jane", ByKind: iam.ActorHuman, StopRunning: true, At: time.Now(),
+	}}
+	e.pauses.known = true
+	l := launcherOn(e, c, seat, "t1")
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	if !turn.Stopped(err) {
+		t.Fatalf("a launch on a stopped seat = %v, want the stop", err)
+	}
+	refusedCleanly(t, e, "t1", jobs)
+}
+
+// A LAUNCHED RUN IS TOLD HOW TO GET A PERSON'S ANSWER. The box carries the ask
+// shim and the collection reads what it writes, and the run's system text is
+// the only place that says either exists: without it no run could park on a
+// question at all. Both ways are said — the tools for a question the run can go
+// on without, the shim for one it cannot — with the names the chart gives the
+// seat.
+func TestALaunchedRunIsToldHowToGetAPersonsAnswer(t *testing.T) {
+	t.Parallel()
+	c, seat := executorCompany(t)
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	l := launcherOn(e, c, seat, "t1")
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+		t.Fatalf("LaunchExecutor: %v", err)
+	}
+	started := jobs.Started()
+	if len(started) != 1 {
+		t.Fatalf("%d jobs started, want 1", len(started))
+	}
+	for _, said := range []string{`crewlet-ask "`, "`" + builtin.CommentOnWorkTool + "` with `ask`"} {
+		if !strings.Contains(started[0].System, said) {
+			t.Errorf("the run's system text does not say %q:\n%s", said, started[0].System)
+		}
+	}
+}
+
+// A LAUNCH PLACES ITS BOX BY ITS EPOCH'S CATALOGUE. The member, its run_in and
+// the seat's box settings come from the turn's pinned epoch, so the cells, the
+// engine-wide setup steps and the default turn cap have to come from the same
+// one: an apply landing between the turn's start and its launch swaps the
+// node's live manager, and a launch that read that one placed a pinned entry by
+// a catalogue its own revision never had.
+func TestALaunchPlacesItsBoxByItsEpochsCatalogue(t *testing.T) {
+	t.Parallel()
+	c, seat := executorCompany(t)
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	// THE NEXT REVISION'S CATALOGUE, live on the node: another default
+	// cell, a setup step of its own and another turn cap.
+	next, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers:        map[sandbox.Placement]sandbox.Provider{sandbox.E2B: sandbox.NewFakeProvider()},
+		DefaultPlacement: sandbox.E2B,
+		Runners:          map[string]sandbox.Runner{"claude-code": jobs},
+		DefaultMaxTurns:  7,
+		DefaultSetup:     []sandbox.SetupStep{{Name: "next-revision", Brief: "next-revision is set up"}},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	e.sandbox.Load().coordinator.SetManager(next)
+
+	l := launcherOn(e, c, seat, "t1")
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+		t.Fatalf("LaunchExecutor: %v", err)
+	}
+	row, _, _ := e.sandbox.Load().pending.Get(t.Context(), "t1")
+	if row.Placement != string(sandbox.Direct) {
+		t.Errorf("the run was placed in %q, want its epoch's default cell, direct", row.Placement)
+	}
+	started := jobs.Started()
+	if len(started) != 1 || started[0].Limits.MaxTurns == 7 {
+		t.Fatalf("started %+v, want one job under its epoch's turn cap", started)
+	}
+	if strings.Contains(started[0].System, "next-revision") {
+		t.Errorf("the run was provisioned with the live revision's setup step:\n%s", started[0].System)
+	}
+}
+
+// A LAUNCH CARRIES ITS TURN'S DEADLINE ONTO THE RUN. The turn's own segments
+// stop starting rounds once its wall-clock cap ends, and the run is the one
+// part of the turn that can outlast it — so the row says when, for the poll to
+// end a run that does. Every turn but a scheduled fire carries none.
+func TestALaunchCarriesItsTurnsDeadline(t *testing.T) {
+	t.Parallel()
+	for name, deadline := range map[string]time.Time{
+		"a scheduled fire's cap": time.Date(2026, 9, 1, 9, 30, 0, 0, time.UTC),
+		"no cap":                 {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c, seat := executorCompany(t)
+			e, _ := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+				Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+			}))
+			l := launcherOn(e, c, seat, "t1")
+			l.turn.Deadline = deadline
+			if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+				t.Fatalf("LaunchExecutor: %v", err)
+			}
+			row, _, _ := e.sandbox.Load().pending.Get(t.Context(), "t1")
+			if !row.Deadline.Equal(deadline) {
+				t.Errorf("the run carries deadline %v, want its turn's %v", row.Deadline, deadline)
+			}
+		})
+	}
+}
+
+// A LAUNCH IS HELD TO THE GRANT ITS TURN WAS ADMITTED UNDER. The fence it asks
+// is the turn's own, handed on by the runner, which captured the seat's grant
+// when the turn began — so a seat that moved while the prompt was built, and
+// even one that came back under a new grant, launches nothing. A fence the
+// launch built for itself captured the grant at the moment it asked, compared
+// that grant with itself, and could not see either.
+func TestALaunchAsksItsTurnsOwnFence(t *testing.T) {
+	t.Parallel()
+	c, seat := executorCompany(t)
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	l := launcherOn(e, c, seat, "t1")
+	req := launchRequest(l, nil)
+	moved := fmt.Errorf("%w: %q was held at epoch 3 and is now held at epoch 4", seatpkg.ErrSeatMoved, "swe")
+	asked := 0
+	req.Fence = func() error { asked++; return moved }
+	_, err := l.LaunchExecutor(t.Context(), req)
+	if !errors.Is(err, seatpkg.ErrSeatMoved) || asked != 1 {
+		t.Fatalf("a launch whose turn's grant moved = %v (fence asked %d times), want the move", err, asked)
+	}
+	refusedCleanly(t, e, "t1", jobs)
+
+	// AND NONE AT ALL IS AN ASSEMBLY FAULT, never an open fence.
+	req.Fence = nil
+	if _, err := l.LaunchExecutor(t.Context(), req); err == nil || !strings.Contains(err.Error(), "no fence") {
+		t.Fatalf("a launch with no fence from its turn = %v, want it refused", err)
+	}
+	refusedCleanly(t, e, "t1", jobs)
+}
+
+// A RUN WITH NO SANDBOX RUNTIME IS REFUSED, NAMING WHAT TO CONFIGURE — and so is
+// one whose pinned company dropped its catalogue while the node's runtime
+// carries on finishing the runs already out: a launch then would mint a box on
+// a catalogue the company no longer configures.
+func TestAnExecutorIsRefusedWithoutACatalogueForItsCompany(t *testing.T) {
+	t.Parallel()
+	c, seat := executorCompany(t)
+	bare := &Engine{}
+	bare.epoch.current.Store(c)
+	l := launcherOn(bare, c, seat, "t1")
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err == nil ||
+		!strings.Contains(err.Error(), "providers.sandbox") {
+		t.Errorf("a launch on a node with no runtime = %v, want it refused naming providers.sandbox", err)
+	}
+
+	dropped, seat := executorCompany(t)
+	e, jobs := launchRig(t, dropped, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	dropped.Config.Providers.Sandbox = nil
+	l = launcherOn(e, dropped, seat, "t1")
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err == nil ||
+		!strings.Contains(err.Error(), "providers.sandbox") {
+		t.Errorf("a launch for a company with no catalogue = %v, want it refused", err)
+	}
+	refusedCleanly(t, e, "t1", jobs)
 }
 
 // EACH RUN'S BOX IS GIVEN ITS OWN JOB'S ENDPOINT, never another's.
@@ -151,20 +774,14 @@ func TestBoxModeIsRefusedWithNoBridge(t *testing.T) {
 // other than the row's, and the token here names no job the row holds.
 func TestEachRunsBoxIsGivenItsOwnJobsEndpoint(t *testing.T) {
 	t.Parallel()
-	c, seat := splitLoginCompany(t, "api", "codex")
+	c, seat := chainCompany(t, chainMember{key: "api", agent: "claude-code",
+		model: "claude-golden", runIn: config.PlacementE2B})
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	for _, runID := range []string{"t1", "t2"} {
-		launcher := &agentLauncher{
-			engine: e, turn: &turnctx.Turn{RunID: runID, Seat: seat, Org: c.Org, Task: "fix it"}, seat: seat,
-			codingAgent: "claude-code", placement: sandbox.E2B,
-		}
-		if err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
-			Brief: "fix the failing test", Round: 1,
-			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
-				ForTurn(launcher.turn),
-		}); err != nil {
+		l := launcherOn(e, c, seat, runID)
+		if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
 			t.Fatalf("LaunchExecutor(%s): %v", runID, err)
 		}
 	}
@@ -173,6 +790,7 @@ func TestEachRunsBoxIsGivenItsOwnJobsEndpoint(t *testing.T) {
 		t.Fatalf("%d jobs started, want 2", len(started))
 	}
 	prefix := "https://engine.example.com" + mcpbridge.PathPrefix
+	agent, _ := c.Org.AgentIDFor(seat)
 	for i, runID := range []string{"t1", "t2"} {
 		url := started[i].MCPServers[config.ToolServerName].URL
 		token, ok := strings.CutPrefix(url, prefix)
@@ -183,7 +801,6 @@ func TestEachRunsBoxIsGivenItsOwnJobsEndpoint(t *testing.T) {
 		if err != nil || !found {
 			t.Fatalf("run %s has no row (found %v, err %v)", runID, found, err)
 		}
-		agent, _ := c.Org.AgentIDFor(seat)
 		if !strings.Contains(token, run.LaunchID+"~"+agent.String()+"~"+runID) {
 			t.Errorf("run %s's endpoint does not name its own job %s and its seat", runID, run.LaunchID)
 		}
@@ -194,15 +811,19 @@ func TestEachRunsBoxIsGivenItsOwnJobsEndpoint(t *testing.T) {
 }
 
 // THE DURABLE LOG IS THE RESUME'S WHOLE RECORD, so the conversion has to keep
-// every field the delivery check, the citations and the ledger read — and
-// what the phase record states each call with: its place in the order the run
-// made its calls, when it ran, for how long and who answered.
+// every field the delivery check, the citations, the ledger and the executor's
+// own record read — the bridge's measurement of each call included: its place
+// in the order the run made its calls, when it ran, for how long and who
+// answered, which is what the record's timeline places the run's calls by.
+//
+// Mutation: drop the place, the start, the duration or the origin from the
+// conversion, and this goes red.
 func TestABridgedCallSurvivesTheRoundTripToTheLedger(t *testing.T) {
 	t.Parallel()
-	started := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	at := time.Date(2026, 6, 15, 12, 1, 2, 0, time.UTC)
 	got := bridgedCalls([]sandbox.BridgeCall{
 		{Name: "slack_post", Args: `{"channel":"C1"}`, Output: "posted", Seq: 2,
-			StartedAt: started, DurationMS: 1500, Origin: "mcp:slack", Server: "slack"},
+			StartedAt: at, DurationMS: 1500, Origin: "mcp:slack", Server: "slack"},
 		{Name: "jira_create", Args: "not json", Failed: true, Seq: 1},
 	})
 	if len(got) != 2 {
@@ -211,17 +832,24 @@ func TestABridgedCallSurvivesTheRoundTripToTheLedger(t *testing.T) {
 	if got[0].Name != "slack_post" || got[0].Result != "posted" || got[0].Failed {
 		t.Errorf("call = %+v", got[0])
 	}
+	if got[0].Seq != 2 || !got[0].StartedAt.Equal(at) || got[0].Duration != 1500*time.Millisecond {
+		t.Errorf("the bridge's measurement was lost: place %d, started %s, took %s",
+			got[0].Seq, got[0].StartedAt, got[0].Duration)
+	}
+	if got[0].Origin != "mcp:slack" || got[0].Server != "slack" {
+		t.Errorf("who answered was lost: origin %q, server %q", got[0].Origin, got[0].Server)
+	}
+	// AN UNMEASURED CALL STAYS UNMEASURED: a zero start is "not timed",
+	// never a call placed at the epoch.
+	if !got[1].StartedAt.IsZero() || got[1].Duration != 0 {
+		t.Errorf("an unmeasured call gained a measurement: %+v", got[1])
+	}
 	if got[0].Args["channel"] != "C1" {
 		t.Errorf("arguments were lost: %v", got[0].Args)
 	}
-	if got[0].Seq != 2 || !got[0].StartedAt.Equal(started) ||
-		got[0].Duration != 1500*time.Millisecond ||
-		got[0].Origin != "mcp:slack" || got[0].Server != "slack" {
-		t.Errorf("the call's place, timing or origin was lost: %+v", got[0])
-	}
 	// UNDECODABLE ARGUMENTS KEEP THE CALL. One ledger line renders worse;
 	// failing the resume over it would lose the whole turn.
-	if got[1].Name != "jira_create" || !got[1].Failed {
+	if got[1].Name != "jira_create" || !got[1].Failed || got[1].Seq != 1 {
 		t.Errorf("a call with bad arguments was dropped or reshaped: %+v", got[1])
 	}
 	if got[1].Args != nil {
@@ -229,80 +857,13 @@ func TestABridgedCallSurvivesTheRoundTripToTheLedger(t *testing.T) {
 	}
 }
 
-// runnerAgentRequest is the shape the runner hands the launcher.
-func runnerAgentRequest() runner.AgentRunRequest {
-	return runner.AgentRunRequest{Brief: "fix the failing test", Round: 1}
-}
-
-// A BOX-MODE RUN IS THE EXECUTOR, so it runs on the executor's own entry.
+// A SEAT WITH NO role.sandbox BLOCK STILL RUNS ITS EXECUTOR.
 //
-// A seat legitimately points llm_sandbox at a cheaper, more code-shaped model
-// than the one it thinks with — that is what the field is for. Sending a
-// box-mode run there would run the seat's whole turn on the model it chose
-// for a subordinate job, silently, on any seat that set both.
-func TestABoxModeRunUsesTheExecutorsModelNotTheSandboxOne(t *testing.T) {
-	t.Parallel()
-	thinker, err := cliagent.New(cliagent.Config{
-		Key: "thinker", Agent: "claude-code", Box: true, Model: "opus",
-		StateDir: t.TempDir(), Timeout: time.Minute,
-	})
-	if err != nil {
-		t.Fatalf("cliagent.New: %v", err)
-	}
-	coder, err := cliagent.New(cliagent.Config{
-		Key: "coder", Agent: "claude-code", Model: "haiku",
-		StateDir: t.TempDir(), Timeout: time.Minute,
-	})
-	if err != nil {
-		t.Fatalf("cliagent.New: %v", err)
-	}
-	models, err := phase.NewRegistry([]phase.Entry{
-		{Key: "thinker", Provider: thinker}, {Key: "coder", Provider: coder},
-	})
-	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
-	}
-	seat := &org.Role{
-		Name: "SWE",
-		LLM:  org.ProviderKeys{"thinker"},
-		// The seat delegates CODE WORK to a cheaper model, which is what
-		// this field is for and must not capture the executor.
-		LLMSandbox: org.ProviderKeys{"coder"},
-	}
-	c := &Company{
-		Models: models,
-		Config: &config.Company{Providers: config.Providers{
-			LLM: map[string]config.LLMProvider{
-				"thinker": {Model: "opus", Mode: config.CLIModeBox},
-				"coder":   {Model: "haiku"},
-			},
-		}},
-	}
-
-	// ASKED THROUGH THE LAUNCHER, not through runLLM directly: what is
-	// under test is which phase the box-mode path chooses, and a test
-	// that named the phase itself would pass whatever the launcher did.
-	launcher := &agentLauncher{seat: seat, codingAgent: "claude-code"}
-	executor, err := launcher.executorRun(c, nil)
-	if err != nil || executor.model != "opus" {
-		t.Fatalf("a box-mode run resolved to %q (err %v), want the executor's own model",
-			executor.model, err)
-	}
-	// And a run_sandbox call still goes to the model the seat chose for it.
-	delegated, err := newCodingRun(c, seat, phase.Sandbox, "claude-code", nil)
-	if err != nil || delegated.model != "haiku" {
-		t.Fatalf("a delegated coding run resolved to %q (err %v), want llm_sandbox's model",
-			delegated.model, err)
-	}
-}
-
-// A SEAT WITH NO role.sandbox BLOCK IS A SUPPORTED BOX-MODE CONFIGURATION.
-//
-// A box-mode executor is placed by its own providers.llm entry's `run_in`,
-// so it runs in a box whether or not that block was ever written — and
-// assembling the run environment used to range over the nil block's Env and
-// panic on the seat's very first launch.
-func TestABoxModeSeatNeedsNoSandboxBlock(t *testing.T) {
+// An executor is placed by its own providers.llm entry's `run_in`, so it runs
+// in a box whether or not that block was ever written — and assembling the run
+// environment used to range over the nil block's Env and panic on the seat's
+// very first launch.
+func TestASeatWithNoSandboxBlockStillRunsItsExecutor(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
 	seat := &org.Role{Name: "SWE"}
@@ -328,36 +889,35 @@ func TestABoxModeSeatNeedsNoSandboxBlock(t *testing.T) {
 // A SEAT'S SANDBOX BLOCK IS FOUND WHEREVER IT IS DECLARED.
 //
 // The lookup walked only the top-level `roles:`, so a seat under `units:` —
-// most of a real company's seats — always answered nil. run_sandbox then
-// refused it with "this seat's sandbox is not enabled" on a seat whose block
-// says exactly the opposite, and every other per-seat sandbox setting (its
-// setup steps, its MCP scope, its env, its pause TTL, its round cap) was
-// silently dropped.
+// most of a real company's seats — always answered nil, and every per-seat box
+// setting (its setup steps, its MCP scope, its env, its pause TTL, its round
+// cap) was silently dropped.
 func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 	t.Parallel()
 	never := 0.0
+	nested, deep := 12, 40
 	c := composed(t, &config.Company{
 		Roles: []config.Role{{Name: "CEO"}},
 		Units: []config.Unit{{
 			Name:  "Platform",
-			Roles: []config.Role{{Name: "Nested", Sandbox: &config.RoleSandbox{Enabled: true}}},
+			Roles: []config.Role{{Name: "Nested", Sandbox: &config.RoleSandbox{MaxTurns: &nested}}},
 			Children: []config.Unit{{
 				Name: "Infra",
 				Roles: []config.Role{{Name: "Deep", Sandbox: &config.RoleSandbox{
-					Enabled: true, PauseTTLSeconds: &never,
+					MaxTurns: &deep, PauseTTLSeconds: &never,
 				}}},
 			}},
 		}},
 	})
 	// ADDRESSED BY HANDLE, derived from the name where the seat declares
 	// none — the same value every other surface addresses a seat by.
-	for _, handle := range []string{"nested", "deep"} {
+	for handle, want := range map[string]int{"nested": nested, "deep": deep} {
 		gate := seatSandbox(c, handle)
 		if gate == nil {
 			t.Fatalf("seat %q inside a unit found no sandbox block", handle)
 		}
-		if !gate.Enabled {
-			t.Errorf("seat %q found a block that is not the one it wrote", handle)
+		if gate.MaxTurns == nil || *gate.MaxTurns != want {
+			t.Errorf("seat %q found a block that is not the one it wrote: %+v", handle, gate)
 		}
 	}
 	// The seat at depth keeps its own settings, not the shallower one's.
@@ -372,31 +932,24 @@ func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 	// TWO SEATS OF ONE NAME GET THEIR OWN BLOCKS. A display name is an
 	// admission rule rather than a runnable one, so a revision stored
 	// before it runs with duplicates — and a walk matching on the name
-	// handed whichever came first. A seat that turned code work off would
-	// be given its namesake's setup steps, credentials and box.
+	// handed whichever came first. A seat would be given its namesake's
+	// setup steps, credentials and round cap.
 	namesakes := composed(t, &config.Company{
 		Roles: []config.Role{{Name: "Engineer", Handle: "plat-eng"}},
 		Units: []config.Unit{{
 			Name: "Product",
 			Roles: []config.Role{{Name: "Engineer", Handle: "prod-eng",
-				Sandbox: &config.RoleSandbox{Enabled: true}}},
+				Sandbox: &config.RoleSandbox{MaxTurns: &nested}}},
 		}},
 	})
 	if got := seatSandbox(namesakes, "plat-eng"); got != nil {
 		t.Errorf("the seat that wrote no block was handed %+v — its namesake's", got)
 	}
-	if got := seatSandbox(namesakes, "prod-eng"); got == nil || !got.Enabled {
+	if got := seatSandbox(namesakes, "prod-eng"); got == nil || got.MaxTurns == nil {
 		t.Errorf("the seat that wrote a block found %+v", got)
 	}
 
 	// AND A COMPANY THAT COULD BE AMBIGUOUS IS REFUSED BEFORE IT RUNS.
-	//
-	// Two seats named Twin derive one handle, and the walk this lookup
-	// replaced had to reason about which of them it had found: using the
-	// nil block as its "still looking" sentinel, it could not tell a seat
-	// that declared no block from a name nobody holds, so it ran past its
-	// own answer and handed back a LATER seat's block — a seat that turned
-	// code work off getting somebody else's.
 	//
 	// An INDEX cannot be ambiguous, because a handle is the seat's identity
 	// in it. What makes that safe rather than merely convenient is the
@@ -406,7 +959,7 @@ func TestASeatsSandboxBlockIsFoundInsideAUnit(t *testing.T) {
 		Roles: []config.Role{{Name: "Twin"}},
 		Units: []config.Unit{{
 			Name:  "Platform",
-			Roles: []config.Role{{Name: "Twin", Sandbox: &config.RoleSandbox{Enabled: true}}},
+			Roles: []config.Role{{Name: "Twin", Sandbox: &config.RoleSandbox{MaxTurns: &nested}}},
 		}},
 	}
 	if _, err := ambiguous.Organization(); err == nil {
@@ -431,88 +984,32 @@ func composed(t *testing.T, cfg *config.Company) *Company {
 	return &Company{Config: cfg, Org: o}
 }
 
-// launchReadyEngine is an engine that can take a box-mode launch all the
-// way to a box: a remote cell served by the in-process double, a durable run
-// store, a queue for the start event and a bridge with somewhere to dial.
-func launchReadyEngine(t *testing.T, c *Company) *Engine {
-	t.Helper()
-	e, _ := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+// A NODE THAT NOTHING REACHES REFUSES AN EXECUTOR, AND SAYS WHICH SETTING.
+//
+// A bridge that neither serves the route nor joined a fleet relay — a node
+// serving the API with api.port 0 — used to mint an endpoint naming this node:
+// the box launched, every tool call it made found nothing listening, and the
+// turn was rescued as incomplete with no sign of why. The refusal names
+// api.port, because the message for an unset base URL would send the operator
+// to a variable that is already set.
+func TestAnExecutorIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
+	t.Parallel()
+	c, seat := executorCompany(t)
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
-	return e
-}
-
-// launchRig is [launchReadyEngine] over a bridge the caller built — one a test
-// can dial — with the runner every launch starts its job on.
-func launchRig(t *testing.T, c *Company, bridge *mcpbridge.Bridge) (*Engine, *sandbox.FakeRunner) {
-	t.Helper()
-	jobs := sandbox.NewFakeRunner("claude-code")
-	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
-		Providers:          map[sandbox.Placement]sandbox.Provider{sandbox.E2B: sandbox.NewFakeProvider()},
-		Runners:            map[string]sandbox.Runner{"claude-code": jobs},
-		DefaultCodingAgent: "claude-code",
-	})
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-	q := memory.New()
-	pending := sandbox.NewCoordStore(coordmemory.NewFleet())
-	// Mounted, as serveAPI mounts it on a node with a listener: a bridge no
-	// listener took opens no session.
-	_ = bridge.Handler()
-	e := &Engine{
-		backends: &Backends{Queue: q},
-		bridge:   bridge,
-	}
-	// The engine's own resumer, as buildSandboxRuntime hands it over: the
-	// coordinator refuses to be built without one.
-	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Audience: noAudience{},
-		Queue:    q, Pending: pending, Manager: manager, Resume: &resumer{engine: e},
-	})
-	if err != nil {
-		t.Fatalf("NewCoordinator: %v", err)
-	}
-	e.useSandbox(pending, coordinator)
-	e.epoch.current.Store(c)
-	return e, jobs
-}
-
-// A NODE THAT SERVES NO BRIDGE REFUSES BOX MODE, AND SAYS WHICH SETTING.
-//
-// A base URL on a node that binds no listener (api.port 0) used to mint an
-// endpoint naming this node: the box launched, every tool call it made found
-// nothing listening, and the turn was rescued as incomplete with no sign of
-// why. The refusal names api.port, because the message for an unset base URL
-// would send the operator to a variable that is already set.
-func TestABoxModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
-	t.Parallel()
-	c, seat := splitLoginCompany(t, "api", "codex")
-	e := launchReadyEngine(t, c)
 	e.bridge = bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	})
-	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
-		codingAgent: "claude-code", placement: sandbox.E2B,
-	}
-	err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
-		Brief: "fix the failing test", Round: 1,
-		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
-			ForTurn(launcher.turn),
-	})
+	l := launcherOn(e, c, seat, "t1")
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
 	if err == nil {
-		t.Fatal("a box-mode run launched on a node whose bridge nothing reaches")
+		t.Fatal("an executor launched on a node whose bridge nothing reaches")
 	}
 	if !strings.Contains(err.Error(), "api.port") {
 		t.Errorf("the refusal does not name the setting that fixes it: %v", err)
 	}
-	if e.bridge.Live() != 0 {
-		t.Errorf("%d bridge sessions live for a run that was refused", e.bridge.Live())
-	}
-	if _, found, getErr := e.sandbox.Load().pending.Get(t.Context(), "t1"); getErr != nil || found {
-		t.Errorf("a run row exists for a launch that was refused (found %v, err %v)", found, getErr)
-	}
+	refusedCleanly(t, e, "t1", jobs)
 }
 
 // A SURFACE BOUND TO NO SEAT IS REFUSED BY NAME, and not as a missing bridge.
@@ -522,134 +1019,24 @@ func TestABoxModeRunIsRefusedOnANodeThatServesNoBridge(t *testing.T) {
 // answer as "no bridge URL", sending an operator to a variable that was set on
 // a node whose bridge was mounted and serving. The runner always binds its
 // phase surface, so this is an assembly fault, and the refusal says so.
-func TestABoxModeRunOnASurfaceWithNoSeatIsRefusedAsAnAssemblyFault(t *testing.T) {
+func TestAnExecutorOnASurfaceWithNoSeatIsRefusedAsAnAssemblyFault(t *testing.T) {
 	t.Parallel()
-	c, seat := splitLoginCompany(t, "api", "codex")
-	e := launchReadyEngine(t, c)
-	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat}, seat: seat,
-		codingAgent: "claude-code", placement: sandbox.E2B,
-	}
-	err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
-		Brief: "fix the failing test", Round: 1,
-		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
-	})
+	c, seat := executorCompany(t)
+	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+	}))
+	l := launcherOn(e, c, seat, "t1")
+	req := launchRequest(l, nil)
+	req.Surface = tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil)
+	_, err := l.LaunchExecutor(t.Context(), req)
 	if err == nil {
-		t.Fatal("a box-mode run launched over a surface bound to no seat")
+		t.Fatal("an executor launched over a surface bound to no seat")
 	}
 	if strings.Contains(err.Error(), mcpbridge.BaseURLVar) ||
 		!strings.Contains(err.Error(), "bound to no seat") {
 		t.Errorf("the refusal does not say what is wrong: %v", err)
 	}
-	if e.bridge.Live() != 0 {
-		t.Errorf("%d bridge sessions live for a run that was refused", e.bridge.Live())
-	}
-}
-
-// splitLoginCompany is a one-seat epoch whose executor and whose code work
-// run on DIFFERENT entries: a codex subscription — whose login cannot follow
-// a run into a remote box — and an API-key entry, whose key can. Which one
-// the seat's `llm` names and which its `llm_sandbox` names is the argument.
-func splitLoginCompany(t *testing.T, executor, coder string) (*Company, *org.Role) {
-	t.Helper()
-	codex, err := cliagent.New(cliagent.Config{
-		Key: "codex", Agent: "codex", Box: true,
-		StateDir: t.TempDir(), Timeout: time.Minute,
-	})
-	if err != nil {
-		t.Fatalf("cliagent.New: %v", err)
-	}
-	// The key is what a launch on it carries, so it is a real provider in
-	// api-key mode rather than a fake that names no credential at all.
-	api, err := cliagent.New(cliagent.Config{
-		Key: "api", Agent: "claude-code", Model: "claude-golden",
-		StateDir: t.TempDir(), Timeout: time.Minute,
-		Auth: cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-not-real"},
-	})
-	if err != nil {
-		t.Fatalf("cliagent.New: %v", err)
-	}
-	models, err := phase.NewRegistry([]phase.Entry{
-		{Key: "codex", Provider: codex},
-		{Key: "api", Provider: api},
-	})
-	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
-	}
-	seat := &org.Role{
-		Name: "SWE", LLM: org.ProviderKeys{executor}, LLMSandbox: org.ProviderKeys{coder},
-	}
-	return &Company{
-		Models: models,
-		Org:    &org.Organization{Name: "Acme", Roles: []*org.Role{seat}},
-		Config: &config.Company{Providers: config.Providers{
-			LLM: map[string]config.LLMProvider{
-				"codex": {
-					Agent: config.CLICodex, Mode: config.CLIModeBox, RunIn: config.PlacementE2B,
-				},
-				"api": {
-					Model: "claude-golden",
-					Auth:  config.CLIAgentAuth{Mode: config.AuthAPIKey, APIKey: "${ANTHROPIC_API_KEY}"},
-				},
-			},
-		}},
-	}, seat
-}
-
-// THE LAUNCHER GUARDS THE EXECUTOR'S OWN LOGIN, because a box-mode run IS
-// the executor. Asked about llm_sandbox instead, the guard inspected a model
-// the run never touches: a seat whose executor was a codex subscription and
-// whose code work was an API key launched a remote box that failed at its
-// first model call, minutes in, with the vendor's "not authenticated", and
-// the mirror image, an API-key executor with a codex llm_sandbox, was refused
-// a run that would have worked.
-//
-// Through LaunchExecutor rather than the guard directly: the guard honours
-// whatever phase it is handed, and what is under test is which phase the
-// launcher hands it.
-func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
-	t.Parallel()
-	// BOUND TO THE LAUNCHER'S OWN TURN, as the runner binds every phase
-	// surface: the bridge acts as that turn's seat on every call and
-	// refuses a surface that names none.
-	request := func(l *agentLauncher) runner.AgentRunRequest {
-		return runner.AgentRunRequest{
-			Brief: "fix the failing test", Round: 1,
-			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
-				ForTurn(l.turn),
-		}
-	}
-	// The runner the turn resolved from the executor's own entry, as
-	// executorRuntime resolves it: a CLI's box mode runs on that CLI.
-	launcherFor := func(e *Engine, seat *org.Role, runner string) *agentLauncher {
-		return &agentLauncher{
-			engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat, Org: e.Company().Org}, seat: seat,
-			codingAgent: runner, placement: sandbox.E2B,
-		}
-	}
-
-	// Executor on the subscription, code work on the key: refused, and the
-	// session opened for the run is closed with the refusal.
-	c, seat := splitLoginCompany(t, "codex", "api")
-	e := launchReadyEngine(t, c)
-	launcher := launcherFor(e, seat, "codex")
-	err := launcher.LaunchExecutor(t.Context(), request(launcher))
-	var credErr *SandboxCredentialError
-	if !errors.As(err, &credErr) {
-		t.Fatalf("a box-mode run on a login that cannot follow it was launched "+
-			"(err = %v): the launcher asked the guard about llm_sandbox", err)
-	}
-	if e.bridge.Live() != 0 {
-		t.Errorf("%d bridge sessions live after a refused launch", e.bridge.Live())
-	}
-
-	// And the mirror image, or a launcher that always refused would pass.
-	c, seat = splitLoginCompany(t, "api", "codex")
-	e = launchReadyEngine(t, c)
-	launcher = launcherFor(e, seat, "claude-code")
-	if err := launcher.LaunchExecutor(t.Context(), request(launcher)); err != nil {
-		t.Fatalf("a box-mode run on an API-key executor was refused: %v", err)
-	}
+	refusedCleanly(t, e, "t1", jobs)
 }
 
 // THE SEAT'S SYSTEM PROMPT REACHES THE RUN AS ITS STANDING INSTRUCTIONS, and
@@ -657,22 +1044,17 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 // which hands the first to the CLI on the channel that adds to its own system
 // prompt and runs the second. Dropped here, the run went out with the box's
 // framing alone and a seat that did not know whose work it was doing.
-func TestABoxModeRunCarriesTheSeatsSystemPromptApartFromItsAsk(t *testing.T) {
+func TestAnExecutorRunCarriesTheSeatsSystemPromptApartFromItsAsk(t *testing.T) {
 	t.Parallel()
-	c, seat := splitLoginCompany(t, "api", "codex")
+	c, seat := executorCompany(t)
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
-	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat, Org: c.Org, Task: "fix the failing test"}, seat: seat,
-		codingAgent: "claude-code", placement: sandbox.E2B,
-	}
+	l := launcherOn(e, c, seat, "t1")
 	const system = "You are Agent SWE at Acme.\nSEAT-IDENTITY-MARKER"
-	if err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
-		System: system, Brief: "## Task\nfix the failing test", Round: 1,
-		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
-			ForTurn(launcher.turn),
-	}); err != nil {
+	req := launchRequest(l, nil)
+	req.System = system
+	if _, err := l.LaunchExecutor(t.Context(), req); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}
 	started := jobs.Started()
@@ -688,7 +1070,7 @@ func TestABoxModeRunCarriesTheSeatsSystemPromptApartFromItsAsk(t *testing.T) {
 	}
 	// THE ASK ONCE: it already opens with the turn's task, so nothing frames
 	// that task after it a second time.
-	if started[0].Brief != "## Task\nfix the failing test" {
+	if started[0].Brief != req.Brief {
 		t.Errorf("the run's prompt is not the turn's ask alone:\n%s", started[0].Brief)
 	}
 }
@@ -698,41 +1080,23 @@ func TestABoxModeRunCarriesTheSeatsSystemPromptApartFromItsAsk(t *testing.T) {
 // company mid-turn changes it; the run's durable row must carry the id of the
 // organization the turn is pinned to, which is the id every other event of
 // that turn carries, not the one the engine's current company would derive.
-//
-// It covers BOTH launch paths now, because there is one builder behind them:
-// the run_sandbox tool took this id off the LIVE company and was the odd one
-// out, so a renamed epoch gave its row an agent id no other event of that turn
-// carried. Asserted through the launcher rather than against the builder
-// directly, so a path that stopped using it would fail here.
 func TestARunRecordsTheAgentIDOfItsPinnedTurn(t *testing.T) {
 	t.Parallel()
-	pinned, seat := modeCompany(t, "claude-code", true, config.PlacementDirect)
+	pinned, seat := executorCompany(t)
 	e := &Engine{}
 	e.epoch.current.Store(&Company{
 		Config: pinned.Config, Models: pinned.Models,
 		Org: &org.Organization{Name: "Acme Renamed", Roles: []*org.Role{seat}},
 	})
-	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat, Org: pinned.Org}, seat: seat,
-		codingAgent: "claude-code", placement: sandbox.Direct,
-	}
+	l := launcherOn(e, pinned, seat, "t1")
+	l.turn.Org = pinned.Org
 	want, ok := org.DeriveAgentID("Acme", seat.Handle())
 	if !ok {
 		t.Fatal("the fixture derives no agent id")
 	}
-	if got := launcher.runTurnRef(t.Context()).AgentID; got != want.String() {
+	if got := l.runTurnRef(t.Context()).AgentID; got != want.String() {
 		t.Errorf("the run records agent id %q, want %q: the id of the turn's own organization", got, want)
 	}
-}
-
-// bridgeFor is [mcpbridge.New] for a keyring a case expects to be usable.
-func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
-	t.Helper()
-	bridge, err := mcpbridge.New(opts)
-	if err != nil {
-		t.Fatalf("mcpbridge.New: %v", err)
-	}
-	return bridge
 }
 
 // THE BRIDGE FOLLOWS THE SEAT. A node that takes a seat tells the bridge so
@@ -743,7 +1107,7 @@ func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
 // speaks for it, and every box would go on talking to it.
 func TestTheBridgeFollowsTheSeat(t *testing.T) {
 	t.Parallel()
-	c, seat := splitLoginCompany(t, "api", "codex")
+	c, seat := executorCompany(t)
 	bridge := bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	})
@@ -766,14 +1130,8 @@ func TestTheBridgeFollowsTheSeat(t *testing.T) {
 		t.Fatal("the seat's runs were recovered and the bridge was not told the seat is taken")
 	}
 
-	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{RunID: "t1", Seat: seat, Org: c.Org}, seat: seat,
-		codingAgent: "claude-code", placement: sandbox.E2B,
-	}
-	if err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
-		Brief: "fix the failing test", Round: 1,
-		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).ForTurn(launcher.turn),
-	}); err != nil {
+	l := launcherOn(e, c, seat, "t1")
+	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}
 	if bridge.Live() != 1 {
@@ -787,4 +1145,14 @@ func TestTheBridgeFollowsTheSeat(t *testing.T) {
 	if bridge.Ready(agent) {
 		t.Error("the bridge still says this node holds a seat it handed on")
 	}
+}
+
+// bridgeFor is [mcpbridge.New] for a keyring a case expects to be usable.
+func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
+	t.Helper()
+	bridge, err := mcpbridge.New(opts)
+	if err != nil {
+		t.Fatalf("mcpbridge.New: %v", err)
+	}
+	return bridge
 }

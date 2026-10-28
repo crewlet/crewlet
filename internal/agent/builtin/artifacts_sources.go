@@ -291,10 +291,10 @@ func (s *fileSources) openBox(ctx context.Context) (ArtifactBox, *tools.Result) 
 	box, err := s.deps.Boxes.Box(ctx, s.caller.turn)
 	switch {
 	case errors.Is(err, ErrNoBox):
-		r := refusedBy(tools.RefusalNotRunning, err, s.tool+" found no coding run's box "+
-			"to read in this turn: a box is readable after run_sandbox returns and until "+
-			"this Execute phase ends, and is torn down after it. Ask the coding run to "+
-			"build into a directory with run_sandbox, then publish from it in the same turn.")
+		r := refusedBy(tools.RefusalNotRunning, err, s.tool+" found no live run's box "+
+			"to read in this turn: a box is readable by the run working in it, while it "+
+			"runs, and is torn down after it. Build into a directory in your workspace, "+
+			"then publish from it before your run ends.")
 		return nil, &r
 	case err != nil:
 		r := nodeFailure(ctx, s.tool, err, "Could not reattach the coding run's box",

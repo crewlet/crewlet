@@ -42,20 +42,22 @@
  *    has not started, while the turn runs.
  *
  * A TURN THAT PARKED ON A CODING RUN IS ONE TURN: its executor publishes one
- * record when it finally finishes, carrying every round from before the park
- * and after it at their own instants, so the phase spans the run it waited on
- * and the run sits beside it.
+ * record when the run is collected, carrying the run as its one round — from
+ * the launch to the collection, with the run's calls at their own instants
+ * inside it — so the phase spans the run it waited on and the run sits beside
+ * it.
  *
  * # What cannot be placed is still shown
  *
- * A call whose arguments did not parse was answered rather than run, and a
- * box-mode executor's rounds ran inside somebody else's loop; neither kind of
- * call carries instants. Those are UNTIMED rows — listed under the
- * waterfall as "not placed on this clock" — rather than bars drawn at an
- * invented position, or dropped. The list says PLACED rather than
- * timed because a call can be measured and still have nowhere to go: timed
- * but unstamped, in a round with no model call of its own to follow. Whether
- * a call was measured at all is [callMeasured]'s, which every surface asks.
+ * A call whose arguments did not parse was answered rather than run, so it
+ * carries no instants — unlike an executor run's calls, which ran inside its
+ * CLI's own loop and are timed at the bridge they were made over. Such a call
+ * is an UNTIMED row — listed under the waterfall as "not placed on this
+ * clock" — rather than a bar drawn at an invented position, or dropped. The
+ * list says PLACED rather than timed because a call can be measured and
+ * still have nowhere to go: timed but unstamped, in a round with no model call
+ * of its own to follow. Whether a call was measured at all is
+ * [callMeasured]'s, which every surface asks.
  */
 
 import type { EventRecord } from "~/protocol/index.ts";
@@ -525,11 +527,13 @@ function runNodes(
 ): Node[] {
   const out: Node[] = [];
   const seen = new Set<string>();
-  const failures = events
-    .filter((e) => e.type === "sandbox_run_failed")
-    .map((e) => at(e.timestamp))
-    .filter((t) => t > 0)
-    .sort((a, b) => a - b);
+  // HOW A RUN WITH NO RECORD ENDED: lost, or stopped by a person — which ends
+  // its span as surely and is never drawn as a failure.
+  const endings = events
+    .filter((e) => e.type === "sandbox_run_failed" || e.type === "sandbox_run_stopped")
+    .map((e) => ({ at: at(e.timestamp), failed: e.type === "sandbox_run_failed" }))
+    .filter((x) => x.at > 0)
+    .sort((a, b) => a.at - b.at);
   const starts = events
     .filter((e) => e.type === "sandbox_run_started")
     .sort((a, b) => at(a.timestamp) - at(b.timestamp));
@@ -548,11 +552,12 @@ function runNodes(
       return;
     }
     const start = at(str(p.started_at)) || at(ev.timestamp);
-    // A RUN WITH NO RECORD YET is still out, or it failed: a failure is the
-    // first `sandbox_run_failed` after its start and before the next one.
+    // A RUN WITH NO RECORD YET is still out, or it ended without one: its
+    // ending is the first `sandbox_run_failed` or `sandbox_run_stopped` after
+    // its start and before the next one.
     const next = starts[i + 1] ? at(starts[i + 1]!.timestamp) : Infinity;
-    const failedAt = failures.find((t) => t >= start && t < next);
-    if (failedAt !== undefined) {
+    const ended = endings.find((x) => x.at >= start && x.at < next);
+    if (ended !== undefined) {
       out.push({
         span: span({
           id,
@@ -560,8 +565,8 @@ function runNodes(
           label,
           sub,
           start,
-          end: failedAt,
-          failed: true,
+          end: ended.at,
+          failed: ended.failed,
           launchId: launch,
         }),
         children: [],

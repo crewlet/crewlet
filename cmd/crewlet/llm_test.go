@@ -189,12 +189,14 @@ func TestOperatorCommandsTakeTheirLevelFromTheEnvironment(t *testing.T) {
 
 // doctorCompany writes a company whose providers are the given block, and
 // returns the flags pointing doctor at it. The bootstrap path does not exist,
-// so references resolve from the environment alone.
+// so references resolve from the environment alone. Its one seat is a
+// person's: the entries are `custom` stand-ins for a CLI this suite cannot
+// install, which can run no seat's executor.
 func doctorCompany(t *testing.T, providers string) []string {
 	t.Helper()
 	dir := t.TempDir()
-	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  llm:\n"+providers+
-		"roles:\n  - name: CEO\n    handle: ceo\n    llm: claude\n")
+	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n"+providers+
+		"roles:\n  - name: CEO\n    handle: ceo\n    kind: human\n")
 	return []string{"-company", company, "-config", filepath.Join(dir, "absent.yaml")}
 }
 
@@ -250,6 +252,49 @@ func TestDoctorReportsAnEntryThatDoesNotBuildBesideTheOthers(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("report lacks %q:\n%s", want, out.String())
 		}
+	}
+}
+
+// THE DOCTOR NAMES THE SEATS THAT LAUNCH ON AN ENTRY, as the company resolves
+// them: the seats whose executor chain holds it — and for a member whose CLI
+// no box can run, that a launch passes over it. An entry no seat's executor
+// chain holds says nothing of runners or a bridge it never needs.
+//
+// Mutation: hand Diagnose no seats and none of the launch lines is written.
+func TestDoctorNamesTheSeatsThatLaunchOnAnEntry(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	coder := fmt.Sprintf("    coder:\n      agent: claude-code\n      model: sonnet\n      state_dir: %q\n"+
+		"      overrides: {binary: %q}\n", t.TempDir(), filepath.Join(dir, "no-cli-here"))
+	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n"+
+		healthyDoctorEntry(t, "plain", "m")+coder+healthyDoctorEntry(t, "spare", "m")+
+		"roles:\n  - name: SWE\n    handle: swe\n    llm: [plain, coder]\n"+
+		"  - name: QA\n    handle: qa\n    llm: [plain, coder]\n")
+	args := []string{"doctor", "-no-smoke", "-company", company, "-config", filepath.Join(dir, "absent.yaml")}
+	var out, notes bytes.Buffer
+	// Problems are expected — the claude-code entry's CLI is not there, and
+	// no bridge is set — so the exit is not the case; the report is.
+	_ = runLLM(noEnviron, args, &out, &notes)
+	reports := map[string]string{}
+	for _, section := range strings.Split(out.String(), "provider      : ")[1:] {
+		key, _, _ := strings.Cut(section, "\n")
+		reports[key] = section
+	}
+	for key, wants := range map[string][]string{
+		"plain": {"executor      : seats: swe, qa", `runner: none for "custom"`},
+		"coder": {"executor      : seats: swe, qa", `runner: "claude-code" is registered`},
+	} {
+		for _, want := range wants {
+			if !strings.Contains(reports[key], want) {
+				t.Errorf("the report of %s, which both seats' executors launch through, lacks %q:\n%s",
+					key, want, reports[key])
+			}
+		}
+	}
+	if spare, ok := reports["spare"]; !ok || strings.Contains(spare, "executor      :") ||
+		strings.Contains(spare, "runner:") {
+		t.Errorf("the report of an entry no seat launches on is missing or talks about "+
+			"launching:\n%s", spare)
 	}
 }
 
@@ -478,6 +523,7 @@ func TestATokenVariableNoStoreCanHoldMintsNothing(t *testing.T) {
 		t.Helper()
 		return writeFile(t, t.TempDir(), "company.yaml", fmt.Sprintf(`name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     claude:
       agent: claude-code

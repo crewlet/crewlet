@@ -60,11 +60,14 @@ func (s *LiveState) applySandbox(env Envelope, payload map[string]any) {
 		return
 	}
 	switch env.Type {
-	case "sandbox_run_completed", "sandbox_run_failed":
+	case "sandbox_run_completed", "sandbox_run_failed", "sandbox_run_stopped":
 		// A FAILED RUN LEAVES THE SET TOO. It used to be read by nothing
 		// here, so a run lost to an unreachable box or a stranded claim
 		// was drawn as running until the age-out took it twelve hours
-		// later.
+		// later. And so does a STOPPED one, at once: a person who paused
+		// the seat to stop it is looking at the panel, and a run drawn as
+		// running until the next reconcile is a stop that seems not to
+		// have worked.
 		delete(s.sandboxes, turnID)
 		s.endedRuns.put(turnID, runEnd{launch: str(payload, "launch_id"), at: newStamp(env.Timestamp)})
 
@@ -75,6 +78,8 @@ func (s *LiveState) applySandbox(env Envelope, payload map[string]any) {
 			AgentHandle: str(payload, "agent_handle"),
 			AgentID:     str(payload, "agent_id"),
 			CodingAgent: str(payload, "coding_agent"),
+			ProviderKey: str(payload, "provider_key"),
+			Model:       str(payload, "model"),
 			SandboxID:   str(payload, "sandbox_id"),
 			Task:        str(payload, "task"),
 			Status:      SandboxRunning,

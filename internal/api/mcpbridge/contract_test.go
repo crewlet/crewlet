@@ -14,7 +14,9 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession/toolsessiontest"
@@ -22,9 +24,11 @@ import (
 
 // THE BRIDGE'S DISPATCHER HOLDS THE GATES EVERY DISPATCHER HOLDS — the
 // contract the tool loop's runs as well (internal/agent/toolloop). Each case
-// is one box-mode run's session, opened on a bridge mounted on a live
+// is one detached run's session, opened on a bridge mounted on a live
 // listener, which the suite reaches over the run's minted URL as the CLI in a
-// box does.
+// box does. The session names its caller, the seat its surface is bound to,
+// because the suite's surface is one that parks ([parking]) rather than the
+// seat's own; a seat's own session is held to the same gates by gates_test.
 func TestTheBridgeKeepsTheToolSessionContract(t *testing.T) {
 	t.Parallel()
 	toolsessiontest.Run(t, func(t *testing.T, spec toolsessiontest.Spec) *toolsessiontest.Served {
@@ -36,9 +40,11 @@ func TestTheBridgeKeepsTheToolSessionContract(t *testing.T) {
 		})
 		mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
 		calls := &ledger{}
+		surface := contractSurface(t, spec)
 		session := &mcpbridge.Session{
 			RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer",
-			Surface: contractSurface(t, spec), Ledger: calls, Fence: spec.Fence,
+			Surface: surface, Caller: actingSeat{surface.Surface},
+			Ledger: calls, Fence: spec.Fence,
 		}
 		url := bridge.Open(spec.Context, session)
 		if url == "" {
@@ -123,34 +129,53 @@ func (b *abortOnClose) Close() error {
 
 // contractSurface is the suite's tools on the run's seat's surface: each a
 // seat tool, called for the run's turn, whose call log counts its calls.
-func contractSurface(t *testing.T, spec toolsessiontest.Spec) *tools.Surface {
+func contractSurface(t *testing.T, spec toolsessiontest.Spec) parking {
 	t.Helper()
 	turn := seatTurn()
 	turn.Calls = turnctx.NewCallLog()
 	var surf *tools.Surface
 	reg := tools.NewRegistry()
+	parks := map[string]bool{}
 	for _, tool := range spec.Tools {
 		seat := &suiteTool{tool: tool, surface: func() *tools.Surface { return surf }}
-		var callable tools.Callable = seat
-		if tool.Suspends {
-			callable = suiteLauncher{seat}
-		}
-		if err := reg.Register(callable, tools.OriginBuiltin); err != nil {
+		if err := reg.Register(seat, tools.OriginBuiltin); err != nil {
 			t.Fatalf("Register(%s): %v", tool.Name, err)
 		}
+		parks[tool.Name] = tool.Suspends
 	}
 	surf = tools.NewSurface("execute", reg.Snapshot(), spec.Offered).ForTurn(turn)
-	return surf
+	return parking{Surface: surf, parks: parks}
 }
 
-// suiteLauncher is a suite tool whose work outlives its call: its result asks
-// the run to park.
-type suiteLauncher struct{ *suiteTool }
+// parking is the suite's surface with its suspending tools' results asking
+// the run to park, as a tool whose work outlives its call answers — what the
+// Dashboard Assistant's quick-mode surface does with a proposal. No seat tool
+// asks for it, so the suite's are marked here rather than registered as one.
+type parking struct {
+	*tools.Surface
+	parks map[string]bool
+}
 
-func (s suiteLauncher) CallDetached(ctx context.Context, turn *turnctx.Turn,
-	args map[string]any) (tools.DetachedResult, error) {
-	res, err := s.CallForTurn(ctx, turn, args)
-	return tools.DetachedResult{Result: res, Suspend: true}, err
+func (p parking) Admit(name string, args map[string]any) toolloop.Admitted {
+	admitted := p.Surface.Admit(name, args)
+	if !p.parks[name] {
+		return admitted
+	}
+	return func(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
+		res, err := admitted(ctx, call)
+		res.Suspend = true
+		return res, err
+	}
+}
+
+// actingSeat decides a call as the seat the suite's surface is bound to: a
+// surface that is not the seat's own [*tools.Surface] names its caller.
+type actingSeat struct{ surface *tools.Surface }
+
+func (c actingSeat) Bound() bool { return c.surface.Turn().Handle() != "" }
+
+func (c actingSeat) Acting(ctx context.Context) context.Context {
+	return iam.WithPrincipal(ctx, turnctx.Principal(c.surface.Turn()))
 }
 
 // suiteTool is one of the suite's tools as a seat tool.

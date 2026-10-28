@@ -13,8 +13,8 @@ import (
 
 // A QUESTION PAST ITS BOUND IS CONDENSED, as the question it is: it travels on
 // the run's record, its coordination row, the park's announcement, a person's
-// banner and the resumed executor's every later round, and a run's ask file
-// was read whole up to 32 MiB.
+// banner and every later request of the run its answer carries on, and a run's
+// ask file was read whole up to 32 MiB.
 func TestAQuestionPastItsBoundIsCondensedAsAQuestion(t *testing.T) {
 	t.Parallel()
 	condenser := &fakeCondenser{answer: func(part RunPart, _ string, _ int) (string, error) {
@@ -95,8 +95,8 @@ func TestAnUncondensedQuestionKeepsWholeLinesOrIsNotAsked(t *testing.T) {
 // A REF IS REDACTED BEFORE ANYTHING READS IT. It is whatever word a report
 // put on its `Delivered:` line, and a box holds the seat's credentials — so
 // the coordinator, which trusts no runner to have redacted what it hands back,
-// redacts each before the record, the resumed executor's text and the bound
-// that measures them.
+// redacts each before the record, the run's report and the bound that
+// measures them.
 func TestADeliveredRefIsRedactedBeforeItIsRecorded(t *testing.T) {
 	t.Parallel()
 	secret := "ghp_" + strings.Repeat("c", 36)
@@ -105,7 +105,7 @@ func TestADeliveredRefIsRedactedBeforeItIsRecorded(t *testing.T) {
 	rec := runPhase(PendingRun{}, LaunchRecord{}, got, time.Now())
 	for where, refs := range map[string][]string{
 		"the result": got.DeliveredRefs, "the record": rec.DeliveredRefs,
-		"the resumed text": {resumeText(got)},
+		"the run's report": {runReport(got)},
 	} {
 		if strings.Contains(strings.Join(refs, " "), secret) {
 			t.Errorf("a credential survived in %s: %q", where, refs)
@@ -147,9 +147,9 @@ func TestDeliveredRefsAreDedupedAndBoundedWithTheRestCounted(t *testing.T) {
 			len(got.DeliveredRefs), got.DeliveredRefsElided)
 	}
 
-	text := resumeText(got)
+	text := runReport(got)
 	if !strings.Contains(text, fmt.Sprintf("(and %d more its report names", got.DeliveredRefsElided)) {
-		t.Errorf("the resumed executor is not told the list is short: %.300q", text)
+		t.Errorf("the run's report does not say the list is short: %.300q", text)
 	}
 	rec := runPhase(PendingRun{}, LaunchRecord{}, got, time.Now())
 	if rec.DeliveredRefsElided != got.DeliveredRefsElided || len(rec.DeliveredRefs) != len(got.DeliveredRefs) {

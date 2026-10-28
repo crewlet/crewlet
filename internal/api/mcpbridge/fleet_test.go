@@ -158,16 +158,20 @@ func dialWith(t *testing.T, url string, relisted *atomic.Int32) *mcp.ClientSessi
 // fleet's address — one node — while the run's session lives on another, so
 // every gate, every activation's re-list and every cut box crosses the relay,
 // event stream included, and is held to exactly what a box dialling its
-// holder directly is.
+// holder directly is. The session names its caller, as the suite's surface is
+// one that parks ([parking]), so it is relayed to the process that opened it;
+// a seat's route to its holder is held by the cases below.
 func TestTheRelayedBridgeKeepsTheToolSessionContract(t *testing.T) {
 	t.Parallel()
 	toolsessiontest.Run(t, func(t *testing.T, spec toolsessiontest.Spec) *toolsessiontest.Served {
 		f := newFleet(t, 2, 10*time.Second)
 		holder := f.members[1]
 		calls := &ledger{}
+		surface := contractSurface(t, spec)
 		session := &mcpbridge.Session{
 			RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer",
-			Surface: contractSurface(t, spec), Ledger: calls, Fence: spec.Fence,
+			Surface: surface, Caller: actingSeat{surface.Surface},
+			Ledger: calls, Fence: spec.Fence,
 		}
 		f.hold(t, holder)
 		url := holder.bridge.Open(spec.Context, session)

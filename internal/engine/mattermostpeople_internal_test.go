@@ -44,6 +44,7 @@ func ghostCompanyProvisioning(t *testing.T, url, provisioning string) *Company {
 	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -313,6 +314,7 @@ func TestOnlyAnApplyAnswersAMovedName(t *testing.T) {
 	doc := []byte(fmt.Sprintf(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

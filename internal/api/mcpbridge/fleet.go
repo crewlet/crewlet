@@ -19,10 +19,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// relayName scopes the bridge's relay on the broker: its subjects are
+// RelayName scopes the bridge's relay on the broker: its subjects are
 // `crewlet.mcpbridge.…` and its signed channels `mcpbridge.open` and
-// `mcpbridge.frame` (internal/httprelay).
-const relayName = "mcpbridge"
+// `mcpbridge.frame` (internal/httprelay). Exported for the engine's gate that
+// holds every signed channel's key domains apart.
+const RelayName = "mcpbridge"
 
 // Leases reads which incarnation holds a seat: the half of the coordination
 // store routing a call needs.
@@ -88,11 +89,14 @@ func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe
 	}
 	// THE RELAY'S HANDLER IS THE MCP HANDLER ITSELF, behind the route's
 	// own pattern so the token reaches it as a path value — never the
-	// route's handler, which would relay a relayed call again.
+	// route's handler, which would relay a relayed call again. And the
+	// notes route's, served on the opening the token names here, for the
+	// same reason never through its own routing.
 	mux := http.NewServeMux()
 	mux.Handle(PathPrefix+"{token}", b.streamable)
+	mux.Handle(SteerPattern, b.heldOnly(b.serveSteer))
 	relay, err := httprelay.New(httprelay.Options{
-		Fabric: opts.Fabric, Name: relayName, Node: opts.Node, Owner: opts.Owner,
+		Fabric: opts.Fabric, Name: RelayName, Node: opts.Node, Owner: opts.Owner,
 		Keyring: opts.Keyring, Admit: b.admitRelayed, Handler: mux,
 	})
 	if err != nil {
@@ -118,7 +122,10 @@ func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe
 // cannot stand in for that, because it is the entry's own loopback that it
 // would name.
 func (b *Bridge) admitRelayed(r *http.Request) httprelay.Verdict {
-	sub, ok := b.parse(strings.TrimPrefix(r.URL.Path, PathPrefix))
+	// THE TOKEN IS THE FIRST SEGMENT after the prefix, whatever route under
+	// it the call is for: the MCP endpoint, or the notes route beneath it.
+	token, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, PathPrefix), "/")
+	sub, ok := b.parse(token)
 	if !ok {
 		return httprelay.Refuse
 	}

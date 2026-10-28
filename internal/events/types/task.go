@@ -64,11 +64,15 @@ type TaskAssigned struct {
 	// is no cap, which the one producer never sends (a schedule with none
 	// of its own carries the default).
 	//
-	// ENFORCED BETWEEN ROUNDS by the turn loop (turn.Settings.MaxWallClock):
-	// a turn past the cap starts no further round and ends with a
-	// scheduled_timeout breach, which reaches the turn event's error_kind.
-	// Never mid-phase — a phase that is running may already have fired side
-	// effects, and abandoning it there would leave a post half-written.
+	// ENFORCED BETWEEN ROUNDS by the turn loop (turn.Settings.Deadline),
+	// from the moment the turn began and across every park: a turn past the
+	// cap starts no further round — in whichever segment it is — and ends
+	// with a scheduled_timeout breach, which reaches the turn event's
+	// error_kind. Never mid-phase in the engine — a phase that is running
+	// may already have fired side effects, and abandoning it there would
+	// leave a post half-written. The executor's detached run carries the
+	// same instant, and the poll ends a run that outlasts it, collecting
+	// what it did for the turn to judge.
 	//
 	// It travelled as a write-only Payload key before this field existed, so
 	// nothing could read it and the documented cap bounded nothing.

@@ -32,10 +32,10 @@ func (r rewritingTool) CallForTurn(_ context.Context, turn *turnctx.Turn, _ map[
 	return tools.Result{Output: "three notes"}, nil
 }
 
-// A BOX-MODE RUN'S BRIDGED CALLS ARE COUNTED ON THEIR OWN METER.
+// AN EXECUTOR RUN'S BRIDGED CALLS ARE COUNTED ON THEIR OWN METER.
 //
 // The coding CLI calls the seat's tools over the bridge long after the segment
-// that launched it has suspended and charged what it spent. Counted on that
+// that launched it has parked and charged what it spent. Counted on that
 // segment — its auxiliary tally, its worker tally — every one of those calls
 // added to a number nothing read again, and the work item the turn was on was
 // never charged for any of them. So the bridged surface is metered apart: a
@@ -46,15 +46,15 @@ func (r rewritingTool) CallForTurn(_ context.Context, turn *turnctx.Turn, _ map[
 // Mutations: build the bridged surface on the runner's own meter, bind its
 // tools to the segment's turn, or close its workers on the segment's tally, and
 // the meter comes up short while the segment's figures move.
-func TestABoxRunsBridgedCallsAreCountedOnTheirOwnMeter(t *testing.T) {
+func TestAnAgentRunsBridgedCallsAreCountedOnTheirOwnMeter(t *testing.T) {
 	t.Parallel()
-	launcher := &recordingLauncher{}
+	launcher := &playLauncher{}
 	cost := auxspend.Spent{Calls: 1, Input: 420, Output: 35, CacheRead: 100}
 	reg := tools.NewRegistry()
 	if err := reg.Register(rewritingTool{cost: cost}, tools.OriginBuiltin); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: &delegatingProvider{}}})
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: workerProvider{}}})
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -63,9 +63,8 @@ func TestABoxRunsBridgedCallsAreCountedOnTheirOwnMeter(t *testing.T) {
 	r, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
 		Registry: reg, Models: models,
-		Caps:     runner.Caps{ExecutorRounds: 6},
 		Task:     "fan this out",
-		AgentRun: launcher,
+		Launcher: launcher,
 		Subagent: &runner.SubagentConfig{Limits: shipped()},
 		Turn: runner.Turn{RunID: "t-bridge", AgentID: "agent-1",
 			Context: &turnctx.Turn{RunID: "t-bridge", WorkKey: "wk-bridge", AuxSpend: segment}},
@@ -76,14 +75,14 @@ func TestABoxRunsBridgedCallsAreCountedOnTheirOwnMeter(t *testing.T) {
 	}
 	w, _, err := r.Execute(context.Background(), 1, "", nil)
 	if err != nil || !w.Suspended {
-		t.Fatalf("Execute = %+v, %v; want a suspended box run", w, err)
+		t.Fatalf("Execute = %+v, %v; want a parked run", w, err)
 	}
-	req := launcher.req
+	req := launcher.last(t)
 	if req.Spend == nil {
 		t.Fatal("the run was launched with no meter for its bridged calls")
 	}
 
-	// THE BRIDGE'S CALLS, made after the segment suspended.
+	// THE BRIDGE'S CALLS, made after the segment parked.
 	if !req.Surface.Activate("recall_notes") {
 		t.Fatal("the bridged surface does not resolve the seat's tool")
 	}

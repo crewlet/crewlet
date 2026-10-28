@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/crewlet/crewlet/internal/api"
@@ -80,6 +82,71 @@ func bindListeners(ctx context.Context, boot *config.Bootstrap, nodeID string,
 			"route the node will serve 503 starting until it serves "+
 			"(api_listening, or api_probes_listening on a node without ingress)")
 	return l, nil
+}
+
+// boxHostURL is where a box on this node's own host — the `direct` cell —
+// reaches the two routes a box dials, the tool bridge and the telemetry
+// receiver: this node's own listener that serves them, as this host dials it
+// ([engine.Options.BoxHostURL]). Empty where the node runs no seat, and so
+// launches no box, or binds no listener a box of its own reaches (api.port 0):
+// such a node's boxes dial CREWLET_MCP_BRIDGE_URL like any other.
+//
+// THE LISTENER THEY ARE SERVED ON. An ingress node serves them to anyone:
+// on api.public where it binds one — they are public routes — and on api.port
+// otherwise, dialled at the address it bound ([loopbackURL]). A node without
+// the role serves them on api.port beside its probes, to this host's loopback
+// ALONE (internal/api's Probes): a seat pool with no route in from the
+// network, which is what such a node is for, still runs every seat a direct
+// box serves. So its listener must be one loopback reaches — bound on every
+// interface or on loopback — and one bound to a single address that is not
+// loopback derives none: a call from this host to that address arrives from
+// it, not from loopback, and would be refused as from off the host.
+func (l *nodeListeners) boxHostURL(boot *config.Bootstrap, nodeID string) string {
+	profile := boot.Profile(nodeID)
+	if l == nil || !profile.RunsSeats() {
+		return ""
+	}
+	if !profile.RunsIngress() {
+		if !reachedOnLoopback(l.api.socket.Addr()) {
+			return ""
+		}
+		return loopbackURL(l.api.socket.Addr())
+	}
+	served := l.api
+	if l.public != nil {
+		served = l.public
+	}
+	return loopbackURL(served.socket.Addr())
+}
+
+// reachedOnLoopback reports whether a process on this host reaches a TCP
+// listener over the loopback interface: one bound to every interface, or to a
+// loopback address.
+func reachedOnLoopback(addr net.Addr) bool {
+	tcp, ok := addr.(*net.TCPAddr)
+	if !ok {
+		return false
+	}
+	return tcp.IP == nil || tcp.IP.IsUnspecified() || tcp.IP.IsLoopback()
+}
+
+// loopbackURL is the URL a process on this host dials a TCP listener at: the
+// address it bound where that is one address, and loopback where it took
+// every interface. Plain http, because a listener of this process serves no
+// TLS of its own — that is terminated in front of it — and a box on the host
+// dials it directly. Empty for an address that is not TCP.
+func loopbackURL(addr net.Addr) string {
+	tcp, ok := addr.(*net.TCPAddr)
+	if !ok {
+		return ""
+	}
+	ip := tcp.IP
+	if ip == nil || ip.IsUnspecified() {
+		// EVERY INTERFACE, which a Go listener on ":port" is dual-stack:
+		// IPv4 loopback reaches it whichever family it was written in.
+		ip = net.IPv4(127, 0, 0, 1)
+	}
+	return "http://" + net.JoinHostPort(ip.String(), strconv.Itoa(tcp.Port))
 }
 
 // recovered tells the boot surface the engine has recovered what this node

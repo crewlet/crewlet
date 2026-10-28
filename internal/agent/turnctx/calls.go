@@ -103,15 +103,16 @@ func (l *CallLog) Record(tool string, args toolargs.Args) {
 
 // SeededCall is one call a run made before this log held it, by the
 // canonical arguments its tool read ([toolargs.Args]): a resumed run's record
-// of a parked call holds the model's spelling, which a count read against the
-// canonical form would take for another call.
+// of a call made before this segment (the bridge's log of its executor run's
+// calls, a closed round) holds the model's spelling, which a count read
+// against the canonical form would take for another call.
 type SeededCall struct {
 	Tool string
 	Args toolargs.Args
 }
 
 // Seed records calls the run made before this log existed — a resumed run's
-// calls from before its suspension, by their canonical arguments.
+// calls from before this segment, by their canonical arguments.
 func (l *CallLog) Seed(calls ...SeededCall) {
 	for _, call := range calls {
 		l.Record(call.Tool, call.Args)

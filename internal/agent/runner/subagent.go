@@ -125,6 +125,9 @@ func (r *Runner) spawnEntry(ctx context.Context, m meter, ph phase.Phase, round 
 		Limits:          r.cfg.Subagent.Limits,
 		Publisher:       r.cfg.Publisher,
 		Trace:           r.cfg.Turn.Trace,
+		// The executor's surface is its run's, and every call the run
+		// makes is recorded on the run's one round — see [runRound].
+		Round: runRound,
 		// The parent turn, so every seat-scoped tool in the grant works.
 		// Without it a child is handed tools that always fail.
 		Turn: m.turn,

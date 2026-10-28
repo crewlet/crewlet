@@ -46,26 +46,36 @@ type API struct {
 	// decides what it carries. With the ingress role it is the whole HTTP
 	// surface: the dashboard, the REST API, the webhooks and the probes,
 	// less the routes [API.Public] moves to a listener of their own.
-	// Without it, the probes alone (/health and /ready) — plus a seats
-	// node's box-mode tool bridge where api.public is unset — because an
-	// orchestrator runs every node and must be able to probe each, while
-	// the API is placed only where traffic is meant to arrive. ONE PORT
-	// rather than a second setting for the probes: the probes are already
-	// on this listener on an ingress node, so a probe port beside it would
-	// be a second address for the same two routes there, and one Tier A
-	// file keeps working for both shapes. 0 binds nothing at all, on any
-	// node.
+	// Without it, the probes (/health and /ready) to the network, because
+	// an orchestrator runs every node and must be able to probe each, while
+	// the API is placed only where traffic is meant to arrive — and, on a
+	// node that runs seats, the two routes its own direct boxes dial, to
+	// this host's loopback alone (below). ONE PORT rather than a second
+	// setting for the probes: the probes are already on this listener on an
+	// ingress node, so a probe port beside it would be a second address for
+	// the same two routes there, and one Tier A file keeps working for both
+	// shapes. 0 binds nothing at all, on any node.
 	//
-	// THE BRIDGE IS BOX MODE'S ALONE. A box is another machine, so its CLI
-	// reaches the seat's tools over HTTP, here; a host-mode CLI runs beside
-	// the engine and reaches them through a unix socket in the engine's own
-	// session directory (internal/toolsession), so a seats node whose seats
-	// run on host-mode entries serves every tool with this at 0.
+	// THE BRIDGE IS THE EXECUTOR'S ALONE. A seat's executor is its CLI's own
+	// run in a box, which may be another machine, so it reaches the seat's
+	// tools over HTTP; every other phase runs its CLI beside the engine and
+	// reaches them through a unix socket in the engine's own session
+	// directory (internal/toolsession), so those need no port at all. A
+	// direct box is a process of this host, so on every node that runs
+	// seats it dials this listener on loopback — served to anyone on an
+	// ingress node, and to this host's loopback alone on a node without the
+	// role, which is why such a node derives the address only where it binds
+	// every interface or loopback; every other box dials
+	// CREWLET_MCP_BRIDGE_URL, the fleet's address, and the ingress node that
+	// answers relays each call to the node holding the seat over the broker
+	// (internal/api/mcpbridge). So a seats node without the ingress role runs
+	// its direct boxes with no fleet address once it binds this, and serves
+	// its other boxes' tools with this at 0.
 	//
 	// So a port is not what makes a node SERVE the API — a port and the
 	// ingress role together are ([Bootstrap.ServesAPI]), and only that pair
 	// asks for the authentication settings below.
-	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener), only /health and /ready without it (and a seats node's box-mode tool bridge, where api.public is unset). 0 binds nothing."`
+	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener); without it, /health and /ready, and on a node with the seats role the tool bridge and telemetry receiver its own direct boxes dial, to this host's loopback alone. 0 binds nothing."`
 
 	// ExternalURL is where a BROWSER reaches this deployment — a person, a
 	// session cookie and every link a person follows — and, while no
@@ -83,10 +93,12 @@ type API struct {
 	//     against;
 	//   - every link a PERSON follows: a dashboard address in a
 	//     notification, a page-change link, a skill's `${crewlet_base_url}`;
-	//   - the base every vendor webhook, app manifest and sandbox endpoint
-	//     is built on — UNLESS [API.Public] opens a listener of its own, in
-	//     which case those routes are served only there and
-	//     [APIPublic.ExternalURL] is their base ([API.WebhookBase]).
+	//   - the base every vendor webhook and app manifest is built on —
+	//     UNLESS [API.Public] opens a listener of its own, in which case
+	//     those routes are served only there and [APIPublic.ExternalURL] is
+	//     their base ([API.WebhookBase]). A box's per-run sandbox endpoints
+	//     are built on neither: they come from CREWLET_MCP_BRIDGE_URL and
+	//     CREWLET_SANDBOX_OTEL_RECEIVER_URL, which name the same address.
 	//
 	// # Two sockets, two addresses, and no fallback between them
 	//
@@ -170,9 +182,12 @@ func (a API) ExternalBase() string {
 	return strings.TrimRight(strings.TrimSpace(a.ExternalURL), "/")
 }
 
-// WebhookBase is where a VENDOR and a sandbox box reach this deployment: the
-// base every webhook, app manifest, app redirect and per-run sandbox endpoint
-// URL is built on.
+// WebhookBase is where a VENDOR reaches this deployment: the base every
+// webhook, app manifest and app redirect URL is built on. A box's per-run
+// sandbox endpoints are not: a box is handed CREWLET_MCP_BRIDGE_URL and
+// CREWLET_SANDBOX_OTEL_RECEIVER_URL, which the operator points at this same
+// address, and a `direct` box on an ingress node dials its listener on
+// loopback.
 //
 // THE PUBLIC LISTENER'S OWN ADDRESS WHEN IT HAS ONE ([APIPublic.ExternalURL]),
 // and [API.ExternalBase] otherwise. No fallback between the two: once
@@ -260,8 +275,10 @@ type APIPublic struct {
 	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port for the dedicated public listener serving only /webhooks/, /otlp/ and /mcp/; 0 keeps every route on api.port."`
 
 	// ExternalURL is where a VENDOR and a sandbox box reach this listener:
-	// the base of every webhook, app manifest, app redirect and per-run
-	// sandbox endpoint once the listener is set ([API.WebhookBase]).
+	// the base of every webhook, app manifest and app redirect once the
+	// listener is set ([API.WebhookBase]), and the address a remote box's
+	// CREWLET_MCP_BRIDGE_URL and CREWLET_SANDBOX_OTEL_RECEIVER_URL name,
+	// which are what its per-run endpoints are built on.
 	// REQUIRED once the listener is set on an ingress node, because that
 	// node is the one building those addresses and handing them to vendors.
 	//

@@ -560,7 +560,9 @@ func (c *Company) ReferenceWarnings() []Warning {
 // company its agents run alone and a surprise for one somebody meant to sign
 // in to.
 //
-// So is a token budget a seat's ceilings leave idle ([Company.budgetWarnings]).
+// So is a seat whose executor chain holds an entry that can never run the
+// executor beside one that can ([Company.executorWarnings]), and a token
+// budget a seat's ceilings leave idle ([Company.budgetWarnings]).
 //
 // EMPTY, NEVER NIL, for the reason [Company.ReferenceWarnings] gives.
 func (c *Company) AdvisoryWarnings() []Warning {
@@ -580,6 +582,7 @@ func (c *Company) AdvisoryWarnings() []Warning {
 	}
 	out = append(out, c.peoplelessWarnings()...)
 	out = append(out, c.unreachableWarnings()...)
+	out = append(out, c.executorWarnings()...)
 	return append(out, c.budgetWarnings()...)
 }
 

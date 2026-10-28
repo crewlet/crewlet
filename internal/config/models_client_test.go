@@ -10,11 +10,13 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
-// THE MODELS SCREEN READS AN ENTRY AS THE ENGINE DOES: the auth modes and
-// modes its editor and its words are keyed on are exactly the engine's closed
-// sets, and what it says an unset field means is the default the engine
-// applies — so a page never names claude-code, subscription or ten minutes
-// for an entry the engine runs some other way.
+// THE MODELS SCREEN READS AN ENTRY AS THE ENGINE DOES: the auth modes its
+// editor and its words are keyed on are exactly the engine's closed set, and
+// what it says an unset field means is the default the engine applies — so a
+// page never names claude-code, subscription or ten minutes for an entry the
+// engine runs some other way. And the CLIs it says can run a seat's executor
+// are exactly the ones config holds to the in-box runners, so the screen never
+// tells an operator an entry runs executors that every launch skips.
 func TestTheModelsScreenReadsAnEntryAsTheEngineDoes(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)
@@ -23,7 +25,6 @@ func TestTheModelsScreenReadsAnEntryAsTheEngineDoes(t *testing.T) {
 		want []string
 	}{
 		{"CLIAuthMode", strs(config.CLIAgentAuthModes)},
-		{"CLIMode", strs(config.CLIModes)},
 	} {
 		got, err := clientsource.Union(tree, tc.name)
 		if err != nil {
@@ -33,14 +34,18 @@ func TestTheModelsScreenReadsAnEntryAsTheEngineDoes(t *testing.T) {
 			t.Errorf("contract/models.ts %s is %v, want exactly the engine's %v", tc.name, got, tc.want)
 		}
 	}
-	var unset config.LLMProvider
-	mode := string(config.CLIModeHost)
-	if unset.Box() {
-		mode = string(config.CLIModeBox)
+	body, err := clientsource.Literal(tree, "EXECUTOR_CLI_AGENTS")
+	if err != nil {
+		t.Fatal(err)
 	}
+	if got, want := clientsource.Strings(body), strs(config.CodingAgents); !slices.Equal(
+		slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
+		t.Errorf("contract/models.ts EXECUTOR_CLI_AGENTS is %v, want exactly the engine's "+
+			"executor CLIs %v", got, want)
+	}
+	var unset config.LLMProvider
 	for _, tc := range []struct{ name, want string }{
 		{"DEFAULT_CLI_AGENT", unset.AgentName()},
-		{"DEFAULT_CLI_MODE", mode},
 		{"DEFAULT_CLI_AUTH_MODE", string(unset.ResolvedAuthMode())},
 		{"DEFAULT_CLI_TIMEOUT_SECONDS", strconv.FormatFloat(unset.Timeout(), 'f', -1, 64)},
 		{"DEFAULT_CLI_MAX_CONCURRENT", strconv.Itoa(unset.Concurrency())},

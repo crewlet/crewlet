@@ -54,6 +54,7 @@ import { ConfigField, HelperOnFocus, type FieldChoice } from "~/components/Confi
 import { useQuery } from "~/lib/useQuery.ts";
 import { isWholeReference } from "~/lib/references.ts";
 import { handleLabel } from "~/lib/seats.ts";
+import { sandboxWords } from "~/routes/agents/seat/profile.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { SeatHolding, canManagePeople, useHumanSeats } from "~/components/people.tsx";
 import { TOOL_TONE, toolRollup } from "~/lib/toolState.ts";
@@ -2221,12 +2222,13 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string }) {
     });
   }
   if (isRecord(data.sandbox)) {
-    const enabled = data.sandbox.enabled === true ? "Enabled" : "Not enabled";
-    const runIn = typeof data.sandbox.run_in === "string" ? `, runs in ${data.sandbox.run_in}` : "";
+    // THE SEAT PAGE'S WORDS: what the seat's own block sets for the box its
+    // executor runs in. Where that box is belongs to the model entry that
+    // launches the run, not to this block.
     facts.push({
       key: "sandbox",
-      label: "Sandbox",
-      value: `${enabled}${runIn}`,
+      label: "Executor box",
+      value: sandboxWords(data),
       reason: "Edit in the configuration file.",
     });
   }

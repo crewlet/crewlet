@@ -174,6 +174,7 @@ func TestAnApplyNeverBuildsFromTheEnvironmentAlone(t *testing.T) {
 	status, stages, err := e.Apply(t.Context(), parseBundled(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     main:
       model: ${ACME_MODEL}

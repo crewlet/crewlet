@@ -22,6 +22,13 @@
 // configuration, its app's key and its boxes together. ADR-0058 is the
 // decision.
 //
+// And it is where a person's note to a running turn is carried: in the first
+// segment's box on the node running the turn until the turn launches its coding
+// run (steer.go), and from that launch to the turn's end sealed on the run's
+// record, which any node files on, the run's bridge serves and the review reads
+// (runsteer.go) — because only this package holds the turn, the run's record,
+// the bridge and the fleet keyring together. ADR-0067 is the decision.
+//
 // And it is where a seat whose models are all at their usage limit is parked
 // rather than retried into the limit (providerpark.go, on the machinery the
 // budget park shares, seatpark.go), because only this package holds the
@@ -236,7 +243,6 @@ func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver) (*cl
 		Key:                        key,
 		Model:                      model,
 		Agent:                      spec.AgentName(),
-		Box:                        spec.Box(),
 		StateDir:                   stateDir,
 		Overrides:                  spec.Overrides,
 		Timeout:                    time.Duration(spec.Timeout() * float64(time.Second)),

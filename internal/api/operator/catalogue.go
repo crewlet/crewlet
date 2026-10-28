@@ -457,10 +457,9 @@ func (s *Server) run(ctx context.Context, cat catalogue, c Call) (tools.Result, 
 	// THROUGH [tools.Invoke], as every caller calls a tool: an operator's
 	// call is held to the schema the tool advertises like a seat's
 	// (ADR-0059), a value the tool would misread refused before it runs.
-	invoked, _, err := tools.Invoke(withKey(ctx, c.Key), tools.Invocation{
+	result, _, err := tools.Invoke(withKey(ctx, c.Key), tools.Invocation{
 		Name: c.Tool, Tool: tool, Args: args, Where: "operator", Counter: s.counter,
 	})
-	result := invoked.Result
 	if !readOnly(c.Tool) {
 		s.auditCall(ctx, c, result, err)
 	}

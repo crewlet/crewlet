@@ -91,6 +91,23 @@ func (r *waiterRig) managers() *Manager { return r.current.Load() }
 
 func newWaiterRig(t *testing.T) *waiterRig {
 	t.Helper()
+	return newWaiterRigIn(t, Direct)
+}
+
+// rigDrives is the waiter that drives a rig's runs in cell: the node's own for
+// a box on the engine's host — the rig's runs name no node, and neither does
+// its waiter — and the fleet's for one every node reaches.
+func rigDrives(cell Placement) Drives {
+	if cell.OnEngineHost() {
+		return DrivesLocal
+	}
+	return DrivesRemote
+}
+
+// newWaiterRigIn is a rig whose one backend, and so every run it launches, is
+// in cell.
+func newWaiterRigIn(t *testing.T, cell Placement) *waiterRig {
+	t.Helper()
 	rig := &waiterRig{
 		t:        t,
 		queue:    &recorder{},
@@ -104,7 +121,7 @@ func newWaiterRig(t *testing.T) *waiterRig {
 	// a test advances to and no age assertion below would mean anything.
 	rig.pending = NewCoordStore(memory.NewFleet()).WithClock(func() time.Time { return rig.now })
 	manager, err := NewManager(ManagerOptions{
-		Providers: map[Placement]Provider{Direct: rig.provider},
+		Providers: map[Placement]Provider{cell: rig.provider},
 		Runners:   map[string]Runner{"claude-code": rig.runner},
 	})
 	if err != nil {
@@ -114,7 +131,8 @@ func newWaiterRig(t *testing.T) *waiterRig {
 	rig.current.Store(manager)
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		Now: func() time.Time { return rig.now },
+		Drives: rigDrives(cell),
+		Now:    func() time.Time { return rig.now },
 	})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)
@@ -146,6 +164,14 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 // at until something re-stamps it.
 func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
 	r.t.Helper()
+	return r.launchingAs(turnID, lease, func(*PendingRun) {})
+}
+
+// launchingAs is [waiterRig.launchingUnder] for a row the case shapes before
+// the write that opens it — a turn a colleague's ask woke, say, whose row the
+// launch writes the ask onto.
+func (r *waiterRig) launchingAs(turnID string, lease Fence, shape func(*PendingRun)) PendingRun {
+	r.t.Helper()
 	ctx := r.t.Context()
 	box, err := r.provider.Create(ctx, Spec{})
 	if err != nil {
@@ -169,6 +195,7 @@ func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
 		// phase record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
 	}
+	shape(&run)
 	if _, err := r.pending.BeginLaunch(ctx, run, lease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)
 	}
@@ -221,7 +248,7 @@ func (r *waiterRig) suspend(turnID string) {
 func (r *waiterRig) suspendIn(ctx context.Context, turnID string) {
 	r.t.Helper()
 	suspended, err := r.pending.MarkSuspended(ctx, turnID, Suspension{State: json.RawMessage(
-		`{"version":1,"pending_tool_call_id":"call-1","pending_tool_name":"run_sandbox"}`),
+		`{"version":4,"iteration":1}`),
 		Iteration: rigIteration})
 	if err != nil {
 		r.t.Fatalf("MarkSuspended: %v", err)
@@ -410,10 +437,10 @@ func TestAVanishedBoxFiresCompletionOnceTheStreakIsLongEnough(t *testing.T) {
 	run := rig.launch("t1")
 	rig.provider.Vanished[run.SandboxID] = true
 
-	// Two failures, but no time has passed: giving up is TERMINAL — the
-	// completion fires, collect cannot reconnect either, and the run is
-	// settled failed — so a burst of probes must not be able to spend the
-	// window on its own.
+	// Two failures, but no time has passed: giving up is TERMINAL for the
+	// job — the completion fires, and a box that is gone has its job lost
+	// and its round started again — so a burst of probes must not be able to
+	// spend the window on its own.
 	for i := range MinConnectFailures + 2 {
 		if fired := rig.tick(); fired != 0 {
 			t.Fatalf("gave up on probe %d with no time elapsed", i+1)
@@ -435,8 +462,8 @@ func TestTheGiveUpWindowDoesNotShrinkWithTheCadence(t *testing.T) {
 	rig := newWaiterRig(t)
 	fast, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		Interval: 100 * time.Millisecond,
-		Now:      func() time.Time { return rig.now },
+		Drives: DrivesLocal, Interval: 100 * time.Millisecond,
+		Now: func() time.Time { return rig.now },
 	})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)
@@ -564,13 +591,15 @@ func TestThePollNeverWakesABoxItsRunHasMovedOnFrom(t *testing.T) {
 	}
 }
 
-// A PAUSED BOX UNDER A RUN STILL RUNNING IS WOKEN, because that is the run's
-// box again: a collection that read and paused it and then could not resume
-// the turn hands the claim back to running, and the box has to be kept alive
-// and collected anew. The read-only attach must not cost that.
+// A PAUSED BOX UNDER A RUN STILL RUNNING A JOB NO COLLECTION READ BACK IS
+// WOKEN, because that is the run's box and only the poll can say whether its
+// job finished: it has to be kept alive and polled. The read-only attach must
+// not cost that. (A job a collection read back and handed back to running is
+// announced with its box left asleep instead, since it is over:
+// TestAReadBackJobsBoxSleepsUntilItIsCollectedAgain.)
 //
-// Mutation: leave every paused box alone, and the handed-back run's box is
-// never heart-beaten or polled again.
+// Mutation: leave every paused box alone, and this run's box is never
+// heart-beaten or polled again.
 func TestThePollWakesAPausedBoxItsRunStillRuns(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -582,7 +611,7 @@ func TestThePollWakesAPausedBoxItsRunStillRuns(t *testing.T) {
 	rig.runner.Finish(Result{Text: "done", Success: true})
 
 	if fired := rig.tick(); fired != 1 {
-		t.Errorf("the handed-back run fired %d completion(s); want its job collected anew", fired)
+		t.Errorf("the run fired %d completion(s); want its finished job announced", fired)
 	}
 	if box.Paused() || box.Keepalives() != 1 {
 		t.Errorf("paused=%v keepalives=%d; want the run's box woken and kept alive",
@@ -736,9 +765,10 @@ func TestTheReaperReclaimsTheBoxOfAnAnswerStillWaitingOnItsResume(t *testing.T) 
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	rig.park("t1")
-	if _, ok, err := rig.pending.RecordAnswer(t.Context(), "t1", rig.get("t1").LaunchID, RecordedAnswer{
-		Text: "use main", Via: types.AnswerViaChat, EventIDs: []string{"r1"}, RecordedAt: rig.now,
-	}, rigLease); err != nil || !ok {
+	parked := rig.get("t1")
+	if _, ok, err := rig.pending.RecordAnswer(t.Context(), "t1", parked.LaunchID, sealedOnto(t, rigAnswers(),
+		parked, chatWords("use main"), RecordedAnswer{EventIDs: []string{"r1"}, RecordedAt: rig.now},
+	), rigLease); err != nil || !ok {
 		t.Fatalf("RecordAnswer = %v, %v", ok, err)
 	}
 
@@ -927,12 +957,12 @@ func withPaused(run PendingRun, at time.Time) PendingRun {
 // N nodes polling means N reconnects per box per tick and N racing reapers.
 func TestANodeWithoutTheDutyDoesNothing(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
+	rig := newWaiterRigIn(t, E2B)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
 
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
 		ClaimDuty: func(context.Context) (bool, error) { return false, nil }, DutyTTL: time.Minute,
 	})
 	if err != nil {
@@ -952,12 +982,12 @@ func TestANodeWithoutTheDutyDoesNothing(t *testing.T) {
 // costs one interval.
 func TestAnUnreadableDutyStandsDownRatherThanPollingAnyway(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
+	rig := newWaiterRigIn(t, E2B)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true})
 
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
 		DutyTTL: time.Minute, ClaimDuty: func(context.Context) (bool, error) {
 			return false, errors.New("coordination store unreachable")
 		},
@@ -982,7 +1012,7 @@ func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 
 	waiter, err := NewWaiter(WaiterOptions{
 		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
-		Interval: 5 * time.Millisecond,
+		Drives: DrivesLocal, Interval: 5 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatalf("NewWaiter: %v", err)
@@ -1009,10 +1039,10 @@ func TestTheLoopTicksAndStopsCleanly(t *testing.T) {
 // with the deadline's, and every pass leaves one child registered.
 func TestAPassLeavesNoChildOfItsContextBehind(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
+	rig := newWaiterRigIn(t, E2B)
 	rig.launch("t1")
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
 		Now:       func() time.Time { return rig.now },
 		ClaimDuty: func(context.Context) (bool, error) { return true, nil },
 		DutyTTL:   time.Minute,
@@ -1192,45 +1222,56 @@ func TestACompletionCarriesTheRunsUnitOfWork(t *testing.T) {
 // job runs, so it is what keeps a credential issued at launch, which expires
 // within the hour, current in the box for a job that runs for hours. A box the
 // run no longer runs is not the run's to refresh.
+//
+// ON BOTH WAITERS, since each box is polled by one of them alone ([Drives]):
+// a box on the engine host by its launching node's own, and one every node
+// reaches by the fleet's. A refresh only one of them made would leave every
+// box of the other kind with the credential it launched with.
 func TestEveryPollHandsTheRunningBoxToTheRefresh(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
-	var (
-		mu     sync.Mutex
-		handed []string
-	)
-	rig.waiter.refresh = func(_ context.Context, manager *Manager, run PendingRun, box Sandbox) {
-		mu.Lock()
-		defer mu.Unlock()
-		if manager != rig.manager {
-			t.Error("the refresh was handed a manager other than the one that reached the box")
-		}
-		handed = append(handed, run.TurnID+"@"+box.ID())
-	}
-	run := rig.launch("t1")
-	for range 3 {
-		rig.tick()
-	}
-	mu.Lock()
-	got := slices.Clone(handed)
-	mu.Unlock()
-	if len(got) != 3 || got[0] != "t1@"+run.SandboxID {
-		t.Fatalf("refreshes = %v, want the running box on each of three polls", got)
-	}
+	for _, cell := range []Placement{Direct, E2B} {
+		t.Run(string(cell), func(t *testing.T) {
+			t.Parallel()
+			rig := newWaiterRigIn(t, cell)
+			var (
+				mu     sync.Mutex
+				handed []string
+			)
+			rig.waiter.refresh = func(_ context.Context, manager *Manager, run PendingRun, box Sandbox) {
+				mu.Lock()
+				defer mu.Unlock()
+				if manager != rig.manager {
+					t.Error("the refresh was handed a manager other than the one that reached the box")
+				}
+				handed = append(handed, run.TurnID+"@"+box.ID())
+			}
+			run := rig.launch("t1")
+			for range 3 {
+				rig.tick()
+			}
+			mu.Lock()
+			got := slices.Clone(handed)
+			mu.Unlock()
+			if len(got) != 3 || got[0] != "t1@"+run.SandboxID {
+				t.Fatalf("%s waiter: refreshes = %v, want the running box on each of three polls",
+					rig.waiter.drives, got)
+			}
 
-	moved := newWaiterRig(t)
-	calls := 0
-	moved.waiter.refresh = func(context.Context, *Manager, PendingRun, Sandbox) { calls++ }
-	listed := moved.launch("t2")
-	moved.runner.Finish(Result{Text: "done", Success: true})
-	if _, ok, err := moved.pending.ClaimForResume(t.Context(), "t2", CompletionTail(listed.LaunchID), rigLease); err != nil || !ok {
-		t.Fatalf("claim = %v, %v", ok, err)
-	}
-	if err := moved.provider.Box(listed.SandboxID).Pause(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	moved.waiter.pollOne(t.Context(), moved.manager, listed)
-	if calls != 0 {
-		t.Error("a box its run has moved on from was handed to the refresh")
+			moved := newWaiterRigIn(t, cell)
+			calls := 0
+			moved.waiter.refresh = func(context.Context, *Manager, PendingRun, Sandbox) { calls++ }
+			listed := moved.launch("t2")
+			moved.runner.Finish(Result{Text: "done", Success: true})
+			if _, ok, err := moved.pending.ClaimForResume(t.Context(), "t2", CompletionTail(listed.LaunchID), rigLease); err != nil || !ok {
+				t.Fatalf("claim = %v, %v", ok, err)
+			}
+			if err := moved.provider.Box(listed.SandboxID).Pause(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			moved.waiter.pollOne(t.Context(), moved.manager, listed)
+			if calls != 0 {
+				t.Error("a box its run has moved on from was handed to the refresh")
+			}
+		})
 	}
 }

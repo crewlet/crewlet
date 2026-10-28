@@ -556,18 +556,20 @@ type Options struct {
 	// It belongs to the API rather than to the engine because the route is
 	// served by whichever node the box can reach, which need not be the
 	// node whose engine minted the endpoint. That is why the token is
-	// signed rather than stored.
+	// signed rather than stored. A node without the ingress role serves it
+	// beside its probes, to its own host's boxes alone ([Probes]).
 	OtelReceiver *sandbox.OtelReceiver
 
 	// Bridge serves a running seat's tool surface to a coding agent over
 	// MCP. Nil serves none, and the route is then ABSENT for the same
 	// reason OtelReceiver's is.
 	//
-	// Unlike OtelReceiver it is NOT a split-deployment surface: a session
-	// is a live tool surface in the process that opened it, so it must be
-	// the ENGINE's own bridge, served by the node that runs the seat. A
-	// node without the ingress role serves it beside its probes and
-	// nothing else, through [Probes].
+	// Unlike OtelReceiver it is the ENGINE's own: a session is a live tool
+	// surface in the process holding the run's seat, and this bridge holds
+	// this process's sessions and relays a call for any other seat to its
+	// holder (internal/api/mcpbridge). A node without the ingress role
+	// serves it beside its probes, to its own host's boxes alone
+	// ([Probes]).
 	Bridge *mcpbridge.Bridge
 
 	// Operator is Worklet and Doclet as ONE tool
@@ -910,7 +912,7 @@ func New(opts Options) (*App, error) {
 	// the same reason: the exporter inside a box holds no API token, and
 	// giving it one would hand a sandbox the credential that reads the
 	// whole company. Its per-run token is in the path instead.
-	a.mountOTLP(mux, opts.OtelReceiver)
+	mountOTLP(mux, opts.OtelReceiver)
 	mountBridge(mux, opts.Bridge)
 	// The config surface, every route on a grant, reads included:
 	// reading it exposes the whole company document and writing it

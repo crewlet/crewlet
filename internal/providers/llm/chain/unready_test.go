@@ -3,6 +3,7 @@ package chain
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -77,6 +78,51 @@ func TestAChainIsUnreadyOnlyWhenEveryMemberIs(t *testing.T) {
 			}
 			if !failure.RetryAt.Equal(tc.at) {
 				t.Errorf("RetryAt = %v, want %v", failure.RetryAt, tc.at)
+			}
+		})
+	}
+}
+
+// A CHAIN'S KNOWN LIMIT IS THE ONE A CALL THROUGH IT WOULD MEET, read without the
+// call: every member sitting out a limit with an instant, its keys in order and
+// the earliest instant any is tried again. A member that may answer, cannot
+// say, or refuses for another reason (a login somebody has to mend) leaves the
+// chain without one, as [Limited] leaves a call's failure.
+//
+// Mutation: read only the head member, and the chain whose fallback is signed
+// out reads as limited; drop the keys, and the limit names no entry to probe.
+func TestAChainsKnownLimitIsTheOneACallWouldMeet(t *testing.T) {
+	t.Parallel()
+	soon := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	later := soon.Add(time.Hour)
+	auth := refused(llm.KindAuth, errors.New("signed out"))
+	for name, tc := range map[string]struct {
+		members []Member
+		limited bool
+		retry   time.Time
+	}{
+		"no members":            {},
+		"every member spent":    {members: []Member{{"plan", knowing{spent(later)}}, {"key", knowing{spent(soon)}}}, limited: true, retry: soon},
+		"a member ready":        {members: []Member{{"plan", knowing{spent(soon)}}, {"key", knowing{}}}},
+		"a member signed out":   {members: []Member{{"plan", knowing{spent(soon)}}, {"key", knowing{auth}}}},
+		"a member cannot say":   {members: []Member{{"plan", knowing{spent(soon)}}, {"key", answering("m", "x")}}},
+		"a spent plan, unnamed": {members: []Member{{"plan", knowing{spent(time.Time{})}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			limit, limited := KnownLimit(t.Context(), tc.members)
+			if limited != tc.limited {
+				t.Fatalf("KnownLimit = %v (%+v), want %v", limited, limit, tc.limited)
+			}
+			if !limited {
+				return
+			}
+			keys := make([]string, 0, len(tc.members))
+			for _, m := range tc.members {
+				keys = append(keys, m.Key)
+			}
+			if !slices.Equal(limit.Keys, keys) || !limit.RetryAt.Equal(tc.retry) {
+				t.Errorf("limit = %+v, want keys %v tried again at %v", limit, keys, tc.retry)
 			}
 		})
 	}

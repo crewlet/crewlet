@@ -8,17 +8,19 @@ import (
 )
 
 // setupFileDoc is a company whose catalogue is catalogue, whose engine-wide
-// setup is shared and whose seats are roles — every block already indented
-// for its place, so a case reads as the document it is.
+// setup is shared, whose providers.llm entries are llm (one claude-code entry
+// in the catalogue's default cell when empty) and whose seats are roles —
+// every block already indented for its place, so a case reads as the
+// document it is.
 func setupFileDoc(catalogue, shared, llm, roles string) string {
 	doc := "name: Acme\nproviders:\n  sandbox:\n" + catalogue
 	if shared != "" {
 		doc += "    setup:\n" + shared
 	}
-	if llm != "" {
-		doc += "  llm:\n" + llm
+	if llm == "" {
+		llm = defaultLLM
 	}
-	return doc + "roles:\n" + roles
+	return doc + "  llm:\n" + llm + "roles:\n" + roles
 }
 
 // One step writing one file, indented for a list under `setup:` at depth.
@@ -33,11 +35,11 @@ const (
 	directAndImg  = "    local: {image: img}\n    default_run_in: direct\n"
 	e2bOnly       = "    e2b: {api_key: k}\n"
 	directAndE2B  = "    local: {}\n    e2b: {api_key: k}\n    default_run_in: direct\n"
-	boxModeLLM    = "    sub:\n      model: sonnet\n      agent: claude-code\n      mode: box\n"
-	boxModeE2B    = "    sub:\n      model: sonnet\n      agent: claude-code\n      mode: box\n      run_in: e2b\n"
-	plainSeat     = "  - name: SWE\n    sandbox: {enabled: true}\n"
-	agentSeat     = "  - name: SWE\n    llm: sub\n"
-	seatStepsHead = "  - name: SWE\n    sandbox:\n      enabled: true\n"
+	defaultLLM    = "    main:\n      model: sonnet\n"
+	containerLLM  = "    main:\n      model: sonnet\n      run_in: container\n"
+	e2bLLM        = "    main:\n      model: sonnet\n      run_in: e2b\n"
+	plainSeat     = "  - name: SWE\n"
+	seatStepsHead = "  - name: SWE\n    sandbox:\n"
 )
 
 // seatWith is a seat whose gate is gate (indented under `sandbox:`) and whose
@@ -71,6 +73,7 @@ func TestASetupFileALocalBoxRefusesIsRefusedOnTheWrite(t *testing.T) {
 			doc:  setupFileDoc(directOnly, fileStep("      ", "git-auth", "/usr/local/bin/helper"), "", plainSeat),
 			path: shared + "/usr/local/bin/helper",
 			says: []string{`setup step "git-auth"`, "/usr/local/bin/helper", "direct box", `Seat "swe"`,
+				"runs its executor in one (providers.llm.main)",
 				"Name the file relative to the box's home", `"$HOME"`},
 		},
 		{
@@ -114,20 +117,17 @@ func TestASetupFileALocalBoxRefusesIsRefusedOnTheWrite(t *testing.T) {
 		},
 		{
 			name: "a path under the home mount of a container box",
-			doc: setupFileDoc(directAndImg, fileStep("      ", "rc", "/home/user/.npmrc"), "",
-				"  - name: SWE\n    sandbox: {enabled: true, run_in: container}\n"),
+			doc:  setupFileDoc(directAndImg, fileStep("      ", "rc", "/home/user/.npmrc"), containerLLM, plainSeat),
 		},
 		{
 			name: "a system path in a container box",
-			doc: setupFileDoc(directAndImg, fileStep("      ", "git-auth", "/usr/local/bin/helper"), "",
-				"  - name: SWE\n    sandbox: {enabled: true, run_in: container}\n"),
+			doc:  setupFileDoc(directAndImg, fileStep("      ", "git-auth", "/usr/local/bin/helper"), containerLLM, plainSeat),
 			path: shared + "/usr/local/bin/helper",
 			says: []string{"container box", "/home/user"},
 		},
 		{
 			name: "a climb off the home mount of a container box",
-			doc: setupFileDoc(directAndImg, fileStep("      ", "rc", "/home/user/../../etc/cron.d/x"), "",
-				"  - name: SWE\n    sandbox: {enabled: true, run_in: container}\n"),
+			doc:  setupFileDoc(directAndImg, fileStep("      ", "rc", "/home/user/../../etc/cron.d/x"), containerLLM, plainSeat),
 			path: shared + "/home/user/../../etc/cron.d/x",
 		},
 		{
@@ -137,40 +137,30 @@ func TestASetupFileALocalBoxRefusesIsRefusedOnTheWrite(t *testing.T) {
 			doc:  setupFileDoc(e2bOnly, fileStep("      ", "git-auth", "/usr/local/bin/helper"), "", plainSeat),
 		},
 		{
+			// The entry places the box, not the catalogue's default: a seat
+			// whose executor runs in e2b opens no direct box for the step
+			// to fail in.
 			name: "an engine-wide system path no local box reaches",
-			doc: setupFileDoc(directAndE2B, fileStep("      ", "git-auth", "/usr/local/bin/helper"), "",
-				"  - name: SWE\n    sandbox: {enabled: true, run_in: e2b}\n"),
+			doc:  setupFileDoc(directAndE2B, fileStep("      ", "git-auth", "/usr/local/bin/helper"), e2bLLM, plainSeat),
 		},
 		{
-			// A box-mode seat's gate offers it no box: the executor's,
-			// in e2b here, is the one its steps reach, and not the direct
-			// one the catalogue's default would give a run_sandbox box.
-			name: "a box-mode seat's gate falls to a direct default",
-			doc: setupFileDoc(directAndE2B, "", boxModeE2B,
-				"  - name: SWE\n    llm: sub\n    sandbox:\n      enabled: true\n      setup:\n"+
-					fileStep("        ", "own", "/usr/local/bin/helper")),
+			// A launch falls back to the next member when the first sits
+			// out, so the seat's step reaches the fallback member's box too,
+			// in the cell that member names.
+			name: "a fallback member's container box",
+			doc: setupFileDoc(directAndImg, "", defaultLLM+"    boxed:\n      model: sonnet\n      run_in: container\n",
+				"  - name: SWE\n    llm: [main, boxed]\n    sandbox:\n      setup:\n"+
+					fileStep("        ", "own", "/home/user/../../etc/cron.d/x")),
+			path: own + "/home/user/../../etc/cron.d/x",
+			says: []string{"container box", "runs its executor in one (providers.llm.boxed)"},
 		},
 		{
-			// No gate at all: the executor's own box is placed by its
-			// entry, and given the engine-wide steps.
-			name: "a box-mode executor's direct box",
-			doc:  setupFileDoc(directOnly, fileStep("      ", "git-auth", "/usr/local/bin/helper"), boxModeLLM, agentSeat),
-			path: shared + "/usr/local/bin/helper",
-			says: []string{"runs its executor in one", "providers.llm.sub"},
-		},
-		{
-			// `self` is no box of its own, so the seat's step reaches only
-			// the executor's — in the cell its entry names.
-			name: "a self seat's step in its executor's direct box",
-			doc: setupFileDoc(directOnly, "", boxModeLLM,
-				"  - name: SWE\n    llm: sub\n    sandbox:\n      enabled: true\n      run_in: self\n      setup:\n"+
-					fileStep("        ", "own", "/usr/local/bin/helper")),
-			path: own + "/usr/local/bin/helper",
-			says: []string{"runs its executor in one"},
-		},
-		{
-			name: "a box-mode executor placed in e2b",
-			doc:  setupFileDoc(directAndE2B, fileStep("      ", "git-auth", "/usr/local/bin/helper"), boxModeE2B, agentSeat),
+			// A member no launch picks opens no box, so the default cell
+			// it would otherwise resolve to judges nothing about it.
+			name: "a member a launch skips",
+			doc: setupFileDoc(directOnly, "", defaultLLM+"    codex:\n      model: gpt-5\n      agent: codex\n",
+				"  - name: SWE\n    llm: [main, codex]\n    sandbox:\n      setup:\n"+
+					fileStep("        ", "own", ".npmrc")),
 		},
 		{
 			name: "the double writes nothing anywhere",
@@ -269,9 +259,7 @@ func TestASetupFileAnE2BBoxRefusesIsRefusedOnTheWrite(t *testing.T) {
 func TestARefusedEngineWideFileIsOneProblemNamingItsSeats(t *testing.T) {
 	t.Parallel()
 	doc := setupFileDoc(directOnly, fileStep("      ", "git-auth", "/usr/local/bin/helper"), "",
-		"  - name: SWE\n    sandbox: {enabled: true}\n"+
-			"  - name: QA\n    sandbox: {enabled: true}\n"+
-			"  - name: Ops\n    sandbox: {enabled: true}\n")
+		"  - name: SWE\n  - name: QA\n  - name: Ops\n")
 	_, err := ParseCompany([]byte(doc))
 	problems := Problems(err)
 	if len(problems) != 1 {
@@ -293,13 +281,12 @@ func TestARefusedSetupFileIsAnAdmissionRule(t *testing.T) {
 		"providers.sandbox.setup[0].files./usr/local/bin/helper")
 }
 
-// A SEAT'S BOX IS PLACED AS THE ENGINE PLACES IT: the run_sandbox box its gate
-// offers — in the gate's cell, else the catalogue's default, which is how the
-// manager resolves an empty one at launch — or, for a seat whose executor runs
-// in box mode, the box that executor runs in, placed by its entry, and no
-// other: such a seat is never offered run_sandbox. Each is given the
-// engine-wide steps and then the seat's own, as the engine's runEnvironment
-// builds them.
+// A SEAT'S BOXES ARE PLACED AS THE ENGINE PLACES THEM: one in each cell a
+// member of its executor chain that can run it lands in — the member's own
+// run_in, else the catalogue's default, which is how the manager resolves an
+// empty one at launch — under the first member in that cell, and none for a
+// member a launch skips. Each is given the engine-wide steps and then the
+// seat's own, as the engine's runEnvironment builds them. A person opens none.
 func TestSeatBoxesArePlacedAsTheEngineLaunchesThem(t *testing.T) {
 	t.Parallel()
 	type box struct {
@@ -311,28 +298,21 @@ func TestSeatBoxesArePlacedAsTheEngineLaunchesThem(t *testing.T) {
 		"    local: {image: img}\n    e2b: {api_key: k}\n    default_run_in: direct\n"+
 		"    setup:\n      - {name: shared, brief: b}\n"+
 		"  llm:\n    main:\n      model: claude-golden\n"+
-		"    sub:\n      model: sonnet\n      agent: claude-code\n      mode: box\n      run_in: e2b\n"+
-		"    deflt:\n      model: sonnet\n      agent: claude-code\n      mode: box\n"+
+		"    twin:\n      model: sonnet\n"+
+		"    remote:\n      model: sonnet\n      run_in: e2b\n"+
+		"    boxed:\n      model: anthropic/claude-sonnet-5\n      agent: opencode\n      run_in: container\n"+
+		"    codex:\n      model: gpt-5\n      agent: codex\n"+
 		"roles:\n"+
-		// The gate's own cell.
-		"  - name: Named\n    llm: main\n    sandbox:\n      enabled: true\n      run_in: container\n"+
+		"  - name: Founder\n    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n"+
+		// Every cell the chain can land in, each with the seat's steps.
+		"  - name: Fallback\n    llm: [main, remote]\n    sandbox:\n"+
 		"      setup:\n        - {name: mine, brief: b}\n"+
-		// The catalogue's default.
-		"  - name: Silent\n    llm: main\n    sandbox: {enabled: true}\n"+
-		// No box at all: a gate that is off, on a native executor.
-		"  - name: Off\n    llm: main\n    sandbox: {enabled: false}\n"+
-		// `self` is no box of its own; the executor's entry places it.
-		"  - name: Self\n    llm: sub\n    sandbox:\n      enabled: true\n      run_in: self\n"+
-		"      setup:\n        - {name: own, brief: b}\n"+
-		// A box-mode seat's enabled gate offers it nothing: its one box
-		// is the executor's, in e2b, not a run_sandbox box in the
-		// catalogue's default — though the box is given the gate's steps.
-		"  - name: Agent\n    llm: sub\n    sandbox:\n      enabled: true\n"+
-		"      setup:\n        - {name: kept, brief: b}\n"+
-		// A box-mode seat with no gate at all still runs in its
-		// executor's box, and an entry that names no cell takes the
-		// catalogue's default.
-		"  - name: Bare\n    llm: deflt\n")
+		// Two members in one cell open one box, under the first.
+		"  - name: Twins\n    llm: [main, twin]\n"+
+		// A member a launch skips opens nothing, and a seat naming no
+		// key runs on the first declared entry.
+		"  - name: Mixed\n    llm: [codex, boxed]\n"+
+		"  - name: Silent\n")
 
 	var got []box
 	for b := range cfg.SeatBoxes() {
@@ -343,12 +323,13 @@ func TestSeatBoxesArePlacedAsTheEngineLaunchesThem(t *testing.T) {
 		got = append(got, box{b.Seat.Name, b.Executor, b.Cell, steps})
 	}
 	shared := "shared@providers.sandbox.setup[0]"
+	mine := "mine@roles[1].sandbox.setup[0]"
 	want := []box{
-		{"Named", "", PlacementContainer, []string{shared, "mine@roles[0].sandbox.setup[0]"}},
-		{"Silent", "", PlacementDirect, []string{shared}},
-		{"Self", "sub", PlacementE2B, []string{shared, "own@roles[3].sandbox.setup[0]"}},
-		{"Agent", "sub", PlacementE2B, []string{shared, "kept@roles[4].sandbox.setup[0]"}},
-		{"Bare", "deflt", PlacementDirect, []string{shared}},
+		{"Fallback", "main", PlacementDirect, []string{shared, mine}},
+		{"Fallback", "remote", PlacementE2B, []string{shared, mine}},
+		{"Twins", "main", PlacementDirect, []string{shared}},
+		{"Mixed", "boxed", PlacementContainer, []string{shared}},
+		{"Silent", "main", PlacementDirect, []string{shared}},
 	}
 	if !slices.EqualFunc(got, want, func(a, b box) bool {
 		return a.seat == b.seat && a.executor == b.executor && a.cell == b.cell && slices.Equal(a.steps, b.steps)
@@ -357,16 +338,22 @@ func TestSeatBoxesArePlacedAsTheEngineLaunchesThem(t *testing.T) {
 	}
 }
 
-// NO CATALOGUE, NO BOX, and a human seat opens none either: it runs no turn.
+// NO CATALOGUE, NO MODEL, NO BOX — and a human seat opens none either: it
+// runs no turn.
 //
-// Read without validation, because a person's sandbox block is refused on
-// its own and the answer must not depend on that refusal having run first.
+// Read without validation, because a company with an agent seat and no
+// catalogue, and a person's sandbox block, are refused on their own and the
+// answer must not depend on that refusal having run first.
 func TestSeatBoxesAreNoneWithoutACatalogueOrForAPerson(t *testing.T) {
 	t.Parallel()
 	for name, doc := range map[string]string{
-		"no catalogue": "name: Acme\nroles:\n  - name: SWE\n    sandbox: {enabled: true}\n",
+		"no catalogue": "name: Acme\nproviders:\n  llm:\n    main: {model: sonnet}\n" +
+			"roles:\n  - name: SWE\n    sandbox: {max_turns: 5}\n",
+		"no model": "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n" +
+			"roles:\n  - name: SWE\n    sandbox: {max_turns: 5}\n",
 		"a person": "name: Acme\nproviders:\n  sandbox:\n    local: {}\n    default_run_in: direct\n" +
-			"roles:\n  - name: Founder\n    kind: human\n    sandbox: {enabled: true}\n",
+			"  llm:\n    main: {model: sonnet}\n" +
+			"roles:\n  - name: Founder\n    kind: human\n    sandbox: {max_turns: 5}\n",
 	} {
 		cfg, err := ParseCompanyDocument([]byte(doc))
 		if err != nil {

@@ -43,13 +43,16 @@ import "reflect"
 // which replaces every copy it holds.
 //
 // NEVER TWICE, rather than counted per call, because a call is cleared and
-// built again under the SAME key: a suspended Execute phase publishes a
-// completion checkpoint, which clears its call, and streams its resumed rounds
-// under the same turn, phase and iteration. Counted per call, the rebuilt call
-// numbered its fields from one again, and a tab still holding the copy from
-// before the suspension — one that missed the push clearing it and the first
-// push after — took every lower version for a push overtaken by what it held:
-// it kept the old response, narration and tool calls, and asked for nothing,
+// built again under the SAME key. A parked turn's resume can run more than
+// once — held until its seat's budget has room for the relaunch its reviewer
+// sent back, or handed back for a retry after an attempt that broke — and each
+// attempt collects the same run into the same turn and round, so its review
+// opens again under the turn, phase and iteration of the attempt before it,
+// whose completion cleared the call. Counted per call, the rebuilt call
+// numbered its fields from one again, and a tab still holding the earlier
+// attempt's copy — one that missed the push clearing it and the first push
+// after — took every lower version for a push overtaken by what it held: it
+// kept the old response, narration and tool calls, and asked for nothing,
 // until the new count passed the old one, which it might never do.
 type CallVersions struct {
 	// Prompt numbers `prompt` and `prompt_messages`, which move together:

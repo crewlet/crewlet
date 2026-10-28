@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -30,32 +31,47 @@ import (
 //
 // The per-segment arithmetic of a charge is turnspend_internal_test.go's; this
 // is the one thing only a stateless node can show: that the charge is not left
-// behind on a node that keeps no tracker.
+// behind on a node that keeps no tracker. And the executor's share of it is its
+// run's, collected from the box — the cached share included, which a CLI
+// reports beside its tokens and the charge carries like every phase's.
+//
+// Mutation: leave the job's cached share out of the resumed segment's charge,
+// and CacheRead is the reviewer's alone.
 func TestAStatelessNodesTurnChargesItsTaskOnADataNode(t *testing.T) {
 	t.Parallel()
 	e, served := spendingEngine(t)
-	if _, err := e.runTurn(t.Context(), Request{
+	rig := rigRuns(t, e, modelPlayer(t, billingRun))
+	runToItsEnd(t, e, rig, Request{
 		Handle: "swe", WorkKey: "wk-1", RunID: "run-1",
 		WorkSince: time.Now().UTC(),
 		Events:    []*events.Event{taskWake("task-9", "ENG-9")},
-	}); err != nil {
-		t.Fatalf("runTurn: %v", err)
-	}
+	})
+	// ONE CHARGE PER SEGMENT: the dispatch that parked on the launch, and
+	// the resume that collected the run and reviewed it (ADR-0022).
 	turns, ops := served.recorded()
-	if len(turns) != 1 {
-		t.Fatalf("the turn recorded %d charge(s) on the data node, want one", len(turns))
+	if len(turns) != 2 {
+		t.Fatalf("the turn recorded %d charge(s) on the data node, want its two segments': %+v",
+			len(turns), turns)
 	}
-	got := turns[0]
-	if got.Task != "task-9" || got.Seat != "swe" || got.TurnID != "run-1" {
-		t.Fatalf("the charge arrived as %+v, want task-9 by swe in run-1", got)
+	var whole worklet.TurnSpend
+	for _, got := range turns {
+		if got.Task != "task-9" || got.Seat != "swe" || got.TurnID != "run-1" {
+			t.Fatalf("a charge arrived as %+v, want task-9 by swe in run-1", got)
+		}
+		whole.Turns += got.Spend.Turns
+		whole.Input += got.Spend.Input
+		whole.Output += got.Spend.Output
+		whole.CacheRead += got.Spend.CacheRead
 	}
-	if got.Spend.Turns != 1 || got.Spend.Input != 2*billedInput ||
-		got.Spend.Output != 2*billedOutput || got.Spend.CacheRead != 2*billedCached {
-		t.Fatalf("the charge is %+v, want one turn and the two phases' tokens (%d in, "+
-			"%d out, %d of them cached)", got.Spend, 2*billedInput, 2*billedOutput, 2*billedCached)
+	if whole.Turns != 1 || whole.Input != 2*billedInput ||
+		whole.Output != 2*billedOutput || whole.CacheRead != 2*billedCached {
+		t.Fatalf("the segments charged %+v between them, want one turn and the run's and the "+
+			"review's tokens (%d in, %d out, %d of them cached)", whole,
+			2*billedInput, 2*billedOutput, 2*billedCached)
 	}
-	if ops[0] == "" {
-		t.Fatal("the charge crossed with no operation id, so a repeat would count it twice")
+	if ops[0] == "" || ops[1] == "" || ops[0] == ops[1] {
+		t.Fatalf("the charges crossed under operation ids %q: each segment needs its own, or a "+
+			"repeat would count it twice and the second segment would collapse into the first", ops)
 	}
 }
 
@@ -68,12 +84,11 @@ func TestAStatelessNodesUnattributedTurnChargesNothing(t *testing.T) {
 		NotificationSource: "slack", SourceEventType: "message",
 		Sender: "ana", Subject: "a message", Body: "can you look at this",
 	}, events.TraceContext{})
-	if _, err := e.runTurn(t.Context(), Request{
-		Handle: "swe", WorkKey: "wk-2", Events: []*events.Event{chat},
+	rig := rigRuns(t, e, modelPlayer(t, billingRun))
+	runToItsEnd(t, e, rig, Request{
+		Handle: "swe", WorkKey: "wk-2", RunID: "run-2", Events: []*events.Event{chat},
 		WorkSince: time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("runTurn: %v", err)
-	}
+	})
 	if turns, _ := served.recorded(); len(turns) != 0 {
 		t.Fatalf("a chat turn charged %+v", turns)
 	}
@@ -144,7 +159,8 @@ func (s *servedEstate) For(context.Context) (estate.Backend, bool) {
 }
 
 // spendingEngine is an engine WITHOUT the data role running one seat on the
-// Worklet, whose writes are served by one data node over the estate.
+// Worklet, whose writes are served by one data node over the estate. Its seat's
+// executor launches on [runnerKey]; the case rigs what plays the run.
 func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 	t.Helper()
 	broker := memory.NewBroker()
@@ -180,16 +196,13 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 
 	seat := &org.Role{Name: "SWE", DeclaredHandle: "swe", LLM: org.ProviderKeys{"only"}}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{seat}}
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: billingModel()}})
-	if err != nil {
-		t.Fatalf("phase.NewRegistry: %v", err)
-	}
-	e := withSessions(t, &Engine{backends: &Backends{Queue: q}, router: router})
+	models := runnable(t, []phase.Entry{{Key: "only", Provider: billingModel()}}, seat)
+	e := withSessions(t, &Engine{backends: &Backends{Queue: q, Fleet: coordmem.NewFleet()}, router: router})
 	e.remote.Store(&remoteNative{tracker: true})
 	e.epoch.current.Store(&Company{
 		Org: organization, Models: models, Tools: tools.NewRegistry(),
 		Config: &config.Company{Name: "Acme", TurnEngine: config.TurnEngine{
-			MaxIterations: 1, DelegationDepthLimit: 1, MaxToolRounds: 3,
+			MaxIterations: 1, DelegationDepthLimit: 1,
 		}},
 	})
 	e.notify.registry = notify.NewRegistry(organization, nil)

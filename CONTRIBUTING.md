@@ -9,9 +9,10 @@ Prerequisites: **Go 1.27+** and
 **[golangci-lint](https://golangci-lint.run/welcome/install/)**, which
 `make check` runs and CI's own job downloads for itself. **A current Node**
 (npm ships with it) for the dashboard — its build output is committed, so
-building and running the ENGINE needs neither, but changing the dashboard or
-running `internal/e2e`'s client replay does. Nothing in the tree pins a node
-version; CI installs the latest — see *Which node* under
+building and running the ENGINE needs neither, but changing the dashboard,
+running `internal/e2e`'s client replay or the probe of OpenCode's notes plugin
+does. Nothing in the tree pins a node version; CI installs the latest — see
+*Which node* under
 [A skip is not a pass](#a-skip-is-not-a-pass). **Docker** only for the vendor
 loops below; the engine itself needs no services.
 
@@ -292,6 +293,17 @@ What follows are the prerequisites that legitimately vary by machine.
   directory above the script holding a `go.mod` — rather than the directory it
   is run from.
 
+  `node` also runs the **OpenCode notes plugin** the engine embeds
+  (`internal/sandbox/codingagent/opencode_steer.js`): the plugin is
+  JavaScript an OpenCode run's server loads, and `opencode_steer_test.go`
+  drives it — as the engine writes it into a real box — under plain `node`,
+  through `opencode_steer_probe.mjs` beside it, against a stand-in of the
+  bridge's notes route and against a real bridge's. That package is in the
+  parallel half, so `make test`
+  requires node too and CI's `test (race)` job installs it, and its skip has
+  no allowlist entry either. It needs no npm either: the plugin imports
+  nothing.
+
 - **`npm`** builds and tests the dashboard itself. Its assertions — the
   wire protocol, the router's history rules, the ordering comparators, the
   purity of `src/contract/`, and the MEASURED contrast of every colour token
@@ -452,11 +464,13 @@ What follows are the prerequisites that legitimately vary by machine.
   bundle](#a-dashboard-bump-brings-its-own-bundle).
 
   **Which node.** CI installs `latest` — the newest Node release, resolved by
-  setup-node when the job runs — in the `dashboard` job, the `gates` job and
+  setup-node when the job runs — in the `dashboard` job, the `test (race)` and
+  `gates` jobs and
   [`dependabot-dashboard.yml`](.github/workflows/dependabot-dashboard.yml)'s
   `build` job. The last must always answer this the same way as `dashboard`,
-  because it rebuilds the bundle that job diffs. `gates` need not match either:
-  what it runs under plain node is the committed bundle, not a fresh build.
+  because it rebuilds the bundle that job diffs. `test (race)` and `gates` need
+  not match either: what they run under plain node is a committed file — the
+  plugin, the built bundle — not a fresh build.
 
   **Nothing in this repository names a node version**, and that is a decision
   rather than an oversight. A pin earns its keep by being maintained, and
@@ -547,9 +561,10 @@ dispatcher around it: the socket, the tool list, the withheld answers and the
 release are on the way of every real call. Test
 files sit beside what they cover, as Go expects, and a test file that is not Go
 is no exception: the dashboard's Vitest suites sit beside their modules in
-`dashboard/src`, and `internal/e2e`'s client replay is
-`internal/e2e/replay.mjs`, beside the `golden_test.go` that runs it. There is
-no top-level `tests/` tree.
+`dashboard/src`, `internal/e2e`'s client replay is `internal/e2e/replay.mjs`,
+beside the `golden_test.go` that runs it, and the OpenCode notes plugin's probe
+is `internal/sandbox/codingagent/opencode_steer_probe.mjs`, beside the
+`opencode_steer_test.go` that runs it. There is no top-level `tests/` tree.
 
 A test that opens a store on a fresh path opens it through
 `storetest.OpenNode` or `storetest.OpenEstate`, and one that boots an engine on
@@ -665,11 +680,12 @@ states with their reasons:
 Go's compiler proves the types line up. It cannot prove a backend is wired,
 and this codebase has two shapes where it is not:
 
-- **A config value with no implementation.** `role.sandbox.run_in: e2b`
-  parses, validates, appears in the generated schema — and the engine refuses
-  it at construction, because the company configured no `e2b:` backend. That
-  refusal is the right behaviour; what would be wrong is accepting it and
-  failing later, inside a turn that has already spent its rounds.
+- **A config value with no implementation.**
+  `providers.sandbox.default_run_in: e2b` parses and appears in the generated
+  schema — and validation refuses it while the company configures no `e2b:`
+  backend, because every executor run placed there would fail at its launch.
+  That refusal is the right behaviour; what would be wrong is accepting it and
+  failing later, inside every turn of every seat that runs there.
 - **A knob nothing reads.** `provisioning.group_webhook` was validated,
   documented and consulted by no code at all, so an operator setting it got
   the default and no error. A config field ships with the code that reads it,

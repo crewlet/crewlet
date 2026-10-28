@@ -23,7 +23,7 @@ import (
 //	  retention_days: 30            # 1..365
 //	  token_budget: { day: 200000 } # per person, optional
 //	  deep_work:                    # optional; absent means quick mode only
-//	    llm: assistant-deep         # an agent-mode providers.llm key
+//	    llm: assistant-deep         # a Claude Code providers.llm key
 //	    timeout_seconds: 1200       # 60..1200
 //	    max_steps: 150              # 10..400
 //	    max_tokens: 3000000         # 10000..20000000
@@ -46,22 +46,22 @@ import (
 //
 // # Only a model that can reach nothing else
 //
-// Every member of `llm` must be a host-mode entry whose profile denies the
-// CLI's own local tools AND its own web tools, so the one tool source its run
-// has is the engine's `crewlet` server, serving the person's own requests
-// (ADR-0049). The assistant's guarantee (ADR-0050) is that it reads only what
-// the person's own requests return; a CLI in box mode runs its own tool loop
-// with its own tools, a shell reads whatever the engine user can, and a web
-// fetch is both text no authority decision ever saw and a way out for
-// whatever the person's data put in the prompt. [Company.AssistantChain] is the one place the chain is
-// handed out, and it refuses a chain that breaks this, so a stored revision
-// carrying one leaves the assistant unavailable rather than unsafe.
+// Every member of `llm` must be an entry whose profile denies the CLI's own
+// local tools AND its own web tools, so the one tool source its run on the
+// engine host has is the engine's `crewlet` server, serving the person's own
+// requests (ADR-0049). The assistant's guarantee (ADR-0050) is that it reads
+// only what the person's own requests return; a shell reads whatever the
+// engine user can, and a web fetch is both text no authority decision ever
+// saw and a way out for whatever the person's data put in the prompt.
+// [Company.AssistantChain] is the one place the chain is handed out, and it
+// refuses a chain that breaks this, so a stored revision carrying one leaves
+// the assistant unavailable rather than unsafe.
 type Assistant struct {
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Run the Dashboard Assistant for this company. Absent or false: off."`
 
 	// LLM is the assistant's provider chain, the first key tried first, in
 	// the shape a seat's llm_auxiliary takes.
-	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero" desc:"providers.llm keys the assistant runs on, a fallback chain. Required when enabled. Each must be a text-mode entry denying local tools and, through overrides.web_tools, web tools."`
+	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero" desc:"providers.llm keys the assistant runs on, a fallback chain. Required when enabled. Each must be an entry whose CLI's local tools are denied and, through overrides.web_tools, its web tools."`
 
 	MaxSteps           int `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=40" desc:"Most tool steps one assistant turn may take, 1..40. Absent: 30."`
 	TurnTimeoutSeconds int `yaml:"turn_timeout_seconds,omitempty" json:"turn_timeout_seconds,omitempty" js:"min=0;max=1200" desc:"Longest one assistant turn may run, 30..1200 seconds. Absent: 900."`
@@ -82,8 +82,9 @@ type Assistant struct {
 //
 // # A coding CLI with its own tools, never on the engine unconfined
 //
-// The entry it names runs in AGENT MODE: the CLI's shell, files, web search
-// and image reading are the point. Its one way into Crewlet is the person's
+// The entry it names runs as its CLI's own run in a box, as a seat's
+// executor does: the CLI's shell, files, web search and image reading are the
+// point. Its one way into Crewlet is the person's
 // own assistant tools, bridged, so every read is still the person's request
 // and every write still a proposal they approve. Where it runs is the entry's
 // own `run_in`, else the first of e2b and container this company configures,
@@ -96,7 +97,7 @@ type Assistant struct {
 // the default without a pointer, and a stored value out of range is clamped
 // by its accessor.
 type AssistantDeepWork struct {
-	LLM            string `yaml:"llm,omitempty" json:"llm,omitempty" desc:"providers.llm key deep work runs on: an agent-mode entry driving claude-code. Required."`
+	LLM            string `yaml:"llm,omitempty" json:"llm,omitempty" desc:"providers.llm key deep work runs on: an entry driving claude-code. Required."`
 	TimeoutSeconds int    `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0;max=1200" desc:"Longest one deep-work run may take, 60..1200 seconds. Absent: 1200."`
 	MaxSteps       int    `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=400" desc:"Most agentic rounds and Crewlet tool calls one deep-work run may make, 10..400. Absent: 150."`
 	MaxTokens      int    `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty" js:"min=0;max=20000000" desc:"Most tokens one deep-work run may spend before it is stopped, 10000..20000000. Absent: 3000000. The person's and the company's budgets still apply."`
@@ -228,7 +229,7 @@ func (d AssistantDeepWork) Tokens() int { return deepTokens.value(d.MaxTokens) }
 // ErrDeepWorkOff is what [Company.AssistantDeepWork] answers for a company
 // whose assistant has no deep work.
 var ErrDeepWorkOff = errors.New("the assistant has no deep work: set assistant.deep_work.llm " +
-	"to an agent-mode providers.llm entry")
+	"to a Claude Code providers.llm entry")
 
 // AssistantDeepWork is the providers.llm entry deep work runs on and its key,
 // or why there is none: [ErrAssistantOff], [ErrDeepWorkOff], or the problems
@@ -273,8 +274,8 @@ func (c *Company) DeepWorkPlacement() (Placement, bool) {
 }
 
 // deepWorkProblems reports every way `assistant.deep_work` cannot run: no
-// entry, an unknown one, one not in box mode, a CLI other than Claude
-// Code, or a run_in this company configures no backend for.
+// entry, an unknown one, a CLI other than Claude Code, or a run_in this
+// company configures no backend for.
 func (c *Company) deepWorkProblems(path Path) error {
 	var p problems
 	d := c.Assistant.DeepWork
@@ -294,7 +295,7 @@ func (c *Company) deepWorkProblems(path Path) error {
 	llmPath := at(path, "llm")
 	if d.LLM == "" {
 		p.add(llmPath, ErrMissing, "deep work names no model: set it to a providers.llm "+
-			"key whose entry has mode: box and agent: claude-code")
+			"key whose entry has agent: claude-code")
 		return p.err()
 	}
 	entry, ok := c.Providers.LLM[d.LLM]
@@ -304,19 +305,17 @@ func (c *Company) deepWorkProblems(path Path) error {
 		return p.err()
 	}
 	entryField := func(f string) Path { return at(entryPath(d.LLM), f) }
-	if !entry.Box() {
-		p.add(llmPath, ErrConflict, "providers.llm.%s is in host mode, where the CLI has "+
-			"no tool of its own and deep work would be quick mode again: set %s: box",
-			d.LLM, entryField("mode"))
-	}
-	// CLAUDE CODE ALONE: a run parked on a proposal is continued, after
-	// the approval, in its CLI's own session (`--resume`), and that is the
-	// one runner here that continues one.
-	if CodingAgent(entry.AgentName()) != CodingAgentClaudeCode {
+	// CLAUDE CODE ALONE. Both in-box runners continue a parked run in its
+	// CLI's own session after the approval, but deep work's run on the
+	// engine host is confined around one CLI's install and temp roots
+	// (internal/sandbox's confinement, measured against Claude Code's), and
+	// the engine drives it with that CLI's runner: another CLI there would
+	// meet a confinement nobody measured it against.
+	if CLIAgentName(entry.AgentName()) != CLIClaudeCode {
 		p.add(llmPath, ErrConflict, "providers.llm.%s drives %s, and deep work runs on %s "+
-			"alone: a run parked on a proposal continues in its CLI's own session after "+
-			"the approval, which only that runner can do. Set %s: %s",
-			d.LLM, entry.AgentName(), CodingAgentClaudeCode, entryField("agent"), CodingAgentClaudeCode)
+			"alone: its run is confined around that CLI's own install and temp "+
+			"directories, which no other CLI has been measured against. Set %s: %s",
+			d.LLM, entry.AgentName(), CLIClaudeCode, entryField("agent"), CLIClaudeCode)
 	}
 	if entry.RunIn != "" && entry.RunIn != PlacementDirect && !c.Providers.Sandbox.Configured(entry.RunIn) {
 		p.add(entryField("run_in"), ErrConflict, "deep work on providers.llm.%s runs in %s, "+
@@ -382,17 +381,17 @@ func (c *Company) validateAssistant() error {
 }
 
 // assistantChainProblems reports every way `assistant.llm` cannot carry the
-// assistant: empty while enabled, a key providers.llm does not configure, an
-// entry in box mode, or one whose merged profile leaves the CLI's local or
-// web tools reachable. Each problem names the field to change.
+// assistant: empty while enabled, a key providers.llm does not configure, or
+// an entry whose merged profile leaves the CLI's local or web tools
+// reachable. Each problem names the field to change.
 func (c *Company) assistantChainProblems(path Path) error {
 	var p problems
 	llmPath := at(path, "llm")
 	if len(c.Assistant.LLM) == 0 {
 		p.add(llmPath, ErrMissing,
 			"the assistant is enabled but names no model: list a providers.llm "+
-				"key, e.g. llm: [assistant], whose entry is in host mode and has "+
-				"overrides: {web_tools: denied}")
+				"key, e.g. llm: [assistant], whose CLI's local tools are denied and "+
+				"whose entry has overrides: {web_tools: denied}")
 		return p.err()
 	}
 	known := slices.Sorted(maps.Keys(c.Providers.LLM))
@@ -431,13 +430,6 @@ func (c *Company) AssistantEntryProblems(key string) error {
 func assistantMemberProblems(member Path, key string, entry *LLMProvider) error {
 	var p problems
 	entryField := func(f string) Path { return at(entryPath(key), f) }
-	if entry.Box() {
-		p.add(member, ErrConflict,
-			"providers.llm.%s is in box mode, where the CLI runs with its own tools "+
-				"beside the engine's, which never pass the guard the assistant's every "+
-				"read goes through: point the assistant at a host-mode entry (remove %s)",
-			key, entryField("mode"))
-	}
 	if entry.Agent != "" && !entry.Agent.Valid() {
 		return p.err() // the entry's own rule names the agent; there is no profile
 	}

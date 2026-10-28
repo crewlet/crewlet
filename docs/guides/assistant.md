@@ -102,12 +102,12 @@ does not.
 ## Turning it on
 
 1. **Add a dedicated `providers.llm` entry** for the assistant that meets the
-   assistant's rules: host mode, a CLI run with no tool of its own beside the
-   engine's `crewlet` server, and
+   assistant's rules: a CLI run with no tool of its own beside the engine's
+   `crewlet` server, and
    `overrides: { web_tools: denied }`. Which CLIs qualify, and why the others
    are refused, is stated once in the
    [Configuration Reference](../getting-started/configuration.md#the-dashboard-assistant)
-   and in [Tool calls in host mode](../concepts/llm-backends.md#tool-calls-in-host-mode).
+   and in [Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host).
    A dedicated entry keeps its own `max_concurrent` slots, so a busy company's
    seats never queue people's questions and the reverse.
 2. **Prove the entry** with `crewlet llm doctor assistant` (the entry's key),
@@ -246,9 +246,8 @@ entry:
 providers:
   llm:
     assistant-deep:
-      agent: claude-code
+      agent: claude-code     # deep work runs the CLI's own loop and tools, in a box
       model: sonnet
-      mode: box              # the CLI runs its own loop and tools
       # run_in: e2b          # optional; see "Where a run happens"
 assistant:
   enabled: true
@@ -260,8 +259,10 @@ assistant:
     max_tokens: 3000000      # 10000..20000000 tokens a task may spend
 ```
 
-The entry must be Claude Code in box mode, because a run parked on a
-proposal is continued in that CLI's own session after the approval. A run's
+The entry must be Claude Code: a run on the engine host is confined around that
+CLI's own install and temporary directories, which no other CLI has been
+measured against, and a run parked on a proposal is continued in that CLI's own
+session after the approval. A run's
 wall clock never passes the read grant of the turn it belongs to, which is why
 twenty minutes is the ceiling; a longer task proposes, waits and continues on
 the fresh grant the approval brings. Its tokens are charged to the person's and
@@ -295,20 +296,38 @@ A run goes to the first of these the company configures:
    (`apt install bubblewrap`) or run on a kernel with Landlock, or configure a
    cell above.
 
+   Its box is made under the company's box root, where a seat's `direct`
+   boxes are made too: `providers.sandbox.local.state_dir`, else
+   `$CREWLET_SANDBOX_LOCAL_HOME`, else `~/.crewlet/sandboxes`, in a directory
+   of its own there (`<box root>/assistant/boxes/<id>`), which a seat's
+   backend never lists or reaps. So what a run checks out, installs and builds
+   lands on the volume you sized for boxes and never on the one holding the
+   store and the stream ([Where a box writes](deployment.md#where-a-box-writes)).
+   A revision that moves `state_dir` leaves a box kept for a proposal where it
+   is: for as long as the node runs, the approval continues the run in it and
+   its earlier box root stays denied to every other run.
+
 A run dials `CREWLET_MCP_BRIDGE_URL`, the fleet's address for the tool bridge
 ([Code Sandbox](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)),
 and its call is relayed to the node that opened its session wherever it lands.
-Where every box runs on the engine host, as on a single node with no sandbox
-cell, point that variable at the node's loopback address
-(`http://127.0.0.1:<api.port>`). A confined run's bridge token is then admitted
-from that host's loopback only, and never relayed to another node. A run in a
-`container` box on the same host is handed the runtime's name for the engine
-host in place of loopback
+Where every box runs on the engine host — a single node whose
+`providers.sandbox` configures no `e2b` cell, such as one with only the
+`direct` cell the [Quickstart](../getting-started/quickstart.md) sets up —
+point that variable at the node's loopback address
+(`http://127.0.0.1:<api.port>`; `[::1]`, `localhost` and a name under it,
+such as `engine.localhost`, are loopback too). A confined run's bridge token
+is then admitted from that host's loopback only, under a loopback host name or
+a container runtime's name for the engine host, so a page in a browser on the
+host cannot spend a leaked one under a name of its own, and it is never
+relayed to another node. A run in a `container` box on the same host is
+handed the runtime's name for the engine host in place of loopback
 ([Local sandboxes](../concepts/code-sandbox.md#local-sandboxes)) and is held to
 loopback all the same, so it can do nothing a confined run cannot. A runtime
-that delivers the box's calls over the host's loopback (Docker Desktop) meets
-that hold; one that delivers them from its bridge network (Docker Engine and
-Podman on Linux) does not, so run deep work `direct` or remote there.
+that delivers the box's calls over the host's loopback (Docker Desktop, and
+Podman's machine on macOS and Windows) meets that hold, and the bridge admits
+the runtime's name for the host those calls carry; one that delivers them from
+its bridge network (Docker Engine and Podman on Linux) does not, so run deep
+work `direct` or remote there.
 Don't do this where seats run boxes on other machines: they are given the same
 address, and a box on another machine cannot dial it.
 

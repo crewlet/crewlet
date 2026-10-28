@@ -72,10 +72,13 @@ var turnFields = map[string]class{
 }
 
 // sandboxFields classifies a [SandboxEntry]. The question is the body too, but
-// shown to the people it is put to as well — [SandboxEntry.For].
+// shown to the people it is put to as well — [SandboxEntry.For]. The entry a
+// run was launched on is the company's configuration; the model it runs under
+// is what it is doing.
 var sandboxFields = map[string]class{
 	"turn_id": status, "role": status, "agent_handle": status, "agent_id": status,
-	"coding_agent": status, "sandbox_id": status, "status": status,
+	"coding_agent": status, "provider_key": config, "model": status,
+	"sandbox_id": status, "status": status,
 	"started_at": status, "audience": status, "owner": status, "paused_at": status,
 	"body_withheld": status,
 	"task":          body, "question": body,

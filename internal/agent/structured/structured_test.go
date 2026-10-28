@@ -137,7 +137,7 @@ func TestTheLastSubmissionWins(t *testing.T) {
 	}
 }
 
-// SUBMISSIONS MADE AT ONCE LAND WHOLE. A box-mode run's bridge hands a
+// SUBMISSIONS MADE AT ONCE LAND WHOLE. An executor run's bridge hands a
 // response's calls to the surface side by side, with nothing that runs a
 // submission alone, so two submissions — and the read of one — meet on the
 // tool. Whichever lands last is the answer, and it is one submission: never

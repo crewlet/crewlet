@@ -40,17 +40,26 @@ const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 // than given a per-process key: there is no node without one, so reaching
 // here with one is a mistake to name, not a posture to degrade into.
 //
-// An unset base URL builds NOTHING, and that is a real configuration rather
-// than an error: most deployments run no box mode. The route is then absent,
-// and a seat that asks for box mode is refused with the variable named —
-// which is a better failure than a run that starts and cannot call a tool.
-func Build(env func(string) string, material runtoken.Material) (*Bridge, error) {
+// hostURL is where a box on this node's own host reaches it — the node's own
+// listener on loopback ([Options.HostURL]), derived by whoever bound that
+// listener on a node that runs seats, "" anywhere else.
+//
+// NEITHER BUILDS NOTHING, and that is a real configuration rather than an
+// error. The route is then absent, and every executor launch on this node is
+// refused naming what is missing — which is a better failure than a run that
+// starts and cannot call a tool. A node that runs no seat needs no bridge, so
+// the absence is not an error here; the launch is where it is decided. One
+// without the other builds a bridge that reaches the boxes it can: the host
+// URL alone serves the `direct` cell of this node, and the variable alone
+// every cell.
+func Build(env func(string) string, material runtoken.Material, hostURL string) (*Bridge, error) {
 	base := ""
 	if env != nil {
 		base = strings.TrimSpace(env(BaseURLVar))
 	}
-	if base == "" {
+	hostURL = strings.TrimSpace(hostURL)
+	if base == "" && hostURL == "" {
 		return nil, nil
 	}
-	return New(Options{Material: material, BaseURL: base})
+	return New(Options{Material: material, BaseURL: base, HostURL: hostURL})
 }

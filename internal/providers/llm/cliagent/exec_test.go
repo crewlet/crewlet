@@ -561,7 +561,7 @@ func TestAnEmptyAnswerIsRetryableRatherThanFatal(t *testing.T) {
 	if got := llm.KindOf(err); got != llm.KindServer {
 		t.Fatalf("kind = %v, want server", got)
 	}
-	if err := p.benched(); err != nil {
+	if err := p.SittingOut(); err != nil {
 		t.Errorf("an empty answer sat the entry out: %v", err)
 	}
 }
@@ -644,7 +644,7 @@ func TestAFailedRunIsAServerFailureThatDoesNotSitTheEntryOut(t *testing.T) {
 	if !strings.Contains(err.Error(), "overloaded_error") {
 		t.Errorf("err = %v, want the error the CLI relayed", err)
 	}
-	if err := p.benched(); err != nil {
+	if err := p.SittingOut(); err != nil {
 		t.Errorf("a failed run sat the entry out: %v", err)
 	}
 }

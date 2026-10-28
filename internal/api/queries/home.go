@@ -687,7 +687,7 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 			}
 			at := waitingSince(run)
 			items = append(items, DecisionItem{Kind: "run", At: at,
-				Run: serialiseRun(run, reach(run))})
+				Run: serialiseRun(run, reach(run), s.answeredBy(run))})
 			total++
 			older(at)
 		}

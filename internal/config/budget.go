@@ -426,3 +426,86 @@ func (c *Company) budgetWarnings() []Warning {
 	}
 	return out
 }
+
+// validateExecutorFloor refuses a token ceiling below the room an executor
+// launch needs (turn_engine.executor_min_budget_tokens), on every scope a seat
+// that runs an executor is judged by: its own `token_budget`, and the
+// company's.
+//
+// RUNNABLE, because such a seat never runs. Every executor launch is refused
+// while a capped window of either scope has less than the floor left, and the
+// refusal parks the seat until the window turns over — but a ceiling below the
+// floor has less than the floor left at the window's very first token, so the
+// seat parks as starved before its first launch and every window it ever opens
+// leaves it parked. Nothing at run time says why beyond "starved"; this is the
+// one place the two settings meet.
+//
+// AT THE CEILING, naming both remedies, because either is the author's to
+// choose: raise the ceiling to the floor, or lower the floor to the ceiling —
+// knowing that a floor below one request of a run admits runs that cannot
+// finish their first round. The company's ceiling binds every executor seat,
+// so it is refused once, naming the first such seat and how many more; a
+// company with no seat that runs an executor caps nothing a launch reads, and
+// is not refused.
+//
+// A ceiling below one token is not judged here: [TokenBudget.validate] and the
+// seat's own validation refuse it, and a second refusal of the same key would
+// be advice about a value that has to go anyway.
+func (c *Company) validateExecutorFloor() error {
+	floor := c.TurnEngine.ExecutorFloor()
+	if floor <= 0 {
+		return nil
+	}
+	var p problems
+	first, seats := "", 0
+	for seat := range c.executorSeats() {
+		handle := seat.role.Seat().Handle()
+		if seats == 0 {
+			first = handle
+		}
+		seats++
+		here := at(seat.path, "token_budget")
+		ceilings := seat.role.TokenBudget.Ceilings()
+		for _, window := range period.Periods {
+			ceiling, capped := ceilings[window]
+			if !capped || ceiling < 1 || ceiling >= floor {
+				continue
+			}
+			p.add(at(here, string(window)), ErrConflict,
+				"seat %q's token_budget.%s (%d) is below turn_engine.executor_min_budget_tokens "+
+					"(%d), the room an executor launch needs: every launch is refused while a "+
+					"window has less than that left, and this one never has more, so the seat "+
+					"parks as starved before its first run and never launches one. Raise this "+
+					"ceiling to at least %d, or lower turn_engine.executor_min_budget_tokens to "+
+					"at most %d (0 turns the floor off)",
+				handle, window, ceiling, floor, floor, ceiling)
+		}
+	}
+	if seats == 0 {
+		return p.err()
+	}
+	who := fmt.Sprintf("seat %q", first)
+	switch {
+	case seats == 2:
+		who += " and 1 more seat"
+	case seats > 2:
+		who += fmt.Sprintf(" and %d more seats", seats-1)
+	}
+	company := c.TokenBudget.Ceilings()
+	for _, window := range period.Periods {
+		ceiling, capped := company[window]
+		if !capped || ceiling < 1 || ceiling >= floor {
+			continue
+		}
+		p.add(at(field("token_budget"), string(window)), ErrConflict,
+			"token_budget.%s (%d) is below turn_engine.executor_min_budget_tokens (%d), the "+
+				"room an executor launch needs: every seat that runs an executor is judged by "+
+				"the company's ceilings too, and a launch is refused while a window has less "+
+				"than the floor left, which this one always has — so %s would park as starved "+
+				"before a first run and never launch one. Raise this ceiling to at least %d, "+
+				"or lower turn_engine.executor_min_budget_tokens to at most %d (0 turns the "+
+				"floor off)",
+			window, ceiling, floor, who, floor, ceiling)
+	}
+	return p.err()
+}

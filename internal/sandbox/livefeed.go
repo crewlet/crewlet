@@ -57,7 +57,8 @@ import (
 // there is an error the answer names (the local backend's own sentence).
 
 // LiveReading is one live reading of one job's account of itself, advanced a
-// read at a time by the node that owns the run — what [Runner.Follow] begins.
+// read at a time by the node that reads the run's box — what [Runner.Follow]
+// begins.
 type LiveReading interface {
 	// Read reads what the job has said since the last Read, from a box
 	// attached for the purpose ([Provider.Attach]): nothing is written,

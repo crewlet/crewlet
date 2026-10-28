@@ -9,7 +9,8 @@ package sandbox
 // needs the operator's own subscription login chose it for the seat whose
 // generated code must never touch that host. Those are different decisions
 // about different work, so the provider block became a CATALOGUE and the
-// choice moved to the seat, as role.sandbox.run_in.
+// choice moved to the entry a seat's executor launches on, as
+// providers.llm.<key>.run_in.
 //
 // The manager therefore holds a provider PER PLACEMENT rather than one
 // provider, and every lifecycle call that reaches a box — create, reconnect,

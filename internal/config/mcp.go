@@ -24,15 +24,16 @@ const (
 var MCPTransports = []MCPTransport{TransportStdio, TransportHTTP}
 
 // ToolServerName is the name a seat's coding CLI sees the seat's own tools
-// under, in both modes: the MCP server a host-mode run dials through `crewlet
-// mcp-relay`, and the tool bridge a box-mode run dials over HTTP. One name, so
-// a seat's tools are spelled one way wherever it runs — the prefix its model
-// sees (`mcp__crewlet__reply`) does not change when a seat moves into a box —
-// and the built-in CLI profiles, which write it into each CLI's own
-// configuration grammar, are held to it by a test in cliagent.
+// under, wherever the CLI runs: the MCP server a phase on this host dials
+// through `crewlet mcp-relay`, and the tool bridge the seat's executor — its
+// CLI's own run in a box — dials over HTTP. One name, so a seat's tools are
+// spelled one way in every phase — the prefix its model sees
+// (`mcp__crewlet__reply`) is the same for the reviewer on this host and the
+// executor in its box — and the built-in CLI profiles, which write it into
+// each CLI's own configuration grammar, are held to it by a test in cliagent.
 //
 // RESERVED: an `mcp_servers` entry may not take it. The engine writes the
-// bridge into every box-mode run's server list under this key, so a company
+// bridge into every executor box's server list under this key, so a company
 // server of the same name would be overwritten there — its tools gone from
 // the run with no validation error and no log line saying why. Named here
 // rather than beside either server because this is where the reservation is

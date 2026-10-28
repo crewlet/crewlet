@@ -1,9 +1,11 @@
 package e2e
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -23,18 +25,67 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
+// listenForBridge binds the listener a node's API — and with it the seat's
+// tool bridge — is served on, for the engine the node is built with to name as
+// the address a box on this host dials ([listenerURL],
+// [engine.Options.BoxHostURL]).
+//
+// BOUND BEFORE THE ENGINE, and held until the server that serves on it: the
+// engine takes the address once, when it builds its bridge
+// ([mcpbridge.Build]), and an httptest server picks its port only when it
+// starts — after the engine that has to name it. A port released in between
+// could be anybody's by the time a box dials it. Every node here serves its
+// bridge, as `crewlet run` does a seats node's: every agent seat's executor is
+// a run in a box that calls the seat's tools back over it, so a node without
+// one launches nothing.
+//
+// THE HOST ADDRESS AND NOT [mcpbridge.BaseURLVar], because that is what
+// `crewlet run` gives a seats node that binds a listener, and every box here
+// is in the `direct` cell: the harness runs the quickstart's shape, a node
+// with no bridge variable at all, rather than a configuration the quickstart
+// never asks for.
+//
+// ON addr, or on a port of the system's choosing where it is empty: a case
+// restarting a node binds the address the node it replaces bound, as a node
+// restarted on its own api.port does — the URL a box was handed addresses
+// that socket and no other.
+func listenForBridge(addr string) (net.Listener, error) {
+	ln, err := net.Listen("tcp", cmp.Or(addr, "127.0.0.1:0"))
+	if err != nil {
+		return nil, fmt.Errorf("binding the bridge's listener: %w", err)
+	}
+	return ln, nil
+}
+
+// listenerURL is where this host dials ln: where a `direct` box dials the
+// bridge served on it, as `crewlet run` derives it for a seats node that binds
+// a listener, and where a box anywhere dials it as the fleet's address.
+func listenerURL(ln net.Listener) string { return "http://" + ln.Addr().String() }
+
+// bridgeListener is [listenForBridge] for a case on the test's own goroutine,
+// closing the listener when the test ends if no server took it over.
+func bridgeListener(t *testing.T, addr string) net.Listener {
+	t.Helper()
+	ln, err := listenForBridge(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln
+}
+
 // serveAPI is the API half of a node, wired to the engine beside it the way
-// cmd/crewlet wires it, served on a test listener and torn down when the test
-// ends. See [wireAPI].
+// cmd/crewlet wires it, served on ln and torn down when the test ends. See
+// [wireAPI].
 //
 // For a case that owns its node for the whole test, on the test's own
 // goroutine. A fleet member is built on a goroutine of its own and may have to
 // be torn down before the test ends, so it calls [wireAPI] directly.
 func serveAPI(
-	t *testing.T, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
+	t *testing.T, e *engine.Engine, boot *config.Bootstrap, ln net.Listener, amend func(*api.Options),
 ) (*api.App, *httptest.Server) {
 	t.Helper()
-	app, srv, stops, err := wireAPI(t.Context(), e, boot, amend)
+	app, srv, stops, err := wireAPI(t.Context(), e, boot, ln, amend)
 	// REGISTERED BEFORE THE ERROR IS RAISED, so a wiring that failed halfway
 	// still stops the half that came up.
 	t.Cleanup(func() { stopInReverse(stops) })
@@ -45,7 +96,7 @@ func serveAPI(
 }
 
 // wireAPI is the API half of a node, wired to the engine beside it the way
-// cmd/crewlet wires it, and served on a test listener.
+// cmd/crewlet wires it, and served on ln ([listenForBridge]).
 //
 // # IT IS A SECOND COPY OF THE COMPOSITION ROOT, and that has a cost
 //
@@ -102,7 +153,8 @@ func serveAPI(
 // file's bytes crossing between members is something only a fleet here can
 // exercise.
 func wireAPI(
-	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
+	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, ln net.Listener,
+	amend func(*api.Options),
 ) (*api.App, *httptest.Server, []func(), error) {
 	var stops []func()
 	fail := func(what string, err error) (*api.App, *httptest.Server, []func(), error) {
@@ -285,6 +337,10 @@ func wireAPI(
 		// THE ENGINE'S OWN TRAIL, as cmd/crewlet hands it: the guard
 		// reports every refused bearer and every token use through it.
 		AuthEvents: e.AuthEvents(),
+		// THE ENGINE'S OWN BRIDGE, as cmd/crewlet hands it: a run's
+		// session lives in the object that opened it, and an executor
+		// launch is refused on a node whose bridge nothing serves.
+		Bridge: e.Bridge(),
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return e.WebhookSecrets() },
 			Publisher: backends.Queue,
@@ -342,7 +398,12 @@ func wireAPI(
 		return fail("seed the live projection", err)
 	}
 
-	srv := httptest.NewServer(app)
+	// ON THE LISTENER THE ENGINE WAS TOLD ABOUT, so the bridge URL its runs
+	// are handed is this server's.
+	srv := httptest.NewUnstartedServer(app)
+	_ = srv.Listener.Close()
+	srv.Listener = ln
+	srv.Start()
 	stops = append(stops, srv.Close)
 	return app, srv, stops, nil
 }

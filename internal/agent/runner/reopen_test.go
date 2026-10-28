@@ -3,7 +3,6 @@ package runner_test
 import (
 	"context"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
@@ -14,9 +13,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// A BOX-MODE RUN TAKEN OVER WHILE IT WORKS IS SERVED THE SURFACE IT LEFT. Its
+// AN EXECUTOR RUN TAKEN OVER WHILE IT WORKS IS SERVED THE SURFACE IT LEFT. Its
 // box goes on calling the seat's tools after the process that launched it is
 // gone, and the node that takes it over rebuilds that surface from the run's
 // own state: what the launch recorded, plus what the run did to it since over
@@ -34,9 +34,9 @@ func TestARunTakenOverIsServedTheSurfaceItLeft(t *testing.T) {
 	t.Parallel()
 	calls := turnctx.NewCallLog()
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
-		buildOpts{agentRun: &recordingLauncher{}, calls: calls})
+		buildOpts{calls: calls})
 	state := execstate.State{
-		Version: execstate.Version, AgentRun: true, Round: 1,
+		Version: execstate.Version, Round: 1,
 		ActiveTools: []string{"lookup_colleague", "slack_post"},
 	}
 	spent := runner.Bridged{Aux: auxspend.Spent{Input: 900, Output: 90}, Workers: 1,
@@ -97,9 +97,9 @@ func TestARunTakenOverIsServedTheSurfaceItLeft(t *testing.T) {
 // is refused for a skill the run loaded.
 func TestARunTakenOverKeepsTheSkillsItLoaded(t *testing.T) {
 	t.Parallel()
-	r := guardedRunner(t, &scriptedProvider{}, newCapture())
+	r, _ := guardedRunner(t, newCapture(), tools.OriginBuiltin)
 	surface, _, err := r.ReopenAgentRun(context.Background(), execstate.State{
-		Version: execstate.Version, AgentRun: true, Round: 1,
+		Version: execstate.Version, Round: 1,
 		ActiveTools: []string{"slack_post", skills.LoaderTool},
 	}, []runner.BridgedCall{
 		{Call: ledger.Call{Name: skills.LoaderTool, Args: map[string]any{"key": "chat-conventions"},
@@ -116,17 +116,5 @@ func TestARunTakenOverKeepsTheSkillsItLoaded(t *testing.T) {
 	}
 	if res.Failed {
 		t.Errorf("a tool the run's loaded skill unlocked was refused: %s", res.Output)
-	}
-}
-
-// A HOST-MODE EXECUTOR PARKED ON A DETACHED RUN IS NOT REOPENED: its run is a
-// coding job whose box calls no bridge, and what it parked is a conversation
-// that is re-entered when the job ends.
-func TestOnlyABoxModeRunIsReopened(t *testing.T) {
-	t.Parallel()
-	r := boxFixture(t, &recordingLauncher{}, nil)
-	_, _, err := r.ReopenAgentRun(context.Background(), suspendedAfterTwoRounds(), nil, runner.Bridged{})
-	if err == nil || !strings.Contains(err.Error(), "host-mode") {
-		t.Errorf("err = %v, want a refusal naming the host-mode conversation", err)
 	}
 }

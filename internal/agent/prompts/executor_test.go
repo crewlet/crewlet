@@ -181,32 +181,6 @@ func TestExecutorPromptRosterInlinesMemberProfiles(t *testing.T) {
 		"Goal: Ship quality code.", "Responsibilities: Write tests.")
 }
 
-// THE SANDBOX SECTION FOLLOWS THE TOOL, NOT THE ROLE'S GATE.
-//
-// It used to be rendered for every seat whose gate was enabled, which an
-// box-mode executor's seat may be — and that seat is never offered
-// run_sandbox, so its coding CLI was taught a tool its bridge never lists,
-// every turn. The caller says whether the tool is offered; the gate alone
-// renders nothing.
-func TestExecutorPromptSandboxSectionIsGatedOnTheOfferedTool(t *testing.T) {
-	t.Parallel()
-	// Absent for the ~all seats that are not offered the tool, so it never
-	// bloats the common prompt.
-	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, "Sandbox code work", "run_sandbox")
-
-	o := acme()
-	o.Role("eng").Sandbox = &org.RoleSandbox{Enabled: true, CodingAgent: "claude-code"}
-	excludes(t, BuildExecutor(seatIn(o, "eng"), ExecutorInput{}).Text, "Sandbox code work", "run_sandbox")
-
-	p := BuildExecutor(seatIn(o, "eng"), ExecutorInput{OffersSandbox: true}).Text
-	// The run is detached and the SAME turn resumes with the result, which
-	// is what stops the model ending the turn to "report later".
-	contains(t, p, "run_sandbox", "resumes", "SAME turn")
-	// And it no longer talks about planning the arc in a tools_needed list
-	// that does not exist.
-	excludes(t, p, "tools_needed")
-}
-
 func TestExecutorPromptOmitsTheLearnedSkillsScaffold(t *testing.T) {
 	t.Parallel()
 	// Synthesized skills arrive as a prefetch block, never as a section of
@@ -332,16 +306,15 @@ func TestIdentityLineAndSectionAgreeOnATopLevelSeat(t *testing.T) {
 // whole turn's budget counts the roster once on that premise.
 //
 // Measured with EVERY GATE ON in both, the way production sends them to a
-// seat that holds every gated tool: the review's sandbox rule and `a2a_ask`,
-// and the executor's escalation, workers, sandbox and tools to discover
-// (referenceExecutor). An ungated review is the smallest one there is, and a
+// seat that holds every gated tool: the review's `a2a_ask`, and the
+// executor's escalation, workers and tools to discover (referenceExecutor). An ungated review is the smallest one there is, and a
 // comparison made on it held for a review that had grown every rule it can
 // render.
 func TestTheReviewPromptIsSmallerThanTheExecutors(t *testing.T) {
 	t.Parallel()
 	s := lead()
 	exec := BuildExecutor(s, referenceExecutor(t)).Text
-	review := BuildReview(s, ReviewInput{OffersSandbox: true, OffersA2A: true}).Text
+	review := BuildReview(s, ReviewInput{OffersA2A: true}).Text
 	if len(review) >= len(exec) {
 		t.Errorf("review prompt (%d) is not smaller than the executor's (%d)",
 			len(review), len(exec))
@@ -367,7 +340,7 @@ var forbiddenToolNames = []string{
 func TestPhaseContractsNameNoVendorTools(t *testing.T) {
 	t.Parallel()
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, forbiddenToolNames...)
-	excludes(t, BuildReview(engineer(), ReviewInput{OffersSandbox: true, OffersA2A: true}).Text,
+	excludes(t, BuildReview(engineer(), ReviewInput{OffersA2A: true}).Text,
 		forbiddenToolNames...)
 }
 
@@ -377,7 +350,7 @@ func TestPhaseContractHeadersNameNoSpecificPlatforms(t *testing.T) {
 	t.Parallel()
 	contains(t, ExecutorHeader, "originating channel's reply tool")
 	// The review header with every gated rule rendered, so none hides a name.
-	review := reviewHeader(ReviewInput{OffersSandbox: true, OffersA2A: true})
+	review := reviewHeader(ReviewInput{OffersA2A: true})
 	for _, product := range []string{"Slack", "Jira", "Confluence", "Copilot", "GitHub"} {
 		if strings.Contains(ExecutorHeader, product) {
 			t.Errorf("ExecutorHeader names %q", product)

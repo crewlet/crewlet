@@ -6,14 +6,16 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A running coding run's live output, read from the node that owns the run
+// A running coding run's live output, read from the node that reads its box
 // (`sandbox_tail`, internal/sandbox/livetail.go).
 //
 // # Every node serves, whether or not it has a sandbox backend
 //
-// A run is owned by whichever node holds its seat, and that node may serve no
-// API, so the answer cannot be the API's to build: every node answers for the
-// runs it owns, from their boxes, and every node that serves the API asks. A
+// A run is owned by whichever node holds its seat — and a box on an engine host
+// is read by the node that launched it, which alone can reach it — and that
+// node may serve no API, so the answer cannot be the API's to build: every node
+// answers for the runs it owns or hosts, from their boxes, and every node that
+// serves the API asks. A
 // node with no sandbox backend owns no run, so it is never addressed — but it
 // still ASKS, because the person watching may be looking at a run another node
 // drives. The reader is therefore built wherever a fleet record exists, not
@@ -36,13 +38,13 @@ func (e *Engine) armSandboxTails(ctx context.Context) error {
 	e.sandboxFeeds = sandbox.NewLiveFeeds(context.WithoutCancel(ctx), sandbox.LiveFeedsOptions{
 		Manager: e.sandboxManager,
 	})
-	e.sandboxTails = &sandbox.TailReader{Owner: owner, Pending: pending, Feeds: e.sandboxFeeds}
+	e.sandboxTails = &sandbox.TailReader{Owner: owner, Node: e.id, Pending: pending, Feeds: e.sandboxFeeds}
 	if e.backends.Queue == nil {
 		// A NODE WITH NO BROKER IS THE FLEET: it owns every run there is.
 		return nil
 	}
 	e.sandboxTails.Queue = e.backends.Queue
-	stop, err := sandbox.ServeTail(ctx, e.backends.Queue, owner, pending, e.sandboxFeeds)
+	stop, err := sandbox.ServeTail(ctx, e.backends.Queue, owner, e.id, pending, e.sandboxFeeds)
 	if err != nil {
 		return err
 	}

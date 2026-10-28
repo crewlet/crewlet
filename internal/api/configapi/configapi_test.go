@@ -60,6 +60,7 @@ const (
 const companyDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -195,7 +196,7 @@ func (s *surface) active(ctx context.Context) (store.Revision, bool, error) {
 // resolved rather than stored.
 // companyJSONDoc is the smallest document PUT /config accepts, for the cases
 // that write to a node with nothing on it yet.
-const companyJSONDoc = `{"name":"Acme","providers":{"llm":{"zulu":` +
+const companyJSONDoc = `{"name":"Acme","providers":{"sandbox":{"fake":true},"llm":{"zulu":` +
 	`{"model":"claude-sonnet-5"}}}}`
 
 func (s *surface) activeDocument(t *testing.T) string {
@@ -1243,7 +1244,7 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 		{"a patch", http.MethodPatch, "/config",
 			opening + "mission: checked\nnonsense: true\n", true, 5},
 		{"an entity", http.MethodPut, "/config/llm-providers/zulu",
-			opening + "agent: claude-code\nmodel: claude-sonnet-5\nmode: host\nmodell: haiku\n", true, 7},
+			opening + "agent: claude-code\nmodel: claude-sonnet-5\nrun_in: direct\nmodell: haiku\n", true, 7},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

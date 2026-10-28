@@ -21,7 +21,7 @@ import (
 // left to get wrong is which phase is shown which block, and that is exactly
 // what these pin.
 
-// withContext builds a runner over the given blocks.
+// withContext builds a runner over the given blocks, for the reviewer's case.
 func withContext(t *testing.T, prov *scriptedProvider, blocks prefetch.Blocks) *runner.Runner {
 	t.Helper()
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
@@ -33,7 +33,7 @@ func withContext(t *testing.T, prov *scriptedProvider, blocks prefetch.Blocks) *
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
 		Registry: tools.NewRegistry(),
 		Models:   models,
-		Caps:     runner.Caps{ExecutorRounds: 4},
+		Launcher: &playLauncher{},
 		Task:     "post the weekly summary",
 		Context:  blocks,
 		Sessions: sessions,
@@ -59,14 +59,23 @@ func systemOf(t *testing.T, prov *scriptedProvider, phaseName string) string {
 	return ""
 }
 
+// launchedSystem is the system text the executor's run was launched with, on
+// a runner over the given blocks: what its coding CLI appends to its own.
+func launchedSystem(t *testing.T, blocks prefetch.Blocks) string {
+	t.Helper()
+	_, req := launch(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{context: blocks}, 1, "", nil)
+	return req.System
+}
+
 // Every block the prefetch renders reaches the executor's prompt under its own
-// heading. A block rendered and not shown is work spent on nothing — and there
-// is only ONE prompt to reach now, which is the point: the frame that decides
-// is the frame that acts, so nothing has to be forwarded from one to another.
+// heading — the system text its run is launched with. A block rendered and not
+// shown is work spent on nothing — and there is only ONE prompt to reach, which
+// is the point: the frame that decides is the frame that acts, so nothing has
+// to be forwarded from one to another.
 func TestEveryPrefetchedBlockReachesTheExecutorsPrompt(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llmtest.Response{text("working")}}
-	r := withContext(t, prov, prefetch.Blocks{
+	system := launchedSystem(t, prefetch.Blocks{
 		ThreadContext:       "- **Ana Ruiz (ana)**: staging redirects in a loop",
 		PersonalMemory:      "- always use semantic commits",
 		RelevantKnowledge:   "- **Staging runbook**: how the proxy is wired",
@@ -74,11 +83,6 @@ func TestEveryPrefetchedBlockReachesTheExecutorsPrompt(t *testing.T) {
 		CounterpartyProfile: "Subject: Ana Ruiz\nObserved by you:\n  - tone: terse",
 		SynthesizedSkills:   "- **ship-a-fix**: the release checklist",
 	})
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-
-	system := systemOf(t, prov, "execute")
 	for _, want := range []string{
 		"## The thread so far", "staging redirects in a loop",
 		"## Personal memory", "always use semantic commits",
@@ -124,12 +128,7 @@ func TestTheReviewerIsNotHandedThePrefetch(t *testing.T) {
 // agent it has a memory, or a knowledge base, that it cannot read.
 func TestAnEmptyBlockRendersNoHeading(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llmtest.Response{text("working")}}
-	r := withContext(t, prov, prefetch.Blocks{})
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	system := systemOf(t, prov, "execute")
+	system := launchedSystem(t, prefetch.Blocks{})
 	for _, heading := range []string{
 		"## The thread so far",
 		"## Personal memory", "## Relevant knowledge", "## Similar prior work",
@@ -141,36 +140,39 @@ func TestAnEmptyBlockRendersNoHeading(t *testing.T) {
 	}
 }
 
-// AND IT REACHES THE BOX-MODE SYSTEM PROMPT TOO.
+// A LATER LAUNCH IS BUILT FROM THE CONTEXT THE TURN STARTED WITH. A turn sent
+// back for another iteration launches again from the segment that collected
+// its run — a fresh runner, which the engine hands no prefetch — so the freeze
+// has to survive the park, or the second run is briefed without the seat's
+// memory, its company's pages and the conversation it is part of, on a system
+// prompt that moved under work already in hand.
 //
-// executorPrompt is ONE builder for both runtimes — a host-mode pass sends the
-// system and user messages to the model, a box-mode run hands them to its
-// coding CLI as the system text it appends and the prompt it runs — so a block
-// that reached one and not the other would be a seat with context on the
-// engine's own loop and none on the subscription's. There is nothing in the
-// box-mode path that could drop it today, which is exactly why the claim
-// needs a test: the two paths drift on whichever half nobody re-reads.
-func TestThePrefetchReachesTheBoxModeSystemPromptToo(t *testing.T) {
+// Mutation: leave the context off the park, and the second launch lacks it.
+func TestALaterLaunchIsBuiltFromTheContextTheTurnStartedWith(t *testing.T) {
 	t.Parallel()
-	launcher := &recordingLauncher{}
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
-		buildOpts{agentRun: launcher, context: prefetch.Blocks{
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	opts := buildOpts{
+		context: prefetch.Blocks{
 			ThreadContext:  "- **Ana Ruiz (ana)**: staging redirects in a loop",
 			PersonalMemory: "- always use semantic commits",
-		}})
+		},
+		conversation: "### Turn 1\nYou replied: shipped the proxy fix",
+	}
+	launched, first := launch(t, entries, opts, 1, "", nil)
+	bridged := play(t, first, deliver(t, "posted"))
 
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+	relauncher := &playLauncher{}
+	collecting := opts
+	collecting.launcher = relauncher
+	collector, _, _ := collect(t, entries, collecting, launched, nil, bridged, "posted", runner.RunRecord{})
+	if _, _, err := collector.Execute(context.Background(), 2, "try again", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if launcher.runs != 1 {
-		t.Fatalf("launched %d runs", launcher.runs)
+	second := relauncher.last(t)
+	if second.System != first.System {
+		t.Errorf("the second run's system prompt moved:\nfirst:  %q\nsecond: %q", first.System, second.System)
 	}
-	for _, want := range []string{
-		"## The thread so far", "staging redirects in a loop",
-		"## Personal memory", "always use semantic commits",
-	} {
-		if !strings.Contains(launcher.req.System, want) {
-			t.Errorf("the box-mode system prompt is missing %q", want)
-		}
+	if !strings.Contains(second.Brief, "You replied: shipped the proxy fix") {
+		t.Errorf("the second run's brief lost the conversation the turn is part of:\n%s", second.Brief)
 	}
 }

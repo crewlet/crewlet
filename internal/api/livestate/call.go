@@ -69,6 +69,24 @@ func (c *LiveCall) sameCall(turnID, phase string, iteration int) bool {
 	return c != nil && c.TurnID == turnID && c.Phase == phase && c.Iteration == iteration
 }
 
+// runningAs reports whether a call is the one these coordinates name and is
+// still running: not a call its phase's failure froze ([recordPhaseFailure]).
+//
+// A FROZEN CALL IS AN ATTEMPT THAT ENDED, and its phase can run again under
+// the same coordinates — the review of a parked turn's resume that is held or
+// retried ([CallVersions]). That run is a call of its own: its start seeds a
+// fresh placeholder, its rounds are not judged against the rounds the failed
+// attempt reached, and it takes neither that attempt's prompt nor its clock.
+// Read as the same call, the new run's start left the failed call on the seat
+// and its first rounds were dropped as stale behind it, so the seat drew the
+// earlier attempt's failure while its review ran again. No straggler of the
+// failed attempt's own reaches the question: the state machine's reorder
+// guard drops a start older than the failure, and [LiveState.applyProgress]'s
+// straggler guard every round not newer than it.
+func (c *LiveCall) runningAs(turnID, phase string, iteration int) bool {
+	return c.sameCall(turnID, phase, iteration) && c.InProgress
+}
+
 // beginCall seeds a placeholder when a phase opens.
 //
 // The placeholder makes the live row appear the instant a phase starts;
@@ -128,9 +146,12 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	// The phase already published its completion and this round is not
 	// newer than it: a straggler that lost a cross-topic race, not live
 	// work. Seeding a call from it would put a permanent in-flight row on
-	// a finished phase. A RESUMED phase's rounds are newer than its
-	// suspend checkpoint and pass through. Keyed on turn id, so a loop run
-	// outside the turn engine is never matched against an unrelated one.
+	// a finished phase. A phase that RUNS AGAIN under the same coordinates
+	// — the review of a parked turn's resume that is held or retried
+	// ([CallVersions]) — streams rounds newer than the completion the
+	// attempt before it published, and they pass through. Keyed on turn id,
+	// so a loop run outside the turn engine is never matched against an
+	// unrelated one.
 	if turnID != "" {
 		if finished, ok := s.finishedCalls.get(callKey(turnID, phase, iteration)); ok {
 			if at.empty() || !at.after(finished) {
@@ -140,7 +161,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	}
 
 	switch {
-	case cur.sameCall(turnID, phase, iteration):
+	case cur.runningAs(turnID, phase, iteration):
 		// THE OPENING FRAME IS THE ONLY CARRIER OF THE PROMPT, and it
 		// travels on a different subject from the rounds, so it can land
 		// after one of them. Dropping it as stale would leave the call with
@@ -203,7 +224,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	// to every open dashboard, was most of what a progress frame weighed.
 	prompt := str(payload, "prompt")
 	promptMessages := list(payload, "prompt_messages")
-	if cur != nil && cur.sameCall(turnID, phase, iteration) {
+	if cur.runningAs(turnID, phase, iteration) {
 		if prompt == "" {
 			prompt = cur.Prompt
 		}
@@ -217,7 +238,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	// before its own phase_started (different subjects, no ordering) opens
 	// the clock instead.
 	startedAt := env.Timestamp
-	if cur != nil && cur.sameCall(turnID, phase, iteration) && cur.StartedAt != "" {
+	if cur.runningAs(turnID, phase, iteration) && cur.StartedAt != "" {
 		startedAt = cur.StartedAt
 	}
 
@@ -266,7 +287,10 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	}
 	// The versions this round's fields are at: the held call's where a
 	// field is what it held, the projection's next where it moved — and
-	// every field at the next for a call of its own.
+	// every field at the next for a call of its own. A call its failure
+	// froze under the same key is held here too: a version names a copy's
+	// value, so a field the run again has equal to it keeps the version a
+	// tab already holds that value at.
 	var held *LiveCall
 	if cur.sameCall(turnID, phase, iteration) {
 		held = cur

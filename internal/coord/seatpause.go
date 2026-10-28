@@ -68,10 +68,11 @@ type SeatPause struct {
 	// Reason is why, in the pauser's own words. Optional.
 	Reason string `json:"reason,omitempty"`
 
-	// StopRunning asks the node running the seat to end the turn it is on
-	// at that turn's next round boundary, rather than letting it finish.
-	// Without it a pause only stops NEW work, and the turn in flight runs
-	// to its end.
+	// StopRunning asks the node running the seat to end its running work
+	// rather than letting it finish: the turn it is on at that turn's next
+	// round boundary, and a coding run it has out at once (the node ends
+	// the run through sandbox.Coordinator.StopSeat). Without it a pause only
+	// stops NEW work, and the work in flight runs to its end.
 	StopRunning bool `json:"stop_running,omitempty"`
 
 	// At is when the seat was paused.

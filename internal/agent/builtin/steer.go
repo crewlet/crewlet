@@ -46,8 +46,8 @@ type FleetAsker interface {
 
 // SteerDeps are steer_turn's dependencies.
 type SteerDeps struct {
-	// Asker reaches every node, one of which runs the turn. Nil omits the
-	// tool.
+	// Asker reaches every node, one of which runs a turn that has not
+	// launched its coding run yet. Nil omits the tool.
 	Asker FleetAsker
 
 	// Wire signs every request the tool scatters and verifies every reply,
@@ -59,6 +59,12 @@ type SteerDeps struct {
 	// not verify could name whichever seat the caller leads.
 	Wire *signedask.Channel[steer.Request, steer.Reply]
 
+	// Runs is where a turn's notes wait once it has launched its coding run:
+	// the run's record, which every node reads ([RunSteers]). Required with
+	// Asker — a surface that asked only the scatter would send every note to
+	// a turn whose run is out to nobody.
+	Runs RunSteers
+
 	// Actor is who is sending the note, off the caller's own credential —
 	// the same resolution every other operator write takes
 	// ([PrincipalActor]), so a person bound to a seat sends AS that seat,
@@ -68,46 +74,96 @@ type SteerDeps struct {
 	Actor func(ctx context.Context, turn *turnctx.Turn) (Actor, error)
 }
 
+// RunSteers is where a turn's notes wait from the launch of its coding run to
+// the turn's end: the run's own record in the coordination store, sealed
+// (internal/engine, runsteer.go, and ADR-0067). Declared here, by the consumer.
+type RunSteers interface {
+	// Seat is the seat the turn's run serves, as the record's sealed anchor
+	// names it. Found false where the turn has no run record — it has not
+	// launched one, or it has ended. An error is a record that could not be
+	// read, which decides nothing.
+	Seat(ctx context.Context, turnID string) (RunSeat, bool, error)
+
+	// File files the note on the turn's run record and answers what became
+	// of it. An error is a filing that may not have landed; a retry is the
+	// same note, so it is never taken twice.
+	File(ctx context.Context, turnID string, note steer.Note) (RunFiled, error)
+}
+
+// RunSeat is the seat a turn's run record names: its derived agent id, which a
+// person's authority is decided on, and its handle, a label.
+type RunSeat struct {
+	Agent  string
+	Handle string
+
+	// Unverified is set, and the seat empty, where the anchor did not open —
+	// sealed under a key this node does not hold, or not by the fleet at all.
+	// The sentence says which and what to do; no authority is decided on a
+	// seat nobody can vouch for.
+	Unverified string
+}
+
+// RunFiled is what became of a note filed on a turn's run record.
+type RunFiled struct {
+	Status      steer.Status
+	Reads       steer.Reads
+	AgentHandle string
+}
+
 // steerTurn sends a note to a turn that is running now (internal/agent/steer).
+//
+// # Where the note goes
+//
+// A turn's notes wait in one of two places, one after the other. Once the turn
+// has launched its coding run, on the RUN'S RECORD, which every node reads: the
+// tool reads it first, and files the note there itself. Before that, in the box
+// the turn's first segment holds on the node running it, which nothing here can
+// read — so the note is SCATTERED to the fleet ([steer.Request]), and the node
+// running the turn answers. A note that read "no record" a moment before the
+// launch wrote one still reaches the turn: the node that held the box filed
+// what it held on the record as the run launched, and files a late offer there
+// too.
 //
 // # Whose turn it is to steer
 //
 // The turn's SEAT's lead's, or an admin's ([authz.ActionTurnSteer]) — never
-// any reader's, since everybody signed in reads the overview. The seat
-// is what the decision needs and the one thing this node cannot know: the
-// turn runs wherever its seat is held. So the decision is taken in two steps.
-// First on the turn as named, a record nobody has resolved yet
-// ([authz.Object.Unresolved]): admin admits there and then,
-// and a caller who leads nobody is refused with exactly the answer they would
-// get on a seat they do not lead — neither costs a round trip. A caller who
-// leads somebody is told to resolve the record, and a PROBE asks the fleet
-// whose turn it is without offering anything; the decision is taken again on
-// that seat, and only then is the note offered. A turn's seat never changes,
-// so the probe and the offer cannot disagree about whose turn it is.
+// any reader's, since everybody signed in reads the overview. The decision is
+// taken first on the turn as named, a record nobody has resolved yet
+// ([authz.Object.Unresolved]): admin admits there and then, and a caller who
+// leads nobody is refused with exactly the answer they would get on a seat they
+// do not lead. A caller who leads somebody is told to resolve the record, and
+// the seat is read: off the run record's SEALED ANCHOR where the turn has one —
+// written by the launch, so nobody who can rewrite the record in the clear can
+// move a person's authority onto another seat — and from a PROBE of the fleet
+// where it has none, which offers nothing. The decision is taken again on that
+// seat, and only then is the note sent. A turn's seat never changes, so the
+// read and the filing cannot disagree about whose turn it is.
 //
 // # What it promises
 //
-// `pending`: the node running the turn took the note, and the turn reads it at
-// its next round boundary. What became of it is recorded there, as
-// `agent_turn_steered` — `delivered` at the round that read it, or `expired`
-// if the turn ended first. This node cannot see that far: the turn runs
-// elsewhere, and the only thing that crossed back is the box's answer.
+// `pending`: the turn took the note, and `reads` says when it will be read —
+// `next_step`, at the turn's next step, or `after_answer`, once the person its
+// coding run asked has answered and whatever resumes the turn reads it. What
+// became of it is recorded where the turn reads it, as `agent_turn_steered` —
+// `delivered` where it was read, or `expired` if the turn ended first. This node
+// sees no further.
 //
-// `unknown`: no node answered the offer in time. The note may have been taken
-// — an answer lost on its way back is indistinguishable from none — so sending
-// it again is safe: the retry carries the same request id, and a box that took
-// it once answers `accepted` without taking it twice.
+// `unknown`: no node answered a scattered offer in time. The note may have been
+// taken — an answer lost on its way back is indistinguishable from none — so
+// sending it again is safe: the retry carries the same request id, and a turn
+// that took it once answers `accepted` without taking it twice.
 //
-// What it refuses is what the running node said: `not_running` for a turn that
-// has ended, `conflict` for one already holding as many unread notes as it
-// takes, and `steer_unsupported` for one whose executor runs as a coding CLI's
-// own loop.
+// What it refuses is what the turn said: `not_running` for a turn that has
+// ended, `notes_full` for one already holding as many unread notes as may wait,
+// and `notes_spent` for one that has taken as many notes as a turn takes — and
+// `unavailable` where the run's record, or the node running the turn, could not
+// be read or written.
 type steerTurn struct {
 	deps      SteerDeps
 	authorize Authorizer
 
-	// org resolves the seat a probe names by its id, per call because a
-	// config apply replaces the chart.
+	// org resolves the seat a record or a probe names by its id, per call
+	// because a config apply replaces the chart.
 	org func() *org.Organization
 }
 
@@ -117,13 +173,15 @@ func (t *steerTurn) Name() string { return SteerTurnTool }
 
 func (t *steerTurn) Description() string {
 	return "Send a short note to an agent's turn while it is running. The turn " +
-		"reads it at its next round — after the tool call in flight returns — " +
-		"as a correction or addition to the work it has in hand, and keeps to it " +
-		"for the rest of the turn. Use it to redirect work you can see going the " +
-		"wrong way; for anything longer than a paragraph, or for work the turn " +
-		"has not started, write on the work item instead. Find running turns and " +
-		"their ids on the live view. Only the seat's lead, or an admin, may " +
-		"steer its turn."
+		"reads it at its next step, as a correction or addition to the work it " +
+		"has in hand, and keeps to it for the rest of the turn: a note sent while " +
+		"the turn's coding run works reaches the run between its steps, and is read by the review " +
+		"that judges the run and by every run the turn launches after it; one sent while the run " +
+		"waits on a person's answer is read once the turn resumes. Use it to " +
+		"redirect work you can see going the wrong way; for anything longer than " +
+		"a paragraph, or for work the turn has not started, write on the work " +
+		"item instead. Find running turns and their ids on the live view. Only " +
+		"the seat's lead, or an admin, may steer its turn."
 }
 
 func (t *steerTurn) Parameters() map[string]any {
@@ -151,7 +209,7 @@ func (t *steerTurn) Call(ctx context.Context, args map[string]any) (tools.Result
 func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	if t.deps.Asker == nil || t.deps.Actor == nil || t.deps.Wire == nil {
+	if t.deps.Asker == nil || t.deps.Actor == nil || t.deps.Wire == nil || t.deps.Runs == nil {
 		return refused(tools.RefusalUnavailable, SteerTurnTool+" is unavailable: "+
 			"this surface was built without a way to reach the fleet."), nil
 	}
@@ -170,14 +228,20 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		var long *steer.TooLongError
 		if errors.As(invalid, &long) {
 			return failed(fmt.Sprintf("That `note` is %d characters and a note may be "+
-				"at most %d: a turn reads it between two rounds, beside its task. "+
+				"at most %d: a turn reads it between two steps, beside its task. "+
 				"Put the detail on the work item and send a note saying where it is.",
 				long.Runes, steer.MaxNoteRunes)), nil
 		}
 		return failed("steer_turn needs a `note` — what the running turn should take into account."), nil
 	}
-	if refusal := t.maySteer(ctx, turnID); refusal != nil {
+	// THE RUN'S RECORD FIRST: where it exists it is where the note goes, and
+	// the seat it names is the one authority is decided on.
+	seat, recorded, refusal := t.runSeat(ctx, turnID)
+	if refusal != nil {
 		return *refusal, nil
+	}
+	if denied := t.maySteer(ctx, turnID, seat, recorded); denied != nil {
+		return *denied, nil
 	}
 
 	// THE NOTE'S IDENTITY IS THE REQUEST'S, so a person's retry of one
@@ -185,9 +249,9 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// tool as the actor's seed ([Actor.OperationSeed]): on the act route,
 	// the `Idempotency-Key` the dashboard mints once per gesture and repeats
 	// on every retry, scoped to the person who sent it (internal/api/opkey)
-	// — the same value that route answers as `op_id`, so the note the
-	// running node records in `agent_turn_steered` names the request the
-	// person's surface holds.
+	// — the same value that route answers as `op_id`, so the note the turn
+	// records in `agent_turn_steered` names the request the person's surface
+	// holds.
 	//
 	// NOT [Actor.Operation], which is an operation a WORK tool binds for an
 	// assistant's call ([WorkDeps.bindOperation]); this tool binds none, so
@@ -198,6 +262,12 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	noteID := actor.OperationSeed()
 	if noteID == "" {
 		noteID = uuid.NewString()
+	}
+	if recorded {
+		return t.file(ctx, turnID, steer.Note{
+			ID: noteID, Text: note, By: actor.Handle, ByKind: iam.ActorKind(actor.Kind),
+			OperatorID: actor.OperatorID,
+		})
 	}
 	reply, answered, refusal := t.ask(ctx, steer.Request{
 		Version: steer.WireVersion, TurnID: turnID, NoteID: noteID, Note: note,
@@ -216,37 +286,81 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"turn_id": turnID, "note_id": noteID, "outcome": string(statelog.OutcomeUnknown),
 		})
 	}
-	switch reply.Status {
+	reads := reply.Reads
+	if reads == "" {
+		reads = steer.ReadsNextStep
+	}
+	return t.answered(turnID, noteID, reply.Status, reads, reply.AgentHandle)
+}
+
+// file files a note on the turn's run record — see [RunSteers.File].
+func (t *steerTurn) file(ctx context.Context, turnID string, note steer.Note) (tools.Result, error) {
+	fileCtx, cancel := context.WithTimeout(ctx, SteerAskBudget)
+	defer cancel()
+	filed, err := t.deps.Runs.File(fileCtx, turnID, note)
+	if err != nil {
+		log.WarnContext(ctx, "steer_turn_unfiled", "turn_id", turnID, "note_id", note.ID,
+			"error", err.Error())
+		return refused(tools.RefusalUnavailable, fmt.Sprintf("The note could not be written "+
+			"to the record of turn %s's coding run. Try again: a retry is the same note, so "+
+			"the turn never takes it twice.", clip(turnID))), nil
+	}
+	return t.answered(turnID, note.ID, filed.Status, filed.Reads, filed.AgentHandle)
+}
+
+// answered is what the turn said of the note, each in the class the person's
+// surface acts on — a note accepted, refused or answered with a status this
+// build does not know.
+func (t *steerTurn) answered(turnID, noteID string, status steer.Status, reads steer.Reads,
+	handle string,
+) (tools.Result, error) {
+	switch status {
 	case steer.StatusAccepted:
 		return jsonResult(map[string]any{
-			"turn_id": turnID, "note_id": noteID, "agent_handle": reply.AgentHandle,
-			"outcome": string(statelog.OutcomePending),
+			"turn_id": turnID, "note_id": noteID, "agent_handle": handle,
+			"outcome": string(statelog.OutcomePending), "reads": string(reads),
 		})
 	case steer.StatusClosed:
 		return refused(tools.RefusalNotRunning, fmt.Sprintf("Turn %s is not running: "+
-			"it has ended or parked, so no later round will read a note. Nothing was sent.",
+			"it has ended, so nothing will read a note. Nothing was sent.",
 			clip(turnID))), nil
 	case steer.StatusFull:
-		return refused(tools.RefusalConflict, fmt.Sprintf("Turn %s already holds %d "+
+		return refused(tools.RefusalNotesFull, fmt.Sprintf("Turn %s already holds %d "+
 			"notes it has not read yet. Nothing was sent: once it has read them — at "+
-			"its next round — this note may be sent again.", clip(turnID), steer.MaxPendingNotes)), nil
-	case steer.StatusUnsupported:
-		return refused(tools.RefusalSteerUnsupported, fmt.Sprintf("Turn %s cannot "+
-			"take a note: %s's executor runs as a coding CLI's own agentic loop, "+
-			"whose rounds the engine does not drive. Nothing was sent.",
-			clip(turnID), reply.AgentHandle)), nil
+			"its next step — this note may be sent again.", clip(turnID), steer.MaxPendingNotes)), nil
+	case steer.StatusSpent:
+		return refused(tools.RefusalNotesSpent, fmt.Sprintf("Turn %s has been sent the %d "+
+			"notes a turn takes. Nothing was sent: put the rest on the work item, where "+
+			"this turn and every later one can read it.", clip(turnID), steer.MaxTurnNotes)), nil
 	}
 	// A STATUS THIS BUILD DOES NOT KNOW, from a newer peer. Whether the note
 	// was taken is exactly what this node cannot tell.
 	return jsonResult(map[string]any{
-		"turn_id": turnID, "note_id": noteID, "agent_handle": reply.AgentHandle,
+		"turn_id": turnID, "note_id": noteID, "agent_handle": handle,
 		"outcome": string(statelog.OutcomeUnknown),
 	})
 }
 
-// maySteer decides whether the caller may steer turnID, probing the fleet for
-// the turn's seat only when the decision turns on it. Nil admits.
-func (t *steerTurn) maySteer(ctx context.Context, turnID string) *tools.Result {
+// runSeat reads the turn's run record for the seat it names. recorded is false
+// where the turn has none; a refusal is a record that could not be read, which
+// decides nothing and sends nothing.
+func (t *steerTurn) runSeat(ctx context.Context, turnID string) (RunSeat, bool, *tools.Result) {
+	readCtx, cancel := context.WithTimeout(ctx, SteerAskBudget)
+	defer cancel()
+	seat, recorded, err := t.deps.Runs.Seat(readCtx, turnID)
+	if err != nil {
+		log.WarnContext(ctx, "steer_turn_record_unread", "turn_id", turnID, "error", err.Error())
+		return RunSeat{}, false, refusalOf(refused(tools.RefusalUnavailable, fmt.Sprintf("The "+
+			"record of turn %s's coding run could not be read, so nothing was sent. Try again.",
+			clip(turnID))))
+	}
+	return seat, recorded, nil
+}
+
+// maySteer decides whether the caller may steer turnID: on the seat the run's
+// record names where there is one, and on the seat a probe of the fleet names
+// where there is none — read only when the decision turns on it. Nil admits.
+func (t *steerTurn) maySteer(ctx context.Context, turnID string, seat RunSeat, recorded bool) *tools.Result {
 	if t.authorize == nil {
 		refusal := authorityRefusal(SteerTurnTool, ErrNoAuthorizer)
 		return &refusal
@@ -265,6 +379,22 @@ func (t *steerTurn) maySteer(ctx context.Context, turnID string) *tools.Result {
 		refusal := authorityRefusal(SteerTurnTool, err)
 		return &refusal
 	}
+	if recorded {
+		// THE RECORD'S ANCHOR, and nothing else: no scatter is asked about a
+		// turn whose run record already names its seat.
+		if seat.Unverified != "" {
+			return refusalOf(refused(tools.RefusalUnavailable, fmt.Sprintf("Whose turn %s "+
+				"is cannot be decided: %s. Nothing was sent.", clip(turnID), seat.Unverified)))
+		}
+		owner, named := t.seatOf(seat.Agent, seat.Handle)
+		if !named {
+			return refusalOf(refused(tools.RefusalUnavailable, fmt.Sprintf("The record of "+
+				"turn %s's coding run names no seat, so whether you may steer it cannot be "+
+				"decided. Nothing was sent.", clip(turnID))))
+		}
+		return askAuthority(ctx, t.authorize, authz.ActionTurnSteer,
+			authz.Object{Kind: authz.KindPerson, ID: turnID, Owner: owner})
+	}
 	reply, answered, refusal := t.ask(ctx, steer.Request{
 		Version: steer.WireVersion, TurnID: turnID, Probe: true,
 	})
@@ -281,7 +411,7 @@ func (t *steerTurn) maySteer(ctx context.Context, turnID string) *tools.Result {
 	case reply.Unverified != "":
 		return refusalOf(unverifiedRefusal(turnID, reply))
 	}
-	owner, named := t.seatOf(reply)
+	owner, named := t.seatOf(reply.Agent, reply.AgentHandle)
 	if !named {
 		return refusalOf(refused(tools.RefusalUnavailable, fmt.Sprintf("The node "+
 			"running turn %s could not name the seat it runs for, so whether you may "+
@@ -292,13 +422,12 @@ func (t *steerTurn) maySteer(ctx context.Context, turnID string) *tools.Result {
 		authz.Object{Kind: authz.KindPerson, ID: turnID, Owner: owner})
 }
 
-// seatOf is the handle the authority is asked about for the seat a reply
-// names: by its id through the running org, and the reply's own handle where
-// this org no longer holds the seat — which nobody leads, so only admin
-// would have passed.
-// False when the reply names no seat at all.
-func (t *steerTurn) seatOf(reply steer.Reply) (string, bool) {
-	id, err := uuid.Parse(reply.Agent)
+// seatOf is the handle the authority is asked about for the seat a run record
+// or a probe names: by its id through the running org, and the named handle
+// where this org no longer holds the seat — which nobody leads, so only admin
+// would have passed. False when no seat is named at all.
+func (t *steerTurn) seatOf(agent, handle string) (string, bool) {
+	id, err := uuid.Parse(agent)
 	if err != nil || id == uuid.Nil {
 		return "", false
 	}
@@ -309,8 +438,8 @@ func (t *steerTurn) seatOf(reply steer.Reply) (string, bool) {
 			}
 		}
 	}
-	if reply.AgentHandle != "" {
-		return reply.AgentHandle, true
+	if handle != "" {
+		return handle, true
 	}
 	return id.String(), true
 }

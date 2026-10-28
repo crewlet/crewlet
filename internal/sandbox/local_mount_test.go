@@ -179,6 +179,17 @@ func TestRunArgsComeAfterEverythingTheBackendChose(t *testing.T) {
 // sees at [DefaultHome].
 func homeOf(root string) string { return boxLayout{root: root}.home() }
 
+// madeBox is a box directory with its home made, as Create makes it before the
+// container starts and the mount is proven.
+func madeBox(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(homeOf(root), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 // stubBox is a container that shares the box's home faithfully.
 type stubBox struct {
 	// root is the host directory the container sees as its home.
@@ -191,6 +202,10 @@ type stubBox struct {
 	// way rather than by ownership because a test cannot change uids, and
 	// the branch it exercises is the same one.
 	asFile bool
+	// linkTo, if set, makes the probe's directory a link to it, standing in
+	// for a container that made the directory the engine writes into a link
+	// out of its home.
+	linkTo string
 	// fail makes the exec itself fail.
 	fail bool
 }
@@ -223,12 +238,15 @@ func (b *stubBox) run() (string, error) {
 	if b.asFile {
 		return out, os.WriteFile(made, nil, 0o600)
 	}
+	if b.linkTo != "" {
+		return out, os.Symlink(b.linkTo, made)
+	}
 	return out, os.MkdirAll(made, 0o700)
 }
 
 func TestAFaithfulMountIsAccepted(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
+	root := madeBox(t)
 	if err := verifyMount(t.Context(), &stubBox{root: homeOf(root)}, boxLayout{id: "b", root: root}); err != nil {
 		t.Fatalf("verifyMount: %v", err)
 	}
@@ -250,7 +268,7 @@ func TestAFaithfulMountIsAccepted(t *testing.T) {
 // agent would simply find no brief, no credentials and no shim.
 func TestAMountOnAnotherHostIsRefused(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
+	root := madeBox(t)
 	err := verifyMount(t.Context(),
 		&stubBox{root: homeOf(root), token: "somebody else's box"}, boxLayout{id: "b", root: root})
 	if err == nil {
@@ -263,7 +281,7 @@ func TestAMountOnAnotherHostIsRefused(t *testing.T) {
 
 func TestAContainerThatCannotBeReachedIsRefused(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
+	root := madeBox(t)
 	if err := verifyMount(t.Context(), &stubBox{root: homeOf(root), fail: true},
 		boxLayout{id: "b", root: root}); err == nil {
 		t.Fatal("verifyMount accepted a box whose exec failed")
@@ -277,7 +295,7 @@ func TestAContainerThatCannotBeReachedIsRefused(t *testing.T) {
 // wonders why the host is full of box directories.
 func TestABoxDirectoryTheEngineCannotManageIsRefused(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
+	root := madeBox(t)
 	err := verifyMount(t.Context(),
 		&stubBox{root: homeOf(root), asFile: true}, boxLayout{id: "b", root: root})
 	if err == nil {

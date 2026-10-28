@@ -6,7 +6,7 @@
 //
 // Some requests can be answered by one process only, because what answers them
 // is live state in that process rather than fleet state any node can read: a
-// box-mode run's tool session is the seat's live tool surface, in the process
+// detached run's tool session is the seat's live tool surface, in the process
 // holding the seat (internal/api/mcpbridge). The request still arrives wherever
 // the network put it — a load balancer in front of several nodes, or the node a
 // box was launched from after its seat moved to a peer. This package hands the

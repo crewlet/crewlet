@@ -387,6 +387,10 @@ export interface RunningCall {
 export interface PhaseSteer {
   round: number;
   note_id: string;
+  /** The kind of step that read it (`types.SteerBoundary`, one of
+   *  `STEER_BOUNDARIES`): a round of the engine's loop, or a step of the
+   *  phase's coding run. */
+  boundary: string;
 }
 
 /** The one work item a turn is charged to (`types.WorkItem`). */
@@ -426,7 +430,8 @@ export interface Paused {
   operator_id?: string;
   at: string;
   reason?: string;
-  /** Whether the pause also ended the turn the seat was on. */
+  /** Whether the pause also ended the seat's running work: the turn it was
+   *  on, at its next round, and any coding run it had out, at once. */
   stop_running: boolean;
 }
 
@@ -459,7 +464,8 @@ export interface LastTurn {
   turn_id: string;
   /** The turn's newest event: its completion, or the reflection after it. */
   ended_at: string;
-  outcome: "completed" | "failed";
+  /** `stopped` when a person ended it with a pause — never a failure. */
+  outcome: "completed" | "failed" | "stopped";
 }
 
 /** The in-flight LLM call: the latest progress round, or a phase-start seed. */
@@ -720,6 +726,12 @@ export interface SandboxEntry {
   agent_handle: string;
   agent_id: string;
   coding_agent: string;
+  /** The executor-chain member the run was launched on, and its model — which
+   *  a fallback at launch makes other than the chain's head. The member is the
+   *  company's configuration and is sent to an admin alone; the model goes to
+   *  every reader. */
+  provider_key?: string;
+  model?: string;
   sandbox_id: string;
   /**
    * What the run was asked to do — the seat's TRAIL, sent only to an admin
@@ -753,8 +765,8 @@ export interface SandboxEntry {
  * than an omission: a run's record is DELETED once the run settles and its box
  * is reclaimed, so `sandbox.Active` is every status a record can carry and the
  * terminal pair can never reach a client. How a run ended is on the event
- * stream — the resumed turn's own events, or a `sandbox_run_failed` naming the
- * reason — never on this row.
+ * stream — the resumed turn's own events, a `sandbox_run_failed` naming the
+ * reason, or a `sandbox_run_stopped` naming who stopped it — never on this row.
  */
 export type SandboxStatus =
   "launching" | "running" | "awaiting_clarification" | "reseed" | "answered" | "resumed";
@@ -775,6 +787,11 @@ export interface SandboxRun {
   role: string;
   status: SandboxStatus;
   coding_agent: string;
+  /** The executor-chain member the job was launched on, and its model. Absent
+   *  on a live entry that named none; the member is also absent for every
+   *  reader but an admin, since it is the company's configuration. */
+  provider_key?: string;
+  model?: string;
   /** Which configured cell the run's box is in: direct, container or e2b. */
   placement: string;
   /**
@@ -824,11 +841,12 @@ export interface SandboxRun {
   /**
    * What this run called through the MCP bridge, in order.
    *
-   * THE ONE TOOL LOG THAT HAS NOWHERE ELSE TO LIVE. A native tool loop keeps
-   * its calls in memory and the turn writes them when it ends; a bridged run's
-   * are made by a process outside the engine, minutes or hours apart and
-   * possibly across a restart. Absent on every run that is not bridged, which
-   * is every ordinary coding run.
+   * THE ONE TOOL LOG THAT HAS NOWHERE ELSE TO LIVE. Every run's calls are
+   * made by its coding CLI, a process outside the engine, over the MCP bridge
+   * — minutes or hours apart and possibly across a restart. ALWAYS AN ARRAY on
+   * a row the store answered, empty for a run that has called nothing yet;
+   * absent where it is not known — a live entry whose row is not read yet, or
+   * a body withheld from this reader.
    */
   bridge_calls?: BridgeCall[];
 
@@ -852,7 +870,19 @@ export interface BridgeCall {
   args?: string;
   output?: string;
   failed?: boolean;
+  /** When the row recorded the call, on the store's clock. Always present. */
   at: string;
+  /**
+   * The bridge's own measurement of the call: when it was handed to the
+   * seat's tools (RFC 3339, UTC) and how long they took to answer. Both
+   * absent on a call nobody measured — "not recorded", never "instant".
+   */
+  started_at?: string;
+  duration_ms?: number;
+  /** `builtin` or `mcp:<server>` for the tool that answered, and the bare
+   *  server name for an `mcp:` one. Absent on a call no tool answered. */
+  origin?: string;
+  server?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1209,7 +1239,6 @@ export interface ConfigRole {
   llm_subagent?: ProviderKeys;
   llm_auxiliary?: ProviderKeys;
   llm_judge?: ProviderKeys;
-  llm_sandbox?: ProviderKeys;
   /** Unset means the company default, so this is three-valued. */
   learning_enabled?: boolean | null;
   /** A human seat's identities: one per surface, keyed by [HumanContactKey]. */
@@ -1406,7 +1435,6 @@ export type PhaseLLM =
       subagent?: ProviderKeys;
       auxiliary?: ProviderKeys;
       judge?: ProviderKeys;
-      sandbox?: ProviderKeys;
     };
 
 /**
@@ -3195,8 +3223,9 @@ export interface WorkItemTurn {
   wall_ms: number;
   workers?: number;
   sent_back?: number;
-  /** How the turn ended, off its newest segment: its decision, `failed`, or
-   *  `suspended` while a coding run is still out. */
+  /** How the turn ended, off its newest segment: its decision, `failed`,
+   *  `stopped` where a person's pause ended it, or `suspended` while a coding
+   *  run is still out. */
   outcome: string;
   phases: string[];
   /** The phase that failed, when `outcome` is `failed` because one did.
@@ -3778,13 +3807,18 @@ export interface SandboxOutput {
  * tail of that job while it runs, `launching` while its box is still being
  * made, `not_running` with the record's own status once it is not,
  * `box_paused` for a running record whose box is paused (never woken to be
- * read), or the owning node NAMED where it did not answer (`owner_silent`).
+ * read), or the node that reads its box NAMED where it did not answer
+ * (`owner_silent`).
  */
 export interface SandboxTailAnswer {
   outcome: (typeof SANDBOX_TAIL_OUTCOMES)[number];
   turn_id: string;
   launch_id: string;
-  /** The node that owns the run — the one that answered, or did not. */
+  /**
+   * The node that reads the run's box — its owner, or the node that launched a
+   * `direct` or `container` box, whoever holds the seat — the one that
+   * answered, or did not. Absent only for an `e2b` run no node holds.
+   */
   node?: string;
   /** Why the job is not running: the record's status, `replaced`, or absent
    *  where no record is left. */
@@ -4806,6 +4840,10 @@ export interface TurnRow {
    *  Absent for a turn that carried no failure. */
   error?: string;
   error_kind?: string;
+  /** Whether a PERSON ended the turn — a pause with `stop_running` reached it
+   *  at a round, or ended the coding run it was parked on. Never a failure:
+   *  a stopped completion carries no `failed`. Absent when nobody stopped it. */
+  stopped?: boolean;
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;

@@ -10,11 +10,13 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -40,7 +42,7 @@ func (c *capture) reads() []*types.KnowledgeRead {
 // skilledRunner builds a runner over two published skills: one about a tool the
 // executor has, and one an operator scoped to Review on an MCP server the seat
 // holds a credential for.
-func skilledRunner(t *testing.T, prov *scriptedProvider, pub *capture) *runner.Runner {
+func skilledRunner(t *testing.T, prov *scriptedProvider, pub *capture, launcher runner.AgentLauncher) *runner.Runner {
 	t.Helper()
 	registry := skills.NewRegistry()
 	registry.Replace([]skills.Skill{{
@@ -87,7 +89,7 @@ func skilledRunner(t *testing.T, prov *scriptedProvider, pub *capture) *runner.R
 	r, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: company, Role: role},
 		Registry: reg, Models: models, Skills: registry,
-		Caps:      runner.Caps{ExecutorRounds: 3},
+		Launcher:  launcher,
 		Task:      "post the summary",
 		Publisher: pub,
 		Turn: runner.Turn{
@@ -102,21 +104,22 @@ func skilledRunner(t *testing.T, prov *scriptedProvider, pub *capture) *runner.R
 	return r
 }
 
-// THE EXECUTOR'S CATALOGUE IS RECORDED AGAINST ITS PAGES, once per prompt,
-// and a skill the model then loads is recorded as a read in the phase that
-// loaded it.
+// THE EXECUTOR'S CATALOGUE IS RECORDED AGAINST ITS PAGES, once per prompt
+// its run is launched with, and a skill the run then loads over the bridge is
+// recorded as a read in the phase that loaded it.
 func TestTheExecutorsSkillCatalogueIsRecordedAsARead(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llmtest.Response{
-		submitCall(t, builtin.LoadToolSkillTool, `{"key":"chat-conventions"}`),
-		submitWork(t),
-	}}
 	pub := newCapture()
-	r := skilledRunner(t, prov, pub)
+	launcher := &playLauncher{}
+	r := skilledRunner(t, &scriptedProvider{}, pub, launcher)
 
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
+	play(t, launcher.last(t), run{calls: []llm.ToolCall{
+		call(t, builtin.LoadToolSkillTool, `{"key":"chat-conventions"}`),
+		submitWork(t),
+	}})
 	var injected, loaded []*types.KnowledgeRead
 	for _, read := range pub.reads() {
 		switch read.Via {
@@ -154,7 +157,7 @@ func TestAReviewScopedSkillReachesTheReviewer(t *testing.T) {
 		submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`),
 	}}
 	pub := newCapture()
-	r := skilledRunner(t, prov, pub)
+	r := skilledRunner(t, prov, pub, &playLauncher{})
 
 	if _, err := r.Review(context.Background(), 1, workFor("posted"), nil); err != nil {
 		t.Fatalf("Review: %v", err)
@@ -183,7 +186,8 @@ func TestAReviewScopedSkillReachesTheReviewer(t *testing.T) {
 // prompt. A worker's prompt is built inside the subagent package, so its offer
 // is drained on the one hook that package calls on every path a child takes —
 // and a worker offered a skill whose page nobody counted would leave the pages
-// a company's fan-outs are shown reading as unread.
+// a company's fan-outs are shown reading as unread. The worker is spawned by
+// the run's delegate call over the bridge, as every worker is.
 func TestAWorkersSkillCatalogueIsRecordedInTheSubagentPhase(t *testing.T) {
 	t.Parallel()
 	registry := skills.NewRegistry()
@@ -195,9 +199,8 @@ func TestAWorkersSkillCatalogueIsRecordedInTheSubagentPhase(t *testing.T) {
 		SourcePageID: "pg-research", SourceBackend: "native", SourceContainer: "SKILLS",
 		SourceTitle: "Research method page",
 	}})
-	prov := &delegatingProvider{}
 	pub := newCapture()
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: workerProvider{}}})
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -210,10 +213,11 @@ func TestAWorkersSkillCatalogueIsRecordedInTheSubagentPhase(t *testing.T) {
 		MCPEnv: org.MCPEnv{"github": {"TOKEN": "${GH}"}},
 	}
 	company := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
+	launcher := &playLauncher{}
 	r, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: company, Role: role},
 		Registry: reg, Models: models, Skills: registry,
-		Caps:      runner.Caps{ExecutorRounds: 6},
+		Launcher:  launcher,
 		Task:      "fan this out",
 		Publisher: pub,
 		Subagent:  &runner.SubagentConfig{Limits: shipped()},
@@ -227,6 +231,10 @@ func TestAWorkersSkillCatalogueIsRecordedInTheSubagentPhase(t *testing.T) {
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
+	play(t, launcher.last(t), run{calls: []llm.ToolCall{
+		{ID: "d", Name: subagent.ToolName, Arguments: map[string]any{"tasks": []any{map[string]any{
+			"id": "research", "prompt": "look", "system_prompt": "you research things"}}}},
+	}})
 	var worker []*types.KnowledgeRead
 	for _, read := range pub.reads() {
 		if read.Via == types.ReadViaSkillInjected && read.Phase == types.PhaseSubagent {

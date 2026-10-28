@@ -47,26 +47,24 @@ import (
 //
 // The assertions below are over the PUBLISHED events rather than the runner's
 // return value, because the wire is where every one of those defects lived and
-// no suite looked at it.
+// no suite looked at it. Driven through onboarding: the one phase the engine
+// drives whose ceiling sits above its budget, so the one an extension reaches.
 func TestEveryRoundAPhasePublishesIsOnThePhasesOwnScale(t *testing.T) {
 	t.Parallel()
 	// Three rounds of work against a two-round cap, so the phase exhausts
 	// its budget once, is granted an extension, and re-enters the loop.
-	prov := &scriptedProvider{execute: []llmtest.Response{
-		sayAndCall(t, "read_file", `{"path":"/a"}`, "start with the file"),
-		sayAndCall(t, "read_file", `{"path":"/b"}`, "and the other one"),
-		sayAndCall(t, runner.SubmitWorkTool,
-			`{"outcome":"delivered","summary":"read both"}`, "that is enough"),
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
+		persist(t, "conventions", "start with the conventions"),
+		persist(t, "owners", "and who owns what"),
+		markDone(t, "that is enough"),
 		text("done"),
 	}}
 	pub := newCapture()
 	r := extendableRunner(t, prov, pub, alwaysExtend{})
 
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	onboard(t, r)
 
-	done := completedPhase(t, pub, "execute")
+	done := completedPhase(t, pub, "onboarding")
 	if done.RoundsUsed != 3 {
 		t.Fatalf("the record claims %d rounds for a phase that ran 3", done.RoundsUsed)
 	}
@@ -115,24 +113,21 @@ func TestEveryRoundAPhasePublishesIsOnThePhasesOwnScale(t *testing.T) {
 // ledger exists to guarantee.
 func TestALiveFrameNeverDropsTheRoundsBehindIt(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llmtest.Response{
-		sayAndCall(t, "read_file", `{"path":"/a"}`, "start with the file"),
-		sayAndCall(t, "read_file", `{"path":"/b"}`, "and the other one"),
-		sayAndCall(t, runner.SubmitWorkTool,
-			`{"outcome":"delivered","summary":"read both"}`, "that is enough"),
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
+		persist(t, "conventions", "start with the conventions"),
+		persist(t, "owners", "and who owns what"),
+		markDone(t, "that is enough"),
 		text("done"),
 	}}
 	pub := newCapture()
 	r := extendableRunner(t, prov, pub, alwaysExtend{})
 
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	onboard(t, r)
 
 	// The highest round any frame reported, and the frame count at that
 	// point. Rounds only append, so neither may ever go backwards.
 	highest, narrated := 0, 0
-	for _, frame := range progressFrames(t, pub, "execute") {
+	for _, frame := range progressFrames(t, pub, "onboarding") {
 		for _, n := range frame.RoundNarration {
 			if round, _ := n["round"].(int); round > highest {
 				highest = round
@@ -161,6 +156,83 @@ func TestALiveFrameNeverDropsTheRoundsBehindIt(t *testing.T) {
 	}
 }
 
+// A CALL IN AN EXTENSION IS TOLD THE PHASE'S ROUND, the one its record states.
+// The loop numbers each invocation from 1, and the phase's records are
+// renumbered onto the phase's scale once it returns (offsetRounds); a tool
+// that asks its round mid-call is answered before that, so the phase declares
+// the rounds behind each invocation on the context it runs the loop with.
+// Without it the call in the extension's first round heard round 1 of a phase
+// whose record puts it in round 3 — a round the reading tool would hold its
+// answer to, and the round a call made twenty rounds earlier was really in.
+//
+// Mutation: run the loop on the phase's own context, without
+// toolloop.WithRoundOffset, and the extension's call is told round 1.
+func TestACallInAnExtensionIsToldThePhasesRound(t *testing.T) {
+	t.Parallel()
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
+		persist(t, "conventions", "start with the conventions"),
+		persist(t, "owners", "and who owns what"),
+		markDone(t, "that is enough"),
+		text("done"),
+	}}
+	pub := newCapture()
+	told := &roundsTold{}
+	r := runnerOver(t, prov, pub, alwaysExtend{}, loopCaps{
+		rounds: 2, ceiling: 8, extensionOn: true, step: 4,
+	}, []tools.Callable{
+		roundWitness{stubTool: stubTool{name: runner.ReflectAndPersistTool, out: "noted"}, told: told},
+		roundWitness{stubTool: stubTool{name: runner.MarkOnboardedTool, out: "marked"}, told: told},
+	})
+
+	onboard(t, r)
+
+	if got := told.rounds(); !slices.Equal(got, []int{1, 2, 3}) {
+		t.Errorf("the pass's calls were told rounds %v, want [1 2 3]: the phase's, "+
+			"across the extension", got)
+	}
+	// AND THE RECORD AGREES: each call is stated in the round it was told.
+	done := completedPhase(t, pub, "onboarding")
+	var recorded []int
+	for _, ex := range done.ToolExecutions {
+		round, _ := ex["round"].(int)
+		recorded = append(recorded, round)
+	}
+	if !slices.Equal(recorded, told.rounds()) {
+		t.Errorf("the record states the calls in rounds %v, and they were told %v",
+			recorded, told.rounds())
+	}
+}
+
+// roundsTold collects what a [roundWitness]'s calls were told.
+type roundsTold struct {
+	mu   sync.Mutex
+	seen []int
+}
+
+func (r *roundsTold) rounds() []int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.seen)
+}
+
+// roundWitness is a tool that records the round each call of it was told it
+// runs in ([toolloop.CallRound]), or -1 for a call told none.
+type roundWitness struct {
+	stubTool
+	told *roundsTold
+}
+
+func (w roundWitness) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	round, ok := toolloop.CallRound(ctx)
+	if !ok {
+		round = -1
+	}
+	w.told.mu.Lock()
+	w.told.seen = append(w.told.seen, round)
+	w.told.mu.Unlock()
+	return w.stubTool.Call(ctx, args)
+}
+
 // alwaysExtend grants every request, so the phase re-enters the tool loop.
 type alwaysExtend struct{}
 
@@ -178,8 +250,42 @@ func sayAndCall(t *testing.T, name, argsJSON, prose string) llmtest.Response {
 	return call
 }
 
-// extendableRunner is a seat whose executor exhausts a two-round cap and can
-// be granted more.
+// persist is an onboarding round that says something and keeps a note.
+func persist(t *testing.T, note, prose string) llmtest.Response {
+	t.Helper()
+	return sayAndCall(t, runner.ReflectAndPersistTool, `{"note":"`+note+`"}`, prose)
+}
+
+// markDone is the round that finishes the onboarding pass.
+func markDone(t *testing.T, prose string) llmtest.Response {
+	t.Helper()
+	return sayAndCall(t, runner.MarkOnboardedTool, `{"notes":"read the pages"}`, prose)
+}
+
+// onboard runs r's onboarding pass, which the case needs to have run.
+func onboard(t *testing.T, r *runner.Runner) {
+	t.Helper()
+	ran, err := r.Onboard(context.Background())
+	if err != nil {
+		t.Fatalf("Onboard: %v", err)
+	}
+	if !ran {
+		t.Fatal("the onboarding pass did not run, so the case proves nothing")
+	}
+}
+
+// loopCaps is the round budget and ceiling of the phase a loop-mechanics case
+// drives — onboarding, the only engine-driven phase whose ceiling sits above
+// its budget, so the only one the round-cap extension reaches — and the
+// extension's switch and step.
+type loopCaps struct {
+	rounds, ceiling int
+	extensionOn     bool
+	step            int
+}
+
+// extendableRunner is a seat whose onboarding pass exhausts a two-round cap
+// and can be granted more.
 //
 // Takes the PROVIDER INTERFACE rather than the scripted fixture: a phase's own
 // wall clock is only observable against a provider that takes time, and a
@@ -190,9 +296,8 @@ func extendableRunner(
 	meter ...toolloop.BudgetMeter,
 ) *runner.Runner {
 	t.Helper()
-	return cappedRunner(t, prov, pub, judge, runner.Caps{
-		ExecutorRounds: 2, ExecutorCeiling: 8,
-		ExtensionOn: true, ExtensionStep: 4,
+	return cappedRunner(t, prov, pub, judge, loopCaps{
+		rounds: 2, ceiling: 8, extensionOn: true, step: 4,
 	}, meter...)
 }
 
@@ -200,7 +305,20 @@ func extendableRunner(
 // extension switch off, or a ceiling equal to the budget.
 func cappedRunner(
 	t *testing.T, prov llm.Provider, pub queue.Publisher, judge extension.Judge,
-	caps runner.Caps, meter ...toolloop.BudgetMeter,
+	caps loopCaps, meter ...toolloop.BudgetMeter,
+) *runner.Runner {
+	t.Helper()
+	return runnerOver(t, prov, pub, judge, caps, []tools.Callable{
+		stubTool{name: runner.ReflectAndPersistTool, out: "noted"},
+		stubTool{name: runner.MarkOnboardedTool, out: "marked"},
+	}, meter...)
+}
+
+// runnerOver is cappedRunner with the onboarding pass's own pair of tools
+// stated by the case, for one whose subject is what those calls are told.
+func runnerOver(
+	t *testing.T, prov llm.Provider, pub queue.Publisher, judge extension.Judge,
+	caps loopCaps, pair []tools.Callable, meter ...toolloop.BudgetMeter,
 ) *runner.Runner {
 	t.Helper()
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
@@ -208,21 +326,27 @@ func cappedRunner(
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	reg := tools.NewRegistry()
-	if err := reg.Register(stubTool{name: "read_file", out: "contents"},
-		tools.OriginBuiltin); err != nil {
-		t.Fatalf("Register: %v", err)
+	for _, tl := range pair {
+		if err := reg.Register(tl, tools.OriginBuiltin); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
 	}
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
 	r, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
 		Registry: reg, Models: models,
-		Caps:      caps,
+		Caps:      runner.Caps{ExtensionOn: caps.extensionOn, ExtensionStep: caps.step},
+		Launcher:  &playLauncher{},
 		Task:      "read the files",
 		Publisher: pub,
 		Judge:     judge,
 		Budget:    budgetOf(meter),
 		Turn:      runner.Turn{RunID: "t-rounds", WorkKey: "wk-rounds", AgentID: "agent-1"},
 		Sessions:  sessions,
+		Onboarding: runner.Onboarding{
+			Markers: &markers{claimHeld: true}, Latch: runner.NewLatch(),
+			Rounds: caps.rounds, Ceiling: caps.ceiling,
+		},
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -271,196 +395,6 @@ func progressFrames(t *testing.T, c *capture, ph string) []*types.AgentTurnProgr
 	return out
 }
 
-// A RESUMED PHASE IS THE SAME PHASE, AND ITS RECORD COVERS ALL OF IT.
-//
-// A suspending Execute returns before `emit.completed` runs, so it publishes
-// no durable record at all, and its progress frames are stream-only. The
-// resumed half is therefore the only account this phase will ever have — and
-// it used to start at round 1, so the pre-suspend rounds, the `run_sandbox`
-// call that caused the suspension included, were gone from the store for good,
-// under token counters that covered both halves.
-func TestAResumedPhasePublishesTheWholePhase(t *testing.T) {
-	t.Parallel()
-	prov := &scriptedProvider{execute: []llmtest.Response{
-		sayAndCall(t, "slack_post", `{"text":"the fix is up"}`, "tell the requester"),
-		sayAndCall(t, runner.SubmitWorkTool,
-			`{"outcome":"delivered","summary":"shipped it","deliveries":["slack_post"]}`,
-			"the box did the work"),
-		text("done"),
-	}}
-	pub := newCapture()
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
-		pub:    pub,
-		resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},
-	})
-
-	if _, _, err := r.Resume(context.Background(), nil); err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-
-	done := completedPhase(t, pub, "execute")
-	if done.RoundsUsed != 4 {
-		t.Errorf("RoundsUsed = %d, want the phase's own 4 (two before the suspend, two after)",
-			done.RoundsUsed)
-	}
-	names := map[string]int{}
-	for _, ex := range done.ToolExecutions {
-		name, _ := ex["name"].(string)
-		round, _ := ex["round"].(int)
-		names[name] = round
-	}
-	// The call that CAUSED the suspension. If this is missing, the only
-	// durable evidence that the phase started a coding run is gone.
-	if names["run_sandbox"] != 2 {
-		t.Errorf("run_sandbox is recorded in round %d, want 2: %v", names["run_sandbox"], names)
-	}
-	if names["search_knowledge"] != 1 {
-		t.Errorf("the pre-suspend read is in round %d, want 1: %v",
-			names["search_knowledge"], names)
-	}
-	// And the resumed round CONTINUES rather than restarting.
-	if names["slack_post"] != 3 || names[runner.SubmitWorkTool] != 4 {
-		t.Errorf("the resumed rounds are numbered %d and %d, want 3 and 4: %v",
-			names["slack_post"], names[runner.SubmitWorkTool], names)
-	}
-	rounds := map[int]bool{}
-	for _, n := range done.RoundNarration {
-		round, _ := n["round"].(int)
-		if rounds[round] {
-			t.Errorf("round %d is narrated twice — the resume restarted the count", round)
-		}
-		rounds[round] = true
-	}
-	if len(rounds) != 4 {
-		t.Errorf("narrated rounds = %v, want one per round of 4", rounds)
-	}
-	// The counters were already the phase's total; they must not double now
-	// that the rounds they cover are on the record too.
-	if done.TotalTokens != 500+2*100 {
-		t.Errorf("total_tokens = %d, want 700 (500 before the suspend, 200 after)",
-			done.TotalTokens)
-	}
-}
-
-// WHY A PARKED ROUND STOPPED SURVIVES THE RESUME — AND THE NEXT SUSPEND.
-//
-// The parked row carries each round's stop reason, and the resume rebuilds the
-// loop's rounds from it field by field. A field left out of that rebuild is
-// blank on the resumed record (which reads as "the backend reported none"),
-// and because a second suspend re-encodes the rounds from the rebuilt ones,
-// it is gone from every later record too. Both ends are asserted: the record
-// the resume publishes, and the row a second suspension would persist.
-func TestAParkedRoundsStopReasonSurvivesTheResume(t *testing.T) {
-	t.Parallel()
-	parked := func() execstate.State {
-		state := suspendedAfterTwoRounds()
-		state.Rounds = []types.PhaseRound{
-			{Round: 1, Model: "earlier", StopReason: string(llm.StopToolUse)},
-			{Round: 2, Model: "earlier", StopReason: string(llm.StopToolUse)},
-		}
-		// Through JSON, as the pending-run row hands it back.
-		blob, err := execstate.Encode(state)
-		if err != nil {
-			t.Fatalf("Encode: %v", err)
-		}
-		out, _, err := execstate.Decode(blob)
-		if err != nil {
-			t.Fatalf("Decode: %v", err)
-		}
-		return out
-	}
-	wantParked := func(t *testing.T, rounds []types.PhaseRound) {
-		t.Helper()
-		if len(rounds) < 2 {
-			t.Fatalf("rounds = %+v, want the two parked rounds first", rounds)
-		}
-		for _, r := range rounds[:2] {
-			if r.StopReason != string(llm.StopToolUse) {
-				t.Errorf("parked round %d stop_reason = %q, want %q",
-					r.Round, r.StopReason, llm.StopToolUse)
-			}
-		}
-	}
-
-	t.Run("the resumed record", func(t *testing.T) {
-		t.Parallel()
-		prov := &scriptedProvider{execute: []llmtest.Response{
-			submitCall(t, runner.SubmitWorkTool,
-				`{"outcome":"delivered","summary":"shipped it","evidence":"the box did the work"}`),
-		}}
-		pub := newCapture()
-		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
-			pub:    pub,
-			resume: &runner.Resume{State: parked(), Answer: "the run succeeded"},
-		})
-		if _, _, err := r.Resume(context.Background(), nil); err != nil {
-			t.Fatalf("Resume: %v", err)
-		}
-		wantParked(t, completedPhase(t, pub, "execute").Rounds)
-	})
-
-	t.Run("a second suspension", func(t *testing.T) {
-		t.Parallel()
-		state := parked()
-		state.ActiveTools = append(state.ActiveTools, "run_sandbox")
-		prov := &scriptedProvider{execute: []llmtest.Response{
-			submitCall(t, "run_sandbox", `{"task":"and the follow-up"}`),
-		}}
-		r, reg := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
-			resume: &runner.Resume{State: state, Answer: "the run succeeded"},
-			// The gate a seat that parked on run_sandbox has: without it
-			// the resumed executor is not offered the tool again.
-			sandbox: &org.RoleSandbox{Enabled: true},
-		})
-		if err := reg.RegisterWith(suspendingTool{}, tools.Origin("sandbox"), tools.Annotations{}); err != nil {
-			t.Fatalf("Register: %v", err)
-		}
-		w, _, err := r.Resume(context.Background(), nil)
-		if err != nil {
-			t.Fatalf("Resume: %v", err)
-		}
-		if !w.Suspended {
-			t.Fatal("the resumed phase did not suspend again, so there is no second row to read")
-		}
-		again, ok := r.Suspended()
-		if !ok {
-			t.Fatal("no second suspension was recorded")
-		}
-		wantParked(t, again.State.Rounds)
-	})
-}
-
-// suspendedAfterTwoRounds is a phase parked on run_sandbox, two rounds in.
-func suspendedAfterTwoRounds() execstate.State {
-	return execstate.State{
-		Version: execstate.Version,
-		Messages: []llm.Message{
-			{Role: llm.RoleSystem, Content: "you are the CTO"},
-			{Role: llm.RoleUser, Content: "post the weekly summary"},
-			{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
-				{ID: "call-1", Name: "run_sandbox", Arguments: map[string]any{"task": "fix it"}},
-			}},
-		},
-		PendingCallID:   "call-1",
-		PendingCallName: "run_sandbox",
-		// The activations the pre-suspend rounds made, replayed — which is
-		// the reason the field exists.
-		ActiveTools:  []string{"slack_post"},
-		Round:        1,
-		RoundsUsed:   2,
-		InputTokens:  400,
-		OutputTokens: 100,
-		ToolExecutions: []types.ToolExecution{
-			{"name": "search_knowledge", "arguments": "{}", "result": "2 pages", "success": true, "round": 1},
-			{"name": "run_sandbox", "arguments": "{}", "result": "started", "success": true, "round": 2},
-		},
-		RoundNarration: []types.RoundNarration{
-			{"round": 1, "content": "Checking what we already know."},
-			{"round": 2, "content": "Starting a coding run."},
-		},
-	}
-}
-
 // THE JUDGE IS A MODEL CALL, AND A MODEL CALL LEAVES A RECORD.
 //
 // It was the only one in the engine that left none: no phase event, so no card
@@ -471,20 +405,17 @@ func suspendedAfterTwoRounds() execstate.State {
 // exactly like one whose phases deserved no extension.
 func TestTheExtensionJudgeIsPublishedAsAPhaseAndCharged(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llmtest.Response{
-		sayAndCall(t, "read_file", `{"path":"/a"}`, "one"),
-		sayAndCall(t, "read_file", `{"path":"/b"}`, "two"),
-		sayAndCall(t, runner.SubmitWorkTool,
-			`{"outcome":"delivered","summary":"read both"}`, "enough"),
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
+		persist(t, "a", "one"),
+		persist(t, "b", "two"),
+		markDone(t, "enough"),
 		text("done"),
 	}}
 	pub := newCapture()
 	meter := &countingMeter{}
 	r := extendableRunner(t, prov, pub, spendingJudge{}, meter)
 
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	onboard(t, r)
 
 	judged := phasesOfKind(t, pub, "judge")
 	if len(judged) != 1 {
@@ -492,9 +423,9 @@ func TestTheExtensionJudgeIsPublishedAsAPhaseAndCharged(t *testing.T) {
 	}
 	got := judged[0]
 	// NESTED under the phase that asked, which is what puts the card under
-	// the Execute round rather than beside the turn's own phases.
-	if got.HostPhase != "execute" || got.HostIteration != 1 {
-		t.Errorf("host = %q/%d, want execute/1", got.HostPhase, got.HostIteration)
+	// that phase rather than beside the turn's own phases.
+	if got.HostPhase != "onboarding" || got.HostIteration != 0 {
+		t.Errorf("host = %q/%d, want onboarding/0", got.HostPhase, got.HostIteration)
 	}
 	if got.Decision != "extend" {
 		t.Errorf("decision = %q, want the verdict", got.Decision)
@@ -527,17 +458,14 @@ func TestTheExtensionJudgeIsPublishedAsAPhaseAndCharged(t *testing.T) {
 // call that never happened, which is the fact the judge phase exists to carry.
 func TestNoJudgePhaseIsPublishedWhenNoJudgeWasAsked(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llmtest.Response{
-		sayAndCall(t, runner.SubmitWorkTool,
-			`{"outcome":"delivered","summary":"done in one"}`, "straight in"),
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
+		markDone(t, "straight in"),
 		text("done"),
 	}}
 	pub := newCapture()
 	r := extendableRunner(t, prov, pub, spendingJudge{}, &countingMeter{})
 
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	onboard(t, r)
 	if got := phasesOfKind(t, pub, "judge"); len(got) != 0 {
 		t.Errorf("%d judge phases on a phase that never ran out of rounds", len(got))
 	}
@@ -565,11 +493,10 @@ func (spendingJudge) Decide(context.Context, extension.Request) (extension.Decis
 // records like any round it refuses.
 func TestARefusedJudgementDeclinesTheExtensionAndIsStillCharged(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llmtest.Response{
-		sayAndCall(t, "read_file", `{"path":"/a"}`, "one"),
-		sayAndCall(t, "read_file", `{"path":"/b"}`, "two"),
-		sayAndCall(t, runner.SubmitWorkTool,
-			`{"outcome":"delivered","summary":"read both"}`, "enough"),
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
+		persist(t, "a", "one"),
+		persist(t, "b", "two"),
+		markDone(t, "enough"),
 		text("done"),
 	}}
 	pub := newCapture()
@@ -577,10 +504,8 @@ func TestARefusedJudgementDeclinesTheExtensionAndIsStillCharged(t *testing.T) {
 	meter := &ceilingMeter{ceiling: 220}
 	r := extendableRunner(t, prov, pub, spendingJudge{}, meter)
 
-	// NOT A FAILED TURN: an over-budget judgement is a declined extension.
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	// NOT A FAILED PASS: an over-budget judgement is a declined extension.
+	onboard(t, r)
 	judged := phasesOfKind(t, pub, "judge")
 	if len(judged) != 1 {
 		t.Fatalf("%d judge phases published, want the one call that ran", len(judged))
@@ -589,8 +514,8 @@ func TestARefusedJudgementDeclinesTheExtensionAndIsStillCharged(t *testing.T) {
 		t.Errorf("decision = %q, want rescue: the budget refused the judgement, so "+
 			"the phase was not extended", judged[0].Decision)
 	}
-	if got := prov.roundsOf("execute"); got != 2 {
-		t.Errorf("the executor made %d model requests, want its 2 rounds and no extension", got)
+	if got := prov.roundsOf("onboarding"); got != 2 {
+		t.Errorf("the pass made %d model calls, want its 2 rounds and no extension", got)
 	}
 	if got := meter.charges(); !slices.Equal(got, []int{100, 100, 30}) {
 		t.Errorf("charges = %v, want both rounds and the refused judgement's 30", got)
@@ -599,18 +524,18 @@ func TestARefusedJudgementDeclinesTheExtensionAndIsStillCharged(t *testing.T) {
 
 // THE PHASE AFTER A REFUSED JUDGEMENT MAKES NO CALL.
 //
-// The judgement's refusal declines the extension and the phase ends rescued,
+// The judgement's refusal declines the extension and the phase ends unmarked,
 // but the refused judgement is counted, so the window reads past its ceiling
-// and every later charge of the turn is refused. The reviewer that follows
-// used to send its whole first round — the evidence log, the prompt, its
-// tools — which the vendor billed and the meter then refused. The meter holds
-// the refusal now, and the reviewer is refused before it calls.
+// and every later charge of the turn is refused. The phase that follows used
+// to send its whole first round — the evidence log, the prompt, its tools —
+// which the vendor billed and the meter then refused. The meter holds the
+// refusal now, and the next phase is refused before it calls.
 func TestTheReviewAfterARefusedJudgementMakesNoCall(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{
-		execute: []llmtest.Response{
-			sayAndCall(t, "read_file", `{"path":"/a"}`, "one"),
-			sayAndCall(t, "read_file", `{"path":"/b"}`, "two"),
+		onboarding: []llmtest.Response{
+			persist(t, "a", "one"),
+			persist(t, "b", "two"),
 		},
 		review: []llmtest.Response{
 			sayAndCall(t, runner.SubmitReviewTool, `{"decision":"done","notes":"ok"}`, "judged"),
@@ -620,12 +545,9 @@ func TestTheReviewAfterARefusedJudgementMakesNoCall(t *testing.T) {
 	meter := &ceilingMeter{ceiling: 220} // two 100-token rounds fit; the 30-token judgement does not
 	r := extendableRunner(t, prov, pub, spendingJudge{}, meter)
 
-	work, _, err := r.Execute(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	onboard(t, r)
 	runs := len(prov.allRuns())
-	_, err = r.Review(context.Background(), 1, work, nil)
+	_, err := r.Review(context.Background(), 1, workFor("posted"), nil)
 	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
 		t.Fatalf("Review = %v, want the refusal the judgement left standing", err)
 	}
@@ -642,34 +564,28 @@ func TestTheReviewAfterARefusedJudgementMakesNoCall(t *testing.T) {
 // — billed, then charged — and once nothing more fits a window every charge
 // after is refused. Here the phase's two rounds fill the ceiling exactly: both
 // are admitted, nothing refused them, and the phase runs out of rounds with the
-// window full. So the extension is decided by the budget, not the judge: the
-// phase is rescued as incomplete, no judgement is bought, and the CLI asks its
-// model nothing past the two requests the window held. (The judge's own guard is
-// held in judge_internal_test.go.)
+// window full. So the extension is decided by the budget, not the judge: no
+// judgement is bought, and the CLI asks its model nothing past the two
+// requests the window held. (The judge's own guard is held in
+// judge_internal_test.go.)
 func TestNothingMoreIsBoughtOnARefusalAlreadyCertain(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llmtest.Response{
-		sayAndCall(t, "read_file", `{"path":"/a"}`, "one"),
-		sayAndCall(t, "read_file", `{"path":"/b"}`, "two"),
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
+		persist(t, "a", "one"),
+		persist(t, "b", "two"),
 	}}
 	pub := newCapture()
 	meter := &ceilingMeter{ceiling: 200}
 	r := extendableRunner(t, prov, pub, spendingJudge{}, meter)
 
-	w, _, err := r.Execute(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Execute = %v, want the phase rescued on the budget", err)
-	}
-	if !w.Rescued {
-		t.Errorf("the executor was not rescued, though nothing more could be bought")
-	}
+	onboard(t, r)
 	if got := phasesOfKind(t, pub, "judge"); len(got) != 0 {
 		t.Errorf("%d judge phases published on a refusal the meter already held", len(got))
 	}
 	if got := meter.charges(); !slices.Equal(got, []int{100, 100}) {
 		t.Errorf("charges = %v, want the two rounds and no judgement", got)
 	}
-	if got := prov.roundsOf("execute"); got != 2 {
+	if got := prov.roundsOf("onboarding"); got != 2 {
 		t.Errorf("the CLI made %d model requests, want the two the window held", got)
 	}
 }
@@ -765,9 +681,8 @@ func phasesOfKind(t *testing.T, c *capture, ph string) []*types.AgentPhaseComple
 // a tool call, and no caller did — so it was unreachable and the package doc's
 // claim that a forced tool call is ENFORCED held for no phase the engine ran. A
 // reviewer that answered with prose fell straight through to the rescue, which
-// sends the whole turn back for another executor round: a whole extra turn
-// spent on the one failure a model reliably fixes when it is simply asked
-// again. The reviewer's loop finishes by `submit_review`, so the corrective it
+// sends the whole turn back for another executor run: a whole extra run spent
+// on the one failure a model reliably fixes when it is simply asked again. The reviewer's loop finishes by `submit_review`, so the corrective it
 // gets now is the FINISHING one, naming that tool.
 func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T) {
 	t.Parallel()
@@ -823,20 +738,18 @@ func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T
 func TestALiveFrameCarriesNeitherThePromptNorWholeToolResults(t *testing.T) {
 	t.Parallel()
 	huge := strings.Repeat("x", 20_000)
-	prov := &scriptedProvider{execute: []llmtest.Response{
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
+		activating("read_file"),
 		submitCall(t, "read_file", `{"path":"/big"}`),
-		submitCall(t, runner.SubmitWorkTool,
-			`{"outcome":"delivered","summary":"read it"}`),
+		markDone(t, "read it"),
 		text("done"),
 	}}
 	pub := newCapture()
 	r := bigResultRunner(t, prov, pub, huge)
 
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	onboard(t, r)
 
-	for _, frame := range progressFrames(t, pub, "execute") {
+	for _, frame := range progressFrames(t, pub, "onboarding") {
 		// The prompt is sent ONCE, on the opening frame, and carried by the
 		// projection from there.
 		if frame.Prompt != "" || len(frame.PromptMessages) != 0 {
@@ -850,13 +763,13 @@ func TestALiveFrameCarriesNeitherThePromptNorWholeToolResults(t *testing.T) {
 		}
 	}
 	// The opening frame still carries it — that is its whole job.
-	opening := openingFrame(t, pub, "execute")
+	opening := openingFrame(t, pub, "onboarding")
 	if opening.Prompt == "" || len(opening.PromptMessages) == 0 {
 		t.Error("the opening frame carries no prompt, so the live row never gets one")
 	}
 	// AND THE DURABLE RECORD KEEPS THE RESULT WHOLE. A reader opens the
 	// finished card to read what a tool actually returned.
-	done := completedPhase(t, pub, "execute")
+	done := completedPhase(t, pub, "onboarding")
 	var stored string
 	for _, ex := range done.ToolExecutions {
 		if name, _ := ex["name"].(string); name == "read_file" {
@@ -868,8 +781,8 @@ func TestALiveFrameCarriesNeitherThePromptNorWholeToolResults(t *testing.T) {
 	}
 }
 
-// bigResultRunner is a seat whose one tool returns more than a frame should
-// carry.
+// bigResultRunner is a seat whose onboarding pass can reach one tool that
+// returns more than a frame should carry.
 func bigResultRunner(
 	t *testing.T, prov *scriptedProvider, pub queue.Publisher, out string,
 ) *runner.Runner {
@@ -879,18 +792,27 @@ func bigResultRunner(
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	reg := tools.NewRegistry()
-	if err := reg.Register(stubTool{name: "read_file", out: out}, tools.OriginBuiltin); err != nil {
-		t.Fatalf("Register: %v", err)
+	for _, tl := range []stubTool{
+		{name: "read_file", out: out},
+		{name: runner.ReflectAndPersistTool, out: "noted"},
+		{name: runner.MarkOnboardedTool, out: "marked"},
+	} {
+		if err := reg.Register(tl, tools.OriginBuiltin); err != nil {
+			t.Fatalf("Register: %v", err)
+		}
 	}
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
 	r, err := runner.New(runner.Config{
 		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
 		Registry: reg, Models: models,
-		Caps:      runner.Caps{ExecutorRounds: 4},
+		Launcher:  &playLauncher{},
 		Task:      "read the big file",
 		Publisher: pub,
 		Turn:      runner.Turn{RunID: "t-frames", WorkKey: "wk-t-frames", AgentID: "agent-1"},
 		Sessions:  sessions,
+		Onboarding: runner.Onboarding{
+			Markers: &markers{claimHeld: true}, Latch: runner.NewLatch(), Rounds: 4,
+		},
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -913,77 +835,49 @@ func openingFrame(t *testing.T, c *capture, ph string) *types.AgentTurnProgress 
 	return nil
 }
 
-// A RESUMED RUN COUNTS THE CALLS IT MADE BEFORE IT PARKED.
+// A RESUMED RUN COUNTS THE CALLS THE TURN MADE BEFORE IT PARKED.
 //
-// A resume is the same run in a fresh process with a fresh call log, and a
+// A resume is the same turn in a fresh process with a fresh call log, and a
 // write it makes derives its operation id's repeat count from that log. Left
-// empty, a call made again after a different one before the suspend counted
-// nothing and took its first copy's id — answered as that copy's retry, with
-// the different write's value in place. So the resume seeds the log with the
-// rounds that closed, the parked round's own calls and, for a box-mode run,
-// what it called over the bridge.
+// empty, a call made again after a different one counted nothing and took its
+// first copy's id — answered as that copy's retry, with the different write's
+// value in place. So the resume seeds the log with the rounds that closed and
+// what the run called over the bridge.
 func TestAResumedRunCountsTheCallsItMadeBeforeItParked(t *testing.T) {
 	t.Parallel()
 	first := map[string]any{"summary": "first"}
 	closed := []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{
 		{Name: "jira_create", Args: first},
 	}}}
-	parked := suspendedAfterTwoRounds()
-	parked.ToolExecutions = append(parked.ToolExecutions, types.ToolExecution{
-		"name": "jira_create", "arguments": `{"summary":"parked"}`, "success": true, "round": 2,
-	})
-
-	t.Run("a host-mode run", func(t *testing.T) {
-		t.Parallel()
-		calls := turnctx.NewCallLog()
-		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
-			execute: []llmtest.Response{sayAndCall(t, runner.SubmitWorkTool,
-				`{"outcome":"delivered","summary":"done"}`, "finish"), text("done")},
-		}}}, buildOpts{
-			resume: &runner.Resume{State: parked, Answer: "the run succeeded"},
-			calls:  calls,
-		})
-		if _, _, err := r.Resume(context.Background(), closed); err != nil {
-			t.Fatalf("Resume: %v", err)
-		}
-		if got := calls.Ordinal("jira_create", first); got != 1 {
-			t.Fatalf("after the resume the first create counts %d different "+
-				"creates before it, want the parked round's 1 — made again, it "+
-				"would take the first copy's id", got)
-		}
-		if got := calls.Ordinal("jira_create", map[string]any{"summary": "new"}); got != 2 {
-			t.Fatalf("a new create counts %d, want both the closed round's and "+
-				"the parked round's", got)
-		}
-	})
-
-	t.Run("a box-mode run", func(t *testing.T) {
-		t.Parallel()
-		calls := turnctx.NewCallLog()
-		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
-			buildOpts{agentRun: &recordingLauncher{}, calls: calls, resume: &runner.Resume{
-				State:  execstate.State{Version: execstate.Version, AgentRun: true, Round: 1},
-				Answer: "done",
-				Bridged: bridgedRun([]ledger.Call{
-					{Name: "jira_create", Args: map[string]any{"summary": "bridged"}},
-				}),
-			}})
-		if _, _, err := r.Resume(context.Background(), closed); err != nil {
-			t.Fatalf("Resume: %v", err)
-		}
-		if got := calls.Ordinal("jira_create", first); got != 1 {
-			t.Fatalf("after the resume the first create counts %d, want the "+
-				"bridged call's 1", got)
-		}
-	})
+	calls := turnctx.NewCallLog()
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{calls: calls, resume: &runner.Resume{
+			State:  execstate.State{Version: execstate.Version, Round: 2},
+			Answer: "done",
+			Bridged: []runner.BridgedCall{
+				{Call: ledger.Call{Name: "jira_create", Args: map[string]any{"summary": "bridged"}}},
+			},
+		}})
+	if _, _, err := r.Resume(context.Background(), closed); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if got := calls.Ordinal("jira_create", first); got != 1 {
+		t.Fatalf("after the resume the first create counts %d different creates "+
+			"before it, want the bridged call's 1 — made again, it would take "+
+			"the first copy's id", got)
+	}
+	if got := calls.Ordinal("jira_create", map[string]any{"summary": "new"}); got != 2 {
+		t.Fatalf("a new create counts %d, want both the closed round's and the "+
+			"bridged call's", got)
+	}
 }
 
-// A RESUMED RUN MAY CITE A DELIVERY A CLOSED ROUND MADE, on both runtimes.
+// A COLLECTED RUN MAY CITE A DELIVERY A CLOSED ROUND MADE.
 //
-// The citation check reads the TURN's record ([turn.Record]): the rounds
-// that closed before the suspend, then the phase's own calls. A resume that
-// read only the phase refused the one citation that was true, because the
-// prior-work ledger had told the round not to make that delivery again.
+// The citation check reads the TURN's record ([turn.Record]): the rounds that
+// closed before the park, then the run's own calls. A collection that read
+// only the run refused the one citation that was true, because the prior-work
+// ledger had told the run not to make that delivery again.
 func TestAResumedRunMayCiteADeliveryAClosedRoundMade(t *testing.T) {
 	t.Parallel()
 	tracker := func(t *testing.T, reg *tools.Registry) {
@@ -998,22 +892,7 @@ func TestAResumedRunMayCiteADeliveryAClosedRoundMade(t *testing.T) {
 	closed := []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{
 		{Name: "comment_on_work_item", Result: "commented"},
 	}}}
-
-	hostMode := func(t *testing.T, history []ledger.Iteration) turn.Work {
-		t.Helper()
-		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
-			execute: []llmtest.Response{submitCall(t, runner.SubmitWorkTool, citation)},
-		}}}, buildOpts{
-			reply: turn.ToolReply("work"), register: tracker,
-			resume: &runner.Resume{State: suspendedAfterTwoRounds(), Answer: "the run succeeded"},
-		})
-		w, _, err := r.Resume(context.Background(), history)
-		if err != nil {
-			t.Fatalf("Resume: %v", err)
-		}
-		return w
-	}
-	boxMode := func(t *testing.T, history []ledger.Iteration) turn.Work {
+	collect := func(t *testing.T, history []ledger.Iteration) turn.Work {
 		t.Helper()
 		var args map[string]any
 		if err := json.Unmarshal([]byte(citation), &args); err != nil {
@@ -1021,10 +900,10 @@ func TestAResumedRunMayCiteADeliveryAClosedRoundMade(t *testing.T) {
 		}
 		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 			buildOpts{reply: turn.ToolReply("work"), register: tracker,
-				agentRun: &recordingLauncher{}, resume: &runner.Resume{
-					State:   execstate.State{Version: execstate.Version, AgentRun: true, Round: 2},
+				resume: &runner.Resume{
+					State:   execstate.State{Version: execstate.Version, Round: 2},
 					Answer:  "done",
-					Bridged: bridgedRun([]ledger.Call{{Name: runner.SubmitWorkTool, Args: args}}),
+					Bridged: []runner.BridgedCall{{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: args}}},
 				}})
 		w, _, err := r.Resume(context.Background(), history)
 		if err != nil {
@@ -1033,21 +912,13 @@ func TestAResumedRunMayCiteADeliveryAClosedRoundMade(t *testing.T) {
 		return w
 	}
 
-	for name, resume := range map[string]func(*testing.T, []ledger.Iteration) turn.Work{
-		"a host-mode run": hostMode, "a box-mode run": boxMode,
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			if w := resume(t, closed); w.Rescued || w.Outcome != turn.OutcomeDelivered {
-				t.Errorf("outcome = %s (rescued %v), want the citation of the closed "+
-					"round's comment accepted", w.Outcome, w.Rescued)
-			}
-			// The counterfactual: with no closed round behind it the same
-			// citation names a comment nobody made, and is refused.
-			if w := resume(t, nil); !w.Rescued {
-				t.Errorf("outcome = %s, want a citation of a comment nobody made refused",
-					w.Outcome)
-			}
-		})
+	if w := collect(t, closed); w.Rescued || w.Outcome != turn.OutcomeDelivered {
+		t.Errorf("outcome = %s (rescued %v), want the citation of the closed "+
+			"round's comment accepted", w.Outcome, w.Rescued)
+	}
+	// The counterfactual: with no closed round behind it the same citation
+	// names a comment nobody made, and is refused.
+	if w := collect(t, nil); !w.Rescued {
+		t.Errorf("outcome = %s, want a citation of a comment nobody made refused", w.Outcome)
 	}
 }

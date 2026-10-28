@@ -216,16 +216,16 @@ func TestAStartingNodeAnswersEachRouteOnTheListenerThatWillServeIt(t *testing.T)
 	}
 }
 
-// A NODE WITHOUT INGRESS SERVES ITS PROBES AND NOTHING ELSE, its box-mode seats'
-// tool bridge included — a box reaches that through the nodes that serve the
-// API, which relay its call here. So while it starts nothing but the probes
-// answers on either socket: every other path is absent, as it is once the node
-// serves, and no caller is told to come back for a route this node will never
-// serve.
+// A NODE WITHOUT INGRESS SERVES THE NETWORK ITS PROBES AND NOTHING ELSE — a box
+// off its host reaches its seats' tools through the nodes that serve the API,
+// which relay its call here. So while it starts nothing but the probes answers
+// a caller off the host on either socket: every other path is absent, as it is
+// once the node serves, and no caller is told to come back for a route this
+// node will never serve it.
 func TestAStartingSeatsNodeServesOnlyItsProbes(t *testing.T) {
 	t.Parallel()
-	paths := []string{mcpbridge.PathPrefix + "a-token", "/webhooks/github", "/otlp/a-token/v1/traces",
-		"/agents", "/config"}
+	paths := []string{mcpbridge.PathPrefix + "a-token", mcpbridge.PathPrefix + "a-token/steer/notes",
+		"/webhooks/github", "/otlp/a-token/v1/traces", "/agents", "/config"}
 	for _, tc := range []struct {
 		name   string
 		public bool
@@ -255,6 +255,63 @@ func TestAStartingSeatsNodeServesOnlyItsProbes(t *testing.T) {
 		}
 		if rec := sendTo(t, boot.Public(), http.MethodGet, "/health"); !absent(t, rec) {
 			t.Errorf("%s: GET /health on api.public = %d, want its 404", tc.name, rec.Code)
+		}
+	}
+}
+
+// AND A BOX ON ITS OWN HOST IS TOLD TO COME BACK. A seats node serves the two
+// routes its own direct boxes dial on api.port, to this host's loopback alone
+// ([api.Probes]), and a direct run outlives its node's process: while the node
+// restarts, the run's calls reach the boot surface, and an absent route would
+// read to its CLI as a bridge that is gone rather than one about to answer. So
+// a loopback caller of either route is answered `503 starting`, and every
+// other path — and every caller off the host — exactly as before. A node that
+// runs no seats launches no box, and tells nobody to come back for them.
+//
+// Mutation: drop the loopback check and the off-host rows are told to come
+// back; register the routes on every node without ingress and the data node's
+// row is.
+func TestAStartingSeatsNodeTellsItsOwnBoxesToComeBack(t *testing.T) {
+	t.Parallel()
+	from := func(h http.Handler, remote, method, path string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader("{}"))
+		r.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec
+	}
+	boxes := []string{mcpbridge.PathPrefix + "a-token", mcpbridge.PathPrefix + "a-token/steer/notes",
+		auth.OTLPPrefix + "a-token/v1/traces"}
+	for _, tc := range []struct {
+		name   string
+		roles  []string
+		remote string
+		waits  bool
+	}{
+		{"a seats node, IPv4 loopback", []string{"seats"}, "127.0.0.1:41000", true},
+		{"a seats node, IPv6 loopback", []string{"data", "seats"}, "[::1]:41000", true},
+		{"a seats node, a caller off the host", []string{"seats"}, "192.0.2.7:41000", false},
+		{"a node that runs no seats, loopback", []string{"data", "workers"}, "127.0.0.1:41000", false},
+	} {
+		b := closedPosture()
+		b.Node.Roles = tc.roles
+		h := bootFor(t, b).Handler()
+		for _, path := range boxes {
+			rec := from(h, tc.remote, http.MethodPost, path)
+			switch {
+			case tc.waits && (rec.Code != http.StatusServiceUnavailable ||
+				!strings.Contains(rec.Body.String(), string(httpjson.CodeStarting))):
+				t.Errorf("%s: POST %s = %d %q, want the starting 503", tc.name, path,
+					rec.Code, rec.Body.String())
+			case !tc.waits && !absent(t, rec):
+				t.Errorf("%s: POST %s = %d, want its 404", tc.name, path, rec.Code)
+			}
+		}
+		// NOTHING ELSE COMES BACK, however near the caller.
+		for _, path := range []string{"/webhooks/github", "/agents", "/config"} {
+			if rec := from(h, tc.remote, http.MethodPost, path); !absent(t, rec) {
+				t.Errorf("%s: POST %s = %d, want its 404", tc.name, path, rec.Code)
+			}
 		}
 	}
 }
@@ -330,6 +387,7 @@ func TestAStartingNodeLogsNoRunTokenItRefuses(t *testing.T) {
 	boot := bootFor(t, closedPosture())
 	for _, path := range []string{
 		mcpbridge.PathPrefix + "the-secret-run-token",
+		mcpbridge.PathPrefix + "the-secret-run-token/steer/notes",
 		auth.OTLPPrefix + "the-secret-run-token/v1/traces",
 	} {
 		if rec := sendTo(t, boot.Handler(), http.MethodPost, path); rec.Code != http.StatusServiceUnavailable {
@@ -343,7 +401,8 @@ func TestAStartingNodeLogsNoRunTokenItRefuses(t *testing.T) {
 	if strings.Contains(logged, "the-secret-run-token") {
 		t.Errorf("a refusal logged the run token its path carried: %q", logged)
 	}
-	for _, want := range []string{mcpbridge.PathPrefix + "{token}", auth.OTLPPrefix + "{token}/v1/traces"} {
+	for _, want := range []string{mcpbridge.PathPrefix + "{token}",
+		mcpbridge.PathPrefix + "{token}/steer/notes", auth.OTLPPrefix + "{token}/v1/traces"} {
 		if !strings.Contains(logged, want) {
 			t.Errorf("the refusals logged %q, want the route %q named with its token "+
 				"replaced", logged, want)
@@ -411,7 +470,7 @@ func TestTheBootSurfaceRefusesAMissingDependency(t *testing.T) {
 
 // WHICH NODE BINDS api.public is one rule, read before the engine exists and
 // again when it serves: an ingress node whenever the file sets one, and nothing
-// else — not a node without ingress, whose box-mode seats a box reaches through
+// else — not a node without ingress, whose seats an executor box reaches through
 // the ingress nodes — and nothing on api.port 0.
 func TestWhichNodesBindAPublicListener(t *testing.T) {
 	t.Parallel()

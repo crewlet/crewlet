@@ -14,7 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -31,12 +31,14 @@ func (refusingWrite) Call(context.Context, map[string]any) (tools.Result, error)
 		Failed: true, Cause: tools.RefusalInvalid}, nil
 }
 
-// THE GP-38 TURN, REPLAYED THROUGH THE RUNNER (ADR-0059): the model asks for
-// the artifacts skill by the wrong key and is told the right one, loads it,
-// and then keeps writing a version its tool refuses. From the fourth refusal
-// on, the answer tells it to stop and raise a blocker, and the node counts the
-// loop once (crewlet.tools.policy_refusal_loops); the turn ends on its own
-// submission.
+// THE GP-38 TURN, REPLAYED THROUGH THE RUNNER (ADR-0059): the seat's executor
+// run asks over the tool bridge for the artifacts skill by the wrong key and is
+// told the right one, loads it, and then keeps writing a version its tool
+// refuses. From the fourth refusal on, the answer tells it to stop and raise a
+// blocker, and the node counts the loop once
+// (crewlet.tools.policy_refusal_loops); the run ends on its own submission,
+// which its surface accepts. Every call is played as the bridge plays it,
+// admitted to the surface the run was launched with ([play]).
 //
 // Mutation: drop the Metrics wiring from the runner's surface and nothing is
 // counted; drop the key list from load_tool_skill and the miss names none.
@@ -64,26 +66,25 @@ func TestTheGP38LoopIsStoppedAndCounted(t *testing.T) {
 		t.Fatal(err)
 	}
 	attempts := tools.PolicyRefusalLimit + 1
-	script := []llmtest.Response{
-		submitCall(t, builtin.LoadToolSkillTool, `{"key":"artifacts"}`),
-		submitCall(t, builtin.LoadToolSkillTool, `{"key":"`+builtin.ArtifactsToolSkillKey+`"}`),
+	script := []llm.ToolCall{
+		call(t, builtin.LoadToolSkillTool, `{"key":"artifacts"}`),
+		call(t, builtin.LoadToolSkillTool, `{"key":"`+builtin.ArtifactsToolSkillKey+`"}`),
 	}
 	for range attempts {
-		script = append(script, submitCall(t, "create_thing", `{}`))
+		script = append(script, call(t, "create_thing", `{}`))
 	}
-	script = append(script, submitCall(t, runner.SubmitWorkTool,
+	script = append(script, call(t, runner.SubmitWorkTool,
 		`{"outcome":"blocked","summary":"the brand kit is refused","evidence":"create_thing refused it"}`))
-	prov := &scriptedProvider{execute: script}
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: &scriptedProvider{}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	role := &org.Role{Name: "Designer", DeclaredHandle: "designer"}
 	o := &org.Organization{Name: "GoPhrase", Roles: []*org.Role{role}}
+	launcher := &playLauncher{}
 	r, err := runner.New(runner.Config{
 		Seat: prompts.Seat{Org: o, Role: role}, Registry: reg, Models: models, Skills: registry,
-		Caps: runner.Caps{ExecutorRounds: attempts + 4}, Task: "draft the brand kit (GP-38)",
-		Metrics: rec,
+		Task: "draft the brand kit (GP-38)", Metrics: rec, Launcher: launcher,
 		Turn: runner.Turn{RunID: "t-gp38", WorkKey: "GP-38", AgentID: "agent-designer",
 			Context: &turnctx.Turn{RunID: "t-gp38", WorkKey: "GP-38", Seat: role, Org: o}},
 		Sessions: sessions,
@@ -95,19 +96,21 @@ func TestTheGP38LoopIsStoppedAndCounted(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	if miss := prov.answerTo("execute", builtin.LoadToolSkillTool); !strings.Contains(miss,
+	answered := play(t, launcher.last(t), run{calls: script})
+
+	if miss := answered[0].Result; !strings.Contains(miss,
 		`Did you mean "`+builtin.ArtifactsToolSkillKey+`"?`) {
 		t.Errorf("the wrong key was answered %q", miss)
 	}
 	var stops int
-	for i, res := range prov.answered("execute") {
+	for i, res := range answered {
 		if res.Name != "create_thing" {
 			continue
 		}
-		if strings.Contains(res.Output, "STOP RETRYING create_thing") {
+		if strings.Contains(res.Result, "STOP RETRYING create_thing") {
 			stops++
-			if !strings.Contains(res.Output, "raise a blocker on it") {
-				t.Errorf("answer %d stops without saying to raise a blocker: %q", i, res.Output)
+			if !strings.Contains(res.Result, "raise a blocker on it") {
+				t.Errorf("answer %d stops without saying to raise a blocker: %q", i, res.Result)
 			}
 		}
 	}
@@ -123,5 +126,8 @@ func TestTheGP38LoopIsStoppedAndCounted(t *testing.T) {
 	}
 	if counted != 1 {
 		t.Errorf("the node counted %d refusal loops, want the one", counted)
+	}
+	if last := answered[len(answered)-1]; last.Name != runner.SubmitWorkTool || last.Failed {
+		t.Errorf("the run's own submission was answered %q (failed %v)", last.Result, last.Failed)
 	}
 }

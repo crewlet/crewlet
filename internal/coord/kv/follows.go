@@ -194,8 +194,8 @@ func (f *FleetStore) Unfollow(ctx context.Context, backend, handle, channel, thr
 // every expected-last-subject-sequence refusal through one path and has no
 // key-not-found arm at all, so a key a peer already removed arrives here as a
 // mismatch against an empty subject. The second arm is kept anyway, matching
-// [FleetStore.DeleteSandboxRun] — the mapping is the client's to change and
-// not ours to depend on.
+// [lostUpdateRace] — the mapping is the client's to change and not ours to
+// depend on.
 func (f *FleetStore) deleteFollowAt(ctx context.Context, key string, revision uint64) (bool, error) {
 	err := f.follows.Delete(ctx, key, jetstream.LastRevision(revision))
 	switch {

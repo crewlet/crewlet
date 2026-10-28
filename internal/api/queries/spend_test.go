@@ -29,6 +29,7 @@ const spendCompany = `
 name: Acme
 timezone: Asia/Tokyo
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

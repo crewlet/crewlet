@@ -105,6 +105,7 @@ import {
   failedIn,
   feedRows,
   fortnight,
+  lastTurnEnded,
   mayReadRecord,
   mayReadTrail,
   placementWords,
@@ -421,8 +422,7 @@ function CurrentTurn({
         </Card.Header>
         {last && (
           <p className="prof-turn-last">
-            Its last turn {last.outcome === "failed" ? "failed" : "ended"}{" "}
-            {relTime(last.ended_at, now)}.
+            Its last turn {lastTurnEnded(last.outcome)} {relTime(last.ended_at, now)}.
           </p>
         )}
       </Card>

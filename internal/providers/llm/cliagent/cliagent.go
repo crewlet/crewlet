@@ -2,6 +2,15 @@
 // subscription for, headless, behind [llm.Provider]: a seat's phase as the
 // CLI's own loop over the seat's tools, and a text function as one answer.
 //
+// It is the backend of every phase but one: the reviewer, delegated workers,
+// onboarding and the side passes call [Provider.Complete] on this host, with
+// the CLI's own shell and file tools denied by its profile. A seat's EXECUTOR
+// is not a call through it — it is the same CLI's own agentic run in a box
+// (internal/sandbox/codingagent), which reads this entry's identity from here
+// ([Provider.Agent], [Provider.ModelArgument], the Sandbox* environment and
+// credentials) and, at launch, whether the entry sits out
+// ([Provider.SittingOut]).
+//
 // WHICH CLIs is the profile table's answer, not this comment's —
 // [cliprofile.BuiltinNames] reads the shipped table and config's tests hold it
 // to the agent names a document may write. A
@@ -83,9 +92,6 @@ type Config struct {
 	Model string
 	// Agent names the built-in profile.
 	Agent string
-	// Box runs a seat's executor as a detached run of the CLI in a box of
-	// providers.sandbox rather than on this host. See [Provider.Box].
-	Box bool
 	// StateDir is the resolved state directory. The CLI keeps its login and
 	// its per-seat homes under <StateDir>/<Agent> ([Shared]), so entries on
 	// one directory share a login only when they drive one CLI.
@@ -123,7 +129,6 @@ type Provider struct {
 	key     string
 	model   string
 	agent   string
-	box     bool
 	profile cliprofile.Profile
 	ws      *Workspace
 	env     map[string]string
@@ -202,7 +207,6 @@ func New(cfg Config) (*Provider, error) {
 		bundleConfigured: cfg.CredentialBundleConfigured,
 		model:            cfg.Model,
 		agent:            cfg.Agent,
-		box:              cfg.Box,
 		profile:          profile,
 		ws:               ws,
 		env:              cfg.Env,
@@ -232,30 +236,10 @@ func (p *Provider) Model() string { return p.model }
 // Key is the providers.llm key the entry was built under.
 func (p *Provider) Key() string { return p.key }
 
-// ModelArgument is the model exactly as this entry's text calls hand it to the
-// CLI ([cliprofile.Profile.ModelArgument]) — what a coding run of the same CLI
-// is handed too, so a box and a text call on one entry name one model.
+// ModelArgument is the model exactly as this entry's runs on this host hand it
+// to the CLI ([cliprofile.Profile.ModelArgument]) — what the executor's run of
+// the same CLI in a box is handed too, so the two name one model.
 func (p *Provider) ModelArgument() string { return p.profile.ModelArgument(p.model) }
-
-// Box reports whether this entry runs a seat's executor as a detached run of
-// the CLI in a box (`mode: box`) rather than on this host behind the engine's
-// tool loop.
-//
-// The provider is still a full [llm.Provider] in box mode, and deliberately:
-// every OTHER phase — the reviewer, a worker, the summariser, the round-cap
-// judge — runs on this host, and a seat pointing `llm` at a box entry must not
-// lose them. Only the executor branches, and only the engine knows where that
-// branch is.
-func (p *Provider) Box() bool { return p.box }
-
-// CodingAgent is the sandbox runner that drives this CLI in box mode.
-//
-// It is the CLI's own name, because the runner registry is keyed on exactly
-// that: box mode reuses the coding-agent runners rather than growing a
-// second way to invoke the same binary with the same flags. A CLI with no
-// registered runner is refused where the run is built, by a message that
-// names what IS registered — see [sandbox.Manager.RunnerFor].
-func (p *Provider) CodingAgent() string { return p.agent }
 
 // Profile is the resolved profile, for `crewlet llm doctor`.
 func (p *Provider) Profile() cliprofile.Profile { return p.profile }
@@ -264,7 +248,11 @@ func (p *Provider) Profile() cliprofile.Profile { return p.profile }
 // entry on the same directory and CLI shares.
 func (p *Provider) Workspace() *Workspace { return p.ws }
 
-// Agent is which CLI this provider drives.
+// Agent is which CLI this provider drives — its profile name, which is also
+// the key the in-box runner registry is keyed on ([sandbox.Manager.RunnerFor]):
+// an executor run reuses the runner for the same binary rather than a second
+// way to invoke it, so this one name answers both "which CLI" and "which
+// runner".
 func (p *Provider) Agent() string { return p.agent }
 
 // AuthMode is how this entry signs its CLI in ([Auth.Mode]), for a caller that
@@ -311,7 +299,7 @@ func (p *Provider) routeFor(req llm.Request) cliprofile.Route {
 // Complete runs one CLI invocation and reads its answer.
 //
 // An entry its CLI last reported spent is NOT called while it sits out
-// ([Provider.benched]): the call fails at once as a rate limit, naming the
+// ([Provider.SittingOut]): the call fails at once as a rate limit, naming the
 // instant, so the seat's chain moves to its next model without a process
 // launched to learn again what the last one said. Checked as the call arrives
 // and again once it holds a slot, because a call that queued for one may have
@@ -333,14 +321,14 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	}
 	p.remember(err)
 	if err == nil {
-		p.answered()
+		p.answered(p.now())
 	}
 	return comp, err
 }
 
 // complete is one call, as [Provider.Complete] describes it.
 func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
-	if err := p.benched(); err != nil {
+	if err := p.SittingOut(); err != nil {
 		return nil, err
 	}
 	if req.Tools != nil && p.profile.MCP == nil {
@@ -384,7 +372,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// here, the queue drains at once, each call handing its slot to the next
 	// through the release deferred above. The check at the top stays: it
 	// spares a call that arrives during a sit-out the render and the queue.
-	if sitting := p.benched(); sitting != nil {
+	if sitting := p.SittingOut(); sitting != nil {
 		return nil, sitting
 	}
 
@@ -815,8 +803,9 @@ func (p *Provider) completion(
 	// which does not share this one's outage: trying it costs one process
 	// launch, and stopping cost the seat every turn for as long as the outage
 	// lasted, each redelivered against the same dead head. Nothing is
-	// repeated by the walk, either — a text call runs none of the seat's
-	// tools; the engine runs those once an answer is back.
+	// repeated by the walk, either: the calls a run made are on its
+	// session's record, which the next member continues from rather than
+	// runs again (internal/providers/llm/chain).
 	//
 	// NOT BENCHED: only a spent plan sits the entry out ([Provider.bench]),
 	// because only a spent plan is known to last. A failure the next call

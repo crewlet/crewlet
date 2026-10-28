@@ -99,12 +99,6 @@ type Deps struct {
 	// with topics and no publisher.
 	Events Telemetry
 
-	// Sandbox launches a detached coding run. Nil omits run_sandbox, which
-	// is what a build with no providers.sandbox has — and omitting it is
-	// the point: a seat offered a code tool that cannot start a box would
-	// reach for one and fail at the call.
-	Sandbox SandboxLauncher
-
 	// Knowledge searches the team knowledge base on demand. Nil omits
 	// search_knowledge, which is what a company with no knowledge backend
 	// has — and it is the same seam the turn-start prefetch reads, so the
@@ -189,7 +183,6 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		}, deps.Diary != nil},
 		{&reflectAndPersist{diary: deps.Diary}, deps.Diary != nil},
 		{&markOnboarded{onboarding: deps.Onboarding}, deps.Onboarding != nil},
-		{&runSandbox{launcher: deps.Sandbox}, deps.Sandbox != nil},
 		{&loadToolSkill{skills: deps.ToolSkills, events: deps.Events}, deps.ToolSkills != nil},
 		{&searchKnowledge{search: deps.Knowledge, events: deps.Events}, deps.Knowledge != nil},
 		{&listWorkItems{deps: deps.Work}, deps.Work.Reader != nil},
@@ -367,18 +360,6 @@ func annotationsFor(name string) tools.Annotations {
 		// It used to fall through the default arm, where the missing hint
 		// made it a shared write.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.No}
-	case RunSandboxTool:
-		// The one builtin that writes to a SHARED SURFACE, which
-		// ReadOnly=No plus OpenWorld=Yes is how that is stated: a coding
-		// run pushes branches and opens pull requests other people see, so
-		// mcp.WritesToSharedSurface reads true and the sub-agent guard
-		// keeps it away from a sub-agent acting under its parent's name,
-		// which ALSO denies it by name for a second and independent
-		// reason — a worker cannot park for a detached run's result.
-		// Not destructive — a branch and a pull request are additive — and
-		// nowhere near idempotent: a second call is a second run, a second
-		// box, and a second set of commits.
-		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case ListWorkItemsTool, GetWorkItemTool, ListPagesTool, GetPageTool,
 		worklet.GetWorkCatalogueTool, worklet.ListProjectsTool,
 		worklet.DescribeProjectTool,
@@ -584,8 +565,9 @@ func annotationsFor(name string) tools.Annotations {
 		// than the engine's protection.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes}
 	case PauseSeatTool:
-		// DESTRUCTIVE, because `stop_running` ends a turn mid-flight and the
-		// turn is not run again — what it had not yet done is lost. Otherwise
+		// DESTRUCTIVE, because `stop_running` ends a turn mid-flight, and the
+		// coding run it has out with its box, and neither is run again —
+		// what they had not yet done is lost. Otherwise
 		// reversible, and IDEMPOTENT: a second pause of a paused seat changes
 		// nothing. Closed-world: it changes whether one of the company's own
 		// seats works, and reaches nothing outside the engine.

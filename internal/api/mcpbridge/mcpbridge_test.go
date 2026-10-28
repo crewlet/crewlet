@@ -3,6 +3,7 @@ package mcpbridge_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -323,9 +324,10 @@ func TestClosingTwiceIsSafe(t *testing.T) {
 // cost a fleet the one diagnosis the fleet's key buys: a peer a misrouted call
 // reaches could no longer tell a token its fleet signed from a forged one.
 // Every node holds a keyring now, so a caller arriving without one is a wiring
-// mistake, refused by name at both entrances — and [mcpbridge.Build] with no
-// base URL still builds nothing and refuses nothing, because most deployments
-// bridge nothing and that is not a keyring question.
+// mistake, refused by name at both entrances — and [mcpbridge.Build] with
+// neither a base URL nor a host URL still builds nothing and refuses nothing,
+// because a node with no address a box can dial is a node that binds no
+// listener, and that is not a keyring question.
 //
 // Mutation: restore the per-process fallback in runtoken.New and every row
 // builds a bridge.
@@ -346,25 +348,93 @@ func TestAKeyringThatCannotSignBuildsNoBridge(t *testing.T) {
 			if b, err := mcpbridge.New(mcpbridge.Options{Material: material}); !errors.Is(err, runtoken.ErrNoKeyring) || b != nil {
 				t.Errorf("New = %v, %v, want ErrNoKeyring and no bridge", b, err)
 			}
-			if b, err := mcpbridge.Build(env, material); !errors.Is(err, runtoken.ErrNoKeyring) || b != nil {
+			if b, err := mcpbridge.Build(env, material, ""); !errors.Is(err, runtoken.ErrNoKeyring) || b != nil {
 				t.Errorf("Build = %v, %v, want ErrNoKeyring and no bridge", b, err)
 			}
-			// THE CONTROL: with no base URL nothing is built, whatever the
-			// keyring, and that is a configuration rather than a refusal.
-			if b, err := mcpbridge.Build(func(string) string { return "" }, material); err != nil || b != nil {
+			// THE CONTROL: with no address at all nothing is built,
+			// whatever the keyring, and that is a configuration rather
+			// than a refusal.
+			if b, err := mcpbridge.Build(func(string) string { return "" }, material, ""); err != nil || b != nil {
 				t.Errorf("Build with no base URL = %v, %v, want nothing and no error", b, err)
 			}
 		})
 	}
 	// And a usable keyring builds one, so the rows above are refused for the
 	// keyring and not for something else Build dislikes.
-	if b, err := mcpbridge.Build(env, runtoken.OneKey("k1", "m")); err != nil || b == nil {
+	if b, err := mcpbridge.Build(env, runtoken.OneKey("k1", "m"), ""); err != nil || b == nil {
 		t.Fatalf("Build with a usable keyring = %v, %v, want a bridge", b, err)
 	}
 }
 
+// A BOX ON THE NODE'S OWN HOST DIALS THE NODE'S OWN LISTENER. The `direct`
+// cell's run is a process of this host, so the listener the node bound is an
+// address it can always dial, and the quickstart's company — one `direct` cell
+// and no CREWLET_MCP_BRIDGE_URL — has to bridge on that alone. A box in any
+// other cell cannot dial the host's loopback, so it is given the variable's
+// address or nothing, never the loopback one.
+//
+// And preferred to the variable for a host box even where both are set:
+// loopback never leaves the host, while the variable may route through a load
+// balancer to any peer of the fleet.
+//
+// Mutation: drop hostURL from Build and the host-only row builds nothing; give
+// Reaches the host URL for every box and the container row dials loopback;
+// prefer the base URL for a host box and the both-set row does.
+func TestABoxOnTheHostDialsTheNodesOwnListener(t *testing.T) {
+	t.Parallel()
+	const host, base = "http://127.0.0.1:8080", "https://engine.example.com"
+	withBase := func(name string) string {
+		if name == mcpbridge.BaseURLVar {
+			return base
+		}
+		return ""
+	}
+	noEnv := func(string) string { return "" }
+	for _, tc := range []struct {
+		name          string
+		env           func(string) string
+		host          string
+		onHost, other string
+	}{
+		{"the host URL alone", noEnv, host, host, ""},
+		{"the variable alone", withBase, "", base, base},
+		{"both", withBase, host, host, base},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b, err := mcpbridge.Build(tc.env, runtoken.OneKey("k", "k"), tc.host)
+			if err != nil || b == nil {
+				t.Fatalf("Build = %v, %v, want a bridge", b, err)
+			}
+			if got := b.Reaches(true); got != tc.onHost {
+				t.Errorf("a box on the host dials %q, want %q", got, tc.onHost)
+			}
+			if got := b.Reaches(false); got != tc.other {
+				t.Errorf("a box off the host dials %q, want %q", got, tc.other)
+			}
+			_ = b.Handler()
+			for _, onHost := range []bool{true, false} {
+				want := tc.other
+				if onHost {
+					want = tc.onHost
+				}
+				endpoint := b.Open(t.Context(), &mcpbridge.Session{
+					RunID: fmt.Sprintf("run-%t", onHost), Launch: "job-1", Handle: "dev",
+					Surface: emptySurface(), OnHost: onHost,
+				})
+				switch {
+				case want == "" && endpoint != "":
+					t.Errorf("on host %t: minted %q with no address that box can dial", onHost, endpoint)
+				case want != "" && !strings.HasPrefix(endpoint, want+mcpbridge.PathPrefix):
+					t.Errorf("on host %t: endpoint %q, want it under %q", onHost, endpoint, want)
+				}
+			}
+		})
+	}
+}
+
 // A DEPLOYMENT WHOSE API IS NOT REACHABLE FROM A BOX cannot bridge, and the
-// honest answer is an empty endpoint the caller can refuse box mode on —
+// honest answer is an empty endpoint the caller can refuse the launch on —
 // not a run that starts and fails on its first tool call.
 //
 // AND NOTHING IS REGISTERED FOR IT. The minted token is the only way to reach
@@ -528,6 +598,75 @@ func TestAFailingToolComesBackWithItsReason(t *testing.T) {
 	}
 }
 
+// statusTool takes a closed set, so a case can tell the spelling a model sent
+// from the one its tool reads.
+type statusTool struct{ stubTool }
+
+func (*statusTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{
+		"status": map[string]any{"type": "string", "enum": []any{"draft", "published"}},
+		"note":   map[string]any{"type": "string"},
+	}}
+}
+
+// AN EXECUTOR RUN'S CALL IS HELD TO ITS TOOL'S SCHEMA OVER THE BRIDGE
+// (ADR-0059), by the surface's one path ([tools.Invoke]) and no check of the
+// bridge's own: the tool reads a closed set's member as its schema spells it;
+// a call answered outside its schema carries the note to the CLI and onto the
+// run's durable record, which a collected run's record is read from; and a
+// value the tool would misread is refused before it runs, the refusal on the
+// record too. The record keeps the spelling the model sent, which a resume
+// reads back canonically (internal/agent/runner's seedCalls).
+//
+// Mutation: answer a bridged call with the tool's own output rather than the
+// surface's rendered one and the note reaches neither the CLI nor the record;
+// call the tool directly from the surface and the misread runs.
+func TestABridgedCallIsHeldToItsToolsSchema(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	reg := tools.NewRegistry()
+	status := &statusTool{stubTool{name: "set_status"}}
+	if err := reg.RegisterWith(status, tools.OriginBuiltin,
+		tools.Annotations{ReadOnly: crewletmcp.No}); err != nil {
+		t.Fatal(err)
+	}
+	f.session.Surface = tools.NewSurface("execute", reg.Snapshot(), []string{"set_status"}).
+		ForTurn(seatTurn())
+	sess := dial(t, f.open(t))
+
+	res := callTool(t, sess, "set_status", map[string]any{"status": " Draft", "tittle": "x"})
+	if res.IsError {
+		t.Fatalf("the call failed: %s", text(res))
+	}
+	if seen := status.seen(); len(seen) != 1 || seen[0]["status"] != "draft" {
+		t.Errorf("the tool read %+v, want the status as its schema spells it", seen)
+	}
+	const note = "\n\nNote: set_status ran, but these arguments are outside its schema"
+	if got := text(res); !strings.HasPrefix(got, "set_status ok"+note) ||
+		!strings.Contains(got, "`tittle` is not an argument") {
+		t.Errorf("the CLI was answered %q, want the output and the note on the unknown argument", got)
+	}
+
+	refused := callTool(t, sess, "set_status", map[string]any{"note": map[string]any{"x": 1}})
+	if !refused.IsError || !strings.Contains(text(refused), "set_status did not run") {
+		t.Errorf("a misread was answered %+v / %q", refused.IsError, text(refused))
+	}
+	if len(status.seen()) != 1 {
+		t.Error("the tool ran on a value it would misread")
+	}
+
+	rows := f.ledger.rows()
+	if len(rows) != 2 {
+		t.Fatalf("%d rows, want both calls: %+v", len(rows), rows)
+	}
+	if !strings.HasPrefix(rows[0].Output, "set_status ok"+note) || rows[0].Args["status"] != " Draft" {
+		t.Errorf("the record is %+v, want the noted answer and the model's own spelling", rows[0])
+	}
+	if !rows[1].Failed || !strings.Contains(rows[1].Output, "set_status did not run") {
+		t.Errorf("the refusal's record is %+v", rows[1])
+	}
+}
+
 // --- the durable ledger ----------------------------------------------------
 
 // A NATIVE TOOL LOOP KEEPS ITS CALLS IN MEMORY and the turn writes them at the
@@ -590,7 +729,7 @@ func TestARunWithNoLedgerStillDispatches(t *testing.T) {
 // own map entry. The SDK keeps every session a box opened — transport,
 // server, and through the server's handlers the seat's live surface — until
 // the client sends a DELETE or an idle clock fires, and a box torn down
-// mid-run sends nothing. Left there, each box-mode run this process ever
+// mid-run sends nothing. Left there, each executor run this process ever
 // served would pin its seat's surface for the life of the process.
 func TestClosingARunEndsTheBoxesOpenSessions(t *testing.T) {
 	t.Parallel()
@@ -687,7 +826,7 @@ func TestASupersededBoxsTokenNoLongerResolves(t *testing.T) {
 	}
 }
 
-// A BOX'S TOKEN OUTLIVES THE PROCESS THAT MINTED IT. A box-mode run goes on
+// A BOX'S TOKEN OUTLIVES THE PROCESS THAT MINTED IT. A detached run goes on
 // calling for as long as its CLI runs, and the node it dials can restart in
 // the meantime: the new process holds no session until it takes the run's
 // seat back, and then it opens the run's JOB again — and the token the box

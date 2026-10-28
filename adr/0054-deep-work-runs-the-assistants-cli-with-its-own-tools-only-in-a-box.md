@@ -2,15 +2,15 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistant`
-- **Enforced-by:** `internal/assistant.TestDeepWorkIsOfferedOnlyWhereItCanRun`, `internal/assistant.TestADeepRunReachesCrewletOnlyThroughTheTurnsSurface`, `internal/assistant.TestAProposalParksTheRunAndTheApprovalContinuesIt`, `internal/assistant.TestAStopKillsTheRun`, `internal/assistant.TestARunsCrewletCallsAreCapped`, `internal/assistant.TestARunNeverOutlivesTheTurnsGrant`, `internal/assistant.TestARunsTokensAreChargedToTheTurn`, `internal/assistant.TestTheBrandRedesignDeliversAssetsAndProposesThemIntoTheDraft`, `internal/assistant.TestAFilesTypeIsReadFromItsBytes`, `internal/engine.TestADeepRunReachesCrewletOnlyThroughItsSurface`, `internal/engine.TestADeepRunIsStoppedAtItsTokenCap`, `internal/engine.TestAnUnconfinableHostRefusesDeepWork`, `internal/engine.TestTheHostConfinementDeniesTheEnginesPaths`, `internal/sandbox.TestAConfinedHostBoxCannotReachTheEngine`, `internal/sandbox.TestAConfinementWithoutAMechanismIsRefused`, `internal/api/mcpbridge.TestASeatSessionIsByteIdenticalOnTheWire`, `internal/api/mcpbridge.TestACallIsDecidedAsItsCallerNeverAsTheRequest`, `internal/api/mcpbridge.TestASessionsTTLCapsItsToken`, `internal/api/mcpbridge.TestAClosedDeepRunsTokenIsRefused`, `internal/api/mcpbridge.TestALoopbackSessionRefusesAnotherHost`, `internal/config.TestDeepWorkIsHandedOutOnlyForAnAgentModeEntry`, `internal/config.TestDeepWorkPrefersAConfiguredSandbox`, `internal/providers/llm/cliagent.TestTheAssistantArgvLeavesTheCLIWithNoToolOfItsOwn`, `internal/providers/llm/cliagent.TestTheAssistantsQuickModeArgvIsUnchanged`
+- **Enforced-by:** `internal/assistant.TestDeepWorkIsOfferedOnlyWhereItCanRun`, `internal/assistant.TestADeepRunReachesCrewletOnlyThroughTheTurnsSurface`, `internal/assistant.TestAProposalParksTheRunAndTheApprovalContinuesIt`, `internal/assistant.TestAStopKillsTheRun`, `internal/assistant.TestARunsCrewletCallsAreCapped`, `internal/assistant.TestARunNeverOutlivesTheTurnsGrant`, `internal/assistant.TestARunsTokensAreChargedToTheTurn`, `internal/assistant.TestTheBrandRedesignDeliversAssetsAndProposesThemIntoTheDraft`, `internal/assistant.TestAFilesTypeIsReadFromItsBytes`, `internal/engine.TestADeepRunReachesCrewletOnlyThroughItsSurface`, `internal/engine.TestADeepRunIsStoppedAtItsTokenCap`, `internal/engine.TestAnUnconfinableHostRefusesDeepWork`, `internal/engine.TestTheHostConfinementDeniesTheEnginesPaths`, `internal/engine.TestADeepWorkBoxIsMadeUnderTheCompanysBoxRoot`, `internal/engine.TestADeepWorkBoxIsReachedAfterItsBoxRootMoves`, `internal/sandbox.TestAConfinedHostBoxCannotReachTheEngine`, `internal/sandbox.TestAConfinementWithoutAMechanismIsRefused`, `internal/api/mcpbridge.TestASeatSessionIsByteIdenticalOnTheWire`, `internal/api/mcpbridge.TestACallIsDecidedAsItsCallerNeverAsTheRequest`, `internal/api/mcpbridge.TestASessionsTTLCapsItsToken`, `internal/api/mcpbridge.TestAClosedDeepRunsTokenIsRefused`, `internal/api/mcpbridge.TestALoopbackSessionRefusesAnotherHost`, `internal/config.TestDeepWorkIsHandedOutOnlyForAClaudeCodeEntry`, `internal/config.TestDeepWorkPrefersAConfiguredSandbox`, `internal/providers/llm/cliagent.TestTheAssistantArgvLeavesTheCLIWithNoToolOfItsOwn`, `internal/providers/llm/cliagent.TestTheAssistantsQuickModeArgvIsUnchanged`
 - **Cost-when-tried:** quick mode alone answers a single read or a single change well, and cannot do a task that needs research, a script, a generated file, an attached image or a hundred steps: the person asked for a team redesign from a month of work, or a new set of brand assets, and the assistant could only describe what it would have done
 - **Tag-status:** unreleased
 
 ## The decision
 
 **A Dashboard Assistant turn may hand its task to a deep-work run: the
-company's `assistant.deep_work` entry, a coding CLI in box mode, with its own
-shell, files, web search and fetch, and image reading.** The assistant starts in
+company's `assistant.deep_work` entry, its Claude Code CLI's own run in a box,
+with its own shell, files, web search and fetch, and image reading.** The assistant starts in
 quick mode, whose model still has no tool of its own (ADR-0050), and escalates
 by calling `start_deep_work` itself; the drawer shows the run as one step of
 the turn, with its progress, and the Crewlet calls it makes nested under it.
@@ -39,8 +39,15 @@ strongest OS confinement the host enforces (sandbox-exec on macOS, bubblewrap
 over namespaces or Landlock on Linux): a box root of its own, an allowlisted
 environment with no engine secret, and no read or write of the engine's data
 directory, stream store, log, keyring and config files, any CLI login, any
-seat's box or the operator's home. A host that can enforce none of these runs
-no deep work, and an administrator is told why; it never runs unconfined.
+seat's box or the operator's home. That box root is a directory of its own
+beneath the company's local box root (`providers.sandbox.local.state_dir`,
+else its default), where its seats' boxes are made, so a run's writes land on
+the volume sized for boxes and never on the one holding the store and the
+stream, and a seat's backend, which lists and reaps only its own directory
+there, never reaches one. Every box root the node has made a run's box under
+stays denied to every other run after a revision moves it. A host that can
+enforce none of these runs no deep work, and an administrator is told why; it
+never runs unconfined.
 
 **The box is the only place it writes, temporary files included.** Every
 temporary root its processes read (`TMPDIR`, `TMP`, `TEMP` and Claude Code's

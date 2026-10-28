@@ -44,44 +44,44 @@ func dangling(msgs []llm.Message) []string {
 	return out
 }
 
-// TWO DETACHED RUNS IN ONE RESPONSE PARK THE PHASE ON ONE. Each starts work a
-// parked phase answers for only one of, so they run alone, the first parks, and
-// the second is never run — answered as not run, so the conversation holds
-// exactly one dangling call, which is the invariant a resume checks.
+// TWO DETACHED CALLS IN ONE RESPONSE PARK THE PHASE ON ONE. Each starts work a
+// parked phase answers for only one of — two changes, each waiting on a
+// person's approval — so they run alone, the first parks, and the second is
+// never run — answered as not run, so the conversation holds exactly one
+// dangling call, which is the invariant a resume checks.
 //
 // Issued at once, the two race for the gate, so that case is tried repeatedly:
 // a park decided only after the gate is let go admits the second now and then.
-func TestTwoDetachedRunsInOneResponseParkOnOne(t *testing.T) {
+func TestTwoDetachedCallsInOneResponseParkOnOne(t *testing.T) {
 	t.Parallel()
 	cases := []bool{false}
 	for range 20 {
 		cases = append(cases, true)
 	}
 	for _, parallel := range cases {
-		surf := newSurface("run_sandbox")
-		surf.detached["run_sandbox"] = true
-		surf.results["run_sandbox"] = toolloop.ToolResult{Output: "started", Suspend: true,
-			SuspendPayload: map[string]any{"job": "j1"}}
+		surf := newSurface("propose_change")
+		surf.detached["propose_change"] = true
+		surf.results["propose_change"] = toolloop.ToolResult{Output: "proposed", Suspend: true}
 		prov := script(runOf(llmtest.Response{Parallel: parallel, Calls: []llmtest.Call{
-			{ID: "a", Name: "run_sandbox", Args: `{"task":"one"}`},
-			{ID: "b", Name: "run_sandbox", Args: `{"task":"two"}`},
+			{ID: "a", Name: "propose_change", Args: `{"change":"one"}`},
+			{ID: "b", Name: "propose_change", Args: `{"change":"two"}`},
 		}}))
 		res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, AllowSuspend: true})
 		if err != nil {
 			t.Fatalf("parallel %v: Run: %v", parallel, err)
 		}
-		if !res.Suspended || res.PendingToolName != "run_sandbox" {
-			t.Fatalf("parallel %v: result %+v, want parked on a run_sandbox", parallel, res)
+		if !res.Suspended || res.PendingToolName != "propose_change" {
+			t.Fatalf("parallel %v: result %+v, want parked on a propose_change", parallel, res)
 		}
 		if got := surf.calls(); len(got) != 1 {
-			t.Errorf("parallel %v: the surface ran %v, want one detached run", parallel, got)
+			t.Errorf("parallel %v: the surface ran %v, want one detached call", parallel, got)
 		}
 		if d := dangling(res.Messages); len(d) != 1 || d[0] != res.PendingToolCallID {
 			t.Errorf("parallel %v: dangling %v, want exactly the parked call %s", parallel, d, res.PendingToolCallID)
 		}
 		for _, m := range toolResults(res.Messages) {
 			if !m.Failed || !strings.Contains(strings.ToLower(m.Content), "not run") {
-				t.Errorf("parallel %v: the other run is answered %+v, want not run", parallel, m)
+				t.Errorf("parallel %v: the other call is answered %+v, want not run", parallel, m)
 			}
 		}
 	}
@@ -513,11 +513,11 @@ func (l *lagging) Complete(ctx context.Context, req llm.Request) (*llm.Completio
 // exactly what the CLI was told, failed, so the two never disagree about it.
 func TestASuspendIsRefusedWhereItCannotBeResumed(t *testing.T) {
 	t.Parallel()
-	surf := newSurface("run_sandbox")
-	surf.detached["run_sandbox"] = true
-	surf.results["run_sandbox"] = toolloop.ToolResult{Output: "launched", Suspend: true}
+	surf := newSurface("propose_change")
+	surf.detached["propose_change"] = true
+	surf.results["propose_change"] = toolloop.ToolResult{Output: "proposed", Suspend: true}
 	prov := script(runOf(
-		llmtest.Response{Calls: []llmtest.Call{{ID: "call-1", Name: "run_sandbox"}}},
+		llmtest.Response{Calls: []llmtest.Call{{ID: "call-1", Name: "propose_change"}}},
 		says("understood"),
 	))
 	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, AllowSuspend: false})
@@ -540,32 +540,34 @@ func TestASuspendIsRefusedWhereItCannotBeResumed(t *testing.T) {
 	}
 }
 
-// A LONG CALL BESIDE ANOTHER LETS THE OTHER RUN. A call that waits on other
-// model runs ends its run — but not before the rest of its response: a CLI that
-// waits on each answer is told "still running" so it makes the next call, and
-// the run ends after that one, whose answer is withheld. The next run is handed
-// both results.
+// A LONG CALL BESIDE ANOTHER LETS THE OTHER RUN. A call still running near the
+// CLI's own tool timeout ends its run — but not before the rest of its
+// response: a CLI that waits on each answer is told "still running" so it makes
+// the next call, and the run ends after that one, whose answer is withheld. The
+// next run is handed both results.
 func TestALongCallBesideAnotherLetsTheOtherRun(t *testing.T) {
 	t.Parallel()
-	surf := newSurface("delegate", "post", "submit_work")
-	surf.results["delegate"] = toolloop.ToolResult{Output: "the workers' answer"}
+	surf := newSurface("slow", "post", "submit_work")
+	surf.results["slow"] = toolloop.ToolResult{Output: "the slow call's answer"}
 	surf.hook = func(_ context.Context, call llm.ToolCall) {
-		if call.Name == "delegate" {
-			time.Sleep(50 * time.Millisecond)
+		if call.Name == "slow" {
+			time.Sleep(600 * time.Millisecond)
 		}
 	}
 	prov := script(
-		runOf(calling("", "delegate", "post"), says("never reached in this run")),
+		runOf(calling("", "slow", "post"), says("never reached in this run")),
 		runOf(calling("", "submit_work")),
 	)
-	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf, ParkLocally: []string{"delegate"},
+	// Answered "still running" at 300ms, while it runs to 600.
+	prov.ToolTimeout = 5300 * time.Millisecond
+	res, err := run(t, toolloop.Config{Provider: prov, Surface: surf,
 		TerminateAfter: []string{"submit_work"}})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	ran := surf.calls()
 	slices.Sort(ran)
-	if !slices.Equal(ran, []string{"delegate", "post", "submit_work"}) {
+	if !slices.Equal(ran, []string{"post", "slow", "submit_work"}) {
 		t.Errorf("the surface ran %v, want the long call, the one beside it, and the submission", ran)
 	}
 	if late := prov.Late(); late != 0 {
@@ -581,7 +583,7 @@ func TestALongCallBesideAnotherLetsTheOtherRun(t *testing.T) {
 			results[m.Name] = m.Content
 		}
 	}
-	if results["delegate"] != "the workers' answer" || results["post"] != "post ok" {
+	if results["slow"] != "the slow call's answer" || results["post"] != "post ok" {
 		t.Errorf("the next run was handed %v, want both calls' real results", results)
 	}
 	if strings.Contains(res.Text, "never reached in this run") {

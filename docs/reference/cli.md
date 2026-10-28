@@ -28,7 +28,7 @@ subcommand below is served by it.
 | `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it. The token takes `admin` |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
-| `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
+| `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends its running work: the turn it is on at its next round, and a coding run it has out at once. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
 | `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head (its runtime contract and capabilities among it) and audience, its versions, each with its contract and capabilities, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
 | `crewlet artifacts publish <dir\|file> [-artifact ID] [-op-id ID]` | Publish a directory or a file as a new artifact, or as the next version of one: an upload intent first, then only the files the artifact does not already hold are sent, then the version is published against the head it read |
@@ -51,7 +51,7 @@ subcommand below is served by it.
 | `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
 | `crewlet assistant eval -suite DIR` | Run a directory of evaluation cases through the Dashboard Assistant's orchestrator and catalogue in process: each case's own scripted rounds by default (deterministic, no model called), or a candidate `providers.llm` entry with `-model KEY`, so a model is measured before the assistant is switched to it. Exits non-zero when any case fails |
 | `crewlet llm list` | Every `providers.llm` entry the company declares, with its CLI, model and how it is signed in |
-| `crewlet llm doctor [KEY]` | Verify `providers.llm` entries end to end — the CLI is installed, something signs it in, a real run calls a tool over the seat's tool route, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before every real completion). Exits non-zero when any entry has a problem |
+| `crewlet llm doctor [KEY]` | Verify `providers.llm` entries end to end — the CLI is installed, something signs it in, a real run calls a tool over the seat's tool route, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before every real completion), and, for an entry a seat's executor launches on, whether its CLI has an in-box runner and which tool bridge its box dials. Exits non-zero when any entry has a problem |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's login — its credential files, or the login document a CLI like OpenCode 2 exports |
@@ -363,7 +363,7 @@ publishes](../concepts/control-plane.md#what-a-booting-node-publishes).
 | `-log-file PATH` | Also write the log to this file, overriding `logging.file.path` in Tier A, and only when actually given. It is a **second** destination: stderr keeps every line. An explicit `-log-file ""` writes no file for one run, whatever the Tier A document says — unless that document also set `logging.stderr: false`, which would leave the node writing its log nowhere; that combination is refused by name. It moves the path only — the file's shape, level and rotation caps stay Tier A's. A path that cannot be opened **fails the command** rather than resolving to a default: a durable record an operator did not get, with nothing saying why, is worse than not starting. |
 | `-debug` | Shorthand for `-log-level debug`; wins if both are given. It only ever *raises* — to quieten a file that sets `logging.level: debug`, pass `-log-level info`. It makes the **engine** verbose and not the embedded broker: nats-server's own debug output is `stream.debug` in Tier A, off by default, because it is per internal-client rather than per event and the engine's coordination reads produce a constant stream of it. The broker's warnings and errors reach the log at either setting. |
 | `-api-host HOST` | Bind address, overriding `api.host` |
-| `-api-port PORT` | Bind port, overriding `api.port`. With the `ingress` role it carries the whole HTTP surface (less the routes `api.public.port` moves to its own listener); without it, only the [probes](api-endpoints.md#probes-on-a-node-without-ingress) — `/health` and `/ready` — since a box-mode run's tool calls reach a seat on such a node through an `ingress` node's bridge. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint and no probe, so every integration goes deaf and no orchestrator can probe the node. That is why leaving the flag off is not the same as passing `0`. Any other port is bound as the node starts, before it opens its store, so a port somebody holds fails the run at once; until the node serves, it answers what a [starting node](api-endpoints.md#while-a-node-is-starting) answers. Either flag is refused when it contradicts the file's other listeners: `0` beneath an `api.public.port`, or a port another listener in the file binds on the same address. So is a port on an ingress node whose file has no `api:` block: a node serving the API must state `api.external_url`, `api.auth.admin` and a token. |
+| `-api-port PORT` | Bind port, overriding `api.port`. With the `ingress` role it carries the whole HTTP surface (less the routes `api.public.port` moves to its own listener); without it, only the [probes](api-endpoints.md#probes-on-a-node-without-ingress) — `/health` and `/ready` — since an executor run's tool calls reach a seat on such a node through an `ingress` node's bridge. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint and no probe, so every integration goes deaf and no orchestrator can probe the node. That is why leaving the flag off is not the same as passing `0`. Any other port is bound as the node starts, before it opens its store, so a port somebody holds fails the run at once; until the node serves, it answers what a [starting node](api-endpoints.md#while-a-node-is-starting) answers. Either flag is refused when it contradicts the file's other listeners: `0` beneath an `api.public.port`, or a port another listener in the file binds on the same address. So is a port on an ingress node whose file has no `api:` block: a node serving the API must state `api.external_url`, `api.auth.admin` and a token. |
 | `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers, no writer on any surface, no barrier (a `linearizable` read is refused `maintenance`), no object collection or audit (each pins the estate with a barrier), and no eviction, readmission or reanchor — while the node keeps its presence lease, and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
 | `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all four — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. Roles decide what a node serves and which duties it holds, and `data` alone decides which state logs it applies: every data node applies all five, the identity directory included, and a node without `data` applies none and reaches the estate through one that does — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
 | `-dev-principal LOGIN` | **Development only.** Resolve every request that presents no credential to `dev:LOGIN`, carrying every app, and `admin` only where `api.auth.admin` is `serve`. It is what `api.auth.disabled` should have been, and it is **refused** unless *both* hold: `api.host` binds a loopback address, and the binary is a development build. See below. |
@@ -1636,7 +1636,8 @@ under its own login.
 A paused seat starts no new turn, its incoming mail waits on its inbox in
 order, and its scheduled runs are recorded `skipped_paused` rather than sent.
 The turn it is on finishes first unless `-stop` is given, which ends that turn
-at its next round; a stopped turn is not run again. `-reason` is one line
+at its next round and a coding run it has out at once, its box reclaimed and
+what it had spent charged; what was stopped is not run again. `-reason` is one line
 (at most 500 characters), shown on the seat and in the feed. Pausing a paused
 seat changes nothing — except that `-stop` adds the stop — and resuming a seat
 that is not paused changes nothing. See
@@ -2442,8 +2443,8 @@ exactly as a turn would run on it. That calls a paid model once per round of
 every trial, so `-model` without `-paid` is refused before anything is read,
 and the run says on stderr which model it is asking. That is how a model is measured before
 `assistant.llm` is switched to it ([Running the Dashboard Assistant](../guides/assistant.md#choosing-the-model)).
-The entry must satisfy the assistant's rules (host mode, no shell, web tools
-denied); `crewlet llm doctor KEY` proves one first. The entry's own `${VAR}`
+The entry must satisfy the assistant's rules (no tool of its own beside the
+engine's, no shell, web tools denied); `crewlet llm doctor KEY` proves one first. The entry's own `${VAR}`
 references, and nothing else of the company's, resolve as `crewlet llm`
 resolves them: through the store `-config` names or the node `-api` names, the
 environment behind it (see
@@ -2582,8 +2583,9 @@ offered its model — where a confinement that stopped holding shows first. It i
 the only check that catches a plan whose quota is exhausted, or a profile whose
 tool route, record or `text_paths` no longer match what the CLI does. The same run measures two claims the
 profile makes rather than trusting them: that the CLI's own **shell is
-refused** (it runs on the engine host, so a denial that stopped working is a
-seat reading whatever the engine user can read) and that its **web tool
+refused** (every phase but a seat's executor runs on the engine host — the
+reviewer, a worker, a side pass — so a denial that stopped working is such a
+phase reading whatever the engine user can read) and that its **web tool
 reaches the network** (the one local tool every profile deliberately keeps
 on). Both are believed only on evidence a model cannot invent — the current
 clock, read by the tool. Its `system prompt` lines say where a seat's system
@@ -2591,6 +2593,17 @@ prompt goes and where a side pass's does — added to the CLI's own, in place of
 it, or in the transcript under it ([which channel a call
 takes](../concepts/llm-backends.md#which-channel-a-call-takes)) — and every probe
 is sent as a seat's call, so it runs under the prompt a seat does.
+
+For an entry some agent seat's executor chain holds, `doctor` also prints
+`executor` lines: the seats that launch on it; whether its CLI has an in-box
+runner — only `claude-code` and `opencode` do, and another CLI is skipped at
+launch and serves those seats' phases on this host only, which is a line and
+not a problem; and the tool bridge its box dials — for a `direct` cell this
+node's own listener on loopback where the node binds `api.port`, whatever its
+roles, and for any other cell `CREWLET_MCP_BRIDGE_URL`, whose absence there is
+a problem, since
+every launch on that entry would be refused
+([The executor's run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box)).
 
 Both commands answer "signed in" the same way, from the environment the CLI is
 actually given rather than from the configuration: credential files a login

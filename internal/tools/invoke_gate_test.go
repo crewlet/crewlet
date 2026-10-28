@@ -18,13 +18,13 @@ import (
 // each reached only through [tools.Invoke] itself: builtin's authority gate
 // decides the call, then hands it on.
 var forwarders = map[string][]string{
-	"internal/agent/builtin/authority.go": {"gated", "gatedSeat", "gatedDetached"},
+	"internal/agent/builtin/authority.go": {"gated", "gatedSeat"},
 }
 
-// EVERY TOOL IS CALLED THROUGH tools.Invoke (ADR-0059): a tool's Call,
-// CallForTurn or CallDetached invoked anywhere else is a caller that skips the
-// check of a call against its tool's schema, as the operator surface did
-// before it was routed here. Allowed besides the one call site in invoke.go:
+// EVERY TOOL IS CALLED THROUGH tools.Invoke (ADR-0059): a tool's Call or
+// CallForTurn invoked anywhere else is a caller that skips the check of a
+// call against its tool's schema, as the operator surface did before it was
+// routed here. Allowed besides the one call site in invoke.go:
 // a tool's own method delegating to its other variant (`t.CallForTurn` inside
 // `func (t *x) Call`), and a wrapper forwarding to the tool it wraps.
 //
@@ -165,8 +165,8 @@ func outsideInvoke(fset *token.FileSet, file *ast.File, rel string) []string {
 }
 
 // toolMethods are a tool's own calls by the arguments each takes:
-// Call(ctx, args), CallForTurn(ctx, turn, args), CallDetached(ctx, turn, args).
-var toolMethods = map[string]int{"Call": 2, "CallForTurn": 3, "CallDetached": 3}
+// Call(ctx, args) and CallForTurn(ctx, turn, args).
+var toolMethods = map[string]int{"Call": 2, "CallForTurn": 3}
 
 // typeExpr reports x names a type, as a method expression's receiver does:
 // an exported name (`Callable`, `tools.Callable`), a pointer type or a
@@ -200,7 +200,7 @@ func TestTheInvokeGateSeesEveryShape(t *testing.T) {
 		"method value":      `f := t.Call; f(ctx, args)`,
 		"method expression": `tools.Callable.Call(t, ctx, args)`,
 		"seat method value": `g := t.CallForTurn; g(ctx, turn, args)`,
-		"pointer method":    `(*tool).CallDetached(t, ctx, turn, args)`,
+		"pointer method":    `(*tool).CallForTurn(t, ctx, turn, args)`,
 	} {
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(fset, "fixture.go",

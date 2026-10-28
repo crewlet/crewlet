@@ -38,7 +38,7 @@
               "type": "array"
             }
           ],
-          "description": "providers.llm keys the assistant runs on, a fallback chain. Required when enabled. Each must be a text-mode entry denying local tools and, through overrides.web_tools, web tools."
+          "description": "providers.llm keys the assistant runs on, a fallback chain. Required when enabled. Each must be an entry whose CLI's local tools are denied and, through overrides.web_tools, its web tools."
         },
         "max_steps": {
           "description": "Most tool steps one assistant turn may take, 1..40. Absent: 30.",
@@ -90,7 +90,7 @@
       "additionalProperties": false,
       "properties": {
         "llm": {
-          "description": "providers.llm key deep work runs on: an agent-mode entry driving claude-code. Required.",
+          "description": "providers.llm key deep work runs on: an entry driving claude-code. Required.",
           "type": [
             "string",
             "number",
@@ -542,7 +542,7 @@
           ]
         },
         "min_tokens_per_task": {
-          "description": "Floor on one worker's token share; below it the call is refused.",
+          "description": "Floor on one worker's token share; below it the call is refused (default 500; 0 = no floor).",
           "minimum": 0,
           "type": [
             "integer",
@@ -732,8 +732,8 @@
           ]
         },
         "exemplar_count": {
-          "description": "Originals kept raw after a cluster is compacted.",
-          "minimum": 0,
+          "description": "Originals kept raw after a cluster is compacted (at least 1).",
+          "minimum": 1,
           "type": [
             "integer",
             "null"
@@ -1335,27 +1335,18 @@
             ],
             "x-crewlet-secret": true
           },
-          "description": "Extra environment for the CLI child process.",
+          "description": "Extra environment for the CLI, on this host and in every executor run's box (beneath the seat's role.sandbox.env).",
           "type": [
             "object",
             "null"
           ]
         },
         "max_concurrent": {
-          "description": "Concurrent CLI processes; each costs 200-400 MB.",
+          "description": "Concurrent CLI processes on this host; each costs 200-400 MB. Executor runs are not counted: each seat runs at most one.",
           "minimum": 0,
           "type": [
             "integer",
             "null"
-          ]
-        },
-        "mode": {
-          "description": "host (the CLI runs on this engine's host, turn by turn) or box (the executor runs detached in a box of providers.sandbox).",
-          "enum": [
-            "host",
-            "box",
-            "",
-            null
           ]
         },
         "model": {
@@ -1376,7 +1367,7 @@
           ]
         },
         "run_in": {
-          "description": "Where a box-mode run happens. Empty = providers.sandbox.default_run_in.",
+          "description": "Where a seat's executor run on this entry happens. Empty = providers.sandbox.default_run_in.",
           "enum": [
             "direct",
             "container",
@@ -1395,7 +1386,7 @@
           ]
         },
         "timeout_seconds": {
-          "description": "Wall-clock cap on one stretch of the CLI's own work with no tool call in flight (default 600).",
+          "description": "Wall-clock cap on one stretch of a CLI run on this host with no tool call in flight (default 600). Executor runs are bounded by their round cap instead.",
           "minimum": 0,
           "type": [
             "number",
@@ -1516,7 +1507,7 @@
           ]
         },
         "state_dir": {
-          "description": "Parent directory for box directories; used by both local placements.",
+          "description": "Parent directory for box directories; used by both local placements and by deep work on the engine host.",
           "type": [
             "string",
             "number",
@@ -1906,7 +1897,7 @@
         },
         "sandbox": {
           "$ref": "#/$defs/SandboxProvider",
-          "description": "Code sandbox backend. Absent = no seat runs code."
+          "description": "Where every agent seat's executor runs. Required once the company has an agent seat and a providers.llm entry."
         }
       },
       "type": [
@@ -2166,29 +2157,6 @@
                     }
                   ]
                 },
-                "sandbox": {
-                  "anyOf": [
-                    {
-                      "type": [
-                        "string",
-                        "number",
-                        "boolean",
-                        "null"
-                      ]
-                    },
-                    {
-                      "items": {
-                        "type": [
-                          "string",
-                          "number",
-                          "boolean",
-                          "null"
-                        ]
-                      },
-                      "type": "array"
-                    }
-                  ]
-                },
                 "subagent": {
                   "anyOf": [
                     {
@@ -2290,30 +2258,6 @@
           ],
           "description": "Provider chain for the reviewer."
         },
-        "llm_sandbox": {
-          "anyOf": [
-            {
-              "type": [
-                "string",
-                "number",
-                "boolean",
-                "null"
-              ]
-            },
-            {
-              "items": {
-                "type": [
-                  "string",
-                  "number",
-                  "boolean",
-                  "null"
-                ]
-              },
-              "type": "array"
-            }
-          ],
-          "description": "Model the sandboxed coding agent runs on."
-        },
         "llm_subagent": {
           "anyOf": [
             {
@@ -2414,7 +2358,7 @@
         },
         "sandbox": {
           "$ref": "#/$defs/RoleSandbox",
-          "description": "Per-seat code sandbox gate. Absent = never offered."
+          "description": "What this seat's executor box reads beyond providers.sandbox: setup, env, optional_keys, mcp, pause_ttl_seconds, max_turns. Absent = the engine-wide settings only."
         },
         "schedules": {
           "description": "Recurring work fired into this seat's inbox.",
@@ -2729,24 +2673,6 @@
     "RoleSandbox": {
       "additionalProperties": false,
       "properties": {
-        "coding_agent": {
-          "description": "Override the provider default for this seat.",
-          "enum": [
-            "claude-code",
-            "opencode",
-            "",
-            null
-          ]
-        },
-        "enabled": {
-          "description": "Offer this seat the sandbox tool.",
-          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
-          "type": [
-            "boolean",
-            "string",
-            "null"
-          ]
-        },
         "env": {
           "additionalProperties": {
             "type": [
@@ -2757,14 +2683,14 @@
             ],
             "x-crewlet-secret": true
           },
-          "description": "Env for this seat's sandbox run; declare external tokens here.",
+          "description": "Env for this seat's executor run; declare external tokens here.",
           "type": [
             "object",
             "null"
           ]
         },
         "max_turns": {
-          "description": "Agentic-round cap for this seat's coding runs. Unset = provider default; 0 = uncapped.",
+          "description": "Agentic-round cap for one of this seat's executor runs. Unset = providers.sandbox.default_max_turns; 0 = uncapped.",
           "minimum": 0,
           "type": [
             "integer",
@@ -2775,7 +2701,7 @@
           "$ref": "#/$defs/RoleSandboxMCP"
         },
         "optional_keys": {
-          "description": "Keys of env whose value may resolve to nothing; such a key is left out of the run rather than refusing it.",
+          "description": "Keys of env whose value may resolve to nothing; such a key is left out quietly rather than logged as a gap in the run's environment.",
           "items": {
             "type": [
               "string",
@@ -2795,17 +2721,6 @@
           "type": [
             "number",
             "null"
-          ]
-        },
-        "run_in": {
-          "description": "Where this seat's code work runs; self = inside its own box-mode executor run. Empty inherits providers.sandbox.default_run_in.",
-          "enum": [
-            "direct",
-            "container",
-            "e2b",
-            "self",
-            "",
-            null
           ]
         },
         "setup": {
@@ -2828,7 +2743,7 @@
       "additionalProperties": false,
       "properties": {
         "servers": {
-          "description": "MCP server names the coding agent may use.",
+          "description": "MCP server names this seat's executor box is given, beside its tool bridge.",
           "items": {
             "type": [
               "string",
@@ -2880,17 +2795,8 @@
     "SandboxProvider": {
       "additionalProperties": false,
       "properties": {
-        "default_coding_agent": {
-          "description": "Coding agent for seats that name none.",
-          "enum": [
-            "claude-code",
-            "opencode",
-            "",
-            null
-          ]
-        },
         "default_max_turns": {
-          "description": "Agentic-round cap for coding runs on seats that name none. 0 = uncapped.",
+          "description": "Agentic-round cap for one executor run on seats that name none. Unset = 96; 0 = uncapped.",
           "minimum": 0,
           "type": [
             "integer",
@@ -2906,7 +2812,7 @@
           ]
         },
         "default_run_in": {
-          "description": "Where a box whose placer names no cell runs: a sandbox-enabled seat whose executor is not in box mode and names no run_in, or a box-mode providers.llm entry with no run_in. Required unless the catalogue names exactly one cell, or every such seat and entry names its own.",
+          "description": "Where a run launched on a providers.llm entry with no run_in happens. Required unless the catalogue names exactly one cell, or every entry a seat's executor can launch on names its own.",
           "enum": [
             "direct",
             "container",
@@ -3025,7 +2931,7 @@
           ]
         },
         "optional_keys": {
-          "description": "Keys of env, or paths of files, whose value may resolve to nothing; left out rather than refusing the run.",
+          "description": "Keys of env, or paths of files, whose value may resolve to nothing; left out quietly rather than logged as a gap in the run's environment.",
           "items": {
             "type": [
               "string",
@@ -3139,8 +3045,8 @@
           ]
         },
         "catchup_min_seconds": {
-          "description": "Lower clamp on the missed-tick catchup window.",
-          "minimum": 0,
+          "description": "Lower clamp on the missed-tick catchup window (at least 1).",
+          "minimum": 1,
           "type": [
             "integer",
             "null"
@@ -3561,8 +3467,8 @@
             "null"
           ]
         },
-        "execute_max_tool_rounds_ceiling": {
-          "description": "Hard ceiling for executor rounds across extensions.",
+        "executor_min_budget_tokens": {
+          "description": "Refuse an executor launch, and park the seat, below this remaining token budget (default 25000; 0 = no floor).",
           "minimum": 0,
           "type": [
             "integer",
@@ -3570,7 +3476,7 @@
           ]
         },
         "extension_enabled": {
-          "description": "Round-cap extension judge (default on).",
+          "description": "Round-cap extension judge for the onboarding pass (default on).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -3579,7 +3485,7 @@
           ]
         },
         "extension_round_step": {
-          "description": "Maximum rounds one extension call may grant.",
+          "description": "Maximum onboarding rounds one extension call may grant.",
           "minimum": 0,
           "type": [
             "integer",
@@ -3594,16 +3500,8 @@
             "null"
           ]
         },
-        "max_tool_rounds": {
-          "description": "Tool rounds within one executor run.",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "onboarding_max_tool_rounds": {
-          "description": "Rounds for the first-turn onboarding pass; 0 disables it.",
+          "description": "Rounds for the first-turn onboarding pass (default 10); 0 disables it.",
           "minimum": 0,
           "type": [
             "integer",
@@ -3612,14 +3510,6 @@
         },
         "onboarding_max_tool_rounds_ceiling": {
           "description": "Hard ceiling for onboarding rounds across extensions.",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "sandbox_min_budget_tokens": {
-          "description": "Refuse a coding run below this remaining budget.",
           "minimum": 0,
           "type": [
             "integer",

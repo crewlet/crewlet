@@ -28,7 +28,8 @@ import (
 //   - its tool servers' `role.mcp_env` block, read by [seatSpecs] for the
 //     servers this node runs for the seat;
 //   - its coding box's environment and setup files, `role.sandbox.env` and
-//     the setup steps, read by [Engine.runEnvironment] for both launch paths;
+//     the setup steps, read by [Engine.runEnvironment] for every executor
+//     launch;
 //   - the tool servers that go INTO that box, `role.sandbox.mcp`, read by
 //     [sandboxMCP].
 //
@@ -63,13 +64,28 @@ import (
 //     is, and released when the reconcile records the installation, which
 //     applies a revision and runs every read again.
 //   - GITHUB REFUSED THE MINT, or could not be reached. That is a failure
-//     with a reason, [credentialMissing.unissued], and it is retried: the
-//     seat's children on the restart schedule, a coding run at the seat's
-//     next attempt.
+//     with a reason, [credentialMissing.unissued], and it is retried on the
+//     restart schedule: the process's issuer holds the refusal for the
+//     schedule's wait ([github.Issuer.RetryWait], [Engine.seatRetryDelay]),
+//     so every reader of one installation meets it within the wait and the
+//     first after it asks GitHub again. The seat's children are passed again
+//     on that schedule, and a running box's token file is written by the
+//     first poll after GitHub issues one ([Engine.refreshRunTokens]); a
+//     refusal that lasts, which a person ends at GitHub, costs one request a
+//     wait, never one per poll, per nudge, per launch and per delivery.
 //   - THE GITHUB INTEGRATION IS NOT ENABLED. Nothing issues anything: the
 //     gesture an operator makes after a leak is switching the block off,
 //     and it has to stop every token the engine hands out, so the variable
 //     is one nothing sets, and is reported as such.
+//
+// In none of the three is an executor run refused: it starts without the
+// value, said as its launch's `sandbox_env_unresolved`, because a seat's every
+// turn is one and a seat refused its turn for a token would do no work at all,
+// GitHub's or anyone else's. A token FILE it was launched without is the
+// poll's to write once the token can be issued — the app installed, the mint
+// answered, the integration switched back on — and the poll says each story
+// once per job, a refusal once per reason GitHub gives and a token file it
+// cannot write once for that file, rather than on every pass ([tokenWait]).
 
 // seatToken answers one seat's own GitHub App token, issued at its first
 // lookup.
@@ -104,6 +120,14 @@ func (s *seatToken) Lookup(name string) (string, bool) {
 		return "", false
 	}
 	return s.token.Token, true
+}
+
+// SourceName is how a shadow warning names this source: a stale value the
+// secret store or the environment holds under the seat's token variable is
+// hidden by the token issued here, and it is that value the operator removes
+// ([config.Resolver]).
+func (s *seatToken) SourceName() string {
+	return "the GitHub App token the engine issues for this seat"
 }
 
 // issued is the token this resolution handed out, and whether it handed one
@@ -200,7 +224,8 @@ func githubIssued(c *Company, handle string) string {
 func issuedAtUse(kind integration.Kind) bool { return kind == integration.KindGitHub }
 
 // refreshRunTokens keeps a running box's GitHub App token file current: the
-// completion poll's [sandbox.RefreshFunc].
+// completion poll's [sandbox.RefreshFunc], and the launch's for a job that
+// continues in its turn's kept box.
 //
 // # A run outlives the token it was launched with
 //
@@ -213,14 +238,34 @@ func issuedAtUse(kind integration.Kind) bool { return kind == integration.KindGi
 // any other) is rewritten here, on the poll, with the token the issuer holds
 // once it renews it, and a credential helper reading that file at the moment
 // of use always reads a token that is good. The documented git-auth recipe
-// reads it that way (docs/concepts/code-sandbox.md).
+// reads it that way (docs/concepts/code-sandbox.md). The rewrite REPLACES the
+// file whole ([sandbox.Sandbox.WriteFile]): written in place, it was empty and
+// then half written for as long as the write took, and a push whose helper
+// read it then authenticated with nothing.
+//
+// ON WHICHEVER WAITER POLLS THE BOX, and so on both of a node's
+// ([Engine.sandboxWaiterOptions]): a `direct` or `container` box is polled by
+// its launching node's own waiter and by no other, and an `e2b` box by the
+// fleet's, on the node holding its duty (ADR-0065).
+//
+// AND BEFORE A JOB STARTS IN A KEPT BOX, on the node launching it
+// ([sandbox.CoordinatorOptions.Refresh]). A box is paused while its turn's
+// reviewer reads the job's work, or while the job waits on a person's answer,
+// for up to [sandbox.DefaultPauseTTL], and no poll reaches a paused box; the
+// job that continues in it runs no setup, so its file holds what the last poll
+// wrote, which can have expired. A job carried on after an answer acts on it
+// at once, before its own first poll could write the file again.
 //
 // ASKED OF THE BOX, NOT REMEMBERED. The file is read back and rewritten only
-// where it differs, so the poll's duty can move between nodes, and the
+// where it differs, so the fleet's duty can move between nodes, and the
 // engine can restart, with nothing to carry over, and a quiet poll costs one
-// read. The composition of steps is the launch's own ([boxSetup]), read off
-// the company current now: a file a revision has since removed is no longer
-// kept, which is what the operator who removed it asked for.
+// read. A file the run was launched WITHOUT — its token could not be issued
+// then, so the launch wrote none ([Engine.runEnvironment]) — reads back as
+// nothing, which differs from any token, so the first poll after the app can
+// issue one writes it. The composition of steps is the launch's own
+// ([boxSetup]), read off the company current now: a file a revision has since
+// removed is no longer kept, which is what the operator who removed it asked
+// for.
 //
 // NEVER LOGGED, never returned: the lines here name the seat, the path and
 // when the token expires.
@@ -253,33 +298,228 @@ func (e *Engine) refreshTokenFiles(
 	}
 	_, token := e.seatResolver(ctx, c, seat, github.RefreshTokenLife)
 	value, ok := token.Lookup(name)
+	job := run.TurnID + "/" + run.LaunchID
 	if !ok {
 		attrs := []any{"seat", seat.Handle(), "turn_id", run.TurnID, "files", paths}
-		if why := token.unissued(name); why != "" {
-			log.WarnContext(ctx, "sandbox_token_refresh_failed", append(attrs,
-				"detail", "the run keeps the token it holds and the next poll asks again: "+why)...)
-			return
-		}
-		log.WarnContext(ctx, "sandbox_token_refresh_failed", append(attrs,
-			"detail", "the seat's GitHub App is no longer installed or no longer "+
-				"resolves its key, so nothing renews this run's token")...)
+		story := tokenWait{held: tokenFilesHold(ctx, box, paths), refused: token.unissued(name)}
+		e.tokenWaits.tell(ctx, job, story, e.tokenWaitForget(), attrs)
 		return
 	}
+	e.tokenWaits.settle(job)
 	issued, _ := token.issued()
 	for _, path := range paths {
+		file := tokenFileJob(job, path)
 		held, err := box.ReadFile(ctx, path)
 		if err == nil && subtle.ConstantTimeCompare(held, []byte(value)) == 1 {
+			e.tokenWaits.settle(file)
 			continue
 		}
 		if err := box.WriteFile(ctx, path, []byte(value)); err != nil {
-			log.WarnContext(ctx, "sandbox_token_refresh_failed", "seat", seat.Handle(),
-				"turn_id", run.TurnID, "file", path, "error", err.Error(),
-				"detail", "the next poll writes it again")
+			// ONCE FOR THE FILE, like every other story here: a file the
+			// job replaced with a link or a directory, a directory it made
+			// read-only around the file, or a box out of disk, fails the
+			// same way on every poll and every nudge for the life of the job.
+			story := tokenWait{held: len(held) > 0, unwritable: err.Error()}
+			e.tokenWaits.tell(ctx, file, story, e.tokenWaitForget(),
+				[]any{"seat", seat.Handle(), "turn_id", run.TurnID, "file", path})
 			continue
 		}
+		e.tokenWaits.settle(file)
 		log.InfoContext(ctx, "sandbox_token_refreshed", "seat", seat.Handle(),
 			"turn_id", run.TurnID, "file", path, "expires_at", issued.ExpiresAt)
 	}
+}
+
+// tokenFileJob is the key [tokenWaits] holds what was said of one of job's
+// token files under: a file the poll cannot write is a story of its own,
+// beside the job's story of a token that could not be issued, and each of a
+// job's files is told apart.
+func tokenFileJob(job, path string) string { return job + "\x00" + path }
+
+// tokenWait is the story a poll tells of a running job whose seat's GitHub
+// App token could not be issued now, read off two facts: whether the job's own
+// files hold a token, and why the issue failed; or of one of its token files
+// the poll could not write the issued token into.
+//
+// FOUR STORIES OF A TOKEN NOT ISSUED, because each pair of answers is a
+// different thing to say:
+//
+//   - nothing held, nothing refused: the app is not created, not installed or
+//     its key does not resolve, a person's step the GitHub integration's card
+//     asks for ([github.ErrNotInstalled]), and the job was launched before it.
+//     Its files hold nothing, and the first poll after the app can issue a
+//     token writes them. The launch said the same wait as
+//     `sandbox_env_unresolved`, so this is information, not a failure.
+//   - a token held, nothing refused: the job was handed a token the app no
+//     longer renews, which GitHub refuses once it expires, halfway through the
+//     work, and which nothing else on this node would say.
+//   - a token held, a refusal: GitHub refused the mint, or could not be
+//     reached. The job keeps the token it holds until that expires.
+//   - nothing held, a refusal: the same refusal, met by a job that has nothing
+//     to keep. Every agent turn is an executor run and a run starts without a
+//     token its seat cannot issue, so this is an ordinary path, not one a
+//     refused launch rules out.
+//
+// AND ONE OF A FILE THE POLL CANNOT WRITE: the token is issued, and writing
+// it into the file failed, so the job goes on with what the file holds — a
+// token nothing renews any more, which GitHub refuses once it expires, or
+// nothing at all. The job replaced the file with a link or a directory (a
+// local box replaces only a regular file, and leaves either as the job made
+// it), made the directory around it read-only (a file is replaced by one
+// written beside it, so a file made read-only itself is no obstacle), or the
+// box ran out of disk; each fails the same way on every poll, so the failure
+// is told once for the file, and again only when its error changes. A write
+// that succeeds settles it.
+//
+// THE REFUSAL'S REASON IS PART OF THE STORY, so a job is told each reason
+// GitHub gives once, and told again only when GitHub's answer changes.
+type tokenWait struct {
+	// held is whether any of the job's token files holds a token: one its
+	// launch wrote or an earlier poll did. For a file the poll cannot
+	// write, whether that file does.
+	held bool
+	// refused is why a mint that was attempted failed ([seatToken.unissued]),
+	// or "" where the seat's app cannot issue a token at all.
+	refused string
+	// unwritable is why the issued token could not be written into the
+	// file, or "" for a story of a token not issued. The box's error, which
+	// names the file and never what was being written.
+	unwritable string
+}
+
+// tokenFilesHold reports whether any of a job's token files holds anything: a
+// job whose files are all empty or missing was never handed a token, which a
+// file the launch could not write reads back as.
+func tokenFilesHold(ctx context.Context, box sandbox.Sandbox, paths []string) bool {
+	for _, path := range paths {
+		if held, err := box.ReadFile(ctx, path); err == nil && len(held) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// failure reports whether the story is one a reader of the log has to act on,
+// written at warning; the one wait that is not is a person's step the launch
+// already said, written as information.
+func (w tokenWait) failure() bool { return w.held || w.refused != "" || w.unwritable != "" }
+
+// detail is the story's sentence. NEVER THE TOKEN: the reason is the
+// issuer's error, which carries neither the token nor GitHub's response body.
+func (w tokenWait) detail() string {
+	switch {
+	case w.unwritable != "" && w.held:
+		return "the seat's GitHub App token was renewed and could not be written into this " +
+			"file: " + w.unwritable + "; the token the file holds is no longer renewed, and " +
+			"GitHub refuses it once it expires. A file the job replaced with a link or a " +
+			"directory, or whose directory it made read-only, is never rewritten; the first " +
+			"poll whose write succeeds puts the current token there"
+	case w.unwritable != "":
+		return "the seat's GitHub App token was issued and could not be written into this " +
+			"file, so the run has no token there: " + w.unwritable + "; the first poll " +
+			"whose write succeeds puts the current token there"
+	case w.refused != "" && w.held:
+		return "GitHub refused to issue the seat's GitHub App token: " + w.refused +
+			"; the run keeps the token it holds until that expires, and GitHub is " +
+			"asked again on the restart schedule"
+	case w.refused != "":
+		return "this run was launched without the seat's GitHub App token, and " +
+			"GitHub refused to issue it: " + w.refused + "; GitHub is asked again " +
+			"on the restart schedule, and the first poll after it issues one writes " +
+			"it into these files"
+	case w.held:
+		return "the seat's GitHub App no longer issues a token: it is no longer " +
+			"installed or no longer resolves its key, so nothing renews the token this " +
+			"run holds, which GitHub refuses once it expires; the first poll after the " +
+			"app is installed again writes a new one"
+	default:
+		return "this run was launched without the seat's GitHub App token, which " +
+			"is issued once the app is created and installed and its key resolves; " +
+			"the first poll after that writes it into these files"
+	}
+}
+
+// tokenWaits is what this node's polls have said of the jobs they reach whose
+// seat's token could not be issued, or could not be written into one of the
+// job's files: each story ONCE PER JOB (once per file for a write), and a
+// refusal once per reason GitHub gives, rather than on every pass, which at
+// the poll's interval and the nudges besides buried the one line under a
+// hundred copies of it for the life of the run.
+//
+// IN MEMORY, keyed by the job ([sandbox.PendingRun.LaunchID] under its run;
+// [tokenFileJob] for one of its files), and forgotten once the job resolves a
+// token again, or the file takes it ([tokenWaits.settle]), or goes unpolled on
+// this node past [Engine.tokenWaitForget]: a restart, a duty that moved, a run
+// that ended. Each costs at most one more line where the
+// next poll finds the job still waiting, which is the right thing to say to a
+// reader of that node's log.
+type tokenWaits struct {
+	mu   sync.Mutex
+	said map[string]tokenWaitSaid
+	now  func() time.Time
+}
+
+// tokenWaitSaid is one job's wait as last said, and when a poll last found it.
+type tokenWaitSaid struct {
+	story tokenWait
+	seen  time.Time
+}
+
+// tokenWaitForget is how long a job may go unpolled on this node before what
+// was said of it is forgotten: the longest a running job's box goes
+// unanswered before its waiter gives it up ([sandbox.ConnectGiveUp]), plus
+// one of this node's poll intervals, past which a job not polled is one this
+// node no longer polls.
+func (e *Engine) tokenWaitForget() time.Duration {
+	interval := e.sandboxPollInterval
+	if interval <= 0 {
+		interval = sandbox.DefaultPollInterval
+	}
+	return sandbox.ConnectGiveUp + interval
+}
+
+// tell logs job's wait where it is not the one last said of it, forgetting
+// the jobs no poll has found for forget ([Engine.tokenWaitForget]).
+func (w *tokenWaits) tell(ctx context.Context, job string, story tokenWait, forget time.Duration, attrs []any) {
+	if !w.first(job, story, forget) {
+		return
+	}
+	attrs = append(attrs, "detail", story.detail())
+	if story.failure() {
+		log.WarnContext(ctx, "sandbox_token_refresh_failed", attrs...)
+		return
+	}
+	log.InfoContext(ctx, "sandbox_token_waiting", attrs...)
+}
+
+// first records story as job's wait, and reports whether it was not already
+// the one said. Jobs no poll has found for forget are forgotten on the way.
+func (w *tokenWaits) first(job string, story tokenWait, forget time.Duration) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	now := time.Now()
+	if w.now != nil {
+		now = w.now()
+	}
+	for key, said := range w.said {
+		if now.Sub(said.seen) > forget {
+			delete(w.said, key)
+		}
+	}
+	if w.said == nil {
+		w.said = make(map[string]tokenWaitSaid)
+	}
+	said, known := w.said[job]
+	w.said[job] = tokenWaitSaid{story: story, seen: now}
+	return !known || said.story != story
+}
+
+// settle forgets job's wait: its seat issues a token again, or the file the
+// key names took it, so a later wait is a new one and said as such.
+func (w *tokenWaits) settle(job string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.said, job)
 }
 
 // tokenFiles are the paths among steps' files whose whole body names the

@@ -7,7 +7,10 @@
 // decodes the stream and reads the result,
 // and an ask overlay surfaces a mid-run clarification. This package owns that
 // plumbing so each runner supplies only what is its own: its invocation, its
-// config, where its output lands, and how its stream and result are read.
+// config, where its output lands, and how its stream and result are read —
+// and how a person's notes to its run's turn reach it between its own steps
+// (steer.go: Claude Code's hooks, [ClaudeCode]; OpenCode's plugin,
+// opencode_steer.js, [OpenCode]).
 //
 // # A run's output is read as a stream
 //
@@ -68,7 +71,8 @@ func (p Paths) Brief() string { return p.WorkDir() + "/brief.md" }
 
 // System is where a run's standing instructions ([sandbox.RunRequest.System])
 // are written for its CLI to add to its own system prompt: named on Claude
-// Code's command line, listed in the opencode.json OpenCode reads.
+// Code's command line, listed in the configuration an OpenCode run is handed
+// ([Paths.OpenCodeConfig]).
 //
 // A FILE, never argv. The text carries the seat's org chart, policies and
 // memory, and a command line is readable by every process that can list them
@@ -76,6 +80,14 @@ func (p Paths) Brief() string { return p.WorkDir() + "/brief.md" }
 // ARG_MAX. Under WorkDir, out of the checkout, so a `git clean` cannot remove
 // it from under a run and a commit cannot carry it into a repository.
 func (p Paths) System() string { return p.WorkDir() + "/system.md" }
+
+// ClaudeNotesSystem is where a Claude Code run wired to its turn's notes has
+// its standing instructions written a second time, with its CLI's instruction
+// about notes after them ([ClaudeCodeSteerInstruction]): the text the run's
+// script names in place of [Paths.System] on a release whose note hooks it
+// starts ([claudeNotesGate]), so the instruction reaches a run its notes can
+// reach and no other. Beside it, and a file for the reason it is.
+func (p Paths) ClaudeNotesSystem() string { return p.WorkDir() + "/system-notes.md" }
 
 // CredentialDocument is where a box keeps the login a CLI holds in a database
 // of its own: the CLI's own export of it, which the engine seeds a local box
@@ -112,6 +124,55 @@ func (p Paths) Ask() string { return p.WorkDir() + "/ask.json" }
 
 // MCPConfig is where the scoped MCP surface is rendered.
 func (p Paths) MCPConfig() string { return p.WorkDir() + "/mcp.json" }
+
+// ClaudeSettings is where a Claude Code run's own settings file is written —
+// the hooks that hand its main agent a person's notes between its steps
+// ([ClaudeCode.WriteConfig]) — named on its command line with `--settings`.
+//
+// BESIDE mcp.json, never in the checkout's `.claude/`: the checkout is the
+// repository's, which the run edits and a commit carries, and a file there would
+// replace the repository's own project settings rather than sit above them.
+// `--settings` adds a layer the CLI ranks above the repository's settings and
+// below a managed policy, so the repository keeps its own and the run's hooks
+// are there whatever it holds. Under WorkDir, so a `git clean` in the brief
+// cannot remove it from under the run.
+func (p Paths) ClaudeSettings() string { return p.WorkDir() + "/claude-settings.json" }
+
+// OpenCodeConfig is where an OpenCode run's own configuration is written
+// ([OpenCode.WriteConfig]), and read from by the run's script, which hands its
+// content to the run's server alone as OPENCODE_CONFIG_CONTENT
+// ([OpenCode.Command]).
+//
+// BESIDE the run's other artefacts, never in the checkout: the checkout is the
+// repository's, and an opencode.json written there would replace the
+// repository's own file, where content handed to the server ranks above it and
+// leaves it in place. Under WorkDir, so a `git clean` in the brief cannot
+// remove it from under the run.
+func (p Paths) OpenCodeConfig() string { return p.WorkDir() + "/opencode.json" }
+
+// OpenCodeValues is the directory holding the values an OpenCode run's MCP
+// servers are configured with — each server's url, each header value, each
+// environment value — one file apiece, which [Paths.OpenCodeConfig] names by a
+// `{file:<path>}` reference rather than carrying the value
+// ([openCodeValueFiles]). A directory of the run's own, removed whole before
+// every run ([Runner.ClearArtifacts]), so a run configured with fewer values
+// than the last keeps none of the last one's.
+func (p Paths) OpenCodeValues() string { return p.WorkDir() + "/opencode-values" }
+
+// OpenCodeSteerPlugin is the DIRECTORY an OpenCode run's notes plugin is written
+// into, as index.js ([OpenCode.WriteConfig]), and named by the run's
+// configuration — the plugin that admits a person's notes to the run's turn into
+// its session at its next step (opencode_steer.js).
+//
+// A DIRECTORY, because OpenCode 2 loads a configured local plugin only from one
+// — a file named there is skipped with a warning — trying its `server` module
+// and then its `index`. Under WorkDir, beside the configuration that names it,
+// never in the checkout or a `.opencode/plugins/` OpenCode would discover on its
+// own; and its own, removed whole before every run ([Runner.ClearArtifacts]):
+// OpenCode watches a configured plugin's directory and reloads the plugin on any
+// change inside it, so nothing is written there once the run's server starts —
+// the plugin itself writes nothing at all.
+func (p Paths) OpenCodeSteerPlugin() string { return p.WorkDir() + "/opencode-steer" }
 
 // Findings is the agent's authoritative final report.
 //

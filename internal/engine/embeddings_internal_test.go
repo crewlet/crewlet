@@ -38,6 +38,7 @@ func companyWith(t *testing.T, doc string) *Company {
 const embeddingDoc = `
 name: Nimbus
 providers:
+  sandbox: {fake: true}
   llm:
     scripted:
       model: claude-x
@@ -58,6 +59,7 @@ roles:
 const noEmbeddingsDoc = `
 name: Nimbus
 providers:
+  sandbox: {fake: true}
   llm:
     scripted:
       model: claude-x
@@ -293,6 +295,7 @@ func TestTheEmbedderAsksForItsWidthOnTheConfigurationsRule(t *testing.T) {
 			doc := fmt.Sprintf(`
 name: Nimbus
 providers:
+  sandbox: {fake: true}
   llm:
     scripted:
       model: claude-x

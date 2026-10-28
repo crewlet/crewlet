@@ -6,7 +6,7 @@ Agents interact with external systems and internal engine operations through too
 
 ## Built-in Tools
 
-The engine registers these into each epoch's tool registry with the origin `builtin`. A tool whose dependency is absent (no store, no knowledge backend, no sandbox) is omitted rather than registered and broken; [Agent Runtime § Built-in Tools](../concepts/agent-runtime.md#built-in-tools) says when each one is registered.
+The engine registers these into each epoch's tool registry with the origin `builtin`. A tool whose dependency is absent (no store, no knowledge backend, no A2A channel) is omitted rather than registered and broken; [Agent Runtime § Built-in Tools](../concepts/agent-runtime.md#built-in-tools) says when each one is registered.
 
 | Tool | Description |
 |------|-------------|
@@ -20,7 +20,6 @@ The engine registers these into each epoch's tool registry with the origin `buil
 | `a2a_ask` | Ask one AI colleague one question over the private A2A channel (see [Turn Engine § Colleague-surface tools](../concepts/turn-engine.md#colleague-surface-tools)) |
 | `search_knowledge` | Re-run the shared-knowledge search mid-turn, once the agent knows what the task actually needs. `mode` picks the ranking — `hybrid` by default, `keyword` or `semantic` (see [Search](search.md#three-modes-and-what-an-answer-says-it-served)) — and an answer ranked other than it was asked says so in a sentence: a `semantic` search with nothing to rank by meaning runs nothing, and says that tells the seat nothing about whether a page exists. Registered wherever the company has a knowledge backend at all |
 | `load_tool_skill` | Load the full body of a [Tool Skill](../concepts/tool-skills.md) by key. A key nobody published is answered with the near keys ("did you mean") and the keys that exist, at most 30 |
-| `run_sandbox` | Hand a code task to a coding agent in a [sandbox](../concepts/code-sandbox.md) |
 
 `delegate`, the tool that hands work to short-lived [workers](../concepts/turn-engine.md#workers), is not registered here: it is built per turn for the executor, because it carries that turn's grant.
 
@@ -133,7 +132,8 @@ with kind `operator` — the credential
 itself is recorded beside either as the write's `operator_id`. Five more are a
 person's decisions about the company rather than its work, and are served only
 there too: `pause_seat` and `resume_seat`, and `steer_turn` (a note to a
-running turn, decided once a probe of the fleet names the turn's seat — a
+running turn, decided on the seat its coding run's record names once the run
+is out, and before that once a probe of the fleet names the turn's seat — a
 probe nobody answers is `unavailable`), each for the seat's holder, its lead
 or an administrator; `answer_run`, for the person who asked the parked
 coding run its question or a lead of its seat; and `answer_knowledge`, which
@@ -290,8 +290,16 @@ are declared to an upload the publish pipeline reserves first, each file is put
 through the engine, and the version is decided only after every byte is read
 back verified. A sandbox is never handed an upload URL; the engine lists the
 directory through the box itself, holds every path to the workspace, and
-refuses one file more than a version holds rather than truncating. A box is
-readable after `run_sandbox` returns and until the Execute phase ends.
+refuses one file more than a version holds rather than truncating. The engine
+reads a box only for the run working in it — a call the run makes over its own
+bridge while its record reads `running` — attached as a reader, never resumed.
+A call from another seat's turn, or from a run parked on a question, collected
+or torn down, is refused `not_running`; a caller that is not an agent seat is
+refused `forbidden`; and a seat's call on a node that runs no sandbox is refused
+`unavailable`
+([Code Sandbox](../concepts/code-sandbox.md#how-a-coding-task-runs)). So a
+seat's executor publishes a build larger than the inline bound from its box
+before it finishes.
 
 **Per turn**, an agent makes at most 20 publishes, 10 of them on one artifact,
 and writes at most 128 MiB; past either the call is refused `turn_quota` and
@@ -323,7 +331,7 @@ is (copy the directory into your assistant's skills folder).
 
 ### Per-Role MCP Servers (GitHub)
 
-Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring goes through the [code sandbox](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).
+Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the seat's executor run's, with its own shell and git in its [box](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).
 
 ### Where a tool comes from
 
@@ -411,8 +419,9 @@ before granting a seat a new server.
 ### A call is held to the schema its tool advertises
 
 Every call to one of the engine's own tools is checked against the JSON schema
-that tool hands the model, before the tool runs, whoever makes it (a seat, a
-worker, an operator's assistant over `/operator/mcp`, or the work API), with
+that tool hands the model, before the tool runs, whoever makes it (a seat's
+executor run over the tool bridge, a phase on the engine's host, a worker, an
+operator's assistant over `/operator/mcp`, or the work API), with
 every finding named in one pass by its path and the shape the tool reads there
 ([ADR-0059](../../adr/0059-a-tools-contract-is-its-validators-and-every-fault-comes-back-at-once.md)).
 A third-party MCP server holds its own schema and is not checked here.
@@ -467,8 +476,9 @@ a model acts on:
 | `already_answered` | The question this answers has an answer | Read the answer |
 | `reassignment_budget` | The item has been handed on as often as it may be | Do not reassign it again |
 | `inbox_full` | A person's inbox list is at its ceiling | Mark older entries read |
+| `notes_full` | The running turn a note is for already holds as many notes as may wait unread | Send it again once the turn has read them, at its next step |
+| `notes_spent` | The running turn has taken as many notes as a turn takes | Do not send it again; put the rest on the work item |
 | `not_running` | The run or turn the call addresses is not running, or not waiting for this | Nothing to act on |
-| `steer_unsupported` | The running turn's runtime cannot take a note mid-turn | Wait for the turn to end |
 | `budget_exhausted` | The company's token budget has no room left in one of its windows, so a call that would spend tokens was not made; nothing was spent. A person's answer carries a `remedy` naming the ceiling | Wait for the window the sentence names to turn over, or raise its ceiling |
 | `unavailable` | This node cannot serve the call right now, or the company does not run what it needs — the node is behind its log, the log refused the read or the append (a maintenance or sealed fleet included), the coordination store did not answer, the event broker did not answer or this node's connection to it is reconnecting, this node's store was busy with other writes, the backend is not configured. A **condition**, which waiting clears. **Never** "it does not exist" | Retry, or use the backend the company does run |
 | `internal_error` | This node failed at something of its own — a read of its own store that broke. Nothing about the call was wrong, and waiting does **not** clear it; the sentence is fixed and the error itself is in the node's log, never in the answer | Tell whoever runs the node; a retry fails the same way |
@@ -1063,7 +1073,7 @@ Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); over
 
 ## How Tool Calls Work
 
-From the LLM's perspective, builtin tools and MCP tools are identical — both appear as JSON schema tool definitions, served together to the seat's coding CLI as the tools of one MCP server, `crewlet`, which the CLI calls in its own loop and the engine answers through the dispatch below ([Tool calls in host mode](../concepts/llm-backends.md#tool-calls-in-host-mode)). The model does not know whether a tool is a function inside the engine or an MCP server talking to a tracker. The name `crewlet` is therefore reserved: no `mcp_servers` entry may take it.
+From the LLM's perspective, builtin tools and MCP tools are identical — both appear as JSON schema tool definitions, served together to the seat's coding CLI as the tools of one MCP server, `crewlet`, which the CLI calls in its own loop and the engine answers through the dispatch below ([Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host)). The model does not know whether a tool is a function inside the engine or an MCP server talking to a tracker. The name `crewlet` is therefore reserved: no `mcp_servers` entry may take it.
 
 **Tool resolution order:**
 

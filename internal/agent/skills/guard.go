@@ -145,7 +145,7 @@ func (g *Guard) Restore(keys []string) {
 
 // LoadedKeys is what this session has loaded, sorted.
 //
-// Sorted because it is persisted into a suspended conversation's state, and a
+// Sorted because it is persisted into a parked turn's state, and a
 // blob whose key order came from map iteration would differ on every write of
 // the same fact.
 func (g *Guard) LoadedKeys() []string {

@@ -2,8 +2,12 @@
 //
 // It is the innermost loop of the engine: the model asks for tools, they run,
 // their results go back, until it stops asking or the round budget runs out.
-// Everything above it is this loop with a different surface and a different
-// prompt: the executor, the reviewer, the extension judge, a worker.
+// Every phase the ENGINE drives is this loop with a different surface and a
+// different prompt: the reviewer, a delegated worker, the onboarding pass and
+// its extension judge, and the Dashboard Assistant's turn. A seat's executor
+// is not one of them — it is its coding CLI's own agentic run, in a box, which
+// reaches the seat's tools over the tool bridge rather than through a loop
+// here.
 //
 // THE CLI DRIVES THE ROUNDS; THE LOOP HOLDS THE PHASE. Every model call is a
 // vendor's coding CLI, which runs its own loop — ask the model, call a tool,
@@ -31,7 +35,7 @@
 //     used to be assembled separately, so the live view streamed a round's
 //     tool calls against an empty response and its prose appeared only when
 //     the phase ended. The per-call frame is what makes a round's calls
-//     visible WHILE they run: a sandbox launch or a slow MCP server takes
+//     visible WHILE they run: a delegated worker or a slow MCP server takes
 //     minutes, and a live view that learned of a call only once it returned
 //     showed a seat doing nothing for exactly the stretch somebody was
 //     watching it.
@@ -103,13 +107,13 @@ import (
 //
 // Two, and every one of them an IDENTICAL message, which is not the waste it
 // would be elsewhere. In a loop that finishes by a call, a round without the
-// call cannot end the phase except into its caller's rescue — `incomplete` for
-// the executor, a whole extra executor round for the reviewer, an unmarked seat
+// call cannot end the phase except into its caller's rescue — a whole extra
+// executor run for the reviewer, `no_result` for a worker, an unmarked seat
 // that re-runs its onboarding on every turn — so a second send is weighed
 // against that, not against nothing. And it caps there because a model that
 // cannot emit the call in three attempts will not emit it in ten, while each
 // attempt is a full priced round charged like any other. Against the budgets
-// that arm it: the executor's default 24 rounds lose at most 2 to a run of
+// that arm it: onboarding's default 10 rounds lose at most 2 to a run of
 // declines; the reviewer's 4 keep 1 for the submission the corrective asks
 // for; a worker with `max_turns: 1` has no round left to read a corrective at
 // all, and gets none — no corrective is ever sent on a round that has none
@@ -136,7 +140,7 @@ const MaxFinishingCorrectives = 2
 // PER RUN OF EMPTY ROUNDS, like the finishing allowance. Counted for the
 // phase's lifetime instead, this bounds a different quantity — how many times
 // a model may ever stall — and one stall early then disarms the corrective for
-// every round after it. That is measured, not hypothetical: an executor on a
+// every round after it. That is measured, not hypothetical: a seat on a
 // 24-round budget stalled at round 2, filed a work item at round 3, had a
 // submission bounced at round 4, and broke on the stall at round 5 with
 // nineteen rounds unspent — one round before the message it had just said it
@@ -147,8 +151,8 @@ const maxEmptyAnswerRetries = 1
 //
 // An interface rather than a concrete registry because the phases differ in
 // what they expose and the loop must not know which phase it is running: the
-// executor sees the world, the reviewer sees only the tool it submits its
-// decision with, a worker sees a subset of its parent's. Its offer is re-read
+// reviewer sees only the tool it submits its decision with, a worker sees a
+// subset of its parent's, onboarding sees the seat's own. Its offer is re-read
 // whenever its [Surface.Revision] moves, so a surface mutated mid-run — a
 // meta-tool activating another tool — is listed to the CLI before its next
 // request, or the run is ended for a CLI that never re-lists.
@@ -167,11 +171,6 @@ type Surface interface {
 	// first.
 	AnnotationsOf(name string) mcp.Annotations
 
-	// Detached reports a tool whose work outlives its call and may park the
-	// phase ([ToolResult.Suspend]). Such a call runs alone — two run side
-	// by side would each start work a parked phase can answer for only one.
-	Detached(name string) bool
-
 	// Admit fixes one call's place in its run's call log NOW — the order the
 	// repeat count an operation id carries is read in — and returns the call
 	// bound to that place, to be run once.
@@ -183,12 +182,25 @@ type Surface interface {
 	// lock, in the order the calls arrive.
 	//
 	// CALLED CONCURRENTLY with the calls it returns, which run side by side:
-	// every call but a terminator or a [Surface.Detached] one, which runs
+	// every call but a terminator or a [Detacher]'s detached one, which runs
 	// alone.
 	Admit(name string, args map[string]any) Admitted
 
 	// Phase names the phase for telemetry.
 	Phase() string
+}
+
+// Detacher is a [Surface] with tools whose work outlives their call and may
+// park the phase ([ToolResult.Suspend]). Such a call runs alone — two run side
+// by side would each start work a parked phase can answer for only one.
+//
+// Optional, like [Refuser]: only a loop that may park ([Config.AllowSuspend])
+// has such a tool — today the Dashboard Assistant's turn, which parks on a
+// change waiting for its person's approval — so every other surface, which
+// would answer false for every name, implements nothing.
+type Detacher interface {
+	// Detached reports whether a call of name may park the phase.
+	Detached(name string) bool
 }
 
 // Refuser is a [Surface] that keeps a record of the calls this loop answers
@@ -239,14 +251,11 @@ type ToolResult struct {
 	Cause error
 
 	// Suspend stops the loop with this call UNANSWERED, for a tool whose
-	// work outlives the turn (the detached sandbox). Honoured only when
-	// the caller set AllowSuspend; elsewhere it is logged and ignored,
-	// because a phase that never persists a partial conversation cannot
-	// resume one.
+	// work outlives the turn — a change the Dashboard Assistant proposed,
+	// waiting on its person's approval. Honoured only when the caller set
+	// AllowSuspend; elsewhere the call is refused, because a phase that
+	// never persists a partial conversation cannot resume one.
 	Suspend bool
-
-	// SuspendPayload is handed back to the caller to persist.
-	SuspendPayload map[string]any
 
 	// Origin is where the tool that ANSWERED came from — the registry's
 	// grammar, `builtin` or `mcp:<server>` — and Server the bare MCP server
@@ -498,11 +507,13 @@ type roundOffsetKey struct{}
 // tool is on the PHASE's scale rather than the invocation's.
 //
 // It exists because a phase can run the loop more than once — an extension
-// continues it, a resumed executor re-enters it — and the loop numbers its own
-// rounds from 1 every time. The records it returns are renumbered by the
-// caller afterwards ([Result] is a value it can shift), but a tool that asks
-// its round mid-call cannot wait for that: a worker spawned in extension round
-// 1 of a twenty-round phase would otherwise nest itself under round 1.
+// continues it, and a corrective the last invocation withheld is read past its
+// budget (internal/agent/runner) — and the loop numbers its own rounds from 1
+// every time. The records it returns are renumbered by the caller afterwards
+// ([Result] is a value it can shift), but a tool that asks its round mid-call
+// cannot wait for that: a call in the first round of an extension continuing
+// a twenty-round phase would be told round 1 while the phase's record states
+// it in round 21.
 func WithRoundOffset(ctx context.Context, prior int) context.Context {
 	if prior <= 0 {
 		return ctx
@@ -510,12 +521,20 @@ func WithRoundOffset(ctx context.Context, prior int) context.Context {
 	return context.WithValue(ctx, roundOffsetKey{}, prior)
 }
 
-// CallRound is the round the calling tool runs in, on the phase's scale, and
-// false outside a tool call this loop made.
+// CallRound is the round the calling tool runs in, on the phase's scale — the
+// one-based scale its records state the call on, which a caller that runs the
+// loop again declares with [WithRoundOffset] — and false outside a tool call
+// this loop made.
 //
-// Read by a tool whose own record has to say which round asked for it — a
-// delegate call's workers nest under the round that spawned them — and never
-// by the loop itself, which knows its round without asking.
+// Read by a tool whose own answer depends on which round asked for it, and
+// never by the loop itself, which knows its round without asking: the
+// assistant's brief turn refuses a read in a round kept for its answer, says
+// so on a read in the last round that may read, and makes a refused answer in
+// the turn's last round final (internal/assistant). A worker spawned by a
+// delegate call is told its parent's round by its caller instead
+// ([subagent.Config]): the delegate tool is served only on an executor run's
+// surface, whose calls arrive over the tool bridge, where no loop is iterating
+// to stamp one.
 func CallRound(ctx context.Context) (int, bool) {
 	round, ok := ctx.Value(roundKey{}).(int)
 	return round, ok
@@ -626,7 +645,7 @@ type BudgetMeter interface {
 	// is the half of a refusal Spend cannot carry, because a refusal is
 	// answered to one caller and a turn makes its calls from several — the
 	// next run of this loop, the round-cap judge, the next phase, a sibling
-	// worker, a box-mode executor's launch — and before this
+	// worker, the executor's launch — and before this
 	// each of them paid for one call certain to be refused.
 	//
 	// A TRUE ANSWER IS A REFUSAL, NOT A FORECAST. Every caller asks it
@@ -677,7 +696,7 @@ type BudgetMeter interface {
 //
 // It is the question the loop asks before every run and every call, exported
 // because the loop is not the only frame that calls a model on a turn's meter:
-// the round-cap judge, a box-mode executor's launch and the engine's auxiliary
+// the round-cap judge, the executor's launch and the engine's auxiliary
 // seam before each of the turn's auxiliary calls ask it too, so every call in
 // a turn is stopped by the same answer — and, since a true answer is a
 // refusal of the call the caller was about to make, recorded by the same
@@ -937,12 +956,10 @@ type Result struct {
 
 	// Suspended and its companions are set when a tool suspended the loop.
 	// The pending call is left UNANSWERED in Messages — exactly one
-	// dangling tool call, which is an invariant checked on both serialize
-	// and resume.
+	// dangling tool call, the one its caller's resume answers.
 	Suspended         bool
 	PendingToolCallID string
 	PendingToolName   string
-	SuspendPayload    map[string]any
 }
 
 // partialInterval bounds how often a round in flight republishes.
@@ -1032,12 +1049,6 @@ type Config struct {
 	// its answer exactly as a loop that declared none.
 	TerminateAfter []string
 
-	// ParkLocally names tools whose call ends the CLI run at once: the call
-	// goes on, and the next run is handed its result. For a call that waits
-	// on other model runs — delegated workers — during which the CLI would
-	// hold its slot and its memory idle.
-	ParkLocally []string
-
 	// CorrectivesSpent is how many finishing correctives the run of
 	// declines this invocation CONTINUES has already been sent — by an
 	// earlier invocation of the same phase, the withheld one its caller
@@ -1047,8 +1058,10 @@ type Config struct {
 	// continue a run of declines.
 	CorrectivesSpent int
 
-	// AllowSuspend permits a tool to suspend this loop. Only Execute sets
-	// it — see ToolResult.Suspend.
+	// AllowSuspend permits a tool to suspend this loop — see
+	// [ToolResult.Suspend]. Only the Dashboard Assistant's turn sets it: no
+	// phase of a seat's turn persists a partial conversation, since the
+	// one that outlives its process, the executor, is its CLI's own run.
 	AllowSuspend bool
 
 	// Budget is the shared counter. Nil disables charging, which is for
@@ -1359,7 +1372,6 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			out.EmptyAnswers = emptyAnswers
 			out.Suspended = true
 			out.PendingToolCallID, out.PendingToolName = d.pending()
-			out.SuspendPayload = d.payload
 			return &out, nil
 		case stateCut:
 			return nil, cutErr
@@ -1640,10 +1652,9 @@ const emptyAnswerCorrective = "Your last reply was empty: you produced no visibl
 // not finished, call the tool" — and a model that still does not call writes
 // its report out again, near-verbatim. Joined whole, a phase that kept
 // declining through both finishing correctives handed three copies of one
-// report to whoever reads the text: a rescued executor's to the reviewer as
-// "what the agent produced", a worker's `no_result` prose to its parent. So
-// those later rounds are left out, and the text is what the
-// model answered the task with. A round that called a tool ends the run of
+// report to whoever reads the text: a worker's `no_result` prose to its
+// parent, a reviewer's to the record of its verdict. So those later rounds are
+// left out, and the text is what the model answered the task with. A round that called a tool ends the run of
 // declines, so a model that worked and then stopped again is a new answer, and
 // kept.
 //

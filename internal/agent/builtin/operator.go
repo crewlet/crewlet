@@ -25,11 +25,10 @@ import (
 // The tools that only make sense INSIDE a turn: the memory tools (a diary
 // belongs to a seat, and an operator has none), the skill tools (a skill is
 // loaded into a phase), `a2a_ask` (a colleague ask is answered by waking a
-// seat, and there is nobody here for the answer to come back to),
-// `run_sandbox` (a detached run resumes a suspended phase that does not
-// exist — though a run a seat parked on a question IS a person's to answer,
-// which is `answer_run`), and `lookup_colleague` — which would be useful, but resolves
-// against the turn's own org and has no other source.
+// seat, and there is nobody here for the answer to come back to), and
+// `lookup_colleague` — which would be useful, but resolves against the turn's
+// own org and has no other source. A run a seat parked on a question IS a
+// person's to answer, though, which is `answer_run`.
 //
 // What is left is the surface an operator's assistant actually needs: read
 // the board, file and move work, read and write the wiki, search what the

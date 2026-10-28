@@ -67,7 +67,7 @@ flowchart LR
         LLM["<b>Models, through coding CLIs</b><br/>Claude Code · Codex · OpenCode · …<br/><i>on a subscription or an API key —<br/>each CLI calls its own vendor</i>"]
         EMB["<b>Embeddings API</b> — OpenAI-compatible<br/><i>optional — without it, search is<br/>keyword only and nothing is<br/>recalled by similarity</i>"]
         MCPS["<b>MCP servers</b><br/><i>the agents' hands</i>"]
-        BOX["<b>Code sandbox</b><br/>an E2B VM, or this host"]
+        BOX["<b>Code sandbox</b><br/>where every executor runs:<br/>an E2B VM, a container, or this host"]
     end
 
     OTEL["<b>OTLP collector</b><br/><i>optional — Jaeger, Tempo, …</i>"]
@@ -76,15 +76,17 @@ flowchart LR
     NODE -->|"per phase, per role"| LLM
     NODE --> EMB
     NODE -->|"tool calls, made as each agent"| MCPS
-    NODE -->|"detached coding runs"| BOX
+    NODE -->|"every seat's executor run"| BOX
     NODE -.->|traces| OTEL
     NODE -.->|"stream + coordination"| NATS
 ```
 
-**Nothing outside the boundary is a hard dependency except a model.** No
-embeddings means no similarity search — the diary's candidate pool falls back to
-recency and the "similar prior work" block renders nothing, both first-class
-states rather than failures. No sandbox means no `run_sandbox` tool. No chat,
+**Nothing outside the boundary is a hard dependency except a model, and a cell
+for its executor runs** — which the `local:` backend provides on the engine
+host itself. No embeddings means no similarity search — the diary's candidate
+pool falls back to recency and the "similar prior work" block renders nothing,
+both first-class states rather than failures. No sandbox is valid only for a
+company with no agent seat, or no model yet. No chat,
 tracker or code host means an agent has fewer surfaces to be reached on and to
 act through, and every other one still routes end to end.
 
@@ -94,7 +96,7 @@ act through, and every other one still routes end to end.
 | MCP servers | In practice | The agents' hands — chat, tracker, wiki, code host | Agents have only the [builtins](agent-runtime.md#built-in-tools) |
 | Chat · tracker · code host | No, each | Where triggers arrive and work is delivered | That surface simply routes nothing |
 | Embeddings provider | No | Vector recall over `agent_diary` and `episodes` | Recall degrades to recency; episodes render nothing |
-| Code sandbox | No | Code authoring as a detached, suspended executor phase | No `run_sandbox`; agents still read and review code over MCP |
+| Code sandbox | Yes, with agent seats and a model (a `local:` cell is the engine host itself) | Where every agent seat's executor runs: its coding CLI's own detached run | A company with agent seats and a model is refused at `providers.sandbox` |
 | OTLP collector | No | Exported traces | Trace ids are still minted and still stored on every event row |
 | External NATS | No | The stream for a fleet that will not embed it | The process embeds its own — the default |
 
@@ -192,7 +194,7 @@ back what it wrote.
 | Lease | Duty |
 |---|---|
 | `worker:scheduler` | Role- and unit-scoped cron; a fire is published to the stream. |
-| `worker:sandbox-waiter` | Polls detached runs and resumes the turns waiting on them, over the stream. The same tick is the box keepalive. |
+| `worker:sandbox-waiter` | Polls the detached runs whose boxes every node reaches (`e2b`) and resumes the turns waiting on them, over the stream; the same tick is the box keepalive. Each node polls the `direct` and `container` boxes on its own host itself, with no duty, and this one ends the runs of a node that left for good. |
 | `worker:maintenance` | The retention sweep over the records that answer "recently" rather than "ever", and the retirement of a removed seat's mailbox and coding runs. |
 | `worker:integration-reconcile` | The [integration reconcile](integration-reconcile.md) loop: every connected third-party app's pass, on a cadence set by who has to act. |
 | `worker:learning` | Every learning background pass: skill ageing, episode compaction, clustering and cross-agent promotion. |
@@ -220,15 +222,18 @@ flowchart TB
         CLAIM["<b>Seat host</b><br/>claims seat leases, attaches the mailbox<br/><i>acquire → equip → THEN attach</i>"]
         MBOX["<b>Per-seat mailbox</b><br/>durable consumer on<br/>crewlet.agent.SEAT-ID.inbox<br/>+ .control for sandbox resumes<br/>+ .reflect for post-turn reflection"]
         BATCH["<b>Inbox batching</b><br/>drain · partition by conversation<br/>· one digest turn per partition"]
-        TURN["<b>Turn engine</b><br/>executor → reviewer<br/><i>one per running turn, gated by<br/>node.max_concurrent</i>"]
+        TURN["<b>Turn engine</b><br/>executor → reviewer<br/><i>node.max_concurrent gates every<br/>segment, a run's collection off<br/>.control included; the run holds none</i>"]
         REG["<b>Per-seat tool registry + bridge</b><br/>the shared catalogue, CLONED,<br/>plus this role's own MCP children"]
         PROV["<b>Provider chain</b><br/>fallback chain over<br/>the seat's coding CLIs"]
     end
     STREAM[("<b>Event stream</b>")]
     KV[("<b>Coordination KV</b>")]
+    RUN["<b>Executor run</b><br/>the seat's coding CLI in a box,<br/>detached from the turn"]
 
     STREAM --> MBOX
     MBOX --> BATCH --> TURN
+    TURN -->|"launches, then parks"| RUN
+    RUN -->|"the seat's tools, over the bridge"| REG
     TURN --> REG
     TURN --> PROV
     TURN -->|events| STREAM
@@ -249,10 +254,12 @@ gets its own cloned registry and its own bridge.
 **One model call has two layers of failure handling, each owning exactly one
 decision.** The backend *classifies* and does nothing else — it never retries.
 The one thing it holds of its own is a spent plan: a CLI that reported its
-vendor's rate limit in the vendor's own words is `rate_limit`, and the entry
-then sits out on this node until the reset the CLI named (an hour at most), or
-for a minute where it named none, so every round of every seat on it does not
-start a process to hear the same sentence again. The fallback chain decides
+vendor's rate limit, in its own structured status or the vendor's words, is
+`rate_limit`, and the entry then sits out on this node until the reset the
+vendor named (never more than an hour away), or, where it named none, for a
+window of 1, 2, 5, then 15 minutes that steps up with each probe the limit
+refuses, so every round of every seat on it does not start a process to hear
+the same sentence again. The fallback chain decides
 whether the **model** is worth abandoning and moves to the next one in the
 role's chain, publishing a `provider_fallback` event for each hand-off —
 addressed to the turn, the phase and the iteration it happened in, so a chain
@@ -287,9 +294,11 @@ projection shows and what the store keeps are two questions with two answers.
 
 **The API is served inside the engine's process, and only there.** `crewlet run`
 builds it over the engine's own store, broker and coordination plane; a node
-without the `ingress` role serves only its two
+without the `ingress` role serves the network only its two
 [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on
-`api.port`, and a node with `api.port: 0` serves nothing at all. `node.roles` changes what the engine
+`api.port` — and its own boxes, beside them, the tool bridge and the telemetry
+receiver to its own host's loopback alone — and a node with `api.port: 0`
+serves nothing at all. `node.roles` changes what the engine
 *does*, never whether there is one, so every API answers its node's in-flight
 count, seats, posture and applied epoch rather than reporting them as
 unknowable.
@@ -383,13 +392,16 @@ sequenceDiagram
     autonumber 11
     participant S as Event stream
     participant O as The seat's owner<br/>(seats)
+    participant B as The executor's box
     participant M as LLM + MCP
 
     S->>O: the seat's durable consumer,<br/>group agent-HANDLE
     O->>O: drain the backlog, partition by<br/>partition key, one digest per partition
     O->>O: take a slot at node.max_concurrent
-    O->>M: executor → reviewer
-    M-->>O: the reply is posted by the agent's<br/>own Slack tool, as itself
+    O->>B: launch the executor's run, and park
+    B->>M: the run's own model, and the seat's<br/>tools over the bridge
+    M-->>B: the reply is posted by the agent's<br/>own Slack tool, as itself
+    B-->>O: the run is collected, and the reviewer judges it
     O->>S: turn events → crewlet.events.*
     O->>S: ack the delivery
 ```
@@ -454,13 +466,14 @@ onward is identical again.
 
 Every trigger that reaches a seat runs the same two-stage turn — a batch of
 triggers for one conversation is one turn. What varies is how many rounds it
-takes, and whether the turn survives its own process.
+takes and how long its executor's run works; every turn parks on that run, so
+every turn can outlive the process that started it.
 
 ```mermaid
 flowchart TB
     WHO["<b>Who is waiting?</b><br/>derived from the trigger's own type,<br/>before any model runs"]
-    EXEC["<b>Executor</b><br/>one agentic loop: decide, discover,<br/>act, then account for it"]
-    SUSP["<b>Suspended</b><br/>a detached coding run: the loop is serialized<br/>into the pending-run record and left"]
+    EXEC["<b>Executor</b><br/>the seat's coding CLI's own run, in a box:<br/>decide, discover, act, then account for it"]
+    SUSP["<b>Parked</b><br/>the executor's run, detached in its box:<br/>the turn's state, no conversation,<br/>on the run's record"]
     CHECK["<b>Engine check</b><br/>does the record support<br/>what it says it did?"]
     SKIP["<b>skipped</b><br/>nobody was asking<br/>this seat to do anything"]
     REV["<b>Reviewer</b><br/>is the work any good?"]
@@ -470,9 +483,8 @@ flowchart TB
     AFTER["<b>What the turn leaves behind</b><br/>events · episode · diary entries ·<br/>conversation-ledger entry · token spend"]
 
     WHO --> EXEC
-    EXEC -->|run_sandbox| SUSP
-    SUSP -->|"minutes or days later,<br/>possibly on another node"| EXEC
-    EXEC --> CHECK
+    EXEC -->|"launches its run"| SUSP
+    SUSP -->|"collected, minutes or days later,<br/>possibly on another node"| CHECK
     CHECK -->|"no_action, and nothing acted"| SKIP
     CHECK -->|"a claim the record refutes"| EXEC
     CHECK --> REV
@@ -490,17 +502,18 @@ flowchart TB
     classDef ok stroke:#46a758
     classDef danger stroke:#ef4444
     classDef happens stroke-dasharray:4 3
-    linkStyle 6,8 stroke:#46a758,color:#46a758
+    linkStyle 6,7 stroke:#46a758,color:#46a758
     linkStyle 10 stroke:#ef4444,color:#ef4444
 ```
 
 **Two nested loops, not one.** The outer loop is the turn: executor → reviewer,
 re-entered on `self_iterate` up to `turn_engine.max_iterations`. The inner loop
 is the model↔tool round trip *inside each phase*, bounded by its own cap
-(`max_tool_rounds` for the executor; a constant for the reviewer, which holds
-one submission tool). A turn is therefore up to `max_iterations × (executor
-rounds + review rounds)` priced model calls, which is the number to reason
-about when sizing a budget — not "one call per turn".
+(the executor's coding-CLI run by `role.sandbox.max_turns`, else
+`providers.sandbox.default_max_turns`, 96 unless set; a constant for the
+reviewer, which holds one submission tool). A turn is therefore up to
+`max_iterations × (executor rounds + review rounds)` priced model calls, which
+is the number to reason about when sizing a budget — not "one call per turn".
 
 **One loop where there were two, and that is the point.** The engine used to
 plan in one conversation and act in another; the actor lost everything the
@@ -520,16 +533,17 @@ send 15–25 KB of tool definitions with every model request, so the executor se
 *server names* and walks `list_mcp_server_tools` → `activate_tool` to promote
 what it actually needs. From the model's side a builtin and an MCP tool are the
 same thing: two tools of the one `crewlet` server its CLI lists, which the
-engine answers ([Tool calls in host mode](llm-backends.md#tool-calls-in-host-mode)).
+engine answers ([Tool calls on this host](llm-backends.md#tool-calls-on-this-host)).
 
-**A suspended turn is the reason there is no parked goroutine anywhere.** A
-detached coding run stops the executor's loop mid-round with its `run_sandbox`
-call *unanswered*, and the conversation is serialized into the pending-run
-record rather than held in memory. The run outlives the process: it may be
-resumed after a restart, on a different node, days later once a person answers
-the agent's question. The record carries an explicit version, a permanent
-reader for the previous one, and a build that understands neither refuses
-loudly and leaves the row untouched.
+**A parked turn is the reason there is no parked goroutine anywhere.** Every
+executor launch parks its turn: the run is detached in its box, and the turn's
+state — its bookkeeping and no conversation, since there is no engine loop to
+re-enter — is written to the run's record rather than held in memory. The run
+outlives the process: its turn may be resumed after a restart, on a different
+node, days later once a person answers the agent's question. The record carries
+an explicit version, and a build that does not know it refuses loudly and
+leaves the row untouched; a reader for an older version is kept only once a
+tag has shipped it.
 
 **Whether anything was DELIVERED is the engine's judgement, not a model's.**
 Who is waiting comes from the trigger's own type before the turn starts; what
@@ -663,7 +677,7 @@ to the adopted log.
 | **`crewlet_ledger`** · **`crewlet_claims`** · `crewlet_fires` | Turn completions, webhook delivery claims, scheduled-fire claims |
 | `crewlet_rebases` | The instant a unit of work's writes are minted at when its own start is older than the operation ledger remembers, so a crash re-run, a retried resume or the next half of the turn mints where the attempt before it did. The bucket's age, 30 days, is the ledger's retention |
 | **`crewlet_token_windows`** · `crewlet_rate` | The token counters (one record per scope, a slot for each calendar window, aged 32 days past its last charge) and the rate windows of the notification valve and of a person's Dashboard Assistant turns, each window at most a minute wide and kept three |
-| **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, detached coding runs |
+| **`crewlet_secrets`** · `crewlet_channels` · `crewlet_sandbox_runs` | The company's sealed credentials, open A2A channels, every agent seat's executor run |
 | `crewlet_follows` | The chat threads each seat follows, so the next reply wakes it whichever node claims that delivery. The bucket's age, 90 days, is the last-activity horizon |
 | `crewlet_objects` | The [object store](object-store.md)'s **backend record** (`nats` or `s3:<endpoint>/<bucket>/<prefix>`, written create-only by the first node to boot and compared by every node after it, which refuses to boot configured with another store), and the `object-collector` duty's **last report**, replaced by each pass so every node's `/fleet` shows it whoever ran it, and the `trash-reaper` duty's, which the next holder of the duty resumes from. **No age**: an expired record would let the next node record a different store and split the company's files between two |
 | `crewlet_custody` | Which data node keeps each batch of a stateless node's events: claimed create-only by the data node that wrote the batch, after it wrote it, so exactly one node's log keeps it ([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)). The bucket's age, 32 days, outlasts the event log's retention, so a node settling a batch it wrote before a crash always finds the answer |
@@ -912,7 +926,7 @@ here.
 | Diary, episodes, skill induction, profiles | `internal/learning` | [Agent learning](agent-learning.md) |
 | What a seat already said in one thread | `internal/agent/ledger` | [Conversation sessions](conversation-sessions.md) |
 | Models, each a coding CLI, and the fallback chain | `internal/providers` | [Provider layer](overview.md#provider-layer) · [LLM backends](llm-backends.md) |
-| Detached coding runs | `internal/sandbox`, `internal/hostbox` | [Code sandbox](code-sandbox.md) |
+| Every agent seat's executor run, detached in a box | `internal/sandbox`, `internal/hostbox`, `internal/agent/runner` (`agentrun.go`) | [Code sandbox](code-sandbox.md) |
 | Cron-scoped recurring work | `internal/schedule` | [Scheduling](scheduling.md) |
 | The company's sealed credentials | `internal/fleetsecrets` | [Secret store](secret-store.md) |
 | The local database and its migrations | `internal/store` | [Database](overview.md#database) · [Backups & restore](../guides/backup.md) |

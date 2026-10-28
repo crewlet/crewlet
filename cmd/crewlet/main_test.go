@@ -45,6 +45,7 @@ import (
 const companyYAML = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     primary:
       model: claude-sonnet-5
@@ -323,7 +324,7 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	// assertion's record went.
 	//
 	// AT WARN ONLY WHERE NOTHING ELSE WARNED. A node whose DECLARED roles
-	// name ingress has been told at WARN already, by the `api.port`
+	// name ingress or seats has been told at WARN already, by the `api.port`
 	// advisory its start logs, which leaves an undeclared node.roles out —
 	// so that node is the one this line warns, and every other is told at
 	// info. Mutation: warn on every ingress node and the declared-ingress
@@ -455,14 +456,26 @@ func TestANodeWithoutTheIngressRoleServesOnlyItsProbes(t *testing.T) {
 	}
 }
 
-// A NODE WITHOUT INGRESS SERVES ITS PROBES ALONE, whether it runs seats or
-// not and whatever its environment says about a bridge. A box-mode seat's box
-// reaches its tools through the nodes that serve the API, which relay its call
-// to the node holding the seat over the broker — so the listener here carries
-// the probes, and no bridge, dashboard or REST route.
+// A NODE WITHOUT INGRESS SERVES ITS PROBES, AND ITS OWN BOXES' ROUTES ONLY
+// WHERE IT LAUNCHES BOXES. A box off the host reaches its tools through the
+// nodes that serve the API, which relay its call to the node holding the seat
+// over the broker, so no dashboard or REST route is here; a box on the host is
+// a seats node's own, which serves it the bridge on loopback (internal/api's
+// Probes). A node that runs no seats launches none, so whatever its
+// environment says about a bridge, the bridge's prefix is absent there.
+//
+// Mutation: hand the probe surface the bridge on every node and the data
+// node's row answers the bridge's 401.
 func TestANodeWithoutIngressServesItsProbesAlone(t *testing.T) {
 	t.Parallel()
-	for _, roles := range [][]string{{"seats"}, {"data", "workers"}} {
+	for _, tc := range []struct {
+		roles  []string
+		bridge int // what the bridge's prefix answers a caller on this host
+	}{
+		{[]string{"seats"}, http.StatusUnauthorized},
+		{[]string{"data", "workers"}, http.StatusNotFound},
+	} {
+		roles := tc.roles
 		var logged bytes.Buffer
 		log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -490,13 +503,16 @@ func TestANodeWithoutIngressServesItsProbesAlone(t *testing.T) {
 		if got := statusOf(t, http.MethodGet, base+"/health"); got != http.StatusOK {
 			t.Errorf("%v: GET /health = %d, want the liveness probe's 200", roles, got)
 		}
-		// AN EXEMPT PATH THIS LISTENER DOES NOT MOUNT 404s — the bridge's
-		// prefix among them: the guard lets it through to a mux that has
-		// nothing there.
-		for _, path := range []string{"/dashboard", mcpbridge.PathPrefix + "not-a-token"} {
-			if got := statusOf(t, http.MethodPost, base+path); got != http.StatusNotFound {
-				t.Errorf("%v: POST %s = %d on a probe listener, want 404", roles, path, got)
-			}
+		// AN EXEMPT PATH THIS LISTENER DOES NOT MOUNT 404s: the guard lets
+		// it through to a mux that has nothing there. The bridge's prefix is
+		// exempt too, and mounted — to this host — only on the seats node,
+		// where a token the fleet did not sign meets the bridge's 401.
+		if got := statusOf(t, http.MethodPost, base+"/dashboard"); got != http.StatusNotFound {
+			t.Errorf("%v: POST /dashboard = %d on a probe listener, want 404", roles, got)
+		}
+		if got := statusOf(t, http.MethodPost, base+mcpbridge.PathPrefix+"not-a-token"); got != tc.bridge {
+			t.Errorf("%v: POST %snot-a-token = %d on a probe listener, want %d", roles,
+				mcpbridge.PathPrefix, got, tc.bridge)
 		}
 		// AND A GUARDED ONE IS REFUSED RATHER THAN 404, which is exactly
 		// what the full surface answers now that every guarded route needs
@@ -731,14 +747,24 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	log *slog.Logger,
 ) (*httpSurface, *engine.Reconciler, error) {
 	t.Helper()
-	cipher := e.Cipher()
-	// THROUGH runEngine's OWN CONSTRUCTOR, so a node this builds holds the
-	// config surface exactly where a running one would — and none on a node
-	// holding no estate.
-	configSurface, err := companySurface(e, boot, cipher)
+	reconciler := reconcilerFor(t, boot, e)
+	// BOUND AS runEngine BINDS, on the socket the case reserved for each port
+	// it configured rather than a second bind of a port it let go (see
+	// [reservePort]) — and here after the engine has booted, which is the
+	// one difference from a running node: the boot surface's own answers are
+	// [TestAStartingNodeAnswersItsProbesBeforeItServes]'s.
+	listeners, err := bindListeners(t.Context(), boot, e.Node().ID(), bindReserved, log)
 	if err != nil {
-		t.Fatalf("config surface: %v", err)
+		return nil, reconciler, err
 	}
+	surface, err := serveBound(t, boot, e, reconciler, listeners, log)
+	return surface, reconciler, err
+}
+
+// reconcilerFor is the reconciler that owns e's config posture, as runEngine
+// builds it, under the node id boot names.
+func reconcilerFor(t *testing.T, boot *config.Bootstrap, e *engine.Engine) *engine.Reconciler {
+	t.Helper()
 	nodeID, err := config.ResolveNodeID(boot, nil)
 	if err != nil {
 		t.Fatalf("node identity: %v", err)
@@ -750,21 +776,30 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		t.Fatalf("reconciler: %v", err)
 	}
-	// BOUND AS runEngine BINDS, on the socket the case reserved for each port
-	// it configured rather than a second bind of a port it let go (see
-	// [reservePort]) — and here after the engine has booted, which is the
-	// one difference from a running node: the boot surface's own answers are
-	// [TestAStartingNodeAnswersItsProbesBeforeItServes]'s.
-	listeners, err := bindListeners(t.Context(), boot, e.Node().ID(), bindReserved, log)
+	return reconciler
+}
+
+// serveBound hands listeners a case bound itself the node's surface, as
+// [serveNodeWith] does after its own bind: for a case whose engine has to be
+// built from what the bind derived, as runEngine builds it ([bootEngine]).
+func serveBound(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
+	reconciler *engine.Reconciler, listeners *nodeListeners, log *slog.Logger,
+) (*httpSurface, error) {
+	t.Helper()
+	cipher := e.Cipher()
+	// THROUGH runEngine's OWN CONSTRUCTOR, so a node this builds holds the
+	// config surface exactly where a running one would — and none on a node
+	// holding no estate.
+	configSurface, err := companySurface(e, boot, cipher)
 	if err != nil {
-		return nil, reconciler, err
+		t.Fatalf("config surface: %v", err)
 	}
 	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, nil, listeners, engine.DeepHost{}, log)
 	if err != nil {
 		// THE CALLER'S TO CLOSE until the handover, as in runEngine.
 		listeners.close(context.Background(), log)
 	}
-	return surface, reconciler, err
+	return surface, err
 }
 
 // testEngine builds a real engine on an embedded stream in a temp directory.
@@ -2213,7 +2248,7 @@ func TestValidateLocatesAnEntrysProfileRefusal(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			doc := "name: Acme\nproviders:\n  llm:\n    sub:\n      model: m\n" + tc.entry
+			doc := "name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    sub:\n      model: m\n" + tc.entry
 			path := writeYAML(t, "company.yaml", doc)
 			var out, errOut bytes.Buffer
 			if err := run([]string{"validate", path, "-tier", "company", "-json"}, &out, &errOut); err == nil {

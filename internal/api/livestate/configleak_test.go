@@ -17,10 +17,15 @@ const rawFailure = "llm chain exhausted after 1 providers (" + entryKey + "): us
 
 // leakyState is a seat whose live state has met every field that can carry the
 // company's configuration: a fallback off the entry, a CLI run it served, a
-// phase that failed naming it, and the chain's exhaustion.
+// phase that failed naming it, the chain's exhaustion, and a coding run
+// launched on it.
 func leakyState() *livestate.LiveState {
 	s := livestate.New()
 	call := map[string]any{"agent_id": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": 0}
+	s.Apply(env("sandbox_run_started", map[string]any{"agent_id": "Lead", "turn_id": "tn-0",
+		"role": "Lead", "agent_handle": "lead", "coding_agent": "claude-code",
+		"provider_key": entryKey, "model": "opus", "sandbox_id": "sb-1", "task": "fix it",
+	}, at("2026-10-27T23:15:00Z"), id("sr")))
 	s.Apply(env("agent_phase_started", call, at("2026-10-27T23:16:00Z"), id("ps")))
 	s.Apply(env("provider_fallback", with(call, map[string]any{
 		"from_provider_key": entryKey, "to_provider_key": "metered-" + entryKey,
@@ -46,19 +51,26 @@ func wireOf(t *testing.T, v any) string {
 
 // NO BROADCAST FIELD CARRIES THE COMPANY'S CONFIGURATION OR A RAW FAILURE, to
 // any reader but an admin. Every shape a seat's live state reaches a reader in
-// (its overlay, its live call whole and lean, its roster row) is read for the
-// entry's key and for the failure's own words; a seat's lead reads its trail
-// and is still not an admin. The failure's kind stays, which the dashboard
-// words for a person, and an admin is sent the text.
+// (its overlay, its live call whole and lean, its roster row, and the coding
+// run it launched, which the `sandboxes` push and snapshot carry) is read for
+// the entry's key and for the failure's own words; a seat's lead reads its
+// trail and is still not an admin. The failure's kind stays, which the
+// dashboard words for a person, and so does the model a coding run runs
+// under; an admin is sent the text and the run's entry.
 //
-// Mutation: leave the failure's text or a run's entry in any one of the
-// masks, or broadcast it as status, and the lead's copy names the entry.
+// Mutation: leave the failure's text, a CLI run's entry or a coding run's in
+// any one of the masks, or broadcast it as status, and the lead's copy names
+// the entry.
 func TestNoBroadcastFieldCarriesAConfigKeyOrARawFailure(t *testing.T) {
 	t.Parallel()
 	s := leakyState()
 	overlay := s.AgentOverlay("Lead")
 	if overlay == nil || overlay.LiveCall == nil || overlay.LastError == nil {
 		t.Fatalf("overlay = %+v, want a failed call and a last error", overlay)
+	}
+	runs := s.ActiveSandboxes()
+	if len(runs) != 1 || runs[0].ProviderKey != entryKey {
+		t.Fatalf("runs = %+v, want the coding run launched on the entry", runs)
 	}
 	shapes := func(r livestate.Reach) map[string]any {
 		rows := s.MergeAgents([]map[string]any{{"agent_id": "Lead", "handle": "lead"}})
@@ -68,6 +80,7 @@ func TestNoBroadcastFieldCarriesAConfigKeyOrARawFailure(t *testing.T) {
 			"the call lean":  livestate.MaskCall(overlay.LiveCall.Without(livestate.CallVersions{}), r),
 			"the roster row": livestate.MaskRow(rows[0], r),
 			"the pushed row": livestate.MaskRow(s.OverlayRows([]string{"Lead"})[0], r),
+			"the coding run": runs[0].For(r),
 		}
 	}
 	for reader, r := range map[string]livestate.Reach{
@@ -89,9 +102,18 @@ func TestNoBroadcastFieldCarriesAConfigKeyOrARawFailure(t *testing.T) {
 	}
 	admin := livestate.Reach{Body: true, Tracker: true, Config: true}
 	for shape, v := range shapes(admin) {
-		if wire := wireOf(t, v); !strings.Contains(wire, rawFailure) {
-			t.Errorf("an admin is sent %s without the failure's own text: %s", shape, wire)
+		want := rawFailure
+		if shape == "the coding run" {
+			want = `"provider_key":"` + entryKey + `"`
 		}
+		if wire := wireOf(t, v); !strings.Contains(wire, want) {
+			t.Errorf("an admin is sent %s without %s: %s", shape, want, wire)
+		}
+	}
+	// THE MODEL A RUN RUNS UNDER STAYS EVERYBODY'S: it is what the run is
+	// doing, as a call's model is.
+	if wire := wireOf(t, runs[0].For(livestate.Reach{})); !strings.Contains(wire, `"model":"opus"`) {
+		t.Errorf("everybody is sent the coding run without its model: %s", wire)
 	}
 }
 

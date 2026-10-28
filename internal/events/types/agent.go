@@ -55,11 +55,12 @@ const (
 	// round-cap extension judge.
 	PhaseAuxiliary Phase = "auxiliary"
 	PhaseJudge     Phase = "judge"
-	// PhaseSandbox is the coding run itself: what a detached run_sandbox
-	// job did, spent and reported, on the record its collection publishes
+	// PhaseSandbox is the coding run itself: what an executor's detached
+	// run did, spent and reported, on the record its collection publishes
 	// (see [AgentPhaseCompleted.ActivityTranscript]). NOT nested — it has no
-	// host phase, because the executor that launched it was suspended for
-	// the whole of it and publishes its own record only when it resumes.
+	// host phase, because the turn that launched it was parked for the
+	// whole of it and its execute phase publishes its completion only when
+	// the run is collected.
 	// Iteration is the executor iteration that launched it, and a turn can
 	// launch more than one run in one iteration, so its identity is
 	// (turn_id, phase, iteration, launch_id).
@@ -128,12 +129,12 @@ type PromptSection struct {
 // [RunningCall] is matched to once the call has answered, absent where nothing
 // named the call — and, where the call was timed, `started_at` (RFC 3339,
 // UTC), `duration_ms`, and `origin` (`builtin` or `mcp:<server>`) with
-// `server` (the bare MCP server name) for the tool that answered. The last
-// four are ABSENT on a row nothing timed — a call whose arguments did not
-// parse, a box-mode run's bridged call — and `origin`/`server` are absent on a
-// call no tool answered (an unknown name, one not offered, one a guard
-// refused): absent means "not recorded", never "instant" or "the engine's
-// own".
+// `server` (the bare MCP server name) for the tool that answered — measured by
+// the engine's tool loop, or for an executor run's call by the bridge it was
+// made over. The last four are ABSENT on a row nothing timed — a call whose
+// arguments did not parse — and `origin`/`server` are absent on a call no tool
+// answered (an unknown name, one not offered, one a guard refused): absent
+// means "not recorded", never "instant" or "the engine's own".
 //
 // Deliberately an open map rather than a struct, and the one place in this
 // catalogue that stays loose. Its consumers pass it through verbatim, precisely
@@ -278,15 +279,20 @@ type PhaseInvocation struct {
 	ToolCalls int `json:"tool_calls"`
 }
 
-// PhaseSteer is one person's note a phase read mid-turn, and the round that
-// first read it — see [AgentTurnSteered] for the note itself and who sent it.
+// PhaseSteer is one person's note a phase read mid-turn, the round that first
+// read it and the kind of step it was read at — see [AgentTurnSteered] for the
+// note itself and who sent it.
 //
 // Keyed on the round number `rounds[]`, `tool_executions[]` and
 // `round_narration[]` share, so a reader puts the note beside the round it
-// changed.
+// changed. A coding run's record is one round of the engine's, so every note
+// the run read — in its brief, or at a boundary of its own loop — is at round 1,
+// and its Boundary is what tells them apart ([SteerBoundary]): every read
+// records one.
 type PhaseSteer struct {
-	Round  int    `json:"round"`
-	NoteID string `json:"note_id"`
+	Round    int           `json:"round"`
+	NoteID   string        `json:"note_id"`
+	Boundary SteerBoundary `json:"boundary"`
 }
 
 // AgentTurnStarted opens a turn — or one SEGMENT of it, when a parked coding
@@ -416,10 +422,16 @@ type AgentTurnCompleted struct {
 	// showed had no way to say why it stopped.
 	Failed bool `json:"failed"`
 	// Stopped is true when a PERSON ended the turn — a pause that asked to
-	// stop the running turn reached its next round — rather than the turn
+	// stop the running turn reached its next round, or ended the coding run
+	// the turn was parked on ([SandboxRunStopped]) — rather than the turn
 	// finishing or failing. Never both: a stop is not a failure, and read as
 	// one it would list a turn somebody deliberately ended among the ones
 	// that broke. Who stopped it is the turn's [AgentTurnStopped].
+	//
+	// A PARKED TURN IS CLOSED WITH ONE OF THESE, not left parked: the
+	// segment that parked completed `suspended`, and the stop of its run
+	// publishes the turn's last completion — stopped, with no phase of its
+	// own, since nothing of the turn ran again.
 	Stopped bool `json:"stopped,omitempty"`
 	// Error is the failure's message, truncated. Empty unless Failed or
 	// Stopped.
@@ -578,7 +590,7 @@ type TurnCompleted struct {
 // each node held, the node holding the end counted the turn's reviews, its
 // send-backs and its duration short, and the node holding the rest counted
 // them nowhere. The turn itself knows them: each segment counts what it ran,
-// and a segment that parks hands its count on with the suspended conversation
+// and a segment that parks hands its count on with the parked turn's state
 // (internal/agent/execstate), so the segment that ends the turn states it
 // whole.
 type TurnTally struct {
@@ -738,8 +750,10 @@ type AgentPhaseCompleted struct {
 	// for. See [RoundNarration].
 	RoundNarration []RoundNarration `json:"round_narration,omitempty"`
 	// Rounds is one entry per provider call the phase made, keyed on the
-	// round number the two lists above share — see [PhaseRound]. Absent on
-	// a phase that ran no loop in this process.
+	// round number the two lists above share — see [PhaseRound]. A
+	// collected executor states ONE: the run, from its launch to its
+	// collection, with no tokens (the run's are on its PhaseSandbox
+	// record). Absent on a phase that ran no loop in this process.
 	Rounds []PhaseRound `json:"rounds,omitempty"`
 	// Invocations are the phase's CLI runs, in order — see
 	// [PhaseInvocation]. Every phase that offered tools has at least one.
@@ -759,6 +773,15 @@ type AgentPhaseCompleted struct {
 	CacheWriteTokens int  `json:"cache_write_tokens"`
 	RoundsUsed       int  `json:"rounds_used"`
 	ExhaustedRounds  bool `json:"exhausted_rounds"`
+	// CLITurns is how many model turns a coding run's CLI says its own loop
+	// took, on a PhaseSandbox record only: the run's provider calls, which
+	// the engine neither made nor timed. NOT rounds_used, which counts the
+	// rounds a phase drove and times on `rounds`; a run's turns have no
+	// timing the engine could state. Absent where the CLI reported none
+	// (OpenCode reports none) — the run then counts as one call, the one the
+	// engine asked for. What every spend figure counts a record's calls by
+	// is tokens.PhaseCalls.
+	CLITurns int `json:"cli_turns,omitempty"`
 	// MaxRounds is the round cap the phase ENDED under — its base budget
 	// plus every extension the judge granted — and RoundCeiling the most
 	// it could ever have been granted. RoundsUsed against MaxRounds is
@@ -800,12 +823,13 @@ type AgentPhaseCompleted struct {
 	// carries its own measurement answers all three, and the arithmetic is
 	// done where the clock is.
 	//
-	// Zero means this record measures no loop of its own rather than a
-	// phase that took no time: a box-mode executor's rounds happen
-	// inside the CLI's own loop, in another process, and the engine's
-	// re-entry replays what that run already did. The detached run's own
-	// wall clock is on sandbox_run_started / sandbox_run_completed, which
-	// is where a reader asking how long the CODING took should look.
+	// On a collected execute phase it is the phase's two SEGMENTS — the
+	// launch and the collection — and not the run between them: the
+	// executor's turns happen inside its CLI's own loop, in its box, and
+	// the segment that collects the run replays what that run already did.
+	// The detached run's own wall clock is on its PhaseSandbox record and on
+	// sandbox_run_started / sandbox_run_completed, which is where a reader
+	// asking how long the CODING took should look.
 	DurationMS int `json:"duration_ms"`
 	// EmptyAnswerRounds counts the rounds in which the model produced
 	// neither prose nor a tool call — it spent its output budget on hidden
@@ -838,6 +862,9 @@ type AgentPhaseCompleted struct {
 	// with every first-party tool and NO MCP tool, because sending full
 	// schemas for every server's catalogue is what made a turn expensive; a
 	// tool it activates through discovery joins the list from that round on.
+	// On the execute phase that collects a coding run it is what the run held
+	// when it ended: a tool it activated over the bridge is here, and not in
+	// ToolCatalogue.
 	ToolsAvailable []string `json:"tools_available,omitempty"`
 	// ToolCatalogue is the rest of what the executor could reach, by
 	// discovery and with no schema: the tools of its universe it did not
