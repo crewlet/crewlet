@@ -39,7 +39,7 @@ import (
 // containerProbeTimeout bounds the runtime queries around a box's creation:
 // the rootless probe and the in-box half of the mount proof.
 //
-// Short on purpose, and shorter than [controlTimeout]. Both run against a
+// Short on purpose, and shorter than [ControlTimeout]. Both run against a
 // daemon this process is about to ask for a container anyway, so a daemon slow
 // enough to blow this is a create that is about to fail regardless — the only
 // thing a longer bound would buy is a later error. Ten seconds is well past a

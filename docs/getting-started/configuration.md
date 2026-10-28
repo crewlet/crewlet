@@ -1920,7 +1920,7 @@ units:
 | `timezone` | string | no | IANA timezone this one schedule fires in (default: the company's [`timezone`](#the-companys-clock)). Not `Local` or `localtime` |
 | `target` | string | no | **Unit schedules only**: `each` (default — every direct member) or `lead` (the effective unit lead). Ignored for role schedules; for a per-person task, use a role schedule |
 | `enabled` | bool | no | `false` keeps the schedule in config without firing (default `true`) |
-| `timeout_seconds` | int | no | Hard wall-clock cap on the scheduled turn (default `180`) |
+| `timeout_seconds` | int | no | Hard wall-clock cap on the scheduled turn, its executor's run included (default `1800`, half an hour: [why](../concepts/scheduling.md#hard-wall-clock-timeout)) |
 | `catchup` | bool | no | Fire one recent missed tick on restart (default `true`) |
 
 > Scheduling requires a database (for the at-most-once `scheduled_runs`

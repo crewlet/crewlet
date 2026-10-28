@@ -37,11 +37,17 @@ const WorkspaceSubdir = "workspace"
 // identifiable — and greppable in `docker ps` — without consulting Crewlet.
 const ContainerPrefix = "crewlet-sbx-"
 
-// controlTimeout bounds a CONTROL-PLANE command: mkdir, `docker exec`, the
-// liveness probe. Never the coding job itself, which is detached and
-// deliberately uncapped. Sized for a container runtime under load, not for
-// work.
-const controlTimeout = 120 * time.Second
+// ControlTimeout bounds a CONTROL-PLANE command: mkdir, `docker exec`, the
+// liveness probe, and a container box's start — its `docker run`, with the
+// pull of an image the host does not hold yet inside it. Never the coding job
+// itself, which is detached and deliberately uncapped. Sized for a container
+// runtime under load, not for work.
+//
+// EXPORTED for the one reader outside this package: a scheduled turn's
+// default cap (internal/org's DefaultScheduleTimeout) has to outlast what its
+// turn spends before its run starts, the box's start among it, and a test in
+// internal/engine holds the two in order.
+const ControlTimeout = 120 * time.Second
 
 // termGrace is how long a direct box's process group gets between SIGTERM and
 // SIGKILL.

@@ -8632,7 +8632,7 @@ timezone, target → resolved runner handles, and a per-request `next_run`
       "name": "daily-standup",
       "cron": "30 9 * * 1-5", "timezone": "Europe/Amsterdam",
       "task": "Post your standup…", "target": "each",
-      "enabled": true, "timeout_seconds": 180, "catchup": true,
+      "enabled": true, "timeout_seconds": 1800, "catchup": true,
       "runners": ["backend-lead", "backend-dev"],
       "next_run": "2026-06-09T07:30:00+00:00"
     }
