@@ -1283,12 +1283,17 @@ const (
 	// rather than drawn as a card (ADR-0061): its chip and peek, the mention
 	// rule, the oversize card and a page that says it is one, less the folded
 	// read cards they replace, took it to 4591.9 KiB. 4592 KiB, which still
-	// refuses a doubled baseline. Saying what became of an answer to a parked
-	// coding run (sent, recorded while its seat is busy and on what, answered,
-	// or not used and why) off the run's own record, rather than calling a
-	// `pending` press answered, took it to 4594.4 KiB. 4595 KiB, which still
-	// refuses a doubled baseline.
-	treeBudget = 4<<20 + 499<<10
+	// refuses a doubled baseline. A limit's refusal naming where its ceiling
+	// is raised (ADR-0060's remedy): the link table and its gate, the press
+	// drawn on every surface a spent budget is shown on, a section arrived
+	// at on Budgets, each person's assistant ceiling edited there, and the
+	// one rule a refused question goes back in the box by, took it to
+	// 4601.7 KiB. 4602 KiB, which still refuses a doubled baseline. The
+	// review's fixes (a restore decided once per turn in the session, a
+	// section matched by its path and name, Home's spent week through the
+	// remedy gate) took it to 4602.0 KiB, past it by bytes. 4603 KiB, which
+	// still refuses a doubled baseline.
+	treeBudget = 4<<20 + 507<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -53,6 +53,7 @@ import {
   type Caveat,
   type CaveatAction,
 } from "./writeOutcome.ts";
+import type { Remedy } from "./remedy.ts";
 
 /** A change the dashboard may make: a key of `contract/actions.ts`. */
 export type ActionTool = keyof typeof ACTIONS;
@@ -124,6 +125,8 @@ export type ActResult =
        * retry sends the same operation.
        */
       retryable: boolean;
+      /** Where the limit that caused it is changed, for a refusal a limit caused (a spent budget). */
+      remedy: Remedy | null;
     };
 
 export interface ActOptions {

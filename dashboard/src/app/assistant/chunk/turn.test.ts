@@ -141,6 +141,7 @@ describe("one row per move of the state machine", () => {
         sentence: "Question limit reached.",
         hint: null,
         retryAfterSeconds: 30,
+        remedy: null,
       },
     });
     expect(phase(view)).toBe("refused");

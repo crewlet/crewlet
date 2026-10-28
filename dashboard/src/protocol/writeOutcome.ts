@@ -34,6 +34,7 @@ import { ACT_ERRORS } from "../contract/errors.ts";
 import { CAVEAT_ACTIONS } from "../contract/caveats.ts";
 import { RestError } from "./rest.ts";
 import { retryAfterMs } from "./retry.ts";
+import type { Remedy } from "./remedy.ts";
 
 /** A refusal code this build has a sentence for. */
 export type ActErrorCode = keyof typeof ACT_ERRORS;
@@ -107,6 +108,8 @@ export type WriteFailed =
       grants: string[];
       /** Whether sending it again may succeed: the engine said waiting can change it. */
       retryable: boolean;
+      /** Where the limit that caused it is changed, for a refusal a limit caused (a spent budget). */
+      remedy: Remedy | null;
       /**
        * Whether the screen the press was made from is OUT OF DATE (see
        * [LOOK_AGAIN]), so every question the write would have moved is asked
@@ -212,6 +215,7 @@ export function writeFailed(err: RestError): WriteFailed {
     // that hint, so a press offered "Try again" is one the engine said could
     // land.
     retryable: err.retryHint !== null && retryAfterMs(err.retryHint) !== null,
+    remedy: err.remedy,
     lookAgain: LOOK_AGAIN.has(code),
   };
 }

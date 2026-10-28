@@ -45,14 +45,25 @@ func RebuildFromPeer(raw []byte, out any) error {
 }
 
 // SaidFromPeer is a refusal's phrasing a peer wrote, as the error chain
-// carries it, or nil for none. FOR THE ESTATE ROUTER ALONE, for
+// carries it, or nil for none: raw is the JSON the peer's
+// [Refusal.MarshalJSON] wrote, and an error is JSON that is not that. A
+// remedy this build does not know is dropped and the words kept, since the
+// words alone are still the person's. FOR THE ESTATE ROUTER ALONE, for
 // [RebuildFromPeer]'s reason.
-func SaidFromPeer(person string) *Said {
-	person = strings.TrimSpace(person)
-	if person == "" {
-		return nil
+func SaidFromPeer(raw []byte) (*Said, error) {
+	var peer peerRefusal
+	if err := json.Unmarshal(raw, &peer); err != nil {
+		return nil, fmt.Errorf("caveat: a peer's refusal phrasing: %w", err)
 	}
-	return &Said{Words: Refusal{person: person}}
+	person := strings.TrimSpace(peer.Person)
+	if person == "" {
+		return nil, nil
+	}
+	words := Refusal{person: person}
+	if peer.Remedy != nil && peer.Remedy.valid() {
+		words.remedy = *peer.Remedy
+	}
+	return &Said{Words: words}, nil
 }
 
 var caveatType = reflect.TypeFor[Caveat]()

@@ -668,8 +668,18 @@ func (t *turn) outcome(ctx context.Context, res *toolloop.Result, err error) (wi
 			if budget.Scope == PersonBudgetScope {
 				failure.Message = "Your own assistant token budget for this window is spent."
 			}
+			// BOTH WAYS BACK, in a person's words: the window turning over,
+			// and the ceiling raised, which the remedy beside it opens
+			// (ADR-0060). The reset's instant rides as the wait, never as a
+			// timestamp in the sentence a person reads.
+			failure.Hint = "It comes back when the window resets, or as soon as the " +
+				"ceiling is raised."
 			if !budget.ResetsAt.IsZero() {
-				failure.Hint = "It resets " + budget.ResetsAt.UTC().Format(time.RFC3339) + "."
+				failure.RetryAfterSeconds = max(int((budget.ResetsAt.Sub(t.svc.now())+
+					time.Second-1)/time.Second), 1)
+			}
+			if remedy := budgetRemedy(budget.Scope); !remedy.IsZero() {
+				failure.Remedy = &remedy
 			}
 		}
 		return wire.TurnBudgetExhausted, failure

@@ -28,6 +28,7 @@ import type { ActionTool } from "~/protocol/act.ts";
 import type { Act } from "~/lib/useAct.ts";
 import { marked } from "~/ui/Problems.tsx";
 import { youNeedWords } from "~/lib/access.ts";
+import { LimitRemedy } from "./LimitRemedy.tsx";
 
 export interface WriteButtonProps<T extends ActionTool> extends Omit<
   ButtonProps,
@@ -144,6 +145,9 @@ export function RefusalNote<T extends ActionTool>({ write }: { write: Act<T> }) 
       {refusal.grants.length > 0
         ? `${youNeedWords(refusal.grants)} Ask an admin.`
         : marked(refusal.sentence, "inherit")}
+      {/* WHERE THE LIMIT THAT REFUSED IT IS RAISED, for a refusal a limit
+          caused, behind the gate of the editor it opens. */}
+      <LimitRemedy remedy={refusal.remedy} />
     </RefusalStrip>
   );
 }

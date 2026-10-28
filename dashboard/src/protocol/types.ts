@@ -1100,6 +1100,14 @@ export interface BudgetsAnswer {
     handle: string;
     windows: BudgetWindow[];
   }[];
+  /**
+   * The ceiling every person's Dashboard Assistant spend is held to
+   * (`assistant.token_budget`): all three windows, `limit` where capped.
+   * `used` is the VIEWER's own spend only where `counted` is true (a person,
+   * under a company that caps a person's spend); elsewhere it is a zero
+   * nobody measured, and a screen draws no figure.
+   */
+  assistant: { counted: boolean; windows: BudgetWindow[] };
 }
 
 // ---------------------------------------------------------------------------
