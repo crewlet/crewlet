@@ -261,7 +261,7 @@ If your image genuinely needs its own user — one that installs packages at run
 
 Every container box is then proved once, at creation, before anything runs in it: the engine writes a token the box reads back, and the box creates a directory the engine writes into and removes. That catches the ownership case and one other that is otherwise invisible — a `runtime` pointed at a daemon on **another host** (`DOCKER_HOST`, a forwarded socket) bind-mounts *that* machine's filesystem, so the agent finds no brief, no credentials and no shim. A box that fails the proof is torn down and the error names the cause; use the `e2b` provider for a genuinely remote runtime.
 
-**A box reaches the engine host by the runtime's name for it.** The engine hands a box addresses written in its own network: the [tool bridge](#the-tool-bridge--a-seats-own-tools-from-inside-a-box) (`CREWLET_MCP_BRIDGE_URL`), the telemetry receiver (`CREWLET_SANDBOX_OTEL_RECEIVER_URL`) and the URL of every HTTP [MCP server](#mcp-inside-the-sandbox) the seat scopes into the box. A single-host install sets those to loopback (`http://127.0.0.1:8000`), and inside a container loopback is the container itself. So where a URL the engine hands a `container` box names the engine host's loopback (`127.0.0.1`, any `127.x` address, `::1` or `localhost`), the box is given the same URL with the host replaced by the runtime's own name for the engine host: `host.docker.internal` under Docker, which the engine defines for every box it starts (`--add-host host.docker.internal:host-gateway`, which Docker Engine on Linux needs and Docker Desktop answers the same way), and `host.containers.internal` under Podman, which defines it itself. Any other host is handed on as written, since it already names a machine both sides can see, and so is every value you declare for the box yourself (`role.sandbox.env`, a setup step's `env`), which is in the box's network to begin with: a box reaching a service on the host names `host.docker.internal` there. `direct` shares the host's network and is handed every address as written — and for the bridge it needs none on a node that serves the API, dialling that node's own listener on loopback, which the node derives from the socket it binds — so one company runs `direct` entries and `container` entries side by side with one loopback `CREWLET_MCP_BRIDGE_URL`, which only the containers read. Docker Desktop, and Podman's machine on macOS and Windows, deliver that name over the host's loopback, where a loopback bind hears it and the [tool bridge](#the-tool-bridge--a-seats-own-tools-from-inside-a-box) admits it: on a loopback connection the bridge takes a loopback host name or one of these two runtime names and refuses every other, which is its guard against DNS rebinding. Docker Engine and Podman on Linux deliver it from the container's bridge network rather than the host's loopback, so the engine's API must listen there too: `api.host` empty (every interface) or the bridge's address, never `127.0.0.1`. `crewlet validate`, given both files, and every apply on a Linux node with both the `ingress` and the `seats` role — the one that serves the bridge and the receiver and starts the boxes that dial them on this host; a node without `seats` starts no box here, so whatever dials its routes comes from another machine — warn (`config_advisory` at `api.host`, or `api.public.host` when the public listener serves the bridge) when a company that reaches the `container` cell meets a loopback bind.
+**A box reaches the engine host by the runtime's name for it.** The engine hands a box addresses written in its own network: the [tool bridge](#the-tool-bridge--a-seats-own-tools-from-inside-a-box) (`CREWLET_MCP_BRIDGE_URL`), the telemetry receiver (`CREWLET_SANDBOX_OTEL_RECEIVER_URL`), the URL of every HTTP [MCP server](#mcp-inside-the-sandbox) the seat scopes into the box, and the run's [notes route](#notes-to-a-running-run) on the bridge, which OpenCode's plugin polls. A single-host install sets those to loopback (`http://127.0.0.1:8000`), and inside a container loopback is the container itself. So where a URL the engine hands a `container` box names the engine host's loopback (`127.0.0.1`, any `127.x` address, `::1` or `localhost`), the box is given the same URL with the host replaced by the runtime's own name for the engine host: `host.docker.internal` under Docker, which the engine defines for every box it starts (`--add-host host.docker.internal:host-gateway`, which Docker Engine on Linux needs and Docker Desktop answers the same way), and `host.containers.internal` under Podman, which defines it itself. Any other host is handed on as written, since it already names a machine both sides can see, and so is every value you declare for the box yourself (`role.sandbox.env`, a setup step's `env`), which is in the box's network to begin with: a box reaching a service on the host names `host.docker.internal` there. `direct` shares the host's network and is handed every address as written — and for the bridge it needs none on a node that serves the API, dialling that node's own listener on loopback, which the node derives from the socket it binds — so one company runs `direct` entries and `container` entries side by side with one loopback `CREWLET_MCP_BRIDGE_URL`, which only the containers read. Docker Desktop, and Podman's machine on macOS and Windows, deliver that name over the host's loopback, where a loopback bind hears it and the [tool bridge](#the-tool-bridge--a-seats-own-tools-from-inside-a-box) admits it: on a loopback connection the bridge — its MCP endpoint and the run's notes route alike — takes a loopback host name or one of these two runtime names and refuses every other, which is its guard against DNS rebinding. Docker Engine and Podman on Linux deliver it from the container's bridge network rather than the host's loopback, so the engine's API must listen there too: `api.host` empty (every interface) or the bridge's address, never `127.0.0.1`. `crewlet validate`, given both files, and every apply on a Linux node with both the `ingress` and the `seats` role — the one that serves the bridge and the receiver and starts the boxes that dial them on this host; a node without `seats` starts no box here, so whatever dials its routes comes from another machine — warn (`config_advisory` at `api.host`, or `api.public.host` when the public listener serves the bridge) when a company that reaches the `container` cell meets a loopback bind.
 
 **Setup commands get a provisioning budget, not a control one.** Each command may run for `timeout_seconds` (default 600). Real provisioning — a dependency install, a cold image pull, a large clone — takes minutes, and without its own budget these inherited the backend's control-plane timeout and were killed, failing the whole acquisition. Raise it for a step you know is slow; lower it for one that should be instant, so a hung command surfaces as a named setup failure rather than eating the turn. A failure names the step and what in it failed — the file it could not write, or the command's position and either the status it exited with or that it reported none — and never the command text: the engine resolves nothing in a command, which the box's shell expands from the run environment, but a recipe may still spell a credential out literally, and the failure is logged and handed back to the agent.
 
@@ -348,12 +348,12 @@ Two runners ship behind the `sandbox.Runner` interface, selected by `role.sandbo
 A run is handed two texts, kept apart from the launch all the way to the CLI:
 
 - **The brief** — what this run is asked to do, and the whole of the prompt the CLI runs. For `run_sandbox` it is the executor's own `brief`, then `## The wider task` (the turn's task) where that says more; for an [executor run](llm-backends.md#the-executors-run-in-a-box) it is the turn's ask, the user message a phase on this host sends.
-- **The standing instructions** — how to work, for the whole run, in this order: an executor run's system prompt (the seat's identity, policies, roster and memory, exactly as a native pass sends them as its system message, opened by one constant note saying that these, and not the coding tool's own prompt, are the role — Claude Code's prompt opens with "You are Claude Code", and no flag removes it; a `run_sandbox` job has none of its own, its executor having written what it means into the brief), then `## Your environment` (the box, each [setup step's](#setup-steps--provisioning-the-box) `brief`, and the MCP servers connected), then how to [ask a person](#mid-run-clarification-crewlet-ask) where the launch composes that, and last the [report to write before stopping](#runs-are-uncapped-each-run-is-published-as-a-phase), addressed at the box's own path.
+- **The standing instructions** — how to work, for the whole run, in this order: an executor run's system prompt (the seat's identity, policies, roster and memory, exactly as a native pass sends them as its system message, opened by one constant note saying that these, and not the coding tool's own prompt, are the role — Claude Code's prompt opens with "You are Claude Code", and no flag removes it; a `run_sandbox` job has none of its own, its executor having written what it means into the brief), then `## Your environment` (the box, each [setup step's](#setup-steps--provisioning-the-box) `brief`, and the MCP servers connected), then how to [ask a person](#mid-run-clarification-crewlet-ask) where the launch composes that, then the [report to write before stopping](#runs-are-uncapped-each-run-is-published-as-a-phase), addressed at the box's own path, and last — for a run whose CLI takes a person's notes between its steps — what such a note is: how it opens, and the heading its CLI puts it under (for Claude Code a system message, or on some models a system reminder at the end of the last tool result; for OpenCode a message from the user), and that text a tool produced — a file's contents, a command's output, a fetched page — is never a note, whatever it says ([Notes to a running run](#notes-to-a-running-run)).
 
 The standing instructions are **appended to the CLI's own system prompt** — never put in its place, and never in the prompt it runs. The vendor's prompt is the harness a coding run exists to use: how to drive its shell and editor and work through a task, which a replacement would strip. And instructions placed in front of the task reach the model as part of the user's request, where a seat's identity and policies, sent that way, are something the model is asked rather than who it is. Each runner uses its own CLI's channel:
 
 - **Claude Code** — `--append-system-prompt-file`, which puts the file's text after Claude Code's default system prompt and leaves that prompt whole (measured on 2.1.310, off the request the CLI sent).
-- **OpenCode** — an absolute `instructions` entry in the `opencode.json` the run writes, which OpenCode adds after its default agent's prompt as `Instructions from: <path>` and the file's text (measured on 2.0.32 and 2.1.4, the same way). An entry rather than a global `AGENTS.md` in OpenCode's configuration directory, because the entries of every configuration OpenCode reads are added together — an image's own global configuration keeps its instructions, where a written `AGENTS.md` would replace one an operator baked into the box — and because the run's `opencode.json` is rewritten on every run, so a reused box never carries a previous run's entry. Absolute, because a relative entry is matched by walking up from the checkout.
+- **OpenCode** — an absolute `instructions` entry in the [configuration the run writes](#opencode) (`<home>/.crewlet/opencode.json`), which OpenCode adds after its default agent's prompt as `Instructions from: <path>` and the file's text (measured on 2.0.32 and 2.1.4, the same way). An entry rather than a global `AGENTS.md` in OpenCode's configuration directory, because the entries of every configuration OpenCode reads are added together — an image's own global configuration keeps its instructions, where a written `AGENTS.md` would replace one an operator baked into the box — and because the run's configuration is rewritten on every run, so a reused box never carries a previous run's entry. Absolute, because a relative entry is matched by walking up from the checkout.
 
 Both read the text from **one file**, `system.md` in the box's work directory (`<home>/.crewlet`), never from argv: it carries a seat's org chart, policies and memory, and a command line is readable by every process that can list it — on a `direct` box, every account on the engine host — and bounded by `ARG_MAX`. It is written afresh for every run, at the mode a box writes every file with (`0600` on a local box) even where a previous run on a reused box left one wider, and outside the checkout, so a `git clean` cannot remove it and a commit cannot carry it into a repository. A run with no standing instructions writes no file and passes no flag; a runner always has at least the report instruction.
 
@@ -361,7 +361,9 @@ Neither text is recorded anywhere a later process reads: the box is started with
 
 ### Claude Code
 
-Runs headless — `claude -p "<brief>" --output-format stream-json --verbose --permission-mode bypassPermissions --append-system-prompt-file <home>/.crewlet/system.md` (the run's [standing instructions](#what-a-coding-agent-is-told)) — so it prints every message as it happens, one JSON object a line, into its own **event stream** (`stream.jsonl` in the box's work directory). That stream is what a person watching the run sees and what its transcript is built from; `--output-format json` printed one object when the run ended and nothing before it, and in print mode the CLI writes nothing to stderr either, so a run on it showed nothing while it worked and left no transcript after. (`--verbose` is not optional: print mode refuses stream-json without it.) The stream's **last line is the result message**, which the wrapper copies to `result.json` after the CLI exits — never through a pipe beside it, whose exit status would be the copy's rather than the CLI's — and that line maps directly onto the result (final text, session id, token usage, cost; an error subtype such as `error_max_turns` and its `errors` are the failure). A stream that ends on anything else is a run that stopped before it said how it ended, and reads as one rather than as a silent success. A run whose wrapper never made the copy — its process group killed, by an OOM or a host restart, so the poll ended it on the wrapper's liveness — is read from the stream's own last line, which is what the copy would have held: the result, where the CLI printed one before the wrapper died, and otherwise what it was saying when it stopped. It used to read as a run that "produced no output" beside a transcript of everything it did. A result file the box refuses (one that is [not a regular file](#runs-are-uncapped-each-run-is-published-as-a-phase), say) is read from that line the same way, and the refusal is still said; a CLI that exited before printing anything at all — not installed, a bad flag — leaves both empty, and reads as what it is.
+Runs headless — `claude -p --output-format stream-json --verbose --permission-mode bypassPermissions --settings <home>/.crewlet/claude-settings.json --append-system-prompt-file <home>/.crewlet/system.md` (the run's [hooks](#claude-codes-hooks) and its [standing instructions](#what-a-coding-agent-is-told)), the brief on its standard input — so it prints every message as it happens, one JSON object a line, into its own **event stream** (`stream.jsonl` in the box's work directory). That stream is what a person watching the run sees and what its transcript is built from; `--output-format json` printed one object when the run ended and nothing before it, and in print mode the CLI writes nothing to stderr either, so a run on it showed nothing while it worked and left no transcript after. (`--verbose` is not optional: print mode refuses stream-json without it.) The stream's **last line is the result message**, which the wrapper copies to `result.json` after the CLI exits — never through a pipe beside it, whose exit status would be the copy's rather than the CLI's — and that line maps directly onto the result (final text, session id, token usage, cost; an error subtype such as `error_max_turns` and its `errors` are the failure). A stream that ends on anything else is a run that stopped before it said how it ended, and reads as one rather than as a silent success. A run whose wrapper never made the copy — its process group killed, by an OOM or a host restart, so the poll ended it on the wrapper's liveness — is read from the stream's own last line, which is what the copy would have held: the result, where the CLI printed one before the wrapper died, and otherwise what it was saying when it stopped. It used to read as a run that "produced no output" beside a transcript of everything it did. A result file the box refuses (one that is [not a regular file](#runs-are-uncapped-each-run-is-published-as-a-phase), say) is read from that line the same way, and the refusal is still said; a CLI that exited before printing anything at all — not installed, a bad flag — leaves both empty, and reads as what it is.
+
+**The brief is read on stdin**, from `brief.md` in the box's work directory, never from argv — `-p` with no prompt reads its prompt there, verbatim (measured on 2.1.263 and 2.1.310). A brief carries every note the turn has read, so it grows; one argument is capped at 128 KiB; and a command line is readable by every account on a `direct` box's host, the reason the standing instructions are a file too. **The wrapper unsets `CLAUDE_CODE_SIMPLE` and `CLAUDE_CODE_SAFE_MODE`** before the CLI starts: bare mode drops every hook (with `CLAUDE.md`, subagents and a plan's login) and safe mode drops hooks and the `--mcp-config` bridge, and either can arrive from the seat's `role.sandbox.env`, the image or a profile the login shell sources — only the wrapper, running after all three, reaches every one, so they are removed for every Claude Code run rather than refused in configuration. **A run a hook stopped is a failure.** Claude Code reports a loop that a hook of the repository's or the image's own settings stopped — one that exited 2 or returned a block — as a success subtype with an empty result and `terminal_reason: hook_stopped` (measured on 2.1.263 and 2.1.310); the runner reads it as a failed run saying so, never as a run that succeeded and said nothing.
 
 The run's input is its **whole** prompt: the vendor's `input_tokens` counts only the uncached remainder, so the engine adds `cache_read_input_tokens` and `cache_creation_input_tokens` to it and carries both as the cache's share, the same way the engine counts a call on a Claude Code entry on its own host. Read alone, the uncached figure put a fraction of every coding run's prompt on the budget counter.
 
@@ -387,7 +389,15 @@ The run's `--model` is the `opencode` entry's model exactly as written — the s
 
 **A login follows a run into a local cell as OpenCode's own export.** OpenCode 2 keeps its logins in the database it keeps its sessions in, so the entry's login travels as the document `opencode auth export` printed ([LLM Backends](llm-backends.md#1-broker-the-vendors-own-login-any-cli)): a `direct` or `container` box is seeded with it at `~/.crewlet/exported-credentials`, and the run imports it before its server starts. A token OpenCode refreshes mid-run then lives only in that database, and every teardown of a run still in flight — a seat retired mid-run, a launch settled as failed after its job started, the pause reaper — kills the job's group outright (`SIGKILL`, or `docker rm -f` for a `container` box), so nothing in the box runs at its end. So the run **exports the database back over the document while it works**, through its own server every 30 s, as well as once more when it ends; a `SIGTERM`, `SIGINT` or `SIGHUP` to the run exports once more before it goes, exiting 143, 130 or 129. Thirty seconds is the window a kill can still lose a refresh in: an OAuth access token lives an hour or more, so under one refresh in a hundred falls inside it, and an export through the server costs about 0.14 s (measured on 2.0.32). An export replaces the document only where it differs and holds a login — a whole, non-empty JSON array, never the `[]` a database that dropped its credential prints — and nothing is exported where the box was given none. The box's teardown then writes the document back to the shared login under the rule every local box's login follows ([Local sandboxes](#local-sandboxes)). A remote box is never given it.
 
-The runner **writes OpenCode 2's own configuration into the checkout** (`opencode.json`; OpenCode takes no config flag, so the file's location is the wiring). It declares **no provider**: the model names one of OpenCode's own, which reads its key from the run environment under that provider's own variable, so a credential is never written into the file where the agent could read it back into its report, and a provider declared beside the one the model names would shadow it. The same file sets `permissions` to allow every action and deny only `question` (headless runs have no human to approve a prompt — a gate left at `ask` is auto-rejected — and the one tool that asks a person is replaced by `crewlet-ask`), `share: disabled`, `update: disable` (a CLI that updates itself mid-run swaps the tool under the brief while the seat's turn is suspended waiting on it) and `snapshots: false` (a git snapshot of the checkout at every step, for an undo a headless run never offers). Each MCP server is declared under `mcp.servers` with **`codemode: false`**, so its tools are offered to the model directly as `<server>_<tool>` rather than only through Code Mode's JavaScript `execute` tool — which a model may never take to, and which the transcript would record as `execute` whatever it reached — and a remote server with **`oauth: false`**, since the bridge authenticates with the run's token and a headless run cannot complete an OAuth flow. Its `instructions` names the file holding the run's [standing instructions](#what-a-coding-agent-is-told), by its absolute path. That file is written on **every** run, including one that names no model and no server: a run that wrote none would not fall back to the vendor's defaults, it would inherit whatever the previous run left on a reused box, MCP block and dead per-run bridge URL included.
+The runner **writes OpenCode 2's own configuration to `<home>/.crewlet/opencode.json`**, beside the run's other artefacts and never in the checkout, and the run's script hands its content to the run's server alone as **`OPENCODE_CONFIG_CONTENT`**. OpenCode takes no config flag, and of its two variables for a process's own configuration, `OPENCODE_CONFIG` (a file's path) ranks *below* a repository's `opencode.json` and `.opencode/`, while `OPENCODE_CONFIG_CONTENT` ranks above them: 2.x reads managed policies, well-known, global, `OPENCODE_CONFIG`, the project's `opencode.json`, its `.opencode/`, `OPENCODE_CONFIG_CONTENT` and managed settings in that order, a later document winning (the same at 2.0.0, 2.0.32 and 2.1.4). So **a repository's own `opencode.json` is not written to**: it stays as it is and loads beneath the run's configuration, the way Claude Code loads a repository's `.claude/settings.json` beneath `--settings`. Measured on 2.0.32 and 2.1.4 with a repository whose own `opencode.json` and `.opencode/opencode.json` disable the bridge and deny every permission: the bridge connected and the shell ran. Every server the run declares, and the agent its turn cap is set on, states `disabled: false`, so a document beneath the run's cannot switch one off under the same name. The login's import and export and the run's own client calls are handed none of it, and a run whose configuration is missing is refused before a login is imported or a server started. For a run wired to its turn's notes, the same file names the run's [notes plugin](#opencodes-notes-plugin) and the server alone is handed the run's session as `CREWLET_STEER_SESSION`.
+
+It declares **no provider**: the model names one of OpenCode's own, which reads its key from the run environment under that provider's own variable, so a credential is never written into the file where the agent could read it back into its report, and a provider declared beside the one the model names would shadow it. The same file sets `permissions` to allow every action and deny only `question` (headless runs have no human to approve a prompt — a gate left at `ask` is auto-rejected — and the one tool that asks a person is replaced by `crewlet-ask`; the rules of every document OpenCode reads are added together in its order, so these come last and, the last match winning, decide), `share: disabled`, `update: disable` (a CLI that updates itself mid-run swaps the tool under the brief while the seat's turn is suspended waiting on it) and `snapshots: false` (a git snapshot of the checkout at every step, for an undo a headless run never offers). Each MCP server is declared under `mcp.servers` with **`codemode: false`**, so its tools are offered to the model directly as `<server>_<tool>` rather than only through Code Mode's JavaScript `execute` tool — which a model may never take to, and which the transcript would record as `execute` whatever it reached — and a remote server with **`oauth: false`**, since the bridge authenticates with the run's token and a headless run cannot complete an OAuth flow.
+
+**A server's values are referenced, not written into the configuration.** Its `url`, each header value and each `environment` value is a `{file:<path>}` reference to a file of its own under `<home>/.crewlet/opencode-values/`, which OpenCode reads in the reference's place — the file's content with the whitespace at either end trimmed, so an `environment` value that begins or ends with whitespace arrives without it (a URL or a header value has none that counts) — so the configuration and the variable carrying it hold paths and no value. The files are written before the configuration that names them, at the mode a box writes every file with (`0600` on a local box). OpenCode replaces every `{env:…}` and `{file:…}` in the configuration's text before it parses it, and the configuration names the instruction file, the notes plugin and every value under the box's home, so a run on a box whose home that text cannot name — a relative one, or one holding a brace, a quote, a backslash or a control character — is refused, saying so and naming `providers.sandbox.local.state_dir`, which places a local box's home.
+
+Its `instructions` names the file holding the run's [standing instructions](#what-a-coding-agent-is-told), by its absolute path. The configuration is written on **every** run, including one that names no model and no server, and the previous run's configuration and values are removed before it is: a run is configured by its own file or not started at all, never by the vendor's defaults or by a file an earlier run on a reused box left, MCP block and dead per-run bridge URL included.
+
+**Its answer is its last message's text.** Each step of a run is a message of its own, and `run --format json` prints every step's text, so the result is the text of the last message that wrote any — a run handed a [note](#opencodes-notes-plugin) after it had answered answers again, and its result is the later answer, not the two joined — while the transcript keeps every step's. The report the run writes is what the result prefers anyway.
 
 **Its tokens are the session's own totals.** `run --format json` drops the final step's counts, so the run asks its session (`opencode api session.get`) once it ends and the collection reads that: the whole prompt, the cache's two shares included, and the output with the reasoning OpenCode reports beside it added back, as every provider bills it — plus OpenCode's price, as it reported it (zero where it has no pricing for the provider, which the record reads as no price). A run whose report is missing reports zero rather than an estimate.
 
@@ -561,9 +571,9 @@ The declaration that counts is the one beside the value that won: a key in `role
 
 ## MCP inside the sandbox
 
-The coding agent is itself an MCP client, so the engine renders the role's servers into the box (`internal/sandbox/mcprender.go` → Claude Code's `.mcp.json` via `--mcp-config --strict-mcp-config`, or OpenCode's `opencode.json`). Scoping is at the **server level only**: `role.sandbox.mcp.servers` names which of the role's `mcp_servers` to expose, and the coding agent gets **every tool those servers expose**. There is no per-tool allowlist — OpenCode has no allowlist flag and Claude Code runs `bypassPermissions` headless, so a curated list couldn't be enforced uniformly and would give a false sense of restriction. A role that shouldn't reach a surface simply doesn't list that server.
+The coding agent is itself an MCP client, so the engine renders the role's servers into the box (`internal/sandbox/mcprender.go` → Claude Code's `.mcp.json` via `--mcp-config --strict-mcp-config`, or the [configuration an OpenCode run is handed](#opencode)). Scoping is at the **server level only**: `role.sandbox.mcp.servers` names which of the role's `mcp_servers` to expose, and the coding agent gets **every tool those servers expose**. There is no per-tool allowlist — OpenCode has no allowlist flag and Claude Code runs `bypassPermissions` headless, so a curated list couldn't be enforced uniformly and would give a false sense of restriction. A role that shouldn't reach a surface simply doesn't list that server.
 
-Credentials from `role.mcp_env` are resolved into the rendered specs (HTTP servers get them as headers, stdio servers as env), so the in-box server instances authenticate as the seat. So is every `${VAR}` in the server's own `env`, `headers` and `url`: the engine resolves each through the secret store and its own environment, exactly as it does for the server's child on the engine host, and never writes a reference into the box for the coding CLI to expand — OpenCode does not read that syntax, and Claude Code would read it from the run environment, which holds a company secret only where the seat's `sandbox.env` or a setup step repeats it. So a server's reference means in the box what it means on the engine host: one the secret store and the engine's environment do not answer is not answered by a value the run environment happens to carry either. The connected server names are also listed in the coding agent's environment brief. A server any of whose values does **not** resolve — the seat's or its own, under a key the server does not [declare optional](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value) — is not rendered at all, by the rule the server's own child follows ([Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers)): handed an empty token, an in-box server refuses to start or acts as nobody, and the agent would spend a round finding that out. A key it does declare optional is left out of what the box is given. The run logs `sandbox_mcp_server_withheld` naming the variables: at info while the integration that mints them is minting them — a run launched once the seal reaches the node is given the server — and as a warning where they are unset, or where that integration cannot mint them until somebody acts.
+Credentials from `role.mcp_env` are resolved into the rendered specs (HTTP servers get them as headers, stdio servers as env), so the in-box server instances authenticate as the seat. So is every `${VAR}` in the server's own `env`, `headers` and `url`: the engine resolves each through the secret store and its own environment, exactly as it does for the server's child on the engine host, and never writes a `${VAR}` reference into the box for the coding CLI to expand — OpenCode does not read that syntax, and Claude Code would read it from the run environment, which holds a company secret only where the seat's `sandbox.env` or a setup step repeats it. (What OpenCode is handed is the resolved value, in a file of its own its configuration names — see [OpenCode](#opencode).) So a server's reference means in the box what it means on the engine host: one the secret store and the engine's environment do not answer is not answered by a value the run environment happens to carry either. The connected server names are also listed in the coding agent's environment brief. A server any of whose values does **not** resolve — the seat's or its own, under a key the server does not [declare optional](../guides/tools-and-mcp.md#a-key-that-may-go-without-its-value) — is not rendered at all, by the rule the server's own child follows ([Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers)): handed an empty token, an in-box server refuses to start or acts as nobody, and the agent would spend a round finding that out. A key it does declare optional is left out of what the box is given. The run logs `sandbox_mcp_server_withheld` naming the variables: at info while the integration that mints them is minting them — a run launched once the seal reaches the node is given the server — and as a warning where they are unset, or where that integration cannot mint them until somebody acts.
 
 A named server the company's `mcp_servers` does not carry is **skipped**, with a warning, rather than rendered empty — the agent must never be offered a server it cannot reach, because it spends a round discovering that. The same holds for a server whose `transport` is neither `stdio` nor `http`. One skipped entry does not cost the seat the rest of its surface.
 
@@ -588,7 +598,7 @@ box ──MCP/streamable-HTTP──▶  POST /mcp/{token}  ──▶  the seat's
 
 **The dispatch is the seat's own.** A bridged call goes through the same `tools.Surface` a phase on this host calls, so the grant, the [required-skill guard](tool-skills.md), the failure shape and the recording are all the ones an operator already knows. `internal/api/mcpbridge` never grows a second idea of whether a tool is allowed — a second copy would drift, and it would drift on the security half. The MCP server behind the route is the one a run on this host reaches over its unix socket (`internal/toolsession`), kept in step with the seat's live tool set: a tool the run activates is listed on its next request, the activation's answer held until the box's CLI has re-read the list.
 
-**Every call is held to the run, as a phase holds its own.** What the bridge adds is what a detached run's calls are owed that a surface cannot know: the **seat's fence**, before and after each call — once this node stops holding the seat, or a person asks the seat to stop, that call and every one after it are refused rather than made as a seat the node no longer speaks for, each written on the run's record as refused; the **order the calls arrived in**, fixed as each is admitted (`Surface.Admit`) rather than as it returns, so a response's calls made at once read the same call log a re-run would; the **run's context, never the request's**, so a box that disconnects mid-call abandons only the answer and never a tool half-way through a write; a **panic contained** — the call answered as failed, logged with its stack, and the run's tools closed to it; and a **run that is over refuses** — a call reaching a session after its run ended, or after a relaunch replaced it, is answered and not run. A call whose arguments did not parse is answered with the same words a phase on this host uses, never run on an empty object — though a box's CLI is read by no record, so an object the CLI made of what its model wrote (Claude Code's of an array) reaches the tool as the CLI sent it, and the tool's own validation is what judges it. What it does not add belongs to a tool loop — rounds, a terminator, a per-request budget, a person's notes — because an executor run's loop is its CLI's own, its turn is parked while it runs, and those are settled when the run is collected and its turn resumes.
+**Every call is held to the run, as a phase holds its own.** What the bridge adds is what a detached run's calls are owed that a surface cannot know: the **seat's fence**, before and after each call — once this node stops holding the seat, or a person asks the seat to stop, that call and every one after it are refused rather than made as a seat the node no longer speaks for, each written on the run's record as refused; the **order the calls arrived in**, fixed as each is admitted (`Surface.Admit`) rather than as it returns, so a response's calls made at once read the same call log a re-run would; the **run's context, never the request's**, so a box that disconnects mid-call abandons only the answer and never a tool half-way through a write; a **panic contained** — the call answered as failed, logged with its stack, and the run's tools closed to it; and a **run that is over refuses** — a call reaching a session after its run ended, or after a relaunch replaced it, is answered and not run. A call whose arguments did not parse is answered with the same words a phase on this host uses, never run on an empty object — though a box's CLI is read by no record, so an object the CLI made of what its model wrote (Claude Code's of an array) reaches the tool as the CLI sent it, and the tool's own validation is what judges it. What it does not add belongs to a tool loop — rounds, a terminator, a per-request budget — because an executor run's loop is its CLI's own, its turn is parked while it runs, and those are settled when the run is collected and its turn resumes (a person's notes reach the run over the bridge too, between its steps: see [Notes to a running run](#notes-to-a-running-run)).
 
 **The credential is per-job and expires with the run.** The box holds no API token; what admits a request is a signed token in the endpoint's own path, the same shape the OTLP receiver uses (`internal/runtoken`). It names the run, the **seat** it acts as and its **job** — the launch id the store mints and keeps on the run's durable row — never a process, and it is signed under the fleet's keyring. Two gates stand behind it: the signature says this fleet minted it, and the session map on the node holding the seat says the job it names is still the run's, so a box that outlived its run keeps no working key, and a relaunch is a new job whose old box's token stops resolving. The session is opened as soon as the job is named and before any box exists, so a launch that cannot be served is refused with nothing started.
 
@@ -603,6 +613,252 @@ box ──MCP/streamable-HTTP──▶  POST /mcp/{token}  ──▶  the seat's
 **A call waits for a holder that can answer it.** A call that lands while no node can answer — the seat's holder has died and its lease not yet run out, or a peer has the lease and is still taking the seat — waits, reading the lease again, for up to two seat-lease lifetimes (90 seconds at the default `coordination.lease_ttl_seconds`): one for a dead holder's lease to lapse and one for a peer to claim the seat and open its running jobs' sessions again. A holder that has finished taking the seat and holds no session for the job answers `401`, as for any run that is over. One that cannot be found within the bound is answered `503` with a `Retry-After`, never that the run is over, which nobody said. A holder that took a call and stopped answering before it had written a status is answered `502`, and the call is not offered to another node: it may have run.
 
 **A run outlives a restart, or a move, of the node that holds its seat.** Because the token names the job rather than a process, whichever node takes the seat over — the same node after a restart, or a peer — re-opens the run's session as it recovers the seat, before the seat's mailbox opens: the surface rebuilt from the run's own row — the tools and skills it launched with, those it activated or loaded over the bridge — with its call log and what its bridged calls have cost carried over. Only once the seat's running jobs are recovered does the node answer that a job it holds no session for is over. The node that hands the seat on ends its runs' sessions as it releases the seat, so the box's next request is routed afresh and reaches the new holder. The box's own MCP session lived on the node that let it go, so its next request there is answered `404`, which the MCP protocol answers by connecting again — through the same URL, to the new holder, with the box's unchanged token. A session that cannot be re-opened logs `bridge_not_reopened` and never fails the recovery. A run whose ending is already decided is not re-opened, and neither is one on a seat whose pause asks for its running work to stop: the node that takes that seat ends the run as it recovers it (see [Stop now](agent-runtime.md#pausing-a-seat)), so its box never gets the seat's tools back in between.
+
+## Notes to a running run
+
+A person can [steer](turn-engine.md#steering-a-running-turn) a turn while its
+coding run works. From the run's launch until its turn ends, the turn's notes
+wait on the **run's record** in the coordination store, each sealed under the
+fleet keyring by the node that filed it, beside a sealed anchor naming the seat
+the run serves ([ADR-0066](https://github.com/crewlet/crewlet/blob/main/adr/0066-a-note-to-a-coding-run-waits-sealed-on-its-record.md)).
+The run reads them at four kinds of step, and every read is recorded on the
+record by the write that hands the note over — so a note is never handed to a
+model twice, and the record's read notes are exactly what the turn carries into
+its review, whichever node resumes it:
+
+- **Its brief.** A note waiting when a run is launched — the first one, a
+  relaunch the reviewer sends back, or the one that carries a person's answer —
+  goes into the brief, read by the write that opens the job.
+- **Between its steps, through its tool bridge.** The run's bridge serves its
+  notes to its CLI two ways, behind the run's own token and nothing else:
+  - **`steer_take`**, a tool on the run's MCP server that a CLI's hook calls
+    after a batch of the main agent's tool calls (`PostToolBatch`) or as the
+    run is about to finish (`Stop`). It is **never listed**, so no CLI offers it
+    to its model, and it is answered before the seat's surface sees the call,
+    so it is never recorded on the run's ledger: it is the CLI asking, not the
+    model. Its answer is always text — the hook's answer, with the notes as its
+    additional context, or empty for nothing — and **never an error**, because a
+    hook whose call failed makes the CLI drop and re-initialise the run's whole
+    bridge. Only the main agent's loop takes notes: a subagent's batch, and a
+    hook whose agent id the CLI did not fill in, take nothing, because a note
+    handed to a delegated loop binds that piece of work alone. One answer
+    carries the oldest waiting notes within **9,000 UTF-16 code units**, measured
+    as the CLI measures its context, and the rest wait for the next step; it is
+    answered within **five seconds**, half the hook's timeout, or not at all.
+  - **The notes route**, `/mcp/{token}/steer/notes?after=<seq>` and
+    `/mcp/{token}/steer/read`, which a plugin inside the CLI polls: a poll is
+    held for up to **ten seconds** while no note waits, and answered at once
+    when one arrives. Once the node is stopping, or the session's opening has
+    ended, a held poll is let go and every later one turned away with a `503`
+    and a `Retry-After` — never an empty answer a poller would ask again at
+    once — and its notes wait on the record for the session's next opening, on
+    this node or the seat's next holder. That holds as well for a poll the
+    stopping node is relaying to another node that holds the session: the
+    stopping node lets go of it at once rather than wait out the holder's hold
+    on its listener's grace. A read names the notes
+    (one to ten) the CLI put in front of its model, and is recorded read at the
+    run's next step. Each note carries an id the CLI admits it under, unique to
+    the note and the job, so a poller that admits it twice admits it once.
+
+  A CLI takes notes here only where its run is set up to ask for them; a run
+  whose CLI asks for none still has every note read, by its review. Both
+  coding CLIs are set up to: **Claude Code** through [hooks](#claude-codes-hooks)
+  that call `steer_take`, and **OpenCode** through a [plugin](#opencodes-notes-plugin)
+  that polls the notes route and hands each note to the run's session.
+
+  A take is pinned to the run's **job** and to a run that is launching or
+  working with its ending undecided: a relaunch's job, a run parked on a
+  question, a collected run and a run whose tools are closed — its seat moved,
+  or a person stopped it — take nothing, and their notes wait for whatever reads
+  the turn next. The bridge itself decides nothing about notes; it routes the
+  call, like every bridged call, to the node holding the run's seat, whose
+  inbox for the run is rebuilt from the record — so a run whose node restarted
+  is served its notes by whichever node reopens its session.
+- **The review's first round.** A note the run never took is read by the
+  segment that reviews the run, before its first provider call.
+- **After its question is answered.** A run parked on a question takes nothing
+  while it waits; `steer_turn` answers `reads: "after_answer"`, and the launch
+  that carries the answer carries the notes.
+
+What became of each note is published as `agent_turn_steered`: `delivered` by
+the node whose step read it, with the kind of step (`boundary`: `brief`,
+`tool_batch`, `finish`, `step`, or `round` for the review) and, for a read by
+the run, its job (`launch_id`); or `expired`, for a note no job ran with when
+the turn ends — still waiting, or read into the brief of a launch that failed
+after writing the record, whose job never started — by the node that finishes
+the run's ending, and by nothing else: before the record is deleted, under an
+id derived from the ending, so a retried ending records it once. A park is
+never an ending. Whether a job started is on that job's own record, written when
+its command is attached and kept when a park or an expired pause lets its box
+go, so a note a started job's brief carried, recorded `delivered`, is never
+then recorded `expired`.
+
+A proxy between the boxes and `CREWLET_MCP_BRIDGE_URL` holds a poll open for
+up to those ten seconds, so it needs a request timeout of at least fifteen —
+see [Deployment](../guides/deployment.md).
+
+### Claude Code's hooks
+
+Every Claude Code run its launch wires to its turn's notes — every seat's
+executor run; not the assistant's deep work, whose session has no inbox — is
+started with a settings file of its own, `claude-settings.json` in the box's
+work directory, written afresh at `0600` and named with `--settings`, which
+Claude Code ranks above the repository's own settings and below a managed
+policy. It holds two hooks and the setting that keeps them on, nothing else:
+
+```json
+{
+  "disableAllHooks": false,
+  "hooks": {
+    "PostToolBatch": [{"hooks": [{"type": "mcp_tool", "server": "crewlet", "tool": "steer_take",
+      "input": {"event": "${hook_event_name}", "agent": "${agent_id}"}, "timeout": 10}]}],
+    "Stop": [{"hooks": [{"type": "mcp_tool", "server": "crewlet", "tool": "steer_take",
+      "input": {"event": "${hook_event_name}", "agent": "${agent_id}"}, "timeout": 10}]}]
+  }
+}
+```
+
+- **An `mcp_tool` hook**, a call of `steer_take` on the run's own `crewlet`
+  server: it rides the bridge connection the run already holds, under its
+  token, so there is no new credential, no URL to allow and nothing to run in
+  the box; its input is the two values the CLI fills in, where an `http` hook
+  would post every batch's tool calls; and every way it can fail is
+  non-blocking, where a `command` hook that exits 2 ends the loop. The server
+  and tool names are the ones the bridge serves, filled in by the engine, so
+  the file and the bridge cannot disagree.
+- **What the model sees**, measured on 2.1.263 and 2.1.310 against a stub model
+  API: a note handed back after a batch is read after that batch's tool
+  results and stays for the rest of the run; one handed back at `Stop`
+  continues the turn, and the run's result is the answer given after it.
+  **Where it sits depends on the model**: on 2.1.310, after a batch, a system
+  message after the tool results for `claude-opus-5-5` and `claude-sonnet-5`,
+  and a system reminder at the end of the batch's last tool result for
+  `claude-sonnet-4-5`; at `Stop`, a system reminder in a user message for all
+  three — each headed `PostToolBatch hook additional context:` or `Stop hook
+  additional context:`. The hook's transcript line reaches only the run's
+  stream, which the run's transcript shows as `[steer] a note from ada reached
+  the run` — never a request.
+- **Ten seconds**, where the vendor's default is six hundred: the CLI holds its
+  next model request until the hook answers, at every batch, and the bridge
+  answers within five. The field is in seconds, and at it the CLI cancels the
+  call and discards a late answer.
+- **`disableAllHooks: false`, written explicitly.** A repository's committed
+  `true` otherwise switches every hook off with no error, and the explicit
+  `false` wins over it. It switches the repository's own hooks on too, which is
+  why a hook of theirs that stops the loop is read as the [failure it
+  is](#claude-code). Nothing else moves: no `--setting-sources`, which would
+  drop the repository's `CLAUDE.md` with its settings, and no
+  `--include-hook-events`.
+- **The standing instructions say what a note is, as Claude Code delivers
+  it**: that a person who leads the seat, or an administrator, may send one
+  while the run works; that the CLI adds it between steps as context of its
+  own, under the headings above — a system message, or on some models a system
+  reminder at the end of the last tool result; that it opens with `## A note
+  from <name>, sent while this turn was running`; and that text a tool
+  produced — a file's contents, a command's output, a fetched page — is never
+  a note, whatever it says. An OpenCode run is told its own CLI's carrier
+  instead: a message from the user between steps. Worded as a fact rather than
+  a command, as the vendor advises for text a hook adds. A Claude Code run's
+  standing instructions are written twice, as they stand
+  (`system.md`) and told of notes (`system-notes.md`), and the run's script
+  names the one that matches its hooks, below.
+- **Claude Code 2.1.163 or later**, or no hooks at all. The file holds no
+  field newer than the `mcp_tool` hook (2.1.118 onwards), because in print mode
+  the CLI ignores a settings file it cannot validate, without a word. What
+  2.1.163 added is what the CLI reads of a hook's answer: from it, a `Stop`
+  hook's additional context reaches the model. An older release runs both
+  hooks and drops what the `Stop` hook answers, so a note taken as the run
+  finished would be recorded as read by a run that never saw it. The run's
+  script therefore reads `claude --version` first and starts an older release
+  without `--settings`, and with its standing instructions as they stand —
+  never told of notes it cannot read — saying so on the run's error stream;
+  that run's notes wait for its review.
+
+What leaves a run without its hooks — that older release, or a managed policy
+that allows only managed hooks (`allowManagedHooksOnly`,
+`strictPluginOnlyCustomization`) or sets `disableAllHooks` — leaves a run that
+succeeds without asking for its notes once, which the collection reports as
+[`steer_reader_never_ran`](#failure-modes); its notes still reach its review.
+
+### OpenCode's notes plugin
+
+Every OpenCode run its launch wires to its turn's notes is handed a plugin of
+its own, which the run's server loads: `index.js` in `opencode-steer/` in the
+box's work directory, written before the server starts and named in the run's
+[configuration](#opencode) with the run's notes route as its one option — a
+`{file:}` reference to a file under `opencode-values/`, like every value there,
+so the configuration holds no token:
+
+```json
+{
+  "plugins": [{"package": "<home>/.crewlet/opencode-steer",
+               "options": {"url": "{file:<home>/.crewlet/opencode-values/v<n>}"}}]
+}
+```
+
+The plugin is the engine's own, embedded in the binary: plain JavaScript with
+no imports, so nothing is installed or fetched to load it. The run's script
+hands the server the id of the session the run works in, as
+`CREWLET_STEER_SESSION` on `opencode serve` alone, and the plugin reads that
+session and no other:
+
+- **It polls only while the session works** — from the session's
+  `session.execution.started` (or any of its steps starting) to its
+  `succeeded`, `failed` or `interrupted`, again for an execution OpenCode
+  starts itself — and nothing before, so the brief is always the first thing
+  the session reads. Its setup only registers and returns: OpenCode holds
+  every prompt until each plugin's setup has resolved.
+- **Each note is admitted as a steer**, under the id the route gives it
+  (`ctx.session.prompt` with `delivery: "steer"`): OpenCode hands every steer
+  waiting at its next step boundary to the model as a user message after that
+  step's tool results — or after a final step that called no tool, whose
+  boundary reads the inbox again — so a note sent while the run writes its
+  answer is still read in the same run. The id is derived from the job and the
+  note, so a note admitted twice is admitted once. The cursor moves past a note
+  only once it is admitted.
+- **With `resume: false`**: a note admitted once the session has settled
+  starts nothing — an execution `opencode run` no longer watched would answer
+  nobody — and the plugin admits none then anyway. Such a note waits on the
+  run's record for its review. One whose admission landed just as the session
+  settled, after OpenCode last read its inbox, is left pending in the session
+  too, and the session's inbox outlives the server: a run carried on in the
+  same session with a person's answer would be handed it ahead of its next
+  prompt, beside the continuation brief's copy. So once `opencode run` has
+  exited, and before the server stops, the run's script lists the session's
+  inbox and **cancels every steer the plugin admitted and OpenCode never
+  delivered** (`session.inbox.cancel`, an id of the plugin's own shape and
+  nothing else), and the record alone carries the note — read once, by the
+  review or the next launch's brief.
+- **It confirms only what OpenCode delivered**: on the session's
+  `session.inbox.delivered` for a note it admitted, it posts the note's id to
+  the route's `read`, which records it read by the run's job (`boundary:
+  step`). A note admitted and never delivered is never confirmed, and its
+  review reads it.
+- **It asks, and never insists**: a poll is held up to the route's ten seconds
+  and given twenty, a confirmation ten; a failed request — a stopping node's
+  `503` among them — is made again after a pause of a second, doubling to
+  thirty and reset by the next success; a poll that admitted nothing is
+  followed by the next no sooner than a second after it began, so no answer
+  can drive it into a loop of requests; and a refused token (`401`) or a run
+  with no notes route (`404`) ends the plugin for the rest of the run, its
+  notes waiting for the review.
+- **It writes nothing**: OpenCode reloads a configured plugin whose directory
+  changes, and a note never touches the box's disk.
+
+Measured against a stub model API: on OpenCode 2.0.32 and 2.1.4, a note
+admitted while a tool call ran was read by the next request, after the tool's
+result, and one admitted during the final model call was read in the same
+execution, after the answer it superseded; on 2.1.4, one admitted after the
+execution settled, with `resume: false`, started nothing, stayed pending in the
+session across the server's restart and was handed to the next run in that
+session ahead of its prompt — and, cancelled, was handed to nobody. The run's
+[result](#opencode) is its **last** message's text, so a run steered past its
+answer reports the answer it gave after the note.
+
+A managed policy that denies the plugin (`integration.use`), or a plugin
+OpenCode fails to load — which its own log names — leaves a run that succeeds
+without asking for its notes once, which the collection says as
+[`steer_reader_never_ran`](#failure-modes); its notes still reach its review.
 
 ---
 
@@ -624,7 +880,7 @@ The shim is **signal-only**: it records the question, its audience and the **bra
 
    **Recording and resuming were split because the inbox's retry order is the wrong order for an answer.** The answer used to be held by its delivery until a resume succeeded, and a resume that failed handed the *message* back to the broker with a NAK. On JetStream a NAK'd message comes back after its redelivery backoff, **behind** the conversation's newer mail ([event system](event-system.md#delivery-semantics)): so the person's next message reached the still-waiting run first and was spliced in as its answer, and the real answer came round afterwards to answer whatever the run asked next — or ran as a turn with no context. The in-memory twin replayed a NAK at the head, so every engine test certified the order production never gave. A resume that fails now is the **coordinator's** to retry, on its own schedule, and the person's message is never handed back for it.
 
-   **The seat's later mail waits behind the answer.** While a seat owes any of its runs an answer's resume, the coordinator holds the seat's inbox (the `sandbox` hold a busy seat is held under too) and lifts the hold once the resume has *returned*, so the person's follow-up is worked as an ordinary turn — with the run's own replies already in the thread it reads — rather than racing the resume. A hold rather than a park: the mail waits on the broker with its order and its delivery count intact. A later reply is an ordinary message, not a note to the resumed run: a [steer note](turn-engine.md#steering-a-running-turn) reaches a turn that is *running*, and while the answer's resume is owed no turn is.
+   **The seat's later mail waits behind the answer.** While a seat owes any of its runs an answer's resume, the coordinator holds the seat's inbox (the `sandbox` hold a busy seat is held under too) and lifts the hold once the resume has *returned*, so the person's follow-up is worked as an ordinary turn — with the run's own replies already in the thread it reads — rather than racing the resume. A hold rather than a park: the mail waits on the broker with its order and its delivery count intact. A later reply is an ordinary message, not a note to the resumed run: a [steer note](turn-engine.md#steering-a-running-turn) is sent with `steer_turn`, and one sent to a parked run waits on the run's record and is read in the brief of the launch that carries the answer ([notes to a running run](#notes-to-a-running-run)).
 
    **Every delivery to a seat with a question open is offered to that match first**, and that follows from step 2 rather than adding to it: a parked run frees its seat, so the answer arrives on the ordinary path looking like any other message — nothing about a chat reply says which coding run it ends. So the dispatcher offers each delivery to the parked run *before* consuming it, and only what no parked run claims becomes a turn. It is offered after the completion ledger has had its say, so a redelivered trigger that already produced a turn is never spliced in as an answer as well. A **held** seat offers nothing — its inbox is held, so a reply to a second run of the same seat, waiting while the first is still going, waits with the seat's mail and is offered when the first stops holding the seat. A delivery that **becomes** an answer is recorded in that same ledger, so a copy of it — a redelivery whose acknowledgement was lost — is dropped rather than run as a turn, on whichever node it reaches; while the run still holds the answer, a copy is recognised on the run itself and spent as the answer it is.
 
@@ -837,10 +1093,14 @@ What an operator should recognize:
 - **`sandbox_run_failed` with reason `launch_node_gone`**: the run's `direct` or `container` box was on the host of a node that left the fleet and did not come back within `default_timeout_seconds` — scaled away, or its host lost — so nothing could poll, collect or reclaim it (see [A node that never comes back](#durability-completion-and-observability)). Whatever the run pushed is on its branch. A node that only restarts within that bound never produces this; one that is routinely away longer needs a longer `default_timeout_seconds`.
 - **`sandbox_collect_host_silent`** (a log line, at warning): the seat's holder asked the node whose host a run's box is on to read it back, and it did not answer — stopped, restarting, or gone. The claim is handed back uncounted and that node announces the completion again from its own poll once it is back; a node that never comes back ends the run as `launch_node_gone`.
 - **`sandbox_run_failed` with reason `seat_removed`**: the seat left the company's agent seats — it was removed from the chart, or made a person's and not made an agent's again within the 24-hour retirement grace — so its runs were ended when its mailbox was retired. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
+- **`steer_reader_never_ran`** (a log line, at warning, on the node that collects the run): a run whose CLI takes a person's notes between its steps succeeded without asking for them once — a Claude Code run always asks at its finish, and an OpenCode run's plugin as soon as its session starts working — so something in its box switched its reading off: for Claude Code its [hooks](#claude-codes-hooks), by a managed policy that allows only managed hooks or disables them all, or a CLI older than 2.1.163, which the run starts without them (its error stream says so); for OpenCode its [plugin](#opencodes-notes-plugin), by a managed policy that denies it or a load that failed, which OpenCode's own log names. Any note sent while it worked waited for its review rather than reaching it between its steps. The line names the run, its job and its CLI.
+- **`a hook in the run stopped its loop before it finished (Claude Code terminal_reason hook_stopped)`** — a hook of the repository's or the image's own settings exited 2 or returned a block, and Claude Code ended the run part-way while reporting a success subtype. The run is a failure saying so; the run's own steering hooks never block. Fix or remove that hook in the repository or the image.
+- **`this box's home "…" cannot be named in an OpenCode run's configuration`** — an OpenCode run's configuration names its instruction file, its notes plugin and its servers' values by paths under the box's home ([OpenCode](#opencode)), and this home is one the configuration's text cannot carry: relative, or holding a brace, a quote, a backslash or a control character. A local box's home is under `providers.sandbox.local.state_dir`; move it to a path without one. The run starts nothing.
+- **`crewlet: the run has no OpenCode configuration at …`** (the run's error output) — the configuration the runner writes before every OpenCode run was not there, or was empty, when the run's script started: something in the box removed it between the two. The script stops before it imports a login or starts a server, and the next run writes the file again.
 - **A run that "finishes" with no report** — the coding agent neither wrote its findings file nor streamed a final message. `collect` surfaces the exit status, the CLI's own account of how it ended (an error subtype, or that its stream stopped before its result) and the stderr as the error; the resumed executor sees a failed run rather than an empty success.
 
 ---
 
 ## Testing
 
-`providers.sandbox.fake: true` wires the in-process fakes (`sandbox.FakeProvider`, `sandbox.FakeRunner`): scripted results, an in-memory filesystem, no network, per the project rule that tests never touch real services. The runner tests pin the exact CLI invocations (`claude -p … --output-format stream-json --verbose`, `opencode run … --format json`) and output parsers — Claude Code's against fixtures written from the vendor's documented stream-json message schema, never a captured run, and once through a real shell with a stand-in CLI so the wrapper's copy of the result line and the CLI's own exit status are exercised as they run — and `internal/config/examples_test.go` parses the git-auth recipe out of *this page* and holds it to its security properties (host scoping at both layers, `--add` rewrites, identity from the engine's agent facts) so an edit cannot quietly widen them. This is the copy readers take, so this is the copy under test.
+`providers.sandbox.fake: true` wires the in-process fakes (`sandbox.FakeProvider`, `sandbox.FakeRunner`): scripted results, an in-memory filesystem, no network, per the project rule that tests never touch real services. The runner tests pin the exact CLI invocations (`claude -p … --output-format stream-json --verbose`, `opencode run … --format json`) and output parsers — Claude Code's against fixtures written from the vendor's documented stream-json message schema, and its hook lines and result messages against Claude Code's own output for 2.1.263 and 2.1.310 run against a stub model API (no model is ever called), and once through a real shell with a stand-in CLI so the wrapper's copy of the result line and the CLI's own exit status are exercised as they run; OpenCode's notes plugin runs, as the engine writes it into a real box, under `node` against a stand-in of the notes route, against a real bridge's own route, and against a stand-in of the context OpenCode hands a plugin — and `internal/config/examples_test.go` parses the git-auth recipe out of *this page* and holds it to its security properties (host scoping at both layers, `--add` rewrites, identity from the engine's agent facts) so an edit cannot quietly widen them. This is the copy readers take, so this is the copy under test.

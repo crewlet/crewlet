@@ -40,6 +40,7 @@ var publicRoutes = []struct{ method, path string }{
 	{http.MethodGet, "/webhooks/github-app?code=c&state=s"},
 	{http.MethodPost, "/otlp/not-a-token/v1/traces"},
 	{http.MethodPost, mcpbridge.PathPrefix + "not-a-token"},
+	{http.MethodGet, mcpbridge.PathPrefix + "not-a-token/steer/notes"},
 }
 
 // adminRoutes are the routes that stay on api.port: the probes, the dashboard
@@ -136,6 +137,7 @@ var publishedRoutes = []string{
 	"GET /webhooks/github-app",
 	"POST " + auth.OTLPPrefix + "{token}/v1/{signal}",
 	mcpbridge.PathPrefix + "{token}",
+	mcpbridge.SteerPattern,
 }
 
 // wildcard is one segment of a mux pattern that matches more than itself.
@@ -359,7 +361,8 @@ func TestBothListenersDrain(t *testing.T) {
 				"want the draining 503", path, rec.Code)
 		}
 	}
-	for _, path := range []string{mcpbridge.PathPrefix + "not-a-token", "/otlp/not-a-token/v1/traces"} {
+	for _, path := range []string{mcpbridge.PathPrefix + "not-a-token",
+		mcpbridge.PathPrefix + "not-a-token/steer/read", "/otlp/not-a-token/v1/traces"} {
 		if rec := sendTo(t, public, http.MethodPost, path); refusedForDraining(t, rec) {
 			t.Errorf("POST %s on the public listener was refused for draining: an "+
 				"in-flight run lost its edge", path)
@@ -370,6 +373,32 @@ func TestBothListenersDrain(t *testing.T) {
 	}
 	if rec := sendTo(t, a, http.MethodPost, "/backup"); !refusedForDraining(t, rec) {
 		t.Errorf("POST /backup on api.port answered %d during a drain", rec.Code)
+	}
+}
+
+// A RUN'S NOTES ROUTE IS THE BRIDGE'S, EDGE FOR EDGE: a coding CLI inside a box
+// polls it with the run's token alone, so it is served on the public listener
+// and never on api.port, asks for no operator token — an unminted token gets
+// the bridge's own 401 — and is served through a drain, which cannot wait for
+// the runs it carries notes to.
+func TestTheBridgeNotesRouteIsServedOnThePublicListenerUnderDrain(t *testing.T) {
+	t.Parallel()
+	for _, draining := range []bool{false, true} {
+		a := listenerApp(t, true, draining)
+		public := a.Public()
+		for _, req := range []struct{ method, path string }{
+			{http.MethodGet, mcpbridge.PathPrefix + "not-a-token/steer/notes"},
+			{http.MethodPost, mcpbridge.PathPrefix + "not-a-token/steer/read"},
+		} {
+			rec := sendTo(t, public, req.method, req.path)
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("%s %s on the public listener (draining %v) answered %d, want the "+
+					"bridge's own 401", req.method, req.path, draining, rec.Code)
+			}
+			if rec := sendTo(t, a, req.method, req.path); !absent(t, rec) {
+				t.Errorf("%s %s answered %d on api.port, want 404", req.method, req.path, rec.Code)
+			}
+		}
 	}
 }
 

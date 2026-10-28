@@ -216,12 +216,13 @@ type Config struct {
 	// a turn on an assembly mistake. See agentrun.go.
 	Launcher AgentLauncher
 
-	// Steer is the turn's box of notes from a person (internal/agent/steer),
-	// drained at the top of every round of the REVIEWER — the turn's own
-	// conversation the engine drives. Never a worker's (a leaf its parent
-	// directs), the onboarding pass's (orientation, not the work) or the
-	// extension judge's (a question about the phase, not part of it): a note
-	// left in the box by one of those is read by the next round of the
+	// Steer is where the turn's notes from a person wait
+	// (internal/agent/steer): taken at the opening of every run of the
+	// REVIEWER — the turn's own conversation the engine drives — and by the
+	// brief of every coding run the turn launches. Never a worker's (a leaf
+	// its parent directs), the onboarding pass's (orientation, not the work)
+	// or the extension judge's (a question about the phase, not part of it):
+	// a note waiting while one of those runs is read by the next step of the
 	// turn's own.
 	//
 	// A note read once is carried into every later phase of the turn, as
@@ -231,8 +232,40 @@ type Config struct {
 	// See [Runner.steered].
 	//
 	// Nil is a turn nobody can steer, which is every test and every runner
-	// driven directly. The engine opens one box per turn.
-	Steer *steer.Box
+	// driven directly. The engine hands a turn's first segment its box, and
+	// a segment that resumes the turn its run's record.
+	Steer SteerSource
+}
+
+// SteerSource is where a turn's notes from a person wait, as the runner reads
+// them: the first segment's box ([steer.Box]), or the record of the coding run
+// a resumed segment collects. Declared here, by the consumer.
+type SteerSource interface {
+	// Take takes every note waiting, recording it read where at says, and
+	// answers what it took — what a run of the engine's loop opens with.
+	Take(ctx context.Context, at steer.Reading) []steer.Note
+
+	// Brief is the notes a coding run's brief takes, oldest first. They are
+	// the launch's from here: recorded read by the write that opens the
+	// run's job, or handed back with [SteerSource.Return] where the launch
+	// fails before that write.
+	Brief(ctx context.Context) []steer.Note
+
+	// Return hands back notes [SteerSource.Brief] gave a launch that failed
+	// BEFORE IT WROTE ITS RUN'S RECORD ([Launched.LaunchID] empty): they
+	// reached nobody, and are the source's again — a box keeps them, at its
+	// front, for its next reader or reports them expired when it closes; a
+	// run's record, which a brief only peeks, still holds them waiting. A
+	// launch that failed after the write is never handed back: the record
+	// holds its brief's notes read by a job that never ran, and its ending is
+	// the one party that reports them, once.
+	Return(ctx context.Context, notes []steer.Note)
+
+	// Waiting reports a note waiting, WITHOUT TAKING IT and without
+	// blocking: the tool loop asks it under its dispatcher's lock, to end a
+	// run once the calls in flight are answered so the next run opens with
+	// the note.
+	Waiting() bool
 }
 
 // Resume is the collection of the executor run a turn parked on.
@@ -263,6 +296,13 @@ type Resume struct {
 	// with the answer rather than collecting it — see [Asked]. Answer is
 	// then empty, and Bridged holds the calls the run made before it asked.
 	Asked *Asked
+
+	// Steered is every note the turn had read when the run was collected,
+	// and where, in the order read — off the run's record, which every read
+	// is written on: a brief's, the run's own and a reviewer's. The
+	// resumed turn opens every phase with them ([Runner.steered]), and the
+	// collected run's own reads are its record's ([Runner.resumeAgentRun]).
+	Steered []steer.Read
 }
 
 // BridgedCall is one call an executor run made over the MCP bridge, as the
@@ -384,19 +424,20 @@ type Runner struct {
 	// that phase's.
 	guard *skills.Guard
 
-	// steered is every person's note this turn has read, rendered, in the
+	// steered is every person's note this turn has read, and where, in the
 	// order it was read — opened into every LATER phase's conversation
-	// after its opening messages, and into every later run's brief.
+	// after its opening messages, and into every later run's brief, each
+	// rendered as the message the model read ([prompts.SteerMessage]).
 	//
 	// A phase is a fresh conversation, so a note read in one phase is gone
 	// from the next unless it is carried: a later reviewer would judge the
 	// work against the task the person corrected. Carried as the SAME
 	// message rather than summarised, because the note's words are the
-	// person's and a paraphrase is the engine's. Guarded by mu: the loop
-	// that reads a note and the park that persists the list are on one
-	// goroutine, but the engine reads the suspension after the turn
-	// returns.
-	steered []string
+	// person's and a paraphrase is the engine's. A turn that resumes from a
+	// coding run starts from the reads its run's record holds
+	// ([Resume.Steered]), which is every note the turn read before it — the
+	// record is where every read is written. Guarded by mu.
+	steered []steer.Read
 }
 
 var _ turn.Phases = (*Runner)(nil)
@@ -503,7 +544,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 // snapshot, they never saw `delegate`, and `## Your workers` was rendered for
 // no seat at all.
 func (r *Runner) executorPrompt(ctx context.Context, notes string,
-	history []ledger.Iteration, snapshot tools.Snapshot, built *tools.Surface,
+	history []ledger.Iteration, snapshot tools.Snapshot, built *tools.Surface, fresh []steer.Note,
 ) (system, user prompts.Prompt) {
 	offer := r.cfg.Skills.Offer()
 	system = prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
@@ -532,12 +573,22 @@ func (r *Runner) executorPrompt(ctx context.Context, notes string,
 		PriorWork:           r.priorWork(ctx, history),
 		ConversationHistory: r.cfg.Conversation,
 		// EVERY NOTE THE TURN HAS READ, so a run launched after a person
-		// corrected the turn starts from the turn as corrected. The run is
-		// a fresh session with no conversation of the engine's to carry
-		// them in, so its brief does. See [Runner.steered].
-		Steered: r.carriedSteers(),
+		// corrected the turn starts from the turn as corrected — and then
+		// the notes this brief is the first to read. The run is a fresh
+		// session with no conversation of the engine's to carry them in,
+		// so its brief does. See [Runner.steered].
+		Steered: append(r.carriedSteers(), renderedNotes(fresh)...),
 	})
 	return system, user
+}
+
+// renderedNotes is notes as the model reads each ([prompts.SteerMessage]).
+func renderedNotes(notes []steer.Note) []string {
+	out := make([]string, 0, len(notes))
+	for _, n := range notes {
+		out = append(out, prompts.SteerMessage(n.By, n.Text))
+	}
+	return out
 }
 
 // priorWork renders the turn's earlier rounds, every payload past its budget
@@ -602,6 +653,7 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 		StartedAt: w.res.StartedAt, Caps: w.res.Caps,
 		Decision: payload.Outcome, Rescued: !submitted,
 		Run:       w.run,
+		RunSteers: w.res.RunSteers,
 		Available: w.surface.Active(),
 		// What the executor could still have discovered, with no schemas:
 		// the universe it was built from less what it held by the end.
@@ -1382,6 +1434,13 @@ type phaseResult struct {
 	// loop's CALLER acts on; this is what its telemetry publishes, and
 	// re-deriving one from the other is how the two come to disagree.
 	Result toolloop.Result
+
+	// RunSteers is what a collected coding run read of the turn's notes —
+	// in its brief, and at boundaries of its CLI's own loop — at the run's
+	// one round with each one's boundary. A run of the engine's loop reads
+	// its notes at its rounds, which its Result records; a coding run's
+	// reads are on its record instead ([Runner.resumeAgentRun]).
+	RunSteers []types.PhaseSteer
 }
 
 // surfaceWith builds a phase surface, registering the phase's submission tool
@@ -1700,17 +1759,21 @@ type phaseSteer struct {
 }
 
 func (s phaseSteer) Drain(round int) []toolloop.SteerNote {
-	notes := s.r.cfg.Steer.Drain()
+	at := steer.Reading{
+		Phase: types.Phase(s.ph), Iteration: s.iteration, Round: s.offset + round,
+		Boundary: types.SteerBoundaryRound, At: time.Now().UTC(),
+	}
+	notes := s.r.cfg.Steer.Take(s.ctx, at)
 	if len(notes) == 0 {
 		return nil
 	}
 	out := make([]toolloop.SteerNote, 0, len(notes))
 	emit := s.r.emitter()
 	for _, n := range notes {
-		msg := prompts.SteerMessage(n.By, n.Text)
-		s.r.carrySteer(msg)
-		emit.steered(s.ctx, s.ph, s.iteration, s.offset+round, n)
-		out = append(out, toolloop.SteerNote{ID: n.ID, Message: msg})
+		read := steer.Read{Note: n, Reading: at}
+		s.r.carrySteer(read)
+		emit.steered(s.ctx, read)
+		out = append(out, toolloop.SteerNote{ID: n.ID, Message: prompts.SteerMessage(n.By, n.Text)})
 	}
 	return out
 }
@@ -1729,17 +1792,62 @@ func sessionTitle(seat prompts.Seat, ph phase.Phase) string {
 }
 
 // carrySteer records a note the turn has read, for its later phases.
-func (r *Runner) carrySteer(msg string) {
+func (r *Runner) carrySteer(read steer.Read) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.steered = append(r.steered, msg)
+	r.steered = append(r.steered, read)
 }
 
-// carriedSteers is every note the turn has read so far, in order.
+// carriedSteers is every note the turn has read so far, in order, each
+// rendered as the model read it.
 func (r *Runner) carriedSteers() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]string(nil), r.steered...)
+	out := make([]string, 0, len(r.steered))
+	for _, read := range r.steered {
+		out = append(out, prompts.SteerMessage(read.By, read.Text))
+	}
+	return out
+}
+
+// steerBrief is the notes a coding run's brief takes — none on a turn nobody
+// can steer.
+func (r *Runner) steerBrief(ctx context.Context) []steer.Note {
+	if r.cfg.Steer == nil {
+		return nil
+	}
+	return r.cfg.Steer.Brief(ctx)
+}
+
+// steerReturn hands back the notes a launch that failed took for its brief —
+// only where it failed before it wrote its run's record: once it named the job
+// it opened, the record holds them, and its ending reports them
+// ([Launched.LaunchID]).
+func (r *Runner) steerReturn(ctx context.Context, launched Launched, notes []steer.Note) {
+	if r.cfg.Steer == nil || len(notes) == 0 || launched.LaunchID != "" {
+		return
+	}
+	r.cfg.Steer.Return(ctx, notes)
+}
+
+// steerBriefed records the notes a launched run's brief carried as read by the
+// job it opened — carried into the turn's later phases, and published
+// delivered at the brief — once the launch has returned: a launch that failed
+// delivered nothing ([Runner.steerReturn]).
+func (r *Runner) steerBriefed(ctx context.Context, iteration int, launch string, notes []steer.Note) {
+	if len(notes) == 0 {
+		return
+	}
+	at := steer.Reading{
+		Phase: types.PhaseExecute, Iteration: iteration, Round: runRound,
+		Boundary: types.SteerBoundaryBrief, Launch: launch, At: time.Now().UTC(),
+	}
+	emit := r.emitter()
+	for _, n := range notes {
+		read := steer.Read{Note: n, Reading: at}
+		r.carrySteer(read)
+		emit.steered(ctx, read)
+	}
 }
 
 // SteerExpired records the notes a turn took and never read: it ended or

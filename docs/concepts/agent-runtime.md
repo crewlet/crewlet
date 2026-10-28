@@ -492,17 +492,20 @@ stateDiagram-v2
 ### Steering a running turn
 
 Short of stopping a turn, a person can **steer** it: send a note that the turn
-reads as soon as its tool calls in flight have their answers, and keeps to for
-the rest of the turn — from
-the live view, or from their own assistant with `steer_turn`. It is the
-seat's holder's, its lead's or an administrator's to send, as a pause
-is — decided on the turn's seat, which only the node running the turn can
-name, so the note asks that node first. The note travels
-on an ephemeral scatter to every node; the node running the turn is the one
-that answers, and the turn's own record says what became of it
-(`agent_turn_steered`: `delivered` at the round that read it, or `expired` when
-the turn ended first). A turn whose executor runs as a coding CLI's own loop
-cannot take one. See [Turn Engine § Steering a running
+reads at its next step, and keeps to for the rest of the turn — from the live
+view, or from their own assistant with `steer_turn`. It is the seat's holder's,
+its lead's or an administrator's to send, as a pause is. Before the turn
+launches its executor's coding run, the note travels on an ephemeral scatter to
+every node, decided on the turn's seat, which only the node running the turn
+can name — so the note asks that node first — and that node is the one that
+answers. From the launch on, the note waits sealed on the run's record in the
+coordination store, which any node files it on: the run's next brief, a step of
+the run where its CLI takes notes ([Notes to a running
+run](code-sandbox.md#notes-to-a-running-run)), or the review that judges the run
+reads it, and a run parked on a question reads it once the question is
+answered. The turn's own record says what became of it (`agent_turn_steered`:
+`delivered` where it was read — the round, or the kind of step inside the run —
+or `expired` when the turn ended first). See [Turn Engine § Steering a running
 turn](turn-engine.md#steering-a-running-turn).
 
 ### Graceful shutdown

@@ -430,6 +430,12 @@ type FakeRunner struct {
 	Player func(ctx context.Context, req RunRequest) Result
 	plays  map[string]*fakePlay
 
+	// TakesNotes is what [FakeRunner.ReadsNotes] answers: whether the CLI
+	// this fake stands in for takes a person's notes between its own steps,
+	// as a real runner's CLI taught to does. Set it before the first
+	// collection.
+	TakesNotes bool
+
 	// StartErr, when set, fails every Start.
 	StartErr error
 	// PollErr, when set, fails every Poll — the transient case the waiter
@@ -510,6 +516,10 @@ func (r *FakeRunner) play(ctx context.Context, handle RunHandle) (Result, bool) 
 
 // Name is the coding agent's key in the runner registry.
 func (r *FakeRunner) Name() string { return r.name }
+
+// ReadsNotes answers [FakeRunner.TakesNotes]: the optional answer a runner
+// whose CLI takes a person's notes between its steps gives the coordinator.
+func (r *FakeRunner) ReadsNotes() bool { return r.TakesNotes }
 
 // Install records that the agent was provisioned into the box.
 func (r *FakeRunner) Install(ctx context.Context, box Sandbox) error {
@@ -693,7 +703,9 @@ func (r *FakeRunner) Installed(sandboxID string) bool {
 	return r.installed[sandboxID]
 }
 
-// Started is every run request handed to Start, in order.
+// Started is every run request handed to Start, in order — whole, the steer
+// wiring a job was handed among it ([RunRequest.Steer]), so a case can play the
+// CLI's own side of the run against what the launch gave it.
 func (r *FakeRunner) Started() []RunRequest {
 	r.mu.Lock()
 	defer r.mu.Unlock()

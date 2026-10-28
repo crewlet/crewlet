@@ -69,6 +69,13 @@ export interface PressLabel {
   /** What happened, past tense, naming the object: "Assigned ENG-42 to Ana". */
   done: string;
   /**
+   * What the change came to, in the write's own words, read off the tool's
+   * answer — for a write whose answer says more than that it landed: a note
+   * the turn reads at its next step, or once its question is answered.
+   * Undefined, or an answer it cannot read, says the generic sentence.
+   */
+  landed?: (receipt: unknown) => string | undefined;
+  /**
    * The control draws what came back in place of a toast: an answer the
    * person asked for is shown where they asked, and a toast saying "Answered"
    * over the answer itself is the same fact twice. Applied, pending and
@@ -229,20 +236,22 @@ export function useAct<T extends ActionTool>(tool: T): Act<T> {
               message: caveated.message,
             });
           } else {
-            toast.ok(press.label.done);
+            const said = press.label.landed?.(result.receipt);
+            if (said) toast.show({ variant: "success", title: press.label.done, message: said });
+            else toast.ok(press.label.done);
           }
           break;
         }
         case "pending": {
           // A PENDING WRITE WAS DECIDED, so its caveats are as true as an
-          // applied one's, and said beside the wait.
-          const caveated = press.label.drawsCaveats
-            ? null
-            : caveatToast(result.caveats, PENDING_SENTENCE);
+          // applied one's, and said beside the wait — which is the write's
+          // own sentence where its label words its receipt.
+          const said = press.label.landed?.(result.receipt) ?? PENDING_SENTENCE;
+          const caveated = press.label.drawsCaveats ? null : caveatToast(result.caveats, said);
           toast.show({
             variant: caveated?.variant ?? "info",
             title: press.label.done,
-            message: caveated?.message ?? PENDING_SENTENCE,
+            message: caveated?.message ?? said,
           });
           break;
         }

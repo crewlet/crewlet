@@ -531,7 +531,9 @@ var Active = []string{
 // the fleet's coordination store where a node running a different build reads
 // it — so the json tags are a wire format and the type must not carry a
 // dependency the store layer has no business on. Same rule the rest of
-// [PendingRun] follows: add fields, never rename one.
+// [PendingRun] follows: add fields, never rename one — and a key this build
+// does not know is carried in [BridgeCall.Extra], so a field a later build adds
+// to a call survives every write this build makes to the record.
 type BridgeCall struct {
 	Name string `json:"name"`
 	// Args is what the caller passed, as JSON text rather than a decoded
@@ -573,6 +575,11 @@ type BridgeCall struct {
 	// it. Empty on a call nothing answered (a refused one).
 	Origin string `json:"origin,omitempty"`
 	Server string `json:"server,omitempty"`
+
+	// Extra is every key of the call this build does not know, kept verbatim
+	// and written back by every write of the record (wirekeys.go). Filled by
+	// the decode, never by a caller.
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // BridgeAppend is one finished bridged call as the bridge hands it to the row
@@ -889,8 +896,9 @@ type PendingRun struct {
 	//
 	// A KEY OF ITS OWN AT THE TOP OF THE ROW rather than a field of
 	// [RecordedEnding], because the row is rewritten whole by every node
-	// that steps an ending, and only keys at the top survive a build that
-	// does not know them ([PendingRun.Extra]).
+	// that steps an ending, and a key a build does not know survives only
+	// at the top ([PendingRun.Extra]) or inside a section that carries its
+	// own (wirekeys.go) — which [RecordedEnding] does not.
 	Stop *RunStop `json:"stop,omitempty"`
 
 	// WorkItem is the one work item the launching turn was charged to, nil
@@ -1136,6 +1144,27 @@ type PendingRun struct {
 	// Every other relaunch is a new round, whose log starts empty.
 	Continues bool `json:"-"`
 
+	// Steer is the notes a person sent the run's turn from the run's launch
+	// to its turn's end, sealed, with the seat anchor authority to send one
+	// is decided on — see [RunSteer] and notes.go. Kept by every reset of the
+	// record: they are the TURN's, and a relaunch is the same turn.
+	Steer RunSteer `json:"steer,omitzero"`
+
+	// BriefNotes is TRANSIENT, an instruction to [PendingStore.BeginLaunch]
+	// as [PendingRun.Continues] is: the notes the job's brief carries, which
+	// the write that opens the job records read by it — a note the record
+	// holds already, and one it has never held (the turn's first segment's
+	// own), added already read. Never persisted as itself.
+	BriefNotes []RunNote `json:"-"`
+
+	// HandedNotes is TRANSIENT as well: the notes the turn's first segment's
+	// box still held unread when the launch began ([LaunchRequest.HandedNotes]),
+	// which the write that opens the job files WAITING — after the brief's
+	// notes, and ahead of every note a person files on the record once it
+	// exists. A note the record already holds is left as it is. Never
+	// persisted as itself.
+	HandedNotes []RunNote `json:"-"`
+
 	// Prior is TRANSIENT as well: on the row a relaunch's
 	// [PendingStore.BeginLaunch] answers, the box the row named before the
 	// reset moved it onto the new job — its id, the cell that holds it, the
@@ -1300,6 +1329,19 @@ type PendingStore interface {
 	// launch told nothing went on to start a job on a row that never named
 	// it, in a box nothing would reclaim. A row that went between the create
 	// and the reset is created again.
+	//
+	// THE TURN'S NOTES ([PendingRun.Steer]) ARE KEPT by a reset — every note,
+	// read or waiting, with its numbering and the seat anchor — and created
+	// with the row: the anchor the launch sealed ([RunSteer.Seat]), written
+	// on a reset only where the row has none. Whether a job's CLI asked for
+	// them ([RunSteer.Pulled]) is the job's, and starts empty. The notes the
+	// job's brief carries ([PendingRun.BriefNotes]) are recorded READ BY THE
+	// JOB THIS WRITE OPENS, in the same write — a note the row holds and one
+	// it has never held alike — so the job's own CLI can never take them
+	// again. And the notes the turn's box still held
+	// ([PendingRun.HandedNotes]) are filed WAITING in the same write, after
+	// them: from the write that creates the record, nothing a person files on
+	// it can land ahead of a note the box took first.
 	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
@@ -1489,7 +1531,10 @@ type PendingStore interface {
 	// with no error is that, and so is a row that is gone.
 	MarkLaunchNodeGone(ctx context.Context, turnID, launch, node string, at time.Time) (bool, error)
 
-	// AttachSandbox records the box and the command a run is using.
+	// AttachSandbox records the box and the command a run is using. An
+	// attach naming a command records the job STARTED on the job's record
+	// ([LaunchRecord.Started]) in the same write, and no later write of the
+	// job unsays it: the box and its command may go, the job still ran.
 	AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error
 
 	// MarkBoxPaused and ReleaseBox are the two halves of the box record:
@@ -1711,6 +1756,50 @@ type PendingStore interface {
 	// fact about the broker, true whoever published them. FALSE IS NOT AN
 	// ERROR — a run that is gone, or copies a peer already cleared.
 	ClearHandBack(ctx context.Context, turnID string, ids []string) (bool, error)
+
+	// FileNote files a person's note on a run's record ([RunSteer]), waiting,
+	// and answers what became of it with the record as it was written or —
+	// for any other answer — as the filing found it.
+	//
+	// IN EVERY LIVE STATUS, while the record exists and its ending is not
+	// decided: a note to a turn whose run is working, parked on a question
+	// or being collected is held for whatever reads the turn next. A note
+	// whose id the record holds is [NoteDuplicate], and nothing is added; a
+	// turn that holds [NoteFiling.MaxNotes] notes is [NoteSpent], and one with
+	// [NoteFiling.MaxWaiting] waiting [NoteFull]; a decided ending, or no
+	// record at all, is [NoteClosed]. NONE OF THOSE IS AN ERROR.
+	//
+	// NO FENCE, as [PendingStore.AppendBridgeCall] takes none: a note is an
+	// append to the turn, never an ownership decision. The note must carry
+	// its id and its seal; the store opens nothing.
+	FileNote(ctx context.Context, turnID string, filing NoteFiling) (NoteFiled, PendingRun, error)
+
+	// TakeNotes records the notes a take names read, where its Read says,
+	// and answers the ones THIS CALL recorded — each with its read. Pinned to
+	// the take's job, its statuses, an undecided ending and its lease
+	// ([NoteTake]); a take that fails any of them, a note no longer waiting
+	// and a record that is gone are each nothing taken, never an error.
+	//
+	// THE READ IS THE HANDOVER: a caller hands a note to a model only once
+	// this has recorded it read, so a note is never delivered twice by two
+	// takers racing for it, nor delivered without a record that says so.
+	TakeNotes(ctx context.Context, turnID string, take NoteTake) ([]RunNote, error)
+
+	// MarkPulled records that the job named has asked for its notes at least
+	// once ([RunSteer.Pulled]), reporting whether this call recorded it.
+	// FALSE IS NOT AN ERROR: the record holds another job, already says so,
+	// or is gone.
+	MarkPulled(ctx context.Context, turnID, launch string) (bool, error)
+
+	// WatchNotes follows one run's notes: the record's state when the watch
+	// began — [NotesView.Found] false where it has none — then each state it
+	// reaches, as [coord.SandboxRuns.WatchSandboxRun] delivers them, each
+	// decoded only as far as a [NotesView] reads. A reader slower than the
+	// record is handed the newest state, never a queue of older ones.
+	//
+	// A CLOSED CHANNEL IS NOT A DELETE: the watcher has stopped hearing,
+	// keeps what it last knew and watches again.
+	WatchNotes(ctx context.Context, turnID string) (<-chan NotesView, error)
 }
 
 // ConversationRef is where an arriving delivery came from, as a parked run is
@@ -2108,6 +2197,21 @@ type LaunchRecord struct {
 	// StartedAt is when the job was launched, on the store's clock —
 	// written by [PendingStore.BeginLaunch], the moment the launch exists.
 	StartedAt time.Time `json:"started_at,omitzero"`
+
+	// Started is whether the job's CLI was started in its box: written by
+	// the attach that names the job's command ([PendingStore.AttachSandbox]),
+	// the write a launch makes once its job exists and before it returns.
+	// What tells a brief's notes a job ran with from ones read into the
+	// brief of a launch that failed before its job ([PendingRun.UnreadNotes]).
+	//
+	// ON THE JOB'S RECORD, AND NEVER CLEARED FOR THE JOB — never read off
+	// the row's command ([PendingRun.CommandID]), which is the BOX's: a
+	// park's teardown ([PendingStore.ReleaseBox]) and an expired pause
+	// ([PendingStore.ExpirePause]) forget the box and its command, and a
+	// job that ran in it still ran. Read that way, the ending of a turn
+	// parked past its pause reported the notes its job's brief had carried
+	// expired, after its runner had recorded them delivered.
+	Started bool `json:"started,omitempty"`
 
 	// Model is the model the coding agent was pointed at, empty when the
 	// launch named none and the CLI chose its own.

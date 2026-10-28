@@ -191,9 +191,11 @@ export const ACTIONS = {
   },
   steer_turn: {
     // STEER ON THE TURN TRACE: a note to a turn running now, read at its
-    // next round. It crosses to the node running the turn on an ephemeral
-    // ask rather than into a log, so it raises no floor; what became of it
-    // is the turn's own `agent_turn_steered`, which the trace re-reads.
+    // next step — a round of the engine's loop, or a step of the coding run
+    // it has out. It crosses to the node running the turn on an ephemeral
+    // ask, or waits on the run's record in the coordination store, never in
+    // a log, so it raises no floor; what became of it is the turn's own
+    // `agent_turn_steered`, which the trace re-reads.
     args: ["turn_id", "note"],
     domain: null,
     refreshes: ["turn"],

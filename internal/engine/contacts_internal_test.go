@@ -98,13 +98,13 @@ type promptRecorder struct {
 	seen bool
 }
 
-func (s *promptRecorder) LaunchExecutor(_ context.Context, req runner.AgentRunRequest) error {
+func (s *promptRecorder) LaunchExecutor(_ context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.seen {
 		s.seen, s.text = true, req.System+"\n"+req.Brief+"\n"
 	}
-	return errors.New("the recorder launches nothing")
+	return runner.Launched{}, errors.New("the recorder launches nothing")
 }
 
 func (s *promptRecorder) first() string {

@@ -154,6 +154,12 @@ vendor's current model (`sonnet`, `opus`, `haiku`) or an exact id
 Claude Code's to decide, as they are at a terminal; see
 [What an entry does not set](#what-an-entry-does-not-set).
 
+A seat's executor run on a Claude Code entry takes a person's notes between its
+own steps, through hooks the run is started with; that needs Claude Code 2.1.163
+or later — an older release is started without them, and its notes wait for its
+review — and was measured on 2.1.263 and 2.1.310; see [The executor's run in a
+box](#the-executors-run-in-a-box).
+
 ### OpenAI's models: Codex
 
 ```yaml
@@ -242,6 +248,10 @@ entry with no sign-in the engine can see, which `crewlet llm doctor` clears once
 its smoke test is answered. The declaration reaches the entry's own calls; an
 [executor run](#the-executors-run-in-a-box) writes OpenCode's configuration of
 its own, so there the model has to be one OpenCode knows by name.
+
+A seat's executor run on an OpenCode entry takes a person's notes at its next
+step, through a plugin the engine hands the run's server; measured on OpenCode
+2.0.32 and 2.1.4 — see [The executor's run in a box](#the-executors-run-in-a-box).
 
 ### The other CLIs
 
@@ -1080,6 +1090,33 @@ on the same channel. Claude Code takes the text with
 configuration the run writes, each from a private file in the box, never from
 argv: see [What a coding agent is told](code-sandbox.md#what-a-coding-agent-is-told).
 
+**A person's notes reach a Claude Code run between its steps.** The run is
+started with `-p` and no prompt, reading its brief on standard input from a
+file in the box — a brief carries every note the turn has read, and one
+argument is capped at 128 KiB — and with `--settings` naming a file of two
+`mcp_tool` hooks, which call the bridge's unlisted `steer_take` tool after each
+batch of the main agent's tool calls and as the run is about to finish. The
+wrapper unsets `CLAUDE_CODE_SIMPLE` and `CLAUDE_CODE_SAFE_MODE` first, since
+either switches those hooks off. Measured on Claude Code 2.1.263 and 2.1.310;
+it needs 2.1.163 or later, and the run's script starts an older release without
+`--settings` and without telling it of notes. See [Claude Code's
+hooks](code-sandbox.md#claude-codes-hooks).
+
+**A person's notes reach an OpenCode run at its next step.** The run's
+configuration names a plugin the engine writes into the box beside it, which
+the run's server loads: while the run's session works, it polls the bridge's
+notes route and admits each note to the session as a steer with `resume:
+false`, and OpenCode puts it before the model at the session's next step —
+after a step's tool results, or after a final step that called no tool — and
+reports it delivered, which the plugin confirms to the engine. A note that
+arrives once the session has settled is not admitted, and waits for the
+review; and the run's result is its last message's text. Measured on OpenCode
+2.0.32 and 2.1.4. See [OpenCode's notes plugin](code-sandbox.md#opencodes-notes-plugin).
+
+A CLI run on this host gets neither hooks nor a plugin: the engine's own loop
+puts a note before the next run it opens, so a phase here reads one only at its
+loop's run boundaries.
+
 **The engine's correctives do not reach the run.** The rounds are the CLI's
 own, so the engine's tool loop never sees one end in prose and cannot ask the
 model again: a run whose model writes its report as text instead of calling
@@ -1110,9 +1147,12 @@ seat's *live* tool set: a tool the coding agent activates mid-run with
 held until the CLI has re-read the list, up to two seconds.
 
 What the bridge owes a detached run's calls, each one, is what a phase owes its
-own — less the rounds, the terminator, the per-request budget and a person's
-notes, which belong to a loop the box's CLI runs itself and are settled when the
-run is collected and its turn resumes:
+own — less the rounds, the terminator and the per-request budget, which belong
+to a loop the box's CLI runs itself and are settled when the run is collected
+and its turn resumes (a person's notes reach the run over the bridge too — by a
+tool no model is offered, which Claude Code's hooks call, or by a notes route
+OpenCode's plugin polls: see [Notes to a running
+run](code-sandbox.md#notes-to-a-running-run)):
 
 - **The seat's fence**, before and after the call. The run outlives the turn
   that launched it; once this node stops holding the seat, or a person asks the

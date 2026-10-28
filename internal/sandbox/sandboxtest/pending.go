@@ -7,7 +7,8 @@
 // never both, the box record's two halves moving together: each is a
 // conditional write, not
 // code around one, so a suite that ran only against a fake would assert the
-// author's intent and nothing about the store. The one implementation is
+// author's intent and nothing about the store. So are a person's notes on a
+// run's record (notes.go): filed, taken, pinned and bounded by the same writes. The one implementation is
 // [sandbox.CoordStore]. The record operations it is built on are certified on
 // both coordination backends by coordtest, and this suite certifies every
 // conditional flip built on top of them.
@@ -144,6 +145,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ExpiringAPauseClearsTheBoxInTheSameWrite", testExpiringAPauseClearsTheBoxInTheSameWrite},
 		{"BridgeCallsAreAppendedInOrder", testBridgeCallsAreAppendedInOrder},
 		{"BridgeCallsSurviveWithoutAFence", testBridgeCallsSurviveWithoutAFence},
+		{"ManyBridgedWritersAllLand", testManyBridgedWritersAllLand},
 		{"BridgeCallsForAMissingRunAreDropped", testBridgeCallsForAMissingRunAreDropped},
 		{"BridgeCallsDropTheMiddleNotTheStart", testBridgeCallsDropTheMiddleNotTheStart},
 		{"ABridgedRunsSpendIsTheNewestTotal", testABridgedRunsSpendIsTheNewestTotal},
@@ -152,6 +154,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ABridgedCallAfterItsJobsClaimStaysOnItsJob", testABridgedCallAfterItsJobsClaimStaysOnItsJob},
 		{"AParkedJobsCondensationIsKeptForItsAnswer", testAParkedJobsCondensationIsKeptForItsAnswer},
 	}
+	cases = append(cases, noteCases...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -166,6 +169,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem",
 			testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem},
 	}
+	raw = append(raw, noteRawCases...)
 	for _, tc := range raw {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -2549,6 +2553,86 @@ func testBridgeCallsSurviveWithoutAFence(t *testing.T, s sandbox.PendingStore) {
 	}
 	if got := mustGet(t, s, r.TurnID); len(got.BridgeCalls) != 1 {
 		t.Errorf("%d calls recorded", len(got.BridgeCalls))
+	}
+}
+
+// EVERY BRIDGED CALL LANDS, HOWEVER MANY WRITE AT ONCE. A coding run's tool
+// calls reach its row from as many as twenty subagents at once — Claude Code's
+// default — and the seat's own lease and status writes race them. Each append
+// is a decision the store takes again on a lost race, so none of them is
+// dropped, none overwrites another, and none is answered "the record kept
+// changing": the sixteen attempts this store once counted could answer exactly
+// that of a healthy, busy row.
+//
+// Mutation: have the store give up on a write after its first lost race, and
+// appends fail here.
+func testManyBridgedWritersAllLand(t *testing.T, s sandbox.PendingStore) {
+	const writers, each = 20, 3
+	ctx := t.Context()
+	r := run("t-bridge-storm")
+	launch := mustLaunched(t, s, r)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, writers*each+2)
+	for w := range writers {
+		wg.Go(func() {
+			for n := range each {
+				name := fmt.Sprintf("agent-%02d-call-%d", w, n)
+				recorded, err := s.AppendBridgeCall(ctx, r.TurnID, sandbox.BridgeAppend{
+					Launch: launch, Call: sandbox.BridgeCall{Name: name}})
+				switch {
+				case err != nil:
+					errs <- fmt.Errorf("append %s: %w", name, err)
+				case !recorded:
+					errs <- fmt.Errorf("append %s was not recorded", name)
+				}
+			}
+		})
+	}
+	// The seat's own writes, racing the appends: a lease moving onto the
+	// run, and the status a recovery writes back.
+	wg.Go(func() {
+		for epoch := int64(1); epoch <= each; epoch++ {
+			switch ok, err := s.ClaimOwnership(ctx, r.TurnID, "node-b", epoch); {
+			case err != nil:
+				errs <- fmt.Errorf("ClaimOwnership at epoch %d: %w", epoch, err)
+			case !ok:
+				errs <- fmt.Errorf("ClaimOwnership at epoch %d was refused", epoch)
+			}
+		}
+	})
+	wg.Go(func() {
+		for range each {
+			if err := s.SetStatus(ctx, r.TurnID, sandbox.StatusRunning, sandbox.Fence{}); err != nil {
+				errs <- fmt.Errorf("SetStatus: %w", err)
+			}
+		}
+	})
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("a write racing the bridged calls failed: %v", err)
+	}
+
+	got := mustGet(t, s, r.TurnID)
+	var names []string
+	for _, call := range got.BridgeCalls {
+		names = append(names, call.Name)
+	}
+	slices.Sort(names)
+	var want []string
+	for w := range writers {
+		for n := range each {
+			want = append(want, fmt.Sprintf("agent-%02d-call-%d", w, n))
+		}
+	}
+	if !slices.Equal(names, want) {
+		t.Fatalf("the row holds %d calls after %d concurrent appends, want every one exactly once: %v",
+			len(names), len(want), names)
+	}
+	if got.Owner != "node-b" || got.OwnerEpoch != each {
+		t.Errorf("owner = %q at epoch %d, want node-b at %d: a lease write was lost among the appends",
+			got.Owner, got.OwnerEpoch, each)
 	}
 }
 

@@ -163,15 +163,15 @@ func (e AgentTurnStopped) SummaryFor(actor string) string {
 type SteerOutcome string
 
 const (
-	// SteerDelivered — the turn read the note: it entered the conversation
-	// at a round boundary, and that round's provider call was the first to
-	// see it.
+	// SteerDelivered — the turn read the note, at the boundary its record
+	// names ([SteerBoundary]): what "read" means differs by boundary, and
+	// the boundary says which.
 	SteerDelivered SteerOutcome = "delivered"
 
-	// SteerExpired — the turn ended or parked before its next round, so
-	// nothing read the note. It is not carried to a later turn: a note is
-	// an instruction about the work in flight, and a later turn is other
-	// work.
+	// SteerExpired — the turn ended before anything read the note. It is not
+	// carried to a later turn: a note is an instruction about the work in
+	// flight, and a later turn is other work. Never at a park: a turn parked
+	// on its coding run's question holds its notes for whatever resumes it.
 	SteerExpired SteerOutcome = "expired"
 )
 
@@ -181,15 +181,65 @@ var SteerOutcomes = []SteerOutcome{SteerDelivered, SteerExpired}
 // Valid reports whether an outcome off the wire is one this build knows.
 func (o SteerOutcome) Valid() bool { return slices.Contains(SteerOutcomes, o) }
 
-// AgentTurnSteered records what became of one person's note to a running turn
-// (internal/agent/steer): read at a round boundary, or expired unread because
-// the turn ended first.
+// SteerBoundary is where a delivered note was read: which kind of step of the
+// turn put it in front of a model.
 //
-// PUBLISHED BY THE NODE THAT RAN THE TURN, once it knows — never by the node
-// that took the request, which answered `pending` and cannot see the turn. The
-// note travels to the turn on an ephemeral scatter that leaves no record, so
-// this row is the only durable account that the note existed at all; that is
-// why it carries the note's text.
+// FIVE, because a turn reads notes in two kinds of place and they mean
+// different things. The engine's own loop reads a note at the opening of one of
+// its runs ([SteerBoundaryRound]) and a coding run in its brief
+// ([SteerBoundaryBrief]): the engine sent it. Inside a coding run the CLI reads
+// it at a step of its own loop — Claude Code after a batch of tool calls
+// ([SteerBoundaryToolBatch]) or as it was about to finish
+// ([SteerBoundaryFinish]), each where the CLI handed the note to its model;
+// OpenCode at its next step ([SteerBoundaryStep]), once it reported putting the
+// note in front of the model.
+type SteerBoundary string
+
+const (
+	// SteerBoundaryRound — at the opening of a run of the engine's own loop
+	// (the reviewer), at the round it starts.
+	SteerBoundaryRound SteerBoundary = "round"
+
+	// SteerBoundaryBrief — in the brief a coding run started with.
+	SteerBoundaryBrief SteerBoundary = "brief"
+
+	// SteerBoundaryToolBatch — Claude Code, after a batch of tool calls.
+	SteerBoundaryToolBatch SteerBoundary = "tool_batch"
+
+	// SteerBoundaryFinish — Claude Code, as the run was about to finish.
+	SteerBoundaryFinish SteerBoundary = "finish"
+
+	// SteerBoundaryStep — OpenCode, at its next step.
+	SteerBoundaryStep SteerBoundary = "step"
+)
+
+// SteerBoundaries is every boundary this build records.
+var SteerBoundaries = []SteerBoundary{
+	SteerBoundaryRound, SteerBoundaryBrief, SteerBoundaryToolBatch, SteerBoundaryFinish,
+	SteerBoundaryStep,
+}
+
+// Valid reports whether a boundary off the wire is one this build knows.
+func (b SteerBoundary) Valid() bool { return slices.Contains(SteerBoundaries, b) }
+
+// AgentTurnSteered records what became of one person's note to a running turn
+// (internal/agent/steer): read at a boundary of the turn, or expired unread
+// because the turn ended first.
+//
+// PUBLISHED BY THE NODE WHOSE STEP READ THE NOTE — the runner's node for a round
+// of the engine's loop or a coding run's brief, the node serving the run's tool
+// bridge for a read inside the run — or BY THE NODE THAT FINISHED THE TURN'S
+// ENDING, for a note nothing read. Never by the node that took the request,
+// which answered `pending` and cannot see the turn. A note to a turn with no run
+// record yet travels on an ephemeral scatter that leaves no record, and one
+// waiting on a run's record is deleted with it, so this row is the only durable
+// account that the note existed at all; that is why it carries the note's text.
+//
+// ONE CONSTRUCTOR builds every one, internal/agent/steer's Record, so the
+// runner, the bridge's run inbox and an ending cannot publish three shapes of
+// the same fact. It lives with its publishers rather than here, because a
+// payload literal outside this package is what the engine's publisher gate
+// reads as one (internal/engine's TestEveryRegisteredEventTypeIsPublishedSomewhere).
 type AgentTurnSteered struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`
@@ -206,11 +256,22 @@ type AgentTurnSteered struct {
 
 	// Phase, Iteration and Round are where a DELIVERED note landed: the
 	// phase and iteration that read it, and the round, on the phase's
-	// one-based scale, whose provider call first saw it. Absent on an
-	// expired note, which nothing read.
+	// one-based scale, whose provider call first saw it — round 1 for a
+	// coding run, whose record is one round of the engine's
+	// ([AgentPhaseCompleted.Rounds]). Absent on an expired note, which
+	// nothing read.
 	Phase     Phase `json:"phase,omitempty"`
 	Iteration int   `json:"iteration,omitempty"`
 	Round     int   `json:"round,omitempty"`
+
+	// Boundary is the kind of step that read a delivered note
+	// ([SteerBoundary]), and LaunchID the coding run's job that read it —
+	// set for a brief and for every read inside a run, so a reader puts the
+	// note on the job whose record the read belongs to. Both absent on an
+	// expired note, which nothing read — and LaunchID on a read the engine's
+	// own loop made.
+	Boundary SteerBoundary `json:"boundary,omitempty"`
+	LaunchID string        `json:"launch_id,omitempty"`
 
 	// Note is what the person wrote.
 	Note string `json:"note"`

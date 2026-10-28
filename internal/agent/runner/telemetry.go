@@ -860,6 +860,10 @@ type phaseRecord struct {
 	// what every phase but the executor is.
 	Run RunRecord
 
+	// RunSteers is what a collected coding run read of the turn's notes —
+	// see [phaseResult.RunSteers].
+	RunSteers []types.PhaseSteer
+
 	// Failed and Err describe a phase that died instead of finishing. The
 	// rest of the record is then PARTIAL rather than absent: a phase that
 	// raises used to publish nothing at all, leaving a dashboard showing an
@@ -1090,7 +1094,7 @@ func (e emitter) completed(ctx context.Context, rec phaseRecord) {
 		ToolExecutions:   toolExecutions(rec.Result.Executions),
 		RoundNarration:   roundNarration(rec.Result.Narration),
 		Rounds:           phaseRounds(rec.Result.Rounds),
-		Steers:           phaseSteers(rec.Result.Steers),
+		Steers:           append(phaseSteers(rec.Result.Steers), rec.RunSteers...),
 		Invocations:      phaseInvocations(rec.Result.Invocations),
 		InputTokens:      rec.Result.InputTokens,
 		OutputTokens:     rec.Result.OutputTokens,
@@ -1288,27 +1292,28 @@ func phaseRounds(rounds []toolloop.Round) []types.PhaseRound {
 	return out
 }
 
-// phaseSteers renders the notes a phase read in their wire shape, or nil.
+// phaseSteers renders the notes a phase's loop read in their wire shape — each
+// at the round whose provider call first saw it, at a round's opening — or nil.
 func phaseSteers(marks []toolloop.SteerMark) []types.PhaseSteer {
 	if len(marks) == 0 {
 		return nil
 	}
 	out := make([]types.PhaseSteer, 0, len(marks))
 	for _, m := range marks {
-		out = append(out, types.PhaseSteer{Round: m.Round, NoteID: m.ID})
+		out = append(out, types.PhaseSteer{Round: m.Round, NoteID: m.ID,
+			Boundary: types.SteerBoundaryRound})
 	}
 	return out
 }
 
-// steered records that a phase read a person's note, at the round whose
-// provider call first saw it.
-func (e emitter) steered(ctx context.Context, ph phase.Phase, iteration, round int, n steer.Note) {
+// steered records that the turn read a person's note, where read says: at the
+// opening of a round of the engine's loop, or in a coding run's brief.
+func (e emitter) steered(ctx context.Context, read steer.Read) {
 	if !e.on() {
 		return
 	}
-	ev := e.steerEvent(n, types.SteerDelivered)
-	ev.Phase, ev.Iteration, ev.Round = types.Phase(ph), iteration, round
-	e.publish(ctx, events.New(ev, e.traceFor(ctx)))
+	at := read.Reading
+	e.publish(ctx, events.New(steer.Record(e.steerTurn(), read.Note, &at), e.traceFor(ctx)))
 }
 
 // steerExpired records a note the turn took and never read.
@@ -1316,17 +1321,13 @@ func (e emitter) steerExpired(ctx context.Context, n steer.Note) {
 	if !e.on() {
 		return
 	}
-	e.publish(ctx, events.New(e.steerEvent(n, types.SteerExpired), e.traceFor(ctx)))
+	e.publish(ctx, events.New(steer.Record(e.steerTurn(), n, nil), e.traceFor(ctx)))
 }
 
-func (e emitter) steerEvent(n steer.Note, outcome types.SteerOutcome) types.AgentTurnSteered {
-	return types.AgentTurnSteered{
-		Agent: e.turn.AgentID, AgentHandle: e.handle, RoleName: e.role,
-		TurnID: e.turn.RunID, WorkKey: e.turn.WorkKey,
-		NoteID: n.ID, Outcome: outcome, Note: n.Text,
-		SteeredBy: n.By, SteeredByKind: string(n.ByKind), OperatorID: n.OperatorID,
-		SentAt: utcOrZero(n.At),
-	}
+// steerTurn is the turn a note this runner records was sent to.
+func (e emitter) steerTurn() steer.Turn {
+	return steer.Turn{Agent: e.turn.AgentID, AgentHandle: e.handle, Role: e.role,
+		TurnID: e.turn.RunID, WorkKey: e.turn.WorkKey}
 }
 
 // runningCalls renders the calls in flight, or nil when none is — so the key

@@ -991,12 +991,19 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		return err
 	}
 	resumedReply := input.Reply
-	// The note box the turn files — see [turnSteerBox]. A RESUMED SEGMENT IS
-	// STEERABLE LIKE ANY OTHER: it is the same turn running again, and a note
-	// sent while it parked was answered `closed` — the box that segment had
-	// is gone.
-	box := turnSteerBox()
-	input.Steer = box
+	// THE TURN'S NOTES ARE ON ITS RUN'S RECORD, which this segment claimed:
+	// taken there, pinned to the claim — the job it collects, the resumed
+	// status and the lease the claim stamped — and carried from there, every
+	// note the turn read before this segment included. A note sent while the
+	// run worked or waited on its question was held there for exactly this.
+	// Closed on every way out: each return below is a retry, and the view
+	// it follows the record by must not outlive the attempt. See runsteer.go.
+	source := e.runSteers.source(ctx, in.Run,
+		sandbox.Fence{Owner: in.Run.Owner, Epoch: in.Run.OwnerEpoch})
+	defer source.Close()
+	if source != nil {
+		input.Steer = source
+	}
 	// The working indicator's phase updates, on the same terms as the
 	// dispatch path: the resumed segment opens its phases like any other, and
 	// a reader watching the thread should see them move when the box's answer
@@ -1032,6 +1039,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// AND A PERSON'S ANSWER, which carries the run on rather than
 		// reporting it — see [runner.Asked].
 		Asked: runnerAsked(in.Asked),
+		// AND EVERY NOTE THE TURN HAS READ, off the record every read is
+		// written on — the briefs', the run's own and earlier reviews'.
+		Steered: e.runSteers.carried(in.Run),
 	}
 	r, err := company.RunnerFor(in.Turn.Handle(), e.seatRegistry(company, in.Turn.Handle()), input)
 	if err != nil {
@@ -1064,17 +1074,19 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// frame makes is paired. A resume gathers no context of its own, so
 	// nothing slow is being skipped by waiting.
 	e.publishTurnStarted(ctx, tel, in.Run.DelegationDepth, in.Run.DelegationChain, true)
-	// Open once the segment is certain to run, for the reason its start is
-	// announced only now; closed the moment it returns, as on the dispatch
-	// path, with the defer as the backstop.
-	closeSteer := e.openSteer(in.Run.TurnID, in.Turn.Handle(), box, r)
-	defer closeSteer(ctx)
 	// THE TURN'S OWN DEADLINE, off the park: the cap bounds the turn a fire
 	// started, so the round this segment collects always runs and no round
 	// after it starts once that instant has passed ([turn.Settings.Deadline]).
 	res, err := turn.Run(ctx, r, company.TurnSettings(tel.deadline),
 		resumeInputFor(in, resumedReply))
-	closeSteer(ctx)
+	// A SEGMENT THAT ENDED THE TURN — finished, or stopped by a person — is
+	// remembered here as ended, so a note that reaches this node after the
+	// run's record is gone is told the turn is over rather than nothing. One
+	// that suspended again leaves the record as the turn's notes' home, and
+	// one that broke is a retry of this same segment.
+	if !res.Suspended && (err == nil || turn.Stopped(err)) {
+		e.steers.remember(in.Run.TurnID, steerSeat{agent: in.Run.AgentID, handle: in.Run.AgentHandle})
+	}
 	// THE TURN RAN, so from here the indicator follows what it concluded
 	// rather than the retry rule above: a resumed turn that suspended AGAIN
 	// keeps it, because the same box is still working.
@@ -2001,6 +2013,10 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// works: this node after a restart, or the seat's next holder —
 		// see [sandbox.CoordinatorOptions.Recovered].
 		Recovered: e.reopenAgentRun,
+		// AND EVERY NOTE A PERSON SENT THE TURN THAT IS STILL WAITING ON
+		// THE RUN'S RECORD is recorded expired by the ending, before the
+		// record goes — see runsteer.go.
+		SteersExpired: e.runSteers.expired,
 		// A run that stops with a turn still suspended into it takes the
 		// working indicator down with it, whichever way it stopped: the
 		// agent is waiting on a person, or is never coming back at all,

@@ -280,6 +280,8 @@ var contract = []Entry{
 
 	// steer.ts
 	{"STEER_NOTE_MAX_RUNES", ReadScalar, "internal/agent/steer.TestTheDashboardBoundsANoteAtTheEnginesCap"},
+	{"STEER_READS", ReadLiteral, "internal/agent/steer.TestTheDashboardKnowsWhenANoteIsRead"},
+	{"STEER_BOUNDARIES", ReadLiteral, "internal/events/types.TestTheDashboardNamesEverySteerBoundary"},
 
 	// sandbox.ts
 	{"SANDBOX_TAIL_OUTCOMES", ReadLiteral, "internal/sandbox.TestTheDashboardKnowsEveryTailOutcome"},

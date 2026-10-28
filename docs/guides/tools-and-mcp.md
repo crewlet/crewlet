@@ -133,7 +133,8 @@ with kind `operator` — the credential
 itself is recorded beside either as the write's `operator_id`. Five more are a
 person's decisions about the company rather than its work, and are served only
 there too: `pause_seat` and `resume_seat`, and `steer_turn` (a note to a
-running turn, decided once a probe of the fleet names the turn's seat — a
+running turn, decided on the seat its coding run's record names once the run
+is out, and before that once a probe of the fleet names the turn's seat — a
 probe nobody answers is `unavailable`), each for the seat's holder, its lead
 or an administrator; `answer_run`, for the person who asked the parked
 coding run its question or a lead of its seat; and `answer_knowledge`, which
@@ -468,8 +469,9 @@ a model acts on:
 | `already_answered` | The question this answers has an answer | Read the answer |
 | `reassignment_budget` | The item has been handed on as often as it may be | Do not reassign it again |
 | `inbox_full` | A person's inbox list is at its ceiling | Mark older entries read |
+| `notes_full` | The running turn a note is for already holds as many notes as may wait unread | Send it again once the turn has read them, at its next step |
+| `notes_spent` | The running turn has taken as many notes as a turn takes | Do not send it again; put the rest on the work item |
 | `not_running` | The run or turn the call addresses is not running, or not waiting for this | Nothing to act on |
-| `steer_unsupported` | The running turn's runtime cannot take a note mid-turn | Wait for the turn to end |
 | `budget_exhausted` | The company's token budget has no room left in one of its windows, so a call that would spend tokens was not made; nothing was spent. A person's answer carries a `remedy` naming the ceiling | Wait for the window the sentence names to turn over, or raise its ceiling |
 | `unavailable` | This node cannot serve the call right now, or the company does not run what it needs — the node is behind its log, the log refused the read or the append (a maintenance or sealed fleet included), the coordination store did not answer, the event broker did not answer or this node's connection to it is reconnecting, this node's store was busy with other writes, the backend is not configured. A **condition**, which waiting clears. **Never** "it does not exist" | Retry, or use the backend the company does run |
 | `internal_error` | This node failed at something of its own — a read of its own store that broke. Nothing about the call was wrong, and waiting does **not** clear it; the sentence is fixed and the error itself is in the node's log, never in the answer | Tell whoever runs the node; a retry fails the same way |

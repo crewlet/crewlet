@@ -69,8 +69,10 @@ RUN apt-get update \
 USER crewlet
 ```
 
-— `2.1.263` because it is the release the `claude-code` profile's flags, output
-paths and limit sentences were measured against; take a newer one when
+— `2.1.263`, a release pinned exactly: the hooks a seat's coding run takes a
+person's notes through need Claude Code 2.1.163 or later (an older release runs
+without them) and were measured on 2.1.263 and 2.1.310, and the `claude-code` profile's flags, output paths and
+limit sentences on 2.1.303 and 2.1.310; take a newer one when
 `crewlet llm doctor` passes against it. Give the container a volume for the state directory
 (`CREWLET_LLM_CLI_HOME=/var/lib/crewlet/llm-cli`, say), so a login survives a
 restart. A login made on another machine reaches the container as a

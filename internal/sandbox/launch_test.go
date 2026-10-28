@@ -473,12 +473,21 @@ func TestALaunchNamesItsJobBeforeItsBoxExists(t *testing.T) {
 	req.MCPServers = map[string]MCPServer{
 		"jira": {Name: "jira", Transport: TransportStdio, Command: "jira-mcp"},
 	}
-	req.Opened = func(job OpenedJob) (map[string]MCPServer, error) {
+	// THE TURN'S NOTES RIDE THE ROW THE LAUNCH OPENS: the seat anchor, and
+	// the brief's note read by the job the write names.
+	req.SteerSeat = []byte("sealed-seat")
+	req.BriefNotes = []RunNote{{ID: "note-1", Sealed: []byte("sealed-note"),
+		Read: &NoteRead{Phase: "execute", Iteration: 1, Round: 1, Boundary: "brief"}}}
+	req.Opened = func(job OpenedJob) (Opening, error) {
 		witness.mu.Lock()
 		defer witness.mu.Unlock()
 		witness.named = append(witness.named, job.LaunchID)
-		return map[string]MCPServer{"crewlet": {Name: "crewlet", Transport: TransportHTTP,
-			URL: "https://engine.example.com/mcp/" + job.LaunchID}}, nil
+		endpoint := "https://engine.example.com/mcp/" + job.LaunchID
+		return Opening{
+			Servers: map[string]MCPServer{"crewlet": {Name: "crewlet", Transport: TransportHTTP,
+				URL: endpoint}},
+			Steer: SteerWiring{Server: "crewlet", Tool: "steer_take", URL: endpoint + "/steer"},
+		}, nil
 	}
 	if _, err := rig.launchVia(t.Context(), manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -513,6 +522,18 @@ func TestALaunchNamesItsJobBeforeItsBoxExists(t *testing.T) {
 		t.Errorf("the run's standing instructions do not list the servers it was given:\n%s",
 			started[0].System)
 	}
+	// AND WHERE THE JOB'S CLI ASKS FOR ITS TURN'S NOTES, as the naming
+	// answered it — never persisted, so only the job it was minted for.
+	if want := (SteerWiring{Server: "crewlet", Tool: "steer_take",
+		URL: "https://engine.example.com/mcp/" + run.LaunchID + "/steer"}); started[0].Steer != want {
+		t.Errorf("the job was handed steer wiring %+v, want %+v", started[0].Steer, want)
+	}
+	if string(run.Steer.Seat) != "sealed-seat" || len(run.Steer.Notes) != 1 ||
+		run.Steer.Notes[0].Read == nil || run.Steer.Notes[0].Read.Launch != run.LaunchID ||
+		run.Steer.Notes[0].Read.Boundary != "brief" {
+		t.Errorf("the row the launch opened carries notes %+v, want the anchor and the brief's "+
+			"note read by job %s", run.Steer, run.LaunchID)
+	}
 }
 
 // A JOB THAT CANNOT BE NAMED TO WHAT SERVES ITS BOX IS NOT LAUNCHED. The naming
@@ -533,8 +554,8 @@ func TestALaunchWhoseJobCannotBeNamedStartsNothing(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	req := launchReq("t1")
-	req.Opened = func(OpenedJob) (map[string]MCPServer, error) {
-		return nil, errors.New("no endpoint for the job")
+	req.Opened = func(OpenedJob) (Opening, error) {
+		return Opening{}, errors.New("no endpoint for the job")
 	}
 	if _, err := rig.launchVia(t.Context(), manager, req); err == nil {
 		t.Fatal("a launch whose job could not be named started")

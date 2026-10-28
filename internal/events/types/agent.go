@@ -279,15 +279,20 @@ type PhaseInvocation struct {
 	ToolCalls int `json:"tool_calls"`
 }
 
-// PhaseSteer is one person's note a phase read mid-turn, and the round that
-// first read it — see [AgentTurnSteered] for the note itself and who sent it.
+// PhaseSteer is one person's note a phase read mid-turn, the round that first
+// read it and the kind of step it was read at — see [AgentTurnSteered] for the
+// note itself and who sent it.
 //
 // Keyed on the round number `rounds[]`, `tool_executions[]` and
 // `round_narration[]` share, so a reader puts the note beside the round it
-// changed.
+// changed. A coding run's record is one round of the engine's, so every note
+// the run read — in its brief, or at a boundary of its own loop — is at round 1,
+// and its Boundary is what tells them apart ([SteerBoundary]): every read
+// records one.
 type PhaseSteer struct {
-	Round  int    `json:"round"`
-	NoteID string `json:"note_id"`
+	Round    int           `json:"round"`
+	NoteID   string        `json:"note_id"`
+	Boundary SteerBoundary `json:"boundary"`
 }
 
 // AgentTurnStarted opens a turn — or one SEGMENT of it, when a parked coding

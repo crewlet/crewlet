@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -129,7 +130,7 @@ func TestABridgedCallsRowCarriesItsTimingAndWhoAnswered(t *testing.T) {
 	got := store.appends[0].Call
 	want := sandbox.BridgeCall{Name: "list_issues", Args: `{"repo":"core"}`, Output: "[]",
 		Seq: 4, StartedAt: started, DurationMS: 1500, Origin: "mcp", Server: "github"}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the row is %+v, want %+v", got, want)
 	}
 }

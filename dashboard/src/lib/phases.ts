@@ -366,9 +366,9 @@ export interface PhaseRecord {
    * trail's and answered whole or not at all.
    */
   bodyWithheld: boolean;
-  /** The notes a person sent the turn that this phase read, and the round
-   *  whose provider call first saw each. */
-  steers: { round: number; noteId: string }[];
+  /** The notes a person sent the turn that this phase read, the round whose
+   *  provider call first saw each, and the kind of step that read it. */
+  steers: { round: number; noteId: string; boundary: string }[];
   /** The node that ran the phase, off the live call; "" on a stored record,
    *  whose row carries no node (the turn answer's `nodes` says it). */
   node: string;
@@ -765,7 +765,11 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     runStartedAt: call.run_started_at ?? "",
     runningCalls: runningCalls(call.running_calls),
     bodyWithheld: call.body_withheld === true,
-    steers: (call.steers ?? []).map((s) => ({ round: s.round, noteId: s.note_id })),
+    steers: (call.steers ?? []).map((s) => ({
+      round: s.round,
+      noteId: s.note_id,
+      boundary: s.boundary,
+    })),
     node: call.node ?? "",
     clockStart: call.started_at ?? "",
     at: call.updated_at,
@@ -867,6 +871,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
       ? (p.steers as Record<string, unknown>[]).map((s) => ({
           round: num(s.round),
           noteId: String(s.note_id ?? ""),
+          boundary: typeof s.boundary === "string" ? s.boundary : "",
         }))
       : [],
     node: "",

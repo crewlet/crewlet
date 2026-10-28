@@ -103,7 +103,7 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 func (b bridgedRun) launch(t *testing.T, cont *runner.Continuation) bridgedRun {
 	t.Helper()
 	before := len(b.jobs.Started())
-	if err := b.launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
+	if _, err := b.launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
 		Brief: "fix the failing test", Round: 1,
 		Surface:    b.surface,
 		OnFallback: func(chain.Fallback) {},

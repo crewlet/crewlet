@@ -382,7 +382,7 @@ var wireTags = map[string][]string{
 	"seat_paused":                     {"agent_handle", "agent_id", "operator_id", "paused_at", "paused_by", "paused_by_kind", "reason", "role", "stop_running"},
 	"seat_resumed":                    {"agent_handle", "agent_id", "operator_id", "paused_at", "paused_by", "paused_by_kind", "resumed_by", "resumed_by_kind", "role"},
 	"agent_turn_stopped":              {"agent_handle", "agent_id", "operator_id", "reason", "role", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
-	"agent_turn_steered":              {"agent_handle", "agent_id", "iteration", "note", "note_id", "operator_id", "outcome", "phase", "role", "round", "sent_at", "steered_by", "steered_by_kind", "turn_id", "work_key"},
+	"agent_turn_steered":              {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "note", "note_id", "operator_id", "outcome", "phase", "role", "round", "sent_at", "steered_by", "steered_by_kind", "turn_id", "work_key"},
 	"sandbox_answer_given":            {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "launch_id", "operator_id", "turn_id"},
 	"sandbox_run_answered":            {"agent_handle", "agent_id", "answered_by", "answered_by_kind", "operator_id", "outcome", "role", "turn_id", "via", "work_item", "work_key"},
 	"phase.tool_skill_blocked":        {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},

@@ -11,15 +11,19 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // answer is one request's status and its JSON error code, retried while the
@@ -428,6 +432,86 @@ func TestTheProbesOutliveThePublicListener(t *testing.T) {
 		t.Error("api.port is still listening after the surface stopped")
 	}
 }
+
+// A HELD POLL FOR A RUN'S NOTES DOES NOT SPEND THE LISTENER'S GRACE. A coding
+// CLI's poll is held for longer than the grace while no note waits
+// (internal/api/mcpbridge), so a stop that left it to the listener would spend
+// the whole grace on a request with nothing to answer and log the cut; the
+// surface releases every held poll before it closes a listener — as a 503 the
+// CLI pauses on, never an empty answer it would ask again at once — and the
+// CLI polls again wherever the seat goes next.
+//
+// Mutation: drop the bridge's shutdown from the surface's stop, and this stop
+// takes the whole grace.
+func TestAHeldNotePollDoesNotSpendTheListenersGrace(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	log := logging.Get("test")
+	bridge := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://x"})
+	mux := http.NewServeMux()
+	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
+	mux.Handle(mcpbridge.SteerPattern, bridge.SteerHandler())
+	publicServer, publicAddr, err := listenAPI(ctx, bindTCP, "127.0.0.1:0", mux, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbox := &quietInbox{reached: make(chan struct{})}
+	seat := &org.Role{Name: "Dev", DeclaredHandle: "dev"}
+	url := bridge.Open(ctx, &mcpbridge.Session{
+		RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Dev", Steer: inbox,
+		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
+			ForTurn(&turnctx.Turn{RunID: "run-1", Seat: seat,
+				Org: &org.Organization{Name: "Nimbus", Roles: []*org.Role{seat}}}),
+	})
+	if url == "" {
+		t.Fatal("no endpoint was minted")
+	}
+	token := url[strings.LastIndex(url, "/")+1:]
+	polled := make(chan int, 1)
+	go func() {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet,
+			"http://"+publicAddr+mcpbridge.PathPrefix+token+"/steer/notes", nil)
+		res, doErr := httpxtest.Pool(t).Do(req)
+		if doErr != nil {
+			polled <- 0
+			return
+		}
+		_ = res.Body.Close()
+		polled <- res.StatusCode
+	}()
+	select {
+	case <-inbox.reached:
+	case <-time.After(apiShutdownGrace):
+		t.Fatal("the poll never reached the run's inbox")
+	}
+	surface := &httpSurface{public: publicServer, bridge: bridge}
+	began := time.Now()
+	surface.stop(context.Background(), log)
+	if took := time.Since(began); took >= apiShutdownGrace/2 {
+		t.Errorf("the surface took %s to stop with a poll held, against a grace of %s", took, apiShutdownGrace)
+	}
+	if status := <-polled; status != http.StatusServiceUnavailable {
+		t.Errorf("the held poll was answered %d, want 503: a refusal its poller pauses on", status)
+	}
+}
+
+// quietInbox is a run's inbox with no note for ever, saying when it is first
+// polled.
+type quietInbox struct {
+	once    sync.Once
+	reached chan struct{}
+}
+
+func (*quietInbox) Take(context.Context, string) string { return "" }
+
+func (i *quietInbox) Wait(context.Context, int) ([]mcpbridge.SteerNote, <-chan struct{}) {
+	i.once.Do(func() { close(i.reached) })
+	return nil, nil
+}
+
+func (*quietInbox) Read(context.Context, []string) error { return nil }
+
+func (*quietInbox) Close() {}
 
 // A DIRECT BOX DIALS THE LISTENER ITS NODE BOUND, ON LOOPBACK, WHERE THE NODE
 // SERVES THE BRIDGE. The `direct` cell's run is a process of this host, so the

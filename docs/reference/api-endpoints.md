@@ -29,7 +29,7 @@ operator credential — move to that listener and are served nowhere else:
 |---|---|---|---|
 | `/webhooks/*` | Vendors (deliveries) and a person's browser returning from a vendor's app flow (`/webhooks/slack-oauth`, `/webhooks/github-app`) | `api.port` | `api.public` only |
 | `/otlp/{token}/v1/{signal}` | A sandbox exporting a coding run's telemetry | `api.port` | `api.public` only |
-| `/mcp/{token}` | A seat's executor run, in its box, calling the seat's tools | `api.port` | `api.public` only |
+| `/mcp/{token}` | A seat's executor run, in its box, calling the seat's tools — and, beneath it, polling for its turn's notes (`/mcp/{token}/steer/{notes,read}`) | `api.port` | `api.public` only |
 | Everything else: `/health`, `/ready`, `/`, `/dashboard`, `/favicon.ico`, `/static/*`, `/auth/*`, `/iam/*`, `/ws/stream`, `/query/*`, every REST read, `/config`, `/secrets`, `/setup`, `/operator/*`, `/backup`, the `/worklet/*` and `/fleet/*` gestures | People, the dashboard, the CLI, orchestrators | `api.port` | `api.port` only |
 
 A public route asked of `api.port` answers `404` with the code `no_route` and a
@@ -273,7 +273,7 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | `GET /health` | `200`, `status: "shutting_down"` | Liveness. An orchestrator that could not reach the node would kill it in the middle of the turns the drain exists to finish. |
 | `GET /ready` | `503`, `reason: "draining"` | Readiness: takes the node out of rotation so traffic moves to a peer. |
 | Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
-| `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. A tool call whose run's seat is held by another node is relayed there, as it is outside a drain. |
+| `/mcp/{token}` (its notes route included) and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls, the notes and the spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. A tool call whose run's seat is held by another node is relayed there, as it is outside a drain. |
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
 | Every other write: `/config`, `/secrets`, `/setup`, `/backup`, the `/worklet/*` writes, `POST /operator/mcp`, `POST /operator/act/{tool}` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. `POST /secrets/reveal` rides with them although it changes nothing — it is a `POST` so the names it reads travel in a body — and the CLI run asking it is told to try another node, as a write is. |
 
@@ -412,6 +412,8 @@ node means nothing was done.
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
 | `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to the seat's executor, its coding CLI's run in a box — by the node holding the seat, to which the node the call reaches relays it over the broker. Per-run token in the path; all three verbs because that is what the transport uses. `401` for a token that is forged, expired, or names a run that is over; `503` with a `Retry-After` while no node can answer for the run's seat, after waiting up to two seat-lease lifetimes for one; `502` when the seat's holder took the call and stopped answering before it wrote a status |
+| `GET` | `/mcp/{token}/steer/notes?after={seq}` | The run's [notes](../concepts/code-sandbox.md#notes-to-a-running-run): the notes waiting for its turn past the cursor, `{"notes": [{seq, id, inbox, message}]}`, held up to ten seconds while none waits and answered at once when one arrives. `503` with a `Retry-After` once the node is stopping (`draining`) or the run's session has ended here (`unavailable`), the held poll included: its notes wait for the session's next opening. The same token, routing and refusals as the bridge; `404` for a run that has nothing to steer |
+| `POST` | `/mcp/{token}/steer/read` | Record the notes the run's CLI put in front of its model, `{"ids": [...]}` (one to ten, at most 64 KiB): `204`, or `503` with a `Retry-After` when the record could not be written, and the notes wait |
 | `GET` `POST` `DELETE` | `/operator/mcp` | Worklet and Doclet, served over MCP to **your** AI assistant. **Always needs a credential**, which for an assistant is a [machine token](#post-iamcredentials-mints-a-machine-token) acting as you: it files and moves work (see [below](#operatormcp--your-own-assistant)). The catalogue is built per request: `503 no_active_revision` until this node's first company brings Worklet or Doclet up, and `404 no_route` on a company that runs neither |
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the principal your request resolves to**: the dashboard's write surface. Any credential the guard resolved; every tool is decided by the authority table, as on every other surface, and the `Idempotency-Key` header is required (see [below](#operatoract--the-dashboards-write-surface)). Answers as `/operator/mcp` does before the first company and on a company that runs neither Worklet nor Doclet |
 | `POST` | `/assistant/proposals/{id}/approve` | Approve one of **your own** Dashboard Assistant proposals. A proposal whose turn read through an app you no longer hold is not sent: it settles `failed` with the refusal `access_withdrawn`, and the turn ends rather than carrying on with what it read. Your session cookie and a matching `Origin` only (an assistant grant is refused before routing), `Content-Type: application/json`, the `Idempotency-Key` header, and `{"protocol_version": 1, "digest": "sha256:..."}` echoing the digest the card showed, with an optional `page_context`: the screen you decided from, as it is now, which the resumed turn runs on (the actions it accepts, the draft as the change left it). A turn you asked without a page never gains one this way, and a `page_context` the screen's own rules refuse is `400 invalid_body` before anything is decided. Refusals: `404 not_found` (not yours, or no such proposal), `409 proposal_already_decided` (with its `state`), `410 proposal_expired`, `409 proposal_digest_mismatch` (nothing sent), `409 proposal_stale` (the record moved since it was shown), `403 step_up_required` (nothing recorded; confirm it is you and send the same request again), `503 unavailable` with the `op_id` to retry under. A server write is sent in process as you, once, under the proposal's own operation key, and `202` answers its state (`applied`, `failed` or `unknown`), the turn and where its continuation streams. An `unknown` proposal is retried by approving it again: the same write, never a second one |
@@ -3343,8 +3345,9 @@ cache_write_tokens, tool_calls}` per CLI run, `outcome` one of `end`, `cap`,
 phase's `cache_read_tokens` / `cache_write_tokens` (a breakdown of
 `input_tokens`, never an addition to it), `max_rounds` / `round_ceiling`, a
 worker's or a judge's `host_round`, a resumed executor's `launch_id` and the
-turn's `work_item`, and `steers[]` — `{round, note_id}` for each person's note
-the phase read. The live frame carries the same so far plus
+turn's `work_item`, and `steers[]` — `{round, note_id, boundary}` for each
+person's note the phase read; a read by the phase's coding run is at round 1,
+with the kind of step that read it. The live frame carries the same so far plus
 `round_started_at`, the `run_started_at` of the CLI run in flight and the
 `running_calls` in flight. Each is **absent** where
 nothing measured it — a tool call nobody timed has no `duration_ms`, never a
@@ -4220,7 +4223,7 @@ way. The fields are these:
 - `round_started_at` is when the latest round made its provider call. It is later than every entry in `rounds` while that call is out, and equal to the last entry's start while the round's tools run — only the first is a model call in flight.
 - `run_started_at` is when the CLI run in flight was launched — the run whose rounds are past every entry in `invocations`. Absent between runs, so a reader draws the run in flight from its launch rather than from the first round it happens to have timed.
 - `running_calls` is every tool call running right now, in the order the calls arrived, each `{id, round, name, arguments, started_at}` — a **list**, because a coding CLI may make a response's calls at once. `id` is the call's id, which its `tool_executions` row carries as `call_id` once it has answered. It is absent while no call runs, and never carried forward from an earlier frame: a frame that stops listing a call means the call returned.
-- `steers` is every person's note the phase has read so far, `{round, note_id}` — the round whose provider call first saw it. What the note said and who sent it are on the turn's `agent_turn_steered` rows. See [steering a running turn](#steering-a-running-turn).
+- `steers` is every person's note the phase has read so far, `{round, note_id, boundary}` — the round whose provider call first saw it, and the kind of step that read it (`round`, or `brief`, `tool_batch`, `finish` or `step` for a read by the phase's coding run, which is round 1). What the note said and who sent it are on the turn's `agent_turn_steered` rows. See [steering a running turn](#steering-a-running-turn).
 - `node` is the node running the call.
 - `versions` is `{prompt, response, narration, executions, rounds}`: the version of the copy the call holds of each of its heavy fields — `prompt` numbers `prompt` and `prompt_messages`, `response` the `response`, `narration` the `round_narration`, `executions` the `tool_executions` and `rounds` the `rounds` — a number the node's projection never hands out twice, taken whenever the field is written: every field of a call when the call begins, and after that each field a frame changes. So on the node a tab's socket reads, a version only grows, for every call under every key — and a call built again under its own key (`turn_id`, `phase`, `iteration`), as a suspended Execute phase is when its resumed rounds stream after the checkpoint cleared it, is newer in every field than the copy a tab held from before. A tab that reconnects is sent a snapshot, which replaces every copy it holds. Every surface that carries a call carries it.
 
@@ -5317,42 +5320,53 @@ the same pause.
 ### Steering a running turn
 
 `steer_turn` sends a short note to a turn **while it runs**. The turn reads it
-at its next round — after the tool call in flight returns — as a correction or
-addition to the work in hand, and keeps to it for the rest of the turn: the
-reviewer that judges the work and every later executor iteration open with it
-too. See [Turn Engine § Steering a running turn](../concepts/turn-engine.md#steering-a-running-turn).
+at its next step — the next round of the engine's own loop, after the tool
+call in flight returns, or, while the turn's executor has its coding run out,
+the run's next brief, a step of the run where its CLI takes notes, or the
+review that judges the run — as a correction or addition to the work in hand,
+and keeps to it for the rest of the turn: the reviewer that judges the work and
+every later executor iteration open with it too. See [Turn Engine § Steering a
+running turn](../concepts/turn-engine.md#steering-a-running-turn).
 
 | Argument | |
 |---|---|
 | `turn_id` | The running turn's `turn_id`, as the `agents` push names it on each seat's `live_call`. |
 | `note` | What the turn should take into account, at most 2,000 characters. Longer is a brief, and belongs on the work item. |
 
-It answers `{"turn_id", "note_id", "agent_handle", "outcome": "pending"}`: the
-node running the turn took the note, and the turn reads it at its next round.
-What became of it is recorded there, as `agent_turn_steered` — `delivered`
-naming the phase and round that read it, or `expired` if the turn ended or
-parked first. `note_id` is the request's own id, so a retry of one request is
-one note however often it is sent.
+It answers `{"turn_id", "note_id", "agent_handle", "outcome": "pending", "reads"}`:
+the turn took the note, and `reads` says when it reads it — `next_step`, or
+`after_answer` for a turn whose coding run is parked on a question, which reads
+it once the question is answered. What became of it is recorded as
+`agent_turn_steered` — `delivered` naming the phase and round that read it, the
+kind of step (`boundary`) and, for a read by a coding run, its job
+(`launch_id`); or `expired` if the turn ended first. `note_id` is the request's
+own id, so a retry of one request is one note however often it is sent.
 
-**Who may**: the turn's seat's holder, whoever leads that seat, or `admin`. The seat is the one thing this node cannot know — the turn runs wherever its seat is held — so `admin` is admitted at once and a caller who leads nobody is refused at once, and anybody else is decided after a PROBE asks the fleet whose turn it is, without offering the note. A probe nobody answers inside two seconds is `unavailable`: nothing was offered, so there is nothing to be uncertain about.
+**Where it goes**: a turn whose executor has launched its coding run keeps its
+notes on the run's record in the coordination store, which every node reads, so
+this node files the note there itself — sealed under the fleet keyring — and
+asks nobody. A turn that has not launched one holds its notes on the node
+running it, and the note is scattered to that node.
+
+**Who may**: the turn's seat's holder, whoever leads that seat, or `admin`. Once the turn's run is out, the seat is the one the run's record names under a sealed anchor, read here; a record whose anchor does not open decides nothing, and the note is refused `unavailable` with the reason. Before that the seat is the one thing this node cannot know — the turn runs wherever its seat is held — so `admin` is admitted at once and a caller who leads nobody is refused at once, and anybody else is decided after a PROBE asks the fleet whose turn it is, without offering the note. A probe nobody answers inside two seconds is `unavailable`: nothing was offered, so there is nothing to be uncertain about.
 
 `unknown` means no node answered the OFFER inside two seconds. A reply lost on its way
 back is indistinguishable from none, so the note may have been taken; sending it
 again is safe for that reason.
 
-It refuses `not_running` for a turn that has ended or parked, `conflict` for one
-already holding five notes it has not read yet (once it reads them, the note may
-be sent again), `steer_unsupported` for a turn whose executor is running — its
-coding CLI's own run, detached in a box
-([the executor's run](../concepts/llm-backends.md#the-executors-run-in-a-box)): its
-rounds are its CLI's, the turn is parked while it runs, and the engine has no run
-boundary to hand a note to — and `invalid` for an empty or oversized note.
+It refuses `not_running` for a turn that has ended, `notes_full` for one already
+holding five notes it has not read yet (once it reads them, the note may be sent
+again), `notes_spent` for one that has taken the ten notes a turn takes (sending
+it again changes nothing: put the rest on the work item), `unavailable` where the
+run's record could not be read or written (a retry is the same note), and
+`invalid` for an empty or oversized note.
 
-The note is **signed**: the node running the turn offers it as the person it
-names, on this node's decision that they may, so the request it is scattered in
-— and the running node's answer — is signed under the fleet keyring and bound
-to that one request, and nothing else reaches a turn
-([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md)).
+The note is **signed**: a scattered request and the running node's answer are
+signed under the fleet keyring and bound to that one request, and a note on a
+run's record is sealed under the same keyring, bound to its turn and its id —
+so nothing else reaches a turn
+([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md),
+[ADR-0066](https://github.com/crewlet/crewlet/blob/main/adr/0066-a-note-to-a-coding-run-waits-sealed-on-its-record.md)).
 An answer the asking node cannot believe is no answer, so it reads as
 `unknown`. A running node that does not hold the key the note is signed under
 takes nothing and says so, and the tool refuses `unavailable` naming the keys
@@ -5778,7 +5792,7 @@ has them:
 | `invalid` | `422` |
 | `not_found` | `404` |
 | `forbidden` | `403` |
-| `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `not_running`, `steer_unsupported`, `budget_exhausted` | `409` |
+| `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `notes_full`, `notes_spent`, `not_running`, `budget_exhausted` | `409` |
 | `unavailable` | `503` |
 | `internal_error` | `500` — a fault of the node's own store or code: a fixed sentence, the error itself only in the node's log, and **no** `Retry-After`, since no wait clears it. It is also the answer for a failure that carried no class |
 
@@ -5917,7 +5931,7 @@ for one; otherwise its `message`, the code's own sentence, stands alone
 | `403` | `unauthorized` / `step_up_required` | The authority table refused, or the verb needs a fresher proof | `reason` and `grants` (or the window), and the verb in `action` where the route decided it itself |
 | `403` | `forbidden` | The domain forbids this caller the gesture, such as rewriting somebody else's remark | `detail` in a person's words, where the refusal has them |
 | `404` | `not_found` | The item, page or comment does not exist — or it was purged | |
-| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it (a stale `If-Match`, a title taken, a race lost), or the state the request needs is not there | `message`: read it again, or change what is in the way |
+| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, `notes_full`, `notes_spent`, … | Somebody changed it after you read it (a stale `If-Match`, a title taken, a race lost), or the state the request needs is not there | `message`: read it again, or change what is in the way |
 | `409` | `invalid_input` | The `Idempotency-Key` already names a write to another object | send it under a new key |
 | `422` | `invalid` | The domain refused the write on its own rules, such as a purge whose `?confirm=` names another item among them | `detail` in a person's words, where the refusal has them |
 | `500` | `internal_error` | The engine failed at something of its own, or a tool answered something that is not a receipt | nothing a retry changes; the reason, and anything the tool said instead, is in the node's log |

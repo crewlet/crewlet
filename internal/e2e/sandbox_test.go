@@ -87,11 +87,12 @@ providers:
         FAKE_AGENT_MODE: "${FAKE_AGENT_MODE}"
         FAKE_AGENT_ARGV: "${FAKE_AGENT_ARGV}"
         FAKE_AGENT_RELEASE: "${FAKE_AGENT_RELEASE}"
-      # Only the cases that read the argv or hold the run set these two.
-      # Declared optional, a case that sets neither runs without them;
-      # undeclared, every such run starts without what it never needed and
-      # logs the gap.
-      optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE]
+        FAKE_AGENT_VERSION: "${FAKE_AGENT_VERSION}"
+      # Only the cases that read the argv, hold the run or run an older
+      # release set these three. Declared optional, a case that sets none runs
+      # without them; undeclared, every such run starts without what it never
+      # needed and logs the gap.
+      optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE, FAKE_AGENT_VERSION]
   - name: Founder
     kind: human
     contact:
@@ -119,11 +120,28 @@ type codingNode struct {
 // agentArgv is what the stand-in coding CLI was actually invoked with.
 func (n *codingNode) agentArgv(t *testing.T) []string {
 	t.Helper()
+	return n.invocation(t).Argv
+}
+
+// agentBrief is the brief the stand-in coding CLI read on its stdin — the
+// prompt it ran.
+func (n *codingNode) agentBrief(t *testing.T) string {
+	t.Helper()
+	return n.invocation(t).Stdin
+}
+
+// invocation is how the stand-in coding CLI last recorded it was started.
+func (n *codingNode) invocation(t *testing.T) codingInvocation {
+	t.Helper()
 	raw, err := os.ReadFile(n.argvPath)
 	if err != nil {
 		t.Fatalf("the coding agent recorded no invocation: %v", err)
 	}
-	return strings.Split(strings.TrimSpace(string(raw)), "\n")
+	var out codingInvocation
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("the coding agent's invocation does not read: %v\n%s", err, raw)
+	}
+	return out
 }
 
 // startCoding stands up a node with a local sandbox whose runs are in mode.
@@ -483,8 +501,8 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	if !slices.Contains(argv, "--resume") || !slices.Contains(argv, codingSession) {
 		t.Fatalf("the answered run was not resumed in its own session: argv = %v", argv)
 	}
-	if !strings.Contains(strings.Join(argv, "\n"), "target main, please") {
-		t.Fatalf("the resumed run was not given the answer: argv = %v", argv)
+	if brief := n.agentBrief(t); !strings.Contains(brief, "target main, please") {
+		t.Fatalf("the resumed run was not given the answer: its prompt = %q", brief)
 	}
 	// AND IT SUBMITTED: the turn settled on the carried-on run's own
 	// submission, never on the answer filed as a report and rescued.
@@ -970,9 +988,10 @@ func TestAnExpiredPauseReclaimsTheBoxAndLeavesTheRunWaiting(t *testing.T) {
 	if strings.Contains(argv, "--resume") {
 		t.Fatalf("a run whose box was reclaimed resumed a session that went with it: %s", argv)
 	}
+	brief := n.agentBrief(t)
 	for _, want := range []string{codingQuestion, "target main, please"} {
-		if !strings.Contains(argv, want) {
-			t.Fatalf("the fresh run was not told %q: %s", want, argv)
+		if !strings.Contains(brief, want) {
+			t.Fatalf("the fresh run was not told %q: its prompt = %q", want, brief)
 		}
 	}
 	if outcome := n.settledOutcome(t, reseeded.TurnID); outcome != "delivered" {

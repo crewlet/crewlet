@@ -121,7 +121,7 @@ func launchRecoverable(t *testing.T) recoverableRun {
 		WorkSince: time.Now().UTC().Add(-time.Minute),
 		Seat:      seat, Org: c.Org, Calls: turnctx.NewCallLog()}
 	launcher := &agentLauncher{engine: e, turn: turn, seat: seat, company: c}
-	if err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
+	if _, err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
 		Brief: "fix the failing test", Round: 1, Fence: e.seatFence(seat.Handle()),
 		Surface: tools.NewSurface("execute", c.Tools.Snapshot(), []string{"probe"}).ForTurn(turn),
 	}); err != nil {

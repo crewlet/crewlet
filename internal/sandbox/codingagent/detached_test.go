@@ -2,6 +2,7 @@ package codingagent_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -45,7 +46,7 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 	for _, path := range []string{
 		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(),
 		p.Ask(), p.MCPConfig(), p.Findings(), p.BinDir(), p.AskShim(),
-		p.Brief(), p.System(),
+		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(),
 	} {
 		if !strings.HasPrefix(path, b.Home()+"/") {
 			t.Fatalf("%q is not under the box home %q", path, b.Home())
@@ -95,12 +96,14 @@ func TestStartLaunchesDetachedAndWritesBothMarkers(t *testing.T) {
 	// and the redirections around them.
 	script := lastBackground(t, b)
 	for _, want := range []string{
-		"< /dev/null", // a headless agent must never block on input
-		p.Stream(),    // stdout is the event stream
-		p.Result(),    // its last line is the result
-		p.Err(),       // stderr is the transcript fallback
-		p.ExitCode(),  // the crash explanation
-		p.Done(),      // the completion signal
+		// A headless agent must never block on input: its stdin is the
+		// brief's file, which ends.
+		`< '\''` + p.Brief() + `'\''`,
+		p.Stream(),   // stdout is the event stream
+		p.Result(),   // its last line is the result
+		p.Err(),      // stderr is the transcript fallback
+		p.ExitCode(), // the crash explanation
+		p.Done(),     // the completion signal
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("the launch script is missing %q:\n%s", want, script)
@@ -139,8 +142,8 @@ func TestTheReportInstructionForThisBoxIsAStandingInstruction(t *testing.T) {
 	p := paths(b)
 	script := startAndScript(t, runner, b, sandbox.RunRequest{Brief: "fix the flake"})
 
-	if !strings.Contains(script, "'fix the flake'") {
-		t.Fatalf("the brief was lost:\n%s", script)
+	if brief, err := b.ReadFile(t.Context(), p.Brief()); err != nil || string(brief) != "fix the flake" {
+		t.Fatalf("the brief was lost: %q (%v)", brief, err)
 	}
 	system, err := b.ReadFile(t.Context(), p.System())
 	if err != nil || !strings.Contains(string(system), p.Findings()) {
@@ -178,11 +181,21 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	}
 	for _, want := range []string{
 		p.Done(), p.ExitCode(), p.Result(), p.Stream(), p.Findings(), p.Ask(),
-		// The previous run's instructions, which are not this run's.
-		p.Brief(), p.System(),
+		// The previous run's instructions, which are not this run's — its
+		// hooks name a bridge session its end closed.
+		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig(),
 	} {
 		if !strings.Contains(cleared, want) {
 			t.Fatalf("%q was not cleared: %s", want, cleared)
+		}
+	}
+	// OpenCode's values and its notes plugin are DIRECTORIES, removed whole —
+	// a run with fewer values than the last would keep the last one's beside
+	// its own, and a run wired to no notes a plugin nothing names.
+	_, removed, _ := strings.Cut(cleared, "; rm -rf ")
+	for _, dir := range []string{p.OpenCodeValues(), p.OpenCodeSteerPlugin()} {
+		if !strings.Contains(removed, "'"+dir+"'") {
+			t.Fatalf("the directory %q was not removed whole: %s", dir, cleared)
 		}
 	}
 	// The CHECKOUT is left alone — that disk state is the whole reason to
@@ -650,5 +663,52 @@ func TestTheBoxsConfigNamesTheEngineHostAsTheBoxReachesIt(t *testing.T) {
 	}
 	if servers["crewlet"].URL != "http://127.0.0.1:8000/mcp/tok" {
 		t.Fatalf("the caller's servers were rewritten: %q", servers["crewlet"].URL)
+	}
+}
+
+// THE NOTES ROUTE IS DIALLED FROM INSIDE THE BOX TOO. OpenCode's plugin polls
+// the run's notes route by its URL rather than through the MCP server Claude
+// Code's hooks name, so that URL is translated in Start like the servers'
+// own: written as the engine host's loopback, a plugin in a container box
+// polled the container itself and its run read no note.
+//
+// Mutation: drop the notes route's translation from Start, and the plugin's
+// route names 127.0.0.1.
+func TestTheBoxsNotesRouteNamesTheEngineHostAsTheBoxReachesIt(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewOpenCode()
+	b := containerLike{sandbox.NewFakeSandbox("box-1").CapReads(boxReadCap)}
+	if err := runner.Install(t.Context(), b); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	const route = "http://127.0.0.1:8000/mcp/tok/steer"
+	req := sandbox.RunRequest{Brief: "b",
+		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take", URL: route}}
+	if _, err := runner.Start(t.Context(), b, req); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	raw, err := b.ReadFile(t.Context(), paths(b).OpenCodeConfig())
+	if err != nil {
+		t.Fatalf("reading the configuration: %v", err)
+	}
+	var cfg struct {
+		Plugins []openCodePlugin `json:"plugins"`
+	}
+	if err = json.Unmarshal(raw, &cfg); err != nil || len(cfg.Plugins) != 1 {
+		t.Fatalf("the configuration names no notes plugin (%v):\n%s", err, raw)
+	}
+	file, ok := referencedPath(cfg.Plugins[0].Options.URL)
+	if !ok {
+		t.Fatalf("the plugin's route is %q, want a reference to a file", cfg.Plugins[0].Options.URL)
+	}
+	value, err := b.ReadFile(t.Context(), file)
+	if err != nil {
+		t.Fatalf("reading the route's file: %v", err)
+	}
+	if got := strings.TrimSpace(string(value)); got != "http://host.docker.internal:8000/mcp/tok/steer" {
+		t.Fatalf("the plugin polls %q, want the engine host by its alias", got)
+	}
+	if req.Steer.URL != route {
+		t.Fatalf("the caller's wiring was rewritten: %q", req.Steer.URL)
 	}
 }

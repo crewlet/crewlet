@@ -4,13 +4,10 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
 	"slices"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,10 +39,26 @@ import (
 // run's own fields — the at-most-once tail claim on the status, the epoch
 // fence on a write, the pause expiry on "is it still parked". Within one
 // process a mutex made those atomic; across a fleet the condition has to be
-// re-evaluated against what the store actually holds, so each is a
-// read-decide-write under the record's version, retried on a lost race. A
-// caller that loses re-reads, which is what makes the SECOND writer see the
-// first one's decision instead of overwriting it.
+// re-evaluated against what the store actually holds, so each is a DECISION
+// handed to the store's read-decide-write ([coord.SandboxRuns.MutateSandboxRun]),
+// which writes it under the record's version and, on a lost race, asks it
+// again on the record as it then stands. That is what makes the SECOND writer
+// see the first one's decision instead of overwriting it.
+//
+// # A lost race is the store's to retry, for its patience
+//
+// Not a count of attempts made here. A run's record has more writers than a
+// count can be set for: every tool call its box makes over the bridge appends
+// to it — from as many as twenty subagents at once, Claude Code's default —
+// beside its seat's own turns, a peer recovering it, a person's answer and a
+// person's stop, so the sixteen immediate attempts this file once made could
+// report a healthy, busy record as one that "kept changing" and drop the
+// write. The store retries a lost race after a jittered wait for as long as
+// its patience allows (internal/coord/kv's race.go: a lost race measures load,
+// not health), and answers [coord.ErrUnavailable] only once a write has lost
+// for all of it. What the coordinator still loops on here is never a lost race
+// but an OUTCOME — a decision refused, a row gone between two operations — and
+// each such loop carries a bound of its own, with its reason.
 type CoordStore struct {
 	runs coord.SandboxRuns
 	now  func() time.Time
@@ -71,19 +84,18 @@ func (s *CoordStore) clock() time.Time {
 	return time.Now().UTC()
 }
 
-// casRetries bounds one read-decide-write.
+// launchRounds bounds [CoordStore.BeginLaunch]'s create-or-reset loop.
 //
-// A COUNT, unlike the time the fleet store retries its own lost races for
-// (internal/coord/kv's race.go), and for the reason that file gives its own
-// counted loops: what a write here races ends the race of itself. The time
-// bound exists for records whose writers nothing limits — the token counter —
-// while a run's record is written only by its seat's
-// own turns and a peer recovering it, two or three writers at the very worst.
-// Sixteen is that several times over, so exhausting it is a store that is not
-// settling rather than a queue of legitimate writers, and it is reported as an
-// error instead of as a lost race: a caller told "somebody else got there"
-// stops, while a caller told "no answer" retries.
-const casRetries = 16
+// A round repeats only when the row VANISHED between the create that found it
+// and the reset that read it — the turn's previous run finishing in that
+// window — and the next create then wins, unless another launch of the same
+// turn created the row first, which the next reset takes. So an ordinary
+// launch takes one round, a launch that met a finishing run two, and one that
+// also met a racing launch three; a fourth needs the row to vanish again
+// inside the next create-to-reset window, which nothing in this engine does
+// repeatedly — the reasoning internal/coord/kv's createRounds gives its own
+// create loop. Exhausting it is reported as an error, never as a launch.
+const launchRounds = 3
 
 // BeginLaunch opens a launch on this turn's row. See the contract on
 // [PendingStore].
@@ -117,17 +129,25 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// one's. Only the model and the entry it runs on are the caller's.
 	run.Launch = LaunchRecord{StartedAt: now, Model: run.Launch.Model,
 		ProviderKey: run.Launch.ProviderKey}
-	raw, err := encodeRun(run)
+	// THE TURN'S NOTES START HERE, on a record the launch creates: the seat
+	// anchor the caller sealed, the brief's notes, read by this job, and then
+	// the notes the turn's box still held, waiting — see
+	// [PendingStore.BeginLaunch]. Nothing else of the caller's: a record made
+	// here holds no note it was not handed.
+	created := run
+	created.Steer = RunSteer{Seat: bytes.Clone(run.Steer.Seat)}
+	openNotes(&created.Steer, run, run.LaunchID, now)
+	raw, err := encodeRun(created)
 	if err != nil {
 		return PendingRun{}, err
 	}
-	for range casRetries {
-		created, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw)
+	for range launchRounds {
+		made, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw)
 		if err != nil {
 			return PendingRun{}, fmt.Errorf("sandbox: create run %s: %w", run.TurnID, err)
 		}
-		if created {
-			return run, nil
+		if made {
+			return created, nil
 		}
 		opened, reset, held, err := s.resetLaunch(ctx, run, fence)
 		if err != nil {
@@ -251,6 +271,19 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// it would tell this job's completion that its spend is already
 		// counted, and the company would never be billed for it.
 		existing.Charged, existing.CompanyCharged = false, false
+		// THE TURN'S NOTES ARE THE TURN'S, not the job's: every note, read
+		// or waiting, and their numbering stay, and so does the seat anchor
+		// — written here only where the record has none. What is the job's
+		// is whether its CLI asked for them ([RunSteer.Pulled]), which a new
+		// job has not; and the brief's notes are read BY THIS JOB, in the
+		// write that names it, so its CLI can never take them again — and
+		// the box's, if the launch hands any, filed after them.
+		existing.Steer.Notes = slices.Clone(existing.Steer.Notes)
+		if len(existing.Steer.Seat) == 0 {
+			existing.Steer.Seat = bytes.Clone(run.Steer.Seat)
+		}
+		existing.Steer.Pulled = ""
+		openNotes(&existing.Steer, run, run.LaunchID, s.clock())
 		return true
 	})
 	if err != nil {
@@ -810,6 +843,13 @@ func (s *CoordStore) AttachSandbox(ctx context.Context, turnID string, box BoxRe
 		}
 		run.SandboxID = box.SandboxID
 		run.CommandID = box.CommandID
+		// A COMMAND IS A JOB THAT STARTED, recorded on the job's own record
+		// where nothing that forgets the box reaches it — see
+		// [LaunchRecord.Started]. Only ever set: the attach before the job
+		// names no command, and unsays nothing.
+		if box.CommandID != "" {
+			run.Launch.Started = true
+		}
 		// The box's cell moves with the box — see [BoxRef.Placement] — and
 		// so does its host ([BoxRef.Node]).
 		if box.Placement != "" {
@@ -976,32 +1016,46 @@ func (s *CoordStore) ListActiveForSeatID(ctx context.Context, seat uuid.UUID) ([
 // seat nothing. See the contract on [PendingStore].
 //
 // A read-decide-delete under the record's version, like every flip here, so a
-// write that lands in between — a let-go, a clear — is seen before the delete.
+// write that lands in between — a let-go, a clear — is seen before the delete:
+// the delete is decided again on the row as it then stands.
 func (s *CoordStore) Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error) {
-	for range casRetries {
-		run, version, found, err := s.read(ctx, turnID)
+	var (
+		run     PendingRun
+		refused error // the decision's own error, returned as it is
+	)
+	_, gone, err := s.runs.MutateSandboxRun(ctx, turnID, func(record coord.Record) (coord.SandboxRunChange, error) {
+		decoded, err := decodeRun(record)
 		if err != nil {
-			return PendingRun{}, false, err
+			refused = err
+			return coord.SandboxRunChange{}, err
 		}
-		if !found || run.Ending == nil || run.Ending.ID != ending {
-			return PendingRun{}, false, nil
+		run = decoded
+		switch {
+		case run.Ending == nil || run.Ending.ID != ending:
+			return coord.SandboxRunChange{}, nil
+		case len(run.HandBack) > 0:
+			refused = fmt.Errorf("sandbox: finish run %s: %w", turnID, ErrHandBackOwed)
+			return coord.SandboxRunChange{}, refused
+		case run.answerOwed():
+			refused = fmt.Errorf("sandbox: finish run %s: %w", turnID, ErrAnswerOwed)
+			return coord.SandboxRunChange{}, refused
 		}
-		if len(run.HandBack) > 0 {
-			return run, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, ErrHandBackOwed)
+		return coord.SandboxRunChange{Delete: true}, nil
+	})
+	switch {
+	case err != nil && refused != nil && errors.Is(err, refused):
+		// THE ROW AS IT STANDS rides an owed refusal, for the ending to
+		// hand back what it still owes and finish again.
+		if errors.Is(err, ErrHandBackOwed) || errors.Is(err, ErrAnswerOwed) {
+			return run, false, err
 		}
-		if run.answerOwed() {
-			return run, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, ErrAnswerOwed)
-		}
-		gone, err := s.runs.DeleteSandboxRun(ctx, turnID, version)
-		if err != nil {
-			return PendingRun{}, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, err)
-		}
-		if gone {
-			return run, true, nil
-		}
+		return PendingRun{}, false, err
+	case err != nil:
+		return PendingRun{}, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, err)
+	case !gone:
+		return PendingRun{}, false, nil
 	}
-	return PendingRun{}, false, fmt.Errorf(
-		"sandbox: finish run %s: the record kept changing under the delete", turnID)
+	return run, true, nil
 }
 
 // read decodes one record and the version it was read at.
@@ -1058,44 +1112,64 @@ func (s *CoordStore) mutateAny(ctx context.Context, turnID string, decide func(*
 
 // write is the read-decide-write itself; live refuses a run whose ending is
 // decided, with [ErrRunEnding].
+//
+// THE STORE RUNS IT ([coord.SandboxRuns.MutateSandboxRun]), and on a lost race
+// it RE-READS AND RE-DECIDES rather than re-writing what was computed: the
+// other writer may have taken the claim, moved the lease, unparked the run or
+// decided its ending, and every condition decide evaluates is evaluated
+// against fields it could have changed. So decide may run more than once, on
+// a fresh copy of the row each time, and what this answers is the last run's.
 func (s *CoordStore) write(ctx context.Context, turnID string, live bool,
 	decide func(*PendingRun) bool,
 ) (PendingRun, bool, error) {
-	for range casRetries {
-		run, version, found, err := s.read(ctx, turnID)
+	next, won, _, err := s.writeFound(ctx, turnID, live, decide)
+	return next, won, err
+}
+
+// writeFound is [CoordStore.write], answering as well whether the LAST attempt
+// found the record: decide is not asked about a record that is gone, so a
+// caller keeping what an earlier attempt decided — before it lost a race to a
+// write that removed the record — reads this to know that decision is not the
+// answer.
+func (s *CoordStore) writeFound(ctx context.Context, turnID string, live bool,
+	decide func(*PendingRun) bool,
+) (PendingRun, bool, bool, error) {
+	var (
+		next    PendingRun
+		refused error // the decision's own error, returned as it is
+	)
+	last, won, err := s.runs.MutateSandboxRun(ctx, turnID, func(record coord.Record) (coord.SandboxRunChange, error) {
+		run, err := decodeRun(record)
 		if err != nil {
-			return PendingRun{}, false, err
-		}
-		if !found {
-			return PendingRun{}, false, nil
+			refused = err
+			return coord.SandboxRunChange{}, err
 		}
 		if live && run.Ending != nil {
-			return PendingRun{}, false, fmt.Errorf("sandbox: run %s: %w", turnID, ErrRunEnding)
+			refused = fmt.Errorf("sandbox: run %s: %w", turnID, ErrRunEnding)
+			return coord.SandboxRunChange{}, refused
 		}
-		next := run
+		next = run
 		if !decide(&next) {
-			return PendingRun{}, false, nil
+			return coord.SandboxRunChange{}, nil
 		}
 		next.UpdatedAt = s.clock()
 		raw, err := encodeRun(next)
 		if err != nil {
-			return PendingRun{}, false, err
+			refused = err
+			return coord.SandboxRunChange{}, err
 		}
-		won, err := s.runs.UpdateSandboxRun(ctx, turnID, raw, version)
-		if err != nil {
-			return PendingRun{}, false, fmt.Errorf("sandbox: update run %s: %w", turnID, err)
-		}
-		if won {
-			return next, true, nil
-		}
-		// Lost the version. RE-READ AND RE-DECIDE rather than re-writing
-		// what we computed: the other writer may have taken the claim,
-		// moved the lease, unparked the run or decided its ending, and
-		// every condition above is evaluated against fields it could have
-		// changed.
+		return coord.SandboxRunChange{Put: raw}, nil
+	})
+	found := last.Key != ""
+	switch {
+	case err != nil && refused != nil && errors.Is(err, refused):
+		return PendingRun{}, false, true, err
+	case err != nil:
+		return PendingRun{}, false, found, fmt.Errorf("sandbox: update run %s: %w", turnID, err)
+	case !won:
+		return PendingRun{}, false, found, nil
 	}
-	return PendingRun{}, false, fmt.Errorf(
-		"sandbox: update run %s: the record kept changing under the write", turnID)
+	return next, true, true, nil
 }
 
 // list decodes every record and returns the ones that match, oldest first.
@@ -1147,34 +1221,12 @@ func outranked(run PendingRun, fence Fence) bool {
 	return fence.Fenced() && run.OwnerEpoch > fence.Epoch
 }
 
-// encodeRun writes a run back whole, keys this build does not know included.
-//
-// THE KNOWN FIELDS WIN. [PendingRun.Extra] holds only what the decode could
-// not place in the struct, so a key in both can only mean a caller put it
-// there by hand, and the value this build decided is the one that lands.
-// "Known" is what the struct DECLARES ([pendingRunKeys]), never what the
-// marshal happened to emit: an omitempty field left at its zero value emits
-// nothing, and testing presence would let a carried key of the same name
-// bring back the value this build just cleared.
+// encodeRun writes a run back whole, keys this build does not know included —
+// at the top of the record from [PendingRun.Extra], and inside each section that
+// carries its own (wirekeys.go) — under the one rule [marshalCarrying] states:
+// the fields this build declares win.
 func encodeRun(run PendingRun) ([]byte, error) {
-	raw, err := json.Marshal(run)
-	if err != nil {
-		return nil, fmt.Errorf("sandbox: encode run %s: %w", run.TurnID, err)
-	}
-	if len(run.Extra) == 0 {
-		return raw, nil
-	}
-	fields := map[string]json.RawMessage{}
-	if err = json.Unmarshal(raw, &fields); err != nil {
-		return nil, fmt.Errorf("sandbox: encode run %s: %w", run.TurnID, err)
-	}
-	declared := pendingRunKeys()
-	for key, value := range run.Extra {
-		if !declared[key] {
-			fields[key] = value
-		}
-	}
-	raw, err = json.Marshal(fields)
+	raw, err := marshalCarrying(run, pendingRunKeys(), run.Extra)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: encode run %s: %w", run.TurnID, err)
 	}
@@ -1185,23 +1237,11 @@ func encodeRun(run PendingRun) ([]byte, error) {
 // [PendingRun.Extra] for the rolling upgrade that loses it otherwise.
 func decodeRun(record coord.Record) (PendingRun, error) {
 	var run PendingRun
-	if err := json.Unmarshal(record.Value, &run); err != nil {
+	extra, err := unmarshalCarrying(record.Value, &run, pendingRunKeys())
+	if err != nil {
 		return PendingRun{}, fmt.Errorf("sandbox: decode run %s: %w", record.Key, err)
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(record.Value, &fields); err != nil {
-		return PendingRun{}, fmt.Errorf("sandbox: decode run %s: %w", record.Key, err)
-	}
-	known := pendingRunKeys()
-	for key, value := range fields {
-		if known[key] {
-			continue
-		}
-		if run.Extra == nil {
-			run.Extra = map[string]json.RawMessage{}
-		}
-		run.Extra[key] = value
-	}
+	run.Extra = extra
 	// A null state is NO state. The struct writes one for a run that has
 	// none, and a raw field reads the null back as four bytes — which every `len(...) == 0` asking "is a
 	// conversation parked here?" would answer wrongly.
@@ -1215,22 +1255,5 @@ func decodeRun(record coord.Record) (PendingRun, error) {
 	return run, nil
 }
 
-// pendingRunKeys is every wire key [PendingRun] declares, read off its own
-// tags so a field added to the struct is known here the moment it exists — a
-// hand-kept list would be one more place a new field could be forgotten, and
-// a forgotten one would be carried in Extra AND written from the struct.
-var pendingRunKeys = sync.OnceValue(func() map[string]bool {
-	keys := map[string]bool{}
-	typ := reflect.TypeFor[PendingRun]()
-	for field := range typ.Fields() {
-		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
-		switch {
-		case name == "-" || !field.IsExported():
-			continue
-		case name == "":
-			name = field.Name
-		}
-		keys[name] = true
-	}
-	return keys
-})
+// pendingRunKeys is every wire key [PendingRun] declares ([wireKeys]).
+func pendingRunKeys() map[string]bool { return wireKeys(reflect.TypeFor[PendingRun]()) }

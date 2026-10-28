@@ -345,6 +345,7 @@ describe("a person's note", () => {
         phase: "execute",
         iteration: 1,
         round: 3,
+        boundary: "round",
         note: "use staging",
         steered_by: "jane",
         steered_by_kind: "human",
@@ -368,6 +369,93 @@ describe("a person's note", () => {
     expect(screen.getByText("the turn finished before it read the note")).toBeTruthy();
     expect(screen.getByText("delivered")).toBeTruthy();
     expect(screen.getByText("expired")).toBeTruthy();
+  });
+
+  // A READ INSIDE A CODING RUN IS THE RUN'S: the engine's loop was parked
+  // while the run worked, so the note is drawn on the run's bar — the span
+  // the trace gives its job — and said as the kind of step that read it.
+  test("a read inside a coding run is drawn on the run's bar, in the words of its step", async () => {
+    const read = (note_id: string, ms: number, boundary: string) =>
+      event("agent_turn_steered", ms, {
+        note_id,
+        outcome: "delivered",
+        phase: "execute",
+        iteration: 1,
+        round: 1,
+        boundary,
+        launch_id: "L1",
+        note: `note ${note_id}`,
+      });
+    const events = [
+      ...PARKED,
+      read("b", 1_100, "brief"),
+      read("t", 2_000, "tool_batch"),
+      read("f", 3_000, "finish"),
+      read("s", 4_000, "step"),
+      // A ROUND OF THE ENGINE'S OWN LOOP, the review's, names no job.
+      event("agent_turn_steered", 5_000, {
+        note_id: "rev",
+        outcome: "delivered",
+        phase: "review",
+        iteration: 1,
+        round: 2,
+        boundary: "round",
+      }),
+    ];
+    const marks = steerMarks(events, "turn-1");
+    expect(marks.map((m) => [m.noteId, m.boundary, m.spanId])).toEqual([
+      ["b", "brief", "run:L1"],
+      ["t", "tool_batch", "run:L1"],
+      ["f", "finish", "run:L1"],
+      ["s", "step", "run:L1"],
+      ["rev", "round", "turn-1|review|1.r2"],
+    ]);
+    mount(events, RUNNING);
+    await flush();
+    for (const words of [
+      "read by the coding run of Execute in its brief",
+      "read by the coding run of Execute after a tool batch",
+      "read by the coding run of Execute as it was finishing",
+      "read by the coding run of Execute at its next step",
+      "read at round 2 of Review",
+    ]) {
+      expect(screen.getByText(new RegExp(words))).toBeTruthy();
+    }
+    // AND THE RUN'S ROW CARRIES THE MARK.
+    const run = screen.getByRole("button", { name: /Coding run/ });
+    expect(within(run).getByText("note")).toBeTruthy();
+  });
+
+  // A STEP THIS BUILD CANNOT NAME — one a newer build names, or none, which no
+  // build writes — is the turn's read, placed on the run its record names and
+  // never on a round of the engine's loop.
+  test("a boundary this build does not know is never drawn or said as a round", async () => {
+    const read = (note_id: string, ms: number, fields: Record<string, unknown>) =>
+      event("agent_turn_steered", ms, {
+        note_id,
+        outcome: "delivered",
+        phase: "execute",
+        iteration: 1,
+        round: 1,
+        note: `note ${note_id}`,
+        ...fields,
+      });
+    const events = [
+      ...PARKED,
+      read("new", 1_500, { boundary: "checkpoint", launch_id: "L1" }),
+      read("unplaced", 2_500, { boundary: "checkpoint" }),
+      read("none", 3_500, {}),
+    ];
+    const marks = steerMarks(events, "turn-1");
+    expect(marks.map((m) => [m.noteId, m.boundary, m.spanId])).toEqual([
+      ["new", "unknown", "run:L1"],
+      ["unplaced", "unknown", ""],
+      ["none", "unknown", ""],
+    ]);
+    mount(events, RUNNING);
+    await flush();
+    expect(screen.getAllByText(/read by the turn in Execute/)).toHaveLength(3);
+    expect(screen.queryByText(/read at round/)).toBeNull();
   });
 
   // NAMED BY ITS HEADING, which a screen reader announces: an `aria-label` on

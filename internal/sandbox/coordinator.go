@@ -346,6 +346,10 @@ type CoordinatorOptions struct {
 	//
 	// A PARKED run is deliberately not ended: it is waiting on a person,
 	// not finished, and its box will resume into the same session.
+	//
+	// THE SESSION'S NOTE INBOX GOES WITH IT, and no note with it: the notes
+	// still waiting are on the run's record, which the ending publishes as
+	// expired before it deletes it ([CoordinatorOptions.SteersExpired]).
 	Ended func(runID string)
 
 	// Recovered is told of each run this node takes over still RUNNING in
@@ -456,6 +460,26 @@ type CoordinatorOptions struct {
 	// nothing — a coordinator built without an engine (a test's): the stop
 	// is still announced and the run still ended.
 	CloseStopped func(ctx context.Context, run PendingRun) error
+
+	// SteersExpired publishes, as expired, every note a person sent the run's
+	// turn that no job ran with ([PendingRun.UnreadNotes]): the ones still
+	// WAITING on the run's record ([RunSteer]), which nothing will read now
+	// that the turn is over, and the ones the brief of a job that never
+	// started recorded read. The engine implements it, because only the
+	// engine opens a note's seal, and this package never publishes words it
+	// cannot verify.
+	//
+	// A STEP OF THE ENDING, as CloseStopped is: made before the record is
+	// deleted, once per attempt, and made again by any attempt that finishes
+	// the ending after a crash — so what it publishes it publishes under
+	// identities derived from the run, its ending and each note
+	// ([RecordedEnding.ID], [RecordedEnding.At]), which makes a repeat the
+	// same records. An error keeps the ending for its retry, as a refused
+	// announcement does. Nothing lands on the record between this step and
+	// the delete: a note filed once the ending is decided is refused
+	// ([PendingStore.FileNote]). Nil publishes nothing — a coordinator built
+	// without an engine (a test's).
+	SteersExpired func(ctx context.Context, run PendingRun) error
 
 	// Hold holds a seat's inbox while one of its runs holds the seat or an
 	// answer it owes is waiting on its resume — see [SeatHold]. Nil holds
@@ -654,6 +678,8 @@ type Coordinator struct {
 	stopped   func(ctx context.Context, handle, turnID string)
 	// closeStopped is [CoordinatorOptions.CloseStopped].
 	closeStopped func(ctx context.Context, run PendingRun) error
+	// steersExpired is [CoordinatorOptions.SteersExpired].
+	steersExpired func(ctx context.Context, run PendingRun) error
 	// node, boxes and nudge are [CoordinatorOptions.Node], Boxes and Nudge.
 	node  string
 	boxes BoxReader
@@ -798,35 +824,36 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
 		resume: opts.Resume, account: opts.Account, audience: opts.Audience,
-		answers:      opts.Answers,
-		condense:     opts.Condense,
-		ended:        opts.Ended,
-		recovered:    opts.Recovered,
-		stopped:      opts.Stopped,
-		closeStopped: opts.CloseStopped,
-		node:         opts.Node,
-		boxes:        opts.Boxes,
-		nudge:        opts.Nudge,
-		refresh:      opts.Refresh,
-		now:          opts.Now,
-		runs:         map[string]seatRuns{},
-		moves:        map[string]uint64{},
-		attempts:     map[answerKey]map[string]answerBudget{},
-		retries:      map[string]*answerRetry{},
-		refused:      map[string]refusedCompletion{},
-		owed:         map[string]map[string]struct{}{},
-		held:         map[string]bool{},
-		holdBusy:     map[string]bool{},
-		holdDirty:    map[string]bool{},
-		holdGen:      map[string]uint64{},
-		signals:      map[signal]uint64{},
-		launchStops:  map[string]launchStop{},
-		hold:         opts.Hold,
-		admit:        opts.Admit,
-		gate:         opts.Gate,
-		after:        opts.After,
-		spent:        opts.Spent,
-		lease:        opts.Lease,
+		answers:       opts.Answers,
+		condense:      opts.Condense,
+		ended:         opts.Ended,
+		recovered:     opts.Recovered,
+		stopped:       opts.Stopped,
+		closeStopped:  opts.CloseStopped,
+		steersExpired: opts.SteersExpired,
+		node:          opts.Node,
+		boxes:         opts.Boxes,
+		nudge:         opts.Nudge,
+		refresh:       opts.Refresh,
+		now:           opts.Now,
+		runs:          map[string]seatRuns{},
+		moves:         map[string]uint64{},
+		attempts:      map[answerKey]map[string]answerBudget{},
+		retries:       map[string]*answerRetry{},
+		refused:       map[string]refusedCompletion{},
+		owed:          map[string]map[string]struct{}{},
+		held:          map[string]bool{},
+		holdBusy:      map[string]bool{},
+		holdDirty:     map[string]bool{},
+		holdGen:       map[string]uint64{},
+		signals:       map[signal]uint64{},
+		launchStops:   map[string]launchStop{},
+		hold:          opts.Hold,
+		admit:         opts.Admit,
+		gate:          opts.Gate,
+		after:         opts.After,
+		spent:         opts.Spent,
+		lease:         opts.Lease,
 	}
 	if c.now == nil {
 		c.now = time.Now
@@ -1055,10 +1082,10 @@ func (c *Coordinator) OnStarted(ctx context.Context, ev types.SandboxRunStarted)
 // from the seat's count and lift the hold the launch just took — a seat freed
 // beside a job that is starting. So a recount during which this node moved the
 // seat ([Coordinator.adjust]) is read again, and one that cannot settle within
-// [casRetries] reads leaves the counts alone, which is the same answer a
+// [seatRecountRounds] reads leaves the counts alone, which is the same answer a
 // listing that failed gets.
 func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
-	for range casRetries {
+	for range seatRecountRounds {
 		c.mu.Lock()
 		moved := c.moves[handle]
 		c.mu.Unlock()
@@ -1092,6 +1119,22 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 		"detail", "the seat's runs kept moving under the recount, so the counts this node "+
 			"already kept stand")
 }
+
+// seatRecountRounds bounds [Coordinator.syncSeat]'s listings.
+//
+// A recount is read again only when THIS NODE moved the seat while the listing
+// ran, so what it races is the seat's own transitions here, and they come in
+// bursts no longer than an answered question's: the answer recorded, the run
+// claimed for its resume, the claim given back to the resuming turn, and that
+// turn's next launch — four moves, each one store write after the last, which
+// is the pace of a listing. Eight rounds is that burst twice over, so a
+// recount that starts at a burst's head still settles after it. Not every
+// transition triggers a recount of its own (a park and a recorded answer only
+// move the counts), so a recount that gives up leaves counts a later recount
+// may be a while correcting — which is why the bound is a burst twice over
+// rather than one. And it stays a bound, half of the sixteen it replaced,
+// because every round is a listing of every run the fleet holds.
+const seatRecountRounds = 8
 
 // OnCompleted claims the run, collects, accounts, then resumes the loop.
 func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunCompleted, trigger *events.Event) error {
@@ -1388,9 +1431,62 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool
 	if ended {
 		result = endedAtDeadline(result, run.Deadline)
 	}
+	c.warnNotesUnasked(ctx, run, result)
 	// HELD TO THE RECORD'S BOUND here, where every collected result enters,
 	// so the phase record, the park and the resumed executor carry one text.
 	return c.fitText(ctx, run, result), ended, nil
+}
+
+// noteReader is a [Runner] whose CLI takes a person's notes to its run's turn
+// between its own steps (internal/sandbox/codingagent's Runner, for a CLI it
+// has taught to). Optional, as a runner that reads none — a CLI not yet taught,
+// a test's — says nothing about notes at all.
+type noteReader interface{ ReadsNotes() bool }
+
+// warnNotesUnasked says, as steer_reader_never_ran, that a run which succeeded
+// never once asked for its turn's notes ([RunSteer.Pulled]) — what tells a run
+// whose CLI's reading was switched off from one that had nothing to read.
+//
+// A RELIABLE SIGNAL, for a CLI that reads notes: a Claude Code run that
+// finishes reaches its Stop hook, which asks whatever waits, and an OpenCode
+// run's plugin asks as soon as the run's session starts working. So a run that
+// succeeded without asking is one whose reading never ran — for Claude Code, a
+// managed policy that allows only managed hooks or disables them all, or a
+// release older than 2.1.163, which its script starts without the hooks
+// (codingagent, claudeNotesFloor); for OpenCode, a managed policy that denies
+// the plugin, or a plugin that failed to load — and every note sent while it
+// worked waited for its review, which a person sending one is told reads at its
+// next step.
+// Only for a run whose record names its seat: that anchor is what a launch
+// wired to its turn's notes writes ([LaunchRequest.SteerSeat]), and a run its
+// launch gave nothing to ask for is no sign of anything. Logged on the node
+// that collects, which reads the record the claim took.
+func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, result Result) {
+	if !result.Success || len(run.Steer.Seat) == 0 || run.Steer.Pulled == run.LaunchID {
+		return
+	}
+	manager := c.mgr()
+	if manager == nil {
+		return
+	}
+	runner, err := manager.RunnerFor(run.CodingAgent)
+	if err != nil {
+		return
+	}
+	if reader, ok := runner.(noteReader); !ok || !reader.ReadsNotes() {
+		return
+	}
+	log.WarnContext(ctx, "steer_reader_never_ran", "turn_id", run.TurnID,
+		"launch_id", run.LaunchID, "agent", run.CodingAgent,
+		"detail", "the run succeeded and its coding CLI never asked for its turn's notes, so a "+
+			"note sent while it worked waited for its review instead of reaching it between its "+
+			"steps. Something in the box switched the CLI's reading off: for Claude Code, a "+
+			"managed policy that allows only managed hooks (allowManagedHooksOnly, "+
+			"strictPluginOnlyCustomization) or disables every hook (disableAllHooks), or a "+
+			"release older than 2.1.163, the oldest whose Stop hook's answer reaches the model, "+
+			"which the run starts without its hooks and whose error stream says so; "+
+			"for OpenCode, a managed policy that denies the run's notes plugin "+
+			"(integration.use), or a plugin OpenCode failed to load, which its own log names")
 }
 
 // readBox is the part of a collection that touches the box, made on the node
@@ -2032,7 +2128,7 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 		return AnswerNotMine, fmt.Errorf("sandbox: the answer to run %s arrived with no event to "+
 			"record it under", given.TurnID)
 	}
-	for range casRetries {
+	for range answerRecordRounds {
 		run, found, err := c.pending.Get(ctx, given.TurnID)
 		if err != nil {
 			// A STORE THAT COULD NOT BE READ IS NOT A RUN THAT IS GONE.
@@ -2124,6 +2220,19 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 	return AnswerDeferred, fmt.Errorf("sandbox: run %s kept changing under the answer it was given",
 		given.TurnID)
 }
+
+// answerRecordRounds bounds [Coordinator.AnswerByTurn]'s record loop.
+//
+// A round repeats only when the record was REFUSED: the run was answered
+// another way, or moved on, between the read and the record — a lost race on
+// the row itself is the store's to retry and never reaches here. The read
+// after a refusal lands on the branch that explains it and returns, so one
+// round past the first covers it, and a third covers a question answered and
+// let go of again in between, back to waiting on the same launch. Past that
+// the answer is handed back (AnswerDeferred), and the queue's own backoff
+// spaces the next attempt — the pacing a run that keeps refusing should get,
+// rather than reads back to back.
+const answerRecordRounds = 3
 
 // errRunMovedOn is a resume's report that the run it would have ended moved on
 // to somebody else first — a newer lease owns it, or it was ended by another
@@ -3217,7 +3326,10 @@ var errAskAway = errors.New("sandbox: the run's box is read on another node's ho
 //  5. the announcement is published, under the ending's own identity;
 //  6. for a stop, the turn that was parked on the run is closed on the record
 //     as stopped ([CoordinatorOptions.CloseStopped]);
-//  7. the record is deleted ([PendingStore.Finish]).
+//  7. every note a person sent the turn that no job ran with — still waiting on
+//     the record, or read by the brief of a job that never started — is
+//     published expired ([CoordinatorOptions.SteersExpired]);
+//  8. the record is deleted ([PendingStore.Finish]).
 //
 // # Across a crash at each step
 //
@@ -3239,8 +3351,8 @@ var errAskAway = errors.New("sandbox: the run's box is read on another node's ho
 // does not land is returned, and the caller keeps the ending.
 func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk bool) error {
 	var handed []string
-	reclaimed, announced, closed := false, false, false
-	for range casRetries {
+	reclaimed, announced, closed, expired := false, false, false, false
+	for range endingRounds {
 		if run.answerOwed() {
 			owing, err := c.letGoAnswer(ctx, run)
 			if err != nil {
@@ -3300,6 +3412,13 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 			}
 			closed = true
 		}
+		if !expired && c.steersExpired != nil && run.unreadNotes() {
+			if err := c.steersExpired(ctx, run); err != nil {
+				return fmt.Errorf("sandbox: ending run %s, whose unread notes could not be "+
+					"recorded expired: %w", run.TurnID, err)
+			}
+			expired = true
+		}
 		settled, _, err := c.pending.Finish(ctx, run.TurnID, run.Ending.ID)
 		switch {
 		case err == nil:
@@ -3316,6 +3435,20 @@ func (c *Coordinator) finishEnding(ctx context.Context, run PendingRun, mayAsk b
 	return fmt.Errorf("sandbox: ending run %s: it kept owing its seat a reply after handing one back",
 		run.TurnID)
 }
+
+// endingRounds bounds [Coordinator.finishEnding]'s rounds.
+//
+// A round repeats only when the delete is refused for a reply the row still
+// owes the seat — copies, or an answer, that another attempt at the same ending
+// left on it after this round read it — and a decided ending takes no new
+// answer (the store refuses every live write to it, [ErrRunEnding]), so what a
+// refusal can name is one of a finite set: an answer to let go of, an earlier
+// decline's copies, the let-go's own copies. Four rounds is one for each and
+// one for the delete. A round that finds the very copies it already handed
+// back stops sooner (the same-copies guard below), so the bound is reached only
+// by another node finishing the same ending in step with this one, and the
+// ending is then kept for this node's retry.
+const endingRounds = 4
 
 // keepEnding keeps an ending that could not be finished for this node's retry
 // ([Coordinator.oweEnding]) and returns cause as the kept ending's error.
@@ -3353,7 +3486,7 @@ func (c *Coordinator) letGoAnswer(ctx context.Context, run PendingRun) (PendingR
 	c.spend(ctx, run.AgentHandle, answer)
 	letGo := LetGo{Ending: run.Ending.ID, Answer: answer.EventIDs, HandBack: handBackOf(answer)}
 	var handed []string
-	for range casRetries {
+	for range letGoRounds {
 		owing, won, err := c.pending.OweHandBack(ctx, run.TurnID, letGo)
 		switch {
 		case err == nil && won:
@@ -3379,6 +3512,16 @@ func (c *Coordinator) letGoAnswer(ctx context.Context, run PendingRun) (PendingR
 	return PendingRun{}, fmt.Errorf("sandbox: letting go of run %s's answer: it kept owing its seat "+
 		"an earlier reply", run.TurnID)
 }
+
+// letGoRounds bounds [Coordinator.letGoAnswer]'s rounds.
+//
+// A round repeats only to hand back the copies an earlier decline still owes
+// before the let-go can be recorded, and a row owes one decline's worth at a
+// time ([PendingRun.HandBack]) while a decided ending takes no new decline: so
+// the second round records the let-go, or finds that another attempt at the
+// same ending already did, and a third is one round's margin. A clear that does
+// not land is stopped sooner, by the same-copies guard below.
+const letGoRounds = 3
 
 // handBackIDs are the ids of what a row owes the seat, in order.
 func handBackIDs(owed []HandedBack) []string {

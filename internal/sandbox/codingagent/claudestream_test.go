@@ -145,6 +145,38 @@ func TestAClaudeStreamSkipsWhatItDoesNotKnow(t *testing.T) {
 	}
 }
 
+// AN INFORMATIONAL HOOK NOTE BECOMES A [steer] LINE: when the run's own hook
+// hands its model a person's note, the CLI streams the hook's transcript line as
+// `system/informational`, `<event> says: crewlet: …` (measured, the fixtures),
+// and that is the one place a person watching the run sees the note arrive.
+// Every other system line — another informational line, a hook's own start and
+// end, a notice of the same shape from an event that takes no note — is
+// skipped, as every system line was.
+//
+// Mutation: drop the system case from the decoder and the measured lines vanish;
+// match any informational line and the others appear.
+func TestAnInformationalHookNoteBecomesASteerLine(t *testing.T) {
+	t.Parallel()
+	for _, version := range []string{"2.1.263", "2.1.310"} {
+		measured := strings.Split(strings.TrimSpace(fixture(t, version, "informational.jsonl")), "\n")
+		want := "[steer] a note from ada reached the run\n" +
+			"[steer] a note from bob reached the run as it was finishing"
+		if got := decodeClaude(measured...); got != want {
+			t.Errorf("%s: transcript =\n%s\nwant\n%s", version, got, want)
+		}
+	}
+	skipped := decodeClaude(
+		`{"type":"system","subtype":"informational","content":"PreToolUse says: crewlet: a note","level":"notice"}`,
+		`{"type":"system","subtype":"informational","content":"PostToolBatch says: lint passed","level":"notice"}`,
+		`{"type":"system","subtype":"informational","content":{"text":"PostToolBatch says: crewlet: x"}}`,
+		`{"type":"system","subtype":"hook_response","hook_event":"Stop","content":"Stop says: crewlet: x"}`,
+		`{"type":"system","subtype":"hook_started","hook_event":"PostToolBatch"}`,
+	)
+	if skipped != "" {
+		t.Errorf("a system line that is no note of the run's own reached the transcript:\n%s", skipped)
+	}
+}
+
 // A RUN THAT DID NOT SUCCEED SAYS HOW in its transcript, from the result
 // message's subtype and errors — the documented fields of an error result,
 // which carries no `result` text at all.
@@ -340,13 +372,7 @@ func TestAClaudeRunInARealBoxIsCollectedFromItsStream(t *testing.T) {
 	if err = box.WriteFile(t.Context(), p.WorkDir()+"/stream.fixture", []byte(stream)); err != nil {
 		t.Fatalf("write the fixture: %v", err)
 	}
-	fake := "#!/bin/sh\ncat '" + p.WorkDir() + "/stream.fixture'\nexit 3\n"
-	if err = box.WriteFile(t.Context(), p.BinDir()+"/claude", []byte(fake)); err != nil {
-		t.Fatalf("write the stand-in: %v", err)
-	}
-	if _, err = box.Exec(t.Context(), "chmod +x '"+p.BinDir()+"/claude'", sandbox.ExecOptions{}); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
+	writeBoxStandIn(t, box, p.BinDir()+"/claude", "#!/bin/sh\ncat '"+p.WorkDir()+"/stream.fixture'\nexit 3\n")
 
 	handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "fix the flake"})
 	if err != nil {

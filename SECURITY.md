@@ -316,11 +316,13 @@ A few things worth knowing when deploying Crewlet:
   the records, the event stream and the coordination store are readable by
   anything that reaches those ports, the coordination store's writes are
   guarded by compare-and-set rather than a signature — except a person's
-  answer to a parked coding run, which the run's record carries sealed under
-  the keyring and which a resume reads only once it opens — and the scatters that
+  answer to a parked coding run and a person's note to a running one, which
+  the run's record carries sealed under the keyring and which nothing hands to
+  a model until it opens — and the scatters that
   only READ — history, search, a seat's memory, a sandbox's tail — are not
   signed. Keep both ports on a private network. The decision is
-  [ADR-0031](adr/0031-every-state-log-record-is-signed.md).
+  [ADR-0031](adr/0031-every-state-log-record-is-signed.md), and the note's
+  [ADR-0066](adr/0066-a-note-to-a-coding-run-waits-sealed-on-its-record.md).
 - **Removing a person erases their values from every node's rows — and not
   from the identity log or a backup until those let go of them.** A person's
   name, address and second-factor seed are sealed under the fleet keyring,

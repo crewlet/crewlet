@@ -208,6 +208,29 @@ type LaunchRequest struct {
 	// it — the node takes the pause into its copy before it lists.
 	Fence func() error
 
+	// SteerSeat is the turn's seat, sealed by the engine — the anchor a
+	// person's authority to send the turn a note is decided on
+	// ([RunSteer.Seat]) — and BriefNotes the notes the job's brief carries,
+	// each sealed, which the write that opens the job records read by it
+	// ([PendingRun.BriefNotes]). HandedNotes are the notes the turn's first
+	// segment's box still held unread as the launch began, each sealed, which
+	// the same write files WAITING after them ([PendingRun.HandedNotes]). All
+	// written onto the record the launch opens, never anywhere else. Empty
+	// writes no anchor and files nothing.
+	SteerSeat   []byte
+	BriefNotes  []RunNote
+	HandedNotes []RunNote
+
+	// Recorded is told the job's name the moment the store has written the
+	// record the launch opens ([PendingStore.BeginLaunch]) — before the
+	// launch's fence is asked again, and before anything else can fail. From
+	// that write the record holds the turn's notes, the brief's and the
+	// box's ([LaunchRequest.HandedNotes]), and a launch that fails after it
+	// ENDS the record, whose ending reports every one of them no job ran
+	// with ([PendingRun.UnreadNotes]); a launch that fails before it wrote
+	// nothing, and its notes are the caller's still. Nil tells nobody.
+	Recorded func(launchID string)
+
 	// Opened is told the job the moment the store has opened it
 	// ([PendingStore.BeginLaunch]) and BEFORE ANY BOX EXISTS, for what must
 	// name the job before its box can act: the run's bridge session, which
@@ -218,15 +241,16 @@ type LaunchRequest struct {
 	// call that outlived its job is the next one. And where the job's calls
 	// are numbered from ([OpenedJob.LastSeq]), off the same write.
 	//
-	// It answers the MCP servers the job's box is given BESIDE MCPServers:
-	// the ones whose address can only be minted once the job has a name.
-	// The run's tool bridge is one — its token names the job, so a node that
+	// It answers what the job's box is given that can only be minted once
+	// the job has a name ([Opening]): MCP servers BESIDE MCPServers — the
+	// run's tool bridge is one, its token naming the job, so a node that
 	// takes the run over can serve the job's session again under the token
-	// the box already holds, and a relaunch's box cannot reach its
-	// predecessor's. A name it answers that MCPServers also has replaces it.
-	// An error abandons the launch, before any box exists. Nil tells nobody
-	// and adds nothing.
-	Opened func(job OpenedJob) (map[string]MCPServer, error)
+	// the box already holds and a relaunch's box cannot reach its
+	// predecessor's; a name it answers that MCPServers also has replaces
+	// it — and where the job's CLI asks for its turn's notes, which is the
+	// same bridge. An error abandons the launch, before any box exists. Nil
+	// tells nobody and adds nothing.
+	Opened func(job OpenedJob) (Opening, error)
 
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
@@ -252,6 +276,17 @@ type OpenedJob struct {
 	LastSeq int
 }
 
+// Opening is what a job's box is given once the job has a name — see
+// [LaunchRequest.Opened].
+type Opening struct {
+	// Servers join the box's MCP servers.
+	Servers map[string]MCPServer
+
+	// Steer is where the job's CLI asks for its turn's notes
+	// ([RunRequest.Steer]); the zero value takes none inside the run.
+	Steer SteerWiring
+}
+
 // Continuation is how a job continues the asking job before it — see
 // [LaunchRequest.Continue].
 type Continuation struct {
@@ -266,6 +301,10 @@ type Continuation struct {
 
 // LaunchResult reports what a launch produced.
 type LaunchResult struct {
+	// LaunchID is the job the launch opened, as the store named it
+	// ([PendingRun.LaunchID]).
+	LaunchID string
+
 	SandboxID   string
 	CommandID   string
 	CodingAgent string
@@ -381,11 +420,23 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Continues: req.Continue != nil,
 		// The model and the entry the run's phase record is filed under;
 		// the store keys the rest of that record on the launch it mints.
-		Launch:    LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey},
-		CreatedAt: now(),
+		Launch: LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey},
+		// THE TURN'S NOTES: the seat anchor, the brief's notes, read by the
+		// job this write opens, and the box's, waiting after them — see
+		// [PendingStore.BeginLaunch].
+		Steer:       RunSteer{Seat: req.SteerSeat},
+		BriefNotes:  req.BriefNotes,
+		HandedNotes: req.HandedNotes,
+		CreatedAt:   now(),
 	}, fence)
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the run: %w", err)
+	}
+	// THE RECORD HOLDS THE TURN'S NOTES FROM HERE — see
+	// [LaunchRequest.Recorded]: told before anything below can fail, so the
+	// caller knows the record, and no longer itself, answers for them.
+	if req.Recorded != nil {
+		req.Recorded(opened.LaunchID)
 	}
 	// HELD FROM HERE, before anything below can fail or the turn can
 	// return — see [Coordinator.Launch]. Every failure past this point
@@ -410,18 +461,20 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// and what it answers joins the box's servers, on the request every step
 	// below reads: the job's own runner and the standing instructions that
 	// list the servers a box has.
+	var steer SteerWiring
 	if req.Opened != nil {
 		named, openErr := req.Opened(OpenedJob{LaunchID: opened.LaunchID, LastSeq: opened.LastBridgeSeq()})
 		if openErr != nil {
 			c.abandon(ctx, m, req, fence, "")
 			return LaunchResult{}, fmt.Errorf("sandbox: naming the job to what serves its box: %w", openErr)
 		}
-		if len(named) > 0 {
-			servers := make(map[string]MCPServer, len(req.MCPServers)+len(named))
+		if len(named.Servers) > 0 {
+			servers := make(map[string]MCPServer, len(req.MCPServers)+len(named.Servers))
 			maps.Copy(servers, req.MCPServers)
-			maps.Copy(servers, named)
+			maps.Copy(servers, named.Servers)
 			req.MCPServers = servers
 		}
+		steer = named.Steer
 	}
 
 	// THE BOX IS MADE FOR THIS TURN, which a local box records so its host
@@ -484,6 +537,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Limits:     Limits{MaxTurns: req.Spec.MaxTurns},
 		Model:      req.Model,
 		MCPServers: req.MCPServers,
+		// WHERE THE JOB'S CLI ASKS FOR ITS TURN'S NOTES, as the job's own
+		// opening answered it — see [Opening.Steer].
+		Steer: steer,
 	})
 	if err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
@@ -553,7 +609,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		"reused", reused, "continues_session", session != "")
 
 	return LaunchResult{
-		SandboxID: box.ID(), CommandID: handle.CommandID,
+		LaunchID: opened.LaunchID, SandboxID: box.ID(), CommandID: handle.CommandID,
 		CodingAgent: req.Spec.CodingAgent, Reused: reused,
 	}, nil
 }

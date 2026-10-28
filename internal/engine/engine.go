@@ -12,7 +12,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
-	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -444,10 +443,11 @@ type RunnerInput struct {
 	// parked on rather than a fresh turn. Nil is the ordinary case.
 	Resume *runner.Resume
 
-	// Steer is the turn's box of notes from a person, opened by
-	// [turnSteerBox]. Nil is a turn with no box: every test that drives a
-	// runner directly.
-	Steer *steer.Box
+	// Steer is where the turn's notes from a person wait: the first
+	// segment's box, or the record of the run a resumed segment collects
+	// ([Engine.runSteers]). Nil is a turn nobody can steer: every test that
+	// drives a turn directly.
+	Steer runner.SteerSource
 }
 
 // TurnSettings is the loop's pinned configuration for this epoch.

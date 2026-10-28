@@ -89,9 +89,12 @@ func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe
 	}
 	// THE RELAY'S HANDLER IS THE MCP HANDLER ITSELF, behind the route's
 	// own pattern so the token reaches it as a path value — never the
-	// route's handler, which would relay a relayed call again.
+	// route's handler, which would relay a relayed call again. And the
+	// notes route's, served on the opening the token names here, for the
+	// same reason never through its own routing.
 	mux := http.NewServeMux()
 	mux.Handle(PathPrefix+"{token}", b.streamable)
+	mux.Handle(SteerPattern, b.heldOnly(b.serveSteer))
 	relay, err := httprelay.New(httprelay.Options{
 		Fabric: opts.Fabric, Name: RelayName, Node: opts.Node, Owner: opts.Owner,
 		Keyring: opts.Keyring, Admit: b.admitRelayed, Handler: mux,
@@ -119,7 +122,10 @@ func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe
 // cannot stand in for that, because it is the entry's own loopback that it
 // would name.
 func (b *Bridge) admitRelayed(r *http.Request) httprelay.Verdict {
-	sub, ok := b.parse(strings.TrimPrefix(r.URL.Path, PathPrefix))
+	// THE TOKEN IS THE FIRST SEGMENT after the prefix, whatever route under
+	// it the call is for: the MCP endpoint, or the notes route beneath it.
+	token, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, PathPrefix), "/")
+	sub, ok := b.parse(token)
 	if !ok {
 		return httprelay.Refuse
 	}

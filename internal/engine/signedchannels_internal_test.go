@@ -17,7 +17,9 @@ import (
 // a read of a box asked of its host, a box's tool call relayed to the process
 // holding its session, and the Dashboard Assistant's frames, replays and stops
 // — and none of them in a state log's. So does a person's answer to a parked
-// run, sealed onto the run's row and handed to the resumed run as their words.
+// run, sealed onto the run's row and handed to the resumed run as their words,
+// and a note to a turn whose coding run is out, sealed onto the run's row with
+// the seat anchor a person's authority to send one is decided on.
 // And so does the one sealed frame that is no instruction, presence, which a
 // node displays as a person in a room: a domain shared with any of the others
 // would let a captured frame of one verify as the other. The domain is in the
@@ -65,6 +67,10 @@ func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	notes, err := newSteerSeals(ring)
+	if err != nil {
+		t.Fatal(err)
+	}
 	owner := map[string]string{}
 	claim := func(domain, by string) {
 		if prior, taken := owner[domain]; taken {
@@ -92,7 +98,10 @@ func TestEveryInstructionChannelSignsInDomainsOfItsOwn(t *testing.T) {
 	claim(assistant.frames.Domain(), "an assistant turn's frame")
 	claim(presenceWire.Domain(), "a presence frame")
 	claim(answers.Domain(), "an answer to a parked run")
-	if len(owner) != len(registeredDomains())+19 {
+	note, seat := notes.Domains()
+	claim(note, "a note on a run record")
+	claim(seat, "a run record's seat anchor")
+	if len(owner) != len(registeredDomains())+21 {
 		t.Fatalf("%d domains claimed: %v", len(owner), owner)
 	}
 }

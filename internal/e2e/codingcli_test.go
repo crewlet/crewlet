@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -38,9 +39,11 @@ import (
 // `claude` on the box's PATH, which a setup step copies there ([codingShim]).
 //
 // It does what Claude Code does with that argv, and nothing a test could get
-// right while the engine was wrong: it reads its brief off `-p`, its system
-// prompt off `--append-system-prompt-file` and its tool surface off
-// `--mcp-config`, dials the seat's bridge over a REAL MCP session, and loops —
+// right while the engine was wrong: it answers `--version` with a release
+// ([codingVersion], or [codingVersionEnv]'s), reads its brief on stdin, as `-p`
+// with no prompt does, its system prompt off `--append-system-prompt-file`, its
+// tool surface off `--mcp-config` and its hooks off `--settings`, dials the seat's
+// bridge over a REAL MCP session, and loops —
 // each round asked of the scripted model exactly as the scripted CLI on the
 // engine host asks one ([modelRequest]: the brief, the tools the bridge
 // listed by the server's own names, the system prompt on the append channel
@@ -49,6 +52,14 @@ import (
 // box's does. It ends when the model submits its work or answers in prose, or
 // at `--max-turns`, and prints stream-json as Claude Code does: one object a
 // line, the result message last, its usage the sum of every round's.
+//
+// ITS HOOKS ARE PLAYED AT ITS BOUNDARIES, as Claude Code plays them
+// ([codingHooks]): after each batch of calls has its results (PostToolBatch)
+// and as it is about to finish (Stop), each hook a call of its tool over the
+// run's own bridge session with the event and the agent id filled in. What a
+// hook hands back is what the CLI does with it: its transcript line printed as
+// the CLI's informational line, and its additional context — a person's note —
+// put before the model's next request, or, at Stop, the turn continued with it.
 //
 // SO THE SCRIPTED MODEL IS ONE MODEL FOR BOTH HALVES. The executor's rounds
 // reach the same [scriptedModel.serve] the phases on the host do, keyed on the same
@@ -70,19 +81,31 @@ const (
 	// codingModeEnv picks what the run does: [codingModeWork] (the default),
 	// [codingModeAsk] or [codingModeHeld].
 	codingModeEnv = "FAKE_AGENT_MODE"
-	// codingArgvEnv names a file, outside the box, the run records its argv
-	// in — outside because the box is reclaimed when the turn ends.
+	// codingArgvEnv names a file, outside the box, the run records its
+	// invocation in — its argv and the brief it read on stdin
+	// ([codingInvocation]) — outside because the box is reclaimed when the
+	// turn ends.
 	codingArgvEnv = "FAKE_AGENT_ARGV"
 	// codingReleaseEnv names a file a [codingModeHeld] run waits for.
 	codingReleaseEnv = "FAKE_AGENT_RELEASE"
+	// codingVersionEnv is the release the stand-in answers `claude
+	// --version` with, [codingVersion] when unset.
+	codingVersionEnv = "FAKE_AGENT_VERSION"
 )
+
+// codingVersion is the release the stand-in reports by default: 2.1.310, the
+// Claude Code the runner's fixtures were measured on, at or past the oldest a
+// run is started with its note hooks on (codingagent's claudeNotesFloor).
+const codingVersion = "2.1.310 (Claude Code)"
 
 // The modes a run can be in.
 const (
 	// codingModeWork does the scripted work: the rounds the model answers.
 	codingModeWork = "work"
 	// codingModeAsk parks the run on a question through `crewlet-ask`, the
-	// shim the runner installs, and ends it without touching the bridge.
+	// shim the runner installs, and ends it without calling a tool over the
+	// bridge — its Stop hook still asks for notes, as Claude Code's does at
+	// the end of every turn.
 	codingModeAsk = "ask"
 	// codingModeHeld runs until [codingReleaseEnv] exists, then submits its
 	// work over the seat's bridge and ends reporting it finished — so a case
@@ -193,17 +216,26 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// codingArgs is what the stand-in reads off the argv the runner wrote.
+// codingArgs is what the stand-in reads off the argv the runner wrote, and the
+// brief it read on stdin.
 type codingArgs struct {
-	brief, systemFile, mcpConfig string
+	brief, systemFile, mcpConfig, settings string
 	// resume is the session `--resume` names: the asking run's own, which
 	// a run carrying it on with the answer continues.
 	resume   string
 	maxTurns int
 }
 
+// codingInvocation is what a run records of how it was started
+// ([codingArgvEnv]): its argv, and the brief it read on stdin.
+type codingInvocation struct {
+	Argv  []string `json:"argv"`
+	Stdin string   `json:"stdin"`
+}
+
 // parseCodingArgs reads the flags Claude Code's runner passes, skipping every
-// one this stand-in has no use for.
+// one this stand-in has no use for. `-p` takes no value: the prompt is read on
+// stdin, which is where the runner puts the brief.
 func parseCodingArgs(args []string) (codingArgs, error) {
 	var out codingArgs
 	value := func(i int) (string, error) {
@@ -215,8 +247,8 @@ func parseCodingArgs(args []string) (codingArgs, error) {
 	for i := 0; i < len(args); i++ {
 		var err error
 		switch args[i] {
-		case "-p":
-			out.brief, err = value(i)
+		case "--settings":
+			out.settings, err = value(i)
 		case "--append-system-prompt-file":
 			out.systemFile, err = value(i)
 		case "--mcp-config":
@@ -297,14 +329,41 @@ func runCodingCLI(endpoint string) int {
 		return 1
 	}
 	args := os.Args[1:]
+	// A VERSION PROBE IS ANSWERED AS CLAUDE CODE ANSWERS IT, and nothing else
+	// happens: no brief read, no invocation recorded, no mode run. A run wired
+	// to its notes asks `claude --version` before it starts the CLI, to decide
+	// its hooks and its system text (codingagent's claudeNotesGate); a
+	// stand-in that ran the probe as a run held a held case's wait in the
+	// probe rather than in the CLI, answered nothing, and left the gate to its
+	// fallback, so no case ran the branch a real release takes.
+	if slices.Equal(slices.DeleteFunc(slices.Clone(args), func(arg string) bool {
+		// The shim's own filter for the test framework ([codingShim]),
+		// ahead of what the run's script passed.
+		return strings.HasPrefix(arg, "-test.")
+	}), []string{"--version"}) {
+		fmt.Println(cmp.Or(os.Getenv(codingVersionEnv), codingVersion))
+		return 0
+	}
+	// THE PROMPT IS STDIN'S, as `-p` with no prompt reads it: the runner
+	// points it at the brief's file, which ends.
+	brief, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return fail("reading the brief on stdin: %v", err)
+	}
 	if path := os.Getenv(codingArgvEnv); path != "" {
-		if err := os.WriteFile(path, []byte(strings.Join(args, "\n")+"\n"), 0o644); err != nil {
-			return fail("recording the argv: %v", err)
+		raw, _ := json.Marshal(codingInvocation{Argv: args, Stdin: string(brief)})
+		if err := os.WriteFile(path, raw, 0o644); err != nil {
+			return fail("recording the invocation: %v", err)
 		}
 	}
 	parsed, err := parseCodingArgs(args)
 	if err != nil {
 		return fail("reading the argv: %v", err)
+	}
+	parsed.brief = string(brief)
+	hooks, err := readCodingHooks(parsed.settings)
+	if err != nil {
+		return fail("%v", err)
 	}
 	stream := codingStream{out: os.Stdout}
 	// A RUN CARRYING ON AN ASKING RUN, its session resumed with the answer
@@ -318,7 +377,7 @@ func runCodingCLI(endpoint string) int {
 			return fail("asked to resume session %q, and the run that asked was %q",
 				parsed.resume, codingSession)
 		}
-		if err := codingWork(context.Background(), endpoint, parsed, stream); err != nil {
+		if err := codingWork(context.Background(), endpoint, parsed, hooks, stream); err != nil {
 			return fail("%v", err)
 		}
 		return 0
@@ -339,7 +398,7 @@ func runCodingCLI(endpoint string) int {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		if err := codingHeldSubmit(context.Background(), parsed, stream); err != nil {
+		if err := codingHeldSubmit(context.Background(), parsed, hooks, stream); err != nil {
 			return fail("%v", err)
 		}
 		stream.result("success", codingHeldReport, 1, replyUsage{})
@@ -349,7 +408,7 @@ func runCodingCLI(endpoint string) int {
 		// the answer in its brief, and does not ask again: it does the work,
 		// as a real CLI told what it was about to ask would.
 		if strings.Contains(parsed.brief, codingQuestion) {
-			if err := codingWork(context.Background(), endpoint, parsed, stream); err != nil {
+			if err := codingWork(context.Background(), endpoint, parsed, hooks, stream); err != nil {
 				return fail("%v", err)
 			}
 			return 0
@@ -372,6 +431,9 @@ func runCodingCLI(endpoint string) int {
 			return fail("asking through crewlet-ask: %v", err)
 		}
 		stream.init(nil)
+		if err := codingAskFinish(context.Background(), parsed, hooks, stream); err != nil {
+			return fail("%v", err)
+		}
 		stream.result("success", "blocked on a question", 1, replyUsage{})
 		return 0
 	default:
@@ -379,15 +441,18 @@ func runCodingCLI(endpoint string) int {
 		// run the default and pass a case for the wrong reason.
 		return fail("unknown %s %q", codingModeEnv, mode)
 	}
-	if err := codingWork(context.Background(), endpoint, parsed, stream); err != nil {
+	if err := codingWork(context.Background(), endpoint, parsed, hooks, stream); err != nil {
 		return fail("%v", err)
 	}
 	return 0
 }
 
 // codingWork is a [codingModeWork] run: the rounds the scripted model answers,
-// each call made over the seat's bridge.
-func codingWork(ctx context.Context, endpoint string, args codingArgs, stream codingStream) error {
+// each call made over the seat's bridge, and the run's hooks played at its
+// boundaries — a note one hands back after a batch rides the model's next
+// request, and one handed back at the finish continues the turn with it.
+func codingWork(ctx context.Context, endpoint string, args codingArgs, hooks codingHooks,
+	stream codingStream) error {
 	system := ""
 	if args.systemFile != "" {
 		raw, err := os.ReadFile(args.systemFile)
@@ -425,6 +490,20 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, stream co
 	// server's own names, and every earlier round of this run.
 	req := modelRequest{System: system, Channel: channelAppend, Prompt: args.brief, Tools: names}
 	var spent replyUsage
+	// finish plays the run's Stop hooks with its last word said: a note one
+	// hands back continues the turn, as Claude Code continues it, and
+	// nothing ends it on that word.
+	finish := func(round int, last string) (bool, error) {
+		note, err := hooks.play(ctx, session, codingEventFinish, stream)
+		if err != nil || note == "" {
+			if err == nil {
+				stream.result("success", last, round+1, spent)
+			}
+			return true, err
+		}
+		req.Run = append(req.Run, exchange{Reply: modelReply{Text: last}, Notes: []string{note}})
+		return false, nil
+	}
 	for round := range rounds {
 		reply, err := askModel(endpoint, req)
 		if err != nil {
@@ -433,8 +512,10 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, stream co
 		spent = spent.plus(reply.Usage)
 		if len(reply.Calls) == 0 {
 			stream.text(reply.Text)
-			stream.result("success", reply.Text, round+1, spent)
-			return nil
+			if done, err := finish(round, reply.Text); done || err != nil {
+				return err
+			}
+			continue
 		}
 		ex := exchange{Reply: reply}
 		report := ""
@@ -452,15 +533,151 @@ func codingWork(ctx context.Context, endpoint string, args codingArgs, stream co
 				report = cmp.Or(report, "Submitted the work.")
 			}
 		}
+		// THE BATCH HAS ITS RESULTS: a note handed back now rides the
+		// model's next request, after them.
+		note, err := hooks.play(ctx, session, codingEventToolBatch, stream)
+		if err != nil {
+			return err
+		}
+		if note != "" {
+			ex.Notes = append(ex.Notes, note)
+		}
 		req.Run = append(req.Run, ex)
 		if report != "" {
 			stream.text(report)
-			stream.result("success", report, round+1, spent)
-			return nil
+			if done, err := finish(round, report); done || err != nil {
+				return err
+			}
 		}
 	}
 	stream.result("error_max_turns", "", rounds, spent)
 	return nil
+}
+
+// The hook events the stand-in plays, as Claude Code names them.
+const (
+	codingEventToolBatch = "PostToolBatch"
+	codingEventFinish    = "Stop"
+)
+
+// codingHooks is a run's own hooks, by event, read off the settings file its
+// `--settings` names — none for a run started without one.
+type codingHooks map[string][]codingHook
+
+// codingHook is one hook of the settings file.
+type codingHook struct {
+	Type   string            `json:"type"`
+	Server string            `json:"server"`
+	Tool   string            `json:"tool"`
+	Input  map[string]string `json:"input"`
+}
+
+// readCodingHooks reads the hooks of the settings file at path, refusing a
+// file that switches hooks off or holds a hook this stand-in cannot play, so a
+// run handed one fails saying so rather than playing nothing.
+func readCodingHooks(path string) (codingHooks, error) {
+	if path == "" {
+		return nil, nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading the settings file: %w", err)
+	}
+	var doc struct {
+		DisableAllHooks *bool `json:"disableAllHooks"`
+		Hooks           map[string][]struct {
+			Hooks []codingHook `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, fmt.Errorf("reading the settings file: %w", err)
+	}
+	if doc.DisableAllHooks == nil || *doc.DisableAllHooks {
+		return nil, fmt.Errorf("the settings file does not switch hooks on, so a repository's "+
+			"own disableAllHooks would switch the run's off: %s", raw)
+	}
+	out := codingHooks{}
+	for event, matchers := range doc.Hooks {
+		for _, matcher := range matchers {
+			for _, hook := range matcher.Hooks {
+				if hook.Type != "mcp_tool" || hook.Server != config.ToolServerName {
+					return nil, fmt.Errorf("a %s hook calls %s on server %q, and the run's only "+
+						"server is the bridge, %q", event, hook.Type, hook.Server, config.ToolServerName)
+				}
+				out[event] = append(out[event], hook)
+			}
+		}
+	}
+	return out, nil
+}
+
+// play plays every hook at event as Claude Code does on the main agent's own
+// boundary: a call of its tool over the run's bridge session, its input's
+// ${hook_event_name} and ${agent_id} filled in (the main agent's id is empty).
+// Each answer's transcript line is printed as the CLI prints it, and what they
+// hand the model is answered, joined. A call that fails is the run's failure:
+// the bridge answers this tool with text always.
+func (h codingHooks) play(ctx context.Context, session *mcp.ClientSession, event string,
+	stream codingStream) (string, error) {
+	var notes []string
+	for _, hook := range h[event] {
+		args := map[string]any{}
+		for k, v := range hook.Input {
+			v = strings.ReplaceAll(v, "${hook_event_name}", event)
+			args[k] = strings.ReplaceAll(v, "${agent_id}", "")
+		}
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: hook.Tool, Arguments: args})
+		if err != nil {
+			return "", fmt.Errorf("the %s hook's call of %s: %w", event, hook.Tool, err)
+		}
+		answer := callText(res)
+		if res.IsError {
+			return "", fmt.Errorf("the %s hook's call of %s answered an error: %s", event, hook.Tool, answer)
+		}
+		if strings.TrimSpace(answer) == "" {
+			continue
+		}
+		var out struct {
+			HookSpecificOutput struct {
+				AdditionalContext string `json:"additionalContext"`
+			} `json:"hookSpecificOutput"`
+			SystemMessage string `json:"systemMessage"`
+		}
+		if err := json.Unmarshal([]byte(answer), &out); err != nil {
+			return "", fmt.Errorf("the %s hook's answer is not a hook's JSON: %w: %s", event, err, answer)
+		}
+		if out.SystemMessage != "" {
+			stream.line(map[string]any{"type": "system", "subtype": "informational",
+				"content": event + " says: " + out.SystemMessage, "level": "notice",
+				"session_id": codingSession})
+		}
+		if note := out.HookSpecificOutput.AdditionalContext; note != "" {
+			notes = append(notes, note)
+		}
+	}
+	return strings.Join(notes, "\n\n"), nil
+}
+
+// codingAskFinish plays a [codingModeAsk] run's Stop hooks, over a session it
+// opens on the seat's bridge for them alone, where it was handed any. It asks
+// no model, so a note one hands back goes no further than the CLI's own
+// transcript line.
+func codingAskFinish(ctx context.Context, args codingArgs, hooks codingHooks, stream codingStream) error {
+	if len(hooks[codingEventFinish]) == 0 {
+		return nil
+	}
+	bridge, err := bridgeURL(args.mcpConfig)
+	if err != nil {
+		return err
+	}
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "claude", Version: "e2e"}, nil).
+		Connect(ctx, &mcp.StreamableClientTransport{Endpoint: bridge, HTTPClient: httpx.Client(0)}, nil)
+	if err != nil {
+		return fmt.Errorf("connecting to the bridge at %s for the run's Stop hook: %w", bridge, err)
+	}
+	defer func() { _ = session.Close() }()
+	_, err = hooks.play(ctx, session, codingEventFinish, stream)
+	return err
 }
 
 // toldHowToAsk reports whether the run's standing instructions — its system
@@ -477,8 +694,11 @@ func toldHowToAsk(args codingArgs) (bool, error) {
 }
 
 // codingHeldSubmit is a released [codingModeHeld] run's one call: its
-// submission, over a session it opens on the seat's bridge now.
-func codingHeldSubmit(ctx context.Context, args codingArgs, stream codingStream) error {
+// submission, over a session it opens on the seat's bridge now — and the run's
+// hooks after it, which take any note a person sent while it was held. It asks
+// no model, so a note goes no further than the CLI's own transcript line; the
+// record of its reading is the engine's.
+func codingHeldSubmit(ctx context.Context, args codingArgs, hooks codingHooks, stream codingStream) error {
 	bridge, err := bridgeURL(args.mcpConfig)
 	if err != nil {
 		return err
@@ -501,8 +721,12 @@ func codingHeldSubmit(ctx context.Context, args codingArgs, stream codingStream)
 	if failed {
 		return fmt.Errorf("submitting over the bridge after the release: %s", out)
 	}
+	if _, err := hooks.play(ctx, session, codingEventToolBatch, stream); err != nil {
+		return err
+	}
 	stream.text(codingHeldReport)
-	return nil
+	_, err = hooks.play(ctx, session, codingEventFinish, stream)
+	return err
 }
 
 // bridgeURL is the seat's tool bridge, read off the MCP config the runner

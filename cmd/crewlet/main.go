@@ -1690,6 +1690,13 @@ type httpSurface struct {
 	// the ingress role. Closed before any listener, so its open streams end
 	// rather than holding a listener's grace.
 	assistant *assistantNode
+
+	// bridge is the engine's tool bridge, nil on a node that builds none.
+	// Shut down before any listener, for the assistant's reason: a coding
+	// run's poll for its notes is held open for seconds
+	// (internal/api/mcpbridge), and a held poll is a request a listener's
+	// grace would otherwise wait out.
+	bridge *mcpbridge.Bridge
 }
 
 // apiListener is one socket a node binds, the server serving it, and the slot
@@ -1735,6 +1742,12 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 	// and a stream is a request a listener's grace would otherwise wait out
 	// whole. The engine its ends are written to has not been torn down yet.
 	closeAssistant(ctx, s.assistant, log)
+	// AND EVERY HELD POLL FOR A RUN'S NOTES, for the same reason — one this
+	// node serves from its own opening and one it relays to the session's
+	// holder alike: released at once and turned away as a 503 the CLI pauses
+	// on before it polls again, on this node's successor once it has the
+	// seat. A relayed tool call or read is left to finish within the grace.
+	s.bridge.Shutdown()
 	// THE ARTIFACT ORIGIN FIRST: it serves no probe, and an artifact frame
 	// is the request most able to wait for a node that is going away.
 	if s.artifacts != nil {
@@ -2661,7 +2674,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	runs.Start(ctx)
 
 	surface := &httpSurface{app: app, projector: projector, runs: runs, auth: humans.SignIn,
-		assistant: assistantSvc}
+		assistant: assistantSvc, bridge: e.Bridge()}
 	// THE PUBLIC LISTENER WAS BOUND BY THE SAME RULE THE APP SERVES ONE BY
 	// ([api.PublicListener]), and a disagreement is a node that would serve
 	// its webhooks on no socket, or leave one bound that answers `starting`

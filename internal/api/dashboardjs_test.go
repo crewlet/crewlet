@@ -1129,8 +1129,12 @@ const (
 	// rather than drawn as a card (ADR-0061): the renderer saying which run
 	// of prose opens its block, in the shared Markdown module the entry
 	// loads, took it to 349.1 KiB. 350 KiB, still under two seconds on that
-	// link.
-	initialBudget = 350 << 10
+	// link. Steering a turn whose coding run is out, merged beside it, took it
+	// to 350.0 KiB, past it by bytes: the shared write hook reads a press
+	// label's own sentence for its receipt (`landed`, which says when a note
+	// is read), in the seats chunk the entry loads. 351 KiB, still under two
+	// seconds on that link.
+	initialBudget = 351 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1298,8 +1302,14 @@ const (
 	// the live view's chunk and the runs board's, a seat whose last turn "was
 	// stopped" in the profile's, the task's "stopped by a person" pill in the
 	// worklet's, and the pause dialog's words in the writes chunk. 4604 KiB,
-	// which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 508<<10
+	// which still refuses a doubled baseline. Steering a turn whose coding run
+	// is out, merged beside it, took it to 4604.8 KiB: Steer offered on a
+	// parked turn with the toast saying when the note is read (`lib/steer.ts`,
+	// and the press label that reads its receipt in the shared write hook),
+	// and a note read inside a run drawn on the run's bar in the words of its
+	// step, in the live view's chunk. 4605 KiB, which still refuses a doubled
+	// baseline.
+	treeBudget = 4<<20 + 509<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -45,7 +45,7 @@ func TestALaunchDialsTheBridgeWhereItsCellReachesIt(t *testing.T) {
 				model: "claude-golden", runIn: tc.runIn})
 			e, jobs := launchRig(t, c, hostOnlyBridge(t))
 			l := launcherOn(e, c, seat, "t1")
-			err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+			_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
 			if tc.refuse {
 				if err == nil {
 					t.Fatal("a box off this host launched with only a loopback address to dial")
@@ -148,7 +148,7 @@ func TestAnExecutorIsRefusedOnANodeWithNoBridge(t *testing.T) {
 	e, jobs := launchRig(t, c, hostOnlyBridge(t))
 	e.bridge = nil
 	l := launcherOn(e, c, seat, "t1")
-	err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
+	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
 	if err == nil || !strings.Contains(err.Error(), mcpbridge.BaseURLVar) {
 		t.Fatalf("a launch on a node with no bridge = %v, want it refused naming %s",
 			err, mcpbridge.BaseURLVar)

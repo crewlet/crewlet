@@ -410,7 +410,7 @@ func operatorSurface(e *engine.Engine, authority authz.Chart) (*operator.Server,
 		// SIGNED WITH THE NODE'S OWN STEER CHANNEL, the one its desk
 		// answers with: the running node offers a note as the person it
 		// names on this node's decision, so neither half may be unsigned.
-		Steer: builtin.SteerDeps{Asker: e.Backends().Queue, Wire: e.SteerWire()},
+		Steer: builtin.SteerDeps{Asker: e.Backends().Queue, Wire: e.SteerWire(), Runs: e.RunSteers()},
 		Answer: builtin.AnswerDeps{
 			Models: engine.AnswerModels(e), Budget: engine.AnswerBudget(e),
 			Corpus: e.KnowledgeCorpus,

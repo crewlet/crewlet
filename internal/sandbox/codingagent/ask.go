@@ -141,7 +141,8 @@ func AskInstruction(roster []string, manager string) string {
 }
 
 // FindingsInstruction is the standing instruction requiring a durable report,
-// the last part of a run's system text ([finalSystem]).
+// the last part of the system text the runner composes ([finalSystem]) — which
+// only a CLI's instruction about notes follows ([withNoteInstruction]).
 //
 // The coding agent is NOT the last step: its findings go back to the Crewlet
 // agent, which continues the same task. The streamed final message can be lost

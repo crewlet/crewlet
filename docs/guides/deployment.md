@@ -1008,6 +1008,17 @@ port public for every company running remote sandboxes. Point
 `CREWLET_SANDBOX_OTEL_RECEIVER_URL` and `CREWLET_MCP_BRIDGE_URL` at the public
 address.
 
+**A proxy in front of the bridge needs a request timeout of at least 15
+seconds.** Beside a run's tool calls, the bridge serves the run's poll for its
+turn's [notes](../concepts/code-sandbox.md#notes-to-a-running-run)
+(`/mcp/{token}/steer/notes`), which it holds for up to ten seconds while no note
+waits — under Envoy's default route timeout of fifteen, which is the tightest
+common default. A proxy that cuts a request sooner turns each held poll into a
+failed request, which the run's notes plugin waits on before it asks again — a
+second, doubling to thirty while the failures go on — so a note can reach the
+run up to about thirty seconds late. Nothing is lost: a note waits on the run's
+record until something reads it, and reaches the run's review either way.
+
 **Why the probes are not.** `/health` describes the node — its version, its
 seats, its posture — for whoever runs it, and an orchestrator or a load balancer
 can probe a port other than the one it routes traffic to. Point the public load

@@ -120,9 +120,9 @@ func TestACarriedOnJobIsNumberedAfterTheAskingJobsCalls(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	var told []OpenedJob
-	opened := func(job OpenedJob) (map[string]MCPServer, error) {
+	opened := func(job OpenedJob) (Opening, error) {
 		told = append(told, job)
-		return nil, nil
+		return Opening{}, nil
 	}
 	askAndAnswerAfter(t, rig, false, []BridgeCall{
 		// FINISHED OUT OF ORDER: the call made last returned first.
