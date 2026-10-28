@@ -818,6 +818,121 @@ func TestTheCanaryRefusesAChainOverTheWrongBase(t *testing.T) {
 	})
 }
 
+// A CANARY THAT COULD NOT READ THE CHAIN REFUSES NOTHING: the canary tells a
+// layer over the wrong base from a sound one only once git has read the chain
+// through its bitmap — exited with a status that is not its answer, or named
+// damage. One the read lane did not admit within SlotWait, every read slot
+// held by the requests the lane serves, read nothing: the layers it was to
+// judge are not placed, and are the installer's to try again — never refused
+// corrupt while the rows name them, which kept them off the node until the
+// maintainer's next publication or a restart, and counted a busy node's
+// layers as damage.
+//
+//   - "in place": a cold copy's first full round places its chain in place;
+//     its canary refused a slot, the round answers from the layers below the
+//     chain's first (none here), and the installer places the chain once the
+//     lane has room.
+//   - "by a swap": the installer's swap places a delta's chain; its canary
+//     refused a slot, the try waits installRetryBase as one that may pass
+//     does, and the next places the chain.
+//
+// Mutation: take any failure of the canary for its verdict (canary answering
+// errChainUnsound whatever its git's error) — every layer is refused corrupt.
+func TestACanaryThatCouldNotReadTheChainRefusesNothing(t *testing.T) {
+	t.Parallel()
+	// busy holds every slot of w's read lane while the first canary waits
+	// for one, and lets them go once its git has ended: refused ErrBusy
+	// after SlotWait, as on a node whose requests fill the lane.
+	busy := func(t *testing.T, w *syncWorld) func(*cache.Options) {
+		var once atomic.Bool
+		return cache.CanaryRunningWith(func(string) func() {
+			if !once.CompareAndSwap(false, true) {
+				return func() {}
+			}
+			var holds []func()
+			for range w.pool.Slots(gitproc.ClassRead) {
+				release, err := w.pool.HoldRead(context.Background())
+				if err != nil {
+					t.Errorf("holding a read slot for the canary to wait behind: %v", err)
+					break
+				}
+				holds = append(holds, release)
+			}
+			return func() {
+				for _, release := range holds {
+					release()
+				}
+			}
+		})
+	}
+	nothingRefused := func(t *testing.T, w *syncWorld, c *cache.Cache, repo string) {
+		t.Helper()
+		if got := cache.Refused(c, repo); len(got) != 0 {
+			t.Errorf("the layers its canary could not read are refused %v, want none", got)
+		}
+		if got := w.layerCount("corrupt"); got != 0 {
+			t.Errorf("crewlet.code.cache.layers{outcome=corrupt} = %d, want none", got)
+		}
+		if got := cache.Installed(c, repo); len(got) != 0 {
+			t.Errorf("the copy holds %v, which no canary read", layerIDs(got))
+		}
+	}
+	placed := func(t *testing.T, w *syncWorld, c *cache.Cache, repo string, chain []code.LayerRef) {
+		t.Helper()
+		if got := layerIDs(cache.Installed(c, repo)); !slices.Equal(got, layerIDs(chain)) {
+			t.Fatalf("the installer's next try left the copy holding %v, want %v", got, layerIDs(chain))
+		}
+		readsThroughTheBitmap(t, w.sync(t, c, repo).Dir)
+	}
+
+	t.Run("in place", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		p := w.pushN(t, repo, 2)
+		chain := w.buildChain(t, p)
+		w.log.publish(repo, chain, nil)
+		c := w.open(t, busy(t, w))
+		w.sync(t, c, repo).Release()
+		nothingRefused(t, w, c, repo)
+		if got := w.layerCount("failed"); got != uint64(len(chain)) {
+			t.Errorf("crewlet.code.cache.layers{outcome=failed} = %d, want %d: a layer a try failed to place",
+				got, len(chain))
+		}
+		if got := len(w.logs.lines(t, "code_layer_install_failed")); got != len(chain) {
+			t.Errorf("code_layer_install_failed logged %d times, want once a layer", got)
+		}
+		cache.InstallPass(c)
+		placed(t, w, c, repo, chain)
+	})
+	t.Run("by a swap", func(t *testing.T) {
+		t.Parallel()
+		w := newSyncWorld(t, onMemory)
+		repo := w.repo(t, 1)
+		p := w.pushN(t, repo, 2)
+		clk := newClock()
+		c := w.open(t, clk.on, busy(t, w))
+		w.sync(t, c, repo).Release()
+		chain := w.buildChain(t, p)
+		w.log.publish(repo, chain, nil)
+		w.sync(t, c, repo).Release()
+		cache.InstallPass(c)
+		nothingRefused(t, w, c, repo)
+		if got := w.layerCount("failed"); got != uint64(len(chain)) {
+			t.Errorf("crewlet.code.cache.layers{outcome=failed} = %d, want %d: a layer a try failed to place",
+				got, len(chain))
+		}
+		at, failures := cache.InstallWait(c, repo)
+		if want := clk.Now().Add(cache.InstallRetryBase); !at.Equal(want) || failures != 1 {
+			t.Fatalf("the try is due again at %v after %d failures, want %v after one: a placement whose canary "+
+				"could not run may pass", at, failures, want)
+		}
+		clk.Set(at)
+		cache.InstallPass(c)
+		placed(t, w, c, repo, chain)
+	})
+}
+
 // A LAYER MISSING FROM THE STORE IS ASKED ABOUT ONCE AT THE LOG'S HEAD: a part
 // the object store holds nothing for may be one a publication replaced since
 // the rows were read, its parts collected — so the installer reads the rows

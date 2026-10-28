@@ -132,6 +132,17 @@ func ChainLinesWith(f func(ids []string) []string) func(*Options) {
 	}
 }
 
+// CanaryRunningWith makes every placement's canary call f with the directory
+// it reads as it is about to run, and what f answers once its git has ended.
+func CanaryRunningWith(f func(dir string) func()) func(*Options) {
+	return func(o *Options) {
+		if o.knobs == nil {
+			o.knobs = &knobs{}
+		}
+		o.knobs.canaryRunning = f
+	}
+}
+
 // InstallWakesWith makes the installer wait on f's channel, told when its
 // earliest wait ends, in place of a timer.
 func InstallWakesWith(o *Options, f func(at time.Time) <-chan time.Time) {

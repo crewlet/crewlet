@@ -165,6 +165,12 @@ type knobs struct {
 	// lists in place of the ids installed: a case writes one in another
 	// order, a chain over the wrong base, for the canary to meet (M16).
 	chainLines func(ids []string) []string
+	// canaryRunning, when set, runs as a placement's canary is about to read
+	// the chain at dir — a swap's staged directory, or the incarnation's own
+	// for a placement in place — and the function it answers once the
+	// canary's git has ended: a case holds every slot of the read lane
+	// between the two, as requests filling it past SlotWait do.
+	canaryRunning func(dir string) func()
 	// verifyWaits runs as Verify is about to wait for the repository's
 	// rounds before listing the incarnation at dir.
 	verifyWaits func(dir string)

@@ -99,7 +99,9 @@ import (
 // that uses the bitmap ("invalid MIDX object position, MIDX is likely
 // corrupt"), which CheckLayer, reading each file alone, cannot see; the
 // canary is one bitmapped walk, 0.004 s with no tail and 0.35 s with sixteen
-// packs outside the chain.
+// packs outside the chain. Its verdict is git's alone: a canary that read
+// nothing of the chain — the read lane full past SlotWait, its deadline —
+// refuses nothing, and what it was to judge is tried again.
 //
 // A LAYER MISSING, CORRUPT OR FROM A NEWER GIT IS REFUSED, never an error: the
 // copy serves from the prefix below it, or in own mode, and the layer and every
@@ -143,8 +145,9 @@ const (
 	// not read.
 	layerNewerGit layerOutcome = "newer_git"
 	// layerFailed: the store failing to answer, this node's disk failing a
-	// write, or a missing part the log's head could not be read about: tried
-	// again, and counted once a try.
+	// write, a missing part the log's head could not be read about, or a
+	// placement whose canary read nothing of the chain: tried again, and
+	// counted once a try.
 	layerFailed layerOutcome = "failed"
 )
 
@@ -1133,9 +1136,10 @@ type layerFetch struct {
 // the fetch replaces (dropFor, EventLayersMoved: before anything of the new
 // chain is visible); every fetched layer's files are renamed in; both chain
 // files are written over rows; and, where the placement added a layer the copy
-// did not hold, the CANARY reads through the chain's bitmap — a failure
-// refuses every layer it added as corrupt and puts the chain back to the
-// layers below the first of them, before any reader is handed the
+// did not hold, the CANARY reads through the chain's bitmap — its verdict that
+// the chain is unsound refuses every layer it added as corrupt, a canary that
+// read nothing of it leaves them to the installer, and either puts the chain
+// back to the layers below the first of them, before any reader is handed the
 // incarnation. It answers the chain placed. held is the packs the copy holds,
 // by checksum, with their rows' figures (recordInstalled). e.mu is not held;
 // the round's write lock is.
@@ -1172,16 +1176,30 @@ func (c *Cache) placeInPlace(ctx context.Context, e *entry, inc *incarnation, ro
 	if len(added) > 0 {
 		if err := c.canary(ctx, e, inc, inc.dir, tail, tips); err != nil {
 			// A layer above its base is valid only over that base, so every
-			// layer from the first added up goes with it.
+			// layer from the first added up goes with it: refused as corrupt
+			// where the canary found the chain unsound, and otherwise — a
+			// canary that read nothing of it — the installer's to try again,
+			// which the round's end kicks (installDue) while the round
+			// answers from the layers below.
 			first := slices.IndexFunc(rows, func(r code.LayerRow) bool { return sameLayer(r, added[0]) })
-			e.mu.Lock()
-			for _, r := range added {
-				c.refuse(e, inc, r, layerCorrupt, err.Error())
+			outcome := layerFailed
+			if errors.Is(err, errChainUnsound) {
+				outcome = layerCorrupt
+				e.mu.Lock()
+				for _, r := range added {
+					c.refuse(e, inc, r, layerCorrupt, err.Error())
+				}
+				e.mu.Unlock()
+			} else {
+				for _, r := range added {
+					c.log.Warn("code_layer_install_failed", "repo", e.id, "layer", r.Layer.LayerID, "seq", r.Seq,
+						"outcome", string(layerFailed), "error", err)
+				}
+				c.countLayers(layerFailed, len(added))
 			}
-			e.mu.Unlock()
 			for _, st := range fetched {
 				if slices.ContainsFunc(added, func(r code.LayerRow) bool { return sameLayer(r, st.row) }) {
-					c.observeInstall(layerCorrupt, time.Since(st.began))
+					c.observeInstall(outcome, time.Since(st.began))
 				}
 			}
 			var gone []string
@@ -1476,8 +1494,21 @@ func (c *Cache) cutChain(e *entry, inc *incarnation, k int, why Event) error {
 // file names no base, so one placed over the wrong base passes
 // `multi-pack-index verify` and fails the first bitmapped read ("invalid MIDX
 // object position, MIDX is likely corrupt"): what this reads, and what
-// code.CheckLayer, reading each file alone, cannot. It fails when git exits
-// non-zero or names damage (gitproc.Result.Damage).
+// code.CheckLayer, reading each file alone, cannot.
+//
+// ITS VERDICT IS GIT'S, AND ONLY GIT'S: errChainUnsound where git read the
+// chain and exited with a status that is not its answer (gitproc.ExitError)
+// or named damage (gitproc.Result.Damage), and nil where it read it whole.
+// Any other failure — no read slot within SlotWait while the requests the
+// lane serves fill it, the deadline, the cache stopping — is no verdict: git
+// never finished a read of the chain, and what stopped it says nothing of the
+// layers. The placement then places none of what it added — a swap fails at
+// this step as at a write its disk failed, and a placement in place puts the
+// chain back below them — and they are the installer's to try again behind
+// its wait. Taken for a verdict, they were refused corrupt: kept off the node
+// until the maintainer's next publication or a restart, a busy node's layers
+// counted as damage, and a copy whose root went that way left in own mode,
+// its whole index the maintainer's to write on a node already short of cores.
 //
 // WHAT IT REPORTS IS THE PLACEMENT'S: it runs naming a reader of inc
 // (gitproc.Cmd.Repairer) whose reports the observer holds rather than makes
@@ -1497,6 +1528,9 @@ func (c *Cache) canary(ctx context.Context, e *entry, inc *incarnation, dir stri
 		delete(inc.held, by)
 		e.mu.Unlock()
 	}()
+	if c.knobs != nil && c.knobs.canaryRunning != nil {
+		defer c.knobs.canaryRunning(dir)()
+	}
 	// Each argument list a literal at its run, so the writers gate reads it.
 	deadline := gitproc.ReadDeadline + gitproc.HistoryWalk(tail)
 	var res gitproc.Result
@@ -1513,14 +1547,21 @@ func (c *Cache) canary(ctx context.Context, e *entry, inc *incarnation, dir stri
 			Args: []string{"rev-list", "--objects", "--use-bitmap-index", "--count", "--all"},
 		})
 	}
+	var exit *gitproc.ExitError
 	switch {
+	case errors.As(err, &exit):
+		return fmt.Errorf("%w: %w", errChainUnsound, err)
 	case err != nil:
-		return fmt.Errorf("cache: the chain's canary: %w", err)
+		return fmt.Errorf("cache: the chain's canary read nothing of it: %w", err)
 	case res.Damage != nil:
-		return fmt.Errorf("cache: the chain's canary read damage: %w", res.Damage)
+		return fmt.Errorf("%w: git read damage: %w", errChainUnsound, res.Damage)
 	}
 	return nil
 }
+
+// errChainUnsound is a canary's verdict that the chain it read is not sound:
+// what refuses every layer its placement added as corrupt (canary).
+var errChainUnsound = errors.New("cache: the chain's canary found it unsound")
 
 // tailObjects is the objects of packs no layer of rows names: what a walk of
 // the copy reads outside the chain's bitmap. live is the live packs, by
@@ -2048,7 +2089,8 @@ type installEnd struct {
 	moved bool
 	// stop is the fetch that stopped the chain, nil where none did;
 	// undecided the read at the log's head that failed where a missing part
-	// could not be decided; swapFailed a placement this node's disk failed;
+	// could not be decided; swapFailed a placement whose swap failed at a
+	// step — a write this node's disk failed, or a canary that read nothing;
 	// and stale the layers of the installed chain the rows no longer name
 	// still standing in, as installed.
 	stop       *layerFetch
@@ -2167,8 +2209,10 @@ func (c *Cache) installRepo(ctx context.Context, id string) installEnd {
 			// fetches is one its copy does not hold — which is definite: the
 			// next plan stops below it.
 		default:
-			// This node's disk failing the swap's writes (logged
-			// code_cache_swap_failed by it): every layer it was to place
+			// A step of the swap failing (logged code_cache_swap_failed by
+			// it) — this node's disk failing a write, or the canary reading
+			// nothing of the chain (no read slot within SlotWait, its
+			// deadline), which is no verdict: every layer it was to place
 			// failed, and is tried again behind the wait.
 			swapFailed = true
 			for _, st := range fetched {

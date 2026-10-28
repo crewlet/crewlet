@@ -164,10 +164,12 @@ const (
 // one's index is written over the next incarnation, which holds exactly its
 // packs — or the zero snapshot where it applied none.
 //
-// A PLACEMENT WHOSE CANARY FAILS IS ABANDONED: every layer it added is
-// refused as corrupt, and the swap is made again for what else it was for —
-// packs leaving — with the chain the copy holds carried as it stands, so one
-// bad layer undoes none of the round's own work. Whatever the placement
+// A PLACEMENT WHOSE CANARY FINDS THE CHAIN UNSOUND IS ABANDONED: every layer
+// it added is refused as corrupt, and the swap is made again for what else it
+// was for — packs leaving — with the chain the copy holds carried as it
+// stands, so one bad layer undoes none of the round's own work. A canary that
+// read nothing of the chain is no verdict, and fails the swap at its step as
+// a write the disk failed does (layers.go's canary). Whatever the placement
 // fetched and no swap placed goes from tmp/.
 func (c *Cache) swapLeaving(ctx context.Context, e *entry, inc *incarnation, snap snapshot,
 	step *layerStep) *incarnation {
@@ -205,8 +207,9 @@ func (c *Cache) swapLeaving(ctx context.Context, e *entry, inc *incarnation, sna
 	}
 }
 
-// canaryFailed is a placement's canary failing in the staged incarnation: the
-// layers the placement added, and what the canary met.
+// canaryFailed is a placement's canary finding the chain staged in the next
+// incarnation unsound (errChainUnsound): the layers the placement added, and
+// what the canary met.
 type canaryFailed struct {
 	added []code.LayerRow
 	err   error
@@ -576,14 +579,17 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 	// 5b. THE CANARY (layers.go), where the placement added a layer: one
 	// bitmapped walk in the staged directory before the rename that makes
 	// the chain visible — a layer over the wrong base passes every check of
-	// its own files and fails the first read through its bitmap. A failure
-	// abandons the placement (swapLeaving), its added layers refused — before
-	// the staging is synced, which a placement abandoned would have spent.
-	// The installer's placement walks in the installer's share of the read
-	// lane for canaries (takeInstallRead), behind the serving — never behind
-	// its checks' hashing, since this swap holds the repository's write lock,
-	// which the repository's rounds wait for; a round's, which a reader waits
-	// on, in the lane as the round's other reads do.
+	// its own files and fails the first read through its bitmap. Its verdict
+	// that the chain is unsound abandons the placement (swapLeaving), its
+	// added layers refused — before the staging is synced, which a placement
+	// abandoned would have spent; a canary that read nothing of the chain (no
+	// read slot within SlotWait, its deadline) is no verdict, and fails the
+	// swap here, as a write the disk failed would, for the layers to be tried
+	// again. The installer's placement walks in the installer's share of the
+	// read lane for canaries (takeInstallRead), behind the serving — never
+	// behind its checks' hashing, since this swap holds the repository's
+	// write lock, which the repository's rounds wait for; a round's, which a
+	// reader waits on, in the lane as the round's other reads do.
 	if len(s.added) > 0 {
 		s.step = stepCanary
 		objects := make(map[string]int64, len(s.packs))
@@ -598,8 +604,11 @@ func (s *swapping) run(ctx context.Context) (*incarnation, error) {
 		}
 		err = c.canary(ctx, e, inc, s.staged, tailObjects(s.chain, objects), nil)
 		share()
-		if err != nil {
+		switch {
+		case errors.Is(err, errChainUnsound):
 			return nil, &canaryFailed{added: s.added, err: err}
+		case err != nil:
+			return nil, err
 		}
 	}
 
