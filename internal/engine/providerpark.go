@@ -332,7 +332,7 @@ func (e *Engine) parkResumeOnLimit(ctx context.Context, handle string, err error
 // providerParkRefusal is what a resume on handle's seat is refused for while
 // this node has the seat parked on its models' limit: [waitProvider], which
 // the park's release signals, until the instant the chain's probe makes its
-// next call. False for a seat not parked here.
+// next call where that is still to come. False for a seat not parked here.
 //
 // EVERY RESUME, WHICHEVER CHAIN ITS FIRST CALL TAKES. A park is this node's
 // word that the seat waits for its models, and a resume is a turn. The case it
@@ -341,6 +341,18 @@ func (e *Engine) parkResumeOnLimit(ctx context.Context, handle string, err error
 // ([Engine.providerRefusing]) admits it the moment its own hold's instant
 // passes, and it was collected and reviewed again, and its box launched again,
 // into a window the probe had just found still spent.
+//
+// AN INSTANT STILL TO COME, OR NONE. A refusal's Until is when it lifts on the
+// clock alone, and an answer's retry re-checks at it
+// ([sandbox.Coordinator.waitOwed]). From the instant the probe's alarm fires
+// until its call comes back, a full run of the entry's CLI, that instant is
+// past and the park still stands: named, it told every answer waiting on the
+// seat to re-check at once, and each one did, thousands of times a second for
+// as long as the call was out, every pass re-reading its run, opening its
+// answer's seal, taking and giving back the node's admission and saying so in
+// the log. A probe that is due or asking names nothing ([Engine.limitProbeNext]),
+// because what ends that wait is its answer: the park's release, which signals
+// [waitProvider], or a renewal, whose instant the next check is told.
 func (e *Engine) providerParkRefusal(handle string) (sandbox.Refusal, bool) {
 	seat, err := e.seatID(handle)
 	if err != nil {
@@ -350,25 +362,28 @@ func (e *Engine) providerParkRefusal(handle string) (sandbox.Refusal, bool) {
 	if parking == nil {
 		return sandbox.Refusal{}, false
 	}
-	due := e.limitProbeDue(parking.basis)
+	next := e.limitProbeNext(parking.basis)
 	reason := "provider limit: " + strings.Join(parking.basis.keys, " -> ") +
 		", the seat parked until its models answer"
-	if !due.IsZero() {
-		reason = limitReason(parking.basis.keys, due)
+	if !next.IsZero() {
+		reason = limitReason(parking.basis.keys, next)
 	}
-	return sandbox.Refusal{Condition: waitProvider, Reason: reason, Until: due}, true
+	return sandbox.Refusal{Condition: waitProvider, Reason: reason, Until: next}, true
 }
 
-// limitProbeDue is when the probe of the chain basis names makes its next
-// call, zero where it has none armed.
-func (e *Engine) limitProbeDue(basis providerBasis) time.Time {
+// limitProbeNext is when the probe of the chain basis names makes its next
+// call, where that is still to come: zero where it has no probe, or where its
+// call is out or due now, whose answer releases the parks (a signal) or renews
+// them (a new instant) — see [Engine.providerParkRefusal].
+func (e *Engine) limitProbeNext(basis providerBasis) time.Time {
 	p := &e.limitProbes
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if probe := p.probes[probeKeyOf(basis)]; probe != nil {
-		return probe.until
+	probe := p.probes[probeKeyOf(basis)]
+	if probe == nil || probe.call != nil || !probe.until.After(e.now()) {
+		return time.Time{}
 	}
-	return time.Time{}
+	return probe.until
 }
 
 // joinLimitProbe puts seat on the probe of the chain basis names, creating the
