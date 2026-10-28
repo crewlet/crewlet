@@ -68,7 +68,7 @@
 // read, never linearizable: the committer holds every input to its own
 // snapshot and refuses a plan from an older one `stale`, so a barrier would
 // buy nothing — and at 250 000 pushes a day a compaction's barriers would be
-// some 31 000 records a day on the code log, over a third of its git clients'
+// some 17 000 records a day on the code log, a fifth of its git clients'
 // census at the gibibyte floor.
 //
 // # The build's bounds

@@ -414,11 +414,13 @@ decides a push
 ([ADR-0060](https://github.com/crewlet/crewlet/blob/main/adr/0060-a-compaction-merges-packs-without-judging-reachability.md)).
 
 **The roll.** Once a minute every git node lists the repositories holding
-eight live packs or more, most packs first, judges whose home each is against
+sixteen live packs or more, most packs first, judges whose home each is against
 one reading of the live git nodes, and for each it is home for it
 plans git's own geometric split — the one `git repack --geometric=2` makes —
 over the packs that are not FULL: the lightest are merged until every pack
-left weighs at least twice the objects of all the lighter ones together. A
+left weighs at least twice the objects of all the lighter ones together, and
+only where that takes sixteen packs or more, so a repository pushed a pack at a
+time is merged sixteen pushes at a time rather than at every poll. A
 pack is full once its pack section, or its whole bundle, is at seven eighths of
 the 1 GiB a merge cuts its outputs at, and a full pack is never merged again.
 A repository holding more than 50 packs that are not full is merged two packs

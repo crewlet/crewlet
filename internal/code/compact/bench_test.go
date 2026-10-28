@@ -76,26 +76,36 @@ import (
 //     one-commit pushes of 20 KB through the data node's committer, 300 to a
 //     simulated minute, and a pass of the home's compactor merging at that
 //     many packs at every minute, while the other git node syncs after every
-//     push and every pass, as a node serving the repository's fetches does.
-//     min-merge=8, the production floor, is the STEADY arm: push-KB is what
-//     a push's pack weighed — its file, its commit and its two trees — which
-//     every figure over the bytes pushed divides by; its max-live-packs must
-//     stay under code.CompactTargetPacks plus a minute's pushes, which
-//     confirms Poll; retired/push is the roll's ρ;
-//     rewrite-B/pushed-B what the outputs weigh over what was pushed, O(log n)
-//     at factor 2; record-B/push the compactions' records on the code log a
-//     push, their signed frames included; and got-B/pushed-B what the other
-//     git node downloads over what was pushed, about 1 + log₂(the largest
-//     merged pack ÷ a push's) — stated in scaling.md (M3-decisions M3-O63).
-//     Every arm states, per 1 000 pushes, the GETs a cold sync of the result
-//     makes (cold-gets/kpush, cold-MB/kpush), the compactions' PUTs
+//     push and every pass, as a node serving the repository's fetches does —
+//     a BUSY repository, whose every pass finds the minute's three hundred
+//     packs whatever its floor. min-merge=16, the production floor, is the
+//     STEADY arm: push-KB is what a push's pack weighed — its file, its
+//     commit and its two trees — which every figure over the bytes pushed
+//     divides by; its max-live-packs must stay under code.CompactTargetPacks
+//     plus a minute's pushes, which confirms Poll; retired/push is the roll's
+//     ρ; rewrite-B/pushed-B what the outputs weigh over what was pushed,
+//     O(log n) at factor 2; record-B/push the compactions' records on the
+//     code log a push, their signed frames included; and got-B/pushed-B what
+//     the other git node downloads over what was pushed, about 1 + log₂(the
+//     largest merged pack ÷ a push's) — stated in scaling.md (M3-decisions
+//     M3-O63). Every arm states, per 1 000 pushes, the GETs a cold sync of
+//     the result makes (cold-gets/kpush, cold-MB/kpush), the compactions' PUTs
 //     (puts/kpush, put-MB/kpush) and the GETs every git node but the builder
 //     makes of their outputs on a fleet of eight (fleet-gets/kpush,
 //     fleet-MB/kpush: the measured node's times seven, since each runs the
-//     same rounds over the same rows) — requests, S3's billing unit, and bytes,
-//     which a node's disk writes. code.CompactMinMerge is the floor with the
-//     fewest GETs and PUTs a thousand pushes; 8 is kept unless another floor
-//     has 10 % fewer.
+//     same rounds over the same rows) — requests, S3's billing unit, and
+//     bytes, which a node's disk writes.
+//   - steady/pushes=1200/rate=1/min/min-merge={4,8,16} (LARGE): the same, a
+//     QUIET repository pushed once a minute, so every floor binds — a merge
+//     waits until that many packs have gathered — and the floors' costs
+//     differ, where at three hundred a minute every floor is passed at every
+//     pass and the three measure alike. code.CompactMinMerge is the floor
+//     with the fewest GETs and PUTs a thousand pushes here, where it saves
+//     more than a tenth of them against the floor before it — 16, which
+//     halved 8's (code's limits.go has each floor's figures). Its
+//     retired/push and record-B/push are a merge at the floor's: the rows
+//     and the records a repository pushed more slowly than its home polls
+//     costs.
 //   - blobs=max_blob/inputs=8 (LARGE): one compaction over eight packs, each a
 //     revision of one blob of the default max_blob_bytes, so the delta search
 //     holds two of them at once: the build's peak anonymous memory (peak-MiB)
@@ -126,7 +136,7 @@ import (
 func BenchmarkCompact(b *testing.B) {
 	quiet(b)
 	b.Run("history=source", benchHistory)
-	b.Run(fmt.Sprintf("steady/pushes=%d/rate=%d/min", steadyPushes, steadyPerMinute), benchSteady)
+	b.Run("steady", benchSteady)
 	b.Run("blobs=max_blob/inputs=8", benchBlobs)
 	for _, packs := range []int{50, 2048} {
 		b.Run(fmt.Sprintf("swap/packs=%d", packs), func(b *testing.B) { benchSwap(b, packs) })
@@ -153,13 +163,8 @@ const (
 	// is taken over a source repository's shape and not a synthetic one.
 	historyBytes = 100_000_000
 
-	// steadyPushes and steadyPerMinute are the steady arm's: 6 000 pushes,
-	// 300 to a simulated minute — the rate the master's confirmation of Poll
-	// is stated at, twenty minutes of it — and steadyPushBytes each push's
-	// new bytes, the 20 KB a push of one commit carries in the figure
-	// scaling.md states.
-	steadyPushes    = 6_000
-	steadyPerMinute = 300
+	// steadyPushBytes is each steady push's new bytes, the 20 KB a push of
+	// one commit carries in the figure scaling.md states.
 	steadyPushBytes = 20_000
 
 	// eightNodes is the fleet the min-merge figures are stated for: one
@@ -670,24 +675,41 @@ func benchCap(b *testing.B, pushes []pushed) {
 	b.ReportMetric(float64(outputs)/float64(cuts), "outputs/cuts")
 }
 
-// benchSteady is steady/…/min-merge={4,8,16}: one pool of one-commit pushes,
-// built once, landed by each arm into a repository of its own on a fleet of
-// its own, a pass of the home's compactor a simulated minute.
+// steadyRates are the steady arms' repositories, each with its reason:
+// pushes landed, and how many to a simulated minute — a pass of the home's
+// compactor at every minute.
+var steadyRates = []struct{ pushes, perMinute int }{
+	// BUSY: 300 a minute, the rate the master's confirmation of Poll is
+	// stated at, twenty minutes of it.
+	{pushes: 6_000, perMinute: 300},
+	// QUIET: one a minute, so every pass finds one pack more and every floor
+	// binds — twenty hours of it, about seventy-five merges at the highest
+	// floor.
+	{pushes: 1_200, perMinute: 1},
+}
+
+// benchSteady is steady/…/min-merge={4,8,16}: for each of steadyRates, one
+// pool of one-commit pushes, built once, landed by each arm into a repository
+// of its own on a fleet of its own, a pass of the home's compactor a simulated
+// minute.
 func benchSteady(b *testing.B) {
-	gittest.Large(b, fmt.Sprintf("%d one-commit pushes packed, then landed, synced and compacted three times",
-		steadyPushes))
+	gittest.Large(b, "one-commit pushes packed, then landed, synced and compacted at each floor")
 	gittest.RequireNode(b)
 	client := gittest.NewClient(b)
-	src := gittest.Empty(b)
-	commits := extend(b, client, src, "", 0, steadyPushes, steadyPushBytes)
-	pushes := commitPushes(b, client, src, code.ZeroOID, commits)
-	for _, minMerge := range []int{4, 8, 16} {
-		b.Run(fmt.Sprintf("min-merge=%d", minMerge), func(b *testing.B) {
-			var fig steadyFigures
-			for b.Loop() {
-				fig = steadyRun(b, pushes, minMerge)
+	for _, rate := range steadyRates {
+		b.Run(fmt.Sprintf("pushes=%d/rate=%d/min", rate.pushes, rate.perMinute), func(b *testing.B) {
+			src := gittest.Empty(b)
+			commits := extend(b, client, src, "", 0, rate.pushes, steadyPushBytes)
+			pushes := commitPushes(b, client, src, code.ZeroOID, commits)
+			for _, minMerge := range []int{4, 8, 16} {
+				b.Run(fmt.Sprintf("min-merge=%d", minMerge), func(b *testing.B) {
+					var fig steadyFigures
+					for b.Loop() {
+						fig = steadyRun(b, pushes, rate.perMinute, minMerge)
+					}
+					fig.report(b)
+				})
 			}
-			fig.report(b)
 		})
 	}
 }
@@ -707,9 +729,9 @@ type steadyFigures struct {
 }
 
 // steadyRun lands pushes into a fresh repository on a fleet of its own, the
-// home's compactor merging at minMerge passing every steadyPerMinute pushes,
-// the other git node syncing after every push and every pass; its figures.
-func steadyRun(b *testing.B, pushes []pushed, minMerge int) steadyFigures {
+// home's compactor merging at minMerge passing every perMinute pushes, the
+// other git node syncing after every push and every pass; its figures.
+func steadyRun(b *testing.B, pushes []pushed, perMinute, minMerge int) steadyFigures {
 	b.Helper()
 	b.StopTimer()
 	f := newBenchFleet(b, 2)
@@ -725,7 +747,7 @@ func steadyRun(b *testing.B, pushes []pushed, minMerge int) steadyFigures {
 		pack, at := f.propose(b, id, p)
 		fig.pushedBytes += pack.Size
 		f.sync(b, other, id, at)
-		if (i+1)%steadyPerMinute != 0 && i != len(pushes)-1 {
+		if (i+1)%perMinute != 0 && i != len(pushes)-1 {
 			continue
 		}
 		cand, ok := f.candidate(b, name)

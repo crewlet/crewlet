@@ -66,13 +66,19 @@ func outputs(before, after codetest.Rows) []code.PackRow {
 	return out
 }
 
-// cutFixture is a repository of ten pushes, each one commit adding five
-// scaledBlob files of random bytes: some 10 MiB of packs, two and a half
-// scaled cuts, whose packs weigh alike, so one roll merges all ten.
+// cutFixture is a repository of code.CompactMinMerge pushes — the fewest one
+// roll merges — of two and a half scaled cuts in all, some 10 MiB, each one
+// commit adding files of random bytes no larger than scaledBlob, whose packs
+// weigh alike, so one roll merges them all whatever the floor.
 func cutFixture(t *testing.T) *fixture {
 	t.Helper()
 	x := newFixture(t)
-	x.pushN(10, scaledBlob, scaledBlob, scaledBlob, scaledBlob, scaledBlob)
+	perPush := 5 * scaledCut / 2 / code.CompactMinMerge
+	files := make([]int, (perPush+scaledBlob-1)/scaledBlob)
+	for i := range files {
+		files[i] = perPush / len(files)
+	}
+	x.pushN(code.CompactMinMerge, files...)
 	return x
 }
 
@@ -80,7 +86,7 @@ func cutFixture(t *testing.T) *fixture {
 // the object that would take it past the cut, so with objects no larger than
 // max_blob_bytes — an eighth of the cut and less — every output but the last
 // is at seven eighths of the cut or past it: full (code.PackRow.Full), merged
-// by no later roll. Ten pushes of two and a half cuts make three outputs.
+// by no later roll. Pushes of two and a half cuts make three outputs.
 //
 // Mutation: cut at code.FullPackBytes' share of the cut rather than at the
 // cut, and the first outputs close under seven eighths.
@@ -90,11 +96,11 @@ func TestEveryCutOutputButTheLastIsFull(t *testing.T) {
 	c, _, _ := x.scaled(nil)
 	before := x.rows()
 	if out, err := compactWhileBusy(t, c, x.candidate()); out != compact.OutcomeApplied {
-		t.Fatalf("the compaction of ten pushes: %s, %v; want applied", out, err)
+		t.Fatalf("the compaction of %d pushes: %s, %v; want applied", code.CompactMinMerge, out, err)
 	}
 	outs := outputs(before, x.rows())
 	if len(outs) != 3 {
-		t.Fatalf("ten pushes of two and a half cuts compacted into %d outputs, want 3: %+v", len(outs), outs)
+		t.Fatalf("pushes of two and a half cuts compacted into %d outputs, want 3: %+v", len(outs), outs)
 	}
 	short := 0
 	for _, o := range outs {

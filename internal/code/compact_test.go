@@ -693,7 +693,12 @@ func (l *lineLog) lines(msg string) []map[string]any {
 func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
-	packs := map[string]int{"a": 9, "b": 30, "c": 30, "d": 12, "e": 3, "f": 50, "g": 20, "h": 30}
+	// Every count is the floor's, so the case holds whatever the floor is: a
+	// just past it, d and g above it, the tie (b, c and h) above them, f the
+	// most and deleted, and e under it.
+	floor := code.CompactMinMerge
+	packs := map[string]int{"a": floor + 1, "b": floor + 22, "c": floor + 22, "d": floor + 4, "e": floor - 5,
+		"f": floor + 42, "g": floor + 12, "h": floor + 22}
 	ids := map[string]string{}
 	for name, count := range packs {
 		ids[name] = n.ensure(name, suiteSettings(), t1).RepoID
@@ -732,7 +737,7 @@ func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 			t.Fatal("the listing did not end")
 		}
 	}
-	// THE TIE AT THIRTY, by id descending, and then the rest by their counts.
+	// THE TIE, by id descending, and then the rest by their counts.
 	want := []string{ids["b"], ids["c"], ids["h"]}
 	slices.Sort(want)
 	slices.Reverse(want)
@@ -760,8 +765,8 @@ func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 	// THE PREMISE: a page ended inside the tie, so a page began after a
 	// cursor whose count the rest of the tie shares.
 	if onPage[want[1]] == onPage[want[2]] {
-		t.Fatalf("the tie at thirty was listed on one page (%d); the case needs a page to end inside it",
-			onPage[want[1]])
+		t.Fatalf("the tie at %d was listed on one page (%d); the case needs a page to end inside it",
+			packs["b"], onPage[want[1]])
 	}
 	if pages < 3 {
 		t.Fatalf("the listing took %d pages of two, want at least three", pages)

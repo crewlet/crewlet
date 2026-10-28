@@ -222,7 +222,8 @@ func aCompactionMergesPacksAndEveryCacheFollows(t *testing.T, newFleet NewFleet)
 	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
-	const pushes = 12
+	// Past the floor, so the home's first pass is due.
+	const pushes = code.CompactMinMerge + 4
 	head := pushEach(c, p, work, pushes, 1<<10)
 	before := c.Rows()
 	if len(before.Packs) != pushes {

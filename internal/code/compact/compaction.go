@@ -34,7 +34,7 @@ var (
 //
 //  1. SYNC at session, floored at the repository's version the listing read:
 //     never linearizable, because a barrier a compaction would cost the code
-//     log up to some 31 000 records a day at 250 000 pushes buys nothing — the
+//     log up to some 17 000 records a day at 250 000 pushes buys nothing — the
 //     committer holds every input to its own snapshot, and a plan from an
 //     older one is refused stale. The repository's home holds it already in
 //     the ordinary case: its reads are asked of it too (ADR-0059).

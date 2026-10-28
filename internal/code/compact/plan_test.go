@@ -69,9 +69,10 @@ func TestThePlanNeverTakesAFullPack(t *testing.T) {
 			t.Fatalf("the fixture's %s is not full by code.PackRow.Full", f.PackID)
 		}
 	}
+	// Past the floor by two, so the roll is due by the small packs alone.
 	var live []code.PackRow
 	var small []string
-	for i := range 10 {
+	for i := range code.CompactMinMerge + 2 {
 		id := fmt.Sprintf("small-%02d", i)
 		live = append(live, row(id, 10, 1<<20))
 		small = append(small, id)
@@ -79,10 +80,10 @@ func TestThePlanNeverTakesAFullPack(t *testing.T) {
 	live = append(live, full...)
 	p := compact.PlanOf(live, compact.InputByteCap(code.CompactPackBytes), code.CompactPackBytes)
 	if !p.Due {
-		t.Fatalf("ten small packs beside three full ones planned not due: %+v", p)
+		t.Fatalf("%d small packs beside three full ones planned not due: %+v", len(small), p)
 	}
 	if got := inputIDs(p); !slices.Equal(got, small) {
-		t.Errorf("the plan merges %v, want the ten small packs %v and no full one", got, small)
+		t.Errorf("the plan merges %v, want the %d small packs %v and no full one", got, len(small), small)
 	}
 
 	var onlyFull []code.PackRow

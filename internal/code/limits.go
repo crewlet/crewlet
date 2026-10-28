@@ -551,14 +551,14 @@ const (
 	// about 240 − S/17 parts. S is how many repositories had packs retired in
 	// the matching quarter hour a day earlier: at the code host's design
 	// point, 250 000 pushes a day (docs/concepts/scaling.md), each adding at
-	// most one pack, and a compaction merging eight packs or more, nearly
-	// always into one, at most about 36 000 records a day retire packs —
-	// some 370 a pass, or 1 100 were all the day's pushes made in eight
-	// hours: 1.8 s of a pass's twenty, 5.5 s at the busiest, and under a
-	// tenth of a day's steps. THE PURGES HAVE THE REST: about 240 parts a
-	// pass with no sweep due and 175 beside the busiest sweeps, some 21 000
-	// a day — so ten thousand repositories (CodeMaxRepos) removed at once,
-	// four parts each, are purged within two days of falling due, against a
+	// most one pack, and a compaction merging CompactMinMerge packs or more,
+	// nearly always into one, at most about 17 000 records a day retire
+	// packs — some 170 a pass, or 520 were all the day's pushes made in eight
+	// hours: 0.8 s of a pass's twenty, 2.6 s at the busiest, and under a
+	// twentieth of a day's steps. THE PURGES HAVE THE REST: about 240 parts a
+	// pass with no sweep due and 210 beside the busiest sweeps, some 22 000 a
+	// day — so ten thousand repositories (CodeMaxRepos) removed at once, four
+	// parts each, are purged within two days of falling due, against a
 	// retention of a week by default.
 	//
 	// A BACKLOG OF SWEEPS holds the purges back by passes, not days. Every
@@ -636,14 +636,17 @@ const (
 	//     docs/concepts/code-host.md) — and a graph of some 43 000 objects, a
 	//     repository of about fifteen megabytes, already holds the page's
 	//     memory;
-	//   - a page is some 8 800 pushes to ONE repository since a cache last
-	//     synced it (about 1.14 retirements a push, the geometric roll's
-	//     expectation), all inside the RetireGrace a retirement's row lives: a
-	//     cache further behind on so busy a repository takes the full answer
-	//     — no more rows than the repository holds — rather than every
-	//     retirement, so the catch-up of a cache two thousand compactions
-	//     behind, twenty thousand retirements beside a repository of fifty
-	//     packs, stays full.
+	//   - a page is some 9 400 pushes to ONE repository since a cache last
+	//     synced it (at most 16/15 retirements a push, a compaction below
+	//     CompactTargetPacks merging CompactMinMerge packs or more into one;
+	//     internal/code/compact's steady arms measured 1.05 for a repository
+	//     pushed once a minute and 1.003 for one pushed three hundred times a
+	//     minute, a minute's roll taking three hundred), all inside the
+	//     RetireGrace a retirement's row lives: a cache further behind on so
+	//     busy a repository takes the full answer — no more rows than the
+	//     repository holds — rather than every retirement, so the catch-up of
+	//     a cache a thousand compactions behind, some sixteen thousand
+	//     retirements beside a repository of fifty packs, stays full.
 	//
 	// NOT the full answer's own rows, refs plus live packs, which it replaced:
 	// those say nothing of what a graph costs — a repository of five refs may
@@ -887,14 +890,29 @@ const (
 
 	// CompactMinMerge is the fewest packs a compaction merges while the
 	// repository holds no more than CompactTargetPacks. A merge costs one PUT
-	// of its output and one GET on every git node that holds the repository,
-	// and saves each later cold sync k−1 GETs and each request k−1 pack
-	// lookups: below eight small packs the saving is a cold sync's seven GETs,
-	// under the eight one compaction costs a fleet of eight git nodes. A
-	// JUDGMENT CALL, kept unless BenchmarkCompact's min-merge arms find a
-	// value that saves more than a tenth of the GETs and PUTs a thousand
-	// pushes cost.
-	CompactMinMerge = 8
+	// of its output and one GET of it on every other git node that holds the
+	// repository, and saves each later cold sync k−1 GETs and each request
+	// k−1 pack lookups — so what the floor decides is how many merges a QUIET
+	// repository's pushes cost, one whose home's poll finds a few new packs
+	// at a time: a busy one's minute of pushes passes any floor.
+	//
+	// SIXTEEN, MEASURED by internal/code/compact's BenchmarkCompact, its
+	// steady/pushes=1200/rate=1/min arms: a repository pushed once a minute
+	// for twenty simulated hours, a pass every minute, its requests counted
+	// on a fleet of eight git nodes (git 2.56.0 over the in-memory store; one
+	// bounded run, -benchtime 1x and one count, on two E-cores of an Intel
+	// Core Ultra 7 265U, 2026-10-28). Merging from 16 packs cost 527 GETs and
+	// PUTs a thousand pushes — 64 PUTs, 449 GETs of the outputs and 13 of a
+	// cold sync of what was left — against 1 081 from 8 and 2 212 from 4:
+	// half the requests, each merge's PUT and GETs bought by twice the
+	// pushes, for a cold sync of 20 live packs at the most rather than 13.
+	// It costs fewer bytes too (713 MB of outputs stored and downloaded a
+	// thousand pushes, against 873), fewer rows (1.05 packs retired a push,
+	// against 1.13) and fewer records (108 bytes a push on the code log,
+	// against 184); and every merge drops every git node's bitmap of the
+	// repository, so half the merges are half that churn. The 8 this replaced
+	// was a judgement, kept unless an arm saved a tenth of the requests.
+	CompactMinMerge = 16
 
 	// CompactTargetPacks is the live packs a repository is held near: git's
 	// gc.autoPackLimit, and the approved design's "about fifty". Past it the
