@@ -16,6 +16,8 @@ import (
 // values this file states rather than from whatever a row happens to say.
 type LinkHostKind string
 
+// The apps a link host can belong to: the code hosts, the chat, and the
+// tracker and wiki on an Atlassian site.
 const (
 	LinkHostGitHub     LinkHostKind = "github"
 	LinkHostGitLab     LinkHostKind = "gitlab"
