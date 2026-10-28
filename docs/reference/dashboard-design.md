@@ -3887,7 +3887,11 @@ rank or an issue in some repository, so it is a reference only where the
 message it is in says which: the same sentence binds it (`#7 in
 gophrase/frontend`, `gophrase/frontend PR #7`, read as one reference); the
 message names that number in full (`gophrase/backend#11`); or the message
-names exactly one repository. Anything else leaves it words. A message is
+names exactly one repository. Anything else leaves it words. The trade-off
+is chosen: in a message that names one repository, a rank or a heading's
+number ("our #1 priority", a heading "#2 Rollout") is read as an issue in
+it too, as GitHub's own autolinking reads one in that repository's
+comments, rather than guess at the words around a number. A message is
 one comment, one page or one answer, and an ask's question, context,
 reasoning and options together (`TokenScope`), so the Inbox's "the #11 PR
 body" is placed by the `gophrase/backend` its context names. A render is part

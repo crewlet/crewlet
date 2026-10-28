@@ -50,6 +50,11 @@
  *     2. THE MESSAGE NAMES ONE REPOSITORY: every reference, repository and
  *        code host address in it names the same one, and `#11` is in it.
  *     3. Otherwise `#11` is words: a list's number, a rank, a heading.
+ *     THE TRADE-OFF, CHOSEN: in a message naming one repository, a rank or
+ *     a heading's number (`our #1 priority`, `## #2 heading`) is read as an
+ *     issue in it too, as GitHub's own autolinking reads one in that
+ *     repository's comments. Telling them apart would take guessing at the
+ *     words around a number, which is the guess this rule exists to avoid.
  *     A message is what [messageScope] reads. The number has no leading
  *     zero and nothing of a word, a path, an entity (`&#11;`) or a decimal
  *     (`#1.5`) on either side, and a code span is never read at all.

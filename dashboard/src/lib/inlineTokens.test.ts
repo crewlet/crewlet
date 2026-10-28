@@ -411,6 +411,15 @@ describe("bare numbers", () => {
   test("with nothing to place it, a number is a word", () => {
     expect(placed("Our #1 priority is #11.")).toEqual([]);
   });
+
+  // THE CHOSEN TRADE-OFF, held so changing it is a decision: in a message that
+  // names one repository, a rank and a heading's number are its issues too,
+  // as GitHub's own autolinking reads them there.
+  test("in a message naming one repository, a rank and a heading's number are placed too", () => {
+    const texts = ["Assigned in gophrase/backend.", "Our #1 priority.", "#2 heading"];
+    expect(placed(texts[1]!, texts)).toEqual(["#1=gophrase/backend#1"]);
+    expect(placed(texts[2]!, texts)).toEqual(["#2=gophrase/backend#2"]);
+  });
 });
 
 describe("cost", () => {
