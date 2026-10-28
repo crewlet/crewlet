@@ -59,12 +59,14 @@ import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.ts
 import { holdLine, ReassignItem } from "~/components/DecisionRow.tsx";
 import type { SeatCondition } from "~/lib/decisions.ts";
 import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
+import { LimitRemedy } from "~/components/LimitRemedy.tsx";
 import { AnswerAsk, type AskAnswer } from "~/components/writes.tsx";
 import { TechnicalDetails } from "~/components/common.tsx";
 import { Composer } from "~/components/Composer.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { RUNS_POLL_MS, answerFate, type GivenAnswer } from "~/lib/runs.ts";
+import { RUNS_POLL_MS } from "~/lib/runs.ts";
+import { answerFate, type GivenAnswer } from "./answerFate.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
@@ -923,12 +925,18 @@ function ConditionPane({ item, frame, now }: { item: Attention; frame: Frame; no
         <p>{item.detail}</p>
       </ReadingPaneLead>
       <TechnicalDetails text={item.technical} />
-      {item.path && (
+      {item.remedy ? (
         <Stack gap={2} align="start">
-          <ButtonLink variant="secondary" size="small" href={href(item.path, item.query)}>
-            Go to it
-          </ButtonLink>
+          <LimitRemedy remedy={item.remedy} />
         </Stack>
+      ) : (
+        item.path && (
+          <Stack gap={2} align="start">
+            <ButtonLink variant="secondary" size="small" href={href(item.path, item.query)}>
+              Go to it
+            </ButtonLink>
+          </Stack>
+        )
       )}
       <Text as="p" variant="caption">
         Clears on its own when the condition ends.
