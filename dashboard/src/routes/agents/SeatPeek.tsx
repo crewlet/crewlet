@@ -106,6 +106,7 @@ import type { HumanSeat } from "~/contract/identity.ts";
 import {
   activityOf,
   awaitingPerson,
+  failureWords,
   handleLabel,
   heldBy,
   indexOrg,
@@ -321,9 +322,7 @@ function SeatPeekBody({
       <YourAccount handle={seat.handle} />
 
       {agent?.last_error && (
-        <Callout variant="danger">
-          <strong>{agent.last_error.kind || "error"}</strong>: {agent.last_error.message}
-        </Callout>
+        <Callout variant="danger">{failureWords(agent.last_error.kind).sentence}</Callout>
       )}
       {sandbox && awaitingPerson(sandbox.status) && (
         // THE ONE THING A READER CAN ACT ON from here: a run parked on a

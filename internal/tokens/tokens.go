@@ -267,6 +267,17 @@ func (b *Bucket) merge(o Bucket) {
 	b.PricedCalls += o.PricedCalls
 }
 
+// WithoutEntries is the rollup for a reader who may not read the company's
+// configuration: every figure but the per-entry breakdown, which names the
+// company's providers.llm entries and is an admin's, as Settings, Models is.
+// The totals and every other breakdown are the same, so nothing a reader is
+// told stops adding up. A copy: r is not changed.
+func (r Rollup) WithoutEntries() Rollup {
+	r.ByProvider = []ProviderRow{}
+	r.EntriesWithheld = true
+	return r
+}
+
 // PhaseRow is the per-phase breakdown of a rollup.
 type PhaseRow struct {
 	Phase string `json:"phase"`
@@ -442,6 +453,12 @@ type Rollup struct {
 	ByProvider []ProviderRow `json:"by_provider"`
 	ByWorker   []WorkerRow   `json:"by_worker"`
 	ByAgent    []AgentRow    `json:"by_agent"`
+
+	// EntriesWithheld says ByProvider was left out for a reader who may not
+	// read which providers.llm entries the company configures, which is an
+	// admin's ([Rollup.WithoutEntries]): its empty list then says nothing
+	// about what was spent.
+	EntriesWithheld bool `json:"entries_withheld,omitempty"`
 
 	// ByTurn is the tail of recent turns — on the LIVE window only. A
 	// company day's row holds no turn, so a named window has none to list

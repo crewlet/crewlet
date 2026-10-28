@@ -421,7 +421,32 @@ type Error struct {
 	// RetryAt is when the entry is tried again, for a [KindRateLimit] whose
 	// backend sits the entry out until then; zero where no instant is known.
 	RetryAt time.Time
-	Err     error
+	// ResetsAt is when the vendor said the limit lifts, for a
+	// [KindRateLimit] whose report named an instant; zero where it did not.
+	// It is the fact a person is told ("resumes at 4:30 PM"), and may lie
+	// past RetryAt, which a backend caps so that a raised plan is noticed.
+	ResetsAt time.Time
+	// Agent is the CLI the entry drives (`claude-code`), and Subscription
+	// whether that CLI signs in on a plan rather than a metered key: what
+	// a person is told a limit is OF ("Claude Code subscription limit
+	// reached"), without the entry's configuration, which only an admin
+	// reads. Empty and false for a backend that is not a CLI's.
+	Agent        string
+	Subscription bool
+	Err          error
+}
+
+// LimitedUntil reports whether err is a rate limit, and when the entry that
+// refused it is tried again and when its vendor said the limit lifts (either
+// zero where unknown): the question a caller that runs on a schedule of its
+// own asks, so that a limit already reported is treated as the wait it is
+// rather than as another failure.
+func LimitedUntil(err error) (retryAt, resetsAt time.Time, ok bool) {
+	var failure *Error
+	if KindOf(err) != KindRateLimit || !errors.As(err, &failure) {
+		return time.Time{}, time.Time{}, false
+	}
+	return failure.RetryAt, failure.ResetsAt, true
 }
 
 func (e *Error) Error() string {

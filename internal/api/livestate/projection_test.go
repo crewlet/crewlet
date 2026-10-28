@@ -593,25 +593,23 @@ func TestAMistypedNumberReadsAsZeroRatherThanPanicking(t *testing.T) {
 
 func TestAnAlternateFieldNameIsUsedOnlyWhenTheFirstIsEmpty(t *testing.T) {
 	t.Parallel()
-	// Several payloads name the same thing two ways — a phase names its
-	// model, and falls back to the provider entry that served it. The
-	// fallback only helps if an EMPTY first value falls through to it.
-	// On a pinned clock: the window ages on the projection's clock, and
-	// on the wall clock these stamps left it long ago.
-	s := stoppedAt(t, defaultTS)
-	s.Apply(env("agent_phase_completed", map[string]any{
-		"agent_id": "a-1", "model": "", "provider_key": "anthropic", "turn_id": "tn-1",
-	}, id("p1")))
-	if got := s.SpendRecords(); len(got) != 1 || got[0].Model != "anthropic" {
-		t.Fatalf("records = %+v, want an empty model to fall through to provider_key", got)
+	// Several payloads name the same thing two ways: a failure event names
+	// its kind as `last_error_kind`, and some only as `kind`. The fallback
+	// only helps if an EMPTY first value falls through to it.
+	s := livestate.New()
+	s.Apply(env("llm_unavailable", map[string]any{
+		"agent_id": "a-1", "last_error_kind": "", "kind": "auth", "turn_id": "tn-1",
+	}, id("u1")))
+	if got := overlayOf(t, s, "a-1").LastError; got == nil || got.Kind != "auth" {
+		t.Fatalf("last error = %+v, want an empty last_error_kind to fall through to kind", got)
 	}
 
-	s2 := stoppedAt(t, defaultTS)
-	s2.Apply(env("agent_phase_completed", map[string]any{
-		"agent_id": "a-1", "model": "claude-sonnet-5", "provider_key": "anthropic", "turn_id": "tn-1",
-	}, id("p1")))
-	if got := s2.SpendRecords(); len(got) != 1 || got[0].Model != "claude-sonnet-5" {
-		t.Errorf("records = %+v, want the first name to win over its fallback", got)
+	s2 := livestate.New()
+	s2.Apply(env("llm_unavailable", map[string]any{
+		"agent_id": "a-1", "last_error_kind": "rate_limit", "kind": "auth", "turn_id": "tn-1",
+	}, id("u1")))
+	if got := overlayOf(t, s2, "a-1").LastError; got == nil || got.Kind != "rate_limit" {
+		t.Errorf("last error = %+v, want the first name to win over its fallback", got)
 	}
 }
 

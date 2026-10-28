@@ -16,6 +16,7 @@
  * several times a second for the length of a turn.
  */
 
+import { sameValue } from "./equal.ts";
 import type {
   AgentRow,
   CallVersions,
@@ -450,11 +451,22 @@ export class Store {
       if (behind) stale.push(patch.agent_id);
       return { ...patch, live_call: call, live_call_seq: patchSeq ?? heldSeq };
     };
-    this.state.agents = this.state.agents.map((a) => {
+    // A ROW THE PUSH LEAVES AS IT WAS KEEPS ITS IDENTITY, and a push that
+    // moves no row tells nobody: every screen keyed on the row would
+    // otherwise draw it again for a push that said nothing new (`sameValue`).
+    let moved = false;
+    const next = this.state.agents.map((a) => {
       const patch = byID.get(a.agent_id);
-      return patch ? { ...a, ...merge(a, patch) } : a;
+      if (!patch) return a;
+      const merged = { ...a, ...merge(a, patch) };
+      if (sameValue(a, merged)) return a;
+      moved = true;
+      return merged;
     });
-    this.emit("agents");
+    if (moved) {
+      this.state.agents = next;
+      this.emit("agents");
+    }
     return stale;
   }
 

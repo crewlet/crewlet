@@ -290,7 +290,7 @@ func (s *LiveState) recordPhaseFailure(agent *agentLive, env Envelope, payload m
 	}
 	failure := &ErrorInfo{
 		Kind:    kind,
-		Message: str(payload, "error"),
+		Detail:  str(payload, "error"),
 		Phase:   str(payload, "phase"),
 		TurnID:  str(payload, "turn_id"),
 		At:      env.Timestamp,

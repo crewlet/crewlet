@@ -456,6 +456,27 @@ func TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts(t *testing.T) {
 	}
 }
 
+// THE SPLITS THE SCREEN KEEPS FROM A READER WHO IS NOT AN ADMIN ARE EXACTLY THE
+// ONES THE ENGINE REFUSES THEM (tokens.AdminGroups). One the engine refuses and
+// the screen still offers is a control that draws a refusal; one the screen
+// hides and the engine answers is a dimension a reader cannot reach.
+//
+// Mutation: add a group to either list alone, and this fails.
+func TestTheScreenOffersAnAdminsSplitsToAnAdminAlone(t *testing.T) {
+	t.Parallel()
+	block, err := clientsource.Literal(clientsource.Tree(t), "ADMIN_GROUPS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var engine []string
+	for _, g := range tokens.AdminGroups {
+		engine = append(engine, string(g))
+	}
+	if got := clientsource.Strings(block); !slices.Equal(got, engine) {
+		t.Errorf("the screen keeps %v to an admin, the engine refuses %v to everybody else", got, engine)
+	}
+}
+
 // AND THE CHART DRAWS EXACTLY THE ENGINE'S PHASE BANDS, IN ITS ORDER.
 //
 // `group=phase` answers four bands the engine folds every phase into ONCE

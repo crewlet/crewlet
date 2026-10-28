@@ -185,3 +185,48 @@ func TestRecoveredIsNilWithoutAPanic(t *testing.T) {
 		t.Errorf("Recovered(nil) = %v, want nil so a deferred check needs no second test", got)
 	}
 }
+
+// A RESUME IS ANSWERABLE FOR ITS OWN WRITES, NOT FOR THE ATTEMPT THAT PARKED.
+// A resumed round's record opens with what the round that called run_sandbox
+// wrote before it suspended ([turn.Work.Inherited]); a resume that broke before
+// writing anything new (its model at a usage limit, the first thing it met)
+// repeats none of that on a retry, which re-enters the same conversation. It
+// used to be abandoned for those inherited writes, settling the coding run for
+// good with its result never reaching the seat. A resume that wrote again in
+// this attempt and then broke is abandoned still: its retry would write twice.
+//
+// Mutation: compute Acted over every call of the round, and the first case is
+// abandoned.
+func TestAResumeAnswersOnlyForWhatThisAttemptWrote(t *testing.T) {
+	t.Parallel()
+	limited := &llm.Error{Kind: llm.KindRateLimit, Err: errors.New("You've hit your 5-hour limit")}
+	for name, tc := range map[string]struct {
+		calls   []ledger.Call
+		abandon bool
+	}{
+		"broke before writing anything new": {
+			calls: []ledger.Call{{Name: "slack_post"}},
+		},
+		"wrote again in this attempt, then broke": {
+			calls: []ledger.Call{{Name: "slack_post"}, {Name: "slack_post"}}, abandon: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := &fake{
+				works:     []turn.Work{{Calls: tc.calls, Inherited: 1}},
+				surfaces:  []turn.Surface{slackSurface()},
+				resumeErr: limited,
+			}
+			res, err := turn.Run(context.Background(), f, settings(), turn.Input{
+				RunID: "t1", Reply: turn.ToolReply(""), Resume: true,
+			})
+			if err == nil {
+				t.Fatal("the resume did not fail")
+			}
+			if _, abandon := turn.Abandon(res, err); abandon != tc.abandon {
+				t.Errorf("Abandon = %v, want %v", abandon, tc.abandon)
+			}
+		})
+	}
+}

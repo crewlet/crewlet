@@ -49,7 +49,7 @@ const FAILED_TURN: AgentRow = {
   activity: "idle",
   last_error: {
     kind: "server",
-    message: "llm chain exhausted after 1 providers (default)",
+    detail: "llm chain exhausted after 1 providers (default)",
     phase: "execute",
     turn_id: "t1",
     at: "2026-01-01T11:30:00Z",
@@ -95,7 +95,7 @@ describe("a seat a fault stopped", () => {
     expect(screen.getByText("Stopped")).toBeTruthy();
     const [item] = queue([PROVIDER_STOP]);
     expect(item?.title).toBe("SRE is stopped");
-    expect(item?.detail).toBe("The seat cannot take work: its model provider is unreachable.");
+    expect(item?.detail).toBe("The seat cannot take work: its models are at their usage limit.");
   });
 });
 

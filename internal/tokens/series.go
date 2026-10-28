@@ -70,6 +70,14 @@ var Groups = []Group{GroupPhase, GroupModel, GroupProvider, GroupSeat, GroupUnit
 // Valid reports whether g is one this build knows.
 func (g Group) Valid() bool { return slices.Contains(Groups, g) }
 
+// AdminGroups are the groupings only an admin is answered: a provider band is
+// one of the company's providers.llm entries, which is its configuration, as
+// [Rollup.WithoutEntries] withholds the same entries from a rollup.
+var AdminGroups = []Group{GroupProvider}
+
+// AdminOnly reports whether g is one of [AdminGroups].
+func (g Group) AdminOnly() bool { return slices.Contains(AdminGroups, g) }
+
 // Band is one of the four bands a phase breakdown is drawn in.
 //
 // FOUR, folded ONCE, here: the engine has seven phase values, a chart has four
