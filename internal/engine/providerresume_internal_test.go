@@ -34,8 +34,8 @@ type spentEntry struct {
 
 func (*spentEntry) Model() string { return "opus" }
 
-func (m *spentEntry) Complete(context.Context, llm.Request) (*llm.Completion, error) {
-	if err := m.Unready(context.Background()); err != nil {
+func (m *spentEntry) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
+	if err := m.Unready(ctx); err != nil {
 		return nil, err
 	}
 	return &llm.Completion{Content: "done", Model: "opus"}, nil
