@@ -390,7 +390,7 @@ const InboxItem = memo(function InboxItem({
         ) : undefined
       }
     >
-      {renderTokens(words.text, "words")}
+      {renderTokens(words.text, "words", "text", true)}
     </Row>
   );
   // A ROW'S WORDS ARE ITS ASK'S: a bare `#11` in its question is placed by

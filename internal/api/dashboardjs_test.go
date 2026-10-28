@@ -1331,8 +1331,14 @@ const (
 	// steering a turn whose coding run is out (Steer offered on a parked turn,
 	// and a note read inside a run drawn on the run's bar in the words of its
 	// step), merged beside it, took it to 4631.8 KiB. 4632 KiB, which still
+	// refuses a doubled baseline. The hardening of inline links merged beside
+	// that (a cited address drawn by the checked rule, a reply scoped by its
+	// own words, references linked only under the company's owners, a
+	// Confluence page rebuilt from its space and id, and uilet 0.75.2's
+	// unclipped marks) took it to 4632.7 KiB, again in the lazy chunks that
+	// render Markdown, the first load 348.8 KiB. 4633 KiB, which still
 	// refuses a doubled baseline.
-	treeBudget = 4<<20 + 536<<10
+	treeBudget = 4<<20 + 537<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

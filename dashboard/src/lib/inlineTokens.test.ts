@@ -25,9 +25,9 @@ function said(text: string, owners: readonly string[] = []): string[] {
   return inlineTokens(text, new Set(owners)).map((t) => `${t.kind}:${t.text}`);
 }
 
-const GITHUB: LinkHost = { kind: "github", url: "https://github.com" };
+const GITHUB: LinkHost = { kind: "github", url: "https://github.com", owners: ["gophrase"] };
 const GHE: LinkHost = { kind: "github", url: "https://github.example.com" };
-const GITLAB: LinkHost = { kind: "gitlab", url: "https://code.example.com/scm" };
+const GITLAB: LinkHost = { kind: "gitlab", url: "https://code.example.com/scm", owners: ["g"] };
 const MATTERMOST: LinkHost = { kind: "mattermost", url: "https://chat.example.com" };
 const JIRA: LinkHost = { kind: "jira", url: "https://jira.example.com" };
 const WIKI: LinkHost = { kind: "confluence", url: "https://wiki.example.com/confluence" };
@@ -183,7 +183,7 @@ describe("what an address is", () => {
     });
     expect(
       describeLink("https://wiki.example.com/confluence/spaces/DES/pages/1/Brand+tokens", [WIKI]),
-    ).toMatchObject({ vendor: "atlassian", label: "Brand tokens" });
+    ).toMatchObject({ vendor: "atlassian", label: "DES page 1" });
   });
 
   test("Slack and Atlassian Cloud are theirs on their own domains", () => {
@@ -196,16 +196,16 @@ describe("what an address is", () => {
     expect(describeLink("https://gophrase.slack.com/archives/C07LQ2V4K", [])?.label).toBe(
       "Channel in gophrase",
     );
-    // A TENANT ANYBODY CAN REGISTER says its host after the label, so a page
-    // titled "Sign in to GitHub" is read as the site it is on; a site the
-    // company configured is its own and its labels stand alone.
+    // A TENANT ANYBODY CAN REGISTER says its host after the label; a site the
+    // company configured is its own and its labels stand alone. A PAGE IS
+    // LABELLED BY ITS SPACE AND ID, never by the title its address carries.
     expect(describeLink("https://acme.atlassian.net/browse/GP-1", [])).toMatchObject({
       label: "GP-1 (acme.atlassian.net)",
       code: false,
     });
     expect(
       describeLink("https://acme.atlassian.net/wiki/spaces/D/pages/2/Sign+in+to+GitHub", [])?.label,
-    ).toBe("Sign in to GitHub (acme.atlassian.net)");
+    ).toBe("D page 2 (acme.atlassian.net)");
     const own: LinkHost[] = [
       { kind: "jira", url: "https://acme.atlassian.net" },
       { kind: "confluence", url: "https://acme.atlassian.net/wiki" },
@@ -213,7 +213,68 @@ describe("what an address is", () => {
     expect(describeLink("https://acme.atlassian.net/browse/GP-1", own)?.label).toBe("GP-1");
     expect(
       describeLink("https://acme.atlassian.net/wiki/spaces/D/pages/2/Brand+tokens", own)?.label,
-    ).toBe("Brand tokens");
+    ).toBe("D page 2");
+  });
+
+  // THE DASHBOARD'S OWN REBUILT ADDRESS, cited back, is a page too: the
+  // canonical form carries no title, and a page needs none to be one.
+  //
+  // Mutation: require a title after the id and the canonical form is inert.
+  test("a Confluence page with no title in its address is the same page", () => {
+    const own: LinkHost[] = [{ kind: "confluence", url: "https://acme.atlassian.net/wiki" }];
+    expect(describeLink("https://acme.atlassian.net/wiki/spaces/ENG/pages/123", own)).toMatchObject(
+      {
+        label: "ENG page 123",
+        canonical: "https://acme.atlassian.net/wiki/spaces/ENG/pages/123",
+      },
+    );
+  });
+
+  // A LABEL IS ONLY WHAT AN ADDRESS IS REBUILT FROM: a Confluence page's
+  // title and a path segment no app allows are the writer's words, and a
+  // label made of them says whatever the writer chose beside a vendor's mark.
+  //
+  // Mutation: label a page by its title, or a channel by any segment, and
+  // these show the writer's words.
+  test("no label carries words the rebuilt address drops", () => {
+    const own: LinkHost[] = [
+      { kind: "confluence", url: "https://acme.atlassian.net/wiki" },
+      MATTERMOST,
+    ];
+    const page = describeLink(
+      "https://acme.atlassian.net/wiki/spaces/D/pages/2/Sign+in+to+GitHub",
+      own,
+    );
+    expect(page?.label).toBe("D page 2");
+    expect(page?.label).not.toContain("GitHub");
+    const channel = describeLink("https://chat.example.com/team/channels/Sign%20in%20to%20GitHub", [
+      MATTERMOST,
+    ]);
+    expect(channel?.label).not.toContain("Sign in");
+    expect(channel?.canonical).toBeNull();
+    const post = describeLink("https://chat.example.com/Sign%20in/pl/abc123", [MATTERMOST]);
+    expect(post?.label).not.toContain("Sign in");
+    expect(post?.canonical).toBeNull();
+  });
+
+  // A CONFLUENCE PAGE IS REBUILT AS ITS SPACE AND ID ALONE: a segment before
+  // `spaces` is the writer's, and so is the title after the id.
+  //
+  // Mutation: rebuild from the written path up to the id and the first two
+  // carry the writer's segment to the company's host.
+  test("a Confluence page on the company's site is rebuilt as spaces/<key>/pages/<id>", () => {
+    const wiki: LinkHost[] = [{ kind: "confluence", url: "https://acme.atlassian.net/wiki" }];
+    const site: LinkHost[] = [{ kind: "confluence", url: "https://acme.atlassian.net" }];
+    const canonical = (raw: string, hosts: LinkHost[]) => describeLink(raw, hosts)?.canonical;
+    expect(canonical("https://acme.atlassian.net/wiki/SECRET/spaces/D/pages/2/T", wiki)).toBeNull();
+    expect(canonical("https://acme.atlassian.net/wiki/x/y/spaces/D/pages/2/T", site)).toBeNull();
+    expect(canonical("https://acme.atlassian.net/wiki/spaces/D/pages/2/Title?x=1", wiki)).toBe(
+      "https://acme.atlassian.net/wiki/spaces/D/pages/2",
+    );
+    expect(canonical("https://acme.atlassian.net/wiki/spaces/~me/pages/2/T", site)).toBe(
+      "https://acme.atlassian.net/wiki/spaces/~me/pages/2",
+    );
+    expect(canonical("https://acme.atlassian.net/wiki/spaces/D/pages/abc/T", wiki)).toBeNull();
   });
 
   test("a segment that decodes to a slash, or that no code host allows, labels nothing", () => {
@@ -257,6 +318,31 @@ describe("what an address is", () => {
 });
 
 describe("where a bare reference points", () => {
+  // A HOST LINKS ONLY UNDER AN OWNER IT NAMES, and one that names none
+  // vouches for no owner at all: closed, never open.
+  //
+  // Mutation: let a host with no owners take any owner and the first case
+  // links.
+  test("a host that names no owners, or not this one, links no reference", () => {
+    const bare: LinkHost = { kind: "github", url: "https://github.com" };
+    expect(referenceTarget("gophrase/backend", "#", "14", [bare])).toEqual({
+      vendor: "github",
+      href: null,
+    });
+    expect(referenceTarget("other/backend", "#", "14", [GITHUB])).toEqual({
+      vendor: "github",
+      href: null,
+    });
+    expect(
+      describeLink("https://github.com/gophrase/backend/pull/14", [bare])?.canonical,
+    ).toBeNull();
+    expect(describeLink("https://github.com/other/x", [GITHUB])?.canonical).toBeNull();
+    expect(
+      describeLink("https://code.example.com/scm/g/app/-/issues/3", [{ ...GITLAB, owners: [] }])
+        ?.canonical,
+    ).toBeNull();
+  });
+
   test("one code host links it there, GitHub's issue address standing for a pull request too", () => {
     expect(referenceTarget("gophrase/backend", "#", "14", [GITHUB])).toEqual({
       vendor: "github",
@@ -391,30 +477,65 @@ describe("bare numbers", () => {
   test("with nothing to place it, a number is a word", () => {
     expect(placed("Our #1 priority is #11.")).toEqual([]);
   });
+
+  // THE CHOSEN TRADE-OFF, held so changing it is a decision: in a message that
+  // names one repository, a rank and a heading's number are its issues too,
+  // as GitHub's own autolinking reads them there.
+  test("in a message naming one repository, a rank and a heading's number are placed too", () => {
+    const texts = ["Assigned in gophrase/backend.", "Our #1 priority.", "#2 heading"];
+    expect(placed(texts[1]!, texts)).toEqual(["#1=gophrase/backend#1"]);
+    expect(placed(texts[2]!, texts)).toEqual(["#2=gophrase/backend#2"]);
+  });
 });
 
 describe("cost", () => {
   // EVERY PATTERN IS LINEAR IN ITS RUN: a comment an agent wrote is rendered by
-  // every reader, so a run that costs seconds freezes everybody. The bound is
-  // two orders above what a linear pass takes here and two below the
-  // quadratic passes these replaced (about 2.7 s and 0.6 s at this size).
+  // every reader, so a run that costs seconds freezes everybody.
   //
-  // Mutation: count the brackets again per character trimmed, or bring back
-  // the lazy pattern around a word, and the first two cases exceed it.
-  test.each([
-    ["an address closed by 20,000 brackets", `https://x.test/${")".repeat(20_000)}`],
-    ["a word of 20,000 brackets and a letter", `${")".repeat(20_000)}a`],
-    ["20,000 slashes", `${"a/".repeat(10_000)}b`],
-    ["20,000 stops", "a.".repeat(10_000)],
-    ["10,000 numbers", "#1".repeat(10_000)],
-    ["5,000 keys", "GP-1/".repeat(5_000)],
-    ["10,000 handles", "@a".repeat(10_000)],
-    ["3,000 commits", "commit ".repeat(3_000)],
-    ["10,000 bound numbers", "#1 in a/b ".repeat(10_000)],
-    ["10,000 repositories before a number", "a/b PR ".repeat(10_000)],
-  ])("%s reads in linear time", (_, text) => {
+  // GROWTH, NOT A CLOCK: a run four times longer must take well under the
+  // sixteen times a quadratic pass takes, here under eight. An absolute bound
+  // passed both a linear pass and a quadratic one at the size a loaded
+  // runner could afford, so it held nothing; a ratio is the machine's speed
+  // divided out. Each run is timed after a warm-up, as the median of five
+  // samples, each sample enough calls to take 10 ms, so a timer's grain or one
+  // stalled sample decides nothing.
+  //
+  // Mutation: count the brackets again per character trimmed, bring back the
+  // lazy pattern around a word, scan the text before every bound number, or
+  // look every reference up again for each commit, and its case exceeds it.
+  const OWNERS = new Set(["a", "gp"]);
+  const sample = (text: string, calls: number) => {
     const start = performance.now();
-    inlineTokens(text, new Set(["a", "gp"]));
-    expect(performance.now() - start).toBeLessThan(250);
+    for (let i = 0; i < calls; i++) inlineTokens(text, OWNERS);
+    return performance.now() - start;
+  };
+  const median = (xs: number[]) => xs.sort((x, y) => x - y)[Math.floor(xs.length / 2)]!;
+  /** How much longer a run four times the size takes. */
+  const growth = (make: (n: number) => string, n: number) => {
+    const small = make(n);
+    const large = make(4 * n);
+    sample(small, 1);
+    sample(large, 1);
+    let calls = 1;
+    while (calls < 256 && sample(small, calls) < 10) calls *= 2;
+    const times = (text: string) => median(Array.from({ length: 5 }, () => sample(text, calls)));
+    return times(large) / times(small);
+  };
+
+  test.each<[string, (n: number) => string]>([
+    ["an address closed by brackets", (n) => `https://x.test/${")".repeat(n)}`],
+    ["a word of brackets and a letter", (n) => `${")".repeat(n)}a`],
+    ["slashes", (n) => `${"a/".repeat(n / 2)}b`],
+    ["stops", (n) => "a.".repeat(n / 2)],
+    ["numbers", (n) => "#1".repeat(n / 2)],
+    ["keys between slashes", (n) => "GP-1/".repeat(n / 5)],
+    ["handles", (n) => "@a".repeat(n / 2)],
+    ["the word commit", (n) => "commit ".repeat(n / 7)],
+    ["commits after references", (n) => "a/b#1 commit abcdef1 ".repeat(n / 21)],
+    ["bound numbers", (n) => "#1 in a/b ".repeat(n / 10)],
+    ["repositories before a number", (n) => "a/b PR ".repeat(n / 7)],
+    ["repositories and numbers", (n) => "a/b #1 ".repeat(n / 7)],
+  ])("%s read in linear time", (_, make) => {
+    expect(growth(make, 5_000)).toBeLessThan(8);
   });
 });

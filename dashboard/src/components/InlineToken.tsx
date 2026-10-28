@@ -36,7 +36,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { ColorChip, Highlight, InlineRef } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
-import { GlobeGlyph, SquareKanbanGlyph } from "@crewlethq/icons/glyphs";
+import { GlobeGlyph, SquareKanbanGlyph, type GlyphSize } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import {
   codeHostOwners,
@@ -48,6 +48,7 @@ import {
   referenceTarget,
   repositoryTarget,
   type InlineToken as Token,
+  type LinkDescription,
   type LinkMode,
   type MessageScope,
 } from "~/lib/inlineTokens.ts";
@@ -65,8 +66,9 @@ const MessageTexts = createContext<readonly string[] | null>(null);
  * One message drawn in several renders: an ask's question, its context, its
  * recommendation and its options are one message to the person reading
  * them, so a bare `#11` in the question is placed by a repository its
- * context names (`messageScope`). Every run inside reads `texts` in place of
- * its own render's source.
+ * context names (`messageScope`). Only a render that says it is part of the
+ * message (`RenderOptions.scoped`) reads `texts`; any other inside it (a
+ * reply in the ask's conversation) is its own message.
  */
 export function TokenScope({ texts, children }: { texts: readonly string[]; children: ReactNode }) {
   return <MessageTexts.Provider value={texts}>{children}</MessageTexts.Provider>;
@@ -112,8 +114,8 @@ function scopeOf(texts: readonly string[], hosts: readonly LinkHost[]): MessageS
  * list ticking its times) reads nothing again. The owners come from the
  * frame's `link_hosts`, which a plain function of the text could not read.
  *
- * `message` is the source the run was rendered from; a [TokenScope] around
- * it names a larger one.
+ * `message` is the message the run was rendered from; undefined, the run is
+ * part of the enclosing [TokenScope]'s (or, with none, its own words).
  */
 export function TokenRun({
   text,
@@ -124,12 +126,12 @@ export function TokenRun({
   text: string;
   links: LinkMode;
   highlight?: readonly string[] | undefined;
-  message: string;
+  message: string | undefined;
 }) {
   const hosts = useLinkHosts();
   const surface = useContext(MessageTexts);
   const owners = useMemo(() => codeHostOwners(hosts), [hosts]);
-  const scope = scopeOf(surface ?? [message], hosts);
+  const scope = scopeOf(message !== undefined ? [message] : (surface ?? [text]), hosts);
   const tokens = useMemo(() => inlineTokens(text, owners, scope), [text, owners, scope]);
   const words = (part: string, at: number): ReactNode =>
     highlight ? <Highlight key={`w${at}`} text={part} terms={highlight} /> : part;
@@ -179,30 +181,57 @@ function AddressToken({
   if (said === null) {
     return <InlineRef href={links === "anchor" ? token.href : undefined}>{token.text}</InlineRef>;
   }
-  const mark = said.vendor ? (
-    <VendorMark vendor={said.vendor} data-vendor={said.vendor} />
-  ) : (
-    <GlobeGlyph />
-  );
-  // CHECKED AND NOT THE COMPANY'S: the address as written, whole, so a reader
-  // sees and can copy exactly where it would go, and never a control.
+  // CHECKED AND NOT THE COMPANY'S: the address as written ([InertAddress]).
   if (links === "checked" && said.canonical === null) {
-    return (
-      <InlineRef mark={mark} kind={said.kind ?? undefined} title={token.href}>
-        {token.text}
-      </InlineRef>
-    );
+    return <InertAddress said={said} raw={token.href} written={token.text} />;
   }
   const to = links === "text" ? undefined : links === "checked" ? said.canonical! : token.href;
   return (
     <InlineRef
-      mark={mark}
+      mark={addressMark(said)}
       href={to}
       kind={said.kind ?? undefined}
       title={token.href}
       code={said.code}
     >
       {said.label}
+    </InlineRef>
+  );
+}
+
+/**
+ * The mark an address is drawn with: the mark of the app it belongs to, or a
+ * globe for an address of nobody we know. `size` for a control's icon (an
+ * evidence button); in a sentence the mark takes `InlineRef`'s square.
+ */
+export function addressMark(said: LinkDescription, size?: GlyphSize): ReactNode {
+  return said.vendor ? (
+    <VendorMark vendor={said.vendor} size={size} data-vendor={said.vendor} />
+  ) : (
+    <GlobeGlyph size={size} />
+  );
+}
+
+/**
+ * An address that opens nothing: its mark, what the mark means said to a
+ * screen reader, and the address `written` as its writer wrote it, whole, so a
+ * reader sees and can copy exactly where it would go. Never a control and
+ * never a label the dashboard did not build: under `checked`, every address
+ * that is not rebuilt on the company's own host is drawn this way, in prose
+ * and as an ask's evidence alike.
+ */
+export function InertAddress({
+  said,
+  raw,
+  written,
+}: {
+  said: LinkDescription;
+  raw: string;
+  written: string;
+}) {
+  return (
+    <InlineRef mark={addressMark(said)} kind={said.kind ?? undefined} title={raw}>
+      {written}
     </InlineRef>
   );
 }

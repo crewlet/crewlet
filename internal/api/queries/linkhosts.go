@@ -96,23 +96,23 @@ func (s Sources) linkHosts(_ context.Context, _ Params) (any, error) {
 	in := company.Integrations
 	if in.GitHub != nil {
 		_, web := in.GitHub.Bases(lookup)
-		var named []string
+		var orgs, repos []string
 		if p := in.GitHub.Provisioning; p != nil {
-			named = append(append(named, p.Org), p.Repos...)
+			orgs, repos = []string{p.Org}, p.Repos
 		}
 		for role := range company.EachRole() {
 			if gh := role.Integrations.GitHub; gh != nil {
-				named = append(named, gh.Repos...)
+				repos = append(repos, gh.Repos...)
 			}
 		}
-		add(LinkHostGitHub, web, codeOwners(named, expand))
+		add(LinkHostGitHub, web, codeOwners(orgs, repos, expand))
 	}
 	if in.GitLab != nil {
-		var named []string
+		var groups, projects []string
 		if p := in.GitLab.Provisioning; p != nil {
-			named = append(append(named, p.Group), p.Projects...)
+			groups, projects = []string{p.Group}, p.Projects
 		}
-		add(LinkHostGitLab, expand(in.GitLab.URL), codeOwners(named, expand))
+		add(LinkHostGitLab, expand(in.GitLab.URL), codeOwners(groups, projects, expand))
 	}
 	if in.Mattermost != nil {
 		add(LinkHostMattermost, expand(in.Mattermost.URL), nil)
@@ -141,9 +141,15 @@ func browserBase(raw string) string {
 	return clean.String()
 }
 
-// codeOwners is the owners a code host's configuration names: each entry's
-// first path segment (an organization, `gophrase` of `gophrase/backend`, or a
-// top-level group), resolved, folded to lower case, sorted and each once.
+// codeOwners is the owners a code host's configuration names: each
+// organization or top-level group whole, and the first segment of each
+// repository or project PATH (`gophrase` of `gophrase/backend`), resolved,
+// folded to lower case, sorted and each once.
+//
+// ONLY A PATH NAMES AN OWNER: a project entry without a slash is a GitLab
+// project's numeric id or a bare name, which is no owner at all, and sent
+// whole it made `12345` or `backend` an owner every bare `12345/x` and
+// `backend/x` read as the company's.
 //
 // THE OWNER AND NEVER THE REPOSITORY, which is the integration's business.
 // The owner is what lets the dashboard read a bare `gophrase/backend` in prose
@@ -153,13 +159,20 @@ func browserBase(raw string) string {
 // A SEGMENT NO CODE HOST ALLOWS IS DROPPED rather than sent: an owner is
 // letters, digits, `.`, `_` and `-`, starting with a letter or a digit
 // ([ownerName]), so a reader is never handed a value no path could hold.
-func codeOwners(named []string, expand func(string) string) []string {
+func codeOwners(owners, paths []string, expand func(string) string) []string {
 	var out []string
-	for _, entry := range named {
-		owner, _, _ := strings.Cut(expand(entry), "/")
+	keep := func(owner string) {
 		owner = strings.ToLower(owner)
 		if ownerName.MatchString(owner) && !slices.Contains(out, owner) {
 			out = append(out, owner)
+		}
+	}
+	for _, owner := range owners {
+		keep(expand(owner))
+	}
+	for _, path := range paths {
+		if owner, _, ok := strings.Cut(expand(path), "/"); ok {
+			keep(owner)
 		}
 	}
 	slices.Sort(out)

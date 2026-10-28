@@ -39,8 +39,8 @@ import {
   RefusalStrip,
   Stack,
   Stepper,
+  InlineRef,
   Text,
-  safeHref,
   peekClickHandler,
   type StepperStep,
 } from "@crewlethq/ui";
@@ -49,11 +49,12 @@ import {
   ChevronLeftGlyph,
   CircleCheckGlyph,
   FileTextGlyph,
-  LinkGlyph,
   SquareKanbanGlyph,
   SquareTerminalGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
+import { describeLink } from "~/lib/inlineTokens.ts";
+import { useLinkHosts } from "~/lib/linkHosts.ts";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { holdLine, ReassignItem } from "~/components/DecisionRow.tsx";
@@ -68,7 +69,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
 import { answerFate, type GivenAnswer } from "./answerFate.ts";
 import { fmtDateTime } from "~/lib/format.ts";
-import { TokenScope } from "~/components/InlineToken.tsx";
+import { addressMark, InertAddress, TokenScope } from "~/components/InlineToken.tsx";
 import { CHECKED_WORDS, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -340,19 +341,25 @@ function AskPane({
             {frame.task && <> on {frame.task}</>}
           </>,
         )}
-        <ReadingPaneTitle>{renderTokens(askQuestion(ask), "question")}</ReadingPaneTitle>
-        {context && <ReadingPaneLead>{renderMarkdown(context, CHECKED_WORDS)}</ReadingPaneLead>}
+        <ReadingPaneTitle>
+          {renderTokens(askQuestion(ask), "question", "text", true)}
+        </ReadingPaneTitle>
+        {context && (
+          <ReadingPaneLead>
+            {renderMarkdown(context, { ...CHECKED_WORDS, scoped: true })}
+          </ReadingPaneLead>
+        )}
         {reasoning ? (
           <ReadingPaneReasoning
             title={
               <>
                 {`${frame.name} recommends `}
-                <strong>{renderTokens(reasoning.label, "recommended")}</strong>
+                <strong>{renderTokens(reasoning.label, "recommended", "text", true)}</strong>
               </>
             }
             footer={chips}
           >
-            <p>{renderTokens(reasoning.text, "reasoning", "checked")}</p>
+            <p>{renderTokens(reasoning.text, "reasoning", "checked", true)}</p>
           </ReadingPaneReasoning>
         ) : (
           chips
@@ -444,7 +451,9 @@ function AnsweredPane({
             {frame.task && <> on {frame.task}</>}
           </>,
         )}
-        <ReadingPaneTitle>{renderTokens(askQuestion(ask), "question")}</ReadingPaneTitle>
+        <ReadingPaneTitle>
+          {renderTokens(askQuestion(ask), "question", "text", true)}
+        </ReadingPaneTitle>
         <ReadingPaneOutcome>
           {`${words.who} ${words.verb}`}
           {said && (
@@ -584,19 +593,51 @@ function EvidenceLink({ evidence }: { evidence: WorkDecisionEvidence }) {
           {evidence.label || "Coding run"}
         </ButtonLink>
       );
-    case "url": {
-      // A LINK THE ASKER WROTE is followed only through `safeHref`, and one it
-      // refuses is shown as words rather than dropped.
-      const url = safeHref(evidence.ref);
-      if (!url) return <Text variant="caption">{evidence.label || evidence.ref}</Text>;
-      return (
-        <ButtonLink {...look} href={url} external leadingIcon={<LinkGlyph size="sm" />}>
-          {evidence.label || new URL(url, location.href).host}
-        </ButtonLink>
-      );
-    }
+    case "url":
+      return <UrlEvidence raw={evidence.ref} />;
   }
   return null;
+}
+
+/**
+ * An address the asker cited, by the Inbox's `checked` rule
+ * (`LinkMode` in `lib/inlineTokens.ts`): a button only when the dashboard
+ * builds it, on a host the company configured and rebuilt from what it names
+ * ([LinkDescription.canonical]), labelled by the dashboard (the reference it
+ * is, or its host and path) and marked with its app's mark.
+ *
+ * NEVER THE ASKER'S LABEL AND NEVER ITS ADDRESS AS WRITTEN: both are an
+ * agent's words, and a button reading "Sign in to GitHub" that opens
+ * `https://evil.example.net/?q=<what it read>` is the one press an injected
+ * instruction needs. Any other address is drawn inert, as written, with its
+ * mark, so the reader sees and can copy where it would go.
+ */
+function UrlEvidence({ raw }: { raw: string }) {
+  const hosts = useLinkHosts();
+  const said = describeLink(raw, hosts);
+  if (said === null) return <Text variant="caption">{raw}</Text>;
+  if (said.canonical) {
+    // WHAT ITS MARK MEANS IS SAID before its words, and an identifier is set
+    // in mono, as the same address reads in a sentence.
+    return (
+      <ButtonLink
+        variant="secondary"
+        size="small"
+        href={said.canonical}
+        external
+        leadingIcon={addressMark(said, "sm")}
+      >
+        <InlineRef kind={said.kind ?? undefined} code={said.code}>
+          {said.label}
+        </InlineRef>
+      </ButtonLink>
+    );
+  }
+  return (
+    <Text variant="caption">
+      <InertAddress said={said} raw={raw} written={raw} />
+    </Text>
+  );
 }
 
 /**

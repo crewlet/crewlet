@@ -251,8 +251,10 @@ export interface LinkHost {
   url: string;
   /**
    * A code host's organizations or top-level groups, lower case and sorted:
-   * the owners a bare `owner/repo` in prose is read as a repository under
-   * (`lib/inlineTokens.ts`). Absent on every other kind.
+   * the owners a bare `owner/repo` in prose is read as a repository under,
+   * and the only owners a reference or an address on the host is linked
+   * under, so a host with none links none (`lib/inlineTokens.ts`). Absent on
+   * every other kind.
    */
   owners?: string[];
 }

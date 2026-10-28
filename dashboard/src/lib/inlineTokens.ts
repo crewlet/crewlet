@@ -50,6 +50,11 @@
  *     2. THE MESSAGE NAMES ONE REPOSITORY: every reference, repository and
  *        code host address in it names the same one, and `#11` is in it.
  *     3. Otherwise `#11` is words: a list's number, a rank, a heading.
+ *     THE TRADE-OFF, CHOSEN: in a message naming one repository, a rank or
+ *     a heading's number (`our #1 priority`, `## #2 heading`) is read as an
+ *     issue in it too, as GitHub's own autolinking reads one in that
+ *     repository's comments. Telling them apart would take guessing at the
+ *     words around a number, which is the guess this rule exists to avoid.
  *     A message is what [messageScope] reads. The number has no leading
  *     zero and nothing of a word, a path, an entity (`&#11;`) or a decimal
  *     (`#1.5`) on either side, and a code span is never read at all.
@@ -324,12 +329,21 @@ export function inlineTokens(
   const chosen = settle(found);
   // RULE 4 READS THE SETTLED REFERENCES, so a commit follows a reference the
   // run actually names rather than one an address swallowed.
+  //
+  // ONE WALK, alongside the commits: both are in order, so the reference
+  // before each commit is the last one the walk has passed. Looking every
+  // reference up again for each commit made a run of references and commits
+  // take more than a second at 420,000 characters.
   const commits: InlineToken[] = [];
+  let next = 0;
+  let before: InlineToken | undefined;
   for (const m of text.matchAll(COMMIT_AFTER)) {
     const sha = m[2]!;
     if (!mixed(sha)) continue;
     const at = m.index + m[0].length - sha.length;
-    const before = chosen.filter((t) => t.kind === "reference" && t.end <= m.index).at(-1);
+    for (; next < chosen.length && chosen[next]!.end <= m.index; next++) {
+      if (chosen[next]!.kind === "reference") before = chosen[next];
+    }
     if (m[1] !== "commit" && before === undefined) continue;
     commits.push({
       kind: "commit",
@@ -501,11 +515,26 @@ const SHA = /^[0-9a-f]{7,40}$/iu;
 /** A path segment an address is rebuilt from: letters, digits, `.`, `_`, `~` and `-`. */
 const SEGMENT = /^[A-Za-z0-9~_.-]+$/u;
 
-/** Where an address is under an app's hosts: its segments, and the company's base it is under. */
+/** Where an address is under an app's hosts: its segments, and the company's host it is under. */
 interface Under {
   parts: string[];
-  /** The configured base it is under, or null under the app's public host alone. */
-  own: string | null;
+  /** The configured host it is under, or null under the app's public host alone. */
+  own: LinkHost | null;
+}
+
+/**
+ * Whether a code host takes `owner`'s repositories as the company's: only an
+ * owner it names (`link_hosts`' `owners`), in any case. `attacker/exfil#1` on
+ * a GitHub the company works on under `gophrase` is somebody else's
+ * repository, and no link is built to it.
+ *
+ * CLOSED WITHOUT OWNERS: a host that names none (a company that configured
+ * no organization, group or repository) vouches for no owner, so every
+ * reference to it keeps its mark and links nowhere, rather than every owner
+ * a writer spells becoming the company's.
+ */
+function ownsOwner(host: LinkHost, owner: string): boolean {
+  return (host.owners ?? []).includes(owner.toLowerCase());
 }
 
 /**
@@ -521,7 +550,7 @@ function underApp(
   for (const host of hosts) {
     if (host.kind !== kind) continue;
     const parts = under(url, host.url);
-    if (parts !== null) return { parts, own: host.url };
+    if (parts !== null) return { parts, own: host };
   }
   const parts = publicBase === undefined ? null : under(url, publicBase);
   return parts === null ? null : { parts, own: null };
@@ -559,7 +588,8 @@ function describeGitHub({ parts, own }: Under, url: URL): LinkDescription {
     label,
     code: true,
     kind: "GitHub",
-    canonical: rebuilt(own, [owner, repo, ...tail]),
+    canonical:
+      own !== null && ownsOwner(own, owner) ? rebuilt(own.url, [owner, repo, ...tail]) : null,
     place: { path, number },
   });
   if ((what === "pull" || what === "issues") && id && /^\d+$/.test(id)) {
@@ -586,7 +616,8 @@ function describeGitLab({ parts, own }: Under, url: URL): LinkDescription {
     label,
     code: true,
     kind: "GitLab",
-    canonical: rebuilt(own, [...names, ...tail]),
+    canonical:
+      own !== null && ownsOwner(own, names[0]!) ? rebuilt(own.url, [...names, ...tail]) : null,
     place: { path, number },
   });
   if (what === "merge_requests" && id && /^\d+$/.test(id)) {
@@ -618,15 +649,31 @@ function describeSlack(url: URL): LinkDescription {
   return hostAndPath("slack", "Slack", url);
 }
 
+/** A Mattermost team's, channel's or post's name: letters, digits, `_` and `-`. */
+const MATTERMOST_NAME = /^[A-Za-z0-9_-]+$/u;
+
+/**
+ * A Mattermost address: a channel by its name, a post by its team.
+ *
+ * ITS LABEL IS ONLY WHAT IT IS REBUILT FROM: a team and a channel are names
+ * Mattermost itself allows, and a segment that is anything else (spaces, a
+ * sentence a writer decoded into the path) labels nothing, so the address
+ * shows as its host and path.
+ */
 function describeMattermost({ parts, own }: Under, url: URL): LinkDescription {
   const [team, what, name] = parts;
-  if (team && (what === "channels" || what === "pl") && name) {
+  const named =
+    team !== undefined &&
+    name !== undefined &&
+    MATTERMOST_NAME.test(team) &&
+    MATTERMOST_NAME.test(name);
+  if (named && (what === "channels" || what === "pl")) {
     return {
       vendor: "mattermost",
       label: what === "channels" ? `~${name}` : `Post in ${team}`,
       code: false,
       kind: "Mattermost",
-      canonical: rebuilt(own, [team, what, name]),
+      canonical: rebuilt(own?.url ?? null, [team, what, name]),
       place: null,
     };
   }
@@ -655,24 +702,47 @@ function describeJira({ parts, own }: Under, url: URL): LinkDescription | null {
     label: onTenant(key, own === null ? url.host : null),
     code: own !== null,
     kind: "Jira",
-    canonical: rebuilt(own, ["browse", key]),
+    canonical: rebuilt(own?.url ?? null, ["browse", key]),
     place: null,
   };
 }
 
+/**
+ * A Confluence page's parts, as its address is rebuilt from them:
+ * `spaces/<KEY>/pages/<id>`, after Cloud's `wiki` where the site's base stops
+ * above it (`lead`), or null for any other shape.
+ *
+ * NOTHING ELSE OF THE WRITTEN PATH: the title after the id is the writer's
+ * words, and so is any segment before `spaces`, which a page never needs and
+ * which could carry anything a writer chose to the company's own host.
+ */
+function confluencePage(
+  parts: readonly string[],
+): { lead: string[]; key: string; id: string } | null {
+  const from = parts[0] === "wiki" ? 1 : 0;
+  const [spaces, key, pages, id] = parts.slice(from);
+  if (spaces !== "spaces" || pages !== "pages" || !key || !id) return null;
+  if (!/^~?[A-Za-z0-9]+$/u.test(key) || !/^\d+$/u.test(id)) return null;
+  return { lead: parts.slice(0, from), key, id };
+}
+
+/**
+ * A Confluence address: a page by its space and id.
+ *
+ * NEVER BY ITS TITLE: the title in a page's address is the writer's words,
+ * which the rebuilt address drops, and a label saying "Sign in to GitHub"
+ * beside the Atlassian mark would say whatever its writer chose. The label
+ * is what the address is rebuilt from, `DES page 123`.
+ */
 function describeConfluence({ parts, own }: Under, url: URL): LinkDescription | null {
-  const at = parts.indexOf("pages");
-  const slug = at < 0 ? undefined : parts[at + 2];
-  if (slug) {
-    const title = slug.replace(/\+/g, " ");
-    const id = parts[at + 1] ?? "";
+  const page = confluencePage(parts);
+  if (page !== null) {
     return {
       vendor: "atlassian",
-      label: onTenant(title, own === null ? url.host : null),
+      label: onTenant(`${page.key} page ${page.id}`, own === null ? url.host : null),
       code: false,
       kind: "Confluence",
-      // A PAGE BY ITS ID: the title in its address is the writer's words.
-      canonical: /^\d+$/.test(id) ? rebuilt(own, parts.slice(0, at + 2)) : null,
+      canonical: rebuilt(own?.url ?? null, [...page.lead, "spaces", page.key, "pages", page.id]),
       place: null,
     };
   }
@@ -747,6 +817,12 @@ export interface ReferenceTarget {
  * or `@` is the host's whose `owners` hold the path's first segment, and one
  * neither or both hold could be either, so it is no reference (null) and
  * stays text; `!` is still GitLab's.
+ *
+ * ONLY TO AN OWNER THE HOST NAMES (`owners`, and none where it names none): a
+ * reference to anybody else's repository keeps its mark and links nowhere,
+ * since its owner and name are the writer's words, and an agent could spell
+ * what it read into them (`attacker/exfil-SECRET#1`). On GitHub a repository
+ * is exactly `owner/repo`, so a longer path is words.
  */
 export function referenceTarget(
   path: string,
@@ -767,8 +843,16 @@ export function referenceTarget(
   else if (gitlab !== null) vendor = "gitlab";
   else if (sep === "#") vendor = "github";
   else return null;
+  const segments = path.split("/");
+  // A GITHUB REPOSITORY IS EXACTLY `owner/repo`: `a/b/c/d#2` names nothing
+  // there, and is words.
+  if (vendor === "github" && segments.length !== 2) return null;
   const base = vendor === "github" ? github : gitlab;
   if (base === null) return { vendor, href: null };
+  // SOMEBODY ELSE'S REPOSITORY is its mark and its words, linked nowhere: a
+  // link is built only to an owner the company works under ([ownsOwner]).
+  const host = hosts.find((h) => h.kind === vendor)!;
+  if (!ownsOwner(host, segments[0]!)) return { vendor, href: null };
   const tail =
     vendor === "github"
       ? sep === "@"
@@ -779,10 +863,7 @@ export function referenceTarget(
         : sep === "!"
           ? `-/merge_requests/${id}`
           : `-/issues/${id}`;
-  const encoded = path
-    .split("/")
-    .map((part) => encodeURIComponent(part))
-    .join("/");
+  const encoded = segments.map((part) => encodeURIComponent(part)).join("/");
   return { vendor, href: safeHref(`${base}/${encoded}/${tail}`) };
 }
 

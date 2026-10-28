@@ -578,6 +578,238 @@ describe("the pane", () => {
     expect(pane.textContent).not.toContain("GP-20 GP-20");
   });
 
+  // A CITED ADDRESS IS A BUTTON ONLY WHERE THE DASHBOARD BUILDS IT, labelled by
+  // the dashboard: an asker's label and its address as written are its words.
+  //
+  // Mutation: draw a url evidence as the live external button it was and the
+  // evil address is an anchor labelled "Sign in to GitHub".
+  test("a cited address opens only as the dashboard rebuilt it, never by the asker's label", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(
+          askItem({
+            ...DECISION,
+            evidence: [
+              {
+                kind: "url",
+                ref: "https://evil.example.net/c?q=secret",
+                label: "Sign in to GitHub",
+              },
+              {
+                kind: "url",
+                ref: "https://github.com/gophrase/backend/pull/14?ref=x",
+                label: "Approve here",
+              },
+            ],
+          }),
+        ),
+        link_hosts: {
+          hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }],
+        },
+      },
+    });
+    await settle();
+    const pane = document.querySelector(".crewlet-reading-pane")!;
+    const anchors = [...pane.querySelectorAll("a")].filter((a) =>
+      a.getAttribute("href")?.startsWith("https://"),
+    );
+    expect(anchors.map((a) => a.getAttribute("href"))).toEqual([
+      "https://github.com/gophrase/backend/pull/14",
+    ]);
+    // THE DASHBOARD'S LABEL AND THE APP'S MARK, never the asker's words.
+    expect(anchors[0]!.textContent).toContain("gophrase/backend#14");
+    expect(anchors[0]!.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
+    expect(pane.textContent).not.toContain("Approve here");
+    expect(pane.textContent).not.toContain("Sign in to GitHub");
+    // THE OTHER IS ITS ADDRESS AS WRITTEN, to read and copy.
+    expect(pane.textContent).toContain("https://evil.example.net/c?q=secret");
+  });
+
+  // A CITED ADDRESS READS AS THE SAME ADDRESS DOES IN A SENTENCE: what its
+  // mark means is said before its words, a reference is set in mono, and one
+  // that opens nothing still says whose it is (one helper draws both).
+  //
+  // Mutation: draw the evidence's mark and words by hand, without `kind` and
+  // `code`, and a screen reader hears no "GitHub" and the reference is prose.
+  test("a cited address says what its mark means, live or inert", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(
+          askItem({
+            ...DECISION,
+            evidence: [
+              { kind: "url", ref: "https://github.com/gophrase/backend/pull/14" },
+              { kind: "url", ref: "https://github.com/attacker/x" },
+            ],
+          }),
+        ),
+        link_hosts: {
+          hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }],
+        },
+      },
+    });
+    await settle();
+    const evidence = document.querySelector(".inbox-evidence")!;
+    const live = evidence.querySelector("a")!;
+    expect(live.textContent).toContain("GitHub: gophrase/backend#14");
+    expect(live.querySelector(".crewlet-inline-ref--code")).not.toBeNull();
+    const inert = [...evidence.querySelectorAll(".crewlet-inline-ref")].find((r) =>
+      r.textContent?.includes("attacker"),
+    )!;
+    expect(inert.closest("a")).toBeNull();
+    expect(inert.textContent).toBe("GitHub: https://github.com/attacker/x");
+  });
+
+  // A REBUILT ADDRESS IS LABELLED FROM WHAT IT WAS REBUILT FROM: a Confluence
+  // page's title is the asker's words, which the rebuilt address drops.
+  test("a cited Confluence page's button names its space and id, never its title", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(
+          askItem({
+            ...DECISION,
+            evidence: [
+              {
+                kind: "url",
+                ref: "https://acme.atlassian.net/wiki/spaces/DES/pages/123/Sign+in+to+GitHub",
+              },
+            ],
+          }),
+        ),
+        link_hosts: { hosts: [{ kind: "confluence", url: "https://acme.atlassian.net/wiki" }] },
+      },
+    });
+    await settle();
+    const pane = document.querySelector(".crewlet-reading-pane")!;
+    const button = [...pane.querySelectorAll("a")].find((a) =>
+      a.getAttribute("href")?.startsWith("https://acme.atlassian.net"),
+    )!;
+    expect(button.getAttribute("href")).toBe(
+      "https://acme.atlassian.net/wiki/spaces/DES/pages/123",
+    );
+    expect(button.textContent).toContain("DES page 123");
+    expect(pane.textContent).not.toContain("Sign in to GitHub");
+  });
+
+  // EVERY PART OF AN ASK IS ONE MESSAGE, each by its own opt-in (`scoped`):
+  // the question, the context, the reasoning, the recommendation, each option
+  // and its detail, in the pane, the Inbox row and the answered pane. Each
+  // part below holds a bare number and another part holds the repository, so
+  // a part that stops opting in reads its own words alone and loses its mark.
+  //
+  // Mutation: drop `scoped` at any one of those sites and its case fails.
+  describe("an ask's parts read the ask's whole message", () => {
+    const HOSTS = { hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }] };
+    const marked = (el: Element | null | undefined) =>
+      el?.querySelectorAll("[data-vendor]").length ?? 0;
+
+    test("the context, the reasoning, the recommendation and the options", async () => {
+      location.hash = "#/inbox?row=ask%3Ac-12";
+      const ask = askItem({
+        ...DECISION,
+        question: "Ship gophrase/backend?",
+        options: [
+          { id: "hold", label: "Take #14", detail: "after #15" },
+          { id: "ship", label: "Ship anyway" },
+        ],
+        recommended: "hold",
+        rationale: "#13 is safer.",
+      });
+      ask.ask.body = "After #12.";
+      mount({ answers: { decisions: decisionsOf(ask), link_hosts: HOSTS } });
+      await settle();
+      const pane = document.querySelector(".crewlet-reading-pane")!;
+      const hrefs = [...pane.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+      // THE CONTEXT and THE REASONING, whose links are checked and built.
+      expect(hrefs).toContain("https://github.com/gophrase/backend/issues/12");
+      expect(hrefs).toContain("https://github.com/gophrase/backend/issues/13");
+      // THE RECOMMENDATION, named in the reasoning's title.
+      expect(marked(pane.querySelector(".crewlet-reading-pane__reasoning strong"))).toBe(1);
+      // THE OPTION AND ITS DETAIL, each its own render.
+      const take = screen.getByRole("button", { name: /^Take/ });
+      expect(marked(take)).toBe(2);
+    });
+
+    test("the question, in the pane, in its Inbox row and once answered", async () => {
+      location.hash = "#/inbox?row=ask%3Ac-12";
+      const ask = askItem({ ...DECISION, question: "Apply #11?" });
+      ask.ask.body = "Assigned in gophrase/backend.";
+      mount({ answers: { decisions: decisionsOf(ask), link_hosts: HOSTS } });
+      await settle();
+      expect(marked(document.querySelector(".crewlet-reading-pane__title"))).toBe(1);
+      const list = screen.getByRole("navigation", { name: "Inbox" });
+      expect(marked(list)).toBeGreaterThanOrEqual(1);
+    });
+
+    test("the question of an answered ask", async () => {
+      const answered = answeredItem();
+      answered.ask = {
+        ...answered.ask,
+        decision: { ...DECISION, question: "Apply #11?" } as never,
+      };
+      answered.ask.body = "Assigned in gophrase/backend.";
+      location.hash = "#/inbox?row=ask%3Ac-20";
+      mount({
+        answers: {
+          decisions: decisionsOf(),
+          answered_decisions: { handle: "jane", items: [answered] },
+          link_hosts: HOSTS,
+        },
+      });
+      await settle();
+      expect(marked(document.querySelector(".crewlet-reading-pane__title"))).toBe(1);
+    });
+  });
+
+  // A REPLY IS ITS OWN MESSAGE: the ask's repository places the ask's numbers,
+  // never a reply's.
+  test("a reply's bare number is placed by the reply's own words", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    const ask = askItem({ ...DECISION, question: "Apply the #11 PR body?" });
+    ask.ask.body = "Assigned to you in gophrase/backend.";
+    const reply = (id: string, body: string) => ({
+      id,
+      task: "t-12",
+      author: "maya",
+      author_kind: "human",
+      body,
+      reply_to: "c-12",
+      created_at: new Date().toISOString(),
+    });
+    mount({
+      answers: {
+        decisions: decisionsOf(ask),
+        link_hosts: {
+          hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }],
+        },
+        work_comments: {
+          item: "t-12",
+          key: "LEAD-12",
+          title: "Q4 release plan",
+          comments: [
+            reply("c-20", "Done with #11."),
+            reply("c-21", "Merged in gophrase/web, see #5."),
+          ],
+        },
+      },
+    });
+    await settle();
+    const thread = screen.getByRole("region", { name: "Replies to this question" });
+    const hrefs = [...thread.querySelectorAll("a")]
+      .map((a) => a.getAttribute("href"))
+      .filter((h) => h?.startsWith("https://"));
+    expect(hrefs).toEqual([
+      "https://github.com/gophrase/web",
+      "https://github.com/gophrase/web/issues/5",
+    ]);
+    // THE ASK'S OWN TITLE IS STILL PLACED BY ITS CONTEXT.
+    const title = document.querySelector(".crewlet-reading-pane__title")!;
+    expect(title.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
+  });
+
   test("an option answers with one press, through the one write, and marks its notice read", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";
     mount({

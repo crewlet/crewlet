@@ -385,17 +385,25 @@ export interface RenderOptions {
   links?: LinkMode;
   /**
    * The whole message a run belongs to, which a bare `#11` is placed by
-   * (`messageScope`). [renderMarkdown] sets it to its source; a surface whose
-   * message spans several renders (an ask's question, context and options)
-   * says so with `TokenScope` instead.
+   * (`messageScope`). [renderMarkdown] sets it to its source.
    */
   message?: string;
+  /**
+   * The render is ONE PART of the message the enclosing `TokenScope` names
+   * (an ask's context, beside its question and options), and its runs are
+   * read against that message instead of [message].
+   *
+   * OPT IN, NEVER INHERITED: a render under a scope that does not say it is
+   * part of it is its own message, so a reply drawn under an ask places a
+   * bare `#11` by the repository the reply names, never by the ask's.
+   */
+  scoped?: boolean;
 }
 
 /** What the inline walk needs of [RenderOptions]. */
 export type InlineOptions = Pick<
   RenderOptions,
-  "breaks" | "highlight" | "image" | "links" | "message" | "prose"
+  "breaks" | "highlight" | "image" | "links" | "message" | "prose" | "scoped"
 > & {
   /**
    * The walk is inside a link's own label ([asLabel]), whose words are
@@ -615,7 +623,7 @@ function tokenise(said: ReactNode, key: string, options: InlineOptions): ReactNo
       text: piece,
       links,
       highlight: terms,
-      message: options.message ?? piece,
+      message: options.scoped ? undefined : (options.message ?? piece),
     });
   });
 }
@@ -623,11 +631,18 @@ function tokenise(said: ReactNode, key: string, options: InlineOptions): ReactNo
 /**
  * Operator-facing words that are NOT Markdown (an Inbox row's excerpt, a
  * question, an answer's option, a notice's quote) with their inline tokens
- * drawn. No token links unless the caller says it may (`anchor`, `checked`): most such
- * words sit inside a control or a row that is a link already.
+ * drawn. No token links unless the caller says it may (`anchor`, `checked`):
+ * most such words sit inside a control or a row that is a link already.
+ * `scoped` reads them as one part of the enclosing `TokenScope`'s message
+ * ([RenderOptions.scoped]); without it they are their own.
  */
-export function renderTokens(text: string, key = "t", links: LinkMode = "text"): ReactNode {
-  return tokenise(text, key, { links, message: text });
+export function renderTokens(
+  text: string,
+  key = "t",
+  links: LinkMode = "text",
+  scoped = false,
+): ReactNode {
+  return tokenise(text, key, { links, message: text, scoped });
 }
 
 // --- block rendering -------------------------------------------------------

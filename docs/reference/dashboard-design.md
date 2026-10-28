@@ -3822,7 +3822,7 @@ from `@crewlethq/ui`), and a seat's handle by its words alone:
 | Written | Drawn |
 |---|---|
 | `#ffe100` in words, or a code span that is one colour (`` `#fff` ``, `` `rgb(255, 225, 0)` ``) | A swatch before the value |
-| A web address | The mark of the app it belongs to (or a globe), and the reference it is (`gophrase/backend#14`, `Message in gophrase`, `~design-review`, `MOB-12`, a page's title) in place of the whole address, which the link's title keeps |
+| A web address | The mark of the app it belongs to (or a globe), and the reference it is (`gophrase/backend#14`, `Message in gophrase`, `~design-review`, `MOB-12`, `DES page 123`) in place of the whole address, which the link's title keeps |
 | `[label](address)` | Its label as written, after the mark of the app its address belongs to |
 | `owner/repo#14`, `group/project!7`, `owner/repo@b5362d2` | The code host's mark, linked to the company's code host |
 | `owner/repo`, under an owner the company works in | The code host's mark, linked to the repository |
@@ -3855,38 +3855,51 @@ refused:
   `[https://github.com/a/b/pull/1](https://login.example.net)` draws no
   GitHub mark. A label built from an address names what anybody could have
   chosen only with its site: an Atlassian Cloud tenant the company did not
-  configure is said after its key or page title ("Sign in to GitHub
-  (evil.atlassian.net)"), and a path segment that decodes to a slash
+  configure is said after its key or page ("DES page 123
+  (evil.atlassian.net)"), a page is named by its space and id and never by
+  the title its address carries, a Mattermost channel only by a name
+  Mattermost allows, and a path segment that decodes to a slash
   (`a%2Fevil`) or that no code host allows labels nothing, so the address
   shows as its host and path.
 - **Too slow.** Every pattern runs in time linear in its run, since a
   comment an agent wrote is rendered by every reader, and a run is read once
   rather than on every render of the surface around it.
 
-**The company's hosts reach every reader, and nothing else of its
-integrations does.** A self-hosted GitLab, an Enterprise Server, a Mattermost
-or a Jira site lives at an address no rule can guess, so the frame reads
-`link_hosts` once ([API Endpoints](api-endpoints.md)): a kind and a base
-address per configured app, which every reader may ask for, where
-`integrations` is an administrator's. A code host's row also names its
-owners (the organizations or top-level groups the company works in), which
-is what makes a bare `owner/repo` a repository, and it carries no repository,
-project, team, credential or health. A bare reference links by the host
-alone; with both GitHub and GitLab configured it goes to the host whose
-owners hold it, and one neither or both hold is left as words. With no code host configured, `owner/repo#14` keeps GitHub's mark
-and links nowhere. The project keys a key needs are the reader's own
-`work_projects`, read once by the frame where Worklet is served to them. No
-mark is ever fetched from anywhere: every mark is the design system's.
+**The company's hosts reach every reader, and nothing else of its integrations
+does.** A self-hosted GitLab, an Enterprise Server, a Mattermost or a Jira
+site lives at an address no rule can guess, so the frame reads `link_hosts`
+once ([API Endpoints](api-endpoints.md)): a kind and a base address per
+configured app, which every reader may ask for, where `integrations` is an
+administrator's. A code host's row also names its owners (the organizations or
+top-level groups the company works in), which is what makes a bare
+`owner/repo` a repository, and it carries no repository, project, team,
+credential or health. A link to a code host is built only to a repository
+under an owner its row names: `attacker/exfil#1` keeps GitHub's mark and links
+nowhere, since an owner and a name are the writer's words, and a code host
+whose row names no owners (a company that configured no organization, group or
+repository) links no reference at all. With both GitHub and GitLab configured,
+a reference goes to the host whose owners hold it, and one neither or both
+hold is left as words. On GitHub a repository is exactly `owner/repo`, so a
+longer path is words. With no code host configured, `owner/repo#14` keeps
+GitHub's mark and links nowhere. The project keys a key needs are the reader's
+own `work_projects`, read once by the frame where Worklet is served to them.
+No mark is ever fetched from anywhere: every mark is the design system's.
 
 **A bare `#11` is placed by its message.** `#11` alone is a list's number, a
 rank or an issue in some repository, so it is a reference only where the
 message it is in says which: the same sentence binds it (`#7 in
 gophrase/frontend`, `gophrase/frontend PR #7`, read as one reference); the
 message names that number in full (`gophrase/backend#11`); or the message
-names exactly one repository. Anything else leaves it words. A message is
+names exactly one repository. Anything else leaves it words. The trade-off
+is chosen: in a message that names one repository, a rank or a heading's
+number ("our #1 priority", a heading "#2 Rollout") is read as an issue in
+it too, as GitHub's own autolinking reads one in that repository's
+comments, rather than guess at the words around a number. A message is
 one comment, one page or one answer, and an ask's question, context,
 reasoning and options together (`TokenScope`), so the Inbox's "the #11 PR
-body" is placed by the `gophrase/backend` its context names. A number with a
+body" is placed by the `gophrase/backend` its context names. A render is part
+of a scope only when it says so (`scoped`): a reply drawn under an ask is its
+own message, and its numbers are placed by its own words. A number with a
 leading zero, inside a word, a path or an entity, or in code is never one.
 
 **A token is a link only where a link may be.** Inside a control or a link (an
@@ -3900,7 +3913,10 @@ configured code host, and an address on a configured host rebuilt from what
 it names, with no query or fragment. Any other address there is drawn
 inert, as written and with the host it names, readable and copyable and never
 a control, because `https://evil.example/?q=<what it read>` is how an
-injected instruction would carry words away ([ADR-0061](../../adr/0061-a-read-is-named-in-the-answer-never-drawn-as-a-card.md)).
+injected instruction would carry words away. An address an ask cites as
+evidence is the same: a button only when it is rebuilt on the company's host,
+labelled by the dashboard with the reference it is and its app's mark, and
+otherwise the address as written, never the asker's label ([ADR-0061](../../adr/0061-a-read-is-named-in-the-answer-never-drawn-as-a-card.md)).
 An outbound link a token makes opens a tab with `rel="noopener noreferrer"`
 and says so to a screen reader, as every outbound link in rendered Markdown
 does.
