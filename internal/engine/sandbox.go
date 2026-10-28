@@ -1198,6 +1198,10 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// answer spent its attempts on a wait. (A spent window was held
 		// above, before the abandon.)
 		if refusal, refused := resumeRefusal(err); refused {
+			// AND THE SEAT IS PARKED ON IT, as a dispatch that met it
+			// parks it: its one steady condition and its chain's probe,
+			// whose release re-fires this resume (providerpark.go).
+			e.parkResumeOnLimit(ctx, in.Turn.Handle(), err)
 			return &sandbox.TurnRefused{Cause: err, Refusal: refusal}
 		}
 		return err
@@ -2484,8 +2488,9 @@ func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.R
 
 // seatCannotRun reports whether the turn route resumes on handle's seat would
 // only fail on a condition that ends at an instant, and if so what it waits
-// on: the seat's budget, or a usage limit every model its first call could take
-// already reported ([Engine.providerRefusing]).
+// on: the seat's budget, a park this node holds the seat in for its models'
+// limit ([Engine.providerParkRefusal]), or a usage limit every model its first
+// call could take already reported ([Engine.providerRefusing]).
 //
 // BY ROUTE, because the first call differs, and so does what the resume has
 // to do before it makes it:
@@ -2523,6 +2528,9 @@ func (e *Engine) seatCannotRun(ctx context.Context, handle string, route sandbox
 		if refusal, held := e.budgetHold(ctx, c, handle); held {
 			return refusal, true
 		}
+	}
+	if refusal, parked := e.providerParkRefusal(handle); parked {
+		return refusal, true
 	}
 	if reason, retry, limited := e.providerRefusing(ctx, c, handle, route); limited {
 		return sandbox.Refusal{Condition: waitProvider, Reason: reason, Until: retry}, true

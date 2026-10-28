@@ -45,7 +45,8 @@ and charged on collection, its rounds bounded by the CLI's own turn cap.
 ([ADR-0064](0064-a-model-at-its-limit-parks-the-seats-it-holds-and-a-seat-says-one-steady-thing.md)).
 A launch whose every runner member sits out is the exhausted chain a call
 reports, each member's refusal on it (`chain.Pick`), so the seat is parked on
-it and a resume waits for it as for a reviewer's limit. A run that ended on its
+it, whether a dispatch's launch or a resumed segment's relaunch met it, and a
+resume waits for the park as for a reviewer's limit. A run that ended on its
 vendor's limit report is read by the classification every call takes, the
 CLI's own terminal event first (Claude Code's result line and its
 `api_error_status`, carried from the box as `sandbox.Result.Event`), against

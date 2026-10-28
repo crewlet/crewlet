@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -215,17 +217,25 @@ func (m *midTurnLimit) limitedErr() error {
 // limitedResume is a drain rig whose swe seat's coding run has finished and
 // whose resume has met the model's limit mid-turn, with the waiter stopped so
 // nothing but a signal can bring the kept completion back: the engine, the
-// model, how many times the gate admitted a resume, and how many it had once
-// the refusal settled.
+// model, how many times the gate admitted a resume, how many it had once the
+// refusal settled, the provider park alarms the case fires, and every
+// seat_provider_parked the engine published.
 type limitedResume struct {
 	r        *drainRig
 	e        *Engine
 	model    *midTurnLimit
 	admitted *atomic.Int32
 	settled  int32
+	alarms   *fakeAlarms
+
+	mu     sync.Mutex
+	parked []types.SeatProviderParked
 }
 
-func newLimitedResume(t *testing.T) *limitedResume {
+// newLimitedResume is a [limitedResume] whose model is limited until retryIn
+// from now: the instant its refusal names, which the resume's own hold waits
+// for.
+func newLimitedResume(t *testing.T, retryIn time.Duration) *limitedResume {
 	t.Helper()
 	r := newDrainRig(t)
 	var admitted atomic.Int32
@@ -239,9 +249,19 @@ func newLimitedResume(t *testing.T) *limitedResume {
 		}
 	}
 	e := r.start(t)
-	model := &midTurnLimit{retry: time.Now().Add(time.Hour)}
-	model.limited.Store(true)
-	withModels(t, e, model)
+	lr := &limitedResume{r: r, e: e, admitted: &admitted, alarms: &fakeAlarms{}}
+	// THE PARK'S PROBE IS FIRED BY THE CASE, never by time.
+	e.providerParks.after = lr.alarms.after
+	e.backends.Queue.AddPublishListener(func(_ context.Context, _ string, ev *events.Event) {
+		if parked, ok := events.DataAs[*types.SeatProviderParked](ev); ok && parked != nil {
+			lr.mu.Lock()
+			lr.parked = append(lr.parked, *parked)
+			lr.mu.Unlock()
+		}
+	})
+	lr.model = &midTurnLimit{retry: time.Now().Add(retryIn)}
+	lr.model.limited.Store(true)
+	withModels(t, e, lr.model)
 	r.seedRun(t, e, "t1")
 	handlers := e.backends.Queue.InFlightCount()
 
@@ -249,7 +269,7 @@ func newLimitedResume(t *testing.T) *limitedResume {
 	// THE REAL RESUME, into the limit: the run is claimed, collected, and
 	// its turn calls the model, which refuses.
 	eventually(t, "the resumed turn to meet the model's limit", func() bool {
-		return model.calls.Load() > 0
+		return lr.model.calls.Load() > 0
 	})
 	stopWaiters(e)
 	eventually(t, "the refused resume's handlers to return", func() bool {
@@ -258,7 +278,7 @@ func newLimitedResume(t *testing.T) *limitedResume {
 	eventually(t, "the run to be given back to running", func() bool {
 		return r.run(t, e, "t1").Status == sandbox.StatusRunning
 	})
-	lr := &limitedResume{r: r, e: e, model: model, admitted: &admitted, settled: admitted.Load()}
+	lr.settled = admitted.Load()
 	// NEVER HANDED BACK: a NAKed completion comes back on the broker's
 	// backoff, a second doubling, with nothing announcing it.
 	time.Sleep(2500 * time.Millisecond)
@@ -270,6 +290,35 @@ func newLimitedResume(t *testing.T) *limitedResume {
 		t.Fatal("a completion refused for a limit quiesced the seat's control topic")
 	}
 	return lr
+}
+
+// parks is every seat_provider_parked the engine published, in order.
+func (lr *limitedResume) parks() []types.SeatProviderParked {
+	lr.mu.Lock()
+	defer lr.mu.Unlock()
+	return slices.Clone(lr.parked)
+}
+
+// probe fires the one probe alarm the seat's park armed, as its instant would.
+func (lr *limitedResume) probe(t *testing.T) {
+	t.Helper()
+	live := lr.alarms.live()
+	if len(live) != 1 {
+		t.Fatalf("%d probe alarms armed, want the swe park's", len(live))
+	}
+	live[0].fire()
+}
+
+// announce offers the run's completion to the coordinator as the waiter's
+// next poll would, and returns what the coordinator answered.
+func (lr *limitedResume) announce(t *testing.T) error {
+	t.Helper()
+	run := lr.r.run(t, lr.e, "t1")
+	payload := types.SandboxRunCompleted{Agent: run.AgentID, AgentHandle: run.AgentHandle,
+		RoleName: run.Role, TurnID: run.TurnID, WorkKey: run.WorkKey, LaunchID: run.LaunchID,
+		SandboxID: run.SandboxID, CodingAgent: run.CodingAgent}
+	return lr.e.sandbox.Load().coordinator.OnCompleted(t.Context(), payload,
+		events.New(payload, events.TraceContext{}))
 }
 
 // resumedOnce lifts the limit with lift, which must signal the wait itself,
@@ -290,50 +339,130 @@ func (lr *limitedResume) resumedOnce(t *testing.T, lift func()) {
 	}
 }
 
-// A RESUMED TURN THAT MEETS THE LIMIT MID-TURN IS A WAIT, END TO END: the real
-// resumer runs the real turn, the model refuses a round in, the claim is given
-// back and the completion acknowledged and kept, and it is never handed back to
-// the broker. When the seat's provider park probes and the model answers, the
-// release signals the wait and the completion resumes, once.
+// A RESUMED TURN THAT MEETS THE LIMIT MID-TURN IS A WAIT, END TO END, AND IT
+// PARKS ITS SEAT AS A DISPATCH WOULD. The real resumer runs the real turn, the
+// model refuses a round in, the claim is given back and the completion
+// acknowledged and kept, and it is never handed back to the broker. The seat's
+// mail is held by its run, so no delivery of its own ever met the limit, and
+// still the seat is parked on it: seat_provider_parked names the entry and when
+// it is tried again, and the chain's probe is armed for that instant. When the
+// probe finds the model answering, the release signals the wait and the
+// completion resumes, once.
 //
 // Mutation: drop the refusal mapping from resumeTurn and the completion is
-// NAKed into the limit; drop the signal from the park's release and nothing
-// brings the kept completion back.
+// NAKed into the limit; drop the park from it and nothing is published or
+// armed; drop the signal from the park's release and nothing brings the kept
+// completion back.
 func TestAResumeThatMeetsALimitMidTurnWaitsForTheParksRelease(t *testing.T) {
 	t.Parallel()
-	lr := newLimitedResume(t)
-	alarms := &fakeAlarms{}
-	lr.e.providerParks.after = alarms.after
-	refusal := lr.model.limitedErr()
-	limit, limited := chain.Limited(&chain.Error{Attempted: []string{"default"},
-		Failures: []error{refusal}, Err: refusal})
-	if !limited {
-		t.Fatalf("the fixture's refusal is not a limit: %v", refusal)
+	lr := newLimitedResume(t, time.Hour)
+	parks := lr.parks()
+	if len(parks) != 1 || parks[0].AgentHandle != "swe" ||
+		!slices.Equal(parks[0].ProviderKeys, []string{"default"}) || !parks[0].RetryAt.Equal(lr.model.retry) {
+		t.Fatalf("the resume that met the limit published %+v, want the swe seat parked on "+
+			"default until %v", parks, lr.model.retry.UTC())
 	}
-	if _, parked, err := lr.e.providerPark(t.Context(), "swe", limit); err != nil || !parked {
-		t.Fatalf("providerPark = %v, %v", parked, err)
-	}
-	lr.resumedOnce(t, func() {
-		live := alarms.live()
-		if len(live) != 1 {
-			t.Fatalf("%d probe alarms armed, want the swe park's", len(live))
-		}
-		live[0].fire()
-	})
+	lr.resumedOnce(t, func() { lr.probe(t) })
 }
 
-// A PUBLISHED COMPANY SIGNALS THE RESUMES WAITING ON A LIMIT: it builds every
-// entry afresh, so a completion kept for its models' limit is re-checked under
-// it at once rather than at the waiter's next poll.
+// A COMPLETION WHOSE RESUME PARKED ITS SEAT WAITS FOR THE PARK, NOT FOR ITS OWN
+// INSTANT. The resume met the limit after its claim, so its node holds the job
+// until the instant the limit named, and the seat is parked. The probe at that
+// instant meets the limit again (the vendor's window outlasts the hour the
+// backend benches an entry for), so the park stands, renewed, and the instant
+// passes: the waiter's next announcement is then refused at the gate, before
+// its claim, with no collection, no review and no box, where the review's own
+// chain, ready again, admitted it into the window the probe had just found
+// spent. The probe that finds the model answering releases the park, and the
+// completion resumes once.
 //
-// Mutation: drop the provider readmit from the converge, and nothing brings the
-// kept completion back.
+// Mutation: drop the park from the turn gate (seatCannotRun), and the
+// announcement past the instant is admitted and reviewed into the limit.
+func TestACompletionAtALimitWaitsForItsParkNotItsInstant(t *testing.T) {
+	t.Parallel()
+	lr := newLimitedResume(t, 3*time.Second)
+	lr.probe(t)
+	if parks := lr.parks(); len(parks) != 2 {
+		t.Fatalf("%d parks published, want the resume's and the probe's renewal", len(parks))
+	}
+	time.Sleep(time.Until(lr.model.retry) + 100*time.Millisecond)
+
+	calls := lr.model.calls.Load()
+	err := lr.announce(t)
+	var refused *sandbox.TurnRefused
+	if !errors.As(err, &refused) || refused.Condition != waitProvider {
+		t.Fatalf("the announcement past the instant = %v, want the park's refusal", err)
+	}
+	if got := lr.admitted.Load(); got != lr.settled {
+		t.Fatalf("the announcement past the instant was admitted (%d admissions, want %d) "+
+			"while the park stood", got, lr.settled)
+	}
+	if got := lr.model.calls.Load(); got != calls || lr.r.collected.Load() != 1 {
+		t.Fatalf("the model was asked %d more times and the box collected %d times: the "+
+			"parked seat's job was run into the limit", got-calls, lr.r.collected.Load())
+	}
+	lr.resumedOnce(t, func() { lr.probe(t) })
+}
+
+// A PUBLISHED COMPANY BUILDS EVERY ENTRY AFRESH, so a completion kept for a
+// limit is re-checked under it at once rather than at the waiter's next poll:
+// one its resume met, whose park the new models release, and one the gate
+// refused before its claim for a limit its entry knew, which the company's own
+// signal re-fires.
+//
+// Mutation: drop the release of a park whose models changed from the converge
+// (reconcileProviderParks), and the parked seat's completion waits for a probe;
+// drop the provider readmit from the converge, and the gate's kept completion
+// waits for a poll that never comes.
 func TestAPublishedCompanyResumesACompletionKeptForALimit(t *testing.T) {
 	t.Parallel()
-	lr := newLimitedResume(t)
-	lr.resumedOnce(t, func() {
-		next := *lr.e.Company()
-		lr.e.epoch.current.Store(&next)
-		lr.e.followCompany(t.Context(), &next)
+	t.Run("met by its resume", func(t *testing.T) {
+		t.Parallel()
+		lr := newLimitedResume(t, time.Hour)
+		lr.resumedOnce(t, func() {
+			withModels(t, lr.e, lr.model)
+			lr.e.followCompany(t.Context(), lr.e.Company())
+		})
+	})
+	t.Run("refused at the gate", func(t *testing.T) {
+		t.Parallel()
+		r := newDrainRig(t)
+		var admitted, refusals atomic.Int32
+		r.gate = func(next sandbox.TurnGate) sandbox.TurnGate {
+			return func(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
+				ctx, release, err := next(ctx, handle, route)
+				var refused *sandbox.TurnRefused
+				switch {
+				case err == nil:
+					admitted.Add(1)
+				case errors.As(err, &refused) && refused.Condition == waitProvider:
+					refusals.Add(1)
+				}
+				return ctx, release, err
+			}
+		}
+		e := r.start(t)
+		entry := &spentEntry{retry: time.Now().Add(time.Hour)}
+		entry.limited.Store(true)
+		withModels(t, e, entry)
+		r.seedRun(t, e, "t1")
+		r.runner.Finish(sandbox.Result{Success: true, Text: "fixed the flaky test"})
+		eventually(t, "the completion to be refused at the gate for the limit", func() bool {
+			return refusals.Load() > 0
+		})
+		stopWaiters(e)
+		time.Sleep(time.Second)
+		if got := admitted.Load(); got != 0 {
+			t.Fatalf("%d resumes admitted while the entry knew its limit", got)
+		}
+
+		withModels(t, e, answers{})
+		e.followCompany(t.Context(), e.Company())
+		eventually(t, "the kept completion to resume under the published company", func() bool {
+			return r.run(t, e, "t1").Status != sandbox.StatusRunning
+		})
+		if got := admitted.Load(); got != 1 {
+			t.Fatalf("the kept completion was admitted %d times under the new company, want once", got)
+		}
 	})
 }

@@ -750,7 +750,15 @@ entry is tried again. Those are the reviewer's chain for a completion, whose
 first call is its review (`llm_review`, else `llm`), and the members a launch
 can take for an answer, whose first call is the relaunch that carries the run
 on: a seat whose executor sits out while its reviewer answers has its
-finished run reviewed and delivered at once.
+finished run reviewed and delivered at once. **A resumed segment that meets the
+limit itself parks the seat**, as a dispatch's turn does: a review whose chain
+is spent, or a send-back or an answer whose relaunch finds every runner member
+sitting out, which is how a plan spent inside a coding run is usually met. And
+**a parked seat runs no resume** until its park is released, whichever chain
+the resume's first call would take: a completion its review sent back to
+spent runners waits for the probe that finds them answering, rather than being
+reviewed again, and its box launched again, every time the backend's hour-long
+sit-out of the entry ends inside a longer vendor window.
 
 The sit-out is the entry's own, on the node that heard the sentence: every other
 node learns the same thing from its own calls, once per window. A later sit-out
@@ -1102,8 +1110,10 @@ which reads as a [limited chain](#falling-back-between-entries). On a dispatch
 the turn fails (`llm_unavailable`, the seat's `last_error`, which is no stop)
 and the seat is parked on its provider (`seat_provider_parked`), reading
 `stopped` with the reason `provider` until a probe of the chain answers or the
-company's models change; a resumed segment's relaunch waits for the first
-member to be tried again instead. A member the launch hands off
+company's models change. A resumed segment's relaunch (a reviewer's send-back,
+a person's answer) that meets it parks the seat the same way, though no
+delivery of the seat's met it, and its resume waits for the park's release
+rather than for the first member's instant. A member the launch hands off
 from is announced against the turn as `provider_fallback`, as a call's is.
 
 The credential guard that refuses a remote run nothing signs in, and names
