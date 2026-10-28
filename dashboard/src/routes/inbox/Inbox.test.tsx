@@ -143,7 +143,11 @@ const QUIET: Record<string, Answer> = {
 let asked: { kind: string; params: Record<string, unknown> }[];
 let posted: { tool: string; args: Record<string, unknown> }[];
 /** What the engine answers a press of each tool with, where not `applied`. */
-let actAnswers: Record<string, { outcome: string; receipt: Record<string, unknown> }>;
+let actAnswers: Record<
+  string,
+  | { outcome: string; receipt: Record<string, unknown> }
+  | { refused: number; body: Record<string, unknown> }
+>;
 
 /**
  * Midday on the company's clock (the fixture org keeps UTC).
@@ -170,6 +174,12 @@ beforeEach(() => {
       const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
       posted.push({ tool, args: body.args });
       const answer = actAnswers[tool] ?? { outcome: "applied", receipt: {} };
+      if ("refused" in answer) {
+        return new Response(JSON.stringify(answer.body), {
+          status: answer.refused,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       return new Response(
         JSON.stringify({
           tool,
@@ -850,10 +860,15 @@ describe("the pane", () => {
       pause_ttl_seconds: 3_600,
       declined_answers: [] as string[],
     };
-    const answerRun = async (after: Record<string, unknown>, others: object[] = []) => {
-      actAnswers = {
-        answer_run: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
-      };
+    const answerRun = async (
+      after: Record<string, unknown>,
+      others: object[] = [],
+      press: (typeof actAnswers)[string] = {
+        outcome: "pending",
+        receipt: { launch_id: "q1", answer_id: "a1" },
+      },
+    ) => {
+      actAnswers = { answer_run: press };
       location.hash = "#/inbox?row=run%3Aturn-7";
       mount({
         answers: {
@@ -903,6 +918,32 @@ describe("the pane", () => {
       expect(outcome()).toBe(
         "Answer recorded: “Yes, delete it.”. The Senior Backend Engineer is busy on GP-4’s run and picks this up next.",
       );
+    });
+
+    test("refused as answered already, says whose and when on the reader's clock", async () => {
+      await answerRun(
+        {
+          status: "answered",
+          answer_ids: ["a0"],
+          answered_by: "miles",
+          answered_at: "2026-09-30T11:35:00Z",
+        },
+        [],
+        {
+          refused: 409,
+          body: {
+            error: "not_running",
+            tool: "answer_run",
+            detail: "This question was already answered by @miles, so your answer was not used.",
+          },
+        },
+      );
+      await settle();
+      const strip = document.querySelector(".crewlet-refusal-strip")?.firstChild?.textContent ?? "";
+      expect(strip).toMatch(
+        /^This question was already answered by miles at \S+, so your answer was not used\.$/,
+      );
+      expect(strip).not.toContain("UTC");
     });
 
     test("is refused, naming whose answer was used, when another was recorded first", async () => {

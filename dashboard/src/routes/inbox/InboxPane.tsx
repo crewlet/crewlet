@@ -678,6 +678,9 @@ function RunPane({
   const [unused, setUnused] = useState<string | null>(null);
   // ANSWERED BY SOMEBODY ELSE FIRST: nothing is left to answer here.
   const [superseded, setSuperseded] = useState(false);
+  // THE ENGINE REFUSED THIS ANSWER because the question was answered: said
+  // here off the run's record, on the reader's own clock.
+  const [refusedAnswered, setRefusedAnswered] = useState(false);
   const runs = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
   const record = runs.data?.runs.find((r) => r.turn_id === run.turn_id);
   const fate = given ? answerFate(given, record, runs.data !== undefined) : null;
@@ -712,8 +715,7 @@ function RunPane({
     // NOT USED, so the person is told so and why, never left looking at
     // "Sent" for an answer the run will not read.
     if (fate === "superseded") {
-      const by = record?.answered_by ? ` by ${record.answered_by}` : "";
-      setUnused(`This question was already answered${by}, so your answer was not used.`);
+      setUnused(answeredAlready(record, now));
       setSuperseded(true);
     } else {
       setUnused(
@@ -724,7 +726,7 @@ function RunPane({
     }
     setGiven(null);
     onSettled(null, undefined, true);
-  }, [fate, given, frame.name, onSettled, record?.answered_by]);
+  }, [fate, given, frame.name, onSettled, record, now]);
 
   // THE SEAT'S OTHER JOB, while this answer waits for it: another of the
   // seat's coding runs holding the seat.
@@ -742,6 +744,11 @@ function RunPane({
       { turn_id: run.turn_id, answer },
       { done: `Sent your answer to ${frame.name}’s coding run` },
     );
+    const answeredFirst = result?.kind === "refused" && result.code === "not_running";
+    setRefusedAnswered(answeredFirst);
+    // A REFUSAL RAISES NO READ FLOOR, so the record is asked again for who
+    // answered and when.
+    if (answeredFirst) runs.refetch();
     if (result && (result.kind === "applied" || result.kind === "pending")) {
       const receipt = (result.receipt ?? {}) as { launch_id?: unknown; answer_id?: unknown };
       setUnused(null);
@@ -813,7 +820,18 @@ function RunPane({
               </WriteButton>
             }
           />
-          <RefusalNote write={write} />
+          {refusedAnswered && record?.answered_by ? (
+            <RefusalStrip
+              onDismiss={() => {
+                setRefusedAnswered(false);
+                write.dismiss();
+              }}
+            >
+              {answeredAlready(record, now)}
+            </RefusalStrip>
+          ) : (
+            <RefusalNote write={write} />
+          )}
         </Stack>
       )}
       <Text as="p" variant="caption">
@@ -830,6 +848,16 @@ function RunPane({
  * What a seat busy on another coding run is doing, for an answer waiting on it:
  * "The Senior Backend Engineer is busy on GP-4’s run and picks this up next."
  */
+/**
+ * A question somebody else's answer was recorded against first: by whom, and
+ * when on the READER's clock ([moment]), never the engine's.
+ */
+function answeredAlready(record: SandboxRun | undefined, now: number): string {
+  const by = record?.answered_by ? ` by ${record.answered_by}` : "";
+  const at = record?.answered_at ? ` at ${moment(record.answered_at, now)}` : "";
+  return `This question was already answered${by}${at}, so your answer was not used.`;
+}
+
 function busyLine(busy: SandboxRun, name: string): string {
   const who = busy.role ? `The ${busy.role}` : name;
   const on = busy.work_item?.key ? `on ${busy.work_item.key}’s run` : "on another coding run";
