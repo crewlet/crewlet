@@ -521,6 +521,14 @@ A third-party MCP server holds its own schema and is not checked here.
   names it. A model or an MCP client reads the note after the answer. An act
   or work API answer, which a person reads, never carries it. The call is logged as `tool_args_outside_schema` and
   counted in `crewlet.tools.args_outside_schema`, by tool.
+- **An argument sent as `null` is one nobody sent,** to the check and to the
+  tool alike: the call reads as though it were left out, so it changes
+  nothing, and a `null` for an argument the tool does not take is not
+  refused. A `null` is a value only where the tool's schema declares it one,
+  and there it clears what it names: an update's `due`, `start`,
+  `estimate_minutes` and `points`, and a project's `target_date`. Inside an
+  object argument a `null` is the object's to read, as a custom field's value
+  in `fields` is cleared by one.
 - **The lenient readings are kept.** A number or a boolean where a string
   belongs, one string or a comma-separated one where a list belongs, and a
   numeric string where a number belongs are read exactly as before.
