@@ -484,27 +484,64 @@ func (s *Segment) lookup(t Trigram) ([]byte, bool) {
 	return nil, false
 }
 
+// ordinals reads one posting list of s in order, holding each ordinal to s's
+// blob table as it is read — above the one before it, and below the table's
+// count — so a list that is not the format's is refused by the read that
+// meets it and never followed past the table. The ONE reader of a list:
+// decoding one, narrowing a set by one and keeping one decoded as far as a
+// lookup has needed it (lookup.go) all read through it. A read that stops
+// part way has neither checked nor answered what lies past where it stopped.
+type ordinals struct {
+	list  []byte
+	count uint64
+	// at is the ordinal last read, once one has been (began).
+	at    uint32
+	began bool
+	// err is why the read stopped short of the list's end, if it did.
+	err error
+}
+
+// ordinals is a read of list, a posting list of s, from its start.
+func (s *Segment) ordinals(list []byte) ordinals {
+	return ordinals{list: list, count: uint64(s.count)}
+}
+
+// next reads the list's next ordinal into at, and reports false at the
+// list's end, or at bytes that are not the format's, which err then names.
+func (o *ordinals) next() bool {
+	if o.err != nil || len(o.list) == 0 {
+		return false
+	}
+	v, n := binary.Uvarint(o.list)
+	if n <= 0 {
+		o.err = fmt.Errorf("%w: a posting list that is not uvarints", ErrMalformed)
+		return false
+	}
+	o.list = o.list[n:]
+	if o.began {
+		if v == 0 || v > o.count {
+			o.err = fmt.Errorf("%w: a posting list that does not rise within its blobs", ErrMalformed)
+			return false
+		}
+		v += uint64(o.at)
+	}
+	if v >= o.count {
+		o.err = fmt.Errorf("%w: a posting names blob %d of %d", ErrMalformed, v, o.count)
+		return false
+	}
+	o.at, o.began = uint32(v), true
+	return true
+}
+
 // decode appends the ordinals list encodes to dst, held to s's blob table:
 // each below its count, each above the one before.
 func (s *Segment) decode(list []byte, dst []uint32) ([]uint32, error) {
-	var prev uint64
-	for first := true; len(list) > 0; first = false {
-		v, n := binary.Uvarint(list)
-		if n <= 0 {
-			return nil, fmt.Errorf("%w: a posting list that is not uvarints", ErrMalformed)
-		}
-		list = list[n:]
-		if !first {
-			if v == 0 || v > uint64(s.count) {
-				return nil, fmt.Errorf("%w: a posting list that does not rise within its blobs", ErrMalformed)
-			}
-			v += prev
-		}
-		if v >= uint64(s.count) {
-			return nil, fmt.Errorf("%w: a posting names blob %d of %d", ErrMalformed, v, s.count)
-		}
-		dst = append(dst, uint32(v))
-		prev = v
+	o := s.ordinals(list)
+	for o.next() {
+		dst = append(dst, o.at)
+	}
+	if o.err != nil {
+		return nil, o.err
 	}
 	return dst, nil
 }

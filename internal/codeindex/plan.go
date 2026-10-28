@@ -2,7 +2,6 @@ package codeindex
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -110,18 +109,39 @@ type Plan struct {
 
 // clause is a clause of the prefilter the index can look up: every literal
 // of it three bytes or more in the form the index holds it.
+//
+// ITS TRIGRAMS ARE SORTED BY HOW MANY OF ITS LITERALS HOLD THEM, once a plan
+// rather than once a segment searched, so that a lookup reads each list the
+// clause names once, whichever literals need it (lookup.go): those every
+// literal holds (shared), those two or more hold and some do not (common),
+// and those one holds alone (alternative.own).
 type clause struct {
 	alts []alternative
+	// shared is the trigrams every literal holds, ascending; none where no
+	// trigram is in them all.
+	shared []Trigram
+	// common is the trigrams two or more literals hold and another does
+	// not, ascending; a literal names those it holds by their places here.
+	common []Trigram
+	// whole is whether some literal holds nothing beyond shared: it admits
+	// every blob holding shared, among which is every blob another literal
+	// admits, so the clause's blobs are those.
+	whole bool
 	// folded is whether any literal of it is compared folded, so that a
 	// blob holding an escape satisfies it whatever its trigrams say.
 	folded bool
 }
 
 // alternative is one literal of a clause, lowered as the index is, with its
-// trigrams.
+// trigrams beyond those every literal of the clause holds (clause.shared).
 type alternative struct {
-	text     string
-	trigrams []Trigram
+	text string
+	// own is the trigrams of it no other literal of the clause holds,
+	// ascending.
+	own []Trigram
+	// common is where in clause.common its trigrams some other literals
+	// hold are, ascending.
+	common []int
 }
 
 // NewPlan plans re over the index. It REFUSES a pattern whose program is past
@@ -200,8 +220,12 @@ func program(re *regexp.Regexp) (int, error) {
 // in its own, since lowering goes rune by rune and the literal is whole runes
 // — so the lookup admits a blob that holds it in another case too, and never
 // misses one that holds it as it is.
+//
+// Its literals' trigrams are sorted by how many of them hold each (clause)
+// here, once a plan, rather than once a segment searched.
 func indexable(terms []regexlit.Term) (clause, bool) {
 	var c clause
+	var trigrams [][]Trigram
 	seen := map[string]bool{}
 	for _, term := range terms {
 		text := term.Text
@@ -217,9 +241,47 @@ func indexable(terms []regexlit.Term) (clause, bool) {
 			continue
 		}
 		seen[text] = true
-		c.alts = append(c.alts, alternative{text: text, trigrams: appendTrigrams(nil, []byte(text))})
+		c.alts = append(c.alts, alternative{text: text})
+		trigrams = append(trigrams, appendTrigrams(nil, []byte(text)))
 	}
-	return c, len(c.alts) > 0
+	if len(c.alts) == 0 {
+		return clause{}, false
+	}
+	// A literal's trigrams are distinct and ascending, so a trigram's count
+	// is the literals holding it, and each part keeps their order.
+	holders := map[Trigram]int{}
+	for _, ts := range trigrams {
+		for _, t := range ts {
+			holders[t]++
+		}
+	}
+	place := map[Trigram]int{}
+	for t, n := range holders {
+		if 1 < n && n < len(c.alts) {
+			c.common = append(c.common, t)
+		}
+	}
+	slices.Sort(c.common)
+	for i, t := range c.common {
+		place[t] = i
+	}
+	for i, ts := range trigrams {
+		a := &c.alts[i]
+		for _, t := range ts {
+			switch n := holders[t]; {
+			case n == len(c.alts):
+				if i == 0 {
+					c.shared = append(c.shared, t)
+				}
+			case n > 1:
+				a.common = append(a.common, place[t])
+			default:
+				a.own = append(a.own, t)
+			}
+		}
+		c.whole = c.whole || len(a.own)+len(a.common) == 0
+	}
+	return c, true
 }
 
 // Regexp is the expression p plans.
@@ -238,21 +300,13 @@ func (p *Plan) LineBytes() int { return MaxLineWork / p.insts }
 // from its postings — unless the clause holds a folded literal and the blob
 // an escape (regexlit.HasEscape), which no lowering sees through. A skipped
 // blob is never a candidate.
+//
+// Each clause is looked up as one, reading each list it names once whichever
+// of its literals hold it (lookup.go).
 func (p *Plan) Candidates(s *Segment) ([]OID, error) {
-	var set []uint32
-	for i, c := range p.index {
-		got, err := c.blobs(s)
-		if err != nil {
-			return nil, err
-		}
-		if i == 0 {
-			set = got
-		} else {
-			set = intersect(set, got)
-		}
-		if len(set) == 0 {
-			return nil, nil
-		}
+	set, err := p.blobs(&reading{s: s})
+	if err != nil || len(set) == 0 {
+		return nil, err
 	}
 	out := make([]OID, 0, len(set))
 	for _, o := range set {
@@ -261,54 +315,6 @@ func (p *Plan) Candidates(s *Segment) ([]OID, error) {
 		}
 	}
 	return out, nil
-}
-
-// blobs is the ordinals of the blobs of s that can hold one of c's literals,
-// ascending — and, where c holds a folded literal, of every blob holding an
-// escape. A clause of an alternation can hold a hundred literals, so their
-// blobs are merged as one union, never folded in one at a time.
-func (c clause) blobs(s *Segment) ([]uint32, error) {
-	var u union
-	for _, a := range c.alts {
-		got, err := a.blobs(s)
-		if err != nil {
-			return nil, err
-		}
-		u.add(got)
-	}
-	if c.folded {
-		u.add(s.escapes)
-	}
-	return u.merged(), nil
-}
-
-// blobs is the ordinals of the blobs of s that hold every trigram of a: the
-// shortest list read first, each other one only to narrow it.
-func (a alternative) blobs(s *Segment) ([]uint32, error) {
-	lists := make([][]byte, 0, len(a.trigrams))
-	for _, t := range a.trigrams {
-		list, ok := s.lookup(t)
-		if !ok {
-			return nil, nil
-		}
-		lists = append(lists, list)
-	}
-	slices.SortFunc(lists, func(x, y []byte) int { return cmp.Compare(len(x), len(y)) })
-	set, err := s.decode(lists[0], nil)
-	if err != nil {
-		return nil, err
-	}
-	var next []uint32
-	for _, list := range lists[1:] {
-		if len(set) == 0 {
-			break
-		}
-		if next, err = s.decode(list, next[:0]); err != nil {
-			return nil, err
-		}
-		set = intersect(set, next)
-	}
-	return set, nil
 }
 
 // Hit is a line of a blob the plan's expression matches.

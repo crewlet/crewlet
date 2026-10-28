@@ -147,10 +147,12 @@ func trigramSet(lowered []byte) map[Trigram]bool {
 	return set
 }
 
-// holds reports whether a blob of the trigrams set holds some literal of c.
+// holds reports whether a blob of the trigrams set holds some literal of c:
+// every trigram of the literal's text, taken from the text again rather than
+// from the parts a plan keeps of it, so a split that lost one is caught here.
 func holds(c clause, set map[Trigram]bool) bool {
 	return slices.ContainsFunc(c.alts, func(a alternative) bool {
-		return !slices.ContainsFunc(a.trigrams, func(t Trigram) bool { return !set[t] })
+		return !slices.ContainsFunc(appendTrigrams(nil, []byte(a.text)), func(t Trigram) bool { return !set[t] })
 	})
 }
 
