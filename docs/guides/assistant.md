@@ -296,6 +296,17 @@ A run goes to the first of these the company configures:
    (`apt install bubblewrap`) or run on a kernel with Landlock, or configure a
    cell above.
 
+   Its box is made under the company's box root, where a seat's `direct`
+   boxes are made too: `providers.sandbox.local.state_dir`, else
+   `$CREWLET_SANDBOX_LOCAL_HOME`, else `~/.crewlet/sandboxes`, in a directory
+   of its own there (`<box root>/assistant/boxes/<id>`), which a seat's
+   backend never lists or reaps. So what a run checks out, installs and builds
+   lands on the volume you sized for boxes and never on the one holding the
+   store and the stream ([Where a box writes](deployment.md#where-a-box-writes)).
+   A revision that moves `state_dir` leaves a box kept for a proposal where it
+   is: for as long as the node runs, the approval continues the run in it and
+   its earlier box root stays denied to every other run.
+
 A run dials `CREWLET_MCP_BRIDGE_URL`, the fleet's address for the tool bridge
 ([Code Sandbox](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)),
 and its call is relayed to the node that opened its session wherever it lands.

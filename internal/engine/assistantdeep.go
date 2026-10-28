@@ -53,6 +53,25 @@ import (
 // (internal/sandbox's confinement): its job is kept from the engine's data, its
 // config, its keyring, every other box and the operator's home. A host that
 // cannot confine one runs none, and says why.
+//
+// # Where its box lives on the engine host
+//
+// Under the company's local box root ([sandbox.BoxRoot]:
+// providers.sandbox.local.state_dir, else the default), in a directory of its
+// own ([deepBoxDir]) — the root a seat's direct boxes are made under, and so
+// the volume an operator sized for boxes. It was the store's directory once,
+// which put a run's checkout, its installs and its builds on the volume holding
+// the store and the stream: one large run could fill it and stop the company.
+// The directory of its own is what keeps the two kinds of box apart: a seat's
+// backend reattaches, lists and reaps under <root>/boxes alone, so it never
+// reaches a deep-work box (unconfined), and the confined cell never a seat's.
+//
+// The root is the company's, so a revision can move it. A box a parked run
+// left under an earlier one is still reached through that root
+// ([assistantDeep.hostManagers]) for its continuation, its keep and its
+// discard, and every root this process has built the confined cell under
+// stays denied to every confined run, so a move never hands one person's kept
+// box, or a seat's box left there, to another person's run.
 
 // DeepHost is what an engine host keeps from a confined deep-work run beyond
 // what the engine knows of itself: the config files it was started from.
@@ -75,11 +94,23 @@ type assistantDeep struct {
 	poll time.Duration
 
 	mu sync.Mutex
-	// local is the confined host cell, built once its mechanism is known,
-	// and rebuilt when the deny list a company names changes.
-	local     *sandbox.Manager
-	localDeny string
+	// roots are the company box roots ([sandbox.BoxRoot], absolute) this
+	// process has built the confined host cell under, in the order first
+	// built: the one the company names now, and every one an earlier
+	// revision named. Held for the life of the process, as a seat's retired
+	// backends are, and bounded by the roots a company has ever named.
+	roots []string
+	// cells are the confined host cells by company box root, built once the
+	// host's mechanism is known, and all rebuilt when what they are kept from
+	// changes (cellsKey).
+	cells    map[string]*sandbox.Manager
+	cellsKey string
 }
+
+// deepBoxDir is the directory of its own a deep-work run's confined box is
+// made under, beneath the company's box root: never "boxes", the directory a
+// seat's backend makes, lists and reaps its own boxes in under the same root.
+const deepBoxDir = "assistant"
 
 var _ assistant.DeepWork = (*assistantDeep)(nil)
 
@@ -165,8 +196,12 @@ func (d *assistantDeep) target() (deepTarget, error) {
 	cell, _ := c.Config.DeepWorkPlacement()
 	t := deepTarget{key: key, agent: agent, placement: sandbox.Placement(cell), company: c}
 	if cell == config.PlacementDirect {
-		t.manager, err = d.hostManager(c.Config)
-		return t, err
+		cells, hostErr := d.hostManagers(c.Config)
+		if hostErr != nil {
+			return deepTarget{}, hostErr
+		}
+		t.manager = cells[0]
+		return t, nil
 	}
 	// THE CATALOGUE OF THE EPOCH THE ENTRY WAS RESOLVED IN ([Company.catalogue]),
 	// not the node's live manager: an apply landing between the two reads
@@ -182,49 +217,99 @@ func (d *assistantDeep) target() (deepTarget, error) {
 	return t, nil
 }
 
-// hostManager is the confined engine-host cell's manager.
-func (d *assistantDeep) hostManager(c *config.Company) (*sandbox.Manager, error) {
+// hostManagers are the confined engine-host cell's managers: the one under the
+// box root the company names now first, which every new run is made in, then
+// one under each root an earlier revision named, where a parked run's box may
+// still be. Each is kept from the same paths: what the company names now, and
+// every root in [assistantDeep.roots].
+func (d *assistantDeep) hostManagers(c *config.Company) ([]*sandbox.Manager, error) {
 	host, err := d.probe()
 	if err != nil {
 		return nil, err
 	}
-	deny, read := d.confinement(c)
-	fingerprint := strings.Join(deny, "\x00") + "\x01" + strings.Join(read, "\x00")
+	// ABSOLUTE, as the backend makes its root ([sandbox.NewLocal]), so a
+	// relative state_dir and the same one written out name one cell.
+	now, err := filepath.Abs(boxRootOf(c))
+	if err != nil {
+		return nil, fmt.Errorf("providers.sandbox.local.state_dir %q is not a usable path: %w",
+			boxRootOf(c), err)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.local != nil && d.localDeny == fingerprint {
-		return d.local, nil
+	if !slices.Contains(d.roots, now) {
+		d.roots = append(d.roots, now)
 	}
+	deny, read := d.confinement(c)
+	key := strings.Join(deny, "\x00") + "\x01" + strings.Join(read, "\x00")
+	if d.cellsKey != key {
+		d.cells, d.cellsKey = map[string]*sandbox.Manager{}, key
+	}
+	order := append([]string{now}, slices.DeleteFunc(slices.Clone(d.roots),
+		func(root string) bool { return root == now })...)
+	managers := make([]*sandbox.Manager, 0, len(order))
+	for _, root := range order {
+		manager := d.cells[root]
+		if manager == nil {
+			if manager, err = hostCell(root, deny, read, host); err != nil {
+				return nil, err
+			}
+			d.cells[root] = manager
+		}
+		managers = append(managers, manager)
+	}
+	return managers, nil
+}
+
+// hostCell is the confined direct cell whose boxes live under the company box
+// root root, in their own directory there ([deepBoxDir]).
+func hostCell(root string, deny, read []string, host *sandbox.HostConfinement) (*sandbox.Manager, error) {
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct,
-		StateDir: d.boxRoot(), Confine: &sandbox.Confinement{Deny: deny, Read: read}, Host: host})
+		StateDir: filepath.Join(root, deepBoxDir),
+		Confine:  &sandbox.Confinement{Deny: deny, Read: read}, Host: host})
 	if err != nil {
 		return nil, err
 	}
-	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+	return sandbox.NewManager(sandbox.ManagerOptions{
 		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: local},
 		Runners:   sandboxRunners(),
 	})
-	if err != nil {
-		return nil, err
-	}
-	d.local, d.localDeny = manager, fingerprint
-	return manager, nil
 }
 
-// boxRoot is where confined boxes live: beside the node's own data, which the
-// confinement denies and gives back to each box's home alone.
-func (d *assistantDeep) boxRoot() string {
-	if d.boot != nil && d.boot.Store.Path != "" {
-		return filepath.Join(filepath.Dir(d.boot.Store.Path), "assistant-boxes")
+// boxRootOf is the company's box root: where its seats' local boxes are made,
+// and beneath which a deep-work run's confined box is ([sandbox.BoxRoot]).
+func boxRootOf(c *config.Company) string {
+	if c != nil && c.Providers.Sandbox != nil && c.Providers.Sandbox.Local != nil {
+		return sandbox.BoxRoot(c.Providers.Sandbox.Local.StateDir)
 	}
-	return filepath.Join(sandbox.DefaultBoxRoot(), "assistant")
+	return sandbox.BoxRoot("")
+}
+
+// boxManagers are the managers a box a run left in placement may be reached
+// through, in the order to ask them.
+//
+// A BOX ON THE ENGINE HOST ([sandbox.Direct]) IS THE CONFINED CELL'S, whatever
+// cell deep work is placed in now: the catalogue's own direct cell is a seat's,
+// unconfined, and a deep-work box reattached through it would run its
+// continuation with nothing kept from it. Any other box is the catalogue's.
+func (d *assistantDeep) boxManagers(t deepTarget, placement sandbox.Placement) ([]*sandbox.Manager, error) {
+	if placement == sandbox.Direct {
+		return d.hostManagers(t.company.Config)
+	}
+	if t.company.catalogue == nil {
+		return nil, fmt.Errorf("the box is in %s, and this node has no sandbox runtime: "+
+			"check providers.sandbox", placement)
+	}
+	return []*sandbox.Manager{t.company.catalogue}, nil
 }
 
 // confinement is what a confined run is kept from and what it may read beneath
 // it. Every path is the node's own: its store and estate, its stream store, its
 // log file, its config files, every CLI login a providers.llm entry keeps,
-// every seat's box, and the operator's home; the CLI's install is given back,
-// read-only.
+// every seat's box and every deep-work box (the company's box root now and
+// every one this process built the confined cell under), and the operator's
+// home; the CLI's install is given back, read-only.
+//
+// Called with d.mu held, or on a value no other goroutine has.
 func (d *assistantDeep) confinement(c *config.Company) (deny, read []string) {
 	add := func(paths ...string) {
 		for _, p := range paths {
@@ -246,7 +331,11 @@ func (d *assistantDeep) confinement(c *config.Company) (deny, read []string) {
 	if home, err := os.UserHomeDir(); err == nil {
 		add(home)
 	}
-	add(sandbox.DefaultBoxRoot())
+	// EVERY BOX ROOT: the default, the company's now, and each one this
+	// process built the confined cell under. A confined box lives beneath
+	// one of them, and is given back its own home alone.
+	add(sandbox.DefaultBoxRoot(), boxRootOf(c))
+	add(d.roots...)
 	if c != nil {
 		// EVERY ENTRY'S LOGIN, the deep entry's own included: a box is
 		// seeded with a copy of what it needs, and never reads the store.
@@ -254,9 +343,6 @@ func (d *assistantDeep) confinement(c *config.Company) (deny, read []string) {
 			if dir, err := entry.ResolvedStateDir(key); err == nil {
 				add(dir)
 			}
-		}
-		if sb := c.Providers.Sandbox; sb != nil && sb.Local != nil {
-			add(sb.Local.StateDir)
 		}
 	}
 	add(os.Getenv(config.CLIHomeEnv))
@@ -314,7 +400,7 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 	out := assistant.DeepOutcome{Box: assistant.DeepBox{Placement: string(placement),
 		Sandbox: box.ID(), Agent: codingagent.ClaudeCodeName, Session: session}}
 	if placeErr := placeInputs(ctx, box, r.Inputs); placeErr != nil {
-		d.discard(ctx, t.manager, placement, box.ID())
+		d.discard(ctx, t, placement, box.ID())
 		return assistant.DeepOutcome{}, placeErr
 	}
 	started := d.e.now()
@@ -322,7 +408,7 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 		Env: run.env, Limits: sandbox.Limits{MaxTurns: r.Steps}, Model: run.model,
 		Resume: session, MCPServers: bridgeServer(endpoint)})
 	if err != nil {
-		d.discard(ctx, t.manager, placement, box.ID())
+		d.discard(ctx, t, placement, box.ID())
 		return assistant.DeepOutcome{}, fmt.Errorf("the deep-work run could not start: %w", err)
 	}
 	out.End = d.watch(ctx, box, runner, handle, r)
@@ -350,8 +436,18 @@ func (d *assistantDeep) Run(ctx context.Context, r assistant.DeepRun) (assistant
 func (d *assistantDeep) acquire(ctx context.Context, t deepTarget, spec sandbox.Spec,
 	r assistant.DeepRun) (sandbox.Sandbox, sandbox.Runner, string, error) {
 	if c := r.Continue; c != nil && c.Sandbox != "" {
-		box, runner, err := t.manager.Reconnect(ctx, sandbox.Placement(c.Placement), c.Sandbox,
-			codingagent.ClaudeCodeName)
+		placement := sandbox.Placement(c.Placement)
+		managers, err := d.boxManagers(t, placement)
+		if err != nil {
+			return nil, nil, "", fmt.Errorf("the box the run left could not be reached: %w", err)
+		}
+		var runner sandbox.Runner
+		box, err := reach(managers, func(m *sandbox.Manager) (sandbox.Sandbox, error) {
+			reconnected, held, reconnectErr := m.Reconnect(ctx, placement, c.Sandbox,
+				codingagent.ClaudeCodeName)
+			runner = held
+			return reconnected, reconnectErr
+		})
 		if err == nil {
 			if timeoutErr := box.SetTimeout(ctx, spec.TimeoutSec); timeoutErr != nil {
 				return nil, nil, "", timeoutErr
@@ -499,16 +595,38 @@ func (d *assistantDeep) Keep(ctx context.Context, b assistant.DeepBox) error {
 	if err != nil {
 		return err
 	}
-	provider, err := t.manager.Provider(sandbox.Placement(b.Placement))
+	placement := sandbox.Placement(b.Placement)
+	managers, err := d.boxManagers(t, placement)
 	if err != nil {
 		return err
 	}
-	box, err := provider.Attach(ctx, b.Sandbox)
+	box, err := reach(managers, func(m *sandbox.Manager) (sandbox.Sandbox, error) {
+		provider, providerErr := m.Provider(placement)
+		if providerErr != nil {
+			return nil, providerErr
+		}
+		return provider.Attach(ctx, b.Sandbox)
+	})
 	if err != nil {
 		return err
 	}
 	keep := t.company.Config.Assistant.ProposalTTL() + deepKeepGrace
 	return box.SetTimeout(ctx, keep.Seconds())
+}
+
+// reach is fn's answer from the first manager that holds the box, asked in
+// order: a cell the box is not under answers [sandbox.ErrBoxGone] and the next
+// is asked, and any other answer is the box's. Gone from every one, it is gone.
+func reach[T any](managers []*sandbox.Manager, fn func(*sandbox.Manager) (T, error)) (T, error) {
+	var zero T
+	err := sandbox.ErrBoxGone
+	for _, m := range managers {
+		var got T
+		if got, err = fn(m); !errors.Is(err, sandbox.ErrBoxGone) {
+			return got, err
+		}
+	}
+	return zero, err
 }
 
 // Discard ends a box no run will continue.
@@ -522,17 +640,33 @@ func (d *assistantDeep) Discard(ctx context.Context, b assistant.DeepBox) {
 			"detail", "its own deadline reaps it")
 		return
 	}
-	d.discard(ctx, t.manager, sandbox.Placement(b.Placement), b.Sandbox)
+	d.discard(ctx, t, sandbox.Placement(b.Placement), b.Sandbox)
 }
 
-func (d *assistantDeep) discard(ctx context.Context, m *sandbox.Manager, placement sandbox.Placement, id string) {
-	provider, err := m.Provider(placement)
+// discard kills a box through every manager it may be under ([boxManagers]).
+//
+// EVERY ONE, never the first that answers: a local backend's Kill of a box
+// that is not under its root reclaims nothing and says nothing, so the first
+// answer would be the cell the box is not in whenever a revision moved the
+// company's box root after the box was made.
+func (d *assistantDeep) discard(ctx context.Context, t deepTarget, placement sandbox.Placement, id string) {
+	managers, err := d.boxManagers(t, placement)
 	if err == nil {
 		killCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deepGrace)
 		defer cancel()
-		err = provider.Kill(killCtx, id)
+		var errs []error
+		for _, m := range managers {
+			provider, providerErr := m.Provider(placement)
+			if providerErr == nil {
+				providerErr = provider.Kill(killCtx, id)
+			}
+			if providerErr != nil && !errors.Is(providerErr, sandbox.ErrBoxGone) {
+				errs = append(errs, providerErr)
+			}
+		}
+		err = errors.Join(errs...)
 	}
-	if err != nil && !errors.Is(err, sandbox.ErrBoxGone) {
+	if err != nil {
 		log.Warn("assistant_deep_box_undiscarded", "sandbox_id", id, "error", err.Error(),
 			"detail", "its own deadline reaps it")
 	}

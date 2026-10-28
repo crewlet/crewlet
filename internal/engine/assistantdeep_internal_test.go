@@ -322,7 +322,10 @@ func TestAnUnconfinableHostRefusesDeepWork(t *testing.T) {
 
 // THE HOST'S CONFINEMENT DENIES EVERY PATH THE ENGINE KEEPS: its config files,
 // its store and estate, its stream store, its log, every CLI login, every
-// seat's boxes and the operator's home.
+// seat's boxes and every deep-work box — under the company's box root now and
+// under one an earlier revision named — and the operator's home. Mutation:
+// leave the roots this process built cells under out of the deny list, and
+// the earlier one is readable.
 func TestTheHostConfinementDeniesTheEnginesPaths(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -336,17 +339,157 @@ func TestTheHostConfinementDeniesTheEnginesPaths(t *testing.T) {
 	entry := c.Providers.LLM["deep"]
 	entry.StateDir = login
 	c.Providers.LLM["deep"] = entry
-	d := &assistantDeep{boot: boot, host: DeepHost{Config: []string{filepath.Join(root, "crewlet.yaml")}}}
+	boxes := filepath.Join(root, "sandboxes")
+	c.Providers.Sandbox.Local = &config.LocalSandbox{StateDir: boxes}
+	earlier := filepath.Join(root, "sandboxes-before")
+	d := &assistantDeep{boot: boot, host: DeepHost{Config: []string{filepath.Join(root, "crewlet.yaml")}},
+		roots: []string{earlier}}
 	deny, _ := d.confinement(c)
 	home, _ := os.UserHomeDir()
 	for _, want := range []string{filepath.Join(root, "crewlet.yaml"), filepath.Join(root, "data"),
 		filepath.Join(root, "estate"), filepath.Join(root, "stream"), boot.Logging.File.Path,
-		login, home, sandbox.DefaultBoxRoot()} {
+		login, home, sandbox.DefaultBoxRoot(), boxes, earlier} {
 		if !slices.Contains(deny, want) {
 			t.Errorf("the confinement does not deny %s: %v", want, deny)
 		}
 	}
-	if !strings.HasPrefix(d.boxRoot(), filepath.Join(root, "data")) {
-		t.Errorf("confined boxes live at %s, outside the node's data", d.boxRoot())
+}
+
+// directDeepCompany is deepCompany with its deep work on the engine host: a
+// local catalogue with no image and no e2b, whose box root is stateDir ("" for
+// the default).
+func directDeepCompany(t *testing.T, stateDir string) *Company {
+	t.Helper()
+	c := deepCompany(t)
+	c.Config.Providers.Sandbox = &config.SandboxProvider{Local: &config.LocalSandbox{StateDir: stateDir}}
+	return c
+}
+
+// confinable is a host whose mechanism is known: nothing in these cases runs a
+// command under it, so the mechanism is never asked to enforce anything.
+func confinable() (*sandbox.HostConfinement, error) {
+	return &sandbox.HostConfinement{Mechanism: sandbox.MechanismLandlock}, nil
+}
+
+// A DEEP-WORK BOX ON THE ENGINE HOST IS MADE UNDER THE COMPANY'S BOX ROOT, in
+// a directory of its own there: providers.sandbox.local.state_dir where the
+// company names one, the default box root where it does not, and never the
+// store's directory, which is the volume holding the store and the stream. A
+// seat's backend over the same root cannot reach it. Not parallel: the
+// default case sets the default box root's variable. Mutations: put the box
+// beside the store, or in the seats' own boxes directory, and a case fails.
+func TestADeepWorkBoxIsMadeUnderTheCompanysBoxRoot(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		stateDir func(root string) string
+		boxRoot  func(root string) string
+	}{
+		{name: "state_dir",
+			stateDir: func(root string) string { return filepath.Join(root, "sandboxes") },
+			boxRoot:  func(root string) string { return filepath.Join(root, "sandboxes") }},
+		{name: "the default",
+			stateDir: func(string) string { return "" },
+			boxRoot:  func(root string) string { return filepath.Join(root, "default-boxes") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv(sandbox.BoxRootEnv, filepath.Join(root, "default-boxes"))
+			rig := newDeepRig(t)
+			rig.deep.probe = confinable
+			rig.deep.boot = &config.Bootstrap{}
+			rig.deep.boot.Store.Path = filepath.Join(root, "data", "node.db")
+			rig.deep.e.epoch.current.Store(directDeepCompany(t, tc.stateDir(root)))
+
+			target, err := rig.deep.target()
+			if err != nil {
+				t.Fatalf("target: %v", err)
+			}
+			if target.placement != sandbox.Direct {
+				t.Fatalf("deep work is placed in %s, want the engine host", target.placement)
+			}
+			provider, err := target.manager.Provider(sandbox.Direct)
+			if err != nil {
+				t.Fatal(err)
+			}
+			box, err := provider.Create(t.Context(), sandbox.Spec{Placement: sandbox.Direct, TimeoutSec: 60})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			t.Cleanup(func() { _ = provider.Kill(context.WithoutCancel(t.Context()), box.ID()) })
+
+			// THE LAYOUT IS DOCUMENTED (<box root>/assistant/boxes/<id>), so it is
+			// spelled out rather than read off the constant.
+			want := filepath.Join(tc.boxRoot(root), "assistant", "boxes", box.ID())
+			if info, err := os.Stat(want); err != nil || !info.IsDir() {
+				t.Fatalf("the deep-work box is not at %s (%v)", want, err)
+			}
+			if _, err := os.Stat(filepath.Join(root, "data")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("a deep-work box wrote into the store's directory (%v)", err)
+			}
+			seats, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct,
+				StateDir: tc.stateDir(root)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := seats.Attach(t.Context(), box.ID()); !errors.Is(err, sandbox.ErrBoxGone) {
+				t.Fatalf("a seat's backend over the same box root reached the deep-work box: %v", err)
+			}
+		})
+	}
+}
+
+// A BOX A PARKED RUN LEFT IS REACHED AFTER A REVISION MOVES THE BOX ROOT, and
+// after one moves deep work off the engine host: kept and discarded through
+// the confined cell under the root it was made in, never through the
+// catalogue's own direct cell (a seat's, unconfined), and that root stays
+// denied to every confined run. Mutations: ask only the cell under the root
+// the company names now, or the catalogue for a direct box, and the keep is
+// refused and the discard leaves the box; leave earlier roots out of the deny
+// list, or stop the discard at the first cell that answers, and a check fails.
+func TestADeepWorkBoxIsReachedAfterItsBoxRootMoves(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	rig := newDeepRig(t)
+	rig.deep.probe = confinable
+	catalogue := rig.deep.e.Company().catalogue
+	before, after := filepath.Join(root, "before"), filepath.Join(root, "after")
+	rig.deep.e.epoch.current.Store(directDeepCompany(t, before))
+
+	target, err := rig.deep.target()
+	if err != nil {
+		t.Fatalf("target: %v", err)
+	}
+	provider, err := target.manager.Provider(sandbox.Direct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	made, err := provider.Create(t.Context(), sandbox.Spec{Placement: sandbox.Direct, TimeoutSec: 60})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { _ = provider.Kill(context.WithoutCancel(t.Context()), made.ID()) })
+	dir := filepath.Join(before, deepBoxDir, "boxes", made.ID())
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("the box is not where it was made: %v", err)
+	}
+
+	// THE NEXT REVISION moves the box root and places deep work in e2b.
+	moved := deepCompany(t)
+	moved.Config.Providers.Sandbox.Local = &config.LocalSandbox{StateDir: after}
+	moved.catalogue = catalogue
+	rig.deep.e.epoch.current.Store(moved)
+	kept := assistant.DeepBox{Placement: string(sandbox.Direct), Sandbox: made.ID(), Agent: "claude-code"}
+	if err := rig.deep.Keep(t.Context(), kept); err != nil {
+		t.Fatalf("a box made under the earlier box root was not kept: %v", err)
+	}
+	deny, _ := rig.deep.confinement(moved.Config)
+	for _, want := range []string{before, after} {
+		if !slices.Contains(deny, want) {
+			t.Errorf("the confinement does not deny the box root %s: %v", want, deny)
+		}
+	}
+	rig.deep.Discard(t.Context(), kept)
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the discarded box is still at %s (%v)", dir, err)
 	}
 }

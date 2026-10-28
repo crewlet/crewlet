@@ -66,7 +66,25 @@ func localErrorf(format string, args ...any) error {
 	return &LocalError{msg: fmt.Sprintf(format, args...)}
 }
 
-// DefaultBoxRoot is the parent directory local boxes are created under.
+// BoxRoot is the directory local boxes are made under for a company whose
+// `providers.sandbox.local.state_dir` is stateDir: the state_dir as written,
+// else [DefaultBoxRoot].
+//
+// ONE RULE for every box the engine makes on its host: a seat's boxes, in
+// either local cell ([NewLocal]), and the Dashboard Assistant's confined
+// deep-work boxes, which the engine keeps in a directory of their own beneath
+// it. The volume an operator gives this directory is the one sized for boxes;
+// a box root derived from anything else (the store's directory, which it once
+// was for deep work) puts a run's writes on a volume nobody sized for them.
+func BoxRoot(stateDir string) string {
+	if stateDir == "" {
+		return DefaultBoxRoot()
+	}
+	return stateDir
+}
+
+// DefaultBoxRoot is the parent directory local boxes are created under when
+// the company names no `providers.sandbox.local.state_dir` ([BoxRoot]).
 func DefaultBoxRoot() string {
 	if override := strings.TrimSpace(os.Getenv(BoxRootEnv)); override != "" {
 		return override
@@ -857,7 +875,7 @@ type LocalOptions struct {
 	// the ask shim — is identical.
 	Placement Placement
 
-	// StateDir is where boxes are created. Empty takes [DefaultBoxRoot].
+	// StateDir is where boxes are created: [BoxRoot] of it.
 	StateDir string
 
 	// Image is the container image. REQUIRED for Container, and it must have
@@ -930,10 +948,7 @@ func NewLocal(opts LocalOptions) (*Local, error) {
 		return nil, localErrorf("a confined local box needs both what it is kept from and " +
 			"the mechanism that keeps it; one was given without the other")
 	}
-	root := opts.StateDir
-	if root == "" {
-		root = DefaultBoxRoot()
-	}
+	root := BoxRoot(opts.StateDir)
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, localErrorf("providers.sandbox.local.state_dir %q is not a usable path: %v", root, err)

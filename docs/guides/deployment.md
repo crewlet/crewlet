@@ -1169,6 +1169,46 @@ Both communicate through the stream, and through the coordination KV on the
 same broker — never with each other. Both accept `-debug` for verbose
 logging.
 
+### Where a box writes
+
+A `direct` or `container` box is a directory on the engine host, made under
+one **box root**: `providers.sandbox.local.state_dir`, else
+`$CREWLET_SANDBOX_LOCAL_HOME`, else `~/.crewlet/sandboxes` under the engine
+user's home. A relative `state_dir` is read against the directory the engine
+was started in. A seat's box is `<box root>/boxes/<id>`, and a
+[Dashboard Assistant deep-work run](assistant.md#where-a-run-happens) placed on
+the engine host keeps its confined box at `<box root>/assistant/boxes/<id>`.
+A box holds its run's checkout, its coding CLI's home with a copy of the
+entry's login, its temporary files (`TMPDIR` and the CLI's own temporary root
+point inside it) and whatever the run installs and builds, and it is removed
+when its run ends ([Local sandboxes](../concepts/code-sandbox.md#local-sandboxes)).
+
+Size the volume under the box root for every box it holds at once: one for
+each seat whose executor is at work (a seat runs one at a time), one for each
+run parked on a person's question, which keeps its box until it resumes or its
+pause TTL passes (`role.sandbox.pause_ttl_seconds`, else
+`providers.sandbox.default_pause_ttl_seconds`, 1800 seconds unless set), and
+one for each deep-work task running or kept for a proposal.
+
+**On a read-only root filesystem, set `state_dir`.** An engine run as a
+non-root user with only a data volume, `/tmp` and its home writable, the shape
+of a hardened container, otherwise makes every box under its home. Give
+`state_dir` a volume of its own that the engine's user can write, and not the
+one holding `store.path` and `stream.store_dir`: a run that fills the volume it
+writes on stops everything else writing there, and a store and a broker with
+no room stop the node. Whether that volume should outlive the engine's
+container is what a run's working tree is worth across a deploy
+([below](#a-restart-and-the-coding-runs-on-its-host)).
+
+**The box root bounds where a box's files land, not what a `direct` run may
+write.** A `direct` run is a process of the engine's own user with no mount
+around it, so a command that names `/tmp`, the engine's home or a path on the
+data volume writes there, and no limit on the box root's volume counts it
+([Security Boundaries](#security-boundaries)). A `container` box writes its
+home, the one directory mounted into it, and the container's own layer, which
+its runtime keeps. A deep-work run on the engine host writes its own box and
+nothing else.
+
 ### A restart and the coding runs on its host
 
 A seat's executor in a `direct` cell is a process tree of the node's own host,

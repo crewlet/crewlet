@@ -550,7 +550,8 @@ providers:
                                         #   above: every seat's executor runs as its CLI's own run,
                                         #   in a box from this catalogue (code-sandbox.md)
     local:
-      state_dir: "./acme-data/sandboxes"  # box directories, removed at teardown
+      state_dir: "./acme-data/sandboxes"  # the box root: every box this host makes, a seat's
+                                        #   and deep work's, each removed at teardown
       # image: ""                       # required only where a run is placed in a container
       # runtime: auto                   # auto | docker | podman
       # network: ""                     # the container network; "none" cuts the box off
