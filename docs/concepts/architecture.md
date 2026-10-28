@@ -254,10 +254,12 @@ gets its own cloned registry and its own bridge.
 **One model call has two layers of failure handling, each owning exactly one
 decision.** The backend *classifies* and does nothing else — it never retries.
 The one thing it holds of its own is a spent plan: a CLI that reported its
-vendor's rate limit in the vendor's own words is `rate_limit`, and the entry
-then sits out on this node until the reset the CLI named (an hour at most), or
-for a minute where it named none, so every round of every seat on it does not
-start a process to hear the same sentence again. The fallback chain decides
+vendor's rate limit, in its own structured status or the vendor's words, is
+`rate_limit`, and the entry then sits out on this node until the reset the
+vendor named (never more than an hour away), or, where it named none, for a
+window of 1, 2, 5, then 15 minutes that steps up with each probe the limit
+refuses, so every round of every seat on it does not start a process to hear
+the same sentence again. The fallback chain decides
 whether the **model** is worth abandoning and moves to the next one in the
 role's chain, publishing a `provider_fallback` event for each hand-off —
 addressed to the turn, the phase and the iteration it happened in, so a chain

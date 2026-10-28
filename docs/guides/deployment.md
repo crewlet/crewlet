@@ -1537,8 +1537,10 @@ or retried — until it and its settle return. The executor run in its box holds
 no slot, and each seat runs at most one at a time. It is per node — so an org's ceiling becomes N × the configured
 value. Size it per node, not per company. And a spent plan: an entry whose CLI reported its
 vendor's rate limit sits out on the node that heard it — until the reset the
-CLI named, an hour at most, or for a minute — while every other node learns
-the same thing from its own calls once per window.
+vendor named, never more than an hour away, or, where it named none, for a
+window of 1, 2, 5, then 15 minutes that steps up with each probe the limit
+refuses — while every other node learns the same thing from its own calls once
+per window.
 
 For the model underneath all of this — what a node is, what the fleet shares,
 and where the constants come from — see

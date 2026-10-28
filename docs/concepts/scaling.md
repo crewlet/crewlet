@@ -306,8 +306,10 @@ seat. See
   `max_concurrent` is a different knob: it caps that entry's CLI processes,
   also per node.)
 - **A spent plan's sit-out.** An entry whose CLI reported a spent plan or a rate
-  limit sits out on the node that heard it, until the reset the CLI named (an
-  hour at most) or for a minute where it named none. Nothing tells the other
+  limit sits out on the node that heard it, until the reset the vendor named
+  (never more than an hour away) or, where it named none, for a window of 1,
+  2, 5, then 15 minutes that steps up with each probe the limit refuses.
+  Nothing tells the other
   nodes: each learns the same thing from its own calls once per window — at
   most `max_concurrent` of them, since a call queued behind those is refused
   once one reports — which is cheaper than a coordination read in front of
