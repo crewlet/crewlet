@@ -1441,24 +1441,26 @@ draining, and rolling upgrades. The two things that bite hardest:
 > --replicas=3`, which covers the buckets too — a bucket *is* a stream), or
 > stand the fleet up fresh.
 
-**A sandbox run record the engine cannot read.** At every boot, before it
-claims a seat, a node raises each seat's fencing epoch above the highest epoch
-that seat's sandbox runs carry, so a seat's new holder is never older than its
-own runs. A run record that does not decode is skipped there and logged at
-error as `sandbox_run_undecodable` with its key, and every other seat is
-still floored; a listing of the runs that fails as a whole still stops the
-boot, naming the bucket. The node then starts, but recovering a seat's runs
-reads every record as well and still stops at the unreadable one, so each seat
-it claims fails its preparation and is handed back until the record is gone.
-Nothing can write the record, so remove it once you know its run is over (its
-box, if any, is the provider's to reclaim):
+**A sandbox run record the engine cannot read.** Every reader of the sandbox
+runs lists them: the boot's epoch floor (before a node claims a seat, it raises
+each seat's fencing epoch above the highest epoch that seat's runs carry), each
+seat's recovery, the completion poll, the lookup that matches a reply to a
+parked run, a seat's retirement, and the dashboard. A record that does not
+decode is skipped by all of them and logged at error as
+`sandbox_run_undecodable` with its key, and every run they can read is worked
+as usual, so the node starts and its seats are prepared. Its seat, status and
+owner cannot be known, so nothing polls, resumes or ends it, and nothing
+deletes or rewrites it: a retirement ends the seat's readable runs and leaves
+it as it is. A listing of the runs that fails as a whole still stops the boot,
+naming the bucket. Remove the record once you know its run is over (its box,
+if any, is the provider's to reclaim):
 
 - **An external NATS cluster** (`stream.type: nats`): with the NATS CLI,
   connected as the engine's own account, `nats kv del crewlet_sandbox_runs
   <key>`, the key from the log line.
 - **The embedded broker:** there is no supported way to reach its buckets from
   outside the engine, and the engine has no command that removes a run
-  record. The record stays, and every boot logs it again.
+  record. The record stays, and every listing logs it again.
 
 ### What an acknowledged publish has reached
 
