@@ -123,15 +123,15 @@ const READ_AT: Record<SteerBoundary, { inRun: boolean; words: string }> = {
 };
 
 /**
- * The kind of step a delivered record names. TWO RECORDS THIS BUILD CANNOT
- * NAME, told apart: one with NO boundary is from a build before the field,
- * whose only step was a round, so it is a round; one naming a boundary this
- * build does not know is from a NEWER build, which added a kind of step — said
- * as nothing more than the turn having read it, and never as a round.
+ * The kind of step a delivered record names. A delivered record this build
+ * cannot name — one naming a boundary it does not know, which a NEWER build
+ * added, or one naming none, which no build writes — is said as nothing more
+ * than the turn having read it, and never as a round.
  */
 function boundaryOf(raw: unknown): SteerBoundary | "unknown" {
-  if (typeof raw !== "string" || raw === "") return "round";
-  return (STEER_BOUNDARIES as readonly string[]).includes(raw) ? (raw as SteerBoundary) : "unknown";
+  return typeof raw === "string" && (STEER_BOUNDARIES as readonly string[]).includes(raw)
+    ? (raw as SteerBoundary)
+    : "unknown";
 }
 
 /** A person's note, as the turn's own record says what became of it. */
@@ -152,9 +152,8 @@ export interface SteerMark {
   round: number;
   phase: string;
   iteration: number;
-  /** The kind of step that read it; "round" for a record from before the
-   *  field, "unknown" for one a newer build names, and "" for an expired
-   *  note, which nothing read. */
+  /** The kind of step that read it; "unknown" for a delivered record this
+   *  build cannot name, and "" for an expired note, which nothing read. */
   boundary: SteerBoundary | "unknown" | "";
   /** The coding run's job that read it, for a read inside a run. */
   launchId: string;
@@ -177,8 +176,7 @@ export function steerMarks(events: readonly EventRecord[], turnId: string): Stee
       const by = typeof p.steered_by === "string" ? p.steered_by : "";
       const kind = typeof p.steered_by_kind === "string" ? p.steered_by_kind : "";
       const launchId = typeof p.launch_id === "string" ? p.launch_id : "";
-      // A DELIVERED NOTE NAMES ITS STEP; one from a build before the field was
-      // read at a round, which was the only step there was.
+      // A DELIVERED NOTE NAMES ITS STEP; an expired one names none.
       const boundary = outcome === "delivered" ? boundaryOf(p.boundary) : "";
       // A READ INSIDE A CODING RUN is drawn on that run's bar (`run:<job>`,
       // the span the trace gives a job), not on a round of the engine's loop,
@@ -456,14 +454,15 @@ function Notes({ marks }: { marks: readonly SteerMark[] }) {
 
 /**
  * Where a delivered note was read, in words: the round of a phase, the step of a
- * phase's coding run, or — for a step a newer build names — the turn in that
+ * phase's coding run, or — for a step this build cannot name — the turn in that
  * phase, never a round.
  */
 function readAt(m: SteerMark): string {
   const phase = m.phase ? phaseLabel({ phase: m.phase, iteration: m.iteration }) : "";
-  if (m.boundary === "unknown") return `read by the turn${phase ? ` in ${phase}` : ""}`;
+  if (m.boundary === "unknown" || m.boundary === "")
+    return `read by the turn${phase ? ` in ${phase}` : ""}`;
   const of = phase ? ` of ${phase}` : "";
-  if (m.boundary === "" || m.boundary === "round") return `read at round ${m.round}${of}`;
+  if (m.boundary === "round") return `read at round ${m.round}${of}`;
   return `read by the coding run${of} ${READ_AT[m.boundary].words}`;
 }
 

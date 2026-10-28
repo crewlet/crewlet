@@ -383,8 +383,8 @@ export interface PhaseSteer {
   note_id: string;
   /** The kind of step that read it (`types.SteerBoundary`, one of
    *  `STEER_BOUNDARIES`): a round of the engine's loop, or a step of the
-   *  phase's coding run. Absent on a record from a build before it. */
-  boundary?: string;
+   *  phase's coding run. */
+  boundary: string;
 }
 
 /** The one work item a turn is charged to (`types.WorkItem`). */
