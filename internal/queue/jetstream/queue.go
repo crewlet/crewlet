@@ -1138,10 +1138,12 @@ func (q *Queue) LostDuring(err error) error {
 // drain asks this for: a turn it would otherwise wait for is now only work to
 // be duplicated, so it is cancelled rather than waited for.
 //
-// [Queue.Lost] is the wider fact and closes first or together with this one: a
-// second connection [Queue.DialWatched] opened closing for good closes Lost and
-// NOT this, because deliveries never settle over it. On this backend and not
-// the contract, for [Queue.Lost]'s reason.
+// [Queue.Lost] is the wider fact: a second connection [Queue.DialWatched]
+// opened closing for good closes Lost and NOT this, because deliveries never
+// settle over it. Where the queue's own connection is the close Lost records,
+// this one is closed FIRST, so a caller woken by Lost reads which loss it was
+// without waiting for it. On this backend and not the contract, for
+// [Queue.Lost]'s reason.
 func (q *Queue) AcksLost() <-chan struct{} { return q.lost.acks }
 
 // Link reports whether this client reaches the fleet's broker right now: nil

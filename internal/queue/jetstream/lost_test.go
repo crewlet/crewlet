@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -241,6 +242,58 @@ func TestOnlyTheQueuesOwnConnectionClosingLosesTheAcks(t *testing.T) {
 	if got := q.LostCause(); got == nil || got.Error() != first.Error() {
 		t.Errorf("the queue's own close rewrote the cause:\nfirst: %v\nnow:   %v",
 			first, got)
+	}
+}
+
+// A READER THAT HAS SEEN THE LOSS SEES WHETHER IT LOST THE ACKS.
+//
+// `crewlet run` wakes on Lost and then asks AcksLost without waiting, to say
+// before the drain whether the turns still running finish or are cancelled. So
+// the queue's own connection closing has to close AcksLost no later than Lost:
+// recorded the other way round, a reader woken in between promised an operator
+// that turns finish while the drain was cancelling them.
+//
+// The reader POLLS rather than parks, because a parked goroutine wakes
+// microseconds after the close and the window it has to land in is the few
+// instructions between the two; a poller on another processor is in it often
+// enough that the misordered record fails this within a few hundred rounds.
+//
+// Mutation: close done before acks in record and this goes red.
+func TestAReaderThatHasSeenTheLossSeesWhetherItLostTheAcks(t *testing.T) {
+	t.Parallel()
+	if runtime.GOMAXPROCS(0) < 2 {
+		t.Fatal("this case needs a second processor for its reader to watch " +
+			"the record from")
+	}
+	cause := lostConnection(lostServer(false, "nats://nats-1.internal:4222"),
+		nats.ErrAuthorization, false)
+	for round := range 2000 {
+		l := newConnectionLoss()
+		watching := make(chan struct{})
+		sawAcks := make(chan bool, 1)
+		go func() {
+			close(watching)
+			for {
+				select {
+				case <-l.done:
+					select {
+					case <-l.acks:
+						sawAcks <- true
+					default:
+						sawAcks <- false
+					}
+					return
+				default:
+				}
+			}
+		}()
+		<-watching
+		l.record(cause, true)
+		if !<-sawAcks {
+			t.Fatalf("round %d: a reader saw the queue's own connection lost and "+
+				"its acks still standing, so the drain line would promise the "+
+				"running turns finish while the drain cancels them", round)
+		}
 	}
 }
 
