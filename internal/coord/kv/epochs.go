@@ -134,6 +134,63 @@ func (e *Epochs) Next(ctx context.Context, resource string) (int64, error) {
 	return epoch, err
 }
 
+// Floor raises resource's counter to at least floor, so the next token it
+// mints is above it, and reports whether it moved. It never lowers one.
+//
+// FOR A TOKEN THE COUNTER DID NOT MINT, or minted and lost: a record that
+// carries an epoch from before the counter knew of it. Two things produce one.
+// A deployment whose counter lived in its process (local coordination before
+// it minted from this bucket) left its sandbox runs stamped with tokens this
+// bucket never held. And the remedy every retention mismatch names, deleting a
+// bucket while the fleet is down so the next boot re-creates it, empties this
+// one under rows that keep their tokens. Either way the seat's next holder
+// would be older than its own rows, and refused on every one of them.
+func (e *Epochs) Floor(ctx context.Context, resource string, floor int64) (bool, error) {
+	key := encodeResource(resource)
+
+	for range casAttempts {
+		kve, err := e.read.live(ctx, key)
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
+			data, err := encodeValue(resourceValue{Resource: resource, Epoch: floor})
+			if err != nil {
+				return false, err
+			}
+			if _, err := createKey(ctx, e.js, e.kv, key, data); err != nil {
+				if errors.Is(err, jetstream.ErrKeyExists) {
+					continue
+				}
+				return false, unavailable("floor epoch "+resource, err)
+			}
+			return true, nil
+		}
+		if err != nil {
+			return false, unavailable("read epoch "+resource, err)
+		}
+		var cur resourceValue
+		if err = json.Unmarshal(kve.Value(), &cur); err != nil {
+			return false, fmt.Errorf("%w: decode epoch record for %s: %w",
+				coord.ErrUnavailable, resource, err)
+		}
+		if cur.Epoch >= floor {
+			return false, nil
+		}
+		cur.Resource, cur.Epoch = resource, floor
+		data, err := encodeValue(cur)
+		if err != nil {
+			return false, err
+		}
+		if _, err := e.kv.Update(ctx, key, data, kve.Revision()); err != nil {
+			if errors.Is(err, jetstream.ErrKeyRevisionMismatch) {
+				continue
+			}
+			return false, unavailable("floor epoch "+resource, err)
+		}
+		return true, nil
+	}
+	return false, contended("floor", resource)
+}
+
 // advance CAS-increments a resource's counter and returns the new token
 // together with the placement hint that now stands.
 //

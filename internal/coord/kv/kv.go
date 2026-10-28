@@ -458,6 +458,9 @@ type Store struct {
 
 var _ coord.Backend = (*Store)(nil)
 
+// Epochs is the counter this store mints its tokens from.
+func (s *Store) Epochs() *Epochs { return s.counter }
+
 // Open creates or adopts the three buckets and returns the backend.
 //
 // Idempotent, and safe to call concurrently from every node in the fleet: a

@@ -84,3 +84,33 @@ func TestContractInProcessLeasesOnThePersistentCounter(t *testing.T) {
 		return &memory.Backend{Epochs: counter}
 	})
 }
+
+// A FLOOR ONLY EVER RAISES. It creates the record a counter that never minted
+// for the resource lacks, lifts one below it, and leaves one at or above it
+// alone, so every node of a fleet can floor at boot and agree.
+func TestAFloorRaisesTheCounterAndNeverLowersIt(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	counter, err := OpenEpochs(t.Context(), jsOf(nc), EpochsConfig{BucketPrefix: fmt.Sprintf("t%d", bucketSeq.Add(1))})
+	if err != nil {
+		t.Fatalf("OpenEpochs: %v", err)
+	}
+	const seat = "seat:a"
+	for _, step := range []struct {
+		floor  int64
+		raised bool
+	}{
+		{floor: 5, raised: true},  // a resource the counter never minted for
+		{floor: 3, raised: false}, // below: never lowered
+		{floor: 5, raised: false}, // at: nothing to do
+		{floor: 7, raised: true},  // above: lifted
+	} {
+		raised, err := counter.Floor(t.Context(), seat, step.floor)
+		if err != nil || raised != step.raised {
+			t.Fatalf("Floor(%d) = %v, %v; want %v", step.floor, raised, err, step.raised)
+		}
+	}
+	if next, err := counter.Next(t.Context(), seat); err != nil || next != 8 {
+		t.Fatalf("Next after a floor of 7 = %d, %v; want 8", next, err)
+	}
+}

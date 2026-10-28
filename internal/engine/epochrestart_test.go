@@ -14,6 +14,94 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
+// restartRig is one single node's disk, booted as many times as a case needs,
+// with the swe seat's coding run carried across the boots.
+type restartRig struct {
+	dir  string
+	seat string
+	w    *spentWorld
+}
+
+func newRestartRig(t *testing.T) *restartRig {
+	t.Helper()
+	return &restartRig{
+		dir:  filepath.Join(t.TempDir(), "stream"),
+		seat: coord.SeatResource(fixtureSeat("swe")),
+		w:    newSpentWorld(t),
+	}
+}
+
+// boot opens the node's backends on local coordination, the default, and
+// points the run's store at the fleet store this boot opened.
+func (r *restartRig) boot(t *testing.T) *engine.Backends {
+	t.Helper()
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		brokertest.StoreIn(&b.Stream, r.dir)
+		b.Coordination.Type = config.CoordinationLocal
+	})
+	back, err := openBackends(t, b)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	r.w.store = sandbox.NewCoordStore(back.Fleet)
+	r.w.ledger = ledgerstore.NewMemoryCompletions()
+	return back
+}
+
+func (r *restartRig) claim(t *testing.T, back *engine.Backends, owner string) *coord.Lease {
+	t.Helper()
+	lease, refused, err := back.Coord.TryAcquire(t.Context(), r.seat,
+		coord.AcquireOptions{Owner: owner, TTL: time.Minute})
+	if err != nil || lease == nil {
+		t.Fatalf("TryAcquire(%s) = %v, %q, %v", owner, lease, refused, err)
+	}
+	return lease
+}
+
+func (r *restartRig) release(t *testing.T, back *engine.Backends, lease *coord.Lease) {
+	t.Helper()
+	if ok, err := back.Coord.Release(t.Context(), r.seat, lease.Owner, lease.Epoch); err != nil || !ok {
+		t.Fatalf("Release(%s at %d) = %v, %v", lease.Owner, lease.Epoch, ok, err)
+	}
+}
+
+// parkUnder launches the run under fence and parks it on its question.
+func (r *restartRig) parkUnder(t *testing.T, fence sandbox.Fence) (sandbox.PendingRun, *spentHolder) {
+	t.Helper()
+	holder := r.w.holder(t, fence, &takingResumer{})
+	run := r.w.parked(t, holder)
+	if run.OwnerEpoch != fence.Epoch {
+		t.Fatalf("the run was parked at epoch %d, want the tenure's %d", run.OwnerEpoch, fence.Epoch)
+	}
+	return run, holder
+}
+
+// answeredAfter is the seat's claim on the next boot: strictly above every
+// epoch the run carries, the run recovered under it, and the person's answer,
+// given on the seat's control topic, recorded and resuming the run.
+func (r *restartRig) answeredAfter(t *testing.T, run sandbox.PendingRun) {
+	t.Helper()
+	back := r.boot(t)
+	t.Cleanup(func() { back.Close(context.WithoutCancel(t.Context())) })
+	after := r.claim(t, back, "node-0/next")
+	if after.Epoch <= run.OwnerEpoch {
+		// Errorf: what the person sees is the answer below, so let it say so.
+		t.Errorf("the seat was claimed after the restart at epoch %d, not above the %d "+
+			"its run was stamped with: the new holder is older than its own past self",
+			after.Epoch, run.OwnerEpoch)
+	}
+	resumer := &takingResumer{}
+	next := r.w.holder(t, sandbox.Fence{Owner: after.Owner, Epoch: after.Epoch}, resumer)
+	if err := next.coordinator.RecoverSeat(t.Context(), "swe", after.Owner, after.Epoch); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
+	next.deliver(t, answerAgainst(run, "use main"))
+	next.retries.fire()
+	if resumer.count() != 1 {
+		t.Fatalf("the run parked before the restart was resumed %d times, want once", resumer.count())
+	}
+}
+
 // A SEAT'S FENCING EPOCH OUTLIVES A GRACEFUL RESTART ON LOCAL COORDINATION, and
 // so does every run the seat parked before it.
 //
@@ -28,76 +116,39 @@ import (
 // ever.
 func TestAnAnswerToARunParkedBeforeAGracefulRestartIsRecordedAfterIt(t *testing.T) {
 	t.Parallel()
-	dir := filepath.Join(t.TempDir(), "stream")
-	boot := func() *engine.Backends {
-		t.Helper()
-		b := bootstrap(t, func(b *config.Bootstrap) {
-			brokertest.StoreIn(&b.Stream, dir)
-			b.Coordination.Type = config.CoordinationLocal
-		})
-		back, err := openBackends(t, b)
-		if err != nil {
-			t.Fatalf("OpenBackends: %v", err)
-		}
-		return back
-	}
-	seat := coord.SeatResource(fixtureSeat("swe"))
-	claim := func(back *engine.Backends, owner string) *coord.Lease {
-		t.Helper()
-		lease, refused, err := back.Coord.TryAcquire(t.Context(), seat,
-			coord.AcquireOptions{Owner: owner, TTL: time.Minute})
-		if err != nil || lease == nil {
-			t.Fatalf("TryAcquire(%s) = %v, %q, %v", owner, lease, refused, err)
-		}
-		return lease
-	}
-	release := func(back *engine.Backends, lease *coord.Lease) {
-		t.Helper()
-		if ok, err := back.Coord.Release(t.Context(), seat, lease.Owner, lease.Epoch); err != nil || !ok {
-			t.Fatalf("Release(%s at %d) = %v, %v", lease.Owner, lease.Epoch, ok, err)
-		}
-	}
+	r := newRestartRig(t)
 
 	// THE FIRST PROCESS claims the seat, gives it up and claims it again,
 	// which is the second tenure a lapse gives a seat mid-process, and parks
 	// a run under that second tenure's token.
-	first := boot()
-	release(first, claim(first, "node-0/first"))
-	before := claim(first, "node-0/first")
-	w := newSpentWorld(t)
-	w.store = sandbox.NewCoordStore(first.Fleet)
-	old := w.holder(t, sandbox.Fence{Owner: before.Owner, Epoch: before.Epoch}, &takingResumer{})
-	run := w.parked(t, old)
-	if run.OwnerEpoch != before.Epoch {
-		t.Fatalf("the run was parked at epoch %d, want the tenure's %d", run.OwnerEpoch, before.Epoch)
-	}
+	first := r.boot(t)
+	r.release(t, first, r.claim(t, first, "node-0/first"))
+	before := r.claim(t, first, "node-0/first")
+	run, old := r.parkUnder(t, sandbox.Fence{Owner: before.Owner, Epoch: before.Epoch})
 	// A GRACEFUL drain: the seat is handed back, and the process stops.
 	old.coordinator.Stop()
-	release(first, before)
+	r.release(t, first, before)
 	first.Close(context.WithoutCancel(t.Context()))
 
-	// THE NEXT PROCESS claims the seat on the same disk.
-	second := boot()
-	t.Cleanup(func() { second.Close(context.WithoutCancel(t.Context())) })
-	after := claim(second, "node-0/second")
-	if after.Epoch <= before.Epoch {
-		// Errorf: what the person sees is the answer below, so let it say so.
-		t.Errorf("the seat was re-claimed after the restart at epoch %d, not above the %d "+
-			"its runs were stamped with: the new holder is older than its own past self",
-			after.Epoch, before.Epoch)
-	}
-	w.store = sandbox.NewCoordStore(second.Fleet)
-	w.ledger = ledgerstore.NewMemoryCompletions()
-	resumer := &takingResumer{}
-	next := w.holder(t, sandbox.Fence{Owner: after.Owner, Epoch: after.Epoch}, resumer)
-	if err := next.coordinator.RecoverSeat(t.Context(), "swe", after.Owner, after.Epoch); err != nil {
-		t.Fatalf("RecoverSeat: %v", err)
-	}
+	r.answeredAfter(t, run)
+}
 
-	// The person answers from the Inbox, on the seat's control topic.
-	next.deliver(t, answerAgainst(run, "use main"))
-	next.retries.fire()
-	if resumer.count() != 1 {
-		t.Fatalf("the run parked before the restart was resumed %d times, want once", resumer.count())
-	}
+// AN UPGRADE OWNS THE RUNS ITS PREDECESSOR'S COUNTER STAMPED. A node that ran a
+// build whose counter lived in its process left runs stamped with epochs the
+// persistent counter never minted, and an operator who deletes the epochs
+// bucket leaves the same: rows above an empty counter. The boot floors each
+// seat's counter at the highest epoch its runs carry, so the seat's first
+// claim already outranks them, with no repair by hand.
+func TestAnUpgradeOwnsTheRunsItsPredecessorsCounterStamped(t *testing.T) {
+	t.Parallel()
+	r := newRestartRig(t)
+
+	// Stamped at 5 by a counter this deployment's bucket never held: no
+	// claim is made on this boot, so the bucket knows nothing of the seat.
+	first := r.boot(t)
+	run, old := r.parkUnder(t, sandbox.Fence{Owner: "node-0/old-build", Epoch: 5})
+	old.coordinator.Stop()
+	first.Close(context.WithoutCancel(t.Context()))
+
+	r.answeredAfter(t, run)
 }

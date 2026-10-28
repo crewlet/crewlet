@@ -799,6 +799,27 @@ func (s *CoordStore) ListActive(ctx context.Context) ([]PendingRun, error) {
 	return s.list(ctx, func(r PendingRun) bool { return slices.Contains(Active, r.Status) })
 }
 
+// OwnerEpochs returns, for each seat, the highest lease epoch any of its run
+// records carries, ended runs included: every token the seat's fencing counter
+// has to stay above, so its next holder is never older than a row it must
+// write ([coord/kv.Epochs.Floor] is what the engine raises it with at boot).
+// A row naming no seat, or written by no lease, carries no epoch to keep above.
+func (s *CoordStore) OwnerEpochs(ctx context.Context) (map[uuid.UUID]int64, error) {
+	runs, err := s.list(ctx, func(PendingRun) bool { return true })
+	if err != nil {
+		return nil, err
+	}
+	out := map[uuid.UUID]int64{}
+	for _, run := range runs {
+		seat := seatOf(run.AgentID)
+		if seat == uuid.Nil || run.OwnerEpoch <= 0 {
+			continue
+		}
+		out[seat] = max(out[seat], run.OwnerEpoch)
+	}
+	return out, nil
+}
+
 // ListActiveForSeat returns one seat's unfinished runs.
 //
 // The read a seat's new owner makes inside on_acquire, and the whole reason
