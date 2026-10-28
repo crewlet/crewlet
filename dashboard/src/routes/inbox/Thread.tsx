@@ -28,7 +28,7 @@ import { Button, Skeleton, Text } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { renderMarkdown } from "~/lib/markdown.ts";
+import { CHECKED_WORDS, renderMarkdown } from "~/lib/markdown.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { WorkComment } from "~/protocol/index.ts";
@@ -224,7 +224,7 @@ function ThreadEntry({
           {comment.removed ? (
             <span className="muted">(this comment was removed)</span>
           ) : comment.body.trim() ? (
-            renderMarkdown(comment.body)
+            renderMarkdown(comment.body, CHECKED_WORDS)
           ) : chose ? (
             // AN ANSWER THAT IS ONLY A CHOICE has no words, and the choice
             // is the whole of what it said.

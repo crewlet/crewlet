@@ -238,9 +238,9 @@ export type LinkHostKind = "github" | "gitlab" | "mattermost" | "jira" | "conflu
 
 /**
  * Where one of the company's apps lives in a browser: its kind and base
- * address, and nothing else. Every reader may ask for these (`link_hosts`),
- * where the `integrations` answer is an administrator's, so it carries no
- * organization, repository, project, team, credential or health.
+ * address, and a code host's owners. Every reader may ask for these
+ * (`link_hosts`), where the `integrations` answer is an administrator's, so it
+ * carries no repository, project, team, credential or health.
  *
  * Held against what the engine sends by
  * `internal/api/queries.TestTheLinkHostsAnswerCarriesHostsAndNothingElse`.
@@ -249,6 +249,12 @@ export interface LinkHost {
   kind: LinkHostKind;
   /** Scheme, host, port and path, with no trailing slash: `https://gitlab.example.com/scm`. */
   url: string;
+  /**
+   * A code host's organizations or top-level groups, lower case and sorted:
+   * the owners a bare `owner/repo` in prose is read as a repository under
+   * (`lib/inlineTokens.ts`). Absent on every other kind.
+   */
+  owners?: string[];
 }
 
 /** The `link_hosts` answer. */

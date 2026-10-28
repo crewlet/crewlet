@@ -12,33 +12,139 @@
  *  - A REFERENCE or a COMMIT carries its code host's mark and links there
  *    when the company configured that host (`referenceTarget`); a reference
  *    two hosts could own is its words.
+ *  - A REPOSITORY (a bare `owner/repo` under an owner the code hosts name)
+ *    carries its owner's code host's mark and links to the repository
+ *    (`repositoryTarget`).
  *  - A KEY links to its work item only when its project is one of the
  *    company's (`lib/projectKeys.ts`): `ISO-8601` is a key's shape and a word.
- *  - A MENTION is drawn with its seat's face and links to the seat only when
- *    the chart holds that handle.
+ *  - A MENTION links to the seat only when the chart holds that handle.
+ *
+ * A MENTION IS ITS WORDS, with no face: a face at the text's size before
+ * every handle made a line of them hard to read, and the handle already says
+ * who. Every other token keeps the mark that says what it is.
  *
  * Anything that resolves to nothing is its words, exactly as written.
  *
- * `links` false draws every token as words with its mark: inside a control or
- * a link (an Inbox row, an answer's option, a link's own label), where a link
- * is invalid or steals the press, and in a model's prose (`links: "inert"`),
- * where nothing the model wrote may become a link.
+ * WHERE A TOKEN LINKS is the run's `LinkMode` (`lib/inlineTokens.ts`):
+ * `text` draws every token as words with its mark (an Inbox row, an answer's
+ * option), and `checked` (the assistant's answers, the Inbox) links only what
+ * the dashboard built: every token but an address is built from checked
+ * parts already, and an address opens only as it is rebuilt on the
+ * company's own host, else it is drawn inert, as written.
  */
 
-import { useContext, type ReactNode } from "react";
-import { ColorChip, InlineRef } from "@crewlethq/ui";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { ColorChip, Highlight, InlineRef } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
 import { GlobeGlyph, SquareKanbanGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { describeLink, referenceTarget, type InlineToken as Token } from "~/lib/inlineTokens.ts";
+import {
+  codeHostOwners,
+  describeLink,
+  inlineTokens,
+  linkTarget,
+  messageScope,
+  NO_SCOPE,
+  referenceTarget,
+  repositoryTarget,
+  type InlineToken as Token,
+  type LinkMode,
+  type MessageScope,
+} from "~/lib/inlineTokens.ts";
+import type { LinkHost } from "~/contract/integrations.ts";
 import { useLinkHosts } from "~/lib/linkHosts.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { useProjectKeys } from "~/lib/projectKeys.ts";
 import { seatPath, useOrgIndex } from "~/lib/seats.ts";
 import { itemPath } from "~/lib/work.ts";
-import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 
-export function InlineToken({ token, links }: { token: Token; links: boolean }) {
+/** The texts of the message a surface draws in several renders ([TokenScope]). */
+const MessageTexts = createContext<readonly string[] | null>(null);
+
+/**
+ * One message drawn in several renders: an ask's question, its context, its
+ * recommendation and its options are one message to the person reading
+ * them, so a bare `#11` in the question is placed by a repository its
+ * context names (`messageScope`). Every run inside reads `texts` in place of
+ * its own render's source.
+ */
+export function TokenScope({ texts, children }: { texts: readonly string[]; children: ReactNode }) {
+  return <MessageTexts.Provider value={texts}>{children}</MessageTexts.Provider>;
+}
+
+/** The scopes read for each set of hosts, by the message's words. */
+const scopes = new WeakMap<readonly LinkHost[], Map<string, MessageScope>>();
+/**
+ * How many messages' scopes are kept per set of hosts: a screen draws a few
+ * dozen messages (an Inbox's rows, a thread's comments), and a page is one.
+ * Past it the oldest is read again when it is drawn again.
+ */
+const SCOPES_KEPT = 128;
+
+/**
+ * A message's scope, READ ONCE for every run of it: a page of fifty
+ * paragraphs is fifty runs of one message, and each reading the whole page
+ * for itself read it fifty times.
+ */
+function scopeOf(texts: readonly string[], hosts: readonly LinkHost[]): MessageScope {
+  const key = texts.join("\u0000");
+  if (key === "") return NO_SCOPE;
+  let kept = scopes.get(hosts);
+  if (kept === undefined) {
+    kept = new Map();
+    scopes.set(hosts, kept);
+  }
+  const found = kept.get(key);
+  if (found !== undefined) return found;
+  const scope = messageScope(texts, hosts);
+  if (kept.size >= SCOPES_KEPT) kept.delete(kept.keys().next().value!);
+  kept.set(key, scope);
+  return scope;
+}
+
+/**
+ * One run of prose with its tokens drawn, the words between them marked where
+ * a search matched (`highlight`).
+ *
+ * A COMPONENT, so the run is read once: the recogniser runs when the run's
+ * words, the company's code host owners or what its message names change,
+ * and a re-render of the surface around it (a page of comments, an Inbox
+ * list ticking its times) reads nothing again. The owners come from the
+ * frame's `link_hosts`, which a plain function of the text could not read.
+ *
+ * `message` is the source the run was rendered from; a [TokenScope] around
+ * it names a larger one.
+ */
+export function TokenRun({
+  text,
+  links,
+  highlight,
+  message,
+}: {
+  text: string;
+  links: LinkMode;
+  highlight?: readonly string[] | undefined;
+  message: string;
+}) {
+  const hosts = useLinkHosts();
+  const surface = useContext(MessageTexts);
+  const owners = useMemo(() => codeHostOwners(hosts), [hosts]);
+  const scope = scopeOf(surface ?? [message], hosts);
+  const tokens = useMemo(() => inlineTokens(text, owners, scope), [text, owners, scope]);
+  const words = (part: string, at: number): ReactNode =>
+    highlight ? <Highlight key={`w${at}`} text={part} terms={highlight} /> : part;
+  const out: ReactNode[] = [];
+  let at = 0;
+  for (const token of tokens) {
+    if (token.at > at) out.push(words(text.slice(at, token.at), at));
+    out.push(<InlineToken key={`k${token.at}`} token={token} links={links} />);
+    at = token.end;
+  }
+  if (at < text.length) out.push(words(text.slice(at), at));
+  return out;
+}
+
+export function InlineToken({ token, links }: { token: Token; links: LinkMode }) {
   switch (token.kind) {
     case "colour":
       return (
@@ -50,6 +156,7 @@ export function InlineToken({ token, links }: { token: Token; links: boolean }) 
       return <AddressToken token={token} links={links} />;
     case "reference":
     case "commit":
+    case "repository":
       return <CodeHostToken token={token} links={links} />;
     case "key":
       return <KeyToken token={token} links={links} />;
@@ -63,21 +170,34 @@ function AddressToken({
   links,
 }: {
   token: Extract<Token, { kind: "address" }>;
-  links: boolean;
+  links: LinkMode;
 }) {
   const hosts = useLinkHosts();
   const said = describeLink(token.href, hosts);
   // NO WEB ADDRESS (a `mailto:`): no app's and no host to show, so it is the
-  // address as written, a link where links may be.
+  // address as written, a link only where any link may be.
   if (said === null) {
-    return <InlineRef href={links ? token.href : undefined}>{token.text}</InlineRef>;
+    return <InlineRef href={links === "anchor" ? token.href : undefined}>{token.text}</InlineRef>;
   }
+  const mark = said.vendor ? (
+    <VendorMark vendor={said.vendor} data-vendor={said.vendor} />
+  ) : (
+    <GlobeGlyph />
+  );
+  // CHECKED AND NOT THE COMPANY'S: the address as written, whole, so a reader
+  // sees and can copy exactly where it would go, and never a control.
+  if (links === "checked" && said.canonical === null) {
+    return (
+      <InlineRef mark={mark} kind={said.kind ?? undefined} title={token.href}>
+        {token.text}
+      </InlineRef>
+    );
+  }
+  const to = links === "text" ? undefined : links === "checked" ? said.canonical! : token.href;
   return (
     <InlineRef
-      mark={
-        said.vendor ? <VendorMark vendor={said.vendor} data-vendor={said.vendor} /> : <GlobeGlyph />
-      }
-      href={links ? token.href : undefined}
+      mark={mark}
+      href={to}
       kind={said.kind ?? undefined}
       title={token.href}
       code={said.code}
@@ -91,31 +211,42 @@ function CodeHostToken({
   token,
   links,
 }: {
-  token: Extract<Token, { kind: "reference" | "commit" }>;
-  links: boolean;
+  token: Extract<Token, { kind: "reference" | "commit" | "repository" }>;
+  links: LinkMode;
 }) {
   const hosts = useLinkHosts();
-  const at =
-    token.kind === "reference"
-      ? { path: token.path, sep: token.sep, id: token.id }
-      : token.after === null
-        ? null
-        : { path: token.after.path, sep: "@" as const, id: token.sha };
-  // A COMMIT NAMED BY THE WORD ALONE ("commit 9fceb02") has no repository to
-  // point at, and is drawn with the mark of the one code host there is.
-  const target = at ? referenceTarget(at.path, at.sep, at.id, hosts) : soleCodeHost(hosts);
+  const target = codeHostTarget(token, hosts);
   if (target === null) return token.text;
   return (
     <InlineRef
       mark={<VendorMark vendor={target.vendor} data-vendor={target.vendor} />}
       kind={CODE_HOST_NAMES[target.vendor]}
-      href={links && target.href !== null ? target.href : undefined}
+      href={links !== "text" && target.href !== null ? target.href : undefined}
       title={target.href ?? undefined}
       code
     >
       {token.text}
     </InlineRef>
   );
+}
+
+/** Where a reference, a commit or a repository points, or null for words. */
+function codeHostTarget(
+  token: Extract<Token, { kind: "reference" | "commit" | "repository" }>,
+  hosts: ReturnType<typeof useLinkHosts>,
+) {
+  switch (token.kind) {
+    case "repository":
+      return repositoryTarget(token.owner, token.repo, hosts);
+    case "reference":
+      return referenceTarget(token.path, token.sep, token.id, hosts);
+    case "commit":
+      // A COMMIT NAMED BY THE WORD ALONE ("commit 9fceb02") has no repository
+      // to point at, and is drawn with the mark of the one code host there is.
+      return token.after === null
+        ? soleCodeHost(hosts)
+        : referenceTarget(token.after.path, "@", token.sha, hosts);
+  }
 }
 
 /** What a code host's mark says, read before its reference. */
@@ -128,14 +259,14 @@ function soleCodeHost(hosts: ReturnType<typeof useLinkHosts>) {
   return only ? { vendor: only.kind as "github" | "gitlab", href: null } : null;
 }
 
-function KeyToken({ token, links }: { token: Extract<Token, { kind: "key" }>; links: boolean }) {
+function KeyToken({ token, links }: { token: Extract<Token, { kind: "key" }>; links: LinkMode }) {
   const projects = useProjectKeys();
   if (!projects.has(token.project)) return token.text;
   return (
     <InlineRef
       mark={<SquareKanbanGlyph />}
       kind="Task"
-      href={links ? href(itemPath({ id: token.text, key: token.text })) : undefined}
+      href={links !== "text" ? href(itemPath({ id: token.text, key: token.text })) : undefined}
       code
     >
       {token.text}
@@ -149,7 +280,7 @@ function KeyToken({ token, links }: { token: Extract<Token, { kind: "key" }>; li
  * handle there is its words, as a key with no projects and an address with no
  * hosts are.
  */
-function MentionToken(props: { token: Extract<Token, { kind: "mention" }>; links: boolean }) {
+function MentionToken(props: { token: Extract<Token, { kind: "mention" }>; links: LinkMode }) {
   return useContext(ClientContext) === null ? props.token.text : <SeatMention {...props} />;
 }
 
@@ -158,21 +289,13 @@ function SeatMention({
   links,
 }: {
   token: Extract<Token, { kind: "mention" }>;
-  links: boolean;
+  links: LinkMode;
 }) {
   const index = useOrgIndex();
   const seat = index.byHandle.get(token.handle);
   if (seat === undefined) return token.text;
   return (
-    <InlineRef
-      markShape="face"
-      mark={
-        <SeatAvatar name={seat.name} kind={seat.kind} avatar={seat.avatar} size="text" decorative />
-      }
-      kind={seat.kind === "human" ? "Person" : "Agent"}
-      href={links ? href(seatPath(seat)) : undefined}
-      title={seat.name}
-    >
+    <InlineRef href={links !== "text" ? href(seatPath(seat)) : undefined} title={seat.name}>
       {token.text}
     </InlineRef>
   );
@@ -185,29 +308,39 @@ function SeatMention({
  * where it goes. No mark for an address of nobody we know: the words are the
  * link, and a globe before every one of them would say nothing.
  *
- * `live` false draws the words and the mark as no link: a model's link
- * (`links: "inert"`), whose address the renderer writes after it.
+ * Under `checked` it opens only the address rebuilt on the company's own host
+ * ([LinkDescription.canonical]); any other is drawn inert, its words and then
+ * the host and path it names, so a reader sees where it would have gone and
+ * can copy it. An app route a writer spelled (`#/settings/...`) is inert there
+ * too: the dashboard's own links into itself are the ones it builds, a key's
+ * and a handle's, never one a model or an agent chose.
  */
 export function LabelledLink({
   href,
-  live,
+  mode,
   children,
 }: {
   href: string;
-  live: boolean;
+  mode: Exclude<LinkMode, "text">;
   children?: ReactNode;
 }) {
   const hosts = useLinkHosts();
   const said = describeLink(href, hosts);
   const vendor = said?.vendor ?? null;
+  const to = mode === "anchor" ? href : (said?.canonical ?? null);
+  const shown = to === null ? linkTarget(href) : null;
   return (
-    <InlineRef
-      mark={vendor ? <VendorMark vendor={vendor} data-vendor={vendor} /> : undefined}
-      kind={vendor ? (said?.kind ?? undefined) : undefined}
-      href={live ? href : undefined}
-      wrap
-    >
-      {children}
-    </InlineRef>
+    <>
+      <InlineRef
+        mark={vendor ? <VendorMark vendor={vendor} data-vendor={vendor} /> : undefined}
+        kind={vendor ? (said?.kind ?? undefined) : undefined}
+        href={to ?? undefined}
+        title={to === null ? href : undefined}
+        wrap
+      >
+        {children}
+      </InlineRef>
+      {shown === null ? null : <span className="md-link-inert-host">{` (${shown})`}</span>}
+    </>
   );
 }

@@ -496,6 +496,19 @@ export function askQuestion(ask: WorkAskRow): string {
   return ask.decision?.question || firstLine(ask.body) || ask.title;
 }
 
+/**
+ * Every text of an ask a reader reads as one message: its question, its
+ * context, the asker's reasoning and each option. A bare `#11` in any of them
+ * is placed by what the others name (`TokenScope`).
+ */
+export function askTexts(ask: WorkAskRow): string[] {
+  const decision = ask.decision;
+  const options = (decision?.options ?? []).flatMap((o) => [o.label, o.detail ?? ""]);
+  return [askQuestion(ask), askContext(ask), decision?.rationale ?? "", ...options].filter(
+    (text) => text.trim() !== "",
+  );
+}
+
 /** What an ask says beside its question: the body, or what follows its first line. */
 export function askContext(ask: WorkAskRow): string {
   if (ask.decision) return ask.body.trim();

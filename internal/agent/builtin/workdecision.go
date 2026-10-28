@@ -69,8 +69,10 @@ func decisionSchema() map[string]any {
 					itemRef,
 			},
 			"label": map[string]any{
-				"type":        "string",
-				"description": "What it is, as a link would say it.",
+				"type": "string",
+				"description": "What it is, as a link would say it. A work " +
+					"item's link says its key first, so its label is what " +
+					"follows the key (\"sitemap fix\", not \"GP-20 sitemap fix\").",
 			},
 		},
 		"required": []any{"kind", "ref"},
@@ -280,18 +282,21 @@ type evidenceLookup struct {
 
 var _ worklet.EvidenceLookup = evidenceLookup{}
 
-// TaskID resolves a key or an id through the same point read every other
+// Task resolves a key or an id through the same point read every other
 // reference in these tools takes.
-func (l evidenceLookup) TaskID(ctx context.Context, ref string) (string, error) {
+func (l evidenceLookup) Task(ctx context.Context, ref string) (worklet.CitedTask, error) {
 	if l.work.Reader == nil {
-		return "", errors.New("this surface has no Worklet reader to check " +
-			"a work item against")
+		return worklet.CitedTask{}, errors.New("this surface has no " +
+			"Worklet reader to check a work item against")
 	}
 	got, err := l.work.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)
 	if err != nil {
-		return "", err
+		return worklet.CitedTask{}, err
 	}
-	return got.Task.ID, nil
+	return worklet.CitedTask{
+		ID:   got.Task.ID,
+		Keys: append([]string{got.Task.Key}, got.Task.FormerKeys...),
+	}, nil
 }
 
 // PageID resolves a page by id or by address to a live page's id.

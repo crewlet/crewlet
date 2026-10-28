@@ -531,6 +531,53 @@ describe("the pane", () => {
     expect(screen.getByText("The only cost is the webinar slot.")).toBeTruthy();
   });
 
+  // AN ASK IS ONE MESSAGE: its question's bare `#11` is placed by the
+  // repository its context names; an address its asker wrote opens only as
+  // the dashboard rebuilt it on the company's own host; and a cited task's
+  // button names its key once, whatever an older label repeats.
+  test("an ask's words link only what the dashboard built, and name a cited key once", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    const ask = askItem({
+      ...DECISION,
+      question: "How should the guard patch from the #11 PR body be applied?",
+      evidence: [{ kind: "task", ref: "t-20", label: "GP-20 sitemap fix, blocked on this access" }],
+    });
+    ask.ask.body =
+      "Assigned to you in gophrase/backend. See https://evil.example.net/c?q=secret and " +
+      "https://github.com/gophrase/backend/pull/11?x=1.";
+    mount({
+      answers: {
+        decisions: decisionsOf(ask),
+        link_hosts: {
+          hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }],
+        },
+        work_item: {
+          task: {
+            id: "t-20",
+            key: "GP-20",
+            project: "GP",
+            title: "Sitemap fix",
+            status: "todo",
+            version: 1,
+          },
+        },
+      },
+    });
+    await settle();
+    const pane = document.querySelector(".crewlet-reading-pane")!;
+    const title = pane.querySelector(".crewlet-reading-pane__title")!;
+    expect(title.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
+    const hrefs = [...pane.querySelectorAll("a")].map((a) => a.getAttribute("href"));
+    expect(hrefs).toContain("https://github.com/gophrase/backend");
+    expect(hrefs).toContain("https://github.com/gophrase/backend/pull/11");
+    expect(hrefs.some((h) => h?.includes("evil.example.net"))).toBe(false);
+    expect(pane.textContent).toContain("https://evil.example.net/c?q=secret");
+    expect(
+      screen.getByRole("link", { name: /GP-20 sitemap fix, blocked on this access/ }),
+    ).toBeTruthy();
+    expect(pane.textContent).not.toContain("GP-20 GP-20");
+  });
+
   test("an option answers with one press, through the one write, and marks its notice read", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";
     mount({
