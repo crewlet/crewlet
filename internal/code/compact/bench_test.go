@@ -77,9 +77,11 @@ import (
 //     simulated minute, and a pass of the home's compactor merging at that
 //     many packs at every minute, while the other git node syncs after every
 //     push and every pass, as a node serving the repository's fetches does.
-//     min-merge=8, the production floor, is the STEADY arm: its
-//     max-live-packs must stay under code.CompactTargetPacks plus a minute's
-//     pushes, which confirms Poll; retired/push is the roll's ρ;
+//     min-merge=8, the production floor, is the STEADY arm: push-KB is what
+//     a push's pack weighed — its file, its commit and its two trees — which
+//     every figure over the bytes pushed divides by; its max-live-packs must
+//     stay under code.CompactTargetPacks plus a minute's pushes, which
+//     confirms Poll; retired/push is the roll's ρ;
 //     rewrite-B/pushed-B what the outputs weigh over what was pushed, O(log n)
 //     at factor 2; record-B/push the compactions' records on the code log a
 //     push, their signed frames included; and got-B/pushed-B what the other
@@ -772,6 +774,7 @@ func steadyRun(b *testing.B, pushes []pushed, minMerge int) steadyFigures {
 // report states fig on b, its requests and bytes a thousand pushes.
 func (fig steadyFigures) report(b *testing.B) {
 	kpush := float64(fig.pushes) / 1000
+	b.ReportMetric(float64(fig.pushedBytes)/float64(fig.pushes)/1e3, "push-KB")
 	b.ReportMetric(float64(fig.maxLive), "max-live-packs")
 	b.ReportMetric(float64(fig.compactions), "compactions")
 	b.ReportMetric(float64(fig.retired)/float64(fig.pushes), "retired/push")
@@ -786,13 +789,24 @@ func (fig steadyFigures) report(b *testing.B) {
 	b.ReportMetric(float64(fig.outputGot*(eightNodes-1))/1e6/kpush, "fleet-MB/kpush")
 }
 
+// extendDirs is how many directories extend spreads a history's files over,
+// as internal/code/cache's benchmarks spread theirs: a push of one file then
+// carries it and two trees of at most a hundred entries — the directory it
+// lands in and the root — as a push into a repository of directories does.
+// Every file in ONE directory would have every push carry a root tree listing
+// every file the history has added, some 40 bytes a file: over the steady
+// arm's 6 000 pushes about 73 KB a push of trees beside its 20 KB of file, so
+// what a push weighed would have been mostly a tree that real repositories
+// never carry, and every figure over the bytes pushed understated by it.
+const extendDirs = 100
+
 // extend fast-imports n commits onto src's main after from ("" for its first
 // commit), the first of them the history's first-th, each adding one file of
 // size bytes from a stream seeded by first — incompressible, as most of a
-// push's new bytes are — and answers them, oldest first. Each is stamped a
-// second after the one before (benchEpoch, first), so no commit is older than
-// its parent: a skewed one has git's date-ordered walks read the whole history
-// (gittest.After).
+// push's new bytes are — in one of extendDirs directories, and answers them,
+// oldest first. Each is stamped a second after the one before (benchEpoch,
+// first), so no commit is older than its parent: a skewed one has git's
+// date-ordered walks read the whole history (gittest.After).
 func extend(b *testing.B, client *gittest.Client, src, from string, first, n, size int) []string {
 	b.Helper()
 	gittest.FastImport(b, client, src, func(w *bufio.Writer) error {
@@ -812,7 +826,8 @@ func extend(b *testing.B, client *gittest.Client, src, from string, first, n, si
 					return err
 				}
 			}
-			if _, err := fmt.Fprintf(w, "M 100644 inline p%07d.bin\ndata %d\n", first+i, size); err != nil {
+			if _, err := fmt.Fprintf(w, "M 100644 inline d%02d/p%07d.bin\ndata %d\n", (first+i)%extendDirs,
+				first+i, size); err != nil {
 				return err
 			}
 			if _, err := w.Write(body); err != nil {
