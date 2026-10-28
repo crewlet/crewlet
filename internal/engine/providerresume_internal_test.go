@@ -649,6 +649,124 @@ func TestAStopReachesACompletionWaitingForALimit(t *testing.T) {
 	}
 }
 
+// limitOnReturn is a model whose call is out until the case lets it go, and
+// comes back refused for a usage limit: the review a person's stop lands under.
+type limitOnReturn struct {
+	retry   time.Time
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (*limitOnReturn) Model() string { return "opus" }
+
+func (m *limitOnReturn) Complete(ctx context.Context, _ llm.Request) (*llm.Completion, error) {
+	select {
+	case m.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-m.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return nil, &llm.Error{Kind: llm.KindRateLimit, Key: "default", RetryAt: m.retry,
+		Err: errors.New("You've hit your 5-hour limit")}
+}
+
+// A STOP THAT LANDS WHILE A RESUME'S CALL IS OUT DECIDES THE WAIT THAT CALL
+// MEETS. A person pauses the seat with a stop while its finished run's review
+// is waiting on the model, and the call then comes back refused for the
+// model's limit. The stop leaves a claimed run to its turn, whose fence closes
+// it at its next round, and there is none: reverted on the limit, the job was
+// held on its node until the limit's instant, up to the hour an entry is
+// benched for, and the stopped seat parked and probed meanwhile. The resume
+// is settled as the stopped turn it is instead: the run ends at once, the turn
+// is said stopped, and nothing is parked.
+//
+// Mutation: turn the limit into the resume's refusal without asking whether
+// the seat is stopping (resumeTurn), and the stopped seat is parked and its run
+// held until the instant.
+func TestAStopDecidesTheLimitAResumesCallMeets(t *testing.T) {
+	t.Parallel()
+	r := newDrainRig(t)
+	e := r.start(t)
+	e.providerParks.after = (&fakeAlarms{}).after
+	model := &limitOnReturn{retry: time.Now().Add(time.Hour), entered: make(chan struct{}, 1),
+		release: make(chan struct{})}
+	withModels(t, e, model)
+	var parked, stopped atomic.Int32
+	e.backends.Queue.AddPublishListener(func(_ context.Context, _ string, ev *events.Event) {
+		if p, ok := events.DataAs[*types.SeatProviderParked](ev); ok && p != nil {
+			parked.Add(1)
+		}
+		if p, ok := events.DataAs[*types.AgentTurnStopped](ev); ok && p != nil {
+			stopped.Add(1)
+		}
+	})
+	r.seedRun(t, e, "t1")
+	r.runner.Finish(sandbox.Result{Success: true, Text: "fixed the flaky test"})
+	select {
+	case <-model.entered:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the resumed turn never called the model")
+	}
+
+	swe := seatIn(t, e, "swe")
+	e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: swe,
+		Pause: &coord.SeatPause{Seat: swe, By: "ana", StopRunning: true}})
+	close(model.release)
+	store := sandbox.NewCoordStore(e.backends.Fleet)
+	eventually(t, "the stopped seat's run to end", func() bool {
+		_, found, err := store.Get(t.Context(), "t1")
+		return err == nil && !found
+	})
+	eventually(t, "the resumed turn to be said stopped", func() bool { return stopped.Load() > 0 })
+	if n := parked.Load(); n != 0 || e.providerParks.parking(swe) != nil {
+		t.Fatalf("the stopped seat was parked (%d parks published) on a limit its stop decided", n)
+	}
+	if n := r.collected.Load(); n != 1 {
+		t.Errorf("the box was collected %d times, want once", n)
+	}
+}
+
+// THE WAITS A STOP DECIDES ARE THE ONES A RESUME WOULD WAIT ON: a limit every
+// model of its chain reported, and a budget that holds the segment (a window
+// full, or too short for the launch every relaunch makes). Any other failure is
+// a retry, whose next attempt the seat's fence closes as stopped at its first
+// round, and a seat with no ceiling has no budget to wait on.
+//
+// Mutation: read the budget's refusal without asking whether the seat's window
+// refuses (resumeWaits), and a stopped seat's uncapped segment is settled as
+// though it waited.
+func TestTheWaitsAStopDecidesAreTheResumesWaits(t *testing.T) {
+	t.Parallel()
+	limit := &llm.Error{Kind: llm.KindRateLimit, Key: "default", RetryAt: time.Now().Add(time.Hour),
+		Err: errors.New("You've hit your 5-hour limit")}
+	limited := &chain.Error{Attempted: []string{"default"}, Failures: []error{limit}, Err: limit}
+	halfLimited := &chain.Error{Attempted: []string{"default", "spare"},
+		Failures: []error{limit, errors.New("server error")}, Err: errors.New("server error")}
+	uncapped := newDrainRig(t).start(t)
+	for name, tc := range map[string]struct {
+		err   error
+		waits bool
+	}{
+		"a limit every model reported":       {err: limited, waits: true},
+		"a limit one model of two reported":  {err: halfLimited},
+		"a failure that is not a wait":       {err: errors.New("the model provider did not answer")},
+		"a budget on a seat with no ceiling": {err: toolloop.ErrBudgetExhausted},
+	} {
+		if got := uncapped.resumeWaits(t.Context(), uncapped.Company(), "swe", tc.err); got != tc.waits {
+			t.Errorf("%s: resumeWaits = %v, want %v", name, got, tc.waits)
+		}
+	}
+	capped := newDrainRig(t)
+	capped.doc = cappedSWEDoc
+	e := capped.start(t)
+	if !e.resumeWaits(t.Context(), e.Company(), "swe", toolloop.ErrBudgetExhausted) {
+		t.Error("a segment its seat's window holds is not a wait the stop decides")
+	}
+}
+
 // A PARK TAKEN AFTER ITS SEAT LEFT THIS NODE IS UNDONE AT ONCE. A seat's
 // release does not wait for the turn whose refusal parks the seat: a lost
 // lease detaches the inbox under a running delivery, a turn refused mid-flight

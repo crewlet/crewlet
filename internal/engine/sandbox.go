@@ -1118,6 +1118,17 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	answer := func(res turn.Result, err error) {
 		e.answerColleague(ctx, company, answeringRun(in.Run), in.Run.ColleagueAsk, res, err)
 	}
+	// stopped settles the resumed turn as a person's stop ended it: said
+	// (agent_turn_stopped, under the pause that stopped it), its colleague
+	// answered, and the run settled rather than reverted (below).
+	stopped := func(stop error, why string) error {
+		pause, _ := stopOf(stop)
+		role, agentID := seatIdentity(company, in.Turn.Handle())
+		e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
+			in.Run.TurnID, in.Run.WorkKey, pause, tracing.TraceOf(ctx)))
+		answer(res, stop)
+		return fmt.Errorf("%w (%s): %w", sandbox.ErrResumeAbandoned, why, stop)
+	}
 	if err != nil {
 		// A PERSON STOPPED THE RESUMED TURN — its seat was paused with a
 		// stop after the run's completion was claimed, or while its
@@ -1131,13 +1142,22 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// until the broker dead-lettered it. The run's box is reclaimed
 		// with it; stopping the turn is what was asked.
 		if turn.Stopped(err) {
-			pause, _ := stopOf(err)
-			role, agentID := seatIdentity(company, in.Turn.Handle())
-			e.observe(ctx, turnStoppedEvent(in.Turn.Handle(), role, agentID,
-				in.Run.TurnID, in.Run.WorkKey, pause, tracing.TraceOf(ctx)))
-			answer(res, err)
-			return fmt.Errorf("%w (a person stopped the resumed turn): %w",
-				sandbox.ErrResumeAbandoned, err)
+			return stopped(err, "a person stopped the resumed turn")
+		}
+		// AND A WAIT THE SEGMENT MET WHILE A PERSON'S STOP LANDED is decided
+		// by the stop: the seat was paused with a stop while one of the
+		// segment's calls was out, and that call came back refused for a
+		// limit its models report or the seat's budget. The turn's fence
+		// would have closed it as stopped at its next round, and there is
+		// none: reverted on the wait, the job was held on its node or its
+		// row until the limit's instant or the window's turn, up to the
+		// hour an entry is benched for, the seat parked and probed
+		// meanwhile, while the stop stood unanswered, since a stop leaves a
+		// claimed run to its turn. Settled here as stopped instead, as the
+		// fence settles it, and nothing is parked.
+		if stop := e.seatStop(in.Turn.Handle()); stop != nil && e.resumeWaits(ctx, company, in.Turn.Handle(), err) {
+			return stopped(stop, fmt.Sprintf("a person stopped the seat while its resumed turn "+
+				"met a wait: %v", err))
 		}
 		// A BUDGET THAT REFUSES THE SEGMENT HOLDS IT, before anything
 		// decides it is lost: the round's relaunch — a reviewer's send-back,
@@ -2578,11 +2598,28 @@ func (e *Engine) seatCannotRun(ctx context.Context, handle string, route sandbox
 // its running work ([Engine.stopFor]): what the seat's fence closes a turn
 // on at its next round.
 func (e *Engine) seatStopping(handle string) bool {
-	seat, err := e.seatID(handle)
-	if err != nil {
-		return false
+	return e.seatStop(handle) != nil
+}
+
+// seatStop is the stop a person's pause asks of handle's seat, as the seat's
+// fence closes a turn on it ([Engine.stopFor]), nil where none does: a seat
+// the running company does not name has no pause this node keeps either.
+func (e *Engine) seatStop(handle string) error {
+	if seat, err := e.seatID(handle); err == nil {
+		return e.stopFor(seat, handle)
 	}
-	return e.stopFor(seat, handle) != nil
+	return nil
+}
+
+// resumeWaits reports whether err, a resumed segment's failure, is a WAIT
+// rather than a failure: a budget that holds it ([Engine.heldByBudget]) or a
+// limit every model of its chain reported ([resumeRefusal]) — what a resume is
+// reverted to wait on, and what a person's stop decides instead.
+func (e *Engine) resumeWaits(ctx context.Context, company *Company, handle string, err error) bool {
+	if _, refused := resumeRefusal(err); refused {
+		return true
+	}
+	return e.heldByBudget(ctx, company, handle, err) != nil
 }
 
 // resumeRefusal is what a reverted resume's failure waits on, if it is the

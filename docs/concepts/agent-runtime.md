@@ -494,7 +494,11 @@ stateDiagram-v2
   window turns over or the limit lifts: a hold on the run is lifted, a
   completion the node kept is offered again, and the node admits a stopped
   seat's completion past its budget and its models' limit, which the stopped
-  turn never reaches. The stop
+  turn never reaches. A resumed turn whose call was out as the stop landed,
+  and comes back refused for a limit or the budget, has no next round for the
+  fence to close it at: it is settled as stopped there and then, rather than
+  held until the limit lifts or the window turns over, and its seat is not
+  parked on the limit. The stop
   is a decision about the work, not about where it runs: a seat that merely
   moves to another node leaves its run running.
 - **Answers wait too.** An answer to a parked coding run, by chat or by turn,
