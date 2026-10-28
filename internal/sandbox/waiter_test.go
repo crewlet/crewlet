@@ -582,13 +582,15 @@ func TestThePollNeverWakesABoxItsRunHasMovedOnFrom(t *testing.T) {
 	}
 }
 
-// A PAUSED BOX UNDER A RUN STILL RUNNING IS WOKEN, because that is the run's
-// box again: a collection that read and paused it and then could not resume
-// the turn hands the claim back to running, and the box has to be kept alive
-// and collected anew. The read-only attach must not cost that.
+// A PAUSED BOX UNDER A RUN STILL RUNNING A JOB NO COLLECTION READ BACK IS
+// WOKEN, because that is the run's box and only the poll can say whether its
+// job finished: it has to be kept alive and polled. The read-only attach must
+// not cost that. (A job a collection read back and handed back to running is
+// announced with its box left asleep instead, since it is over:
+// TestAReadBackJobsBoxSleepsUntilItIsCollectedAgain.)
 //
-// Mutation: leave every paused box alone, and the handed-back run's box is
-// never heart-beaten or polled again.
+// Mutation: leave every paused box alone, and this run's box is never
+// heart-beaten or polled again.
 func TestThePollWakesAPausedBoxItsRunStillRuns(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)

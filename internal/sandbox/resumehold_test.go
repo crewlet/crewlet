@@ -375,6 +375,69 @@ func TestACompletionRefusedForALimitIsHeldHereUntilItsInstant(t *testing.T) {
 	}
 }
 
+// A JOB READ BACK AND HANDED BACK KEEPS ITS BOX ASLEEP UNTIL IT IS COLLECTED
+// AGAIN. The collection read the job and paused its box, and the resume then
+// gave the claim back to running: held by its node for a model's limit, or
+// handed back for a retry. The waiter goes on announcing the job at every poll,
+// and the job is over, so it leaves the box as the collection left it: neither
+// woken nor kept alive, until the collection that next claims the job wakes it
+// to read it. Woken by the poll, a job its node held for a limit had its box
+// resumed and kept alive at every poll for as long as the hold lasted, up to
+// the hour a vendor's window is benched for: a running E2B sandbox, or an
+// unpaused container, for work that was already done.
+//
+// Mutation: drop the read-back case from the waiter's reach, and the box is
+// woken and kept alive at the first poll.
+func TestAReadBackJobsBoxSleepsUntilItIsCollectedAgain(t *testing.T) {
+	t.Parallel()
+	for name, handBack := range map[string]func(t *testing.T, rig *coordRig){
+		"held here for a limit": func(t *testing.T, rig *coordRig) {
+			limitedAfterClaim(t, rig, rig.now.Add(time.Hour))
+		},
+		"handed back for a retry": func(t *testing.T, rig *coordRig) {
+			rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.runner.Finish(Result{Success: true, Text: "fixed the flake"})
+			rig.resumer.failWith(errors.New("the model provider did not answer"))
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+				t.Fatal("the premise: the resume failed and handed its claim back")
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			handBack(t, rig)
+			run := rig.get("t1")
+			box := rig.provider.Box(run.SandboxID)
+			if run.Status != StatusRunning || !run.Launch.Collected || !box.Paused() {
+				t.Fatalf("the premise: run %q (read back %v), box paused %v; want it running, "+
+					"read back, its box paused", run.Status, run.Launch.Collected, box.Paused())
+			}
+			keepalives := box.Keepalives()
+			for range 3 {
+				if fired := rig.tick(); fired != 1 {
+					t.Fatalf("the poll announced %d completions, want the job's", fired)
+				}
+			}
+			if !box.Paused() || box.Keepalives() != keepalives {
+				t.Fatalf("after three polls the box is paused %v and was kept alive %d times, "+
+					"want it left asleep", box.Paused(), box.Keepalives()-keepalives)
+			}
+
+			rig.resumer.failWith(nil)
+			rig.coordinator.Readmit(conditionLimit, "swe")
+			payload, ev := rig.completion("t1")
+			_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
+			rig.coordinator.inflight.Wait()
+			if calls := rig.resumer.calls(); len(calls) != 1 || calls[0].Ended.Text != "fixed the flake" {
+				t.Fatalf("resumed %d times, want the job read back once more and resumed once", len(calls))
+			}
+		})
+	}
+}
+
 // A LIMIT A RESUME MET IS ITS NODE'S ALONE, AND SO IS THE HOLD. The models'
 // sit-out is the node's own, which no peer shares and a restart forgets
 // (ADR-0064), so the hold is kept in the node's memory and never written to

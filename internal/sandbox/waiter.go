@@ -732,8 +732,8 @@ func (w *Waiter) taskDeadline(duty time.Time) time.Time {
 // duplicate announcement is harmless — the coordinator claims once — so it
 // takes the pass's context, not the task's.
 func (w *Waiter) pollBounded(ctx, taskCtx context.Context, manager *Manager, run PendingRun) bool {
-	switch w.pollOne(taskCtx, manager, run) {
-	case pollDone, pollGone:
+	switch state := w.pollOne(taskCtx, manager, run); state {
+	case pollDone, pollGone, pollCollected:
 		// gone → the box vanished; fire anyway so the coordinator frees
 		// the seat and marks the run failed (collect will fail to
 		// reconnect) instead of hanging.
@@ -741,6 +741,15 @@ func (w *Waiter) pollBounded(ctx, taskCtx context.Context, manager *Manager, run
 			log.WarnContext(ctx, "sandbox_completion_publish_failed",
 				"turn_id", run.TurnID, "error", err.Error())
 			return false
+		}
+		if state == pollCollected {
+			// QUIETLY: a job read back and handed back is announced
+			// again at every poll for as long as the node that holds it
+			// waits on a condition, which can be an hour, and the
+			// collection that first read it said so already.
+			log.DebugContext(ctx, "sandbox_waiter_reannounced", "turn_id", run.TurnID,
+				"launch_id", run.LaunchID, "sandbox_id", run.SandboxID)
+			return true
 		}
 		log.InfoContext(ctx, "sandbox_waiter_fired", "turn_id", run.TurnID,
 			"launch_id", run.LaunchID, "sandbox_id", run.SandboxID)
@@ -902,9 +911,10 @@ func (w *Waiter) forget(runs []PendingRun) {
 type pollState int
 
 const (
-	pollRunning pollState = iota // not yet, or a transient error — retry next pass
-	pollDone                     // the job finished
-	pollGone                     // the box has vanished and can never complete
+	pollRunning   pollState = iota // not yet, or a transient error — retry next pass
+	pollDone                       // the job finished
+	pollGone                       // the box has vanished and can never complete
+	pollCollected                  // the job was read back already, and its box is asleep
 )
 
 // pollOne reconnects and asks the runner whether the job has finished.
@@ -920,7 +930,14 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 			"turn_id", run.TurnID, "placement", run.Placement, "error", err.Error())
 		return pollGone
 	}
-	box, err := w.reach(ctx, provider, run)
+	box, collected, err := w.reach(ctx, provider, run)
+	if collected {
+		// ITS JOB IS OVER AND WAS READ BACK, its box paused by that
+		// collection: announced again, and the box left asleep, unpolled
+		// and not kept alive — see [Waiter.reach].
+		w.succeed(run.TurnID)
+		return pollCollected
+	}
 	if box == nil && err == nil {
 		// The run moved on between the listing and the read, and its box
 		// was paused by whatever moved it — or its record could not be
@@ -996,7 +1013,8 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 
 // reach is a running run's box, for the poll: attached WITHOUT resuming it
 // ([Provider.Attach]), and resumed only where the run's own record says a
-// paused box is the running run's.
+// paused box holds the running run's job and no collection has read that job
+// back. collected reports the paused box of a job one has: see below.
 //
 // THE POLL'S RECORD IS A MOMENT OLD. The collection claims a run off running,
 // reads its box and pauses it, and a poll that listed the run before the
@@ -1005,16 +1023,30 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 // poll keeps alive only running records, so on E2B the woken box ran out its
 // timer and the parked run lost the snapshot it had been paused to keep.
 //
-// A PAUSED BOX UNDER A RECORD THAT IS STILL RUNNING is the one the poll must
-// wake: a collection that read and paused the box, then could not resume the
-// turn, hands the claim back to running — and that box is the run's again,
-// to be kept alive and collected anew. So a paused box sends the poll to the
-// record, and only a record still running the same job, in the same box, has
-// it resumed. Anything else answers no box and no error: the run moved on.
-func (w *Waiter) reach(ctx context.Context, provider Provider, run PendingRun) (Sandbox, error) {
-	box, err := provider.Attach(ctx, run.SandboxID)
+// A PAUSED BOX UNDER A RECORD STILL RUNNING THE SAME JOB, IN THE SAME BOX, is
+// the run's box again, and what the poll does with it turns on whether a
+// collection already read that job back ([LaunchRecord.Collected]):
+//
+//   - READ BACK: a collection read the box and paused it, and its resume then
+//     handed the claim back to running — refused for a condition it waits on
+//     (a model's limit its node holds the job for, [Coordinator.keepRefused]),
+//     or handed back for a retry. The job is over and its result was read, so
+//     there is nothing to poll and nothing to keep alive: the poll announces
+//     the job again and leaves the box asleep (collected), and the collection
+//     that next claims the job wakes the box as it reads it
+//     ([Manager.Reconnect]). Woken here, a job its node held for a model's
+//     limit had its box resumed and kept alive at every poll for as long as
+//     the hold lasted, up to the hour a vendor's window is benched for: a
+//     running E2B sandbox, or an unpaused container, for a job already done.
+//   - NOT READ BACK: a box paused under a job no collection handed back is
+//     woken, kept alive and polled, since only the poll can say whether that
+//     job finished.
+//
+// Anything else answers no box and no error: the run moved on.
+func (w *Waiter) reach(ctx context.Context, provider Provider, run PendingRun) (box Sandbox, collected bool, err error) {
+	box, err = provider.Attach(ctx, run.SandboxID)
 	if !errors.Is(err, ErrBoxPaused) {
-		return box, err
+		return box, false, err
 	}
 	current, ok, err := w.pending.Get(ctx, run.TurnID)
 	switch {
@@ -1023,15 +1055,18 @@ func (w *Waiter) reach(ctx context.Context, provider Provider, run PendingRun) (
 		// counted against reaching it, and the next tick asks again.
 		log.WarnContext(ctx, "sandbox_poll_record_unread", "turn_id", run.TurnID,
 			"sandbox_id", run.SandboxID, "error", err.Error())
-		return nil, nil
+		return nil, false, nil
 	case !ok || current.LaunchID != run.LaunchID || current.Status != StatusRunning ||
 		current.SandboxID != run.SandboxID:
 		log.DebugContext(ctx, "sandbox_poll_left_paused", "turn_id", run.TurnID,
 			"sandbox_id", run.SandboxID, "detail", "the box is paused and its run is no "+
 				"longer running it, so the poll leaves it as it is")
-		return nil, nil
+		return nil, false, nil
+	case current.Launch.Collected:
+		return nil, true, nil
 	}
-	return provider.Connect(ctx, run.SandboxID)
+	box, err = provider.Connect(ctx, run.SandboxID)
+	return box, false, err
 }
 
 // fail records one more failed reconnect and reports whether the streak has

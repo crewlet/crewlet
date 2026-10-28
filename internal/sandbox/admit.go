@@ -217,8 +217,10 @@ type refusedCompletion struct {
 // so does its letting go of the seat ([Coordinator.ReleaseSeat]), so the job's
 // next announcement asks whoever holds the seat then. The waiter announces the
 // job on every poll meanwhile, as it does for any refused completion; each
-// announcement costs this node a lookup, not a collection and a review. A seat's
-// budget, which every node reads alike, holds on the row instead ([HeldError]).
+// announcement costs this node a lookup, not a collection and a review, and
+// the job's box, which the collection paused, is left asleep, since the job was
+// read back already ([Waiter.reach]). A seat's budget, which every node reads
+// alike, holds on the row instead ([HeldError]).
 //
 // A SIGNAL THAT LANDS WHILE THE GATE IS REFUSING IS NOT LOST. Readmit re-fires
 // only what is kept when it runs, so a condition that cleared between the
