@@ -2098,8 +2098,8 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// Two of the seat's turns in flight at once is what the hold exists to
 	// prevent (seathold.go).
 	//
-	// WHETHER THE TURN BEGAN, which the resumer reports by calling Begin —
-	// see [ResumeRequest.Begin]. Atomic because nothing here promises the
+	// WHETHER THE TURN BEGAN, which the resumer reports by calling Begin (see
+	// [ResumeRequest.Begin]). Atomic because nothing here promises the
 	// resumer calls it on this goroutine.
 	var began atomic.Bool
 
