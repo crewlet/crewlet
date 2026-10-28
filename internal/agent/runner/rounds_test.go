@@ -156,6 +156,83 @@ func TestALiveFrameNeverDropsTheRoundsBehindIt(t *testing.T) {
 	}
 }
 
+// A CALL IN AN EXTENSION IS TOLD THE PHASE'S ROUND, the one its record states.
+// The loop numbers each invocation from 1, and the phase's records are
+// renumbered onto the phase's scale once it returns (offsetRounds); a tool
+// that asks its round mid-call is answered before that, so the phase declares
+// the rounds behind each invocation on the context it runs the loop with.
+// Without it the call in the extension's first round heard round 1 of a phase
+// whose record puts it in round 3 — a round the reading tool would hold its
+// answer to, and the round a call made twenty rounds earlier was really in.
+//
+// Mutation: run the loop on the phase's own context, without
+// toolloop.WithRoundOffset, and the extension's call is told round 1.
+func TestACallInAnExtensionIsToldThePhasesRound(t *testing.T) {
+	t.Parallel()
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
+		persist(t, "conventions", "start with the conventions"),
+		persist(t, "owners", "and who owns what"),
+		markDone(t, "that is enough"),
+		text("done"),
+	}}
+	pub := newCapture()
+	told := &roundsTold{}
+	r := runnerOver(t, prov, pub, alwaysExtend{}, loopCaps{
+		rounds: 2, ceiling: 8, extensionOn: true, step: 4,
+	}, []tools.Callable{
+		roundWitness{stubTool: stubTool{name: runner.ReflectAndPersistTool, out: "noted"}, told: told},
+		roundWitness{stubTool: stubTool{name: runner.MarkOnboardedTool, out: "marked"}, told: told},
+	})
+
+	onboard(t, r)
+
+	if got := told.rounds(); !slices.Equal(got, []int{1, 2, 3}) {
+		t.Errorf("the pass's calls were told rounds %v, want [1 2 3]: the phase's, "+
+			"across the extension", got)
+	}
+	// AND THE RECORD AGREES: each call is stated in the round it was told.
+	done := completedPhase(t, pub, "onboarding")
+	var recorded []int
+	for _, ex := range done.ToolExecutions {
+		round, _ := ex["round"].(int)
+		recorded = append(recorded, round)
+	}
+	if !slices.Equal(recorded, told.rounds()) {
+		t.Errorf("the record states the calls in rounds %v, and they were told %v",
+			recorded, told.rounds())
+	}
+}
+
+// roundsTold collects what a [roundWitness]'s calls were told.
+type roundsTold struct {
+	mu   sync.Mutex
+	seen []int
+}
+
+func (r *roundsTold) rounds() []int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.seen)
+}
+
+// roundWitness is a tool that records the round each call of it was told it
+// runs in ([toolloop.CallRound]), or -1 for a call told none.
+type roundWitness struct {
+	stubTool
+	told *roundsTold
+}
+
+func (w roundWitness) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	round, ok := toolloop.CallRound(ctx)
+	if !ok {
+		round = -1
+	}
+	w.told.mu.Lock()
+	w.told.seen = append(w.told.seen, round)
+	w.told.mu.Unlock()
+	return w.stubTool.Call(ctx, args)
+}
+
 // alwaysExtend grants every request, so the phase re-enters the tool loop.
 type alwaysExtend struct{}
 
@@ -231,15 +308,25 @@ func cappedRunner(
 	caps loopCaps, meter ...toolloop.BudgetMeter,
 ) *runner.Runner {
 	t.Helper()
+	return runnerOver(t, prov, pub, judge, caps, []tools.Callable{
+		stubTool{name: runner.ReflectAndPersistTool, out: "noted"},
+		stubTool{name: runner.MarkOnboardedTool, out: "marked"},
+	}, meter...)
+}
+
+// runnerOver is cappedRunner with the onboarding pass's own pair of tools
+// stated by the case, for one whose subject is what those calls are told.
+func runnerOver(
+	t *testing.T, prov llm.Provider, pub queue.Publisher, judge extension.Judge,
+	caps loopCaps, pair []tools.Callable, meter ...toolloop.BudgetMeter,
+) *runner.Runner {
+	t.Helper()
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	reg := tools.NewRegistry()
-	for _, tl := range []stubTool{
-		{name: runner.ReflectAndPersistTool, out: "noted"},
-		{name: runner.MarkOnboardedTool, out: "marked"},
-	} {
+	for _, tl := range pair {
 		if err := reg.Register(tl, tools.OriginBuiltin); err != nil {
 			t.Fatalf("Register: %v", err)
 		}

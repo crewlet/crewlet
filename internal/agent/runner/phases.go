@@ -996,11 +996,15 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		// everything above the insertion point, which is the one property
 		// the round ledger exists to guarantee.
 		prior := out
+		// The rounds already behind this invocation, declared so a tool
+		// that asks which round it is in hears the PHASE's number — the
+		// same number the records below are renumbered onto.
+		loopCtx := toolloop.WithRoundOffset(ctx, prior.Rounds)
 		var steering toolloop.Steerer
 		if in.steerable && r.cfg.Steer != nil {
 			steering = phaseSteer{r: r, ctx: ctx, ph: ph, iteration: iteration, offset: prior.Rounds}
 		}
-		res, err := toolloop.Run(ctx, toolloop.Config{
+		res, err := toolloop.Run(loopCtx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
 			Host: r.cfg.Sessions, ServerTitle: sessionTitle(r.cfg.Seat, ph),
 			// The chain's head, standing in until a completion names the

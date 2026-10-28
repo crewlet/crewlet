@@ -434,6 +434,36 @@ func TestACallIsToldItsRound(t *testing.T) {
 	}
 }
 
+// A CALL IS TOLD ITS ROUND ON THE PHASE'S SCALE: an extension continuing a phase
+// twenty rounds in has its calls told rounds 21 and 22, the rounds the phase's
+// records renumber them onto, not 1 and 2.
+//
+// Mutation: stamp the invocation's round without the declared offset and the
+// calls are told [1 2].
+func TestACallIsToldItsRoundOnThePhasesScale(t *testing.T) {
+	t.Parallel()
+	surf := newSurface("read")
+	var mu sync.Mutex
+	var rounds []int
+	surf.hook = func(ctx context.Context, _ llm.ToolCall) {
+		round, ok := toolloop.CallRound(ctx)
+		if !ok {
+			round = -1
+		}
+		mu.Lock()
+		rounds = append(rounds, round)
+		mu.Unlock()
+	}
+	prov := script(runOf(calling("one", "read"), calling("two", "read"), says("done")))
+	cfg := toolloop.Config{Provider: prov, Surface: surf, MaxRounds: 4, Host: host(t), Messages: opening()}
+	if _, err := toolloop.Run(toolloop.WithRoundOffset(t.Context(), 20), cfg); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !slices.Equal(rounds, []int{21, 22}) {
+		t.Errorf("calls were told rounds %v, want [21 22] — the phase's numbers, not the invocation's", rounds)
+	}
+}
+
 // THE PHASE NAMES THE ENTRY THAT SERVED IT, by the model's own precedence: the
 // configured head stands in until a run's answer names an entry, the first that
 // does wins, and a bare backend that names none leaves the head as the answer.

@@ -498,8 +498,33 @@ type SteerMark struct {
 // handed; see [CallRound].
 type roundKey struct{}
 
-// CallRound is the round the calling tool runs in, on the same one-based scale
-// as [Execution.Round], and false outside a tool call this loop made.
+// roundOffsetKey carries the rounds a caller's phase already ran before this
+// invocation of the loop; see [WithRoundOffset].
+type roundOffsetKey struct{}
+
+// WithRoundOffset declares that the phase this loop runs for has already run
+// `prior` rounds before this invocation, so the round [CallRound] reports to a
+// tool is on the PHASE's scale rather than the invocation's.
+//
+// It exists because a phase can run the loop more than once — an extension
+// continues it, and a corrective the last invocation withheld is read past its
+// budget (internal/agent/runner) — and the loop numbers its own rounds from 1
+// every time. The records it returns are renumbered by the caller afterwards
+// ([Result] is a value it can shift), but a tool that asks its round mid-call
+// cannot wait for that: a call in the first round of an extension continuing
+// a twenty-round phase would be told round 1 while the phase's record states
+// it in round 21.
+func WithRoundOffset(ctx context.Context, prior int) context.Context {
+	if prior <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, roundOffsetKey{}, prior)
+}
+
+// CallRound is the round the calling tool runs in, on the phase's scale — the
+// one-based scale its records state the call on, which a caller that runs the
+// loop again declares with [WithRoundOffset] — and false outside a tool call
+// this loop made.
 //
 // Read by a tool whose own answer depends on which round asked for it, and
 // never by the loop itself, which knows its round without asking: the
@@ -507,16 +532,18 @@ type roundKey struct{}
 // so on a read in the last round that may read, and makes a refused answer in
 // the turn's last round final (internal/assistant). A worker spawned by a
 // delegate call is told its parent's round by its caller instead
-// ([subagent.Config]), since a phase is one invocation of this loop and a
-// count from it is the phase's own.
+// ([subagent.Config]): the delegate tool is served only on an executor run's
+// surface, whose calls arrive over the tool bridge, where no loop is iterating
+// to stamp one.
 func CallRound(ctx context.Context) (int, bool) {
 	round, ok := ctx.Value(roundKey{}).(int)
 	return round, ok
 }
 
-// withCallRound stamps the round a call runs in.
+// withCallRound stamps the round a call runs in, offset onto the phase's scale.
 func withCallRound(ctx context.Context, round int) context.Context {
-	return context.WithValue(ctx, roundKey{}, round)
+	prior, _ := ctx.Value(roundOffsetKey{}).(int)
+	return context.WithValue(ctx, roundKey{}, prior+round)
 }
 
 // Narration is one round's model turn — what it said — KEPT ATTACHED TO ITS
