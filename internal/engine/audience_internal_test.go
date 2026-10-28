@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -156,26 +155,6 @@ func TestALaunchedRunRecordsWhoWokeItsTurn(t *testing.T) {
 	ref := sandboxTurnRef(t.Context(), &turnctx.Turn{RunID: "run-1", Requester: "ada"}, "SWE")
 	if ref.Requester != "ada" {
 		t.Fatalf("the run's turn reference names requester %q, want ada", ref.Requester)
-	}
-}
-
-// A NODE WITH A COORDINATOR ROUTES AN ANSWER BY TURN TO IT. Left unwired, the
-// dispatcher hands every such answer back for a coordinator it does not have,
-// and a parked run is never answered however many times a person tries.
-func TestTheDispatcherHandsAnAnswerByTurnToTheCoordinator(t *testing.T) {
-	t.Parallel()
-	e, _ := starting(t, refusingModels(t))
-	equipForCode(t, e, sandbox.NewCoordStore(memory.NewFleet()))
-	d := e.buildDispatcher(Options{Dispatch: &Dispatcher{NoteDeferred: func(string) {}}}, e.backends)
-	if d.AnswerByTurn == nil {
-		t.Fatal("the dispatcher has no route for an answer by turn on a node with a coordinator")
-	}
-	given := types.SandboxAnswerGiven{TurnID: "no-such-run", AgentHandle: "swe", Answer: "main",
-		LaunchID: "launch-1"}
-	disposition, err := d.AnswerByTurn(t.Context(), given, events.New(given, events.TraceContext{}))
-	if err != nil || disposition != sandbox.AnswerNotMine {
-		t.Fatalf("an answer to a run with no record = %q, %v, want the coordinator's not_mine",
-			disposition, err)
 	}
 }
 

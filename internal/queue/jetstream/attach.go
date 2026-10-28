@@ -592,7 +592,8 @@ func (a *attachment) dispatchOne(ctx context.Context, msg jetstream.Msg, h queue
 		return
 	}
 	a.q.beginHandler()
-	res := runHandler(a.withHeadroom(ctx, delivery{msg: msg, ev: ev}), a.log, ev, h)
+	held := delivery{msg: msg, ev: ev}
+	res := runHandler(a.withProgress(a.withHeadroom(ctx, held), held), a.log, ev, h)
 	a.q.endHandler()
 	a.apply(ctx, msg, ev, res)
 }
@@ -624,6 +625,21 @@ func (a *attachment) withHeadroom(ctx context.Context, ds ...delivery) context.C
 		})
 	}
 	return queue.WithHeadroom(ctx, perMessage)
+}
+
+// withProgress states how the handler keeps the messages it holds from timing
+// out ([queue.WithProgress]): an in-progress acknowledgement of each, which
+// restarts its ack window, every third of that window, so two signals can be
+// missed before the third is late.
+func (a *attachment) withProgress(ctx context.Context, ds ...delivery) context.Context {
+	return queue.WithProgress(ctx, a.q.ackWait()/3, func() error {
+		for _, d := range ds {
+			if err := d.msg.InProgress(); err != nil {
+				return fmt.Errorf("jetstream: in-progress acknowledgement: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 // decode parses a message, acking-and-dropping a corrupt payload.

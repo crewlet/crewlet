@@ -302,7 +302,25 @@ export function Inbox() {
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const settle = useCallback(
-    (row: InboxRow, label: string | null, answer?: AskAnswer) => {
+    (row: InboxRow, label: string | null, answer?: AskAnswer, hold?: boolean) => {
+      if (hold) {
+        // KEPT OPEN: marked with the label where it stands, or the label
+        // taken back, and no move to the next row. See [PaneProps.onSettled].
+        setSettled((was) => {
+          const next = new Map(was);
+          if (!label) {
+            next.delete(row.key);
+            return next;
+          }
+          const at = live.current.order
+            .filter((r) => r.kind !== "notice" && r.kind !== "answered")
+            .findIndex((r) => r.key === row.key);
+          const given: Settled = { label, row, at: Math.max(0, at) };
+          if (answer) given.answer = answer;
+          return next.set(row.key, given);
+        });
+        return;
+      }
       const before = live.current.order.map((r) => r.key);
       if (label) {
         const at = live.current.order
@@ -525,7 +543,7 @@ export function Inbox() {
               selected ? (titleOf(titles, rowItem(selected)) ?? taskTitleOf(selected)) : undefined
             }
             onBack={single ? () => nav.filter({ row: null }) : undefined}
-            onSettled={(label, answer) => selected && settle(selected, label, answer)}
+            onSettled={(label, answer, hold) => selected && settle(selected, label, answer, hold)}
           />
         )}
       </div>

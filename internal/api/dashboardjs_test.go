@@ -1305,8 +1305,12 @@ const (
 	// and the spend by model entry kept to an admin, the provider split
 	// offered to an admin alone, and the card that says so) took it to
 	// 4607.0 KiB, past it by bytes. 4608 KiB, which still refuses a doubled
-	// baseline.
-	treeBudget = 4<<20 + 512<<10
+	// baseline. Saying what became of an answer to a parked coding run (sent,
+	// recorded while its seat is busy and on what, answered, or not used and
+	// why) off the run's own record, drawn with uilet 0.74.0's pending tone
+	// while it is on its way, took it to 4610.7 KiB. 4611 KiB, which still
+	// refuses a doubled baseline.
+	treeBudget = 4<<20 + 515<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

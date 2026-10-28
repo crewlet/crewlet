@@ -196,6 +196,17 @@ var coordinatorEntries = map[string][]entryDrive{
 			call: answersByTurn,
 		},
 	},
+	"OnAnswerGiven": {
+		{
+			name: "a person's answer arriving on the seat's control topic",
+			call: answersOnControl,
+		},
+		{
+			name:    "an answer on the control topic whose resume fails",
+			arrange: func(_ *testing.T, rig *coordRig) { rig.resumer.failWith(errors.New("the node lost the seat")) },
+			call:    answersOnControl,
+		},
+	},
 	"Launch": {{
 		name: "a run_sandbox call on the run's own turn",
 		call: func(t *testing.T, rig *coordRig) {
@@ -465,8 +476,32 @@ func completesUnreadable(t *testing.T, rig *coordRig) {
 // the run, as the dispatcher does off the seat's inbox.
 func answersByTurn(t *testing.T, rig *coordRig) {
 	t.Helper()
-	// THE QUESTION THE ROW IS ON NOW, as answer_run names it off the row it
-	// checked — whatever status the row was placed in.
+	given := answerByTurnOnTheRow(t, rig)
+	if _, err := rig.coordinator.AnswerByTurn(t.Context(), given,
+		events.New(given, events.TraceContext{})); err != nil {
+		t.Logf("AnswerByTurn: %v", err)
+	}
+	// THE RESUME IS QUEUED, never inline: it runs on the retry the record
+	// armed, admitted as every retry is.
+	rig.fireRetries()
+}
+
+// answersOnControl delivers an answer by turn the way the seat receives one: on
+// its control topic.
+func answersOnControl(t *testing.T, rig *coordRig) {
+	t.Helper()
+	given := answerByTurnOnTheRow(t, rig)
+	if err := rig.coordinator.OnEvent(t.Context(), events.New(given, events.TraceContext{})); err != nil {
+		t.Logf("OnEvent: %v", err)
+	}
+	rig.fireRetries()
+}
+
+// answerByTurnOnTheRow is the answer answer_run gives t1, naming the question
+// the row is on now, as answer_run names it off the row it checked, whatever
+// status the row was placed in.
+func answerByTurnOnTheRow(t *testing.T, rig *coordRig) types.SandboxAnswerGiven {
+	t.Helper()
 	run, _, _ := rig.pending.Get(t.Context(), "t1")
 	given := types.SandboxAnswerGiven{
 		TurnID: "t1", Agent: sweID, AgentHandle: "swe", Answer: "the release branch",
@@ -476,10 +511,7 @@ func answersByTurn(t *testing.T, rig *coordRig) {
 	if given.LaunchID == "" {
 		given.LaunchID = "launch-of-a-run-with-no-record"
 	}
-	if _, err := rig.coordinator.AnswerByTurn(t.Context(), given,
-		events.New(given, events.TraceContext{})); err != nil {
-		t.Logf("AnswerByTurn: %v", err)
-	}
+	return given
 }
 
 // recovers takes the seat under a fresh lease, as a node claiming it does.

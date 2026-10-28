@@ -5260,31 +5260,36 @@ answers any parked run by naming it:
 | `turn_id` | The parked run's `turn_id`, as [`GET /sandbox-runs`](#get-sandbox-runs) lists it. |
 | `answer` | What the coding agent should be told, at most 32 KiB — it is spliced into the run as one tool reply. |
 
-It answers `{"turn_id", "agent_handle", "question", "outcome": "pending"}`:
-the answer is on the inbox of the seat holding the run, and **that** node
-resumes the run with it — so an answer given while the seat is paused waits
-for the resume, and one given while the seat is
-[busy with another coding run](../concepts/code-sandbox.md#how-a-coding-task-runs)
-waits until that run settles or parks and is then the first thing the seat
-takes — exactly as a chat reply would. The answer is to the **question** the
-run was waiting on when you gave it, and it resumes the run only while the run
+It answers `{"turn_id", "agent_handle", "question", "launch_id", "answer_id",
+"outcome": "pending"}`: the answer is on the control topic of the seat holding
+the run, and **that** node records it on the run as soon as it takes it off
+(the run's `status` reads `answered`), then resumes the run with it as soon as
+the seat is free: no other of its coding runs holding it, no other of its turns
+running, no person's pause. The resume is then the first thing the seat does,
+ahead of its mail. The control topic rather than the seat's inbox because the
+inbox is held while any of the seat's coding runs holds it and is worked
+oldest first after that, and an answer that rode it could wait out the run's
+pause TTL behind them. The answer is to the **question** the run was waiting
+on when you gave it (`launch_id`), and it resumes the run only while the run
 still waits on that one: if somebody else's answer resumed the run meanwhile
 and it has asked something new since, yours is announced `not_awaiting` rather
-than taken as the answer to a question you never saw. What it became is
+than taken as the answer to a question you never saw. What it became is read
+off the run's own row in [`GET /sandbox-runs`](#get-sandbox-runs): `answered`
+or `resumed` on that `launch_id` once it was taken, `answer_id` among its
+`declined_answers` if every attempt to resume the run with it failed and it
+was let go of (the run waits on its question again, and you answer it again),
+or a new `launch_id` if the run moved past the question first. It is also
 announced on the event stream as `sandbox_run_answered` (`resumed`,
-`not_awaiting`, `gone`, or `declined` when every attempt to resume the run with
-your answer failed and it was let go of — the run waits on its question again,
-and you answer it again), naming who answered: their name, its kind and the credential. The node
-holding the seat records your answer on the run before it resumes with it, so
-a node that stops on the way to the resume leaves it for the seat's next
-holder rather than losing it. An `unknown`
+`not_awaiting`, `gone` or `declined`), naming who answered: their name, its
+kind and the credential. A node that stops on the way to the resume leaves the
+recorded answer for the seat's next holder rather than losing it. An `unknown`
 outcome is a delivery the broker never confirmed; answering again is
 harmless, because whichever copy arrives second finds that question no longer
 waiting.
 
 **Who may answer**: whoever asked for the run — the seat its requester holds — or whoever leads the run's seat, or `admin`. Everybody else is refused `forbidden`, as the authority table refuses a lead's verb, because everybody signed in holds a credential and an answer steers somebody else's work.
 
-It refuses `not_running` for a run that is not waiting for an answer, or has no
+It refuses `already_answered` for a question another answer was recorded against first (the first recorded answer wins), naming who gave it and when; the run's row in `GET /sandbox-runs` carries both as values (`answered_by`, `answered_at`). It refuses `not_running` for a run that is not waiting for an answer, or has no
 record at all (a run that ended has none). It is
 served on every company, whether it runs Worklet and Doclet or not: the run record is the
 fleet's, and a company on Jira runs coding agents too.
@@ -7990,11 +7995,18 @@ reclaimed, work preserved on a pushed branch) is listed on both.
       "pause_ttl_seconds": 3600,
       "started_at": "2026-06-08T07:12:44+00:00",
       "updated_at": "2026-06-08T07:30:02+00:00",
-      "answerable_in_chat": true
+      "answerable_in_chat": true,
+      "declined_answers": []
     }
   ]
 }
 ```
+
+`declined_answers` names the answers the run's question let go of, by the id
+of the delivery each arrived in, which `answer_run` answers as `answer_id`. An
+answer named there was not used: the run could not be resumed with it and
+waits on its question again, so the person who gave it is asked to answer
+again rather than left looking at a question that never moves.
 
 `launch_id` names the job the row holds now. A turn can launch more than
 one — a resumed executor that calls `run_sandbox` again reuses the row — and

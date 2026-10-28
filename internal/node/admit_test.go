@@ -3,12 +3,16 @@ package node_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -296,3 +300,348 @@ func TestTheDrainsCutEndsATurnAdmittedOutsideTheMailbox(t *testing.T) {
 // gateWaitBound is how long a case waits for an admission that should already
 // have been answered: it only elapses on a failure.
 const gateWaitBound = 2 * time.Second
+
+// A SEAT RUNS ONE TURN AT A TIME, whichever road each arrives by, and says so
+// when the one running ends, to whoever was refused behind it.
+//
+// The road this is about: a person's answer reaches the run it names on the
+// seat's control topic, which no mailbox turn waits for, so its resume used to
+// be able to start while the seat's mailbox was in the middle of a turn. The
+// second turn is refused at once with the sentinel its caller waits on, never
+// queued behind the first, and the seat's turn ending is announced so the
+// waiting work tries again then rather than on a timer. A turn inside the
+// running one is the same turn, and another seat is another turn.
+//
+// AND ONLY THEN: a release nobody was refused behind announces nothing. The
+// engine's gate releases an admission at once when the seat's model is at its
+// limit, and announcing those woke the seat's other waiting resumes for
+// nothing.
+//
+// Mutation: drop the per-seat check and the second admission is granted; drop
+// the hook call from the release and the ending is never announced; announce
+// every release, and cto's uncontended turn is announced.
+func TestASeatRunsOneTurnAtATime(t *testing.T) {
+	t.Parallel()
+	ended := make(chan string, 4)
+	g := gatedFleetWith(t, 4, nil, func(cfg *node.Config) {
+		cfg.SeatTurnEnded = func(handle string) { ended <- handle }
+	}, idleTurn, "ceo", "cto")
+
+	running, release := admit(t.Context(), t, g.n, "ceo")
+	if _, second, err := g.n.AdmitTurn(t.Context(), "ceo"); !errors.Is(err, node.ErrSeatBusy) {
+		if second != nil {
+			second()
+		}
+		t.Fatalf("a second turn on a seat mid-turn = %v, want ErrSeatBusy", err)
+	}
+	if got := g.n.InFlightTurns(); got != 1 {
+		t.Fatalf("in flight = %d after a busy refusal, want the one turn's slot", got)
+	}
+	_, nested := admit(running, t, g.n, "ceo")
+	nested()
+	_, other := admit(t.Context(), t, g.n, "cto")
+	other()
+	select {
+	case handle := <-ended:
+		t.Fatalf("the end of %s's turn was announced, and nobody was refused behind it", handle)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case handle := <-ended:
+		if handle != "ceo" {
+			t.Fatalf("the ending announced is %q, want ceo's", handle)
+		}
+	case <-time.After(gateWaitBound):
+		t.Fatal("the end of ceo's turn was not announced to the turn refused behind it")
+	}
+	_, again := admit(t.Context(), t, g.n, "ceo")
+	again()
+	select {
+	case handle := <-ended:
+		t.Fatalf("the end of %s's second turn was announced, and nobody was refused behind it", handle)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// A TURN REFUSED ON A BUSY SEAT HEARS IT FREED, HOWEVER CLOSE THE RELEASE.
+//
+// The refused turn (a resume) waits for the seat's next [Config.SeatTurnEnded],
+// and the running turn's release announces one only if somebody was refused
+// behind it. Marked once the refusal had let go of the node's lock, a release
+// landing in that moment freed the seat, read no refusal, and announced
+// nothing: the resume waited for its fifteen-second backstop with the seat
+// free. Here the release runs in exactly that moment.
+//
+// Mutation: mark the refusal after the lock is let go, and the release
+// announces nothing.
+func TestATurnRefusedAsTheSeatIsReleasedHearsItFreed(t *testing.T) {
+	t.Parallel()
+	ended := make(chan string, 2)
+	g := gatedFleetWith(t, 4, nil, func(cfg *node.Config) {
+		cfg.SeatTurnEnded = func(handle string) { ended <- handle }
+	}, idleTurn, "ceo")
+
+	_, release := admit(t.Context(), t, g.n, "ceo")
+	g.n.OnBusyRefusalForTest(func(string) { release() })
+	if _, second, err := g.n.AdmitTurn(t.Context(), "ceo"); !errors.Is(err, node.ErrSeatBusy) {
+		if second != nil {
+			second()
+		}
+		t.Fatalf("a turn on a seat mid-turn = %v, want ErrSeatBusy", err)
+	}
+	select {
+	case handle := <-ended:
+		if handle != "ceo" {
+			t.Fatalf("the ending announced is %q, want ceo's", handle)
+		}
+	case <-time.After(gateWaitBound):
+		t.Fatal("ceo's turn was released as a turn was refused behind it, " +
+			"and the refused turn was never told the seat is free")
+	}
+}
+
+// A SEAT BUSY WITH A TURN THAT DID NOT COME FROM ITS MAILBOX SPENDS NONE OF ITS
+// MAIL WAITING FOR IT.
+//
+// Every hand-back spends one of a message's deliveries, and a seat can be busy
+// for hours with a resumed coding turn. Had the mailbox handed back each
+// delivery that met the busy seat, its queued mail would have walked into the
+// dead-letter subject. The busy turn holds the seat's inbox instead, so the
+// mail waits on the broker untouched and runs once the turn is released:
+// every message exactly once, oldest first, with the headroom a first delivery
+// has.
+//
+// Mutation: drop the inbox hold from AdmitTurn, and the deliveries meet the
+// busy seat; refuse them instead of waiting, and their headroom is spent.
+func TestASeatBusyWithAnotherTurnSpendsNoneOfItsMail(t *testing.T) {
+	t.Parallel()
+	const queued = 60
+	var mu sync.Mutex
+	var ran []string
+	headroom := map[string]int{}
+	turn := func(ctx context.Context, _ string, evs []*events.Event) queue.Result {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, ev := range evs {
+			p, _ := events.DataAs[*trigger](ev)
+			ran = append(ran, p.Work)
+			left, _ := queue.DeliveriesLeftFor(ctx, ev.ID)
+			headroom[p.Work] = left
+		}
+		return queue.Ack()
+	}
+	g := gatedFleet(t, 4, turn, "ceo")
+
+	_, release := admit(t.Context(), t, g.n, "ceo")
+	base := time.Now().UTC()
+	for i := range queued {
+		ev := events.New(trigger{Work: fmt.Sprintf("w%02d", i)}, events.TraceContext{})
+		ev.Timestamp = base.Add(time.Duration(i) * time.Millisecond)
+		ev.Payload = map[string]any{notify.PartitionField: fmt.Sprintf("c/ceo/%02d", i)}
+		if err := g.q.Publish(t.Context(), inbox("ceo"), ev); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+	}
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	early := len(ran)
+	mu.Unlock()
+	if early != 0 {
+		t.Fatalf("%d of the seat's messages ran while another of its turns did", early)
+	}
+
+	release()
+	within(t, "the held mail to run", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(ran) >= queued
+	})
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ran) != queued {
+		t.Fatalf("ran %d turns for %d messages, want each exactly once", len(ran), queued)
+	}
+	first := headroom["w00"]
+	for i, work := range ran {
+		if want := fmt.Sprintf("w%02d", i); work != want {
+			t.Fatalf("turn %d ran %s, want %s: the held mail runs oldest first", i, work, want)
+		}
+		if headroom[work] != first || first <= 0 {
+			t.Fatalf("%s ran with %d deliveries left, want the %d every untouched message has",
+				work, headroom[work], first)
+		}
+	}
+}
+
+// A MAILBOX DELIVERY THAT MEETS A BUSY SEAT WAITS FOR IT, rather than being
+// handed back: the one that was fetched before the busy turn's inbox hold took
+// effect. It runs once the seat's turn is released, on its first delivery.
+//
+// Mutation: refuse the mailbox's turn on a busy seat, and the delivery is
+// deferred.
+func TestAMailboxDeliveryWaitsForABusySeat(t *testing.T) {
+	t.Parallel()
+	ran := make(chan int, 4)
+	turn := func(ctx context.Context, _ string, evs []*events.Event) queue.Result {
+		left, _ := queue.DeliveriesLeftFor(ctx, evs[0].ID)
+		ran <- left
+		return queue.Ack()
+	}
+	g := gatedFleet(t, 4, turn, "ceo")
+	g.send("ceo", "before")
+	var full int
+	select {
+	case full = <-ran:
+	case <-time.After(gateWaitBound):
+		t.Fatal("the seat's first message never ran")
+	}
+
+	// THE BUSY TURN, admitted without its inbox hold, as a turn that won the
+	// seat in the moment between the mailbox's fetch and its admission.
+	_, release := admit(t.Context(), t, g.n, "ceo")
+	g.n.ReleaseSeatTurnHoldForTest("ceo")
+	g.send("ceo", "raced")
+	select {
+	case left := <-ran:
+		t.Fatalf("a mailbox turn ran (%d left) beside the seat's running turn", left)
+	case <-time.After(300 * time.Millisecond):
+	}
+	release()
+	select {
+	case left := <-ran:
+		if left != full {
+			t.Fatalf("the waiting delivery ran with %d deliveries left, want %d: it was handed back", left, full)
+		}
+	case <-time.After(gateWaitBound):
+		t.Fatal("the waiting delivery never ran once the seat was free")
+	}
+}
+
+// resumeHook is a queue that runs a hook once, inside the first lift of a
+// seat_turn hold, before the lift itself.
+type resumeHook struct {
+	queue.EventQueue
+	mu   sync.Mutex
+	hook func()
+}
+
+func (q *resumeHook) ResumeTopic(ctx context.Context, topic, group, reason string) error {
+	q.mu.Lock()
+	hook := q.hook
+	if strings.HasPrefix(reason, node.HoldSeatTurn) {
+		q.hook = nil
+	}
+	q.mu.Unlock()
+	if hook != nil && strings.HasPrefix(reason, node.HoldSeatTurn) {
+		hook()
+	}
+	return q.EventQueue.ResumeTopic(ctx, topic, group, reason)
+}
+
+// A TURN ADMITTED AS THE LAST ONE LETS GO KEEPS ITS OWN HOLD. The release frees
+// the seat before it lifts its inbox hold (so held mail dispatched inline finds
+// the seat free), and a turn admitted in between takes the inbox hold too.
+// Under one reason shared by every such turn, the first turn's lift took the
+// second's hold with it: the second ran with the mailbox fetching beside it,
+// and the fetched delivery waited on the seat, its ack window running out.
+//
+// Mutation: hold every admission under the one reason, and the message sent
+// while the second turn runs is fetched and waits on it.
+func TestATurnAdmittedAsTheLastLetsGoKeepsItsOwnHold(t *testing.T) {
+	t.Parallel()
+	hooked := &resumeHook{}
+	ran := make(chan string, 4)
+	turn := func(_ context.Context, _ string, evs []*events.Event) queue.Result {
+		p, _ := events.DataAs[*trigger](evs[0])
+		ran <- p.Work
+		return queue.Ack()
+	}
+	g := gatedFleetOn(t, 4, func(q queue.EventQueue) queue.EventQueue {
+		hooked.EventQueue = q
+		return hooked
+	}, turn, "ceo")
+
+	_, first := admit(t.Context(), t, g.n, "ceo")
+	var second func()
+	hooked.mu.Lock()
+	hooked.hook = func() {
+		// THE NEXT TURN, admitted between the seat freeing and the hold lifting.
+		_, second = admit(t.Context(), t, g.n, "ceo")
+	}
+	hooked.mu.Unlock()
+	first()
+	if second == nil {
+		t.Fatal("the premise: no turn was admitted inside the first one's lift")
+	}
+
+	// FETCHED IS THE FAILURE, not run: a delivery fetched beside the second
+	// turn waits on the seat inside its handler, and its ack window runs.
+	g.send("ceo", "while the second runs")
+	time.Sleep(300 * time.Millisecond)
+	if n := hooked.InFlightCount(); n != 0 {
+		t.Fatalf("the mailbox fetched %d delivery while the second turn ran: its hold went "+
+			"with the first's", n)
+	}
+	second()
+	select {
+	case <-ran:
+	case <-time.After(gateWaitBound):
+		t.Fatal("the held message never ran once the second turn let go")
+	}
+}
+
+// progressStamp is a queue whose seat deliveries state progress the way a
+// backend with an acknowledgement window does, and counts the signals.
+type progressStamp struct {
+	queue.EventQueue
+	signals atomic.Int32
+}
+
+func (q *progressStamp) SubscribeBatch(ctx context.Context, topic, group string, h queue.BatchHandler,
+	key queue.BatchKeyFunc, opts *queue.BatchOptions) error {
+	return q.EventQueue.SubscribeBatch(ctx, topic, group,
+		func(ctx context.Context, evs []*events.Event) queue.Result {
+			return h(queue.WithProgress(ctx, 20*time.Millisecond, func() error {
+				q.signals.Add(1)
+				return nil
+			}), evs)
+		}, key, opts)
+}
+
+// A MAILBOX DELIVERY WAITING FOR A BUSY SEAT KEEPS TELLING THE QUEUE IT IS
+// WORKED ON, so a turn that outlasts the delivery's acknowledgement window
+// never hands it back. Without it the wait was bounded by the window alone,
+// and a long resumed turn spent a delivery of the mail that waited on it.
+//
+// Mutation: wait for the seat without signalling, and no signal is sent.
+func TestAMailboxDeliveryWaitingForTheSeatSignalsProgress(t *testing.T) {
+	t.Parallel()
+	stamp := &progressStamp{}
+	ran := make(chan struct{}, 2)
+	g := gatedFleetOn(t, 4, func(q queue.EventQueue) queue.EventQueue {
+		stamp.EventQueue = q
+		return stamp
+	}, func(context.Context, string, []*events.Event) queue.Result {
+		ran <- struct{}{}
+		return queue.Ack()
+	}, "ceo")
+
+	_, release := admit(t.Context(), t, g.n, "ceo")
+	g.n.ReleaseSeatTurnHoldForTest("ceo")
+	g.send("ceo", "waits")
+	within(t, "the waiting delivery to signal progress", func() bool { return stamp.signals.Load() >= 3 })
+	select {
+	case <-ran:
+		t.Fatal("the delivery ran beside the seat's turn")
+	default:
+	}
+	release()
+	select {
+	case <-ran:
+	case <-time.After(gateWaitBound):
+		t.Fatal("the waiting delivery never ran once the seat was free")
+	}
+}

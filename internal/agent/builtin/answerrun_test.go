@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -34,9 +35,12 @@ func (d *deskFake) Run(_ context.Context, turnID string) (sandbox.PendingRun, bo
 	return run, ok, nil
 }
 
-func (d *deskFake) Deliver(_ context.Context, given types.SandboxAnswerGiven) error {
+// deliveredID is the id deskFake answers every delivery with.
+var deliveredID = uuid.MustParse("6f1c2b8e-3d4a-4e5f-9a0b-1c2d3e4f5a6b")
+
+func (d *deskFake) Deliver(_ context.Context, given types.SandboxAnswerGiven) (uuid.UUID, error) {
 	d.delivered = append(d.delivered, given)
-	return d.deliverErr
+	return deliveredID, d.deliverErr
 }
 
 // answerRunTool is the operator catalogue's answer_run over these fakes, called
@@ -85,12 +89,15 @@ func parked(t *testing.T, turnID, status string) sandbox.PendingRun {
 		Question: "which branch?", LaunchID: "launch-" + turnID}
 }
 
-// AN ANSWER IS PUT ON THE SEAT'S INBOX AS THE PERSON WHO GAVE IT, naming the
-// question it answers, and the caller is told `pending`: the node holding the
-// seat resumes the run, and this one cannot say what that became. The question
-// — the job the run held when it asked — is what keeps an answer
-// that reaches the seat late from resuming the run as the answer to a later
-// question.
+// AN ANSWER IS DELIVERED AS THE PERSON WHO GAVE IT, naming the question it
+// answers, and the caller is told `pending`: the node holding the seat records
+// and resumes it, and this one cannot say what that became. The question (the
+// job the run held when it asked) is what keeps an answer that reaches the
+// seat late from resuming the run as the answer to a later question. And the
+// caller is told the question and the answer's own id, which is what it reads
+// the run's record against to learn what became of the answer: recorded on
+// that question, let go of among its declined answers, or overtaken by a new
+// one.
 func TestAnswerRunDeliversTheAnswerAsThePersonAndAnswersPending(t *testing.T) {
 	t.Parallel()
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusReseed)}}
@@ -113,8 +120,10 @@ func TestAnswerRunDeliversTheAnswerAsThePersonAndAnswersPending(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.Output), &answer); err != nil {
 		t.Fatal(err)
 	}
-	if answer["outcome"] != "pending" || answer["question"] != "which branch?" {
-		t.Errorf("answer = %v, want pending with the question it answered", answer)
+	if answer["outcome"] != "pending" || answer["question"] != "which branch?" ||
+		answer["launch_id"] != "launch-t1" || answer["answer_id"] != deliveredID.String() {
+		t.Errorf("answer = %v, want pending with the question it answered and the "+
+			"answer's own id", answer)
 	}
 }
 
@@ -213,5 +222,62 @@ func TestARunIsAnsweredByItsRequesterOrItsSeatsLead(t *testing.T) {
 				t.Errorf("a refused answer was delivered: %+v", desk.delivered)
 			}
 		})
+	}
+}
+
+// A QUESTION ANSWERED ALREADY REFUSES THE NEXT ANSWER, AND SAYS WHOSE IT WAS.
+// The first recorded answer wins; a person answering after it is told it was
+// answered, by whom and when, and nothing is delivered. Four people answering
+// one run used to be told `pending` four times while three of the answers went
+// nowhere they could see.
+func TestAnAnsweredQuestionRefusesTheNextAnswerAndSaysWhose(t *testing.T) {
+	t.Parallel()
+	run := parked(t, "t1", sandbox.StatusAnswered)
+	run.Answer = &sandbox.RecordedAnswer{Text: "use main", By: "miles",
+		RecordedAt: time.Date(2026, 10, 28, 0, 35, 6, 0, time.UTC)}
+	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}}
+	result, err := answerRunTool(t, desk).Call(t.Context(),
+		map[string]any{"turn_id": "t1", "answer": "use the release branch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Failed || tools.RefusalOf(result) != tools.RefusalAlreadyAnswered ||
+		!strings.Contains(result.Output, "already answered by miles at 2026-10-28T00:35:06Z") {
+		t.Fatalf("answer_run = %+v, want an already_answered refusal naming who answered and "+
+			"when, in RFC 3339", result)
+	}
+	if len(desk.delivered) != 0 {
+		t.Fatalf("delivered %+v for a question already answered", desk.delivered)
+	}
+	// A PERSON IS TOLD WHOSE IT WAS, and their own screen says when on their
+	// own clock: the engine's UTC instant is the model's, never theirs.
+	if person := result.PersonRefusal.Person(); !strings.Contains(person, "@miles") ||
+		strings.Contains(person, "UTC") {
+		t.Fatalf("a person is told %q, want who answered and no engine clock", person)
+	}
+}
+
+// WHAT THE REFUSAL SAYS BECAME OF THE ANSWER IS WHAT THE RECORD SAYS: waiting
+// on its seat while the run is answered, used once it was resumed, and nothing
+// claimed once the run has moved on to something else.
+func TestTheAnsweredRefusalSaysOnlyWhatTheRecordSays(t *testing.T) {
+	t.Parallel()
+	for status, want := range map[string]string{
+		sandbox.StatusAnswered: "resumes with that answer once its seat is free",
+		sandbox.StatusResumed:  "was resumed with that answer",
+		sandbox.StatusRunning:  "",
+	} {
+		run := parked(t, "t1", status)
+		run.Answer = &sandbox.RecordedAnswer{Text: "use main", By: "miles"}
+		desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}}
+		result, err := answerRunTool(t, desk).Call(t.Context(),
+			map[string]any{"turn_id": "t1", "answer": "use the release branch"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		claims := strings.Contains(result.Output, "resume")
+		if (want == "") == claims || (want != "" && !strings.Contains(result.Output, want)) {
+			t.Errorf("a %s run's refusal says %q, want %q", status, result.Output, want)
+		}
 	}
 }

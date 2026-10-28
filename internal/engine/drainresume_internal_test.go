@@ -472,6 +472,8 @@ func TestADrainWaitsForAResumeAdmittedBeforeIt(t *testing.T) {
 		close(drained)
 	}()
 
+	// THE DRAIN'S REFUSAL, which the seat's own (its one turn is running)
+	// precedes until the drain has closed the gate.
 	var refused *sandbox.TurnRefused
 	eventually(t, "the drain to refuse the next resume", func() bool {
 		_, next, err := e.admitResume(t.Context(), "swe")
@@ -479,7 +481,7 @@ func TestADrainWaitsForAResumeAdmittedBeforeIt(t *testing.T) {
 			next()
 			return false
 		}
-		return errors.As(err, &refused)
+		return errors.As(err, &refused) && !errors.Is(err, node.ErrSeatBusy)
 	})
 	if refused.Condition != waitDrain || !errors.Is(refused, node.ErrDraining) {
 		t.Fatalf("a resume on a draining node was refused as %+v, want it waiting on %q "+

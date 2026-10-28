@@ -85,7 +85,10 @@ var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item",
 	"paused_by_kind", "agent_handle", "note_id", "turn_id", "model", "kind", "ref",
 	// THE QUESTION A RUN ASKED, which the person answering it read and is
 	// shown again as what their answer answers.
-	"question", "reference", "role", "shared_with", "asset", "name"}
+	"question", "reference", "role", "shared_with", "asset", "name",
+	// AND THE IDS AN ANSWER TO A RUN IS READ BACK BY: the question it answers
+	// and the answer's own delivery, which a screen finds on the run's record.
+	"launch_id", "answer_id"}
 
 // writtenForThePerson are the answers whose text at one path is a model's
 // answer written FOR the person who asked, by tool and path: the product

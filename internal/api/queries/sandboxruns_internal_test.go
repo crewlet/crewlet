@@ -4,6 +4,7 @@ import (
 	"maps"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -79,5 +80,37 @@ func TestAMaskedRunCarriesOnlyItsStatus(t *testing.T) {
 	}
 	if whole["body_withheld"] != false {
 		t.Errorf("body_withheld = %v for a reader shown the body", whole["body_withheld"])
+	}
+}
+
+// WHAT BECAME OF AN ANSWER IS ON THE RUN'S ROW: the answer recorded on it (by
+// its deliveries, who gave it and when) and the answers its question let go
+// of. A person who answered reads their own answer's fate there, by the id
+// answer_run gave them, and the first recorded answer is shown as the one
+// that won. Ids and names only, never what anybody wrote.
+func TestARunRowSaysWhatBecameOfItsAnswers(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 10, 28, 0, 35, 6, 0, time.UTC)
+	row := runRow(sandbox.PendingRun{TurnID: "t1", Status: sandbox.StatusAnswered,
+		Answer: &sandbox.RecordedAnswer{Text: "use main", By: "miles", RecordedAt: at,
+			EventIDs: []string{"a1"}},
+		DeclinedAnswers: []string{"a0"}})
+	if got := row["answer_ids"]; !slices.Equal(got.([]string), []string{"a1"}) {
+		t.Errorf("answer_ids = %v, want the recorded answer's delivery", got)
+	}
+	if row["answered_by"] != "miles" || row["answered_at"] != isoOrEmpty(at) {
+		t.Errorf("answered_by %v at %v, want miles at %s", row["answered_by"], row["answered_at"], at)
+	}
+	if got := row["declined_answers"]; !slices.Equal(got.([]string), []string{"a0"}) {
+		t.Errorf("declined_answers = %v, want the answer the question let go of", got)
+	}
+	for key, value := range row {
+		if s, ok := value.(string); ok && s == "use main" {
+			t.Errorf("%s carries what the answer said", key)
+		}
+	}
+	empty := runRow(sandbox.PendingRun{TurnID: "t2", Status: sandbox.StatusAwaiting})
+	if got := empty["answer_ids"]; got == nil || len(got.([]string)) != 0 || empty["answered_by"] != "" {
+		t.Errorf("a run with no recorded answer shows %v by %v, want empty", got, empty["answered_by"])
 	}
 }

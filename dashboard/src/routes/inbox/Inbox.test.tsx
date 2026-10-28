@@ -26,6 +26,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { installScreen } from "~/testing.tsx";
 import { withDerived } from "~/test/org.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -142,6 +143,12 @@ const QUIET: Record<string, Answer> = {
 
 let asked: { kind: string; params: Record<string, unknown> }[];
 let posted: { tool: string; args: Record<string, unknown> }[];
+/** What the engine answers a press of each tool with, where not `applied`. */
+let actAnswers: Record<
+  string,
+  | { outcome: string; receipt: Record<string, unknown> }
+  | { refused: number; body: Record<string, unknown> }
+>;
 
 /**
  * Midday on the company's clock (the fixture org keeps UTC).
@@ -160,18 +167,26 @@ beforeEach(() => {
   location.hash = "#/inbox";
   asked = [];
   posted = [];
+  actAnswers = {};
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {
       const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
       const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
       posted.push({ tool, args: body.args });
+      const answer = actAnswers[tool] ?? { outcome: "applied", receipt: {} };
+      if ("refused" in answer) {
+        return new Response(JSON.stringify(answer.body), {
+          status: answer.refused,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       return new Response(
         JSON.stringify({
           tool,
-          outcome: "applied",
-          position: "CREWLET_TRACKER_LOG@1:99",
-          receipt: {},
+          outcome: answer.outcome,
+          position: answer.outcome === "applied" ? "CREWLET_TRACKER_LOG@1:99" : null,
+          receipt: answer.receipt,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
@@ -593,21 +608,35 @@ describe("the pane", () => {
 
   test("a run answered in words stays in place with what was written under it", async () => {
     location.hash = "#/inbox?row=run%3Aturn-7";
+    const run = {
+      turn_id: "turn-7",
+      launch_id: "q1",
+      agent_handle: "cto",
+      status: "awaiting_clarification",
+      question: "May I delete the fixtures directory?",
+      audience_handles: ["jane"],
+      started_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+      updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+    };
+    // THE ENGINE'S ANSWER AND ITS RECORD: pending, then recorded on the run.
+    actAnswers = {
+      answer_run: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
+    };
     mount({
       answers: {
         decisions: decisionsOf({
           kind: "run",
           at: new Date(Date.now() - 5 * 60_000).toISOString(),
-          run: {
-            turn_id: "turn-7",
-            agent_handle: "cto",
-            status: "awaiting_clarification",
-            question: "May I delete the fixtures directory?",
-            audience_handles: ["jane"],
-            started_at: new Date(Date.now() - 20 * 60_000).toISOString(),
-            updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
-          },
+          run,
         }),
+        sandbox_runs: () =>
+          Promise.resolve({
+            runs: [
+              posted.some((p) => p.tool === "answer_run")
+                ? { ...run, status: "answered", answer_ids: ["a1"] }
+                : run,
+            ],
+          }),
       },
     });
     await settle();
@@ -615,6 +644,7 @@ describe("the pane", () => {
       target: { value: "Yes, but keep the golden files." },
     });
     fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
+    await settle();
     await settle();
     const row = within(screen.getByRole("region", { name: /^Needs you/ })).getByRole("button", {
       name: /Answered$/,
@@ -820,6 +850,175 @@ describe("the pane", () => {
     expect(posted).toEqual([
       { tool: "answer_run", args: { turn_id: "turn-7", answer: "Yes, delete it." } },
     ]);
+  });
+
+  // AN ANSWER TO A PARKED RUN IS SENT, NOT ANSWERED, UNTIL THE RUN SAYS SO.
+  //
+  // `answer_run` answers `pending`: the answer is on its way to the node that
+  // holds the run's seat. The pane drew that as "Answered" and dropped the
+  // question, and a person whose answer never reached the run was told it had
+  // while the question kept coming back. The pane now says what the run's own
+  // record says: sent while it still waits on the question, answered once it
+  // is recorded there, and asked again, with the reason, when the question
+  // let the answer go.
+  //
+  // Mutation: settle on `pending` as before, and the first case reads
+  // "Answered"; ignore `declined_answers`, and the last never asks again.
+  describe("an answer by turn", () => {
+    const parked = {
+      turn_id: "turn-7",
+      launch_id: "q1",
+      agent_handle: "cto",
+      status: "awaiting_clarification",
+      question: "May I delete the fixtures directory?",
+      paused_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      pause_ttl_seconds: 3_600,
+      declined_answers: [] as string[],
+    };
+    // How often the run record was asked for before the press, for a case
+    // about what the press makes the pane ask again.
+    let runsAskedAtPress = 0;
+    const answerRun = async (
+      after: Record<string, unknown>,
+      others: object[] = [],
+      press: (typeof actAnswers)[string] = {
+        outcome: "pending",
+        receipt: { launch_id: "q1", answer_id: "a1" },
+      },
+    ) => {
+      actAnswers = { answer_run: press };
+      location.hash = "#/inbox?row=run%3Aturn-7";
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: parked.paused_at, run: parked }),
+          // THE RUN'S RECORD, as the engine holds it once the answer was sent.
+          sandbox_runs: () =>
+            Promise.resolve({
+              runs: [
+                ...(!posted.some((p) => p.tool === "answer_run")
+                  ? [parked]
+                  : after.gone
+                    ? []
+                    : [{ ...parked, ...after }]),
+                ...others,
+              ],
+            }),
+        },
+      });
+      await settle();
+      fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the run" }), {
+        target: { value: "Yes, delete it." },
+      });
+      runsAskedAtPress = asked.filter((a) => a.kind === "sandbox_runs").length;
+      fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
+      await settle();
+      await settle();
+    };
+    const outcome = () => document.querySelector(".crewlet-reading-pane__outcome")?.textContent;
+
+    test("is shown as sent while the run still waits on its question", async () => {
+      await answerRun({});
+      expect(
+        document.querySelector(".crewlet-reading-pane__outcome")?.getAttribute("data-tone"),
+      ).toBe("pending");
+      expect(outcome()).toBe("Answer sent. Waiting for CTO’s run to take it.");
+      expect(screen.queryByRole("button", { name: "Send answer" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /Answered$/ })).toBeNull();
+    });
+
+    test("says the run ended, not that it was answered, when its record goes away", async () => {
+      await answerRun({ gone: true });
+      expect(
+        document.querySelector(".crewlet-reading-pane__outcome")?.getAttribute("data-tone"),
+      ).toBe("pending");
+      expect(outcome()).toBe("Answer sent. CTO’s run has ended.");
+      expect(screen.queryByRole("button", { name: /Answered$/ })).toBeNull();
+    });
+
+    test("is answered once the run was resumed with it", async () => {
+      await answerRun({ status: "resumed", answer_ids: ["a1"] });
+      expect(
+        document.querySelector(".crewlet-reading-pane__outcome")?.getAttribute("data-tone"),
+      ).toBe("done");
+      expect(outcome()).toBe("Answered “Yes, delete it.”");
+    });
+
+    test("says what the seat is doing while the recorded answer waits for it", async () => {
+      const busy = {
+        ...parked,
+        turn_id: "turn-9",
+        launch_id: "q9",
+        status: "running",
+        role: "Senior Backend Engineer",
+        work_item: { backend: "native", id: "t-4", key: "GP-4", project: "GP" },
+      };
+      await answerRun({ status: "answered", answer_ids: ["a1"] }, [busy]);
+      expect(
+        document.querySelector(".crewlet-reading-pane__outcome")?.getAttribute("data-tone"),
+      ).toBe("pending");
+      expect(outcome()).toBe(
+        "Answer recorded. The Senior Backend Engineer is busy on GP-4’s run and picks this up next.",
+      );
+    });
+
+    test("refused as answered already, says whose and when on the reader's clock", async () => {
+      await answerRun(
+        {
+          status: "answered",
+          answer_ids: ["a0"],
+          answered_by: "miles",
+          answered_at: "2026-09-30T11:35:00Z",
+        },
+        [],
+        {
+          refused: 409,
+          body: {
+            error: "already_answered",
+            tool: "answer_run",
+            detail: "This question was already answered by @miles, so your answer was not used.",
+          },
+        },
+      );
+      await settle();
+      // THE REFUSAL'S ONE SENTENCE, drawn as every refusal of its code is,
+      // and only the time beside it, on the reader's clock.
+      const strip = document.querySelector(".crewlet-refusal-strip")?.firstChild?.textContent ?? "";
+      expect(strip).toBe(ACT_ERRORS.already_answered);
+      const when = screen.getByText(/^Answered by @miles at /).textContent ?? "";
+      expect(when).toMatch(/^Answered by @miles at \S+\.$/);
+      expect(when).not.toContain("UTC");
+      // ASKED AGAIN FOR THE RECORD, by the refusal's own look-again.
+      expect(asked.filter((a) => a.kind === "sandbox_runs").length).toBeGreaterThan(
+        runsAskedAtPress,
+      );
+    });
+
+    test("is refused, naming whose answer was used, when another was recorded first", async () => {
+      await answerRun({
+        status: "answered",
+        answer_ids: ["a0"],
+        answered_by: "jane",
+        answered_at: "2026-09-30T11:35:00Z",
+      });
+      expect(outcome()).toBeUndefined();
+      expect(
+        screen.getByText("Your answer was not used: another answer was recorded first."),
+      ).toBeTruthy();
+      expect(screen.getByText(/^Answered by @jane at \S+\.$/)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Send answer" })).toBeNull();
+    });
+
+    test("is asked again, with the reason, when the question let it go", async () => {
+      await answerRun({ declined_answers: ["a1"] });
+      expect(outcome()).toBeUndefined();
+      expect(
+        screen.getByText(
+          "CTO’s run could not use your answer and is waiting on its question again. Answer it again.",
+        ),
+      ).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Send answer" })).toBeTruthy();
+    });
   });
 
   // NO EM DASH SHIPS: the copy the inbox draws is written with commas,

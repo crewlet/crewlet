@@ -29,11 +29,10 @@ func controlSubject(agentID string) string {
 }
 
 // inboxSubject is a seat's inbox from the id a run's row carries, or empty when
-// the row names no routable seat: where an answer by turn is delivered
-// ([AnswerDesk.Deliver]) and a reply the run did not take is handed back
-// ([Coordinator.deliverHandBack]). The same one parse as [controlSubject], so
-// the two subjects a run is reached on can never disagree about whether its
-// row names a seat.
+// the row names no routable seat: where a chat reply the run did not take is
+// handed back ([Coordinator.deliverHandBack]). The same one parse as
+// [controlSubject], so the two subjects a run is reached on can never disagree
+// about whether its row names a seat.
 func inboxSubject(agentID string) string {
 	return topics.AgentInbox(seatOf(agentID))
 }
@@ -682,4 +681,16 @@ func otelTokenTTL(spec Spec) time.Duration {
 // arrive somewhere.
 func RunEnvFor(m *Manager, req LaunchRequest, box Sandbox) map[string]string {
 	return withTelemetry(m, req, box)
+}
+
+// handBackSubject is where a reply a run let go of goes back to: the seat's
+// control topic for an answer BY TURN, which is addressed to a run and is
+// settled there ([Coordinator.OnAnswerGiven]), and the seat's inbox for a chat
+// reply, which becomes the ordinary message it looks like. Empty when the row
+// names no routable seat.
+func handBackSubject(agentID string, ev *events.Event) string {
+	if _, ok := events.DataAs[*types.SandboxAnswerGiven](ev); ok {
+		return controlSubject(agentID)
+	}
+	return inboxSubject(agentID)
 }
