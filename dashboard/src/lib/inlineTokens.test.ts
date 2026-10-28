@@ -476,28 +476,51 @@ describe("bare numbers", () => {
 
 describe("cost", () => {
   // EVERY PATTERN IS LINEAR IN ITS RUN: a comment an agent wrote is rendered by
-  // every reader, so a run that costs seconds freezes everybody. Every case is
-  // a run of about 20,000 characters, ONE SIZE, so one bound holds them all:
-  // it is two orders above what a linear pass takes here and two below the
-  // quadratic passes these replaced (about 2.7 s and 0.6 s at this size).
-  // A case five times the size took 330 ms on a loaded runner, linearly.
+  // every reader, so a run that costs seconds freezes everybody.
   //
-  // Mutation: count the brackets again per character trimmed, or bring back
-  // the lazy pattern around a word, and the first two cases exceed it.
-  test.each([
-    ["an address closed by 20,000 brackets", `https://x.test/${")".repeat(20_000)}`],
-    ["a word of 20,000 brackets and a letter", `${")".repeat(20_000)}a`],
-    ["20,000 slashes", `${"a/".repeat(10_000)}b`],
-    ["20,000 stops", "a.".repeat(10_000)],
-    ["10,000 numbers", "#1".repeat(10_000)],
-    ["5,000 keys", "GP-1/".repeat(5_000)],
-    ["10,000 handles", "@a".repeat(10_000)],
-    ["3,000 commits", "commit ".repeat(3_000)],
-    ["2,000 bound numbers", "#1 in a/b ".repeat(2_000)],
-    ["3,000 repositories before a number", "a/b PR ".repeat(3_000)],
-  ])("%s reads in linear time", (_, text) => {
+  // GROWTH, NOT A CLOCK: a run four times longer must take well under the
+  // sixteen times a quadratic pass takes, here under eight. An absolute bound
+  // passed both a linear pass and a quadratic one at the size a loaded
+  // runner could afford, so it held nothing; a ratio is the machine's speed
+  // divided out. Each run is timed after a warm-up, as the median of five
+  // samples, each sample enough calls to take 10 ms, so a timer's grain or one
+  // stalled sample decides nothing.
+  //
+  // Mutation: count the brackets again per character trimmed, bring back the
+  // lazy pattern around a word, or scan the text before every bound number,
+  // and its case exceeds it.
+  const OWNERS = new Set(["a", "gp"]);
+  const sample = (text: string, calls: number) => {
     const start = performance.now();
-    inlineTokens(text, new Set(["a", "gp"]));
-    expect(performance.now() - start).toBeLessThan(250);
+    for (let i = 0; i < calls; i++) inlineTokens(text, OWNERS);
+    return performance.now() - start;
+  };
+  const median = (xs: number[]) => xs.sort((x, y) => x - y)[Math.floor(xs.length / 2)]!;
+  /** How much longer a run four times the size takes. */
+  const growth = (make: (n: number) => string, n: number) => {
+    const small = make(n);
+    const large = make(4 * n);
+    sample(small, 1);
+    sample(large, 1);
+    let calls = 1;
+    while (calls < 256 && sample(small, calls) < 10) calls *= 2;
+    const times = (text: string) => median(Array.from({ length: 5 }, () => sample(text, calls)));
+    return times(large) / times(small);
+  };
+
+  test.each<[string, (n: number) => string]>([
+    ["an address closed by brackets", (n) => `https://x.test/${")".repeat(n)}`],
+    ["a word of brackets and a letter", (n) => `${")".repeat(n)}a`],
+    ["slashes", (n) => `${"a/".repeat(n / 2)}b`],
+    ["stops", (n) => "a.".repeat(n / 2)],
+    ["numbers", (n) => "#1".repeat(n / 2)],
+    ["keys between slashes", (n) => "GP-1/".repeat(n / 5)],
+    ["handles", (n) => "@a".repeat(n / 2)],
+    ["the word commit", (n) => "commit ".repeat(n / 7)],
+    ["bound numbers", (n) => "#1 in a/b ".repeat(n / 10)],
+    ["repositories before a number", (n) => "a/b PR ".repeat(n / 7)],
+    ["repositories and numbers", (n) => "a/b #1 ".repeat(n / 7)],
+  ])("%s read in linear time", (_, make) => {
+    expect(growth(make, 5_000)).toBeLessThan(8);
   });
 });
