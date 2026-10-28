@@ -308,14 +308,16 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 
 	// 7. THE GIT READS, the server-side reads of a repository by object id a
 	// seat asks of this node as a repository's home (ADR-0059): over the
-	// cache and the pool, under ONE seat git-work share of the pool's read
-	// lane, judging a seat's grant by the current epoch's chart and refusing
-	// one while this node is behind the company's configuration — both read
-	// per read, never captured. It holds no goroutine of its own, so nothing
-	// stops it but the cache's stop.
+	// cache and the pool, under the node's ONE seat git-work share of the
+	// pool's read lane — the engine writes' builds draw on the same (step 8),
+	// never a second share, which would let seats' reads and builds between
+	// them hold the whole lane — judging a seat's grant by the current
+	// epoch's chart and refusing one while this node is behind the company's
+	// configuration — both read per read, never captured. It holds no
+	// goroutine of its own, so nothing stops it but the cache's stop.
+	share := code.NewGitShare(nodeID, pool.Slots(gitproc.ClassRead), e.metrics)
 	reads, err := query.New(query.Options{
-		NodeID: nodeID, Cache: c, Git: pool,
-		Share:  code.NewGitShare(nodeID, pool.Slots(gitproc.ClassRead), e.metrics),
+		NodeID: nodeID, Cache: c, Git: pool, Share: share,
 		Roster: e.codeRoster, Current: e.admits, Fetched: e.recordCodeRead,
 	})
 	if err != nil {
@@ -327,11 +329,15 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// the committer, the operator audit for every push, and the current
 	// epoch's limits and retention. Who is pushing is the API guard's answer
 	// on each request, the seat the identity directory binds its credential
-	// to included, so the host is handed no chart of its own.
+	// to included. An ENGINE WRITE (ADR-0062) is judged by the current
+	// epoch's chart and refused a seat while this node is behind the
+	// company's configuration, as a read is; signed from the current epoch
+	// (codeSigner); and built under the git reads' own share.
 	h, err := host.New(host.Options{
 		Cache: c, Git: pool, Estate: seam, Objects: objects,
 		Audit: e.auditGit, Fetched: e.recordCodeRead,
 		Limits: e.codeLimits, DeletedRetention: e.codeDeletedRetention,
+		Roster: e.codeRoster, Signer: codeSigner{e: e}, Share: share, Current: e.admits,
 		NodeID: nodeID, Timing: host.Production, Metrics: e.metrics,
 	})
 	if err != nil {

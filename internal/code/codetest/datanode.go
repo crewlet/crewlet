@@ -63,6 +63,10 @@ type DataOptions struct {
 	// suite's meta-test has to build a node whose applier LIES, which a case
 	// must then fail on (TestTheSuiteCatchesARetirementWithNoGrace).
 	WrapApplier func(statelog.Applier) statelog.Applier
+	// SeatRules is the chart and the clock the node's committer judges a
+	// seat's push by — an engine write's among them; nil is the fixture
+	// chart on UTC (FixtureSeatRules).
+	SeatRules func() (code.SeatRules, bool)
 }
 
 // DataNode is one data node's code domain, composed as the engine composes it
@@ -266,14 +270,18 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	if p.reader, err = code.NewReader(code.ReaderOptions{Log: authority, Limits: limits}); err != nil {
 		t.Fatalf("codetest: %s: build the reader: %v", d.o.ID, err)
 	}
+	seatRules := d.o.SeatRules
+	if seatRules == nil {
+		seatRules = FixtureSeatRules
+	}
 	if p.committer, err = code.NewCommitter(code.CommitterOptions{
 		Publisher: &faultPublisher{inner: pub, faults: d.o.Faults, appends: &d.appends},
 		DB:        p.estate.Reader(), NodeID: d.o.ID, Limits: limits,
 		Retention: func() time.Duration { return deletedRetention },
-		// NO CHART, as the node's reader holds none: every case of the
-		// suite pushes as a person, whose decide reads no chart, and a
-		// seat's push here would be handed on as by a node with no epoch.
-		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{}, false },
+		// THE CHART A SEAT'S PUSH IS DECIDED BY — an engine write's, a seat's
+		// own commit landed as a push — the one the git nodes judge it by
+		// before they build it.
+		SeatRules: seatRules,
 	}); err != nil {
 		t.Fatalf("codetest: %s: build the committer: %v", d.o.ID, err)
 	}

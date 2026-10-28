@@ -175,7 +175,7 @@ func startCluster(t testing.TB, backend string) *cluster {
 func startClusterOf(t testing.TB, backend string, broker js.Config) *cluster {
 	t.Helper()
 	c := &cluster{life: t, faults: &codefault.Script{}, placement: &placement{},
-		creds: codetest.NewCredentials([]string{"ceo", "dev"}),
+		creds: codetest.NewCredentials(codetest.DefaultPeople()),
 		// AN HOUR AGO, so an activation a case mints — a second apart, in
 		// order — is never in the future.
 		base: time.Now().UTC().Add(-time.Hour).Truncate(time.Second)}
@@ -651,6 +651,29 @@ func (c *cluster) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer,
 		return code.GitAnswer{}, err
 	}
 	return m.router.Load().Code().GitRead(ctx, q)
+}
+
+// Write is an engine write asked of the members' code hosts, the repository's
+// home first as its own router answers it (codetest.Fleet).
+func (c *cluster) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+	var home, rest []codetest.Node
+	for _, m := range c.members {
+		if !m.isRunning() {
+			continue
+		}
+		n := m.git.Node()
+		if n == nil {
+			continue
+		}
+		if r := m.router.Load(); r != nil {
+			if homes, err := r.HomeOf([]string{w.RepoID}); err == nil && homes[w.RepoID] {
+				home = append(home, n)
+				continue
+			}
+		}
+		rest = append(rest, n)
+	}
+	return codetest.WriteThrough(ctx, w, append(home, rest...), len(home) > 0)
 }
 
 // GitReadThrough is a read of a repository by object id through member node's

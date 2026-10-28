@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -28,17 +29,19 @@ const (
 	// one sound: told to answer anyway, a node behind would judge it by the
 	// chart the fleet replaced, which may be the revision that revoked it.
 	// So a grant field is judged only where a node behind the
-	// configuration REFUSES it rather than answers it last. FOUR exist, the
+	// configuration REFUSES it rather than answers it last. FIVE exist, the
 	// chart a SEAT is judged by on the serving node: code.ReaderOptions.Roster,
 	// a read of the rows; query.Options.Roster, a read by object id on a git
-	// node; code.CommitterOptions.SeatRules, a seat's push on the committer
-	// that decides it; and code.StoreOptions.SeatRules, a tool's lifecycle
+	// node; host.Options.Roster, an engine write a git node builds;
+	// code.CommitterOptions.SeatRules, a seat's push on the committer that
+	// decides it; and code.StoreOptions.SeatRules, a tool's lifecycle
 	// request — a person's as well as a seat's, since a create's owner is
 	// judged against the chart too — on the lifecycle store that decides it,
 	// refused there by its own gate, code.StoreOptions.Current, and by the
-	// estate's declaration on code.lifecycle. The git node's own gate,
-	// query.Options.Current, refuses a seat's read there itself (unready,
-	// behind_config) rather than judging it; the committer's,
+	// estate's declaration on code.lifecycle. The git node's own gates,
+	// query.Options.Current and host.Options.Current, refuse a seat's read
+	// and a seat's write there themselves (unready, behind_config) rather
+	// than judging them; the committer's,
 	// code.CommitterOptions.Current, refuses a seat's push there as a node
 	// that ran nothing, so the repository's next committer decides it, even
 	// when this node is asked last; a data node refuses a seat's read of the
@@ -88,9 +91,10 @@ func (c seamClass) valid() bool {
 // their Backend rows name.) A Backend row that only named its half would see
 // nothing added to the options behind it: the knowledge searcher read the
 // epoch's skills container and embedding model through options no row covered.
-// And a GIT node's query server's options: it serves a seat's read of a
-// repository by object id from its own epoch's chart, which is the same
-// question a serving decide's grant is.
+// And a GIT node's query server's options and its code host's: it serves a
+// seat's read of a repository by object id, and builds a seat's engine write,
+// from its own epoch's chart, which is the same question a serving decide's
+// grant is.
 var servingSeams = []reflect.Type{
 	reflect.TypeFor[tracker.WriterDeps](),
 	reflect.TypeFor[estate.Backend](),
@@ -99,6 +103,7 @@ var servingSeams = []reflect.Type{
 	reflect.TypeFor[code.StoreOptions](),
 	reflect.TypeFor[code.ReaderOptions](),
 	reflect.TypeFor[query.Options](),
+	reflect.TypeFor[host.Options](),
 	reflect.TypeFor[pages.SearcherOptions](),
 	reflect.TypeFor[pages.ReaderOptions](),
 	reflect.TypeFor[pages.Options](),
@@ -214,6 +219,33 @@ var classified = map[string]struct {
 	"query.Options.Fetched": {seamNone, "where a read the node answered of a visibility: unit " +
 		"repository is recorded: the node's reads ledger, flushed into its own event log, which " +
 		"no decide reads"},
+
+	"host.Options.Cache": {seamNone, "the node's git cache, synced from the code log's rows like any " +
+		"reader's"},
+	"host.Options.Git":     {seamNone, "the node's git pool"},
+	"host.Options.Estate":  {seamNone, "the code domain's rows and its committer, through the router"},
+	"host.Options.Objects": {seamNone, "the object store a push's bundle is stored in"},
+	"host.Options.Audit": {seamNone, "where a git push is recorded: the operator audit, which no " +
+		"decide reads"},
+	"host.Options.Fetched": {seamNone, "where a fetch of a visibility: unit repository is recorded: " +
+		"the node's reads ledger"},
+	"host.Options.Limits": {seamValue, "the size limits a push and an engine write are landed under: " +
+		"a write landed under a bound a revision then lowered leaves the same rows"},
+	"host.Options.DeletedRetention": {seamValue, "the instant a repo_deleted refusal names"},
+	"host.Options.Roster": {seamGrant, "the chart a seat's engine write is judged by on the git " +
+		"node that builds it"},
+	"host.Options.Signer": {seamValue, "the epoch's names an engine-built commit carries: a seat's " +
+		"role name and address and the identity domain — a revision renaming a seat just after " +
+		"the write leaves the same commit"},
+	"host.Options.Share": {seamNone, "the node's seat git-work share of its read lane"},
+	"host.Options.Current": {seamGate, "whether this node serves the company's configuration: a " +
+		"seat's write behind it is answered unready, behind_config, and built nowhere here"},
+	"host.Options.NodeID":  {seamNone, "this node's name, which a proposal and a refusal name"},
+	"host.Options.Timing":  {seamNone, "the host's scaled waits"},
+	"host.Options.Faults":  {seamNone, "the suite's fault script, nil in production"},
+	"host.Options.Logger":  {seamNone, "where the host logs"},
+	"host.Options.Metrics": {seamNone, "the node's instruments"},
+	"host.Options.Now":     {seamNone, "the clock"},
 
 	"pages.SearcherOptions.Index":  {seamNone, "the node's lexical index"},
 	"pages.SearcherOptions.Node":   {seamNone, "this node's name in the fan-out's assignment table"},

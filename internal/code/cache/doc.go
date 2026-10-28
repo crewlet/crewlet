@@ -461,9 +461,12 @@
 // which answers for that scrub while it waits (below).
 //
 // A file this process wrote or checked is VOUCHED for, in memory and never
-// persisted, by its IDENTITY: device and inode, size and modification time —
-// NO CTIME, since an adoption and a seeded rebuild hard-link files and every
-// link moves an inode's ctime without changing a byte. A maintenance run
+// persisted, by its IDENTITY: device and inode, size and — for every file but
+// a .pack, which git FRESHENS without changing a byte whenever a process
+// writes an object it holds, an engine write's build beside the copy among
+// them — modification time; NO CTIME, since an adoption and a seeded rebuild
+// hard-link files and every link moves an inode's ctime without changing a
+// byte (check.go's fileID). A maintenance run
 // vouches only for what it changed, so a run over a damaged bitmap git kept
 // vouches nothing of it. A VERDICT HOLDS ONLY FOR THE FILE IT HASHED: the path
 // is Lstat'ed before the open and both the open file and the path after the

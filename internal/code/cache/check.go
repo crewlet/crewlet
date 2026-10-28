@@ -128,20 +128,44 @@ const hashTrailer = sha1.Size
 // over it, written through its own inode (which moves its modification time)
 // or removed is another identity; a file whose bytes change with NO change of
 // identity — media damage — is the scrub's to find, never a vouch's.
+//
+// A PACK'S MODIFICATION TIME IS NO PART OF ITS IDENTITY (packModified): git
+// FRESHENS a .pack — utime(2), now, not one byte — whenever a process writes
+// an object the pack already holds (object-file.c's freshen_packed_object),
+// and an engine write's build in a scratch leaning on a copy writes objects
+// the copy may hold: a blob a seat puts back as it was, a tree a revert
+// returns to (internal/code/host's build). Read into the identity, every such
+// write would take its pack out from under the scrub hashing it (a verdict
+// spoiled as "replaced"), and from under the repair mark and the confirmed
+// hint naming it, so a hot pack an agent kept freshening could go unscrubbed
+// and unrepaired for as long as it kept writing. Nothing writes a pack through
+// its own inode — git writes one beside its name and renames it in, as every
+// writer of a copy does — so its inode and its size say every change of it
+// but media damage, which is the scrub's.
 type fileID struct {
 	present        bool
 	dev, ino       uint64
 	size, modified int64
 }
 
-// idOf is info's identity.
+// idOf is info's identity: a pack's with no modification time (fileID's PACK
+// rule), every other file's with its own.
 func idOf(info fs.FileInfo) fileID {
-	f := fileID{present: true, size: info.Size(), modified: info.ModTime().UnixNano()}
+	f := fileID{present: true, size: info.Size()}
+	if !packModified(info.Name()) {
+		f.modified = info.ModTime().UnixNano()
+	}
 	if st, ok := info.Sys().(*syscall.Stat_t); ok {
 		f.dev, f.ino = uint64(st.Dev), st.Ino //nolint:unconvert // Dev is int32 on darwin
 	}
 	return f
 }
+
+// packModified reports whether name is a pack's own file — a .pack — whose
+// modification time git's freshening moves without a byte of it changing
+// (fileID). Its .idx and .rev git never freshens: each is written once, beside
+// its name, and renamed in, so its modification time stays its identity's.
+func packModified(name string) bool { return strings.HasSuffix(name, ".pack") }
 
 // lstatID is the identity of what is at path now, or the zero (absent) one.
 func lstatID(path string) fileID {

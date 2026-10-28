@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -711,6 +712,82 @@ func TestTheDeletedRetentionIsTheSchemasBounds(t *testing.T) {
 		fmt.Sprintf("min=0;max=%d", config.CodeMaxDeletedRetentionDays); got != want {
 		t.Errorf("deleted_retention_days' schema bounds are %q, want %q — the tag was left "+
 			"behind when the constant moved", got, want)
+	}
+}
+
+// THE IDENTITY DOMAIN IS A LOWERCASE DNS NAME every address spelled in it fits:
+// a name the engine's signer writes into every commit it builds, as written —
+// so one in capitals would be a second spelling of one committer, and one past
+// 189 bytes an address past RFC 5321's 254 for a seat's longest handle. The
+// schema's pattern and length admit exactly what validation admits, row by
+// row; unset is seats.invalid, and a domain with nothing hosting code is
+// refused as the code block's other settings are.
+//
+// Mutations: drop the hyphen-at-an-end rule — "-a.example" accepted, red;
+// widen the bound to 253 — the 190-byte row accepted, red.
+func TestTheIdentityDomainIsADNSName(t *testing.T) {
+	t.Parallel()
+	field, ok := reflect.TypeFor[config.Code]().FieldByName("IdentityDomain")
+	if !ok {
+		t.Fatal("config.Code has no IdentityDomain")
+	}
+	tags := map[string]string{}
+	for _, part := range strings.Split(field.Tag.Get("js"), ";") {
+		key, value, _ := strings.Cut(part, "=")
+		tags[key] = value
+	}
+	pattern, err := regexp.Compile(tags["pattern"])
+	if err != nil {
+		t.Fatalf("identity_domain's schema pattern %q: %v", tags["pattern"], err)
+	}
+	if got := tags["maxlen"]; got != strconv.Itoa(config.CodeMaxIdentityDomainBytes) {
+		t.Errorf("identity_domain's schema length is %s, validation's %d", got, config.CodeMaxIdentityDomainBytes)
+	}
+	label := strings.Repeat("a", 63)
+	long := strings.Repeat(label+".", 2) + strings.Repeat("b", 189-2*64) // 189 bytes
+	for _, tc := range []struct {
+		domain string
+		ok     bool
+	}{
+		{"example.com", true}, {"seats.invalid", true}, {"localhost", true}, {"a-b.c0.example", true},
+		{"123.example", true}, {label + ".example", true}, {long, true},
+		{long + "b", false}, {strings.Repeat("a", 64) + ".example", false}, {"Example.com", false},
+		{"-a.example", false}, {"a-.example", false}, {"a..example", false}, {".example", false},
+		{"example.", false}, {"ex ample.com", false}, {"ex_ample.com", false}, {"bücher.example", false},
+		{"a@b.example", false},
+	} {
+		doc := fmt.Sprintf("name: Acme\ncode:\n  native: true\n  identity_domain: %q\n", tc.domain)
+		_, err := config.ParseCompany([]byte(doc))
+		problems := config.Problems(err)
+		switch {
+		case tc.ok && err != nil:
+			t.Errorf("%q refused: %v", tc.domain, err)
+		case !tc.ok && (len(problems) != 1 || problems[0].Path != "code.identity_domain" ||
+			problems[0].Kind != "shape"):
+			t.Errorf("%q: problems %+v, want one shape problem at code.identity_domain", tc.domain, problems)
+		}
+		schema := pattern.MatchString(tc.domain) && len(tc.domain) <= config.CodeMaxIdentityDomainBytes
+		if schema != tc.ok {
+			t.Errorf("%q: the schema admits it %t, validation %t — the two spellings of the rule drifted",
+				tc.domain, schema, tc.ok)
+		}
+	}
+	_, err = config.ParseCompany([]byte("name: Acme\ncode:\n  identity_domain: example.com\n"))
+	if problems := config.Problems(err); len(problems) != 1 || problems[0].Path != "code.identity_domain" ||
+		problems[0].Kind != "conflict" || !strings.Contains(problems[0].Message, "code.native") {
+		t.Errorf("an identity domain with nothing hosting code: problems %+v, want one conflict naming "+
+			"code.native", problems)
+	}
+	if config.DefaultCodeIdentityDomain != "seats.invalid" {
+		t.Errorf("the default identity domain is %q, want seats.invalid: a name under RFC 2606's .invalid, "+
+			"which nobody can own", config.DefaultCodeIdentityDomain)
+	}
+	if got := (config.Code{}).IdentityDomainResolved(); got != config.DefaultCodeIdentityDomain {
+		t.Errorf("an unset identity domain resolves to %q, want the default %q", got,
+			config.DefaultCodeIdentityDomain)
+	}
+	if got := (config.Code{IdentityDomain: "example.com"}).IdentityDomainResolved(); got != "example.com" {
+		t.Errorf("a set identity domain resolves to %q", got)
 	}
 }
 

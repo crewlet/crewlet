@@ -62,6 +62,8 @@ const (
 	CodeGitWait                      = "crewlet.code.git.wait"
 	CodeHostSpoolWait                = "crewlet.code.host.spool.wait"
 	CodeHostSpoolWaits               = "crewlet.code.host.spool.waits"
+	CodeHostWriteDuration            = "crewlet.code.host.write.duration"
+	CodeHostWrites                   = "crewlet.code.host.writes"
 	CodePushBytes                    = "crewlet.code.push.bytes"
 	CodePushDuration                 = "crewlet.code.push.duration"
 	CodeSeatworkHeld                 = "crewlet.code.seatwork.held"

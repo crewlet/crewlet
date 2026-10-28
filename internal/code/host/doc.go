@@ -1,7 +1,7 @@
 // Package host is SMART HTTP FOR PERSONS: the code host's git surface, the
 // one landing every push takes from its pack to an applied row, the hook
-// relay that hands git's ref updates to it, and the wait that keeps an `ok`
-// honest.
+// relay that hands git's ref updates to it, the engine writes it builds and
+// lands the same way, and the wait that keeps an `ok` honest.
 //
 // # A push is committed by a record, and git is told so only from its row
 //
@@ -48,7 +48,9 @@
 // alternate and connected to what the repository holds, and every object the
 // builder wrote a valid one. For a push git received both are receive-pack's —
 // its connectivity check, and its fsck of every object it took
-// (receive.fsckObjects) — and both run before the hook ever reaches the relay.
+// (receive.fsckObjects) — and both run before the hook ever reaches the relay;
+// for an engine write, its check of every object it names before it builds,
+// and the same fsck (`index-pack --strict`) over every object it made.
 // The landing reads neither: a push with no pack lists nothing, and a pack's
 // listing walks commits, never their trees or blobs. A builder that hands over
 // a scratch missing an object gets a row naming a history no cache can serve.
@@ -58,12 +60,34 @@
 // formed its own would be judged by a check it chose. The landing PARSES THE
 // PROTECTIONS ITSELF, from the synced row its scratch leans on, so no builder
 // can judge a push against rules other than its own repository's as the
-// push's sync read them. The relay is its one caller in this release — it
-// reads git's commands off the hook and hands them over with what the receive
-// handler already judged — and a push the engine builds itself from objects
-// it wrote into a scratch is a second caller of the same function, never a
-// second copy of its steps (ADR-0008): TestEveryPushTakesTheOneLanding holds
-// the proposal, the upload and the adoption to it.
+// push's sync read them. It has two callers: the relay, which reads git's
+// commands off the hook and hands them over with what the receive handler
+// already judged, and an ENGINE WRITE (Server.Write, below), a push the
+// engine builds itself from objects it wrote into a scratch — a second caller
+// of the same function, never a second copy of its steps (ADR-0008):
+// TestEveryPushTakesTheOneLanding holds the proposal, the upload and the
+// adoption to it.
+//
+// # An engine write is built beside the copy and lands as a push
+//
+// A seat's or a person's change made through a tool — files committed, a
+// commit reverted or picked, a branch created or deleted — is BUILT on the
+// git node (Server.Write, write.go; the build, build.go) and LANDED as a push
+// (ADR-0062): judged on the copy synced to its caller's floor, and every
+// refusal judged again once at the log's head before it is answered; built in
+// a scratch named by its push id, by git's own plumbing over exactly the
+// trees the change touches — never an index of the whole tree, which
+// TestAnEngineCommitReadsNoWholeTree holds — under one unit of the node's
+// seat git-work share and one budget of git run time
+// (code.WriteBuildDeadline); its one self-contained pack indexed by the
+// relay's own fsck (`index-pack --strict`); and handed to land with
+// code.ViaEngine. Its push id is an unnamed derivation of the caller's
+// operation (code.WritePushID), and its commit's author, committer and dates
+// are pure functions of the operation and its parent — the author the acting
+// principal as the Signer names it, the committer the engine, the author date
+// the operation's second and the committer date never before the parent's —
+// so a retry, on this node or another, is the same push and the same commit,
+// and a second ask of one push id on this node joins the first.
 //
 // # A push's walks go by generation, and are bounded by the history
 //

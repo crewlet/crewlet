@@ -2,6 +2,7 @@ package host
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"io"
 	"slices"
@@ -221,6 +222,91 @@ func HookWalks(cmds [][3]string, objects int64) time.Duration {
 // stored (code.Proposal.ValidateUnstored) — how a case stands in the
 // receiver's bug no push reaches. Set before s's first push.
 func SetProposalCheck(s *Server, check func(code.Proposal) error) { s.checkProposal = check }
+
+// WriteJoiners is how many writes have joined the write of pushID running on
+// s now (the in-flight join), 0 where none runs.
+func WriteJoiners(s *Server, pushID string) int {
+	s.writesMu.Lock()
+	defer s.writesMu.Unlock()
+	if f, ok := s.writes[pushID]; ok {
+		return f.joined
+	}
+	return 0
+}
+
+// BuildBudget is the git run time s gives an engine write's build
+// (code.WriteBuildDeadline in production).
+func BuildBudget(s *Server) time.Duration { return s.buildBudget }
+
+// SetBuildBudget scales the git run time s gives an engine write's build.
+// Set before s's first write.
+func SetBuildBudget(s *Server, d time.Duration) { s.buildBudget = d }
+
+// CommitDates is commitDates: an engine-built commit's author and committer
+// dates for an operation minted at instant over a parent committed at parent.
+func CommitDates(instant, parent time.Time) (author, committer time.Time) {
+	return commitDates(instant, parent)
+}
+
+// GitInput is one process s handed the pool: its directory, its alternate,
+// its arguments and all its standard input held.
+type GitInput struct {
+	Dir, Alternate string
+	Args           []string
+	Stdin          []byte
+}
+
+// RecordGitInputs has s record every process it hands the pool from now on —
+// its standard input read whole and handed on — and answers a reader of what
+// it has recorded, in order. Set before s's first request.
+func RecordGitInputs(s *Server) func() []GitInput {
+	var (
+		mu  sync.Mutex
+		ins []GitInput
+	)
+	run := s.runGit
+	s.runGit = func(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+		in := GitInput{Dir: c.Dir, Alternate: c.Alternate, Args: slices.Clone(c.Args)}
+		if c.Stdin != nil {
+			body, err := io.ReadAll(c.Stdin)
+			if err != nil {
+				return gitproc.Result{}, err
+			}
+			in.Stdin = body
+			c.Stdin = bytes.NewReader(body)
+		}
+		mu.Lock()
+		ins = append(ins, in)
+		mu.Unlock()
+		return run(ctx, c)
+	}
+	return func() []GitInput {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(ins)
+	}
+}
+
+// HoldGit holds every process of subcommand sub s hands the pool from now on
+// until release: reached is closed when the first is held. Set before s's
+// first request.
+func HoldGit(s *Server, sub string) (reached <-chan struct{}, release func()) {
+	at, held := make(chan struct{}), make(chan struct{})
+	var once, closing sync.Once
+	run := s.runGit
+	s.runGit = func(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+		if len(c.Args) > 0 && c.Args[0] == sub {
+			once.Do(func() { close(at) })
+			select {
+			case <-held:
+			case <-ctx.Done():
+				return gitproc.Result{}, ctx.Err()
+			}
+		}
+		return run(ctx, c)
+	}
+	return at, func() { closing.Do(func() { close(held) }) }
+}
 
 // RecordGit has s record every gitproc.Cmd it hands the pool from now on, and
 // answers a reader of what it has recorded, in order. Set before s's first

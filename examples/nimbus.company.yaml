@@ -598,9 +598,15 @@ knowledge:
 # ``scratch`` is left unset: a seat's own repositories, ``<handle>.<slug>``,
 # which only its tools make, are at most 50 a seat (``max_per_seat``) and
 # deleted once idle for 7 days (``idle_days``) unless a live turn holds one.
+#
+# ``identity_domain`` is the domain a commit the engine builds through a tool
+# spells its addresses in: its committer, ``Crewlet <engine@example.com>``,
+# and the author of a seat whose role states no email address,
+# ``<handle>@example.com``.  Unset is ``seats.invalid``, a name nobody owns.
 # See docs/concepts/code-host.md.
 code:
   native: true
+  identity_domain: example.com
   repos:
     - name: nimbus-web
       owner: {unit: Engineering}

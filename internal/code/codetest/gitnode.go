@@ -177,12 +177,15 @@ type GitOptions struct {
 	GitPath string
 	// Logger is the host's; nil is the package's own.
 	Logger *slog.Logger
-	// Roster is the chart the node's query server judges a seat's read by;
-	// nil is a node holding no chart, which answers a seat's read unready
-	// (no_chart) and every person's as the grant rules do with no chart.
+	// Roster is the chart the node's query server judges a seat's read by,
+	// and its code host a seat's engine write: nil is the fixture chart
+	// (FixtureRoster). A case standing in a node that holds no chart hands one
+	// answering nil, which answers a seat unready (no_chart).
 	Roster func() code.Roster
+	// Signer signs the node's engine-built commits; nil is FixtureSigner.
+	Signer host.Signer
 	// Current is whether the node serves the company's configuration, as
-	// the query server reads it; nil is current.
+	// the query server and the code host read it; nil is current.
 	Current func() bool
 	// QueryPool stands between the query server and the node's pool — a
 	// case that holds a read's processes, or records them; nil is the pool
@@ -342,11 +345,23 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	if fetched == nil {
 		fetched = func(context.Context, types.CodeFetched) {}
 	}
+	roster := g.o.Roster
+	if roster == nil {
+		roster = FixtureRoster
+	}
+	var signer host.Signer = FixtureSigner{}
+	if g.o.Signer != nil {
+		signer = g.o.Signer
+	}
+	// ONE share of the pool's read lane, as the engine builds one: the query
+	// server's reads and the host's engine writes draw on it alike.
+	n.share = code.NewGitShare(n.id, n.pool.Slots(gitproc.ClassRead), n.metrics)
 	if n.host, err = host.New(host.Options{
 		Cache: n.cache, Git: n.pool, Estate: g.o.Estate, Objects: objects,
 		Audit: audit, Fetched: fetched, Limits: limits,
 		DeletedRetention: func() time.Duration { return deletedRetention },
-		NodeID:           n.id, Timing: g.o.Timing, Faults: g.o.Faults, Metrics: n.metrics, Logger: g.o.Logger,
+		Roster:           roster, Signer: signer, Share: n.share, Current: g.o.Current,
+		NodeID: n.id, Timing: g.o.Timing, Faults: g.o.Faults, Metrics: n.metrics, Logger: g.o.Logger,
 	}); err != nil {
 		t.Fatalf("codetest: build %s's host: %v", n.id, err)
 	}
@@ -354,15 +369,10 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 		t.Fatalf("codetest: start %s's host: %v", n.id, err)
 	}
 	// THE QUERY SERVER, as the engine builds it: over the node's cache and
-	// pool, with ONE share of the pool's read lane.
-	n.share = code.NewGitShare(n.id, n.pool.Slots(gitproc.ClassRead), n.metrics)
+	// pool, under the node's one share.
 	var reads query.Pool = n.pool
 	if g.o.QueryPool != nil {
 		reads = g.o.QueryPool(reads)
-	}
-	roster := g.o.Roster
-	if roster == nil {
-		roster = func() code.Roster { return nil }
 	}
 	if n.query, err = query.New(query.Options{NodeID: n.id, Cache: n.cache, Git: reads, Share: n.share,
 		Roster: roster, Current: g.o.Current, Fetched: fetched}); err != nil {

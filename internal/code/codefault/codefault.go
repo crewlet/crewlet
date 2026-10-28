@@ -6,11 +6,12 @@
 // NAMED rather than ad hoc hooks, because the code host's crash matrices walk
 // EVERY point of a path in pipeline order and kill the node there — the push
 // path's ([PushPath]) the receiving node, the compaction's ([CompactPath])
-// the repository's home git node building one: a step with no point is a step
-// nobody ever crashed at. So a new step of the receive pipeline, or of a
-// compaction, that can leave state behind gets a point here, in order, or the
-// matrix does not cover it. The order is written ONCE, in this package, and a
-// call site adds a hit and never edits the list.
+// the repository's home git node building one, and an engine write's
+// ([WritePath]) the git node building it: a step with no point is a step
+// nobody ever crashed at. So a new step of the receive pipeline, of a
+// compaction or of an engine write, that can leave state behind gets a point
+// here, in order, or the matrix does not cover it. The order is written ONCE,
+// in this package, and a call site adds a hit and never edits the list.
 //
 // A crash is a hit HELD PAST THE NODE'S DEATH ([Action.Crash]). The case
 // kills the node while the hit is held, restarts it over the same files and
@@ -72,7 +73,8 @@ import (
 type Point string
 
 // The push path's points, in the order a push reaches them, then the sync's,
-// then the compaction's. Each comment says what is true when the point is hit.
+// then the compaction's, then the engine write's own. Each comment says what
+// is true when the point is hit.
 const (
 	// HostAfterCommands: the push's commands are read and nothing has started.
 	HostAfterCommands Point = "host.after_commands"
@@ -155,6 +157,12 @@ const (
 	// compaction's proposal, and its outputs are not yet adopted into the
 	// building node's cache.
 	CompactAfterPropose Point = "compact.after_propose"
+
+	// WriteAfterBuild: an engine write's build has made its commit and its one
+	// pack, indexed in the write's scratch, and nothing of it is stored or
+	// proposed (internal/code/host's Server.Write): the landing every push
+	// takes is next, its own points the write's from here on ([WritePath]).
+	WriteAfterBuild Point = "write.after_build"
 )
 
 // pushPath is the receive pipeline's points in the order a push reaches them.
@@ -175,6 +183,17 @@ var syncPath = []Point{SyncDownload, SyncRefs, SyncState, SyncSwapBeforeRename, 
 // its build, each output's upload, the uploads ended, the committer's answer.
 var compactPath = []Point{CompactAfterBuild, CompactUpload, CompactAfterUpload, CompactAfterPropose}
 
+// writePath is an engine write's OWN points: its build ended, before the
+// landing. What it meets after them is the landing's ([WritePath]).
+var writePath = []Point{WriteAfterBuild}
+
+// landingPath is the push path's points the LANDING hits (internal/code/host's
+// land), in its order: an engine write lands as a relayed push does, so a write
+// crashes at every point of its landing the push path names, and at no point
+// of the relay's own — its commands, its sync, its scratch, its hook — which
+// a write never meets.
+var landingPath = []Point{HostUpload, HostAfterUpload, HostAfterPropose, HostBeforeAdopt}
+
 // PushPath is the receive pipeline's points in the order a push reaches them:
 // the nine the host hits and the committer's. A fresh copy at every call,
 // because the crash matrix walks it and nothing it does to its copy may
@@ -186,14 +205,24 @@ func PushPath() []Point { return slices.Clone(pushPath) }
 // [PushPath]'s reason: the compaction's crash matrix walks it.
 func CompactPath() []Point { return slices.Clone(compactPath) }
 
+// WritePath is an engine write's points in the order it reaches them: its own
+// ([WriteAfterBuild]), then the landing's of the push path, in their order —
+// every point an engine write's crash matrix kills the git node at. A fresh
+// copy at every call, for [PushPath]'s reason. The landing's points are the
+// push path's own, hit once each by the one landing (land.go), so the write
+// adds a point to the closed set for its build alone.
+func WritePath() []Point { return slices.Concat(writePath, landingPath) }
+
 // Points is the closed set: every point, the push path first in pipeline
-// order, then the sync's, then the compaction's. A fresh copy at every call,
-// so no importer can rewrite what [Point.Valid] accepts.
-func Points() []Point { return slices.Concat(pushPath, syncPath, compactPath) }
+// order, then the sync's, then the compaction's, then the engine write's own.
+// A fresh copy at every call, so no importer can rewrite what [Point.Valid]
+// accepts.
+func Points() []Point { return slices.Concat(pushPath, syncPath, compactPath, writePath) }
 
 // Valid reports whether p is one of [Points].
 func (p Point) Valid() bool {
-	return slices.Contains(pushPath, p) || slices.Contains(syncPath, p) || slices.Contains(compactPath, p)
+	return slices.Contains(pushPath, p) || slices.Contains(syncPath, p) || slices.Contains(compactPath, p) ||
+		slices.Contains(writePath, p)
 }
 
 // readsOffset reports whether p is hit at an offset ([Action.At]): an upload's

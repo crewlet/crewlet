@@ -223,19 +223,30 @@ func TestTheCommandsBoundHoldsWhateverAPushsWorkAdds(t *testing.T) {
 	}
 }
 
+// engineBuilt is p built by the engine, carrying a one-object pack of
+// packBytes bytes.
+func engineBuilt(p code.Proposal, packBytes int64) code.Proposal {
+	p = packed(p, harnessAt)
+	p.Via = code.ViaEngine
+	p.Pack.Size = packBytes + p.Pack.IndexBytes + p.Pack.ReverseBytes
+	return p
+}
+
 // A PROPOSAL NAMES HOW ITS PACK WAS BUILT, and an engine-built one is one
 // commit on one ref: a proposal naming no way, or one this build does not know,
 // is the proposer's bug and refused naming via — by ValidateCommands too, whose
 // measure would otherwise be short of the entry; a push the engine built moving
-// two refs, or --atomic, is refused naming what it broke; and a person's push
-// the engine built of one command is a proposal. So is a seat's, whichever way
-// it was built, since the decide judges a seat's grant — one naming the run
-// that made it, which the engine stamps on every seat's push: a seat's push
-// naming none is its proposer's bug, refused naming principal.run. A seat's
-// push git received is its coding box's, which names its coding run and agent
-// — one naming none is refused naming principal.run.run_id — and a push the
-// engine built is a tool call's, whose run is its turn, so one naming a coding
-// run is refused naming the same.
+// two refs, or --atomic, or storing a pack past what a git node's build stores
+// (code.MaxWritePackBytes, which only an engine-built push is held to), is
+// refused naming what it broke; and a person's push the engine built of one
+// command is a proposal. So is a seat's, whichever way it was built, since the
+// decide judges a seat's grant — one naming the run that made it, which the
+// engine stamps on every seat's push: a seat's push naming none is its
+// proposer's bug, refused naming principal.run. A seat's push git received is
+// its coding box's, which names its coding run and agent — one naming none is
+// refused naming principal.run.run_id — and a push the engine built is a tool
+// call's, whose run is its turn, so one naming a coding run is refused naming
+// the same.
 //
 // Mutations: refuse every principal but an operator's again (validFields'
 // refusal the decide's grant lifts) — the seat's pushes are refused, red; take
@@ -269,6 +280,13 @@ func TestAProposalNamesHowItsPackWasBuilt(t *testing.T) {
 			p.Via, p.Atomic = code.ViaEngine, true
 			return p
 		}(), "atomic"},
+		{"an engine build's pack at its bound", engineBuilt(one, code.MaxWritePackBytes), ""},
+		{"an engine build's pack past its bound", engineBuilt(one, code.MaxWritePackBytes+1), "pack"},
+		{"a pushed pack past an engine build's bound", func() code.Proposal {
+			p := engineBuilt(one, code.MaxWritePackBytes+1)
+			p.Via = code.ViaGit
+			return p
+		}(), ""},
 		{"a seat's push the engine built", func() code.Proposal {
 			p := one
 			p.Via = code.ViaEngine

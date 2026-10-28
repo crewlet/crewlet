@@ -46,7 +46,12 @@ import (
 //     whichever git lists first — on every copy measured one push's pack,
 //     about 0.5% of the objects (on the compacted copy a push of its tail,
 //     not the compacted pack). That pack and the copies the index keeps are
-//     both chosen by when each pack landed, to the second, and by the
+//     both chosen by when each pack landed, to the second — or was last
+//     FRESHENED: git touches a .pack's modification time whenever a process
+//     writes an object it already holds, an engine write's build beside the
+//     copy among them (internal/code/host), so the next index written may
+//     prefer another of the copy's packs, a choice among what it holds and
+//     never a byte of what it serves — and by the
 //     listing, so the edits' bytes moved from copy to copy by up to 5%
 //     under `single` (20.8–21.9 MB) and 11% under `multi` (30.7–34.0 MB),
 //     and `single` sent fewer for less CPU on every copy of every history.

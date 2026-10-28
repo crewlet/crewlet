@@ -585,6 +585,23 @@
 // asked of first is the estate router's: the repository's HOME, the first of
 // its rendezvous order over the live git nodes (ADR-0059).
 //
+// # An engine write is built on a git node and lands as a push
+//
+// A seat's or a person's change made through a tool is BUILT on a git node
+// holding the repository (internal/code/host's Server.Write) and lands as a
+// push through the one landing every push takes (ADR-0062). This package
+// holds what both ends of one import, as it does for a read by object id: the
+// write ([EngineWrite]), its answer ([EngineWriteResult]) and the change's own
+// refusals ([WriteRefusal], UNRECORDED — decided on the git node before
+// anything is stored), the ONE rule every party holds a write to
+// ([EngineWrite.Validate], every new path to [ValidTreePath]), and the bounds
+// that size it. Its push id is an unnamed derivation of the caller's
+// operation ([WritePushID]), so a retry anywhere is the same push, and its
+// commit's dates are read off the instant that operation carries
+// ([EngineWrite.Instant]), so a retry is the same commit. Nothing of a write
+// rides the code log but its push: a proposal [ViaEngine], which moves one ref
+// and carries no pack past [MaxWritePackBytes].
+//
 // # A change's revisions are read by the ids their rows record
 //
 // Three of those reads are of a change's revisions: a revision's FACTS against

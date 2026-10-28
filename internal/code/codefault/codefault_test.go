@@ -94,8 +94,23 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	if got := codefault.CompactPath(); !slices.Equal(got, compactPoints) {
 		t.Fatalf("CompactPath() = %v\nwant the order a compaction reaches them: %v", got, compactPoints)
 	}
-	if got, wantAll := codefault.Points(), slices.Concat(want, syncPoints, compactPoints); !slices.Equal(got, wantAll) {
-		t.Fatalf("Points() = %v\nwant the push path, then the sync's, then the compaction's: %v", got, wantAll)
+	// An engine write's crash matrix walks WritePath(): its own point, then
+	// the landing's, each in the order the one landing hits it — and none of
+	// the relay's own, which a write never meets.
+	writePoints := []codefault.Point{
+		codefault.WriteAfterBuild,  // the commit and its pack made in the scratch, nothing stored
+		codefault.HostUpload,       // inside the bundle's upload
+		codefault.HostAfterUpload,  // the bundle stored, no row naming it
+		codefault.HostAfterPropose, // the committer answered
+		codefault.HostBeforeAdopt,  // the row applied, the pack not yet adopted
+	}
+	if got := codefault.WritePath(); !slices.Equal(got, writePoints) {
+		t.Fatalf("WritePath() = %v\nwant the order an engine write reaches them: %v", got, writePoints)
+	}
+	if got, wantAll := codefault.Points(), slices.Concat(want, syncPoints, compactPoints,
+		[]codefault.Point{codefault.WriteAfterBuild}); !slices.Equal(got, wantAll) {
+		t.Fatalf("Points() = %v\nwant the push path, then the sync's, then the compaction's, then the write's own: %v",
+			got, wantAll)
 	}
 
 	seen := map[codefault.Point]bool{}
@@ -120,10 +135,13 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	path[0] = "host.nope"
 	compactions := codefault.CompactPath()
 	compactions[0] = "host.nope"
+	writes := codefault.WritePath()
+	writes[0], writes[1] = "host.nope", "host.nope"
 	all := codefault.Points()
 	all[0] = "host.nope"
 	if codefault.PushPath()[0] != codefault.HostAfterCommands || codefault.Points()[0] != codefault.HostAfterCommands ||
-		codefault.CompactPath()[0] != codefault.CompactAfterBuild {
+		codefault.CompactPath()[0] != codefault.CompactAfterBuild || codefault.WritePath()[0] != codefault.WriteAfterBuild ||
+		codefault.WritePath()[1] != codefault.HostUpload || codefault.PushPath()[4] != codefault.HostUpload {
 		t.Fatal("rewriting a returned list changed the next call's")
 	}
 	if codefault.Point("host.nope").Valid() {

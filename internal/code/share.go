@@ -21,10 +21,12 @@ import (
 // before it is refused busy: a person's push's scans and its force checks, a
 // sync round's peel of the refs, a fetch's check of the objects it wants — and
 // the git a seat's read of a repository by object id runs
-// (internal/code/query). A seat's read is git work of up to a whole read
-// deadline; sized past the lane, a burst of them would hold every slot, and the
-// person whose push queued behind them would be answered busy after ten seconds
-// of nothing. So the node's seat git work holds at most [ShareOf] the lane's
+// (internal/code/query), and the build of an engine write a seat or a person
+// asks through a tool (internal/code/host). A seat's read is git work of up to
+// a whole read deadline, and so is a write's build (WriteBuildDeadline); sized
+// past the lane, a burst of them would hold every slot, and the person whose
+// push queued behind them would be answered busy after ten seconds of
+// nothing. So the node's seat git work holds at most [ShareOf] the lane's
 // slots — ONE share a node, which every kind of seat git work takes its unit
 // of ([SeatWorks]), so no two kinds can between them take the whole lane — and
 // the other half stays the persons' and the node's own.
@@ -34,8 +36,11 @@ import (
 // read-lane slot and so holds no unit — held across a cold download, one read
 // would refuse every other seat's read on a node whose share is one — and a
 // read's short check of the objects it names waits in the read lane's own
-// queue like any short read. What the share bounds is the long processes,
-// which are what a person's push waits behind.
+// queue like any short read. A write is held to the same rule: its check of
+// what it names is a short read like any, and its unit is held around its
+// build alone — given back before its landing's upload, its proposal and its
+// wait for its row, which hold no read-lane slot. What the share bounds is the
+// long processes, which are what a person's push waits behind.
 //
 // PAST [GitShareWait] the work is answered [ErrGitUnready]{[UnreadyShare]} —
 // never queued for longer, and never refused as the asker's fault — so the
@@ -50,10 +55,15 @@ const (
 	// SeatWorkRead is a server-side read of a repository by object id: the
 	// git a read's kind runs (internal/code/query).
 	SeatWorkRead SeatWork = "read"
+	// SeatWorkWrite is an engine write's git (internal/code/host): its
+	// lookups and its build, from the check of what it names to its pack
+	// indexed — never its landing's upload, proposal or wait for its row,
+	// which hold no read-lane slot.
+	SeatWorkWrite SeatWork = "write"
 )
 
 // SeatWorks is the closed set.
-func SeatWorks() []SeatWork { return []SeatWork{SeatWorkRead} }
+func SeatWorks() []SeatWork { return []SeatWork{SeatWorkRead, SeatWorkWrite} }
 
 // Valid reports a kind of seat git work this build knows.
 func (w SeatWork) Valid() bool { return slices.Contains(SeatWorks(), w) }

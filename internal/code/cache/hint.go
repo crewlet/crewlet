@@ -56,15 +56,22 @@ import (
 // should a rebuild replace theirs meanwhile.
 //
 // A VERDICT HOLDS FOR THE FILES IT WAS REACHED ON: it is kept with the pack's
-// three files' identity — device, inode, size and modification time, each,
-// as the hash found them — and reused while they are those files, whatever
-// else is written into the copy. A round that installs the pack again or
+// three files' identity — device, inode, size and, for the .idx and the .rev,
+// modification time, each as the hash found them (check.go's fileID: git
+// FRESHENS a .pack's time, and no byte of it, whenever a process writes an
+// object the pack holds, as an engine write's build beside the copy does) —
+// and reused while they are those files, whatever else is written into the
+// copy, a freshening included. A round that installs the pack again or
 // sweeps it renames other files in (or none), which another hint then hashes
 // afresh; an adoption of another pack, or the maintainer's index, bitmap and
 // graph, touch no pack's files, so a confirmed copy whose rebuild a cooldown
 // refuses meets its next failing request with the verdict rather than another
 // hash of the same gigabytes for every push. A hash during which the files
-// moved decides nothing.
+// moved decides nothing. And a .pack whose bytes change through its own inode
+// after its verdict — which no writer of a copy does: each writes a file
+// beside its name and renames it in — keeps its identity, so the verdict
+// stands and the scrub, which hashes every file whatever was vouched for,
+// finds it, as it finds media damage.
 //
 // BOUNDED BY HASH alone — HashBudget of the bundle's bytes, its rows' read
 // and the hash, never CheckBudget's fsck term, which a hint runs none of —

@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
@@ -187,6 +188,20 @@ const (
 	// MaxHolds, 1 024, kept above this), so a seat working through all of
 	// them is never refused a hold for their number.
 	CodeScratchMaxPerSeatCeiling = 1_000
+
+	// DefaultCodeIdentityDomain is an unset code.identity_domain:
+	// seats.invalid, under RFC 2606's reserved `.invalid`, so an address a
+	// commit the engine builds names belongs to nobody who could receive
+	// mail at it — or claim it.
+	DefaultCodeIdentityDomain = "seats.invalid"
+
+	// CodeMaxIdentityDomainBytes bounds code.identity_domain: 189 bytes,
+	// the most that leaves every address spelled in it — a seat's
+	// `<handle>@<domain>`, a handle being at most iam.MaxLogin's 64 bytes —
+	// within the 254 bytes RFC 5321 lets an address be. Stricter than the
+	// 253 a DNS name may be, which would let an address no mail system
+	// takes into every commit.
+	CodeMaxIdentityDomainBytes = 254 - len("@") - iam.MaxLogin
 )
 
 // Code is the company's own git host: whether it hosts its repositories in
@@ -216,6 +231,7 @@ const (
 type Code struct {
 	Native               bool        `yaml:"native,omitempty" json:"native,omitempty" desc:"Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node running no native backend yet starts the code host at the activation that sets it; on a node whose native runtime already runs, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart)."`
 	DeletedRetentionDays int         `yaml:"deleted_retention_days,omitempty" json:"deleted_retention_days,omitempty" js:"min=0;max=365" desc:"How long a repository removed from code.repos stays restorable by declaring it again under its name, before it is purged and its name is free: 1..365 days; unset (or 0) is 7."`
+	IdentityDomain       string      `yaml:"identity_domain,omitempty" json:"identity_domain,omitempty" js:"pattern=^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?([.][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$;maxlen=189" desc:"The domain a commit the engine builds through a tool spells its addresses in: its committer's, engine@<domain>, and its author's, <handle>@<domain>, for a seat whose role states no email address. A lowercase DNS name of at most 189 bytes, so every such address is at most 254; unset is seats.invalid, a name nobody can own."`
 	Limits               CodeLimits  `yaml:"limits,omitempty" json:"limits,omitzero"`
 	Scratch              CodeScratch `yaml:"scratch,omitempty" json:"scratch,omitzero"`
 	Repos                []CodeRepo  `yaml:"repos,omitempty" json:"repos,omitempty" desc:"The company's repositories, at most 10000. Each activation creates the ones declared and settles their settings; removing one deletes it, restorable for deleted_retention_days by declaring it again."`
@@ -308,6 +324,41 @@ func (c Code) DeletedRetention() time.Duration {
 		days = DefaultCodeDeletedRetentionDays
 	}
 	return time.Duration(days) * 24 * time.Hour
+}
+
+// IdentityDomainResolved is code.identity_domain, its default applied where
+// it is unset — THE ONE PLACE the default is applied: the domain the engine's
+// signer spells an engine-built commit's committer in (`engine@<domain>`),
+// and its author in for a seat whose role states no email address
+// (`<handle>@<domain>`).
+func (c Code) IdentityDomainResolved() string {
+	if c.IdentityDomain == "" {
+		return DefaultCodeIdentityDomain
+	}
+	return c.IdentityDomain
+}
+
+// validDomainName reports a lowercase DNS name: labels of ASCII letters,
+// digits and hyphens, none empty or past 63 bytes and none beginning or
+// ending with a hyphen, joined by dots — no trailing dot, since an address
+// spells none — at most CodeMaxIdentityDomainBytes in all. Lowercase because
+// a commit records the address as written, and two spellings of one domain
+// would be two committers.
+func validDomainName(s string) bool {
+	if s == "" || len(s) > CodeMaxIdentityDomainBytes {
+		return false
+	}
+	for label := range strings.SplitSeq(s, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			if c := label[i]; !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // CodeRepo is one repository code.repos declares.
@@ -510,6 +561,11 @@ func (c Code) validate(path Path, o *org.Organization) error {
 				"nothing hosts code on this company: set code.native, or remove "+
 					"code.deleted_retention_days")
 		}
+		if c.IdentityDomain != "" {
+			p.add(at(path, "identity_domain"), ErrConflict,
+				"nothing hosts code on this company, so no commit is built to name it: set "+
+					"code.native, or remove code.identity_domain")
+		}
 		if len(c.Repos) > 0 {
 			p.add(at(path, "repos"), ErrConflict,
 				"nothing hosts code on this company, so none of these %d repositories "+
@@ -525,6 +581,12 @@ func (c Code) validate(path Path, o *org.Organization) error {
 		p.add(at(path, "deleted_retention_days"), ErrOutOfRange,
 			"must be 1..%d days, or unset for the default %d, got %d",
 			CodeMaxDeletedRetentionDays, DefaultCodeDeletedRetentionDays, d)
+	}
+	if d := c.IdentityDomain; d != "" && !validDomainName(d) {
+		p.add(at(path, "identity_domain"), ErrShape,
+			"%q is not a lowercase DNS name of at most %d bytes: labels of letters, digits and hyphens, "+
+				"none starting or ending with a hyphen, joined by dots (example.com), or unset for %s",
+			d, CodeMaxIdentityDomainBytes, DefaultCodeIdentityDomain)
 	}
 	p.wrap(c.Limits.validate(at(path, "limits")))
 	p.wrap(c.Scratch.validate(at(path, "scratch")))

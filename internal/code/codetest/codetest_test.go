@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -97,6 +98,47 @@ func TestTheSuiteCatchesAnOkOnPending(t *testing.T) {
 			t.Errorf("OkOnlyFromARow over a host that reports ok on pending = %v, want the decision named", err)
 		}
 	})
+}
+
+// okOnPendingWrite is okOnPending for an ENGINE WRITE alone: a person's push
+// is answered honestly, a write's pending proposal reported applied.
+type okOnPendingWrite struct{ host.Estate }
+
+func (e okOnPendingWrite) Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error) {
+	if p.Via != code.ViaEngine {
+		return e.Estate.Propose(ctx, p)
+	}
+	return okOnPending(e).Propose(ctx, p)
+}
+
+// A suite whose check passes a liar certifies nothing: OkOnlyFromARow must
+// catch a host that answers an engine write applied from a decision, its
+// pushes answered honestly — the half of the check that holds a write.
+func TestTheSuiteCatchesAWriteAnsweredOkWithoutARow(t *testing.T) {
+	liar := codetest.SoloOptions{Shape: codetest.Shape{
+		WrapEstate: func(e host.Estate) host.Estate { return okOnPendingWrite{e} }}}
+	err := codetest.OkOnlyFromARow(t, codetest.Solo(liar, nil))
+	if err == nil || !strings.Contains(err.Error(), "an applied write answered from a decision") {
+		t.Errorf("OkOnlyFromARow over a host that answers a pending write applied = %v, want the decision "+
+			"named", err)
+	}
+}
+
+// A suite whose check passes a liar certifies nothing:
+// NothingButSyncWritesACache must catch an engine write whose build writes
+// into the cache it leans on — here a git that, asked to hash a write's files
+// in its scratch, writes an object into the scratch's alternate too — the
+// mutation of running a build's writer in the copy rather than beside it.
+func TestTheSuiteCatchesAnEngineWriteIntoACache(t *testing.T) {
+	git := gittest.Wrap(t, `if [ "${1-}" = hash-object ] && [ -f "${GIT_DIR-}/objects/info/alternates" ]; then
+	cache=$(sed -n 1p "$GIT_DIR/objects/info/alternates")
+	printf 'intruder\n' | GIT_DIR="${cache%/objects}" "$real_git" hash-object -w --stdin >/dev/null
+fi`)
+	err := codetest.NothingButSyncWritesACache(t, codetest.Solo(codetest.SoloOptions{GitPath: git}, nil))
+	if err == nil || !strings.Contains(err.Error(), "loose objects") {
+		t.Errorf("NothingButSyncWritesACache over a build that writes into the cache = %v, want the loose "+
+			"object named", err)
+	}
 }
 
 // graceless is a data node's applier that LIES about a retirement: every

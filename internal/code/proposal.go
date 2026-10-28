@@ -420,6 +420,12 @@ func (p Proposal) validFields() error {
 	case p.Via == ViaEngine && p.Atomic:
 		return fmt.Errorf("%w: atomic: a push the engine built moves one ref, which --atomic has nothing "+
 			"to hold together with", ErrInvalidProposal)
+	case p.Via == ViaEngine && p.Pack != nil && p.Pack.PackBytes() > MaxWritePackBytes:
+		// THE BUILD'S OWN BOUND: a git node answers a write whose pack is
+		// past it too_large before anything is uploaded, so a proposal
+		// carrying one is no build of this engine's.
+		return fmt.Errorf("%w: pack: %d bytes of pack, past the %d an engine-built push may store "+
+			"(MaxWritePackBytes)", ErrInvalidProposal, p.Pack.PackBytes(), MaxWritePackBytes)
 	}
 	if p.Pack != nil {
 		if err := p.validPack(); err != nil {

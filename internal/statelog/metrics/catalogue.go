@@ -1585,8 +1585,10 @@ func Catalogue() []Instrument {
 			Name: CodeSeatworkHeld, Kind: KindGauge, Unit: UnitCount,
 			Shows: "Seat git work running at once on this git node, of half its " +
 				"read lane: the units of the node's seat git-work share held " +
-				"now, each a server-side read of a repository by object id " +
-				"running its git. The share is half of `git.max_processes` " +
+				"now — server-side reads of a repository by object id running " +
+				"their git, and the builds of engine writes, a seat's or a " +
+				"person's commit made through a tool. The share is half of " +
+				"`git.max_processes` " +
 				"(at least one), and the other half of the read lane stays the " +
 				"node's own and its persons' — a push's scans, a sync's peel, " +
 				"a fetch's check of its wants. Pinned at the share while " +
@@ -1601,7 +1603,9 @@ func Catalogue() []Instrument {
 				"for, by `outcome` — `granted`, taken within two seconds; " +
 				"`unready`, none free in two seconds, answered so the asker " +
 				"is served by another git node — and by `work` (`read`: a " +
-				"server-side read of a repository by object id). One whose " +
+				"server-side read of a repository by object id; `write`: the " +
+				"build of an engine write, a commit made through a tool). One " +
+				"whose " +
 				"caller went away while it waited is not counted. `unready` " +
 				"is a node at its share for whole seconds: more git nodes, or " +
 				"more cores and a wider `git.max_processes`, which widens the " +
@@ -1666,6 +1670,37 @@ func Catalogue() []Instrument {
 				"`refused` one waited for nothing). The `granted` tail is what " +
 				"the wait adds to a checkout; one nearing 55 s is a node about " +
 				"to answer checkouts 503.",
+		},
+		{
+			Name: CodeHostWrites, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"kind", "outcome"},
+			Shows: "Every engine write this git node built or answered — a " +
+				"commit, a revert, a cherry-pick, a branch created or deleted " +
+				"through a tool, a seat's or a person's — by `kind` " +
+				"(`commit_files`, `revert`, `cherry_pick`, `create_branch`, " +
+				"`delete_branch`) and `outcome`: `applied`, `pending` and " +
+				"`unknown` as a push's, from its row; `refused`, a refusal of " +
+				"the change or of its push (a conflict, nothing to change, a " +
+				"stale head, a protection, the grant) or a write the call " +
+				"named wrong; `unready`, this node could not answer in time " +
+				"and another git node was asked; and `failed`, the node's own " +
+				"failure. `unready` climbing is a node behind its syncs or at " +
+				"its share of seat git work; `failed` is never routine — the " +
+				"`code_write` line names it.",
+		},
+		{
+			Name: CodeHostWriteDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"kind", "stage"},
+			Shows: "How long each engine write took on this node, by `kind` " +
+				"and `stage`: `sync`, bringing the copy to the caller's floor " +
+				"and judging the write on it, the check of what it names among " +
+				"it; `build`, its git — the lookups of what it changes, its " +
+				"objects, its commit and its pack, under a unit of the seat " +
+				"git-work share; `land`, the landing every push takes — the " +
+				"upload, the proposal and the wait for its row; and `total`. " +
+				"A `build` tail near ten seconds is changes too wide for an " +
+				"engine write, answered too_large; a `land` tail is the code " +
+				"log's, as a push's is.",
 		},
 		// ---- authentication -------------------------------------------
 		{

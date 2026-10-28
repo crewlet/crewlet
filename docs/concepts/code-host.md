@@ -50,7 +50,9 @@ This is the product's current shape, not a configuration choice:
   yet, so agents do not push. A seat READS the company's repositories, on
   the server, through its code tools ([Server-side reads](#server-side-reads)),
   under the rule a person's push is judged by too ([Who may read and
-  push](#who-may-read-and-push)).
+  push](#who-may-read-and-push)). A git node can build a seat's or a
+  person's commit itself and land it as a push ([Engine-built
+  commits](#engine-built-commits)), but no tool asks it for one yet.
 - **No tool asks for a repository yet.** The code host decides a request to
   create, rename, archive, delete, restore or protect a repository, a seat's
   own scratch repositories among them, and expires an idle scratch repository
@@ -2399,11 +2401,15 @@ the objects it wants, each waiting in turn for at most ten seconds before it is
 refused busy. So the git a seat's read runs takes a unit of the node's **seat
 git-work share** — half the lane, at least one — and gives it back the moment
 that git ends: a read waiting on its sync holds none, and the other half of the
-lane stays the persons' and the node's own. What the share holds is the read's
-own git; the short checks of what a read names, before it, wait in the lane's
-queue like any short read. `crewlet.code.seatwork.held` is the share held now
-and `crewlet.code.seatwork.waits` every unit asked for, by whether it came
-free in time ([Metrics](../reference/metrics.md)).
+lane stays the persons' and the node's own. The build of an [engine-built
+commit](#engine-built-commits) takes its unit of the same share — one share a
+node, so seats' reads and writes between them never hold more than half —
+and gives it back before its push lands. What the share holds is the read's
+or the build's own git; the short checks of what either names, before it,
+wait in the lane's queue like any short read. `crewlet.code.seatwork.held` is
+the share held now and `crewlet.code.seatwork.waits` every unit asked for, by
+the `work` it was for and whether it came free in time
+([Metrics](../reference/metrics.md)).
 
 A read's git process that reports damage to the copy is never answered from,
 even where git answered anyway — it reads around a damaged index from the
@@ -3144,6 +3150,167 @@ and their deadlines.
 
 ---
 
+## Engine-built commits
+
+A change a seat or a person makes through a tool — files committed, a commit
+reverted or cherry-picked, a branch created or deleted — is built by the code
+host itself, on a git node holding the repository ([its home](#the-home-git-node)
+first), and lands as a **push**: the same landing a person's `git push` takes
+from its pack on, held to the same rules, one record on the code log, and
+answered applied only from that record's applied row. Nothing in this release
+asks a git node for one yet ([What it does not do yet](#what-it-does-not-do-yet));
+this is what a git node does with one.
+
+| Kind | What it does |
+|---|---|
+| `commit_files` | One commit of up to 1 000 file operations onto a branch's head — or onto a start commit, creating the branch, or onto nothing, a root commit. A `put` makes a path a file of the text it carries, or of a blob the repository holds by its id, with mode `100644`, `100755` or `120000` (a link, whose target is its text, never a blob); an `edit` replaces text that occurs in the file **exactly once**; a `delete` removes a file, a link, a submodule or a whole directory; a `move` moves an entry to another path, sending no bytes; a `mode` flips a file between `100644` and `100755`. What is judged is the tree as the whole call leaves it, so deleting `a` and putting `a/b` is one change. |
+| `revert` | The inverse of one commit onto a branch's head, with git's own message — `Revert "<subject>"` and `This reverts commit <id>.` — unless the write gives one. |
+| `cherry_pick` | One commit's change onto a branch's head, with the commit's message and `(cherry picked from commit <id>)`, as `git cherry-pick -x` writes it, unless the write gives one. |
+| `create_branch` | A branch at a commit the repository holds. |
+| `delete_branch` | A branch, at the head its caller read. |
+
+Every write that moves a branch names the head its caller read, so a write
+onto a branch that moved since is refused `stale` rather than land on a
+history its caller never saw, and one that creates a branch needs it absent.
+
+### How a write is built
+
+1. **Judged before anything is built.** The node's copy of the repository is
+   brought to the caller's floor — a seat's own writes, a person's
+   linearizable — and the write is judged on it: the repository's status, the
+   writer's [grant](#who-may-read-and-push), the [protections](#protection-rules)
+   — a seat's write to a ref `direct_push: persons` protects is refused
+   `protected_direct`, as its push would be ([A seat's push](#a-seats-push)) —
+   where the branch is, by its exact name, and what every object and path the
+   write names is. A head that is not the one the caller read is first looked
+   up as **this write's own push**, landed by an earlier ask of it, and found,
+   it is the answer. Every refusal is judged once more at the code log's head
+   before it is answered, so a copy that has not yet read a protection's
+   removal refuses nothing a current one would let through. A seat's write on
+   a node [confirmed behind the company's
+   configuration](control-plane.md#where-the-gate-sits) is answered by that
+   node as one it cannot serve, so another git node builds it; a person's
+   write is built there.
+2. **Built beside the copy, over what it touches.** In a scratch repository
+   whose one alternate is the copy — never in the copy, which stays a function
+   of the rows — by git's own plumbing over exactly the directories the change
+   touches: one read of those directories and the files an edit rewrites, one
+   `hash-object` of the new files, one `mktree` a level of directories,
+   deepest first, every entry the change does not touch passed through as it
+   stands, and one `commit-tree`; a revert or a cherry-pick runs one
+   `merge-tree --write-tree`, whose cost follows the trees' differences. Never
+   an index of the whole tree or a checkout, so what a commit costs follows
+   the entries of the directories it touches, never the files the repository
+   holds: a commit beside sibling directories of ten thousand files asks git
+   exactly what one beside directories of ten does. The build takes a
+   unit of the node's [seat git-work share](#server-side-reads), given back
+   before it lands, and one budget of ten seconds of git run time that every
+   process of it shares.
+3. **Checked as a push is.** The new objects are packed into one
+   self-contained pack, indexed by `git index-pack --strict` — the check
+   receive-pack runs on every person's push (`receive.fsckObjects`) — so a
+   write stores nothing the code host would refuse a `git push` of at the
+   door: a `.gitmodules` whose url or path git refuses, a `.gitattributes` past
+   git's bounds, a malformed tree.
+4. **Landed.** From here it is [a push](#a-push-end-to-end), its row saying
+   `via engine`: the bundle stored, the proposal to the repository's
+   committer, the applied row, the pack adopted into the copy. A caller whose
+   time left cannot hold the bundle's upload and the proposal after it is
+   answered `busy` before anything is uploaded, so a slow object store costs a
+   refusal, never a stored bundle nobody proposes.
+
+### Who a commit names
+
+- **Its author is whoever acted**: a seat's role `name` and the `email` its
+  role states, as the company document writes it, or `<handle>@<domain>` on
+  [`code.identity_domain`](../getting-started/configuration.md#code) where the
+  role states none a commit can name — a `${VAR}` reference is never resolved
+  into history. A person writes as the human seat their credential is bound
+  to, by that seat's role and handle, whichever of their credentials they
+  used; a credential bound to no seat writes nothing.
+- **Its committer is the engine**, `Crewlet <engine@<domain>>`. That marks, in
+  a cooperating client's history, the commits the code host built, and
+  authenticates nothing: any git client can write the same committer into a
+  commit it pushes. Who built a commit is the push row's — `via engine`, its
+  principal and, for a seat, the turn that made it.
+- **Its author date is the instant the writer acted** — the instant the
+  write's operation was minted, to the second — and its committer date is
+  that instant, or its parent's committer date where the parent is dated
+  later (a person whose clock runs ahead), so no commit is dated before its
+  parent: git's walks by date, merge bases and the commit-graph read the
+  committer date alone, and a child dated before its parent sends every walk
+  by date through the whole history. git's own `rebase` and `cherry-pick`
+  keep the author date and set the committer date the same way.
+
+Nothing else is added to the message — no trailer naming the seat, its run or
+its work item: the push row carries those, and only what the row says is the
+record of who made a commit.
+
+### A retry is the same push
+
+The push a write lands under is derived from the caller's operation, never
+minted, and the commit is a pure function of the operation and its parent:
+the names and dates above, the tree, the message. So a write asked again —
+on the same git node, on another after the first went silent, after a crash
+at any step — is the same push, which the repository's committer lands
+once, carrying the same commit. A second ask on a node still building the
+first waits for it and is answered what it is; asked again after it landed,
+and after the branch moved on, a write is answered from its push's row with
+nothing built; and a write that cannot learn whether it already landed is
+answered `busy` — make the same call again — never `stale`.
+
+### What a write is refused
+
+A write the request itself gets wrong is refused before anything is read:
+more than 1 000 operations or more than 1 MiB of them with the message, two
+operations on one path, a message with a NUL byte or text git would rewrite,
+and a new path git or a checkout would refuse or misread — past 4 096 bytes,
+a component past 255, an empty, `.` or `..` component, a control character, a
+backslash, a code point HFS+ ignores, `.git` in any spelling git reads as one
+(any case, trailing dots and spaces, an NTFS stream such as
+`.GIT::$INDEX_ALLOCATION`), and a link named `.gitmodules`, `.gitattributes`,
+`.gitignore` or `.mailmap`, which git refuses or ignores. Paths a write does not
+touch are never judged.
+
+A refusal of the **push** — `stale`, the grant's `not_permitted`, a
+protection's, `blob_too_large`, `repo_deleted`, `busy` — says what a push's
+says. One the git node reaches stores and records nothing; one the
+repository's committer reaches is recorded as any push's is. A refusal of the
+**change** stores and records nothing:
+
+| Refusal | Means |
+|---|---|
+| `conflict` | A revert or a cherry-pick does not apply cleanly. The answer names each conflicted path, git's word for the conflict (`CONFLICT (contents)`, `CONFLICT (modify/delete)`, …), the ids of its base, ours and theirs — each in the repository, readable whole by its id — and the first 2 KiB of the file with its markers; as many as fit the answer, the rest counted. |
+| `nothing_to_change` | The change leaves the tree as it is; no commit is made. |
+| `edit_not_found`, `edit_ambiguous` | An edit's text occurs nowhere in its file, or more than once (the sentence names the first two lines). |
+| `edit_binary` | An edit of a file git reads as binary: a NUL in its first 8 000 bytes. |
+| `edit_line_endings` | An edit spanning a line, in a file holding a carriage return. |
+| `path_conflict` | A file where a directory is needed or the reverse, or one path beneath another the same call makes, keeps or moves. |
+| `path_not_found` | An edit, a delete, a move or a mode of a path the tree does not hold. |
+| `not_a_file` | An edit or a mode of a directory, a link or a submodule. |
+| `merge_commit` | A revert or a cherry-pick of a merge, which needs a mainline: make it in a coding box. |
+| `too_large` | The write's pack is past 4 MiB, or its build ran its ten seconds of git. |
+| `rejected_object` | An object the build made fails `index-pack --strict`; the sentence is git's own first error, naming the object and the check. |
+
+### The bounds
+
+| Bound | Value | Why |
+|---|---|---|
+| A write's operations and message | 1 MiB | An engine write is a document or a configuration fix, never a codebase: a larger change belongs in a coding box, whose push has no such bound. |
+| Operations in one `commit_files` | 1 000 | Past every document or configuration change, and what bounds the directories one build rewrites. |
+| A write's pack | 4 MiB | Four payloads' worth: a commit's new files compressed and the directories it touches, each written whole — about 40 bytes an entry, so some 3 MB for a file put into a directory of 100 000. |
+| A write's git | 10 s | Every process of a build together, one read's deadline. |
+| A path | 4 096 bytes | Linux's `PATH_MAX`: a path no checkout can create is a tree no client can use. |
+| A conflict's start | 2 KiB | Enough to see what collided; each stage is readable whole by its id. |
+
+Every write a git node builds or answers is counted
+(`crewlet.code.host.writes`, by `kind` and `outcome`) and timed
+(`crewlet.code.host.write.duration`, by `kind` and `stage`: `sync`, `build`,
+`land` and `total`) ([Metrics](../reference/metrics.md)), and logged
+`code_write` ([What the node logs](#what-the-node-logs)).
+
+---
+
 ## Fair share
 
 Every clone, fetch and push runs its git in one of the node's **transfer
@@ -3342,6 +3509,8 @@ reference](../reference/metrics.md)).
 | `code_scratch_expiry_skipped` | `WARN` | The live turns' holds on a page of idle scratch repositories could not be read — the run store, the seat leases, or a seat holder that did not answer within two seconds (`error`, naming which) — so this pass expired none; the next pass asks again ([A scratch repository's idle expiry](#a-scratch-repositorys-idle-expiry)). |
 | `code_retention_duty_declined`, `code_retention_duty_resumed` | `WARN` or `DEBUG`, `INFO` or `DEBUG` | This node does not take the duty, and gives it back if it holds it (`code_retention_duty_given_back`). It logs a `_declined` line each time the reason it declines for changes, at that reason's level — so a decline that keeps its reason is one line however many ticks it lasts — and one `_resumed` line when it stops declining, `INFO` if any reason of that decline warned and `DEBUG` otherwise. `WARN` where the reason is a fault: its copy of the code log is out of service (`domain`), or it does not serve the revision the fleet is on (`reason`: `behind`, with this node's `applied_epoch` and the `fleet_epoch`, once the lag is confirmed — its apply of the revision failed, or it has been behind for longer than the 45 seconds of propagation; or `unknown`, with the `error` that kept it from telling, as when the activation pointer could not be read). `DEBUG`, and asked again a reconcile interval (15 seconds) later rather than a tick, while it is no fault: `reason` `propagating` (with the `fleet_epoch`, and the `applied_epoch` once its reconciler has read the pointer) on a node still applying the fleet's revision or still starting — every restart's first turn runs before its reconciler is built — and `not_activated` while the fleet has activated no revision yet, which a fresh deployment meets for the seconds before its first activation. A node that fails one activation and then applies the fleet's next logs four lines: `propagating` at `DEBUG` while it applies the first, `behind` at `WARN` once its failure confirms the lag, `propagating` at `DEBUG` when the next activation arrives, and `_resumed` at `INFO` once it serves that one. |
 | `code_push` | `INFO` | One push this node received, whatever became of it: the repository, the push's id, the credential it came through (`operator_id`) and the human seat its principal holds (`seat`, empty for a credential bound to none), the `outcome` (`applied`, `pending`, `unknown`, `refused`, `failed`) and any `refusal`, how many commands and how many went through, the bundle's bytes, the position its record landed at and how long it took. |
+| `code_write` | `INFO` | One [engine-built commit](#engine-built-commits) this node was asked for, whatever became of it: the repository, the write's `kind`, who wrote it (`principal_kind`; the `seat` it is the commit's author for — a person's human seat, or the agent's own — with the credential a person came through, `operator_id`, or the turn behind a seat's, `turn_id`), the `push_id` it lands under, the `outcome` (`applied`, `pending`, `unknown` from its push's row; `refused`; `unready`, this node could not answer and another git node is asked; `failed`), any `refusal` of the change or of its push, and how long it spent in `sync_ms`, `build_ms`, `land_ms` and `total_ms`. No `operator_acted` is recorded for it: a person's tool call is one already, and a seat's write is its push row. |
+| `code_write_outcome_unread` | `WARN` | An engine write found its branch at another head and could not learn, from the code log, whether that head is its own push landed by an earlier ask; it was answered `busy` — make the same call again — rather than `stale`. |
 | `code_commit_failed` | `WARN` | A repository's [committer](#the-committer) could not answer a record it published: the code log failed the write for a reason that is no refusal of it, or the record applied and the rows it wrote could not be read back. By `kind`: `push`, a batch of pushes, each answered with the `error`; or `compaction`, a git node's merge of the repository's packs, which the node that built it plans again. With the `repo` and the record's `op_id`. |
 | `code_fetch_spool_unserved` | `WARN` | A fetch large enough to spool — a partial clone's lazy fetch, which git does not retry — was answered 503 without being served: its wait for its turn at the node's room for large requests reached 55 s (`reason`: `expired`), or it had to wait and found the node's waiting room full, or its credential's quarter of it (`reason`: `refused`). The `operator_id` is the token that sent it, and the `error` says what held it back; its credential's own requests holding it back means several CI runners share the token. git itself prints only `error: RPC failed; HTTP 503`, so this line is where the reason is. |
 | `code_fetch_retried`, `code_push_retried` | `INFO` | git found this node's cache damaged during a fetch's or a push's request — a fetch's in an advertisement, in the node's check of which of the fetch's wants the copy lacks, or in the fetch's own git, before its pack began — read from the formats of git's own reports, never their words, which repeat the request's (`error` quotes git's words) — or the node would not run git in it for its shape (`reason`: `corrupt`, `derived`, `missing`, `shape` — a push's only ever `shape`, since its git runs beside the cache rather than in it); the cache was repaired — a shape or a damaged derived file (`derived`: a multi-pack-index, a commit-graph) in place, damage to its packs or objects in place first, one download a damaged pack, and by a rebuild only when that found nothing — or, for a request whose git began before the node last wrote a repair into the copy, left as it stands; and git run again over the same request. |

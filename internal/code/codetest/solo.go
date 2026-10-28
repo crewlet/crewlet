@@ -141,6 +141,12 @@ type Fleet interface {
 	// engine serves one — in the repository's rendezvous order, its home
 	// first (ADR-0059), and stamping the walk's first attempt home itself.
 	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
+	// Write is an engine write (ADR-0062) asked of the fleet's git nodes'
+	// code hosts in the repository's home order, its home first and stamped
+	// so (code.EngineWrite.Home), the next asked only where one answers a
+	// refusal about itself — the walk a keyed write takes — each host asked
+	// in process: no estate lane carries a write in this release.
+	Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error)
 }
 
 // Shape is what a case asks of the fleet it is run on.
@@ -174,7 +180,7 @@ type SoloOptions struct {
 	Faults *codefault.Script
 	// MaxProcesses is each git pool's read lane; 0 is the pool's default.
 	MaxProcesses int
-	// People are the human seats with a token each; nil is ceo and dev.
+	// People are the human seats with a token each; nil is DefaultPeople.
 	People []string
 	// GitPath is the git every pool runs; "" is the one on PATH, held to the
 	// node floor (gittest.RequireNode). A case that records what git ran
@@ -273,7 +279,7 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	}
 	o.Limits = withDefaults(o.Limits)
 	if o.People == nil {
-		o.People = []string{"ceo", "dev"}
+		o.People = DefaultPeople()
 	}
 	if o.LogBytes == 0 {
 		o.LogBytes = soloLogBytes
@@ -418,6 +424,52 @@ func (f *SoloFleet) compact(ctx context.Context, p code.CompactionProposal) (cod
 		return res, &soloUnserved{err: err}
 	}
 	return res, err
+}
+
+// DefaultPeople are the human seats every topology mints a token for unless a
+// case names its own: ceo and dev, who push in the cases, and the fixture
+// chart's pat, whose engine writes are a person's.
+func DefaultPeople() []string { return []string{"ceo", "dev", FixturePat} }
+
+// Write is an engine write through the fleet's git nodes (Fleet), in the home
+// order their own routers answer.
+func (f *SoloFleet) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+	order := make([]Node, 0, len(f.git))
+	var rest []Node
+	for i, g := range f.git {
+		n := g.Node()
+		if n == nil {
+			continue
+		}
+		home, err := soloHomes{f: f, i: i}.HomeOf([]string{w.RepoID})
+		if err == nil && home[w.RepoID] {
+			order = append(order, n)
+		} else {
+			rest = append(rest, n)
+		}
+	}
+	return WriteThrough(ctx, w, append(order, rest...), len(order) > 0)
+}
+
+// WriteThrough asks w of nodes' code hosts in order — the first stamped home
+// where home says it is the repository's — answering the first answer that is
+// not a refusal about the node itself (code.ErrGitUnready, code.ErrNotServing),
+// as a keyed walk does; the last such refusal where every node gave one.
+func WriteThrough(ctx context.Context, w code.EngineWrite, nodes []Node, home bool) (code.EngineWriteResult,
+	error) {
+
+	err := errors.New("codetest: no git node runs to write through")
+	for i, n := range nodes {
+		attempt := w
+		attempt.Home = home && i == 0
+		var res code.EngineWriteResult
+		res, err = n.Host().Write(ctx, attempt)
+		var unready *code.ErrGitUnready
+		if !errors.As(err, &unready) && !errors.Is(err, code.ErrNotServing) {
+			return res, err
+		}
+	}
+	return code.EngineWriteResult{}, err
 }
 
 // GitRead is a read of a repository by object id through the fleet's routing

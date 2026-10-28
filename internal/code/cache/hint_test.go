@@ -351,15 +351,17 @@ func TestAHintReadsOnlyThePacksOfItsRows(t *testing.T) {
 // once the round has let the entry's write lock go, which an adoption takes
 // meanwhile (that nothing else of the repository waits on it either is
 // TestARoundEndsBeforeItsHintIsHashed's). A sound pack answers the round's
-// callers git's own failure; a pack that is not its row's answers them with
-// the repair a request's confirmed hint gets: THAT pack fetched again over
-// its files in the same incarnation, one GET, counted `stored`.
+// callers git's own failure, and keeps that verdict once git freshens it; a
+// pack that is not its row's answers them with the repair a request's
+// confirmed hint gets: THAT pack fetched again over its files in the same
+// incarnation, one GET, counted `stored`.
 //
 // Mutations: confirm the hint inside the round, under its lock — the hash
 // finds the lock held; answer every round's hint with git's failure — the
 // damaged pack is never repaired; ask the whole rebuild for a round's
 // confirmed hint (damagedRound's askRebuild with nothing seeded) — a new
-// incarnation, every pack downloaded.
+// incarnation, every pack downloaded; read a .pack's modification time into
+// its identity (check.go's fileID) — the freshened pack is hashed again.
 func TestARoundHashesItsHintWithoutTheWriteLock(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -404,21 +406,55 @@ func TestARoundHashesItsHintWithoutTheWriteLock(t *testing.T) {
 		t.Errorf("the round's hint was hashed %d times with the write lock held and %d without, want once without",
 			held[true], held[false])
 	}
-	unflag = true
 	mu.Unlock()
 	if got := counter(w.rec, metrics.CodeCacheHintHashes, "outcome", "sound"); got != 1 {
 		t.Errorf("%s{outcome=sound} = %d, want the round's one hash", metrics.CodeCacheHintHashes, got)
 	}
 
-	// The same pack, now not its row's: the next round's hint is confirmed,
-	// and the round's callers are answered by the repair of THAT pack, in
-	// place.
+	// The same pack FRESHENED keeps its verdict: git moves a .pack's
+	// modification time, and no byte of it, whenever a process writes an
+	// object the pack holds — an engine write's build in a scratch leaning on
+	// the copy does — so the next round's naming of it takes the verdict and
+	// hashes nothing.
 	pack := filepath.Join(first.Dir, "objects", "pack", "pack-"+row.GitChecksum+".pack")
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(pack, later, later); err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Sync(t.Context(), repo, statelog.Freshness{Level: statelog.ReadLinearizable})
+	if !errors.As(err, &exit) || len(exit.Result.Trace.Hints) != 1 {
+		t.Fatalf("a sync whose peel names a freshened sound pack in words: %v, want git's own failure carrying "+
+			"its hint", err)
+	}
+	if got := counter(w.rec, metrics.CodeCacheHintHashes, "outcome", "sound"); got != 1 {
+		t.Errorf("%s{outcome=sound} = %d once the pack was freshened, want its verdict kept: one hash",
+			metrics.CodeCacheHintHashes, got)
+	}
+	if got := counter(w.rec, metrics.CodeCacheHints, "outcome", "sound"); got != 2 {
+		t.Errorf("%s{outcome=sound} = %d, want both namings answered sound", metrics.CodeCacheHints, got)
+	}
+	mu.Lock()
+	unflag = true
+	mu.Unlock()
+
+	// The same pack's NAME, now another file whose bytes are not its row's —
+	// written beside it and renamed in, as every writer of a copy places a
+	// file, so it is another identity (a write through the pack's own inode
+	// keeps its identity, and is the scrub's to find, as media damage is):
+	// the next round's hint is confirmed, and the round's callers are
+	// answered by the repair of THAT pack, in place.
 	b, err := os.ReadFile(pack)
 	if err != nil {
 		t.Fatal(err)
 	}
-	overwriteBytes(t, pack, 20, []byte{b[20] ^ 0xff})
+	b[20] ^= 0xff
+	staged := pack + ".staged"
+	if err := os.WriteFile(staged, b, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(staged, pack); err != nil {
+		t.Fatal(err)
+	}
 	gets := w.objects.total()
 	repaired, err := c.Sync(t.Context(), repo, statelog.Freshness{Level: statelog.ReadLinearizable})
 	if err != nil {

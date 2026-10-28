@@ -503,6 +503,29 @@ var cacheWriters = []writerRow{
 	{"internal/code/host/advertise.go", kindGit + " receive-pack",
 		"a push's advertisement (`--advertise-refs`, which writes nothing), run in an advertisement view " +
 			"under scratch/ (cache.AdvertiseView), never in a cache", nil},
+	{"internal/code/host/build.go", kindGit + " hash-object",
+		"an engine write's new files, hashed into its own SCRATCH (cache.NewScratch, named its push id), never a " +
+			"cache: an object the copy already holds is FRESHENED in the alternate — its pack's modification " +
+			"time, not a byte — which is no part of a copy's image nor of a pack's identity (check.go's fileID)",
+		nil},
+	{"internal/code/host/build.go", kindGit + " mktree",
+		"an engine write's touched directories, written into its scratch a level at a time; freshening as above", nil},
+	{"internal/code/host/build.go", kindGit + " commit-tree",
+		"an engine write's commit, written into its scratch", nil},
+	{"internal/code/host/build.go", kindGit + " merge-tree",
+		"a revert's or a cherry-pick's merged tree (`--write-tree`), and its conflicted files, written into its " +
+			"scratch; freshening as above", nil},
+	{"internal/code/host/build.go", kindGit + " pack-objects",
+		"an engine write's one pack (`--stdout`), of its scratch's loose objects into a file staged in its " +
+			"scratch — pack-objects writes a repository only with a base name, so the row is argued for what " +
+			"the build does with its output", nil},
+	{"internal/code/host/build.go", kindGit + " index-pack",
+		"an engine write's pack (`--strict --stdin`) indexed into its scratch's objects/pack under the relay's " +
+			"own fsck; it enters a cache only by Adopt, once its row has applied", nil},
+	{"internal/code/host/build.go", kindOS,
+		"an engine write's staging under its scratch's write/: its new files, its edited files, the directories " +
+			"it touches as git stores them, each level's input to mktree and its pack — removed with the scratch",
+		nil},
 	{"internal/code/host/scan.go", kindRuntime,
 		"rev-list over a push's new values in its scratch — the path of a blob over the limit and the " +
 			"commits the push introduces — whose argument lists are this file's literals and object ids", nil},
@@ -573,8 +596,10 @@ var gitReaders = map[string]gitReader{
 		"takes, creates the file it names in the directory git runs in (git 2.43: `rev-list " +
 		"--output=f HEAD` exits 0 and leaves f behind)"},
 	"merge-base": {why: "walks history"},
-	"rev-parse":  {why: "expands an abbreviated object id from the objects alone (--disambiguate)"},
-	"ls-tree":    {why: "lists a tree by id"},
+	"for-each-ref": {why: "lists the refs a pattern names, with their objects' names and types; it opens no " +
+		"file to write, and its options choose what it prints"},
+	"rev-parse": {why: "expands an abbreviated object id from the objects alone (--disambiguate)"},
+	"ls-tree":   {why: "lists a tree by id"},
 	"diff-tree": {writes: "--output", why: "compares two trees by id; --output, a diff option, creates the " +
 		"file it names in the directory git runs in (2.56.0: `diff-tree --output=f <a> <b>` exits 0 and " +
 		"leaves f behind)"},

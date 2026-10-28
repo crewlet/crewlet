@@ -21,9 +21,9 @@ import (
 const codefaultPath = "github.com/crewlet/crewlet/internal/code/codefault"
 
 // hitDirs are the directories the points are hit in: the code host's
-// pipeline and the suite's wrapping publisher that hits the committer's — a
-// push's — the cache, whose sync hits its own, and the compactor, which hits
-// the compaction's.
+// pipeline, its engine write's build among it, and the suite's wrapping
+// publisher that hits the committer's — a push's — the cache, whose sync hits
+// its own, and the compactor, which hits the compaction's.
 var hitDirs = []string{"internal/code/host", "internal/code/codetest", "internal/code/cache",
 	"internal/code/compact"}
 
@@ -98,6 +98,7 @@ var pointNames = map[string]codefault.Point{
 	"SyncSwapBeforeRename": codefault.SyncSwapBeforeRename, "InstallAfterFetch": codefault.InstallAfterFetch,
 	"CompactAfterBuild": codefault.CompactAfterBuild, "CompactUpload": codefault.CompactUpload,
 	"CompactAfterUpload": codefault.CompactAfterUpload, "CompactAfterPropose": codefault.CompactAfterPropose,
+	"WriteAfterBuild": codefault.WriteAfterBuild,
 }
 
 // byPoint is counts keyed by identifier, read as points.
@@ -119,8 +120,10 @@ func byPoint(t *testing.T, counts map[codefault.Point]int) map[codefault.Point]i
 }
 
 // A fault point is ONE step, named once: F21 kills the node at every point
-// of PushPath(), C6 the home at every point of CompactPath(), and a cache
-// case holds a sync — or crashes it — at each of the sync's, so a point hit at
+// of PushPath(), C6 the home at every point of CompactPath(), F37 the git node
+// at every point of WritePath() — the write's own and the one landing's — and
+// a cache case holds a sync — or crashes it — at each of the sync's, so a
+// point hit at
 // two sites fires at whichever runs first and a point hit at none is a fault
 // no case can make — the swap's rename among them, which a case copies the
 // disk at as a crash would leave it. The two upload points are each hit in

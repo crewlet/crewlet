@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -111,9 +111,10 @@ var identityVars = []string{
 // an empty address it writes as `<>`, a commit that names no address. Those
 // two are the pool's own rules; every other is git's, and
 // TestThePoolAdmitsAnIdentityPartExactlyWhereGitWritesItAsGiven holds them
-// both ways against git. git holds a commit's message to the same UTF-8 rule,
-// since ensure_utf8 reads the whole commit, and the pool hands Stdin to git
-// unread: a call site that writes a message holds it to that rule itself.
+// both ways against git. git holds a commit's message to the same UTF-8 rule
+// (gitref.CommitText, the one reading of it), since ensure_utf8 reads the
+// whole commit, and the pool hands Stdin to git unread: a call site that
+// writes a message holds it to that rule itself.
 //
 // THE DATES are written in the one form git reads as seconds whatever their
 // digits, `@<unix seconds> +0000` — without the `@`, git reads a number of
@@ -197,11 +198,24 @@ func checkIdentity(sub string, id *Identity) error {
 	return nil
 }
 
-// identityPart is why git would not write s into a commit as it is given — or
-// why the pool refuses it of its own (an empty part, a NUL) — and "" when it
-// would. Its rules are [Identity]'s.
+// IdentityRefusal is why git would not write s into a commit's identity — a
+// name or an address of its author or its committer — as it is given, or why
+// the pool refuses it of its own (an empty part, a NUL), and "" when it would:
+// [Identity]'s rules, which every run of commit-tree is held to before any
+// process starts.
+//
+// EXPORTED FOR WHOEVER FORMS AN IDENTITY FROM TEXT IT DID NOT WRITE: the code
+// host signs an engine-built commit with a seat's role name and address, which
+// a company document states as it likes, and asks this first, so it can sign
+// with a part git writes as given (the seat's handle, an address on the
+// identity domain) rather than have the build refused after its work — one
+// rule, here, rather than a second reading of git's beside the one the pool
+// enforces.
+func IdentityRefusal(s string) string { return identityPart(s) }
+
+// identityPart is IdentityRefusal: its rules are [Identity]'s.
 func identityPart(s string) string {
-	switch notUTF8 := commitUTF8(s); {
+	switch notUTF8 := gitref.CommitText(s); {
 	case s == "":
 		return "is empty: a commit names its author and its committer, each by a name and an address"
 	case strings.IndexByte(s, 0) >= 0:
@@ -215,37 +229,6 @@ func identityPart(s string) string {
 			"either end of an identity"
 	}
 	return ""
-}
-
-// commitUTF8 is why s is not UTF-8 as git reads a commit, and "" when it is.
-// git's UTF-8 is not Go's: its has_invalid_utf8 (commit.c) refuses, beside
-// everything unicode/utf8 refuses, Unicode's noncharacters (noncharacter),
-// which unicode/utf8 takes as it takes any other rune, and its ensure_utf8
-// rewrites every byte of a sequence it refused as though the byte were
-// Latin-1 — so a valid Go string ending in U+FFFE goes into history ending in
-// the six bytes of "ï¿¾", while git prints a warning and exits 0. The rule is
-// the whole commit's, not its identity's alone: ensure_utf8 reads every byte
-// commit-tree writes, the message it reads from Stdin among them.
-func commitUTF8(s string) string {
-	if !utf8.ValidString(s) {
-		return "is not UTF-8: git would rewrite the commit's bytes as though they were Latin-1"
-	}
-	for _, r := range s {
-		if noncharacter(r) {
-			return fmt.Sprintf("holds the Unicode noncharacter %U, which git reads as bytes that are not UTF-8 "+
-				"and rewrites as though they were Latin-1", r)
-		}
-	}
-	return ""
-}
-
-// noncharacter reports whether r is one of Unicode's 66 noncharacters, by
-// has_invalid_utf8's own two tests: U+FDD0 to U+FDEF, and the last two code
-// points of every plane, U+xxFFFE and U+xxFFFF, each a code point whose low
-// sixteen bits are FFFE or FFFF. Unicode's stability policy fixes the set for
-// good.
-func noncharacter(r rune) bool {
-	return (0xFDD0 <= r && r <= 0xFDEF) || r&0xFFFE == 0xFFFE
 }
 
 // identityCrud reports whether git trims b from either end of a name or an

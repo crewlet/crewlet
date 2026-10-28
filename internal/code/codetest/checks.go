@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code/codefault"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE TWO BEHAVIOURS THE RECORD PINS (ADR-0054), as checks a topology that
@@ -55,23 +56,35 @@ func okFromRows(c *Case, res Pushed, head string) error {
 
 // OkOnlyFromARow is the check that git is told `ok` for a ref only once the
 // push's own row has applied: a push whose record is durable while the
-// applier is paused must not print ok for a ref the rows do not yet hold.
+// applier is paused must not print ok for a ref the rows do not yet hold —
+// and an ENGINE WRITE is answered applied only from its row, the same.
 func OkOnlyFromARow(t *testing.T, newFleet NewFleet) error {
 	t.Helper()
 	c := newCase(t, newFleet, Shape{}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
 	res, head, resume, err := pausedPush(c, p, p.Init())
-	defer resume()
+	if err == nil {
+		err = okFromRows(c, res, head)
+	}
+	resume()
 	if err != nil {
 		return err
 	}
-	return okFromRows(c, res, head)
+	rows := c.Rows()
+	w := commitFiles(t, rows.Repo.ID, seatAt(t, FixtureAlice), "refs/heads/seats/alice/w", "",
+		rows.Refs["refs/heads/main"], "a write", put("w.md", "w\n"))
+	written, resume, err := pausedWrite(c, w)
+	if err == nil {
+		err = writeOkFromRows(c.Ctx, c.Fleet, written, w.Ref)
+	}
+	resume()
+	return err
 }
 
 // NothingButSyncWritesACache is the check that a cache is a function of the
-// rows: after pushes of branches and tags and a fetch, every node's cache,
-// synced linearizable, holds exactly the rows' refs, HEAD and packs, and
-// nothing a sync never writes.
+// rows: after pushes of branches and tags, a fetch and an engine write built
+// beside the cache, every node's cache, synced linearizable, holds exactly the
+// rows' refs, HEAD and packs, and nothing a sync never writes.
 func NothingButSyncWritesACache(t *testing.T, newFleet NewFleet) error {
 	t.Helper()
 	c := newCase(t, newFleet, Shape{}, Settings())
@@ -89,6 +102,12 @@ func NothingButSyncWritesACache(t *testing.T, newFleet NewFleet) error {
 	clone := p.Clone(c.URL(0))
 	if _, stderr, err := p.Git().Try(t, clone, nil, "fetch", "--tags", c.URL(0)); err != nil {
 		return fmt.Errorf("a fetch: %w\n%s", err, stderr)
+	}
+	rows := c.Rows()
+	res, err := c.Fleet.Write(c.Ctx, commitFiles(t, rows.Repo.ID, seatAt(t, FixtureAlice),
+		"refs/heads/seats/alice/w", "", rows.Refs["refs/heads/main"], "a write", put("w.md", "w\n")))
+	if err != nil || res.Outcome != statelog.OutcomeApplied {
+		return fmt.Errorf("an engine write: %+v %w", res, err)
 	}
 	return converged(c.Ctx, c.Fleet)
 }

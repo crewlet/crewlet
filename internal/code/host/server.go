@@ -99,8 +99,8 @@ var Production = Timing{
 // receive.keepAlive default.
 const keepalive = 5 * time.Second
 
-// Options are how a Server is built. Every field but Faults, Logger, Metrics
-// and Now is required, and New refuses a missing one by name.
+// Options are how a Server is built. Every field but Current, Faults, Logger,
+// Metrics and Now is required, and New refuses a missing one by name.
 //
 // FETCHED IS REQUIRED LIKE AUDIT: a code host that served a `visibility: unit`
 // repository's contents to somebody and recorded nothing would answer "who
@@ -134,6 +134,22 @@ type Options struct {
 	// DeletedRetention is the CURRENT epoch's code.deleted_retention_days —
 	// what a deleted repository's refusal names its purge by.
 	DeletedRetention func() time.Duration
+	// Roster is the chart an engine write's grant is judged by (write.go):
+	// the serving node's CURRENT epoch's, read per write — the query
+	// server's own. A nil answer is a node with no chart yet, which builds no
+	// seat's write (code.UnreadyNoChart).
+	Roster func() code.Roster
+	// Signer names an engine-built commit's author and committer from the
+	// serving node's epoch (write.go's Signer).
+	Signer Signer
+	// Share is the node's seat git-work share — the query server's own, ONE a
+	// node (code.GitShare): an engine write's build holds one unit of it,
+	// given back before its landing.
+	Share *code.GitShare
+	// Current reports whether this node serves the company's configuration:
+	// false on a node confirmed behind it, which builds no SEAT's write from
+	// the chart the fleet replaced (code.UnreadyBehindConfig). nil is current.
+	Current func() bool
 	// NodeID is this node, which a proposal names as the one that received
 	// the push.
 	NodeID string
@@ -196,6 +212,17 @@ type Server struct {
 	// ones: a helper that adds the history term proves nothing about a call
 	// site that hands it no history.
 	runGit func(context.Context, gitproc.Cmd) (gitproc.Result, error)
+
+	// writes is every engine write running on this node, by its push id,
+	// which a second write of the same push id waits for (write.go's
+	// in-flight join).
+	writesMu sync.Mutex
+	writes   map[string]*inflightWrite
+	// syncWait bounds an engine write's wait on its sync and on its push's
+	// outcome (statelog.ReadBudget), and buildBudget is the git run time its
+	// build is given (code.WriteBuildDeadline) — fields so the suite can
+	// scale them (export_test.go).
+	syncWait, buildBudget time.Duration
 }
 
 // New builds a Server, refusing every required field missing, by name, in one
@@ -215,6 +242,9 @@ func New(o Options) (*Server, error) {
 	need(o.Fetched == nil, "Fetched")
 	need(o.Limits == nil, "Limits")
 	need(o.DeletedRetention == nil, "DeletedRetention")
+	need(o.Roster == nil, "Roster")
+	need(o.Signer == nil, "Signer")
+	need(o.Share == nil, "Share")
 	need(strings.TrimSpace(o.NodeID) == "", "NodeID")
 	need(o.Timing.PendingGrace <= 0, "Timing.PendingGrace")
 	need(o.Timing.PendingFirst <= 0, "Timing.PendingFirst")
@@ -227,7 +257,8 @@ func New(o Options) (*Server, error) {
 		return nil, fmt.Errorf("%w: %s missing or zero", ErrOptions, strings.Join(missing, ", "))
 	}
 	s := &Server{o: o, log: o.Logger, now: o.Now, requestMemory: RequestMemoryBytes,
-		checkProposal: code.Proposal.ValidateUnstored, runGit: o.Git.Run}
+		checkProposal: code.Proposal.ValidateUnstored, runGit: o.Git.Run, syncWait: statelog.ReadBudget,
+		buildBudget: code.WriteBuildDeadline}
 	if s.log == nil {
 		s.log = logging.Get("code.host")
 	}

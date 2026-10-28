@@ -98,6 +98,24 @@
             "null"
           ]
         },
+        "identity_domain": {
+          "anyOf": [
+            {
+              "maxLength": 189,
+              "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?([.][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "The domain a commit the engine builds through a tool spells its addresses in: its committer's, engine@\u003cdomain\u003e, and its author's, \u003chandle\u003e@\u003cdomain\u003e, for a seat whose role states no email address. A lowercase DNS name of at most 189 bytes, so every such address is at most 254; unset is seats.invalid, a name nobody can own.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
         "limits": {
           "$ref": "#/$defs/CodeLimits"
         },

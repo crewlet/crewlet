@@ -2016,6 +2016,7 @@ code:
   scratch:                              # seats' own repositories, made by their tools; every field optional
     idle_days: 7                        # 1..365; idle this long, a scratch repository is deleted (default 7)
     max_per_seat: 50                    # 0..1000; scratch repositories one seat may hold, 0 for none (default 50)
+  identity_domain: example.com          # lowercase DNS name; the addresses engine-built commits name (default seats.invalid)
   repos:                                # at most 10000
     - name: nimbus-web                  # one host-name label: a-z, 0-9 and -, at most 63
       owner: { unit: engineering }      # exactly one of unit (a key) and seat (a handle)
@@ -2067,6 +2068,8 @@ The order is checked on what a push is actually held to, the defaults included: 
 - **`max_per_seat`** — how many scratch repositories one seat may hold: 0 to 1 000, and unset is 50. **Every** scratch repository the seat owns counts until it is purged, a deleted one included, so deleting and creating in a loop holds no more than this; 0 lets no seat create one. A seat at the limit is refused `scratch_limit` naming it.
 
 The 10 000 repositories `code.repos` may list is also what a tool's create of a **project** repository is held to: the project repositories the code host holds, declared and tool-made alike and every one short of purged, so a create at it is refused `repo_limit`. A seat's scratch repositories never count there, so seats' experiments cannot refuse a person's project. Like the rest of the block, `code.scratch` is refused on a company that does not set `code.native`.
+
+`code.identity_domain` is the domain the commits the engine builds through a tool spell their addresses in ([Engine-built commits](../concepts/code-host.md#engine-built-commits)): the committer's, `Crewlet <engine@<domain>>`, which marks in every clone's history the commits the host built, and the author's, `<handle>@<domain>`, for a seat whose role states no `email` a commit can name as written — one `@` between a local part and a domain, at most 254 bytes. A `${VAR}` reference is no address until something resolves it, and it is never resolved for a commit: it would be read from the environment of whichever git node built the commit, and an address a company kept out of its document would be written into history for good. Unset is `seats.invalid`, under the `.invalid` domain RFC 2606 reserves, so no address the engine writes belongs to anybody who could receive mail at it, or claim it. It is a lowercase DNS name — labels of letters, digits and hyphens, none beginning or ending with a hyphen, joined by dots — of at most 189 bytes, so that every address spelled in it, a 64-byte handle's included, is within the 254 an address may be. It is read off the current revision at every commit, so a change takes effect at its activation, and a commit keeps the domain it was built with for good. Like the rest of the block, it is refused on a company that does not set `code.native`.
 
 ---
 

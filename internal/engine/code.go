@@ -58,8 +58,14 @@ import (
 // one instant). So a revision's settings hold from its activation on, with no
 // restart: they are an epoch's, never the runtime's — and therefore each
 // node's, while a revision is applied node by node on each node's own clock.
-func (e *Engine) codeInForce() config.Code {
-	c := e.Company()
+func (e *Engine) codeInForce() config.Code { return codeInForceAt(e.Company()) }
+
+// codeInForceAt is the code host's settings in force at epoch c: for a
+// reader that takes something else off the same epoch beside them — the
+// engine's commit signer reads a seat's role and the identity domain off ONE
+// epoch, so a revision that renames the seat and moves the domain together
+// signs a commit by both or by neither.
+func codeInForceAt(c *Company) config.Code {
 	switch {
 	case c == nil || c.Config == nil:
 		return config.Code{}

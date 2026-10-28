@@ -218,7 +218,12 @@ const minReadAttempt = code.ReplyMargin
 // walks and waits between them, which is what production's write attempt is
 // sized for (writeAttempt), and every one of those waits ends inside whatever
 // attempt the write is given, a reply's margin short of it. See [Timing].
-const minWriteAttempt = statelog.ReadBudget + code.CommitBudget + code.ReplyMargin
+//
+// IT IS code.MinProposeAttempt, the domain's one sum of those three terms,
+// because the code host holds an engine write to it too — refusing to upload
+// a write whose caller left less than it for the proposal after the upload —
+// and two sums would let the two disagree on what a proposal needs.
+const minWriteAttempt = code.MinProposeAttempt
 
 // refusal is why a router may not be built with t, naming the first field it
 // refuses, or nil.

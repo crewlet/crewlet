@@ -22,31 +22,37 @@ import (
 // push after its pack exists in a scratch — the repository's status, the force
 // and stale checks, the blob scan, --atomic, the size, the bundle stored and
 // sealed while the commits it introduces are listed, the proposal, the wait
-// for its row and the adoption — in ONE function, land. The relay is its one
-// caller in this release: it reads git's commands off the hook and hands them
-// over. A second copy of these steps — for a push the engine builds itself
-// rather than one git received — would be a second implementation of what a
-// push is (ADR-0008), and the first rule it got wrong would be one only it
-// broke: Command.Forced, which protected_force turns on, is formed here and
-// nowhere else.
+// for its row and the adoption — in ONE function, land. It has two callers:
+// the relay, which reads git's commands off the hook and hands them over, and
+// an engine write (write.go), a push the engine builds itself rather than one
+// git received (ADR-0062). A second copy of these steps for the engine's
+// pushes would be a second implementation of what a push is (ADR-0008), and
+// the first rule it got wrong would be one only it broke: Command.Forced,
+// which protected_force turns on, is formed here and nowhere else.
 //
 // What land does NOT check is that the scratch's objects are whole — every
 // command's New present in the scratch or its alternate and connected, every
 // object its builder wrote valid. That is the BUILDER'S: for the relay,
 // receive-pack's connectivity check and its fsck of every object it took
 // (receive.fsckObjects, receiveConfig), both run before the hook reaches the
-// relay. A push with no pack runs no listing here at all, and a pack's
+// relay; for an engine write, the check of every object it names before it
+// builds and the same fsck, index-pack --strict, over every object it made
+// (build.go). A push with no pack runs no listing here at all, and a pack's
 // listing walks commits, never their trees or blobs, so a scratch handed over
 // missing an object lands a row naming a history no cache can serve.
 
 // landing is one push as whoever built its pack hands it to land.
 type landing struct {
 	// Synced is the pinned incarnation Scratch leans on. Its Repo is the
-	// linearizable row the push is judged on — its status, its protections
-	// and its live packs included, the last read again before it refuses
-	// anything (behind) — its Position is the proposal's Seen, and its
+	// row the push is judged on — its status, its protections and its live
+	// packs included, the last read again before it refuses anything
+	// (behind): linearizable for the relay, and for an engine write
+	// (write.go) a row that already passed the same checks at its caller's
+	// floor, every refusal of which was judged again at linearizable
+	// before it was answered — its Position is the proposal's Seen, and its
 	// DropEpoch the proposal's: the epoch the copy's objects/ holds, which
-	// receive-pack checked the push's objects over (cache.Synced.DropEpoch)
+	// the push's objects were checked over — by receive-pack for the relay,
+	// by the build's own reads for an engine write (cache.Synced.DropEpoch)
 	// — the row's but while a begin's inputs are still in the copy, when it
 	// is the epoch before — and which its committer refuses expunging once
 	// an expunge has begun since.
@@ -68,15 +74,17 @@ type landing struct {
 	// Principal is who pushes.
 	Principal code.Principal
 	// Via is how the builder built the push's pack — the relay's is
-	// code.ViaGit — which the proposal and the push row carry as it says:
+	// code.ViaGit, an engine write's code.ViaEngine — which the proposal
+	// and the push row carry as it says:
 	// the landing is one for every builder, so the builder says which it is,
 	// and nothing here guesses it from the commits.
 	Via code.PushVia
 	// PushID is the scratch's name and the proposal's id: a canonical UUIDv7
 	// (code.Proposal's rule, and a scratch's, which is a path component).
-	// Its builder mints it — the relay with uuid.NewV7 — and a derived one
-	// is an UNNAMED derivation, since a named one carries a `.<name>` suffix
-	// neither takes.
+	// Its builder mints it — the relay with uuid.NewV7 — or derives it, an
+	// engine write from its caller's operation (code.WritePushID), and a
+	// derived one is an UNNAMED derivation, since a named one carries a
+	// `.<name>` suffix neither takes.
 	PushID string
 	// ReceivedAt is when the push was received.
 	ReceivedAt time.Time

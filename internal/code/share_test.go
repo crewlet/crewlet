@@ -129,8 +129,60 @@ func TestSeatGitWorkIsHalfTheReadLane(t *testing.T) {
 	}
 
 	// A kind of work this build does not know is refused by name.
-	if _, err := s.Take(ctx, "write"); !errors.Is(err, code.ErrInvalid) {
+	if _, err := s.Take(ctx, "compact"); !errors.Is(err, code.ErrInvalid) {
 		t.Errorf("an unknown kind of seat work = %v, want ErrInvalid", err)
+	}
+}
+
+// AN ENGINE WRITE'S BUILD IS SEAT GIT WORK OF THE SAME SHARE: two builds hold
+// a four-slot node's whole share, so a seat's read waits its while and is
+// unready — about the node — and a unit a build gives back is a read's; each
+// take is counted by the work it is (`work=write`).
+//
+// Mutation: a share of its own for writes — the read is granted, red.
+func TestAWritesBuildDrawsOnTheSeatShare(t *testing.T) {
+	t.Parallel()
+	rec, err := metrics.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := code.NewGitShare("git-a", 4, rec)
+	code.SetShareWait(s, 50*time.Millisecond)
+	ctx := t.Context()
+	one, err := s.Take(ctx, code.SeatWorkWrite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, err := s.Take(ctx, code.SeatWorkWrite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Take(ctx, code.SeatWorkRead)
+	var unready *code.ErrGitUnready
+	if !errors.As(err, &unready) || unready.Reason != code.UnreadyShare {
+		t.Fatalf("a read beside two builds holding the share = %v, want ErrGitUnready{share}", err)
+	}
+	one()
+	read, err := s.Take(ctx, code.SeatWorkRead)
+	if err != nil {
+		t.Fatalf("a read once a build gave its unit back: %v", err)
+	}
+	read()
+	two()
+	for _, row := range []struct {
+		work, outcome string
+		want          uint64
+	}{{"write", "granted", 2}, {"read", "unready", 1}, {"read", "granted", 1}} {
+		got := uint64(0)
+		for _, snap := range rec.Read() {
+			if snap.Name == metrics.CodeSeatworkWaits && snap.Attrs["work"] == row.work &&
+				snap.Attrs["outcome"] == row.outcome {
+				got = snap.Total
+			}
+		}
+		if got != row.want {
+			t.Errorf("waits{work=%s, outcome=%s} = %d, want %d", row.work, row.outcome, got, row.want)
+		}
 	}
 }
 
