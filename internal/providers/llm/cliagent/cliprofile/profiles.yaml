@@ -407,9 +407,9 @@ claude-code:
   #
   # The reset is read from the sentence: "You've hit your 5-hour limit ·
   # resets 4:30pm (America/Vancouver)" names a time of day and the zone it is
-  # in, the occurrence of which nearest the report is the instant
-  # (reset_unit: clock). A sentence with no reset in that shape still
-  # classifies, and the entry sits out a growing window instead.
+  # in, the next occurrence of which is the instant (reset_unit: clock). A
+  # sentence with no reset in that shape still classifies, and the entry sits
+  # out a growing window instead.
   limit_events:
     - match:
         - {path: ["type"], equals: "result"}
@@ -433,10 +433,13 @@ claude-code:
   # anywhere in a run the CLI flags failed (a non-zero exit or is_error); the
   # relayed API error sits after "API Error: 429", so it counts only in a
   # failed run.
+  #
+  # 2.1.312's own opening, "You've hit your", is deliberately NOT one: it
+  # opens a clean answer as readily as a report ("You've hit your Q3 target"),
+  # and a sentinel that matches an answer benches a working entry for every
+  # seat on the node. Its report carries the status above, which is the
+  # evidence; its words are not.
   limit_markers:
-    - sentinel: "You've hit your"
-      reset_separator: "resets "
-      reset_unit: clock
     - sentinel: "Usage limit reached"
       reset_separator: "resets "
       reset_unit: clock

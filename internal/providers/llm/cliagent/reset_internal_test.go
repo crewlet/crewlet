@@ -104,8 +104,8 @@ func TestAnEpochOrADelayResetIsReadAgainstTheReport(t *testing.T) {
 // no sentinel the profile shipped before this change, which is how every seat
 // on the entry came to retry the refusal once a second.
 //
-// Mutation: drop limit_events from the profile and the sentinel that names the
-// new wording, and the line classifies as nothing (a server failure).
+// Mutation: drop limit_events from the profile, and the line classifies as
+// nothing (a server failure).
 func TestClaudeCodesLimitIsReadFromItsStatusWithTheReset(t *testing.T) {
 	t.Parallel()
 	p, err := cliprofile.Load("claude-code", nil)
@@ -146,6 +146,29 @@ func TestAnAnswerThatSpellsOutTheStatusIsAnAnswer(t *testing.T) {
 		strconv.Quote(answer) + `}`
 	if hit, ok := classifyMarkers(p, cliOutput{said: answer, stdout: stdout, at: reportedAt}); ok {
 		t.Fatalf("a healthy answer classified as %+v", hit)
+	}
+}
+
+// AN ANSWER THAT OPENS WITH THE VENDOR'S WORDS IS AN ANSWER. Claude Code
+// 2.1.312 opens its limit report with "You've hit your", and so does an answer
+// about a quarterly target; a sentinel on those words matched the answer where
+// it opens a clean run, and benched a working entry for every seat on the
+// node. The report is read from the status its result event carries, which a
+// clean run's does not.
+//
+// Mutation: add "You've hit your" back as a limit sentinel, and the answer
+// classifies as a limit.
+func TestAnAnswerOpeningWithTheLimitsWordsIsAnAnswer(t *testing.T) {
+	t.Parallel()
+	p, err := cliprofile.Load("claude-code", nil)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	const answer = "You've hit your Q3 target with two weeks to spare."
+	stdout := `{"type":"result","subtype":"success","is_error":false,"result":` +
+		strconv.Quote(answer) + `}`
+	if hit, ok := classifyMarkers(p, cliOutput{said: answer, stdout: stdout, at: reportedAt}); ok {
+		t.Fatalf("a clean answer classified as %+v", hit)
 	}
 }
 
