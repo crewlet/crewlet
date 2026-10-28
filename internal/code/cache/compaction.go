@@ -88,17 +88,17 @@ type Compacting struct {
 //     a negative count.
 //
 // The charge is chargeOver(inputs, CompactBytesPerObject, the repository's
-// objects) — the merged packs' objects, with room beside them for one
-// transfer of the WHOLE repository, as every background step is charged — and
+// objects) — the merged packs' objects, with room beside them for one transfer
+// of the WHOLE repository, as every background step is charged — and
 // CompactWindowBytes(limits), the build's delta window, which no count of
 // objects charges. The build's own memory follows what it merges, while the
 // clone it shares the node with is of the repository, however few packs the
 // build merges: a compaction runs on the repository's home, the git node its
-// clones and fetches are asked of, every minute that pushes keep its packs
-// due — a busy repository is one that is read — and charged by its inputs
-// alone, a home merging eight small pushes into a repository of three million
-// objects would keep a few kilobytes of a clone's 720 MB, the room every other
-// step over that repository keeps. The repository's objects are the
+// clones and fetches are asked of, every minute that pushes keep its packs due
+// — a busy repository is one that is read — and charged by its inputs alone, a
+// home merging the floor's sixteen small pushes into a repository of three
+// million objects would keep a few kilobytes of a clone's 720 MB, the room
+// every other step over that repository keeps. The repository's objects are the
 // incarnation s pins, read under its entry's lock: the count its rounds keep
 // (incarnation.objects), as every maintainer step's charge reads it. A node
 // whose budget cannot hold the build and that room together is refused the

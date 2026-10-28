@@ -417,12 +417,12 @@ func TestAStoreWithNoRoomHoldsACompactionBackUntilItHasTheRoom(t *testing.T) {
 
 // A REPOSITORY'S STORED OUTPUTS ANSWER ITS OWN HOLD, on a store that holds a
 // reservation as on any: a repository the listing goes on naming once its
-// compaction landed — one keeping eight full packs, or one a capped roll
-// leaves listed — whose first roll a full store refused is planned again at
-// its next, smaller roll as soon as the room holds THAT roll, though the room
-// is below what the first would have stored. The refusal it was held back for
-// is answered by its own outputs, stored; a refusal of a later roll would set
-// an estimate of its own.
+// compaction landed — one keeping code.CompactMinMerge full packs, or one a
+// capped roll leaves listed — whose first roll a full store refused is planned
+// again at its next, smaller roll as soon as the room holds THAT roll, though
+// the room is below what the first would have stored. The refusal it was held
+// back for is answered by its own outputs, stored; a refusal of a later roll
+// would set an estimate of its own.
 //
 // Mutation: keep a repository's own hold, on a store that holds a
 // reservation, once its outputs are stored (Compactor.stored), and the second
@@ -432,10 +432,10 @@ func TestAStoredCompactionReleasesItsOwnHold(t *testing.T) {
 	t.Parallel()
 	full := &objstore.Full{Remedy: "the operator raises the bucket's reservation", Err: errors.New("no room")}
 	x := newFixture(t)
-	// THE FIRST ROLL: eight pushes of ten files each, thirteen objects a push,
-	// so its output outweighs the next roll's pushes of one file — four
-	// objects each — more than twice over, and git's split leaves it out of
-	// that roll.
+	// THE FIRST ROLL: code.CompactMinMerge pushes of ten files each, thirteen
+	// objects a push, so its output outweighs the next roll's pushes of one
+	// file — four objects each — more than twice over, and git's split leaves
+	// it out of that roll.
 	heavy := make([]int, 10)
 	for i := range heavy {
 		heavy[i] = 4 << 10
@@ -462,8 +462,8 @@ func TestAStoredCompactionReleasesItsOwnHold(t *testing.T) {
 		defer mu.Unlock()
 		return objstore.Usage{Bytes: 1 << 30, MaxBytes: 1<<30 + room}, true, nil
 	}
-	// LISTED WHATEVER ITS PACK COUNT, as a repository keeping eight full packs
-	// beside its small ones is.
+	// LISTED WHATEVER ITS PACK COUNT, as a repository keeping
+	// code.CompactMinMerge full packs beside its small ones is.
 	comp, rec, _ := x.compactorOf(func(o *compact.Options) {
 		o.Objects, o.Estate = rs, &listed{Estate: served{x.fleet}}
 	})

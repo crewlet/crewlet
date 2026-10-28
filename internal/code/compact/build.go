@@ -87,14 +87,14 @@ type output struct {
 // search sorts by, `--stdin-packs` walks from every commit its inputs hold
 // through every tree and blob it can reach, and only an excluded pack stops it
 // — so over the whole incarnation a roll of a few small packs walked the
-// repository's history, its cost and its memory following the history while
-// its charge and its deadline follow the roll (measured at review, about
-// 3.5 µs an object of a 400 032-object history on the node pin, and 451 ms and
-// 100.8 MiB beside the 100 MB source history in BenchmarkCompact's roll arm:
-// past the deadline of a roll of small pushes from a few million objects, a
-// gigabyte or two of a source repository, so every such roll was killed and
-// the repository went on to refuse pushes compaction_behind). Over a store of
-// the inputs alone the walk ends at their edge, as git walks with
+// repository's history, its cost and its memory following the history while its
+// charge and its deadline follow the roll (measured at review, about 3.5 µs an
+// object of a 400 032-object history on the node pin, and for a roll of eight
+// 451 ms and 100.8 MiB beside the 100 MB source history in BenchmarkCompact's
+// roll arm: past the deadline of a roll of small pushes from a few million
+// objects, a gigabyte or two of a source repository, so every such roll was
+// killed and the repository went on to refuse pushes compaction_behind). Over a
+// store of the inputs alone the walk ends at their edge, as git walks with
 // ignore_missing_links, and writes the same packs.
 //
 // The build names no Repairer: the compactor repairs nothing itself, so what

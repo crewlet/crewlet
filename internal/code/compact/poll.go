@@ -311,12 +311,12 @@ func (c *Compactor) holdFull(repoID string, estimate int64) {
 // ITS OWN HOLD GOES, WHATEVER THE STORE: the refusal it was held back for is
 // answered by these very outputs, stored, and a refusal of a later roll of it
 // sets an estimate of its own. Kept, the estimate of the roll a full store
-// first refused went on holding the repository back for as long as the
-// listing named it — on a store that holds a reservation nothing else drops a
-// hold of a repository still listed, and one that keeps eight full packs, or
-// that a capped roll leaves listed, is listed for good — so once the room fell
-// back below that first roll's size, as the outputs just stored and a day of
-// retired inputs make usual, every later roll of it, however small, was
+// first refused went on holding the repository back for as long as the listing
+// named it — on a store that holds a reservation nothing else drops a hold of a
+// repository still listed, and one that keeps code.CompactMinMerge full packs,
+// or that a capped roll leaves listed, is listed for good — so once the room
+// fell back below that first roll's size, as the outputs just stored and a day
+// of retired inputs make usual, every later roll of it, however small, was
 // skipped at every pass, until its pushes were refused compaction_behind; and
 // the stale estimate was charged against the room every other held repository
 // is released by.

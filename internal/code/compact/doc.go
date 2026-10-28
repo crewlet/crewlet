@@ -39,11 +39,11 @@
 // every roll was killed at its deadline and its pushes refused
 // compaction_behind. Over the store the walk ends at the inputs' edge — git
 // walks with ignore_missing_links — and the build writes the same packs; its
-// cost follows the roll (BenchmarkCompact's history=source/roll=8 arms: a
-// roll of eight 20 KB pushes built in 19.6 ms at a peak of 0.8 MiB beside
-// the 100 MB source history and in 14.2 ms beside nothing, where over the
-// whole copy it took 451 ms and 100.8 MiB; internal/code/cache's scratch.go
-// has the run).
+// cost follows the roll (BenchmarkCompact's history=source/roll=16 arms: a
+// roll of sixteen 20 KB pushes built in 22.9 ms at a peak of 0.95 MiB beside
+// the 100 MB source history and in 21.3 ms beside nothing, where over the
+// whole copy a roll of eight took 451 ms and 100.8 MiB; internal/code/cache's
+// scratch.go has the runs).
 //
 // # Who compacts, and how often
 //

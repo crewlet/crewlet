@@ -63,12 +63,15 @@ import (
 // and a parent no input holds is simply not there: 7 ms, and the same pack,
 // byte for byte, its name-hash hints the same. So a merge's cost follows what
 // it merges, never the history beside it — BenchmarkCompact's
-// history=source/roll=8 arms: eight one-commit pushes of 20 KB, 24 objects,
-// built in 19.6 ms at a peak of 0.8 MiB beside the 100 MB source history's
-// 295 680 objects and in 14.2 ms at 0.75 MiB beside nothing, where over the
-// whole copy, as it built before, the same merge took 451 ms and 100.8 MiB
-// (git 2.56.0, the in-process store, -benchtime 1x and one count each, two
-// E-cores of an Intel Core Ultra 7 265U, 2026-10-28).
+// history=source/roll=16 arms, a roll of code.CompactMinMerge's pushes:
+// sixteen one-commit pushes of 20 KB, 64 objects, built in 22.9 ms at a peak
+// of 0.95 MiB beside the 100 MB source history's 295 680 objects and in
+// 21.3 ms at 0.94 MiB beside nothing. At the floor of eight before it, eight
+// one-commit pushes of 20 KB, 24 objects, built in 19.6 ms at 0.8 MiB beside
+// the history and in 14.2 ms at 0.75 MiB beside nothing, where over the whole
+// copy, as it built before, the same merge of eight took 451 ms and
+// 100.8 MiB (git 2.56.0, the in-process store, -benchtime 1x and one count
+// each, two E-cores of an Intel Core Ultra 7 265U, 2026-10-28).
 //
 // The store is the merge's, as the scratch is: removed with it (Remove), moved
 // aside by a boot with the rest of scratch/, and counted by the janitor only

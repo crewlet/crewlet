@@ -302,8 +302,8 @@ func (h *handmade) pack(ids []string) (bare, checksum string) {
 // the packs it merges hold — one that a pack it does not merge holds as well
 // among them — because a merge judges no reachability: two compactions decided
 // from different snapshots may each retire the pack the other relied on, and
-// both land (ADR-0060). A heavy pack and eight light ones share a blob; the
-// eight are merged, and the blob is in the outputs.
+// both land (ADR-0060). A heavy pack and code.CompactMinMerge light ones share
+// a blob; the light ones are merged, and the blob is in the outputs.
 //
 // Mutation: hand the build the packs it does not merge as excluded packs (a
 // `^` line each), and the shared blob is left to the heavy pack alone.
@@ -368,7 +368,7 @@ func TestACompactionKeepsEveryObjectOfItsInputs(t *testing.T) {
 // else: no pack the roll leaves out, no multi-pack-index, no commit-graph. So
 // `--stdin-packs`, which walks every commit, tree and blob it can reach to fill
 // in its name hashes, walks the roll and never the history beside it — here a
-// heavy pack live beside the eight light ones merged, which the store does not
+// heavy pack live beside the light ones merged, which the store does not
 // hold. And the build succeeds on the node pin's git: a platform assertion, as
 // a git that did not read an alternate's packs for `--stdin-packs` would fail
 // every compaction.

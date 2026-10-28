@@ -63,15 +63,16 @@ import (
 //     outputs over ⌈the pack bytes it merged ÷ the cut⌉ (outputs/cuts), from
 //     which InputByteCap's half is re-derived — at most code.MaxCompactOutputs
 //     outputs a roll at the cap, whatever pack-objects writes whole.
-//   - history=source/roll=8/beside={history,none}: ONE compaction of eight
-//     one-commit pushes (code.CompactMinMerge) — beside the source history
-//     pushed as one pack, which the roll leaves out, and beside nothing — its
-//     build's wall clock (build-ms) and peak anonymous memory (peak-MiB),
-//     which follow the roll and not the history when the two arms agree: the
-//     build's walk for its name hashes ends at the roll's edge
-//     (cache.Cache.NewMergeScratch), where over the whole copy it ran the
-//     history — 451 ms and 100.8 MiB beside it, against 19.6 ms and 0.8 MiB
-//     (the figures are cache's scratch.go's).
+//   - history=source/roll=16/beside={history,none}: ONE compaction of
+//     code.CompactMinMerge one-commit pushes, sixteen — beside the source
+//     history pushed as one pack, which the roll leaves out, and beside
+//     nothing — its build's wall clock (build-ms) and peak anonymous memory
+//     (peak-MiB), which follow the roll and not the history when the two
+//     arms agree: the build's walk for its name hashes ends at the roll's
+//     edge (cache.Cache.NewMergeScratch), where over the whole copy it ran
+//     the history — a roll of eight, the floor then, took 451 ms and
+//     100.8 MiB beside it, against 19.6 ms and 0.8 MiB over its store (the
+//     figures are cache's scratch.go's).
 //   - steady/pushes=6000/rate=300/min/min-merge={4,8,16} (LARGE): 6 000
 //     one-commit pushes of 20 KB through the data node's committer, 300 to a
 //     simulated minute, and a pass of the home's compactor merging at that
