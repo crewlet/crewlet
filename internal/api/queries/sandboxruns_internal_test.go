@@ -20,11 +20,12 @@ import (
 // is. A key the row writes that [runKeys] does not name fails here, as does a
 // name the table keeps for a key the row no longer writes (a classification of
 // nothing, which reads as a decision somebody made). And the four the owner's
-// decision lists as a run's body are held to it by name, because the
+// decision lists as a run's body, and the entry the job was launched on, which
+// is the company's configuration, are held to it by name, because the
 // classification itself is what a careless edit would move.
 //
 // Mutation: add a key to runRow, or drop a row of runKeys, and this goes red;
-// classify `task_description` as status and it goes red too.
+// classify `task_description` or `provider_key` as status and it goes red too.
 func TestEverySandboxRunKeyIsClassified(t *testing.T) {
 	t.Parallel()
 	row := runRow(sandbox.PendingRun{}, "")
@@ -35,7 +36,7 @@ func TestEverySandboxRunKeyIsClassified(t *testing.T) {
 				"say whether it is status, body, the question or the tracker's", key)
 			continue
 		}
-		if shown < runStatus || shown > runTracker {
+		if shown < runStatus || shown > runConfig {
 			t.Errorf("%q is classified %d, which is no class", key, shown)
 		}
 	}
@@ -50,6 +51,7 @@ func TestEverySandboxRunKeyIsClassified(t *testing.T) {
 		"bridge_calls":     runBody,
 		"question":         runQuestion,
 		"work_item":        runTracker,
+		"provider_key":     runConfig,
 	} {
 		if got := runKeys[key]; got != want {
 			t.Errorf("%q is classified %d, want %d", key, got, want)
@@ -76,7 +78,7 @@ func TestAMaskedRunCarriesOnlyItsStatus(t *testing.T) {
 	if status["body_withheld"] != true {
 		t.Errorf("body_withheld = %v for a reader shown no body", status["body_withheld"])
 	}
-	whole := serialiseRun(run, livestate.Reach{Body: true, Tracker: true}, "")
+	whole := serialiseRun(run, livestate.Reach{Body: true, Tracker: true, Config: true}, "")
 	if got, want := slices.Sorted(maps.Keys(whole)), slices.Sorted(maps.Keys(runKeys)); !slices.Equal(got, want) {
 		t.Errorf("a reader with every reach was shown %v, want every key %v", got, want)
 	}

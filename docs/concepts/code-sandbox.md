@@ -1015,7 +1015,7 @@ The receiver **accepts and drops** when no upstream is configured: the engine's 
 
 This replaced a twelve-hour age-out, which was wrong in both directions. A finished run whose completion was lost stayed on the panel as running for twelve hours. A run parked on a question for longer than twelve hours disappeared from the panel, and a run waiting on a person is the one the panel most needs to show.
 
-Each entry is `{turn_id, role, agent_handle, agent_id, coding_agent, provider_key, model, sandbox_id, task, status, started_at, question, audience, work_item, owner, paused_at}` — `provider_key` and `model` the `providers.llm` entry the launch picked and its model.
+Each entry is `{turn_id, role, agent_handle, agent_id, coding_agent, provider_key, model, sandbox_id, task, status, started_at, question, audience, work_item, owner, paused_at}` — `provider_key` and `model` the `providers.llm` entry the launch picked and its model. The entry is the company's configuration, sent to an admin alone, as it is on the [`sandbox_runs`](../reference/api-endpoints.md#get-sandbox-runs) board; every other reader, a seat's lead included, is sent the model the run runs under.
 
 - `status` uses the record's own vocabulary: `launching`, `running`, `awaiting_clarification`, `reseed` or `answered` (a reply is recorded and the engine is resuming the run with it). A `resumed` run is over, because its turn has already taken back the result, so it is not listed. The panel used to write `awaiting_input`, a status the record cannot hold, so the dashboard never saw a live run as waiting on a person.
 - `owner` is the node driving the run.

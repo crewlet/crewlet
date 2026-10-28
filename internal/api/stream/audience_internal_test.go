@@ -417,6 +417,41 @@ func runningName(rows SandboxRows, audience Audience) string {
 	return name
 }
 
+// THE SANDBOXES PUSH NAMES THE ENTRY A RUN WAS LAUNCHED ON TO AN ADMIN ALONE.
+// Which `providers.llm` entry a coding run spends, the chain's head or the
+// fallback a launch took, is the company's configuration: everybody else, the
+// seat's lead included, is sent the run and the model it runs under without
+// it. The push and the snapshot both shape the rows through here.
+//
+// Mutation: drop the configuration rule from the coding run's mask, or reach
+// it with no Config for an admin, and a reader is handed the entry or an
+// admin is not.
+func TestTheSandboxesPushNamesARunsEntryToAnAdminAlone(t *testing.T) {
+	t.Parallel()
+	rows := SandboxRows{{TurnID: "turn-1", AgentID: "agent-eng", Task: "fix it",
+		ProviderKey: "plan-zulu", Model: "opus"}}
+	lead := iam.Principal{Login: "ana.ruiz", Stage: iam.StageActive, Seat: "eng-lead",
+		Grants: []iam.Grant{iam.GrantWorklet}}
+	for name, tc := range map[string]struct {
+		audience Audience
+		entry    bool
+	}{
+		"an admin":        {NewAudience(adminPrincipal, nil), true},
+		"the seat's lead": {NewAudience(lead, []string{"agent-eng"}), false},
+		"a tracker user":  {NewAudience(workletPrincipal, nil), false},
+		"the overview":    {NewAudience(overviewPrincipal, nil), false},
+	} {
+		_, data := rows.For(tc.audience)
+		got := data.([]livestate.SandboxEntry)
+		if len(got) != 1 || (got[0].ProviderKey == "plan-zulu") != tc.entry || got[0].Model != "opus" {
+			t.Errorf("%s is sent %+v, want the entry shown %v and the model always", name, got, tc.entry)
+		}
+	}
+	if rows[0].ProviderKey != "plan-zulu" {
+		t.Error("shaping the push wrote through to the rows the broadcast shares")
+	}
+}
+
 // THE AUDIENCE HOLDS EXACTLY THE APPS THE PRINCIPAL CAN.
 //
 // It held one field per app and a switch over them, so an app added to the

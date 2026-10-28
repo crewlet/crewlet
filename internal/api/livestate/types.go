@@ -489,7 +489,9 @@ type SandboxEntry struct {
 	// ProviderKey and Model are the executor-chain member the run was
 	// launched on and the model it runs under — see
 	// [types.SandboxRunStarted.ProviderKey]. Empty on a run whose
-	// announcement and record named none.
+	// announcement and record named none. The key is the company's
+	// configuration and reaches an admin alone ([SandboxEntry.For]); the
+	// model is everybody's.
 	ProviderKey string `json:"provider_key,omitempty"`
 	Model       string `json:"model,omitempty"`
 	SandboxID   string `json:"sandbox_id"`

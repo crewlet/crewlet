@@ -3599,11 +3599,11 @@ shaped the same way.
   "events":    [ { /* recent event row, newest first — payload-free, plus
                       a `failed` boolean */ }, ... ],
   "sandboxes": [ { /* an executor run in flight: turn_id, role,
-                      agent_handle, agent_id, coding_agent, provider_key and
-                      model (the executor-chain member it was launched on),
-                      sandbox_id, task, status (the run record's own word),
-                      started_at, question, audience, work_item, owner,
-                      paused_at */ }, ... ],
+                      agent_handle, agent_id, coding_agent, provider_key
+                      (the executor-chain member it was launched on, to an
+                      admin alone) and model, sandbox_id, task, status (the
+                      run record's own word), started_at, question,
+                      audience, work_item, owner, paused_at */ }, ... ],
   "tools":     [ { /* one catalogue entry — see The Tool Catalogue below */ } ],
   "org":       { /* /org payload */ },
   "tokens":    { /* the spend rollup — same shape as /tokens/breakdown */ },
@@ -4251,9 +4251,11 @@ person, and `detail` is the failure in its own words, sent only to a reader who
 is an admin. Those words name the company's `providers.llm` entries ("llm chain
 exhausted after 1 providers (default)") and carry whatever a vendor or a tool
 wrote, and which entries a company configures is an admin's to read; the same
-goes for each `invocations` entry's `provider_key`, which every other reader,
-a seat's lead included, is sent without. The full text stays in the engine's
-log and on the turn's own record.
+goes for each `invocations` entry's `provider_key`, and for the `provider_key`
+of a coding run on the `sandboxes` push and snapshot and on the
+[`sandbox_runs`](#get-sandbox-runs) board, which every other
+reader, a seat's lead included, is sent without. The full text stays in the
+engine's log and on the turn's own record.
 
 #### What the projection carries, and what the wire sends
 
@@ -8035,9 +8037,12 @@ parked run on, relaunches the executor under the same row — and
 output of the job it shows rather than of whichever replaced it.
 `provider_key` and `model` name the member of the seat's executor chain the
 job was launched on, which a fallback at launch makes other than the chain's
-head. `bridge_calls` is always an array on a row the store answered — every
-run's tools reach it over the bridge, so an empty one is a run that has called
-nothing yet — and absent only where the run's body is withheld from the reader.
+head. `provider_key` is the company's configuration and is sent to an admin
+alone; every other reader, a seat's lead included, is told the model the job
+runs under and not the entry. `bridge_calls` is always an array on a row the
+store answered — every run's tools reach it over the bridge, so an empty one is
+a run that has called nothing yet — and absent only where the run's body is
+withheld from the reader.
 
 `box_exists` and `paused_at` stand in for the sandbox id: a board wants to
 know that a box exists and that it is currently paused (and being billed

@@ -331,6 +331,11 @@ const (
 	runQuestion
 	// runTracker is the tracker's: a work item, shown to whoever holds it.
 	runTracker
+	// runConfig is the company's configuration: which `providers.llm` entry
+	// the job was launched on, shown to an admin alone
+	// ([livestate.Reach.Config]) — what the live panel's copy of a run
+	// withholds too, and the spend breakdown's entries.
+	runConfig
 )
 
 // runKeys is THE SPLIT of a coding run's row, declared once: every key
@@ -342,7 +347,9 @@ const (
 // makes of the live panel's copy of a run (ADR-0033): what a run was asked
 // (`task_description`), the question it parked on, who is waiting on it
 // (`reply`) and the bridge's call log — every argument and output its agent
-// passed through the seat's tools — are the seat's body.
+// passed through the seat's tools — are the seat's body, and the entry the
+// job was launched on is the company's configuration, which a seat's lead
+// reads its trail without.
 var runKeys = map[string]runShown{
 	"turn_id":             runStatus,
 	"work_key":            runStatus, // a delivery identity (internal/workkey), not a task key
@@ -352,8 +359,8 @@ var runKeys = map[string]runShown{
 	"role":                runStatus,
 	"status":              runStatus,
 	"coding_agent":        runStatus,
-	"provider_key":        runStatus, // which entry's plan the job spends: what it is doing
-	"model":               runStatus,
+	"provider_key":        runConfig, // which entry's plan the job spends: the company's configuration
+	"model":               runStatus, // the model it runs under: what it is doing
 	"placement":           runStatus,
 	"task_description":    runBody,
 	"question":            runQuestion,
@@ -407,6 +414,10 @@ func serialiseRun(run sandbox.PendingRun, r livestate.Reach, answeredBy string) 
 			if !r.Tracker {
 				delete(row, key)
 			}
+		case runConfig:
+			if !r.Config {
+				delete(row, key)
+			}
 		default:
 			delete(row, key)
 		}
@@ -448,8 +459,8 @@ func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 		"coding_agent": run.CodingAgent,
 		// THE EXECUTOR-CHAIN MEMBER THE JOB RUNS ON, and its model: a
 		// fallback at launch makes it other than the chain's head, and
-		// which entry's plan a job is spending is the first thing a person
-		// watching a long run asks.
+		// which entry's plan a job is spending is the first thing an admin
+		// watching a long run asks. The entry is theirs alone ([runConfig]).
 		"provider_key": run.Launch.ProviderKey,
 		"model":        run.Launch.Model,
 		// WHERE the run is, which became an operator question the moment

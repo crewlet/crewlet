@@ -307,10 +307,11 @@ func TestTheBoardSaysWhereEachRunIs(t *testing.T) {
 	}
 }
 
-// THE BOARD NAMES THE MEMBER EACH RUN WAS LAUNCHED ON, and its model: a
-// launch-time fallback runs a job on an entry other than the chain's head, and
-// which entry's plan a long run is spending is what a person reading the board
-// asks.
+// THE BOARD NAMES THE MEMBER EACH RUN WAS LAUNCHED ON, and its model, to an
+// admin: a launch-time fallback runs a job on an entry other than the chain's
+// head, and which entry's plan a long run is spending is what the person who
+// configures the entries asks. Who else may read the entry is
+// [TestASandboxRunsBodyIsItsSeatsTrail]'s.
 //
 // Mutation: drop either key from the row and this goes red.
 func TestTheBoardNamesTheMemberEachRunWasLaunchedOn(t *testing.T) {
@@ -517,7 +518,8 @@ func TestARunNamesTheItemItIsOn(t *testing.T) {
 }
 
 // parkedRun is a coding run of the agent seat `swe` parked on a question put
-// to ana, carrying every body field and a work item.
+// to ana, carrying every body field, a work item, and the entry its job was
+// launched on.
 func parkedRun() sandbox.PendingRun {
 	return sandbox.PendingRun{
 		TurnID: "t-1", AgentHandle: "swe", Role: "SWE", Status: sandbox.StatusAwaiting,
@@ -526,6 +528,7 @@ func parkedRun() sandbox.PendingRun {
 		AudienceHandles: []string{"ana"},
 		BridgeCalls:     []sandbox.BridgeCall{{Name: "get_work_item", Args: `{"id":"ENG-1"}`}},
 		WorkItem:        &types.WorkItem{Backend: "native", ID: "task-1", Key: "ENG-1"},
+		Launch:          sandbox.LaunchRecord{ProviderKey: "plan-zulu", Model: "opus"},
 		CreatedAt:       runBase,
 	}
 }
@@ -549,15 +552,18 @@ func boardAs(ctx context.Context, t *testing.T, chart authz.Chart) map[string]an
 
 // A RUN'S STATUS IS EVERYBODY'S AND ITS BODY IS ITS SEAT'S TRAIL (ADR-0033).
 //
-// Every reader sees the run — its seat, its state, where it is — and only an
-// admin and the seat's lead see what it was asked, who is waiting on it and
-// what its agent called; the work item it is on goes to whoever holds the
-// tracker, whatever else they read. A withheld body is said (`body_withheld`)
-// rather than left to read as a run that was asked nothing.
+// Every reader sees the run — its seat, its state, where it is, the model it
+// runs under — and only an admin and the seat's lead see what it was asked,
+// who is waiting on it and what its agent called; the work item it is on goes
+// to whoever holds the tracker, whatever else they read; and the
+// `providers.llm` entry its job was launched on is the company's
+// configuration, an admin's alone, which the lead reads the trail without. A
+// withheld body is said (`body_withheld`) rather than left to read as a run
+// that was asked nothing.
 //
 // Mutation: show the body to every reader ([Sources.runReach] answering Body
 // true) and the stranger's row goes red; drop the tracker rule and the lead's
-// does.
+// does; classify the entry as status and every row but the admin's does.
 func TestASandboxRunsBodyIsItsSeatsTrail(t *testing.T) {
 	t.Parallel()
 	body := []string{"task_description", "question", "reply", "bridge_calls"}
@@ -567,20 +573,25 @@ func TestASandboxRunsBodyIsItsSeatsTrail(t *testing.T) {
 		chart    authz.Chart
 		body     bool
 		workItem bool
+		entry    bool
 	}{
-		{"an admin", asGrants(t, "", iam.GrantAdmin), flatChart{}, true, true},
+		{"an admin", asGrants(t, "", iam.GrantAdmin), flatChart{}, true, true, true},
 		{"the seat's lead, holding no permission", asSeat(t, "lead"),
-			leadsChart{lead: "lead", report: "swe"}, true, false},
+			leadsChart{lead: "lead", report: "swe"}, true, false, false},
 		{"a stranger holding every app", asSeat(t, "pat", iam.Apps...), flatChart{},
-			false, true},
-		{"a stranger holding nothing", asSeat(t, "pat"), flatChart{}, false, false},
+			false, true, false},
+		{"a stranger holding nothing", asSeat(t, "pat"), flatChart{}, false, false, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			row := boardAs(c.ctx, t, c.chart)
 			if row["turn_id"] != "t-1" || row["agent_handle"] != "swe" ||
-				row["status"] != sandbox.StatusAwaiting {
+				row["status"] != sandbox.StatusAwaiting || row["model"] != "opus" {
 				t.Errorf("the run's status is not everybody's: %v", row)
+			}
+			if entry, shown := row["provider_key"]; shown != c.entry ||
+				(shown && entry != "plan-zulu") {
+				t.Errorf("provider_key is %v (shown %v), want shown %v", entry, shown, c.entry)
 			}
 			for _, key := range body {
 				if _, shown := row[key]; shown != c.body {
