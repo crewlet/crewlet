@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -544,5 +545,58 @@ func TestATurnAdmittedAsTheLastLetsGoKeepsItsOwnHold(t *testing.T) {
 	case <-ran:
 	case <-time.After(gateWaitBound):
 		t.Fatal("the held message never ran once the second turn let go")
+	}
+}
+
+// progressStamp is a queue whose seat deliveries state progress the way a
+// backend with an acknowledgement window does, and counts the signals.
+type progressStamp struct {
+	queue.EventQueue
+	signals atomic.Int32
+}
+
+func (q *progressStamp) SubscribeBatch(ctx context.Context, topic, group string, h queue.BatchHandler,
+	key queue.BatchKeyFunc, opts *queue.BatchOptions) error {
+	return q.EventQueue.SubscribeBatch(ctx, topic, group,
+		func(ctx context.Context, evs []*events.Event) queue.Result {
+			return h(queue.WithProgress(ctx, 20*time.Millisecond, func() error {
+				q.signals.Add(1)
+				return nil
+			}), evs)
+		}, key, opts)
+}
+
+// A MAILBOX DELIVERY WAITING FOR A BUSY SEAT KEEPS TELLING THE QUEUE IT IS
+// WORKED ON, so a turn that outlasts the delivery's acknowledgement window
+// never hands it back. Without it the wait was bounded by the window alone,
+// and a long resumed turn spent a delivery of the mail that waited on it.
+//
+// Mutation: wait for the seat without signalling, and no signal is sent.
+func TestAMailboxDeliveryWaitingForTheSeatSignalsProgress(t *testing.T) {
+	t.Parallel()
+	stamp := &progressStamp{}
+	ran := make(chan struct{}, 2)
+	g := gatedFleetOn(t, 4, func(q queue.EventQueue) queue.EventQueue {
+		stamp.EventQueue = q
+		return stamp
+	}, func(context.Context, string, []*events.Event) queue.Result {
+		ran <- struct{}{}
+		return queue.Ack()
+	}, "ceo")
+
+	_, release := admit(t.Context(), t, g.n, "ceo")
+	g.n.ReleaseSeatTurnHoldForTest("ceo")
+	g.send("ceo", "waits")
+	within(t, "the waiting delivery to signal progress", func() bool { return stamp.signals.Load() >= 3 })
+	select {
+	case <-ran:
+		t.Fatal("the delivery ran beside the seat's turn")
+	default:
+	}
+	release()
+	select {
+	case <-ran:
+	case <-time.After(gateWaitBound):
+		t.Fatal("the waiting delivery never ran once the seat was free")
 	}
 }

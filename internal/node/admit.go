@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"sync/atomic"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/google/uuid"
 )
@@ -198,13 +200,33 @@ func (n *Node) AdmitTurn(ctx context.Context, handle string) (context.Context, f
 }
 
 // waitForSeat waits for the turn running on a seat to be released, for a
-// mailbox delivery that met it.
+// mailbox delivery that met it, telling the queue the delivery is still being
+// worked on as often as the queue asks ([queue.Progress]). The running turn
+// can last longer than the delivery's acknowledgement window, and a window
+// that ran out would hand the delivery back and spend one of its deliveries
+// on nothing but the wait.
 func (n *Node) waitForSeat(ctx context.Context, handle string, running *admission) error {
-	select {
-	case <-running.done:
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("node: admitting a turn on %q: %w", handle, ctx.Err())
+	var tick <-chan time.Time
+	every, signal, ok := queue.Progress(ctx)
+	if ok {
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		tick = ticker.C
+	}
+	for {
+		select {
+		case <-running.done:
+			return nil
+		case <-ctx.Done():
+			return fmt.Errorf("node: admitting a turn on %q: %w", handle, ctx.Err())
+		case <-tick:
+			if err := signal(); err != nil {
+				// LOGGED AND WAITED ON: the next signal may land, and a
+				// window that does run out hands the delivery back, which
+				// is what would have happened without one.
+				n.log.Warn("seat_wait_progress_failed", "handle", handle, "error", err.Error())
+			}
+		}
 	}
 }
 
