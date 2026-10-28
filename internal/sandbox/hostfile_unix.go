@@ -3,7 +3,9 @@
 package sandbox
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -56,35 +58,11 @@ import (
 // A path that is not there answers [fs.ErrNotExist] through the error, which
 // is what the callers read as "not written yet".
 func openRegularIn(root *os.Root, name string) (*os.File, error) {
-	return openInAs(root, name, unix.O_RDONLY, false)
-}
-
-// openWritableIn opens name beneath root for WRITING it whole — created where
-// nothing is, emptied where a regular file is — under the same rule as
-// [openRegularIn], for the same reason.
-//
-// The engine writes into a box after something has run in it: a shim and a
-// coding CLI's configuration after the setup steps' commands, which run
-// whatever a checkout's install scripts say, and a follow-up run's
-// configuration into a box a coding agent has had to itself. A plain
-// os.WriteFile there followed a link at the last element — one that leads
-// nowhere, so the write CREATED a file wherever the link pointed on the engine
-// host — and an open of a named pipe for writing waited for a reader for good,
-// wedging the launch. So the open is non-blocking and follows no link, and
-// anything but a regular file is refused before a byte is written.
-func openWritableIn(root *os.Root, name string) (*os.File, error) {
-	return openInAs(root, name, unix.O_WRONLY|unix.O_CREAT|unix.O_TRUNC, true)
-}
-
-// openInAs is the one open behind [openRegularIn] and [openWritableIn]: the
-// directory reached through root, the last element opened in it by its
-// descriptor.
-func openInAs(root *os.Root, name string, mode int, write bool) (*os.File, error) {
 	host := filepath.Join(root.Name(), name)
 	dir, err := root.OpenFile(filepath.Dir(name), unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NONBLOCK, 0)
 	if err != nil {
 		if errors.Is(err, unix.ENOTDIR) {
-			if refused := notDirOnWay(root, filepath.Dir(name), write); refused != nil {
+			if refused := notDirOnWay(root, filepath.Dir(name), false); refused != nil {
 				return nil, refused
 			}
 		}
@@ -104,18 +82,17 @@ func openInAs(root *os.Root, name string, mode int, write bool) (*os.File, error
 	if err := raw.Control(func(dirfd uintptr) {
 		for {
 			fd, openErr = unix.Openat(int(dirfd), base,
-				mode|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, uint32(hostbox.FileMode))
+				unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 			if !errors.Is(openErr, unix.EINTR) {
 				break
 			}
 		}
 		// SOME KINDS ARE REFUSED BEFORE THERE IS A DESCRIPTOR TO ASK: a link
-		// at the last element (ELOOP under O_NOFOLLOW), a socket (ENXIO,
+		// at the last element (ELOOP under O_NOFOLLOW) and a socket (ENXIO,
 		// which a read of one used to report as a box that could not be
-		// read, so a collection retried it until the run was lost), and for
-		// a write a pipe nobody reads (ENXIO) and a directory (EISDIR). So
-		// the name itself is asked what it is, in the same directory. Not
-		// for an absent name, which is the answer "not written yet".
+		// read, so a collection retried it until the run was lost). So the
+		// name itself is asked what it is, in the same directory. Not for an
+		// absent name, which is the answer "not written yet".
 		if openErr != nil && !errors.Is(openErr, unix.ENOENT) {
 			kind = kindAt(int(dirfd), base)
 		}
@@ -124,7 +101,7 @@ func openInAs(root *os.Root, name string, mode int, write bool) (*os.File, error
 	}
 	if openErr != nil {
 		if kind != "" {
-			return nil, &NotRegularFileError{Path: host, Kind: kind, Write: write}
+			return nil, &NotRegularFileError{Path: host, Kind: kind}
 		}
 		return nil, &fs.PathError{Op: "open", Path: host, Err: openErr}
 	}
@@ -135,13 +112,102 @@ func openInAs(root *os.Root, name string, mode int, write bool) (*os.File, error
 	}
 	if what := fileKind(st); what != "" {
 		_ = unix.Close(fd)
-		return nil, &NotRegularFileError{Path: host, Kind: what, Write: write}
+		return nil, &NotRegularFileError{Path: host, Kind: what}
 	}
 	if err := unix.SetNonblock(fd, false); err != nil {
 		_ = unix.Close(fd)
 		return nil, &fs.PathError{Op: "open", Path: host, Err: err}
 	}
 	return os.NewFile(uintptr(fd), host), nil
+}
+
+// replaceIn puts content at name beneath root WHOLE, BY REPLACING THE FILE
+// rather than rewriting it: the one way the engine writes a local box's file,
+// in its home and in its records alike ([writeHomeFile], [writeRecord]).
+//
+// A READER NEVER FINDS A WRITE HALF DONE. The engine writes into a box a run is
+// using — the completion poll rewrites a seat's GitHub App token file under
+// the running job, and the job's git credential helper reads it at every call
+// — and a write that truncated the file and then wrote it in place left it
+// empty, then part written, in between: a push that read it then
+// authenticated with nothing. A write the engine's process stopped part way
+// through left it so for good, and a record a later engine reads back is
+// judged by what it holds: an empty witness ([jobEnd]) is not one this engine
+// wrote, so a job its engine's restart killed was collected as one that ended
+// rather than carried on. So the content is written to a fresh file beside
+// name, synced, and renamed over name in one step ([hostbox.ReplaceFileIn]):
+// a reader opens the old file or the new one, and a crash leaves one of the
+// two.
+//
+// AND IT WRITES THROUGH NOTHING AT NAME. A rename replaces the directory entry:
+// it follows no link there and rewrites no other name of the same file (a hard
+// link the box made to a file of its own). The file staged beside it is
+// created exclusively, which follows no link either, and every directory on
+// the way is walked through the root, as a read's is.
+//
+// ONLY A REGULAR FILE IS REPLACED, or nothing at all. Anything else at name —
+// a link, a directory, a named pipe, a socket, a device — is the box's own
+// doing, so it is refused as what it is ([NotRegularFileError], Write) and
+// left as the box made it, and so is anything but a directory on the way
+// ([notDirOnWay]). It is looked at before the write, and again after one
+// that failed, so a directory the box put there in between is refused as one
+// too.
+//
+// NO STAGED FILE OUTLIVES A WRITE THAT FAILED: [hostbox.ReplaceFileIn] removes
+// it. The new file has [hostbox.FileMode] whatever the one it replaces had, so
+// new content is never handed a mode the box widened. name's directory must
+// exist.
+func replaceIn(root *os.Root, name string, content []byte) error {
+	return replaceWith(root, name, content, hostbox.ReplaceFileIn)
+}
+
+// boxReplace is how [replaceWith] puts a whole file beneath a root:
+// [hostbox.ReplaceFileIn], in every box.
+//
+// A PARAMETER rather than a call written in, for the one refusal nothing a
+// test can leave in the tree beforehand reaches: something the box puts at
+// the name AFTER the look that would have refused it, which the replacement
+// itself then meets. So a test hands in a replacement that puts the obstacle
+// down between the two.
+type boxReplace func(root *os.Root, name string, content io.Reader) error
+
+// replaceWith is [replaceIn] with its replacement handed in ([boxReplace]).
+func replaceWith(root *os.Root, name string, content []byte, replace boxReplace) error {
+	if refused := notRegularAt(root, name); refused != nil {
+		return refused
+	}
+	if err := replace(root, name, bytes.NewReader(content)); err != nil {
+		if refused := notRegularAt(root, name); refused != nil {
+			return refused
+		}
+		return err
+	}
+	return nil
+}
+
+// notRegularAt is the refusal of a write at name beneath root
+// ([NotRegularFileError], Write): what is at name where that is not a regular
+// file, or what is on the way to it where that is not a directory. nil for a
+// regular file, for nothing at all, and for a name that cannot be looked at,
+// whose write then says why itself.
+//
+// A LOOK, NOT AN OPEN: the root walks the directories on the way as
+// directories and looks at the last element without following it, so a named
+// pipe anywhere on the path is named rather than waited on.
+func notRegularAt(root *os.Root, name string) error {
+	info, err := root.Lstat(name)
+	switch {
+	case err == nil:
+		if info.Mode().Type() == 0 {
+			return nil
+		}
+		return &NotRegularFileError{Path: filepath.Join(root.Name(), name), Kind: modeKind(info.Mode()), Write: true}
+	case errors.Is(err, unix.ENOTDIR):
+		if refused := notDirOnWay(root, filepath.Dir(name), true); refused != nil {
+			return refused
+		}
+	}
+	return nil
 }
 
 // notDirOnWay is the refusal of a path whose way to its file holds something

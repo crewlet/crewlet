@@ -136,9 +136,11 @@ func TestACLIGivenNoSystemTextWritesAndPassesNothing(t *testing.T) {
 // A `direct` box is a directory on the engine host, so the system text — a
 // seat's org chart, policies and memory — is readable there by whatever its
 // mode allows. It is created afresh at the mode every box file is created with
-// even where a previous run left one wider: a write over an existing file
-// keeps that file's mode, and a reused box keeps its files. And Claude Code is
-// pointed at exactly that file, with the task alone as its prompt.
+// even where a previous run left one wider in a reused box, which keeps its
+// files: the run's artefacts are cleared before it starts, and a box write
+// replaces a file whole rather than keeping the mode of the one it replaces.
+// And Claude Code is pointed at exactly that file, with the task alone as its
+// prompt.
 func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 	t.Parallel()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})

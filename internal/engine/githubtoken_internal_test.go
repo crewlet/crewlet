@@ -938,13 +938,13 @@ func TestATokenWaitIsToldOncePerJob(t *testing.T) {
 // A TOKEN FILE THE POLL CANNOT WRITE IS TOLD ONCE FOR THE FILE, NOT EVERY POLL.
 //
 // Every agent turn is a run whose box the refresh visits, and a job can make
-// its token file one no write reaches: read-only, a link or a directory in its
-// place, a box out of disk. Each fails the same way on every poll and every
-// nudge, and the line said so on each, for the life of the job, while the
-// token the file holds went on expiring. It is told once for the file, saying
-// that token is no longer renewed; a write that succeeds settles it, so a
-// file that fails again later is told again. Not parallel: it adds a
-// destination to the process-wide logger.
+// its token file one no write reaches: a link or a directory in its place, a
+// directory around it made read-only, a box out of disk. Each fails the same
+// way on every poll and every nudge, and the line said so on each, for the
+// life of the job, while the token the file holds went on expiring. It is
+// told once for the file, saying that token is no longer renewed; a write
+// that succeeds settles it, so a file that fails again later is told again.
+// Not parallel: it adds a destination to the process-wide logger.
 func TestATokenFileThePollCannotWriteIsToldOnce(t *testing.T) {
 	logs := captureEngineLogs(t)
 	gh := newAppGitHub(t)
@@ -991,7 +991,8 @@ func TestATokenFileThePollCannotWriteIsToldOnce(t *testing.T) {
 }
 
 // unwritableBox is a box whose writes fail with refuse while it is set, as a
-// file the job made read-only fails every write the engine makes.
+// file whose directory the job made read-only fails every write the engine
+// makes.
 type unwritableBox struct {
 	*sandbox.FakeSandbox
 	refuse error

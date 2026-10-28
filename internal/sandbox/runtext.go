@@ -133,10 +133,13 @@ func readLimit(capped int) int {
 // other than a regular file where it lies — a named pipe, a device, a socket,
 // a directory or a symbolic link. A backend that reads a box's files from the
 // engine host refuses one, because opening it there could block the reader or
-// never end ([NotRegularFileError] says which it was). It refuses a WRITE to
-// one too ([NotRegularFileError.Write]), which could block or follow a link
-// out of the box; a write refused is the launch's failure, since what it was
-// writing is something the run needs.
+// never end ([NotRegularFileError] says which it was). It refuses a WRITE over
+// one too ([NotRegularFileError.Write]): a write replaces a regular file whole
+// ([Sandbox.WriteFile]), and anything else at the path is the box's own doing
+// — a link it points somewhere, a pipe or a socket something uses — which a
+// replacement would destroy, so it is left as the box made it. A write refused
+// is the launch's failure, since what it was writing is something the run
+// needs.
 //
 // A REFUSAL OF THAT PIECE, NOT A BOX THAT COULD NOT BE READ. What the path
 // names is fixed by what the box holds, so a collection that retried it would
@@ -180,8 +183,9 @@ func (e *NotRegularFileError) Reason() string {
 
 func (e *NotRegularFileError) Error() string {
 	if e.Write {
-		return e.Path + " " + e.Reason() + ": what the engine writes into a box is a file, and " +
-			"writing anything else from the engine host could block it or write past the box"
+		return e.Path + " " + e.Reason() + ": the engine writes a box's file by replacing it whole, " +
+			"and replaces nothing else the box put at a path — a link, a directory, a named pipe — " +
+			"which is left as the box made it"
 	}
 	return e.Path + " " + e.Reason() + ": a box's markers, reports and streams are files " +
 		"its runner writes, and reading anything else from the engine host could block it, " +

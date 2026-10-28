@@ -402,11 +402,22 @@ type Sandbox interface {
 	// answer.
 	Job(ctx context.Context, commandID string) (JobState, error)
 
-	// WriteFile puts content at path whole. A backend that writes the box
-	// from the engine host writes only a regular file where it lies, and
-	// refuses anything else at the path with [ErrNotRegularFile] — a link
-	// there would be followed out of the box, and a named pipe waited on
-	// for good.
+	// WriteFile puts content at path whole, by REPLACING the file there: the
+	// content is staged under a fresh name beside the path and renamed over
+	// it, so a process in the box reading the file meanwhile — a git
+	// credential helper reading the token file the completion poll keeps
+	// current under a running job — finds the old file or the new one,
+	// never an empty or part-written one. A write that fails removes what it
+	// staged, or says it could not, where a remote box stopped answering.
+	// The new file has the mode the backend writes every file with,
+	// whatever the replaced one had.
+	//
+	// A backend that writes the box from the engine host replaces only a
+	// regular file where it lies, or puts one where nothing is, and refuses
+	// anything else at the path with [ErrNotRegularFile], leaving it as the
+	// box made it: the rename writes through no link, and a named pipe is
+	// never opened to be waited on. A remote box is a machine of its own, so
+	// what is at the path there is replaced, a link included.
 	WriteFile(ctx context.Context, path string, content []byte) error
 
 	// ReadFile reads a file the engine means to read WHOLE — a report, a

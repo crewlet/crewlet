@@ -299,15 +299,16 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 // ask file. Without clearing them the completion poll fires immediately on the
 // stale marker and Collect reads the old result. Its brief, system text,
 // settings and configuration go too: a run's instructions are its own — a
-// previous job's hooks name a bridge session that job's end closed — and a file
-// this run writes is then always created fresh, at the mode a backend creates a
-// file with. OpenCode's values ([Paths.OpenCodeValues]) and its notes plugin
-// ([Paths.OpenCodeSteerPlugin]) are DIRECTORIES, removed whole: a run writes one
-// file per value, so one with fewer values than the last would otherwise keep
-// the last one's beside its own, and a run wired to no notes would otherwise
-// leave a plugin no configuration names. THE CHECKOUT IS LEFT INTACT — that
-// disk state is the continued context, and it is the whole reason to reuse a
-// box.
+// previous job's hooks name a bridge session that job's end closed. (Whatever
+// mode a previous run left on one, the file this run writes has the box's
+// own: a box write replaces a file whole ([sandbox.Sandbox.WriteFile]).)
+// OpenCode's values ([Paths.OpenCodeValues]) and its notes plugin
+// ([Paths.OpenCodeSteerPlugin]) are DIRECTORIES, removed whole: a run writes
+// one file per value, so one with fewer values than the last would otherwise
+// keep the last one's beside its own, and a run wired to no notes would
+// otherwise leave a plugin no configuration names. THE CHECKOUT IS LEFT INTACT
+// — that disk state is the continued context, and it is the whole reason to
+// reuse a box.
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.cli.Output(p)

@@ -277,8 +277,10 @@ func floorParts(version string) (major, minor, patch string) {
 // ([claudeNotesGate]).
 //
 // The settings file is written afresh, at the mode a box writes every file with
-// (0600 on a local box): the run's artefacts are cleared before it starts
-// ([Runner.ClearArtifacts]), so a previous run's wider file is never kept.
+// (0600 on a local box): a box write replaces a file whole
+// ([sandbox.Sandbox.WriteFile]), and the run's artefacts are cleared before it
+// starts besides ([Runner.ClearArtifacts]), so a previous run's wider file is
+// never kept.
 func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
 	if req.System != "" {
 		if err := box.WriteFile(ctx, paths.System(), []byte(req.System)); err != nil {

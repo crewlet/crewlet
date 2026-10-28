@@ -1034,26 +1034,20 @@ func readHomeFile(l boxLayout, rel, path string, limit int) ([]byte, error) {
 }
 
 // writeHomeFile is a local box's WriteFile once the path is mapped onto its
-// home and its directory made: content put at rel whole, in place, through
-// [openWritableIn] — so no component of the path leads the write out of the
-// box, a link at the path is refused rather than followed, and a named pipe is
-// refused rather than waited on, each as a [NotRegularFileError] naming what
-// is there.
+// home and its directory made: the file at rel REPLACED whole through
+// [replaceIn] — so a process in the box reading it meanwhile (the git
+// credential helper reading the token file the poll keeps current) finds the
+// old file or the new one, never an empty or part-written one; no component
+// of the path leads the write out of the box; and anything at the path that
+// is not a regular file — a link, a named pipe, a directory — is refused as a
+// [NotRegularFileError] naming what is there, and left as the box made it.
 func writeHomeFile(l boxLayout, rel, path string, content []byte) error {
 	home, err := l.openHome()
 	if err != nil {
 		return fmt.Errorf("local sandbox: open %s for writing: %w", path, err)
 	}
 	defer func() { _ = home.Close() }()
-	f, err := openWritableIn(home, rel)
-	if err != nil {
-		return fmt.Errorf("local sandbox: open %s for writing: %w", path, err)
-	}
-	if _, err := f.Write(content); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("local sandbox: write %s: %w", path, err)
-	}
-	if err := f.Close(); err != nil {
+	if err := replaceIn(home, rel, content); err != nil {
 		return fmt.Errorf("local sandbox: write %s: %w", path, err)
 	}
 	return nil

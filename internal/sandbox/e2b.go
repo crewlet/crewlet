@@ -331,7 +331,8 @@ func (s *E2BSandbox) Job(ctx context.Context, commandID string) (JobState, error
 	return remoteJob(ctx, s, commandID)
 }
 
-// WriteFile implements [Sandbox].
+// WriteFile implements [Sandbox]: the file is REPLACED whole, never uploaded
+// over in place, which is how envd writes an upload ([envdClient.writeFile]).
 func (s *E2BSandbox) WriteFile(ctx context.Context, path string, content []byte) error {
 	return s.envd.writeFile(ctx, path, content)
 }

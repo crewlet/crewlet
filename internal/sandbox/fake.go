@@ -125,7 +125,8 @@ func (s *FakeSandbox) Job(ctx context.Context, commandID string) (JobState, erro
 }
 
 // WriteFile stores the content in memory, where [FakeSandbox.Put] and
-// ReadFile can see it.
+// ReadFile can see it — replaced whole under the box's lock, so a read never
+// finds a write half done, as no real backend's does ([Sandbox.WriteFile]).
 func (s *FakeSandbox) WriteFile(ctx context.Context, p string, content []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

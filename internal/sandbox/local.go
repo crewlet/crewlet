@@ -391,13 +391,13 @@ func seedLogin(ctx context.Context, l boxLayout, login boxLogin) (map[string]see
 }
 
 // writeBoxFile puts one seeded login file at name in a box's home, its parents
-// created, through a temporary file and a rename — every step through the
-// home's root ([hostbox.ReplaceFileIn]).
+// created, as every file of a box is written: replaced whole, every step
+// through the home's root ([replaceIn]).
 func writeBoxFile(home *os.Root, name string, content []byte) error {
 	if err := home.MkdirAll(filepath.Dir(name), hostbox.DirMode); err != nil {
 		return err
 	}
-	return hostbox.ReplaceFileIn(home, name, bytes.NewReader(content))
+	return replaceIn(home, name, content)
 }
 
 // digestOf is the SHA-256 of content in [hostbox.Digest]'s form.
@@ -746,14 +746,10 @@ func touchAlive(l boxLayout) {
 	if records.Chtimes(aliveRecord, now, now) == nil {
 		return
 	}
-	f, err := openWritableIn(records, aliveRecord)
-	if err != nil {
-		localLog.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
-		return
-	}
-	if err := f.Close(); err != nil {
-		// A keepalive that did not land is a box the reaper will treat as
-		// an orphan, so the failure is worth the same line as the open.
+	// The stamp is made, empty, where there is none yet: a keepalive that
+	// did not land is a box the reaper will treat as an orphan, so the
+	// failure is worth the same line as the records' open.
+	if err := replaceIn(records, aliveRecord, nil); err != nil {
 		localLog.Debug("local_sandbox_keepalive_unwritable", "sandbox_id", l.id, "error", err.Error())
 	}
 }
@@ -767,31 +763,19 @@ func recordLeader(l boxLayout, leader procgroup.Leader) error {
 	return writeRecord(l, pidRecord, []byte(leader.String()))
 }
 
-// writeRecord puts blob at the engine's record called name about a box, whole, in
-// place, through the box's records ([boxLayout.openRecords]) and only as a
-// regular file where it lies ([openWritableIn]). The records directory must
-// exist.
+// writeRecord puts blob at the engine's record called name about a box,
+// through the box's records ([boxLayout.openRecords]): replaced whole, and
+// only over a regular file where it lies ([replaceIn]), so a reader — another
+// goroutine's poll, the next engine after a restart, the runtime's CLI reading
+// the env file — finds the record before the write or after it, never half of
+// one. The records directory must exist.
 func writeRecord(l boxLayout, name string, blob []byte) error {
 	records, err := l.openRecords()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = records.Close() }()
-	return writeIn(records, name, blob)
-}
-
-// writeIn puts blob at name beneath root, whole, in place, only as a regular
-// file where it lies ([openWritableIn]). name's directory must exist.
-func writeIn(root *os.Root, name string, blob []byte) error {
-	f, err := openWritableIn(root, name)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(blob); err != nil {
-		_ = f.Close()
-		return err
-	}
-	return f.Close()
+	return replaceIn(records, name, blob)
 }
 
 // jobGroup is the box's recorded job group when that group is still the job,

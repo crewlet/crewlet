@@ -416,6 +416,41 @@ func TestReplaceFileLeavesNoTempFileBehind(t *testing.T) {
 	}
 }
 
+// A REPLACEMENT THAT FAILS LEAVES NOTHING STAGED. The content is written to a
+// file beside the destination before the rename that puts it in place, and a
+// rename refused — a directory at the destination, say — must not leave that
+// file behind: a box's home would hold a credential under a name nothing reads,
+// and a shared login's directory a file no reader expects. The destination is
+// left as it was.
+//
+// Mutation: drop the removal of the staged file, and it survives the refusal.
+func TestReplaceFileInLeavesNothingStagedWhenItsRenameFails(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	if err := os.MkdirAll(filepath.Join(dir, "dst", "inside"), DirMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReplaceFileIn(root, "dst", strings.NewReader("token")); err == nil {
+		t.Fatal("a replacement over a directory succeeded")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "dst" {
+			t.Errorf("%q survived the failed replacement", entry.Name())
+		}
+	}
+	if info, err := os.Lstat(filepath.Join(dir, "dst", "inside")); err != nil || !info.IsDir() {
+		t.Errorf("the destination is now %v, %v; want it as it was", info, err)
+	}
+}
+
 // THE PUBLISHED TABLE OF WHAT A CHILD SEES IS THESE LISTS, NAME FOR NAME.
 //
 // docs/guides/tools-and-mcp.md tells an operator exactly which host variables

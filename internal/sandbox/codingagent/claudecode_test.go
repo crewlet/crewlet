@@ -196,10 +196,12 @@ func TestTheSettingsFileIsTheMeasuredShape(t *testing.T) {
 // THE SETTINGS FILE IS WRITTEN PRIVATE, UNDER THE BOX'S WORK DIRECTORY, on a real
 // box: outside the checkout, which a commit carries and the run edits, and
 // written afresh at the mode a box writes every file with even where a previous
-// run left one wider — the run's artefacts are cleared before it starts.
+// run left one wider — the run's artefacts are cleared before it starts, and a
+// box write replaces a file whole rather than keeping the replaced one's mode.
 //
-// Mutation: drop the settings from ClearArtifacts and the previous run's wide
-// file keeps its mode.
+// Mutation: drop the settings from ClearArtifacts and write a local box's file
+// in place (O_TRUNC), and the previous run's wide file keeps its mode — either
+// alone still holds it.
 func TestTheSettingsFileIsWrittenPrivateUnderTheWorkDir(t *testing.T) {
 	t.Parallel()
 	runner, box := realBox(t)
