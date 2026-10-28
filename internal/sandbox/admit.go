@@ -128,11 +128,22 @@ type refusedCompletion struct {
 // itself, and the poll is the backstop for a clearing nothing signals. Both
 // may arrive: the claim is at-most-once, so the run resumes once.
 //
+// A SIGNAL THAT LANDS WHILE THE GATE IS REFUSING IS NOT LOST. Readmit re-fires
+// only what is kept when it runs, so a condition that cleared between the
+// gate's answer and the keep would leave the completion kept for a signal that
+// has already been and gone, until the next poll. So the caller reads what was
+// signalled BEFORE it asks the gate (seen), and the keep, under the lock
+// Readmit takes, re-fires at once instead of keeping when cond has been
+// signalled for the seat since: the same rule [Coordinator.waitOwed] applies
+// to an answer.
+//
 // A refusal that names no condition is not kept: nothing would signal its end.
 // Nor is one for a seat this node lets go of ([Coordinator.ReleaseSeat]): the
 // successor's waiter announces it there. A drain's is kept and never re-fired,
 // since nothing signals a drain's end, until that release drops it.
-func (c *Coordinator) keepRefused(ev types.SandboxRunCompleted, trigger *events.Event, cond Condition) {
+func (c *Coordinator) keepRefused(ev types.SandboxRunCompleted, trigger *events.Event, cond Condition,
+	seen map[signal]uint64,
+) {
 	if cond == "" {
 		return
 	}
@@ -141,7 +152,12 @@ func (c *Coordinator) keepRefused(ev types.SandboxRunCompleted, trigger *events.
 	if c.closed {
 		return
 	}
-	c.refused[ev.TurnID] = refusedCompletion{cond: cond, ev: ev, trigger: trigger}
+	kept := refusedCompletion{cond: cond, ev: ev, trigger: trigger}
+	if c.signalledSinceLocked(cond, ev.AgentHandle, seen) {
+		c.refireLocked(kept)
+		return
+	}
+	c.refused[ev.TurnID] = kept
 }
 
 // forgetRefused drops a kept completion of turnID's run, once a completion of
@@ -165,12 +181,19 @@ func (c *Coordinator) refireRefusedLocked(cond Condition, handles []string) {
 			continue
 		}
 		delete(c.refused, turnID)
-		c.inflight.Add(1)
-		go func() {
-			defer c.inflight.Done()
-			c.refire(kept)
-		}()
+		c.refireLocked(kept)
 	}
+}
+
+// refireLocked re-fires one kept completion on a goroutine of the
+// coordinator's own lifetime, which [Coordinator.Stop] waits for. The caller
+// holds c.mu and has checked the coordinator is not closed.
+func (c *Coordinator) refireLocked(kept refusedCompletion) {
+	c.inflight.Add(1)
+	go func() {
+		defer c.inflight.Done()
+		c.refire(kept)
+	}()
 }
 
 // refire offers a kept completion to [Coordinator.OnCompleted] again, under

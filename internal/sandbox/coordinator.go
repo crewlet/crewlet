@@ -939,7 +939,9 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// [TurnGate]. A refusal leaves the run unclaimed and running, so the
 	// waiter announces its completion again on its next poll, and keeps the
 	// box meanwhile; the error carries the refusal, whose condition decides
-	// what the caller does with this delivery.
+	// what the caller does with this delivery. What was signalled is read
+	// first, for the reason [Coordinator.keepRefused] gives.
+	seen := c.signalsSeen()
 	adm, err := c.admitTurn(ctx, ev.AgentHandle)
 	if err != nil {
 		log.InfoContext(ctx, "sandbox_completion_not_admitted",
@@ -947,7 +949,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 			"detail", "this node may not start the turn the completion resumes, so the "+
 				"run is left unclaimed for the waiter to announce again, here once the "+
 				"condition clears or on the seat's next holder")
-		c.keepRefused(ev, trigger, refusalOf(err).Condition)
+		c.keepRefused(ev, trigger, refusalOf(err).Condition, seen)
 		return fmt.Errorf("%w: %w", ErrResumeUnavailable, err)
 	}
 	defer adm.release()
