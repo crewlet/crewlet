@@ -429,17 +429,13 @@ calls all of its seat's tools back through the bridge at
 the engine's API published to the internet, its
 [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api)
 behind your proxy, or a tunnel to it — and never `localhost` or `127.0.0.1`.
-A proxy or tunnel on your laptop that connects to the engine on `127.0.0.1`
-has to send it a loopback `Host` (ngrok's `--host-header=rewrite`,
-cloudflared's `httpHostHeader: localhost`, Caddy's
-`header_up Host {upstream_hostport}`): the bridge answers a call that reaches
-it on the loopback under a `Host` that is neither loopback nor a container
-runtime's name for the engine host with `403 Forbidden: invalid Host header`
+A proxy or tunnel on your laptop (ngrok, cloudflared, Caddy) works as it
+comes: it may reach the engine on `127.0.0.1` and pass the public `Host` on,
+since the bridge admits a call on the token in its path
 ([The tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
 Left unset, every `e2b` launch is refused; set to an address the VM cannot
-reach, or through a hop that keeps the public `Host`, every call the run makes
-over the bridge fails, so the run has none of its seat's tools, cannot call
-`submit_work`, and is rescued as `incomplete`.
+reach, every call the run makes over the bridge fails, so the run has none of
+its seat's tools, cannot call `submit_work`, and is rescued as `incomplete`.
 Services on your laptop the run would use directly (`localhost` GitLab) need
 the same: a reachable deployment, a tunnel, or self-hosted E2B on the same
 network.

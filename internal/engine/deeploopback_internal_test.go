@@ -15,8 +15,15 @@ import (
 // session: it is held to loopback exactly as a direct box is, so its token is
 // worth nothing from any address but this host's loopback. A remote box is
 // never held (it cannot dial loopback), and nothing is held where the base is
-// not loopback, since then no box dials it there. That the hold refuses every
-// other caller is the bridge's own suite's (fleet_test.go).
+// not loopback, since then no box dials it there. Every spelling of loopback
+// the rehosting moves is one the hold covers — a name under `localhost` and
+// an IPv6 address included — or a container run on it would be handed the
+// runtime's name and held to nothing. That the hold refuses every other
+// caller is the bridge's own suite's (caller_test.go, host_test.go).
+//
+// Mutation: read the base as loopback only for `localhost` or a loopback
+// address, as the bridge once did, and the `.localhost` base goes red for
+// both local cells.
 func TestAContainerDeepRunIsHeldToLoopbackAsADirectOneIs(t *testing.T) {
 	t.Parallel()
 	bridge := func(base string) *mcpbridge.Bridge {
@@ -26,21 +33,28 @@ func TestAContainerDeepRunIsHeldToLoopbackAsADirectOneIs(t *testing.T) {
 		}
 		return b
 	}
-	loopback, public := bridge("http://127.0.0.1:8000"), bridge("https://engine.example.com")
-	for _, tc := range []struct {
-		placement sandbox.Placement
-		bridge    *mcpbridge.Bridge
-		want      bool
+	for _, base := range []struct {
+		url      string
+		loopback bool
 	}{
-		{sandbox.Direct, loopback, true},
-		{sandbox.Container, loopback, true},
-		{sandbox.E2B, loopback, false},
-		{sandbox.Direct, public, false},
-		{sandbox.Container, public, false},
+		{"http://127.0.0.1:8000", true},
+		{"http://engine.localhost:8000", true},
+		{"http://[::1]:8000", true},
+		{"https://engine.example.com", false},
 	} {
-		if got := deepHeldToLoopback(tc.placement, tc.bridge); got != tc.want {
-			t.Errorf("%s with a %q base: held to loopback = %v, want %v",
-				tc.placement, map[bool]string{true: "loopback", false: "public"}[tc.bridge == loopback], got, tc.want)
+		b := bridge(base.url)
+		for _, tc := range []struct {
+			placement sandbox.Placement
+			want      bool
+		}{
+			{sandbox.Direct, base.loopback},
+			{sandbox.Container, base.loopback},
+			{sandbox.E2B, false},
+		} {
+			if got := deepHeldToLoopback(tc.placement, b); got != tc.want {
+				t.Errorf("%s with the base %s: held to loopback = %v, want %v",
+					tc.placement, base.url, got, tc.want)
+			}
 		}
 	}
 }

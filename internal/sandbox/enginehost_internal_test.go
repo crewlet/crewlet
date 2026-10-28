@@ -141,12 +141,12 @@ func TestTheContainerIsStartedKnowingTheEngineHostsName(t *testing.T) {
 }
 
 // EVERY NAME A BOX IS HANDED FOR THE ENGINE HOST IS ONE THE ENGINE ADMITS. The
-// tool bridge admits a call that arrives on loopback under a loopback name or
-// an [EngineHostName], which is how Docker Desktop and Podman's machine deliver
-// a container's call to the host; a runtime whose name it did not admit would
-// leave every executor in that runtime's containers without its tools. And
-// nothing else is one: a name the runtimes do not hand out, or one merely
-// containing theirs, is not.
+// tool bridge admits a call to a session held to this host's loopback under a
+// loopback name or an [EngineHostName], which is how Docker Desktop and
+// Podman's machine deliver a container's call to the host; a runtime whose
+// name it did not admit would leave every held run in that runtime's
+// containers without its tools. And nothing else is one: a name the runtimes
+// do not hand out, or one merely containing theirs, is not.
 func TestEveryRuntimesNameForTheEngineHostIsAdmitted(t *testing.T) {
 	t.Parallel()
 	for _, runtime := range []string{"docker", "podman"} {

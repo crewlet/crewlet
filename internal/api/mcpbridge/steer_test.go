@@ -106,9 +106,19 @@ type steerFixture struct {
 
 func newSteerFixture(t *testing.T, hold time.Duration) *steerFixture {
 	t.Helper()
+	return newSteerFixtureWith(t, hold, nil)
+}
+
+// newSteerFixtureWith is [newSteerFixture] with the session edited before it
+// is opened, for a case about a session opened some other way.
+func newSteerFixtureWith(t *testing.T, hold time.Duration, edit func(*mcpbridge.Session)) *steerFixture {
+	t.Helper()
 	f := newFixture(t)
 	inbox := newFakeInbox()
 	f.session.Steer = inbox
+	if edit != nil {
+		edit(f.session)
+	}
 	f.bridge = bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: f.server.URL,
 	})
@@ -624,22 +634,26 @@ func TestShutdownLetsGoOfAPollItRelays(t *testing.T) {
 	wantTurnedAway(t, after, "draining")
 }
 
-// THE NOTES ROUTE ADMITS THE BRIDGE'S HOSTS AND NO OTHER. A poll on a loopback
-// connection is admitted under a loopback name or a container runtime's name
-// for the engine host, and refused 403 under any other, as a call to the MCP
-// endpoint is — on the node holding the run's opening, and on the holder a
-// poll is relayed to, which judges the address the poll arrived on where it
-// landed. The route is served beside the MCP handler that check wraps, never
-// through it, so without a check of its own it took any name at all. Over real
-// listeners on 127.0.0.1, so the address judged is the connection's own.
+// THE NOTES ROUTE JUDGES A CALL'S HOST AS THE MCP ENDPOINT DOES. A seat's poll
+// is answered its notes under whatever Host it arrives with — a reverse proxy
+// or tunnel on the engine host that passes the public name on included — on
+// the node holding the run's opening and on the holder a poll is relayed to
+// alike. A session held to this host's loopback admits a loopback name or a
+// container runtime's name for the engine host and refuses any other with the
+// route's own 401, as its MCP endpoint does: the two routes share the routing
+// that judges it, so they cannot come to disagree. Over real listeners on
+// 127.0.0.1, so every poll arrives on loopback.
 //
-// Mutation: drop the host check from the notes route's handler, and a rebound
-// name is answered its notes on both paths.
-func TestTheNotesRouteAdmitsTheBridgesHostsAndNoOther(t *testing.T) {
+// Mutation: judge a seat's Host on the notes route (refuse a name that is not
+// loopback), and the public names are refused on both paths; drop the Host
+// from the hold, and the held session answers a rebound name its notes.
+func TestTheNotesRouteJudgesAHostAsTheMCPEndpointDoes(t *testing.T) {
 	t.Parallel()
 	note := mcpbridge.SteerNote{Seq: 1, ID: "n-1", Inbox: "msg_1", Message: "use staging"}
 	direct := newSteerFixture(t, time.Second)
 	direct.inbox.file(note)
+	held := newSteerFixtureWith(t, time.Second, func(s *mcpbridge.Session) { s.Loopback = true })
+	held.inbox.file(note)
 
 	fx := newFixture(t)
 	f := newFleet(t, 2, 10*time.Second)
@@ -656,20 +670,24 @@ func TestTheNotesRouteAdmitsTheBridgesHostsAndNoOther(t *testing.T) {
 	for path, route := range map[string]struct {
 		url    string
 		client *http.Client
+		// loopbackOnly is a session held to loopback, whose Host is judged.
+		loopbackOnly bool
 	}{
-		"held here": {mcpbridge.SteerURL(direct.url) + "/notes", direct.server.Client()},
-		"relayed":   {mcpbridge.SteerURL(relayed) + "/notes", entry.server.Client()},
+		"a seat's, held here":        {mcpbridge.SteerURL(direct.url) + "/notes", direct.server.Client(), false},
+		"a seat's, relayed":          {mcpbridge.SteerURL(relayed) + "/notes", entry.server.Client(), false},
+		"one held to loopback, here": {mcpbridge.SteerURL(held.url) + "/notes", held.server.Client(), true},
 	} {
 		parsed, err := url.Parse(route.url)
 		if err != nil {
 			t.Fatal(err)
 		}
 		port := parsed.Port()
-		for host, admitted := range map[string]bool{
+		for host, heldAdmits := range map[string]bool{
 			"127.0.0.1:" + port:                                true,
 			"localhost:" + port:                                true,
 			"host.docker.internal:" + port:                     true,
 			"host.containers.internal:" + port:                 true,
+			"crewlet.example.com":                              false,
 			"rebound.example.com:" + port:                      false,
 			"host.docker.internal.rebound.example.com:" + port: false,
 		} {
@@ -683,9 +701,9 @@ func TestTheNotesRouteAdmitsTheBridgesHostsAndNoOther(t *testing.T) {
 				t.Fatalf("%s: poll as %s: %v", path, host, err)
 			}
 			_ = res.Body.Close()
-			want := http.StatusForbidden
-			if admitted {
-				want = http.StatusOK
+			want := http.StatusOK
+			if route.loopbackOnly && !heldAdmits {
+				want = http.StatusUnauthorized
 			}
 			if res.StatusCode != want {
 				t.Errorf("%s: a poll naming Host %s on loopback answered %d, want %d",

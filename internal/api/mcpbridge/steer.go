@@ -158,13 +158,11 @@ func (b *Bridge) SteerHandler() http.Handler { return b.routed(b.serveSteer) }
 
 // serveSteer answers one call of the notes route on the opening that holds it.
 //
-// THE MCP ENDPOINT'S HOST CHECK, here ([refusedHost]): the notes route is
-// served beside the MCP handler that check wraps, never through it, on this
-// node's own mount and on the relay's alike.
+// NO ADMISSION OF ITS OWN: the token, and for a session held to loopback the
+// address and the Host ([loopbackRefusal]), are judged by the routing it
+// shares with the MCP endpoint ([Bridge.routed]) before it is reached, and a
+// relayed call for a held session never reaches it ([Bridge.admitRelayed]).
 func (b *Bridge) serveSteer(w http.ResponseWriter, r *http.Request, opened *binding) {
-	if refusedHost(w, r) {
-		return
-	}
 	inbox := opened.inbox()
 	if inbox == nil {
 		// A SESSION WITH NO INBOX — a run with nothing to steer, the

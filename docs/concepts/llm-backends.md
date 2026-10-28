@@ -1217,8 +1217,9 @@ there and the variable names it. A loopback `CREWLET_MCP_BRIDGE_URL` serves a
 for the engine host in its place
 ([Local sandboxes](code-sandbox.md#local-sandboxes)), which on Linux needs the
 API to listen beyond loopback. Docker Desktop and Podman's machine on macOS
-and Windows deliver that name on the host's loopback instead, where the bridge
-admits it beside a loopback host name, and refuses any other name there.
+and Windows deliver that name on the host's loopback instead, where a loopback
+bind hears it. Whatever name a call arrives under, a proxy's or a tunnel's
+included, the bridge admits it on the token in its path.
 
 > **In a fleet, that URL is the fleet's, the same on every node.** A session
 > is a live tool surface — the seat's MCP children, its skill guard, its

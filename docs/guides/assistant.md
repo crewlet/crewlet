@@ -301,10 +301,13 @@ A run dials `CREWLET_MCP_BRIDGE_URL`, the fleet's address for the tool bridge
 and its call is relayed to the node that opened its session wherever it lands.
 Where every box runs on the engine host, as on a single node with no sandbox
 cell, point that variable at the node's loopback address
-(`http://127.0.0.1:<api.port>`). A confined run's bridge token is then admitted
-from that host's loopback only, and never relayed to another node. A run in a
-`container` box on the same host is handed the runtime's name for the engine
-host in place of loopback
+(`http://127.0.0.1:<api.port>`; `[::1]`, `localhost` and a name under it,
+such as `engine.localhost`, are loopback too). A confined run's bridge token
+is then admitted from that host's loopback only, under a loopback host name or
+a container runtime's name for the engine host, so a page in a browser on the
+host cannot spend a leaked one under a name of its own, and it is never
+relayed to another node. A run in a `container` box on the same host is
+handed the runtime's name for the engine host in place of loopback
 ([Local sandboxes](../concepts/code-sandbox.md#local-sandboxes)) and is held to
 loopback all the same, so it can do nothing a confined run cannot. A runtime
 that delivers the box's calls over the host's loopback (Docker Desktop, and

@@ -1006,14 +1006,10 @@ on somebody else's network and reaches only what you publish; it calls
 never holds a credential of anybody's. Leaving them on `api.port` would force that
 port public for every company running remote sandboxes. Point
 `CREWLET_SANDBOX_OTEL_RECEIVER_URL` and `CREWLET_MCP_BRIDGE_URL` at the public
-address. A proxy on the engine host that connects to the node on `127.0.0.1`
-has to send the bridge a loopback `Host` — nginx's default
-`proxy_set_header Host $proxy_host` with `proxy_pass` naming `127.0.0.1`
-rather than `$host`, Caddy's `header_up Host {upstream_hostport}` — or connect
-on an address of the host that is not loopback: the bridge answers a call that
-reaches it on the loopback under a `Host` that is neither loopback nor a
-container runtime's name for the engine host with `403 Forbidden: invalid
-Host header`, and the run then has none of its seat's tools
+address. The proxy in front of it may pass the public `Host` on (Caddy's
+default, or nginx's `proxy_set_header Host $host`) and reach the node on
+`127.0.0.1` or any other address: the bridge admits a call on the token in its
+path, whatever name the call arrives under
 ([The tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
 
 **A proxy in front of the bridge needs a request timeout of at least 15
@@ -1046,9 +1042,7 @@ What to point where:
   built on `CREWLET_MCP_BRIDGE_URL` and `CREWLET_SANDBOX_OTEL_RECEIVER_URL`,
   which name the same public address (a `direct` box dials its own node on
   loopback instead: an `ingress` node's public listener, or `api.port` on a
-  node without the role). A proxy in front of that address
-  that reaches the node on its loopback sends the bridge a loopback `Host`,
-  as above.
+  node without the role).
 - **`api.external_url`** is where people reach the dashboard — `api.port`'s
   address as your private network or VPN reaches it. It names the session
   cookie and is the only `Origin` a write is accepted from, and every link an
