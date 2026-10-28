@@ -2097,6 +2097,16 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// resumed turn, and the seat's next mail ran as a second turn beside it.
 	// Two of the seat's turns in flight at once is what the hold exists to
 	// prevent (seathold.go).
+	//
+	// AND A PANIC RECOUNTS TOO, before it goes on up: the counts are this
+	// node's, and a panic that left them as the claim set them would hold the
+	// seat for as long as this process ran, whatever the store says of it.
+	defer func() {
+		if p := recover(); p != nil {
+			c.syncSeat(context.WithoutCancel(ctx), run.AgentHandle)
+			panic(p)
+		}
+	}()
 
 	// WHETHER THE TURN BEGAN, which the resumer reports by calling Begin —
 	// see [ResumeRequest.Begin]. Atomic because nothing here promises the

@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"testing"
 )
@@ -88,4 +90,74 @@ func TestAResumedTurnThatRelaunchesHoldsTheSeatOnce(t *testing.T) {
 	if got := rig.get("t1"); slices.Contains(Holding, got.Status) && !holds.holding("swe") {
 		t.Fatal("the relaunched job does not hold the seat's inbox")
 	}
+}
+
+// EVERY WAY A RESUME ENDS LETS GO OF THE SEAT AS THE STORE SAYS, with no count
+// left behind and none doubled. The count is kept through the resumed turn
+// rather than given back before it, so each exit has to recount: a turn that
+// broke after acting, one that broke before it began, a resume that failed and
+// gave its claim back, and a panic on its way up.
+//
+// Mutation: drop the recount from any of those exits, and its case leaves the
+// seat held on a run that no longer holds it.
+func TestEveryResumeExitLetsGoOfTheSeat(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		err        error
+		beforeTurn bool
+		// held is what the store says once the resume is over: a claim given
+		// back to `running` still holds the seat, every other exit ends it.
+		held bool
+	}{
+		"a turn that broke after acting":    {err: fmt.Errorf("%w: the provider went away", ErrResumeAbandoned)},
+		"a turn that broke before it began": {err: fmt.Errorf("%w: a panic re-entering", ErrResumeAbandoned), beforeTurn: true},
+		"a resume that gave its claim back": {err: errors.New("the model provider did not answer"), held: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			holds := rig.withHold()
+			launchScheduled(t, rig, "t1")
+			rig.resumer.failWith(tc.err)
+			rig.resumer.beforeTurn = tc.beforeTurn
+			rig.runner.Finish(Result{Success: true})
+			payload, ev := rig.completion("t1")
+			_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
+			rig.coordinator.mu.Lock()
+			counted := rig.coordinator.runs["swe"]
+			rig.coordinator.mu.Unlock()
+			want := 0
+			if tc.held {
+				want = 1
+			}
+			if counted.holding != want || holds.holding("swe") != tc.held {
+				t.Fatalf("after the resume the seat counts %d holding (inbox held %v), want %d (%v)",
+					counted.holding, holds.holding("swe"), want, tc.held)
+			}
+		})
+	}
+	t.Run("a panic on its way up", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRig(t)
+		launchScheduled(t, rig, "t1")
+		rig.resumer.during = func(context.Context, PendingRun) { panic("the resumer broke") }
+		rig.runner.Finish(Result{Success: true})
+		payload, ev := rig.completion("t1")
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Error("the panic was swallowed rather than passed on")
+				}
+			}()
+			_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
+		}()
+		// THE STORE'S ANSWER: the claim is still on the row, so the seat is
+		// held once, by it, and not by a count the panic left behind.
+		rig.coordinator.mu.Lock()
+		counted := rig.coordinator.runs["swe"]
+		rig.coordinator.mu.Unlock()
+		if counted.holding != 1 {
+			t.Fatalf("after a panic the seat counts %d holding, want the store's one claim", counted.holding)
+		}
+	})
 }
