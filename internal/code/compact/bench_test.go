@@ -107,9 +107,10 @@ import (
 //     waits until that many packs have gathered — and the floors' costs
 //     differ, where at three hundred a minute every floor is passed at every
 //     pass and the three measure alike. code.CompactMinMerge is the floor
-//     with the fewest GETs and PUTs a thousand pushes here, where it saves
-//     more than a tenth of them against the floor before it — 16, which
-//     halved 8's (code's limits.go has each floor's figures). Its
+//     of the three with the fewest GETs and PUTs a thousand pushes here,
+//     where it saves more than a tenth of them against the floor before it —
+//     16, which halved 8's, the largest floor measured (code's limits.go has
+//     each floor's figures, and what bounds a higher one). Its
 //     retired/push, record-B/push and sweep-B/push are a merge at the
 //     floor's: the rows and the records a repository pushed more slowly than
 //     its home polls costs, each merge's retirements swept by a record of

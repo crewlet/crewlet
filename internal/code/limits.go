@@ -915,13 +915,21 @@ const (
 	// PUTs, 449 GETs of the outputs and 13 of a cold sync of what was left —
 	// against 1 081 from 8 and 2 212 from 4: half the requests, each merge's
 	// PUT and GETs bought by twice the pushes, for a cold sync of 20 live
-	// packs at the most rather than 13.
-	// It costs fewer bytes too (713 MB of outputs stored and downloaded a
-	// thousand pushes, against 873), fewer rows (1.05 packs retired a push,
-	// against 1.13) and fewer records (108 bytes a push on the code log,
-	// against 184); and every merge drops every git node's bitmap of the
-	// repository, so half the merges are half that churn. The 8 this replaced
-	// was a judgement, kept unless an arm saved a tenth of the requests.
+	// packs at the most rather than 13. It costs fewer bytes too (713 MB of
+	// outputs stored and downloaded a thousand pushes, against 873), fewer
+	// rows (1.05 packs retired a push, against 1.13) and fewer records (108
+	// bytes a push on the code log, against 184); and every merge drops every
+	// git node's bitmap of the repository, so half the merges are half that
+	// churn. The 8 this replaced was a judgement, kept unless an arm saved a
+	// tenth of the requests.
+	//
+	// THE LARGEST FLOOR MEASURED, not a minimum the arms bracket: M3-decisions
+	// M3-O32 sets them at 4, 8 and 16, and each doubling halved the requests,
+	// so sixteen is the best of the three. What bounds a higher floor is
+	// CompactTargetPacks, which a quiet repository's packs below the floor and
+	// the progression of its merged ones stay under only while the floor
+	// leaves the progression room: past the target the home merges at every
+	// poll, two packs at the least — as often as it merges anything.
 	CompactMinMerge = 16
 
 	// CompactTargetPacks is the live packs a repository is held near: git's

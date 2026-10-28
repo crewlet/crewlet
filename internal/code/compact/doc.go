@@ -180,15 +180,18 @@
 // the outputs on a fleet of eight, and 13 GETs a cold sync of what was left —
 // 527 requests, where merging from eight cost 1 081 (161 compactions, at most
 // 13 live packs, 1.13 retired a push, 184 bytes of records) and from four
-// 2 212 (331, 9, 1.27, 337): the floor is the one with the fewest requests.
-// And a day after each quarter hour of it, the code-retention duty's pass
-// swept what that quarter hour's merges had retired: 75 retire_sweep records
-// for the 77 merges, about 700 bytes each and 44 bytes a push on the code log
-// beside the compactions' 108 — merges some sixteen minutes apart are nearly
-// all swept alone (measured since, the arm at the floor alone: -run '^$'
-// -bench 'BenchmarkCompact/steady/pushes=1200/rate=1/min/min-merge=16'
-// -benchtime 1x -count 1, the same machine, 2026-10-28, every other figure
-// of it unchanged).
+// 2 212 (331, 9, 1.27, 337): the floor is the one of the three with the
+// fewest requests, each doubling having halved them — the largest the arms
+// measure, not a minimum they bracket (code.CompactMinMerge says what bounds
+// a higher one). And a day after each quarter hour of it, the code-retention
+// duty's pass swept what that quarter hour's merges had retired: 75
+// retire_sweep records for the 77 merges, about 700 bytes each and 44 bytes
+// a push on the code log beside the compactions' 108 — merges some sixteen
+// minutes apart are nearly all swept alone (measured since, the arm at the
+// floor alone: -run '^$' -bench
+// 'BenchmarkCompact/steady/pushes=1200/rate=1/min/min-merge=16' -benchtime
+// 1x -count 1, the same machine, 2026-10-28, every other figure of it
+// unchanged).
 //
 // THE SWAP (swap/packs={50,2048}) is the cache's — a compaction is what makes
 // one — and internal/code/cache's doc states it.
