@@ -815,4 +815,20 @@ func TestACommentThreadPagesOnlyItsOwnConversation(t *testing.T) {
 	if got := walk(worklet.CommentThread{Root: "cm-ask", WithRoot: true}); !slices.Equal(got, withRoot) {
 		t.Fatalf("the thread with its root walked\n  %v\nwant\n  %v", got, withRoot)
 	}
+	// A ROOT THE TASK DOES NOT HOLD NARROWS TO NOTHING, never to another
+	// task's conversation: the read stays on the task it was asked of.
+	other := r.createTask("another task")
+	askOn(t, r, "op-elsewhere", other.ID, worklet.Comment{ID: "cm-elsewhere", Task: other.ID,
+		Author: "ana", AuthorKind: worklet.AuthorHuman, Body: "elsewhere", CreatedAt: at(90)})
+	elsewhere := "cm-elsewhere"
+	askOn(t, r, "op-elsewhere-reply", other.ID, worklet.Comment{ID: "cm-elsewhere-reply",
+		Task: other.ID, Author: "bo", AuthorKind: worklet.AuthorAgent, Body: "a reply",
+		ReplyTo: &elsewhere, CreatedAt: at(91)})
+	for _, root := range []string{"cm-nobody-wrote", "cm-elsewhere"} {
+		page := read(worklet.CommentThread{Root: root, WithRoot: true}, "", 0)
+		if len(page.Comments) != 0 || page.CommentsCursor != "" {
+			t.Errorf("root %s paged %d comment(s) and cursor %q on %s, want none",
+				root, len(page.Comments), page.CommentsCursor, created.ID)
+		}
+	}
 }
