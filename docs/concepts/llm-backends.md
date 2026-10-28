@@ -737,7 +737,10 @@ which carries a seat is on **Settings › Models**, for an admin. A seat whose c
 runs on that entry, and the condition says so. A chain whose head is limited and
 whose fallback failed for another reason is retried as any failed turn is,
 because nothing says that failure lasts. An apply that changes the company's
-models releases every park at once: the new entries have sat nothing out.
+models releases every park at once, so the redelivery asks the new entries; an
+entry whose specification the apply left unchanged keeps its sit-out (below)
+and refuses before any CLI starts, so a limit that still holds parks the seat
+again at the cost of one delivery and no process.
 A coding run's completion, or a person's answer to one, that arrives while the
 seat's models are at a limit they reported waits for it rather than resuming
 into it, and resumes once the park lifts or the first entry is tried again.
@@ -1081,8 +1084,13 @@ to it. A run that hits its plan's limit mid-run is not relaunched on the next
 member — the run is the CLI's own, hours long, with no call to hand over — but
 its entry sits out on the node that collects it, so the next launch skips it.
 Every runner member sitting out fails the launch the way a chain that ran out
-fails a call on this host: a `*chain.Error`, published as `llm_unavailable`,
-the seat reading as stopped on its provider. A member the launch hands off
+fails a call on this host: a `*chain.Error` carrying each member's refusal,
+which reads as a [limited chain](#falling-back-between-entries). On a dispatch
+the turn fails (`llm_unavailable`, the seat's `last_error`, which is no stop)
+and the seat is parked on its provider (`seat_provider_parked`), reading
+`stopped` with the reason `provider` until a probe of the chain answers or the
+company's models change; a resumed segment's relaunch waits for the first
+member to be tried again instead. A member the launch hands off
 from is announced against the turn as `provider_fallback`, as a call's is.
 
 The credential guard that refuses a remote run nothing signs in, and names
