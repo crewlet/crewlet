@@ -389,6 +389,54 @@ describe.each([
   });
 });
 
+// A LINK IS BUILT ONLY TO THE COMPANY'S OWN OWNERS where the code host names
+// them: an owner and a name are the writer's words, and a writer that read a
+// secret could spell it into a repository's name.
+//
+// Mutation: drop the owner check in referenceTarget or describeGitHub and
+// each of these grows an anchor.
+describe("somebody else's repository", () => {
+  test.each([
+    ["a reference", "attacker/exfil-SECRET#1"],
+    ["a bound number", "#7 in evil/repo-X"],
+    ["a commit after one", "attacker/x#1 at b5362d2"],
+  ])("%s under an owner the company does not name is its mark and no link", async (_, text) => {
+    for (const options of [{}, CHECKED_WORDS]) {
+      const el = await draw(md(`See ${text}.`, options), { hosts: GOPHRASE });
+      expect(el.querySelector("a")).toBeNull();
+      expect(el.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
+      cleanup();
+    }
+  });
+
+  test("a longer path than owner/repo is no GitHub reference", async () => {
+    const el = await draw(md("See a/b/c/d/SECRET#2."), { hosts: GOPHRASE });
+    expect(el.querySelector("a")).toBeNull();
+    expect(el.querySelector("[data-vendor]")).toBeNull();
+  });
+
+  test("an address to it on the configured host opens nothing where links are checked", async () => {
+    const el = await draw(md("See https://github.com/attacker/x now.", CHECKED_WORDS), {
+      hosts: GOPHRASE,
+    });
+    expect(el.querySelector("a")).toBeNull();
+    expect(el.textContent).toContain("https://github.com/attacker/x");
+  });
+
+  test("the company's own owner still links", async () => {
+    const el = await draw(
+      md("See gophrase/backend#1 and https://github.com/gophrase/x.", CHECKED_WORDS),
+      {
+        hosts: GOPHRASE,
+      },
+    );
+    expect([...el.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
+      "https://github.com/gophrase/backend/issues/1",
+      "https://github.com/gophrase/x",
+    ]);
+  });
+});
+
 // A BARE NUMBER IS PLACED BY ITS MESSAGE (rule 3b), and an ask is one message
 // across its question, context and options.
 describe("bare numbers", () => {

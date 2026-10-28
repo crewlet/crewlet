@@ -501,11 +501,22 @@ const SHA = /^[0-9a-f]{7,40}$/iu;
 /** A path segment an address is rebuilt from: letters, digits, `.`, `_`, `~` and `-`. */
 const SEGMENT = /^[A-Za-z0-9~_.-]+$/u;
 
-/** Where an address is under an app's hosts: its segments, and the company's base it is under. */
+/** Where an address is under an app's hosts: its segments, and the company's host it is under. */
 interface Under {
   parts: string[];
-  /** The configured base it is under, or null under the app's public host alone. */
-  own: string | null;
+  /** The configured host it is under, or null under the app's public host alone. */
+  own: LinkHost | null;
+}
+
+/**
+ * Whether a code host takes `owner`'s repositories as the company's: any
+ * owner where it names none (`link_hosts` carries no `owners`), else only one
+ * it names, in any case. `attacker/exfil#1` on a GitHub the company works on
+ * under `gophrase` is somebody else's repository, and no link is built to it.
+ */
+function ownsOwner(host: LinkHost, owner: string): boolean {
+  const owners = host.owners ?? [];
+  return owners.length === 0 || owners.includes(owner.toLowerCase());
 }
 
 /**
@@ -521,7 +532,7 @@ function underApp(
   for (const host of hosts) {
     if (host.kind !== kind) continue;
     const parts = under(url, host.url);
-    if (parts !== null) return { parts, own: host.url };
+    if (parts !== null) return { parts, own: host };
   }
   const parts = publicBase === undefined ? null : under(url, publicBase);
   return parts === null ? null : { parts, own: null };
@@ -559,7 +570,8 @@ function describeGitHub({ parts, own }: Under, url: URL): LinkDescription {
     label,
     code: true,
     kind: "GitHub",
-    canonical: rebuilt(own, [owner, repo, ...tail]),
+    canonical:
+      own !== null && ownsOwner(own, owner) ? rebuilt(own.url, [owner, repo, ...tail]) : null,
     place: { path, number },
   });
   if ((what === "pull" || what === "issues") && id && /^\d+$/.test(id)) {
@@ -586,7 +598,8 @@ function describeGitLab({ parts, own }: Under, url: URL): LinkDescription {
     label,
     code: true,
     kind: "GitLab",
-    canonical: rebuilt(own, [...names, ...tail]),
+    canonical:
+      own !== null && ownsOwner(own, names[0]!) ? rebuilt(own.url, [...names, ...tail]) : null,
     place: { path, number },
   });
   if (what === "merge_requests" && id && /^\d+$/.test(id)) {
@@ -626,7 +639,7 @@ function describeMattermost({ parts, own }: Under, url: URL): LinkDescription {
       label: what === "channels" ? `~${name}` : `Post in ${team}`,
       code: false,
       kind: "Mattermost",
-      canonical: rebuilt(own, [team, what, name]),
+      canonical: rebuilt(own?.url ?? null, [team, what, name]),
       place: null,
     };
   }
@@ -655,7 +668,7 @@ function describeJira({ parts, own }: Under, url: URL): LinkDescription | null {
     label: onTenant(key, own === null ? url.host : null),
     code: own !== null,
     kind: "Jira",
-    canonical: rebuilt(own, ["browse", key]),
+    canonical: rebuilt(own?.url ?? null, ["browse", key]),
     place: null,
   };
 }
@@ -672,7 +685,7 @@ function describeConfluence({ parts, own }: Under, url: URL): LinkDescription | 
       code: false,
       kind: "Confluence",
       // A PAGE BY ITS ID: the title in its address is the writer's words.
-      canonical: /^\d+$/.test(id) ? rebuilt(own, parts.slice(0, at + 2)) : null,
+      canonical: /^\d+$/.test(id) ? rebuilt(own?.url ?? null, parts.slice(0, at + 2)) : null,
       place: null,
     };
   }
@@ -747,6 +760,12 @@ export interface ReferenceTarget {
  * or `@` is the host's whose `owners` hold the path's first segment, and one
  * neither or both hold could be either, so it is no reference (null) and
  * stays text; `!` is still GitLab's.
+ *
+ * ONLY TO THE COMPANY'S OWN OWNERS where the host names them (`owners`): a
+ * reference to anybody else's repository keeps its mark and links nowhere,
+ * since its owner and name are the writer's words, and an agent could spell
+ * what it read into them (`attacker/exfil-SECRET#1`). On GitHub a repository
+ * is exactly `owner/repo`, so a longer path is words.
  */
 export function referenceTarget(
   path: string,
@@ -767,8 +786,16 @@ export function referenceTarget(
   else if (gitlab !== null) vendor = "gitlab";
   else if (sep === "#") vendor = "github";
   else return null;
+  const segments = path.split("/");
+  // A GITHUB REPOSITORY IS EXACTLY `owner/repo`: `a/b/c/d#2` names nothing
+  // there, and is words.
+  if (vendor === "github" && segments.length !== 2) return null;
   const base = vendor === "github" ? github : gitlab;
   if (base === null) return { vendor, href: null };
+  // SOMEBODY ELSE'S REPOSITORY is its mark and its words, linked nowhere: a
+  // link is built only to an owner the company works under ([ownsOwner]).
+  const host = hosts.find((h) => h.kind === vendor)!;
+  if (!ownsOwner(host, segments[0]!)) return { vendor, href: null };
   const tail =
     vendor === "github"
       ? sep === "@"
@@ -779,10 +806,7 @@ export function referenceTarget(
         : sep === "!"
           ? `-/merge_requests/${id}`
           : `-/issues/${id}`;
-  const encoded = path
-    .split("/")
-    .map((part) => encodeURIComponent(part))
-    .join("/");
+  const encoded = segments.map((part) => encodeURIComponent(part)).join("/");
   return { vendor, href: safeHref(`${base}/${encoded}/${tail}`) };
 }
 
