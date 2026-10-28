@@ -39,11 +39,15 @@ const (
 	// SettingAssistantTokenBudget is the ceiling every person's Dashboard
 	// Assistant spend is held to, `assistant.token_budget:`.
 	SettingAssistantTokenBudget Setting = "assistant_token_budget"
+	// SettingModelProviders is the company's models, its `providers.llm`
+	// entries: where a model at its usage limit is given a fallback, or a
+	// plan changed (ADR-0064).
+	SettingModelProviders Setting = "model_providers"
 )
 
 // settings are every [Setting], in declaration order.
 var settings = []Setting{SettingCompanyTokenBudget, SettingSeatTokenBudget,
-	SettingAssistantTokenBudget}
+	SettingAssistantTokenBudget, SettingModelProviders}
 
 // Settings are every setting a remedy may name, in declaration order: the
 // vocabulary the dashboard's LIMIT_SETTINGS mirrors.
@@ -75,6 +79,10 @@ func CompanyTokenBudget() Remedy { return Remedy{Setting: SettingCompanyTokenBud
 // naming the handle copied there would be exactly that stale copy. The
 // dashboard composes a seat's remedy from the row's own current handle, in this
 // same vocabulary.
+
+// NO MODELS CONSTRUCTOR either, for the seat's reason: a model at its usage
+// limit reaches a person as the seat's live `provider_limit`, and the
+// dashboard composes the remedy from it, in this same vocabulary.
 
 // AssistantTokenBudget is the remedy of a refusal a person's own assistant
 // ceilings caused.

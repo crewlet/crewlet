@@ -365,7 +365,9 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       title: limitTitle(limit),
       detail: limitDetail(limit, now),
       ...(limit.said ? { technical: limit.said } : {}),
-      path: ["settings", "models"],
+      // THE COMPANY'S MODELS, where a fallback is given or a plan changed,
+      // behind the same gate as the screen it opens (lib/remedy.ts).
+      remedy: { setting: "model_providers" },
       at: limit.since,
       ...whoOfLimit(limit),
     });

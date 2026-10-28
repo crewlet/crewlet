@@ -645,7 +645,7 @@ describe("a model at its usage limit", () => {
     expect(decide.map((i) => i.id)).toEqual(["provider-limit-default"]);
     expect(decide[0]?.title).toBe("Claude Code subscription limit reached");
     expect(decide[0]?.technical).toBe("You've hit your 5-hour limit");
-    expect(decide[0]?.path).toEqual(["settings", "models"]);
+    expect(decide[0]?.remedy).toEqual({ setting: "model_providers" });
   });
 
   test("a seat's own row keeps its id between stopped and failed", () => {

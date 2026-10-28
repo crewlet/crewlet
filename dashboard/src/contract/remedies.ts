@@ -12,6 +12,7 @@ export const LIMIT_SETTINGS = [
   "company_token_budget",
   "seat_token_budget",
   "assistant_token_budget",
+  "model_providers",
 ] as const;
 
 /** Where a person changes the limit a refusal was caused by. */
