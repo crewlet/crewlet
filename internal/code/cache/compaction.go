@@ -39,8 +39,9 @@ import (
 // NEVER A ROW AN EXPUNGE'S BEGIN LEFT DROPPING: no compaction takes one as an
 // input — its decide refuses it stale (code's liveInput), so a plan naming
 // one would be refused at every poll until the expunge commits — and the
-// compaction's build reads its inputs through its scratch's one alternate,
-// the incarnation's objects/, where no dropping pack lies.
+// compaction's build reads its inputs through its merge's store, links of
+// exactly them from the incarnation's objects/pack (Cache.NewMergeScratch),
+// where no dropping pack lies: a merge naming one is refused [ErrInvalid].
 //
 // AS THE INCARNATION HOLDS THEM, which may be past s.Position: a round that
 // adds packs applies in place on the incarnation s pins. A plan from them is

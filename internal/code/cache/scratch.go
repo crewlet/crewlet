@@ -149,10 +149,11 @@ func (c *Cache) NewScratch(ctx context.Context, s Synced, id string) (*Scratch, 
 // once.
 //
 // A merge of no pack, a pack named twice and a pack the incarnation does not
-// hold live are refused ([ErrInvalid]), with nothing made: the store holds
-// what the merge reads, the incarnation's live files alone. A file that could
-// not be linked — one a repair is replacing in place this moment — is the
-// error, the scratch and its store moved aside.
+// hold live in objects/pack — one only rows an expunge's begin left dropping
+// name lies in its dropping view — are refused ([ErrInvalid]), with nothing
+// made: the store holds what the merge reads, the incarnation's live files
+// alone. A file that could not be linked — one a repair is replacing in place
+// this moment — is the error, the scratch and its store moved aside.
 func (c *Cache) NewMergeScratch(ctx context.Context, s Synced, id string, packs []string) (*Scratch, error) {
 	if err := c.handedOut(s, "a merge's scratch"); err != nil {
 		return nil, err
@@ -273,22 +274,26 @@ func (c *Cache) newScratch(ctx context.Context, s Synced, name string, view bool
 }
 
 // mergedLive holds a merge's packs to inc's live set — each the checksum of a
-// pack live there, named once — and a push's scratch or a view, which names
-// none, to nothing; e.mu is held.
+// pack the set places in objects/pack (placeOf), named once — and a push's
+// scratch or a view, which names none, to nothing; e.mu is held. The live set
+// holds DROPPING rows too, a pack only they name lying in the copy's dropping
+// view (packPlace), where the store's links (linkPacks) find nothing: no
+// merge reads one — a compaction never takes one as an input ([Cache.Packs])
+// — so one named is refused here, with nothing made, rather than failing its
+// link with the scratch half written.
 func mergedLive(inc *incarnation, packs []string) error {
 	if packs == nil {
 		return nil
 	}
-	live := make(map[string]bool, len(inc.live))
-	for _, p := range inc.live {
-		live[p.checksum] = true
-	}
 	named := make(map[string]bool, len(packs))
 	for _, cs := range packs {
-		switch {
+		switch place := placeOf(inc, cs); {
 		case named[cs]:
 			return fmt.Errorf("pack-%s is named twice", cs)
-		case !live[cs]:
+		case place == placeDropping:
+			return fmt.Errorf("pack-%s is dropping in %s (an expunge has begun), and no merge reads one", cs,
+				inc.dir)
+		case place != placeLive:
 			return fmt.Errorf("pack-%s is no pack live in %s", cs, inc.dir)
 		}
 		named[cs] = true

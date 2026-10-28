@@ -1057,16 +1057,18 @@
 //     directory holds (heldView), which a round fills before its live set says
 //     so.
 //   - NOTHING THAT WRITES OBJECTS does: a push's scratch, an advertisement
-//     view, a compaction's build and an engine write lean on the copy's
-//     objects/ alone, their one alternate, and the pool refuses a call naming
-//     the view beside an alternate — never an alternates file naming it,
-//     which git follows from every repository that names the copy as ITS
-//     alternate. And git loads the first commit-graph its object directories
-//     hold, an alternate's included, which a retirement keeps (X04) and so may
-//     name a commit only a dropping pack holds: a process leaning on a copy
-//     that holds a view has git hold every commit a graph names to the
-//     objects it can reach (gitproc's GIT_COMMIT_GRAPH_PARANOIA), so its
-//     connectivity check never passes over one.
+//     view and an engine write lean on the copy's objects/ alone, their one
+//     alternate, and a compaction's build on its merge's store, links of its
+//     inputs from objects/pack, which refuses a pack only dropping rows name
+//     (mergedLive); and the pool refuses a call naming the view beside an
+//     alternate — never an alternates file naming it, which git follows from
+//     every repository that names the copy as ITS alternate. And git loads
+//     the first commit-graph its object directories hold, an alternate's
+//     included, which a retirement keeps (X04) and so may name a commit only
+//     a dropping pack holds: a process leaning on a copy that holds a view
+//     has git hold every commit a graph names to the objects it can reach
+//     (gitproc's GIT_COMMIT_GRAPH_PARANOIA), so its connectivity check never
+//     passes over one.
 //
 // WHERE A PACK LIES is its rows' (packPlace): objects/pack where any live row
 // names its checksum — a live row is one a push may rely on — and the view

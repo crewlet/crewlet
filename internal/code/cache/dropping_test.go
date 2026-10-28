@@ -1,6 +1,7 @@
 package cache_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -23,7 +24,9 @@ import (
 // — and nothing else, through a swap (a reader held the copy the begin
 // retired the inputs of) and a restart alike. A serving process that names
 // the view (Synced.Dropping) reads a dropping object by id; one in the copy
-// that names none, and a push's scratch leaning on it, read nothing of it.
+// that names none, and a push's scratch leaning on it, read nothing of it;
+// and a merge's store, which links its packs from objects/pack alone, is
+// refused the dropping pack (ErrInvalid) with nothing made under scratch/.
 // The copy's drop epoch is the begin's once its inputs are gone. The budget
 // counts the view (the state's DroppingBytes, the node's
 // crewlet.code.cache.dropping.bytes). A pack's files at the other place —
@@ -37,7 +40,9 @@ import (
 // ones; let packStrays take a pack at the other place for one its rows place
 // there, and Verify's repair has to rebuild and the boot's round keeps them;
 // let Verify's checkPacks judge a pack's files wherever they lie, and neither
-// plant is named.
+// plant is named; let mergedLive hold a merge to every row of the live set,
+// dropping ones included, and the merge's scratch fails its link of a file
+// objects/pack does not hold rather than being refused.
 func TestTheImageHoldsExactlyLiveAndDroppingPacks(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -107,6 +112,14 @@ func TestTheImageHoldsExactlyLiveAndDroppingPacks(t *testing.T) {
 		t.Errorf("a push's scratch over the copy read the dropping commit %s: %q", gone, out)
 	}
 	sc.Remove()
+	scratched := names(t, w.path("scratch"))
+	if _, err := c.NewMergeScratch(t.Context(), s, uuid.Must(uuid.NewV7()).String(),
+		[]string{dropping.GitChecksum}); !errors.Is(err, cache.ErrInvalid) {
+		t.Errorf("a merge's scratch naming the dropping pack = %v, want ErrInvalid: no merge reads the view", err)
+	}
+	if got := names(t, w.path("scratch")); !slices.Equal(got, scratched) {
+		t.Errorf("scratch/ holds %v after the refused merge, want %v: nothing made", got, scratched)
+	}
 
 	// A RESTART: the boot counts the view from the state, and the first
 	// round, full, keeps it.
