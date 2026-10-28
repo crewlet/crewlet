@@ -72,6 +72,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 var log = logging.Get("api.stream")
@@ -578,6 +579,21 @@ func (rows AgentRows) For(audience Audience) (string, any) {
 		out = append(out, livestate.MaskRow(row, audience.Reach(id)))
 	}
 	return audience.variant(false), out
+}
+
+// SpendRollup is the live spend breakdown as the `tokens` push carries it: a
+// [Shaped] payload, whole for an admin and without its per-entry breakdown for
+// everybody else ([tokens.Rollup.WithoutEntries]), which is how the `tokens`
+// question answers too. The variant is named after which of the two it is,
+// `admin` or `overview`, as the org's is.
+type SpendRollup tokens.Rollup
+
+// For is the rollup as audience may read it.
+func (r SpendRollup) For(audience Audience) (string, any) {
+	if audience.Admin() {
+		return "admin", tokens.Rollup(r)
+	}
+	return "overview", tokens.Rollup(r).WithoutEntries()
 }
 
 // SandboxRows are the in-flight coding runs as a [Shaped] payload: each masked

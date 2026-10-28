@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 )
@@ -91,5 +92,29 @@ func TestNoBroadcastFieldCarriesAConfigKeyOrARawFailure(t *testing.T) {
 		if wire := wireOf(t, v); !strings.Contains(wire, rawFailure) {
 			t.Errorf("an admin is sent %s without the failure's own text: %s", shape, wire)
 		}
+	}
+}
+
+// A SPEND RECORD WITH NO MODEL IS NOT NAMED BY ITS ENTRY. The live window read
+// a phase's model and fell back to its `provider_key`, so a phase that named no
+// model reached every reader's spend by model under the company's entry key,
+// where the store's rows (which a named window folds) carry none.
+//
+// Mutation: fall back to `provider_key` for the model again, and the record is
+// named by the entry.
+func TestASpendRecordIsNeverNamedByItsEntry(t *testing.T) {
+	t.Parallel()
+	now, _ := time.Parse(time.RFC3339, "2026-10-27T23:20:00Z")
+	s := livestate.New(livestate.WithClock(func() time.Time { return now }))
+	s.Apply(env("agent_phase_completed", map[string]any{
+		"agent_id": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": 0,
+		"provider_key": entryKey, "input_tokens": 10, "total_tokens": 10,
+	}, at("2026-10-27T23:16:02Z"), id("pc")))
+	records := s.SpendRecords()
+	if len(records) != 1 {
+		t.Fatalf("%d spend records, want the phase's", len(records))
+	}
+	if records[0].Model == entryKey {
+		t.Errorf("the phase's spend is filed under model %q, its entry's key", records[0].Model)
 	}
 }

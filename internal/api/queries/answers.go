@@ -994,9 +994,10 @@ func (s Sources) reach(ctx context.Context, handle string) livestate.Reach {
 	}
 	r := livestate.Reach{Tracker: principal.Can(iam.GrantWorklet),
 		Record: iam.RecordOwner(principal)}
+	r.Config = readsConfig(ctx)
 	switch {
-	case principal.Can(iam.GrantAdmin):
-		r.Body, r.Config = true, true
+	case r.Config:
+		r.Body = true
 	case handle != "":
 		r.Body = authz.Decide(ctx, principal, authz.ActionSeatTrailRead,
 			authz.Object{Kind: authz.KindPerson, Owner: handle}, s.Chart,

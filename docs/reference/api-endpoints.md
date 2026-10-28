@@ -8751,7 +8751,11 @@ Notes:
   under one key. `models` is every model the entry answered with, biggest
   first; `seats` the three handles that spent the most through it and
   `seats_total` how many did at all. A call recorded before the key was
-  promoted (node migration 0032) is under `unknown`.
+  promoted (node migration 0032) is under `unknown`. **An admin's alone**:
+  the entries are the company's configuration, so every other reader, of
+  this answer and of the socket's `tokens` push, is sent `by_provider` empty
+  and `entries_withheld: true`, with every other figure unchanged. A model a
+  call did not name is `unknown` in `by_model`, never its entry's key.
 - `by_agent[].turns` and `failed` are how many of the seat's turns ENDED in
   the window, and how many of those failed — a named window only. The live
   window holds phase records, not endings, so it carries neither rather than
@@ -8808,7 +8812,7 @@ path — its buckets are company days, which only the usage domain holds.
 
 | Name | Default | Description |
 |------|---------|-------------|
-| `group` | `phase` | The dimension the bands are: `phase`, `model`, `provider`, `seat`, `unit` or `worker`. Anything else (`turn` included) is **400** naming the set. `phase` is the **four bands** below; `seat` is keyed by the seat's agent id (never a name, which two seats may share), and carries its name as its `label`, beside its `handle`; `unit` resolves through the org chart's DIRECT unit for each seat, keyed by the unit's key and labelled with its name, not the chain, because a band per nesting level would count the same spend for the team and again for the department above it. A usage row carries no project and no work item; that attribution is Worklet's own per-item counters. |
+| `group` | `phase` | The dimension the bands are: `phase`, `model`, `provider`, `seat`, `unit` or `worker`. Anything else (`turn` included) is **400** naming the set. `provider` is an admin's alone, its bands being the company's `providers.llm` entries, and is refused to everybody else on authority. `phase` is the **four bands** below; `seat` is keyed by the seat's agent id (never a name, which two seats may share), and carries its name as its `label`, beside its `handle`; `unit` resolves through the org chart's DIRECT unit for each seat, keyed by the unit's key and labelled with its name, not the chain, because a band per nesting level would count the same spend for the team and again for the department above it. A usage row carries no project and no work item; that attribution is Worklet's own per-item counters. |
 | `bucket` | `day` | `day` (a company day) or `week` (the company's ISO week, from Monday midnight on its clock). Nothing finer: a day is the smallest thing every node's usage agrees on, and `hour` is **400**. |
 | `groups` | `4` | How many bands before the rest fold into the residual. Capped at 20. Four is how many data hues the design system has, and exactly the phase breakdown's band count — a phase grouping never folds. |
 

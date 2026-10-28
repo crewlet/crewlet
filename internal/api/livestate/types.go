@@ -626,7 +626,7 @@ func (c *Change) agentMoved(agentID string) {
 // str returns the first non-empty string among keys.
 //
 // FIRST NON-EMPTY, not first present: several payloads name the same thing two
-// ways (role / agent_role, model / provider_key) and the fallback only helps if
+// ways (role / agent_role) and the fallback only helps if
 // an empty value falls through to it.
 func str(payload map[string]any, keys ...string) string {
 	for _, key := range keys {
