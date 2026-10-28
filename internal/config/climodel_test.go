@@ -21,7 +21,7 @@ func opencodeEntry(model string, lines ...string) string {
 //
 // OpenCode splits its model flag at the first slash, so a bare
 // `claude-sonnet-5` is the provider "claude-sonnet-5" with no model and every
-// call — the text calls and a box-mode run, handed the same value — is
+// call — its runs on this host and an executor run, handed the same value — is
 // "Invalid model reference". Refused on a write at the field, admitted on apply,
 // because the provider builds and the grammar is a vendor fact a newer peer
 // may know better.

@@ -146,7 +146,7 @@ const DOCUMENT: CompanyDocument = {
               handle: "swe",
               email: "swe@example.com",
               workers: ["test-writer", "reviewer-lite"],
-              sandbox: { enabled: true, run_in: "e2b", coding_agent: "claude-code" },
+              sandbox: { setup: [{ name: "deps" }], max_turns: 40 },
               placement: { labels: { pool: "build" } },
               token_budget: { week: 3_000_000 },
               // What an engine whose redaction took any value CONTAINING `${`
@@ -1225,7 +1225,7 @@ test("the current turn names its round against the granted cap, its calls and th
 
 test("the setup card reads the chart's model and tools, and the document's own rows", async () => {
   mount("#/company/org/seats/swe", { answers: { viewer: OPERATOR, config: DOCUMENT } });
-  await waitFor(() => expect(screen.getByText(/e2b · claude-code/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/1 setup step · up to 40 turns/)).toBeTruthy());
   const setup = screen.getByText("Setup").closest(".crewlet-card") as HTMLElement;
   expect(setup.textContent).toContain("anthropic-main");
   expect(setup.textContent).toContain("openai-fallback");
@@ -1248,7 +1248,7 @@ test("without the document the setup card says whose read it is, not that nothin
   // THE PUBLIC HALF STILL DRAWS.
   expect(setup.textContent).toContain("anthropic-main");
   expect(setup.textContent).toContain("Some setup is only visible to admins.");
-  expect(setup.textContent).not.toContain("Not offered");
+  expect(setup.textContent).not.toContain("The catalogue's defaults");
 });
 
 // ---------------------------------------------------------------------------

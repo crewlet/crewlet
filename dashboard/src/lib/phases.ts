@@ -366,9 +366,9 @@ export interface PhaseRecord {
    * trail's and answered whole or not at all.
    */
   bodyWithheld: boolean;
-  /** The notes a person sent the turn that this phase read, and the round
-   *  whose provider call first saw each. */
-  steers: { round: number; noteId: string }[];
+  /** The notes a person sent the turn that this phase read, the round whose
+   *  provider call first saw each, and the kind of step that read it. */
+  steers: { round: number; noteId: string; boundary: string }[];
   /** The node that ran the phase, off the live call; "" on a stored record,
    *  whose row carries no node (the turn answer's `nodes` says it). */
   node: string;
@@ -394,10 +394,11 @@ export interface PhaseRecord {
    * How long this phase took, in milliseconds, as the engine measured it.
    *
    * Straight off `agent_phase_completed.duration_ms`. Zero on a live record,
-   * which has not finished, and on a record the engine could not measure —
-   * a box-mode executor whose rounds ran inside a coding CLI's own loop,
-   * in another process. Read it through [phaseDuration], never directly:
-   * "no duration" and "took no time" must not render alike.
+   * which has not finished. An executor's record states its two segments —
+   * the launch and the collection — and never the run between them, which
+   * is the run's own fact on its `sandbox` record. Read it through
+   * [phaseDuration], never directly: "no duration" and "took no time" must
+   * not render alike.
    */
   durationMs: number;
   /** The event id, when this came from the store — for a deep link. */
@@ -442,11 +443,11 @@ export function toolCalls(raw: unknown): ToolCall[] {
       result: str(rec.result),
       failed: rec.success === false || Boolean(rec.error),
       // How long the call took, and who answered it: the tool loop times
-      // every call and the surface names the origin that served it. Absent
+      // every call it runs, the bridge every call an executor run makes
+      // over it, and the surface names the origin that served it. Absent
       // on a row nothing timed (a call whose arguments did not parse, which
-      // was answered rather than run, and a box-mode run's bridged call,
-      // whose rounds ran inside somebody else's loop), which reads as 0 /
-      // "" — "not recorded", never "instant" or "the engine's own".
+      // was answered rather than run), which reads as 0 / "" — "not
+      // recorded", never "instant" or "the engine's own".
       durationMs: typeof rec.duration_ms === "number" ? rec.duration_ms : 0,
       origin: typeof rec.origin === "string" ? rec.origin : "",
       server: typeof rec.server === "string" ? rec.server : "",
@@ -669,9 +670,10 @@ function promptRole(
  * the page. A turn's own phases have no task id and keep the three-part key
  * they have always had.
  *
- * THE LAUNCH ID IS NOT OPTIONAL for a coding run, for the same reason: a
- * resumed executor that calls `run_sandbox` again in one iteration launches a
- * second run, and each is a `sandbox` phase of that iteration. It keys the
+ * THE LAUNCH ID IS NOT OPTIONAL for a coding run, for the same reason: a run
+ * that parked on a question and is relaunched on its answer is a second
+ * launch in the same iteration, and each is a `sandbox` phase of that
+ * iteration. It keys the
  * `sandbox` phase ONLY — the resumed executor's record names the run it
  * collected too, and keyed on it that record would stop matching the live
  * call it replaces.
@@ -763,7 +765,11 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     runStartedAt: call.run_started_at ?? "",
     runningCalls: runningCalls(call.running_calls),
     bodyWithheld: call.body_withheld === true,
-    steers: (call.steers ?? []).map((s) => ({ round: s.round, noteId: s.note_id })),
+    steers: (call.steers ?? []).map((s) => ({
+      round: s.round,
+      noteId: s.note_id,
+      boundary: s.boundary,
+    })),
     node: call.node ?? "",
     clockStart: call.started_at ?? "",
     at: call.updated_at,
@@ -865,6 +871,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
       ? (p.steers as Record<string, unknown>[]).map((s) => ({
           round: num(s.round),
           noteId: String(s.note_id ?? ""),
+          boundary: typeof s.boundary === "string" ? s.boundary : "",
         }))
       : [],
     node: "",

@@ -6,11 +6,13 @@ the agents in one process; a node with `-roles data,ingress` serves only these
 routes and reaches the rest of the fleet over the event stream. The routes
 below are identical either way.
 
-A node **without** the `ingress` role binds `api.port` too, and serves only
-its two probes there — `/health` and `/ready`: see
-[Probes on a node without ingress](#probes-on-a-node-without-ingress). Its
-seats' box-mode runs reach their tools through an ingress node's
-[tool bridge](#routes), which relays each call to the node holding the seat.
+A node **without** the `ingress` role binds `api.port` too, and serves the
+network only its two probes there — `/health` and `/ready`: see
+[Probes on a node without ingress](#probes-on-a-node-without-ingress). An
+executor run in a box off its host reaches its tools through an ingress node's
+[tool bridge](#routes), which relays each call to the node holding the seat; a
+`direct` run on its own host dials it there on loopback, where it serves the
+bridge to its own host alone.
 
 There is nothing to install for it — it is compiled into the binary, along
 with the dashboard it serves and the WebSocket that is the dashboard's data
@@ -29,7 +31,7 @@ operator credential — move to that listener and are served nowhere else:
 |---|---|---|---|
 | `/webhooks/*` | Vendors (deliveries) and a person's browser returning from a vendor's app flow (`/webhooks/slack-oauth`, `/webhooks/github-app`) | `api.port` | `api.public` only |
 | `/otlp/{token}/v1/{signal}` | A sandbox exporting a coding run's telemetry | `api.port` | `api.public` only |
-| `/mcp/{token}` | A sandbox calling its seat's tools (box mode) | `api.port` | `api.public` only |
+| `/mcp/{token}` | A seat's executor run, in its box, calling the seat's tools — and, beneath it, polling for its turn's notes (`/mcp/{token}/steer/{notes,read}`) | `api.port` | `api.public` only |
 | Everything else: `/health`, `/ready`, `/`, `/dashboard`, `/favicon.ico`, `/static/*`, `/auth/*`, `/iam/*`, `/ws/stream`, `/query/*`, every REST read, `/config`, `/secrets`, `/setup`, `/operator/*`, `/backup`, the `/worklet/*` and `/fleet/*` gestures | People, the dashboard, the CLI, orchestrators | `api.port` | `api.port` only |
 
 A public route asked of `api.port` answers `404` with the code `no_route` and a
@@ -41,9 +43,11 @@ nothing about the admin routes behind it. It asks for no credential and
 decides before the guard runs, so a guarded route there is that same `404`
 whatever credential is sent. The probes are deliberately
 **not** public: `/health` describes the node to whoever runs it, so point every
-health check at `api.port`. A node without the `ingress` role serves its
-[probes](#probes-on-a-node-without-ingress) on `api.port` and nothing else, on
-either listener — and nothing at all when its `api.port` is `0`. See
+health check at `api.port`. A node without the `ingress` role serves the
+network its [probes](#probes-on-a-node-without-ingress) on `api.port` and
+nothing else, on either listener — beside them only the routes its own boxes
+dial, to its own host's loopback — and nothing at all when its `api.port` is
+`0`. See
 [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api).
 
 ---
@@ -192,9 +196,9 @@ serve — and only for one it will serve:
 |---|---|---|
 | `GET /health`, on `api.port` | `503` while the node recovers what it holds, then `200`, `status: "starting"` both times | The `503` is what a startup probe sized for the node's store — and, on a data node of a fleet, for the join it may have to make — bounds; nothing after the recovery holds it. See the phases below. |
 | `GET /ready`, on `api.port` | `503`, `reason: "starting"` | The node does no work and takes no traffic until it serves, so no load balancer and no rollout counts it. |
-| A route this listener will serve | `503 starting`, with `Retry-After: 10` | The caller is told to come back rather than meeting a refused connection, which reads as a node that is not there. On an `ingress` node that is every route of [Which listener serves what](#which-listener-serves-what) on the listener that serves it; a node without `ingress` serves no route but its probes. |
+| A route this listener will serve | `503 starting`, with `Retry-After: 10` | The caller is told to come back rather than meeting a refused connection, which reads as a node that is not there. On an `ingress` node that is every route of [Which listener serves what](#which-listener-serves-what) on the listener that serves it; a node without `ingress` serves the network no route but its probes, and a node without it that runs seats tells a caller on its own host's loopback to come back for `/mcp/` and `/otlp/`, the routes its own boxes dial — a `direct` run outlives its node's restart, and calls back while the node starts. |
 | A request on the artifact origin (`api.artifacts`) | An empty `503` with `Retry-After: 10` for a ticketed path, the runtime or the kit, and the empty `404` or `405` the origin gives anything else | The origin's own refusal under its own inert headers, never a JSON body, which would be a document an artifact page could read. |
-| Anything else | The `404` that listener answers once the node serves | So a socket says no more while the node starts than it does afterwards, and nobody is sent back to wait for a route this node will never serve. On `api.public` that is the router's own `404 no_route`, the probes included; on `api.port` of an `ingress` node with `api.public` set, the `404` naming `api.public` for a route outside parties call; and on `api.port` of a node without `ingress`, the router's own `404` for every path but the two above (once it serves, its guard answers `401` for a path that asks for a credential, and a `404` says no more than that). |
+| Anything else | The `404` that listener answers once the node serves | So a socket says no more while the node starts than it does afterwards, and nobody is sent back to wait for a route this node will never serve. On `api.public` that is the router's own `404 no_route`, the probes included; on `api.port` of an `ingress` node with `api.public` set, the `404` naming `api.public` for a route outside parties call; and on `api.port` of a node without `ingress`, the router's own `404` for every path but the two above and, from its own host's loopback on a node that runs seats, its boxes' two routes (once it serves, its guard answers `401` for a path that asks for a credential, and a `404` says no more than that). |
 
 Nothing here asks for a credential, since nothing is served that one could
 unlock. Every answer carries the security headers every answer of the node's
@@ -273,7 +277,7 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | `GET /health` | `200`, `status: "shutting_down"` | Liveness. An orchestrator that could not reach the node would kill it in the middle of the turns the drain exists to finish. |
 | `GET /ready` | `503`, `reason: "draining"` | Readiness: takes the node out of rotation so traffic moves to a peer. |
 | Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
-| `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. A tool call whose run's seat is held by another node is relayed there, as it is outside a drain. |
+| `/mcp/{token}` (its notes route included) and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls, the notes and the spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. A tool call whose run's seat is held by another node is relayed there, as it is outside a drain. |
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
 | Every other write: `/config`, `/secrets`, `/setup`, `/backup`, the `/worklet/*` writes, `POST /operator/mcp`, `POST /operator/act/{tool}` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. `POST /secrets/reveal` rides with them although it changes nothing — it is a `POST` so the names it reads travel in a body — and the CLI run asking it is told to try another node, as a write is. |
 
@@ -411,8 +415,10 @@ node means nothing was done.
 | `POST` | `/webhooks/confluence/{event}` | Receive one Confluence **Cloud** event, authenticated by the shared token the registered URL carries — `X-Crewlet-Token` first, `?token=` as the fallback, because Cloud honours no registration field for a header |
 | `POST` | `/webhooks/datadog` | Receive a Datadog monitor alert, authenticated by a constant-time comparison of `X-Crewlet-Token`. Datadog signs nothing, so the token is the whole check: an unset one answers `503`, and one shorter than 26 characters answers `503` too — see [Datadog](../integrations/datadog.md#verification-is-weaker-here-and-that-is-the-providers-ceiling) |
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
-| `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
-| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to a coding agent in box mode — by the node holding the seat, to which the node the call reaches relays it over the broker. Per-run token in the path; all three verbs because that is what the transport uses. `401` for a token that is forged, expired, or names a run that is over; `503` with a `Retry-After` while no node can answer for the run's seat, after waiting up to two seat-lease lifetimes for one; `502` when the seat's holder took the call and stopped answering before it wrote a status |
+| `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path). Mounted where `CREWLET_SANDBOX_OTEL_RECEIVER_URL` is set, or, for a node's own `direct` boxes, where it runs seats, binds `api.port` and forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` — on a node without `ingress` to its own host's loopback alone, as the bridge is |
+| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to the seat's executor, its coding CLI's run in a box — by the node holding the seat, to which the node the call reaches relays it over the broker. Per-run token in the path; all three verbs because that is what the transport uses. A call is admitted under any `Host`, a proxy's or tunnel's public name on the node's loopback included. `401` for a token that is forged, expired, or names a run that is over, and for a call to a Dashboard Assistant deep-work run held to the engine host's loopback that comes from any other address, or names a `Host` that is neither loopback nor a container runtime's name for the engine host (`host.docker.internal`, `host.containers.internal`); `503` with a `Retry-After` while no node can answer for the run's seat, after waiting up to two seat-lease lifetimes for one; `502` when the seat's holder took the call and stopped answering before it wrote a status. Mounted only on a node that has a bridge: one given `CREWLET_MCP_BRIDGE_URL`, or one that runs seats and binds `api.port`, for its own `direct` boxes. A node without `ingress` mounts it on `api.port` beside its probes and serves it to its own host's loopback alone, answering any other caller `404 no_route` (see [Probes on a node without ingress](#probes-on-a-node-without-ingress)); on any other node the route is absent |
+| `GET` | `/mcp/{token}/steer/notes?after={seq}` | The run's [notes](../concepts/code-sandbox.md#notes-to-a-running-run): the notes waiting for its turn past the cursor, `{"notes": [{seq, id, inbox, message}]}`, held up to ten seconds while none waits and answered at once when one arrives. `503` with a `Retry-After` once the node is stopping (`draining`) or the run's session has ended here (`unavailable`), the held poll included: its notes wait for the session's next opening. The same token, routing and refusals as the bridge; `404` for a run that has nothing to steer |
+| `POST` | `/mcp/{token}/steer/read` | Record the notes the run's CLI put in front of its model, `{"ids": [...]}` (one to ten, at most 64 KiB): `204`, or `503` with a `Retry-After` when the record could not be written, and the notes wait |
 | `GET` `POST` `DELETE` | `/operator/mcp` | Worklet and Doclet, served over MCP to **your** AI assistant. **Always needs a credential**, which for an assistant is a [machine token](#post-iamcredentials-mints-a-machine-token) acting as you: it files and moves work (see [below](#operatormcp--your-own-assistant)). The catalogue is built per request: `503 no_active_revision` until this node's first company brings Worklet or Doclet up, and `404 no_route` on a company that runs neither |
 | `POST` | `/operator/act/{tool}` | The same catalogue's writes, one tool per request, **as the principal your request resolves to**: the dashboard's write surface. Any credential the guard resolved; every tool is decided by the authority table, as on every other surface, and the `Idempotency-Key` header is required (see [below](#operatoract--the-dashboards-write-surface)). Answers as `/operator/mcp` does before the first company and on a company that runs neither Worklet nor Doclet |
 | `POST` | `/assistant/proposals/{id}/approve` | Approve one of **your own** Dashboard Assistant proposals. A proposal whose turn read through an app you no longer hold is not sent: it settles `failed` with the refusal `access_withdrawn`, and the turn ends rather than carrying on with what it read. Your session cookie and a matching `Origin` only (an assistant grant is refused before routing), `Content-Type: application/json`, the `Idempotency-Key` header, and `{"protocol_version": 1, "digest": "sha256:..."}` echoing the digest the card showed, with an optional `page_context`: the screen you decided from, as it is now, which the resumed turn runs on (the actions it accepts, the draft as the change left it). A turn you asked without a page never gains one this way, and a `page_context` the screen's own rules refuse is `400 invalid_body` before anything is decided. Refusals: `404 not_found` (not yours, or no such proposal), `409 proposal_already_decided` (with its `state`), `410 proposal_expired`, `409 proposal_digest_mismatch` (nothing sent), `409 proposal_stale` (the record moved since it was shown), `403 step_up_required` (nothing recorded; confirm it is you and send the same request again), `503 unavailable` with the `op_id` to retry under. A server write is sent in process as you, once, under the proposal's own operation key, and `202` answers its state (`applied`, `failed` or `unknown`), the turn and where its continuation streams. An `unknown` proposal is retried by approving it again: the same write, never a second one |
@@ -688,7 +694,7 @@ told they lead nobody goes looking for an authority they already hold.
 | **everybody** | The [overview](../concepts/identity-and-access.md#everybodys-overview), for every principal the guard resolved whose stage may act: `/agents`, `/agents/activity` and the `agent` and `live_call` questions (an agent's **status**, with its **body** to an administrator and to whoever leads the seat, [below](#a-status-reader-never-receives-a-transcript)), `/org`, `/tools`, `/schedules` and their runs, `/budgets`, `/sandbox-runs` (status; the same body rule), `/tokens/*`, `/viewer`, `/stream/snapshot`, `/ws/stream`, `GET /iam/seats` (masked per reader), the `seat_activity` and `colleague` questions, and the cross-app answers filtered row by row: `/feed`, `decisions`, `answered_decisions` and the `knowledge` question |
 | `worklet` | The reads under `/worklet/*`, the [write surface's](#the-human-write-surface) item routes, a project's files (`GET`/`PUT /worklet/files/…`; removing one is the project lead's), every `work_*` question, the socket's `inbox_changed` push, and `/operator/mcp`'s Worklet half. Some verbs also ask a RELATION beside the app: re-routing, a project's policy and taking an item out of circulation are its project lead's, and a person's inbox, queue and person view are their own and their lead's |
 | `doclet` | The reads under `/doclet/pages/*` and `/containers`, the page questions, and writing Doclet's pages. A rename, the trash and a restore are also the container's lead's or the page's creator's; see [the write surface](#the-human-write-surface) |
-| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model (a coding CLI the host runs), a `run_in: self` sandbox), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, `/mcp-servers`, `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/worklet/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, and the two purges (`/worklet/items/{key}/purge`, `/doclet/pages/{id}/purge`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
+| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model — a coding CLI the host runs — and a `direct` cell, an entry's `run_in` or `providers.sandbox.default_run_in`, which runs agent seats' executors there as fully permissioned coding CLIs), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, `/mcp-servers`, `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/worklet/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, and the two purges (`/worklet/items/{key}/purge`, `/doclet/pages/{id}/purge`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
 | `audit.seat.read` | One seat's own trail — `/agents/{id}/memory`, `/agents/{id}/memory/episodes/{episode}`, `/agents/{id}/conversations`, `memory_overview` (filtered to the seats the caller may read), `turns?seat=` and `phases?seat=`, and a coding run's tail (`/sandbox-runs/{turn_id}/tail`) — decided per seat: **its lead**, or `admin` |
 
 A question asked on the socket is decided by the same declaration the REST
@@ -1705,8 +1711,8 @@ The registered media type is `application/merge-patch+json`; plain `application/
 
 ```bash
 curl -X PATCH https://engine.example.com/config \
-  -H "Authorization: Bearer $TOKEN" -H "X-Summary: raise the executor round cap" \
-  -d '{"turn_engine": {"max_tool_rounds": 32}}'
+  -H "Authorization: Bearer $TOKEN" -H "X-Summary: allow one more self-iteration per turn" \
+  -d '{"turn_engine": {"max_iterations": 4}}'
 ```
 
 - **Deep merge.** `{"providers": {"llm": {"main": {"model": "claude-opus-5"}}}}` changes that model and leaves the provider's type, its keys and every other provider alone.
@@ -3313,25 +3319,26 @@ coding run is a row of its own, `phase: sandbox`, published when the run is
 collected: its tokens, its `launch_id` (a turn can launch two runs in one
 iteration, so the launch is part of that row's identity), its report as
 `response` and its `activity_transcript` — see
-[each run is published as a phase](../concepts/code-sandbox.md#runs-are-uncapped-each-run-is-published-as-a-phase).
+[each run is published as a phase](../concepts/code-sandbox.md#a-run-is-bounded-by-its-rounds-each-run-is-published-as-a-phase).
 A finished row also carries `duration_ms`, which a live one cannot: it is the
 engine's own measurement of the phase, published on the record rather than
 reconstructed by pairing it with the `agent_phase_started` that shares its key.
-Zero means *not measured* — a box-mode executor's rounds ran inside a coding
+Zero means *not measured* — an executor's rounds ran inside its coding
 CLI's own loop, in another process — never *took no time*. A phase that failed
 before it reached a provider also truncates to zero at this resolution;
 `failed` is what separates the two.
 
-It measures the **whole** phase, including a suspend. A detached coding run
-parks the executor mid-loop and the phase is re-entered later — after a
-restart, possibly on another node — and the parked row carries the clock
-across with the rounds and the tokens, so the one record the phase publishes
-reports the run rather than the seconds spent collecting its answer.
+It measures the phase's **own segments**. The executor launches its run and
+parks, and when the run is collected the same turn re-enters the phase — after
+a restart, possibly on another node — so the one record the phase publishes
+carries the launch segment's time, carried across on the park, plus the
+collection's, and never the run between them: the run's own time and tokens
+are on the `phase: sandbox` row of the box it ran in.
 
 A finished row carries the phase's **timeline** too, and so does every other
 reader of the record — `phases`, `turn`, `trace` and `event` answer the stored
 payload verbatim: `started_at` (when this segment began — not published minus
-`duration_ms`, which on a resumed phase spans a coding run), `rounds[]` (one
+`duration_ms`, which on a resumed phase also counts the launch segment), `rounds[]` (one
 `{round, started_at, duration_ms, model, input_tokens, output_tokens,
 cache_read_tokens, cache_write_tokens, tool_calls, stop_reason}` per model
 request the CLI's record showed, the model's half of the round only;
@@ -3344,8 +3351,9 @@ cache_write_tokens, tool_calls}` per CLI run, `outcome` one of `end`, `cap`,
 phase's `cache_read_tokens` / `cache_write_tokens` (a breakdown of
 `input_tokens`, never an addition to it), `max_rounds` / `round_ceiling`, a
 worker's or a judge's `host_round`, a resumed executor's `launch_id` and the
-turn's `work_item`, and `steers[]` — `{round, note_id}` for each person's note
-the phase read. The live frame carries the same so far plus
+turn's `work_item`, and `steers[]` — `{round, note_id, boundary}` for each
+person's note the phase read; a read by the phase's coding run is at round 1,
+with the kind of step that read it. The live frame carries the same so far plus
 `round_started_at`, the `run_started_at` of the CLI run in flight and the
 `running_calls` in flight. Each is **absent** where
 nothing measured it — a tool call nobody timed has no `duration_ms`, never a
@@ -3595,10 +3603,12 @@ shaped the same way.
                       while a person has the seat paused, or null) */ }, ... ],
   "events":    [ { /* recent event row, newest first — payload-free, plus
                       a `failed` boolean */ }, ... ],
-  "sandboxes": [ { /* in-flight detached coding run: turn_id, role,
-                      agent_handle, agent_id, coding_agent, sandbox_id,
-                      task, status (the run record's own word), started_at,
-                      question, audience, work_item, owner, paused_at */ }, ... ],
+  "sandboxes": [ { /* an executor run in flight: turn_id, role,
+                      agent_handle, agent_id, coding_agent, provider_key
+                      (the executor-chain member it was launched on, to an
+                      admin alone) and model, sandbox_id, task, status (the
+                      run record's own word), started_at, question,
+                      audience, work_item, owner, paused_at */ }, ... ],
   "tools":     [ { /* one catalogue entry — see The Tool Catalogue below */ } ],
   "org":       { /* /org payload */ },
   "tokens":    { /* the spend rollup — same shape as /tokens/breakdown */ },
@@ -3735,16 +3745,33 @@ A node whose `node.roles` leave out `ingress` — a [satellite](../guides/satell
 or the seats and workers half of a split deployment — serves no API, no
 dashboard and no webhook. But an orchestrator runs every node, and one it
 cannot probe it can neither restart when it wedges nor wait on during a
-rollout. So such a node binds `api.port` for exactly two routes, and binds no
-[public listener](#which-listener-serves-what): a box-mode run of one of its
-seats reaches its tools through an ingress node's [tool bridge](#routes), which
-relays each call here. The guard stands in front of them as it does
-on an ingress node, so every other path is judged as one there is: `401` to a
-request that presents no credential, since everything outside the guard's
-exemptions is guarded (`/agents`, say), and `404 no_route` for an exempt path
-this node does not serve (`/dashboard`) and for anything once a credential is
-presented. The node logs `api_probes_listening`. `api.port: 0` binds nothing,
-on this node as on any other.
+rollout. So such a node binds `api.port` for exactly two routes the network
+can reach, and binds no [public listener](#which-listener-serves-what): an
+executor in a box off its host reaches its tools through an ingress node's
+[tool bridge](#routes), which relays each call here. The guard stands in front
+of them as it does on an ingress node, so every other path is judged as one
+there is: `401` to a request that presents no credential, since everything
+outside the guard's exemptions is guarded (`/agents`, say), and `404 no_route`
+for an exempt path this node does not serve (`/dashboard`) and for anything
+once a credential is presented. The node logs `api_probes_listening`, with the
+address its own boxes dial in `box_host_url`. `api.port: 0` binds nothing, on
+this node as on any other.
+
+**A node that runs seats serves its own boxes beside the probes.** A `direct`
+box is a process of the node's host, and dials the node that launched it on
+loopback: the [tool bridge](#routes) under `/mcp/{token}` (its notes route
+included) and, where the node forwards to `OTEL_EXPORTER_OTLP_ENDPOINT`, the
+telemetry receiver under `/otlp/{token}/v1/{signal}`. Both are served here to a
+caller on this host's loopback alone, read from the connection's own address,
+and are the same routes an ingress node serves: a token the fleet did not sign
+answers `401`, and a call for a seat this node has since handed on is relayed to
+its holder. Any caller off the host meets `404 no_route` under both prefixes,
+whatever its method, so the network reaches nothing here but the probes. While
+the node starts, a loopback caller of either is answered `503 starting` with a
+`Retry-After`, as every starting node answers a route it will serve. The node
+hands its boxes this address only where loopback reaches the listener — an
+`api.host` of every interface or a loopback address; one bound to a single
+other address leaves its `direct` boxes to `CREWLET_MCP_BRIDGE_URL`.
 
 `GET /health` is liveness, `200` while the process is alive — through a drain
 and through a broker link that is down — once the node serves; before then it
@@ -4219,9 +4246,9 @@ way. The fields are these:
 - `round_started_at` is when the latest round made its provider call. It is later than every entry in `rounds` while that call is out, and equal to the last entry's start while the round's tools run — only the first is a model call in flight.
 - `run_started_at` is when the CLI run in flight was launched — the run whose rounds are past every entry in `invocations`. Absent between runs, so a reader draws the run in flight from its launch rather than from the first round it happens to have timed.
 - `running_calls` is every tool call running right now, in the order the calls arrived, each `{id, round, name, arguments, started_at}` — a **list**, because a coding CLI may make a response's calls at once. `id` is the call's id, which its `tool_executions` row carries as `call_id` once it has answered. It is absent while no call runs, and never carried forward from an earlier frame: a frame that stops listing a call means the call returned.
-- `steers` is every person's note the phase has read so far, `{round, note_id}` — the round whose provider call first saw it. What the note said and who sent it are on the turn's `agent_turn_steered` rows. See [steering a running turn](#steering-a-running-turn).
+- `steers` is every person's note the phase has read so far, `{round, note_id, boundary}` — the round whose provider call first saw it, and the kind of step that read it (`round`, or `brief`, `tool_batch`, `finish` or `step` for a read by the phase's coding run, which is round 1). What the note said and who sent it are on the turn's `agent_turn_steered` rows. See [steering a running turn](#steering-a-running-turn).
 - `node` is the node running the call.
-- `versions` is `{prompt, response, narration, executions, rounds}`: the version of the copy the call holds of each of its heavy fields — `prompt` numbers `prompt` and `prompt_messages`, `response` the `response`, `narration` the `round_narration`, `executions` the `tool_executions` and `rounds` the `rounds` — a number the node's projection never hands out twice, taken whenever the field is written: every field of a call when the call begins, and after that each field a frame changes. So on the node a tab's socket reads, a version only grows, for every call under every key — and a call built again under its own key (`turn_id`, `phase`, `iteration`), as a suspended Execute phase is when its resumed rounds stream after the checkpoint cleared it, is newer in every field than the copy a tab held from before. A tab that reconnects is sent a snapshot, which replaces every copy it holds. Every surface that carries a call carries it.
+- `versions` is `{prompt, response, narration, executions, rounds}`: the version of the copy the call holds of each of its heavy fields — `prompt` numbers `prompt` and `prompt_messages`, `response` the `response`, `narration` the `round_narration`, `executions` the `tool_executions` and `rounds` the `rounds` — a number the node's projection never hands out twice, taken whenever the field is written: every field of a call when the call begins, and after that each field a frame changes. So on the node a tab's socket reads, a version only grows, for every call under every key — and a call cleared and built again under its own key (`turn_id`, `phase`, `iteration`) is newer in every field than the copy a tab held from before. A tab that reconnects is sent a snapshot, which replaces every copy it holds. Every surface that carries a call carries it.
 
 Beside `live_call`, each seat carries `live_call_seq`: the node projection's
 own sequence — the one `versions` are taken from — read when the seat's call
@@ -4236,7 +4263,11 @@ is a fact about one node's projection, and a snapshot resets what a tab holds.
 Beside `live_call`, each seat carries `turn`, `last_turn` and `paused`: the turn the seat is on, with its `stage` of `context`, `phase` or `parked`, the newest turn it ended, and who paused the seat, when and why (`null` while nobody has). See [Agent States](../concepts/agent-runtime.md#agent-states).  A call whose phase failed keeps `in_progress: false`
 plus `failed: true` and an `error` object, so the dashboard renders the failure
 instead of an answer that never arrives — and no `partial_round`, because the
-phase is over and nothing is still arriving.
+phase is over and nothing is still arriving. The failed call stays until the
+seat's next work replaces it, and the same phase running again under the same
+turn and iteration — the review of a parked turn's resume that is held or
+retried — replaces it with a call of its own rather than continuing the failed
+one's rounds.
 
 **A failure is told by its kind, and the company's configuration only to an
 admin.** The `error` object and a seat's `last_error` are
@@ -4246,9 +4277,11 @@ person, and `detail` is the failure in its own words, sent only to a reader who
 is an admin. Those words name the company's `providers.llm` entries ("llm chain
 exhausted after 1 providers (default)") and carry whatever a vendor or a tool
 wrote, and which entries a company configures is an admin's to read; the same
-goes for each `invocations` entry's `provider_key`, which every other reader,
-a seat's lead included, is sent without. The full text stays in the engine's
-log and on the turn's own record.
+goes for each `invocations` entry's `provider_key`, and for the `provider_key`
+of a coding run on the `sandboxes` push and snapshot and on the
+[`sandbox_runs`](#get-sandbox-runs) board, which every other
+reader, a seat's lead included, is sent without. The full text stays in the
+engine's log and on the turn's own record.
 
 #### What the projection carries, and what the wire sends
 
@@ -4271,8 +4304,8 @@ pushes out of it are trimmed, and each is reassembled on the other side:
   and the tab keeps the copy it holds. They move once a round or once a tool
   call; between those moments a push is the round being written
   (`partial_round`), the call in flight and the light fields. Measured over one
-  long executor phase (thirty rounds, 1 311 frames), each open tab was sent
-  185 MiB with every push whole, and is sent 5.9 MiB.
+  long phase streamed on the engine host (thirty rounds, 1 311 frames), each
+  open tab was sent 185 MiB with every push whole, and is sent 5.9 MiB.
 - **A dropped push is noticed by the next one.** The socket drops a slow tab's
   oldest envelope rather than stalling every other tab, which is why the pushes
   used to be whole: a frame that carried only what changed, dropped, would
@@ -4299,11 +4332,10 @@ pushes out of it are trimmed, and each is reassembled on the other side:
   leaves the call as the answer had it, and its other fields still apply.
 - **A version is never handed out twice**, so "moved" and "newer" are one
   question. Counted per call, a call cleared and built again under the same
-  key — a suspended Execute phase, whose completion checkpoint clears its call
-  and whose resumed rounds stream under the same turn, phase and iteration —
-  numbered its fields from one again, and a tab that had missed the clearing
-  push and the first one after it read every later push as older than the
-  copy it held from before the suspension, and kept that copy.
+  turn, phase and iteration would number its fields from one again, and a tab
+  that had missed the clearing push and the first one after it would read
+  every later push as older than the copy it held from before, and keep that
+  copy.
 
 ### `WS /ws/stream`
 
@@ -4409,7 +4441,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `events` | `{limit, type, source, category, trace_id, channel_id, seat, actor, agent, turn_id, work_key, work_item, suspended, failed, feed_only, since, until, before_id, before_time}` | `GET /events`. `feed_only=true` selects the rows the activity feed carries — every stored type but the ones it keeps out (`auxiliary_spend`), a trace's `agent` siblings included — and is what every read merged with the live feed asks; `true`, `false` or absent, any other word a **400**. `failed` is THREE-VALUED the same way — `true`, `false` or absent, any other word a **400** — and selects by the rule every row's own `failed` is stamped by: a stored `failed` tag, or a type that is itself a failure (`llm_unavailable`, `budget_exhausted`, `turn.guard_breach`, `sandbox_run_failed`). It is the event log's "Failures only", applied by the engine so the axis and every page are one set. `suspended` is THREE-VALUED — `true`, `false` or absent for every row, any other word a **400** — and selects by whether a completion record PARKED its turn on a detached coding run: a turn that parks and resumes writes two `agent_turn_completed` records, the first marked `suspended`, so `type=agent_turn_completed&suspended=false` is the turns that ENDED, one record each, and is what a turns axis counts over. `trace_id` selects one trace as a FILTER — paged, windowed and combinable with every other filter, where [`GET /events/trace/{trace_id}`](#routes) is the whole trace oldest first. `channel_id` selects one agent-to-agent conversation's events, by the channel id every A2A event carries (an index seek, migration `0034`). `seat` is a seat's **handle** and selects the events that seat published, resolved on the server to the id every node derives for it — so a seat since removed from the chart still names its history, and a role name, which a rename changes, is never the key; anything that is not a handle, or a person's seat's handle, is a **400** — an empty page would read as a seat that never did anything — and before a company configuration is applied it is **503** `unavailable`, since the id is derived from the company's name. `agent` is the broader question — the **related** filter: every event involving one agent seat, named by any handle it answers to and matched on its agent id, plus every event sharing a trace with one (see [Paging the event history](#paging-the-event-history)). `turn_id` selects ONE RUN of a turn; `work_key` selects every run of one unit of work — the attempts at a trigger that was redelivered; `work_item` selects every event on one work item — each turn's start, its phases and completions, a coding run it launched — named by the item's identity across trackers, `<backend>:<id>` (`native:<task id>`, `jira:<issue id>`), never by its key, which a move rewrites. A value that is not that shape (a key such as `ENG-4`, or either half missing) is a **400** rather than an empty page, because an empty answer reads as "nothing happened on this item". The filter reads the `work_item` COLUMN (migration `0033`), filled from the same payload field as the row's `work_item` tag. Every row answers with its own `work_key` read off the `work_key` COLUMN (migration `0029`) rather than out of its `tags` — the column is what the `work_key` filter reads, so a row and the filter that matched it never disagree about its unit of work |
 | `event_series` | `{bucket, since, until, type, source, category, trace_id, channel_id, seat, actor, agent, turn_id, work_key, work_item, suspended, failed, feed_only}` | `GET /events/series`. Every bar carries `failed` beside `count` — how many of its rows reported a failure — and the answer a `failed` total beside `total` (see [the event log's time axis](#the-event-logs-time-axis)). THE SAME ROWS WITH A TIME AXIS, which a page of rows has no dimension for: a burst at four in the morning and a steady trickle across a week are the same hundred rows in the same column. A second question rather than a flag on the first, because the two answers have different shapes and one route returning either would make every caller branch on what came back — the same split `tokens` and `token_series` carry. Both halves compile their filters through ONE predicate in the store, so a bar can never claim rows the listing beside it would not show |
 | `trace` | `{trace_id}` | `GET /events/trace/{trace_id}`. Answers `{trace_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-trace cap (500) rather than at the end of the trace, which the caller must say — a trace shown short with no note reads as a complete causal chain that simply ends. It is **counted, not inferred** from the row count: a trace of exactly the cap holds every row it has, and `len(rows) == cap` would put a truncation warning on a complete one. Across a fleet the rows are every node's oldest, merged, and they stop at the last row a node sent when that node holds more than it sent — its own read stopped at the cap, or its reply was cut to fit the transport — rather than show another node's newer rows past the ones it did not send: such a view can hold fewer than 500 rows, and `truncated` says it is cut |
-| `turns` | `{days, since, until, seat, model, work_key, work_item, failed, sort, before, limit}` | `GET /turns`. The window is on the turn's START: `days` back from now (default 7, at most 30), OR `since` (inclusive) and `until` (exclusive) as RFC 3339 instants — either alone is a one-sided window — which is what a bar in the past needs, since `days` counts back from now; naming both forms, or a `since` not before `until`, is **400**. A turn is in the window when it STARTED there: one that began before `since` and ran on into the window is not listed, rather than listed from the window's edge with half its tokens. `seat` is a seat's **handle** and narrows to that seat's turns, resolved on the server exactly as on `events` (and refused the same way); there is no role-name filter, because a role name is changed by a rename while the history keeps the old one. ONE ROW PER RUN of a turn — a wake, a decision, its rounds and its reply — which is the view of a working company that did not exist anywhere. A turn that broke before reaching outside the engine is redelivered, so one TRIGGER is legitimately several rows; each carries the `work_key` they share and `work_key=` narrows to every attempt at one (see [a turn's two identities](../concepts/turn-engine.md#a-turns-two-identities)). A turn is what this engine DOES and every other surface is a projection of one: the spend rollup groups them, the seat page shows one seat's, an item's history links to the ones that touched it, and none of them is a list of them. The dashboard faked one by paging the raw event feed sixty-one times and folding in the browser — slow, capped at whatever the caller gave up on, and wrong at the page boundary, where a turn straddling two pages appeared twice. The aggregates are over PROMOTED COLUMNS (migration 0015) rather than payloads; only the duration, the summary and the work item come from the completion record's own payload, read from the one row per turn that carries it. `work_item` is `{backend, id, key, project}` — the one item the turn was charged to (see [which work a turn is on](../concepts/turn-engine.md#which-work-a-turn-is-on)) — and ABSENT for a turn on nothing, including one still running, since a sole write names its item only at the end. `work_item=` narrows to the turns on one item, by the same `<backend>:<id>` identity `/events` takes (and the same **400** for anything else); it selects TURNS rather than rows, so a turn is listed whole — every phase and every segment folded — when any of its records names the item. There is no `task_id` on a row: the key it read was declared on the completion and never set, and `task_id` elsewhere means a delegated worker's task or a schedule fire's run, never a tracker item. A turn that launched a detached coding run PARKS: the segment that launched it publishes a completion with `suspended: true`, and the same turn completes again when the run is collected — so one turn can hold several completion records and "a completion exists" is not "the turn ended". The NEWEST completion decides: `complete` is true when it is not a suspension, and `parked` when it is, so the two are never both true; a turn with neither is running or died mid-flight. A `sandbox_run_failed` also counts as an end. It is a coding run that was LOST, and nothing resumes the turn that was parked on it, so a list reading completions alone called that turn parked for good. The newest end still decides: a run lost while it was still launching is followed by its turn's own completion. `duration_ms` is the turn's OWN measurement — the SUM of every segment's, so the wait for the coding run between them is not counted — which is not the span of its events either: the span covers the reflection pass that publishes afterwards. A turn's tokens are its COST: its phases' and its in-turn `auxiliary_spend` records' (its turn-start context, its ledgers' rewrites, its card), never the reflection after it — whose records carry the turn's id, so the Turn screen can draw them, and which is the seat's learning rather than what the work cost; `sort=-tokens` ranks by the same sum, and `model=` selects over the same rows: a turn is listed for a model one of its phases or in-turn calls ran on — exactly what its `models` names — and never for one only its reflection used. `cache_read_tokens` and `cache_write_tokens` are that cost's prompt-cache counts (migrations `0032`, `0040`), a breakdown of `input_tokens` rather than an addition to `total_tokens`. `failed` is THREE-VALUED and absent means every turn, because folding it into `false` would hide every failing turn from an unparameterised list — and a turn counts as failed when ANY of its events carried a failure OR was a failure BY ITS TYPE (`llm_unavailable`, `budget_exhausted`, `turn.guard_breach`, `sandbox_run_failed`), which is the same rule `/events` applies to a row. The second half is what a turn the engine killed BETWEEN phases leaves behind — a refused charge, an exhausted chain, a breached guard — so reading the failure flag alone reported those as clean turns with no completion record, which is indistinguishable from a turn still running. A failed turn says WHY on its row: `error` and `error_kind` are the message and class of the record that ended it, the turn's own `agent_turn_completed` first, then any other failed record (a failed phase, a provider chain that ran out, whose `last_error` is read, or a failure by its type, whose kind is that type), and both are absent for a turn that carried no failure, including one a person stopped. They are read by whoever may read the row, so a lead reads why their agent's turn failed without the administrator's event log. The rows are newest first by where each turn is listed, and the higher `turn_id` first within one microsecond, so the order is total. The cursor is on the TURN — a keyset on any one event pages a turn twice — and it is OPAQUE: `next` is a token, and `before` takes exactly the `next` a page answered (anything else is **400** `bad_params`, an RFC 3339 instant included). It is opaque because the position is not a row's own fields: it is where the page's last turn is LISTED, which is not always its `started_at` (see [Reading the fleet's history](#reading-the-fleets-history-coverage)), and that turn's id, without which two turns starting at one microsecond either side of a page's cut were one position and the one past the cut was on no page; and it can stand on an empty page, which has no row to build one from. Where `/events` and `phases` echo `before_time`/`before_id`, the position IS the last row's key. `next` is present only while more turns lie past the page — `null` on the last one, which is how a reader paging a seat's record knows the walk has ended rather than offering "older" onto an empty page. `sort` is `-started` (the default, newest first) or `-tokens` (the most total tokens first, the spend screen's drill-down per turn) — anything else is **400** naming both. Read from EVERY node and merged, with a `coverage` — see [Reading the fleet's history](#reading-the-fleets-history-coverage) |
+| `turns` | `{days, since, until, seat, model, work_key, work_item, failed, sort, before, limit}` | `GET /turns`. The window is on the turn's START: `days` back from now (default 7, at most 30), OR `since` (inclusive) and `until` (exclusive) as RFC 3339 instants — either alone is a one-sided window — which is what a bar in the past needs, since `days` counts back from now; naming both forms, or a `since` not before `until`, is **400**. A turn is in the window when it STARTED there: one that began before `since` and ran on into the window is not listed, rather than listed from the window's edge with half its tokens. `seat` is a seat's **handle** and narrows to that seat's turns, resolved on the server exactly as on `events` (and refused the same way); there is no role-name filter, because a role name is changed by a rename while the history keeps the old one. ONE ROW PER RUN of a turn — a wake, a decision, its rounds and its reply — which is the view of a working company that did not exist anywhere. A turn that broke before reaching outside the engine is redelivered, so one TRIGGER is legitimately several rows; each carries the `work_key` they share and `work_key=` narrows to every attempt at one (see [a turn's two identities](../concepts/turn-engine.md#a-turns-two-identities)). A turn is what this engine DOES and every other surface is a projection of one: the spend rollup groups them, the seat page shows one seat's, an item's history links to the ones that touched it, and none of them is a list of them. The dashboard faked one by paging the raw event feed sixty-one times and folding in the browser — slow, capped at whatever the caller gave up on, and wrong at the page boundary, where a turn straddling two pages appeared twice. The aggregates are over PROMOTED COLUMNS (migration 0015) rather than payloads; only the duration, the summary and the work item come from the completion record's own payload, read from the one row per turn that carries it. `work_item` is `{backend, id, key, project}` — the one item the turn was charged to (see [which work a turn is on](../concepts/turn-engine.md#which-work-a-turn-is-on)) — and ABSENT for a turn on nothing, including one still running, since a sole write names its item only at the end. `work_item=` narrows to the turns on one item, by the same `<backend>:<id>` identity `/events` takes (and the same **400** for anything else); it selects TURNS rather than rows, so a turn is listed whole — every phase and every segment folded — when any of its records names the item. There is no `task_id` on a row: the key it read was declared on the completion and never set, and `task_id` elsewhere means a delegated worker's task or a schedule fire's run, never a tracker item. A turn that launched a detached coding run PARKS: the segment that launched it publishes a completion with `suspended: true`, and the same turn completes again when the run is collected — so one turn can hold several completion records and "a completion exists" is not "the turn ended". The NEWEST completion decides: `complete` is true when it is not a suspension, and `parked` when it is, so the two are never both true; a turn with neither is running or died mid-flight. A `sandbox_run_failed` also counts as an end. It is a coding run that was LOST, and nothing resumes the turn that was parked on it, so a list reading completions alone called that turn parked for good. The newest end still decides: a run lost while it was still launching is followed by its turn's own completion. A turn a PERSON stopped — a pause with `stop_running` reached it at a round, or ended the coding run it was parked on — ends with a completion of its own, carrying `stopped`: such a row is `complete`, reads `stopped: true`, and is not `failed` for the stop (a `sandbox_run_stopped` is not a failure by type). `duration_ms` is the turn's OWN measurement — the SUM of every segment's, so the wait for the coding run between them is not counted — which is not the span of its events either: the span covers the reflection pass that publishes afterwards. A turn's tokens are its COST: its phases' and its in-turn `auxiliary_spend` records' (its turn-start context, its ledgers' rewrites, its card), never the reflection after it — whose records carry the turn's id, so the Turn screen can draw them, and which is the seat's learning rather than what the work cost; `sort=-tokens` ranks by the same sum, and `model=` selects over the same rows: a turn is listed for a model one of its phases or in-turn calls ran on — exactly what its `models` names — and never for one only its reflection used. `cache_read_tokens` and `cache_write_tokens` are that cost's prompt-cache counts (migrations `0032`, `0040`), a breakdown of `input_tokens` rather than an addition to `total_tokens`. `failed` is THREE-VALUED and absent means every turn, because folding it into `false` would hide every failing turn from an unparameterised list — and a turn counts as failed when ANY of its events carried a failure OR was a failure BY ITS TYPE (`llm_unavailable`, `budget_exhausted`, `turn.guard_breach`, `sandbox_run_failed`), which is the same rule `/events` applies to a row. The second half is what a turn the engine killed BETWEEN phases leaves behind — a refused charge, an exhausted chain, a breached guard — so reading the failure flag alone reported those as clean turns with no completion record, which is indistinguishable from a turn still running. A failed turn says WHY on its row: `error` and `error_kind` are the message and class of the record that ended it, the turn's own `agent_turn_completed` first, then any other failed record (a failed phase, a provider chain that ran out, whose `last_error` is read, or a failure by its type, whose kind is that type), and both are absent for a turn that carried no failure, including one a person stopped. They are read by whoever may read the row, so a lead reads why their agent's turn failed without the administrator's event log. The rows are newest first by where each turn is listed, and the higher `turn_id` first within one microsecond, so the order is total. The cursor is on the TURN — a keyset on any one event pages a turn twice — and it is OPAQUE: `next` is a token, and `before` takes exactly the `next` a page answered (anything else is **400** `bad_params`, an RFC 3339 instant included). It is opaque because the position is not a row's own fields: it is where the page's last turn is LISTED, which is not always its `started_at` (see [Reading the fleet's history](#reading-the-fleets-history-coverage)), and that turn's id, without which two turns starting at one microsecond either side of a page's cut were one position and the one past the cut was on no page; and it can stand on an empty page, which has no row to build one from. Where `/events` and `phases` echo `before_time`/`before_id`, the position IS the last row's key. `next` is present only while more turns lie past the page — `null` on the last one, which is how a reader paging a seat's record knows the walk has ended rather than offering "older" onto an empty page. `sort` is `-started` (the default, newest first) or `-tokens` (the most total tokens first, the spend screen's drill-down per turn) — anything else is **400** naming both. Read from EVERY node and merged, with a `coverage` — see [Reading the fleet's history](#reading-the-fleets-history-coverage) |
 | `turn` | `{turn_id}` | Every event of ONE RUN of a turn, oldest first, payloads included — each phase, the turn's own completion, and the fallbacks and guard breaches that happened inside it. Not a slice of the trace: one trace can span several turns and one turn several traces. Answers `{turn_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-turn cap (500) rather than at the end of the turn. A cut answer is the turn's **opening and its ending**, not its opening alone: a turn is read oldest first, so a head-only read would drop `agent_turn_completed` and `turn_completed` — the two records a reader takes the outcome, the duration and the plan summary from — and a turn cut at the cap would be indistinguishable from one that never finished. The last rows are recovered beside the first (up to 32 more, merged on the store's own identity, `(event_time, event_id)`, so the two reads cannot overlap into duplicates — the id alone is not unique, and a narrower key would drop a row the two reads legitimately both carry and then report a gap over a page holding the whole turn), so what `truncated` names is a gap in the **middle** — and it is **counted, not inferred** from the row count, because a turn between the cap and the cap plus thirty-two ends up whole on the page and must not carry a truncation warning. Across a fleet the opening stops, as `trace`'s rows do, at the last opening row of a node holding rows it sent in neither half, so it never shows a row past a gap it does not report. It also answers `work_key` and `attempts`: the unit of work this run was an attempt at, and every run of it the store holds, OLDEST FIRST — over the SAME thirty-day horizon the events above come from, not the turns list's own default week, and read at the same instant they were, so a turn between eight and thirty days old, or one whose rows sit at the very edge of the horizon, names its attempts rather than reporting none while displaying one — so the screen a deep link lands on can say "attempt 2 of 2" and link the other, rather than leaving a reader to conclude the company did the work twice. One element is the ordinary case; an empty `work_key` means the trigger had none to collapse on, and `attempts` is then empty too. And `nodes`: the nodes whose own store holds any of this turn's events — where it RAN, since each node's store holds only what that node published — sorted, and an empty list rather than an absent key where no node this read could reach holds any |
 | `phases` | `{seat, limit, before_time, before_id}` | The company's `agent_phase_completed` records, newest first, **payloads included**, keyset-paged. `seat` is a seat's **handle** and narrows to that one seat's phases, resolved on the server exactly as on `events` (and refused the same way) — never a role name, which two unit seats stamped from one template share, so a role filter answered one seat's phases with every such seat's. `events?type=agent_phase_completed` is not a substitute: the event listing deliberately never selects the payload, and a phase record without one has no prompts, no response, no tool calls and no decision. `next` is present only while more records lie past the page — each node's read asks one row past it rather than guessing from a page that filled, so a history exactly a page long ends without offering "older" onto nothing |
 | `tokens` | `{days, since, until, previous, seat}` | `GET /tokens/breakdown`. With no parameters, the live 24-hour window from the projection; with any, whole company days from the replicated usage domain — every node's, up to 90 days, within the 181-day horizon (see [Token Spend Breakdown](#token-spend-breakdown)) |
@@ -4420,11 +4452,11 @@ REST route calls, so the two surfaces cannot diverge:
 | `fleet_broker` | `{}` | `GET /fleet/broker`: what every live node advertises about its broker, the metadata group as a member reports it, and where the two disagree. **Takes `admin`**. See [below](#the-brokers-membership) |
 | `backups` | `{}` | `GET /backups`: each owner's newest backup and the backup history, the Settings › Backups & retention screen. **Takes `admin`**. See [below](#get-backups) |
 | `mcp_servers_status` | `{}` | `GET /mcp-servers`: each MCP server's condition and its per-node counts, the Settings › MCP Tools screen's Servers section. **Takes `admin`**. See [below](#get-mcp-servers) |
-| `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.max_tool_rounds`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
+| `limits` | `{}` | The caps the engine holds the company's work to, as it ENFORCES them: `{limits: [{key, group, unit, value, default, off, default_off}]}`, in drawing order. `key` is the setting's path in the company document (`turn_engine.max_iterations`, `turn_engine.onboarding_max_tool_rounds`, `turn_engine.delegation_depth_limit`, the six `turn_engine.delegation.*` caps, `notification_rate_limit`, `notification_coalesce_max_batch`, and `schedules.timeout_seconds`, the timeout every schedule takes unless it sets its own); `group` is `turn`, `delegation`, `notifications` or `schedules`; `unit` is `count`, `seconds`, `fraction` or `per_second`. `value` is what the applied company holds, which is the default wherever the document says nothing, and `default` is the engine's own, so a screen draws both and never keeps a copy of a default. There is no "was it written" flag, because the applied company does not remember. `off` marks a value that switches its limit off: a `notification_rate_limit` of 0 (no limit) and an `onboarding_max_tool_rounds` of 0 (no onboarding pass). `default_off` asks the same of `default`, so a screen saying which default a set value replaced says Off where the default is no limit. Empty on a node running no company. **Takes `admin`**, as the `config` question it is read beside does |
 | `sign_in_policy` | `{}` | How a person signs in on THIS node, read from its own `api.auth`: `{node, policy: {second_factor, min_password_length, session_absolute_seconds, session_idle_seconds, step_up_seconds}}`. Every value is the one the engine enforces, so a setting the file leaves out arrives as its default (`required`, 12, 168 hours, 1 hour), and `session_idle_seconds` is the engine's constant 12 hours. Tier A, so nodes of one fleet may disagree and `node` names the one that answered; changing a value is an edit to that node's file and a restart. **Takes `admin`**. The two values a sign-in form needs before anybody has signed in are also on the unguarded [`/auth/config`](#routes) |
 | `fleet` | `{}` | `GET /fleet`: leases move with no event to push, so Settings › Nodes polls this rather than waiting for one. **Takes `admin`**. A lease table that could not be read answers `unavailable`, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
 | `sandbox_runs` | `{audience?}` | `GET /sandbox-runs`: `unknown_query` on a company with no sandbox configured, and `unavailable` when the fleet's run record could not be read. Each run carries `work_item` (`{backend, id, key, project}`, or null), the item the launching turn was charged to, and `launch_id`, the job the row holds now — what `sandbox_tail` is asked by |
-| `sandbox_tail` | `{turn_id, launch_id, epoch?, after?, digest?}` | `GET /sandbox-runs/{turn_id}/tail?launch_id=…[&epoch=…&after=…&digest=…]`. What ONE running coding job has said so far, read from its box by the node that owns the run (see [Watching a run live](../concepts/code-sandbox.md#watching-a-run-live)). Both ids are required (`bad_params` otherwise): a turn can launch more than one job, and the launch id is the one `sandbox_run_started` and the run's phase record carry. Answers `{outcome, turn_id, launch_id, node?, status?, output?}`: `outcome` is `tail` with `output`; `launching` for a job whose box is still being made (not stopped — ask again); `not_running` with the record's `status` (`awaiting_clarification`, `resumed`, `reseed`, `replaced` for a job a later launch replaced, or absent where no record is left); `owner_silent` naming the owning `node` that did not answer inside the 2 s fleet read budget — a draining owner, or one whose heartbeat lapsed, included (no `node` for a run nobody holds right now); or `box_paused` for a running record whose box is paused where its backend cannot read it without waking it (a peek never wakes a box). The asker says what it holds — `epoch`, `after` (the byte offset it holds through: a whole number of zero or more, `bad_params` otherwise — a fraction is refused rather than rounded) and `digest`, all three absent for one holding nothing yet — and `output` is `{text, source: transcript\|stderr\|none, cut, as_of, finished, epoch, start, end, digest, reset, front, held}`, redacted — `epoch`, `start`, `end` and `digest` on every answer, `0` included (a run that has settled nothing yet is answered at `end: 0` and followed from `start: 0`): `text` is what follows `after` (`start` = `after`), or on `reset: true` the last 256 KiB in whole lines, which replaces what the asker held (`start` says where it begins; `cut` that earlier output exists). Send `end` and `digest` back as the next `after` and `digest`. `front` says the owner's reading began after the job's own start; `held` counts bytes written but not shown until their redaction is settled. What a coding agent prints is its seat's trail, so the tail is read by an admin and by the lead of the seat the run's record names (`audit.seat.read`) and refused to anybody else naming `admin` — and a caller who leads nobody is refused before the record is read, so a record that could not be read, or a box the owner could not read, is an error carrying the reason only to somebody it could have admitted. There is no event and no row: the dashboard asks it every 3 s for each running job it is showing — an open span on a turn's timeline, a parked turn's coding-run card, and the run's own page — and nothing outside the dashboard asks |
+| `sandbox_tail` | `{turn_id, launch_id, epoch?, after?, digest?}` | `GET /sandbox-runs/{turn_id}/tail?launch_id=…[&epoch=…&after=…&digest=…]`. What ONE running coding job has said so far, read from its box by the node that can reach it: the run's owner for an `e2b` box, and for a `direct` or `container` box the node that launched it (`launch_node`), whoever holds the seat now (see [Watching a run live](../concepts/code-sandbox.md#watching-a-run-live)). Both ids are required (`bad_params` otherwise): a turn can launch more than one job, and the launch id is the one `sandbox_run_started` and the run's phase record carry. Answers `{outcome, turn_id, launch_id, node?, status?, output?}`: `outcome` is `tail` with `output`; `launching` for a job whose box is still being made (not stopped — ask again); `not_running` with the record's `status` (`awaiting_clarification`, `resumed`, `reseed`, `replaced` for a job a later launch replaced, or absent where no record is left); `owner_silent` naming the `node` that did not answer inside the 2 s fleet read budget — the run's owner, or a `direct` or `container` box's launching node, held or not, a draining node or one whose heartbeat lapsed included (no `node` only for an `e2b` run nobody holds right now); or `box_paused` for a running record whose box is paused where its backend cannot read it without waking it (a peek never wakes a box). The asker says what it holds — `epoch`, `after` (the byte offset it holds through: a whole number of zero or more, `bad_params` otherwise — a fraction is refused rather than rounded) and `digest`, all three absent for one holding nothing yet — and `output` is `{text, source: transcript\|stderr\|none, cut, as_of, finished, epoch, start, end, digest, reset, front, held}`, redacted — `epoch`, `start`, `end` and `digest` on every answer, `0` included (a run that has settled nothing yet is answered at `end: 0` and followed from `start: 0`): `text` is what follows `after` (`start` = `after`), or on `reset: true` the last 256 KiB in whole lines, which replaces what the asker held (`start` says where it begins; `cut` that earlier output exists). Send `end` and `digest` back as the next `after` and `digest`. `front` says that node's reading began after the job's own start; `held` counts bytes written but not shown until their redaction is settled. What a coding agent prints is its seat's trail, so the tail is read by an admin and by the lead of the seat the run's record names (`audit.seat.read`) and refused to anybody else naming `admin` — and a caller who leads nobody is refused before the record is read, so a record that could not be read, or a box that node could not read, is an error carrying the reason only to somebody it could have admitted. There is no event and no row: the dashboard asks it every 3 s for each running job it is showing — an open span on a turn's timeline, a parked turn's coding-run card, and the run's own page — and nothing outside the dashboard asks |
 | `budgets` | `{}` | `GET /budgets` |
 | `a2a_channels` | `{}` | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
 | `knowledge` | `{q, mode?}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more: searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists: "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. Everybody may ask it, and what it searches is the caller's apps': it searches pages only for a caller holding `doclet`, so a caller holding `worklet` alone is answered with no hits, `available: false` and `reason: no_access` (and the searcher is never asked), while a caller holding neither app is refused `unauthorized` naming both. `available: false` covers all five of no access, no company, no backend, a backend wired with no org-wide read scope, and a node whose index is still `building`. `reason` (`no_access` / `no_company` / `no_backend` / `no_scope` / `building`, empty when the search ran) is the value to branch on and `note` is the prose for a person: a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. A search that RAN and fell short says so in its outcome rather than its `note` (which is empty whenever `available` is true): `served_mode` empty with `coverage.complete` false is a backend that did not answer, and a partial `coverage` is part of the corpus unsearched. An EMPTY `q` is the seam's PROBE: nothing runs and nothing is read, no hits are returned, but `modes` and (for the `mode` asked) the `degraded` its CONFIGURATION decides are answered, so a screen offers the modes honestly before anybody types (the dashboard asks the probe for `semantic`, the mode whose reason names what is missing). A transient reason (`embedding_failed`) is a property of a search and is never predicted. `mode` is `hybrid` (the default), `keyword` or `semantic`; the screen's label for the last is "Meaning", and any other value is refused rather than run as the default. A `q` past 400 bytes (trimmed) is refused `bad_params`, naming its size and the limit, rather than cut: the bound every search surface shares ([Search](../guides/search.md#three-modes-and-what-an-answer-says-it-served)). Every answer carries what the search actually did: `mode` (resolved), `served_mode` (the ranking the hits came from; `""` when nothing ran), `modes` (what this backend can serve as asked: `[keyword]` with no embeddings provider and on Confluence), `degraded` (`no_embeddings` / `embedding_failed` / `semantic_partial` / `unsupported`, empty when it served what was asked) and `coverage{nodes:[{id,answered,error}], complete, buckets_missing}`, the fleet the scan was divided across, which is how a partial answer is told from a short corpus. A hybrid search with nothing to rank by meaning serves its keyword half; a semantic one serves nothing and says why. See [Search](../guides/search.md#three-modes-and-what-an-answer-says-it-served) |
@@ -5260,7 +5292,7 @@ answers any parked run by naming it:
 | Argument | |
 |---|---|
 | `turn_id` | The parked run's `turn_id`, as [`GET /sandbox-runs`](#get-sandbox-runs) lists it. |
-| `answer` | What the coding agent should be told, at most 32 KiB — it is spliced into the run as one tool reply. |
+| `answer` | What the coding agent should be told. It carries the run on: the coding CLI is launched again in the box the run kept, continuing its own session with the answer as its next message, where the relaunch reuses that box (the box was kept, the member picked runs the same CLI in the same cell, and the box is the resuming node's to drive); otherwise afresh in a new box from the run's pushed branch, told the question and the answer. Either way the answer is part of the run's prompt from then on, which its coding CLI sends again with every request it makes, so it is held to the page its question is: at most 16 KiB. Put anything longer on a page the run can read and answer with where it is; a longer answer is refused `invalid`. |
 
 It answers `{"turn_id", "agent_handle", "question", "launch_id", "answer_id",
 "outcome": "pending"}`: the answer is on the control topic of the seat holding
@@ -5301,13 +5333,14 @@ fleet's, and a company on Jira runs coding agents too.
 `pause_seat` stops an agent seat taking work until somebody resumes it:
 it starts no new turn, its incoming mail waits on its inbox in order, and its
 scheduled runs are recorded `skipped_paused` rather than sent. The turn it is on
-finishes first, unless the pause asks to stop it. `resume_seat` lifts the
+finishes first, unless the pause asks to stop it — which also ends a coding run
+it has out, at once. `resume_seat` lifts the
 pause, and what waited is delivered first. See
 [Agent Runtime § Pausing a seat](../concepts/agent-runtime.md#pausing-a-seat).
 
 | Tool | Arguments |
 |---|---|
-| `pause_seat` | `handle` — the agent seat; `reason` — one line, at most 500 characters, optional; `stop_running` — also end the turn the seat is on at its next round. A stopped turn is not run again. |
+| `pause_seat` | `handle` — the agent seat; `reason` — one line, at most 500 characters, optional; `stop_running` — also end the seat's running work: the turn it is on at its next round, and a coding run it has out at once, its box reclaimed (`sandbox_run_stopped`). What was stopped is not run again; a run parked on a question stays parked. |
 | `resume_seat` | `handle` |
 
 **Who may**: the seat's holder, whoever leads it, or `admin` — never every reader, since everybody signed in holds a credential.
@@ -5333,40 +5366,53 @@ the same pause.
 ### Steering a running turn
 
 `steer_turn` sends a short note to a turn **while it runs**. The turn reads it
-at its next round — after the tool call in flight returns — as a correction or
-addition to the work in hand, and keeps to it for the rest of the turn: the
-reviewer that judges the work and every later executor iteration open with it
-too. See [Turn Engine § Steering a running turn](../concepts/turn-engine.md#steering-a-running-turn).
+at its next step — the next round of the engine's own loop, after the tool
+call in flight returns, or, while the turn's executor has its coding run out,
+the run's next brief, a step of the run where its CLI takes notes, or the
+review that judges the run — as a correction or addition to the work in hand,
+and keeps to it for the rest of the turn: the reviewer that judges the work and
+every later executor iteration open with it too. See [Turn Engine § Steering a
+running turn](../concepts/turn-engine.md#steering-a-running-turn).
 
 | Argument | |
 |---|---|
 | `turn_id` | The running turn's `turn_id`, as the `agents` push names it on each seat's `live_call`. |
 | `note` | What the turn should take into account, at most 2,000 characters. Longer is a brief, and belongs on the work item. |
 
-It answers `{"turn_id", "note_id", "agent_handle", "outcome": "pending"}`: the
-node running the turn took the note, and the turn reads it at its next round.
-What became of it is recorded there, as `agent_turn_steered` — `delivered`
-naming the phase and round that read it, or `expired` if the turn ended or
-parked first. `note_id` is the request's own id, so a retry of one request is
-one note however often it is sent.
+It answers `{"turn_id", "note_id", "agent_handle", "outcome": "pending", "reads"}`:
+the turn took the note, and `reads` says when it reads it — `next_step`, or
+`after_answer` for a turn whose coding run is parked on a question, which reads
+it once the question is answered. What became of it is recorded as
+`agent_turn_steered` — `delivered` naming the phase and round that read it, the
+kind of step (`boundary`) and, for a read by a coding run, its job
+(`launch_id`); or `expired` if the turn ended first. `note_id` is the request's
+own id, so a retry of one request is one note however often it is sent.
 
-**Who may**: the turn's seat's holder, whoever leads that seat, or `admin`. The seat is the one thing this node cannot know — the turn runs wherever its seat is held — so `admin` is admitted at once and a caller who leads nobody is refused at once, and anybody else is decided after a PROBE asks the fleet whose turn it is, without offering the note. A probe nobody answers inside two seconds is `unavailable`: nothing was offered, so there is nothing to be uncertain about.
+**Where it goes**: a turn whose executor has launched its coding run keeps its
+notes on the run's record in the coordination store, which every node reads, so
+this node files the note there itself — sealed under the fleet keyring — and
+asks nobody. A turn that has not launched one holds its notes on the node
+running it, and the note is scattered to that node.
+
+**Who may**: the turn's seat's holder, whoever leads that seat, or `admin`. Once the turn's run is out, the seat is the one the run's record names under a sealed anchor, read here; a record whose anchor does not open decides nothing, and the note is refused `unavailable` with the reason. Before that the seat is the one thing this node cannot know — the turn runs wherever its seat is held — so `admin` is admitted at once and a caller who leads nobody is refused at once, and anybody else is decided after a PROBE asks the fleet whose turn it is, without offering the note. A probe nobody answers inside two seconds is `unavailable`: nothing was offered, so there is nothing to be uncertain about.
 
 `unknown` means no node answered the OFFER inside two seconds. A reply lost on its way
 back is indistinguishable from none, so the note may have been taken; sending it
 again is safe for that reason.
 
-It refuses `not_running` for a turn that has ended or parked, `conflict` for one
-already holding five notes it has not read yet (once it reads them, the note may
-be sent again), `steer_unsupported` for a turn whose executor runs detached in a box
-([box mode](../concepts/llm-backends.md#box-mode)) — its rounds are its CLI's, the turn is
-parked while it runs, and the engine has no run boundary to hand a note to — and `invalid` for an empty or oversized note.
+It refuses `not_running` for a turn that has ended, `notes_full` for one already
+holding five notes it has not read yet (once it reads them, the note may be sent
+again), `notes_spent` for one that has taken the ten notes a turn takes (sending
+it again changes nothing: put the rest on the work item), `unavailable` where the
+run's record could not be read or written (a retry is the same note), and
+`invalid` for an empty or oversized note.
 
-The note is **signed**: the node running the turn offers it as the person it
-names, on this node's decision that they may, so the request it is scattered in
-— and the running node's answer — is signed under the fleet keyring and bound
-to that one request, and nothing else reaches a turn
-([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md)).
+The note is **signed**: a scattered request and the running node's answer are
+signed under the fleet keyring and bound to that one request, and a note on a
+run's record is sealed under the same keyring, bound to its turn and its id —
+so nothing else reaches a turn
+([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md),
+[ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md)).
 An answer the asking node cannot believe is no answer, so it reads as
 `unknown`. A running node that does not hold the key the note is signed under
 takes nothing and says so, and the tool refuses `unavailable` naming the keys
@@ -5485,10 +5531,9 @@ offered against **any** knowledge backend, Confluence included — a ranked
 search over the company's own wiki is exactly as useful to an assistant there.
 
 The turn-only tools are deliberately absent: the memory tools (a diary belongs
-to a seat), the skill tools (a skill is loaded into a phase), `a2a_ask` (a
+to a seat), the skill tools (a skill is loaded into a phase) and `a2a_ask` (a
 colleague's answer comes back by waking a seat, and there is nobody here for
-it to reach) and `run_sandbox` (a detached run resumes a suspended phase that
-does not exist — answering a run a seat started is `answer_run`).
+it to reach). Answering a run a seat started is `answer_run`.
 
 ### Seeding a knowledge base with it
 
@@ -5792,7 +5837,7 @@ has them:
 | `invalid` | `422` |
 | `not_found` | `404` |
 | `forbidden` | `403` |
-| `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `not_running`, `steer_unsupported`, `budget_exhausted` | `409` |
+| `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `notes_full`, `notes_spent`, `not_running`, `budget_exhausted` | `409` |
 | `unavailable` | `503` |
 | `internal_error` | `500` — a fault of the node's own store or code: a fixed sentence, the error itself only in the node's log, and **no** `Retry-After`, since no wait clears it. It is also the answer for a failure that carried no class |
 
@@ -5931,7 +5976,7 @@ for one; otherwise its `message`, the code's own sentence, stands alone
 | `403` | `unauthorized` / `step_up_required` | The authority table refused, or the verb needs a fresher proof | `reason` and `grants` (or the window), and the verb in `action` where the route decided it itself |
 | `403` | `forbidden` | The domain forbids this caller the gesture, such as rewriting somebody else's remark | `detail` in a person's words, where the refusal has them |
 | `404` | `not_found` | The item, page or comment does not exist — or it was purged | |
-| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, … | Somebody changed it after you read it (a stale `If-Match`, a title taken, a race lost), or the state the request needs is not there | `message`: read it again, or change what is in the way |
+| `409` | `stale_version`, `conflict`, `exists`, `reassignment_budget`, `inbox_full`, `notes_full`, `notes_spent`, … | Somebody changed it after you read it (a stale `If-Match`, a title taken, a race lost), or the state the request needs is not there | `message`: read it again, or change what is in the way |
 | `409` | `invalid_input` | The `Idempotency-Key` already names a write to another object | send it under a new key |
 | `422` | `invalid` | The domain refused the write on its own rules, such as a purge whose `?confirm=` names another item among them | `detail` in a person's words, where the refusal has them |
 | `500` | `internal_error` | The engine failed at something of its own, or a tool answered something that is not a receipt | nothing a retry changes; the reason, and anything the tool said instead, is in the node's log |
@@ -7957,7 +8002,7 @@ as every other control of the deployment does, and both are refused during a
 
 ### `GET /sandbox-runs`
 
-Every detached [coding run](../concepts/code-sandbox.md) the engine still
+Every seat's [executor run](../concepts/code-sandbox.md) the engine still
 holds, oldest first — `launching`, `running`, `awaiting_clarification`,
 `reseed`, `answered` and `resumed` run records. An `answered` run has a
 person's reply recorded as the answer to its question and is owed the resume
@@ -7965,15 +8010,16 @@ that answer drives; it is no longer waiting on anybody, so `audience=` — what
 is waiting on one person — lists only runs still waiting (`awaiting_clarification`
 or `reseed`).
 
-A run that has settled, whether its turn finished or it was lost, is not
-listed because it has no record: its record is deleted once its box is
-reclaimed. How it ended is on the event stream, in the resumed turn's own
-events or a `sandbox_run_failed` event naming the reason.
+A run that has settled, whether its turn finished, it was lost or a person
+stopped it, is not listed because it has no record: its record is deleted once
+its box is reclaimed. How it ended is on the event stream, in the resumed
+turn's own events, a `sandbox_run_failed` event naming the reason, or a
+`sandbox_run_stopped` event naming who stopped it.
 
 A `launching` run is one whose coding job has started while the turn that
-started it is still unwinding, so the suspended conversation a resume
-re-enters is not on the row yet; it is listed but never polled, because a
-row nobody lists is a box nobody reclaims.
+started it is still unwinding, so the parked turn state its collection reads
+is not on the row yet; it is listed but never polled, because a row nobody
+lists is a box nobody reclaims.
 
 This query reads the durable row directly. The live projection's panel is
 reconciled against the same record every 30 seconds, but it carries only what
@@ -7989,6 +8035,7 @@ reclaimed, work preserved on a pushed branch) is listed on both.
     {
       "turn_id": "<uuid>", "launch_id": "<uuid>", "agent_handle": "eng", "role": "Engineer",
       "status": "awaiting_clarification", "coding_agent": "claude-code",
+      "provider_key": "default", "model": "sonnet",
       "task_description": "Add retry to the webhook client",
       "question": "Which backoff ceiling should I use?", "audience": "manager",
       "audience_handles": ["founder"], "audience_fallback": false,
@@ -8011,9 +8058,18 @@ waits on its question again, so the person who gave it is asked to answer
 again rather than left looking at a question that never moves.
 
 `launch_id` names the job the row holds now. A turn can launch more than
-one — a resumed executor that calls `run_sandbox` again reuses the row — and
+one — a reviewer that sends the work back, or a person's answer carrying a
+parked run on, relaunches the executor under the same row — and
 `sandbox_tail` is asked by it, so a run's page polls the live
 output of the job it shows rather than of whichever replaced it.
+`provider_key` and `model` name the member of the seat's executor chain the
+job was launched on, which a fallback at launch makes other than the chain's
+head. `provider_key` is the company's configuration and is sent to an admin
+alone; every other reader, a seat's lead included, is told the model the job
+runs under and not the entry. `bridge_calls` is always an array on a row the
+store answered — every run's tools reach it over the bridge, so an empty one is
+a run that has called nothing yet — and absent only where the run's body is
+withheld from the reader.
 
 `box_exists` and `paused_at` stand in for the sandbox id: a board wants to
 know that a box exists and that it is currently paused (and being billed
@@ -8611,7 +8667,7 @@ timezone, target → resolved runner handles, and a per-request `next_run`
       "name": "daily-standup",
       "cron": "30 9 * * 1-5", "timezone": "Europe/Amsterdam",
       "task": "Post your standup…", "target": "each",
-      "enabled": true, "timeout_seconds": 180, "catchup": true,
+      "enabled": true, "timeout_seconds": 1800, "catchup": true,
       "runners": ["backend-lead", "backend-dev"],
       "next_run": "2026-06-09T07:30:00+00:00"
     }
@@ -8757,9 +8813,11 @@ Notes:
   `skill_refiner`, `episode_compaction`, `skill_clustering`,
   `skill_promotion`, `provider_probe`, `answer_knowledge`, and `condense_<kind>` for each kind of
   text a compaction rewrites. Its rows sum to that phase.
-- `calls` is PROVIDER CALLS on every bucket: a phase's model rounds, an
-  auxiliary record's coalesced calls. It counted records once, which made a
-  forty-round executor one call.
+- `calls` is PROVIDER CALLS on every bucket: a phase's model rounds, a
+  coding run's own CLI turns as its CLI reported them (`cli_turns`, one for a
+  run whose CLI reports none — OpenCode reports none), an auxiliary record's
+  coalesced calls. The executor's own record counts none: its run's calls are
+  the run's. It counted records once, which made a forty-turn run one call.
 - `by_provider` answers "which configured entry (`providers.llm.<key>`) do we
   pay for", which `by_model` cannot: a fallback chain serves several models
   under one key. `models` is every model the entry answered with, biggest
@@ -8834,7 +8892,7 @@ path — its buckets are company days, which only the usage domain holds.
 
 | Band | Phases |
 |------|--------|
-| `execute` | `execute`, `sandbox` (a detached coding run is the executor's own work done elsewhere) |
+| `execute` | `execute`, `sandbox` (the executor's own run, recorded from the box it ran in) |
 | `review` | `review` |
 | `workers` | `subagent` — the workers an executor delegated to |
 | `auxiliary` | `auxiliary`, `judge`, `onboarding`, and any phase this build does not know |

@@ -50,8 +50,9 @@ func newEngineRuntime(e *engine.Engine, reconciler *engine.Reconciler) (engineRu
 // EngineProbeOptions is the [ProbeOptions] of a node without the ingress role
 // that runs e: its runtime over the same engine and reconciler, under the same
 // requirements, as [NewEngineRuntime] — so a node's /health says the same thing
-// whichever surface serves it — its node id, and the roles its presence lease
-// advertises.
+// whichever surface serves it — its node id, the roles its presence lease
+// advertises, and, where it runs seats, the engine's own bridge and telemetry
+// receiver for the boxes it launches on this host.
 //
 // ONE WIRING, here rather than in the command that serves it, so that
 // `crewlet run` and the end-to-end suite probe a node through the same code: a
@@ -76,6 +77,13 @@ func EngineProbeOptions(boot *config.Bootstrap, e *engine.Engine,
 	opts := ProbeOptions{
 		Bootstrap: boot, Runtime: runtime, NodeID: nodeID,
 		Roles: profile.Roles.Names(), QueueBackend: e.Backends().Queue.Backend(),
+	}
+	// ONLY WHERE THE NODE LAUNCHES BOXES: the seats role. A node without it
+	// may still build a bridge — the fleet's variable is the same on every
+	// node, and its relay verifies a token — but no box on this host dials
+	// it, so its listener serves the network's probes and nothing beside.
+	if profile.RunsSeats() {
+		opts.Bridge, opts.OtelReceiver = e.Bridge(), e.OtelReceiver()
 	}
 	return opts, nil
 }

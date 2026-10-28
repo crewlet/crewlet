@@ -13,12 +13,12 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// creditedCompany is a one-seat company whose sandbox model is the named
+// creditedCompany is a one-seat company whose executor is the named
 // subscription CLI.
 //
 // A REAL cliagent provider rather than a stand-in, because the whole question
 // is which credentials that provider's profile can actually put inside a box —
-// a fake would answer whatever the test wanted and prove nothing about codex.
+// a fake would answer whatever the test wanted and prove nothing about the CLI.
 func creditedCompany(t *testing.T, agent string) (*Company, *org.Role) {
 	t.Helper()
 	return creditedCompanyAuth(t, agent, cliagent.Auth{})
@@ -50,18 +50,33 @@ func creditedCompanyOverrides(t *testing.T, agent string, auth cliagent.Auth,
 	return &Company{Models: models, Config: &config.Company{}}, seat
 }
 
+// guardOn is the credential guard as a launch asks it of seat's executor: on
+// the member of its chain the launch runs on — the head, in every company
+// here — over the run environment env.
+func guardOn(t *testing.T, c *Company, seat *org.Role, placement sandbox.Placement,
+	env map[string]string) error {
+	t.Helper()
+	member, err := c.Models.Head(seat, phase.Execute)
+	if err != nil {
+		t.Fatalf("%s's executor chain: %v", seat.Name, err)
+	}
+	return sandboxCredentials(member.Provider.(*cliagent.Provider), member.Key, seat.Handle(),
+		placement, env)
+}
+
 // A SUBSCRIPTION LOGIN CANNOT FOLLOW A RUN INTO A REMOTE BOX.
 //
 // The credential files stay on the engine host — they carry a refresh token
-// whose rotation is fleet state — so a CLI that mints no headless token has
-// nothing inside a remote box to authenticate with. Left unchecked the run
+// whose rotation is fleet state — so a CLI that mints no headless token
+// (OpenCode, whose login is a database it keeps) has nothing inside a remote
+// box to authenticate with unless its provider's key travels. Left unchecked the run
 // provisions a box, installs the agent, applies every setup step and starts
 // the job, and the agent fails at its first model call with the vendor's own
 // "not authenticated", minutes in, naming nothing an operator could act on.
 func TestARemoteRunWithNoTravellingCredentialIsRefused(t *testing.T) {
 	t.Parallel()
-	c, seat := creditedCompany(t, "codex")
-	err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
+	c, seat := creditedCompany(t, "opencode")
+	err := guardOn(t, c, seat, sandbox.E2B, nil)
 	if err == nil {
 		t.Fatal("a remote run with no credential that travels was launched")
 	}
@@ -70,11 +85,11 @@ func TestARemoteRunWithNoTravellingCredentialIsRefused(t *testing.T) {
 		t.Fatalf("error is %T, want *SandboxCredentialError — the remedy is a "+
 			"config edit, and retrying it as a provider outage would loop", err)
 	}
-	// The remedy has to be THIS operator's: codex mints no token, so
+	// The remedy has to be THIS operator's: OpenCode mints no token, so
 	// telling them to capture one would send them at a flag that does not
 	// exist.
 	if strings.Contains(err.Error(), "capture-token") {
-		t.Errorf("the error offers a token codex cannot mint: %v", err)
+		t.Errorf("the error offers a token opencode cannot mint: %v", err)
 	}
 	if !strings.Contains(err.Error(), string(sandbox.Direct)) {
 		t.Errorf("the error does not name the local cell that would work: %v", err)
@@ -88,7 +103,7 @@ func TestARemoteRunWithNoTravellingCredentialIsRefused(t *testing.T) {
 func TestTheRemedyNamesTheTokenWhereTheCLIMintsOne(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompany(t, "claude-code")
-	err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
+	err := guardOn(t, c, seat, sandbox.E2B, nil)
 	if err == nil {
 		t.Fatal("a remote run with no resolved token was launched")
 	}
@@ -137,7 +152,7 @@ func TestTheRemedyFollowsTheEntrysAuthMode(t *testing.T) {
 	} {
 		t.Run(string(tc.mode), func(t *testing.T) {
 			c, seat := creditedCompanyAuth(t, "claude-code", cliagent.Auth{Mode: tc.mode})
-			err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
+			err := guardOn(t, c, seat, sandbox.E2B, nil)
 			var credErr *SandboxCredentialError
 			if !errors.As(err, &credErr) {
 				t.Fatalf("a remote run nothing signs in answered %v, want a *SandboxCredentialError", err)
@@ -167,11 +182,7 @@ func TestEachModesRemedySignsTheRunIn(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
 	launch := func(c *Company, seat *org.Role, seatEnv map[string]string) error {
 		t.Helper()
-		run, err := newCodingRun(c, seat, phase.Sandbox, "claude-code", seatEnv)
-		if err != nil {
-			t.Fatalf("newCodingRun: %v", err)
-		}
-		return sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, run.env)
+		return guardOn(t, c, seat, sandbox.E2B, runOn(t, c, seat, seatEnv).env)
 	}
 
 	key, keySeat := creditedCompanyAuth(t, "claude-code", cliagent.Auth{Mode: cliagent.AuthAPIKey})
@@ -206,7 +217,7 @@ func TestEachModesRemedySignsTheRunIn(t *testing.T) {
 func TestARemedyNamesNoVariableTheModeDoesNotHave(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompanyAuth(t, "opencode", cliagent.Auth{Mode: cliagent.AuthAPIKey})
-	err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
+	err := guardOn(t, c, seat, sandbox.E2B, nil)
 	var credErr *SandboxCredentialError
 	if !errors.As(err, &credErr) {
 		t.Fatalf("a remote run nothing signs in answered %v, want a *SandboxCredentialError", err)
@@ -289,7 +300,7 @@ func TestARemedyOffersNoVariableNoStoreCanHold(t *testing.T) {
 			name: "inherit-env with none", mode: cliagent.AuthInheritEnv,
 			overrides: map[string]any{"token_env": "MY-TOKEN", "api_key_env": "MY-KEY"},
 			want: []string{"providers.llm.sub.overrides.token_env and providers.llm.sub.overrides.api_key_env",
-				"seeded with the entry's login", string(sandbox.Direct)},
+				"seeded with its login", string(sandbox.Direct)},
 			notWant: []string{"role.sandbox.env", "export one in", "capture-token"},
 		},
 	} {
@@ -299,7 +310,7 @@ func TestARemedyOffersNoVariableNoStoreCanHold(t *testing.T) {
 				agent = "claude-code"
 			}
 			c, seat := creditedCompanyOverrides(t, agent, cliagent.Auth{Mode: tc.mode}, tc.overrides)
-			err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
+			err := guardOn(t, c, seat, sandbox.E2B, nil)
 			var credErr *SandboxCredentialError
 			if !errors.As(err, &credErr) {
 				t.Fatalf("a remote run nothing signs in answered %v, want a *SandboxCredentialError", err)
@@ -325,15 +336,15 @@ func TestARemedyOffersNoVariableNoStoreCanHold(t *testing.T) {
 // already sits.
 func TestASeatThatBroughtItsOwnKeyIsNotRefused(t *testing.T) {
 	t.Parallel()
-	c, seat := creditedCompany(t, "codex")
-	env := map[string]string{"CODEX_API_KEY": "sk-not-a-real-key"}
-	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, env); err != nil {
+	c, seat := creditedCompany(t, "claude-code")
+	env := map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-not-a-real-token"}
+	if err := guardOn(t, c, seat, sandbox.E2B, env); err != nil {
 		t.Fatalf("a seat carrying its own key was refused: %v", err)
 	}
 	// Blank is not a value: an unresolved ${VAR} lands here as empty, and
 	// reading that as "authenticated" is the whole failure again.
-	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, map[string]string{
-		"CODEX_API_KEY": "  ",
+	if err := guardOn(t, c, seat, sandbox.E2B, map[string]string{
+		"CLAUDE_CODE_OAUTH_TOKEN": "  ",
 	}); err == nil {
 		t.Error("an empty credential variable was read as authentication")
 	}
@@ -356,16 +367,16 @@ func TestASeatsOwnClaudeCodeSignInPassesTheRemoteGuard(t *testing.T) {
 		{"CLAUDE_CODE_USE_FOUNDRY": "1"},
 		{"ANTHROPIC_AUTH_TOKEN": "bearer-from-the-seat"},
 	} {
-		if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, own); err != nil {
+		if err := guardOn(t, c, seat, sandbox.E2B, own); err != nil {
 			t.Errorf("%v: a seat signed in by its own environment was refused: %v", own, err)
 		}
 	}
-	// And only Claude Code's: a codex run is not signed in by a Bedrock
-	// toggle it never reads.
-	codex, codexSeat := creditedCompany(t, "codex")
-	if err := sandboxCredentials(codex, codexSeat, phase.Sandbox, sandbox.E2B,
+	// And only Claude Code's: an OpenCode run is not signed in by a
+	// Bedrock toggle it never reads.
+	oc, ocSeat := creditedCompany(t, "opencode")
+	if err := guardOn(t, oc, ocSeat, sandbox.E2B,
 		map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1"}); err == nil {
-		t.Error("a codex run was let through on Claude Code's cloud toggle")
+		t.Error("an opencode run was let through on Claude Code's cloud toggle")
 	}
 }
 
@@ -374,56 +385,11 @@ func TestASeatsOwnClaudeCodeSignInPassesTheRemoteGuard(t *testing.T) {
 // the placement rather than on the provider.
 func TestALocalRunNeedsNoTravellingCredential(t *testing.T) {
 	t.Parallel()
-	c, seat := creditedCompany(t, "codex")
+	c, seat := creditedCompany(t, "opencode")
 	for _, placement := range []sandbox.Placement{sandbox.Direct, sandbox.Container} {
-		if err := sandboxCredentials(c, seat, phase.Sandbox, placement, nil); err != nil {
+		if err := guardOn(t, c, seat, placement, nil); err != nil {
 			t.Errorf("run_in %q was refused: %v", placement, err)
 		}
-	}
-}
-
-// THE GUARD READS THE ENTRY THE RUN'S MODEL COMES FROM, which is a different
-// entry for the two kinds of run: run_sandbox work runs on llm_sandbox, and a
-// box-mode run IS the executor and runs on the seat's own llm. A guard that
-// always asked llm_sandbox answered for a model a box-mode run never
-// touches — waving through a remote box whose CLI had no token, and refusing
-// one whose executor entry would have minted a token that travels.
-func TestTheGuardAsksTheEntryTheRunActuallyRunsOn(t *testing.T) {
-	t.Parallel()
-	subscription, err := cliagent.New(cliagent.Config{
-		Key: "sub", Agent: "codex", StateDir: t.TempDir(), Timeout: time.Minute,
-	})
-	if err != nil {
-		t.Fatalf("cliagent.New: %v", err)
-	}
-	models, err := phase.NewRegistry([]phase.Entry{
-		{Key: "sub", Provider: subscription},
-		// An API-key entry exports its key into every box; there is
-		// nothing host-bound for the guard to refuse.
-		{Key: "api", Provider: &answeringProvider{}},
-	})
-	if err != nil {
-		t.Fatalf("NewRegistry: %v", err)
-	}
-	c := &Company{Models: models, Config: &config.Company{}}
-
-	// Executor on the subscription, code work on the API key.
-	seat := &org.Role{Name: "SWE", LLM: org.ProviderKeys{"sub"}, LLMSandbox: org.ProviderKeys{"api"}}
-	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil); err != nil {
-		t.Errorf("run_sandbox work on an API-key entry was refused: %v", err)
-	}
-	if err := sandboxCredentials(c, seat, phase.Execute, sandbox.E2B, nil); err == nil {
-		t.Error("a box-mode run on a login that cannot follow it was launched " +
-			"because the guard looked at llm_sandbox instead")
-	}
-
-	// And the mirror image, or the guard could simply always refuse.
-	reversed := &org.Role{Name: "QA", LLM: org.ProviderKeys{"api"}, LLMSandbox: org.ProviderKeys{"sub"}}
-	if err := sandboxCredentials(c, reversed, phase.Execute, sandbox.E2B, nil); err != nil {
-		t.Errorf("a box-mode run on an API-key entry was refused: %v", err)
-	}
-	if err := sandboxCredentials(c, reversed, phase.Sandbox, sandbox.E2B, nil); err == nil {
-		t.Error("run_sandbox work on a login that cannot follow it was launched")
 	}
 }
 
@@ -431,9 +397,9 @@ func TestTheGuardAsksTheEntryTheRunActuallyRunsOn(t *testing.T) {
 //
 // OpenCode reads its provider's key from its own environment, so an entry's
 // whole sign-in can be one variable in env — which the doctor counts. The
-// run environment carried only the token and the api-key variable, so a
-// box-mode or sandbox run on such an entry started its CLI signed in to
-// nothing, and a remote one was refused as having no credential at all.
+// run environment carried only the token and the api-key variable, so an
+// executor run on such an entry started its CLI signed in to nothing, and a
+// remote one was refused as having no credential at all.
 func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 	t.Parallel()
 	company := func(env map[string]string) (*Company, *org.Role) {
@@ -458,19 +424,22 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 	c, seat := company(map[string]string{
 		"ANTHROPIC_API_KEY": "sk-ant-not-real", "HTTPS_PROXY": "http://proxy.example.com",
 	})
-	run, err := newCodingRun(c, seat, phase.Sandbox, "opencode", nil)
-	if err != nil {
-		t.Fatalf("an opencode entry under its own runner was refused: %v", err)
-	}
-	env := run.env
+	env := runOn(t, c, seat, nil).env
 	if env["ANTHROPIC_API_KEY"] != "sk-ant-not-real" {
 		t.Fatalf("the run environment does not carry the env sign-in: %v", env)
 	}
-	if _, leaked := env["HTTPS_PROXY"]; leaked {
-		t.Errorf("an env variable that is no credential was offered as one: %v", env)
-	}
-	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, env); err != nil {
+	if err := guardOn(t, c, seat, sandbox.E2B, env); err != nil {
 		t.Errorf("a remote run carrying its env key was refused: %v", err)
+	}
+	// THE REST OF env TRAVELS BESIDE IT, and is no sign-in: an entry whose
+	// env holds a proxy alone reaches the box with it, and is refused a
+	// remote one as signed in to nothing.
+	if env["HTTPS_PROXY"] != "http://proxy.example.com" {
+		t.Errorf("the entry's proxy did not reach the run environment: %v", env)
+	}
+	c, seat = company(map[string]string{"HTTPS_PROXY": "http://proxy.example.com"})
+	if err := guardOn(t, c, seat, sandbox.E2B, runOn(t, c, seat, nil).env); err == nil {
+		t.Error("a remote run whose entry's env holds a proxy alone was launched as signed in")
 	}
 
 	// THE KEY IN THE SEAT'S OWN SANDBOX ENV passes too: which variable this
@@ -478,17 +447,17 @@ func TestACLIEnvSignInTravelsIntoTheRun(t *testing.T) {
 	// cannot ask the profile, and an operator legitimately declares their
 	// own key in role.sandbox.env.
 	c, seat = company(nil)
-	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B,
+	if err := guardOn(t, c, seat, sandbox.E2B,
 		map[string]string{"OPENROUTER_API_KEY": "sk-or-not-real"}); err != nil {
 		t.Errorf("a remote run carrying its key in role.sandbox.env was refused: %v", err)
 	}
 	// A count of model tokens is not a key.
-	if err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B,
+	if err := guardOn(t, c, seat, sandbox.E2B,
 		map[string]string{"OPENCODE_MAX_TOKENS": "4096"}); err == nil {
 		t.Error("a remote run whose only variable is a token count was launched")
 	}
 
-	err = sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
+	err := guardOn(t, c, seat, sandbox.E2B, nil)
 	if err == nil {
 		t.Fatal("a remote run with no sign-in was launched")
 	}

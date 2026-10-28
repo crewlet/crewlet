@@ -9,8 +9,9 @@ import (
 
 // A PHASE RECORD THAT MEASURED NOTHING SAYS SO BY OMISSION.
 //
-// A collected coding run's record has no start this build measured, no rounds
-// of its own and no round cap, and a bridged tool call is one nothing timed.
+// A coding run's own `sandbox` record can have no start this build measured,
+// and has no rounds of its own and no round cap; a call whose arguments did
+// not parse is one nothing timed.
 // Decoded and re-encoded (the store keeps the payload, a socket forwards it)
 // such a record must stay that way: a zero time.Time marshals as the year 1,
 // and a record reading "started 0001-01-01" is a timeline bar two thousand

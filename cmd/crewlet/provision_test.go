@@ -29,6 +29,7 @@ import (
 const gitlabCompanyDoc = `
 name: Nimbus
 providers:
+  sandbox: {fake: true}
   llm:
     main:
       model: claude-sonnet-5
@@ -457,6 +458,7 @@ func TestAnUnknownIntegrationCommandIsRefused(t *testing.T) {
 const chatCompanyDoc = `
 name: Nimbus
 providers:
+  sandbox: {fake: true}
   llm:
     main:
       model: claude-sonnet-5

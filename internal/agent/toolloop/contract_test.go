@@ -111,8 +111,8 @@ func (c *suiteCLI) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 
 // contractSurface is the suite's tools on a seat's surface, as a phase's is:
 // each a seat tool, called for the turn, on a turn whose call log counts its
-// calls.
-func contractSurface(t *testing.T, spec toolsessiontest.Spec) *tools.Surface {
+// calls — the suite's suspending tool among them, through [parkingSurface].
+func contractSurface(t *testing.T, spec toolsessiontest.Spec) toolloop.Surface {
 	t.Helper()
 	seat := &org.Role{Name: "Engineer", DeclaredHandle: "dev"}
 	turn := &turnctx.Turn{RunID: "run-1", Seat: seat,
@@ -120,28 +120,43 @@ func contractSurface(t *testing.T, spec toolsessiontest.Spec) *tools.Surface {
 		Calls: turnctx.NewCallLog()}
 	var surf *tools.Surface
 	reg := tools.NewRegistry()
+	suspends := map[string]bool{}
 	for _, tool := range spec.Tools {
-		seat := &suiteTool{tool: tool, surface: func() *tools.Surface { return surf }}
-		var callable tools.Callable = seat
-		if tool.Suspends {
-			callable = suiteLauncher{seat}
-		}
-		if err := reg.Register(callable, tools.OriginBuiltin); err != nil {
+		if err := reg.Register(&suiteTool{tool: tool, surface: func() *tools.Surface { return surf }},
+			tools.OriginBuiltin); err != nil {
 			t.Fatalf("Register(%s): %v", tool.Name, err)
 		}
+		suspends[tool.Name] = tool.Suspends
 	}
 	surf = tools.NewSurface("execute", reg.Snapshot(), spec.Offered).ForTurn(turn)
-	return surf
+	return parkingSurface{Surface: surf, suspends: suspends}
 }
 
-// suiteLauncher is a suite tool whose work outlives its call: its result asks
-// the run to park.
-type suiteLauncher struct{ *suiteTool }
+// parkingSurface is a seat's surface on which the suite's suspending tool asks
+// the run to park, as a tool whose work outlives its call does: it runs alone
+// ([toolloop.Detacher]) and its result carries [toolloop.ToolResult.Suspend].
+// A seat's own tools never park a phase — only the Dashboard Assistant's do —
+// so the gate a phase that may not suspend holds is proven against this
+// stand-in.
+type parkingSurface struct {
+	*tools.Surface
+	suspends map[string]bool
+}
 
-func (s suiteLauncher) CallDetached(ctx context.Context, turn *turnctx.Turn,
-	args map[string]any) (tools.DetachedResult, error) {
-	res, err := s.CallForTurn(ctx, turn, args)
-	return tools.DetachedResult{Result: res, Suspend: true}, err
+var _ toolloop.Detacher = parkingSurface{}
+
+func (s parkingSurface) Detached(name string) bool { return s.suspends[name] }
+
+func (s parkingSurface) Admit(name string, args map[string]any) toolloop.Admitted {
+	admitted := s.Surface.Admit(name, args)
+	if !s.suspends[name] {
+		return admitted
+	}
+	return func(ctx context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {
+		res, err := admitted(ctx, call)
+		res.Suspend = true
+		return res, err
+	}
 }
 
 // suiteTool is one of the suite's tools as a seat tool.

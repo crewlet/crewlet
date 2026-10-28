@@ -102,7 +102,12 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		CacheWriteTokens: num(payload, "cache_write_tokens"),
 		ProviderKey:      str(payload, "provider_key"),
 		CostUSD:          fraction(payload, "cost_usd"),
-		Calls:            tokens.PhaseCalls(length(payload, "rounds"), num(payload, "rounds_used")),
+		Calls: tokens.PhaseCalls(tokens.PhaseCounts{
+			Phase:      str(payload, "phase"),
+			Rounds:     length(payload, "rounds"),
+			RoundsUsed: num(payload, "rounds_used"),
+			CLITurns:   num(payload, "cli_turns"),
+		}),
 	}
 	if env.Type == auxiliarySpendType {
 		// THE AUXILIARY MODEL'S SPEND, filed as the store's writer files

@@ -195,11 +195,13 @@ A few things worth knowing when deploying Crewlet:
   deliberately one permission over the whole company — its configuration, its
   credentials, its people and its deployment — and the configuration
   configuration runs code: a stdio `mcp_servers` entry is a `command` the
-  engine starts as its own user on every node that runs seats; a `cli-agent`
-  provider names a binary it runs, and a seat on one with `run_in: self` does
-  its code work inside it; a `run_in: direct` sandbox cell runs a coding agent,
-  and its setup steps, as that same user; and a seat's model chain,
-  credentials, sandbox cell and `mcp_env` are part of the same document.
+  engine starts as its own user on every node that runs seats; a
+  `providers.llm` entry names a coding CLI it runs, and every agent seat's
+  executor is that CLI's own fully permissioned run, which a `run_in: direct`
+  cell (on the entry, or as `providers.sandbox.default_run_in`) runs, with the
+  seat's setup steps, as that same user on the engine host; and a seat's model
+  chain (which places its run), credentials and `mcp_env` are part of the same
+  document.
   Whoever holds it can therefore run anything on every
   engine host and read whatever the engine's user can: the Tier A file, the
   keyring that signs every session, and every credential the store holds. Give
@@ -315,10 +317,14 @@ A few things worth knowing when deploying Crewlet:
   it holds is refused and logged. Signing authenticates and does not encrypt:
   the records, the event stream and the coordination store are readable by
   anything that reaches those ports, the coordination store's writes are
-  guarded by compare-and-set rather than a signature, and the scatters that
+  guarded by compare-and-set rather than a signature — except a person's
+  answer to a parked coding run and a person's note to a running one, which
+  the run's record carries sealed under the keyring and which nothing hands to
+  a model until it opens — and the scatters that
   only READ — history, search, a seat's memory, a sandbox's tail — are not
   signed. Keep both ports on a private network. The decision is
-  [ADR-0031](adr/0031-every-state-log-record-is-signed.md).
+  [ADR-0031](adr/0031-every-state-log-record-is-signed.md), and the note's
+  [ADR-0067](adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md).
 - **Removing a person erases their values from every node's rows — and not
   from the identity log or a backup until those let go of them.** A person's
   name, address and second-factor seed are sealed under the fleet keyring,
@@ -381,16 +387,24 @@ A few things worth knowing when deploying Crewlet:
   page never does this by accident; share `editor` with seats and people you
   would trust with every viewer's readable rows. See
   `internal/api/pagepolicy` for why a nonce-based policy cannot close this.
-- **Sandbox isolation depends on the cell a seat runs in.** A coding agent
-  runs fully permissioned — the sandbox boundary, not the agent's own
-  permission prompts, is the isolation model — so where it runs is the
-  security decision. `run_in: e2b` is a remote VM per run and `run_in:
-  container` a Docker or Podman container on the engine host; `run_in: direct`
-  is a process tree running **as the engine's own user on the engine host**,
-  which isolates each box's state and not the host — it can read what that
-  user can. Use `direct` on a workstation or a dedicated VM, never where the
-  work is untrusted. Treat anything you inject into a sandbox (tokens in
-  `role.sandbox.env`) as visible to the code that runs there. See
+- **Where each executor runs is the isolation decision.** Every agent seat's
+  executor is its coding CLI's own fully permissioned run — Claude Code under
+  `bypassPermissions`, OpenCode with every action allowed but `question` —
+  because a headless run has nobody to answer a permission prompt, so the
+  cell it runs in, not the CLI's own prompts, is the isolation model. The cell
+  is the one the `providers.llm` entry it launches on names in `run_in`, else
+  `providers.sandbox.default_run_in`. `e2b` is a remote VM per run and
+  `container` a Docker or Podman container on the engine host; `direct` runs
+  a fully permissioned CLI **as the engine's own user on the engine host**,
+  which keeps each box's state apart and not the host — the run can read
+  what that user can. Use `direct` only on a dedicated host you are willing
+  to hand to an autonomous agent, for the entry that needs the host itself,
+  or for a first run on your own machine while its seats take work from you
+  alone — the quickstart's start; for any other local instance, a
+  workstation included, and before a seat takes work from anyone else,
+  place the runs in `container` (or `e2b`). Treat anything you put into a
+  box (tokens in `role.sandbox.env`) as visible to the code that runs there.
+  See
   [Code Sandbox § Local sandboxes](docs/concepts/code-sandbox.md#local-sandboxes).
   E2B boxes are created with secured access, so a box's in-box agent runs a
   command or serves a file only for a holder of that box's access token,

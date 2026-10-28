@@ -12,20 +12,22 @@ package phase
 type Phase string
 
 // The phases. Execute and Review are the turn's own two passes; Subagent,
-// Auxiliary, Judge and Sandbox are the scopes a seat's work spills into, each
-// with its own provider chain so an operator can point cheap work at a cheap
-// model.
+// Auxiliary and Judge are the scopes a seat's work spills into, each with its
+// own provider chain so an operator can point cheap work at a cheap model.
 //
 // `execute` names the phase although it now decides as well as acts:
 // deciding is part of the seat doing its own work, which is what every
-// dashboard and rollup that reads the value means by it.
+// dashboard and rollup that reads the value means by it. The executor runs
+// as its coding CLI's own run, in a box, so the box's own record of that run
+// is a phase of the event vocabulary (events/types.PhaseSandbox) and not of
+// this one: no provider chain is resolved for it, because the run IS the
+// Execute chain's member that launched it.
 const (
 	Execute   Phase = "execute"
 	Review    Phase = "review"
 	Subagent  Phase = "subagent"
 	Auxiliary Phase = "auxiliary"
 	Judge     Phase = "judge"
-	Sandbox   Phase = "sandbox"
 	// Onboarding is the dedicated first-turn pass, BEFORE the executor.
 	// Its own phase rather than a hint inside the executor's prompt,
 	// because on a genuine first turn reading the team's pages and

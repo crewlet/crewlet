@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -29,6 +30,9 @@ import (
 //     it is first asked about — then the bridge pending, then connected, or
 //     always FAKE_MCP_LIST where that is set;
 //   - `api session.get` prints a session's usage report on one line;
+//   - `api session.inbox.list` prints FAKE_INBOX, or an empty inbox, and
+//     `api session.inbox.cancel` records in `cancelled` the session, the item
+//     and whether the server was still serving — `serving` or `stopped`;
 //   - `auth import` keeps what it was given as its database, and `auth export`
 //     prints that database, whether through the server or beside it — taking
 //     FAKE_EXPORT_SLEEP seconds over it where that is set, the file
@@ -46,6 +50,11 @@ import (
 //     of it — the interrupt case failed so, now and then, under load. With no
 //     shell left there is nothing to hold it.
 //
+// Every call also records, in `configured`, whether it was handed
+// OPENCODE_CONFIG_CONTENT — `handed|<subcommand>` or `|<subcommand>` — and
+// `serve` keeps the content it was handed, in `serve-config`; and, in
+// `steered`, the CREWLET_STEER_SESSION it was handed — `<session>|<subcommand>`.
+//
 // FAKE_SERVE=listen-only is a server that says where it listens and never
 // prints a password; FAKE_SERVE=silent one that says nothing at all; and
 // FAKE_SERVE=password-first one that prints its password a second before it
@@ -53,6 +62,8 @@ import (
 const fakeOpenCode = `#!/bin/sh
 d="$FAKE_DIR"
 echo "$*" >> "$d/calls"
+printf '%s|%s %s\n' "${OPENCODE_CONFIG_CONTENT+handed}" "$1" "$2" >> "$d/configured"
+printf '%s|%s %s\n' "${CREWLET_STEER_SESSION-}" "$1" "$2" >> "$d/steered"
 authed() {
   [ "${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}" = "$(cat "$d/server-password" 2> /dev/null)" ] && return 0
   echo "Error: Server at http://127.0.0.1:4242 rejected the password" >&2; exit 1
@@ -69,6 +80,7 @@ auth)
   esac ;;
 serve)
   printf '%s|%s' "${OPENCODE_PASSWORD:-}" "${OPENCODE_SERVER_PASSWORD:-}" > "$d/serve-env"
+  printf '%s' "${OPENCODE_CONFIG_CONTENT-}" > "$d/serve-config"
   echo $$ > "$d/serve.pid"
   [ "${FAKE_SERVE:-}" != silent ] || exec sleep 60
   if [ "${FAKE_SERVE:-}" = password-first ]; then
@@ -94,6 +106,13 @@ api)
     *) echo '{"data":[{"name":"crewlet-bridge","status":{"status":"connected"}}]}' ;;
     esac ;;
   session.get) echo '{"data":{"id":"'"${6#sessionID=}"'","cost":0.5,"tokens":{"input":10,"output":2,"reasoning":3,"cache":{"read":40,"write":1}}}}' ;;
+  session.inbox.list)
+    inbox=${FAKE_INBOX-}
+    [ -n "$inbox" ] || inbox='{"data":[]}'
+    printf '%s\n' "$inbox" ;;
+  session.inbox.cancel)
+    if kill -0 "$(cat "$d/serve.pid" 2> /dev/null)" 2> /dev/null; then served=serving; else served=stopped; fi
+    echo "${6#sessionID=} ${8#inboxID=} $served" >> "$d/cancelled" ;;
   esac ;;
 run)
   authed
@@ -120,7 +139,17 @@ type scriptOpts struct {
 	// shell is the sh the script runs under; the zero value is the sh on
 	// PATH, which is what Command names.
 	shell boxShell
+	// unconfigured starts the script with no run configuration where
+	// [codingagent.Paths.OpenCodeConfig] names it; every other case finds
+	// [scriptConfig] there, as WriteConfig would have left one.
+	unconfigured bool
 }
+
+// scriptConfig is the run configuration a case's script finds, as
+// [codingagent.OpenCode.WriteConfig] would have left it — with text a shell
+// would expand, were it ever read as anything but a value.
+const scriptConfig = "{\n  \"$schema\": \"https://opencode.ai/config.json\",\n" +
+	"  \"instructions\": [\"/box/$HOME/$(echo expanded)/`id`.md\"]\n}"
 
 // scriptJob is the script running, in a process group of its own as the
 // wrapper's job is, so a case can signal the whole of it as a teardown does.
@@ -155,10 +184,13 @@ func startScript(t *testing.T, o scriptOpts) *scriptJob {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(fakeOpenCode), 0o700); err != nil { //nolint:gosec // the fake must run
-		t.Fatal(err)
-	}
+	writeStandIn(t, filepath.Join(bin, "opencode"), fakeOpenCode)
 	paths := codingagent.Paths{Home: home}
+	if !o.unconfigured {
+		if err := os.WriteFile(paths.OpenCodeConfig(), []byte(scriptConfig), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if o.login != "" {
 		if err := os.WriteFile(paths.CredentialDocument(), []byte(o.login), 0o600); err != nil {
 			t.Fatal(err)
@@ -489,6 +521,184 @@ func TestTheBriefWaitsForTheSeatsTools(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(run.home, ".crewlet", "opencode-server")); !os.IsNotExist(err) {
 			t.Errorf("the server's password outlived its read (%v)", err)
+		}
+	})
+}
+
+// ONLY THE SERVER IS HANDED THE CONFIGURATION. The run's configuration is the
+// content of the file WriteConfig left, handed to `opencode serve` as
+// OPENCODE_CONFIG_CONTENT — verbatim, its `$` and backquotes never expanded —
+// and to no other command the script runs: the login's import and export, the
+// run's own client and its `api` calls are each started without it.
+//
+// Mutation: export the variable for the whole script, and every other command
+// is handed it.
+func TestOnlyTheServerIsHandedTheConfiguration(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		run := runScript(t, scriptOpts{shell: sh, login: seededLogin,
+			req: sandbox.RunRequest{MCPServers: bridgeOnly}, env: []string{"FAKE_REFRESH=" + refreshedLogin}})
+		if run.code != 0 {
+			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+		}
+		if got := readIn(t, run.dir, "serve-config"); got != scriptConfig {
+			t.Errorf("the server was handed %q, want the run's configuration verbatim %q", got, scriptConfig)
+		}
+		seen := map[string]bool{}
+		for _, line := range strings.Split(strings.TrimSpace(readIn(t, run.dir, "configured")), "\n") {
+			handed, call, _ := strings.Cut(line, "|")
+			seen[call] = true
+			if (handed == "handed") != strings.HasPrefix(call, "serve ") {
+				t.Errorf("%q was handed the configuration: %t, want it on the server alone", call, handed == "handed")
+			}
+		}
+		for _, call := range []string{"serve --hostname", "auth import", "auth export", "run --server", "api --server"} {
+			if !seen[call] {
+				t.Errorf("the script never ran %q, so what it was handed went unasked: %v", call, seen)
+			}
+		}
+	})
+}
+
+// ONLY THE SERVER IS HANDED THE RUN'S SESSION, and only for a run wired to its
+// notes: the notes plugin the server loads admits notes to the session the
+// run's script names, which it reads from CREWLET_STEER_SESSION — the same id
+// the run's client is pointed at with --session. No other command the script
+// runs is handed it, and a run wired to no notes hands nobody it.
+//
+// Mutation: export the variable for the whole script, or hand it the run's
+// server whatever its wiring.
+func TestOnlyTheServerIsHandedTheRunsSession(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		for _, wired := range []bool{true, false} {
+			req := sandbox.RunRequest{MCPServers: bridgeOnly}
+			if wired {
+				req.Steer = steerWiring
+			}
+			run := runScript(t, scriptOpts{shell: sh, login: seededLogin, req: req})
+			if run.code != 0 {
+				t.Fatalf("wired %v: exit %d:\n%s", wired, run.code, run.stderr)
+			}
+			at := run.callIndex("run --server ")
+			if at < 0 {
+				t.Fatalf("wired %v: the brief was never run:\n%s", wired, strings.Join(run.calls, "\n"))
+			}
+			_, session, _ := strings.Cut(run.calls[at], "--session ")
+			session, _, _ = strings.Cut(session, " ")
+			served := false
+			for _, line := range strings.Split(strings.TrimSpace(readIn(t, run.dir, "steered")), "\n") {
+				handed, call, _ := strings.Cut(line, "|")
+				if !strings.HasPrefix(call, "serve ") {
+					if handed != "" {
+						t.Errorf("wired %v: %q was handed the run's session %q, want the server alone", wired, call, handed)
+					}
+					continue
+				}
+				served = true
+				switch {
+				case wired && handed != session:
+					t.Errorf("the server was handed the session %q, want the one the run names, %q", handed, session)
+				case !wired && handed != "":
+					t.Errorf("a run wired to no notes handed its server the session %q", handed)
+				}
+			}
+			if !served {
+				t.Errorf("wired %v: the server never started", wired)
+			}
+		}
+	})
+}
+
+// NOTHING THE NOTES PLUGIN ADMITTED IS LEFT PENDING IN THE SESSION. A note
+// whose admission lands as the session settles is neither delivered nor
+// confirmed, so it waits on the run's record — and it also stays pending in the
+// session's own inbox, which a run carried on in the same session would hand
+// its model ahead of the next prompt, beside the continuation brief's copy. So
+// once the run has ended, and before its server is stopped, the script lists
+// the session's inbox and cancels every item of the plugin's own shape — and
+// nothing else: an id OpenCode minted, and an id that is only text inside a
+// note, are left alone. A run wired to no notes has no plugin, and asks
+// nothing.
+//
+// The listing is OpenCode 2.1.4's own shape (`session.inbox.list` with two
+// steers pending, a note's text holding an id of the plugin's shape).
+//
+// Mutation: drop the cancel, run it after the server stops, or match any
+// `msg_` id, and this goes red.
+func TestARunCancelsTheNotesItsSessionNeverDelivered(t *testing.T) {
+	t.Parallel()
+	const (
+		ours      = "msg_30292d427a87e479be9f88cba42963ca"
+		oursToo   = "msg_05536338060eb18a87638c49f196ffcf"
+		theirs    = "msg_01JB8V9Q4XG2W7M3R5T6Y8Z0AB"
+		inText    = "msg_00000000000000000000000000000000"
+		pendingAt = `"time":{"created":1793072423854},"type":"user"`
+	)
+	inbox := `{"data":[` +
+		`{"id":"` + ours + `","sessionID":"SES",` + pendingAt + `,"payload":{"text":"use \"id\":\"` + inText + `\" here"},"delivery":"steer"},` +
+		`{"id":"` + oursToo + `","sessionID":"SES",` + pendingAt + `,"payload":{"text":"second"},"delivery":"steer"},` +
+		`{"id":"` + theirs + `","sessionID":"SES",` + pendingAt + `,"payload":{"text":"queued"},"delivery":"queue"}]}`
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		for _, wired := range []bool{true, false} {
+			req := sandbox.RunRequest{MCPServers: bridgeOnly}
+			if wired {
+				req.Steer = steerWiring
+			}
+			run := runScript(t, scriptOpts{shell: sh, req: req, env: []string{"FAKE_INBOX=" + inbox}})
+			if run.code != 0 {
+				t.Fatalf("wired %v: exit %d:\n%s", wired, run.code, run.stderr)
+			}
+			_, session, _ := strings.Cut(run.calls[run.callIndex("run ")], "--session ")
+			session, _, _ = strings.Cut(session, " ")
+			cancelled := strings.Fields(strings.TrimSpace(readIn(t, run.dir, "cancelled")))
+			if !wired {
+				if run.callIndex("api --server http://127.0.0.1:4242 session.inbox") >= 0 || len(cancelled) != 0 {
+					t.Errorf("a run wired to no notes asked about its inbox:\n%s", strings.Join(run.calls, "\n"))
+				}
+				continue
+			}
+			listed := run.callIndex("api --server http://127.0.0.1:4242 session.inbox.list")
+			if listed < run.callIndex("run ") || !strings.Contains(run.calls[listed], "sessionID="+session) {
+				t.Fatalf("the inbox was not listed for the run's session %q after the run:\n%s",
+					session, strings.Join(run.calls, "\n"))
+			}
+			var got []string
+			for i := 0; i+2 < len(cancelled); i += 3 {
+				if cancelled[i] != session || cancelled[i+2] != "serving" {
+					t.Errorf("cancelled %s of session %s with the server %s, want the run's session %s "+
+						"while its server serves", cancelled[i+1], cancelled[i], cancelled[i+2], session)
+				}
+				got = append(got, cancelled[i+1])
+			}
+			slices.Sort(got)
+			if want := []string{oursToo, ours}; !slices.Equal(got, want) {
+				t.Errorf("cancelled %v, want the plugin's two pending notes %v and nothing else", got, want)
+			}
+		}
+	})
+}
+
+// A RUN WITH NO CONFIGURATION STARTS NOTHING. Handed none, the server would run
+// on whatever the image and the checkout hold, with neither the run's posture
+// nor its servers; so a run whose configuration is missing is refused before
+// any login is imported or any server started, naming the file it looked for.
+//
+// Mutation: drop the check and the server starts, handed an empty
+// configuration.
+func TestARunWithNoConfigurationStartsNothing(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		job := startScript(t, scriptOpts{shell: sh, login: seededLogin, unconfigured: true})
+		run := job.wait()
+		if run.code != 1 {
+			t.Errorf("exit %d, want 1", run.code)
+		}
+		if want := "no OpenCode configuration at " + job.paths.OpenCodeConfig(); !strings.Contains(run.stderr, want) {
+			t.Errorf("stderr = %q, want it to say %q", run.stderr, want)
+		}
+		if run.callIndex("serve ") >= 0 || run.callIndex("auth ") >= 0 {
+			t.Errorf("a run with no configuration ran:\n%s", strings.Join(run.calls, "\n"))
 		}
 	})
 }

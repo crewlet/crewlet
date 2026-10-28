@@ -422,10 +422,13 @@ func (s MarkerScope) Valid() bool {
 // LocalTools says what a profile does about the CLI's OWN tools — its shell,
 // its file editor, its browser.
 //
-// On this host the engine uses none of them: a seat's tools reach the CLI as
-// the engine's own MCP server ([MCP]), and a CLI editing files in its own
-// sandbox is invisible to the tool registry, the permission model and the
-// event stream. The
+// On this host the engine uses none of them — every phase but the executor: a
+// seat's tools reach the CLI as the engine's own MCP server ([MCP]), and a CLI
+// editing files in its own sandbox is invisible to the tool registry, the
+// permission model and the event stream. A seat's executor is the other case:
+// the same CLI's own agentic run in a box, fully permissioned there by its
+// in-box runner (internal/sandbox/codingagent), which this stance does not
+// reach. The
 // shell is the one that matters: hostbox isolates a seat's HOME and
 // environment, not the filesystem, so a CLI with a shell on the engine host
 // reads whatever the engine user can read. A profile therefore DENIES local
@@ -1587,7 +1590,7 @@ func (p *Profile) TakesModel() bool {
 // modelPlaceholder is what a model_args element carries the entry's model as.
 const modelPlaceholder = "{model}"
 
-// ModelArgument is the model as a text call hands it to the CLI: the VALUE of
+// ModelArgument is the model as a run hands it to the CLI: the VALUE of
 // the model_args element carrying {model}, rendered with model — so an
 // override such as ["--model", "openrouter/{model}"] is part of it. The model
 // itself when no element carries the placeholder, which config and the
@@ -1595,10 +1598,10 @@ const modelPlaceholder = "{model}"
 //
 // ONE RENDERING FOR EVERY PLACE THE MODEL GOES, because a cli-agent entry's
 // `model` is written in its CLI's own grammar and every reader of it has to
-// see the same string: a host-mode run's argv, a box-mode or code-sandbox run
-// of the same CLI in a box, and the config rule that judges the value as that
+// see the same string: the argv of a run on this host, the executor's run of
+// the same CLI in a box, and the config rule that judges the value as that
 // CLI reads it. A run that rebuilt the value its own way named one model to
-// the box and another to every host-mode run on the same entry.
+// the box and another to every run on this host on the same entry.
 //
 // THE VALUE, NOT THE ELEMENT. A box's runner writes its own flag
 // (`--model <value>`), so an element that spells flag and value as one —

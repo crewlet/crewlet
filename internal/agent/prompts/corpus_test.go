@@ -39,8 +39,8 @@ const iterationLedger = "### Round 1 — sent back\n" +
 	"- `slack_post` → success: \"## Deploy 2.3 — done 🎉\"\n" +
 	"### Round 2\n- `jira_create` → error: field \"résumé\" is required\n"
 
-// richSeat is the lead of a mixed company with a sandbox: every identity
-// section the executor renders has something to say.
+// richSeat is the lead of a mixed company: every identity section the
+// executor renders has something to say.
 //
 // Every seat is named by its HANDLE — the unit's lead, what the lead manages
 // and the seat looked up — because that is a seat's identity (ADR-0013); a
@@ -68,7 +68,6 @@ func richSeat() Seat {
 					Responsibilities:     []string{"Guide the team.", "Own incidents."},
 					BehavioralGuidelines: []string{"Be concise.", "Cite the ticket."},
 					Manages:              []string{"eng", "sarah-chen"},
-					Sandbox:              &org.RoleSandbox{Enabled: true},
 					MCPEnv: org.MCPEnv{
 						"atlassian": {"token": "x"},
 						"github":    {"Authorization": "Bearer x"},
@@ -125,7 +124,6 @@ func richExecutorInput() ExecutorInput {
 		RelevantKnowledge:   "## Runbook: deploys\n1. tag\n2. ship 🚢",
 		ThreadContext:       "- Ana: ## not a heading of ours\n- Bo: ok",
 		Skills:              richSkills(),
-		OffersSandbox:       true,
 	}
 }
 
@@ -138,7 +136,7 @@ func richReviewInput() ReviewInput {
 		Produced:          producedReport,
 		ToolLog:           "- `slack_post` → success",
 		EarlierIterations: iterationLedger,
-		OffersSandbox:     true,
+		Delivered:         DeliveredRefs([]string{"acme/api#41 — fix the flake 🧪"}, 2),
 		OffersA2A:         true,
 		Skills:            richSkills(),
 	}

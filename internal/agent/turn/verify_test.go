@@ -62,18 +62,18 @@ func TestActedCountsOnlyWhatIsPROVENToHaveLeftTheEngine(t *testing.T) {
 	s := turn.Surface{
 		Catalogue: []string{
 			"slack_post", "slack_history", "tracker_do", "submit_work",
-			"activate_tool", "reflect_and_persist", "a2a_ask", "run_sandbox",
+			"activate_tool", "reflect_and_persist", "a2a_ask", "github_open_pr",
 		},
 		Deliveries:     map[string]string{"slack_post": "test", "tracker_do": "test"},
 		KnownReads:     []string{"slack_history"},
-		KnownOpenWorld: []string{"a2a_ask", "run_sandbox"},
+		KnownOpenWorld: []string{"a2a_ask", "github_open_pr"},
 	}
 	for name, want := range map[string]bool{
-		"slack_post":    true,  // a declared deliverable reached a person
-		"tracker_do":    true,  // declared a deliverable at registration
-		"a2a_ask":       true,  // a builtin, but it woke a colleague
-		"run_sandbox":   true,  // a builtin, but it started a billed box
-		"slack_history": false, // positively read-only
+		"slack_post":     true,  // a declared deliverable reached a person
+		"tracker_do":     true,  // declared a deliverable at registration
+		"a2a_ask":        true,  // a builtin, but it woke a colleague
+		"github_open_pr": true,  // no delivery, but a pull request others see
+		"slack_history":  false, // positively read-only
 		// The three that make this predicate different from
 		// !ReadOnlyProven, and the reason it is not written that way:
 		// every one of them is unannotated in-engine plumbing that a
@@ -263,7 +263,7 @@ func TestDeliverersForNamesOnlyTheAwaitedSurface(t *testing.T) {
 	}
 }
 
-// A Reply is stored as a string on a suspended coding run's row and read back
+// A Reply is stored as a string on a parked run's row and read back
 // by whatever build resumes it, which may be days and a restart later.
 func TestAReplyRoundTripsThroughItsStoredForm(t *testing.T) {
 	t.Parallel()
@@ -291,7 +291,7 @@ func TestAReplyRoundTripsThroughItsStoredForm(t *testing.T) {
 func TestAnsweredOnlyConsultsTheRecordWhenAToolOwesTheAnswer(t *testing.T) {
 	t.Parallel()
 	s := turn.Surface{Deliveries: map[string]string{"slack_post": "slack"}}
-	nothing := []ledger.Call{{Name: "run_sandbox"}}
+	nothing := []ledger.Call{{Name: "slack_history"}}
 
 	if !turn.Answered(nothing, s, turn.NoReply()) {
 		t.Error("a turn nobody asked for was recorded as having failed to reply")

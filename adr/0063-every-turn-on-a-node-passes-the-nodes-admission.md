@@ -26,7 +26,10 @@ node defers it, which quiesces the control topic for the rest of the drain and
 costs the one delivery every handoff costs. A condition that clears by waiting
 (the seat's ownership not yet proven again, or any limit a later change adds)
 acknowledges it, spending none of its deliveries and quiescing nothing, because
-the waiter announces a finished run again on every poll until a node claims it.
+the waiter that drives the run's box announces a finished run again on every
+poll until a node claims it: the fleet's for an `e2b` box, the box host's own
+for a `direct` or `container` one
+([ADR-0065](0065-a-local-box-is-driven-by-the-node-that-launched-it.md)).
 Only a failure the refusal does not explain is a Nak. A new condition is
 handed back by the rule for its kind with no change to the hand-back.
 
@@ -35,12 +38,12 @@ poll at worst.** The coordinator keeps each completion its gate refused on a
 condition, and re-fires it when the engine signals that condition cleared for
 the seat (`Engine.readmitResumes`, the same `sandbox.Coordinator.Readmit` that
 wakes an answer waiting on it, and the hook whatever ends a new condition
-calls). The waiter is the backstop for a clearing nothing signals: it lists
-every active run on every pass, whatever its seat is doing, so the wait is
-bounded by its poll interval (`sandbox.DefaultPollInterval`, 15 seconds). The
+calls). That waiter is the backstop for a clearing nothing signals: it lists
+the active runs on every pass and polls each one it drives, whatever its seat
+is doing, so the wait is bounded by its poll interval (`sandbox.DefaultPollInterval`, 15 seconds). The
 claim is at-most-once, so the two arriving together resume the run once. A
-seat this node lets go of drops its kept completions, for the successor's
-waiter to announce there.
+seat this node lets go of drops its kept completions, for the waiter that
+drives each run's box to announce to the seat's next holder.
 
 **A turn inside an admitted turn reuses that admission, and skips the
 ownership check for the inner turn.** The inline answer resume runs on the

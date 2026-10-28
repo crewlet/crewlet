@@ -434,7 +434,8 @@ func TestTheFeedShowsOnlyTheAppsTheCallerHolds(t *testing.T) {
 // still asked things, may read the item an open ask names them on and post the
 // answer without it — so the list of what waits on them is theirs to read
 // whatever they hold. A parked coding run's question put to them is shown, and
-// the task behind it, its seat's trail, is not.
+// the task behind it, its seat's trail, is not, nor the entry its job was
+// launched on, which is an admin's.
 //
 // Somebody else's list is still the tracker's: a lead without it reads no
 // report's, and is told the tracker would admit them.
@@ -476,6 +477,13 @@ func TestYourOwnAsksNeedNoTracker(t *testing.T) {
 	}
 	if _, shown := run.Run["work_item"]; shown {
 		t.Error("ana, holding no tracker, was shown the run's work item")
+	}
+	// THE ENTRY THE RUN'S JOB WAS LAUNCHED ON IS THE COMPANY'S CONFIGURATION,
+	// as the board withholds it: the decisions answer serialises the run the
+	// board's way, so ana, no admin, is told the model and not the entry.
+	if _, shown := run.Run["provider_key"]; shown || run.Run["model"] != "opus" {
+		t.Errorf("ana was shown the run's entry %v, model %v: want the model alone",
+			run.Run["provider_key"], run.Run["model"])
 	}
 
 	lead := viewerSources(t, &stubWork{})

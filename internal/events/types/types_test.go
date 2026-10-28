@@ -53,7 +53,7 @@ func catalogue() []events.Payload {
 		SkillTelemetryWriteFailed{}, CompactionRequested{},
 		CompactionCompleted{}, ReflectionCompleted{},
 		// sandbox.go
-		SandboxRunStarted{}, SandboxRunCompleted{}, SandboxRunFailed{},
+		SandboxRunStarted{}, SandboxRunCompleted{}, SandboxRunFailed{}, SandboxRunStopped{},
 		SandboxClarificationRequested{}, SandboxAnswerGiven{}, SandboxRunAnswered{},
 		// turn.go
 		ToolSkillGuardBlocked{}, PromptSize{}, TurnGuardBreach{},
@@ -154,6 +154,7 @@ var wireTypes = []string{
 	"sandbox_run_completed",
 	"sandbox_run_failed",
 	"sandbox_run_started",
+	"sandbox_run_stopped",
 	"scheduled_task_fired",
 	"seat_paused",
 	"seat_provider_parked",
@@ -358,7 +359,7 @@ var wireTags = map[string][]string{
 	"agent_turn_completed":            {"agent_id", "cache_read_tokens", "cache_write_tokens", "conversation_key", "decision", "error", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "prompt", "prompt_messages", "response", "review_model", "role", "stopped", "subagent_count", "subagent_input_tokens", "subagent_output_tokens", "subagent_tokens", "suspended", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"turn_completed":                  {"agent_handle", "agent_id", "all_tool_names", "ask", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "plan_summary", "review_outcome", "role", "skills_used", "started_at", "suspended", "task_summary", "tool_sequence", "turn", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"agent_phase_started":             {"agent_id", "iteration", "phase", "role", "trigger", "turn_id", "work_item", "work_key"},
-	"agent_phase_completed":           {"activity_transcript", "activity_transcript_elided_bytes", "activity_transcript_elided_lines", "agent_id", "backend", "cache_read_tokens", "cache_write_tokens", "coding_agent", "conversation_key", "cost_usd", "decision", "delivered_refs", "delivered_refs_elided", "duration_ms", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "host_round", "input_tokens", "invocations", "iteration", "launch_id", "max_rounds", "model", "notes", "output_tokens", "phase", "provider_key", "rescue_fired", "response", "role", "round_ceiling", "round_narration", "rounds", "rounds_used", "sandbox_id", "started_at", "steers", "system_prompt", "system_sections", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "user_sections", "work_item", "work_key", "worker"},
+	"agent_phase_completed":           {"activity_transcript", "activity_transcript_elided_bytes", "activity_transcript_elided_lines", "agent_id", "backend", "cache_read_tokens", "cache_write_tokens", "cli_turns", "coding_agent", "conversation_key", "cost_usd", "decision", "delivered_refs", "delivered_refs_elided", "duration_ms", "empty_answer_rounds", "error", "error_kind", "exhausted_rounds", "failed", "host_iteration", "host_phase", "host_round", "input_tokens", "invocations", "iteration", "launch_id", "max_rounds", "model", "notes", "output_tokens", "phase", "provider_key", "rescue_fired", "response", "role", "round_ceiling", "round_narration", "rounds", "rounds_used", "sandbox_id", "started_at", "steers", "system_prompt", "system_sections", "task_id", "tool_catalogue", "tool_executions", "tools_available", "total_tokens", "trigger", "turn_id", "user_prompt", "user_sections", "work_item", "work_key", "worker"},
 	"agent_turn_progress":             {"agent_id", "cache_read_tokens", "cache_write_tokens", "input_tokens", "invocations", "iteration", "max_rounds", "model", "output_tokens", "partial_round", "phase", "prompt", "prompt_messages", "response", "role", "round_ceiling", "round_narration", "round_num", "round_started_at", "rounds", "run_started_at", "running_calls", "steers", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_key"},
 	"subagent_batched":                {"failures", "graph", "parent_handle", "round", "started_at", "statuses", "successes", "task_count", "total_tokens", "turn_id", "work_key"},
 	"episode_written":                 {"agent_handle", "agent_id", "duration_ms", "review_outcome", "role", "tool_count", "turn_id", "work_key"},
@@ -377,18 +378,19 @@ var wireTags = map[string][]string{
 	"compaction_requested":            {"agent_handle", "raw_count", "threshold"},
 	"compaction_completed":            {"agent_handle", "clusters_compacted", "compacted_evicted", "consolidated_dropped", "non_terminal_dropped", "raw_replaced_by_compaction", "skipped_reason"},
 	"reflection_completed":            {"agent_handle", "agent_id", "review_outcome", "role", "turn_id", "work_key", "workers_run"},
-	"sandbox_run_started":             {"agent_handle", "agent_id", "coding_agent", "conversation_key", "launch_id", "role", "sandbox_id", "started_at", "task", "turn_id", "work_item", "work_key"},
+	"sandbox_run_started":             {"agent_handle", "agent_id", "coding_agent", "conversation_key", "launch_id", "model", "provider_key", "role", "sandbox_id", "started_at", "task", "turn_id", "work_item", "work_key"},
 	"sandbox_run_completed":           {"agent_handle", "agent_id", "coding_agent", "launch_id", "role", "sandbox_id", "turn_id", "work_key"},
 	"sandbox_run_failed":              {"agent_handle", "agent_id", "coding_agent", "detail", "reason", "role", "sandbox_id", "turn_id", "work_key"},
+	"sandbox_run_stopped":             {"agent_handle", "agent_id", "coding_agent", "launch_id", "operator_id", "reason", "role", "sandbox_id", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
 	"sandbox_clarification_requested": {"agent_handle", "agent_id", "audience", "conversation_key", "question", "role", "sandbox_id", "turn_id", "work_item", "work_key"},
 	"seat_paused":                     {"agent_handle", "agent_id", "operator_id", "paused_at", "paused_by", "paused_by_kind", "reason", "role", "stop_running"},
 	"seat_resumed":                    {"agent_handle", "agent_id", "operator_id", "paused_at", "paused_by", "paused_by_kind", "resumed_by", "resumed_by_kind", "role"},
 	"agent_turn_stopped":              {"agent_handle", "agent_id", "operator_id", "reason", "role", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
-	"agent_turn_steered":              {"agent_handle", "agent_id", "iteration", "note", "note_id", "operator_id", "outcome", "phase", "role", "round", "sent_at", "steered_by", "steered_by_kind", "turn_id", "work_key"},
+	"agent_turn_steered":              {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "note", "note_id", "operator_id", "outcome", "phase", "role", "round", "sent_at", "steered_by", "steered_by_kind", "turn_id", "work_key"},
 	"sandbox_answer_given":            {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "launch_id", "operator_id", "turn_id"},
 	"sandbox_run_answered":            {"agent_handle", "agent_id", "answered_by", "answered_by_kind", "operator_id", "outcome", "role", "turn_id", "via", "work_item", "work_key"},
 	"phase.tool_skill_blocked":        {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},
-	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "message_bytes", "phase", "role", "system_bytes", "tool_bytes", "tool_count", "turn_id", "user_bytes", "work_key"},
+	"prompt.size":                     {"agent_id", "approximate_tokens", "iteration", "phase", "role", "system_bytes", "tool_bytes", "tool_count", "turn_id", "user_bytes", "work_key"},
 	"turn.guard_breach":               {"agent_id", "detail", "kind", "role", "turn_id", "work_key"},
 	"tool_skill_page_changed":         {"backend", "container", "page_id", "walk"},
 	"raw_webhook":                     {"body", "body_raw", "forge_atlassian_id", "handle", "headers", "trigger"},
@@ -536,6 +538,10 @@ func TestFailed(t *testing.T) {
 		want          bool
 	}{
 		{"failure by type alone", "sandbox_run_failed", false, false, true},
+		// A RUN A PERSON STOPPED IS NOT A LOST ONE: its turn is closed as
+		// stopped, and a type that failed by name would count it with the
+		// runs that broke.
+		{"a run a person stopped", "sandbox_run_stopped", false, false, false},
 		{"llm chain exhausted", "llm_unavailable", false, false, true},
 		{"budget refused a charge", "budget_exhausted", false, false, true},
 		{"guard breach", "turn.guard_breach", false, false, true},

@@ -210,17 +210,23 @@ type boxConfine struct {
 }
 
 // argv is a shell command line as this box runs it: confined where the box
-// is, as written where it is not.
+// is, as written where it is not, and either way ahead of the engine for the
+// kernel's OOM killer ([oomFirst]) — every setup and exec command, and the
+// detached job, since all of them start here.
+//
+// Every first word it hands [oomFirst] is an absolute path — /bin/sh, or the
+// confinement's helper as [ProbeConfinement] resolved it — so the raise
+// searches no PATH of the box's.
 func (b *directBox) argv(cmd string) ([]string, error) {
 	argv := []string{"/bin/sh", "-c", cmd}
-	if b.confine == nil {
-		return argv, nil
+	if b.confine != nil {
+		wrapped, err := b.confine.host.wrap(b.confine.rules, argv)
+		if err != nil {
+			return nil, localErrorf("local sandbox %s: %v", b.layout.id, err)
+		}
+		argv = wrapped
 	}
-	wrapped, err := b.confine.host.wrap(b.confine.rules, argv)
-	if err != nil {
-		return nil, localErrorf("local sandbox %s: %v", b.layout.id, err)
-	}
-	return wrapped, nil
+	return oomFirst(argv), nil
 }
 
 func (b *directBox) ID() string   { return b.layout.id }
@@ -269,34 +275,57 @@ func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	return env
 }
 
-// workdir resolves a command's cwd, defaulting to the box's checkout.
+// workdir resolves a command's cwd, defaulting to the box's checkout, makes it
+// — through the box's home, as every write into the box is
+// ([boxLayout.mkdirHome]) — and answers it relative to the home.
+//
+// THE ENGINE NEVER ENTERS IT. A command starts in the box's home, a directory
+// the engine made and the box cannot rename, and its own shell enters the
+// working directory, by its name relative to the home ([inWorkdir]). Entered
+// by its joined host path, the directory was walked on the engine's side by
+// name after it was made, and a box that put a link in place of one on the way
+// between the two moved where its command started; walked by the box's own
+// process, it is the box's walk, under whatever confines the box. And it is
+// the one way every confinement starts the command where it was asked to:
+// bubblewrap enters the home whatever directory the process was handed.
 func (b *directBox) workdir(cwd string) (string, error) {
-	target := b.layout.workspace()
+	named, rel := b.layout.workspace(), WorkspaceSubdir
 	if cwd != "" {
-		resolved, err := b.resolve(cwd)
+		resolved, err := b.homeRel(cwd)
 		if err != nil {
 			return "", err
 		}
-		target = resolved
+		named, rel = cwd, resolved
 	}
-	if err := os.MkdirAll(target, hostbox.DirMode); err != nil {
-		return "", localErrorf("local sandbox %s could not create %s: %v", b.layout.id, target, err)
+	if err := b.layout.mkdirHome(rel); err != nil {
+		return "", b.explain(named, rel, localErrorf("local sandbox %s could not create %s: %v",
+			b.layout.id, filepath.Join(b.layout.home(), rel), err))
 	}
-	return target, nil
+	return rel, nil
+}
+
+// inWorkdir is cmd run in rel, the working directory relative to the box's
+// home that the command's shell enters first ([directBox.workdir]): a shell
+// that cannot enter it runs nothing and fails as the command.
+func inWorkdir(rel, cmd string) string {
+	if rel == "" || rel == "." {
+		return cmd
+	}
+	return "cd -- '" + strings.ReplaceAll(rel, "'", `'\''`) + "' || exit 1\n" + cmd
 }
 
 func (b *directBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error) {
-	dir, err := b.workdir(opts.Cwd)
+	rel, err := b.workdir(opts.Cwd)
 	if err != nil {
 		return ExecResult{}, err
 	}
-	argv, err := b.argv(cmd)
+	argv, err := b.argv(inWorkdir(rel, cmd))
 	if err != nil {
 		return ExecResult{}, err
 	}
 	return runHost(ctx, hostCommand{
 		argv:    argv,
-		cwd:     dir,
+		cwd:     b.layout.home(),
 		env:     b.childEnv(opts.Env),
 		timeout: time.Duration(opts.TimeoutSec * float64(time.Second)),
 	})
@@ -308,8 +337,11 @@ func (b *directBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (Exe
 // the pid has to be usable for three different things and only a direct spawn
 // gives all three: it leads its own session ([procgroup.Detach]), so one signal
 // reaches the tree, no terminal's Ctrl-C reaches it, and it survives the
-// engine; and the engine holds it unreaped, so its identity can be read before
-// the pid could belong to anybody else.
+// engine's process — though not what usually replaces one, a container or a
+// systemd control group stopped whole or a host rebooted, which the box's
+// witness tells apart from a crash (local_witness.go); and the engine holds it
+// unreaped, so its identity can be read before the pid could belong to
+// anybody else.
 //
 // The Wait goroutine is the fourth, and it is the one with no POSIX
 // equivalent: Go will not reap a child until something calls Wait on it, and
@@ -322,19 +354,19 @@ func (b *directBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (Exe
 // Its stdio is /dev/null: the runner's script already redirects the agent's
 // output into the box's result and error files.
 func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOptions) (string, error) {
-	dir, err := b.workdir(opts.Cwd)
+	rel, err := b.workdir(opts.Cwd)
 	if err != nil {
 		return "", err
 	}
 	// Not exec.CommandContext: the job must outlive the turn that starts it,
 	// so binding it to the caller's context would kill it at the first
 	// return.
-	argv, err := b.argv(cmd)
+	argv, err := b.argv(inWorkdir(rel, cmd))
 	if err != nil {
 		return "", err
 	}
 	proc := exec.Command(argv[0], argv[1:]...) //nolint:noctx // deliberate; see above
-	proc.Dir = dir
+	proc.Dir = b.layout.home()
 	proc.Env = hostbox.Environ(b.childEnv(opts.Env))
 	procgroup.Detach(proc)
 	// nil stdio is os/exec's /dev/null, which is what we want: nothing reads
@@ -366,39 +398,53 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 		return "", localErrorf("local sandbox %s could not record its job's process group: %v", b.layout.id, err)
 	}
 	go reap(proc)
+	// THIS PROCESS SAW IT START, and is its witness until another process
+	// of this engine finds it running ([witnessJob]).
+	witnessJob(b.layout)
 	localLog.Info("local_sandbox_job_started", "sandbox_id", b.layout.id, "pid", pid)
 	return strconv.Itoa(pid), nil
 }
 
-// JobRunning implements [Sandbox] for a job on the engine host.
+// Job implements [Sandbox] for a job on the engine host.
 //
 // The handle is a HOST pid, so it is only this job while the box's record
 // says so and the kernel's record of that pid still carries the start time the
 // box recorded. A zombie has exited, so it is not running even before its
-// parent reaps it. A handle that is not the recorded job is not running: the
-// record is rewritten by every StartBackground, so a handle it no longer names
-// belongs to a job this box has already replaced.
+// parent reaps it. A handle that is not the recorded job ENDED: the record is
+// rewritten by every StartBackground, so a handle it no longer names belongs
+// to a job this box has already replaced.
 //
 // The process, not its group, because the question is whether the WRAPPER is
 // alive: a wrapper that died without writing its marker is a run that is
 // over, even while an orphaned member of its group lingers on.
-func (b *directBox) JobRunning(ctx context.Context, commandID string) (bool, error) {
+//
+// A JOB THAT IS NOT RUNNING ENDED OR WAS LOST, and the box's witness says
+// which ([jobEnd]); a job found running makes this process its witness.
+func (b *directBox) Job(ctx context.Context, commandID string) (JobState, error) {
 	pid, err := strconv.Atoi(commandID)
 	if err != nil || pid <= 1 {
-		return false, localErrorf("local sandbox %s: job handle %q is not a process id", b.layout.id, commandID)
+		return "", localErrorf("local sandbox %s: job handle %q is not a process id", b.layout.id, commandID)
 	}
 	leader, found, err := readJobRecord(b.layout)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if !found || leader.PID != pid {
-		return false, nil
+		return JobEnded, nil
 	}
 	proc, found, err := procgroup.Inspect(pid)
 	if err != nil {
-		return false, fmt.Errorf("local sandbox %s: reading the kernel's record of job %d: %w", b.layout.id, pid, err)
+		return "", fmt.Errorf("local sandbox %s: reading the kernel's record of job %d: %w", b.layout.id, pid, err)
 	}
-	return found && !proc.Zombie && proc.Start == leader.Start, nil
+	if found && !proc.Zombie && proc.Start == leader.Start {
+		witnessJob(b.layout)
+		return JobRunning, nil
+	}
+	state, err := jobEnd(b.layout)
+	if err != nil {
+		return "", fmt.Errorf("local sandbox %s: %w", b.layout.id, err)
+	}
+	return state, nil
 }
 
 // reap waits on a detached job so it does not linger as a zombie once it
@@ -409,7 +455,9 @@ func (b *directBox) JobRunning(ctx context.Context, commandID string) (bool, err
 // outcomes those already describe.
 func reap(proc *exec.Cmd) { _ = proc.Wait() }
 
-// resolve maps an in-box path onto the host, refusing escapes.
+// homeRel maps an in-box path onto the box's home: the path relative to it,
+// which every access then makes through the home opened as an os.Root
+// ([boxLayout.openHome]).
 //
 // Direct mode does NOT virtualise the filesystem: there is no chroot and no
 // mount namespace, so an in-box path IS a host path. Writing outside the box
@@ -417,13 +465,14 @@ func reap(proc *exec.Cmd) { _ = proc.Wait() }
 // is why a setup step that provisions a system path is rejected here rather
 // than silently doing it. Container mode is NOT the answer for those, though
 // it once said so: it writes files only under its mount and refuses the same
-// path ([containerBox.hostPath]). What works in every cell is the box's home:
+// path ([containerBox.homeRel]). What works in every cell is the box's home:
 // a file named relative to it, or a setup command writing under "$HOME".
 //
 // Where a path lands is [hostbox.InHome]'s answer, the one config validation
 // gives a setup step's files before any box exists, so the two cannot
-// disagree about which file a box refuses.
-func (b *directBox) resolve(path string) (string, error) {
+// disagree about which file a box refuses. WHERE ITS LINKS LEAD is the root's
+// to decide, at the access itself ([directBox.explain]).
+func (b *directBox) homeRel(path string) (string, error) {
 	// An absolute path that already names somewhere in the box is the
 	// ordinary case: a brief and a setup step both speak in the home the box
 	// reports. It may name that home as written or as its links resolve.
@@ -436,17 +485,32 @@ func (b *directBox) resolve(path string) (string, error) {
 	if !inside {
 		return "", b.escapeError(path)
 	}
-	resolved, err := hostbox.SafeJoin(b.layout.home(), rel)
-	switch {
-	case errors.Is(err, hostbox.ErrEscape):
-		return "", b.escapeError(path)
-	case err != nil:
-		// NOT AN ESCAPE: a path that could not be resolved at all — one
-		// under a file, say — and reporting it as outside the box sent its
-		// reader looking for a symlink that was never there.
-		return "", localErrorf("local sandbox %s could not resolve %q: %v", b.layout.id, path, err)
+	return rel, nil
+}
+
+// explain is a failed access to path — rel in the box's home — as this box
+// reports it.
+//
+// THE ROOT DECIDED the refusal ([boxLayout.openHome]): no component of rel,
+// whatever the box made of it and whenever, led the access outside the home.
+// This only says why, the way it has always been said: where rel leads as the
+// host's links stand now ([hostbox.SafeJoin]) tells an access refused for
+// leaving the box ([directBox.escapeError]) from a path that could not be
+// resolved at all — one under a file, say, which reported as outside the box
+// sent its reader looking for a symlink that was never there. Every other
+// failure — absence, a file that is no regular file, one past its cap — is the
+// access's own and passes through.
+func (b *directBox) explain(path, rel string, err error) error {
+	if err == nil || absent(err) || errors.Is(err, ErrNotRegularFile) || errors.Is(err, ErrFileTooLarge) {
+		return err
 	}
-	return resolved, nil
+	switch _, check := hostbox.SafeJoin(b.layout.home(), rel); {
+	case errors.Is(check, hostbox.ErrEscape):
+		return b.escapeError(path)
+	case check != nil:
+		return localErrorf("local sandbox %s could not resolve %q: %v", b.layout.id, path, check)
+	}
+	return err
 }
 
 func (b *directBox) escapeError(path string) error {
@@ -458,14 +522,15 @@ func (b *directBox) escapeError(path string) error {
 }
 
 func (b *directBox) WriteFile(ctx context.Context, path string, content []byte) error {
-	target, err := b.resolve(path)
+	rel, err := b.homeRel(path)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(target), hostbox.DirMode); err != nil {
-		return localErrorf("local sandbox %s could not create %s: %v", b.layout.id, filepath.Dir(target), err)
+	if err := b.layout.mkdirHome(filepath.Dir(rel)); err != nil {
+		return b.explain(path, rel, localErrorf("local sandbox %s could not create %s: %v",
+			b.layout.id, filepath.Join(b.layout.home(), filepath.Dir(rel)), err))
 	}
-	return writeHostFile(target, path, content)
+	return b.explain(path, rel, writeHomeFile(b.layout, rel, path, content))
 }
 
 // ReadFile is EMPTY-ON-MISSING: the detached runner polls for marker and
@@ -476,31 +541,34 @@ func (b *directBox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	// path left the box — a caller bug, or an escape attempt — and
 	// answering "empty" would report a refused traversal as a file that
 	// merely is not there yet, which is the one reading a poller acts on.
-	target, err := b.resolve(path)
+	rel, err := b.homeRel(path)
 	if err != nil {
 		return nil, err
 	}
-	return readHostFile(target, path, readLimit(b.readCap))
+	content, err := readHomeFile(b.layout, rel, path, readLimit(b.readCap))
+	return content, b.explain(path, rel, err)
 }
 
 // OpenFile implements [Sandbox] for a box on the engine host: the file itself,
 // read in place, after the same escape check every other path takes.
 func (b *directBox) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
-	target, err := b.resolve(path)
+	rel, err := b.homeRel(path)
 	if err != nil {
 		return nil, err
 	}
-	return openHostFile(target, path)
+	r, err := openHomeFile(b.layout, rel, path)
+	return r, b.explain(path, rel, err)
 }
 
 // ReadTail implements [Sandbox] for a box on the engine host: a seek, so the
 // cost is what is read rather than how long the run has been writing.
 func (b *directBox) ReadTail(ctx context.Context, path string, n int) (FileTail, error) {
-	target, err := b.resolve(path)
+	rel, err := b.homeRel(path)
 	if err != nil {
 		return FileTail{}, err
 	}
-	return readHostTail(target, path, n)
+	tail, err := readHomeTail(b.layout, rel, path, n)
+	return tail, b.explain(path, rel, err)
 }
 
 // SetTimeout refreshes the box's keepalive stamp.
@@ -592,17 +660,19 @@ func (b *containerBox) EngineHost() string { return b.cli.hostAlias() }
 
 func (b *containerBox) workdir() string { return DefaultHome + "/" + WorkspaceSubdir }
 
-// hostPath maps an in-container path onto its host side of the mount.
+// homeRel maps an in-container path onto its host side of the mount: the path
+// relative to the box's home, which every access then makes through the home
+// opened as an os.Root ([boxLayout.openHome]).
 //
-// The result is a HOST path — this is the host side of a bind mount, so an
-// escape here writes to the engine host, not to the container. A prefix test
-// alone does not prevent that: "/home/user/../../etc/cron.d/x" starts with the
-// mount point and still resolves outside it, and setup-step file paths are
-// operator config. The final check is the same one direct mode makes, for the
-// same reason, and so is the first: where a path lands under the mount is
-// [hostbox.InHome]'s answer, which config validation gives a setup step's
-// files too.
-func (b *containerBox) hostPath(path string) (string, error) {
+// This is the host side of a bind mount, so an escape here writes to the
+// engine host, not to the container. A prefix test alone does not prevent
+// that: "/home/user/../../etc/cron.d/x" starts with the mount point and still
+// resolves outside it, and setup-step file paths are operator config. Where a
+// path lands under the mount is [hostbox.InHome]'s answer, which config
+// validation gives a setup step's files too; where its links lead is the
+// root's to decide, at the access itself, as it is for a direct box
+// ([containerBox.explain]).
+func (b *containerBox) homeRel(path string) (string, error) {
 	rel, inside := hostbox.InHome(DefaultHome, path)
 	if !inside {
 		// Not a file under the mount, so a write from out here cannot reach
@@ -615,17 +685,26 @@ func (b *containerBox) hostPath(path string) (string, error) {
 			"(\".npmrc\", \".local/bin/tool\"), which every cell writes under its home, or have a "+
 			"setup command write it under \"$HOME\"", path, DefaultHome)
 	}
-	resolved, err := hostbox.SafeJoin(b.layout.home(), rel)
-	switch {
-	case errors.Is(err, hostbox.ErrEscape):
-		return "", localErrorf("%q resolves outside the sandbox home mount at %s — it would be "+
-			"written to the engine host itself", path, b.layout.home())
-	case err != nil:
-		// Not an escape — see [directBox.resolve].
-		return "", localErrorf("%q could not be resolved under the sandbox home mount at %s: %v",
-			path, b.layout.home(), err)
+	return rel, nil
+}
+
+// explain is a failed access to path — rel in the box's home — as this box
+// reports it: the root decided the refusal, and this says why, as
+// [directBox.explain] does.
+func (b *containerBox) explain(path, rel string, err error) error {
+	if err == nil || absent(err) || errors.Is(err, ErrNotRegularFile) || errors.Is(err, ErrFileTooLarge) {
+		return err
 	}
-	return resolved, nil
+	switch _, check := hostbox.SafeJoin(b.layout.home(), rel); {
+	case errors.Is(check, hostbox.ErrEscape):
+		return localErrorf("%q resolves outside the sandbox home mount at %s — it would be "+
+			"written to the engine host itself", path, b.layout.home())
+	case check != nil:
+		// Not an escape — see [directBox.explain].
+		return localErrorf("%q could not be resolved under the sandbox home mount at %s: %v",
+			path, b.layout.home(), check)
+	}
+	return err
 }
 
 // envArgs renders the run env as --env-file arguments.
@@ -671,7 +750,7 @@ func (b *containerBox) envArgs(extra map[string]string) ([]string, error) {
 		return nil, localErrorf("container sandbox %s could not write its env file: %v", b.layout.id, err)
 	}
 	blob := strings.Join(lines, "\n") + "\n"
-	if err := os.WriteFile(b.layout.envFile(), []byte(blob), hostbox.FileMode); err != nil {
+	if err := writeRecord(b.layout, envRecord, []byte(blob)); err != nil {
 		return nil, localErrorf("container sandbox %s could not write its env file: %v", b.layout.id, err)
 	}
 	return []string{"--env-file", b.layout.envFile()}, nil
@@ -729,15 +808,85 @@ func (b *containerBox) StartBackground(ctx context.Context, cmd string, opts Exe
 		return "", localErrorf("container sandbox %s could not start a background job: %s",
 			b.layout.id, detail)
 	}
+	// THIS PROCESS SAW IT START, as for a direct box ([witnessJob]).
+	witnessJob(b.layout)
 	localLog.Info("local_sandbox_job_started",
 		"sandbox_id", b.layout.id, "pid", pid, "container", b.container)
 	return pid, nil
 }
 
-// JobRunning implements [Sandbox]: the handle is a pid inside the container,
-// whose --init reaps a finished job, so `kill -0` there answers it.
-func (b *containerBox) JobRunning(ctx context.Context, commandID string) (bool, error) {
-	return probeByKill(ctx, b, commandID)
+// Job implements [Sandbox]: the handle is a pid inside the container, whose
+// --init reaps a finished job, so `kill -0` there answers it — once the
+// runtime has said the container is up.
+//
+// THE RUNTIME IS ASKED FIRST, because an exec answers two questions with one
+// exit status: a `kill -0` that found no job and a runtime that could not run
+// the exec at all — no daemon, a socket not yet there after a reboot — both
+// exit non-zero. Read as the job's answer, a daemon that was briefly away
+// ended a job that was still running; and since an engine that has just
+// restarted is no witness to it ([jobEnd]), that job was taken for one its
+// host's restart had killed, and its round started again beside it. The
+// listing tells the two apart: a runtime that answers it can say whether the
+// container is there and up, and one that does not is the error that is no
+// answer at all.
+//
+// A container that is gone or stopped ran its job down with it — a host that
+// rebooted, a daemon restarted without live-restore — so its job is not
+// running, and the box's witness says whether it ended or was lost. A PAUSED
+// container takes no exec, so its job cannot be asked about: an error, which
+// [Local.Attach] keeps the poll from ever reaching.
+func (b *containerBox) Job(ctx context.Context, commandID string) (JobState, error) {
+	state, err := b.state(ctx)
+	if err != nil {
+		return "", err
+	}
+	switch state {
+	case "paused":
+		return "", localErrorf("container sandbox %s is paused, and a paused container's job "+
+			"cannot be asked about without unpausing it", b.layout.id)
+	case "running":
+		running, probeErr := probeByKill(ctx, b, commandID)
+		if probeErr != nil {
+			return "", probeErr
+		}
+		if running {
+			witnessJob(b.layout)
+			return JobRunning, nil
+		}
+	}
+	ended, err := jobEnd(b.layout)
+	if err != nil {
+		return "", fmt.Errorf("container sandbox %s: %w", b.layout.id, err)
+	}
+	return ended, nil
+}
+
+// state is the container's state as its runtime lists it — "running",
+// "paused", "exited" and so on, lower-cased — and "" where the runtime lists no
+// container of this box's name. An error is a runtime that did not answer,
+// which says nothing about the container.
+//
+// A LISTING, NOT AN INSPECTION: `inspect` of a container that is not there
+// fails as a runtime that is not there does, while a listing the runtime
+// answers is a full answer, absence included. Filtered by the box's name and
+// read for that exact name, since the filter matches by substring.
+func (b *containerBox) state(ctx context.Context) (string, error) {
+	res, err := runHost(ctx, b.cli.command(0, "ps", "-a",
+		"--filter", "name="+b.container, "--format", "{{.Names}}\t{{.State}}"))
+	if err != nil {
+		return "", localErrorf("container sandbox %s: listing its container: %v", b.layout.id, err)
+	}
+	if res.ExitCode != 0 {
+		return "", localErrorf("container sandbox %s: listing its container failed with exit %d: %s",
+			b.layout.id, res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	for line := range strings.SplitSeq(res.Stdout, "\n") {
+		name, state, _ := strings.Cut(strings.TrimSpace(line), "\t")
+		if strings.TrimSpace(name) == b.container {
+			return strings.ToLower(strings.TrimSpace(state)), nil
+		}
+	}
+	return "", nil
 }
 
 // trailingPID is the last numeric line of output — the backgrounded job's pid.
@@ -759,56 +908,62 @@ func trailingPID(output string) string {
 }
 
 func (b *containerBox) WriteFile(ctx context.Context, path string, content []byte) error {
-	target, err := b.hostPath(path)
+	rel, err := b.homeRel(path)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(target), hostbox.DirMode); err != nil {
-		return localErrorf("container sandbox %s could not create %s: %v",
-			b.layout.id, filepath.Dir(target), err)
+	if err := b.layout.mkdirHome(filepath.Dir(rel)); err != nil {
+		return b.explain(path, rel, localErrorf("container sandbox %s could not create %s: %v",
+			b.layout.id, filepath.Join(b.layout.home(), filepath.Dir(rel)), err))
 	}
-	return writeHostFile(target, path, content)
+	return b.explain(path, rel, writeHomeFile(b.layout, rel, path, content))
 }
 
 func (b *containerBox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	// Same split as directBox.ReadFile: an escaped path is an error, a
 	// file that is not there yet is empty.
-	target, err := b.hostPath(path)
+	rel, err := b.homeRel(path)
 	if err != nil {
 		return nil, err
 	}
-	return readHostFile(target, path, readLimit(b.readCap))
+	content, err := readHomeFile(b.layout, rel, path, readLimit(b.readCap))
+	return content, b.explain(path, rel, err)
 }
 
 // OpenFile implements [Sandbox]: the host side of the mount, read in place.
 func (b *containerBox) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
-	target, err := b.hostPath(path)
+	rel, err := b.homeRel(path)
 	if err != nil {
 		return nil, err
 	}
-	return openHostFile(target, path)
+	r, err := openHomeFile(b.layout, rel, path)
+	return r, b.explain(path, rel, err)
 }
 
 // ReadTail implements [Sandbox]: a seek on the host side of the mount.
 func (b *containerBox) ReadTail(ctx context.Context, path string, n int) (FileTail, error) {
-	target, err := b.hostPath(path)
+	rel, err := b.homeRel(path)
 	if err != nil {
 		return FileTail{}, err
 	}
-	return readHostTail(target, path, n)
+	tail, err := readHomeTail(b.layout, rel, path, n)
+	return tail, b.explain(path, rel, err)
 }
 
-// openHostFile is a local box's OpenFile once the path is resolved: the file,
-// or a reader that yields nothing for one that is not there yet.
+// openHomeFile is a local box's OpenFile once the path is mapped onto its home:
+// the file, or a reader that yields nothing for one that is not there yet.
 //
 // ONLY ABSENCE IS EMPTY. A file that exists and cannot be opened is an error,
 // because the reader of a stream decides what the run did from what it reads,
 // and an unreadable event log answered as an empty one is a run that "said
 // nothing" — which a collection settles as a run that produced nothing. So is
-// anything that is not a regular file ([openHostRegular]), for all three
-// reads alike.
-func openHostFile(target, path string) (io.ReadCloser, error) {
-	f, err := openHostRegular(target)
+// anything that is not a regular file ([openRegularIn]), for all three reads
+// alike.
+//
+// The home is closed once the file is open: what was opened through it stays
+// open, and holds no path that anything could move.
+func openHomeFile(l boxLayout, rel, path string) (io.ReadCloser, error) {
+	f, err := openHomeRegular(l, rel)
 	switch {
 	case absent(err):
 		return io.NopCloser(strings.NewReader("")), nil
@@ -818,14 +973,14 @@ func openHostFile(target, path string) (io.ReadCloser, error) {
 	return f, nil
 }
 
-// readHostTail is a local box's ReadTail once the path is resolved.
+// readHomeTail is a local box's ReadTail once the path is mapped onto its home.
 //
 // A SECTION OF THE FILE, never a read to its end: a job still writing can
 // have grown it since the size was taken, and a read to EOF would then answer
 // more than was asked for. Whatever arrived inside the window is counted into
 // the size, so Data never claims to be more of the file than the file was.
-func readHostTail(target, path string, n int) (FileTail, error) {
-	f, err := openHostRegular(target)
+func readHomeTail(l boxLayout, rel, path string, n int) (FileTail, error) {
+	f, err := openHomeRegular(l, rel)
 	switch {
 	case absent(err):
 		return FileTail{}, nil
@@ -846,21 +1001,21 @@ func readHostTail(target, path string, n int) (FileTail, error) {
 	return FileTail{Data: data, Size: max(info.Size(), start+int64(len(data)))}, nil
 }
 
-// readHostFile is a local box's ReadFile once the path is resolved: empty for
-// a file that is not there, and REFUSED past limit (the box's [readLimit]) for
-// the reason [readCapped] gives — which a plain os.ReadFile skipped, so a job
-// that looped printing errors into its stderr file put all of it in the
-// engine's memory on the host it shares, where a remote box's identical file
-// was refused.
+// readHomeFile is a local box's ReadFile once the path is mapped onto its home:
+// empty for a file that is not there, and REFUSED past limit (the box's
+// [readLimit]) for the reason [readCapped] gives — which a plain os.ReadFile
+// skipped, so a job that looped printing errors into its stderr file put all
+// of it in the engine's memory on the host it shares, where a remote box's
+// identical file was refused.
 //
-// ONLY ABSENCE IS EMPTY, as for [openHostFile]. Every failure to open or read
+// ONLY ABSENCE IS EMPTY, as for [openHomeFile]. Every failure to open or read
 // used to answer empty too, so a findings report the engine was not permitted
 // to read — a container writing its mount as a user the engine is not —
 // collected as a run that wrote none, and a question file as a run that asked
 // nothing; a remote box's envd answers the same failure as an error, which
 // is what a collection retries and a person can act on.
-func readHostFile(target, path string, limit int) ([]byte, error) {
-	f, err := openHostRegular(target)
+func readHomeFile(l boxLayout, rel, path string, limit int) ([]byte, error) {
+	f, err := openHomeRegular(l, rel)
 	switch {
 	case absent(err):
 		// Empty-on-missing IS the contract here: the detached runner
@@ -878,24 +1033,35 @@ func readHostFile(target, path string, limit int) ([]byte, error) {
 	return content, err
 }
 
-// writeHostFile is a local box's WriteFile once the path is resolved: content
-// put at target whole, in place, through [openHostWritable] — so a link at the
-// path is refused rather than followed out of the box, and a named pipe is
-// refused rather than waited on, each as a [NotRegularFileError] naming what
-// is there.
-func writeHostFile(target, path string, content []byte) error {
-	f, err := openHostWritable(target)
+// writeHomeFile is a local box's WriteFile once the path is mapped onto its
+// home and its directory made: the file at rel REPLACED whole through
+// [replaceIn] — so a process in the box reading it meanwhile (the git
+// credential helper reading the token file the poll keeps current) finds the
+// old file or the new one, never an empty or part-written one; no component
+// of the path leads the write out of the box; and anything at the path that
+// is not a regular file — a link, a named pipe, a directory — is refused as a
+// [NotRegularFileError] naming what is there, and left as the box made it.
+func writeHomeFile(l boxLayout, rel, path string, content []byte) error {
+	home, err := l.openHome()
 	if err != nil {
 		return fmt.Errorf("local sandbox: open %s for writing: %w", path, err)
 	}
-	if _, err := f.Write(content); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("local sandbox: write %s: %w", path, err)
-	}
-	if err := f.Close(); err != nil {
+	defer func() { _ = home.Close() }()
+	if err := replaceIn(home, rel, content); err != nil {
 		return fmt.Errorf("local sandbox: write %s: %w", path, err)
 	}
 	return nil
+}
+
+// openHomeRegular opens rel in l's home for reading, as [openRegularIn] opens
+// a file: a home that is not there is a file that is not there.
+func openHomeRegular(l boxLayout, rel string) (*os.File, error) {
+	home, err := l.openHome()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = home.Close() }()
+	return openRegularIn(home, rel)
 }
 
 // absent is whether an open failed because there is no file at the path —

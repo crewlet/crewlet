@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
 
@@ -37,9 +38,20 @@ const (
 	refusedExists    = "That already exists."
 	refusedConflict  = "Another change landed at the same moment."
 	refusedTooLarge  = "It is larger than the engine accepts."
-	refusedBusy      = "The engine is busy. Try again in a moment."
-	refusedValue     = "One of its values was not accepted."
-	refusedUnsent    = "The assistant asked for it in a form the engine does not accept, " +
+
+	// A 409 IS NOT ALWAYS A COLLISION: these are states the request met
+	// that no rereading changes, each said as what it is.
+	refusedAnswered   = "Somebody has already answered it."
+	refusedHandedOn   = "It has been handed between seats as often as it may be. A person has to pick it up now."
+	refusedInboxFull  = "The inbox holds as many marks as it may. Mark everything up to here read first."
+	refusedNotesFull  = "The turn already holds as many notes as it can before it reads them. Send it again once it has read them, at its next step."
+	refusedNotesSpent = "The turn has taken as many notes as a turn takes. Put the rest on its work item."
+	refusedNotRunning = "It is not running any more, or not waiting for this."
+	refusedBudget     = "The token budget for this window is spent. Raise it, or wait for the window to turn over."
+
+	refusedBusy   = "The engine is busy. Try again in a moment."
+	refusedValue  = "One of its values was not accepted."
+	refusedUnsent = "The assistant asked for it in a form the engine does not accept, " +
 		"so it was not sent."
 	refusedUnread  = "What this would change could not be read."
 	refusedDeep    = "Deep work is not available right now."
@@ -64,6 +76,23 @@ const (
 // handed the route's whole refusal, so the assistant says what to change.
 const RefusalResumes = "The assistant has the details and will suggest a change that can apply."
 
+// RefusalSettled is the hint in its place for a refusal no change to the same
+// request can mend — the turn has ended, has taken all the notes it takes, or
+// the question was answered: the assistant still has the details, and says
+// what can be done instead.
+const RefusalSettled = "The assistant has the details and will say what can still be done."
+
+// RefusalHint is the hint a failed proposal's card carries for a refusal of
+// code: [RefusalSettled] where no change to the request can apply, else
+// [RefusalResumes].
+func RefusalHint(code string) string {
+	switch code {
+	case string(httpjson.CodeNotRunning), string(httpjson.CodeNotesSpent), string(httpjson.CodeAlreadyAnswered):
+		return RefusalSettled
+	}
+	return RefusalResumes
+}
+
 // PersonRefusal is r as a person reads it: its code and grants, and the
 // engine's own sentence for its kind ([personSentence]) in place of the route's
 // or the model's words. status is the route's answer, zero for a call refused
@@ -74,8 +103,9 @@ func PersonRefusal(r wire.Refusal, status int) wire.Refusal {
 }
 
 // personSentence is the sentence for a refusal of code at status: the code
-// where it says more than its status (a 409 that is an existing record rather
-// than a race), else the status's class.
+// where it says more than its status (a 409 that is an existing record, a full
+// or spent turn, a turn that ended, rather than a race), else the status's
+// class.
 func personSentence(code string, status int) string {
 	switch code {
 	case "step_up_required":
@@ -84,6 +114,20 @@ func personSentence(code string, status int) string {
 		return refusedExists
 	case "body_too_large":
 		return refusedTooLarge
+	case string(httpjson.CodeAlreadyAnswered):
+		return refusedAnswered
+	case string(httpjson.CodeReassignmentBudget):
+		return refusedHandedOn
+	case string(httpjson.CodeInboxFull):
+		return refusedInboxFull
+	case string(httpjson.CodeNotesFull):
+		return refusedNotesFull
+	case string(httpjson.CodeNotesSpent):
+		return refusedNotesSpent
+	case string(httpjson.CodeNotRunning):
+		return refusedNotRunning
+	case string(httpjson.CodeBudgetExhausted):
+		return refusedBudget
 	case CodePreviewUnreadable:
 		return refusedUnread
 	case CodeDeepUnavailable:

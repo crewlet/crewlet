@@ -451,9 +451,10 @@ it confers rather than a side effect of it. It is one permission by decision,
 and the configuration it writes runs code — a stdio `mcp_servers` entry is a
 `command` the engine starts as its own user on every node that runs seats; a
 seat's per-phase model keys (`llm_*`) name `providers.llm` entries, each a
-coding CLI the engine runs, and a `sandbox` cell of `run_in: self` does its code work inside
-it; a `run_in: direct` sandbox cell runs a coding agent, and every setup step,
-as that user; a seat's `mcp_env` decides which credentials its children are
+coding CLI the engine runs; every agent seat's executor is its coding CLI's own
+fully permissioned run, which a `providers.llm` entry's `run_in: direct` (or
+`providers.sandbox.default_run_in: direct`) runs, with every setup step, on the
+engine host as that user; a seat's `mcp_env` decides which credentials its children are
 handed; and a seat's worker grants decide which of its tools a worker holds.
 So a holder can run anything on every engine host and read whatever the
 engine's user can: the Tier A file, the keyring every session cookie is signed
@@ -475,11 +476,12 @@ a tool server, and does nothing about an administrator, who chose that server.
 **A lead reaches part of it without admin.** The org chart is written by its
 leads as well ([A lead edits their own team](#a-lead-edits-their-own-team)),
 and a lead may change every field of a seat in their team but a credential and
-a keyed field — its model chain and its sandbox among them. What they choose
-from is what the settings declare, which stay admin's: every `providers.llm`
-entry is a coding CLI that runs on the engine host, and so is a sandbox cell
-there, so a lead can give either to their own seats, and through them run code
-there. Declare those
+a keyed field — its model chain among them, which also places its executor run
+(the cell is the `run_in` of the entry a launch picks). What they choose from
+is what the settings declare, which stay admin's: every `providers.llm` entry
+is a coding CLI that runs on the engine host, or places its executor runs in a
+cell there by its `run_in`, so a lead who points their own seats at an entry
+runs code there. Declare those
 only where every lead may use them.
 
 **Connecting an integration is admin's and nothing more.** `/setup` performs
@@ -491,11 +493,10 @@ performs — so connecting a vendor is the same permission as both.
 
 An agent seat acting in its own turn holds exactly the apps — `iam.Apps`,
 derived, so a seat can never hold `admin` — and its **role** decides which
-tools it is offered. Two verbs belong to agents alone, marked **seat-only** on
-their rows: `a2a_ask`, which spends a colleague seat's turn, and
-`run_sandbox`, which hands a box the seat's whole tool surface. No person and
-no token takes either, whatever they hold, because a person has no turn for a
-colleague's answer to land in and no executor for a run to resume; which seats
+tools it is offered. One verb belongs to agents alone, marked **seat-only** on
+its row: `a2a_ask`, which spends a colleague seat's turn. No person and no
+token takes it, whatever they hold, because a person has no turn for a
+colleague's answer to land in; which seats
 may is the role registry's decision, which already says which seat runs which
 tool. Seat-only is the mirror of the **human-only** mark, and both are checked
 before anything else on the row ([The sixteen rules](#the-sixteen-rules)). On
@@ -2354,7 +2355,7 @@ unlocks.
 | **App or asked** | Reading one work item, and commenting on it (`get_work_item`, `comment_on_work_item`) | `worklet`, or the person an open ask on the item names, and on the comment only their answer to it ([You may answer what you were asked](#what-each-app-opens)) |
 | **Self** | The caller's own diary, episodes, skills and onboarding marker | The caller, and **nobody else** — not even admin |
 | **Own record** | Marking an inbox, pinned views | The owner, or admin, with `worklet` |
-| **Own or lead** | Priorities, a person's day and queue (`set_priorities`, `my_work`, `work_inbox`, `get_person`); whether a seat works (pausing it, resuming it, a note to the turn it is running: `pause_seat`, `resume_seat`, `steer_turn`); answering the question a coding run parked on (`answer_run`); and reading one seat's own trail (`audit.seat.read`) | The owner, whoever leads them, or admin, with `worklet` on the four Worklet verbs, and with no app on the rest, since a lead who uses neither app still runs their team. For a seat's controls the owner is the person bound to the seat; for a run's question it is the run's **requester** (the person whose message woke the turn that launched it), and otherwise whoever leads the run's seat, so nobody who merely leads the requester answers a question the run put to them |
+| **Own or lead** | Priorities, a person's day and queue (`set_priorities`, `my_work`, `work_inbox`, `get_person`); whether a seat works (pausing it, resuming it, a note to the turn it is running: `pause_seat`, `resume_seat`, `steer_turn`); answering the question a coding run parked on (`answer_run`); and reading one seat's own trail (`audit.seat.read`) | The owner, whoever leads them, or admin, with `worklet` on the four Worklet verbs, and with no app on the rest, since a lead who uses neither app still runs their team. For a seat's controls the owner is the person bound to the seat — for a note to a turn whose coding run is out, the seat the run's record names under its sealed anchor, which the asking node reads itself ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md)); for a run's question it is the run's **requester** (the person whose message woke the turn that launched it), and otherwise whoever leads the run's seat, so nobody who merely leads the requester answers a question the run put to them |
 | **Saved view** | Saving a view | With `worklet`: a **personal** view (one naming an owner) is its owner's, or admin's; a **shared** one is its container's lead's (a project's, a unit's, or the person whose page it sits on and whoever leads them) or admin's, which is the only way to a workspace-wide tab. Replacing a stored view asks this twice: for the view written, and for the view it overwrites as it stands |
 | **Container** | A project's policy (its fields, default assignee, tag renames and archives, archiving the project) and re-routing a task to another team | The project's lead, or admin, with `worklet` |
 | **Tidy** | Removing and restoring a work item; renaming, trashing and restoring a page | The container's lead, the item's **reporter** or the page's **creator**, or admin — with the app. An author tidies their own item and never a subtree beneath it |
@@ -2378,13 +2379,12 @@ replacing it — archiving is still the project lead's, and a purge still needs
 `admin` — and it is checked **first**, so an agent is told it is a seat
 rather than that it lacks a permission it may well hold.
 
-**And two verbs are only an agent's.** `a2a_ask` and `run_sandbox` carry the
-opposite mark, **seat-only**: no person and no token takes them, whatever they
-hold — `403` with the reason `seat_only` and no permission named, because none
-would change the answer — and an agent seat takes them with no permission at
-all, offered or not by its role. Asking a colleague spends that seat's turn and
-budget, and a coding run hands a box the seat's whole tool surface; which seats
-may do either is the role registry's decision, and a person has no turn for an
+**And one verb is only an agent's.** `a2a_ask` carries the opposite mark,
+**seat-only**: no person and no token takes it, whatever they hold — `403`
+with the reason `seat_only` and no permission named, because none would change
+the answer — and an agent seat takes it with no permission at all, offered or
+not by its role. Asking a colleague spends that seat's turn and budget; which
+seats may ask is the role registry's decision, and a person has no turn for an
 answer to land in. Seat-only is checked where human-only is, before the rule,
 and no row carries both.
 
@@ -2466,10 +2466,11 @@ space in the knowledge base with its pages, declared by nothing in the company
 document — an orphan nobody leads until an administrator
 declares it again, since a lead may not. It takes authority away and gives
 none. A seat edited within the lead's subtree may otherwise change anything —
-its model chain, its sandbox, its schedules — among what the company's settings
-offer, which stay admin's: which `providers.llm` entries — each a coding CLI
-on the engine host — and which sandbox cells on the engine host exist for a
-lead to choose is the administrator's decision.
+its model chain, its sandbox settings, its schedules — among what the
+company's settings offer, which stay admin's: which `providers.llm` entries —
+each a coding CLI on the engine host — exist, and which cell each entry runs
+its executors in (`run_in`, or the default), is the administrator's decision,
+and a lead who points a seat at an entry takes its cell with it.
 
 A refused write is `403 unauthorized` naming `admin` — the permission that
 would admit all of it — and a `refused` list of every part that is not the

@@ -173,7 +173,8 @@ export const ACTIONS = {
   pause_seat: {
     // A SEAT'S PROFILE PAUSES IT: its mail waits, its schedules are skipped,
     // and the turn it is on finishes first unless `stop_running` asks for it
-    // to end at its next round. The pause is a coordination record rather
+    // to end at its next round — and a coding run it has out to end at once.
+    // The pause is a coordination record rather
     // than a log a question reads, so it raises no floor; the seat's state
     // moves on the agents push, which every node sends when its watch lands.
     args: ["handle", "reason", "stop_running"],
@@ -190,9 +191,11 @@ export const ACTIONS = {
   },
   steer_turn: {
     // STEER ON THE TURN TRACE: a note to a turn running now, read at its
-    // next round. It crosses to the node running the turn on an ephemeral
-    // ask rather than into a log, so it raises no floor; what became of it
-    // is the turn's own `agent_turn_steered`, which the trace re-reads.
+    // next step — a round of the engine's loop, or a step of the coding run
+    // it has out. It crosses to the node running the turn on an ephemeral
+    // ask, or waits on the run's record in the coordination store, never in
+    // a log, so it raises no floor; what became of it is the turn's own
+    // `agent_turn_steered`, which the trace re-reads.
     args: ["turn_id", "note"],
     domain: null,
     refreshes: ["turn"],

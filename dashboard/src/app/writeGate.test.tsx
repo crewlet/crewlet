@@ -185,7 +185,7 @@ const FIXTURES: Readonly<Record<keyof typeof writes, { props: object; name: RegE
     name: /^Pause$/,
   },
   SteerTurnButton: {
-    props: { turnId: "run-1", seat: "SWE", running: true, parked: false },
+    props: { turnId: "run-1", seat: "SWE", running: true },
     name: /^Steer$/,
   },
 };

@@ -464,7 +464,7 @@ func (f failingFleet) Rebase(context.Context, string) (time.Time, uint64, error)
 // The resume builds its turn in describeResume, the frame that hands the
 // runner the identity its tools derive every id from — so a resume path that
 // skipped the rule is red on the first case. The second is the one the
-// reviewers found: half 2 of a turn rebased onto R1 calls run_sandbox again,
+// reviewers found: half 2 of a turn rebased onto R1 relaunches its executor,
 // and half 3's resume two hours on, judged against the work's start alone, was
 // rebased onto its own instant and wrote twice whatever half 2 wrote and half 3
 // repeated. It inherits R1 instead.

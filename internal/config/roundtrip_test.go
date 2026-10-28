@@ -16,6 +16,7 @@ const roundTripDoc = `
 name: Acme
 mission: ship
 providers:
+  sandbox: {fake: true}
   llm:
     default:
       model: claude-sonnet-5

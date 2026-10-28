@@ -187,11 +187,15 @@ company has no model:
 # 1. Write the running company to a file
 crewlet config export > company.yaml
 
-# 2. Add the model to it
+# 2. Add the model to it, and the sandbox every seat's executor
+#    runs in: here this machine, as your user
 providers:
   llm:
     default:
       model: sonnet
+  sandbox:
+    local: {}
+    default_run_in: direct
 
 # 3. Sign its CLI in to your subscription, and check it end to end
 #    (on a member of a cluster, add -api with a running member's URL
@@ -237,6 +241,20 @@ crewlet run
   installed, signed in and still matches the profile Crewlet drives it with.
   For another CLI or an API key, write the entry
   [LLM Backends](../concepts/llm-backends.md) describes instead.
+- **The sandbox is this machine.** A `direct` box runs the CLI as your user
+  on the node's own host, and calls the seat's tools back through the node's
+  own listener on loopback, so there is nothing else to set — the node only
+  needs its `api.port`, whatever its roles. A `container` or `e2b` cell, or a
+  seats node started with `api.port: 0`, instead needs
+  `CREWLET_MCP_BRIDGE_URL`, the fleet's address as that box reaches it (see
+  [Code Sandbox](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
+  The CLI runs fully permissioned there, so `direct` is for a first run on
+  your own machine while its seats take work from you alone, a dedicated host
+  you are willing to hand to an autonomous agent, or the entry that needs the
+  host itself; before a seat takes work from anyone else, place the runs in
+  `container` with [an image of your
+  own](../concepts/code-sandbox.md#bring-your-own-image) (see [Choosing a
+  cell](../concepts/code-sandbox.md#choosing-a-cell)).
 - **The import is offline**, with the node stopped: it makes the file what
   the node boots on, built on the fleet's revision the export came from, and
   the node publishes it to the fleet as it starts — as long as the fleet
@@ -246,10 +264,12 @@ crewlet run
   the node starts on it, logs `offline_revision_not_published` at warn, and
   moves to the fleet's revision once it applies it. Add the model to the
   fleet's company through a running node then: a `PATCH /config` carrying
-  only the `providers.llm` block, which is built on the fleet's revision and
-  keeps the other node's change. Importing `company.yaml` with `-api` would
-  replace the whole document with the one exported before that change. See
-  [Offline commands make an
+  only step 2's `providers` block — its `llm` entry, and its `sandbox` block
+  unless the fleet's company already has one, since a company with an agent
+  seat and a model is refused without it — which is built on the fleet's
+  revision and keeps the other node's change. Importing `company.yaml` with
+  `-api` would replace the whole document with the one exported before that
+  change. See [Offline commands make an
   offer](../concepts/configuration.md#offline-commands-make-an-offer).
 
 None of this applies to a company another system
@@ -636,10 +656,12 @@ credentials are written in the configuration document.
 | Owns: tracker project, knowledge space | Agent seats. The seat's own `project` and `space`: where unrouted work for the seat goes and where it files its own. Not a permission. Shown unless the company runs no tracker or no knowledge base, as for a unit. Changing either takes `admin`. |
 
 Shown with the reason they are not changed here: per-phase models
-(`llm_review` and the other `llm_*` fields), sandbox (enabled, where it runs),
-workers, placement, learning, tool credentials (names only) and whether the
-seat is the Datadog fallback. Sandbox, placement, workers and tool credentials
-each depend on a company-level block the builder does not edit.
+(`llm_review` and the other `llm_*` fields), the executor box (the seat's
+setup steps, variables, tool servers and turn cap; where it runs is its model
+entry's `run_in`), workers, placement, learning, tool credentials (names only)
+and whether the seat is the Datadog fallback. The executor box, placement,
+workers and tool credentials each depend on a company-level block the builder
+does not edit.
 
 **Delete seat** is on the editor's last tab (**Advanced** for an agent seat,
 **Work** for a human seat) and opens the same dialog as the chart's Delete.

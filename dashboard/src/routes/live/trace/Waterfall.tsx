@@ -37,13 +37,13 @@
  * # A running coding run is watched, not replayed
  *
  * While a coding run's span is open AND a reader has it open, its live output
- * is asked of the node that owns the run every [SANDBOX_TAIL_POLL_MS]
+ * is asked of the node that reads its box every [SANDBOX_TAIL_POLL_MS]
  * (`sandbox_tail`), and the view holds what it is sent — up to what the run's
  * record will hold — following the end unless the reader scrolled up. Nothing
  * else asks: closing the span, or the run stopping, stops the poll; a job still
  * being set up is not a stopped one. The answer is honest about the ways it can
  * be empty — a run that has not written anything yet, a job not started yet,
- * and an owner that did not answer — and names the owner in the last, because
+ * and a node that did not answer — and names that node in the last, because
  * "nothing to show" and "the node that could show it is silent" send a reader
  * to opposite places.
  */
@@ -77,6 +77,7 @@ import { deliveredLine, outcomeWords, rounds, type PhaseRecord } from "~/lib/pha
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useLiveTail, type LiveView } from "~/lib/useLiveTail.ts";
 import { SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
+import { STEER_BOUNDARIES } from "~/contract/steer.ts";
 import {
   fraction,
   phaseLabel,
@@ -101,6 +102,37 @@ const KIND_LABEL: Record<SpanKind, string> = {
   pending: "Waiting",
 };
 
+/** A kind of step a note is read at (`types.SteerBoundary`). */
+type SteerBoundary = (typeof STEER_BOUNDARIES)[number];
+
+/**
+ * How the trace says each kind of step that read a note. A read INSIDE A CODING
+ * RUN is the run's — its brief, a batch of its tool calls, its finish, its next
+ * step — and is drawn on the run's bar, said as the step of the phase's run
+ * (*read by the coding run of Execute as it was finishing*); a round is the
+ * engine's own loop's (*read at round 2 of Review*). The compiler holds every
+ * boundary of the contract to its words.
+ */
+const READ_AT: Record<SteerBoundary, { inRun: boolean; words: string }> = {
+  round: { inRun: false, words: "read at round" },
+  brief: { inRun: true, words: "in its brief" },
+  tool_batch: { inRun: true, words: "after a tool batch" },
+  finish: { inRun: true, words: "as it was finishing" },
+  step: { inRun: true, words: "at its next step" },
+};
+
+/**
+ * The kind of step a delivered record names. A delivered record this build
+ * cannot name — one naming a boundary it does not know, which a NEWER build
+ * added, or one naming none, which no build writes — is said as nothing more
+ * than the turn having read it, and never as a round.
+ */
+function boundaryOf(raw: unknown): SteerBoundary | "unknown" {
+  return typeof raw === "string" && (STEER_BOUNDARIES as readonly string[]).includes(raw)
+    ? (raw as SteerBoundary)
+    : "unknown";
+}
+
 /** A person's note, as the turn's own record says what became of it. */
 export interface SteerMark {
   noteId: string;
@@ -113,11 +145,17 @@ export interface SteerMark {
   /** Whether `by` is a seat's handle: the author kind the engine recorded
    *  beside it (`steered_by_kind`) is `human` or `agent`, never `operator`. */
   bySeat: boolean;
-  /** The span that read it — a round's model call — or "" for an expired one. */
+  /** The span that read it — a round's model call, or the coding run's bar for
+   *  a read inside the run — or "" for an expired one. */
   spanId: string;
   round: number;
   phase: string;
   iteration: number;
+  /** The kind of step that read it; "unknown" for a delivered record this
+   *  build cannot name, and "" for an expired note, which nothing read. */
+  boundary: SteerBoundary | "unknown" | "";
+  /** The coding run's job that read it, for a read inside a run. */
+  launchId: string;
   at: string;
 }
 
@@ -136,6 +174,17 @@ export function steerMarks(events: readonly EventRecord[], turnId: string): Stee
       // a handle to name; an unbound credential's is its own login.
       const by = typeof p.steered_by === "string" ? p.steered_by : "";
       const kind = typeof p.steered_by_kind === "string" ? p.steered_by_kind : "";
+      const launchId = typeof p.launch_id === "string" ? p.launch_id : "";
+      // A DELIVERED NOTE NAMES ITS STEP; an expired one names none.
+      const boundary = outcome === "delivered" ? boundaryOf(p.boundary) : "";
+      // A READ INSIDE A CODING RUN is drawn on that run's bar (`run:<job>`,
+      // the span the trace gives a job), not on a round of the engine's loop,
+      // which was parked while the run worked. A step this build does not
+      // know is placed on the run its record names, and nowhere without one:
+      // drawn on a round, it would claim the engine's loop read a note it
+      // never saw.
+      const inRun =
+        boundary === "unknown" ? launchId !== "" : boundary !== "" && READ_AT[boundary].inRun;
       return {
         noteId: String(p.note_id ?? e.id),
         outcome,
@@ -143,12 +192,20 @@ export function steerMarks(events: readonly EventRecord[], turnId: string): Stee
         by,
         bySeat: by !== "" && (kind === "human" || kind === "agent"),
         spanId:
-          outcome === "delivered" && phase && round
-            ? `${turnId}|${phase}|${iteration}.r${round}`
-            : "",
+          outcome !== "delivered"
+            ? ""
+            : inRun
+              ? launchId
+                ? `run:${launchId}`
+                : ""
+              : boundary !== "unknown" && phase && round
+                ? `${turnId}|${phase}|${iteration}.r${round}`
+                : "",
         round,
         phase,
         iteration,
+        boundary,
+        launchId,
         at: e.timestamp,
       } satisfies SteerMark;
     });
@@ -383,11 +440,7 @@ function Notes({ marks }: { marks: readonly SteerMark[] }) {
               {m.outcome}
             </Tag>
             <span className="steer-mark-text">
-              {m.outcome === "delivered"
-                ? `read at round ${m.round}${
-                    m.phase ? ` of ${phaseLabel({ phase: m.phase, iteration: m.iteration })}` : ""
-                  }`
-                : "the turn finished before it read the note"}
+              {m.outcome === "delivered" ? readAt(m) : "the turn finished before it read the note"}
               {m.by ? ` · from ${m.bySeat ? badgeOf(m.by).name : m.by}` : ""}
               {m.note && <q className="steer-mark-note">{m.note}</q>}
             </span>
@@ -396,6 +449,20 @@ function Notes({ marks }: { marks: readonly SteerMark[] }) {
       </ul>
     </section>
   );
+}
+
+/**
+ * Where a delivered note was read, in words: the round of a phase, the step of a
+ * phase's coding run, or — for a step this build cannot name — the turn in that
+ * phase, never a round.
+ */
+function readAt(m: SteerMark): string {
+  const phase = m.phase ? phaseLabel({ phase: m.phase, iteration: m.iteration }) : "";
+  if (m.boundary === "unknown" || m.boundary === "")
+    return `read by the turn${phase ? ` in ${phase}` : ""}`;
+  const of = phase ? ` of ${phase}` : "";
+  if (m.boundary === "round") return `read at round ${m.round}${of}`;
+  return `read by the coding run${of} ${READ_AT[m.boundary].words}`;
 }
 
 function Facts({ rows }: { rows: [string, ReactNode][] }) {
@@ -905,7 +972,7 @@ export function liveState(answer: SandboxTailAnswer | null | undefined, failed: 
     return failed ? "The run's output could not be read." : "Asking the node that runs it.";
   switch (answer.outcome) {
     case "owner_silent":
-      return "The node that owns this run did not answer.";
+      return "The node that runs it did not answer.";
     case "launching":
       return "The job is being set up.";
     case "box_paused":

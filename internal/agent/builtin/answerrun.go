@@ -24,21 +24,36 @@ const AnswerRunTool = "answer_run"
 
 // MaxRunAnswerBytes bounds one answer to a parked coding run.
 //
-// HALF OF [ToolAnswerBytes], because the answer is not delivered alone: it is
-// spliced into the resumed turn as the result of the suspended `run_sandbox`
-// call, framed by the question it answers and the instructions to continue,
-// and that whole message is one tool answer in the turn's context. The other
-// half is the room the question and the framing take. A person's answer to a
-// coding agent's question is a sentence or a paragraph; one this size is a
-// document, and belongs on a page the run can be pointed at.
-const MaxRunAnswerBytes = ToolAnswerBytes / 2
+// THE PAGE ITS QUESTION IS HELD TO ([sandbox.MaxQuestionBytes]), because the
+// answer travels where the question does, beside it. It is sealed onto the
+// run's coordination row with the delivery it came in, which every status flip
+// and every listing of active runs reads whole until the run is carried on;
+// and then it is that run's prompt — the asking run's next message in its own
+// CLI session, after the question it answers, or, where that session cannot
+// go on, a fresh run's brief beside the round's own — which the run's CLI
+// re-sends with every request it makes from then on, each charged to the
+// budget in full, cached or not. So every byte of an answer is paid for again
+// at every step the run takes after it.
+//
+// A person's answer to a coding agent's question is a sentence or a
+// paragraph. One past a page is a document, and belongs on a page or the work
+// item, which the run reads with its own tools when it needs it rather than at
+// every step.
+//
+// NOT [ToolAnswerBytes], which bounds what a tool answers a model: no tool's
+// answer carries this one.
+const MaxRunAnswerBytes = sandbox.MaxQuestionBytes
 
-// RunDesk is what answer_run needs: the run an answer names, and the way to put
-// the answer on the inbox of the seat that holds it. [sandbox.AnswerDesk] is
-// the implementation.
+// RunDesk is what answer_run needs: the run an answer names, the way to put the
+// answer on the control topic of the seat that holds it, and who gave the
+// answer a run already has, which only its seal says ([sandbox.AnswerSeal]).
+// [sandbox.AnswerDesk] is the implementation.
 type RunDesk interface {
 	Run(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
 	Deliver(ctx context.Context, given types.SandboxAnswerGiven) (uuid.UUID, error)
+	// Answerer is who gave run's recorded answer, empty where the seal does
+	// not open here.
+	Answerer(run sandbox.PendingRun) string
 }
 
 // RunDeps are answer_run's dependencies.
@@ -140,7 +155,8 @@ func (t *answerRun) Parameters() map[string]any {
 			"answer": map[string]any{
 				"type": "string",
 				"description": fmt.Sprintf("Your answer to the run's question, as the "+
-					"coding agent should read it. At most %d KiB.", MaxRunAnswerBytes>>10),
+					"coding agent should read it. At most %d KiB: put anything longer on "+
+					"a page the run can read, and say where it is.", MaxRunAnswerBytes>>10),
 			},
 		},
 		"required": []any{"turn_id", "answer"},
@@ -174,8 +190,10 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed("answer_run needs an `answer` — what the coding agent should be told."), nil
 	case len(answer) > MaxRunAnswerBytes:
 		return failed(fmt.Sprintf("That answer is %d KiB and one answer may be at most %d KiB: "+
-			"it is spliced into the run as a single tool reply. Put the detail on a page "+
-			"and answer with where it is.", len(answer)>>10, MaxRunAnswerBytes>>10)), nil
+			"it becomes the run's next message, or a fresh run's brief where the run cannot "+
+			"carry on in its own session, and its coding agent reads it again at every step "+
+			"after. Put the detail on a page the run can read, and answer with where it is.",
+			kib(len(answer)), MaxRunAnswerBytes>>10)), nil
 	}
 
 	run, found, err := t.deps.Desk.Run(ctx, turnID)
@@ -197,8 +215,9 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// was and when, rather than taken quietly: an answer is recorded the
 		// moment the seat takes it, so a second person answering the same
 		// question finds it answered here.
-		return toPerson(refused(tools.RefusalAlreadyAnswered, answeredAlready(run)),
-			caveat.AnsweredAlready(run.Answer.By)), nil
+		by := t.deps.Desk.Answerer(run)
+		return toPerson(refused(tools.RefusalAlreadyAnswered, answeredAlready(run, by)),
+			caveat.AnsweredAlready(by)), nil
 	case !slices.Contains(sandbox.Awaiting, run.Status):
 		return refused(tools.RefusalNotRunning, fmt.Sprintf("Run %s is %s, not "+
 			"waiting for an answer, so there is no question for this to answer.",
@@ -250,12 +269,12 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // answeredAlready is the refusal an answer gets for a question already
-// answered, as the model reads it: by whom, when (RFC 3339, the instant as the
-// record holds it), and what became of that answer as far as the record says.
-// A person's surface shows [caveat.AnsweredAlready] instead, with the instant
-// read off the run's row on the person's own clock.
-func answeredAlready(run sandbox.PendingRun) string {
-	by := run.Answer.By
+// answered, as the model reads it: by whom (by, as the answer's seal names
+// them, or "someone else" where it does not open here), when (RFC 3339, the
+// instant as the record holds it), and what became of that answer as far as
+// the record says. A person's surface shows [caveat.AnsweredAlready] instead,
+// with the instant read off the run's row on the person's own clock.
+func answeredAlready(run sandbox.PendingRun, by string) string {
 	if by == "" {
 		by = "someone else"
 	}

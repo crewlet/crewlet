@@ -688,17 +688,19 @@ func (f *fakeChannels) Purge(_ context.Context, _ time.Time) (int64, error) {
 	return f.purged, nil
 }
 
-// TestTheIdleChannelJobDrivesTheServiceThatAnnounces holds the one thing that
+// TestTheIdleChannelJobDrivesTheSweeperThatAnnounces holds the one thing that
 // changed about this job's shape.
 //
-// It used to call a2a.Store.CloseIdle directly and DISCARD the channels it
-// returned — which is the only reason that method returns them rather than a
-// count, so a swept close published no event at all. An operator's single
-// signal that an ask went unanswered was silence: the requester's turn ended
-// when it asked, so a channel reaching this sweep means some turn never
-// finished. The job drives the SERVICE now, which owns what a close means on
-// the wire, and this is what stops it quietly going back to the store.
-func TestTheIdleChannelJobDrivesTheServiceThatAnnounces(t *testing.T) {
+// It used to close idle channels through the channel store directly and
+// DISCARD the channels that close returned — which was the only reason it
+// returned them rather than a count, so a swept close published no event at
+// all. An operator's single signal that an ask went unanswered was silence: the
+// requester's turn ended when it asked, so a channel reaching this sweep means
+// some turn never finished. The job drives internal/a2a's sweeper now, which
+// owns what a close means on the wire and asks, before each one, whether the
+// channel's answer is still owed — and this is what stops it quietly going back
+// to the store.
+func TestTheIdleChannelJobDrivesTheSweeperThatAnnounces(t *testing.T) {
 	t.Parallel()
 	ch := &fakeChannels{closed: 3, purged: 5}
 	jobs := maintenance.ChannelJobs(ch)
@@ -715,9 +717,9 @@ func TestTheIdleChannelJobDrivesTheServiceThatAnnounces(t *testing.T) {
 	cutoff := base.Add(-maintenance.ChannelIdleTimeout)
 	n, err := idle.Run(context.Background(), base, cutoff)
 	if err != nil || n != 3 {
-		t.Fatalf("Run = (%d, %v), want the service's own count", n, err)
+		t.Fatalf("Run = (%d, %v), want the sweeper's own count", n, err)
 	}
-	// THE CUTOFF AND NOT THE TICK'S `now`: the service reads its own clock
+	// THE CUTOFF AND NOT THE TICK'S `now`: the sweeper reads its own clock
 	// for the close instant, so a channel's closed_at and the duration on
 	// the event it publishes come from one reading rather than two.
 	if len(ch.cutoffs) != 1 || !ch.cutoffs[0].Equal(cutoff) {

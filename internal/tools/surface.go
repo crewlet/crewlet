@@ -42,8 +42,9 @@ type Surface struct {
 	// installed second.
 	guard Guard
 
-	// counter counts the refusal-loop guard's decisions, or nil
-	// ([Surface.WithCounter]).
+	// counter counts the refusal-loop guard's decisions and, handed to
+	// every call's [Invoke], the calls answered outside their schema, or
+	// nil ([Surface.WithCounter]).
 	counter Counter
 
 	mu     sync.Mutex
@@ -85,45 +86,6 @@ type Guard interface {
 func (s *Surface) WithGuard(g Guard) *Surface {
 	s.guard = g
 	return s
-}
-
-// Detached is a tool whose work outlives the call that started it.
-//
-// The one tool in the engine that has any use for this is run_sandbox: it
-// starts a coding run and asks the loop to SUSPEND with the call unanswered,
-// so the conversation can be persisted and re-entered — minutes later,
-// possibly after a restart, possibly on another node — when the run finishes.
-//
-// Optional, like [SeatCallable], and for the same reason: a plain Callable is
-// unaffected and knows nothing about turns.
-type Detached interface {
-	Callable
-
-	// CallDetached runs the tool and may ask the loop to SUSPEND with this
-	// call unanswered.
-	CallDetached(ctx context.Context, turn *turnctx.Turn, args map[string]any) (DetachedResult, error)
-}
-
-// DetachedResult is an ordinary result that may also stop the loop.
-//
-// A SECOND optional interface rather than a Suspend field on [Result], for the
-// same reason SeatCallable is one: Result is the MCP tool contract, an MCP
-// server has no notion of a turn to suspend, and widening it would put a
-// turn-engine concept on every bridged tool to be ignored. This way the one
-// tool whose work outlives its turn asks for the ability, and the rest of the
-// registry is unaffected.
-type DetachedResult struct {
-	Result
-
-	// Suspend stops the loop with this call UNANSWERED, so the conversation
-	// can be persisted and re-entered when the detached work finishes.
-	// Honoured only where the phase allows suspending — Execute — and
-	// logged and ignored elsewhere, because a phase that never persists a
-	// partial conversation cannot resume one.
-	Suspend bool
-
-	// Payload is handed to the caller to persist alongside the state.
-	Payload map[string]any
 }
 
 // SeatCallable is a tool that needs to know which seat is calling it.
@@ -239,8 +201,8 @@ func (s *Surface) Activate(name string) bool {
 // For a renderer that has to keep an EXTERNAL copy of what is offered and
 // cannot see when the set moved: the MCP bridge holds one MCP server per run
 // and re-renders after every bridged call, since a bridged `activate_tool` is
-// the only thing that can widen a surface while the engine's own loop is
-// suspended. Almost none of those calls change anything, and [Surface.ToolDefs]
+// the only thing that can widen the surface of a run the engine is not
+// driving. Almost none of those calls change anything, and [Surface.ToolDefs]
 // deep-clones every active tool's JSON Schema — so asking costs one integer
 // where finding out costs the whole rendering.
 //
@@ -281,19 +243,6 @@ func (s *Surface) AnnotationsOf(name string) Annotations {
 		return Annotations{}
 	}
 	return e.Annotations
-}
-
-// Detached reports a tool whose work outlives its call — one that may park
-// the phase with its call unanswered ([Detached]). The loop runs such a call
-// alone: two side by side would each start work a parked phase can answer for
-// only one of.
-func (s *Surface) Detached(name string) bool {
-	e, held := s.universe.Lookup(name)
-	if !held {
-		return false
-	}
-	_, detached := e.Tool.(Detached)
-	return detached
 }
 
 // ToolDefs renders what the model is offered this round.
@@ -482,7 +431,7 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	}
 	// THE MODEL READS TEXT, so the note is rendered after the output here
 	// ([Rendered]), and the ledger records what the model read.
-	recorded, run := s.settle(Call{Name: name, Args: args.Map(), Output: Rendered(res.Result),
+	recorded, run := s.settle(Call{Name: name, Args: args.Map(), Output: Rendered(res),
 		Failed: res.Failed, Cause: res.Cause}, e.Annotations, target)
 	res.Output = recorded.Output
 	s.reportLoop(name, target, run, turn)
@@ -504,7 +453,7 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	}
 	span.SetAttributes(
 		attribute.Bool("crewlet.tool_failed", res.Failed),
-		attribute.String("crewlet.tool_outcome", invokedOutcome(res.Failed, res.Suspend)))
+		attribute.String("crewlet.tool_outcome", invokedOutcome(res.Failed)))
 	// WHO ANSWERED, stamped here because this is the one frame that
 	// resolved the name to a registered entry — the registry records the
 	// origin at registration and the loop sees only a name. Only on this
@@ -512,7 +461,6 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	server, _ := e.FromMCP()
 	return toolloop.ToolResult{
 		Output: res.Output, Failed: res.Failed, Cause: res.Cause,
-		Suspend: res.Suspend, SuspendPayload: res.Payload,
 		Origin: e.Origin, Server: server,
 	}, nil
 }
@@ -528,20 +476,11 @@ func outcomeFor(known bool) string {
 }
 
 // invokedOutcome names what a real invocation did.
-//
-// `suspended` is its own outcome rather than a flavour of success: a
-// suspending call is the one that returns NO ledger row — toolloop leaves it
-// unanswered and appends no Execution — so this span is the only in-band
-// record that `run_sandbox` was ever called.
-func invokedOutcome(failed, suspended bool) string {
-	switch {
-	case suspended:
-		return "suspended"
-	case failed:
+func invokedOutcome(failed bool) string {
+	if failed {
 		return "failed"
-	default:
-		return "ok"
 	}
+	return "ok"
 }
 
 func (s *Surface) record(c Call) {

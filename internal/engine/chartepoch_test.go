@@ -27,6 +27,7 @@ import (
 const chartDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

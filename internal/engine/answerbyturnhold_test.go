@@ -58,6 +58,7 @@ func newBusySeat(t *testing.T, resume func(*busySeat) sandbox.Resumer) *busySeat
 		Turn:     s.ordinary.run, Completions: ledger, NoteDeferred: func(string) {},
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Answers:  fleetAnswers(),
 		Audience: noAudience{}, Queue: q, Pending: s.store, Manager: manager,
 		Resume: resume(s), Hold: inboxHold{q: q}, After: s.retries.after,
 		Spent: d.SpendAnswer, WasSpent: d.AnswerWorked,
@@ -208,8 +209,8 @@ func TestAnAnswerByTurnReachesItsRunWhileAnotherJobHoldsTheSeat(t *testing.T) {
 // AN ANSWER GIVEN AGAINST A QUESTION THE RUN HAS MOVED PAST ANSWERS NOTHING.
 //
 //  1. A run parks on question Q1, and two people answer Q1 by turn.
-//  2. The first answer resumes the run, and the resumed turn calls run_sandbox
-//     again: the run is running a new job.
+//  2. The first answer resumes the run, and the resumed turn relaunches its
+//     executor: the run is running a new job.
 //  3. The second answer arrives meanwhile, on the control topic, at once.
 //
 // Named only by its run, it claimed whatever the run waited on by then and
@@ -297,7 +298,11 @@ func (r *orderedResumer) Resume(ctx context.Context, req sandbox.ResumeRequest) 
 	if r.order.answers == nil {
 		r.order.answers = map[string]string{}
 	}
-	r.order.answers[req.Run.TurnID] = req.Answer
+	// A PERSON'S ANSWER RIDES THE QUESTION IT ANSWERS ([sandbox.ResumeRequest.Asked]),
+	// never the report: the resumed turn carries the run on with it.
+	if req.Asked != nil {
+		r.order.answers[req.Run.TurnID] = req.Asked.Answer
+	}
 	if r.order.boxes == nil {
 		r.order.boxes = map[string]string{}
 	}
@@ -306,8 +311,8 @@ func (r *orderedResumer) Resume(ctx context.Context, req sandbox.ResumeRequest) 
 	return nil
 }
 
-// relaunchingResumer re-enters a parked run as a coding agent whose turn calls
-// run_sandbox again would: it takes the answer, and launches the next job.
+// relaunchingResumer re-enters a parked run as a turn that relaunches its
+// executor would: it takes the answer, and launches the next job.
 type relaunchingResumer struct {
 	coordinator *sandbox.Coordinator
 	manager     *sandbox.Manager

@@ -597,12 +597,13 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 	// here wants a mark released, and a release on a path that cannot
 	// happen is a release that does nothing.
 	// A PARKED TURN DOES NOT SPEND IT, and that is the one condition on
-	// this guard. A suspended executor publishes `turn_completed` carrying
-	// the suspend's own self_iterate, and its RESUMED half publishes under
-	// the same run — so marking the park refused the resume as a duplicate,
-	// and a seat that does its work through `run_sandbox` reflected on
-	// nothing, ever: no episode, no diary row, no counterparty profile, no
-	// skill, with an empty memory tab as the only symptom.
+	// this guard. Every agent seat's executor is a detached coding run, so
+	// every such turn parks at its launch: the park publishes
+	// `turn_completed` carrying the suspend's own self_iterate, and its
+	// RESUMED half publishes under the same run — so marking the park
+	// refused the resume as a duplicate, and the seat reflected on nothing,
+	// ever: no episode, no diary row, no counterparty profile, no skill,
+	// with an empty memory tab as the only symptom.
 	//
 	// The pass still RUNS for a parked turn, because one worker legitimately
 	// wants it: observing who you talked to does not depend on what the

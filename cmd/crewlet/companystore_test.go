@@ -106,6 +106,7 @@ func companyAt(t *testing.T, doc, vendor string) string {
 const readerCompanyDoc = `
 name: Nimbus
 providers:
+  sandbox: {fake: true}
   llm:
     main:
       model: claude-sonnet-5
@@ -161,6 +162,7 @@ func cliAgentCompanyFile(t *testing.T) (string, *cliagent.Provider) {
 	state := filepath.Join(dir, "state")
 	path := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     sub:
       agent: custom
@@ -175,9 +177,11 @@ providers:
         host_credential_paths: [".fake/creds.json"]
         status_args: ["status"]
 roles:
+  # A person's seat: the custom entry stands in for a CLI this suite
+  # cannot install, and it can run no seat's executor.
   - name: CEO
     handle: ceo
-    llm: sub
+    kind: human
 `, state))
 	p, err := cliagent.New(cliagent.Config{
 		Key: "sub", Agent: "custom", StateDir: state,
@@ -371,7 +375,7 @@ func TestARunThatReadsNoStoredValueDecidesNoRoute(t *testing.T) {
 		"    url: VENDOR\n    team: nimbus\n  confluence:\n    url: VENDOR\n    email: ops@example.com\n"+
 		"    token: t\n    webhook_secret: \"${CONFLUENCE_WEBHOOK_SECRET}\"\nroles:\n"+
 		"  - name: CEO\n    handle: ceo\n", vendor)
-	literal := companyAt(t, "name: Nimbus\nproviders:\n  llm:\n    main:\n      model: claude-sonnet-5\n"+
+	literal := companyAt(t, "name: Nimbus\nproviders:\n  sandbox: {fake: true}\n  llm:\n    main:\n      model: claude-sonnet-5\n"+
 		"roles:\n  - name: CEO\n    handle: ceo\n    llm: main\n    integrations:\n      slack:\n"+
 		"        bot_token: xoxb-a-literal-token\n        signing_secret: a-literal-signing-secret\n",
 		vendor)
@@ -485,8 +489,8 @@ func TestALoginWithTheEngineStoppedStoresOnTheFleetsStore(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
 	store := llmStoreAt(t, noEnviron, "login", "-config", cfg)
 	company := writeFile(t, t.TempDir(), "company.yaml",
-		"name: Acme\nproviders:\n  llm:\n"+healthyDoctorEntry(t, "claude", "m")+
-			"roles:\n  - name: CEO\n    handle: ceo\n    llm: claude\n")
+		"name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n"+healthyDoctorEntry(t, "claude", "m")+
+			"roles:\n  - name: CEO\n    handle: ceo\n    kind: human\n")
 	var notes bytes.Buffer
 	doc, keys, resolver, err := loadLLMConfig(t.Context(), company, store, "login", "claude", &notes)
 	if err != nil {
@@ -578,6 +582,7 @@ func TestALoginNamesTheDoctorAsItCanBeRun(t *testing.T) {
 				dir := t.TempDir()
 				company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     sub:
       agent: custom
@@ -592,9 +597,11 @@ providers:
         status_args: ["-c", "exit 0"]
         login_args: ["-c", 'mkdir -p "$HOME/.fake" && echo {} > "$HOME/.fake/creds.json"']
 roles:
+  # A person's seat: the custom entry stands in for a CLI this suite
+  # cannot install, and it can run no seat's executor.
   - name: CEO
     handle: ceo
-    llm: sub
+    kind: human
 `, filepath.Join(dir, "state")))
 				out, errs, err := cliIn(t, environ, append([]string{"llm", "login", "sub",
 					"-company", company}, flags...)...)

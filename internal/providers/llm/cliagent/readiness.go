@@ -75,7 +75,7 @@ type readiness struct {
 // ([llm.KindAuth]), or a CLI that could not be started ([llm.KindFatal]
 // wrapping [llm.ErrNotRunnable]). See readiness.go for what lifts each.
 func (p *Provider) Unready(ctx context.Context) error {
-	if err := p.benched(); err != nil {
+	if err := p.SittingOut(); err != nil {
 		return err
 	}
 	stamp := p.loginStamp()

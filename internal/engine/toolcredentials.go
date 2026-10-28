@@ -717,8 +717,11 @@ func (m *credentialMissing) reason() string {
 			varRefs(m.empty), plural(m.empty, "is set to an empty value", "are set to empty values")))
 	}
 	for _, name := range slices.Sorted(maps.Keys(m.unissued)) {
-		parts = append(parts, fmt.Sprintf("${%s} could not be issued: %s; it is asked for "+
-			"again at the next attempt", name, m.unissued[name]))
+		// NOT "at the next attempt": the issuer holds a refusal for the
+		// restart schedule's wait, and an attempt inside it is handed the
+		// same answer without a request ([github.Issuer.RetryWait]).
+		parts = append(parts, fmt.Sprintf("${%s} could not be issued: %s; GitHub is asked "+
+			"for it again on the restart schedule", name, m.unissued[name]))
 	}
 	if remedy := m.optionalRemedy(); remedy != "" {
 		parts = append(parts, remedy)
@@ -781,19 +784,6 @@ func (m *credentialMissing) Error() string {
 		when = "; it starts once " + m.arrival()
 	}
 	return "not started: " + m.reason() + when
-}
-
-// runRefusal is why a coding run was not started, as the tool result its turn
-// reads: what is missing, and — the reader being a model — what to do about
-// the turn meanwhile.
-func (m *credentialMissing) runRefusal() string {
-	refusal := "this seat's run environment is not complete, so no box was started: " + m.reason()
-	if m.waiting() {
-		return refusal + "; a run launched once " + m.arrival() + " is given it: " +
-			"try again then, or do the work with your own tools"
-	}
-	return refusal + "; until somebody does, do the work with your own tools, or say " +
-		"what is missing"
 }
 
 // mintedVariables lists what a child waits for, sorted, for a log line.

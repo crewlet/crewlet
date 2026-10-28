@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // A TURN'S END FOLLOWS ITS COST: every in-turn auxiliary record, its card's
@@ -33,15 +34,15 @@ func TestATurnsEndFollowsEveryInTurnRecord(t *testing.T) {
 	e, served := spendingEngine(t)
 	q := e.backends.Queue.(*memory.Queue)
 	e.auxSpend = auxspend.NewLedger(q)
-	swapModel(t, e, longAccountModel())
+	model := longAccountModel()
+	swapModel(t, e, model)
+	rig := rigRuns(t, e, modelPlayer(t, model.pick))
 
-	if _, err := e.runTurn(t.Context(), Request{
+	runToItsEnd(t, e, rig, Request{
 		Handle: "swe", WorkKey: "wk-1", RunID: "run-1",
 		WorkSince: time.Now().UTC(),
 		Events:    []*events.Event{taskWake("task-9", "ENG-9")},
-	}); err != nil {
-		t.Fatalf("runTurn: %v", err)
-	}
+	})
 
 	card, ended := -1, -1
 	for i, ev := range q.History() {
@@ -62,10 +63,22 @@ func TestATurnsEndFollowsEveryInTurnRecord(t *testing.T) {
 		t.Fatalf("the card's rewrite was published at %d and the turn's end at %d: the end "+
 			"must follow every in-turn record", card, ended)
 	}
-	turns, _ := served.recorded()
-	if len(turns) != 1 || !strings.HasPrefix(turns[0].Summary, condensedCard) {
-		t.Fatalf("the task was charged %+v, want one turn carrying the rewritten card", turns)
+	if ended := endingCharge(t, served); !strings.HasPrefix(ended.Summary, condensedCard) {
+		t.Fatalf("the segment that ended the turn charged %+v, want it carrying the rewritten card",
+			ended)
 	}
+}
+
+// endingCharge is the charge of the segment that ended a turn which parked
+// once on its executor's run: the second of the two the task was handed.
+func endingCharge(t *testing.T, served *servedWriter) worklet.TurnRecord {
+	t.Helper()
+	turns, _ := served.recorded()
+	if len(turns) != 2 {
+		t.Fatalf("the task was charged %+v, want the two segments of a turn that parked on its run",
+			turns)
+	}
+	return turns[1]
 }
 
 // A TURN'S END IS WHERE ITS SEGMENT ENDED, NOT WHERE ITS END WAS PUBLISHED.
@@ -85,15 +98,15 @@ func TestATurnsEndIsMeasuredWhereItsSegmentEnded(t *testing.T) {
 	e, served := spendingEngine(t)
 	q := e.backends.Queue.(*memory.Queue)
 	e.auxSpend = auxspend.NewLedger(q)
-	swapModel(t, e, slowRewriteModel(200*time.Millisecond))
+	model := slowRewriteModel(200 * time.Millisecond)
+	swapModel(t, e, model)
+	rig := rigRuns(t, e, modelPlayer(t, model.pick))
 
-	if _, err := e.runTurn(t.Context(), Request{
+	runToItsEnd(t, e, rig, Request{
 		Handle: "swe", WorkKey: "wk-1", RunID: "run-1",
 		WorkSince: time.Now().UTC(),
 		Events:    []*events.Event{taskWake("task-9", "ENG-9")},
-	}); err != nil {
-		t.Fatalf("runTurn: %v", err)
-	}
+	})
 
 	var completed *types.TurnCompleted
 	for _, ev := range q.History() {
@@ -104,12 +117,12 @@ func TestATurnsEndIsMeasuredWhereItsSegmentEnded(t *testing.T) {
 	if completed == nil {
 		t.Fatal("no turn_completed was published")
 	}
-	turns, _ := served.recorded()
-	if len(turns) != 1 || !strings.HasPrefix(turns[0].Summary, condensedCard) {
-		t.Fatalf("the task was charged %+v, want one turn carrying the rewritten card — "+
-			"without a rewrite the case exercises nothing", turns)
+	ended := endingCharge(t, served)
+	if !strings.HasPrefix(ended.Summary, condensedCard) {
+		t.Fatalf("the segment that ended the turn charged %+v, want it carrying the rewritten "+
+			"card — without a rewrite the case exercises nothing", ended)
 	}
-	if got, want := completed.DurationMS, turns[0].Spend.WallMs; got != want {
+	if got, want := completed.DurationMS, ended.Spend.WallMs; got != want {
 		t.Fatalf("turn_completed says the turn took %d ms and the task's turn row %d ms: "+
 			"the card's rewrite was measured into one of them", got, want)
 	}
@@ -136,11 +149,12 @@ func slowRewriteModel(delay time.Duration) phasedCLI {
 }
 
 // swapModel puts one provider behind every chain the spending engine's seat
-// resolves — its phases and its auxiliary model alike.
+// resolves — its phases and its auxiliary model alike — ahead of the entry its
+// executor launches on, which it keeps.
 func swapModel(t *testing.T, e *Engine, p llm.Provider) {
 	t.Helper()
 	c := *e.Company()
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: p}})
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: p}, runnerEntry(t)})
 	if err != nil {
 		t.Fatalf("phase registry: %v", err)
 	}

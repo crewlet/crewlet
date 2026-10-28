@@ -8,13 +8,13 @@ import {
   formChanged,
   formErrors,
   formOf,
-  modeWords,
   modelEntity,
   modelEntries,
   modelEntry,
   modelLine,
   problemsByField,
   providerOrder,
+  roleWords,
   signInSource,
   usesOf,
 } from "./models.ts";
@@ -23,8 +23,8 @@ import {
   DEFAULT_CLI_AGENT,
   DEFAULT_CLI_AUTH_MODE,
   DEFAULT_CLI_MAX_CONCURRENT,
-  DEFAULT_CLI_MODE,
   DEFAULT_CLI_TIMEOUT_SECONDS,
+  EXECUTOR_CLI_AGENTS,
 } from "~/contract/models.ts";
 import { REDACTED } from "~/lib/format.ts";
 import type { CompanyDocument } from "~/protocol/types.ts";
@@ -65,8 +65,8 @@ describe("which seats run on a model", () => {
 
 describe("an entry, read off the document", () => {
   // WHAT AN UNSET FIELD MEANS IS THE ENGINE'S. An entry naming only its model
-  // still drives a CLI, in a mode, on a sign-in, under two caps — and each is
-  // said as the default the engine applies, marked as one.
+  // still drives a CLI — one that runs executors — on a sign-in, under two caps,
+  // and each is said as the default the engine applies, marked as one.
   test("an entry naming only its model runs on the engine's defaults, each marked", () => {
     const entry = modelEntry("default", { model: "sonnet", auth: {} });
     expect(entry).toMatchObject({
@@ -74,7 +74,7 @@ describe("an entry, read off the document", () => {
       model: "sonnet",
       agent: DEFAULT_CLI_AGENT,
       agentDefault: true,
-      mode: DEFAULT_CLI_MODE,
+      executor: true,
       runIn: "",
       authMode: DEFAULT_CLI_AUTH_MODE,
       authDefault: true,
@@ -91,25 +91,24 @@ describe("an entry, read off the document", () => {
 
   test("an entry that names each field is read as written", () => {
     const entry = modelEntry("coder", {
-      agent: "codex",
-      model: "gpt-5",
-      mode: "box",
+      agent: "opencode",
+      model: "anthropic/claude-sonnet-5",
       run_in: "e2b",
       timeout_seconds: 900,
       max_concurrent: 2,
-      state_dir: "/var/lib/crewlet/codex",
+      state_dir: "/var/lib/crewlet/opencode",
       auth: { mode: "api-key", api_key: "${OPENAI_KEY}" },
     });
     expect(entry).toMatchObject({
-      agent: "codex",
+      agent: "opencode",
       agentDefault: false,
-      mode: "box",
+      executor: true,
       runIn: "e2b",
       timeoutSeconds: 900,
       timeoutSet: true,
       maxConcurrent: 2,
       concurrencySet: true,
-      stateDir: "/var/lib/crewlet/codex",
+      stateDir: "/var/lib/crewlet/opencode",
       authMode: "api-key",
       authDefault: false,
       apiKey: { kind: "reference", name: "OPENAI_KEY" },
@@ -182,11 +181,25 @@ describe("how a model signs in, in words", () => {
     );
   });
 
+  // ONLY A CLI WITH AN IN-BOX RUNNER RUNS AN EXECUTOR: an entry on any other
+  // serves the text phases, and an executor chain skips it at launch — so the
+  // screen must never say Codex runs a seat's work.
+  test("only an executor CLI is said to run a seat's executor", () => {
+    for (const agent of EXECUTOR_CLI_AGENTS) {
+      const entry = modelEntry("m", { agent, model: "x" });
+      expect(entry.executor).toBe(true);
+      expect(roleWords(entry).label).toBe("Executor");
+    }
+    for (const agent of ["codex", "gemini-cli", "custom"]) {
+      const entry = modelEntry("m", { agent, model: "x", run_in: "e2b" });
+      expect(entry.executor).toBe(false);
+      expect(roleWords(entry).label).toBe("Text phases");
+    }
+  });
+
   // A value a newer engine sends that this build has no words for is drawn as
-  // itself, never as nothing and never as a mode it is not.
-  test("a mode this build does not know is said as itself", () => {
-    expect(modeWords("box").label).toBe("Box");
-    expect(modeWords("swarm").label).toBe("swarm");
+  // itself, never as nothing and never as a sign-in it is not.
+  test("a sign-in this build does not know is said as itself", () => {
     expect(authWords("api-key").label).toBe("API key");
     expect(authWords("passkey").label).toBe("passkey");
   });
@@ -203,7 +216,6 @@ describe("the edit", () => {
   const entity = {
     agent: "codex",
     model: "gpt-5",
-    mode: "box",
     run_in: "e2b",
     state_dir: "/var/lib/crewlet/codex",
     env: { HTTPS_PROXY: "${PROXY}" },
@@ -212,7 +224,7 @@ describe("the edit", () => {
     auth: { mode: "api-key", api_key: "${OPENAI_KEY}", credential_bundle: "${BUNDLE}" },
   };
 
-  // ONLY WHAT THE FORM SHOWS CHANGES. The CLI, the mode, where it runs, its
+  // ONLY WHAT THE FORM SHOWS CHANGES. The CLI, where it runs, its
   // home, its environment, its overrides and the bundle are the entry's
   // identity, and go back exactly as read.
   test("sends back the entity it read, with only the edited fields replaced", () => {

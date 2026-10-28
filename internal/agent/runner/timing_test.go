@@ -2,8 +2,8 @@ package runner_test
 
 import (
 	"context"
+	"errors"
 	"slices"
-	"sync"
 	"testing"
 	"time"
 
@@ -25,9 +25,10 @@ import (
 //
 // The tool loop measures every round and every call; these hold the runner to
 // carrying those measurements onto the events a dashboard reads — folded
-// across an extension and a resume exactly as the rounds themselves are, since
-// a timeline whose numbers are on a different scale from the ledger beside it
-// is a second ledger that disagrees with the first.
+// across an extension exactly as the rounds themselves are, since a timeline
+// whose numbers are on a different scale from the ledger beside it is a second
+// ledger that disagrees with the first. The loop's cases run on the onboarding
+// pass, the one engine-driven phase an extension reaches.
 
 // cached is a round that also reports a prompt-cache share.
 func cached(r llmtest.Response, read, write int) llmtest.Response {
@@ -37,23 +38,19 @@ func cached(r llmtest.Response, read, write int) llmtest.Response {
 
 func TestAPhaseRecordCarriesItsRoundsCallsAndCache(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llmtest.Response{
-		cached(sayAndCall(t, "read_file", `{"path":"/a"}`, "start"), 50, 10),
-		cached(sayAndCall(t, "read_file", `{"path":"/b"}`, "again"), 55, 0),
-		cached(sayAndCall(t, runner.SubmitWorkTool,
-			`{"outcome":"delivered","summary":"read both"}`, "enough"), 58, 0),
-		text("done"),
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
+		cached(persist(t, "a", "start"), 50, 10),
+		cached(persist(t, "b", "again"), 55, 0),
+		cached(markDone(t, "enough"), 58, 0),
 	}}
 	pub := newCapture()
 	r := extendableRunner(t, prov, pub, alwaysExtend{})
 
 	before := time.Now().UTC()
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	onboard(t, r)
 	after := time.Now().UTC()
 
-	done := completedPhase(t, pub, "execute")
+	done := completedPhase(t, pub, "onboarding")
 	if len(done.Rounds) != 3 {
 		t.Fatalf("the record carries %d timed rounds, want one per provider call (3): %+v",
 			len(done.Rounds), done.Rounds)
@@ -101,20 +98,16 @@ func TestAnExtensionKeepsRoundNumbersAndMovesTheCap(t *testing.T) {
 	// A two-round cap, extended by the step (4) under a ceiling of 8: the
 	// record states the cap the phase ENDED under, not the one it began
 	// with, and the ceiling it could have reached.
-	prov := &scriptedProvider{execute: []llmtest.Response{
-		sayAndCall(t, "read_file", `{"path":"/a"}`, "one"),
-		sayAndCall(t, "read_file", `{"path":"/b"}`, "two"),
-		sayAndCall(t, runner.SubmitWorkTool,
-			`{"outcome":"delivered","summary":"read both"}`, "three"),
-		text("done"),
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
+		persist(t, "a", "one"),
+		persist(t, "b", "two"),
+		markDone(t, "three"),
 	}}
 	pub := newCapture()
 	r := extendableRunner(t, prov, pub, spendingJudge{})
 
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	done := completedPhase(t, pub, "execute")
+	onboard(t, r)
+	done := completedPhase(t, pub, "onboarding")
 	if done.MaxRounds != 6 || done.RoundCeiling != 8 {
 		t.Errorf("max_rounds %d / round_ceiling %d, want 6 (2 + the granted 4) / 8",
 			done.MaxRounds, done.RoundCeiling)
@@ -135,25 +128,21 @@ func TestAnExtensionKeepsRoundNumbersAndMovesTheCap(t *testing.T) {
 
 func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llmtest.Response{
-		sayAndCall(t, "read_file", `{"path":"/a"}`, "one"),
-		sayAndCall(t, "read_file", `{"path":"/b"}`, "two"),
-		sayAndCall(t, runner.SubmitWorkTool,
-			`{"outcome":"delivered","summary":"read both"}`, "three"),
-		text("done"),
+	prov := &scriptedProvider{onboarding: []llmtest.Response{
+		persist(t, "a", "one"),
+		persist(t, "b", "two"),
+		markDone(t, "three"),
 	}}
 	pub := newCapture()
 	r := extendableRunner(t, prov, pub, alwaysExtend{})
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	onboard(t, r)
 
 	// The opening frame already states the cap, before the model has
 	// answered once.
-	if open := openingFrame(t, pub, "execute"); open.MaxRounds != 2 || open.RoundCeiling != 8 {
+	if open := openingFrame(t, pub, "onboarding"); open.MaxRounds != 2 || open.RoundCeiling != 8 {
 		t.Errorf("the opening frame states max %d / ceiling %d, want 2 / 8", open.MaxRounds, open.RoundCeiling)
 	}
-	frames := progressFrames(t, pub, "execute")
+	frames := progressFrames(t, pub, "onboarding")
 	var running []string
 	announced := map[string]bool{}
 	cap := 0
@@ -203,99 +192,164 @@ func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 	}
 	// Every call announced WHILE it ran — the three calls this phase made,
 	// in order.
-	want := []string{"read_file", "read_file", runner.SubmitWorkTool}
+	want := []string{runner.ReflectAndPersistTool, runner.ReflectAndPersistTool, runner.MarkOnboardedTool}
 	if !slices.Equal(running, want) {
 		t.Errorf("running calls announced = %v, want %v", running, want)
 	}
 }
 
-func TestAResumedPhaseStatesItsOwnSegmentStart(t *testing.T) {
+// A COLLECTED RUN'S RECORD STATES ITS OWN SEGMENT, BOTH SEGMENTS' TIME, AND
+// ITS LAUNCH. The segment that collects a run starts when the collection does —
+// not at the launch, on another node perhaps a day before — but the record is
+// the phase's only completion, so its duration is the phase's: the launching
+// segment's span, carried on the park, plus the collection's, and never the
+// run between them, which is the run's own fact on the record of the box it ran
+// in. And one turn can launch more than once, so the record names the launch it
+// collected.
+//
+// Mutation: drop the launch's span from the park, and the record measures the
+// collection alone — under a millisecond, which every reader draws as an
+// executor that took no time.
+func TestACollectedRunStatesItsOwnSegmentAndLaunch(t *testing.T) {
 	t.Parallel()
-	prov := &scriptedProvider{execute: []llmtest.Response{
-		sayAndCall(t, "slack_post", `{"text":"the fix is up"}`, "tell the requester"),
-		sayAndCall(t, runner.SubmitWorkTool,
-			`{"outcome":"delivered","summary":"shipped it","deliveries":["slack_post"]}`,
-			"the box did the work"),
-		text("done"),
-	}}
-	// Parked a day ago, on another node, after an hour of work.
-	state := suspendedAfterTwoRounds()
-	parkedAt := time.Date(2026, 9, 23, 9, 0, 0, 0, time.UTC)
-	state.ElapsedMS = int(time.Hour / time.Millisecond)
-	state.Rounds = []types.PhaseRound{
-		{Round: 1, StartedAt: parkedAt, DurationMS: 1200, Model: "earlier", InputTokens: 200, OutputTokens: 50},
-		{Round: 2, StartedAt: parkedAt.Add(time.Minute), DurationMS: 900, Model: "earlier",
-			InputTokens: 200, OutputTokens: 50, CacheReadTokens: 150, ToolCalls: 1},
-	}
-	state.CacheReadTokens = 150
-	state.ToolExecutions[1]["started_at"] = parkedAt.Add(2 * time.Minute).Format(time.RFC3339Nano)
-	state.ToolExecutions[1]["duration_ms"] = 3100
-	state.ToolExecutions[1]["origin"] = tools.OriginBuiltin
-
-	// Through JSON, the way the pending-run row hands it back: every number
-	// in a loose map is a float64 on the other side.
-	blob, err := execstate.Encode(state)
-	if err != nil {
-		t.Fatalf("Encode: %v", err)
-	}
-	parked, _, err := execstate.Decode(blob)
-	if err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-
 	pub := newCapture()
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
-		pub: pub,
-		resume: &runner.Resume{State: parked, Answer: "the run succeeded", Run: runner.RunRecord{
-			CodingAgent: "claude-code", SandboxID: "sbx-1", LaunchID: "launch-2",
-		}},
-	})
-	before := time.Now().UTC()
-	if _, _, err := r.Resume(context.Background(), nil); err != nil {
-		t.Fatalf("Resume: %v", err)
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	const launchTook = 40 * time.Millisecond
+	slow := &playLauncher{took: launchTook}
+	launched, _ := buildWith(t, entries, buildOpts{pub: pub, launcher: slow})
+	if w, _, err := launched.Execute(context.Background(), 1, "", nil); err != nil || !w.Suspended {
+		t.Fatalf("Execute = suspended %v, %v; want the executor parked on its run", w.Suspended, err)
 	}
+	bridged := play(t, slow.last(t), deliver(t, "shipped it"))
+
+	before := time.Now().UTC()
+	collect(t, entries, buildOpts{pub: pub}, launched, nil, bridged, "the run succeeded",
+		runner.RunRecord{CodingAgent: "claude-code", SandboxID: "sbx-1", LaunchID: "launch-2"})
 
 	done := completedPhase(t, pub, "execute")
-	// THIS SEGMENT's start — not the published instant minus a duration
-	// that covers an hour of work a day ago on another node.
 	if done.StartedAt.Before(before) {
 		t.Errorf("started_at = %v, want this segment's start (after %v)", done.StartedAt, before)
 	}
-	// WHICH LAUNCH this segment collected: one turn can launch more than
-	// once, and the segment is identified by it.
+	if took := time.Duration(done.DurationMS) * time.Millisecond; took < launchTook {
+		t.Errorf("duration_ms = %d, want at least the %v the launching segment took: the "+
+			"record is the phase's only completion and covers both its segments",
+			done.DurationMS, launchTook)
+	}
 	if done.LaunchID != "launch-2" {
-		t.Errorf("launch_id = %q, want the launch the resume collected", done.LaunchID)
-	}
-	if done.DurationMS < int(time.Hour/time.Millisecond) {
-		t.Errorf("duration_ms = %d, want the whole phase (at least the hour before the suspend)", done.DurationMS)
-	}
-	// The pre-suspend rounds keep THEIR timing and their cache share.
-	if len(done.Rounds) != 4 {
-		t.Fatalf("rounds = %+v, want the two parked rounds and the two resumed ones", done.Rounds)
-	}
-	if !done.Rounds[0].StartedAt.Equal(parkedAt) || done.Rounds[1].DurationMS != 900 || done.Rounds[2].Round != 3 {
-		t.Errorf("the timeline across the suspend is %+v", done.Rounds)
-	}
-	if done.CacheReadTokens != 150 {
-		t.Errorf("cache_read_tokens = %d, want the parked half's 150 carried", done.CacheReadTokens)
-	}
-	parkedCall := done.ToolExecutions[1]
-	if parkedCall["name"] != "run_sandbox" || parkedCall["duration_ms"] != 3100 || parkedCall["origin"] != tools.OriginBuiltin {
-		t.Errorf("the call that parked the phase lost its timing: %v", parkedCall)
-	}
-	// And an untimed row — a call whose arguments did not parse, which
-	// never ran — stays untimed rather than acquiring a zero: absent is
-	// "not recorded", a zero is "instant".
-	if _, timed := done.ToolExecutions[0]["duration_ms"]; timed {
-		t.Errorf("an untimed pre-suspend call acquired a duration: %v", done.ToolExecutions[0])
+		t.Errorf("launch_id = %q, want the launch the collection took", done.LaunchID)
 	}
 }
 
-func TestAWorkerNamesTheRoundThatSpawnedIt(t *testing.T) {
+// A COLLECTED RUN STATES ONE TIMED ROUND, OVER THE RUN, AND PLACES ITS CALLS.
+//
+// The engine's whole exchange with the run is one request — the launch — and
+// one answer — the collection — so the record states one round of one, from
+// the launch's instant to the collection's, and every bridged call on it at
+// the instant and for the span the bridge measured, naming who answered. A
+// record that said "one round" and timed none was a timeline with a hole in
+// it, and a call with no start is one no timeline can place. The round
+// carries no tokens: the run's spend is on its own `sandbox` record.
+//
+// Mutations: leave the round untimed, state no cap, or drop the calls'
+// measurement on the way to the record, and this goes red.
+func TestACollectedRunStatesOneTimedRoundOverTheRun(t *testing.T) {
 	t.Parallel()
-	prov := &delegatingProvider{}
 	pub := newCapture()
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	launcher := &playLauncher{}
+	launched, _ := buildWith(t, entries, buildOpts{pub: pub, launcher: launcher})
+	before := time.Now().UTC()
+	if w, _, err := launched.Execute(context.Background(), 1, "", nil); err != nil || !w.Suspended {
+		t.Fatalf("Execute = suspended %v, %v; want the executor parked on its run", w.Suspended, err)
+	}
+	afterLaunch := time.Now().UTC()
+	bridged := play(t, launcher.last(t), deliver(t, "shipped it"))
+	// THE RUN TAKES TIME, which is what the round has to cover.
+	const ran = 30 * time.Millisecond
+	time.Sleep(ran)
+
+	collect(t, entries, buildOpts{pub: pub}, launched, nil, bridged, "shipped it",
+		runner.RunRecord{CodingAgent: "claude-code", SandboxID: "sbx-1", Model: "claude-sonnet-5"})
+
+	done := completedPhase(t, pub, "execute")
+	if done.RoundsUsed != 1 || len(done.Rounds) != 1 {
+		t.Fatalf("rounds_used = %d with %d timed rounds, want one round, timed",
+			done.RoundsUsed, len(done.Rounds))
+	}
+	if done.MaxRounds != 1 || done.RoundCeiling != 1 {
+		t.Errorf("max_rounds = %d, round_ceiling = %d: a phase of one round states a cap of one",
+			done.MaxRounds, done.RoundCeiling)
+	}
+	round := done.Rounds[0]
+	if round.StartedAt.Before(before) || round.StartedAt.After(afterLaunch) {
+		t.Errorf("the round started at %s, want the launch's instant (%s..%s)",
+			round.StartedAt, before, afterLaunch)
+	}
+	if took := time.Duration(round.DurationMS) * time.Millisecond; took < ran {
+		t.Errorf("the round took %s, want at least the %s the run was out", took, ran)
+	}
+	if round.InputTokens != 0 || round.OutputTokens != 0 {
+		t.Errorf("the round carries %d/%d tokens, which the run's own record already states",
+			round.InputTokens, round.OutputTokens)
+	}
+	if round.Model != "claude-sonnet-5" || round.ToolCalls != len(bridged) {
+		t.Errorf("round = %+v, want the run's model and its %d calls", round, len(bridged))
+	}
+	if len(done.ToolExecutions) != len(bridged) {
+		t.Fatalf("%d executions, want the run's %d calls", len(done.ToolExecutions), len(bridged))
+	}
+	for _, ex := range done.ToolExecutions {
+		at, _ := ex["started_at"].(string)
+		started, err := time.Parse(time.RFC3339Nano, at)
+		if err != nil || started.Before(round.StartedAt) {
+			t.Errorf("%v started at %q, want an instant inside the run's round", ex["name"], at)
+		}
+		if _, ok := ex["duration_ms"]; !ok {
+			t.Errorf("%v carries no duration", ex["name"])
+		}
+		if origin, _ := ex["origin"].(string); origin == "" {
+			t.Errorf("%v names no origin", ex["name"])
+		}
+	}
+}
+
+// A PARK THAT CARRIES NO LAUNCH INSTANT STATES ITS ROUND UNTIMED, never placed
+// at the collection: a round drawn from the collection's own start would show
+// a run that took no time, where "not measured" is the truth.
+func TestARunWithNoLaunchInstantLeavesItsRoundUntimed(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}, buildOpts{
+		pub: pub,
+		resume: &runner.Resume{
+			State:  execstate.State{Version: execstate.Version, Round: 1},
+			Answer: "done",
+		},
+	})
+	if _, _, err := r.Resume(context.Background(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	done := completedPhase(t, pub, "execute")
+	if done.RoundsUsed != 1 || len(done.Rounds) != 0 {
+		t.Errorf("rounds_used = %d with %d timed rounds, want the one round, untimed",
+			done.RoundsUsed, len(done.Rounds))
+	}
+}
+
+// A RUN'S WORKERS NEST UNDER THE ROUND ITS CALLS ARE ON.
+//
+// The run's delegate call arrives over the bridge, where no engine loop is
+// iterating to say which round it is in; the run's record puts every call it
+// made on its one round, so a worker it spawned has to name that round, or a
+// reader places it under no call at all. And under the ITERATION it was
+// launched in, since a self-iterating turn launches once per round.
+//
+// Mutation: leave the spawner's round unstated, and both the worker and the
+// batch name round 0.
+func TestARunsWorkersNestUnderTheRunsRound(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: workerProvider{}}})
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -305,18 +359,12 @@ func TestAWorkerNamesTheRoundThatSpawnedIt(t *testing.T) {
 	}
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
 	item := &types.WorkItem{Backend: types.WorkWorklet, ID: "task-7", Key: "ENG-7"}
+	launcher := &playLauncher{}
 	r, err := runner.New(runner.Config{
-		Seat:     prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
-		Registry: reg, Models: models,
-		// A ONE-ROUND cap, extended: the delegate call is made in the
-		// SECOND invocation of the loop, which numbers its own rounds from
-		// 1 — so a worker that reports the phase's round 2 here is one that
-		// heard the phase's scale rather than the invocation's.
-		Caps: runner.Caps{
-			ExecutorRounds: 1, ExecutorCeiling: 6,
-			ExtensionOn: true, ExtensionStep: 4,
-		},
-		Judge:     alwaysExtend{},
+		Seat:      prompts.Seat{Org: &org.Organization{Name: "Acme", Roles: []*org.Role{role}}, Role: role},
+		Registry:  reg,
+		Models:    models,
+		Launcher:  launcher,
 		Task:      "fan this out",
 		Publisher: pub,
 		Subagent:  &runner.SubagentConfig{Limits: shipped()},
@@ -327,18 +375,24 @@ func TestAWorkerNamesTheRoundThatSpawnedIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
 	}
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+	if _, _, err := r.Execute(context.Background(), 2, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
+	play(t, launcher.last(t), run{calls: []llm.ToolCall{
+		activate("read_file"),
+		call(t, "read_file", `{"path":"/a"}`),
+		{ID: "d", Name: subagent.ToolName, Arguments: map[string]any{"tasks": []any{map[string]any{
+			"id": "research", "prompt": "look", "system_prompt": "you research things"}}}},
+	}})
 
 	workers := phasesOfKind(t, pub, "subagent")
 	if len(workers) != 1 {
 		t.Fatalf("%d worker records, want 1", len(workers))
 	}
 	w := workers[0]
-	// Round 2 made the delegate call; round 1 read a file first.
-	if w.HostRound != 2 {
-		t.Errorf("the worker's host round = %d, want 2 — the round whose delegate call spawned it", w.HostRound)
+	if w.HostRound != 1 || w.Iteration != 2 || w.HostIteration != 2 {
+		t.Errorf("the worker nests at round %d of iteration %d (host iteration %d), want "+
+			"round 1 of the iteration its run was launched in (2)", w.HostRound, w.Iteration, w.HostIteration)
 	}
 	if w.StartedAt.IsZero() || len(w.Rounds) != 1 || w.MaxRounds != shipped().MaxTurns {
 		t.Errorf("the worker's own timeline: started %v, rounds %+v, max %d", w.StartedAt, w.Rounds, w.MaxRounds)
@@ -350,57 +404,32 @@ func TestAWorkerNamesTheRoundThatSpawnedIt(t *testing.T) {
 		t.Errorf("the worker record names item %+v, want the turn's ENG-7", w.WorkItem)
 	}
 	batch := batched(t, pub)
-	if batch.Round != 2 || batch.StartedAt.IsZero() || batch.StartedAt.After(w.StartedAt) {
+	if batch.Round != 1 || batch.StartedAt.IsZero() || batch.StartedAt.After(w.StartedAt) {
 		t.Errorf("the call's summary names round %d, started %v (worker started %v)",
 			batch.Round, batch.StartedAt, w.StartedAt)
 	}
-
-	// A worker's tokens are the turn's DELEGATED spend, split by direction
-	// and kept out of the turn's own totals; the turn's own cache share is
-	// its phases', which is the executor's two rounds here.
-	spend := r.Spend()
-	if spend.Workers != 1 || spend.WorkerInput != 30 || spend.WorkerOutput != 5 || spend.WorkerTokens() != 35 {
-		t.Errorf("delegated tally = %d workers, %d in / %d out", spend.Workers, spend.WorkerInput, spend.WorkerOutput)
-	}
-	if spend.CacheRead != 3*11 {
-		t.Errorf("the turn's own cache share = %d, want the executor's 33", spend.CacheRead)
-	}
 }
 
-// delegatingProvider plays an executor that reads, delegates, and submits, and
-// a worker that submits at once. Told apart by the submission tool each is
-// offered; guarded because the worker runs on its own goroutine.
-type delegatingProvider struct {
-	mu       sync.Mutex
-	executor int
-}
+// workerProvider plays a delegated worker that submits at once — the one
+// model a run's delegate call reaches through the engine, since the run's own
+// rounds are its CLI's. Anything else asking it is a fixture wired wrong, and
+// is refused rather than handed a worker's answer.
+type workerProvider struct{}
 
-func (p *delegatingProvider) Model() string { return "scripted" }
+func (workerProvider) Model() string { return "scripted" }
 
-func (p *delegatingProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+func (workerProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
+	if req.Tools == nil {
+		return nil, errors.New("workerProvider: asked with no tools, so not by a worker")
+	}
 	return llmtest.Drive(ctx, req, llmtest.ConnOptions{}, func(c *llmtest.Conn) (llmtest.Response, error) {
-		if slices.Contains(c.OfferedNames(), subagent.SubmitTool) {
-			return llmtest.Response{
-				Calls: []llmtest.Call{{Name: subagent.SubmitTool, Args: `{"result":"found it"}`}},
-				Usage: llm.Usage{Input: 30, Output: 5, CacheRead: 7},
-			}, nil
+		if !slices.Contains(c.OfferedNames(), subagent.SubmitTool) {
+			return llmtest.Response{}, errors.New("workerProvider: asked by something that is not a worker")
 		}
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		p.executor++
-		var r llmtest.Response
-		switch p.executor {
-		case 1:
-			r = calling(llmtest.Call{Name: "read_file", Args: `{"path":"/a"}`})
-		case 2:
-			r = calling(llmtest.Call{Name: subagent.ToolName, Args: `{"tasks":[` +
-				`{"id":"research","prompt":"look","system_prompt":"you research things"}]}`})
-		default:
-			r = calling(llmtest.Call{Name: runner.SubmitWorkTool,
-				Args: `{"outcome":"no_action","summary":"delegated the research"}`})
-		}
-		r.Usage = llm.Usage{Input: 100, Output: 10, CacheRead: 11}
-		return r, nil
+		return llmtest.Response{
+			Calls: []llmtest.Call{{Name: subagent.SubmitTool, Args: `{"result":"found it"}`}},
+			Usage: llm.Usage{Input: 30, Output: 5, CacheRead: 7},
+		}, nil
 	})
 }
 

@@ -42,7 +42,7 @@
               "type": "string"
             }
           ],
-          "description": "Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener), only /health and /ready without it (and a seats node's box-mode tool bridge, where api.public is unset). 0 binds nothing."
+          "description": "Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener); without it, /health and /ready, and on a node with the seats role the tool bridge and telemetry receiver its own direct boxes dial, to this host's loopback alone. 0 binds nothing."
         },
         "public": {
           "$ref": "#/$defs/APIPublic"
@@ -781,7 +781,7 @@
               "type": "string"
             }
           ],
-          "description": "Agent turns this process runs at once; 0 takes the engine default. Per node, so a fleet's ceiling is N times this."
+          "description": "Turn segments this process runs at once (a seat's executor run is not one of them: each seat runs at most one); 0 takes the engine default. Per node, so a fleet's ceiling is N times this."
         },
         "roles": {
           "description": "What this node does: data, ingress, seats, workers. Omit for all four. A node without data keeps no durable state and needs store.scratch; it joins an embedded fleet as a leaf, through stream.leaf.urls, and runs neither ingress nor workers.",

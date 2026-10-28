@@ -29,7 +29,7 @@ import (
 // refuses.
 const storedRevisionDoc = `{"name":"Nimbus",` +
 	`"a_setting_from_a_newer_build":{"depth":3},` +
-	`"providers":{"llm":{"main":{"model":"claude-sonnet-5"}}},` +
+	`"providers":{"sandbox":{"fake":true},"llm":{"main":{"model":"claude-sonnet-5"}}},` +
 	`"workers":{"researcher":{"description":"reads sources and reports findings",` +
 	`"system_prompt":"You research.","model":"nonexistent"}}}`
 
@@ -47,7 +47,7 @@ func serveStored(t *testing.T, cfg, payload string) string {
 
 // runnableRevisionDoc is a company document this build runs.
 const runnableRevisionDoc = `{"name":"Nimbus",` +
-	`"providers":{"llm":{"main":{"model":"claude-sonnet-5"}}}}`
+	`"providers":{"sandbox":{"fake":true},"llm":{"main":{"model":"claude-sonnet-5"}}}}`
 
 // serveStoredAt is [serveStored] at an activation instant the case chooses,
 // which the store records as the activation this node applied.
@@ -430,7 +430,7 @@ func TestARevisionThisBuildRefusesIsStillShownExportedAndDiffed(t *testing.T) {
 // name being prose. A peer whose build admits under rules this one does not
 // share may store it, and this build must still run it.
 const duplicateKeysRevision = `{"name":"Nimbus",` +
-	`"providers":{"llm":{"main":{"model":"claude-sonnet-5"}}},` +
+	`"providers":{"sandbox":{"fake":true},"llm":{"main":{"model":"claude-sonnet-5"}}},` +
 	`"units":[` +
 	`{"name":"Engineering","children":[{"name":"Platform",` +
 	`"roles":[{"name":"Engineer","handle":"platform-engineer","llm":"main"}]}]},` +
@@ -441,6 +441,7 @@ const duplicateKeysRevision = `{"name":"Nimbus",` +
 const duplicateKeysYAML = `
 name: Nimbus
 providers:
+  sandbox: {fake: true}
   llm:
     main: {model: claude-sonnet-5}
 units:

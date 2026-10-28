@@ -403,6 +403,9 @@ func operatorSurface(e *engine.Engine, authority authz.Chart) (*operator.Server,
 		Runs: builtin.RunDeps{Desk: sandbox.AnswerDesk{
 			Pending: sandbox.NewCoordStore(e.Backends().Fleet),
 			Queue:   e.Backends().Queue,
+			// WHO ANSWERED FIRST is said only by the answer's seal, which
+			// the node's own fleet keyring opens.
+			Seal: e.AnswerSeal(),
 		}},
 		Pauses: builtin.SeatPauseDeps{
 			Pauses: e.Backends().Fleet, Announce: e.Backends().Queue, Org: chart,
@@ -410,7 +413,7 @@ func operatorSurface(e *engine.Engine, authority authz.Chart) (*operator.Server,
 		// SIGNED WITH THE NODE'S OWN STEER CHANNEL, the one its desk
 		// answers with: the running node offers a note as the person it
 		// names on this node's decision, so neither half may be unsigned.
-		Steer: builtin.SteerDeps{Asker: e.Backends().Queue, Wire: e.SteerWire()},
+		Steer: builtin.SteerDeps{Asker: e.Backends().Queue, Wire: e.SteerWire(), Runs: e.RunSteers()},
 		Answer: builtin.AnswerDeps{
 			Models: engine.AnswerModels(e), Budget: engine.AnswerBudget(e),
 			Corpus: e.KnowledgeCorpus,

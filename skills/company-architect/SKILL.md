@@ -183,13 +183,34 @@ live-editable, so the first version does not need to be the last.
      `auth: {mode: api-key}`, which reads `ANTHROPIC_API_KEY` from the secret
      store or the environment. Name another variable with
      `auth.api_key: "${VAR}"` only if theirs is called something else.
-   - **OpenAI's** — `agent: codex`, `model: gpt-5`, and the same `auth`, which
-     reads an OpenAI API key from `CODEX_API_KEY`, the variable codex signs in
-     with; leave `auth` out for a ChatGPT login.
    - **Open models** (OpenRouter, a hosted provider, a local server) —
      `agent: opencode`, `model: <provider>/<model>` (a bare id is refused), and
      the provider's key in `env` under that provider's own variable, e.g.
      `env: {OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"}`.
+   - **OpenAI's** — `agent: codex`, `model: gpt-5`, and the same `auth`, which
+     reads an OpenAI API key from `CODEX_API_KEY`, the variable codex signs in
+     with; leave `auth` out for a ChatGPT login. **Not on its own:** every
+     agent seat's executor is its coding CLI's own run, which only
+     `claude-code` and `opencode` can be, so a company on Codex alone is
+     refused. Codex (and every other CLI) serves a seat's reviewer, workers
+     and side passes through `llm_review`, `llm_subagent`, `llm_auxiliary` or
+     `llm_judge`, beside a Claude Code or OpenCode entry the seat's `llm`
+     names.
+
+   **Write `providers.sandbox` with the model**, because every agent seat's
+   executor runs in a box from it and a company with an agent seat and a
+   model is refused without one. For a local instance, the founder's own
+   machine included, recommend `container`: a `local.image` carrying the CLI
+   (an image of their own, or a stock one plus a setup step that installs it)
+   and `default_run_in: container`. `sandbox: {local: {}, default_run_in:
+   direct}` is the shortest start and runs it as the engine's user — a fully
+   permissioned CLI on that host, with whatever that account can read — so
+   keep it for a dedicated host the founder is willing to hand to an
+   autonomous agent, the entry that needs the host itself, or a first run on
+   their own machine while its seats take work from them alone, and say that
+   the runs move into `container` before a seat takes work from anyone else;
+   `e2b` keeps the run off the host altogether. See
+   [Code sandbox](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/).
 
    Whichever it is, the CLI must be installed on the machine running
    `crewlet run`, and `crewlet llm doctor` is what proves the entry works —
@@ -396,9 +417,13 @@ founder managing every seat floods them. Give every other person who will
 sign in a `kind: human` seat the same way, where they sit in the chart. See
 [Humans in the org chart](https://docs.crewlet.ai/engine/latest/concepts/humans-in-the-org/).
 
-**Agents do not get code-authoring tools by default.** Reading and
-reviewing code is MCP; *writing* it is the sandbox (`role.sandbox`),
-which needs `providers.sandbox` configured. See
+**Every agent seat writes code in its own run.** Its executor is its coding
+CLI's own run (`claude-code` or `opencode`) with a shell and git, in a box
+from `providers.sandbox`, which the company must configure once it has an
+agent seat and a model; reading and reviewing code on a code host is MCP.
+`role.sandbox` adds what one seat's box reads: `setup` steps, `env` (its
+code-host token), `optional_keys`, `mcp`, `pause_ttl_seconds` and
+`max_turns`. See
 [Code sandbox](https://docs.crewlet.ai/engine/latest/concepts/code-sandbox/).
 
 **The engine ships no tool-skill prose.** If they want agents to know
@@ -474,9 +499,10 @@ When you finish, the founder should have:
    anything at, and it is what every company starts as. Validate it too
    (`crewlet validate crewlet.yaml`).
 3. `.env` — every `${VAR}` the two files reference, with real values.
-   List them explicitly; a missing one keeps a tool server, or a
-   `run_sandbox` coding run, that reads it from starting, and anywhere
-   else can resolve to an empty string that fails later, deep in a turn.
+   List them explicitly; a missing one keeps a tool server that reads it
+   from starting, is left out of an executor run (which starts anyway and
+   logs `sandbox_env_unresolved`), and anywhere else can resolve to an empty
+   string that fails later, deep in a turn.
 4. The run command, and what they should expect to see:
 
 ```bash

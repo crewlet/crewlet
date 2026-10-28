@@ -130,8 +130,10 @@ type CLI interface {
 
 	// Command builds the headless invocation. The brief and the system text
 	// are already final — the report instruction is appended to the system
-	// text by the base — and a CLI given system text puts it on the channel
-	// that adds to its own system prompt, never in the prompt it runs.
+	// text by the base — but for the instruction about notes, which a CLI
+	// that reads them adds where a note can reach its run ([noteReader]); and
+	// a CLI given system text puts it on the channel that adds to its own
+	// system prompt, never in the prompt it runs.
 	Command(req sandbox.RunRequest, paths Paths, configPath string) string
 
 	// Output is where the CLI's stdout lands and how its result is read
@@ -158,6 +160,19 @@ type CLI interface {
 
 // resumer is a CLI that continues a session an earlier run reported.
 type resumer interface{ Resumes() bool }
+
+// noteReader is a CLI that takes a person's notes to its run's turn between its
+// own steps, where its launch wires it to them ([sandbox.RunRequest.Steer]),
+// and tells its model so: NoteInstruction is the standing instruction about
+// notes its runs are given ([ClaudeCodeSteerInstruction],
+// [OpenCodeSteerInstruction]) — the CLI's own, because where a note appears in
+// what the model reads is the CLI's to decide, and the CLI adds it to its run's
+// system text itself ([withNoteInstruction]), on the run its notes can reach.
+//
+// OPTIONAL, as [resumer] is, because a CLI is taught to read notes in its own
+// way — hooks, a plugin — and one not taught yet must not be claimed to: the
+// instruction, and the warning that a run never asked for any, both follow it.
+type noteReader interface{ NoteInstruction() string }
 
 // Output is how the wrapper connects a CLI's standard streams in the box —
 // where its stdout lands, what its stdin reads — and how its result is read
@@ -188,6 +203,14 @@ type Output struct {
 	// brief on stdin arrived byte for byte. Unset, the CLI's stdin is
 	// /dev/null, so a headless agent can never block waiting for input.
 	BriefOnStdin bool
+
+	// Unset is every variable the wrapper removes from the CLI's environment
+	// before it starts: one that, from wherever it came — the seat's
+	// role.sandbox.env, the image, a profile the login shell sources —
+	// switches off something the run depends on. Removed IN the wrapper,
+	// after the login shell has sourced its profile, because that is the
+	// one place every source has already been read.
+	Unset []string
 }
 
 // Runner drives one CLI through the detached lifecycle.
@@ -235,6 +258,20 @@ func New(cli CLI) *Runner {
 // Name is the coding agent's config name.
 func (r *Runner) Name() string { return r.cli.Name() }
 
+// ReadsNotes reports whether this runner's CLI takes a person's notes between
+// its steps — see [noteReader]. The coordinator asks it before it says a run
+// that succeeded never asked for its notes (internal/sandbox).
+func (r *Runner) ReadsNotes() bool { return r.noteInstruction() != "" }
+
+// noteInstruction is the standing instruction about notes this runner's CLI
+// gives its runs, or "" for a CLI that takes none — see [noteReader].
+func (r *Runner) noteInstruction() string {
+	if reader, ok := r.cli.(noteReader); ok {
+		return reader.NoteInstruction()
+	}
+	return ""
+}
+
 // Install prepares the box: the artefact directory and the ask shim.
 //
 // The CLI itself is NOT installed here — it ships in the image, which is what
@@ -260,29 +297,47 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 //
 // A reused box still carries the prior run's done marker, result, findings and
 // ask file. Without clearing them the completion poll fires immediately on the
-// stale marker and Collect reads the old result. Its brief and system text go
-// too: a run's instructions are its own, and a file this run writes is then
-// always created fresh, at the mode a backend creates a file with. THE
-// CHECKOUT IS LEFT INTACT — that disk state is the continued context, and it is
-// the whole reason to reuse a box.
+// stale marker and Collect reads the old result. Its brief, system text,
+// settings and configuration go too: a run's instructions are its own — a
+// previous job's hooks name a bridge session that job's end closed. (Whatever
+// mode a previous run left on one, the file this run writes has the box's
+// own: a box write replaces a file whole ([sandbox.Sandbox.WriteFile]).)
+// OpenCode's values ([Paths.OpenCodeValues]) and its notes plugin
+// ([Paths.OpenCodeSteerPlugin]) are DIRECTORIES, removed whole: a run writes
+// one file per value, so one with fewer values than the last would otherwise
+// keep the last one's beside its own, and a run wired to no notes would
+// otherwise leave a plugin no configuration names. THE CHECKOUT IS LEFT INTACT
+// — that disk state is the continued context, and it is the whole reason to
+// reuse a box.
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.cli.Output(p)
-	targets := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask(), p.Brief(), p.System()}
+	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask(), p.Brief(), p.System(),
+		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig()}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
 	// the start would show the previous job's stream as this one's.
 	if out.Stdout != p.Result() {
-		targets = append(targets, out.Stdout)
+		files = append(files, out.Stdout)
 	}
-	quoted := make([]string, len(targets))
-	for i, path := range targets {
-		quoted[i] = shellQuote(path)
-	}
-	if _, err := box.Exec(ctx, "rm -f "+strings.Join(quoted, " "), sandbox.ExecOptions{}); err != nil {
+	// The two directories alone are removed recursively; every other target
+	// is a file, removed as it always was. Two statements rather than one
+	// joined by `&&`, so a file that will not go never keeps a directory.
+	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
+		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeSteerPlugin()})
+	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("codingagent: clearing the prior run's artefacts: %w", err)
 	}
 	return nil
+}
+
+// shellQuoteAll is paths quoted for sh, one word each, space-separated.
+func shellQuoteAll(paths []string) string {
+	quoted := make([]string, len(paths))
+	for i, path := range paths {
+		quoted[i] = shellQuote(path)
+	}
+	return strings.Join(quoted, " ")
 }
 
 // Start launches the coding agent detached and returns its handle.
@@ -308,7 +363,9 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 		return sandbox.RunHandle{}, err
 	}
 	// FINAL BEFORE THE CONFIG IS WRITTEN, which is where a CLI writes the
-	// system text from.
+	// system text from — all but the instruction about notes, which a CLI
+	// that reads them adds itself, where a note can reach its run
+	// ([noteReader]).
 	req.System = finalSystem(req.System, paths)
 	// AND THE SERVERS AS THIS BOX DIALS THEM, for the same reason: their
 	// URLs, the tool bridge's included, are written in the engine host's
@@ -316,6 +373,13 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// ([sandbox.EngineAddress]). Here, because every run reaches its CLI's
 	// config through this one call, whichever caller launched it.
 	req.MCPServers = sandbox.EngineServers(box, req.MCPServers)
+	// The run's notes route too: it is the same bridge under a path of its
+	// own, and a CLI that polls it by URL rather than through its MCP server
+	// (OpenCode's plugin, [OpenCode.WriteConfig]) dials it from inside the
+	// box as well. A copy, since req is this call's own.
+	if req.Steer.Set() {
+		req.Steer.URL = sandbox.EngineAddress(box, req.Steer.URL)
+	}
 	configPath, err := r.cli.WriteConfig(ctx, box, req, paths)
 	if err != nil {
 		return sandbox.RunHandle{}, err
@@ -361,6 +425,11 @@ func wrapperScript(inner string, out Output, paths Paths) string {
 		stdin = shellQuote(paths.Brief())
 	}
 	var b strings.Builder
+	// A STATEMENT OF ITS OWN, before the CLI's: an assignment prefix on the
+	// command could only add to its environment, never remove from it.
+	if len(out.Unset) > 0 {
+		fmt.Fprintf(&b, "unset %s; ", strings.Join(out.Unset, " "))
+	}
 	fmt.Fprintf(&b, "%s < %s > %s 2> %s; code=$?; ",
 		inner, stdin, shellQuote(out.Stdout), shellQuote(paths.Err()))
 	if out.Result != "" && out.Result != out.Stdout {
@@ -377,13 +446,31 @@ func wrapperScript(inner string, out Output, paths Paths) string {
 // Composed here rather than at the launch because the findings path is a
 // property of the box the run lands in, which the caller does not know when it
 // builds the request. On the system side, because it is not part of the task:
-// it is how every run ends, whatever it was asked.
+// it is how every run works, whatever it was asked.
 func finalSystem(system string, paths Paths) string {
-	findings := strings.TrimSpace(FindingsInstruction(paths.Findings()))
-	if system = strings.TrimSpace(system); system == "" {
-		return findings
+	parts := make([]string, 0, 2)
+	if system = strings.TrimSpace(system); system != "" {
+		parts = append(parts, system)
 	}
-	return system + "\n\n" + findings
+	parts = append(parts, strings.TrimSpace(FindingsInstruction(paths.Findings())))
+	return strings.Join(parts, "\n\n")
+}
+
+// withNoteInstruction is a run's final system text with its CLI's instruction
+// about notes after it ([noteReader]) — what a CLI that reads notes hands a run
+// wired to them, as the last of its standing instructions.
+//
+// THE CLI'S TO ADD, AND ONLY WHERE A NOTE CAN ARRIVE: told to a run whose CLI
+// takes none, a run wired to none, or a run started without what reads them, it
+// would describe a channel that never opens. Which of those a run is can be
+// known only where it starts — a Claude Code run's box decides from its CLI's
+// release ([claudeNotesGate]) — so the runner, which composes everything else,
+// leaves this to the CLI.
+func withNoteInstruction(system, instruction string) string {
+	if system == "" {
+		return instruction
+	}
+	return system + "\n\n" + instruction
 }
 
 // withShimPath prepends the box's shim directory to PATH for one command.
@@ -395,23 +482,30 @@ func withShimPath(cmd string, paths Paths) string {
 	return "PATH=" + shellQuote(paths.BinDir()) + `:"$PATH" ` + cmd
 }
 
-// Poll reports whether the detached job has finished.
+// Poll reports what is known of the detached job ([sandbox.JobState]).
 //
 // TWO SIGNALS, because a finished or dead job must not be able to wedge the
 // run — and there is no run-time TTL to fall back on, since the waiter keeps
 // the box alive for exactly as long as the job needs:
 //
 //  1. THE DONE MARKER. The wrapper returned, cleanly or not, and wrote its
-//     exit code.
-//  2. PROCESS LIVENESS. The wrapper is gone yet no marker was written: the
-//     whole process group died abnormally, before the tail echo ran. Without
-//     this the run hangs forever; with it, Collect surfaces the partial result
-//     and the failure. The box answers it ([sandbox.Sandbox.JobRunning]),
-//     because only the backend knows whether its handle is a pid in the box's
-//     own namespace or a host pid the kernel may since have handed to a
-//     stranger. The wrapper is the right process to ask about: while the
-//     coding agent runs the wrapper is alive, and once it exits it has
-//     already written the done marker, which is checked first.
+//     exit code: the job ENDED.
+//  2. THE BOX'S ACCOUNT OF THE JOB ([sandbox.Sandbox.Job]). The wrapper is
+//     gone yet no marker was written: the whole process group died
+//     abnormally, before the tail echo ran. Without this the run hangs
+//     forever. The box answers it, because only the backend knows whether its
+//     handle is a pid in the box's own namespace or a host pid the kernel may
+//     since have handed to a stranger — and whether the job went while an
+//     engine watched it, so that what it left is its result, which Collect
+//     surfaces with the failure (ENDED), or went with the engine that last saw
+//     it running, so that what it left is not (LOST). The wrapper is the right
+//     process to ask about: while the coding agent runs the wrapper is alive,
+//     and once it exits it has already written the done marker, which is
+//     checked first.
+//
+// THE MARKER IS READ AGAIN before a job is answered lost: a wrapper that wrote
+// it and exited between the first read and the box's answer finished, and is
+// collected like any job that did.
 //
 // There was a third — a terminal event read off the end of the stream, for an
 // agent that finished its work and did not exit, which was OpenCode 1.x. No
@@ -421,30 +515,36 @@ func withShimPath(cmd string, paths Paths) string {
 // A READ THAT FAILS NEVER SKIPS THE LIVENESS PROBE. It used to return before
 // it: a read the box refused made a dead job poll as still running for good,
 // with its keepalive refreshed every tick and its seat busy until a person
-// stopped it. The read's error is still reported — beside a "not done" — once
+// stopped it. The read's error is still reported — beside a "running" — once
 // the probe has had its say.
 //
-// A still-alive wrapper reports NOT DONE, whether it is working or hung: a
+// A still-alive wrapper reports RUNNING, whether it is working or hung: a
 // genuinely hung-but-alive process is indistinguishable from a working one
 // without a timer, and imposing one is exactly what this design refuses.
-func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (bool, error) {
+func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.JobState, error) {
 	paths := PathsFor(box)
 	marker, readErr := box.ReadFile(ctx, paths.Done())
 	if readErr == nil && len(marker) > 0 {
-		return true, nil
+		return sandbox.JobEnded, nil
 	}
-	if handle.CommandID != "" {
-		alive, err := box.JobRunning(ctx, handle.CommandID)
+	if handle.CommandID == "" {
+		return sandbox.JobRunning, readErr
+	}
+	state, err := box.Job(ctx, handle.CommandID)
+	if err != nil || !state.Over() {
 		// An unreadable liveness probe is not proof of death, and declaring
 		// the run over on one would collect a partial result from a job
 		// that is still working. The next tick asks again.
-		if err == nil && !alive {
-			log.WarnContext(ctx, "coding_agent_process_gone",
-				"agent", r.cli.Name(), "pid", handle.CommandID)
-			return true, nil
+		return sandbox.JobRunning, readErr
+	}
+	if state == sandbox.JobLost {
+		if again, err := box.ReadFile(ctx, paths.Done()); err == nil && len(again) > 0 {
+			return sandbox.JobEnded, nil
 		}
 	}
-	return false, readErr
+	log.WarnContext(ctx, "coding_agent_process_gone",
+		"agent", r.cli.Name(), "pid", handle.CommandID, "job", string(state))
+	return state, nil
 }
 
 // Collect reads the finished job's result out of the box.

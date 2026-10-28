@@ -140,6 +140,7 @@ func githubTeardownWorld(t *testing.T) (*Engine, *seatWriter, *atomic.Int64) {
 	doc := fmt.Sprintf(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -263,6 +264,7 @@ func TestTheGitHubPassReportsAgentsWithNoAppOfTheirOwn(t *testing.T) {
 	doc := fmt.Sprintf(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

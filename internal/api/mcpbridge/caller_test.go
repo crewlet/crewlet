@@ -144,7 +144,9 @@ func TestAClosedDeepRunsTokenIsRefused(t *testing.T) {
 
 // A LOOPBACK SESSION ADMITS ONLY THIS HOST: the token a confined host run
 // holds is refused from any other address, so a leaked copy is useless off
-// the engine host.
+// the engine host. Every call names the loopback host a confined run dials,
+// so the address is all that differs; the Host such a session admits is
+// host_test.go's.
 func TestALoopbackSessionRefusesAnotherHost(t *testing.T) {
 	t.Parallel()
 	s := serve(t)
@@ -157,6 +159,7 @@ func TestALoopbackSessionRefusesAnotherHost(t *testing.T) {
 			strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Host = "127.0.0.1:8000"
 		req.RemoteAddr = addr
 		rec := httptest.NewRecorder()
 		s.server.Config.Handler.ServeHTTP(rec, req)

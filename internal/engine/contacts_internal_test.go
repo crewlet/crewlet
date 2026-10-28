@@ -12,9 +12,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -69,50 +69,42 @@ roles:
 	}
 }
 
-// leadPrompt is everything the CEO's executor sends its model on the first
-// round of a turn c builds, the model answering nothing back.
+// leadPrompt is everything the CEO's executor is launched with on the first
+// iteration of a turn c builds: the standing instructions and the brief its
+// run is handed.
 func leadPrompt(t *testing.T, c *Company) string {
 	t.Helper()
-	sent := &promptRecorder{}
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: sent}})
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: refusingProvider{}}})
 	if err != nil {
 		t.Fatalf("phase registry: %v", err)
 	}
 	c.Models = models
+	sent := &promptRecorder{}
 	r, err := c.RunnerFor("ceo", tools.NewRegistry(), RunnerInput{Task: "plan the week",
-		Reply: turn.NoReply(), Sessions: testSessions(t)})
+		Reply: turn.NoReply(), Launcher: sent, Sessions: testSessions(t)})
 	if err != nil {
 		t.Fatalf("RunnerFor: %v", err)
 	}
-	// The turn fails, its model refusing every call: only what it was sent
-	// is under test.
+	// Only what the run was handed is under test.
 	_, _, _ = r.Execute(t.Context(), 1, "", nil)
 	return sent.first()
 }
 
-// promptRecorder is a model that records the messages of the first request it is
-// sent and refuses every request.
+// promptRecorder is an executor launcher that records the prompt of the first
+// run it is handed and launches nothing.
 type promptRecorder struct {
 	mu   sync.Mutex
 	text string
 	seen bool
 }
 
-func (*promptRecorder) Model() string { return "recorder" }
-
-func (s *promptRecorder) Complete(_ context.Context, req llm.Request) (*llm.Completion, error) {
+func (s *promptRecorder) LaunchExecutor(_ context.Context, req runner.AgentRunRequest) (runner.Launched, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.seen {
-		s.seen = true
-		var b strings.Builder
-		for _, m := range req.Messages {
-			b.WriteString(m.Content)
-			b.WriteString("\n")
-		}
-		s.text = b.String()
+		s.seen, s.text = true, req.System+"\n"+req.Brief+"\n"
 	}
-	return nil, errors.New("the recorder answers nothing")
+	return runner.Launched{}, errors.New("the recorder launches nothing")
 }
 
 func (s *promptRecorder) first() string {
@@ -140,6 +132,7 @@ func TestTheEnginesChartSeamsResolveThroughItsOwnChain(t *testing.T) {
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

@@ -36,20 +36,18 @@ func (r *seatRecorder) seen() []string {
 // A RESUMED TURN'S MODEL CALLS RUN AS ITS SEAT, as a dispatched turn's do. A
 // coding CLI keeps a home per seat — its transcripts, its sign-in — and a call
 // bound to no seat runs in the one home every unbound call shares, so a
-// resumed executor ran beside other seats' transcripts and on whichever login
-// that home last held. The dispatch path binds the seat; the resume is the
-// same turn and binds it too.
+// resumed turn's reviewer ran beside other seats' transcripts and on whichever
+// login that home last held. The dispatch path binds the seat; the resume is
+// the same turn and binds it too.
 //
 // Mutation: continue the run's trace without binding its seat, and every call
 // the resumed turn makes is the shared home's.
 func TestAResumedTurnsModelCallsRunAsItsSeat(t *testing.T) {
 	t.Parallel()
 	recorder := &seatRecorder{}
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: recorder}})
-	if err != nil {
-		t.Fatalf("phase.NewRegistry: %v", err)
-	}
-	e, _ := starting(t, models)
+	// THE SEAT'S PHASES ON THE RECORDER, its executor on the runner entry
+	// [starting]'s seat names ([runnable]).
+	e, _ := starting(t, runnable(t, []phase.Entry{{Key: "only", Provider: recorder}}))
 	company := e.Company()
 	// The model refuses, so the resume ends in that refusal; what is under
 	// test is the seat its call was made as.

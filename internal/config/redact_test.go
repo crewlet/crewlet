@@ -160,6 +160,7 @@ func TestRedactionKeepsEveryToggle(t *testing.T) {
 	original, err := ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu: {model: claude-sonnet-5, auth: {mode: api-key, api_key: sk-literal-key}}
 turn_engine:
@@ -530,7 +531,7 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 	exempt := map[string]bool{
 		// Numeric caps that merely count tokens (a token budget is a
 		// mapping of them, one per calendar window).
-		"TokenBudget": true, "MinTokensPerTask": true, "SandboxMinBudgetTokens": true,
+		"TokenBudget": true, "MinTokensPerTask": true, "ExecutorMinBudgetTokens": true,
 		// An embedding model's limits, counted in tokens.
 		"MaxInputTokens": true, "MaxBatchTokens": true,
 		// A deep-work run's cap on what it may spend, counted in tokens.
@@ -649,6 +650,7 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 const rosterDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -820,6 +822,7 @@ func TestDuplicateStepNamesAreMatchedToNothing(t *testing.T) {
 const movingDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu: {model: claude-sonnet-5, auth: {mode: api-key, api_key: sk-literal-key}}
 mcp_servers:

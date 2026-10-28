@@ -304,7 +304,11 @@ test("the browser asks before closing a tab with unsaved writing, and not otherw
   expect(unload()).toBe(true);
   saveKey(mission);
   await screen.findByText("Mission saved");
-  expect(unload()).toBe(false);
+  // WAITED FOR, not read at once: the editor lets go of the browser's prompt in
+  // an effect that runs after the render that shows the toast, so a read the
+  // moment the toast is in the document can land between the two. Under a busy
+  // runner it did, and the guard read as still held for writing already saved.
+  await waitFor(() => expect(unload()).toBe(false));
 });
 
 // A READER WHO MAY NOT WRITE THE CHARTER never asks the route that would

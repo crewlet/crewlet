@@ -30,10 +30,13 @@
 // what the engine prefetched for this turn, and the phase's contract — and
 // each rule once. A tool's semantics are its description and a field's are
 // its schema, both of which reach the model with the tool on every round, so
-// a rule about a tool or a field lives there and not here as well. The one
-// protocol fact no harness can teach — that the CLI's final text reaches
-// nobody, so an action is a tool call and prose performs nothing — is stated
-// here, once. Generic agent behaviour, worked examples and restated emphasis are
+// a rule about a tool or a field lives there and not here as well. The
+// executor is the CLI's own agentic run in a box, its seat's tools reaching
+// it over the tool bridge; every other phase is the same CLI's own loop on
+// this host, its tools reaching it as one MCP server. The one protocol fact
+// no harness can teach — that the CLI's final text reaches nobody, so an
+// action is a tool call and prose performs nothing — is stated here, once.
+// Generic agent behaviour, worked examples and restated emphasis are
 // not: a second copy of a rule is two texts that drift, and a model reads
 // whichever it saw last.
 //

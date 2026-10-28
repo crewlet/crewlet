@@ -7,10 +7,10 @@ Spend draws it.
 
 | | The **budget counter** | The **spend rollup** |
 |---|---|---|
-| What it is | The fleet's shared counter the budget gate charges with every model round, the moment its reply arrives | A breakdown of what the calls consumed, by phase, model, provider entry, auxiliary purpose and seat (or person) |
+| What it is | The fleet's shared counter the budget gate charges with every model round on the engine host the moment its reply arrives, and with an executor run's whole spend when the run is collected | A breakdown of what the calls consumed, by phase, model, provider entry, auxiliary purpose and seat (or person) |
 | Its window | One calendar window — the day, the ISO week or the month — on the company's clock | The live 24 hours, or any run of 1 to 90 company days |
 | Where it lives | The coordination store (`budgets`), one record per scope | The live projection for the last 24 hours; the replicated `usage` domain for every named window |
-| What it is for | Stopping a turn whose round did not fit a ceiling, and every round after it | Understanding where the tokens went |
+| What it is for | Stopping a turn whose round did not fit a ceiling, and every round and launch after it | Understanding where the tokens went |
 | Read by | `GET /budgets`, the `budget` push, the meters on the Spend, Budgets and seat screens | `GET /tokens/breakdown`, `GET /tokens/series`, the figures and chart on Settings › Token spend |
 
 They are never comparable. The counter is the one figure a ceiling can be divided
@@ -30,10 +30,37 @@ token_budget: {day: 3000000, month: 40000000}
 
 Every window is cut on the company's one [clock](../getting-started/configuration.md#the-companys-clock):
 a day runs from local midnight to local midnight, a week is the ISO week from
-Monday, a month runs from the 1st. Every model round is charged in all three
-windows it falls in at once, against the company and against its seat, as soon
-as its reply arrives, and what it asked for runs only while every capped window
-of both had room for it.
+Monday, a month runs from the 1st. Every model round on the engine host — the
+reviewer's, a worker's, the onboarding pass's, a side pass's — is charged in all
+three windows it falls in at once, against the company and against its seat, as
+soon as its reply arrives, and what it asked for runs only while every capped
+window of both had room for it. A seat's executor is its coding CLI's own run in
+a box, whose requests the engine never sees one by one, so its whole spend is
+charged in those windows once, when the run is collected: a **post-charge**,
+which never refuses and can take a window past its ceiling
+(`sandbox_spend_over_budget`), after which the seat's next round and next
+delivery are refused against it until the window turns over. What admits a run
+is the floor at its launch.
+
+**A ceiling has room for one executor run, or it is refused.** Every executor
+launch needs `turn_engine.executor_min_budget_tokens` (default 25 000 — one
+run's opening request) left in every capped window of its seat and of the
+company, and a seat short of it is parked until the window turns over. That
+holds for a launch in the middle of a turn too. A reviewer sending the work
+back for another run on a window that cannot pay for it **holds** the job the
+turn just collected: it waits collected in its paused box, with its seat held
+behind it, and the turn resumes once the window turns over or a revision raises
+the ceiling (`sandbox_resume_held` in the log), rather than reviewing it again
+on every retry into the same refusal. A run that finishes while its window is
+full is held the same way once it is collected, its tokens charged in the
+window it ran in, since its review is refused too. A person's answer carrying a
+parked run on is not let in while the window is full or too short for a launch,
+and one whose relaunch is refused all the same is turned back to wait, uncharged,
+in its own series of attempts (`sandbox_resume_refused`), until the window turns
+over or a revision raises the ceiling (see [Mid-run clarification](../concepts/code-sandbox.md#mid-run-clarification-crewlet-ask)). A
+ceiling below that floor never has it left, so on a seat that runs an executor,
+or on a company that has one, it is refused when the document is validated,
+at the ceiling: raise it to the floor, or lower the floor (`0` turns it off).
 
 A round's size is known only from its reply, so by the time it is judged the
 vendor has billed it, and **a refused round is counted like any other**. The
@@ -48,7 +75,7 @@ round in on room that was already spent.
 
 Because every later round is certain to be refused, **a refusal also stops every
 later model call of the turn before it is sent**: the next phase, the round-cap
-judge, the seat's other workers and a box-mode coding run are refused without
+judge, the seat's other workers and an executor launch are refused without
 being made, rather than each billed and then refused — and a call stopped that
 way is the gate's refusal like any other, recorded as the window's `refused_at`
 (the "last refused" on Company › Budgets and in `crewlet budgets show`) the
@@ -151,7 +178,7 @@ screen folds a phase differently from the next:
 
 | Band | What spent it |
 |---|---|
-| **Execute** | The seat's own turn doing its work — the executor, and a detached coding run it launched, which is the same work done in a box |
+| **Execute** | The seat's own turn doing its work — the executor, which is its coding CLI's own run in a box, recorded from the box as the run's `sandbox` phase |
 | **Review** | The reviewer's pass over that work |
 | **Workers** | The short-lived workers an executor delegated tasks to |
 | **Auxiliary** | Everything that is not the turn's own work: the seats' [auxiliary model](#auxiliary-spend) — the turn-start context, every compaction rewrite, the reflection workers, the background passes and a person's answered questions — the round-cap judge and the first-turn onboarding |
@@ -183,7 +210,7 @@ Each call states its **stage** — whose cost it is — and its **purpose**:
 
 | Stage | What spent it (purposes) | Charged to | In the turn's cost and its task's spend |
 |---|---|---|---|
-| `turn` | The turn-start memory filter, knowledge query and episode summary (`memory_filter`, `knowledge_query`, `episode_summary`); every rewrite the turn's ledgers, judge, tools and delegated workers needed, and its card (`condense_<kind>`); and what a coding run cost between two parts of the turn — a box-mode run's bridged tools and the condensing of a collected run's report, failure or question (`condense_report`, `condense_tool_error`, `condense_question`) | the seat and the company | **yes** — the part a coding run cost between two parts of the turn is paid by the part that resumes from it |
+| `turn` | The turn-start memory filter, knowledge query and episode summary (`memory_filter`, `knowledge_query`, `episode_summary`); every rewrite the turn's ledgers, judge, tools and delegated workers needed, and its card (`condense_<kind>`); and what a coding run cost between two parts of the turn — an executor run's bridged tools and the condensing of a collected run's report, failure or question (`condense_report`, `condense_tool_error`, `condense_question`) | the seat and the company | **yes** — the part a coding run cost between two parts of the turn is paid by the part that resumes from it |
 | `reflection` | The learning workers after the turn (`persist_decider`, `counterparty_profiler`, `skill_synthesizer`, `skill_refiner`) and the conversation ledger's account of it | the seat and the company | no — drawn beside the turn in its Reflection lane: it is what the seat remembers, not what the work cost |
 | `background` | The episode compaction, clustered synthesis and skill promotion passes (`episode_compaction`, `skill_clustering`, `skill_promotion`), and the probe of a model entry at its usage limit when it is tried again, one for every seat parked on it, charged to the parked seat it runs as (`provider_probe`) | the seat and the company (the company alone for a unit a person leads) | no, there is no turn |
 | `operator` | A person's question answered on the operator surface (`answer_knowledge`, and `condense_source` for a page too long to read whole) | the company alone: a person has no seat budget | no — no turn |
@@ -209,7 +236,10 @@ learning cost. A compaction of
 seventy rewrites is one record of seventy calls. So the live window trails the
 counter by up to one flush, and a named window by up to two (the flush, and the
 usage publisher's own tick). Every figure's **calls** are provider calls — a
-phase's model rounds, an auxiliary record's coalesced calls — never records.
+phase's model rounds, a coding run's own turns as its CLI reported them (one
+per run where the CLI reports none, as OpenCode does), an auxiliary record's
+coalesced calls — never records. The executor's own record counts none, since
+its run's calls are the run's.
 
 **What is not counted: embeddings.** The calls that turn text into vectors are
 metered by neither the counter nor the rollup: they run on the embeddings
@@ -272,6 +302,6 @@ usage at all is charged an estimate, four characters a token, which
 ## Tokens, never money
 
 The dashboard measures spend in tokens only. A price is reported only by a
-coding run — a `run_sandbox` job or a box-mode executor, in its CLI's own
-figure — and by no text call, so a currency figure would cover a small minority
-of calls while reading as the company's spend.
+coding run — a seat's executor run, in its CLI's own figure — and by no
+call on this host, so a currency figure would leave out every reviewer,
+worker and auxiliary call while reading as the company's spend.

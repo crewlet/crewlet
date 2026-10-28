@@ -20,6 +20,7 @@ import (
 const slackCompany = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

@@ -47,7 +47,8 @@ import (
 // `failed` would be a question whose answer is structurally empty — worse than
 // absent, because an empty board reads as "nothing failed" rather than "this
 // is not where that is recorded". How a run ENDED is on the event stream: the
-// resumed turn's own events, or a `sandbox_run_failed` naming the reason.
+// resumed turn's own events, a `sandbox_run_failed` naming the reason, or a
+// `sandbox_run_stopped` naming the person who stopped it.
 //
 // AND ONE RUN BY ITS TURN, which `sandbox_tail` reads to learn whose seat a
 // run is before it shows anybody that seat's transcript — the record is the
@@ -236,7 +237,7 @@ func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 		if filtered && !putTo(run, who) {
 			continue
 		}
-		out = append(out, serialiseRun(run, reach(run)))
+		out = append(out, serialiseRun(run, reach(run), s.answeredBy(run)))
 	}
 	return map[string]any{"runs": out}, nil
 }
@@ -330,6 +331,11 @@ const (
 	runQuestion
 	// runTracker is the tracker's: a work item, shown to whoever holds it.
 	runTracker
+	// runConfig is the company's configuration: which `providers.llm` entry
+	// the job was launched on, shown to an admin alone
+	// ([livestate.Reach.Config]) — what the live panel's copy of a run
+	// withholds too, and the spend breakdown's entries.
+	runConfig
 )
 
 // runKeys is THE SPLIT of a coding run's row, declared once: every key
@@ -341,7 +347,9 @@ const (
 // makes of the live panel's copy of a run (ADR-0033): what a run was asked
 // (`task_description`), the question it parked on, who is waiting on it
 // (`reply`) and the bridge's call log — every argument and output its agent
-// passed through the seat's tools — are the seat's body.
+// passed through the seat's tools — are the seat's body, and the entry the
+// job was launched on is the company's configuration, which a seat's lead
+// reads its trail without.
 var runKeys = map[string]runShown{
 	"turn_id":             runStatus,
 	"work_key":            runStatus, // a delivery identity (internal/workkey), not a task key
@@ -351,6 +359,8 @@ var runKeys = map[string]runShown{
 	"role":                runStatus,
 	"status":              runStatus,
 	"coding_agent":        runStatus,
+	"provider_key":        runConfig, // which entry's plan the job spends: the company's configuration
+	"model":               runStatus, // the model it runs under: what it is doing
 	"placement":           runStatus,
 	"task_description":    runBody,
 	"question":            runQuestion,
@@ -386,8 +396,8 @@ var runKeys = map[string]runShown{
 //
 // A KEY THE TABLE DOES NOT NAME IS WITHHELD, which the walk keeps unreachable:
 // left out is the direction a mistake here has to fail in.
-func serialiseRun(run sandbox.PendingRun, r livestate.Reach) map[string]any {
-	row := runRow(run)
+func serialiseRun(run sandbox.PendingRun, r livestate.Reach, answeredBy string) map[string]any {
+	row := runRow(run, answeredBy)
 	asked := r.Record != "" && slices.Contains(run.AudienceHandles, r.Record)
 	for key := range row {
 		switch runKeys[key] {
@@ -404,6 +414,10 @@ func serialiseRun(run sandbox.PendingRun, r livestate.Reach) map[string]any {
 			if !r.Tracker {
 				delete(row, key)
 			}
+		case runConfig:
+			if !r.Config {
+				delete(row, key)
+			}
 		default:
 			delete(row, key)
 		}
@@ -413,8 +427,9 @@ func serialiseRun(run sandbox.PendingRun, r livestate.Reach) map[string]any {
 }
 
 // runRow is every fact a coding run's row carries, whoever reads it — see
-// [serialiseRun] for what each reader is shown of it.
-func runRow(run sandbox.PendingRun) map[string]any {
+// [serialiseRun] for what each reader is shown of it. answeredBy is who gave
+// the run's recorded answer, as its seal opens ([Sources.answeredBy]).
+func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 	// HELD, NOT STAMPED. A box parked on a question is being paid for
 	// whether or not the pause instant reached the row, and drawing the raw
 	// stamp showed exactly that box as a live one — the one reading that
@@ -442,6 +457,12 @@ func runRow(run sandbox.PendingRun) map[string]any {
 		"role":         run.Role,
 		"status":       run.Status,
 		"coding_agent": run.CodingAgent,
+		// THE EXECUTOR-CHAIN MEMBER THE JOB RUNS ON, and its model: a
+		// fallback at launch makes it other than the chain's head, and
+		// which entry's plan a job is spending is the first thing an admin
+		// watching a long run asks. The entry is theirs alone ([runConfig]).
+		"provider_key": run.Launch.ProviderKey,
+		"model":        run.Launch.Model,
 		// WHERE the run is, which became an operator question the moment
 		// providers.sandbox became a catalogue: one company now runs some
 		// seats on the engine host and others in a remote box, and "is
@@ -456,7 +477,7 @@ func runRow(run sandbox.PendingRun) map[string]any {
 		// chain — because the audience above named nobody the chart has.
 		// Always an array, empty on a run that is not parked on a
 		// question.
-		"audience_handles":  nonNilStrings(run.AudienceHandles),
+		"audience_handles":  nonNil(run.AudienceHandles),
 		"audience_fallback": run.AudienceFallback,
 		"branch":            run.Branch,
 		"trace_id":          run.TraceID,
@@ -475,13 +496,14 @@ func runRow(run sandbox.PendingRun) map[string]any {
 		// answered is told from here that the run could not take their
 		// answer and is waiting on its question again, rather than left
 		// looking at a question that never changes. Always an array.
-		"declined_answers": nonNilStrings(run.DeclinedAnswers),
+		"declined_answers": nonNil(run.DeclinedAnswers),
 		// THE ANSWER RECORDED ON THE RUN, by its deliveries, who gave it and
 		// when: the first recorded answer wins, and a person whose answer
 		// was not that one is told whose was, rather than shown their own
-		// as taken. Empty on a run with no recorded answer.
+		// as taken. Empty on a run with no recorded answer; who gave it,
+		// also where its seal does not open on this node.
 		"answer_ids":  answerIDs(run.Answer),
-		"answered_by": answeredBy(run.Answer),
+		"answered_by": answeredBy,
 		"answered_at": answeredAt(run.Answer),
 		// WHO IS WAITING, which is the question a board full of parked
 		// runs exists to answer and had no field for. Persisted rather
@@ -489,14 +511,17 @@ func runRow(run sandbox.PendingRun) map[string]any {
 		// its trigger — empty means nobody is waiting, which is the safe
 		// half.
 		"reply": run.Reply,
-		// THE BRIDGE'S OWN TOOL LOG. A native loop keeps its calls in
-		// memory and the turn writes them at the end; a bridged run's are
-		// made by a process outside the engine, minutes or hours apart
-		// and possibly across a restart, so this row is the only copy
-		// there is. `bridge_calls_elided` says how many were cut from the
+		// THE BRIDGE'S OWN TOOL LOG. Every run's calls are made by a
+		// process outside the engine, over its bridge, minutes or hours
+		// apart and possibly across a restart, so this row is the only
+		// copy there is. `bridge_calls_elided` says how many were cut from the
 		// middle, because a log that silently skips is a log that lies
 		// about what the run did.
-		"bridge_calls":        run.BridgeCalls,
+		// ALWAYS AN ARRAY on a row the store answered: every run is
+		// bridged, so an empty log is a run that has called nothing — a
+		// fact the run's page states — and never "not known", which a
+		// reader is told only by the key being absent (a withheld body).
+		"bridge_calls":        nonNil(run.BridgeCalls),
 		"bridge_calls_elided": run.BridgeCallsElided,
 		// THE THREE IDENTIFIERS a person needs to find this run in
 		// somebody else's system: the coding CLI's own session, the
@@ -512,20 +537,21 @@ func runRow(run sandbox.PendingRun) map[string]any {
 	}
 }
 
-// answerIDs, answeredBy and answeredAt are the recorded answer's deliveries,
-// giver and instant, empty for a run with none.
+// answerIDs and answeredAt are the recorded answer's deliveries and instant,
+// empty for a run with none.
 func answerIDs(answer *sandbox.RecordedAnswer) []string {
 	if answer == nil {
 		return []string{}
 	}
-	return nonNilStrings(answer.EventIDs)
+	return nonNil(answer.EventIDs)
 }
 
-func answeredBy(answer *sandbox.RecordedAnswer) string {
-	if answer == nil {
-		return ""
-	}
-	return answer.By
+// answeredBy is who gave run's recorded answer, which only the answer's seal
+// says: empty for a run with none, and where the seal does not open on this
+// node ([sandbox.OpenedAnswerer]). No copy of it is kept in the clear for a
+// row to read instead.
+func (s Sources) answeredBy(run sandbox.PendingRun) string {
+	return sandbox.OpenedAnswerer(s.RunAnswers, run)
 }
 
 func answeredAt(answer *sandbox.RecordedAnswer) string {
@@ -570,11 +596,11 @@ func answerableInChat(conversation string) bool {
 	return notify.Derived(conversation)
 }
 
-// nonNilStrings is a list that encodes as `[]` rather than `null` when empty,
-// so a reader indexes it without a presence check.
-func nonNilStrings(list []string) []string {
+// nonNil is a list that encodes as `[]` rather than `null` when empty, so a
+// reader indexes it without a presence check.
+func nonNil[T any](list []T) []T {
 	if list == nil {
-		return []string{}
+		return []T{}
 	}
 	return list
 }

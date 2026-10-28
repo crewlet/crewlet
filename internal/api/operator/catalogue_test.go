@@ -108,7 +108,7 @@ func TestEveryTransportServesTheSameCatalogue(t *testing.T) {
 
 	// AND A NAME THE CATALOGUE DOES NOT HOLD IS NOT SERVED, rather than
 	// resolved to something near it.
-	if _, err := s.Dispatch(asOps, operator.Call{Tool: "run_sandbox"}); !errors.Is(err, operator.ErrNotServed) {
+	if _, err := s.Dispatch(asOps, operator.Call{Tool: "no_such_tool"}); !errors.Is(err, operator.ErrNotServed) {
 		t.Errorf("the dispatch answered %v for a tool that is in no operator's catalogue", err)
 	}
 }

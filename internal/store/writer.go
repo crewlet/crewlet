@@ -265,7 +265,12 @@ func phaseCalls(body map[string]json.RawMessage) int {
 	if raw, ok := body["rounds"]; ok {
 		_ = json.Unmarshal(raw, &rounds)
 	}
-	return tokens.PhaseCalls(len(rounds), jsonInt(body["rounds_used"]))
+	return tokens.PhaseCalls(tokens.PhaseCounts{
+		Phase:      jsonString(body["phase"]),
+		Rounds:     len(rounds),
+		RoundsUsed: jsonInt(body["rounds_used"]),
+		CLITurns:   jsonInt(body["cli_turns"]),
+	})
 }
 
 // ExtractTags pulls the filterable dimensions out of an event's serialized

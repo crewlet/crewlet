@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +37,12 @@ func askEvent(channelID, brief string) *events.Event {
 	ev.DelegationDepth = 1
 	ev.DelegationChain = []string{"ceo"}
 	return ev
+}
+
+// answerDispatched answers as the dispatch frame does: the ask off the turn's
+// trigger, and the turn as its request names it.
+func answerDispatched(ctx context.Context, e *Engine, c *Company, req Request, res turn.Result) {
+	e.answerColleague(ctx, c, answeringOf(req), colleagueAskOf(askOf(req.Events)), res, nil)
 }
 
 // A COLLEAGUE'S QUESTION REACHES THE SEAT THAT HAS TO ANSWER IT.
@@ -185,7 +192,7 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 	}
 
 	// The answering seat's turn, finished.
-	e.answerColleague(t.Context(), company, Request{
+	answerDispatched(t.Context(), e, company, Request{
 		Handle: "cto", WorkKey: "wk-answer", RunID: "run-answer", Depth: 1,
 		Events: []*events.Event{askEvent(channelID, "What broke last night?")},
 	}, turn.Result{Decision: phase.Done, Artifact: "the deploy at 02:14 rolled back"})
@@ -241,7 +248,7 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 	}
 
 	// One ask, one answer, then CLOSED — rather than left to the idle
-	// sweep an hour later.
+	// sweep.
 	ch, err := a2a.NewCoordStore(e.Backends().Fleet).Get(t.Context(), channelID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -278,9 +285,10 @@ func TestAnAnsweredAskWakesTheAskerAndClosesTheChannel(t *testing.T) {
 
 // A SUSPENDED TURN HAS NOT ANSWERED YET.
 //
-// It is parked on a detached coding run and is still going. Replying now
-// would send the asker an artifact from a turn that has not finished; the
-// resumed turn comes back through the same frame and answers then.
+// It is parked on its executor's run and is still going. Replying now would
+// send the asker an artifact from a turn that has not finished; the frame that
+// ends it answers then, off the ask on the run's record
+// (a2aparked_internal_test.go).
 func TestASuspendedTurnDoesNotAnswerYet(t *testing.T) {
 	t.Parallel()
 	e := watchdogEngine(t)
@@ -293,7 +301,7 @@ func TestASuspendedTurnDoesNotAnswerYet(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	e.answerColleague(t.Context(), company, Request{
+	answerDispatched(t.Context(), e, company, Request{
 		Handle: "cto", WorkKey: "wk", Depth: 1,
 		Events: []*events.Event{askEvent(channelID, "?")},
 	}, turn.Result{Suspended: true})
@@ -309,9 +317,9 @@ func TestASuspendedTurnDoesNotAnswerYet(t *testing.T) {
 
 // A TURN THAT PRODUCED NOTHING STILL OWES AN ANSWER.
 //
-// Silence leaves the asker waiting on a channel the sweep closes an hour
-// later with no explanation, which is strictly worse than a short "I could
-// not" the asker can act on.
+// Silence leaves the asker waiting on a channel the idle sweep closes later
+// with no explanation and without waking it, which is strictly worse than a
+// short "I could not" the asker can act on.
 func TestATurnThatDeliveredNothingStillAnswers(t *testing.T) {
 	t.Parallel()
 	e := watchdogEngine(t)
@@ -324,7 +332,7 @@ func TestATurnThatDeliveredNothingStillAnswers(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	e.answerColleague(t.Context(), company, Request{
+	answerDispatched(t.Context(), e, company, Request{
 		Handle: "cto", WorkKey: "wk", Depth: 1,
 		Events: []*events.Event{askEvent(channelID, "?")},
 	}, turn.Result{Decision: phase.Failed})
@@ -343,7 +351,7 @@ func TestATurnThatDeliveredNothingStillAnswers(t *testing.T) {
 func TestATurnWithNoAskAnswersNobody(t *testing.T) {
 	t.Parallel()
 	e := watchdogEngine(t)
-	e.answerColleague(t.Context(), e.Company(), Request{
+	answerDispatched(t.Context(), e, e.Company(), Request{
 		Handle: "cto", WorkKey: "wk",
 		Events: []*events.Event{{ID: uuid.New(), Type: "external_notification"}},
 	}, turn.Result{Decision: phase.Done, Artifact: "posted"})
@@ -406,12 +414,12 @@ func TestACoalescedPartitionTakesItsDeepestTrigger(t *testing.T) {
 // looking like an answer.
 func TestTheAnswerSaysWhatTheTurnActuallyDid(t *testing.T) {
 	t.Parallel()
-	if got := answerContent(turn.Result{Decision: phase.Done, Artifact: "the answer"}); got != "the answer" {
+	if got := answerContent(turn.Result{Decision: phase.Done, Artifact: "the answer"}, nil); got != "the answer" {
 		t.Errorf("a delivered turn answered %q", got)
 	}
 	skipped := answerContent(turn.Result{
 		Decision: phase.Skipped, Artifact: "nobody was asking this seat to do anything",
-	})
+	}, nil)
 	if strings.Contains(skipped, "nobody was asking") {
 		t.Errorf("the executor's private reasoning was sent to a colleague: %q", skipped)
 	}
@@ -421,13 +429,21 @@ func TestTheAnswerSaysWhatTheTurnActuallyDid(t *testing.T) {
 	breached := answerContent(turn.Result{
 		Decision: phase.Failed,
 		Breach:   &turn.Breach{Kind: types.GuardDepthCap},
-	})
+	}, nil)
 	if !strings.Contains(breached, "depth") {
 		t.Errorf("a breach did not say which guard stopped it: %q", breached)
 	}
 	// A `done` turn that produced no text is still not silence.
-	if got := answerContent(turn.Result{Decision: phase.Done}); got == "" {
+	if got := answerContent(turn.Result{Decision: phase.Done}, nil); got == "" {
 		t.Error("an empty artifact answered with silence")
+	}
+	// A TURN A PERSON STOPPED says so, whatever its result held when the stop
+	// reached it, rather than asking for more detail: the question was not
+	// what ended it.
+	stopped := answerContent(turn.Result{Decision: phase.Failed},
+		fmt.Errorf("resume: %w", turn.ErrStoppedByPerson))
+	if !strings.Contains(stopped, "a person stopped my turn") || strings.Contains(stopped, "more detail") {
+		t.Errorf("a stopped turn answered %q", stopped)
 	}
 }
 
@@ -452,7 +468,7 @@ func TestABlockedTurnAnswersWithWhatStoppedIt(t *testing.T) {
 			Evidence: "asked @founder which repo to file against; waiting on them",
 		},
 	}
-	got := answerContent(blocked)
+	got := answerContent(blocked, nil)
 	if !strings.Contains(got, "waiting on them") {
 		t.Errorf("the asker was not told what the turn is blocked on: %q", got)
 	}
@@ -465,7 +481,7 @@ func TestABlockedTurnAnswersWithWhatStoppedIt(t *testing.T) {
 	// answer.
 	withBoth := blocked
 	withBoth.Artifact = "the answer itself"
-	if got := answerContent(withBoth); got != "the answer itself" {
+	if got := answerContent(withBoth, nil); got != "the answer itself" {
 		t.Errorf("the evidence displaced a real artifact: %q", got)
 	}
 
@@ -476,7 +492,7 @@ func TestABlockedTurnAnswersWithWhatStoppedIt(t *testing.T) {
 		Decision: phase.Done,
 		LastWork: &turn.Work{Outcome: turn.OutcomeBlocked, Evidence: "   "},
 	}
-	if got := answerContent(bare); strings.TrimSpace(got) == "" {
+	if got := answerContent(bare, nil); strings.TrimSpace(got) == "" {
 		t.Error("a blocked turn with no evidence answered with silence")
 	}
 }

@@ -1,9 +1,10 @@
 /**
  * Coding runs.
  *
- * A coding run is a DETACHED Execute phase: the tool starts it, the phase
- * suspends, and the engine resumes that same loop minutes later — possibly
- * after a restart, possibly on another node. So there are two sources and they
+ * A coding run is a seat's executor: its coding CLI's own run, in a box. The
+ * turn parks at the launch, and the run's collection resumes that same turn
+ * minutes later — possibly after a restart, possibly on another node — for
+ * the engine's check and the reviewer. So there are two sources and they
  * answer different questions: the live projection knows what is in flight
  * right now, and `sandbox_runs` knows what the store remembers, including runs
  * whose box has already been reclaimed. The screen this replaces showed only
@@ -140,6 +141,8 @@ function fromLiveBox(box: SandboxEntry): SandboxRun {
     // mirrors whatever the run reported; it is the same vocabulary.
     status: box.status as SandboxStatus,
     coding_agent: box.coding_agent,
+    ...(box.provider_key ? { provider_key: box.provider_key } : {}),
+    ...(box.model ? { model: box.model } : {}),
     placement: "",
     // THE BODY AS THE PROJECTION SENT IT: absent where the engine withheld it
     // from this reader, who is told so (`body_withheld`) rather than shown a
@@ -227,6 +230,23 @@ function runFacts(run: SandboxRun, nameOf: NameOf): Fact[] {
     },
     { label: "Runs in", value: run.placement },
     { label: "Coding agent", value: run.coding_agent },
+    // THE MEMBER THE JOB WAS LAUNCHED ON, and its model: a fallback at launch
+    // runs it on an entry other than the chain's head, and which entry's plan a
+    // long run is spending is the first thing an admin watching it asks. The
+    // entry is the company's configuration, which the engine sends an admin
+    // alone; every other reader is sent the model, the run's own fact, and is
+    // told that rather than nothing.
+    {
+      label: "Launched on",
+      value: run.provider_key ? (
+        <span>
+          <InlineCode>{run.provider_key}</InlineCode>
+          {run.model ? ` · ${run.model}` : ""}
+        </span>
+      ) : (
+        (run.model ?? "")
+      ),
+    },
     { label: "Branch", value: run.branch ? <InlineCode>{run.branch}</InlineCode> : "" },
     // NOT "up / reclaimed" as a plain word pair: whether the box still exists
     // is the difference between a run somebody can answer and a run whose work
@@ -360,11 +380,18 @@ function doingLine(run: SandboxRun): string {
  * page's job, and `Open ↗` is one click away.
  */
 function BridgeSummary({ run }: { run: SandboxRun }) {
-  const calls = run.bridge_calls ?? [];
-  // ABSENT ON AN ORDINARY RUN rather than empty — see [BridgeLog]: a run that
-  // is not bridged made no calls through a bridge, which is not the same fact
-  // as a bridged one that made none.
-  if (calls.length === 0) return null;
+  // NOT KNOWN IS NOT NONE — see [BridgeLog]: absent is a log this reader was
+  // not sent, and an empty one is a run that has called nothing, said so.
+  if (run.bridge_calls === undefined) return null;
+  const calls = run.bridge_calls;
+  if (calls.length === 0) {
+    return (
+      <section className="col gap-2">
+        <div className="t-label">Tool calls</div>
+        <span className="t-caption">{noCallsWords(run)}</span>
+      </section>
+    );
+  }
   const failures = calls.filter((c) => c.failed).length;
   const last = calls[calls.length - 1];
   return (
@@ -568,8 +595,9 @@ export function Runs() {
             rows is structurally zero on every company for ever — and a tile
             reading "Failed 0" tells an operator nothing failed, when what is
             true is that this is not where failures are recorded. They are on
-            the event stream, as the resumed turn's own events or a
-            `sandbox_run_failed` naming the reason. */}
+            the event stream, as the resumed turn's own events, a
+            `sandbox_run_failed` naming the reason, or a
+            `sandbox_run_stopped` naming who stopped it. */}
         <StatCard
           icon={<PackageGlyph size="xs" />}
           label="In the record"
@@ -1055,19 +1083,30 @@ function CollectedRun({
  * and unaskable — and "it called nothing" is exactly the shape the delivery
  * check reads as a turn that did not act.
  *
- * ABSENT ON AN ORDINARY RUN rather than empty: a coding run that is not
- * bridged made no calls through a bridge, which is not the same as a bridged
- * one that made none. The panel is not rendered at all for the first.
+ * EVERY RUN IS BRIDGED, so an empty log is a FACT and is said: a run that has
+ * called nothing — not even its submission — is exactly the run a reader
+ * opened this page to understand, and a panel that vanished for it read as a
+ * page with nothing to show. ABSENT is different: a log this reader was not
+ * sent (a live entry whose row is not read yet, a body withheld from them)
+ * draws no panel, because "made no calls" would be a claim nobody can make.
  */
 export function BridgeLog({ run }: { run: SandboxRun }) {
-  const calls = run.bridge_calls ?? [];
+  if (run.bridge_calls === undefined) return null;
+  const calls = run.bridge_calls;
   const elided = run.bridge_calls_elided ?? 0;
   // AN EMPTY LOG IS AN EMPTY LOG, elision included: the engine drops the
   // MIDDLE of a bounded list and keeps the first and last hundred, so a run
-  // with calls elided always still has calls. Guarding on the count alone is
-  // therefore complete, and a second clause for `elided > 0 && no calls` would
-  // be a branch nothing can reach and nothing can test.
-  if (calls.length === 0) return null;
+  // with calls elided always still has calls.
+  if (calls.length === 0) {
+    return (
+      <Card>
+        <Card.Header icon={<SquareTerminalGlyph size="sm" />} count={0}>
+          <Card.Title>Tool calls</Card.Title>
+        </Card.Header>
+        <EmptyValue label={noCallsWords(run)} />
+      </Card>
+    );
+  }
   const failures = calls.filter((c) => c.failed).length;
   return (
     <Card>
@@ -1099,6 +1138,16 @@ export function BridgeLog({ run }: { run: SandboxRun }) {
       </div>
     </Card>
   );
+}
+
+/**
+ * What a run with an empty bridge log is said to have done: nothing YET while
+ * its job may still be working, and nothing at all once it has stopped.
+ */
+function noCallsWords(run: SandboxRun): string {
+  return run.status === "launching" || run.status === "running"
+    ? "No calls through the MCP bridge yet"
+    : "Made no calls through the MCP bridge — not even its submission";
 }
 
 /**

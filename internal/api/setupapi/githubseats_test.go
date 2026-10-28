@@ -20,7 +20,7 @@ import (
 // seat is there to be left out.
 const githubAppsDoc = `{
   "name": "Acme",
-  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
+  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
   "roles": [
     {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"},
     {"name": "Builder", "handle": "builder", "llm": "zulu",
@@ -489,7 +489,7 @@ func TestASeatEnrolledInGitHubWithNoAppHoldsTheCardOpen(t *testing.T) {
 	s := newSurface(t)
 	s.seedDocument(t, `{
 	  "name": "Acme",
-	  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
+	  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
 	  "integrations": {
 	    "github": {"enabled": true, "webhook_secret": "org", "provisioning": {"org": "acme"}}},
 	  "roles": [
@@ -593,7 +593,7 @@ func TestADatadogSeatCarriesTheRoleItsAccountHolds(t *testing.T) {
 	s := newSurface(t)
 	s.seedDocument(t, `{
 	  "name": "Acme",
-	  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
+	  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
 	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
 	    "webhook_token": "EXAMPLEDATADOGTOKEN0000000",
 	    "provisioning": {"api_key": "dd-api", "app_key": "dd-app", "site": "datadoghq.com", "role": "Datadog Standard Role"}}},
@@ -632,7 +632,7 @@ func TestACustomDatadogRoleKeepsItsOwnName(t *testing.T) {
 	s := newSurface(t)
 	s.seedDocument(t, `{
 	  "name": "Acme",
-	  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
+	  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
 	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
 	    "webhook_token": "EXAMPLEDATADOGTOKEN0000000",
 	    "provisioning": {"api_key": "dd-api", "app_key": "dd-app", "site": "datadoghq.com", "role": "Acme On-Call"}}},
@@ -700,7 +700,7 @@ func TestAGitHubToolWithNoWorkingAgentIsNotSatisfied(t *testing.T) {
 	// seat has an app.
 	s.seedDocument(t, `{
 	  "name": "Acme",
-	  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
+	  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
 	  "integrations": {
 		    "github": {"enabled": true, "webhook_secret": "${GH_SIGN}",
 	               "provisioning": {"org": "crewbed"}}

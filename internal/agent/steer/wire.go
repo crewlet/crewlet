@@ -10,13 +10,21 @@ import (
 //
 // # Why a scatter, and why only one node answers
 //
-// The person's request lands on whichever node serves their dashboard, and the
-// turn runs on whichever node holds its seat — which nothing on the first node
-// knows without asking. So the note is SCATTERED on the queue's ephemeral
-// request verb to every node, and the one node whose box the turn id names is
-// the one that answers. Every other node answers nothing, which is what a
-// scatter's "a server that did not answer" means: it is not an error to be
-// reported, it is a node this turn is not on.
+// The person's request lands on whichever node serves their dashboard, and a
+// turn that has not launched its coding run yet runs on whichever node holds
+// its seat — which nothing on the first node knows without asking. So the note
+// is SCATTERED on the queue's ephemeral request verb to every node, and the one
+// node whose box the turn id names is the one that answers. Every other node
+// answers nothing, which is what a scatter's "a server that did not answer"
+// means: it is not an error to be reported, it is a node this turn is not on.
+//
+// ONLY A TURN WITH NO RUN RECORD YET. From its coding run's launch on, a turn's
+// notes wait on the run's record in the coordination store, which every node
+// reads: the asking node files the note there itself, and asks nobody. The one
+// node that still answers for such a turn is the one that ran its first segment
+// and handed its box to the record — for a note that read "no record" a moment
+// before the launch wrote one — and the node that ran the segment that ended
+// the turn, for a while, so a note racing the end is told `closed`.
 //
 // Ephemeral rather than a durable publish because a note is only worth
 // anything to a turn that is running NOW. A durable note outlives the turn it
@@ -43,9 +51,11 @@ import (
 //
 // # Evolution
 //
-// Additive only, [WireVersion] stamped on both halves. Two builds share this
-// wire during a rolling upgrade; an unknown field is ignored and an unknown
-// [Status] is a value the asker refuses to act on rather than a decode error.
+// Additive only, [WireVersion] stamped on both halves — still 1: the status set
+// grew [StatusSpent], which an older asker reads as a status it does not know
+// and reports as `unknown`, a value and never a decode error. Two builds share
+// this wire during a rolling upgrade; an unknown field is ignored and an
+// unknown [Status] is a value the asker refuses to act on.
 
 // WireVersion is the shape this build writes.
 const WireVersion = 1
@@ -111,6 +121,11 @@ type Reply struct {
 	Agent       string `json:"agent_id,omitempty"`
 	AgentHandle string `json:"agent_handle"`
 	Status      Status `json:"status"`
+
+	// Reads is when an accepted note will be read ([Reads]). Empty from a
+	// peer on a build before it, and for a note a turn's first segment took
+	// into its box, which its next step reads — [ReadsNextStep] either way.
+	Reads Reads `json:"reads,omitempty"`
 
 	// Unverified is set, and Status and the seat are empty, where the
 	// running node took nothing because it could not verify the request —

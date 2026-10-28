@@ -51,6 +51,7 @@ func convergingCompany(ceo map[string]string) string {
 	return fmt.Sprintf(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -201,6 +202,7 @@ func provisioningCompany(starts string) string {
 	return fmt.Sprintf(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

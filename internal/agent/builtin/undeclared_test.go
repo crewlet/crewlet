@@ -23,9 +23,8 @@ import (
 // view saved as a SHARED tab under a success, and a model that misspelt an
 // argument was never told which one. The gate every builtin is wrapped in at
 // registration is the one place every call passes, so it is checked there —
-// here on its three paths: a seat's turn through the phase surface, the
-// operator catalogue's plain call, and the detached arm, which must not
-// suspend a loop for a run it refused to start.
+// here on its two paths: a seat's turn through the phase surface, and the
+// operator catalogue's plain call.
 func TestAnArgumentABuiltinDoesNotReadIsRefusedOnEveryPath(t *testing.T) {
 	t.Parallel()
 
@@ -79,29 +78,6 @@ func TestAnArgumentABuiltinDoesNotReadIsRefusedOnEveryPath(t *testing.T) {
 		refusedByName(t, got, `"owner"`)
 		if len(views.saved) != 0 {
 			t.Errorf("the retired shape was saved as %+v", views.saved)
-		}
-	})
-
-	t.Run("a detached run", func(t *testing.T) {
-		t.Parallel()
-		spy := &launchSpy{}
-		surface := sandboxSurface(t, spy)
-		got, err := surface.Execute(t.Context(), llm.ToolCall{ID: "c1",
-			Name: builtin.RunSandboxTool, Arguments: map[string]any{
-				"brief": "fix the failing test", "repo": "example.com/acme/api",
-			}})
-		if err != nil {
-			t.Fatalf("Execute: %v", err)
-		}
-		if got.Suspend {
-			t.Error("a refused launch suspended the loop, which waits for a run " +
-				"that never started")
-		}
-		if !got.Failed || !strings.Contains(got.Output, `"repo"`) {
-			t.Errorf("a launch carrying an argument nothing reads answered %q", got.Output)
-		}
-		if len(spy.briefs) != 0 {
-			t.Errorf("the refused run was launched: %v", spy.briefs)
 		}
 	})
 }

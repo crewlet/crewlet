@@ -3,18 +3,17 @@ package runner_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/prefetch"
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
-	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -27,9 +26,11 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// scriptedProvider is the model behind every phase's CLI runs, scripted PER
-// PHASE: each phase reads its own stream of responses, one per model request,
-// and a run is told which phase it is by the tools its CLI was offered.
+// scriptedProvider is the model behind every phase's CLI runs that the engine
+// drives — which the executor is not: its run is played by a [playLauncher] —
+// scripted PER PHASE: each phase reads its own stream of responses, one per
+// model request, and a run is told which phase it is by the tools its CLI was
+// offered.
 //
 // Not a flat sequence: each phase runs its own loop and a phase that calls a
 // tool takes another round, so a shared index drifts as soon as any phase
@@ -49,7 +50,7 @@ import (
 // CLI's record does, and every call reaches the phase's tools over MCP
 // (llmtest.Conn).
 type scriptedProvider struct {
-	execute, review, onboarding []llmtest.Response
+	review, onboarding []llmtest.Response
 
 	mu   sync.Mutex
 	runs []*scriptedRun
@@ -105,13 +106,13 @@ func phaseOffering(offered []string) string {
 	case slices.Contains(offered, runner.SubmitReviewTool):
 		return "review"
 	case slices.Contains(offered, runner.MarkOnboardedTool):
-		// Checked BEFORE the executor, because onboarding is the pass that
-		// offers mark_onboarded and the executor is deliberately denied it:
-		// a seat that could mark itself from inside the executor would
-		// permanently skip orientation. See runner.phaseScoped.
 		return "onboarding"
 	default:
-		return "execute"
+		// Nothing else runs a CLI through the engine's loop on a seat's
+		// turn: the executor is its CLI's own run. A run landing here is a
+		// phase this fixture does not know, and it is answered with nothing
+		// a phase could mistake for a decision.
+		return "other"
 	}
 }
 
@@ -122,7 +123,7 @@ func (p *scriptedProvider) scriptOf(which string) []llmtest.Response {
 	case "onboarding":
 		return p.onboarding
 	default:
-		return p.execute
+		return nil
 	}
 }
 
@@ -198,14 +199,6 @@ func (p *scriptedProvider) answerTo(which, name string) string {
 	return ""
 }
 
-// wasAnswered reports whether any call one phase made was answered with text
-// containing part.
-func (p *scriptedProvider) wasAnswered(which, part string) bool {
-	return slices.ContainsFunc(p.answered(which), func(r llmtest.Result) bool {
-		return strings.Contains(r.Output, part)
-	})
-}
-
 // callOf is one call a response makes, its arguments encoded as the model
 // writes them.
 func callOf(t *testing.T, name string, args map[string]any) llmtest.Call {
@@ -235,31 +228,37 @@ func submitCall(t *testing.T, name, argsJSON string) llmtest.Response {
 	return calling(llmtest.Call{Name: name, Args: argsJSON})
 }
 
-// submitWork is the ordinary ending for a round that delivered nothing: the
-// executor's starting surface carries no MCP tool, so a fixture that has not
+// submitWork is the ordinary ending for a run that delivered nothing: the
+// executor's starting surface carries no MCP tool, so a run that has not
 // discovered one cannot honestly cite a delivery.
-func submitWork(t *testing.T) llmtest.Response {
+func submitWork(t *testing.T) llm.ToolCall {
 	t.Helper()
-	return submitCall(t, runner.SubmitWorkTool,
+	return call(t, runner.SubmitWorkTool,
 		`{"outcome":"blocked","summary":"nothing to do here","evidence":"no write tool yet"}`)
 }
 
 // activate is the discovery half of a delivery. MCP TOOLS ARE NOT ON THE
-// STARTING SURFACE — that is the whole point of discovery — so a fixture that
-// posts has to promote the tool first, exactly as a real turn does.
-func activate(name string) llmtest.Response {
+// STARTING SURFACE — that is the whole point of discovery — so a run that
+// posts has to promote the tool first, exactly as a real one does over the
+// bridge.
+func activate(name string) llm.ToolCall {
+	return llm.ToolCall{ID: "act", Name: "activate_tool", Arguments: map[string]any{"name": name}}
+}
+
+// activating is [activate] as a response of an engine-driven phase.
+func activating(name string) llmtest.Response {
 	return calling(llmtest.Call{Name: runner.ActivateTool, Args: `{"name":"` + name + `"}`})
 }
 
-// deliver is the ordinary three-round delivery: discover, call, report.
-func deliver(t *testing.T, summary string) []llmtest.Response {
+// deliver is the ordinary delivery a run makes: discover, call, report.
+func deliver(t *testing.T, summary string) run {
 	t.Helper()
-	return []llmtest.Response{
+	return run{calls: []llm.ToolCall{
 		activate("slack_post"),
-		calling(llmtest.Call{Name: "slack_post"}),
-		submitCall(t, runner.SubmitWorkTool,
+		{ID: "post", Name: "slack_post"},
+		call(t, runner.SubmitWorkTool,
 			`{"outcome":"delivered","summary":"`+summary+`","deliveries":["slack_post"]}`),
-	}
+	}, text: summary}
 }
 
 func text(s string) llmtest.Response { return llmtest.Response{Text: s} }
@@ -288,54 +287,46 @@ func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 	return tools.Result{Output: s.out}, nil
 }
 
+// fixture is the shared runner on one provider, for a turn somebody is
+// waiting on.
 func fixture(t *testing.T, prov *scriptedProvider) (*runner.Runner, *scriptedProvider, *tools.Registry) {
 	t.Helper()
-	r, reg := build(t, []phase.Entry{{Key: "default", Provider: prov}})
+	r, reg := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{})
 	return r, prov, reg
 }
 
-// unaddressedFixture is the same runner for a turn nobody asked for, so
-// no_action is a legitimate submission rather than one the decoder refuses.
-func unaddressedFixture(t *testing.T, prov *scriptedProvider) (*runner.Runner, *scriptedProvider) {
-	t.Helper()
-	r, _ := build(t, []phase.Entry{{Key: "default", Provider: prov}}, turn.NoReply())
-	return r, prov
-}
-
-// runnerWithModels builds a runner over an explicit provider set, so a test
-// can give each phase its own model.
-func runnerWithModels(t *testing.T, entries []phase.Entry) *runner.Runner {
-	t.Helper()
-	r, _ := build(t, entries)
-	return r
-}
-
-// buildOpts are the knobs a test varies on the shared fixture. Zero is the
-// host-mode executor with somebody waiting, which is what most tests want.
+// buildOpts are the knobs a test varies on the shared fixture. Zero is a turn
+// somebody is waiting on, whose executor's launches start nothing.
 type buildOpts struct {
-	reply    turn.Reply
-	agentRun runner.AgentLauncher
+	reply turn.Reply
+	// launcher is the executor's launch seam. Nil is a [playLauncher] of
+	// the fixture's own, which records the launch and starts nothing.
+	launcher runner.AgentLauncher
 	resume   *runner.Resume
 	pub      queue.Publisher
-	// execChain overrides the executor's provider keys, so a test can give
-	// the phase a real fallback chain rather than the single key the
-	// fixture's seat runs on.
-	execChain org.ProviderKeys
+	// reviewChain overrides the reviewer's provider keys (`llm_review`), so
+	// a test can give the phase a real fallback chain rather than the
+	// single key the fixture's seat runs it on.
+	reviewChain org.ProviderKeys
 	// task overrides the brief, which is the one piece of the prompt a test
 	// can put arbitrary text into — so a case about how the prompt is
 	// MEASURED can make it carry multi-byte runes.
 	task string
 
-	// context is the turn's frozen prefetch, for the cases about what
-	// reaches a prompt rather than what a phase decides.
-	context prefetch.Blocks
+	// context is the turn's frozen prefetch, and conversation its
+	// prior-turns block, for the cases about what reaches a prompt rather
+	// than what a phase decides. A collection is handed neither, as the
+	// engine's is: its runner takes them from the park ([collect]).
+	context      prefetch.Blocks
+	conversation string
 	// onPhase is the working indicator's seam. See [runner.Config.OnPhase].
 	onPhase func(phase.Phase)
 	// register adds tools beyond the fixture's standard catalogue, for a
 	// case whose behaviour depends on a first-party tool the seat holds.
 	register func(t *testing.T, reg *tools.Registry)
-	// steer is the turn's note box, for the cases about a person's note.
-	steer *steer.Box
+	// steer is where the turn's notes wait, for the cases about a person's
+	// note: a box, or a source a case plays.
+	steer runner.SteerSource
 	// subagent arms delegate on the executor's surface.
 	subagent *runner.SubagentConfig
 
@@ -350,18 +341,8 @@ type buildOpts struct {
 	// the prompt's assembly asks for costs.
 	compact compact.Bound
 
-	// sandbox is the seat's role.sandbox gate, for the cases about what a
-	// gate does and does not offer.
-	sandbox *org.RoleSandbox
-}
-
-func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
-	t.Helper()
-	waiting := turn.ToolReply("")
-	if len(reply) > 0 {
-		waiting = reply[0]
-	}
-	return buildWith(t, entries, buildOpts{reply: waiting})
+	// fence is the seat fence, for the cases about what a closed one stops.
+	fence func() error
 }
 
 func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Runner, *tools.Registry) {
@@ -411,11 +392,10 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 	// resolution falls back to it, which is the counterfactual the golden
 	// suite asserts.
 	role.LLM = org.ProviderKeys{"executor"}
-	if len(opts.execChain) > 0 {
-		role.LLM = opts.execChain
-	}
 	role.LLMReview = org.ProviderKeys{"reviewer"}
-	role.Sandbox = opts.sandbox
+	if len(opts.reviewChain) > 0 {
+		role.LLMReview = opts.reviewChain
+	}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{role}}
 
 	task := opts.task
@@ -427,24 +407,29 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 	if opts.calls != nil {
 		runTurn.Context = &turnctx.Turn{RunID: "t-1", WorkKey: "wk-1", Calls: opts.calls}
 	}
+	launcher := opts.launcher
+	if launcher == nil {
+		launcher = &playLauncher{}
+	}
 	r, err := runner.New(runner.Config{
-		Seat:      prompts.Seat{Org: organization, Role: role},
-		Registry:  reg,
-		Models:    models,
-		Caps:      runner.Caps{ExecutorRounds: 6},
-		Context:   opts.context,
-		Task:      task,
-		Reply:     waiting,
-		AgentRun:  opts.agentRun,
-		Resume:    opts.resume,
-		Publisher: opts.pub,
-		OnPhase:   opts.onPhase,
-		Steer:     opts.steer,
-		Subagent:  opts.subagent,
-		Turn:      runTurn,
-		Budget:    opts.budget,
-		Compact:   opts.compact,
-		Sessions:  sessions,
+		Seat:         prompts.Seat{Org: organization, Role: role},
+		Registry:     reg,
+		Models:       models,
+		Context:      opts.context,
+		Conversation: opts.conversation,
+		Task:         task,
+		Reply:        waiting,
+		Launcher:     launcher,
+		Resume:       opts.resume,
+		Fence:        opts.fence,
+		Publisher:    opts.pub,
+		OnPhase:      opts.onPhase,
+		Steer:        opts.steer,
+		Subagent:     opts.subagent,
+		Turn:         runTurn,
+		Budget:       opts.budget,
+		Compact:      opts.compact,
+		Sessions:     sessions,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -454,18 +439,16 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 
 func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 	t.Parallel()
-	r, _, _ := fixture(t, &scriptedProvider{execute: []llmtest.Response{
-		activate("slack_post"),
-		calling(callOf(t, "slack_post", map[string]any{"channel": "C1"})),
-		submitCall(t, runner.SubmitWorkTool, `{
-			"outcome":"delivered","summary":"posted the weekly summary",
-			"deliveries":["slack_post"],"open_questions":"which channel next week?"}`),
-	}})
+	got := executeRound(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{}, 1, "", nil, run{calls: []llm.ToolCall{
+			activate("slack_post"),
+			{ID: "a", Name: "slack_post", Arguments: map[string]any{"channel": "C1"}},
+			call(t, runner.SubmitWorkTool, `{
+				"outcome":"delivered","summary":"posted the weekly summary",
+				"deliveries":["slack_post"],"open_questions":"which channel next week?"}`),
+		}, text: "posted it"}, runner.RunRecord{})
 
-	w, surface, err := r.Execute(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	w, surface := got.work, got.surface
 	if w.Outcome != turn.OutcomeDelivered {
 		t.Errorf("outcome = %s", w.Outcome)
 	}
@@ -480,6 +463,11 @@ func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 	}
 	if w.Rescued {
 		t.Error("a submitted outcome was marked as the engine's own")
+	}
+	// What the run CALLED, arguments and all: the delivery check, the
+	// citations and the ledger read it.
+	if len(w.Calls) != 3 || w.Calls[1].Name != "slack_post" || w.Calls[1].Args["channel"] != "C1" {
+		t.Errorf("calls = %+v, want the run's own three", w.Calls)
 	}
 	// The surface handed back is what the delivery check judges against, so
 	// it must describe the whole catalogue and not just what was offered.
@@ -500,11 +488,14 @@ func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 // turned out to need it.
 func TestTheExecutorGetsTheWholeFirstPartySurfaceAndDiscovery(t *testing.T) {
 	t.Parallel()
-	r, prov, _ := fixture(t, &scriptedProvider{execute: []llmtest.Response{submitWork(t)}})
+	launcher := &playLauncher{}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{launcher: launcher})
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	offered := slices.Clone(prov.offeredFor("execute")[0])
+	req := launcher.last(t)
+	offered := toolNames(req.Surface.ToolDefs())
 	slices.Sort(offered)
 	want := []string{
 		"activate_tool", "list_mcp_server_tools", "lookup_colleague", "reflect",
@@ -522,7 +513,7 @@ func TestTheExecutorGetsTheWholeFirstPartySurfaceAndDiscovery(t *testing.T) {
 	}
 	// But the CATALOGUE names the server, or discovery has nothing to aim
 	// at.
-	if !strings.Contains(prov.requestsFor("execute")[0].Messages[0].Content, "slack") {
+	if !strings.Contains(req.System, "slack") {
 		t.Error("the prompt does not name the MCP server")
 	}
 }
@@ -532,158 +523,6 @@ func TestTheExecutorGetsTheWholeFirstPartySurfaceAndDiscovery(t *testing.T) {
 func isFinishingCorrective(m llm.Message, tool string) bool {
 	return m.Role == llm.RoleUser && strings.Contains(m.Content, "so this phase has not finished") &&
 		strings.Contains(m.Content, "`"+tool+"`")
-}
-
-// THE RESCUE PATH. An executor that ran out of rounds, or simply stopped, has
-// produced text and no account of itself. Discarding the turn wastes
-// everything it did; calling it delivered puts words in its mouth on the one
-// question that matters.
-//
-// But only after it was ASKED: its loop finishes by `submit_work`, so a round
-// of prose is not a finish, and the loop asks twice more — naming the tool —
-// before the phase ends without its submission and lands here.
-func TestAnExecutorThatNeverSubmittedIsRescuedAsIncomplete(t *testing.T) {
-	t.Parallel()
-	pub := newCapture()
-	prov := &scriptedProvider{execute: []llmtest.Response{text("I posted something.")}}
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{pub: pub})
-	w, _, err := r.Execute(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	exec := prov.requestsFor("execute")
-	if len(exec) != 3 {
-		t.Fatalf("the executor was asked %d times, want 3 — the first answer and two "+
-			"finishing correctives", len(exec))
-	}
-	for i, req := range exec[1:] {
-		last := req.Messages[len(req.Messages)-1]
-		if !isFinishingCorrective(last, runner.SubmitWorkTool) {
-			t.Errorf("request %d opened on %q, want the finishing corrective", i+2, last.Content)
-		}
-	}
-	// Every round declined, the last included: that is what tells a reader
-	// the phase ended without its submission rather than finishing.
-	done := completedPhase(t, pub, "execute")
-	if !done.RescueFired || len(done.RoundNarration) != 3 {
-		t.Fatalf("rescue_fired = %v narration = %v", done.RescueFired, done.RoundNarration)
-	}
-	for _, n := range done.RoundNarration {
-		if n["declined"] != true {
-			t.Errorf("round %v is not marked declined: %v", n["round"], n)
-		}
-	}
-	if w.Outcome != turn.OutcomeIncomplete {
-		t.Errorf("outcome = %s, want incomplete", w.Outcome)
-	}
-	// Its answer to the task, once: the two the correctives drew out
-	// repeat it, and the reviewer would read the report three times.
-	if n := strings.Count(w.Text, "posted something"); n != 1 {
-		t.Errorf("the phase's text carries its answer %d times, want once: %q", n, w.Text)
-	}
-	// AS TEXT, NOT AS INTENT. The executor gave no account of itself, and
-	// Summary is the intent line — rendered whole to every later round and
-	// kept whole in the conversation ledger — so the transcript copied into
-	// it went out unbounded, twice per round, under a heading calling it
-	// the executor's own account.
-	if w.Summary != "" {
-		t.Errorf("a rescue wrote an intent the executor never gave: %q", w.Summary)
-	}
-	// AND IT SAYS SO. Without the mark, the word is indistinguishable from
-	// one the executor chose — and every fast path in the loop turns on
-	// telling "the executor decided this" from "nothing decided anything".
-	if !w.Rescued {
-		t.Error("a synthesised outcome was returned as if the executor had made it")
-	}
-}
-
-// writtenSubmission is a measured failure: an executor ended its turn with
-// submit_work's ARGUMENTS typed out as a fenced JSON block — the report, as
-// prose — instead of the call.
-func writtenSubmission() llmtest.Response {
-	return text("Commented on the work item.\n\n```json\n" +
-		`{"summary":"Commented on the work item","outcome":"blocked",` +
-		`"evidence":"no write tool yet"}` + "\n```")
-}
-
-// AN EXECUTOR THAT WROTE ITS SUBMISSION AS TEXT IS RE-ASKED RATHER THAN
-// RESCUED. Before, the phase ended on that round: the outcome was the engine's
-// `incomplete`, and the reviewer read the fenced JSON as "what the agent
-// produced". The loop now asks again with a message naming submit_work — never
-// a forced call, which a request cannot express — and the model's call is the
-// outcome.
-func TestAnExecutorThatWroteItsSubmissionAsTextIsReAskedRatherThanRescued(t *testing.T) {
-	t.Parallel()
-	pub := newCapture()
-	prov := &scriptedProvider{execute: []llmtest.Response{writtenSubmission(), submitWork(t)}}
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{pub: pub})
-	w, _, err := r.Execute(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if w.Rescued || w.Outcome != turn.OutcomeBlocked {
-		t.Fatalf("outcome = %s rescued = %v, want the submitted blocked", w.Outcome, w.Rescued)
-	}
-	exec := prov.requestsFor("execute")
-	if len(exec) != 2 {
-		t.Fatalf("the executor was asked %d times, want 2", len(exec))
-	}
-	if last := exec[1].Messages[len(exec[1].Messages)-1]; !isFinishingCorrective(last, runner.SubmitWorkTool) {
-		t.Errorf("the second round opened on %q, want the finishing corrective", last.Content)
-	}
-	done := completedPhase(t, pub, "execute")
-	if done.RescueFired || done.RoundsUsed != 2 {
-		t.Errorf("rescue_fired = %v rounds_used = %d, want a submitted phase of 2 rounds",
-			done.RescueFired, done.RoundsUsed)
-	}
-	if len(done.RoundNarration) != 1 || done.RoundNarration[0]["round"] != 1 ||
-		done.RoundNarration[0]["declined"] != true {
-		t.Errorf("round_narration = %v, want round 1 marked declined", done.RoundNarration)
-	}
-}
-
-// A RESUMED EXECUTOR IS ASKED AGAIN TOO. It re-enters the same loop, with the
-// same submission, so a coding run's result followed by a written-out report is
-// the same failure and gets the same corrective — on the phase's round scale.
-func TestAResumedExecutorThatWroteItsSubmissionAsTextIsReAsked(t *testing.T) {
-	t.Parallel()
-	pub := newCapture()
-	prov := &scriptedProvider{execute: []llmtest.Response{writtenSubmission(), submitWork(t)}}
-	// A round the pre-suspend half was corrected on stays marked across the
-	// suspend: the parked row carries the mark and the resumed record keeps
-	// it, or round 1 would read as a finish nothing finished.
-	state := suspendedAfterTwoRounds()
-	state.RoundNarration[0]["declined"] = true
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{
-		pub:    pub,
-		resume: &runner.Resume{State: state, Answer: "the run succeeded"},
-	})
-	w, _, err := r.Resume(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("Resume: %v", err)
-	}
-	if w.Rescued || w.Outcome != turn.OutcomeBlocked {
-		t.Fatalf("outcome = %s rescued = %v, want the submitted blocked", w.Outcome, w.Rescued)
-	}
-	exec := prov.requestsFor("execute")
-	if len(exec) != 2 {
-		t.Fatalf("the resumed executor was asked %d times, want 2", len(exec))
-	}
-	if last := exec[1].Messages[len(exec[1].Messages)-1]; !isFinishingCorrective(last, runner.SubmitWorkTool) {
-		t.Errorf("the second round opened on %q, want the finishing corrective", last.Content)
-	}
-	// Round 3 of the phase: the two it ran before it parked come first, and
-	// the pre-suspend round 1 keeps its mark.
-	done := completedPhase(t, pub, "execute")
-	var declined []any
-	for _, n := range done.RoundNarration {
-		if n["declined"] == true {
-			declined = append(declined, n["round"])
-		}
-	}
-	if len(declined) != 2 || declined[0] != 1 || declined[1] != 3 {
-		t.Errorf("declined rounds = %v, want [1 3] on the phase's scale", declined)
-	}
 }
 
 // A DELIVERY AN EARLIER ROUND MADE IS CITABLE. The prior-work ledger tells a
@@ -699,32 +538,22 @@ func TestAnEarlierRoundsDeliveryIsCitableInALaterOne(t *testing.T) {
 			t.Fatalf("Register: %v", err)
 		}
 	}
-	cite := submitCall(t, runner.SubmitWorkTool,
-		`{"outcome":"delivered","summary":"re-read the item","deliveries":["comment_on_work_item"]}`)
+	cite := run{calls: []llm.ToolCall{call(t, runner.SubmitWorkTool,
+		`{"outcome":"delivered","summary":"re-read the item","deliveries":["comment_on_work_item"]}`)}}
 	earlier := []ledger.Iteration{{Iteration: 1,
 		Calls: []ledger.Call{{Name: "comment_on_work_item", Result: "commented"}}}}
+	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+	opts := buildOpts{reply: turn.ToolReply("work"), register: tracker}
 
-	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
-		execute: []llmtest.Response{cite},
-	}}}, buildOpts{reply: turn.ToolReply("work"), register: tracker})
-	w, _, err := r.Execute(context.Background(), 2, "read the item first", earlier)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	w := executeRound(t, entries, opts, 2, "read the item first", earlier, cite, runner.RunRecord{}).work
 	if w.Rescued || w.Outcome != turn.OutcomeDelivered {
 		t.Errorf("outcome = %s (rescued %v), want the citation of round one's comment "+
 			"accepted", w.Outcome, w.Rescued)
 	}
 
 	// The counterfactual: with no such round behind it, the same citation
-	// is refused every time it is made, and the phase ends in the rescue.
-	r, _ = buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{
-		execute: []llmtest.Response{cite},
-	}}}, buildOpts{reply: turn.ToolReply("work"), register: tracker})
-	w, _, err = r.Execute(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	// is refused when the run makes it, and the phase ends in the rescue.
+	w = executeRound(t, entries, opts, 1, "", nil, cite, runner.RunRecord{}).work
 	if !w.Rescued {
 		t.Errorf("outcome = %s, want a citation of a comment nobody made refused", w.Outcome)
 	}
@@ -732,69 +561,54 @@ func TestAnEarlierRoundsDeliveryIsCitableInALaterOne(t *testing.T) {
 
 func TestTheReviewersCorrectionReachesTheNextRoundWithoutRewritingTheAsk(t *testing.T) {
 	t.Parallel()
-	// The task text also feeds knowledge search, the sandbox brief and the
-	// episode record, all of which want the requester's actual ask and not
-	// the engine's running commentary on it. So the correction is prefixed
-	// to the user MESSAGE, not merged into the task.
-	r, prov, _ := fixture(t, &scriptedProvider{execute: []llmtest.Response{submitWork(t)}})
+	// The task text also feeds knowledge search and the episode record,
+	// both of which want the requester's actual ask and not the engine's
+	// running commentary on it. So the correction is prefixed to the BRIEF,
+	// not merged into the task.
+	launcher := &playLauncher{}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{launcher: launcher})
 	if _, _, err := r.Execute(context.Background(), 2, "the link was wrong", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	user := prov.requestsFor("execute")[0].Messages[1].Content
-	if !strings.Contains(user, "the link was wrong") {
-		t.Errorf("the correction did not reach the executor:\n%s", user)
+	brief := launcher.last(t).Brief
+	if !strings.Contains(brief, "the link was wrong") {
+		t.Errorf("the correction did not reach the executor:\n%s", brief)
 	}
-	if !strings.Contains(user, "post the weekly summary") {
-		t.Errorf("the original ask was lost:\n%s", user)
+	if !strings.Contains(brief, "post the weekly summary") {
+		t.Errorf("the original ask was lost:\n%s", brief)
 	}
-	// And with no correction the message is byte-identical to its
+	// And with no correction the brief is byte-identical to its
 	// pre-correction form, which is what keeps the prompt prefix cacheable.
-	r2, prov2, _ := fixture(t, &scriptedProvider{execute: []llmtest.Response{submitWork(t)}})
+	plain := &playLauncher{}
+	r2, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{launcher: plain})
 	if _, _, err := r2.Execute(context.Background(), 1, "   ", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if got := prov2.requestsFor("execute")[0].Messages[1].Content; strings.Contains(got, "reviewed") {
+	if got := plain.last(t).Brief; strings.Contains(got, "reviewed") {
 		t.Errorf("a blank correction left scaffolding behind:\n%s", got)
-	}
-}
-
-func TestTheExecutorReportsWhatItCalledAndWhatWasMissing(t *testing.T) {
-	t.Parallel()
-	r, _, _ := fixture(t, &scriptedProvider{execute: []llmtest.Response{
-		activate("slack_post"),
-		calling(callOf(t, "slack_post", map[string]any{"channel": "C1"}),
-			llmtest.Call{Name: "ghost_tool"}),
-		submitWork(t),
-	}})
-	w, _, err := r.Execute(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if len(w.Calls) < 3 {
-		t.Fatalf("calls = %+v", w.Calls)
-	}
-	if w.Calls[1].Name != "slack_post" || w.Calls[1].Args["channel"] != "C1" {
-		t.Errorf("the delivery call = %+v", w.Calls[1])
-	}
-	// Membership in the snapshot is the single source of truth. Matching on
-	// the failure TEXT would flag a false positive the moment a legitimate
-	// tool's own output began with the same words.
-	if !slices.Equal(w.MissingTools, []string{"ghost_tool"}) {
-		t.Errorf("missing tools = %v", w.MissingTools)
 	}
 }
 
 // mark_onboarded is the whole phase-scoped list, and it earns its place:
 // onboarding is its own pass, and a seat that could mark itself from inside
-// the executor would permanently skip orientation.
+// the executor would permanently skip orientation. Registered here, so the
+// case is about the narrowing and not about a registry that never held it.
 func TestTheExecutorIsNotOfferedTheOnboardingMarker(t *testing.T) {
 	t.Parallel()
-	r, prov, _ := fixture(t, &scriptedProvider{execute: []llmtest.Response{submitWork(t)}})
+	launcher := &playLauncher{}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+		buildOpts{launcher: launcher, register: func(t *testing.T, reg *tools.Registry) {
+			if err := reg.Register(stubTool{name: runner.MarkOnboardedTool}, tools.OriginBuiltin); err != nil {
+				t.Fatalf("Register: %v", err)
+			}
+		}})
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if slices.Contains(prov.offeredFor("execute")[0], runner.MarkOnboardedTool) {
-		t.Error("the executor was offered mark_onboarded")
+	if slices.Contains(toolNames(launcher.last(t).Surface.ToolDefs()), runner.MarkOnboardedTool) {
+		t.Error("the executor's run was offered mark_onboarded")
 	}
 }
 
@@ -890,27 +704,29 @@ func TestEachPhaseGetsItsOwnSubmissionToolAndNoneLeaks(t *testing.T) {
 	// The submission tool is per-phase state. Registering it into the
 	// shared registry would leave one phase's answer visible to the next —
 	// or to the next turn, still holding the last one's decision.
-	r, prov, reg := fixture(t, &scriptedProvider{
-		execute: []llmtest.Response{submitWork(t)},
-		review:  []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
-	})
-
-	w, _, err := r.Execute(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
+	prov := &scriptedProvider{
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	}
-	if _, err := r.Review(context.Background(), 1, w, nil); err != nil {
+	// The launching segment's registry and the collecting one's: the run
+	// is launched in one process and collected and reviewed in another.
+	var regs []*tools.Registry
+	got := executeRound(t, []phase.Entry{{Key: "default", Provider: prov}},
+		buildOpts{register: func(_ *testing.T, r *tools.Registry) { regs = append(regs, r) }},
+		1, "", nil, run{calls: []llm.ToolCall{submitWork(t)}}, runner.RunRecord{})
+	if _, err := got.collector.Review(context.Background(), 1, got.work, nil); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
 
-	// Neither name ever reaches the shared registry.
-	for _, name := range []string{runner.SubmitWorkTool, runner.SubmitReviewTool} {
-		if _, ok := reg.Lookup(name); ok {
-			t.Errorf("%s leaked into the shared registry", name)
+	// Neither name ever reaches a shared registry.
+	for _, reg := range regs {
+		for _, name := range []string{runner.SubmitWorkTool, runner.SubmitReviewTool} {
+			if _, ok := reg.Lookup(name); ok {
+				t.Errorf("%s leaked into the shared registry", name)
+			}
 		}
 	}
 	// The executor is offered its own and not the reviewer's.
-	execOffered := prov.offeredFor("execute")[0]
+	execOffered := toolNames(got.launch.Surface.ToolDefs())
 	if !slices.Contains(execOffered, runner.SubmitWorkTool) {
 		t.Errorf("the executor was not offered its submission tool: %v", execOffered)
 	}
@@ -950,27 +766,58 @@ func TestTheReviewerRunsOnItsOwnBudgetNotTheExecutors(t *testing.T) {
 	if got.Decision != phase.SelfIterate || !strings.Contains(got.Notes, "produced no decision") {
 		t.Fatalf("review = %+v, want the rescue a reviewer that never decided gets", got)
 	}
-	// The executor's cap in this fixture is 6; the reviewer's is its own
-	// unexported constant, and must be neither that nor unbounded.
+	// The reviewer's budget is its own unexported constant, and must be
+	// neither unbounded nor borrowed from any other phase's.
 	if rounds := prov.roundsOf("review"); rounds == 0 || rounds > 5 {
 		t.Errorf("the reviewer ran %d rounds, want its own small budget", rounds)
 	}
 }
 
-func TestARunnerNeedsItsRegistries(t *testing.T) {
+// A RUNNER NEEDS ITS REGISTRIES, ITS SESSION HOST AND ITS LAUNCHER, and
+// refuses at assembly without one: every phase the engine drives reaches its
+// CLI's tools through the host, and every executor is a launched run — so a
+// runner missing either cannot run a phase every turn has, and finding that
+// out at the first one fails a turn on a mistake made where the runner was
+// built.
+func TestARunnerNeedsItsRegistriesAndItsLauncher(t *testing.T) {
 	t.Parallel()
-	if _, err := runner.New(runner.Config{Models: &phase.Registry{}}); err == nil {
+	launcher := &playLauncher{}
+	if _, err := runner.New(runner.Config{Models: &phase.Registry{}, Launcher: launcher,
+		Sessions: sessions}); err == nil {
 		t.Error("a runner built with no tool registry")
 	}
-	if _, err := runner.New(runner.Config{Registry: tools.NewRegistry()}); err == nil {
+	if _, err := runner.New(runner.Config{Registry: tools.NewRegistry(), Launcher: launcher,
+		Sessions: sessions}); err == nil {
 		t.Error("a runner built with no provider registry")
 	}
-	// AND ITS SESSION HOST, which every phase's CLI reaches its tools
-	// through: without one the first phase fails, after the turn's prompts
-	// were built and its prefetch spent.
-	_, err := runner.New(runner.Config{Registry: tools.NewRegistry(), Models: &phase.Registry{}})
+	_, err := runner.New(runner.Config{Registry: tools.NewRegistry(), Models: &phase.Registry{},
+		Launcher: launcher})
 	if err == nil || !strings.Contains(err.Error(), "Config.Sessions") {
-		t.Errorf("a runner built with no session host answered %v, want a refusal naming the field", err)
+		t.Errorf("a runner built with no session host = %v, want a refusal naming the field", err)
+	}
+	_, err = runner.New(runner.Config{Registry: tools.NewRegistry(), Models: &phase.Registry{},
+		Sessions: sessions})
+	if err == nil || !strings.Contains(err.Error(), "Launcher") {
+		t.Errorf("a runner built with no launcher = %v, want a refusal naming the field", err)
+	}
+}
+
+// A COLLECTION HANDED A SECOND CONTEXT IS REFUSED where it is assembled. The
+// park froze what the turn started with, and a context fetched again for the
+// resume is a second answer to the same question: taking either silently
+// would launch the turn's next run on a prompt nobody chose.
+func TestACollectionHandedASecondContextIsRefused(t *testing.T) {
+	t.Parallel()
+	resume := &runner.Resume{State: execstate.State{Version: execstate.Version, Round: 1}}
+	for name, cfg := range map[string]runner.Config{
+		"prefetched blocks": {Context: prefetch.Blocks{PersonalMemory: "- fetched again"}},
+		"conversation":      {Conversation: "### Turn 1\nfetched again"},
+	} {
+		cfg.Registry, cfg.Models, cfg.Launcher, cfg.Resume, cfg.Sessions =
+			tools.NewRegistry(), &phase.Registry{}, &playLauncher{}, resume, sessions
+		if _, err := runner.New(cfg); err == nil || !strings.Contains(err.Error(), "Config.Resume") {
+			t.Errorf("%s: a resume handed its own context = %v, want a refusal naming the fields", name, err)
+		}
 	}
 }
 
@@ -980,83 +827,4 @@ func toolNames(defs []llm.ToolDef) []string {
 		out = append(out, d.Name)
 	}
 	return out
-}
-
-// breakingProvider plays a fixed script and then fails its CLI run, so a phase
-// can be stopped at a chosen point WITH tool calls already behind it. The
-// scripted provider above cannot fail at all, and "the phase broke after it had
-// already written" is not reachable any other way.
-type breakingProvider struct {
-	script []llmtest.Response
-	err    error
-
-	mu sync.Mutex
-	n  int
-}
-
-func (p *breakingProvider) Model() string { return "breaking" }
-
-func (p *breakingProvider) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
-	return llmtest.Drive(ctx, req, llmtest.ConnOptions{}, func(*llmtest.Conn) (llmtest.Response, error) {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		if p.n >= len(p.script) {
-			return llmtest.Response{}, p.err
-		}
-		r := p.script[p.n]
-		p.n++
-		return r, nil
-	})
-}
-
-// A BROKEN PHASE HANDS BACK WHAT IT ALREADY DID.
-//
-// The seam this whole fix rests on, and the one a fake cannot vouch for: the
-// dispatcher gives up a trigger when the turn PROVES it wrote outside the
-// engine, and the proof is the record the executor carries out with its error.
-// This path used to `return turn.Work{}, turn.Surface{}, err` — throwing that
-// record away on the one path where a caller most needs it — so a turn that
-// had already commented on an issue looked exactly like one that had done
-// nothing, and its trigger was replayed until the broker gave up.
-func TestABrokenExecutorReturnsTheCallsItAlreadyMade(t *testing.T) {
-	t.Parallel()
-	prov := &breakingProvider{
-		script: []llmtest.Response{
-			activate("jira_create"),
-			calling(llmtest.Call{Name: "jira_create"}),
-		},
-		err: errors.New("the provider went away mid-loop"),
-	}
-	r, _ := build(t, []phase.Entry{{Key: "default", Provider: prov}})
-
-	work, surface, err := r.Execute(t.Context(), 1, "", nil)
-	if err == nil {
-		t.Fatal("the phase did not break")
-	}
-	if !slices.ContainsFunc(work.Calls, func(c ledger.Call) bool { return c.Name == "jira_create" }) {
-		t.Fatalf("calls = %+v, want the issue it created before it broke", work.Calls)
-	}
-	// AND THE SURFACE COMES WITH IT, because the record alone cannot be
-	// judged: whether a call reached outside the engine is a fact about the
-	// tool's origin and annotations, which only the surface carries.
-	if !turn.Acted(work.Calls, surface) {
-		t.Errorf("the executor created an issue and then broke, and the turn "+
-			"reads as having done nothing (surface = %+v)", surface)
-	}
-}
-
-// The counterfactual, kept beside it: a phase that broke before any call still
-// reports nothing, so a transient failure keeps its retry.
-func TestAnExecutorThatBrokeBeforeCallingAnythingReportsNothing(t *testing.T) {
-	t.Parallel()
-	prov := &breakingProvider{err: errors.New("no route to the provider")}
-	r, _ := build(t, []phase.Entry{{Key: "default", Provider: prov}})
-
-	work, surface, err := r.Execute(t.Context(), 1, "", nil)
-	if err == nil {
-		t.Fatal("the phase did not break")
-	}
-	if turn.Acted(work.Calls, surface) {
-		t.Errorf("a phase that never called anything reads as having acted: %+v", work.Calls)
-	}
 }

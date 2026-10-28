@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
@@ -267,7 +269,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// THE BUILD, which changes nothing: the company and the sandbox catalogue
 	// it configures. See [buildRevision], which is also what a write that
 	// must not land a revision this node cannot build asks ([Buildable]).
-	next, sandboxManager, built, err := buildRevision(cfg, e.resolver(), e.sandboxOtel)
+	next, sandboxManager, built, err := buildRevision(cfg, e.resolver(), e.sandboxOtel, e.fakePlay)
 	applied = append(applied, built...)
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
@@ -276,6 +278,10 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
 	stampActivation(next, activatedAt)
+	// THE SPENT PLANS STAY SPENT: every entry the revision left as it was
+	// keeps the sit-out the entry it replaces was serving — see
+	// [carrySitOuts].
+	carrySitOuts(e.Company(), next)
 	// THE NATIVE HALVES, on a node whose FIRST company this is — before the
 	// tools, which are registered only where they exist, and before the
 	// inbound edge, whose parsers include their own. The state log and the
@@ -295,8 +301,8 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	}
 	// THE SANDBOX RUNTIME, on a node that has never run one and whose
 	// revision reaches a sandbox cell — before the tools for the reason the
-	// native halves are: run_sandbox and a box-mode executor are offered
-	// only where it exists. See [Engine.startSandbox], and the bug it fixes.
+	// native halves are: every executor launches into it, so a seat's turn
+	// has nowhere to run until it exists. See [Engine.startSandbox], and the bug it fixes.
 	startedSandbox, err := e.startSandbox(ctx, sandboxManager)
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
@@ -493,8 +499,8 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 // configures — nil when it reaches no sandbox cell, which is not a failure.
 //
 // THE CATALOGUE BESIDE THE COMPANY it is a part of, because one that cannot be
-// built is a revision that cannot be served: its code-enabled seats would plan
-// around boxes nobody can mint. It was built only where a coordinator already
+// built is a revision that cannot be served: every seat's executor would
+// launch into boxes nobody can mint. It was built only where a coordinator already
 // existed, so on every other node a broken block was published rather than
 // refused.
 //
@@ -510,18 +516,54 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 // another CLI from the same directory is refused until a restart — as it is
 // after an apply that built and was refused.
 func buildRevision(cfg *config.Company, env *config.Resolver,
-	otel *sandbox.OtelReceiver) (*Company, *sandbox.Manager, []string, error) {
+	otel *sandbox.OtelReceiver, play fakePlayer) (*Company, *sandbox.Manager, []string, error) {
 
 	next, err := NewCompanyWith(cfg, env)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	built := []string{"company"}
-	manager, err := buildSandbox(next.Config, env, otel)
+	manager, err := buildSandbox(next.Config, env, otel, play)
 	if err != nil {
 		return nil, nil, built, err
 	}
+	// THE EPOCH'S OWN CATALOGUE, pinned on it — see [Company.catalogue].
+	next.catalogue = manager
 	return next, manager, built, nil
+}
+
+// carrySitOuts hands every coding-CLI entry of next whose spec is unchanged
+// from previous the sit-out its predecessor is serving
+// ([cliagent.Provider.CarrySitOut]).
+//
+// AN APPLY REBUILDS EVERY ENTRY, and a rebuilt provider sits nothing out — so
+// the first apply after an entry's plan was spent, an edit to an unrelated
+// seat, handed every seat on the node the spent entry back, and each of their
+// next calls and launches started a process to learn the window again. Only an
+// UNCHANGED spec is the same login and the same plan: an entry whose spec moved
+// — another login, another model, another CLI — is a new question and starts
+// clean, as one that is new to the revision does.
+func carrySitOuts(previous, next *Company) {
+	if previous == nil || next == nil || previous.Models == nil || next.Models == nil ||
+		previous.Config == nil || next.Config == nil {
+		return
+	}
+	for key, spec := range next.Config.Providers.LLM {
+		was, ok := previous.Config.Providers.LLM[key]
+		if !ok || !reflect.DeepEqual(was, spec) {
+			continue
+		}
+		now, okNow := next.Models.Provider(key)
+		then, okThen := previous.Models.Provider(key)
+		if !okNow || !okThen {
+			continue
+		}
+		rebuilt, isCLI := now.(*cliagent.Provider)
+		served, wasCLI := then.(*cliagent.Provider)
+		if isCLI && wasCLI {
+			rebuilt.CarrySitOut(served)
+		}
+	}
 }
 
 // Buildable reports whether cfg builds on this node — the half of an apply
@@ -540,7 +582,7 @@ func buildRevision(cfg *config.Company, env *config.Resolver,
 // which an apply moments later re-reads: a value rotated in between is the
 // only difference, and it is the rotation gesture rather than a revision.
 func (e *Engine) Buildable(cfg *config.Company) error {
-	_, _, _, err := buildRevision(cfg, e.resolver(), nil)
+	_, _, _, err := buildRevision(cfg, e.resolver(), nil, e.fakePlay)
 	return err
 }
 

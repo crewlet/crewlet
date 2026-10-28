@@ -6,12 +6,12 @@ import (
 )
 
 // A RUN THAT DID NOT SUCCEED SAYS WHY, even when it also wrote a report. The
-// resumed executor acts on this text alone — what to tell the requester, what
-// to retry — and it used to be handed the report under "did NOT fully
-// succeed" with the reason dropped whenever a report existed.
-func TestTheResumedExecutorIsToldWhyARunDidNotSucceed(t *testing.T) {
+// reviewer judges the run on this text — whether to send it back, what the
+// requester still needs — and it used to be handed the report under "did NOT
+// fully succeed" with the reason dropped whenever a report existed.
+func TestARunsReportSaysWhyItDidNotSucceed(t *testing.T) {
 	t.Parallel()
-	failed := resumeText(Result{
+	failed := runReport(Result{
 		Text:  "Outcome: partial — the migration is written, the tests were not run",
 		Error: "the coding agent exited with status 137",
 	})
@@ -22,20 +22,39 @@ func TestTheResumedExecutorIsToldWhyARunDidNotSucceed(t *testing.T) {
 	}
 
 	// Said once: a reason that IS the report is not repeated as its own why.
-	same := resumeText(Result{Text: "ran out of turns", Error: "ran out of turns"})
+	same := runReport(Result{Text: "ran out of turns", Error: "ran out of turns"})
 	if strings.Count(same, "ran out of turns") != 1 {
 		t.Errorf("a reason equal to the report was repeated:\n%s", same)
 	}
 
 	// A success carries no why, whatever an earlier stage left in Error.
-	ok := resumeText(Result{Success: true, Text: "Outcome: succeeded", Error: "a warning"})
+	ok := runReport(Result{Success: true, Text: "Outcome: succeeded", Error: "a warning"})
 	if strings.Contains(ok, "Why it did not succeed") {
 		t.Errorf("a successful run was given a reason it failed:\n%s", ok)
 	}
 
 	// And a run with no report says its error, as it always did.
-	bare := resumeText(Result{Error: "the coding agent produced no output"})
+	bare := runReport(Result{Error: "the coding agent produced no output"})
 	if !strings.Contains(bare, "Error: the coding agent produced no output") {
 		t.Errorf("a run with only an error reads:\n%s", bare)
+	}
+}
+
+// A RUN'S REPORT IS ITS OWN ACCOUNT, addressed to nobody: the run was the
+// executor, so an instruction to "continue the task" would be read by the
+// reviewer as the executor's own claim and filed on the work item as what the
+// turn did.
+func TestARunsReportInstructsNobody(t *testing.T) {
+	t.Parallel()
+	got := runReport(Result{Success: true, Text: "Outcome: succeeded",
+		DeliveredRefs: []string{"pr/42"}})
+	if !strings.HasPrefix(got, "The executor's run succeeded.") ||
+		!strings.Contains(got, "Delivered: pr/42") || !strings.Contains(got, "Outcome: succeeded") {
+		t.Errorf("the report reads:\n%s", got)
+	}
+	for _, instruction := range []string{"Continue the task", "do NOT redo", "report the outcome"} {
+		if strings.Contains(got, instruction) {
+			t.Errorf("the report instructs its reader (%q):\n%s", instruction, got)
+		}
 	}
 }

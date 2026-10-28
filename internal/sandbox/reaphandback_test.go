@@ -92,7 +92,7 @@ func claimedPastRevival(t *testing.T, rig *coordRig, took bool) *events.Event {
 // with the person's answer, and handed nothing back and announced no loss.
 func resumedOnceWith(t *testing.T, rig, next *coordRig, answer string) {
 	t.Helper()
-	if calls := next.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, answer) {
+	if calls := next.resumer.calls(); len(calls) != 1 || !strings.Contains(askedOf(calls[0]).Answer, answer) {
 		t.Fatalf("the next holder resumed %+v, want the run resumed once with %q", calls, answer)
 	}
 	if got := rig.handedBack(); len(got) != 0 {
@@ -544,7 +544,7 @@ func TestAClaimGivenBackUnderTheReapIsResumedNotReaped(t *testing.T) {
 	}}
 	next := reaper(t.Context(), t, rig, store, 2, nil)
 	next.fireRetries()
-	if calls := next.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, "use main") {
+	if calls := next.resumer.calls(); len(calls) != 1 || !strings.Contains(askedOf(calls[0]).Answer, "use main") {
 		t.Fatalf("the next holder resumed %+v, want the run resumed once with its answer", calls)
 	}
 	if got := rig.handedBack(); len(got) != 0 {
@@ -1055,7 +1055,7 @@ func TestATurnThatTookTheAnswerInlineSpendsItsDeliveryBeforeItRuns(t *testing.T)
 	}
 }
 
-// AND ONE A RETRIED TURN TOOK BEFORE IT CALLED run_sandbox AGAIN. The relaunch
+// AND ONE A RETRIED TURN TOOK BEFORE IT RELAUNCHED ITS EXECUTOR. The relaunch
 // resets the row — the answer with it — so once the turn has relaunched,
 // nothing on the run could recognise the delivery that carried the reply; a
 // node that stops there must already have recorded it as worked.
@@ -1073,7 +1073,7 @@ func TestAReplyATurnTookIsSpentBeforeItsRelaunchClearsTheRow(t *testing.T) {
 	var spent []spentAt
 	var answer *RecordedAnswer
 	rig.resumer.during = func(ctx context.Context, run PendingRun) {
-		// THE TURN CALLS run_sandbox AGAIN, and its node stops right after.
+		// THE TURN RELAUNCHES ITS EXECUTOR, and its node stops right after.
 		if _, err := rig.pending.BeginLaunch(ctx, run, rigLease); err != nil {
 			t.Errorf("relaunch: %v", err)
 		}

@@ -139,3 +139,26 @@ func TestTheContainerIsStartedKnowingTheEngineHostsName(t *testing.T) {
 		})
 	}
 }
+
+// EVERY NAME A BOX IS HANDED FOR THE ENGINE HOST IS ONE THE ENGINE ADMITS. The
+// tool bridge admits a call to a session held to this host's loopback under a
+// loopback name or an [EngineHostName], which is how Docker Desktop and
+// Podman's machine deliver a container's call to the host; a runtime whose
+// name it did not admit would leave every held run in that runtime's
+// containers without its tools. And nothing else is one: a name the runtimes
+// do not hand out, or one merely containing theirs, is not.
+func TestEveryRuntimesNameForTheEngineHostIsAdmitted(t *testing.T) {
+	t.Parallel()
+	for _, runtime := range []string{"docker", "podman"} {
+		alias := containerCLI{path: "/usr/bin/" + runtime}.hostAlias()
+		if !EngineHostName(alias) {
+			t.Errorf("%s hands a box %q for the engine host, which EngineHostName refuses", runtime, alias)
+		}
+	}
+	for _, name := range []string{"", "localhost", "docker.internal", "host.docker.internal.example.com",
+		"evil-host.docker.internal", "host.internal"} {
+		if EngineHostName(name) {
+			t.Errorf("EngineHostName(%q) = true, want only the runtimes' own names", name)
+		}
+	}
+}

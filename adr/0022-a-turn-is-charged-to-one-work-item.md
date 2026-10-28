@@ -74,7 +74,7 @@ the seat's day and the company's history.
 
 Two kinds of the turn's own spend happen while **no segment is running**, and
 the segment that resumes from the coding run pays them, as it pays the run's
-own tokens: an box-mode executor's calls through the tool bridge, which go on
+own tokens: an executor run's calls through the tool bridge, which go on
 after the segment that launched the run has suspended and charged — the
 auxiliary rewrites its tools ask for and the workers it delegates to — and the
 condensation of a collected run's report, failure or question, which the
@@ -90,6 +90,18 @@ reaches the item; a bridged call that finishes after its job was claimed for
 the resume stays on that job's record unpaid, and one that finishes after the
 next launch is not recorded at all. So the item can fall short of the turn's
 cost and never exceed it.
+
+## Amendment: every turn parks on its executor
+
+Since [ADR-0066](0066-every-executor-is-its-coding-clis-own-run.md) every
+turn's executor is its coding CLI's own detached run, so every turn completes
+once when it parks at the launch and again each time a run it launched is
+collected: the segments above are every turn's, not only those of a turn that
+chose to detach one. What a parked segment charged to nothing hands on rides
+the turn's parked state (`internal/agent/execstate`, its `Uncharged`), which
+carries no conversation, where the decision above says the suspended
+conversation. And the round-cap judge a segment's tokens include is the
+onboarding pass's, the one pass a judge extends.
 
 ## What this does not decide
 

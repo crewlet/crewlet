@@ -7,42 +7,34 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 )
+
+// discoveryEntries is the provider set a discovery case runs on: the executor
+// makes no model call of its own — its run is played — so nothing is scripted.
+func discoveryEntries() []phase.Entry {
+	return []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+}
 
 func TestAPhaseCanDiscoverAndActivateAnMCPTool(t *testing.T) {
 	t.Parallel()
 	// The whole reason discovery exists: the executor is shown SERVER names,
 	// not tool names, and the delivery check's own correction for a
 	// wrong-guessed name tells the model to use exactly these two tools. If
-	// they are not on the surface, that advice is a lie.
-	r, prov, _ := fixture(t, &scriptedProvider{
-		execute: []llmtest.Response{
-			calling(callOf(t, "list_mcp_server_tools", map[string]any{"server": "slack"})),
-			calling(callOf(t, "activate_tool", map[string]any{"name": "slack_post"})),
-			submitWork(t),
-		},
-	})
-	w, _, err := r.Execute(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
+	// they are not on the surface its run calls over the bridge, that advice
+	// is a lie.
+	launched, req := launch(t, discoveryEntries(), buildOpts{}, 1, "", nil)
+	if slices.Contains(toolNames(req.Surface.ToolDefs()), "slack_post") {
+		t.Errorf("the tool was offered before it was activated: %v", toolNames(req.Surface.ToolDefs()))
 	}
-	// The fixture activates but never posts, so the honest outcome is
-	// blocked — the subject here is the discovery round trip, not delivery.
-	if w.Outcome != turn.OutcomeBlocked {
-		t.Fatalf("outcome = %s", w.Outcome)
-	}
-
-	offered := prov.offeredFor("execute")
-	if len(offered) < 3 {
-		t.Fatalf("the executor made %d model requests, want the discovery round trip", len(offered))
-	}
-	// The listing named the server's real tools — what the model read back
-	// from the call.
-	listing := prov.answerTo("execute", "list_mcp_server_tools")
+	listed := play(t, req, run{calls: []llm.ToolCall{{ID: "a", Name: "list_mcp_server_tools",
+		Arguments: map[string]any{"server": "slack"}}}})
+	listing := listed[0].Result
 	if !strings.Contains(listing, "slack_post") || !strings.Contains(listing, "slack_history") {
 		t.Errorf("the listing did not name the server's tools:\n%s", listing)
 	}
@@ -76,13 +68,23 @@ func TestAPhaseCanDiscoverAndActivateAnMCPTool(t *testing.T) {
 	if strings.Contains(listing, "jira_create") {
 		t.Errorf("the listing for slack included another server's tools:\n%s", listing)
 	}
-	// And the activation reached the surface: the tool is offered on the
-	// round AFTER it, which is what makes activation worth anything.
-	if !slices.Contains(offered[2], "slack_post") {
-		t.Errorf("the activated tool was not offered next round: %v", offered[2])
+
+	activated := play(t, req, run{calls: []llm.ToolCall{
+		{ID: "b", Name: "activate_tool", Arguments: map[string]any{"name": "slack_post"}},
+		submitWork(t),
+	}})
+	// And the activation reached the surface: the bridge lists the tool
+	// from the call after it, which is what makes activation worth
+	// anything.
+	if !slices.Contains(toolNames(req.Surface.ToolDefs()), "slack_post") {
+		t.Errorf("the activated tool is not on the run's surface: %v", toolNames(req.Surface.ToolDefs()))
 	}
-	if slices.Contains(offered[0], "slack_post") {
-		t.Errorf("the tool was offered before it was activated: %v", offered[0])
+	_, w, _ := collect(t, discoveryEntries(), buildOpts{}, launched, nil,
+		append(listed, activated...), "", runner.RunRecord{})
+	// The run activates but never posts, so the honest outcome is blocked
+	// — the subject here is the discovery round trip, not delivery.
+	if w.Outcome != turn.OutcomeBlocked {
+		t.Fatalf("outcome = %s", w.Outcome)
 	}
 	// The calls are recorded, so the ledger and the delivery check see them.
 	if !slices.Contains(callNames(w.Calls), "activate_tool") {
@@ -95,17 +97,10 @@ func TestAnUnknownServerListsTheOnesThatExist(t *testing.T) {
 	// A named server with no tools and a wrong server name read very
 	// differently to a model: one means "ask again later", the other means
 	// "you have the name wrong". Listing what exists turns the second into
-	// a recoverable round.
-	r, prov, _ := fixture(t, &scriptedProvider{
-		execute: []llmtest.Response{
-			calling(callOf(t, "list_mcp_server_tools", map[string]any{"server": "slacck"})),
-			submitWork(t),
-		},
-	})
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	reply := prov.answerTo("execute", "list_mcp_server_tools")
+	// a recoverable call.
+	_, req := launch(t, discoveryEntries(), buildOpts{}, 1, "", nil)
+	reply := play(t, req, run{calls: []llm.ToolCall{{ID: "a", Name: "list_mcp_server_tools",
+		Arguments: map[string]any{"server": "slacck"}}}})[0].Result
 	if !strings.Contains(reply, "slack") {
 		t.Errorf("the failure does not name the servers that exist:\n%s", reply)
 	}
@@ -115,17 +110,10 @@ func TestActivatingAGuessedNameSaysHowToFindTheRealOne(t *testing.T) {
 	t.Parallel()
 	// A miss is almost always a guessed MCP tool name. Saying so, and
 	// naming the way to find the real one, is the difference between a
-	// recoverable round and a phase that keeps guessing.
-	r, prov, _ := fixture(t, &scriptedProvider{
-		execute: []llmtest.Response{
-			calling(callOf(t, "activate_tool", map[string]any{"name": "slack_send_msg"})),
-			submitWork(t),
-		},
-	})
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	reply := prov.answerTo("execute", "activate_tool")
+	// recoverable call and a run that keeps guessing.
+	_, req := launch(t, discoveryEntries(), buildOpts{}, 1, "", nil)
+	reply := play(t, req, run{calls: []llm.ToolCall{{ID: "a", Name: "activate_tool",
+		Arguments: map[string]any{"name": "slack_send_msg"}}}})[0].Result
 	if !strings.Contains(reply, "list_mcp_server_tools") {
 		t.Errorf("the failure does not say how to find the real name:\n%s", reply)
 	}
@@ -136,35 +124,32 @@ func TestActivatingAGuessedNameSaysHowToFindTheRealOne(t *testing.T) {
 
 func TestOneSurfacesActivationDoesNotLeakIntoAnother(t *testing.T) {
 	t.Parallel()
-	// The discovery pair is per-PHASE for the same reason the submission
+	// The discovery pair is per-SURFACE for the same reason the submission
 	// tools are: activation mutates one surface, and a shared registry
-	// would carry one phase's activation into the next — or into the next
-	// turn. A self_iterate builds a fresh surface, which is correct: its
-	// LLM context started over too.
-	r, prov, _ := fixture(t, &scriptedProvider{
-		execute: []llmtest.Response{
-			calling(callOf(t, "activate_tool", map[string]any{"name": "slack_history"})),
-			submitWork(t),
-		},
-	})
+	// would carry one launch's activation into the next — or into the next
+	// turn. A self_iterate launches on a fresh surface, which is correct:
+	// its run's context started over too.
+	launcher := &playLauncher{}
+	r, _ := buildWith(t, discoveryEntries(), buildOpts{launcher: launcher})
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
+	}
+	first := launcher.last(t)
+	play(t, first, run{calls: []llm.ToolCall{{ID: "a", Name: "activate_tool",
+		Arguments: map[string]any{"name": "slack_history"}}}})
+	if !slices.Contains(toolNames(first.Surface.ToolDefs()), "slack_history") {
+		t.Errorf("the activation did not reach its own surface: %v", toolNames(first.Surface.ToolDefs()))
 	}
 	if _, _, err := r.Execute(context.Background(), 2, "try again", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	offered := prov.offeredFor("execute")
-	// Round 1 activated it, so round 1's LAST request has it...
-	if !slices.Contains(offered[1], "slack_history") {
-		t.Errorf("the activation did not reach its own surface: %v", offered[1])
+	// ...and the next launch starts clean.
+	next := toolNames(launcher.last(t).Surface.ToolDefs())
+	if slices.Contains(next, "slack_history") {
+		t.Errorf("an activation leaked into the next launch: %v", next)
 	}
-	// ...and the next turn round starts clean.
-	last := offered[len(offered)-1]
-	if slices.Contains(last, "slack_history") {
-		t.Errorf("an activation leaked into the next round: %v", last)
-	}
-	if !slices.Contains(last, runner.SubmitWorkTool) {
-		t.Errorf("the next round lost its own tools: %v", last)
+	if !slices.Contains(next, runner.SubmitWorkTool) {
+		t.Errorf("the next launch lost its own tools: %v", next)
 	}
 }
 
@@ -200,24 +185,18 @@ func TestDiscoveryRefusesAnEmptyArgument(t *testing.T) {
 	// found on server """ — which reads as a server that exists and is
 	// empty — and activating an empty name reports no tool called "", which
 	// says nothing at all.
-	r, prov, _ := fixture(t, &scriptedProvider{
-		execute: []llmtest.Response{
-			calling(callOf(t, "list_mcp_server_tools", map[string]any{"server": "  "}),
-				callOf(t, "activate_tool", map[string]any{})),
-			submitWork(t),
-		},
-	})
-	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
+	_, req := launch(t, discoveryEntries(), buildOpts{}, 1, "", nil)
 	replies := map[string]string{}
-	for _, r := range prov.answered("execute") {
-		replies[r.Name] = r.Output
+	for _, c := range play(t, req, run{calls: []llm.ToolCall{
+		{ID: "a", Name: "list_mcp_server_tools", Arguments: map[string]any{"server": "  "}},
+		{ID: "b", Name: "activate_tool", Arguments: map[string]any{}},
+	}}) {
+		replies[c.Name] = c.Result
 	}
 	if got := replies["list_mcp_server_tools"]; !strings.Contains(got, "Name a server") {
 		t.Errorf("an empty server name reported %q", got)
 	}
-	// It still says which servers exist, so the round is recoverable.
+	// It still says which servers exist, so the call is recoverable.
 	if got := replies["list_mcp_server_tools"]; !strings.Contains(got, "slack") {
 		t.Errorf("the refusal does not name the servers that exist: %q", got)
 	}
@@ -237,17 +216,12 @@ func TestDiscoveryRefusesAnEmptyArgument(t *testing.T) {
 func TestTheReviewerIsOfferedOnlyItsSubmission(t *testing.T) {
 	t.Parallel()
 	r, prov, _ := fixture(t, &scriptedProvider{
-		execute: []llmtest.Response{submitWork(t)},
 		review: []llmtest.Response{
 			calling(callOf(t, runner.ActivateTool, map[string]any{"name": "slack_post"})),
 			submitCall(t, runner.SubmitReviewTool, `{"decision":"done","final_artifact":"a"}`),
 		},
 	})
-	w, _, err := r.Execute(context.Background(), 1, "", nil)
-	if err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	if _, err := r.Review(context.Background(), 1, w, nil); err != nil {
+	if _, err := r.Review(context.Background(), 1, workFor("posted"), nil); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
 	offered := prov.offeredFor("review")

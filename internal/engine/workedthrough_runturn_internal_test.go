@@ -127,7 +127,7 @@ func threadedEngine(t *testing.T, thread []map[string]string) *Engine {
 	e.epoch.current.Store(&Company{
 		Org: organization, Models: models, Tools: tools.NewRegistry(),
 		Config: &config.Company{Name: "Acme", TurnEngine: config.TurnEngine{
-			MaxIterations: 1, DelegationDepthLimit: 1, MaxToolRounds: 3,
+			MaxIterations: 1, DelegationDepthLimit: 1,
 		}},
 	})
 	e.notify.registry = notify.NewRegistry(organization, nil)

@@ -29,7 +29,6 @@ func launchReq(turnID string) LaunchRequest {
 			TraceID: "tr-1", SpanID: "sp-1",
 		},
 		Brief: "Clone example.com/acme/api and fix the failing test",
-		Wider: "get CI green",
 		Task:  "get CI green",
 		Spec:  Spec{CodingAgent: "claude-code", PauseTTLSec: 1800},
 	}
@@ -56,7 +55,8 @@ func TestALaunchIsStampedWithTheLeaseItsSeatIsHeldUnder(t *testing.T) {
 	// AND A LAUNCH THAT FAILS ENDS ITS ROW UNDER IT, rather than unfenced.
 	fenced := &finishFences{PendingStore: rig.pending}
 	c, err := NewCoordinator(CoordinatorOptions{
-		Queue: rig.queue, Pending: fenced, Manager: rig.manager,
+		Answers: rigAnswers(),
+		Queue:   rig.queue, Pending: fenced, Manager: rig.manager,
 		Resume: &resumeSpy{}, Audience: &audienceSpy{},
 		Lease: leased(rigLease),
 	})
@@ -95,9 +95,6 @@ func TestALaunchStartsTheJobAndRecordsWhatOutlivesTheTurn(t *testing.T) {
 	}
 	if res.SandboxID == "" || res.CommandID == "" {
 		t.Fatalf("Launch = %+v, want a box and a command", res)
-	}
-	if res.Reused {
-		t.Fatal("a fresh launch reported reusing a box")
 	}
 	run := rig.get("t1")
 	// LAUNCHING, not running. The job is executing, and the turn that
@@ -227,16 +224,16 @@ func TestTheStartedEventCarriesTheBriefsFirstLineWhole(t *testing.T) {
 	}
 }
 
-// The agent is asked the concrete task and the wider goal it serves, and told
-// as a standing instruction what its box already provides — so it does not
-// spend rounds rediscovering it — on the channel its CLI adds to its own
-// system prompt. Each text carries its own half and nothing of the other's.
+// The agent is asked the task, and told as a standing instruction what its box
+// already provides — so it does not spend rounds rediscovering it — on the
+// channel its CLI adds to its own system prompt. Each text carries its own
+// half and nothing of the other's.
 //
 // There is no success-criteria section: it came from the planner's declared
 // criteria, and with one loop there is no separate plan to declare them. What
 // "done" means is the executor's own brief, written by the frame that will
 // read the answer.
-func TestTheCodingAgentIsToldTheGoalAndItsEnvironment(t *testing.T) {
+func TestTheCodingAgentIsToldItsTaskAndItsEnvironment(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
@@ -252,8 +249,7 @@ func TestTheCodingAgentIsToldTheGoalAndItsEnvironment(t *testing.T) {
 	}
 	brief, system := started[0].Brief, started[0].System
 	for _, want := range []string{
-		"fix the failing test", // the executor's own ask
-		"get CI green",         // the wider task
+		"fix the failing test", // the turn's ask
 	} {
 		if !strings.Contains(brief, want) {
 			t.Errorf("the brief does not mention %q:\n%s", want, brief)
@@ -275,43 +271,27 @@ func TestTheCodingAgentIsToldTheGoalAndItsEnvironment(t *testing.T) {
 	}
 }
 
-// A RUN'S OWN SYSTEM TEXT LEADS ITS STANDING INSTRUCTIONS, and the task leads
-// its brief.
-//
-// A box-mode executor launches with the seat's system prompt: it reaches
+// A RUN'S STANDING INSTRUCTIONS LEAD WITH THE SEAT'S SYSTEM PROMPT: it reaches
 // the runner ahead of the environment and the ask, whole, opened by the note
 // that says it is the role rather than the coding tool's own prompt, and none
-// of it in the brief. A run with no system text of its own (a run_sandbox job)
-// gets the standing instructions alone, opening on the first of them rather
-// than on an empty section or a note introducing nothing.
+// of it in the brief — which is the turn's ask, once, as the runner hands it.
 //
 // AND THE RUN IS NAMED THE SAME WAY LIVE AND FROM ITS RECORD: by its caller's
-// label where it gave one (a box-mode executor names its turn's task, since
-// its brief opens with a heading), else by the brief's first line.
+// label where it gave one (the launch names its turn's task, since the brief
+// opens with a heading), else by the brief's first line.
 func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 	t.Parallel()
 	const seat = "You are Agent SWE at Acme.\nSEAT-IDENTITY-MARKER"
 	const ask = "## If you get blocked on a human decision\nRun crewlet-ask --to founder"
-	for name, tc := range map[string]struct {
-		system, label, opens, named string
-		// agent marks a box-mode executor, whose brief is the turn's
-		// own ask and so carries no wider task.
-		agent bool
-	}{
-		"box mode": {
-			system: seat, label: "Ship the login fix\nand tell Ana", agent: true,
-			opens: agentRunNote + "\n\n" + seat + "\n\n## Your environment\n", named: "Ship the login fix",
-		},
-		"run_sandbox": {system: "", opens: "## Your environment\n"},
+	for name, tc := range map[string]struct{ label, named string }{
+		"labelled":   {label: "Ship the login fix\nand tell Ana", named: "Ship the login fix"},
+		"unlabelled": {},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			rig := newWaiterRig(t)
 			req := launchReq("t1")
-			req.System, req.Ask, req.Label = tc.system, ask, tc.label
-			if tc.agent {
-				req.Wider = ""
-			}
+			req.System, req.Ask, req.Label = seat, ask, tc.label
 			named := cmp.Or(tc.named, req.Brief)
 			if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
 				t.Fatalf("Launch: %v", err)
@@ -321,21 +301,15 @@ func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 				t.Fatalf("started %d runs, want 1", len(started))
 			}
 			got := started[0]
-			if !strings.HasPrefix(got.System, tc.opens) {
-				t.Errorf("the system text opens\n%q\nwant\n%q", got.System, tc.opens)
+			opens := agentRunNote + "\n\n" + seat + "\n\n## Your environment\n"
+			if !strings.HasPrefix(got.System, opens) {
+				t.Errorf("the system text opens\n%q\nwant\n%q", got.System, opens)
 			}
 			if !strings.HasSuffix(got.System, "\n\n"+ask) {
 				t.Errorf("the ask is not the last standing instruction the launch adds:\n%s", got.System)
 			}
-			// THE TASK ONCE: a box-mode executor's brief is the turn's
-			// ask already, and a run_sandbox job's is one step of a goal
-			// framed after it.
-			want := req.Brief
-			if !tc.agent {
-				want += "\n\n## The wider task\n" + req.Wider
-			}
-			if got.Brief != want {
-				t.Errorf("the brief is\n%q\nwant\n%q", got.Brief, want)
+			if got.Brief != req.Brief {
+				t.Errorf("the brief is\n%q\nwant the turn's ask alone\n%q", got.Brief, req.Brief)
 			}
 			if strings.Contains(got.Brief, "SEAT-IDENTITY-MARKER") || strings.Contains(got.Brief, "crewlet-ask") {
 				t.Errorf("standing instructions reached the brief:\n%s", got.Brief)
@@ -377,39 +351,83 @@ func TestTheCodingAgentIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
 	}
 }
 
-// The checkout is the expensive half of a coding run; a second call in one
-// turn continues where the first stopped.
-func TestASecondCallInOneTurnReusesTheBox(t *testing.T) {
+// THE ROW CARRIES THE COLLEAGUE'S ASK THE TURN ANSWERS: the frame that ends a
+// parked turn sees no trigger, and the ask on the row is what it replies to.
+//
+// Mutation: leave the launch's ask off the row, and the row carries none.
+func TestTheRowCarriesTheColleaguesAskTheTurnAnswers(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
-	first, err := rig.launchVia(t.Context(), rig.manager, launchReq("t1"))
-	if err != nil {
-		t.Fatalf("Launch: %v", err)
-	}
 	req := launchReq("t1")
-	req.ReuseBox = first.SandboxID
-	second, err := rig.launchVia(t.Context(), rig.manager, req)
-	if err != nil {
+	req.Turn.ColleagueAsk = &ColleagueAsk{ChannelID: "a2a-1", Question: "which branch?",
+		Chain: []string{"ceo"}, TraceID: "tr-ask", SpanID: "sp-ask"}
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
-	if !second.Reused || second.SandboxID != first.SandboxID {
-		t.Fatalf("second launch = %+v, want it on the first box", second)
+	got := rig.get("t1").ColleagueAsk
+	if got == nil || got.ChannelID != "a2a-1" || got.Question != "which branch?" ||
+		len(got.Chain) != 1 || got.TraceID != "tr-ask" || got.SpanID != "sp-ask" {
+		t.Fatalf("the row carries ask %+v, want the launch's", got)
+	}
+	if again := launchReq("t2"); again.Turn.ColleagueAsk != nil {
+		t.Fatal("the fixture's turn carries an ask of its own")
+	}
+	if _, err := rig.launchVia(t.Context(), rig.manager, launchReq("t2")); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if got := rig.get("t2").ColleagueAsk; got != nil {
+		t.Fatalf("a turn no ask woke carries ask %+v", *got)
 	}
 }
 
-// A box that is gone is exactly the case the pushed branch exists for.
-func TestAReuseOfAVanishedBoxFallsBackToAFreshOne(t *testing.T) {
+// A LAUNCH NAMES ITS RUNNER, and one that names none is refused before its row
+// exists: the runner is the CLI of the entry whose login and model the run
+// carries, and a box running some default CLI could read neither.
+func TestALaunchThatNamesNoCodingAgentIsRefused(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
-	req.ReuseBox = "box-that-was-reaped"
-
-	res, err := rig.launchVia(t.Context(), rig.manager, req)
-	if err != nil {
-		t.Fatalf("a launch whose reuse target is gone must still run: %v", err)
+	req.Spec.CodingAgent = ""
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err == nil {
+		t.Fatal("a launch naming no coding agent started a run")
 	}
-	if res.Reused || res.SandboxID == "" {
-		t.Fatalf("Launch = %+v, want a fresh box", res)
+	if _, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || found {
+		t.Fatalf("a refused launch left a row (found %v, err %v)", found, err)
+	}
+	if started := rig.runner.Started(); len(started) != 0 {
+		t.Fatalf("a refused launch started %d jobs", len(started))
+	}
+}
+
+// THE ENTRY THE RUN WAS LAUNCHED ON IS THE JOB'S, on its record: the member of
+// the seat's executor chain that took it, which a fallback makes other than
+// the head. The phase record its collection publishes is filed under it, so
+// spend by provider names the entry that ran — and a relaunch on another entry
+// files the next job under that one rather than carrying the first.
+func TestAJobRecordsTheEntryItWasLaunchedOn(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	req.ProviderKey, req.Model = "fallback", "sonnet"
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if got := rig.get("t1").Launch; got.ProviderKey != "fallback" || got.Model != "sonnet" {
+		t.Fatalf("the job's record = %+v, want the entry and model it was launched on", got)
+	}
+	rec := runPhase(rig.get("t1"), rig.get("t1").Launch, Result{Success: true}, time.Now())
+	if rec.ProviderKey != "fallback" || rec.Model != "sonnet" {
+		t.Errorf("the job's phase record is filed under %q/%q, want fallback/sonnet",
+			rec.ProviderKey, rec.Model)
+	}
+
+	again := launchReq("t1")
+	again.ProviderKey, again.Model = "head", "opus"
+	if _, err := rig.launchVia(t.Context(), rig.manager, again); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	if got := rig.get("t1").Launch; got.ProviderKey != "head" || got.Model != "opus" {
+		t.Errorf("the relaunched job's record = %+v, want its own entry, not the first job's", got)
 	}
 }
 
@@ -461,7 +479,7 @@ func TestTheRowExistsBeforeTheBoxDoes(t *testing.T) {
 	}
 }
 
-// THE JOB IS NAMED BEFORE ITS BOX EXISTS. A box-mode run's bridge session
+// THE JOB IS NAMED BEFORE ITS BOX EXISTS. A run's bridge session
 // files every call the box makes under the name a launch hands it, so the name
 // has to reach it before the box can make one — and it has to be the name the
 // row holds, which is the one the store minted. Learned later, from the row,
@@ -484,12 +502,21 @@ func TestALaunchNamesItsJobBeforeItsBoxExists(t *testing.T) {
 	req.MCPServers = map[string]MCPServer{
 		"jira": {Name: "jira", Transport: TransportStdio, Command: "jira-mcp"},
 	}
-	req.Opened = func(launch string) (map[string]MCPServer, error) {
+	// THE TURN'S NOTES RIDE THE ROW THE LAUNCH OPENS: the seat anchor, and
+	// the brief's note read by the job the write names.
+	req.SteerSeat = []byte("sealed-seat")
+	req.BriefNotes = []RunNote{{ID: "note-1", Sealed: []byte("sealed-note"),
+		Read: &NoteRead{Phase: "execute", Iteration: 1, Round: 1, Boundary: "brief"}}}
+	req.Opened = func(job OpenedJob) (Opening, error) {
 		witness.mu.Lock()
 		defer witness.mu.Unlock()
-		witness.named = append(witness.named, launch)
-		return map[string]MCPServer{"crewlet": {Name: "crewlet", Transport: TransportHTTP,
-			URL: "https://engine.example.com/mcp/" + launch}}, nil
+		witness.named = append(witness.named, job.LaunchID)
+		endpoint := "https://engine.example.com/mcp/" + job.LaunchID
+		return Opening{
+			Servers: map[string]MCPServer{"crewlet": {Name: "crewlet", Transport: TransportHTTP,
+				URL: endpoint}},
+			Steer: SteerWiring{Server: "crewlet", Tool: "steer_take", URL: endpoint + "/steer"},
+		}, nil
 	}
 	if _, err := rig.launchVia(t.Context(), manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -524,10 +551,22 @@ func TestALaunchNamesItsJobBeforeItsBoxExists(t *testing.T) {
 		t.Errorf("the run's standing instructions do not list the servers it was given:\n%s",
 			started[0].System)
 	}
+	// AND WHERE THE JOB'S CLI ASKS FOR ITS TURN'S NOTES, as the naming
+	// answered it — never persisted, so only the job it was minted for.
+	if want := (SteerWiring{Server: "crewlet", Tool: "steer_take",
+		URL: "https://engine.example.com/mcp/" + run.LaunchID + "/steer"}); started[0].Steer != want {
+		t.Errorf("the job was handed steer wiring %+v, want %+v", started[0].Steer, want)
+	}
+	if string(run.Steer.Seat) != "sealed-seat" || len(run.Steer.Notes) != 1 ||
+		run.Steer.Notes[0].Read == nil || run.Steer.Notes[0].Read.Launch != run.LaunchID ||
+		run.Steer.Notes[0].Read.Boundary != "brief" {
+		t.Errorf("the row the launch opened carries notes %+v, want the anchor and the brief's "+
+			"note read by job %s", run.Steer, run.LaunchID)
+	}
 }
 
 // A JOB THAT CANNOT BE NAMED TO WHAT SERVES ITS BOX IS NOT LAUNCHED. The naming
-// is what mints the box's endpoint, and a box-mode run with no endpoint is a
+// is what mints the box's endpoint, and a run with no endpoint is a
 // coding agent with none of the seat's tools: the launch is abandoned before
 // any box exists, and its row ended, rather than started blind.
 //
@@ -544,8 +583,8 @@ func TestALaunchWhoseJobCannotBeNamedStartsNothing(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	req := launchReq("t1")
-	req.Opened = func(string) (map[string]MCPServer, error) {
-		return nil, errors.New("no endpoint for the job")
+	req.Opened = func(OpenedJob) (Opening, error) {
+		return Opening{}, errors.New("no endpoint for the job")
 	}
 	if _, err := rig.launchVia(t.Context(), manager, req); err == nil {
 		t.Fatal("a launch whose job could not be named started")
@@ -656,7 +695,8 @@ func launchWithoutBrief() LaunchRequest {
 func (r *waiterRig) launchVia(ctx context.Context, m *Manager, req LaunchRequest) (LaunchResult, error) {
 	r.t.Helper()
 	c, err := NewCoordinator(CoordinatorOptions{
-		Queue: r.queue, Pending: r.pending, Manager: m,
+		Answers: rigAnswers(),
+		Queue:   r.queue, Pending: r.pending, Manager: m,
 		Resume: &resumeSpy{}, Audience: &audienceSpy{},
 		Lease: leased(rigLease),
 	})
@@ -665,4 +705,28 @@ func (r *waiterRig) launchVia(ctx context.Context, m *Manager, req LaunchRequest
 	}
 	r.t.Cleanup(c.Stop)
 	return c.Launch(ctx, m, req)
+}
+
+// THE ANNOUNCEMENT NAMES THE MEMBER THAT TOOK THE RUN, and its model: a launch
+// picks the first member of the seat's executor chain that can take it, so a
+// fallback runs a job on an entry other than the chain's head — and which
+// entry's plan a running job is spending is what a person watching it asks,
+// long before its own record is collected.
+//
+// Mutation: drop either field from the announcement and this goes red.
+func TestTheStartedEventNamesTheMemberThatTookTheRun(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	req.ProviderKey, req.Model = "spare", "claude-haiku"
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	started := rig.queue.published[0].event.Data.(*types.SandboxRunStarted)
+	if started.ProviderKey != "spare" || started.Model != "claude-haiku" {
+		t.Fatalf("the announcement names %q/%q, want the member that took the run",
+			started.ProviderKey, started.Model)
+	}
 }

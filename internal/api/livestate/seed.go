@@ -111,7 +111,10 @@ func (s *LiveState) seedTurns(turns []store.Turn) []string {
 				continue
 			}
 			outcome := OutcomeCompleted
-			if t.Failed {
+			switch {
+			case t.Stopped:
+				outcome = OutcomeStopped
+			case t.Failed:
 				outcome = OutcomeFailed
 			}
 			ended := t.EndedAt.UTC().Format(time.RFC3339Nano)

@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
@@ -175,33 +176,52 @@ func leadChain(o *org.Organization, seat *org.Role) []string {
 	return out
 }
 
-// askBrief is the brief addendum that tells a coding agent it may stop and ask
-// a person, and whom it can name when it does.
+// askBrief is the standing instruction that tells an executor run how to get
+// a person's answer, and whom it can name when it asks.
 //
-// THE PARK HAD NO WAY IN. The box carries the ask shim and the collect reads
-// what it writes, but the instruction that tells the coding agent the shim
-// exists ([codingagent.AskInstruction]) had no caller: no brief ever mentioned
-// it, so a run blocked on a decision guessed or gave up rather than asking.
+// TWO WAYS, and which one turns on whether the run can go on without it. A
+// question that only shapes what comes next is asked with the seat's own
+// tools — a comment on the work item that puts it to somebody (its `ask`),
+// or a message where the run was asked — and the run finishes its turn
+// as usual: the answer wakes the seat's next turn like any other message, and
+// nothing waits. A question the work cannot proceed without parks the run with
+// the ask shim ([codingagent.AskInstruction]), and the answer resumes that same
+// run. Told only of the shim, a run parked on every question, holding its box
+// for one a teammate could have answered in the next turn; told of neither, it
+// guessed.
+//
+// THE PARK HAD NO WAY IN. The box carries the ask shim and the collection
+// reads what it writes, and this is the one text that tells a run the shim
+// exists: a launch that did not carry it ([sandbox.LaunchRequest.Ask]) gave
+// every run a park nothing could reach.
 //
 // THE NAMES ARE THE ONES THE PARK RESOLVES. The roster is the seat's unit
 // by handle and the manager is the seat's manager by handle, so a `--to`
 // that copies either resolves through the exact tiers [resolveAudience]
 // accepts rather than falling back.
 func askBrief(o *org.Organization, seat *org.Role) string {
-	if o == nil || seat == nil {
-		return codingagent.AskInstruction(nil, "")
-	}
 	var roster []string
-	if unit := o.UnitFor(seat); unit != nil {
-		for _, member := range unit.Roles {
-			if member != seat {
-				roster = append(roster, member.Handle())
+	manager := ""
+	if o != nil && seat != nil {
+		if unit := o.UnitFor(seat); unit != nil {
+			for _, member := range unit.Roles {
+				if member != seat {
+					roster = append(roster, member.Handle())
+				}
 			}
 		}
+		if m := o.Manager(seat); m != nil {
+			manager = m.Handle()
+		}
 	}
-	manager := ""
-	if m := o.Manager(seat); m != nil {
-		manager = m.Handle()
-	}
-	return codingagent.AskInstruction(roster, manager)
+	return strings.Join([]string{
+		"## When you need a person's answer",
+		"### If you can go on without it",
+		"Ask with your tools and keep working: `" + builtin.CommentOnWorkTool + "` with `ask` " +
+			"naming whoever owes the answer puts the question on the work item, or send them a " +
+			"message where you were asked. Then finish your turn as usual with `" +
+			runner.SubmitWorkTool + "`, saying what is waiting on whom. Their answer wakes a " +
+			"new turn of yours — do not wait for it here.",
+		codingagent.AskInstruction(roster, manager),
+	}, "\n")
 }

@@ -240,8 +240,8 @@ func (r *Registry) Head(role *org.Role, ph Phase) (chain.Member, error) {
 // THE EXECUTOR IS NOT HERE, and its absence is the rule: `llm` is the seat's
 // model, and the executor is what runs on it. Every phase below is a satellite
 // an operator may point somewhere cheaper — the reviewer, a spawned worker,
-// the summariser, the round-cap judge, the coding agent — and each falls
-// straight through to llm when it names nothing.
+// the summariser, the round-cap judge — and each falls straight through to
+// llm when it names nothing.
 func roleKeys(role *org.Role, ph Phase) org.ProviderKeys {
 	switch ph {
 	case Review:
@@ -252,8 +252,6 @@ func roleKeys(role *org.Role, ph Phase) org.ProviderKeys {
 		return role.LLMAuxiliary
 	case Judge:
 		return role.LLMJudge
-	case Sandbox:
-		return role.LLMSandbox
 	case Onboarding:
 		// NO FIELD OF ITS OWN, deliberately: onboarding reads the team's
 		// pages and writes conventions once, on a seat's first turn, and
@@ -272,4 +270,4 @@ func roleKeys(role *org.Role, ph Phase) org.ProviderKeys {
 // chain — but "has no own field" is a fact about [roleKeys], not a reason to
 // be missing from the set. A caller iterating this to cover every phase was
 // silently skipping the one that runs FIRST on a seat's first turn.
-var All = []Phase{Execute, Review, Subagent, Auxiliary, Judge, Sandbox, Onboarding}
+var All = []Phase{Execute, Review, Subagent, Auxiliary, Judge, Onboarding}

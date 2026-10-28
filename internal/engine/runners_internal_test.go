@@ -11,7 +11,7 @@ import (
 
 // THE DOCTOR'S LIST AND THE ENGINE'S REGISTRY ARE THE SAME LIST.
 //
-// `crewlet llm doctor` checks a box-mode entry's CLI against
+// `crewlet llm doctor` checks an executor entry's CLI against
 // codingagent.Names(); the engine builds its runner map here. Nothing connects
 // them, and a drift fails in the direction that is hardest to see: the doctor
 // passes the entry, the deploy script goes green, and the seat's first turn
@@ -32,7 +32,7 @@ func TestTheDoctorsRunnerListIsTheEngineList(t *testing.T) {
 	}
 	for _, name := range want {
 		if built[name] == nil {
-			t.Errorf("runner %q is named and nil, so box mode on it fails at the first turn", name)
+			t.Errorf("runner %q is named and nil, so an executor on it fails at the first turn", name)
 		}
 	}
 }

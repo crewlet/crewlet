@@ -68,8 +68,9 @@ func (p *countedProvider) called() int {
 }
 
 // budgetedTurn is an engine over the in-memory fleet, running one seat whose
-// day is capped at dayCeiling, with its executor and its auxiliary model on
-// two providers a case can count.
+// day is capped at dayCeiling, with its text phases and its auxiliary model on
+// two providers a case can count. Its executor launches on [runnerKey], where
+// a case that rigs the run gets one.
 type budgetedTurn struct {
 	e          *Engine
 	pub        *pub
@@ -99,17 +100,14 @@ func newBudgetedTurn(t *testing.T, dayCeiling, auxTokens int) *budgetedTurn {
 			InputTokens: auxTokens - 100, OutputTokens: 100,
 		}},
 	}
-	models, err := phase.NewRegistry([]phase.Entry{
+	models := runnable(t, []phase.Entry{
 		{Key: "main", Provider: r.executor}, {Key: "cheap", Provider: r.auxiliary},
-	})
-	if err != nil {
-		t.Fatalf("phase.NewRegistry: %v", err)
-	}
+	}, seat)
 	r.e = withSessions(t, &Engine{backends: &Backends{Queue: r.pub, Fleet: r.fleet}})
 	r.e.epoch.current.Store(&Company{
 		Org: r.org, Models: models, Tools: tools.NewRegistry(),
 		Config: &config.Company{Name: "Acme", TurnEngine: config.TurnEngine{
-			MaxIterations: 1, DelegationDepthLimit: 3, MaxToolRounds: 3,
+			MaxIterations: 1, DelegationDepthLimit: 3,
 		}},
 	})
 	return r
@@ -216,19 +214,20 @@ func TestATurnsJudgeAsksTheTurnsMeter(t *testing.T) {
 	}
 }
 
-// A TURN WHOSE CONTEXT FITS RUNS ITS ROUND, so the case above is about the
-// window being full and not about a turn that condensed anything at all.
-func TestATurnWhoseContextFitsItsDayRunsItsFirstRound(t *testing.T) {
+// A TURN WHOSE CONTEXT FITS LAUNCHES ITS EXECUTOR, so the case above is about
+// the window being full and not about a turn that condensed anything at all.
+func TestATurnWhoseContextFitsItsDayLaunchesItsExecutor(t *testing.T) {
 	t.Parallel()
 	r := newBudgetedTurn(t, 100_000, 1600)
+	rig := rigRuns(t, r.e, nil)
 
 	_ = r.run(t)
 	if r.auxiliary.called() != 1 {
 		t.Fatalf("the auxiliary model was called %d times, want one condensation",
 			r.auxiliary.called())
 	}
-	if r.executor.called() == 0 {
-		t.Error("the executor was never called on a day with room left")
+	if n := len(rig.started()); n != 1 {
+		t.Errorf("the turn launched %d executor runs on a day with room left, want one", n)
 	}
 }
 

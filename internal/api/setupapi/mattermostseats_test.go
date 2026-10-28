@@ -14,7 +14,7 @@ import (
 // at all, and a person, who is nobody's to provision.
 const mattermostDoc = `{
   "name": "Acme",
-  "providers": {"llm": {"zulu": {"model": "claude-sonnet-5"}}},
+  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
   "integrations": {
     "mattermost": {"enabled": true, "url": "https://chat.example.com", "team": "acme"}
   },

@@ -33,6 +33,7 @@ import (
 const rosterCompany = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -237,6 +238,7 @@ func TestASeatIsPlacedByItsOwnLease(t *testing.T) {
 	c, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

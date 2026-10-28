@@ -387,6 +387,7 @@ func TestTheStoreTakesItsVectorWidthFromTheCompany(t *testing.T) {
 	const doc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -914,6 +915,7 @@ func TestTheEmbeddingWidthIsLearnedOnceAndHeld(t *testing.T) {
 	const noVectors = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -925,6 +927,7 @@ roles:
 	const wide = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

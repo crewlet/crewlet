@@ -109,15 +109,10 @@ denies such tools.
   block what it cannot classify; the task's (or its template's) explicit
   allowlist already curates the worker surface.
 
-First-party control tools (`delegate`, `run_sandbox`, `a2a_ask` and the
-parent's `activate_tool` / `list_mcp_server_tools` pair) are denied
+First-party control tools (`delegate`, `a2a_ask` and the A2A channel tools,
+and the parent's `activate_tool` / `list_mcp_server_tools` pair) are denied
 separately by name, because they are Crewlet's *own* tools and naming them
-is not a third-party coupling. `run_sandbox` is on that list because a
-detached coding run is keyed to the **parent** turn: the pending row
-carries the parent's `turn_id` and a completion resumes the parent's
-suspended executor, while a worker's loop cannot suspend. The parent turn
-would finish without persisting a suspended conversation, and the run
-would come back with nothing to resume into.
+is not a third-party coupling.
 
 ### The delivery check: did this answer reach anybody?
 

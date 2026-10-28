@@ -521,8 +521,9 @@ type SandboxSetupStep struct {
 	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 
 	// OptionalKeys names the keys of Env and the paths of Files whose value
-	// may resolve to nothing at launch, and so is left out rather than
-	// refusing the run.
+	// may resolve to nothing at launch: such a variable is left out of the
+	// run and such a file unwritten quietly, where any other one that
+	// resolves to nothing is left out and logged as a gap.
 	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty"`
 
 	// Brief is the paragraph handed to the coding agent: what this step
@@ -558,30 +559,20 @@ func SetupTimeout(declared float64) float64 {
 	return declared
 }
 
-// RoleSandbox is the per-seat code-runtime gate. Absent means the seat
-// never sees the option: the run_sandbox Execute tool is not offered to it.
+// RoleSandbox is what this seat's EXECUTOR BOX reads beyond the engine-wide
+// catalogue: its own provisioning, environment and tool servers, how long a
+// box blocked on a person stays paused, and how many agentic rounds one run
+// may take. Absent means the seat's box reads only the engine-wide settings.
+//
+// NOT A GATE, and nothing here places the box: every agent seat's executor
+// runs as its coding CLI's own run, in the cell the launching
+// providers.llm entry names (its `run_in`, else
+// providers.sandbox.default_run_in), on that entry's own CLI. What is left
+// is what differs from one seat's work to another's, which is why it stays
+// on the seat.
 type RoleSandbox struct {
-	Enabled bool `yaml:"enabled" json:"enabled"`
-
-	// RunIn names the cell this seat's code work runs in: direct,
-	// container or e2b — or self, which is the executor's OWN box-mode
-	// run and the one value with no providers.sandbox backend behind it.
-	// Empty inherits the provider default, resolved at LAUNCH rather than
-	// at config time, so a catalogue change reaches seats that never named
-	// one.
-	//
-	// A plain string rather than the config enum, like every other field
-	// here: this package is the runtime shape and does not import config.
-	// The closed set and what each cell means live on config.Placement.
-	RunIn string `yaml:"run_in,omitempty" json:"run_in,omitempty"`
-
-	// CodingAgent overrides the provider-wide default for this seat only.
-	// Empty inherits it, resolved at launch rather than at config time so a
-	// provider swap reaches seats that never named one.
-	CodingAgent string `yaml:"coding_agent,omitempty" json:"coding_agent,omitempty"`
-
-	// PauseTTLSeconds bounds how long a sandbox blocked on a clarification
-	// stays paused before it is reaped and re-seeded.
+	// PauseTTLSeconds bounds how long this seat's box, blocked on a
+	// person's answer, stays paused before it is reaped and re-seeded.
 	//
 	// A POINTER, because there are three states and a float64 has two:
 	// UNSET inherits the provider default, an explicit 0 means never pause.
@@ -601,7 +592,7 @@ type RoleSandbox struct {
 	// coding agent was promised an environment it does not have.
 	Setup []SandboxSetupStep `yaml:"setup,omitempty" json:"setup,omitempty"`
 
-	// MaxTurns caps the agentic ROUNDS one of this seat's coding runs may
+	// MaxTurns caps the agentic ROUNDS one of this seat's executor runs may
 	// take. Unset inherits the provider default; ZERO IS UNCAPPED, which
 	// is why it is a pointer — a seat that deliberately runs without a
 	// round cap and a seat that said nothing are different settings, and
@@ -617,7 +608,7 @@ type RoleSandbox struct {
 
 	MCP RoleSandboxMCP `yaml:"mcp,omitempty" json:"mcp,omitzero"`
 
-	// Env is injected into this seat's sandbox run. External service
+	// Env is injected into this seat's executor run. External service
 	// tokens are DECLARED here (GITHUB_TOKEN for the git-auth recipe, a
 	// private-registry token, a test DATABASE_URL): the engine names no
 	// tool-specific variable of its own, and only LLM credentials derive
@@ -625,7 +616,8 @@ type RoleSandbox struct {
 	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 
 	// OptionalKeys names the keys of Env whose value may resolve to nothing
-	// at launch, and so is left out rather than refusing the run.
+	// at launch: such a key is left out of the run quietly, where any other
+	// key that resolves to nothing is left out and logged as a gap.
 	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty"`
 }
 
@@ -730,10 +722,6 @@ type Role struct {
 	// The decision is cheap and the prompt is bounded, so a small fast
 	// model is the right default.
 	LLMJudge ProviderKeys `yaml:"llm_judge,omitempty" json:"llm_judge,omitzero"`
-	// LLMSandbox runs the coding agent inside the sandbox. It falls back to
-	// LLM, because sandboxed work IS this seat's own work — just running
-	// somewhere else — and LLM is what that work runs on.
-	LLMSandbox ProviderKeys `yaml:"llm_sandbox,omitempty" json:"llm_sandbox,omitzero"`
 
 	// Workers narrows which of the company's delegate templates this seat
 	// may hand work to. Empty means every one — see config.Role.Workers,
@@ -749,7 +737,8 @@ type Role struct {
 
 	MCPEnv MCPEnv `yaml:"mcp_env,omitempty" json:"mcp_env,omitempty"`
 
-	// Sandbox is the code-runtime gate; nil means this seat has none.
+	// Sandbox is what this seat's executor box reads beyond the
+	// engine-wide catalogue; nil means it reads only that.
 	Sandbox *RoleSandbox `yaml:"sandbox,omitempty" json:"sandbox,omitempty"`
 
 	// Placement constrains which nodes may run this seat; the zero value is
@@ -920,7 +909,6 @@ func (r *Role) humanForbidden() []string {
 		{"llm_subagent", len(r.LLMSubagent) > 0},
 		{"llm_auxiliary", len(r.LLMAuxiliary) > 0},
 		{"llm_judge", len(r.LLMJudge) > 0},
-		{"llm_sandbox", len(r.LLMSandbox) > 0},
 		{"sandbox", r.Sandbox != nil},
 		{"token_budget", len(r.TokenBudget) > 0},
 		{"workers", len(r.Workers) > 0},

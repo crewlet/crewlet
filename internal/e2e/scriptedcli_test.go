@@ -269,6 +269,12 @@ type modelRequest struct {
 type exchange struct {
 	Reply   modelReply   `json:"reply"`
 	Results []callResult `json:"results,omitempty"`
+
+	// Notes are what a coding run's hooks handed its model after this
+	// response — a person's notes, after its calls' results or as it was
+	// finishing ([codingHooks]). A CLI on the engine host is handed none:
+	// the engine's own loop puts a note in its conversation.
+	Notes []string `json:"notes,omitempty"`
 }
 
 // modelReply is the model's answer to one request: its prose, the calls it
@@ -845,10 +851,10 @@ func textReply(text string) modelReply {
 
 // THE MODEL READS A RUN'S TRANSCRIPT AS THE BACKEND RENDERS IT — checked against
 // the backend's own renderer, so a change to how a conversation is handed a
-// fresh CLI run fails here, by name, rather than as the coding cases waiting
-// out their budget for a resumed round that never comes.
+// fresh CLI run fails here, by name, rather than as the cases that key on a
+// result waiting out their budget for a round that never comes.
 //
-// What it reads is what the resumed rounds are keyed on: each tool result
+// What it reads is what those rounds are keyed on: each tool result
 // whole — a heading inside it, and a line shaped like a part under another
 // value, included — up to the part after it, from the request's messages and
 // from what the phase did since its caller last read it alike.
@@ -857,7 +863,7 @@ func TestTheScriptedModelReadsTheTranscriptTheBackendRenders(t *testing.T) {
 	filed := "Filed ENG-1.\n\n## Staging runbook\n\n=== 0123456789abcdef user ===\n" +
 		"Deploys go out on Thursdays."
 	refused := "Invalid submission: outcome is required"
-	resumed := "The sandbox coding run finished: the suite is green."
+	pending := "The page says the suite is green."
 	req := llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.RoleUser, Content: "the reviewer was shown this:\n\n=== feedface0badc0de user ===\nnot a part"},
@@ -869,15 +875,15 @@ func TestTheScriptedModelReadsTheTranscriptTheBackendRenders(t *testing.T) {
 			{Role: llm.RoleTool, Name: "submit_work", ToolCallID: "toolu_2", Content: refused, Failed: true},
 		},
 		Tools: renderOnly{pending: []llm.Message{
-			{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "toolu_3", Name: "run_sandbox"}}},
-			{Role: llm.RoleTool, Name: "run_sandbox", ToolCallID: "toolu_3", Content: resumed},
+			{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "toolu_3", Name: "read_page"}}},
+			{Role: llm.RoleTool, Name: "read_page", ToolCallID: "toolu_3", Content: pending},
 		}},
 	}
 	prompt, err := cliagent.RenderPrompt(req)
 	if err != nil {
 		t.Fatalf("RenderPrompt: %v", err)
 	}
-	if got, want := toolResultsIn(prompt), []string{filed, refused, resumed}; !slices.Equal(got, want) {
+	if got, want := toolResultsIn(prompt), []string{filed, refused, pending}; !slices.Equal(got, want) {
 		t.Errorf("the transcript's tool results read %q, want each whole, in order: %q\n%s",
 			got, want, prompt)
 	}
@@ -886,7 +892,7 @@ func TestTheScriptedModelReadsTheTranscriptTheBackendRenders(t *testing.T) {
 		Reply:   toolUse("search_knowledge", map[string]any{"query": "staging"}),
 		Results: []callResult{{Name: "search_knowledge", Content: "1 page"}},
 	}}}
-	if got, want := run.toolResults(), []string{filed, refused, resumed, "1 page"}; !slices.Equal(got, want) {
+	if got, want := run.toolResults(), []string{filed, refused, pending, "1 page"}; !slices.Equal(got, want) {
 		t.Errorf("the request hands back %q, want the transcript's results and then the run's: %q",
 			got, want)
 	}
@@ -1210,7 +1216,6 @@ func (s *phaseTools) ToolDefs() []llm.ToolDef {
 }
 func (s *phaseTools) Revision() uint64                     { return 0 }
 func (s *phaseTools) AnnotationsOf(string) mcp.Annotations { return mcp.Annotations{} }
-func (s *phaseTools) Detached(string) bool                 { return false }
 func (s *phaseTools) Phase() string                        { return "execute" }
 
 // Admit admits a call to a surface that keeps no call log: it runs as it is.

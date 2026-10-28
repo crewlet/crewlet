@@ -38,11 +38,15 @@ export const PROVIDER_STEPS = `# Stop crewlet run first (Ctrl+C), and run these 
 # 1. Write the running company to a file
 crewlet config export > company.yaml
 
-# 2. Add the model to it
+# 2. Add the model to it, and the sandbox every seat's executor
+#    runs in: here this machine, as your user
 providers:
   llm:
     default:
       model: sonnet
+  sandbox:
+    local: {}
+    default_run_in: direct
 
 # 3. Sign its CLI in to your subscription, and check it end to end
 #    (on a member of a cluster, add -api with a running member's URL

@@ -563,7 +563,7 @@ export function barsOf(series: EventSeries | null | undefined): Bar[] {
   return (series?.bars ?? []).map((b) => ({ at: b.at, count: b.count, failed: b.failed }));
 }
 
-/** What a turn IS beyond finished — re-run, parked, running, failed — or nothing. */
+/** What a turn IS beyond finished — re-run, parked, stopped, running, failed — or nothing. */
 function TurnState({
   turn: t,
   reruns,
@@ -575,7 +575,8 @@ function TurnState({
   open: OpenState;
 }) {
   const rerun = !!t.work_key && (reruns.get(t.work_key) ?? 0) > 1;
-  if (!rerun && !t.parked && (open === "" || open === "unknown") && !t.failed) return null;
+  if (!rerun && !t.parked && !t.stopped && (open === "" || open === "unknown") && !t.failed)
+    return null;
   return (
     <span className="row gap-1">
       {/* A RE-RUN SAYS SO. A turn id names one run, so a trigger that failed
@@ -593,6 +594,13 @@ function TurnState({
       {t.parked && (
         <Tag appearance="outline" title="Waiting on its coding run">
           parked
+        </Tag>
+      )}
+      {/* A PERSON STOPPED IT, which is not a failure and is not drawn as one:
+          the neutral outline the other states that are nobody's fault wear. */}
+      {t.stopped && (
+        <Tag appearance="outline" title="A person paused the seat and stopped this turn">
+          stopped
         </Tag>
       )}
       {/* NO COMPLETION RECORD is two states, and the overlay tells them apart

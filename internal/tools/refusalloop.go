@@ -29,9 +29,11 @@ type Counter interface {
 	Add(name string, n uint64, attrs metrics.Attrs)
 }
 
-// WithCounter installs the counter the refusal-loop guard records into
-// ([metrics.ToolPolicyRefusalLoops]) and returns the surface. Nil counts
-// nothing, which is a test's and a validate command's case.
+// WithCounter installs the counter the surface records into and returns the
+// surface: the refusal-loop guard's decisions
+// ([metrics.ToolPolicyRefusalLoops]) and, through every call's [Invoke], the
+// calls answered outside their schema ([metrics.ToolArgsOutsideSchema]). Nil
+// counts nothing, which is a test's and a validate command's case.
 func (s *Surface) WithCounter(c Counter) *Surface {
 	s.counter = c
 	return s

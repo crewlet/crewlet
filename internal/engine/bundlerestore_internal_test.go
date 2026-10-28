@@ -40,6 +40,7 @@ func TestAnEpochRestoresItsBundlesOnlyWhenItIsRun(t *testing.T) {
 	c, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     subscription:
       model: sonnet
@@ -286,6 +287,7 @@ providers:
     subscription:
       model: sonnet
       agent: claude-code
+      run_in: e2b
   sandbox:
     e2b:
       api_key: "${CREWLET_TEST_E2B_KEY_NEVER_SET}"
@@ -293,9 +295,6 @@ roles:
   - name: CEO
     handle: ceo
     llm: subscription
-    sandbox:
-      enabled: true
-      run_in: e2b
 `
 
 // AN EPOCH DOES NOT UNDO A LOGOUT. The directory `crewlet llm logout` empties
@@ -395,14 +394,17 @@ func TestAnEntryMovedToAnotherCLIDoesNotRestoreTheOldCLIsBundle(t *testing.T) {
 	c := parseBundled(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     subscription:
       model: gpt-5
       agent: codex
 roles:
+  # A person's seat: codex can run no seat's executor, and the bundle
+  # restored is the entry's whoever runs on it.
   - name: CEO
     handle: ceo
-    llm: subscription
+    kind: human
 `)
 	company, err := NewCompany(c)
 	if err != nil {
@@ -464,6 +466,7 @@ func (b *bundleLog) String() string {
 const bundledCompanyDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     subscription:
       model: sonnet

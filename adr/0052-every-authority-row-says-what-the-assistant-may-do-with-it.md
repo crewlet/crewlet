@@ -53,8 +53,8 @@ for them, a bearer credential in clear that would pass through the model, the
 transcript and the stored proposal, so it stays with the person, who does it
 from People in Settings.
 
-The two seat-only verbs (`a2a_ask`, `run_sandbox`) are on the list too, because
-no person takes them, so parity keeps them from the person's assistant.
+The seat-only verb (`a2a_ask`) is on the list too, because no person takes it,
+so parity keeps it from the person's assistant.
 
 It is checked inside `authz.Decide`, beside the machine-token presence check
 and before the class: a principal acting through an assistant grant on a

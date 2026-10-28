@@ -142,18 +142,3 @@ export type SeatActivity = "working" | "needs" | "stopped" | "idle";
  * same gate.
  */
 export type StoppedReason = "paused" | "unplaced" | "budget" | "provider";
-
-/**
- * The tool an executor hands work to its workers through, and the argument
- * that lists the tasks it hands them.
- *
- * A seat with a running call — an entry of `live_call.running_calls`, the calls
- * in flight — to this tool is running that many workers, summed over every
- * such call, which is what the state line says ("3 workers on ENG-405")
- * instead of the phase. EXACTLY THE ENGINE'S
- * `subagent.ToolName` and the `tasks` its schema requires, held by
- * `internal/agent/subagent`'s gate: a rename there would otherwise leave every
- * fan-out drawn as an ordinary executor with nothing to say it moved.
- */
-export const DELEGATE_TOOL = "delegate";
-export const DELEGATE_TASKS = "tasks";

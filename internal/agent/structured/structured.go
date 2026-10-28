@@ -43,7 +43,7 @@ import (
 // map it has to re-check at every use.
 //
 // SAFE FOR CONCURRENT USE. A coding CLI makes a response's calls at once, and
-// a box-mode run's bridge hands each one to the surface on its own goroutine
+// an executor run's bridge hands each one to the surface on its own goroutine
 // with nothing in front of them that runs a submission alone — so two
 // submissions, or a submission and the read of one, can meet here. The decoder
 // runs outside the lock: it is the caller's, it may read the surface this tool

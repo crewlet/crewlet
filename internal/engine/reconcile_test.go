@@ -52,34 +52,38 @@ var anOrigin = coord.RevisionOrigin{
 // authoring state, and an empty one would not be refused at all (see
 // nomodels_test.go).
 var brokenRevision = json.RawMessage(`{"name":"Acme",
-  "providers":{"llm":{"zulu":{"model":"m"}}},
+  "providers":{"sandbox":{"fake":true},"llm":{"zulu":{"model":"m"}}},
   "workers":{"researcher":{"description":"reads sources and reports findings",
     "system_prompt":"You research.","model":"nonexistent"}}}`)
 
 // unbuildableCompanyDoc meets every runnable rule and is refused by the
-// engine's own build: its sandbox key is a ${VAR} nothing on the node answers,
-// and the E2B backend refuses an empty key.
+// engine's own build: its one seat's executor runs in an E2B box, whose key is
+// a ${VAR} nothing on the node answers, and the E2B backend refuses an empty
+// key.
 const unbuildableCompanyDoc = `
 name: Acme
 providers:
   sandbox:
     e2b:
       api_key: "${CREWLET_TEST_E2B_KEY_NEVER_SET}"
+  llm:
+    coder: {agent: claude-code, model: sonnet, run_in: e2b}
 roles:
   - name: SWE
     handle: swe
-    sandbox:
-      enabled: true
-      run_in: e2b
+    llm: coder
 `
 
 // A second company, differing from companyDoc in the ways a reconcile has to
-// be visible through: one more seat, and a token budget.
+// be visible through: one more seat, and a token budget — a day ceiling above
+// the executor's launch floor, which a company with seats that run an
+// executor may not go below.
 const grownCompanyDoc = `
 name: Acme
 token_budget:
-  day: 4242
+  day: 4242000
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -94,6 +98,10 @@ roles:
     handle: designer
     llm: zulu
 `
+
+// grownDayCeiling is grownCompanyDoc's day ceiling, which tells it apart from
+// companyDoc once applied.
+const grownDayCeiling = 4242000
 
 // plane is one engine, one store, and the reconciler between them.
 type plane struct {
@@ -321,7 +329,7 @@ func TestANewRevisionReplacesTheEpoch(t *testing.T) {
 	if got := len(before.Seats()); got != 2 {
 		t.Errorf("the previous epoch changed under the apply: %d seats", got)
 	}
-	if got := dayCeiling(p.engine.Company()); got != 4242 {
+	if got := dayCeiling(p.engine.Company()); got != grownDayCeiling {
 		t.Errorf("token budget = %d, want the new revision's", got)
 	}
 	// AND THE ORG IS THE REVISION'S: the seats are part of the document an
@@ -527,21 +535,22 @@ func TestReactivatingTheHeldRevisionMovesItsLocalInstant(t *testing.T) {
 	}
 }
 
-// rotatedKeyDoc is a company whose sandbox key is a ${VAR}: it builds while the
-// node's environment answers it, and the E2B backend refuses it once it does
-// not — the shape of a rotated credential one node never received.
+// rotatedKeyDoc is a company whose one seat's executor runs in an E2B box keyed
+// by a ${VAR}: it builds while the node's environment answers it, and the E2B
+// backend refuses it once it does not — the shape of a rotated credential one
+// node never received.
 const rotatedKeyDoc = `
 name: Acme
 providers:
   sandbox:
     e2b:
       api_key: "${CREWLET_TEST_E2B_KEY_ROTATED}"
+  llm:
+    coder: {agent: claude-code, model: sonnet, run_in: e2b}
 roles:
   - name: SWE
     handle: swe
-    sandbox:
-      enabled: true
-      run_in: e2b
+    llm: coder
 `
 
 // A RE-ACTIVATION OF THE REVISION A NODE RUNS, WHICH THE NODE THEN REFUSES, IS
@@ -1756,7 +1765,7 @@ func TestOneEpochIsRetriedABoundedNumberOfTimes(t *testing.T) {
 		t.Fatalf("the fixed revision was refused: %v", err)
 	}
 	// The fixed revision's settings AND its seats: a revision carries both.
-	if got := dayCeiling(p.engine.Company()); got != 4242 {
+	if got := dayCeiling(p.engine.Company()); got != grownDayCeiling {
 		t.Errorf("token budget = %d, want the fixed revision's", got)
 	}
 	if got := p.seats(t); len(got) != 3 {
@@ -1796,7 +1805,7 @@ func TestASealedRevisionNeedsTheKeyItWasSealedUnder(t *testing.T) {
 	if err := p.recon.Tick(t.Context()); !errors.Is(err, secrets.ErrDecrypt) {
 		t.Fatalf("err = %v, want the revision refused as undecryptable", err)
 	}
-	if got := dayCeiling(p.engine.Company()); got == 4242 {
+	if got := dayCeiling(p.engine.Company()); got == grownDayCeiling {
 		t.Error("the node runs a revision it could not open")
 	}
 
@@ -1805,7 +1814,7 @@ func TestASealedRevisionNeedsTheKeyItWasSealedUnder(t *testing.T) {
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("a revision sealed under this node's keyring: %v", err)
 	}
-	if got := dayCeiling(p.engine.Company()); got != 4242 {
+	if got := dayCeiling(p.engine.Company()); got != grownDayCeiling {
 		t.Errorf("token budget = %d, want the sealed revision's", got)
 	}
 }
@@ -1857,7 +1866,7 @@ func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
 	if got := node.recon.Applied(); got == forged.Epoch {
 		t.Error("the node applied the epoch an unsealed revision was published at")
 	}
-	if got := dayCeiling(node.engine.Company()); got == 4242 {
+	if got := dayCeiling(node.engine.Company()); got == grownDayCeiling {
 		t.Error("the node runs the forged document's settings")
 	}
 	// THE FLEET VIEW the node reports into is the one it reads, the
@@ -2327,7 +2336,7 @@ func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
 	}
 	// The settings and the seats of the revision it converged on, not the
 	// one it booted with.
-	if got := dayCeiling(peer.engine.Company()); got != 4242 {
+	if got := dayCeiling(peer.engine.Company()); got != grownDayCeiling {
 		t.Errorf("the peer's token budget is %d, want the revision it "+
 			"converged on", got)
 	}

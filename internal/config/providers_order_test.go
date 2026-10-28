@@ -12,6 +12,7 @@ import (
 const orderedDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -179,6 +180,7 @@ func TestAMergeKeyKeepsItsProvidersInPlace(t *testing.T) {
 	c, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     <<: &base
       zulu:
@@ -221,6 +223,7 @@ roles:
     handle: cto
     llm: *shared_chain
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: m
@@ -244,6 +247,7 @@ func TestMergeKeysExpandThroughTheKeyReader(t *testing.T) {
 	c, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     <<: &first
       zulu:
@@ -280,6 +284,7 @@ func TestASequenceMergeExpandsLeftToRight(t *testing.T) {
 	c, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     <<:
       - &a
@@ -318,6 +323,7 @@ func TestAnAliasInsideAMergeIsFollowed(t *testing.T) {
 	c, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     <<:
       - &shared

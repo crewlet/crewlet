@@ -755,6 +755,11 @@ export function turnPills(
     case "suspended":
       out.push({ label: "parked on a coding run", variant: "info" });
       break;
+    // A PERSON ENDED IT by pausing the seat with a stop — never drawn as a
+    // failure, which it is not: the engine records it apart for that reason.
+    case "stopped":
+      out.push({ label: "stopped by a person", variant: "neutral" });
+      break;
     case "skipped":
       out.push({ label: "skipped, nothing to do", variant: "neutral" });
       break;
@@ -863,8 +868,8 @@ export function TurnCard({
 }
 
 /**
- * The turn running on this task now: "SWE is on turn 2 · executing · round 7
- * of 25 · for 2m", and the way to watch it.
+ * The turn running on this task now: "SWE is on turn 2 · coding run · for
+ * 2m", and the way to watch it.
  */
 function LiveRow({
   item,

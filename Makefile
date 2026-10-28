@@ -493,13 +493,16 @@ lint: ## run golangci-lint (ci: golangci-lint)
 	fi
 	golangci-lint run
 
-# No require-node: the ONLY consumer of `node` in the Go suite is
-# internal/e2e's dashboard replay (golden_test.go), which is a solo package and
-# therefore not in this half. The prerequisite was here anyway, which made this
-# target stricter than the CI job it mirrors — ci.yml's `test (race)` installs
-# no node and passes — and a Makefile stricter than CI is the same lie as one
-# looser than it, just in the direction nobody notices.
-test: ## the suite, minus the packages that run alone (ci: test (race))
+# require-node, because this half runs a package that drives `node`:
+# internal/sandbox/codingagent's probe of the OpenCode notes plugin
+# (opencode_steer_test.go), which runs the plugin the engine embeds under node
+# against a stand-in of the bridge's notes route and a real bridge's. Without
+# node that case fails where CI is set and skips elsewhere — a skip
+# internal/skipgate declares nowhere, so this target would fail on it after the
+# whole run — and the prerequisite says so before anything runs. ci.yml's
+# `test (race)` installs node for the same reason. (internal/e2e's dashboard
+# replay is node's other consumer, in the solo half below.)
+test: require-node ## the suite, minus the packages that run alone (ci: test (race))
 	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition printed no packages; internal/solo/partition said why above (a TEST_WEIGHTS file it refused, or go list failing)" >&2; exit 1; }
 	$(SKIPGATE)$(if $(TEST_TIMINGS), -timings $(TEST_TIMINGS)) -- $(GOTEST) -json $(PARALLEL_PKGS)
 
@@ -608,12 +611,15 @@ require-npm: ## fail unless npm is on PATH (every dashboard target needs it)
 	  exit 1; \
 	} >&2
 
-require-node: ## fail unless node is on PATH (the e2e client replay needs it)
+require-node: ## fail unless node is on PATH (the e2e client replay and the OpenCode plugin probe need it)
 	@command -v node >/dev/null 2>&1 || { \
-	  echo "node is not on PATH, and internal/e2e's client replay needs it."; \
-	  echo "  It runs the dashboard's own protocol module over the frames a"; \
-	  echo "  real engine produced, and SKIPS without node — so the run would"; \
-	  echo "  go green having checked neither half of the wire protocol."; \
+	  echo "node is not on PATH, and two of the suite's gates need it."; \
+	  echo "  internal/e2e's client replay runs the dashboard's own protocol"; \
+	  echo "  module over the frames a real engine produced, and"; \
+	  echo "  internal/sandbox/codingagent runs the OpenCode notes plugin the"; \
+	  echo "  engine embeds. Each SKIPS without node, a skip internal/skipgate"; \
+	  echo "  declares nowhere: test and test-solo would fail on it only after"; \
+	  echo "  the whole suite, and test-norace would pass having checked neither."; \
 	  echo "  Install any current node, as ci.yml does, and re-run."; \
 	  exit 1; \
 	} >&2

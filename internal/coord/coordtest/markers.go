@@ -1,6 +1,7 @@
 package coordtest
 
 import (
+	"errors"
 	"slices"
 	"time"
 
@@ -74,8 +75,8 @@ var markerCases = []fleetCase{{
 		h.createRun("turn-again", `{"status":"done"}`)
 		first, _ := h.run("turn-again")
 		for _, r := range []coord.Record{{Key: "turn-gone", Version: gone.Version}, {Key: "turn-again", Version: first.Version}} {
-			if ok, err := h.f.DeleteSandboxRun(h.ctx, r.Key, r.Version); err != nil || !ok {
-				h.t.Fatalf("DeleteSandboxRun(%s) = (%v, %v)", r.Key, ok, err)
+			if !h.removeRunAt(r) {
+				h.t.Fatalf("the run %s could not be removed at the version just read", r.Key)
 			}
 		}
 		h.createRun("turn-again", `{"status":"running"}`)
@@ -125,9 +126,6 @@ var markerCases = []fleetCase{{
 		if _, found := h.run("turn-gone"); found {
 			h.t.Error("a run removed before the sweep reads as present after it")
 		}
-		if h.updateRun("turn-again", `{"status":"stale"}`, first.Version) {
-			h.t.Error("a version from the removed incarnation overwrote its successor once the marker between them was swept")
-		}
 		if !h.createRun("turn-gone", `{"status":"running"}`) {
 			h.t.Error("a run whose marker was swept could not be created again: the store reported a removed key as held")
 		}
@@ -148,6 +146,39 @@ var markerCases = []fleetCase{{
 		}
 		if got := h.holdOwners(); !slices.Equal(got, []string{"node-b/snapshot"}) {
 			h.t.Errorf("trim holds after the sweep = %v, want [node-b/snapshot]", got)
+		}
+	},
+}, {
+	// A REVISION NEVER REPEATS, A SWEPT MARKER BETWEEN TWO INCARNATIONS
+	// INCLUDED. A run's record is written by a decision taken on the version
+	// it read, so a decision whose record was removed, its marker swept and
+	// the run created again before it wrote must lose to the successor and be
+	// asked again — which it could not, were the successor's create to land
+	// at the revision the removed record held.
+	name: "a run decided on before its removal is decided again on the one created after the sweep",
+	fn: func(h *fleetHarness) {
+		h.createRun("turn-again", `{"status":"done"}`)
+		var seen []string
+		h.mutateRun("turn-again", func(current coord.Record) (coord.SandboxRunChange, error) {
+			seen = append(seen, string(current.Value))
+			if len(seen) > 1 {
+				return coord.SandboxRunChange{}, nil
+			}
+			if !h.removeRunAt(current) {
+				return coord.SandboxRunChange{}, errors.New("the run could not be removed at the version just read")
+			}
+			h.sweepAll()
+			if !h.createRun("turn-again", `{"status":"running"}`) {
+				return coord.SandboxRunChange{}, errors.New("a run whose marker was swept could not be created again")
+			}
+			return coord.SandboxRunChange{Put: []byte(`{"status":"stale"}`)}, nil
+		})
+		if want := []string{`{"status":"done"}`, `{"status":"running"}`}; !slices.Equal(seen, want) {
+			h.t.Errorf("the decision was asked on %q, want the removed run and then its successor", seen)
+		}
+		if record, _ := h.run("turn-again"); string(record.Value) != `{"status":"running"}` {
+			h.t.Errorf("the successor holds %q — a decision taken on the removed incarnation overwrote "+
+				"it once the marker between them was swept", record.Value)
 		}
 	},
 }}

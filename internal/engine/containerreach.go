@@ -30,8 +30,26 @@ import (
 // since the bridge and the receiver are served there alone, and `api` else. A
 // node that binds no listener for them is told so by the launch that needs
 // one, not here.
+//
+// ONLY ON A NODE WITH BOTH THE INGRESS AND THE SEATS ROLE, the one pair whose
+// own bind a container box on this host dials. Ingress serves those routes to
+// a box off the host at all: a node without it serves them on `api.port` to
+// this host's loopback alone, for its own `direct` boxes (internal/api's
+// Probes), and a container box launched on its host reaches the tool bridge
+// through an ingress node's address (`CREWLET_MCP_BRIDGE_URL`), which this
+// bind says nothing about. Seats is the role that launches a seat's box: a
+// node without it starts none on this host, so every box dialling its routes
+// comes from another machine, over the LAN or a proxy, and never through this
+// host's runtime. Deep work is no reason to warn such a node either: on Linux
+// a container deep-work run on a loopback bridge is held to loopback, and
+// refused whatever the bind. A `direct` box is no concern of this either way:
+// it shares the host's loopback, and dials the node's own listener there
+// (cmd/crewlet's boxHostURL).
 func ContainerReachWarnings(boot *config.Bootstrap, c *config.Company, goos string) []config.Warning {
 	if boot == nil || c == nil || goos != "linux" {
+		return nil
+	}
+	if profile := boot.Profile(""); !profile.RunsIngress() || !profile.RunsSeats() {
 		return nil
 	}
 	if _, ok := c.SandboxPlacements()[config.PlacementContainer]; !ok {

@@ -199,9 +199,9 @@ func (e *DecisionRefused) Unwrap() error { return ErrRefused }
 // field at all are the rows that are deliberately absent: an app's own verbs
 // ([authz.ClassApp] — filing an item, writing a page, keeping a file —
 // decided on whether the caller uses the app and on nothing about the
-// object), the overview's ([authz.ClassEverybody]), and the seat-only ones
-// (`a2a_ask`, `run_sandbox`), which the table bars a person from before any
-// class reads anything.
+// object), the overview's ([authz.ClassEverybody]), and the seat-only one
+// (`a2a_ask`), which the table bars a person from before any class reads
+// anything.
 var subjectOf = map[string]subject{
 	// AN ITEM AND ITS THREAD ARE DECIDED ON THE ITEM, because somebody
 	// without Worklet may still read the item an OPEN ASK on it names
@@ -483,54 +483,27 @@ type gated struct {
 	authorize Authorizer
 }
 
-// gatedSeat and gatedDetached are [gated] for the two OPTIONAL interfaces a
-// tool may also satisfy.
+// gatedSeat is [gated] for the OPTIONAL interface a tool may also satisfy.
 //
-// THREE TYPES rather than one with nil checks, because the surface dispatches
-// on which interface a tool satisfies — and a single wrapper implementing all
-// of them would make every read-only builtin look seat-scoped and
-// suspendable. The phase surface would then refuse each one outside a turn,
-// and the tool loop would wait for a suspension nothing was going to send.
-//
-// Measured by deleting the detached arm: `run_sandbox` stopped suspending the
-// loop, so a turn that launched a coding run ended believing the work was
-// done.
+// TWO TYPES rather than one with a nil check, because [tools.Invoke] dispatches
+// on which interface a tool satisfies — and a single wrapper implementing
+// both would make every read-only builtin look seat-scoped, so the phase
+// surface would refuse each one outside a turn.
 type gatedSeat struct {
 	gated
 	seat tools.SeatCallable
 }
 
-type gatedDetached struct {
-	gated
-	detached tools.Detached
-}
-
 // Unwrap implements [tools.Wrapper], so the surface reads what the gated tool
-// declares (its refusal target) through the gate.
+// declares (its refusal target) through the gate. [gatedSeat] inherits it.
 func (g *gated) Unwrap() tools.Callable { return g.Callable }
 
 func gate(tool tools.Callable, authorize Authorizer) tools.Callable {
 	wrapped := gated{Callable: tool, authorize: authorize}
-	switch held := tool.(type) {
-	case tools.Detached:
-		return &gatedDetached{gated: wrapped, detached: held}
-	case tools.SeatCallable:
+	if held, ok := tool.(tools.SeatCallable); ok {
 		return &gatedSeat{gated: wrapped, seat: held}
 	}
 	return &wrapped
-}
-
-func (g *gatedDetached) CallDetached(ctx context.Context, turn *turnctx.Turn,
-	args map[string]any) (tools.DetachedResult, error) {
-
-	ctx = turnctx.WithPrincipal(ctx, turn)
-	if refusal := g.admit(ctx, args); refusal != nil {
-		// NO SUSPENSION ON A REFUSAL, which is the whole reason this arm
-		// exists: a suspended loop is re-entered when detached work
-		// finishes, and work that never started never finishes.
-		return tools.DetachedResult{Result: *refusal}, nil
-	}
-	return g.detached.CallDetached(ctx, turn, args)
 }
 
 func (g *gated) Call(ctx context.Context, args map[string]any) (mcp.Result, error) {
@@ -566,7 +539,7 @@ func (g *gatedSeat) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // or the result it is answered with instead.
 //
 // THE ARGUMENTS HERE, at the one place every call of every builtin passes:
-// a seat's turn, a worker's slice of it, a sandbox's bridge, the operator's
+// a seat's turn, a worker's slice of it, an executor run's bridge, the operator's
 // assistant and the HTTP write surface all reach a builtin through this
 // wrapper. The HTTP surface used to check them at its routes alone, so the
 // other four dropped what the route refused — see [ErrUndeclaredArgument].

@@ -157,10 +157,13 @@ func (e *Engine) budgets() budgetCounter {
 }
 
 // budgetBasis is what one epoch says a seat's spend is judged by: the
-// company's ceilings, the seat's own, and the clock their windows are cut on.
+// company's ceilings, the seat's own, the clock their windows are cut on, and
+// the room an executor launch needs (turn_engine.executor_min_budget_tokens) —
+// the one threshold below "full" a window can turn a seat's turns away at.
 type budgetBasis struct {
 	org, seat coord.Caps
 	zone      *time.Location
+	floor     int
 }
 
 // basisOf reads a seat's budget basis off one epoch.
@@ -176,6 +179,7 @@ func basisOf(c *Company, seat *org.Role) budgetBasis {
 	}
 	if c.Config != nil {
 		b.zone = c.Config.Location()
+		b.floor = c.Config.TurnEngine.ExecutorFloor()
 	}
 	if c.Org != nil {
 		b.org = coord.Caps(c.Org.TokenBudget)
@@ -769,6 +773,54 @@ func (m *meter) refusing(ctx context.Context) (refusal, bool, error) {
 					by = scope.key
 				}
 				out = refusal{Scope: scope.key, Window: slot.Window, Used: slot.Used, Limit: ceiling, By: by}
+				found = true
+			}
+		}
+	}
+	return out, found, nil
+}
+
+// starved reports the capped window of either scope that leaves the seat less
+// room than an executor launch needs (the basis's floor), when none is
+// refusing outright — the window a launch's floor refusal waits on.
+//
+// THE SAME WINDOWS THE LAUNCH'S FLOOR READS ([meter.Remaining]): the launch is
+// refused when the tightest capped window of either scope has less than the
+// floor left, so the seat is starved by exactly the windows that have. Where
+// several do it is the one that ENDS LAST, by the tie-break [meter.refusing]
+// names a refusal by: no launch fits until every one of them has turned over.
+//
+// No floor is no starvation, and a basis that caps nothing has no window to be
+// short in. THREE-VALUED for the reason refusing is.
+func (m *meter) starved(ctx context.Context) (refusal, bool, error) {
+	if m.basis.floor <= 0 {
+		return refusal{}, false, nil
+	}
+	windows := m.windows()
+	var out refusal
+	found := false
+	for _, scope := range []struct {
+		key  string
+		caps coord.Caps
+	}{
+		{coord.OrgScope, m.basis.org},
+		{m.agentScope, m.basis.seat},
+	} {
+		if len(scope.caps) == 0 {
+			continue
+		}
+		usage, err := m.budgets.Used(ctx, scope.key, windows)
+		if err != nil {
+			return refusal{}, false, fmt.Errorf("engine: budget windows of %s: %w", scope.key, err)
+		}
+		for p, ceiling := range scope.caps {
+			slot := usage.In(p)
+			if ceiling-slot.Used >= m.basis.floor {
+				continue
+			}
+			if !found || coord.Outlasts(slot.Window, out.Window) {
+				out = refusal{Scope: scope.key, Window: slot.Window, Used: slot.Used,
+					Limit: ceiling, By: scope.key}
 				found = true
 			}
 		}

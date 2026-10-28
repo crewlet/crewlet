@@ -2,6 +2,7 @@ package codingagent_test
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -45,7 +46,7 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 	for _, path := range []string{
 		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(),
 		p.Ask(), p.MCPConfig(), p.Findings(), p.BinDir(), p.AskShim(),
-		p.Brief(), p.System(),
+		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(),
 	} {
 		if !strings.HasPrefix(path, b.Home()+"/") {
 			t.Fatalf("%q is not under the box home %q", path, b.Home())
@@ -95,12 +96,14 @@ func TestStartLaunchesDetachedAndWritesBothMarkers(t *testing.T) {
 	// and the redirections around them.
 	script := lastBackground(t, b)
 	for _, want := range []string{
-		"< /dev/null", // a headless agent must never block on input
-		p.Stream(),    // stdout is the event stream
-		p.Result(),    // its last line is the result
-		p.Err(),       // stderr is the transcript fallback
-		p.ExitCode(),  // the crash explanation
-		p.Done(),      // the completion signal
+		// A headless agent must never block on input: its stdin is the
+		// brief's file, which ends.
+		`< '\''` + p.Brief() + `'\''`,
+		p.Stream(),   // stdout is the event stream
+		p.Result(),   // its last line is the result
+		p.Err(),      // stderr is the transcript fallback
+		p.ExitCode(), // the crash explanation
+		p.Done(),     // the completion signal
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("the launch script is missing %q:\n%s", want, script)
@@ -139,8 +142,8 @@ func TestTheReportInstructionForThisBoxIsAStandingInstruction(t *testing.T) {
 	p := paths(b)
 	script := startAndScript(t, runner, b, sandbox.RunRequest{Brief: "fix the flake"})
 
-	if !strings.Contains(script, "'fix the flake'") {
-		t.Fatalf("the brief was lost:\n%s", script)
+	if brief, err := b.ReadFile(t.Context(), p.Brief()); err != nil || string(brief) != "fix the flake" {
+		t.Fatalf("the brief was lost: %q (%v)", brief, err)
 	}
 	system, err := b.ReadFile(t.Context(), p.System())
 	if err != nil || !strings.Contains(string(system), p.Findings()) {
@@ -178,11 +181,21 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	}
 	for _, want := range []string{
 		p.Done(), p.ExitCode(), p.Result(), p.Stream(), p.Findings(), p.Ask(),
-		// The previous run's instructions, which are not this run's.
-		p.Brief(), p.System(),
+		// The previous run's instructions, which are not this run's — its
+		// hooks name a bridge session its end closed.
+		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig(),
 	} {
 		if !strings.Contains(cleared, want) {
 			t.Fatalf("%q was not cleared: %s", want, cleared)
+		}
+	}
+	// OpenCode's values and its notes plugin are DIRECTORIES, removed whole —
+	// a run with fewer values than the last would keep the last one's beside
+	// its own, and a run wired to no notes a plugin nothing names.
+	_, removed, _ := strings.Cut(cleared, "; rm -rf ")
+	for _, dir := range []string{p.OpenCodeValues(), p.OpenCodeSteerPlugin()} {
+		if !strings.Contains(removed, "'"+dir+"'") {
+			t.Fatalf("the directory %q was not removed whole: %s", dir, cleared)
 		}
 	}
 	// The CHECKOUT is left alone — that disk state is the whole reason to
@@ -204,9 +217,9 @@ func TestARunningJobIsNotDone(t *testing.T) {
 	// The wrapper answers the liveness probe.
 	b.ExecFunc = alive(true)
 
-	done, err := runner.Poll(t.Context(), b, handle)
-	if err != nil || done {
-		t.Fatalf("Poll = %v, %v; want a running job", done, err)
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobRunning {
+		t.Fatalf("Poll = %v, %v; want a running job", state, err)
 	}
 }
 
@@ -218,9 +231,9 @@ func TestTheDoneMarkerEndsTheRun(t *testing.T) {
 	b.ExecFunc = alive(true)
 	b.Put(paths(b).Done(), "0")
 
-	done, err := runner.Poll(t.Context(), b, handle)
-	if err != nil || !done {
-		t.Fatalf("Poll = %v, %v; want done", done, err)
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobEnded {
+		t.Fatalf("Poll = %v, %v; want ended", state, err)
 	}
 }
 
@@ -234,9 +247,9 @@ func TestAnEmptyMarkerIsNotACompletion(t *testing.T) {
 	b.ExecFunc = alive(true)
 	b.Put(paths(b).Done(), "")
 
-	done, err := runner.Poll(t.Context(), b, handle)
-	if err != nil || done {
-		t.Fatalf("Poll = %v, %v; an empty marker is indistinguishable from none", done, err)
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobRunning {
+		t.Fatalf("Poll = %v, %v; an empty marker is indistinguishable from none", state, err)
 	}
 }
 
@@ -249,9 +262,62 @@ func TestADeadWrapperWithNoMarkerEndsTheRun(t *testing.T) {
 	handle := start(t, runner, b)
 	b.ExecFunc = alive(false)
 
-	done, err := runner.Poll(t.Context(), b, handle)
-	if err != nil || !done {
-		t.Fatalf("Poll = %v, %v; want the dead job reaped", done, err)
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobEnded {
+		t.Fatalf("Poll = %v, %v; want the dead job ended and collected", state, err)
+	}
+}
+
+// lostBox is a box that says its job was lost with the engine that last saw it
+// running, as a local box does once its engine's restart killed it — writing
+// the done marker as the box is asked, where marked says to: a wrapper that
+// finished between the poll's first read and the box's answer.
+type lostBox struct {
+	*sandbox.FakeSandbox
+	marker string
+}
+
+func (b *lostBox) Job(context.Context, string) (sandbox.JobState, error) {
+	if b.marker != "" {
+		b.Put(paths(b).Done(), b.marker)
+	}
+	return sandbox.JobLost, nil
+}
+
+// A JOB ITS BOX SAYS WAS LOST IS LOST, NOT ENDED: it went with the engine that
+// last saw it running, mid-step, and what it left is no result — so the poll
+// says so, and the waiter has its round carried on rather than collected.
+//
+// Mutation: answer every job that is not running as ended, and a job its
+// engine's restart killed is collected as the round's result.
+func TestAJobItsBoxSaysWasLostIsLost(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewClaudeCode()
+	b := &lostBox{FakeSandbox: box(t, runner)}
+	handle := start(t, runner, b.FakeSandbox)
+
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobLost {
+		t.Fatalf("Poll = %v, %v; want the job lost", state, err)
+	}
+}
+
+// A JOB THAT WROTE ITS MARKER AS IT WAS ASKED ABOUT FINISHED: the wrapper
+// writes the marker and exits, and one that did both between the poll's read
+// and the box's answer is a job that ended, whatever the box then says of its
+// process.
+//
+// Mutation: drop the second read of the marker, and a run that finished is
+// started again.
+func TestALostJobWhoseMarkerIsThereAfterAllEnded(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewClaudeCode()
+	b := &lostBox{FakeSandbox: box(t, runner), marker: "0"}
+	handle := start(t, runner, b.FakeSandbox)
+
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobEnded {
+		t.Fatalf("Poll = %v, %v; want the job that wrote its marker ended", state, err)
 	}
 }
 
@@ -265,7 +331,7 @@ func TestAnAliveWrapperKeepsWaitingHoweverLong(t *testing.T) {
 	b.ExecFunc = alive(true)
 
 	for range 100 {
-		if done, _ := runner.Poll(t.Context(), b, handle); done {
+		if state, _ := runner.Poll(t.Context(), b, handle); state.Over() {
 			t.Fatal("a live job was declared finished")
 		}
 	}
@@ -281,9 +347,9 @@ func TestAnUnreadableLivenessProbeIsNotACompletion(t *testing.T) {
 	b.ExecFunc = func(context.Context, string, sandbox.ExecOptions) (sandbox.ExecResult, error) {
 		return sandbox.ExecResult{}, context.DeadlineExceeded
 	}
-	done, err := runner.Poll(t.Context(), b, handle)
-	if err != nil || done {
-		t.Fatalf("Poll = %v, %v; want the next tick to ask again", done, err)
+	state, err := runner.Poll(t.Context(), b, handle)
+	if err != nil || state != sandbox.JobRunning {
+		t.Fatalf("Poll = %v, %v; want the next tick to ask again", state, err)
 	}
 }
 
@@ -546,9 +612,9 @@ func TestTheCLIsErrorIsNotReplacedByItsStderr(t *testing.T) {
 	}
 }
 
-// THE REPORT LEAVES THE RUNNER WHOLE. It is what the resumed executor reads,
-// and a cut keeping its head reads as the whole report; the coordinator holds
-// it to the record's bound by condensing it.
+// THE REPORT LEAVES THE RUNNER WHOLE. It is what the run's reviewer judges the
+// round on, and a cut keeping its head reads as the whole report; the
+// coordinator holds it to the record's bound by condensing it.
 func TestTheReportLeavesTheRunnerWhole(t *testing.T) {
 	t.Parallel()
 	runner := codingagent.NewClaudeCode()
@@ -623,8 +689,8 @@ func (containerLike) EngineHost() string { return "host.docker.internal" }
 
 // THE CLI DIALS ITS SERVERS FROM INSIDE THE BOX, so the config it is handed
 // names the engine host as the box reaches it. Every run gets its config
-// through Start, a seat's run_sandbox job, a box-mode executor and the
-// assistant's deep work alike, so the translation is here and only here: a
+// through Start, a seat's executor run and the assistant's deep work alike,
+// so the translation is here and only here: a
 // bridge at `127.0.0.1` was written into a container's config as it stood,
 // and every call the CLI made reached the container's own loopback.
 func TestTheBoxsConfigNamesTheEngineHostAsTheBoxReachesIt(t *testing.T) {
@@ -650,5 +716,52 @@ func TestTheBoxsConfigNamesTheEngineHostAsTheBoxReachesIt(t *testing.T) {
 	}
 	if servers["crewlet"].URL != "http://127.0.0.1:8000/mcp/tok" {
 		t.Fatalf("the caller's servers were rewritten: %q", servers["crewlet"].URL)
+	}
+}
+
+// THE NOTES ROUTE IS DIALLED FROM INSIDE THE BOX TOO. OpenCode's plugin polls
+// the run's notes route by its URL rather than through the MCP server Claude
+// Code's hooks name, so that URL is translated in Start like the servers'
+// own: written as the engine host's loopback, a plugin in a container box
+// polled the container itself and its run read no note.
+//
+// Mutation: drop the notes route's translation from Start, and the plugin's
+// route names 127.0.0.1.
+func TestTheBoxsNotesRouteNamesTheEngineHostAsTheBoxReachesIt(t *testing.T) {
+	t.Parallel()
+	runner := codingagent.NewOpenCode()
+	b := containerLike{sandbox.NewFakeSandbox("box-1").CapReads(boxReadCap)}
+	if err := runner.Install(t.Context(), b); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	const route = "http://127.0.0.1:8000/mcp/tok/steer"
+	req := sandbox.RunRequest{Brief: "b",
+		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take", URL: route}}
+	if _, err := runner.Start(t.Context(), b, req); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	raw, err := b.ReadFile(t.Context(), paths(b).OpenCodeConfig())
+	if err != nil {
+		t.Fatalf("reading the configuration: %v", err)
+	}
+	var cfg struct {
+		Plugins []openCodePlugin `json:"plugins"`
+	}
+	if err = json.Unmarshal(raw, &cfg); err != nil || len(cfg.Plugins) != 1 {
+		t.Fatalf("the configuration names no notes plugin (%v):\n%s", err, raw)
+	}
+	file, ok := referencedPath(cfg.Plugins[0].Options.URL)
+	if !ok {
+		t.Fatalf("the plugin's route is %q, want a reference to a file", cfg.Plugins[0].Options.URL)
+	}
+	value, err := b.ReadFile(t.Context(), file)
+	if err != nil {
+		t.Fatalf("reading the route's file: %v", err)
+	}
+	if got := strings.TrimSpace(string(value)); got != "http://host.docker.internal:8000/mcp/tok/steer" {
+		t.Fatalf("the plugin polls %q, want the engine host by its alias", got)
+	}
+	if req.Steer.URL != route {
+		t.Fatalf("the caller's wiring was rewritten: %q", req.Steer.URL)
 	}
 }

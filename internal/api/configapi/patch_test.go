@@ -66,7 +66,7 @@ func TestAPatchReachesANestedSectionWithoutItsSiblings(t *testing.T) {
 	}
 
 	patchOnly(t, s,
-		`{"providers": {"llm": {"zulu": {"model": "claude-opus-5"}}}}`,
+		`{"providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-opus-5"}}}}`,
 		summaryHeader)
 
 	document := s.activeDocument(t)

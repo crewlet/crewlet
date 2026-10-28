@@ -182,6 +182,7 @@ var answerTypes = map[string]assistanttest.ValueTypes{
 const cardsCompany = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

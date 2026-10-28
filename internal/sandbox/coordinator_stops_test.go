@@ -208,7 +208,7 @@ var coordinatorEntries = map[string][]entryDrive{
 		},
 	},
 	"Launch": {{
-		name: "a run_sandbox call on the run's own turn",
+		name: "a relaunch on the run's own turn",
 		call: func(t *testing.T, rig *coordRig) {
 			if _, err := rig.coordinator.Launch(t.Context(), rig.manager, launchReq("t1")); err != nil {
 				t.Logf("Launch: %v", err)
@@ -229,11 +229,41 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "a seat claimed by a new owner",
 		call: recovers,
 	}},
+	"StopSeat": {
+		{
+			name: "a person's pause asking the seat's running work to stop",
+			call: stopsTheSeat,
+		},
+		{
+			name:    "a stop that finds the job's spend to read back",
+			arrange: jobFinished,
+			call:    stopsTheSeat,
+		},
+		{
+			name:    "a stop whose box cannot be read back",
+			arrange: collectFails,
+			call:    stopsTheSeat,
+		},
+	},
 	"RetireSeat": {{
 		name: "the runs of a seat that left the company",
 		call: func(t *testing.T, rig *coordRig) {
 			if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "node-a:1", 3); err != nil {
 				t.Logf("RetireSeat: %v", err)
+			}
+		},
+	}},
+	"ReadHostedBox": {{
+		// IT ENDS NOTHING: it reads, for the node collecting the run, the
+		// box this node hosts — and pauses it where a collection would —
+		// so whatever becomes of the run is the asker's to say.
+		name:    "a peer's collection of a box on this node's host",
+		arrange: jobFinished,
+		call: func(t *testing.T, rig *coordRig) {
+			run, _, _ := rig.pending.Get(t.Context(), "t1")
+			if _, _, err := rig.coordinator.ReadHostedBox(t.Context(), "t1", run.LaunchID,
+				run.SandboxID, BoxReadCollect); err != nil {
+				t.Logf("ReadHostedBox: %v", err)
 			}
 		},
 	}},
@@ -248,6 +278,13 @@ var coordinatorEntries = map[string][]entryDrive{
 	"SeatHeldBySandbox": {{
 		name: "the busy half of it",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.SeatHeldBySandbox("swe") },
+	}},
+	"LaunchStopped": {{
+		// IT ENDS NOTHING: it hands the frame launching a run the stop
+		// decided on it — already ended by the stop's own ending — and
+		// forgets it.
+		name: "the launching frame taking the stop that ended its run",
+		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.LaunchStopped("t1") },
 	}},
 	"HoldSeat": {{
 		name: "a delivery that reached a seat this node counts as held",
@@ -318,8 +355,9 @@ var placements = map[string]func(t *testing.T, rig *coordRig){
 		// still owed — which a node that stopped between the two leaves
 		// for the seat's next holder.
 		run := rig.get("t1")
+		words, answer := chatReply(answerOnTheDM, "the release branch", nil).answerOf(rig.now)
 		if _, won, err := rig.pending.RecordAnswer(t.Context(), "t1", run.LaunchID,
-			chatReply(answerOnTheDM, "the release branch", nil).answerOf(rig.now), rigLease); err != nil || !won {
+			sealedOnto(t, rigAnswers(), run, words, answer), rigLease); err != nil || !won {
 			t.Fatalf("RecordAnswer = %v, %v", won, err)
 		}
 	},
@@ -512,6 +550,17 @@ func answerByTurnOnTheRow(t *testing.T, rig *coordRig) types.SandboxAnswerGiven 
 		given.LaunchID = "launch-of-a-run-with-no-record"
 	}
 	return given
+}
+
+// stopsTheSeat is the pause a person put on the seat with `stop_running`,
+// reaching the node that holds it.
+func stopsTheSeat(t *testing.T, rig *coordRig) {
+	t.Helper()
+	if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{
+		By: "founder", ByKind: "human", OperatorID: "pat:founder-token",
+	}); err != nil {
+		t.Logf("StopSeat: %v", err)
+	}
 }
 
 // recovers takes the seat under a fresh lease, as a node claiming it does.
@@ -736,6 +785,13 @@ func (s *refusingStore) ReleaseClaim(ctx context.Context, turnID string, r Relea
 	return s.inner.ReleaseClaim(ctx, turnID, r)
 }
 
+func (s *refusingStore) LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error) {
+	if s.called("LiftHold") {
+		return false, errRefusedCall
+	}
+	return s.inner.LiftHold(ctx, turnID, cond)
+}
+
 func (s *refusingStore) MarkAwaiting(ctx context.Context, turnID string, q Clarification) error {
 	if s.called("MarkAwaiting") {
 		return errRefusedCall
@@ -765,6 +821,14 @@ func (s *refusingStore) DecideEnding(ctx context.Context, turnID string, d Decis
 	return s.inner.DecideEnding(ctx, turnID, d)
 }
 
+func (s *refusingStore) CollectStop(ctx context.Context, turnID string, c StopCollection,
+) (PendingRun, bool, error) {
+	if s.called("CollectStop") {
+		return PendingRun{}, false, errRefusedCall
+	}
+	return s.inner.CollectStop(ctx, turnID, c)
+}
+
 func (s *refusingStore) Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error) {
 	if s.called("Finish") {
 		return PendingRun{}, false, errRefusedCall
@@ -777,6 +841,13 @@ func (s *refusingStore) ExpirePause(ctx context.Context, turnID string) (bool, e
 		return false, errRefusedCall
 	}
 	return s.inner.ExpirePause(ctx, turnID)
+}
+
+func (s *refusingStore) MarkLost(ctx context.Context, turnID, launch string, loss JobLoss) (bool, error) {
+	if s.called("MarkLost") {
+		return false, errRefusedCall
+	}
+	return s.inner.MarkLost(ctx, turnID, launch, loss)
 }
 
 func (s *refusingStore) AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error {
@@ -881,4 +952,33 @@ func (s *refusingStore) ClearHandBack(ctx context.Context, turnID string, ids []
 		return false, errRefusedCall
 	}
 	return s.inner.ClearHandBack(ctx, turnID, ids)
+}
+
+func (s *refusingStore) FileNote(ctx context.Context, turnID string, filing NoteFiling,
+) (NoteFiled, PendingRun, error) {
+	if s.called("FileNote") {
+		return "", PendingRun{}, errRefusedCall
+	}
+	return s.inner.FileNote(ctx, turnID, filing)
+}
+
+func (s *refusingStore) TakeNotes(ctx context.Context, turnID string, take NoteTake) ([]RunNote, error) {
+	if s.called("TakeNotes") {
+		return nil, errRefusedCall
+	}
+	return s.inner.TakeNotes(ctx, turnID, take)
+}
+
+func (s *refusingStore) MarkPulled(ctx context.Context, turnID, launch string) (bool, error) {
+	if s.called("MarkPulled") {
+		return false, errRefusedCall
+	}
+	return s.inner.MarkPulled(ctx, turnID, launch)
+}
+
+func (s *refusingStore) WatchNotes(ctx context.Context, turnID string) (<-chan NotesView, error) {
+	if s.called("WatchNotes") {
+		return nil, errRefusedCall
+	}
+	return s.inner.WatchNotes(ctx, turnID)
 }

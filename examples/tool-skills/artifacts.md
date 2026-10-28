@@ -54,11 +54,15 @@ figures over live data, a `dashboard` artifact (see Dashboards).
    `old_str` and `new_str` pairs, quoted from the source at your base and each
    occurring exactly once. Replacing a whole page with `content` costs far more
    and risks losing a colleague's change.
-4. **Build big things in the sandbox.** Inline content is at most 1 MiB per
-   call. For a multi-file site, a seat asks its coding run to build into a
-   directory, then publishes it in the same turn with
-   `source: {sandbox: "dist"}`; the box is readable only until that Execute
-   phase ends. A project's file is copied in with `from_project_file`.
+4. **Build big things in the box.** Inline content is at most 1 MiB per
+   call. A seat's executor run builds a multi-file site into a directory of
+   its workspace and publishes it while it works, with
+   `source: {sandbox: "dist"}`, or one file with `from_sandbox`: the engine
+   reads a box only for the run working in it, so publish before the run
+   finishes. Without a box, a site past the bound goes up over several
+   `publish_artifact` calls, each carrying some of its `files`: a publish
+   keeps the files it leaves out. A project's file is copied in with
+   `from_project_file`.
 5. **Share it with the people who must use it.** When an agent creates an
    artifact for a person who asked, that person is made its editor
    automatically. Share with other seats or units with `share_artifact`. An

@@ -62,11 +62,10 @@ func firstDiff(a, b string) string {
 	return fmt.Sprintf("  identical for %d bytes, then lengths differ: %d vs %d", n, len(a), len(b))
 }
 
-// The executor loops: it runs recon, results come back, it acts, it goes round
-// again — and it additionally suspends and resumes around a detached sandbox
-// run. None of that may reach the system prompt: the prefetch blocks are
-// frozen at turn start, and the ledger of what has already run rides the user
-// message.
+// The executor loops: a run is launched, collected and reviewed, and a turn
+// sent back launches another — often from another process, after a park. None
+// of that may reach the system prompt: the prefetch blocks are frozen at turn
+// start, and the ledger of what has already run rides the brief.
 func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 	t.Parallel()
 	seat := lead()
@@ -120,11 +119,12 @@ func TestReviewPromptIsByteStableAcrossRounds(t *testing.T) {
 		Outcome:  "delivered",
 		Produced: "Posted the summary.",
 		ToolLog:  "- post_message(...) → success",
-		// Both gated rules ON, so the bytes they add are inside what is
-		// held stable across rounds.
-		OffersSandbox: true,
-		OffersA2A:     true,
-		Skills:        allSkills(),
+		// The gated rule ON, so the bytes it adds are inside what is held
+		// stable across rounds — and the run's delivered refs, which are
+		// evidence fixed for the phase like the rest.
+		Delivered: DeliveredRefs([]string{"acme/api#41"}, 0),
+		OffersA2A: true,
+		Skills:    allSkills(),
 	}
 	stableAcrossRounds(t, "review",
 		func(int) string { return BuildReview(seat, frozen).Text },

@@ -14,7 +14,7 @@
  */
 
 import type { StepperStep } from "@crewlethq/ui";
-import { delegatedWorkers, roundOf } from "./seats.ts";
+import { roundOf } from "./seats.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 
 /** The steps a turn walks, in order. */
@@ -25,15 +25,16 @@ export type TurnStep = (typeof TURN_STEPS)[number];
  * The turn's steps and which one it is on.
  *
  * A PARKED turn is in Execute — its coding run is the execute phase's work —
- * with the run named; a fan-out to workers says so; otherwise Execute carries
- * "round x of y" against the cap the phase was GRANTED (an extension raises
- * it). Context reads Onboarding on a seat's first turn.
+ * with the run named. Before it parks, Execute carries the round it is on
+ * against the cap the phase states, which for an executor is its launch: the
+ * one round of one the engine records its run as ("round 1 of 1"). Context
+ * reads Onboarding on a seat's first turn.
  *
- * `detail` is that word on its own ("round 7 of 25", "coding run"), and
- * `inLabel: false` leaves it OUT of the Execute step for a row with no room
- * for it — a phone's card, where "Execute · round 7 of 25" pushed Review onto
- * a second line behind its own connector — so the caller can say it beside
- * the stepper instead. Either way it is said once.
+ * `detail` is that word on its own ("coding run"), and `inLabel: false` leaves
+ * it OUT of the Execute step for a row with no room for it — a phone's card,
+ * where the word in the Execute step pushed Review onto a second line behind
+ * its own connector — so the caller can say it beside the stepper instead.
+ * Either way it is said once.
  */
 export function turnSteps(
   row: AgentRow,
@@ -44,18 +45,15 @@ export function turnSteps(
   const phase = parked ? "execute" : (call?.phase ?? row.current_phase ?? "context");
   const current: TurnStep =
     phase === "review" ? "review" : phase === "execute" ? "execute" : "context";
-  const workers = delegatedWorkers(call);
   const round = roundOf(call);
   const detail =
     current !== "execute"
       ? ""
       : parked
         ? "coding run"
-        : workers > 0
-          ? "workers"
-          : round > 0
-            ? `round ${round}${call?.max_rounds ? ` of ${call.max_rounds}` : ""}`
-            : "";
+        : round > 0
+          ? `round ${round}${call?.max_rounds ? ` of ${call.max_rounds}` : ""}`
+          : "";
   const executeLabel = detail && inLabel ? `Execute · ${detail}` : "Execute";
   const steps = TURN_STEPS.map((id) => ({
     id,

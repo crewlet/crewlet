@@ -123,14 +123,23 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// counters, and it must do so under the ceilings now current.
 		e.reconcileBudgetParks(ctx, c)
 		// AND A SEAT PARKED ON ITS MODELS' LIMIT, when this company's
-		// models are not the ones that refused it: they are built afresh
-		// with each company, and have sat nothing out.
+		// models are not the ones that refused it: a park decided under
+		// another registry is released, since whether the seat's chain is
+		// still the one that refused is this company's to say. An entry
+		// whose spec the apply left unchanged keeps its predecessor's
+		// sit-out ([carrySitOuts]), so a limit that still holds parks the
+		// seat again at the cost of one delivery and no process: the
+		// entry refuses before any CLI is started. A seat whose mail its
+		// run holds is parked again by its run's completion, which the
+		// readmit below re-fires: collected again, and refused on the
+		// carried limit before its turn runs ([Engine.collectedRefusal]).
 		e.reconcileProviderParks(ctx, c)
 		// AND A RESUME WAITING ON ANY OF THEM: a published company is the
 		// event that brings a model, the one that moves a ceiling and the
-		// one that builds every entry afresh, so the answers and the
-		// completions waiting on them are re-checked under the company now
-		// current. One still refused waits again, on whatever refuses it.
+		// one that builds every entry afresh (each unchanged one keeping
+		// its sit-out), so the answers and the completions waiting on them
+		// are re-checked under the company now current. One still refused
+		// waits again, on whatever refuses it.
 		if c.Models != nil {
 			e.readmitResumes(waitTurnEngine)
 			e.readmitResumes(waitProvider)

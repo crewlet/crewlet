@@ -44,13 +44,13 @@ func (s *Service) inbox(handle string) (uuid.UUID, bool) {
 }
 
 // Service opens channels and carries asks and answers over the durable queue.
+//
+// It does not sweep: closing an idle ask and deleting a closed one is the
+// [Sweeper]'s, the half of a channel's life that addresses nobody, which shares
+// this one's store, publisher and clock ([keeper]) and nothing else. See
+// [Sweeper] for why the capability is split at all.
 type Service struct {
-	// Sweeper is the half of a channel's life that addresses nobody —
-	// closing an idle ask and deleting a closed one. EMBEDDED rather than
-	// held beside a second copy of the store, the publisher and the clock,
-	// which is what those three are to both halves. See [Sweeper] for why
-	// the capability is split at all.
-	*Sweeper
+	keeper
 
 	dir Directory
 
@@ -67,7 +67,7 @@ type Options struct {
 
 // New builds a service.
 func New(channels Store, pub queue.Publisher, opts Options) (*Service, error) {
-	sweeper, err := NewSweeper(channels, pub, opts.Now)
+	k, err := newKeeper(channels, pub, opts.Now)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func New(channels Store, pub queue.Publisher, opts Options) (*Service, error) {
 			"addressed — wire the running company's org, or take " +
 			"NewSweeper if this caller only closes and purges channels")
 	}
-	s := &Service{Sweeper: sweeper, dir: opts.Directory, newID: opts.NewID}
+	s := &Service{keeper: k, dir: opts.Directory, newID: opts.NewID}
 	if s.newID == nil {
 		s.newID = func() string { return "a2a-" + uuid.New().String()[:12] }
 	}
@@ -232,10 +232,15 @@ type Answer struct {
 	// echo is the only way that context survives the round trip.
 	Question string
 
-	// CausedBy is the ask this answers. Its trace context is copied onto
+	// AskTrace is the trace context of the ask this answers, copied onto
 	// the reply so the whole exchange — the ask, the answering turn's
 	// phases, the reply, and the turn it wakes — reads as ONE trace.
-	CausedBy *events.Event
+	//
+	// THE CONTEXT, NOT THE ASK'S EVENT: the turn that answers can end days
+	// after its trigger, in a segment resumed off its coding run's record on
+	// whichever node then holds the seat, which carries the ask's trace and
+	// never the event itself.
+	AskTrace events.TraceContext
 
 	DelegationDepth int
 	DelegationChain []string
@@ -287,17 +292,12 @@ func (s *Service) Reply(ctx context.Context, ans Answer) error {
 	wake := events.New(types.A2AMessage{
 		ChannelID: ans.ChannelID, Sender: ans.Sender,
 		SenderRole: ans.SenderRole, Question: ans.Question, Content: ans.Content,
-	}, events.TraceContext{})
+	}, ans.AskTrace)
 	wake.Timestamp = now
 	wake.Source = ans.Sender
 	wake.DelegationDepth = ans.DelegationDepth
 	wake.DelegationChain = appendChain(ans.DelegationChain, ans.Sender)
 	wake.ParentTurnID = ans.TurnID
-	if ans.CausedBy != nil {
-		wake.TraceID = ans.CausedBy.TraceID
-		wake.SpanID = ans.CausedBy.SpanID
-		wake.ParentSpanID = ans.CausedBy.ParentSpanID
-	}
 	seat, addressable := s.inbox(recipient)
 	if !addressable {
 		// A counterparty who has been removed or turned into a human seat

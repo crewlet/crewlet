@@ -70,7 +70,8 @@ func seatsAct(environ config.Source, args []string, tool string, pausing bool, s
 		func(fs *flag.FlagSet) {
 			if pausing {
 				stop = fs.Bool("stop", false,
-					"also end the turn the seat is on at its next round; it is not run again")
+					"also end the seat's running work: the turn it is on at its next round, "+
+						"and any coding run it has out at once; neither is run again")
 				reason = fs.String("reason", "", "why, in a line; shown on the seat and in the feed")
 			}
 			opID = fs.String("op-id", "",
@@ -155,7 +156,8 @@ func seatsAct(environ config.Source, args []string, tool string, pausing bool, s
 	case pausing && answer.Receipt.Changed:
 		fmt.Fprintf(stdout, "paused %s (by %s at %s)\n", handle, by, answer.Receipt.PausedAt)
 		if answer.Receipt.StopRunning {
-			fmt.Fprintln(stdout, "  The turn it is on ends at its next round and is not run again.")
+			fmt.Fprintln(stdout, "  The turn it is on ends at its next round and is not run again; "+
+				"a coding run it has out is ended now, its box reclaimed and what it spent charged.")
 		} else {
 			fmt.Fprintln(stdout, "  The turn it is on, if any, finishes first; nothing new starts.")
 		}

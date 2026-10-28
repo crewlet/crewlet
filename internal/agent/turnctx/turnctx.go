@@ -251,8 +251,8 @@ type Turn struct {
 	// preference about somebody not party to the task does not apply — and
 	// a filter that does not know who is asking cannot enforce it. Empty
 	// for a turn no identifiable sender woke. A resumed turn re-reads no
-	// trigger, so it carries the senders its turn PARKED with
-	// (execstate.State.Senders).
+	// trigger, so it reads them off the interactions its turn PARKED with
+	// (execstate.State.Interactions).
 	Senders []types.CanonicalIdentity
 
 	// Phase is the phase session this value was bound for, and empty on
@@ -264,6 +264,14 @@ type Turn struct {
 	// refuses (an ambient phase attributes a call to whichever phase last
 	// wrote the context).
 	Phase types.Phase
+
+	// Deadline is the instant the turn's wall-clock cap ends — a scheduled
+	// fire's cap from the moment the turn began — and zero when it has none.
+	// Fixed once, when the turn begins, and carried across every park
+	// (execstate.State.Deadline), so each segment, and each run the turn
+	// launches, is held to the same instant: a launch stamps it on the run's
+	// row, and the poll ends a run that passes it (turn.Settings.Deadline).
+	Deadline time.Time
 
 	// Calls is what this run has called so far, which a derived operation
 	// id reads its repeat count from — see [CallLog].
@@ -370,9 +378,9 @@ func (t *Turn) InPhase(phase types.Phase) *Turn {
 // one, its auxiliary calls tallied on spend rather than on [Turn.AuxSpend].
 //
 // One caller, and the shape of the problem it solves is the reason it exists:
-// a box-mode executor hands its tool surface to a coding CLI over the
-// bridge, and the CLI goes on calling those tools after the segment that
-// launched it has ended and charged what it spent. Tallied on that segment's
+// every executor hands its tool surface to its coding CLI over the bridge, and
+// the CLI goes on calling those tools after the segment that launched it has
+// ended and charged what it spent. Tallied on that segment's
 // tally, every one of those calls was added to a number nothing read again.
 // A copy, for [Turn.InPhase]'s reason; nil in, nil out.
 //
@@ -479,15 +487,16 @@ func (t *Turn) RequireSeat() (*org.Role, error) {
 // MaxWritten is how many distinct work items [Written] lists before it stops
 // listing them and records only that there were more.
 //
-// PAST THE DEFAULT EXECUTOR CEILING (48 rounds, config.TurnEngine's
-// ExecuteMaxToolRoundsCeiling): a turn that wrote a different item on every
-// round of an executor run extended all the way to it is still listed in
-// full. A turn past 64 is a bulk operation — a relabel, a sweep — whose list
-// nobody reads item by item, and the bound is what keeps a runaway fan-out
-// from growing one turn's record without limit. The answer the set exists
-// for survives the cap untouched: "exactly one" is a question about the
-// first two.
-const MaxWritten = 64
+// PAST THE DEFAULT RUN CAP (96 CLI turns, providers.sandbox's
+// default_max_turns), which is the bound on how many steps one executor run
+// takes: a turn whose run wrote a different item on every one of its turns is
+// still listed in full, with room left for what the onboarding pass wrote
+// before it. A turn past 128 is a bulk operation — a relabel, a sweep — whose
+// list nobody reads item by item, and the bound is what keeps a runaway
+// fan-out from growing one turn's record, and the parked run's row that
+// carries it, without limit. The answer the set exists for survives the cap
+// untouched: "exactly one" is a question about the first two.
+const MaxWritten = 128
 
 // Written is the set of work items a turn's writes committed to, in the order
 // each was first written.

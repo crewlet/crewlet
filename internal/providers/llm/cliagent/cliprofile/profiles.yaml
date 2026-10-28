@@ -3029,8 +3029,7 @@ muse-code:
   # There is no token_env and no capture_token_args: this CLI mints no
   # headless token of its own. `muse login` does mint an API key server-side,
   # but it stores it in the credential file rather than printing it, so a
-  # subscription seat authenticates from that file — which is why an
-  # box-mode run on a REMOTE cell is refused for this CLI.
+  # subscription seat authenticates from that file.
   api_key_env: "META_API_KEY"
   # `muse login` brokers the browser sign-in; `muse logout` removes the stored
   # credential and leaves an exported META_API_KEY alone. Both are real

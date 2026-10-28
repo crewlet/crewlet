@@ -51,6 +51,7 @@ var pinned = time.Date(2026, 8, 23, 16, 0, 0, 0, time.UTC)
 const companyDoc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
@@ -1549,7 +1550,7 @@ func TestTheMemoryScreenReadsWhatThisAnswerSends(t *testing.T) {
 func TestTheMemoryOverviewListsEveryAgentSeat(t *testing.T) {
 	t.Parallel()
 	var doc strings.Builder
-	doc.WriteString("name: Acme\nproviders:\n  llm:\n    z: {model: m}\nroles:\n")
+	doc.WriteString("name: Acme\nproviders:\n  sandbox: {fake: true}\n  llm:\n    z: {model: m}\nroles:\n")
 	for i := range 14 {
 		fmt.Fprintf(&doc, "  - name: Agent %02d\n    handle: agent-%02d\n    llm: z\n", i, 13-i)
 	}
@@ -2322,6 +2323,7 @@ func TestSeatsInUnitsAreReported(t *testing.T) {
 	const doc = `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5

@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
@@ -274,6 +275,11 @@ type Sources struct {
 	// Sandbox is the durable record of detached coding runs, the fleet's
 	// rather than this node's. Nil leaves the question unregistered.
 	Sandbox PendingRuns
+
+	// RunAnswers opens a run's recorded answer for who gave it, which only
+	// the answer's seal says ([sandbox.AnswerSeal]). Nil, or a seal that
+	// does not open here, leaves a row's `answered_by` empty.
+	RunAnswers *sandbox.AnswerSeal
 
 	// SandboxTail is a running coding run's live output, ANSWERED BY THE
 	// NODE THAT OWNS THE RUN (internal/sandbox/livetail.go): the box is

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -52,214 +54,113 @@ func (n *node) conversation(t *testing.T, handle, key string) []ledger.Session {
 // GATE G6 — the golden coding turn.
 //
 // A real local sandbox, a real detached process, the real suspend and the real
-// resume. The one stub is the model, behind the scripted CLI the seat's text
-// calls run on, exactly as in the gate above: what is under test is the
-// ENGINE's half of a coding turn, and a real coding CLI would test the
-// vendor's.
+// resume. Every agent seat's executor is its coding CLI's own run, so this is
+// the path every turn takes; what this gate adds is the box's whole life seen
+// from outside — its argv, its stream, its park on a question, the reaper, and
+// a restart in the middle of a run.
 //
-// The "coding agent" here is a shell script installed as `claude` on the box's
-// PATH. That makes the whole detached protocol real — a process group, a
-// background job, a done marker, a findings file, an ask signal — while
-// leaving what the agent DOES up to the test.
+// The coding CLI is the stand-in of codingcli_test.go: this binary, installed
+// as `claude` on the box's PATH by the catalogue's setup step, asking the same
+// scripted model the seat's phases on this host do. That makes the whole detached
+// protocol real — a process group, a background job, a done marker, a result
+// line, an ask signal, the bridge — while leaving what the agent DOES up to
+// the test, through role.sandbox.env ([codingModeEnv]).
 
-// sandboxCompanyDoc is the golden company with a code-enabled seat, filled by
-// [sandboxCompany].
-//
-// containment `direct`, because the point is the engine's protocol and a
-// container would make this suite need Docker. The path escape guards and the
-// container argv have their own tests in internal/sandbox.
-//
-// TWO MODEL ENTRIES, because a coding run and a text call are two different
-// CLIs here. The seat's text calls — onboarding, the executor that launches the
-// run, the reviewer — run on the scripted entry. The RUN takes its runner from
-// the seat's coding agent and its model from llm_sandbox, and those must be
-// one CLI's: an entry's model is written in its own CLI's grammar, so config
-// refuses a Claude Code run on an entry driving any other. So llm_sandbox names
-// `coder`, a Claude Code entry none of the seat's text phases names, whose
-// model the stand-in below is handed — on a state directory of its own, since
-// two CLIs never share one.
+// sandboxCompanyDoc is the golden coding company, filled by [sandboxCompany]:
+// one agent seat whose executor runs in a `direct` box (see [codingSandbox] for
+// why direct), on a pause TTL a case may shorten.
 const sandboxCompanyDoc = `
 name: Nimbus
 providers:
+%s    default_pause_ttl_seconds: 1800
   llm:
-%s
-    coder:
-      agent: claude-code
-      model: sonnet
-      state_dir: %q
-  sandbox:
-    default_run_in: direct
-    default_coding_agent: claude-code
-    default_pause_ttl_seconds: 1800
-    local:
-      state_dir: %q
-    setup:
-      # A REAL setup step, which is also how the stand-in coding CLI gets
-      # onto the agent's PATH. The box's PATH inside the run wrapper is the
-      # login shell's, so a CLI has to be somewhere the wrapper prepends —
-      # and the shim directory is exactly that.
-      - name: fake-coding-agent
-        commands:
-          - 'mkdir -p "$HOME/.crewlet/bin" && cp "$FAKE_AGENT_PATH" "$HOME/.crewlet/bin/claude" && chmod +x "$HOME/.crewlet/bin/claude"'
-        brief: A stand-in coding CLI is installed.
-roles:
+%s%sroles:
   - name: SWE
     handle: swe
-    llm: scripted
-    llm_sandbox: coder
+    llm: [scripted, coder]
     sandbox:
-      enabled: true
-      # The seat's own round cap. Nothing about the stand-in agent honours
-      # it — what is under test is that a number written HERE reaches the
-      # coding CLI's argv, which is the whole of "wired".
+      # The seat's own round cap. What is under test is that a number
+      # written HERE reaches the coding CLI's argv, which is the whole of
+      # "wired".
       max_turns: 7
       env:
         FAKE_AGENT_MODE: "${FAKE_AGENT_MODE}"
-        FAKE_AGENT_PATH: "${FAKE_AGENT_PATH}"
         FAKE_AGENT_ARGV: "${FAKE_AGENT_ARGV}"
         FAKE_AGENT_RELEASE: "${FAKE_AGENT_RELEASE}"
-      # Only the cases that read the argv or hold the agent set these two,
-      # and the stand-in reads both as possibly unset (${VAR:-}). Declared
-      # optional, a case that sets neither runs without them; undeclared,
-      # every such case's run is refused for a value it never needed.
-      optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE]
+        FAKE_AGENT_VERSION: "${FAKE_AGENT_VERSION}"
+      # Only the cases that read the argv, hold the run or run an older
+      # release set these three. Declared optional, a case that sets none runs
+      # without them; undeclared, every such run starts without what it never
+      # needed and logs the gap.
+      optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE, FAKE_AGENT_VERSION]
   - name: Founder
     kind: human
     contact:
       slack_user_id: U0FOUNDER
 turn_engine:
   max_iterations: 1
-  max_tool_rounds: 4
 `
 
-// sandboxCompany is the coding company's document: its text calls on model's
-// scripted CLI, its boxes under stateDir, and its coding runs' Claude Code
-// entry on a directory of the test's own.
+// sandboxCompany is the coding company's document: its phases on this host on model's
+// scripted CLI, and its executor's boxes under stateDir, each running the
+// stand-in that asks model.
 func sandboxCompany(t *testing.T, model *scriptedModel, stateDir string) string {
 	t.Helper()
-	return fmt.Sprintf(sandboxCompanyDoc, model.entry("scripted"), t.TempDir(), stateDir)
+	return fmt.Sprintf(sandboxCompanyDoc, codingSandbox(stateDir, model.shim),
+		model.entry("scripted"), model.coder("coder"))
 }
 
 // codingNode is a running node whose seat can run code.
 type codingNode struct {
 	*node
 	stateDir string
-	binDir   string
 	argvPath string
 }
 
 // agentArgv is what the stand-in coding CLI was actually invoked with.
 func (n *codingNode) agentArgv(t *testing.T) []string {
 	t.Helper()
+	return n.invocation(t).Argv
+}
+
+// agentBrief is the brief the stand-in coding CLI read on its stdin — the
+// prompt it ran.
+func (n *codingNode) agentBrief(t *testing.T) string {
+	t.Helper()
+	return n.invocation(t).Stdin
+}
+
+// invocation is how the stand-in coding CLI last recorded it was started.
+func (n *codingNode) invocation(t *testing.T) codingInvocation {
+	t.Helper()
 	raw, err := os.ReadFile(n.argvPath)
 	if err != nil {
 		t.Fatalf("the coding agent recorded no invocation: %v", err)
 	}
-	return strings.Split(strings.TrimSpace(string(raw)), "\n")
+	var out codingInvocation
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("the coding agent's invocation does not read: %v\n%s", err, raw)
+	}
+	return out
 }
 
-// startCoding stands up a node with a local sandbox and a fake coding CLI.
+// startCoding stands up a node with a local sandbox whose runs are in mode.
 func startCoding(t *testing.T, mode string) *codingNode {
 	t.Helper()
 	stateDir := t.TempDir()
-	binDir := installFakeAgent(t)
 	// Outside the box directory, so it survives the teardown that ends the
 	// turn under test.
 	argv := filepath.Join(stateDir, "argv.txt")
-	// All three reach the box through role.sandbox.env, which is the ONLY
-	// way an external value gets there: the engine names no tool-specific
-	// variable of its own. That the fake agent runs at all is therefore also
-	// the proof that ${VAR} references in that block resolve.
-	env := fakeAgentEnv(binDir, mode)
-	env["FAKE_AGENT_ARGV"] = argv
+	// Both reach the box through role.sandbox.env, which is the ONLY way an
+	// external value gets there: the engine names no tool-specific variable
+	// of its own. That the run honours its mode is therefore also the proof
+	// that ${VAR} references in that block resolve.
+	env := map[string]string{codingModeEnv: mode, codingArgvEnv: argv}
 
-	model := newSandboxModel(t)
+	model := newScriptedModel(t)
 	doc := sandboxCompany(t, model, stateDir)
 	n := bootCompany(t, doc, model, env)
-	return &codingNode{node: n, stateDir: stateDir, binDir: binDir, argvPath: argv}
-}
-
-// fakeAgentEnv is what a coding node's environment carries for the stand-in
-// CLI installed in binDir to run in mode: where to copy it from, and how to
-// behave.
-func fakeAgentEnv(binDir, mode string) map[string]string {
-	return map[string]string{
-		"FAKE_AGENT_MODE": mode,
-		"FAKE_AGENT_PATH": filepath.Join(binDir, "claude"),
-	}
-}
-
-// installFakeAgent writes a `claude` that behaves like a headless coding CLI.
-//
-// It reads FAKE_AGENT_MODE from the run env — which is how the test steers it,
-// and incidentally proves role.sandbox.env reaches the box — and writes the
-// findings file the brief asked for, or an ask signal, or nothing at all.
-func installFakeAgent(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	script := `#!/bin/sh
-# A stand-in for a headless coding CLI. Everything it touches — the findings
-# file, the ask shim, the stream-json messages and the result message that
-# ends them — is the real protocol.
-work="$HOME/.crewlet"
-init='{"type":"system","subtype":"init","session_id":"sess-1","tools":["Bash"]}'
-# The invocation, recorded OUTSIDE the box: the box is torn down when the
-# turn finishes, and the argv is what a test asserts about afterwards.
-if [ -n "${FAKE_AGENT_ARGV:-}" ]; then
-  for arg in "$@"; do printf '%s\n' "$arg"; done > "$FAKE_AGENT_ARGV"
-fi
-case "${FAKE_AGENT_MODE:-succeed}" in
-  succeed)
-    sleep 0.1
-    printf 'Outcome: succeeded\nRan the suite; all green.\nOpened https://github.com/acme/api/pull/7\n' > "$work/findings.md"
-    printf '%s\n' "$init"
-    printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"go test ./..."}}]},"session_id":"sess-1"}'
-    printf '%s\n' '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"ok","is_error":false}]},"session_id":"sess-1"}'
-    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"sess-1","usage":{"input_tokens":700,"output_tokens":120}}'
-    ;;
-  ask)
-    sleep 0.1
-    crewlet-ask "Which branch should I target?" --to requester
-    printf '%s\n' "$init"
-    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"blocked","session_id":"sess-1"}'
-    ;;
-  held)
-    # RUNS UNTIL THE TEST SAYS SO, rather than for a fixed time.
-    #
-    # The restart case needs this job still running when the second engine
-    # recovers the seat, and a sleep cannot promise that: on a loaded
-    # machine the second boot takes longer than any duration short enough
-    # to keep the test quick, the job finishes first, recovery sees a
-    # settled run and the seat is never parked — a hang no timeout can
-    # fix, because the state it waits for will never arrive.
-    #
-    # So the test creates the release file when it has seen what it needed
-    # to see. The ceiling is a backstop against a test that dies without
-    # releasing, not a timing assumption.
-    waited=0
-    while [ ! -f "${FAKE_AGENT_RELEASE:-/nonexistent}" ] && [ "$waited" -lt 1200 ]; do
-      sleep 0.1
-      waited=$((waited + 1))
-    done
-    printf 'Outcome: succeeded\nfinished after the restart\n' > "$work/findings.md"
-    printf '%s\n' "$init"
-    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"sess-1"}'
-    ;;
-  *)
-    # A MODE THIS SCRIPT DOES NOT KNOW SAYS SO. Falling through silently
-    # would exit 0 with no envelope, which reaches the engine as a run
-    # that produced nothing — and every test on top of it waits out its
-    # budget for a state that will never arrive.
-    printf 'unknown FAKE_AGENT_MODE %s\n' "${FAKE_AGENT_MODE:-}" >&2
-    exit 64
-    ;;
-esac
-`
-	path := filepath.Join(dir, "claude")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatalf("install the fake agent: %v", err)
-	}
-	return dir
+	return &codingNode{node: n, stateDir: stateDir, argvPath: argv}
 }
 
 // bootCompany stands a node (an engine and its API) up over a company document,
@@ -271,11 +172,16 @@ func bootCompany(t *testing.T, doc string, model *scriptedModel, env map[string]
 	t.Helper()
 	dir := t.TempDir()
 	return bootCompanyIn(t, doc, model, filepath.Join(dir, "crewlet.db"),
-		filepath.Join(dir, "stream"), env)
+		filepath.Join(dir, "stream"), env, nil)
 }
 
+// bootCompanyIn is [bootCompany] over the store and stream directories given.
+//
+// host is what the node keeps of one it replaces on the same host — see
+// [sameHost] — and nil for a node with none: a port of the system's choosing
+// and a keyring of its own.
 func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, streamDir string,
-	env map[string]string) *node {
+	env map[string]string, host *sameHost) *node {
 	t.Helper()
 	logs.attribute(t)
 	cfg, err := config.ParseCompany([]byte(doc))
@@ -286,15 +192,26 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	withServingTierA(t, &boot)
 	boot.Store.Path = dbPath
 	brokertest.StoreIn(&boot.Stream, streamDir)
+	addr := ""
+	if host != nil {
+		host.ring.hold(&boot)
+		addr = host.addr
+	}
 	seedStore(t, &boot)
 
+	ln := bridgeListener(t, addr)
+	// THE API IS SERVED ON ln, and api.port names it, as on a node that
+	// cmd/crewlet starts: an ingress node whose api.port is 0 serves
+	// nothing and joins no relay (internal/engine's joinBridgeFleet), so its
+	// bridge is reachable only once the route below is mounted — and a node
+	// that recovers a running run's seat before then has no bridge to serve
+	// the run's box from again.
+	boot.API.Port = ln.Addr().(*net.TCPAddr).Port
+	boot.API.ExternalURL = listenerURL(ln)
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
-		Environment: nodeEnvironment(env),
-		// The completion poll, sped up. It is sized in production against
-		// coding jobs that run for minutes; at that cadence a test whose
-		// job finishes in a moment would wait out a real tick to see it.
-		SandboxPollInterval: 100 * time.Millisecond,
+		Environment: nodeEnvironment(env), SandboxPollInterval: runPollInterval,
+		BoxHostURL: listenerURL(ln),
 	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
@@ -309,7 +226,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 		t.Fatalf("engine.Start: %v", err)
 	}
 
-	app, srv := serveAPI(t, e, &boot, func(opts *api.Options) {
+	app, srv := serveAPI(t, e, &boot, ln, func(opts *api.Options) {
 		// The DURABLE record, which is what the board must read: a run
 		// parked on a question waits days, and the live projection sweeps
 		// long before that.
@@ -318,73 +235,15 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	return &node{engine: e, app: app, server: srv, model: model}
 }
 
-// newSandboxModel is the scripted model for a coding turn.
-//
-// The executor calls run_sandbox on its FIRST Execute request and reports on
-// the resumed one, which is what makes the suspend and the re-entry both real:
-// the second Execute request is one the engine only sends after the detached
-// job has finished and its result has been spliced in — the first request of a
-// fresh CLI run, handed the parked phase's conversation with the run's answer
-// in it.
-func newSandboxModel(t *testing.T) *scriptedModel {
-	t.Helper()
-	m := &scriptedModel{stateDir: t.TempDir()}
-	m.listen(t, func(w http.ResponseWriter, r *http.Request) {
-		req, ok := readRequest(w, r)
-		if !ok {
-			return
-		}
-		offered := req.offers()
-		var reply modelReply
-		switch {
-		case offered["submit_review"]:
-			m.saw("review")
-			reply = toolUse("submit_review", map[string]any{
-				"decision": "done", "final_artifact": "The fix is up for review.",
-			})
-		case offered["mark_onboarded"]:
-			m.saw("onboarding")
-			reply = toolUse("mark_onboarded", map[string]any{"notes": "read the handbook"})
-		case offered["submit_work"] && sawSandboxResult(req):
-			// The RESUMED executor request: the conversation now carries
-			// the tool message the engine spliced in. Submitting is the
-			// executor reporting and finishing.
-			m.saw("resumed")
-			reply = toolUse("submit_work", map[string]any{
-				"outcome": "delivered",
-				"summary": "The sandbox fixed it and opened a pull request.",
-				// run_sandbox is server-backed and not a known read, so it
-				// IS a delivery the engine's own record can confirm.
-				"deliveries": []string{"run_sandbox"},
-			})
-		case offered["submit_work"]:
-			m.saw("execute")
-			reply = toolUse("run_sandbox", map[string]any{
-				"brief": "Clone example.com/acme/api and fix the failing test",
-			})
-		default:
-			// AN AUXILIARY PASS, not a phase. The prefetch's filters reach
-			// this same model with no tools offered, and counting them
-			// as executor requests made "the executor opened once" a claim
-			// about the memory filter.
-			m.saw("aux")
-			reply = textReply("")
-		}
-		answer(w, reply)
-	})
-	return m
-}
-
-// sawSandboxResult reports whether this request's conversation already carries
-// the sandbox's answer — which is what makes it the resumed request.
-//
-// IN A TOOL RESULT, which is where the engine splices it: the run's report is
-// the answer to the phase's run_sandbox call, and a mention anywhere else in
-// the transcript is not the run having come back.
-func sawSandboxResult(req modelRequest) bool {
-	return slices.ContainsFunc(req.toolResults(), func(result string) bool {
-		return strings.Contains(result, "The sandbox coding run")
-	})
+// sameHost is what a node restarted on its host keeps of the one before it:
+// the address its API listened on — the URL a run's box was handed names it —
+// and its Tier A keyring, which signed that URL's token. Both are the
+// operator's file, and a restart changes neither; a harness that changed
+// either would be testing a redeploy, in which a box still running cannot
+// reach its tools by design.
+type sameHost struct {
+	addr string
+	ring keyring
 }
 
 // ---------------------------------------------------------------------
@@ -395,7 +254,7 @@ func sawSandboxResult(req modelRequest) bool {
 // the same turn finishing with the agent's findings in hand.
 func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	t.Parallel()
-	n := startCoding(t, "succeed")
+	n := startCoding(t, codingModeWork)
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
@@ -410,33 +269,33 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	waitFor(t, "a detached run to be recorded", func() bool {
 		return len(n.activeRuns(t)) == 1
 	})
-	// While it is running, the seat's mail is PARKED rather than consumed:
-	// a coding job outlasts any ack window.
-	waitFor(t, "the seat to be parked on its run", func() bool {
+	// The RUN does the executor's work in its box: its round reaches the
+	// scripted model from inside the box, and the submission it makes lands
+	// over the seat's bridge.
+	waitFor(t, "the run to do its work", func() bool {
 		return slices.Contains(n.model.seen(), "execute")
-	})
+	}, n.diagnose)
 
 	// The RESUME: the waiter detects the completion and the engine re-enters
-	// the same conversation, which the model can only answer once the
-	// sandbox's result is in it.
+	// the same turn, whose reviewer judges the run on the record it left.
 	waitFor(t, "the suspended turn to be resumed", func() bool {
-		return slices.Contains(n.model.seen(), "resumed")
+		return slices.Contains(n.model.seen(), "review")
 	}, n.diagnose)
 	waitFor(t, "the run to settle", func() bool {
 		return len(n.activeRuns(t)) == 0
 	})
 
+	// ONE turn, not two, and one run of it: a second executor round would
+	// mean the engine launched again — a fresh turn re-deriving work already
+	// done, or a resume that relaunched instead of collecting.
 	seen := n.model.seen()
-	for _, want := range []string{"execute", "resumed", "review"} {
-		if !slices.Contains(seen, want) {
-			t.Fatalf("the %s phase never ran; phases = %v", want, seen)
-		}
-	}
-	// ONE turn, not two. The resumed round re-enters the conversation the
-	// suspend left; a second opening round would mean the engine started a
-	// fresh turn and re-derived work already done.
 	if got := countOf(seen, "execute"); got != 1 {
-		t.Fatalf("the executor opened %d times; a resume must re-enter. phases = %v", got, seen)
+		t.Fatalf("the executor's run asked the model %d times; one run, one round. "+
+			"phases = %v", got, seen)
+	}
+	if got := countOf(seen, "review"); got != 1 {
+		t.Fatalf("the turn was reviewed %d times; a resume re-enters the turn it "+
+			"parked. phases = %v", got, seen)
 	}
 	// THE RESUMED RECORD NAMES THE LAUNCH IT COLLECTED. One turn can launch
 	// more than once, so a sandbox segment of a phase is identified by the
@@ -465,10 +324,13 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 		t.Error("the resumed sandbox phase names no launch_id")
 	}
 	// THE RUN'S STREAM REACHED ITS RECORD: the transcript the runner built
-	// from the stand-in's stream-json messages, and the spend its result
-	// line — the stream's last, copied out by the wrapper — reported.
-	// End to end because the halves are the CLI's flags, the box's shell and
-	// the record's publisher, and each compiles without the others.
+	// from the stand-in's stream-json messages — its bridged submission
+	// among them — and the spend its result line, the stream's last, copied
+	// out by the wrapper, reported: Claude Code's input is its uncached
+	// remainder, and the record's is the whole prompt, both cache figures
+	// folded in. End to end because the halves are the CLI's flags, the
+	// box's shell and the record's publisher, and each compiles without the
+	// others.
 	var record map[string]any
 	waitFor(t, "the run's own phase record", func() bool {
 		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
@@ -484,14 +346,18 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 		}
 		return false
 	})
-	if transcript, _ := record["activity_transcript"].(string); transcript != "[tool] Bash: go test ./..." {
-		t.Errorf("the run's transcript is %q; want the one tool call its stream made", transcript)
+	submitted := "[tool] mcp__" + config.ToolServerName + "__" + runner.SubmitWorkTool
+	if transcript, _ := record["activity_transcript"].(string); !strings.Contains(transcript, submitted) {
+		t.Errorf("the run's transcript is %q; want the bridged call its stream made, %q",
+			transcript, submitted)
 	}
-	if input, _ := record["input_tokens"].(float64); input != 700 {
-		t.Errorf("the run's input tokens are %v; want the 700 its result line reported", record["input_tokens"])
+	wantInput := toolUseUsage.prompt()
+	if input, _ := record["input_tokens"].(float64); input != float64(wantInput) {
+		t.Errorf("the run's input tokens are %v; want the %d its result line reported",
+			record["input_tokens"], wantInput)
 	}
-	// The box is gone: the resumed Execute made no further run_sandbox call,
-	// so the phase was done with it.
+	// The box is gone: the turn settled, and a settled turn's box is
+	// reclaimed with it.
 	if boxes := n.liveBoxes(t); len(boxes) != 0 {
 		t.Fatalf("%d box directories survived the turn: %v", len(boxes), boxes)
 	}
@@ -508,13 +374,14 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	if argv[i+1] != "7" {
 		t.Fatalf("--max-turns %s, want the seat's own 7", argv[i+1])
 	}
-	// AND THE MODEL ITS llm_sandbox ENTRY NAMES, which is the half of a
-	// coding run's pairing the seat's text calls cannot show: those run on
-	// another entry altogether, so a run handed their model — or none, on
-	// the CLI's own default — would look the same from everywhere else.
+	// AND THE MODEL OF THE ENTRY THE LAUNCH PICKED, which is the half of a
+	// run's pairing the seat's phases on this host cannot show: those run on the
+	// chain's head, a different entry altogether, so a run handed their
+	// model — or none, on the CLI's own default — would look the same from
+	// everywhere else.
 	m := slices.Index(argv, "--model")
-	if m < 0 || m == len(argv)-1 || argv[m+1] != "sonnet" {
-		t.Fatalf("the coding agent was not handed the coder entry's model sonnet: %v", argv)
+	if m < 0 || m == len(argv)-1 || argv[m+1] != codingModel {
+		t.Fatalf("the coding agent was not handed the coder entry's model %s: %v", codingModel, argv)
 	}
 	// AND THE CONVERSATION KNOWS THE TURN HAPPENED. A turn that ends on the
 	// resume path ends a thread's turn as surely as one that ends on the
@@ -563,7 +430,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 // turn and the box waited out its pause TTL.
 func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	t.Parallel()
-	n := startCoding(t, "ask")
+	n := startCoding(t, codingModeAsk)
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
@@ -584,7 +451,7 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 		return false
 	}, n.diagnose)
 	parked := n.runFor(t, sandbox.StatusAwaiting)
-	if parked.Question != "Which branch should I target?" {
+	if parked.Question != codingQuestion {
 		t.Fatalf("question = %q", parked.Question)
 	}
 	if parked.Audience != "requester" {
@@ -610,28 +477,65 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	n.wakeInConversation(t, "swe", "target main, please", codingConversation)
 
 	waitFor(t, "the answer to resume the suspended turn", func() bool {
-		return slices.Contains(n.model.seen(), "resumed")
+		return slices.Contains(n.model.seen(), "review")
 	}, n.diagnose)
 	waitFor(t, "the answered run to settle", func() bool {
 		return len(n.activeRuns(t)) == 0
 	}, n.diagnose)
 
 	// ONE TURN, not two. This is the assertion the whole path turns on: the
-	// answer re-entered the suspended Execute loop rather than opening a
-	// fresh executor round, which is what a seat that treated the reply as
-	// an ordinary message would have done — planning the work again with the
-	// parked run still waiting beside it.
-	if got := countOf(n.model.seen(), "execute"); got != 1 {
-		t.Fatalf("the executor opened %d times; the answer started a new turn "+
+	// answer re-entered the parked turn rather than starting a fresh one,
+	// which is what a seat that treated the reply as an ordinary message
+	// would have done — launching the work again with the parked run still
+	// waiting beside it. A fresh turn's run would ask again and park again,
+	// so the run would never settle; and the parked turn is reviewed once.
+	if got := countOf(n.model.seen(), "review"); got != 1 {
+		t.Fatalf("the turn was reviewed %d times; the answer started a new turn "+
 			"instead of resuming the one that asked. phases = %v",
 			got, n.model.seen())
 	}
-	// What the resumed round was handed is the spliced answer and not a
-	// fresh brief, which is what the "resumed" phase itself records: that
-	// branch of the scripted model fires only for a request whose
-	// conversation already carries the run_sandbox reply. That the reply
-	// carries the person's own words is pinned where the text is built, in
-	// internal/sandbox's own suite.
+	// THE ANSWER CARRIED THE RUN ON: the run that finished the work is the
+	// asking run's own conversation, resumed in its box with the person's
+	// words as its next prompt — the last argv the box recorded.
+	argv := n.agentArgv(t)
+	if !slices.Contains(argv, "--resume") || !slices.Contains(argv, codingSession) {
+		t.Fatalf("the answered run was not resumed in its own session: argv = %v", argv)
+	}
+	if brief := n.agentBrief(t); !strings.Contains(brief, "target main, please") {
+		t.Fatalf("the resumed run was not given the answer: its prompt = %q", brief)
+	}
+	// AND IT SUBMITTED: the turn settled on the carried-on run's own
+	// submission, never on the answer filed as a report and rescued.
+	if outcome := n.settledOutcome(t, parked.TurnID); outcome != "delivered" {
+		t.Fatalf("the answered turn settled with outcome %q, want the run's own "+
+			"`delivered` submission", outcome)
+	}
+}
+
+// settledOutcome is the outcome the record that ENDED turnID states — not one a
+// segment published as it parked — waited for.
+func (n *codingNode) settledOutcome(t *testing.T, turnID string) string {
+	t.Helper()
+	var outcome string
+	waitFor(t, "the settled turn to state its outcome", func() bool {
+		evs, err := n.engine.Backends().Store.Events().Turn(t.Context(), turnID, time.Now())
+		if err != nil {
+			t.Fatalf("the turn's events: %v", err)
+		}
+		for _, ev := range evs {
+			var rec struct {
+				Outcome   string `json:"outcome"`
+				Suspended bool   `json:"suspended"`
+			}
+			if ev.Type == "turn_completed" && json.Unmarshal(ev.Payload, &rec) == nil &&
+				!rec.Suspended {
+				outcome = rec.Outcome
+				return true
+			}
+		}
+		return false
+	})
+	return outcome
 }
 
 // ---------------------------------------------------------------------
@@ -747,7 +651,7 @@ func countOf(list []string, want string) int {
 // be on screen.
 func TestAParkedRunReachesTheBoardAnOperatorReads(t *testing.T) {
 	t.Parallel()
-	n := startCoding(t, "ask")
+	n := startCoding(t, codingModeAsk)
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
@@ -767,7 +671,7 @@ func TestAParkedRunReachesTheBoardAnOperatorReads(t *testing.T) {
 			parked = row
 		}
 	}
-	if parked["question"] != "Which branch should I target?" {
+	if parked["question"] != codingQuestion {
 		t.Fatalf("question = %v", parked["question"])
 	}
 	if parked["agent_handle"] != "swe" || parked["coding_agent"] != "claude-code" {
@@ -776,12 +680,11 @@ func TestAParkedRunReachesTheBoardAnOperatorReads(t *testing.T) {
 	if parked["box_exists"] != true || parked["paused_at"] == "" {
 		t.Fatalf("the held snapshot is invisible, so nobody can see what is being paid for: %v", parked)
 	}
-	// The suspended conversation is by far the largest column in the row,
-	// and every prompt in it is already reachable through the event store.
-	for _, key := range []string{"execute_state", "messages"} {
-		if _, leaked := parked[key]; leaked {
-			t.Fatalf("%q reached a board that renders one line per run", key)
-		}
+	// The parked turn's state is by far the largest column in the row — the
+	// context the turn froze at its start among it — and every prompt built
+	// from it is already reachable through the event store.
+	if _, leaked := parked["execute_state"]; leaked {
+		t.Fatal("execute_state reached a board that renders one line per run")
 	}
 }
 
@@ -814,17 +717,22 @@ func (n *codingNode) board(t *testing.T) []map[string]any {
 // THE RESTART LEG of the gate. A coding job outlives the engine that started
 // it, so the state that matters is the row: a fresh process picks the run up
 // on the seat's next claim, drives it to completion, and re-enters the SAME
-// conversation the dead process suspended.
+// turn the dead process parked.
+//
+// AND THE RUN KEEPS ITS TOOLS. The box goes on dialing the URL it was handed,
+// on the node's own address, and the process now listening there never opened
+// its session: it rebuilds it from the run's park under the token the box
+// holds, and the run's submission — made after the restart, as a real CLI's
+// last call is — lands on the row and decides the turn's outcome. Refused, the
+// run that did its work was rescued as `incomplete`.
 func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
-	binDir := installFakeAgent(t)
-	env := fakeAgentEnv(binDir, "held")
 	// THE JOB RUNS UNTIL THIS FILE APPEARS. The restart has to happen while
 	// it is still running, and how long a second engine takes to boot is a
 	// property of the machine rather than of the design.
 	release := filepath.Join(t.TempDir(), "release")
-	env["FAKE_AGENT_RELEASE"] = release
+	env := map[string]string{codingModeEnv: codingModeHeld, codingReleaseEnv: release}
 
 	// ONE store and ONE stream directory across both processes, which is
 	// what makes this a restart rather than a fresh company.
@@ -832,11 +740,12 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	dbPath := filepath.Join(dir, "crewlet.db")
 	streamDir := filepath.Join(dir, "stream")
 
-	model := newSandboxModel(t)
+	model := newScriptedModel(t)
 	doc := sandboxCompany(t, model, stateDir)
 
-	first := bootCompanyIn(t, doc, model, dbPath, streamDir, env)
-	firstNode := &codingNode{node: first, stateDir: stateDir, binDir: binDir}
+	host := &sameHost{ring: fleetRing(t)}
+	first := bootCompanyIn(t, doc, model, dbPath, streamDir, env, host)
+	firstNode := &codingNode{node: first, stateDir: stateDir}
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(first.engine.Node().Host().Held(), "swe")
 	})
@@ -858,9 +767,14 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	// detached run is reparented to init and keeps going, which is the
 	// whole reason the row exists.
 	first.engine.Stop(context.Background())
+	// AND ITS LISTENER WITH IT, so the next process binds the same address:
+	// the run's box was handed a URL on it, as a node restarted on its own
+	// api.port is dialled at the address it had.
+	host.addr = first.server.Listener.Addr().String()
+	first.server.Close()
 
-	second := bootCompanyIn(t, doc, model, dbPath, streamDir, env)
-	secondNode := &codingNode{node: second, stateDir: stateDir, binDir: binDir}
+	second := bootCompanyIn(t, doc, model, dbPath, streamDir, env, host)
+	secondNode := &codingNode{node: second, stateDir: stateDir}
 	waitFor(t, "the new engine to claim the seat", func() bool {
 		return slices.Contains(second.engine.Node().Host().Held(), "swe")
 	})
@@ -876,19 +790,46 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 		t.Fatalf("release the held agent: %v", err)
 	}
 
-	// And it drives the same run to completion, re-entering the
-	// conversation the dead process suspended.
+	// And it drives the same run to completion, re-entering the turn the
+	// dead process parked: the run it collects is the one that process
+	// launched, and the turn is reviewed once.
 	waitFor(t, "the recovered run to resume its turn", func() bool {
-		return slices.Contains(model.seen(), "resumed")
-	})
+		return slices.Contains(model.seen(), "review")
+	}, secondNode.diagnose)
 	waitFor(t, "the recovered run to settle", func() bool {
 		return len(secondNode.activeRuns(t)) == 0
 	})
-	if got := countOf(model.seen(), "execute"); got != 1 {
-		t.Fatalf("the executor opened %d times across the restart; the resume must "+
-			"re-enter. phases = %v", got, model.seen())
+	if got := countOf(model.seen(), "review"); got != 1 {
+		t.Fatalf("the turn was reviewed %d times across the restart; the resume must "+
+			"re-enter the one turn. phases = %v", got, model.seen())
 	}
-	_ = launched
+	var collected string
+	waitFor(t, "the resumed phase's record to name the launch it collected", func() bool {
+		rows, _, err := second.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
+		if err != nil {
+			t.Fatalf("phases: %v", err)
+		}
+		for _, row := range rows {
+			var rec map[string]any
+			if json.Unmarshal(row.Payload, &rec) == nil && rec["phase"] == "execute" &&
+				rec["backend"] == "sandbox" {
+				collected, _ = rec["launch_id"].(string)
+				return true
+			}
+		}
+		return false
+	})
+	if collected != launched.LaunchID {
+		t.Errorf("the resumed turn collected launch %q, want %q — the one the dead "+
+			"process started", collected, launched.LaunchID)
+	}
+	// THE SUBMISSION THE RUN MADE AFTER THE RESTART decided the turn: its
+	// outcome, not the engine's `incomplete` rescue of a run that said
+	// nothing.
+	if outcome := secondNode.settledOutcome(t, launched.TurnID); outcome != codingHeldOutcome {
+		t.Errorf("the turn settled with outcome %q, want the %q the run submitted over "+
+			"its bridge after the restart", outcome, codingHeldOutcome)
+	}
 }
 
 // THE CONTAINER LEG. Same protocol, real host isolation — and the mode whose
@@ -986,11 +927,12 @@ func usableContainerRuntime(t *testing.T) string {
 // agent pushed, which was always the durable half.
 func TestAnExpiredPauseReclaimsTheBoxAndLeavesTheRunWaiting(t *testing.T) {
 	t.Parallel()
-	n := startCodingWithPause(t, "ask", 1)
+	n := startCodingWithPause(t, codingModeAsk, 1)
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "swe")
 	})
-	n.wake(t, "swe", "the api test is flaking, please fix it")
+	// ON A CONVERSATION, which is what a person's answer is matched on.
+	n.wakeInConversation(t, "swe", "the api test is flaking, please fix it", codingConversation)
 
 	waitFor(t, "the run to park with its box held", func() bool {
 		for _, run := range n.activeRuns(t) {
@@ -1033,6 +975,29 @@ func TestAnExpiredPauseReclaimsTheBoxAndLeavesTheRunWaiting(t *testing.T) {
 	}
 	// And the box really is gone from disk, not merely forgotten.
 	waitFor(t, "the box to be removed", func() bool { return len(n.liveBoxes(t)) == 0 })
+
+	// THE ANSWER STILL CARRIES THE RUN ON — fresh, since the session it
+	// asked from went with its box: a new conversation, in a new box, told
+	// the question it asked and the person's answer, which then does the
+	// work and submits it.
+	n.wakeInConversation(t, "swe", "target main, please", codingConversation)
+	waitFor(t, "the answered run to settle", func() bool {
+		return len(n.activeRuns(t)) == 0
+	}, n.diagnose)
+	argv := strings.Join(n.agentArgv(t), "\n")
+	if strings.Contains(argv, "--resume") {
+		t.Fatalf("a run whose box was reclaimed resumed a session that went with it: %s", argv)
+	}
+	brief := n.agentBrief(t)
+	for _, want := range []string{codingQuestion, "target main, please"} {
+		if !strings.Contains(brief, want) {
+			t.Fatalf("the fresh run was not told %q: its prompt = %q", want, brief)
+		}
+	}
+	if outcome := n.settledOutcome(t, reseeded.TurnID); outcome != "delivered" {
+		t.Fatalf("the answered turn settled with outcome %q, want the fresh run's own "+
+			"`delivered` submission", outcome)
+	}
 }
 
 // startCodingWithPause stands a node up whose paused boxes expire after
@@ -1041,13 +1006,13 @@ func TestAnExpiredPauseReclaimsTheBoxAndLeavesTheRunWaiting(t *testing.T) {
 func startCodingWithPause(t *testing.T, mode string, pauseTTL int) *codingNode {
 	t.Helper()
 	stateDir := t.TempDir()
-	binDir := installFakeAgent(t)
 
-	model := newSandboxModel(t)
+	model := newScriptedModel(t)
 	doc := strings.Replace(
 		sandboxCompany(t, model, stateDir),
 		"default_pause_ttl_seconds: 1800",
 		fmt.Sprintf("default_pause_ttl_seconds: %d", pauseTTL), 1)
-	n := bootCompany(t, doc, model, fakeAgentEnv(binDir, mode))
-	return &codingNode{node: n, stateDir: stateDir, binDir: binDir}
+	argv := filepath.Join(stateDir, "argv.txt")
+	n := bootCompany(t, doc, model, map[string]string{codingModeEnv: mode, codingArgvEnv: argv})
+	return &codingNode{node: n, stateDir: stateDir, argvPath: argv}
 }

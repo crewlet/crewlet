@@ -25,12 +25,14 @@ import "slices"
 // Which `providers.llm` entries a company configures, and so which of them
 // served a run or failed it, is the company's configuration: the org
 // projection hands only an admin each seat's chain, and Settings, Models is
-// an admin's screen. Two live fields name entries: a CLI run's `provider_key`
-// ([LiveCall.Invocations]) and a failure's own text ([ErrorInfo.Detail]),
-// which also carries whatever a vendor or a tool wrote. Both reach only a
-// reader with [Reach.Config], whatever their reach to the seat's body: a
+// an admin's screen. Three live fields name entries: a CLI run's
+// `provider_key` ([LiveCall.Invocations]), the entry a coding run was
+// launched on ([SandboxEntry.ProviderKey]), which a fallback at launch makes
+// other than the chain's head, and a failure's own text ([ErrorInfo.Detail]),
+// which also carries whatever a vendor or a tool wrote. All three reach only
+// a reader with [Reach.Config], whatever their reach to the seat's body: a
 // seat's lead reads its trail and is still not an admin. Everybody else is
-// told a failure by its kind.
+// told a failure by its kind, and a coding run by the model it runs under.
 //
 // # Why one mask, over every shape a call travels in
 //
@@ -71,7 +73,8 @@ type Reach struct {
 	Tracker bool
 
 	// Config is whether the reader may read the company's configuration
-	// (an admin): which entries served a run, and a failure's own text.
+	// (an admin): which entries served a run or launched a coding run, and
+	// a failure's own text.
 	// It gates the LIVE BROADCAST only. A seat's history read
 	// (maskHistory in internal/api/queries) is held to `audit.seat.read`,
 	// which a lead holds over that seat's trail, so its raw errors are
@@ -323,11 +326,16 @@ func maskTurn(t *LiveTurn, r Reach) *LiveTurn {
 // it parked on — except to the people the question is put to, who are asked
 // it whatever their reach to the seat that asked, and could not answer what
 // they were not shown. A reader shown neither is told so (`body_withheld`).
-// The work item is the tracker's.
+// The work item is the tracker's, and the entry the run was launched on the
+// company's configuration, an admin's whatever else the reader may read (see
+// the package's doc); the model it runs under stays everybody's.
 func (e SandboxEntry) For(r Reach) SandboxEntry {
 	out := e
 	if !r.Tracker {
 		out.WorkItem = nil
+	}
+	if !r.Config {
+		out.ProviderKey = ""
 	}
 	if r.Body {
 		return out

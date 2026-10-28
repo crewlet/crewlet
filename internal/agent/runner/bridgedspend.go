@@ -14,10 +14,10 @@ import (
 // same tally; and the spend its delegated workers report into, under mu.
 //
 // EVERY SURFACE THE RUNNER BUILDS NAMES ONE, because which segment pays for a
-// tool call is decided where the surface is built and nowhere later. Nearly
-// every surface is the runner's own ([Runner.ownMeter]): its calls run inside
-// this segment, which charges what they cost when it ends. A box-mode
-// executor's is not — see [BridgedSpend].
+// tool call is decided where the surface is built and nowhere later. Every
+// surface but the executor's is the runner's own ([Runner.ownMeter]): its
+// calls run inside this segment, which charges what they cost when it ends.
+// The executor's is not — see [BridgedSpend].
 type meter struct {
 	turn    *turnctx.Turn
 	compact compact.Bound
@@ -30,15 +30,15 @@ func (r *Runner) ownMeter() meter {
 	return meter{turn: r.cfg.Turn.Context, compact: r.cfg.Compact, spend: &r.spend, mu: &r.mu}
 }
 
-// BridgedSpend is what a box-mode executor's BRIDGED calls cost the
-// engine: the auxiliary calls the seat's tools made for the coding agent and
-// the workers it delegated to.
+// BridgedSpend is what an executor run's BRIDGED calls cost the engine: the
+// auxiliary calls the seat's tools made for the coding agent and the workers
+// it delegated to.
 //
 // ITS OWN METER, because those calls happen after the segment that launched
 // the run has ended. The CLI calls the seat's tools over the bridge for as long
 // as it runs — minutes or hours, often on a node that is not the one the turn
 // resumes on — while the launching segment charged what it had spent the
-// moment it suspended. Counted on that segment's tally, every bridged call
+// moment it parked. Counted on that segment's tally, every bridged call
 // added to a number nothing read again, and the task the turn was on was never
 // charged for any of them. Counted here, the bridge writes the running total to
 // the run's row with each call it records, and the segment that resumes from
@@ -56,7 +56,7 @@ type BridgedSpend struct {
 func NewBridgedSpend() *BridgedSpend { return &BridgedSpend{aux: auxspend.NewTally()} }
 
 // NewBridgedSpendFrom is a meter that starts from what a run's bridged calls
-// have already cost: the meter of a box-mode run a node takes over while it
+// have already cost: the meter of an executor run a node takes over while it
 // works ([Runner.ReopenAgentRun]).
 //
 // FROM THE TOTAL, NEVER FROM ZERO, because the run's row keeps the NEWEST total

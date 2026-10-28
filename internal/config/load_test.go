@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -171,6 +172,7 @@ func TestAFileIsRestoredAgainstItsPriorOnlyWhenItCarriesAMask(t *testing.T) {
 	t.Parallel()
 	const doc = `name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     main:
       model: sonnet
@@ -245,14 +247,14 @@ token_budget: {week: -1}
 notification_coalesce_max_batch: 0
 turn_engine:
   max_iterations: 0
-  max_tool_rounds: 0
+  delegation_depth_limit: 0
 `))
 	if err == nil {
 		t.Fatal("expected failures")
 	}
 	for _, want := range []string{
 		"token_budget.week", "notification_coalesce_max_batch",
-		"turn_engine.max_iterations", "turn_engine.max_tool_rounds",
+		"turn_engine.max_iterations", "turn_engine.delegation_depth_limit",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error should name %s; got:\n%v", want, err)
@@ -263,7 +265,7 @@ turn_engine:
 // A FRACTION IN A WHOLE-NUMBER FIELD IS REFUSED, NAMING THE FIELD — never
 // truncated.
 //
-// The decoder read `api.port: 8080.9` as 8080 and `max_tool_rounds: 3.7` as 3
+// The decoder read `api.port: 8080.9` as 8080 and `max_iterations: 3.7` as 3
 // without a word, so a config ran on a value its author never wrote. A number
 // that IS whole in another spelling (`8080.0`, `1e3`) is the number it spells,
 // and a field that takes fractions takes one.
@@ -279,9 +281,9 @@ func TestAFractionInAWholeNumberFieldIsRefused(t *testing.T) {
 			return err
 		}, "api.port"},
 		{"a Tier B round cap", func() error {
-			_, err := ParseCompany([]byte("name: Acme\nturn_engine:\n  max_tool_rounds: 3.7\n"))
+			_, err := ParseCompany([]byte("name: Acme\nturn_engine:\n  max_iterations: 3.7\n"))
 			return err
-		}, "turn_engine.max_tool_rounds"},
+		}, "turn_engine.max_iterations"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -308,5 +310,43 @@ func TestAFractionInAWholeNumberFieldIsRefused(t *testing.T) {
 	cfg, err := ParseRunnableBootstrap([]byte("coordination:\n  lease_ttl_seconds: 12.5\n"), NewResolver(MapSource{}))
 	if err != nil || cfg.Coordination.LeaseTTLSeconds != 12.5 {
 		t.Errorf("a fractional lease TTL = (%v, %v), want 12.5 — that field takes fractions", cfg, err)
+	}
+}
+
+// A TURN-ENGINE ZERO THAT MEANS SOMETHING SURVIVES THE STORE.
+//
+// executor_min_budget_tokens: 0 is no launch floor, and
+// onboarding_max_tool_rounds: 0 is no onboarding pass. A stored revision is
+// decoded onto the defaults and an encoder drops a zero int, so either one,
+// held as a plain number, came back from the store as the default the company
+// had turned off — onboarding switched back on, the floor back in place — on
+// the first read after the write. Unset still takes the default.
+func TestATurnEngineZeroSurvivesTheStore(t *testing.T) {
+	t.Parallel()
+	silent := mustCompany(t, "name: Acme\n")
+	if got := silent.TurnEngine.ExecutorFloor(); got != 25000 {
+		t.Errorf("an unset launch floor is %d, want the shipped 25000", got)
+	}
+	if got := silent.TurnEngine.OnboardingRounds(); got != 10 {
+		t.Errorf("an unset onboarding budget is %d, want the shipped 10", got)
+	}
+
+	off := mustCompany(t, "name: Acme\nturn_engine:\n"+
+		"  executor_min_budget_tokens: 0\n  onboarding_max_tool_rounds: 0\n")
+	stored, err := json.Marshal(off)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := DecodeCompany(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]*Company{"authored": off, "stored": back} {
+		if got := c.TurnEngine.ExecutorFloor(); got != 0 {
+			t.Errorf("%s: an explicit 0 launch floor reads %d", name, got)
+		}
+		if got := c.TurnEngine.OnboardingRounds(); got != 0 {
+			t.Errorf("%s: an explicit 0 onboarding budget reads %d", name, got)
+		}
 	}
 }

@@ -488,9 +488,17 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	stops.backends = append(stops.backends,
 		func() { backends.Close(context.WithoutCancel(ctx)) })
 
+	// THE MEMBER'S BRIDGE LISTENER, bound before its engine names it — see
+	// [listenForBridge] — and closed with the attempt if no server took it.
+	ln, err := listenForBridge("")
+	if err != nil {
+		return fail(err)
+	}
+	stops.api = append(stops.api, func() { _ = ln.Close() })
 	e, err := engine.New(ctx, engine.Options{
 		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(nil), Backends: backends,
+		SandboxPollInterval: runPollInterval, BoxHostURL: listenerURL(ln),
 	})
 	if err != nil {
 		return fail(refusal("engine.New", err))
@@ -516,9 +524,9 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	//
 	// AT THE PRODUCTION TICK, not the single-node cases' 25 ms — see
 	// [tickInterval] for what that costs a fleet.
-	app, srv, apiStops, err := wireAPI(t.Context(), e, boot, //nolint:contextcheck // see above
+	app, srv, apiStops, err := wireAPI(t.Context(), e, boot, ln, //nolint:contextcheck // see above
 		func(opts *api.Options) { opts.HealthInterval = stream.HealthInterval })
-	stops.api = apiStops
+	stops.api = append(stops.api, apiStops...)
 	if err != nil {
 		return fail(fmt.Errorf("api: %w", err))
 	}

@@ -89,9 +89,10 @@ providers:
     #     agent: claude-code
     #     model: sonnet
     #     auth: { mode: api-key }     # reads ANTHROPIC_API_KEY
-    # (and set providers.sandbox.default_coding_agent: claude-code below,
-    # since a seat's code work runs on its entry's own CLI).  OpenAI's?
-    # `agent: codex`, `model: gpt-5`, the same `auth`, reading CODEX_API_KEY.
+    # Every seat's executor is its CLI's own run, which only claude-code and
+    # opencode have.  OpenAI's models (`agent: codex`, `model: gpt-5`, the
+    # same `auth`, reading CODEX_API_KEY) serve a seat's reviewer, workers
+    # and side passes, through llm_review / llm_subagent / llm_auxiliary.
     #
     # PREREQUISITE: the `opencode` binary (OpenCode 2, the @opencode/cli
     # package) on the machine running `crewlet run`.  Check the whole entry
@@ -129,52 +130,47 @@ providers:
     # field every config has to carry.
     model: text-embedding-3-large
     api_key: "${OPENAI_API_KEY}"
-  # Code-runtime sandbox — lets a sandbox-enabled role run its Execute
-  # phase as a coding agent (Claude Code / OpenCode) in a sandbox box that
-  # implements the work and opens a merge request under the agent's OWN
-  # GitLab identity (the service-account PAT each seat declares as
-  # GITLAB_TOKEN in role.sandbox.env below — same PAT as its
-  # mcp_env.gitlab GITLAB_TOKEN).  Here every box is a `direct` box on the
-  # engine host, which keeps each run's state apart but does not isolate
-  # the host: see the catalogue below.  The per-role gate is
-  # role.sandbox (enabled on the three Engineering seats below); this
-  # block is the engine-wide provider.  See
-  # docs/concepts/code-sandbox.md and docs/integrations/gitlab.md.
-  #
-  # default_coding_agent: opencode is deliberate.  A seat's code work runs
-  # on its providers.llm entry, and that entry's model is written in its
-  # own CLI's grammar and signed in the way that CLI reads: so the coding
-  # agent must BE that CLI.  Nimbus's only entry is the OpenCode one above,
-  # so the box drives OpenCode with that SAME model and the same
-  # OPENROUTER_API_KEY, and needs NO extra secret.  Choosing claude-code
-  # here would need a claude-code entry pointed at by each engineer's
-  # role.llm_sandbox (otherwise the launch is refused with a
-  # SandboxModelError naming the mismatch).
+  # Code sandbox — where every agent seat's executor runs.  A seat's
+  # executor is its coding CLI's own run (OpenCode, the default entry's
+  # CLI, with that SAME model and OPENROUTER_API_KEY), in a box from this
+  # catalogue; an engineering seat's run implements the work and opens a
+  # merge request under the agent's OWN GitLab identity (the
+  # service-account PAT each seat declares as GITLAB_TOKEN in
+  # role.sandbox.env below — same PAT as its mcp_env.gitlab GITLAB_TOKEN).
+  # Here every box is a `direct` box on the engine host, which keeps each
+  # run's state apart but does not isolate the host: see the catalogue
+  # below.  See docs/concepts/code-sandbox.md and
+  # docs/integrations/gitlab.md.
   sandbox:
     # THE PROVIDER BLOCK IS A CATALOGUE: it says which boxes EXIST, and each
-    # seat picks one with `role.sandbox.run_in`. Configure `local:`, `e2b:`,
-    # or both — the seat that should use the login on this machine and the
-    # seat whose generated code must never touch it are different seats, and
-    # a company-wide backend could only ever answer for both.
+    # providers.llm entry places its runs in one with its `run_in`.
+    # Configure `local:`, `e2b:`, or both — the run that should use the
+    # login on this machine and the run whose generated code must never
+    # touch it are different runs, and a company-wide backend could only
+    # ever answer for both.
     #
     # This company configures the ENGINE HOST only: each coding job runs as a
     # process tree on the machine running `crewlet run` — no remote account,
-    # no API key, nothing to provision, which is what makes it right for a
-    # company running on your own machine against your own checkouts.
+    # no API key, nothing to provision — as a first run on your own machine
+    # while its seats take work from you alone.  Every run is the coding
+    # CLI's own, fully permissioned, as the engine's user, so before a seat
+    # takes work from anyone else (a chat other people are in, a shared
+    # tracker or code host), or on a host others share, move the runs into
+    # `container` (below) or `e2b`.
     #
     # For anything shared, add `e2b:` with its `api_key` (and `domain` for a
-    # self-hosted cluster) and point the seats that need it at `run_in: e2b`.
+    # self-hosted cluster) and give the entry those seats run on
+    # `run_in: e2b`.
     # A `template` there must carry the coding agent (opencode here) as well
     # as the toolchains those seats' setup steps check for (Go, Node with
     # corepack, uv): naming one replaces E2B's prebuilt per-agent template
     # for every e2b box in the company, and a step only checks for its tool,
     # so nothing installs either into the template.
-    # Don't want code work at all? Remove this block and the engineers fall
-    # back to the native executor. (`fake: true` is in-process stubs for a
-    # demonstration — it runs no real coding agent and no real MCP.)
+    # (`fake: true` is in-process stubs for a demonstration — it runs no
+    # real coding agent.)
     #
-    # PREREQUISITE for the local backend: the coding agent named below must
-    # be installed on that machine, since `direct` runs it as a child
+    # PREREQUISITE for the local backend: the coding agent the entries drive
+    # must be installed on that machine, since `direct` runs it as a child
     # process. `opencode` here — OpenCode 2, the @opencode/cli package; a
     # 1.x install is refused by name — and `claude-code` is the other
     # supported one.  So must each engineering seat's toolchain (Go; Node
@@ -183,7 +179,7 @@ providers:
     # their tools and name what is missing, rather than install anything
     # on the host.
     local:
-      # The local backend serves both local cells, chosen per seat:
+      # The local backend serves both local cells, chosen per entry:
       #
       #   run_in: direct     state isolation only — each box gets its own
       #                      HOME, XDG directories and an allowlisted
@@ -191,8 +187,10 @@ providers:
       #                      and writes outside the box are refused — but
       #                      the agent runs as the engine's user with the
       #                      engine's filesystem access. The right trade for
-      #                      your own machine, the wrong one for a shared
-      #                      host.
+      #                      a first run on your own machine while its
+      #                      seats take work from you alone, the wrong one
+      #                      once a seat takes work from anyone else, or
+      #                      on a host others share.
       #
       #   run_in: container  real host isolation. Needs an image carrying
       #                      the coding-agent CLI, and is where a local box
@@ -206,35 +204,43 @@ providers:
       state_dir: "./nimbus-data/sandboxes"       # box directories; removed at teardown,
                                                  #   and orphans from a crashed engine are
                                                  #   reaped on the next create
-    # WHERE A SEAT THAT NAMES NONE RUNS. Required whenever the catalogue
+    # WHERE A RUN ON AN ENTRY THAT NAMES NO run_in HAPPENS. Required whenever the catalogue
     # offers more than one cell — and `local:` alone is two, because it
     # serves `direct` and `container`. There is deliberately no implicit
     # answer: `direct` runs the coding agent as the engine's user, which is
     # a trade to make deliberately and never one to inherit by accident.
     default_run_in: direct                       # direct | container | e2b
-    default_coding_agent: opencode               # the CLI the default entry drives, so a box reuses its model and key
     default_timeout_seconds: 1200                # box TTL / keepalive window — NOT a run cap: the waiter refreshes it every tick so a job runs as long as it needs; this is just the orphan-reclaim grace if the engine stops heart-beating
     default_pause_ttl_seconds: 1800              # a sandbox blocked on a person's answer is PAUSED (exact resume if they reply soon); a paused box costs its state for as long as it is held, so the engine reaps it after this long and re-seeds from the pushed branch. 0 = never pause, always re-seed; omit the key entirely for this 1800s default.
-    # ENGINE-WIDE setup steps — applied to every sandbox-enabled seat's box
+    # ENGINE-WIDE setup steps — applied to every agent seat's box
     # before each role's own role.sandbox.setup extras.  Put anything shared
     # by ALL seats here exactly once; keep stack-specific provisioning
     # (Go/Node/Python below) on the owning role.  The engine ships NO steps
     # of its own — provisioning is entirely this config.
     setup:
-      # git-auth: make the seat's own GitLab PAT (declared per seat as
-      # GITLAB_TOKEN in role.sandbox.env below, so MRs land under the
-      # agent's identity) work for HEADLESS git.  Without this a bare
-      # `git clone https://gitlab.com/...` dies with "could not read
-      # Username" — git has no way to supply the token on its own.  The
-      # helper is SCOPED to gitlab.com at both layers (the credential
-      # config key AND a host check in the script) so the PAT can never be
-      # offered to a foreign host, e.g. a malicious submodule URL; without
-      # a token it stays silent so public clones fall through to anonymous.
-      # For PAT basic-auth GitLab ignores the username, so `oauth2` is just
-      # a conventional placeholder.  The `brief` below is what tells the
-      # coding agent about all of this.
+      # git-auth: make the seat's own GitLab PAT (declared as
+      # GITLAB_TOKEN in role.sandbox.env by the three engineering seats
+      # below, so MRs land under the agent's identity) work for HEADLESS
+      # git.  Without this a bare `git clone https://gitlab.com/...` dies
+      # with "could not read Username" — git has no way to supply the
+      # token on its own.  The helper is SCOPED to gitlab.com at both
+      # layers (the credential config key AND a host check in the script)
+      # so the PAT can never be offered to a foreign host, e.g. a malicious
+      # submodule URL; without a token it stays silent so public clones
+      # fall through to anonymous.  For PAT basic-auth GitLab ignores the
+      # username, so `oauth2` is just a conventional placeholder.  The
+      # `brief` below is what tells the coding agent about all of this.
+      #
+      # An engine-wide step reaches EVERY agent seat's box, the CEO's,
+      # CTO's, PM's and DevRel's too, and those seats declare no
+      # GITLAB_TOKEN: their runs read GitLab through their tools and hand
+      # code to the seat that owns the project.  The step is still shared
+      # rather than copied onto three roles, because it does nothing
+      # harmful without a token, and its brief says so — a brief that
+      # promised every box a PAT would send those seats' runs pushing
+      # with nothing to push as.
       - name: git-auth
-        # Expects $GITLAB_TOKEN in the run env — each seat declares it in
+        # Reads $GITLAB_TOKEN from the run env when the seat declares it in
         # role.sandbox.env below, pointing at its OWN PAT (so MRs land
         # under the agent's identity). Setup commands also see the run env,
         # which is how the identity lines below read the engine-provided
@@ -294,8 +300,8 @@ providers:
           # answer.
           GIT_TERMINAL_PROMPT: "0"
         brief: >-
-          Use $GITLAB_TOKEN (already in your environment — this seat's own
-          GitLab PAT) for all GitLab work: git is configured to
+          When $GITLAB_TOKEN is in your environment it is this seat's own
+          GitLab PAT, for all GitLab work: git is configured to
           authenticate to gitlab.com with it automatically, so just clone,
           fetch, and push over plain HTTPS, e.g.
           `git clone https://gitlab.com/<group>/<project>.git`. SSH-style
@@ -304,8 +310,11 @@ providers:
           GitLab push options — no CLI needed:
           `git push -o merge_request.create -o merge_request.target=main
           -o merge_request.title="<title>" origin HEAD:<your-branch>`
-          creates the MR under your own identity. Your git commit identity
-          is preconfigured.
+          creates the MR under your own identity. Without $GITLAB_TOKEN
+          this seat has no GitLab identity: public projects still clone
+          anonymously, but nothing you push is accepted, so hand a code
+          change to the seat that owns the project instead. Your git
+          commit identity is preconfigured.
       - name: nimbus-conventions
         brief: >-
           All Nimbus projects live under gitlab.com/nimbus-hq. Deliver via a
@@ -316,8 +325,8 @@ providers:
 
 # The Dashboard Assistant: a drawer in the dashboard that answers questions
 # and prepares changes for approval, acting only as the signed-in person.
-# Off unless enabled.  Every model in its chain must be a text-mode entry
-# whose CLI's local and web tools are denied (the `assistant` entry above);
+# Off unless enabled.  Every model in its chain must be an entry whose
+# CLI's local and web tools are denied (the `assistant` entry above);
 # anything else is refused.  The four bounds below are their defaults, and
 # token_budget caps each person on top of the company's own budget.  See
 # docs/getting-started/configuration.md#the-dashboard-assistant.
@@ -331,15 +340,14 @@ providers:
 #   token_budget: { day: 200000 }
 
 # Turn engine — executor/reviewer settings.  Includes the round-cap
-# extension judge: when the executor exhausts its base round cap without
-# finishing, a cheap LLM judge inspects the tool log and decides whether
-# to grant more rounds (the agent is making progress) or fall through to
-# the existing rescue path (the agent is thrashing).  Extensions chain up
-# to the per-phase ceilings.  See
+# extension judge for the first-turn onboarding pass: when the pass
+# exhausts its base round cap without finishing, a cheap LLM judge
+# inspects the tool log and decides whether to grant more rounds (the
+# agent is making progress) or fall through to the existing rescue path
+# (the agent is thrashing).  See
 # docs/concepts/turn-engine.md#round-cap-extension-judge.
 turn_engine:
   extension_enabled: true                 # round-cap extension judge
-  execute_max_tool_rounds_ceiling: 48     # hard ceiling for executor rounds with extensions
   extension_round_step: 8                 # max rounds the judge may grant per call
   # llm_judge per role is not set — the judge falls back to the role's
   # main ``llm`` (here: the org-wide ``default`` provider).
@@ -1075,21 +1083,18 @@ units:
               gitlab:                        # env for the glab stdio MCP server
                 GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"
                 GITLAB_HOST: gitlab.com
-            # Code-runtime sandbox: during Execute the agent calls the
-            # run_sandbox tool, which launches a coding agent that
-            # implements the work item in nimbuscore / nimbusk0s and
+            # Executor box: this seat's executor is OpenCode's own run,
+            # which implements the work item in nimbuscore / nimbusk0s and
             # opens an MR as Agent SWE's own GitLab identity (the
             # ${GITLAB_TOKEN_SWE} PAT above).  The merge-request
             # review-requested webhook then wakes this seat to review the
-            # MR + move the work item.  coding_agent inherits the provider
-            # default (opencode).
+            # MR + move the work item.
             sandbox:
-              enabled: true
-              # `run_in:` picks this seat's cell from providers.sandbox
-              # above — direct | container | e2b. Omitted here, so it
-              # inherits providers.sandbox.default_run_in (direct). A seat
-              # whose work must not touch this host names `container` or
-              # `e2b` here, and the catalogue then has to serve it:
+              # The box runs where the default entry places it:
+              # providers.sandbox.default_run_in (direct). A seat whose
+              # work must not touch this host runs on an entry naming
+              # `run_in: container` or `e2b`, and the catalogue then has to
+              # serve it:
               # `container` needs providers.sandbox.local.image, an image
               # carrying the coding agent AND this seat's toolchain (the go
               # step below checks for Go inside it), and `e2b` needs an
@@ -1097,18 +1102,15 @@ units:
               # same — Go 1.21 or later here: the engine installs nothing
               # into a template, and E2B's prebuilt per-agent one is built
               # for the coding agent rather than for this seat's repos.
-              mcp:                                # MCP surface inside the sandbox
-                servers: [mattermost, tavily]
-                # No tracker in the box: the engine's builtins stay with the
-                # seat (docs/concepts/code-sandbox.md, "The tool bridge"), so
-                # the coding agent knows the work item only through the
-                # brief the executor writes — the bundled skill:code_runtime
-                # tells it to copy in the facts and acceptance criteria.
-                # Code-host MCP not needed either — it pushes + opens the MR
-                # via git push options.
-                # Scoping is server-level only — the coding agent gets every
-                # tool the listed servers expose (there is no per-tool allowlist:
-                # OpenCode has none, and claude-code runs bypassPermissions).
+              # No `mcp:` scope, deliberately: every box gets the seat's
+              # tool bridge, which already serves this seat's LIVE tool set
+              # under the reserved `crewlet` server — its mattermost tools,
+              # the shared tavily search and the work item's tools included
+              # (docs/concepts/code-sandbox.md, "The tool bridge") — so
+              # listing a server here would put the same tools in the box
+              # twice.  Name one only when the box needs a credential the
+              # seat itself does not hold.  No code-host server either: the
+              # run pushes and opens the MR with git push options.
               # This seat's own PAT, injected into the box run env — the
               # engine-wide git-auth step (and the coding agent, per that
               # step's brief) uses it. Explicit per seat, so MRs land under
@@ -1116,7 +1118,7 @@ units:
               # nothing about GitLab.
               env:
                 GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"
-              # Per-role provisioning (crewlet.sandbox.setup): each step
+              # Per-seat provisioning (role.sandbox.setup): each step
               # declares files to write, commands to run (a non-zero exit
               # fails the box acquisition), env to merge into the run env,
               # and a `brief` paragraph telling the coding agent what the
@@ -1197,25 +1199,20 @@ units:
               gitlab:                        # env for the glab stdio MCP server
                 GITLAB_TOKEN: "${GITLAB_TOKEN_FE}"
                 GITLAB_HOST: gitlab.com
-            # Code-runtime sandbox: Execute's run_sandbox tool launches a
-            # coding agent that implements the UI story in console / website
-            # and opens an MR as Agent Frontend SWE's own GitLab identity
-            # (${GITLAB_TOKEN_FE}).  coding_agent inherits the provider
-            # default (opencode).
+            # Executor box: this seat's executor is OpenCode's own run,
+            # which implements the UI story in console / website and opens
+            # an MR as Agent Frontend SWE's own GitLab identity
+            # (${GITLAB_TOKEN_FE}).
             sandbox:
-              enabled: true
-              mcp:                                # MCP surface inside the sandbox
-                servers: [mattermost, tavily]
-                # No tracker in the box: the engine's builtins stay with the
-                # seat (docs/concepts/code-sandbox.md, "The tool bridge"), so
-                # the coding agent knows the work item only through the
-                # brief the executor writes — the bundled skill:code_runtime
-                # tells it to copy in the facts and acceptance criteria.
-                # Code-host MCP not needed either — it pushes + opens the MR
-                # via git push options.
-                # Scoping is server-level only — the coding agent gets every
-                # tool the listed servers expose (there is no per-tool allowlist:
-                # OpenCode has none, and claude-code runs bypassPermissions).
+              # No `mcp:` scope, deliberately: every box gets the seat's
+              # tool bridge, which already serves this seat's LIVE tool set
+              # under the reserved `crewlet` server — its mattermost tools,
+              # the shared tavily search and the work item's tools included
+              # (docs/concepts/code-sandbox.md, "The tool bridge") — so
+              # listing a server here would put the same tools in the box
+              # twice.  Name one only when the box needs a credential the
+              # seat itself does not hold.  No code-host server either: the
+              # run pushes and opens the MR with git push options.
               env:
                 GITLAB_TOKEN: "${GITLAB_TOKEN_FE}"   # this seat's own PAT, for the git-auth step and the coding agent
               setup:
@@ -1291,26 +1288,21 @@ units:
               gitlab:                        # env for the glab stdio MCP server
                 GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"
                 GITLAB_HOST: gitlab.com
-            # Code-runtime sandbox: Execute's run_sandbox tool launches a
-            # coding agent that implements the framework story in the Phase-2
-            # repo and opens an MR as Agent AI Systems Engineer's own GitLab
-            # identity (${GITLAB_TOKEN_AI}).  coding_agent inherits the
-            # provider default (opencode) — the CLI the default entry drives,
-            # so a Python framework change needs no extra coding-agent secret.
+            # Executor box: this seat's executor is OpenCode's own run —
+            # the CLI the default entry drives, so a Python framework change
+            # needs no extra coding-agent secret — which implements the
+            # framework story in the Phase-2 repo and opens an MR as Agent
+            # AI Systems Engineer's own GitLab identity (${GITLAB_TOKEN_AI}).
             sandbox:
-              enabled: true
-              mcp:                                # MCP surface inside the sandbox
-                servers: [mattermost, tavily]
-                # No tracker in the box: the engine's builtins stay with the
-                # seat (docs/concepts/code-sandbox.md, "The tool bridge"), so
-                # the coding agent knows the work item only through the
-                # brief the executor writes — the bundled skill:code_runtime
-                # tells it to copy in the facts and acceptance criteria.
-                # Code-host MCP not needed either — it pushes + opens the MR
-                # via git push options.
-                # Scoping is server-level only — the coding agent gets every
-                # tool the listed servers expose (there is no per-tool allowlist:
-                # OpenCode has none, and claude-code runs bypassPermissions).
+              # No `mcp:` scope, deliberately: every box gets the seat's
+              # tool bridge, which already serves this seat's LIVE tool set
+              # under the reserved `crewlet` server — its mattermost tools,
+              # the shared tavily search and the work item's tools included
+              # (docs/concepts/code-sandbox.md, "The tool bridge") — so
+              # listing a server here would put the same tools in the box
+              # twice.  Name one only when the box needs a credential the
+              # seat itself does not hold.  No code-host server either: the
+              # run pushes and opens the MR with git push options.
               env:
                 GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"   # this seat's own PAT, for the git-auth step and the coding agent
               setup:

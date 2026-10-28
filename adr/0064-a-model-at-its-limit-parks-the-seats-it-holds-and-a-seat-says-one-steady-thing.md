@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestASpentModelParksTheSeatUntilItsResetAndThenDeliversOnce`, `internal/engine.TestAProbeThatMeetsTheLimitArmsTheParkAgain`, `internal/engine.TestAFortyHourLimitDeliversTheHeldMailOnceWithItsDeliveriesIntact`, `internal/engine.TestSeatsOnOneLimitedEntryShareOneProbe`, `internal/engine.TestAResumeThatMeetsALimitMidTurnWaitsForTheParksRelease`, `internal/engine.TestAPublishedCompanyResumesACompletionKeptForALimit`, `internal/engine.TestASpentHeadWithAFailingFallbackIsNotParked`, `internal/engine.TestNewModelsReleaseTheParkAtOnce`, `internal/engine.TestAResumeAtItsModelsLimitIsAWaitNotAFailure`, `internal/engine.TestACompletionDuringALimitIsNeverHandedBackAndResumesOnce`, `internal/sandbox.TestACompletionWhoseResumeMeetsALimitIsKeptAndResumedOnce`, `internal/sandbox.TestAnAnswerWhoseResumeMeetsALimitWaitsUncharged`, `internal/providers/llm/chain.TestAChainIsLimitedOnlyWhenEveryMemberIs`, `internal/providers/llm/cliagent.TestClaudeCodesLimitIsReadFromItsStatusWithTheReset`, `internal/providers/llm/cliagent.TestAnAnswerOpeningWithTheLimitsWordsIsAnAnswer`, `internal/providers/llm/cliagent.TestAClockResetIsTheNextOccurrenceInItsZone`, `internal/providers/llm/cliagent.TestAnUnnamedResetBacksOffAndStartsAgainOnceAnswered`, `internal/api/livestate.TestAParkedSeatReadsStoppedThroughEveryProbe`, `internal/api/livestate.TestTheBroadcastLimitCarriesNoConfigKey`, `internal/api/livestate.TestNoBroadcastFieldCarriesAConfigKeyOrARawFailure`, `internal/api/queries.TestTheSpendByEntryIsAnAdminsAlone`, `internal/api/stream.TestTheSpendPushNamesEntriesToAnAdminAlone`, `internal/api/livestate.TestASpendRecordIsNeverNamedByItsEntry`, `internal/api/queries.TestTheScreenOffersAnAdminsSplitsToAnAdminAlone`, `internal/engine.TestTheLastSeatOutEndsTheProbesCall`, `internal/engine.TestAStopWaitsForAProbesCall`, `internal/engine.TestAnOlderProbeCallLeavesTheNewerOnesCancel`, `internal/api/livestate.TestAnExhaustedChainIsAFailedTurnNotAStop`, `internal/config.TestEveryBuiltInCLIHasAProductName`, `internal/agent/turn.TestAResumeAnswersOnlyForWhatThisAttemptWrote`, `internal/agent/runner.TestAResumedRecordMarksTheParkedRoundsCallsAsInherited`, `internal/engine.TestARetriedResumeWaitsForALimitItsModelsKnow`, `internal/caveat.TestTheDashboardKnowsEverySettingARemedyNames`, the dashboard's `LimitRemedy.test.tsx`, `Inbox.test.tsx` ("a burst of live pushes"), `providerLimit.test.ts` and `store.test.ts`
+- **Enforced-by:** `internal/engine.TestASpentModelParksTheSeatUntilItsResetAndThenDeliversOnce`, `internal/engine.TestAProbeThatMeetsTheLimitArmsTheParkAgain`, `internal/engine.TestAFortyHourLimitDeliversTheHeldMailOnceWithItsDeliveriesIntact`, `internal/engine.TestSeatsOnOneLimitedEntryShareOneProbe`, `internal/engine.TestAResumeThatMeetsALimitMidTurnWaitsForTheParksRelease`, `internal/engine.TestAPublishedCompanyResumesACompletionKeptForALimit`, `internal/engine.TestASpentHeadWithAFailingFallbackIsNotParked`, `internal/engine.TestNewModelsReleaseTheParkAtOnce`, `internal/engine.TestAResumeAtItsModelsLimitIsAWaitNotAFailure`, `internal/engine.TestACompletionDuringALimitIsNeverHandedBackAndResumesOnce`, `internal/sandbox.TestACompletionWhoseResumeMeetsALimitIsKeptAndResumedOnce`, `internal/sandbox.TestAnAnswerWhoseResumeMeetsALimitWaitsUncharged`, `internal/providers/llm/chain.TestAChainIsLimitedOnlyWhenEveryMemberIs`, `internal/providers/llm/cliagent.TestClaudeCodesLimitIsReadFromItsStatusWithTheReset`, `internal/providers/llm/cliagent.TestAnAnswerOpeningWithTheLimitsWordsIsAnAnswer`, `internal/providers/llm/cliagent.TestAClockResetIsTheNextOccurrenceInItsZone`, `internal/providers/llm/cliagent.TestAnUnnamedResetBacksOffAndStartsAgainOnceAnswered`, `internal/api/livestate.TestAParkedSeatReadsStoppedThroughEveryProbe`, `internal/api/livestate.TestTheBroadcastLimitCarriesNoConfigKey`, `internal/api/livestate.TestNoBroadcastFieldCarriesAConfigKeyOrARawFailure`, `internal/api/queries.TestTheSpendByEntryIsAnAdminsAlone`, `internal/api/stream.TestTheSpendPushNamesEntriesToAnAdminAlone`, `internal/api/stream.TestTheSandboxesPushNamesARunsEntryToAnAdminAlone`, `internal/api/queries.TestASandboxRunsBodyIsItsSeatsTrail`, `internal/api/livestate.TestASpendRecordIsNeverNamedByItsEntry`, `internal/api/queries.TestTheScreenOffersAnAdminsSplitsToAnAdminAlone`, `internal/engine.TestTheLastSeatOutEndsTheProbesCall`, `internal/engine.TestAStopWaitsForAProbesCall`, `internal/engine.TestAnOlderProbeCallLeavesTheNewerOnesCancel`, `internal/api/livestate.TestAnExhaustedChainIsAFailedTurnNotAStop`, `internal/config.TestEveryBuiltInCLIHasAProductName`, `internal/agent/turn.TestAResumeAnswersOnlyForWhatThisAttemptWrote`, `internal/agent/runner.TestAResumedRecordMarksTheParkedRoundsCallsAsInherited`, `internal/engine.TestARetriedResumeWaitsForALimitItsModelsKnow`, `internal/caveat.TestTheDashboardKnowsEverySettingARemedyNames`, `internal/sandbox.TestALimitAResumeMetIsHeldByItsNodeAlone`, `internal/sandbox.TestACompletionRefusedForALimitIsHeldHereUntilItsInstant`, `internal/engine.TestACompletionOnAFullWindowIsChargedThereAndHeldAsleep`, `internal/sandbox.TestAReadBackJobsBoxSleepsUntilItIsCollectedAgain`, `internal/engine.TestACompletionAtALimitWaitsForItsParkNotItsInstant`, `internal/engine.TestAParkedSeatsAnswerWaitsForItsProbesAnswer`, `internal/engine.TestAnApplyThatCarriesTheSitOutParksTheSeatAgain`, `internal/providers/llm/chain.TestAChainsKnownLimitIsTheOneACallWouldMeet`, `internal/sandbox.TestARefusalNamingAnInstantAlreadyPastWaitsForItsSignal`, the dashboard's `LimitRemedy.test.tsx`, `Inbox.test.tsx` ("a burst of live pushes"), `providerLimit.test.ts` and `store.test.ts`
 - **Measured:** a five-seat company on one Claude Code subscription, 2026-10-27, from 16:16 local when the five-hour window ran out until its 16:30 reset: 60 to 93 `batch_handler_failed` a minute, one partition failing 64 times in eight minutes, and every failed turn also failing a prefetch, a reflection and a compaction call. A forty-second sample of the dashboard socket carried 1207 frames (thirty a second), of which 529 were seat pushes (thirteen a second) and 64 were turns started and failed; each seat moved between working, idle with a failed turn and stopped about once a second. With the park, the storm test runs one refused turn where it ran 25.
 - **Cost-when-tried:** the limit was classified as a server failure (Claude Code had reworded it, and nothing read its 429), so nothing sat the entry out; the dispatcher NAKed every refused turn on a backoff of one second doubling to thirty, per partition, with new notifications joining each; and the seat state read `stopped`/`provider` from the last turn's `llm_unavailable` until the next turn began a few tens of milliseconds later. The Inbox drew each seat as a "stopped" row or a "last turn failed" row under two ids, so every flip removed one row and inserted another, which moved every row below it. Two coding runs resumed into the limit were abandoned with their results: the abandon rule read the writes the attempt that parked had made as the resume's own. In review of the first version of this record: its probe was the held delivery's own turn, parked again by a deferral that spends one of the message's deliveries, so a limit named 40 hours out would have dead-lettered the held mail after 24 hourly probes (about five and a half hours for a reset nobody named); and a completion resumed into the limit was reverted and NAKed through its 25 deliveries in about ten minutes.
 - **Tag-status:** unreleased
@@ -54,9 +54,11 @@ told: the CLI it is of and whether it signs in on a plan, whether the seat
 waits or runs on a fallback (unnamed), when the vendor said it lifts, and since
 when. The entry keys that move it are held and never broadcast, and neither is
 the vendor's sentence. **The same holds for every live field**: a failure's own
-text (`last_error` and a failed call's `error`, as `detail`) and a CLI run's
-`provider_key` reach only a reader of the company's configuration
-(`livestate.Reach.Config`, an admin), whatever their reach to the seat's body;
+text (`last_error` and a failed call's `error`, as `detail`), a CLI run's
+`provider_key`, and the entry a coding run was launched on (`provider_key` on
+the `sandboxes` push and snapshot and on the `sandbox_runs` board) reach only a
+reader of the company's configuration (`livestate.Reach.Config`, an admin),
+whatever their reach to the seat's body;
 everybody else is told a failure by its kind, which the dashboard words, and
 the full text stays in the engine's log and on the turn's record. So does the
 spend breakdown by entry (`by_provider` on the `tokens` answer and push, and a
@@ -98,6 +100,51 @@ names; a resume that meets either before it writes is reverted and refused the
 same way. A completion so refused is acknowledged, kept, and re-fired when the
 condition's signal comes (the waiter announcing it again meanwhile), and an
 answer waits uncharged; neither spends deliveries or attempts on the wait.
+
+**Amended by [ADR-0066](0066-every-executor-is-its-coding-clis-own-run.md), for
+an executor's run.** No round parks with its calls in its conversation: a
+resumed executor's record is its run's calls over the bridge, made before the
+segment that collects it, and those are the calls it inherits. The resume's
+first model call is its reviewer's, and an answer's is the relaunch that
+carries the run on, whose every runner member sitting out is the same limited
+chain. So the turn gate is told the resume's route and asks each of its own
+first call: a completion of its reviewer's chain, an answer of the runner
+members its relaunch can take and of a window long enough for that launch. A
+completion's gate asks no budget and no limit its models know: its job is over
+and its tokens are spent, so it is collected first, charged in the window it
+ran in and its box paused, where refused before its claim it waited
+uncollected until the condition cleared, charged late (into the next window,
+for a budget), its box kept awake by the waiter meanwhile, and a limited seat
+parked by nothing. A limit its review's chain already knows refuses its resume
+once it is collected, before its turn runs, holds the job on the node that
+collected it, and parks the seat on that limit, as the review's call would
+have; so an apply that releases the park of a seat whose mail its run holds,
+carrying the entry's sit-out, parks it again on the job's next collection. A
+budget that refuses a resume once it runs (a completion's review, or a
+relaunch) is waited out on its window, ahead of the abandon: a completion is
+held collected in its paused box, on its record, which the waiter leaves
+asleep (`sandbox.ErrResumeHeld`), and an answer is reverted and waits
+uncharged in its own series. A completion whose review sends its run back to runners every
+one of which sits out meets the limit at that relaunch, which the gate, asked
+again, would admit into again: it is reverted and held by the node that met
+the limit, which refuses the job's announcements itself until the instant the
+limit names, and the waiter announcing it leaves its paused box asleep, the job
+having been read back. **In that node's memory, never on the run's record**, which every
+node reads: the limit is that node's models', so a restart, or the seat's next
+holder, asks its own on the job's next announcement. **A resumed segment that
+meets the limit parks its seat** as a dispatch's turn does: the plan is usually
+spent inside a run, whose seat's mail the run holds, so no delivery meets it,
+and unparked the seat read idle with a failed turn and joined no probe. And a
+parked seat runs no resume until its park is released, whichever chain the
+resume's first call would take, so a completion whose own instant passes while
+the probe finds the limit still there waits on the park rather than being
+reviewed again and relaunched into the window. The park's refusal names the
+instant of the probe's next call only while it is still to come: from the
+probe's instant until its call comes back, a whole run of the entry's CLI, the
+park stands past it, and a refusal naming it set every answer waiting on the
+seat re-checking at once for as long as the call was out. What ends that wait
+is the probe's answer, a release (which signals) or a renewal (a new instant),
+and an answer's wait reads any instant already past as none.
 
 **The way out is the remedy #427 introduced.** The condition carries the
 `model_providers` remedy (a `caveat.Setting`), which the dashboard's link table

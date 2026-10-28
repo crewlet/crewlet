@@ -338,7 +338,14 @@ type EpisodeLifecycle struct {
 	// ExemplarCount is how many originals stay raw after a cluster is
 	// compacted, so an operator can drill into typical examples without
 	// losing fidelity entirely.
-	ExemplarCount int `yaml:"exemplar_count,omitempty" json:"exemplar_count,omitempty" js:"min=0" desc:"Originals kept raw after a cluster is compacted."`
+	//
+	// AT LEAST ONE. A fold that keeps no original writes a summary nobody
+	// can open, which the lifecycle refuses to do: it reads a count below
+	// one as unset and keeps its own two (internal/learning's
+	// defaultExemplarCount). So a 0 written here never meant "keep none" —
+	// and a stored revision, decoded onto the defaults with every knob
+	// written omitempty, dropped it before the lifecycle ever saw it.
+	ExemplarCount int `yaml:"exemplar_count,omitempty" json:"exemplar_count,omitempty" js:"min=1" desc:"Originals kept raw after a cluster is compacted (at least 1)."`
 
 	// CompactedMaxAgeDays is an optional very-long-tail eviction of the
 	// summaries themselves. 0 keeps them indefinitely, which is the
@@ -375,7 +382,7 @@ func (e *EpisodeLifecycle) validate(path Path) error {
 	p.wrap(positive(path, "compaction_min_cluster_size", e.CompactionMinClusterSize))
 	p.wrap(fraction(path, "compaction_jaccard_threshold", e.CompactionJaccardThreshold))
 	p.wrap(positive(path, "compaction_batch_size", e.CompactionBatchSize))
-	p.wrap(nonNegative(path, "exemplar_count", e.ExemplarCount))
+	p.wrap(positive(path, "exemplar_count", e.ExemplarCount))
 	p.wrap(nonNegative(path, "compacted_max_age_days", e.CompactedMaxAgeDays))
 
 	if e.ExemplarCount >= e.CompactionMinClusterSize && e.CompactionMinClusterSize > 0 {

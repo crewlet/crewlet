@@ -11,7 +11,7 @@ import (
 )
 
 // assistantEntry is a providers.llm entry the assistant may run on: Claude
-// Code in host mode with its web tools turned off.
+// Code, whose profile denies its local tools, with its web tools turned off.
 const assistantEntry = "    assistant:\n" +
 	"      agent: claude-code\n      model: sonnet\n" +
 	"      overrides: {web_tools: denied}\n"
@@ -68,9 +68,8 @@ func TestASafeAssistantChainIsHandedOut(t *testing.T) {
 }
 
 // THE ASSISTANT REFUSES AN ENTRY THAT REACHES THE WEB, or anything else the
-// person's own requests did not return: a CLI in box mode (its own tool
-// loop never passes the guard), one whose local tools are not denied (a shell
-// reads what the engine user can), one that keeps its web tools (a page no
+// person's own requests did not return: one whose local tools are not denied
+// (a shell reads what the engine user can), one that keeps its web tools (a page no
 // authority decision saw, and a way out for the person's data), and one on a
 // CLI with no measured way to turn them off. Each is refused at the chain
 // member, naming the entry's own field to change, and AssistantChain refuses
@@ -85,11 +84,6 @@ func TestTheAssistantRefusesAnEntryThatReachesTheWeb(t *testing.T) {
 		kind  error
 		want  string
 	}{
-		"box mode": {
-			entry: "    assistant:\n      agent: claude-code\n      model: sonnet\n      mode: box\n" +
-				"      overrides: {web_tools: denied}\n",
-			kind: ErrConflict, want: "providers.llm.assistant.mode",
-		},
 		"local tools not denied": {
 			entry: "    assistant:\n      agent: custom\n      model: m\n      overrides:\n" +
 				"        binary: mycli\n        complete_args: [run]\n        model_args: [--model, '{model}']\n" +

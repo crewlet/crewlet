@@ -43,6 +43,7 @@ func bundledEntryWithLogout(t *testing.T, bundle, logout string) (flags []string
 	}
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     sub:
       agent: custom
@@ -57,9 +58,11 @@ providers:
         status_args: %s
         login_args: %s%s
 roles:
+  # A person's seat: the custom entry stands in for a CLI this suite
+  # cannot install, and it can run no seat's executor.
   - name: CEO
     handle: ceo
-    llm: sub
+    kind: human
 `, state, binary, status, signIn, logoutArgs))
 	return []string{"-company", company, "-config", filepath.Join(dir, "absent.yaml")},
 		filepath.Join(state, "custom", "credentials", "creds.json")

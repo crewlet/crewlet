@@ -26,6 +26,7 @@ func learningCompany(t *testing.T, block string) *Company {
 	return companyFor(t, `
 name: Acme
 providers:
+  sandbox: {fake: true}
   llm:
     gateway:
       model: sonnet

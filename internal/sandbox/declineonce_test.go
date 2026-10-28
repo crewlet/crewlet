@@ -134,7 +134,7 @@ func TestADeclineStoppedBeforeItsWriteHandsNothingBack(t *testing.T) {
 
 	rig.coordinator.Stop()
 	next := successorOf(t, rig, rig.pending)
-	if calls := next.resumer.calls(); len(calls) != 1 || !strings.Contains(calls[0].Answer, "use main") {
+	if calls := next.resumer.calls(); len(calls) != 1 || !strings.Contains(askedOf(calls[0]).Answer, "use main") {
 		t.Fatalf("the next holder resumed %+v, want the recorded answer once", calls)
 	}
 	if got := rig.handedBack(); len(got) != 0 {

@@ -46,13 +46,15 @@ const (
 // Message is one turn of a conversation.
 //
 // The JSON tags are a WIRE FORMAT, and they are the field names on purpose.
-// A suspended agent turn serializes its whole conversation into a durable row
-// that another BUILD reads back days later
-// ([github.com/crewlet/crewlet/internal/agent/execstate]), and untagged these
-// keys are whatever the Go field happens to be called — so a rename here is
-// an unresumable run with no compile error and no symptom but a refusal in a
-// log. Pinned to the spellings already on the wire; changing one is a format
-// change and needs a version bump on the other side.
+// A Dashboard Assistant turn parked on a proposal serializes its whole
+// conversation into a durable record that another node, or another BUILD,
+// reads back once its owner decides (internal/assistant's parked record), and
+// untagged these keys are whatever the Go field happens to be called — so a
+// rename here is an unresumable turn with no compile error and no symptom but
+// a refusal in a log. Pinned to the spellings already on the wire; changing
+// one is a format change and needs a version bump on the other side. A seat's
+// turn persists none: what it parks on is its executor's run, and the turn's
+// bookkeeping across that park is internal/agent/execstate's.
 type Message struct {
 	Role       string     `json:"Role,omitempty"`
 	Content    string     `json:"Content,omitempty"`
@@ -345,7 +347,9 @@ const (
 
 	// KindRateLimit is a spent plan or a rate limit the CLI reported in its
 	// vendor's own words. The backend sits the entry out for a while
-	// (internal/providers/llm/cliagent), and the chain moves on.
+	// (internal/providers/llm/cliagent), and the chain moves on — a call to
+	// its next member, and a seat's executor launch to the next member that
+	// can run it.
 	KindRateLimit
 
 	// KindAuth is a login the CLI reports expired or missing. Retryable

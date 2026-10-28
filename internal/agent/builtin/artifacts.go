@@ -143,12 +143,14 @@ type ArtifactPublisher interface {
 	SourceText(ctx context.Context, e artifacts.Entry, limit int64) ([]byte, bool, error)
 }
 
-// ArtifactBoxes finds the box the turn's coding run used, for a publish that
-// takes its files from it.
+// ArtifactBoxes finds the box the turn's coding run works in, for a publish
+// that takes its files from it.
 type ArtifactBoxes interface {
-	// Box is the box of the coding run this turn launched, reattached for
-	// reading. It answers [ErrNoBox] when the turn has none it may read: no
-	// run, a box already torn down, or a job still working in it.
+	// Box is the box of the coding run working in this turn, attached for
+	// reading while it works: the run publishes its own build, by calling. It
+	// answers [ErrNoBox] when the turn has none it may read: no run, a run
+	// that is not working in its box (parked on a question, collected, its
+	// pause reaped), or a box already torn down.
 	Box(ctx context.Context, turn *turnctx.Turn) (ArtifactBox, error)
 }
 

@@ -333,13 +333,14 @@ func TestTheTurnCarriesWhatWorkItDetachesWillNeed(t *testing.T) {
 // "not an agent seat" rather than being routed to a node that has the seat.
 //
 // The engine's current company here has no seats at all, standing in for the
-// epoch an apply swapped in after the admission. The admitted company carries
-// no turn settings, so the turn stops at its first round: reaching that round
-// at all is the proof, since it needs a runner built for the seat, and a runner
-// built from the engine's current company is refused before it exists.
+// epoch an apply swapped in after the admission. A resume hands the run's
+// result to the seat's reviewer, whose model is a CLI that is not installed,
+// so the turn stops at the reviewer's first round: reaching that round at all
+// is the proof, since it needs a runner built for the seat, and a runner built
+// from the engine's current company is refused before it exists.
 func TestAResumeRunsInTheEpochThatAdmittedIt(t *testing.T) {
 	t.Parallel()
-	admitted, seat := modeCompany(t, "claude-code", false, "")
+	admitted, seat := executorCompany(t)
 	admitted.Tools = tools.NewRegistry()
 	e, _ := resumingEngine(t)
 	e.backends = &Backends{Queue: memory.New()}
@@ -362,7 +363,7 @@ func TestAResumeRunsInTheEpochThatAdmittedIt(t *testing.T) {
 	in.Turn = resumedTurn(in.Run, seat, admitted.Org)
 
 	err := e.resumeTurn(t.Context(), in)
-	if err == nil || !strings.Contains(err.Error(), "resume round 1") {
+	if err == nil || !strings.Contains(err.Error(), "review round 1") {
 		t.Fatalf("resumeTurn() = %v, want the turn to reach its first round: a runner "+
 			"built from the engine's current company is refused before it", err)
 	}

@@ -109,7 +109,6 @@ const probeSkew = 5 * time.Minute
 type Diagnosis struct {
 	Provider   string
 	Agent      string
-	Mode       string
 	Model      string
 	Binary     string
 	BinaryPath string
@@ -146,32 +145,45 @@ type Diagnosis struct {
 	// a problem, as a shell that ran is on a profile denying local tools.
 	Web string
 
-	// BoxRuntime is what a BOX-MODE entry needs beyond a login, and is
-	// empty for a host-mode one. Each half of it fails at a seat's
-	// first turn and nowhere earlier: a CLI with no coding-agent runner
-	// has nothing to drive, and a box with no bridge to dial gets none of
-	// the seat's tools.
-	BoxRuntime []string
+	// Executor is what an entry a seat's EXECUTOR can launch on needs beyond
+	// a login, and is empty for an entry no executor chain holds. Each half
+	// of it fails at a seat's first launch and nowhere earlier: a CLI with no
+	// in-box runner is skipped by every launch, and a box with no bridge to
+	// dial gets none of the seat's tools.
+	Executor []string
 
 	Problems []string
 }
 
 // DiagnoseOptions are the facts a provider cannot see about itself.
 //
-// Both belong to the PROCESS rather than to the provider — which runners this
-// build registers, and what a sandbox can dial — and both decide whether box
-// mode works. Passed in rather than read here, so `doctor` reports the engine's
-// own answers instead of this package's guess at them.
+// They belong to the COMPANY and the PROCESS rather than to the provider —
+// which seats launch their executor on this entry, which runners this build
+// registers, and what a box can dial — and together they decide whether a
+// seat's executor can run on it. Passed in rather than read here, so `doctor`
+// reports the engine's own answers instead of this package's guess at them.
 type DiagnoseOptions struct {
 	// Smoke runs the real completion and the two tool probes.
 	Smoke bool
 
-	// AgentRunners are the coding-agent runner names this build has. A
-	// box-mode entry naming a CLI outside them cannot run at all.
+	// ExecutorSeats are the agent seats whose executor chain holds this
+	// entry, as the company resolves them. Empty means no seat's executor
+	// can launch here, and the entry serves the phases on this host only.
+	ExecutorSeats []string
+
+	// AgentRunners are the in-box coding-agent runner names this build has.
+	// An executor launch skips an entry whose CLI is outside them.
 	AgentRunners []string
 
+	// Cell is the cell a run launched on this entry is placed in — its own
+	// run_in, else the company's default_run_in. A `direct` box on a node
+	// that serves the API dials the node's own listener on loopback; every
+	// other box dials BridgeURL.
+	Cell string
+
 	// BridgeURL is CREWLET_MCP_BRIDGE_URL as this process sees it. Empty
-	// means box mode is refused at launch.
+	// means a launch whose box cannot dial a listener of its own node's is
+	// refused.
 	BridgeURL string
 }
 
@@ -183,11 +195,11 @@ type DiagnoseOptions struct {
 func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis {
 	smoke := opts.Smoke
 	d := Diagnosis{
-		Provider: p.key, Agent: p.agent, Mode: p.modeName(), Model: p.model,
+		Provider: p.key, Agent: p.agent, Model: p.model,
 		Binary: p.profile.Binary, WrittenFor: p.profile.WrittenFor,
 		StateDir: p.ws.StateDir(),
 	}
-	d.BoxRuntime, d.Problems = p.boxRuntime(opts)
+	d.Executor, d.Problems = p.executor(opts)
 
 	path, err := exec.LookPath(p.profile.Binary)
 	switch {
@@ -426,55 +438,74 @@ func (p *Provider) keyRemedy() string {
 		"as auth.api_key (the CLI reads it from %s)", p.profile.APIKeyEnv)
 }
 
-// modeName is how this entry runs, for the report.
-func (p *Provider) modeName() string {
-	if p.box {
-		return "box (the CLI runs the executor in a box)"
-	}
-	return "host (the CLI runs on this host, turn by turn)"
-}
-
-// boxRuntime measures what a box-mode entry needs beyond a login.
+// executor measures what an entry a seat's executor launches on needs beyond
+// a login.
 //
-// BOTH HALVES FAIL AT A SEAT'S FIRST TURN AND NOWHERE EARLIER, which is the
-// whole reason they are here: an entry naming a CLI this build has no runner
-// for validates cleanly and reports a configured provider, and an engine with
-// no reachable bridge URL refuses every box-mode launch at the moment a seat
-// finally has work. `doctor` is what a deploy script gates on, so it is the
-// last place either can be caught before an agent is waiting.
+// BOTH HALVES FAIL AT A SEAT'S FIRST LAUNCH AND NOWHERE EARLIER, which is the
+// whole reason they are here: an engine with no reachable bridge URL refuses
+// every launch at the moment a seat finally has work, and a CLI with no in-box
+// runner is skipped by every launch while validating cleanly as a provider.
+// `doctor` is what a deploy script gates on, so it is the last place either
+// can be caught before an agent is waiting.
 //
-// A HOST-MODE ENTRY REPORTS NOTHING HERE, rather than reporting that it would
-// not work in a mode it is not in. It runs as a subprocess of this engine and
-// needs neither.
-func (p *Provider) boxRuntime(opts DiagnoseOptions) (lines, problems []string) {
-	if !p.box {
+// A NON-RUNNER MEMBER IS A LINE, NOT A PROBLEM. The company refuses an agent
+// seat whose executor chain holds no runner at all, so a CLI without one sits
+// in a chain beside one that has it — skipped at launch, and still the seat's
+// model for every phase on this host the chain serves. Faulting it would make `doctor`
+// red on a configuration the engine runs.
+//
+// AN ENTRY NO EXECUTOR CHAIN HOLDS REPORTS NOTHING HERE: it serves the phases
+// on this host, as a subprocess of this engine, and needs neither.
+func (p *Provider) executor(opts DiagnoseOptions) (lines, problems []string) {
+	if len(opts.ExecutorSeats) == 0 {
 		return nil, nil
 	}
-	if slices.Contains(opts.AgentRunners, p.agent) {
-		lines = append(lines, fmt.Sprintf("runner: %q is registered", p.agent))
-	} else {
-		lines = append(lines, fmt.Sprintf("runner: none for %q", p.agent))
-		problems = append(problems, fmt.Sprintf(
-			"box mode drives %q through a coding-agent runner and this build "+
-				"registers none for it (has: %s) — set `mode: host` on "+
-				"providers.llm.%s, or point it at a CLI that has one",
-			p.agent, strings.Join(opts.AgentRunners, ", "), p.key))
+	lines = append(lines, "seats: "+strings.Join(opts.ExecutorSeats, ", "))
+	if !slices.Contains(opts.AgentRunners, p.agent) {
+		lines = append(lines, fmt.Sprintf(
+			"runner: none for %q — skipped at launch (runners: %s); serves "+
+				"those seats' phases on this host only",
+			p.agent, strings.Join(opts.AgentRunners, ", ")))
+		return lines, nil
 	}
-	if strings.TrimSpace(opts.BridgeURL) != "" {
+	lines = append(lines, fmt.Sprintf("runner: %q is registered", p.agent))
+	switch {
+	case opts.Cell == directCell:
+		// ON THE HOST, so on a node that binds a listener the box reaches
+		// on loopback — api.port, on every interface or on loopback, which
+		// a node without the ingress role serves its own host alone — the
+		// node's own listener is the address, derived by the node that
+		// binds it: the variable is not needed there, and a report calling
+		// it missing would send an operator to set what the quickstart and
+		// a seat pool never ask for. Whether this node is one is its Tier
+		// A, which this command does not read; a seats node that is not
+		// says so itself at apply.
+		via := "a node on api.port 0 dials " + bridgeURLVar
+		if url := strings.TrimSpace(opts.BridgeURL); url != "" {
+			via = "a node on api.port 0 dials " + url
+		}
+		lines = append(lines, "tool bridge: this node's own listener, on loopback, "+
+			"where the node binds api.port (on every interface or on loopback); "+via)
+	case strings.TrimSpace(opts.BridgeURL) != "":
 		lines = append(lines, "tool bridge: "+opts.BridgeURL)
-	} else {
+	default:
 		lines = append(lines, "tool bridge: unset")
 		problems = append(problems, fmt.Sprintf(
-			"box mode hands the seat's tools to the box over an MCP bridge and "+
-				"%s is unset, so every launch is refused — a coding agent with "+
-				"none of the seat's tools cannot answer anybody or submit its "+
-				"work. Set it to a URL a sandbox can reach",
-			bridgeURLVar))
+			"a seat's executor reaches its tools over an MCP bridge, and a box in "+
+				"the %s cell is not on the node's host, so it dials %s alone — which "+
+				"is unset, so every launch on providers.llm.%s is refused: a coding "+
+				"agent with none of the seat's tools cannot answer anybody or submit "+
+				"its work. Set it to a URL that box reaches the node at",
+			orNone(opts.Cell), bridgeURLVar, p.key))
 	}
 	return lines, problems
 }
 
-// bridgeURLVar is the variable a box-mode run's box dials the engine on.
+// directCell is the cell whose box is a process tree on the engine's own host
+// — config.PlacementDirect, spelled here for [bridgeURLVar]'s reason.
+const directCell = "direct"
+
+// bridgeURLVar is the variable an executor's box dials the engine on.
 //
 // SPELLED HERE RATHER THAN IMPORTED, because importing the API package into a
 // provider would be a dependency from a leaf onto an edge for one string —
@@ -820,7 +851,6 @@ func (d Diagnosis) Render(w io.Writer) {
 	}
 	line("provider", d.Provider)
 	line("cli agent", d.Agent)
-	line("mode", d.Mode)
 	if d.Model != "" {
 		line("model", d.Model)
 	}
@@ -845,10 +875,10 @@ func (d Diagnosis) Render(w io.Writer) {
 	line("smoke test", d.Smoke)
 	line("local tools", d.LocalTools)
 	line("web", d.Web)
-	for i, entry := range d.BoxRuntime {
+	for i, entry := range d.Executor {
 		label := ""
 		if i == 0 {
-			label = "box runtime"
+			label = "executor"
 		}
 		line(label, entry)
 	}
@@ -921,28 +951,51 @@ func (p *Provider) SandboxCredentialDocument() string {
 	return p.ws.documentPath()
 }
 
-// SandboxEnv is the credential a coding run carries in its ENVIRONMENT — the
-// headless subscription token, where one is configured.
+// SandboxEnv is the environment a coding run on this entry carries into its
+// box, in any cell: the entry's own env, and the credential its auth mode signs
+// the CLI in with — the headless subscription token where one is configured,
+// an api-key entry's key, the variables inherit-env forwards.
 //
-// A token travels to any box, including a remote one, because it is a single
-// scoped and revocable variable rather than a rotating refresh secret. An
-// api-key entry contributes its key here instead, and a subscription entry
-// with neither contributes nothing at all: the run then needs the credential
-// files, which is why a CLI that mints no token needs a local box.
+// THE WHOLE ENV, NOT ONLY ITS SIGN-IN. An entry's env is extra environment for
+// every invocation of its CLI, and a seat's executor run is one: a gateway's
+// ANTHROPIC_BASE_URL and the bearer token it takes, a Bedrock or Vertex AI
+// switch and its region, a proxy. Cut to the credential names, a box run on
+// an entry that reached its model through a gateway called the vendor directly
+// with the gateway's key, and one on Bedrock called the Anthropic API signed
+// in to nothing, while every other phase of the same entry worked.
 //
-// A CLI that reads its model provider's key from its own environment
-// ([cliprofile.Profile.EnvSignIn]) signs in through env, and that key
-// travels for the same reason a token does — it is the whole sign-in, and a
-// run that dropped it would start the CLI signed in to nothing while the
-// doctor reported the entry healthy.
+// A token or a key travels to any box, including a remote one, because it is a
+// single scoped and revocable variable rather than a rotating refresh secret.
+// A subscription entry with neither contributes no credential at all: the run
+// then needs the credential files, which is why a CLI that mints no token
+// needs a local box.
 //
-// Read off [childEnv] like [Provider.signIn], so a run carries exactly the
-// credentials a host-mode run is given: what the auth mode removes from the
-// child it removes from the box.
+// Read off [childEnv] like [Provider.signIn], so a run carries what a run on
+// this host is given of the entry: what the auth mode removes from the child
+// it removes from the box, and what the mode sets in the child — the
+// credential, and [cliprofile.Profile.SubscriptionEnv] — it sets in the box.
+// The rest of that environment is this host's and stays on it: the host
+// allowlist (a direct box is given its own, and a remote one is another
+// machine), the isolation variables (a box points HOME and the XDG
+// directories at its own home, and an entry's env naming one is refused on
+// every write but only warned about where it is applied), and the profile's
+// fixed env and passthrough, which tune a call on this host — a run in a box
+// is configured by its runner (internal/sandbox/codingagent).
+//
+// A BLANK VALUE IS LEFT OUT, by the rule the rest of a run's environment is
+// held to: a reference that resolved to nothing reaches no box as an empty
+// string, and its build already warned (cli_agent_env_unresolved).
 func (p *Provider) SandboxEnv() map[string]string {
 	env := childEnv(p.profile, &Checkout{}, p.env, p.auth)
+	names := slices.Collect(maps.Keys(p.env))
+	names = append(names, p.profile.TokenEnv, p.profile.APIKeyEnv)
+	names = append(names, slices.Collect(maps.Keys(p.profile.SubscriptionEnv))...)
+	isolation := p.profile.IsolationVariables()
 	out := map[string]string{}
-	for _, name := range p.CredentialEnvNames() {
+	for _, name := range names {
+		if name == "" || slices.Contains(isolation, name) {
+			continue
+		}
 		if value := env[name]; strings.TrimSpace(value) != "" {
 			out[name] = value
 		}

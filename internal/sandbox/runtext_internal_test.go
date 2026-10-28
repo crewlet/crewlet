@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -280,7 +279,7 @@ func TestAFilePastTheCapIsRefusedNotClipped(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	if got, err := readHostFile(filepath.Join(dir, "absent"), "absent", MaxFileBytes); got != nil || err != nil {
+	if got, err := readHomeFile(boxLayout{id: "b", root: dir}, "absent", "absent", MaxFileBytes); got != nil || err != nil {
 		t.Errorf("a missing file = %q, %v; want empty, the poll's contract", got, err)
 	}
 	local, err := NewLocal(LocalOptions{Placement: Direct, StateDir: t.TempDir()})

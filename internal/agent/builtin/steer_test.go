@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -86,6 +88,43 @@ func (a *fleetAsker) Ask(_ context.Context, subject string, request []byte, want
 	return out, nil
 }
 
+// runRecords is the turn's run records as the tool reads them: none by
+// default — a turn that has not launched its coding run — or one naming a seat
+// and filing every note with what the case says, recording what it was handed.
+type runRecords struct {
+	mu       sync.Mutex
+	recorded bool
+	seat     builtin.RunSeat
+	seatErr  error
+	filed    builtin.RunFiled
+	fileErr  error
+	read     []string
+	notes    []steer.Note
+}
+
+func (r *runRecords) Seat(_ context.Context, turnID string) (builtin.RunSeat, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.read = append(r.read, turnID)
+	if r.seatErr != nil {
+		return builtin.RunSeat{}, false, r.seatErr
+	}
+	return r.seat, r.recorded, nil
+}
+
+func (r *runRecords) File(_ context.Context, _ string, note steer.Note) (builtin.RunFiled, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.notes = append(r.notes, note)
+	return r.filed, r.fileErr
+}
+
+func (r *runRecords) filedNotes() []steer.Note {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.notes)
+}
+
 // steerRig is steer_turn on the operator catalogue, called as one principal
 // and decided by the real authority table over a chart.
 type steerRig struct {
@@ -108,11 +147,19 @@ func newSteerRig(t *testing.T, asker builtin.FleetAsker, key string,
 	caller iam.Principal, chart authz.Chart) steerRig {
 
 	t.Helper()
+	return newSteerRigOn(t, asker, &runRecords{}, key, caller, chart)
+}
+
+// newSteerRigOn is [newSteerRig] over the given run records.
+func newSteerRigOn(t *testing.T, asker builtin.FleetAsker, runs builtin.RunSteers, key string,
+	caller iam.Principal, chart authz.Chart) steerRig {
+
+	t.Helper()
 	o := organization(t)
 	cto := ctoSeat(t)
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Org: func() *org.Organization { return o },
-		Steer: builtin.SteerDeps{Asker: asker, Wire: steerWire, Actor: func(ctx context.Context,
+		Steer: builtin.SteerDeps{Asker: asker, Wire: steerWire, Runs: runs, Actor: func(ctx context.Context,
 			turn *turnctx.Turn) (builtin.Actor, error) {
 			actor, err := builtin.PrincipalActor(ctx, turn)
 			if key != "" {
@@ -181,8 +228,9 @@ func TestSteerTurnSendsTheNoteAsThePersonAndAnswersPending(t *testing.T) {
 	if res.Failed {
 		t.Fatalf("refused: %s", res.Output)
 	}
-	if out["outcome"] != "pending" || out["agent_handle"] != "swe" || out["note_id"] != key {
-		t.Errorf("answered %v, want the note pending under the request's key %q", out, key)
+	if out["outcome"] != "pending" || out["agent_handle"] != "swe" || out["note_id"] != key ||
+		out["reads"] != "next_step" {
+		t.Errorf("answered %v, want the note pending under the request's key %q, read next step", out, key)
 	}
 	if asker.subject != topics.SeatSteer || asker.want != 1 {
 		t.Errorf("asked %q for %d replies, want the steer subject and the one node running it",
@@ -311,9 +359,9 @@ func TestNoReplyIsUnknownNotNotRunning(t *testing.T) {
 func TestSteerTurnRefusesWhatTheRunningNodeRefused(t *testing.T) {
 	t.Parallel()
 	for status, want := range map[steer.Status]tools.Refusal{
-		steer.StatusClosed:      tools.RefusalNotRunning,
-		steer.StatusFull:        tools.RefusalConflict,
-		steer.StatusUnsupported: tools.RefusalSteerUnsupported,
+		steer.StatusClosed: tools.RefusalNotRunning,
+		steer.StatusFull:   tools.RefusalNotesFull,
+		steer.StatusSpent:  tools.RefusalNotesSpent,
 	} {
 		asker := &fleetAsker{replies: []steer.Reply{{TurnID: "run-1", AgentHandle: "swe", Status: status}}}
 		res, _ := steerCall(t, steerTool(t, asker, requestKey()), "run-1", "use staging")
@@ -498,5 +546,185 @@ func TestANoteTheRunningNodeCouldNotVerifyIsRefusedAsUnavailable(t *testing.T) {
 				t.Errorf("asked the fleet %d times, want once and nothing offered after", len(asker.asked))
 			}
 		})
+	}
+}
+
+// recordedTurn is a turn whose coding run has launched: its record names the
+// CTO seat, and files every note with filed.
+func recordedTurn(t *testing.T, filed builtin.RunFiled) *runRecords {
+	t.Helper()
+	return &runRecords{recorded: true,
+		seat:  builtin.RunSeat{Agent: ctoSeat(t).String(), Handle: "agent-cto"},
+		filed: filed}
+}
+
+// A RUN RECORD DECIDES WITHOUT A SCATTER: a turn whose coding run has launched
+// keeps its notes on the run's record, which every node reads — so the note is
+// filed there, by this node, and the fleet is asked nothing. A lead is decided on
+// the seat the record names; asking the fleet as well would be a second answer
+// to a question the record already answered.
+func TestARunRecordDecidesWithoutAScatter(t *testing.T) {
+	t.Parallel()
+	asker := &fleetAsker{}
+	runs := recordedTurn(t, builtin.RunFiled{Status: steer.StatusAccepted,
+		Reads: steer.ReadsNextStep, AgentHandle: "agent-cto"})
+	key := requestKey()
+	res, out := steerCall(t, newSteerRigOn(t, asker, runs, key, boundTo("jane"), seatLeads),
+		"run-1", "  use staging  ")
+	if res.Failed {
+		t.Fatalf("refused: %s", res.Output)
+	}
+	if out["outcome"] != "pending" || out["reads"] != "next_step" || out["note_id"] != key ||
+		out["agent_handle"] != "agent-cto" {
+		t.Errorf("answered %v", out)
+	}
+	if len(asker.asked) != 0 {
+		t.Errorf("the fleet was asked %d times about a turn its run record names: %+v",
+			len(asker.asked), asker.asked)
+	}
+	notes := runs.filedNotes()
+	if len(notes) != 1 || notes[0].ID != key || notes[0].Text != "use staging" ||
+		notes[0].By != "jane" || notes[0].ByKind != iam.ActorHuman {
+		t.Errorf("filed %+v, want the note as the person, under the request's key", notes)
+	}
+}
+
+// NO RUN RECORD PROBES, THEN OFFERS: a turn that has not launched its coding run
+// keeps its notes in its first segment's box, which only the node running it
+// can reach — so the fleet is asked whose turn it is, and then offered the
+// note, and no record is written.
+func TestNoRunRecordProbesThenOffers(t *testing.T) {
+	t.Parallel()
+	asker := &fleetAsker{replies: []steer.Reply{{Version: 1, TurnID: "run-1",
+		Agent: ctoSeat(t).String(), AgentHandle: "agent-cto", Status: steer.StatusAccepted}}}
+	runs := &runRecords{}
+	res, out := steerCall(t, newSteerRigOn(t, asker, runs, requestKey(), boundTo("jane"), seatLeads),
+		"run-1", "use staging")
+	if res.Failed || out["outcome"] != "pending" {
+		t.Fatalf("answered %+v %v, want the note pending", res, out)
+	}
+	if len(asker.asked) != 2 || !asker.asked[0].Probe || asker.asked[1].Probe {
+		t.Errorf("asked the fleet %+v, want a probe and then the offer", asker.asked)
+	}
+	if notes := runs.filedNotes(); len(notes) != 0 {
+		t.Errorf("a note to a turn with no run record was filed on one: %+v", notes)
+	}
+	if len(runs.read) != 1 {
+		t.Errorf("the run record was read %d times, want once", len(runs.read))
+	}
+}
+
+// AUTHORITY IS DECIDED ON THE ANCHORED SEAT: a lead of another seat is refused
+// on the seat the run's sealed record names, with nothing filed and the fleet
+// asked nothing — and a record whose anchor did not open decides nothing at all.
+func TestAuthorityIsDecidedOnTheAnchoredSeat(t *testing.T) {
+	t.Parallel()
+	ceoLead := leadPairs{{"jane", "agent-ceo"}: true}
+	t.Run("a lead of another seat", func(t *testing.T) {
+		t.Parallel()
+		asker := &fleetAsker{}
+		runs := recordedTurn(t, builtin.RunFiled{Status: steer.StatusAccepted})
+		res, _ := steerCall(t, newSteerRigOn(t, asker, runs, requestKey(), boundTo("jane"), ceoLead),
+			"run-1", "use staging")
+		if !res.Failed || !errors.Is(res.Cause, builtin.ErrRefused) {
+			t.Fatalf("answered %+v, want the authority's refusal", res)
+		}
+		if len(asker.asked) != 0 || len(runs.filedNotes()) != 0 {
+			t.Errorf("a refused lead's note went somewhere: asked %+v, filed %+v", asker.asked,
+				runs.filedNotes())
+		}
+	})
+	t.Run("an anchor that did not open", func(t *testing.T) {
+		t.Parallel()
+		asker := &fleetAsker{}
+		runs := &runRecords{recorded: true, seat: builtin.RunSeat{
+			Unverified: "the record's seat is sealed under a key this node does not hold (it holds [k1])"}}
+		res, _ := steerCall(t, newSteerRigOn(t, asker, runs, requestKey(), boundTo("jane"), seatLeads),
+			"run-1", "use staging")
+		if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable ||
+			!strings.Contains(res.Output, "it holds [k1]") {
+			t.Fatalf("answered %s: %q, want unavailable naming why", tools.RefusalOf(res), res.Output)
+		}
+		if len(asker.asked) != 0 || len(runs.filedNotes()) != 0 {
+			t.Errorf("a note was sent on a seat nobody can vouch for: asked %+v, filed %+v",
+				asker.asked, runs.filedNotes())
+		}
+	})
+}
+
+// EVERY FILING OUTCOME HAS ITS REFUSAL, each in the class the person's surface
+// acts on and with its own sentence: a turn that holds too many unread notes,
+// one that has taken all it takes, one that has ended — and a record that
+// could not be read or written, which sent nothing and says to try again.
+func TestEveryFilingOutcomeHasItsRefusal(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		runs   func(t *testing.T) *runRecords
+		want   tools.Refusal
+		saying string
+	}{
+		{"full", func(t *testing.T) *runRecords {
+			return recordedTurn(t, builtin.RunFiled{Status: steer.StatusFull})
+		}, tools.RefusalNotesFull, "notes it has not read yet"},
+		{"spent", func(t *testing.T) *runRecords {
+			return recordedTurn(t, builtin.RunFiled{Status: steer.StatusSpent})
+		}, tools.RefusalNotesSpent, "put the rest on the work item"},
+		{"closed", func(t *testing.T) *runRecords {
+			return recordedTurn(t, builtin.RunFiled{Status: steer.StatusClosed})
+		}, tools.RefusalNotRunning, "is not running"},
+		{"a record that could not be written", func(t *testing.T) *runRecords {
+			runs := recordedTurn(t, builtin.RunFiled{})
+			runs.fileErr = errors.New("coord: the store is unavailable")
+			return runs
+		}, tools.RefusalUnavailable, "a retry is the same note"},
+		{"a record that could not be read", func(*testing.T) *runRecords {
+			return &runRecords{seatErr: errors.New("coord: the store is unavailable")}
+		}, tools.RefusalUnavailable, "could not be read, so nothing was sent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			asker := &fleetAsker{}
+			res, _ := steerCall(t, newSteerRigOn(t, asker, tc.runs(t), requestKey(), operatorCaller,
+				seatLeads), "run-1", "use staging")
+			if !res.Failed || tools.RefusalOf(res) != tc.want || !strings.Contains(res.Output, tc.saying) {
+				t.Errorf("answered failed=%v %s: %q, want %s saying %q", res.Failed,
+					tools.RefusalOf(res), res.Output, tc.want, tc.saying)
+			}
+			if len(asker.asked) != 0 {
+				t.Errorf("the fleet was asked %+v", asker.asked)
+			}
+		})
+	}
+}
+
+// `READS` FOLLOWS WHAT THE RUN IS DOING, as its record says: a run that works
+// reads the note at its next step, one parked on a question its turn resumes
+// after the answer — and the person is told which.
+func TestReadsFollowsTheRunsStatus(t *testing.T) {
+	t.Parallel()
+	for _, reads := range steer.ReadsAll {
+		runs := recordedTurn(t, builtin.RunFiled{Status: steer.StatusAccepted, Reads: reads,
+			AgentHandle: "agent-cto"})
+		res, out := steerCall(t, newSteerRigOn(t, &fleetAsker{}, runs, requestKey(), operatorCaller,
+			seatLeads), "run-1", "use staging")
+		if res.Failed || out["reads"] != string(reads) {
+			t.Errorf("a note the record answered %s for was answered %v (%s)", reads, out, res.Output)
+		}
+	}
+	// AND OFF THE SCATTER, what the running node said: a node that filed a
+	// late offer on the record it handed its box to answers the record's
+	// `reads`, and a reply that says none — a box's, or a peer's before the
+	// field — is read at the turn's next step.
+	for said, want := range map[steer.Reads]steer.Reads{
+		steer.ReadsAfterAnswer: steer.ReadsAfterAnswer,
+		"":                     steer.ReadsNextStep,
+	} {
+		asker := &fleetAsker{replies: []steer.Reply{{Version: 1, TurnID: "run-1",
+			AgentHandle: "swe", Status: steer.StatusAccepted, Reads: said}}}
+		_, out := steerCall(t, steerTool(t, asker, requestKey()), "run-1", "use staging")
+		if out["reads"] != string(want) {
+			t.Errorf("a reply saying reads %q was answered as %v, want %s", said, out["reads"], want)
+		}
 	}
 }

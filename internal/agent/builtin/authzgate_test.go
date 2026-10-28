@@ -104,10 +104,9 @@ func TestEveryAppOpensAPersonFacingTool(t *testing.T) {
 
 // NO SEAT-ONLY VERB IS OFFERED TO A PERSON.
 //
-// `a2a_ask` and `run_sandbox` spend an agent's turn — a colleague seat's, or
-// a coding run the seat's own loop suspends on — so the table refuses them to
-// anybody but a seat before any class is read. A person's catalogue that still
-// listed one would offer a tool every call to which is refused: the shape a
+// `a2a_ask` spends an agent's turn — a colleague seat's — so the table refuses
+// it to anybody but a seat before any class is read. A person's catalogue that
+// still listed one would offer a tool every call to which is refused: the shape a
 // model learns to distrust a whole catalogue from, and an act route a screen
 // would draw a button for. And the table must say so for each: a seat-only row
 // whose tool a seat's registry does not register would be a rule nobody

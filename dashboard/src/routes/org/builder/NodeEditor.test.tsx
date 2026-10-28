@@ -129,7 +129,7 @@ function connected(): CompanyDocument {
     name: "Dev",
     goal: "Build",
     mcp_env: { tracker: { TOKEN: "__redacted__", URL: "${TRACKER_URL}" } },
-    sandbox: { enabled: true, run_in: "e2b", env: { KEY: "__redacted__" } },
+    sandbox: { env: { KEY: "__redacted__" }, max_turns: 40 },
     integrations: {
       github: {
         tier: "review",
@@ -928,7 +928,7 @@ describe("seat fields", () => {
     Object.assign(doc.units![0]!.roles![1]!, {
       llm_review: ["smart", "fast"],
       llm_judge: "fast",
-      sandbox: { enabled: true, run_in: "e2b", env: { KEY: "__redacted__" } },
+      sandbox: { env: { KEY: "__redacted__" }, max_turns: 40 },
       workers: ["researcher", "writer"],
       learning_enabled: false,
     });
@@ -941,12 +941,12 @@ describe("seat fields", () => {
       within(section).getByText(label).closest(".crewlet-fact-list__row") as HTMLElement;
     expect(fact("Models per phase").textContent).toContain("review: smart, then fast");
     expect(fact("Models per phase").textContent).toContain("judge: fast");
-    expect(fact("Sandbox").textContent).toContain("Enabled, runs in e2b");
+    expect(fact("Executor box").textContent).toContain("1 variable · up to 40 turns");
     expect(fact("Workers").textContent).toContain("researcher, writer");
     expect(fact("Learning").textContent).toContain("Off");
     expect(fact("Datadog fallback").textContent).toContain("Another seat");
     // Each says why it is not edited here, and the section links to where it is.
-    expect(fact("Sandbox").textContent).toContain("Edit in the configuration file.");
+    expect(fact("Executor box").textContent).toContain("Edit in the configuration file.");
     expect(
       within(section).getByRole("link", { name: "Open the document" }).getAttribute("href"),
     ).toBe("#/settings/config");

@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -287,10 +286,7 @@ func indicatingWith(t *testing.T, mode notify.StatusMode, prov llm.Provider) (*E
 
 	seat := &org.Role{Name: "SWE", DeclaredHandle: "swe", LLM: org.ProviderKeys{"only"}}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{seat}}
-	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: prov}})
-	if err != nil {
-		t.Fatalf("phase.NewRegistry: %v", err)
-	}
+	models := runnable(t, []phase.Entry{{Key: "only", Provider: prov}}, seat)
 	q := memory.New()
 	if err := q.Start(t.Context()); err != nil {
 		t.Fatalf("queue.Start: %v", err)
@@ -304,10 +300,9 @@ func indicatingWith(t *testing.T, mode notify.StatusMode, prov llm.Provider) (*E
 		Org:    organization,
 		Models: models,
 		Tools:  tools.NewRegistry(),
-		// The depth cap this fixture rests on, plus one round so a turn
-		// that got past it would run exactly one.
+		// The depth cap this fixture rests on.
 		Config: &config.Company{Name: "Acme", TurnEngine: config.TurnEngine{
-			MaxIterations: 1, DelegationDepthLimit: 1, MaxToolRounds: 3,
+			MaxIterations: 1, DelegationDepthLimit: 1,
 		}},
 	})
 	e.notify.registry = notify.NewRegistry(organization, nil)
@@ -342,10 +337,11 @@ func chatTrigger(channel string) *events.Event {
 // ever called it — so this is the case that fails on the code as it was.
 //
 // The raise is asserted from INSIDE the turn, which is both where a person
-// sees it and the only window it is promised in: the model's first call
-// happens with the turn running, and it does not answer until the workspace
-// has heard the raise. The clear is asserted after, because the ending turn
-// makes that one itself. See "WHAT IS PROMISED, AND WHEN" above.
+// sees it and the only window it is promised in: the executor's run calls its
+// model with the turn parked on it, and the model does not answer until the
+// workspace has heard the raise. The clear is asserted after, because the
+// segment that ends the turn makes that one itself. See "WHAT IS PROMISED,
+// AND WHEN" above.
 func TestAChatTriggeredTurnRaisesTheIndicatorAndClearsIt(t *testing.T) {
 	t.Parallel()
 	var (
@@ -353,15 +349,23 @@ func TestAChatTriggeredTurnRaisesTheIndicatorAndClearsIt(t *testing.T) {
 		ws     *workspace
 		raised []string
 	)
-	e, ws = indicatingWith(t, notify.StatusAddressed, scripted{
-		waiting: func(bool) { raised = ws.awaitShown(t, 1) },
-	})
+	model := scripted{waiting: func(reviewing bool) {
+		if !reviewing {
+			raised = ws.awaitShown(t, 1)
+		}
+	}}
+	e, ws = indicatingWith(t, notify.StatusAddressed, model)
+	rig := rigRuns(t, e, modelPlayer(t, model.run))
 
-	if _, err := e.runTurn(t.Context(), Request{
-		Handle: "swe", WorkKey: "wk-1", WorkSince: time.Now().UTC(),
+	res, err := e.runTurn(t.Context(), Request{
+		Handle: "swe", WorkKey: "wk-1", RunID: "run-1", WorkSince: time.Now().UTC(),
 		Events: []*events.Event{chatTrigger("D0ANA")},
-	}); err != nil {
-		t.Fatalf("runTurn: %v", err)
+	})
+	if err != nil || !res.Suspended {
+		t.Fatalf("runTurn = %+v, %v; want the turn parked on its executor's run", res, err)
+	}
+	if err := rig.collect(t, "run-1"); err != nil {
+		t.Fatalf("collecting the run: %v", err)
 	}
 
 	// TWO CHECKS, not one compound. awaitShown returns at least one status or
@@ -435,7 +439,7 @@ func TestTheIndicatorFollowsTheTurnsPhases(t *testing.T) {
 		ws    *workspace
 		moved []string
 	)
-	e, ws = indicatingWith(t, notify.StatusAlways, scripted{
+	model := scripted{
 		waiting: func(reviewing bool) {
 			if !reviewing {
 				// THE RAISE HAS TO HAVE LANDED FIRST, or there is no
@@ -443,25 +447,28 @@ func TestTheIndicatorFollowsTheTurnsPhases(t *testing.T) {
 				// every post, so a phase change that beats it to the
 				// first one leaves the raise never separately shown and
 				// the reviewer's line sitting at index 0. The executor's
-				// own call is where that can be waited for from inside
-				// the turn.
+				// run calling its model is where that can be waited for
+				// from inside the turn.
 				ws.awaitShown(t, 1)
 				return
 			}
 			moved = ws.awaitAnyOf(t, reviews)
 		},
-	})
+	}
+	e, ws = indicatingWith(t, notify.StatusAlways, model)
+	rig := rigRuns(t, e, modelPlayer(t, model.run))
 
 	res, err := e.runTurn(t.Context(), Request{
-		Handle: "swe", WorkKey: "wk-phases", WorkSince: time.Now().UTC(),
+		Handle: "swe", WorkKey: "wk-phases", RunID: "run-phases", WorkSince: time.Now().UTC(),
 		Events: []*events.Event{chatTrigger("D0ANA")},
 	})
-	if err != nil {
-		t.Fatalf("runTurn: %v", err)
+	if err != nil || !res.Suspended {
+		t.Fatalf("runTurn = %+v, %v; want the turn parked on its executor's run", res, err)
 	}
-	if res.Rounds != 1 {
-		t.Fatalf("the turn ran %d rounds, so this case did not exercise its "+
-			"phases: %+v", res.Rounds, res)
+	// THE REVIEWER RUNS IN THE SEGMENT THE RUN'S COLLECTION RESUMES, which is
+	// what this case needs the turn to reach.
+	if err := rig.collect(t, "run-phases"); err != nil {
+		t.Fatalf("collecting the run: %v", err)
 	}
 	// WHERE THE REVIEWER'S LINE SITS, not that it is there: the wait above
 	// returned because it is there, so asserting that again asserts nothing.
@@ -611,53 +618,60 @@ func TestOnlyARecordedSuspensionKeepsTheIndicatorUp(t *testing.T) {
 // END TO END: A SUSPENSION NOTHING RECORDED TAKES THE INDICATOR DOWN.
 //
 // This is the failure the rule above exists for, and it is reachable on a
-// single node with no seat movement at all: the turn returns Suspended, the
-// row is not written, the run is settled and its box reclaimed — and the turn
-// never comes back. Keyed on the intent, the indicator said "is thinking…"
-// every refresh interval for the life of the process, which is exactly what
-// [notify.StatusDriver.ClearFor] was added to bound and what nothing else
-// would ever have taken down.
+// single node with no seat movement at all: the turn launches its executor and
+// returns Suspended, the suspension is not recorded, the run is settled and its
+// box reclaimed — and the turn never comes back. Keyed on the intent, the
+// indicator said "is thinking…" every refresh interval for the life of the
+// process, which is exactly what [notify.StatusDriver.ClearFor] was added to
+// bound and what nothing else would ever have taken down.
+//
+// Through the real launch, which every turn's executor takes, over a run store
+// whose answer to the suspension is the case.
 func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
 	t.Parallel()
-	// THE ROW IS KEYED ON THE RUN, not on the work it was dispatched for
-	// (ADR-0017), so the request below names its own RunID rather than
-	// letting runTurn mint one: a row seeded under any other id is not
-	// launching as far as the suspension is concerned, and every case here
-	// would take the "nowhere to go" branch while claiming to test the
-	// others.
-	launching := func(t *testing.T, store *sandbox.CoordStore) sandbox.PendingStore {
-		t.Helper()
-		if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
-			TurnID: "run-code", WorkKey: "wk-code",
-			AgentHandle: "swe", Role: "SWE",
-		}, sandbox.Fence{}); err != nil {
-			t.Fatalf("BeginLaunch: %v", err)
-		}
-		return store
-	}
-
 	for name, tc := range map[string]struct {
-		pending func(*testing.T, *sandbox.CoordStore) sandbox.PendingStore
+		pending func(sandbox.PendingStore) sandbox.PendingStore
 		live    int
 	}{
-		"a run whose row is open to the completion poll": {pending: launching, live: 1},
-		"a run whose row was never launched": {
-			// MarkSuspended finds nothing launching, so the suspension
-			// has nowhere to go and the run is settled.
-			pending: func(_ *testing.T, store *sandbox.CoordStore) sandbox.PendingStore { return store },
-			live:    0,
+		"a run whose row is open to the completion poll": {
+			pending: func(store sandbox.PendingStore) sandbox.PendingStore { return store },
+			live:    1,
 		},
-		"a store that could not answer": {
-			pending: func(t *testing.T, store *sandbox.CoordStore) sandbox.PendingStore {
-				return unwritableRuns{PendingStore: launching(t, store)}
+		"a run no longer launching when its turn parks": {
+			// MarkSuspended finds nothing launching — a run something
+			// ended between its launch and its turn's park — so the
+			// suspension has nowhere to go and the run is settled.
+			pending: func(store sandbox.PendingStore) sandbox.PendingStore {
+				return endedRuns{PendingStore: store}
+			},
+			live: 0,
+		},
+		"a store that could not answer, whose write landed": {
+			// The honest unknown: the row is open to the poll, so the
+			// settle that follows the error declines it and the hold
+			// stays up for the run that IS coming back.
+			pending: func(store sandbox.PendingStore) sandbox.PendingStore {
+				return unwritableRuns{PendingStore: store, landed: true}
 			},
 			live: 1,
 		},
+		"a store that could not answer, whose write was lost": {
+			// The same answer over a row still launching: the settle
+			// ends the run, and the run's stop takes down the hold the
+			// turn was about to leave up — keyed by the run, the one key
+			// the stop knows it by.
+			pending: func(store sandbox.PendingStore) sandbox.PendingStore {
+				return unwritableRuns{PendingStore: store}
+			},
+			live: 0,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			e, ws := indicatingWith(t, notify.StatusAlways, suspendingModel{})
-			store := sandbox.NewCoordStore(coordmem.NewFleet())
-			equipForCode(t, e, tc.pending(t, store))
+			e, ws := indicating(t, notify.StatusAlways)
+			// THE TURN'S DEPTH IS UNDER THE FIXTURE'S CAP here, so the
+			// turn runs to its executor's launch.
+			e.Company().Config.TurnEngine.DelegationDepthLimit = 3
+			rigRunsOn(t, e, tc.pending(sandbox.NewCoordStore(coordmem.NewFleet())), nil)
 
 			res, err := e.runTurn(t.Context(), Request{
 				Handle: "swe", WorkKey: "wk-code", RunID: "run-code", WorkSince: time.Now().UTC(),
@@ -679,97 +693,27 @@ func TestASuspendedTurnKeepsItsIndicatorOnlyIfItsRunWasRecorded(t *testing.T) {
 
 // unwritableRuns is a run store whose suspension write fails without saying
 // whether it landed — the one answer that is neither "resumable" nor "lost".
-type unwritableRuns struct{ sandbox.PendingStore }
+// landed says which it secretly was: the write made, or never made.
+type unwritableRuns struct {
+	sandbox.PendingStore
+	landed bool
+}
 
-func (unwritableRuns) MarkSuspended(context.Context, string, sandbox.Suspension) (bool, error) {
+func (u unwritableRuns) MarkSuspended(ctx context.Context, turnID string, s sandbox.Suspension) (bool, error) {
+	if u.landed {
+		if _, err := u.PendingStore.MarkSuspended(ctx, turnID, s); err != nil {
+			return false, err
+		}
+	}
 	return false, errors.New("the coordination store did not answer")
 }
 
-// equipForCode gives the fixture's seat a code gate, a run_sandbox that
-// detaches, and the store the engine records its suspension in.
-//
-// The tool is a stand-in for the real one and does what the real one does to
-// the LOOP: it detaches, so the Execute phase suspends with its call
-// unanswered. What is behind it — a provider, a box, a coding agent — is the
-// sandbox package's business and none of it changes what the ENGINE does with
-// a suspension, which is what these cases are about.
-func equipForCode(t *testing.T, e *Engine, pending sandbox.PendingStore) {
-	t.Helper()
-	equipForCodeWith(t, e, pending, suspendingTool{})
-}
+// endedRuns is a run store whose run is no longer launching by the time its
+// turn records the suspension.
+type endedRuns struct{ sandbox.PendingStore }
 
-// equipForCodeWith is [equipForCode] with the detaching tool supplied, for a
-// case about what the turn did before it detached.
-func equipForCodeWith(t *testing.T, e *Engine, pending sandbox.PendingStore, detaching tools.Callable) {
-	t.Helper()
-	company := e.Company()
-	seat := company.Org.AgentSeatByHandle("swe")
-	seat.Sandbox = &org.RoleSandbox{Enabled: true}
-	if err := company.Tools.Register(detaching, tools.OriginBuiltin); err != nil {
-		t.Fatalf("registering the detaching tool: %v", err)
-	}
-	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
-		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: sandbox.NewFakeProvider()},
-		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
-	})
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
-		Audience: noAudience{},
-		Queue:    e.backends.Queue, Pending: pending, Manager: manager,
-		// THE ENGINE'S OWN, because these cases are about what the
-		// indicator does across the seam between the two and a stub
-		// would be a second answer to the question under test.
-		Resume: &resumer{engine: e},
-	})
-	if err != nil {
-		t.Fatalf("NewCoordinator: %v", err)
-	}
-	e.useSandbox(pending, coordinator)
-}
-
-// suspendingModel hands its first round to the detaching tool, which is all it
-// takes: the loop suspends with that call unanswered and the turn returns.
-type suspendingModel struct{}
-
-func (suspendingModel) Model() string { return "suspending" }
-func (suspendingModel) Complete(ctx context.Context, req llm.Request) (*llm.Completion, error) {
-	return phasedCLI{model: "suspending", pick: func([]string) llmtest.Run {
-		return calling(builtin.RunSandboxTool,
-			map[string]any{"brief": "fix the failing test"}, llmtest.DefaultUsage)
-	}}.Complete(ctx, req)
-}
-
-// suspendingTool is run_sandbox as far as the tool loop can tell.
-type suspendingTool struct{}
-
-var _ tools.Detached = suspendingTool{}
-
-func (suspendingTool) Name() string { return builtin.RunSandboxTool }
-func (suspendingTool) Description() string {
-	return "Hand a concrete code task to a coding agent in an isolated sandbox."
-}
-
-func (suspendingTool) Parameters() map[string]any {
-	return map[string]any{
-		"type":       "object",
-		"properties": map[string]any{"brief": map[string]any{"type": "string"}},
-		"required":   []any{"brief"},
-	}
-}
-
-func (suspendingTool) Call(context.Context, map[string]any) (tools.Result, error) {
-	return tools.Result{Output: "this tool can only be called where the loop can suspend",
-		Failed: true}, nil
-}
-
-func (suspendingTool) CallDetached(_ context.Context, t *turnctx.Turn, _ map[string]any) (tools.DetachedResult, error) {
-	return tools.DetachedResult{
-		Result:  tools.Result{Output: "(the coding job is running)"},
-		Suspend: true,
-		Payload: map[string]any{"turn_id": t.RunID},
-	}, nil
+func (endedRuns) MarkSuspended(context.Context, string, sandbox.Suspension) (bool, error) {
+	return false, nil
 }
 
 // A RUN THAT PARKED ON A QUESTION TAKES ITS INDICATOR DOWN.
@@ -846,10 +790,11 @@ func TestASettledRunTakesItsIndicatorDown(t *testing.T) {
 	// The double, which is the whole catalogue this case needs: the run is
 	// settled before it ever has a box.
 	company.Config.Providers.Sandbox = &config.SandboxProvider{Fake: true}
-	manager, err := buildSandbox(company.Config, e.resolver(), e.sandboxOtel)
+	manager, err := buildSandbox(company.Config, e.resolver(), e.sandboxOtel, nil)
 	if err != nil {
 		t.Fatalf("buildSandbox: %v", err)
 	}
+	e.answers = testAnswers()
 	if started, err := e.startSandbox(t.Context(), manager); err != nil || !started {
 		t.Fatalf("startSandbox = (%v, %v), want a runtime brought up", started, err)
 	}
@@ -968,8 +913,9 @@ func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 	company := e.Company()
 	seat := company.Org.AgentSeatByHandle("swe")
 
-	// The turn that suspended into a detached coding run.
-	suspended := e.beginWorkingStatus(t.Context(), "swe", "wk-1",
+	// The turn that suspended into its executor's run, holding its indicator
+	// under the run's id — the one the run's row names it by.
+	suspended := e.beginWorkingStatus(t.Context(), "swe", "run-1",
 		[]*events.Event{chatTrigger("D0ANA")})
 	ws.awaitShown(t, 1)
 	endWorkingStatus(t.Context(), suspended, true)
@@ -982,7 +928,7 @@ func TestAResumedTurnRejoinsTheIndicatorItKeptAlive(t *testing.T) {
 	err := e.resumeTurn(t.Context(), resumeInput{
 		Company: company,
 		Run: sandbox.PendingRun{
-			TurnID: "wk-1", AgentHandle: "swe", Reply: "tool",
+			TurnID: "run-1", WorkKey: "wk-1", AgentHandle: "swe", Reply: "tool",
 			TaskDescription: "fix the failing test",
 		},
 		Turn: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", Seat: seat, Org: company.Org,

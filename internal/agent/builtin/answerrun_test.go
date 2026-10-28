@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -25,6 +27,37 @@ type deskFake struct {
 	readErr    error
 	deliverErr error
 	delivered  []types.SandboxAnswerGiven
+	// seal opens a run's recorded answer for who gave it, as the node's
+	// desk does; nil opens nothing.
+	seal *sandbox.AnswerSeal
+}
+
+func (d *deskFake) Answerer(run sandbox.PendingRun) string {
+	return sandbox.OpenedAnswerer(d.seal, run)
+}
+
+// answerSeal is a fleet keyring's answer seal, under key material of its own.
+func answerSeal(t *testing.T, material string) *sandbox.AnswerSeal {
+	t.Helper()
+	seal, err := sandbox.NewAnswerSeal(statelog.OneKey("answers", material))
+	if err != nil {
+		t.Fatalf("NewAnswerSeal: %v", err)
+	}
+	return seal
+}
+
+// answeredBy records an answer on run as the coordinator does, sealed under
+// seal: who gave it lives only inside the seal.
+func answeredBy(t *testing.T, seal *sandbox.AnswerSeal, run sandbox.PendingRun, by string,
+	at time.Time) sandbox.PendingRun {
+	t.Helper()
+	answer, err := seal.Seal(run, sandbox.AnswerWords{Text: "use main", Via: types.AnswerViaOperator,
+		By: by, ByKind: "human"}, sandbox.RecordedAnswer{EventIDs: []string{"answer-1"}, RecordedAt: at})
+	if err != nil {
+		t.Fatalf("Seal: %v", err)
+	}
+	run.Answer = &answer
+	return run
 }
 
 func (d *deskFake) Run(_ context.Context, turnID string) (sandbox.PendingRun, bool, error) {
@@ -169,19 +202,44 @@ func TestAnswerRunThatMayHaveLandedAnswersUnknown(t *testing.T) {
 	}
 }
 
-// AN ANSWER IS BOUNDED, and the refusal names the bound: it is spliced into the
-// run as one tool reply.
-func TestAnswerRunRefusesAnAnswerTooLongToSplice(t *testing.T) {
+// AN ANSWER IS HELD TO THE PAGE ITS QUESTION IS: it rides beside the question,
+// on the run's row and then in the prompt of the run it carries on, which that
+// run's coding agent reads again at every step. One as long as the longest
+// question is delivered whole; one a byte longer is refused `invalid`, with
+// nothing delivered, and the refusal says how long it is — rounded up, so a
+// byte past the bound never reads as the bound itself — what the bound is, and
+// where the detail goes instead.
+func TestAnAnswerIsHeldToThePageItsQuestionIs(t *testing.T) {
 	t.Parallel()
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusAwaiting)}}
-	result, _ := answerRunTool(t, desk).Call(t.Context(), map[string]any{
-		"turn_id": "t1", "answer": strings.Repeat("a", builtin.MaxRunAnswerBytes+1),
+	tool := answerRunTool(t, desk)
+	result, _ := tool.Call(t.Context(), map[string]any{
+		"turn_id": "t1", "answer": strings.Repeat("a", sandbox.MaxQuestionBytes+1),
 	})
 	if !result.Failed || tools.RefusalOf(result) != tools.RefusalInvalid {
-		t.Fatalf("answer_run with an oversized answer = %+v, want invalid", result)
+		t.Fatalf("answer_run with an answer a byte past a page = %+v, want invalid", result)
 	}
 	if len(desk.delivered) != 0 {
-		t.Error("an oversized answer was delivered")
+		t.Fatalf("an answer past the bound was delivered: %d bytes", len(desk.delivered[0].Answer))
+	}
+	for _, want := range []string{
+		fmt.Sprintf("That answer is %d KiB", sandbox.MaxQuestionBytes>>10+1),
+		fmt.Sprintf("at most %d KiB", sandbox.MaxQuestionBytes>>10),
+		"Put the detail on a page",
+	} {
+		if !strings.Contains(result.Output, want) {
+			t.Errorf("the refusal says %q, want it to say %q", result.Output, want)
+		}
+	}
+
+	page := strings.Repeat("a", sandbox.MaxQuestionBytes)
+	result, err := tool.Call(t.Context(), map[string]any{"turn_id": "t1", "answer": page})
+	if err != nil || result.Failed {
+		t.Fatalf("answer_run with an answer as long as a question may be = %+v, %v; "+
+			"want it delivered", result, err)
+	}
+	if len(desk.delivered) != 1 || desk.delivered[0].Answer != page {
+		t.Fatalf("delivered %d answers, want the one answer whole", len(desk.delivered))
 	}
 }
 
@@ -230,13 +288,33 @@ func TestARunIsAnsweredByItsRequesterOrItsSeatsLead(t *testing.T) {
 // answered, by whom and when, and nothing is delivered. Four people answering
 // one run used to be told `pending` four times while three of the answers went
 // nowhere they could see.
+//
+// WHOSE, AS THE ANSWER'S SEAL SAYS: the answerer is kept nowhere else, so an
+// answer whose seal does not open on this node is "someone else's" rather than
+// a guess.
+//
+// Mutation: name the answerer off anything but the opened seal, and the
+// unopened case names somebody.
 func TestAnAnsweredQuestionRefusesTheNextAnswerAndSaysWhose(t *testing.T) {
 	t.Parallel()
-	run := parked(t, "t1", sandbox.StatusAnswered)
-	run.Answer = &sandbox.RecordedAnswer{Text: "use main", By: "miles",
-		RecordedAt: time.Date(2026, 10, 28, 0, 35, 6, 0, time.UTC)}
-	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}}
-	result, err := answerRunTool(t, desk).Call(t.Context(),
+	seal := answerSeal(t, "the fleet's key material")
+	run := answeredBy(t, seal, parked(t, "t1", sandbox.StatusAnswered), "miles",
+		time.Date(2026, 10, 28, 0, 35, 6, 0, time.UTC))
+
+	unopened := &deskFake{runs: map[string]sandbox.PendingRun{"t1": run},
+		seal: answerSeal(t, "another fleet's key material")}
+	result, err := answerRunTool(t, unopened).Call(t.Context(),
+		map[string]any{"turn_id": "t1", "answer": "use the release branch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Output, "already answered by someone else at 2026-10-28T00:35:06Z") {
+		t.Fatalf("answer_run under a seal that does not open = %+v, want it answered by someone "+
+			"else", result)
+	}
+
+	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}, seal: seal}
+	result, err = answerRunTool(t, desk).Call(t.Context(),
 		map[string]any{"turn_id": "t1", "answer": "use the release branch"})
 	if err != nil {
 		t.Fatal(err)
@@ -267,9 +345,9 @@ func TestTheAnsweredRefusalSaysOnlyWhatTheRecordSays(t *testing.T) {
 		sandbox.StatusResumed:  "was resumed with that answer",
 		sandbox.StatusRunning:  "",
 	} {
-		run := parked(t, "t1", status)
-		run.Answer = &sandbox.RecordedAnswer{Text: "use main", By: "miles"}
-		desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}}
+		seal := answerSeal(t, "the fleet's key material")
+		run := answeredBy(t, seal, parked(t, "t1", status), "miles", time.Time{})
+		desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}, seal: seal}
 		result, err := answerRunTool(t, desk).Call(t.Context(),
 			map[string]any{"turn_id": "t1", "answer": "use the release branch"})
 		if err != nil {

@@ -74,8 +74,9 @@ type surface struct {
 }
 
 var (
-	_ toolloop.Surface = (*surface)(nil)
-	_ toolloop.Refuser = (*surface)(nil)
+	_ toolloop.Surface  = (*surface)(nil)
+	_ toolloop.Refuser  = (*surface)(nil)
+	_ toolloop.Detacher = (*surface)(nil)
 )
 
 // newSurface offers tools in the catalogue's order.
@@ -124,7 +125,7 @@ func (s *surface) AnnotationsOf(name string) mcp.Annotations {
 
 // Detached reports a tool whose call may park the turn: a change waiting on
 // the person's approval, or deep work, which can park on one of its own. Such
-// a call runs alone ([toolloop.Surface.Detached]), since a parked turn waits
+// a call runs alone ([toolloop.Detacher]), since a parked turn waits
 // on one decision.
 func (s *surface) Detached(name string) bool {
 	switch s.byName[name].Kind {

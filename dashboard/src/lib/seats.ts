@@ -56,7 +56,7 @@ import { useOrg } from "./store-hooks.ts";
 import { useViewer } from "./viewer.ts";
 import { loginKind, loginWords } from "./login.ts";
 import { rest } from "~/protocol/rest.ts";
-import { DELEGATE_TASKS, DELEGATE_TOOL, type SeatActivity } from "~/contract/wire.ts";
+import type { SeatActivity } from "~/contract/wire.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { ProviderErrorKind } from "~/contract/failures.ts";
 import type {
@@ -1039,7 +1039,7 @@ export function schedulesOf(settings: SeatSettings): ScheduleSpec[] {
  */
 export function llmChain(
   llm: PhaseLLM | undefined,
-  phase?: "default" | "review" | "subagent" | "auxiliary" | "judge" | "sandbox",
+  phase?: "default" | "review" | "subagent" | "auxiliary" | "judge",
 ): string[] {
   const keys = (value: ProviderKeys | undefined): string[] =>
     typeof value === "string"
@@ -1062,7 +1062,6 @@ export function llmChain(
     ...keys(mapping["subagent"]),
     ...keys(mapping["auxiliary"]),
     ...keys(mapping["judge"]),
-    ...keys(mapping["sandbox"]),
   ]);
 }
 
@@ -1608,44 +1607,18 @@ const PHASE_DOING: Record<string, { alone: string; on: string }> = {
 };
 
 /**
- * How many workers a seat's calls in flight are running: the tasks of every
- * `delegate` call it is waiting on, summed — a CLI runs a response's calls side
- * by side, so two fan-outs can be out at once — or 0 when none of its running
- * calls is one.
- *
- * OFF THE CALLS' OWN ARGUMENTS, because that is the one record that exists
- * WHILE the workers run: each worker's phase record lands when it finishes and
- * the batch's summary when the last one does, so both describe a fan-out that
- * is over. Arguments that do not read as the tool's schema count nothing
- * rather than a guess.
- */
-export function delegatedWorkers(call: LiveCall | null | undefined): number {
-  let workers = 0;
-  for (const running of call?.running_calls ?? []) {
-    // A WITHHELD BODY carries no arguments, so the workers are not counted
-    // rather than guessed: the call is still `delegate`, and says so.
-    if (running.name !== DELEGATE_TOOL || running.arguments === undefined) continue;
-    try {
-      const args: unknown = JSON.parse(running.arguments);
-      const tasks = (args as Record<string, unknown> | null)?.[DELEGATE_TASKS];
-      if (Array.isArray(tasks)) workers += tasks.length;
-    } catch {
-      // Not the tool's schema: counted as none.
-    }
-  }
-  return workers;
-}
-
-/**
  * What a seat is doing, in one line under its name: "Executing ENG-412",
- * "3 workers on ENG-405", "Coding run on ENG-9", "Idle · last turn 24m ago".
+ * "Coding run on ENG-9", "Idle · last turn 24m ago".
  *
  * THE WORK ITEM IS THE TURN'S OWN, `live_call.work_item` — the one item the
  * engine charges the turn to — and never a `work_key` a prompt happened to
- * mention. The workers are the ones the call in flight is running
- * ([delegatedWorkers]), off the same row, so every surface that draws this
- * line says the same thing about a fan-out. A human seat is not run by the
- * engine and says so.
+ * mention. A human seat is not run by the engine and says so.
+ *
+ * NO WORKER COUNT, and none can be read off the row: `delegate` is the
+ * executor's alone, and the executor is its coding CLI's run, which calls it
+ * over the bridge while its turn is parked. The engine streams no call of that
+ * run's, so the line says its coding run, and each worker is on the turn's
+ * record once it finishes.
  */
 export function stateLine(
   row: AgentRow | null | undefined,
@@ -1663,11 +1636,6 @@ export function stateLine(
       // working and no model call is in flight, so the phase says nothing.
       if (row?.turn?.stage === "parked") {
         return item ? `Coding run on ${item}` : "Coding run in progress";
-      }
-      const workers = delegatedWorkers(row?.live_call);
-      if (workers > 0) {
-        const who = plural(workers, "worker");
-        return item ? `${who} on ${item}` : `${who} running`;
       }
       const doing = PHASE_DOING[row?.live_call?.phase ?? row?.current_phase ?? ""] ?? {
         alone: "Working",
@@ -1688,8 +1656,8 @@ export function stateLine(
 }
 
 /**
- * What a task's card says about the turn running on it: "SWE · executing ·
- * round 7 of 20", "AI Systems · 3 workers running", "SWE · coding run".
+ * What a task's card says about the turn running on it: "SWE · reviewing ·
+ * round 2 of 4", "SWE · coding run".
  *
  * JOINED ON THE ITEM THE ENGINE CHARGES THE TURN TO — `live_call.work_item`,
  * then the turn's own — and never on a `work_key`, which is the unit of work a
@@ -1732,17 +1700,14 @@ export function liveOnItems(rows: readonly AgentRow[]): Map<string, CardLive> {
 }
 
 /**
- * The words a working seat's strip carries after its name: "executing · round
- * 7 of 25", "3 workers running", "coding run". A task card's strip and the task
- * page's live row both read it here — the page kept a private copy that read
- * the zero-based `round_num` raw and called every phase but review
- * "executing", so the two named different rounds, and different phases, of
- * one turn.
+ * The words a working seat's strip carries after its name: "reviewing · round
+ * 2 of 4", "coding run". A task card's strip and the task page's live row both
+ * read it here — the page kept a private copy that read the zero-based
+ * `round_num` raw and called every phase but review "executing", so the two
+ * named different rounds, and different phases, of one turn.
  */
 export function doingWords(row: AgentRow): string {
   if (row.turn?.stage === "parked") return "coding run";
-  const workers = delegatedWorkers(row.live_call);
-  if (workers > 0) return `${plural(workers, "worker")} running`;
   const phase = row.live_call?.phase ?? row.current_phase ?? "";
   const verb = (PHASE_DOING[phase]?.alone ?? "working").toLowerCase();
   const round = roundOf(row.live_call);

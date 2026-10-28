@@ -30,9 +30,11 @@ import (
 // over for nobody, since almost nobody is watching almost every run. So it is a
 // QUESTION, asked only while somebody looks: `sandbox_tail{turn_id, launch_id}`,
 // answered from the box by the node whose incarnation the run's record names as
-// its owner ([PendingRun.Owner]). There is no event and no row. What the owner
-// keeps while somebody looks, and how an answer sends only what the asker
-// lacks, is livefeed.go's.
+// its owner ([PendingRun.Owner]) — or, for a box on an engine host, by the
+// node that launched it ([PendingRun.LaunchNode]), the one node that can reach
+// that box (boxhost.go). There is no event and no row. What the owner keeps
+// while somebody looks, and how an answer sends only what the asker lacks, is
+// livefeed.go's.
 //
 // # Outcomes, never an empty answer standing in for another
 //
@@ -43,12 +45,13 @@ import (
 // the record's own status, when the launch asked about is not a running job:
 // it finished and was collected, it parked on a question, a later launch
 // replaced it, or no record is left at all. And `owner_silent{node}` when the
-// node that owns the run did not answer inside the fleet read budget — NAMED,
-// because "the run said nothing" and "the node that could ask it did not
-// answer" send a reader to opposite places, and collapsing the second into an
-// empty tail is exactly the lie a screen that polls cannot recover from. An
-// owner with no presence — draining, or its heartbeat lapsed — is asked like
-// any other, and its silence is that same `owner_silent`. `box_paused` is a
+// node that reads the run's box — its owner, or the node that launched a box
+// on an engine host, held or not — did not answer inside the fleet read
+// budget: NAMED, because "the run said nothing" and "the node that could ask
+// it did not answer" send a reader to opposite places, and collapsing the
+// second into an empty tail is exactly the lie a screen that polls cannot
+// recover from. A node with no presence — draining, or its heartbeat lapsed —
+// is asked like any other, and its silence is that same `owner_silent`. `box_paused` is a
 // running record whose box is paused, which a reader never wakes.
 //
 // A box that the owner could not read is an ERROR rather than an outcome: it
@@ -178,8 +181,10 @@ const (
 	// TailNotRunning is a launch that is not a running job — see
 	// [LiveLaunch].
 	TailNotRunning TailOutcome = "not_running"
-	// TailOwnerSilent is an owning node that did not answer inside the
-	// budget, or a run no node holds right now.
+	// TailOwnerSilent is the node that reads the run's box — its owner, or
+	// the node that launched a box on an engine host ([tailHost]) — not
+	// answering inside the budget, or a box in a remote cell whose run no
+	// node holds right now.
 	TailOwnerSilent TailOutcome = "owner_silent"
 	// TailBoxPaused is a running record whose box is PAUSED, which its
 	// backend cannot read without waking it ([ErrBoxPaused]) — and a peek
@@ -203,8 +208,10 @@ type TailAnswer struct {
 	Outcome  TailOutcome `json:"outcome"`
 	TurnID   string      `json:"turn_id"`
 	LaunchID string      `json:"launch_id"`
-	// Node is the node that owns the run — the one that answered, or the one
-	// that did not. Empty for a run no node holds.
+	// Node is the node that reads the run's box — its owner, or the node
+	// that launched a box on an engine host, whoever holds the seat
+	// ([tailHost]) — the one that answered, or the one that did not. Empty
+	// only for a box in a remote cell whose run no node holds.
 	Node string `json:"node,omitempty"`
 	// Status is the run record's own status, on `not_running`: why the
 	// launch is not a running job. Empty where no record is left.
@@ -271,11 +278,16 @@ type TailServer interface {
 	Serve(ctx context.Context, subject string, h queue.AnswerFunc) (queue.Unsubscribe, error)
 }
 
-// TailReader answers a tail request from the node that owns the run.
+// TailReader answers a tail request from the node that reads the run's box.
 type TailReader struct {
 	// Owner is this process's incarnation, which is what a run's record
 	// names as its owner and what a request is addressed to.
 	Owner string
+
+	// Node is this node's id, which is what a run's record names as the
+	// node a box on an engine host was launched on, and what a request
+	// about such a run is addressed to ([tailHost]).
+	Node string
 
 	// Pending is the fleet's run records.
 	Pending PendingReader
@@ -307,6 +319,10 @@ func (r *TailReader) Tail(ctx context.Context, q TailQuery) (TailAnswer, error) 
 		return TailAnswer{}, err
 	}
 	answer.Node = nodeOf(run.Owner)
+	host := tailHost(run)
+	if host != "" {
+		answer.Node = host
+	}
 	if !running {
 		// The same as a peer's answer does: a launch that stopped is never
 		// asked about again, so its reading here is let go now rather than
@@ -321,6 +337,13 @@ func (r *TailReader) Tail(ctx context.Context, q TailQuery) (TailAnswer, error) 
 		return answer, nil
 	}
 	switch {
+	case host != "":
+		// A BOX ON AN ENGINE HOST is read on that host, whoever holds the
+		// seat: no other node can reach it.
+		if host == r.Node || r.Queue == nil {
+			return r.local(ctx, run, q.Cursor, answer)
+		}
+		return r.ask(ctx, run, q.Cursor, answer, host)
 	case run.Owner == "":
 		// UNCLAIMED: the instant between an owner letting the seat go and
 		// the next one recovering its run. Nobody can ask the box, and
@@ -330,7 +353,17 @@ func (r *TailReader) Tail(ctx context.Context, q TailQuery) (TailAnswer, error) 
 	case run.Owner == r.Owner || r.Queue == nil:
 		return r.local(ctx, run, q.Cursor, answer)
 	}
-	return r.ask(ctx, run, q.Cursor, answer)
+	return r.ask(ctx, run, q.Cursor, answer, "")
+}
+
+// tailHost is the node a run's tail is read on when that is not its owner: the
+// node that launched a box on an engine host, which alone can reach it — ""
+// for a box every node reaches, whose owner reads it.
+func tailHost(run PendingRun) string {
+	if Placement(run.Placement).OnEngineHost() {
+		return run.LaunchNode
+	}
+	return ""
 }
 
 // local answers from this node's own reading, inside the share of the budget
@@ -354,12 +387,18 @@ func (r *TailReader) local(ctx context.Context, run PendingRun, cursor TailCurso
 	return answer, nil
 }
 
-// ask puts the request to the incarnation the record names.
-func (r *TailReader) ask(ctx context.Context, run PendingRun, cursor TailCursor, answer TailAnswer) (TailAnswer, error) {
-	raw, err := json.Marshal(tailRequest{
+// ask puts the request to the incarnation the record names — or, with host
+// set, to the node a box on an engine host was launched on ([tailHost]).
+func (r *TailReader) ask(ctx context.Context, run PendingRun, cursor TailCursor, answer TailAnswer,
+	host string) (TailAnswer, error) {
+	req := tailRequest{
 		Version: tailWireVersion, TurnID: run.TurnID, LaunchID: run.LaunchID, Owner: run.Owner,
-		Cursor: cursor, BudgetMS: r.budget().Milliseconds(),
-	})
+		Cursor: cursor, BudgetMS: r.budget().Milliseconds(), Node: host,
+	}
+	if host != "" {
+		req.Owner = ""
+	}
+	raw, err := json.Marshal(req)
 	if err != nil {
 		return TailAnswer{}, fmt.Errorf("sandbox: encode a tail request: %w", err)
 	}
@@ -372,7 +411,7 @@ func (r *TailReader) ask(ctx context.Context, run PendingRun, cursor TailCursor,
 	}
 	for _, body := range replies {
 		var rep tailReply
-		if json.Unmarshal(body, &rep) != nil || rep.Owner != run.Owner {
+		if json.Unmarshal(body, &rep) != nil || rep.Owner != req.Owner || rep.Node != host {
 			continue
 		}
 		switch {
@@ -407,7 +446,11 @@ func (r *TailReader) ask(ctx context.Context, run PendingRun, cursor TailCursor,
 // registration's own context for as long as the box took — a box slow to
 // read held its slot past the asker's patience, poll after poll, until the
 // slots every run on this node needed were full of answers nobody would read.
-func ServeTail(ctx context.Context, q TailServer, owner string, pending PendingReader,
+//
+// A REQUEST ADDRESSED TO A NODE rather than an incarnation is one about a box
+// on an engine host ([tailHost]): answered by the node that launched it,
+// whichever holds the seat.
+func ServeTail(ctx context.Context, q TailServer, owner, node string, pending PendingReader,
 	feeds *LiveFeeds,
 ) (queue.Unsubscribe, error) {
 	return q.Serve(ctx, topics.ObserveSandboxTail, func(ctx context.Context, raw []byte) ([]byte, error) {
@@ -415,12 +458,13 @@ func ServeTail(ctx context.Context, q TailServer, owner string, pending PendingR
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return nil, fmt.Errorf("sandbox: a tail request this build cannot read: %w", err)
 		}
-		if req.Owner != owner {
+		hosted := req.Node != ""
+		if (hosted && req.Node != node) || (!hosted && req.Owner != owner) {
 			return nil, errTailNotAddressed
 		}
 		ctx, cancel := context.WithTimeout(ctx, req.answerBudget())
 		defer cancel()
-		reply := tailReply{Version: tailWireVersion, Owner: owner}
+		reply := tailReply{Version: tailWireVersion, Owner: req.Owner, Node: req.Node}
 		run, running, status, err := LiveLaunch(ctx, pending, req.TurnID, req.LaunchID)
 		switch {
 		case err != nil:
@@ -430,7 +474,9 @@ func ServeTail(ctx context.Context, q TailServer, owner string, pending PendingR
 			if feeds != nil {
 				feeds.Forget(req.TurnID, req.LaunchID)
 			}
-		case run.Owner != owner:
+		case hosted && tailHost(run) != node:
+			reply.Error = "the run's box is not on this node's host — ask again"
+		case !hosted && run.Owner != owner:
 			// The seat moved between the asker's read and this one; the
 			// new owner is who can answer, and saying so is the honest
 			// reply rather than a read of a box this node no longer drives.
@@ -475,6 +521,9 @@ type tailRequest struct {
 	TurnID   string `json:"turn_id"`
 	LaunchID string `json:"launch_id"`
 	Owner    string `json:"owner"`
+	// Node addresses the request to the node a box on an engine host was
+	// launched on, in place of Owner ([tailHost]).
+	Node string `json:"node,omitempty"`
 
 	// Cursor is what the asker holds; the zero cursor holds nothing.
 	Cursor TailCursor `json:"cursor"`
@@ -493,10 +542,12 @@ func (r tailRequest) answerBudget() time.Duration {
 	return time.Duration(float64(budget) * answerShare)
 }
 
-// tailReply names its owner because a scatter's replies carry no sender.
+// tailReply names its owner — or the node it was addressed to — because a
+// scatter's replies carry no sender.
 type tailReply struct {
 	Version int     `json:"v"`
 	Owner   string  `json:"owner"`
+	Node    string  `json:"node,omitempty"`
 	Output  *Output `json:"output,omitempty"`
 	Status  string  `json:"status,omitempty"`
 	Error   string  `json:"error,omitempty"`

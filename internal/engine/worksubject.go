@@ -132,7 +132,7 @@ func resumedWorkItem(run sandbox.PendingRun) (*types.WorkItem, types.WorkItemBas
 // writing: the resumed segment may write a second item, and a sole write
 // concluded at the park would then have named an item the whole turn was not
 // on alone. The segment that finishes the turn decides, over everything the
-// turn wrote: the half before a park travels on the suspended conversation
+// turn wrote: the half before a park travels on the parked turn's state
 // (execstate.State.Written) and seeds the resumed segment's set, so "exactly
 // one" is judged over the turn rather than over its last segment.
 func completedWorkItem(item *types.WorkItem, basis types.WorkItemBasis,

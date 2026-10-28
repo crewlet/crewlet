@@ -16,7 +16,7 @@ import (
 )
 
 // Providers is the Tier B model surface: which LLMs a seat can be pointed
-// at, what embeds its memories, and where its code work runs.
+// at, what embeds its memories, and where its executor runs.
 //
 // The Tier A infrastructure — store, stream, coordination — is deliberately
 // not here: it cannot be changed without a restart, and mixing the two
@@ -61,16 +61,21 @@ type Providers struct {
 	// episodes are still written, but nothing searches them by similarity.
 	Embeddings *EmbeddingProvider `yaml:"embeddings,omitempty" json:"embeddings,omitempty" desc:"Embedding provider for semantic knowledge search and for diary and episode recall."`
 
-	// Sandbox is the code-runtime backend. Nil (or type none) means no
-	// seat can run a sandboxed coding run, whatever its own gate says.
-	Sandbox *SandboxProvider `yaml:"sandbox,omitempty" json:"sandbox,omitempty" desc:"Code sandbox backend. Absent = no seat runs code."`
+	// Sandbox is the catalogue of cells every agent seat's executor runs
+	// in: each executor is its coding CLI's own run, in a box. Required as
+	// soon as the company has an agent seat AND a providers.llm entry to
+	// run it on ([Company.validateSandboxPlacement]); nil only while the
+	// company has no agent seat or no model — an org chart written before
+	// its credentials runs no executor, so it needs no cell either.
+	Sandbox *SandboxProvider `yaml:"sandbox,omitempty" json:"sandbox,omitempty" desc:"Where every agent seat's executor runs. Required once the company has an agent seat and a providers.llm entry."`
 }
 
 // DefaultProviders is the empty provider surface: no models, no
 // embeddings, no sandbox. A company with no LLM provider parses, validates
 // and runs, which is what lets an org chart be authored before the
 // credentials exist: its seats are placed and hold their work until a
-// revision adds a provider.
+// revision adds a provider — and, with it, the sandbox catalogue its
+// executors run in.
 func DefaultProviders() Providers { return Providers{} }
 
 // llmKeyOrder reads the declaration order of providers.llm off the document
@@ -237,9 +242,21 @@ func (p *Providers) validate(path Path) error {
 // included.
 //
 // The entry is therefore the CLI's own settings and nothing else: which CLI,
-// which model in that CLI's grammar, whether it runs on this host turn by
-// turn or as the executor detached in a box, where its login and per-seat
-// homes live, and how it signs in.
+// which model in that CLI's grammar, where its runs are placed, where its
+// login and per-seat homes live, and how it signs in.
+//
+// # One entry, two uses
+//
+// A seat's EXECUTOR is its coding CLI's own agentic run in a box: the CLI's
+// loop drives the model, its own shell and editor are enabled, and the seat's
+// tools reach it over the MCP bridge (internal/api/mcpbridge). Only a CLI
+// with an in-box runner can be that run ([CodingAgents]). Every OTHER phase —
+// the reviewer, a delegated worker, the onboarding pass, the side passes —
+// runs the CLI's own loop on this host, with its own shell and editor denied
+// and the phase's tools reached as the `crewlet` MCP server
+// ([ToolServerName]), and any CLI can serve one. So the same entry may be
+// both: the executor of the seats whose `llm` names it, and the reviewer of
+// the seats whose `llm_review` does.
 type LLMProvider struct {
 	// Agent is which CLI to drive. Empty drives Claude Code.
 	Agent CLIAgentName `yaml:"agent,omitempty" json:"agent,omitempty" js:"enum=claude-code|codex|gemini-cli|qwen-code|opencode|cursor-agent|copilot|grok|muse-code|kimi-code|hermes|pi|custom" desc:"Which coding CLI to drive (default claude-code)."`
@@ -249,10 +266,7 @@ type LLMProvider struct {
 	// OpenAI id for Codex, `<provider>/<model>` for OpenCode.
 	Model string `yaml:"model,omitempty" json:"model,omitempty" desc:"Model id, in the CLI's own grammar (OpenCode: <provider>/<model>)."`
 
-	// Mode is host (the default) or box. See [CLIMode].
-	Mode CLIMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=host|box" desc:"host (the CLI runs on this engine's host, turn by turn) or box (the executor runs detached in a box of providers.sandbox)."`
-
-	// RunIn is WHERE a box-mode run happens, naming a cell of
+	// RunIn is WHERE a run launched on this entry happens, naming a cell of
 	// providers.sandbox. Empty takes the catalogue's default.
 	//
 	// On the entry rather than on the seat, because it is a property of
@@ -262,9 +276,16 @@ type LLMProvider struct {
 	// two entries and points seats at whichever one is right for them —
 	// which is also how they already choose between two models.
 	//
-	// Read only in box mode; a value here in host mode configures
-	// nothing and is refused.
-	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a box-mode run happens. Empty = providers.sandbox.default_run_in."`
+	// READ WHENEVER AN EXECUTOR LAUNCHES ON THIS ENTRY, which is any agent
+	// seat's executor chain it is a member of: a launch takes the chain's
+	// first member that can run and is not sitting out, so a fallback member
+	// is placed by its own run_in. An entry no executor chain reaches never
+	// launches a run, and its run_in is read the day a seat points at it.
+	//
+	// REFUSED ON A CLI THAT CANNOT LAUNCH ONE ([CodingAgents]): an entry on
+	// any other CLI serves text phases only, so a launch passes over it in
+	// every chain and nothing would ever read the field.
+	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a seat's executor run on this entry happens. Empty = providers.sandbox.default_run_in."`
 
 	// StateDir is where this provider keeps its credential directory and
 	// its per-seat homes, under a subdirectory named for the CLI it drives
@@ -292,14 +313,20 @@ type LLMProvider struct {
 	// length, only for a stretch in which it made no progress the engine
 	// could see. See [defaultCLITimeoutSeconds] for where the default comes
 	// from.
-	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one stretch of the CLI's own work with no tool call in flight (default 600)."`
+	//
+	// THE PHASES ON THIS HOST ONLY — the reviewer, a worker, the onboarding
+	// pass, a side pass. An executor run is the CLI's own detached run in a
+	// box, and it is bounded by its round cap
+	// (providers.sandbox.default_max_turns, role.sandbox.max_turns) rather
+	// than by a clock.
+	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one stretch of a CLI run on this host with no tool call in flight (default 600). Executor runs are bounded by their round cap instead."`
 
-	// MaxConcurrent is how many CLI processes this provider runs at once. A
-	// process lives for a whole run of a phase, its requests and tool calls
-	// included; a model call made from INSIDE one of its tool calls on this
-	// same entry — a delegated worker, an auxiliary rewrite — runs in the
-	// caller's slot rather than waiting for one, which a run holding the
-	// last slot could never free.
+	// MaxConcurrent is how many CLI processes this provider runs at once on
+	// the engine's own host. A process lives for a whole run of a phase, its
+	// requests and tool calls included; a model call made from INSIDE one of
+	// its tool calls on this same entry — a delegated worker, an auxiliary
+	// rewrite — runs in the caller's slot rather than waiting for one, which
+	// a run holding the last slot could never free.
 	//
 	// Each is a full Node or Rust runtime at roughly 200-400 MB resident,
 	// so an unbounded fleet of seats starting a turn together can exhaust
@@ -307,13 +334,25 @@ type LLMProvider struct {
 	// smallest realistic host while still overlapping the calls' long I/O
 	// waits. Subscription plans also throttle concurrency well below what
 	// an API key allows, so a higher number mostly buys rate-limit errors.
-	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty" js:"min=0" desc:"Concurrent CLI processes; each costs 200-400 MB."`
+	//
+	// THE PHASES ON THIS HOST ONLY, like timeout_seconds: an executor run
+	// is a process in its own box, and each seat runs at most one at a time.
+	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty" js:"min=0" desc:"Concurrent CLI processes on this host; each costs 200-400 MB. Executor runs are not counted: each seat runs at most one."`
 
 	// Env is extra environment for every invocation, ${VAR}-resolved. The
 	// child gets an ALLOWLISTED environment, not the engine's, so anything
 	// the CLI needs beyond PATH, locale, TLS and proxy is declared here —
 	// for OpenCode, the key of the provider its model names.
-	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Extra environment for the CLI child process."`
+	//
+	// EVERY INVOCATION INCLUDES A SEAT'S EXECUTOR RUN, in whichever cell its
+	// box is: the whole map is exported into the box with the entry's
+	// sign-in, beneath the seat's role.sandbox.env, which wins a name — so a
+	// gateway's base URL and bearer token, or a cloud provider's switch and
+	// region, reach the run as they reach every other phase. A seat that signs
+	// Claude Code in itself replaces the entry's sign-in whole, its
+	// credential-named variables and cloud toggles included, and keeps the
+	// rest.
+	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Extra environment for the CLI, on this host and in every executor run's box (beneath the seat's role.sandbox.env)."`
 
 	Auth CLIAgentAuth `yaml:"auth,omitempty" json:"auth"`
 
@@ -330,10 +369,10 @@ type LLMProvider struct {
 //
 // A NAMED TYPE over a closed set, like every other closed set in this
 // package. Two things followed from a bare string. The generated schema
-// emitted `"type":"string"` while its sibling RoleSandbox.CodingAgent emitted
-// an enum, so an editor blessed `agent: claud-code` — which [names]'s own doc
-// calls worse than no schema — and with no `js:` tag the field could not join
-// schema_test.go's enum table, so nothing noticed.
+// emitted `"type":"string"` where a closed set emits an enum, so an editor
+// blessed `agent: claud-code` — which [names]'s own doc calls worse than no
+// schema — and with no `js:` tag the field could not join schema_test.go's
+// enum table, so nothing noticed.
 type CLIAgentName string
 
 // The coding CLIs the engine knows how to drive. `custom` ships no defaults
@@ -368,44 +407,20 @@ var CLIAgentNames = []CLIAgentName{
 // than meaning "any".
 func (n CLIAgentName) Valid() bool { return slices.Contains(CLIAgentNames, n) }
 
-// CLIMode is WHERE a seat's executor runs its CLI.
+// CodingAgents is the closed set of CLIs that can run a seat's EXECUTOR: the
+// ones with an in-box runner (internal/sandbox/codingagent), which launches
+// the CLI as its own agentic run, renders its tools and limits, and reads
+// back what it did.
 //
-// # Both run the CLI's own loop
+// Every other CLI drives the text phases only. A seat's executor chain is
+// walked at launch for its first member in this set that is not sitting out,
+// so a chain with no member here can never run its seat's turn, and config
+// refuses it ([Company.validateExecutors]).
 //
-// In either mode the CLI drives the model and calls the seat's tools as MCP
-// tools of one server, every call going through the engine's gates. What the
-// mode decides is where that loop runs and how long it lives.
-//
-// HOST MODE runs it on this engine's host, as a subprocess of the turn, with
-// the CLI's own shell and editor denied: its tools are the seat's alone,
-// served over a socket in this process's own directory. The turn drives it —
-// its rounds are capped, a person's note reaches it between runs, a call that
-// parks the turn ends the run — and it ends with the turn.
-//
-// BOX MODE runs the executor detached, in a box of providers.sandbox, with the
-// CLI's own shell and editor enabled and the seat's tools reached over the
-// MCP bridge (internal/api/mcpbridge). It outlives its turn, which parks until
-// the run reports, and it needs a box.
-//
-// The mode is NOT inferred, and the reason is that both are defensible for the
-// same CLI on the same seat. Host mode needs no sandbox and every step of it
-// is the turn's own. Box mode is faster on real code work, where the vendor's
-// own tools matter, at the cost of a run that outlives its turn and a tool
-// surface reached over the network.
-type CLIMode string
-
-const (
-	// CLIModeHost runs the CLI on this engine's host, turn by turn. The
-	// default.
-	CLIModeHost CLIMode = "host"
-
-	// CLIModeBox runs the seat's executor as a detached run of the CLI in a
-	// box, with the seat's tools bridged in over MCP.
-	CLIModeBox CLIMode = "box"
-)
-
-// CLIModes is the closed set.
-var CLIModes = []CLIMode{CLIModeHost, CLIModeBox}
+// HELD TO THE RUNNERS THAT EXIST by a test against codingagent.Names(): a
+// runner added there and not here refuses entries that would run, and one
+// listed here with no runner admits entries every launch then refuses.
+var CodingAgents = []CLIAgentName{CLIClaudeCode, CLIOpenCode}
 
 // CLIAgentAuthMode is how a providers.llm entry's CLI authenticates.
 type CLIAgentAuthMode string
@@ -506,8 +521,11 @@ func (l *LLMProvider) AgentName() string {
 	return string(l.Agent)
 }
 
-// Box reports whether this entry runs the executor as a detached run in a box.
-func (l *LLMProvider) Box() bool { return l.Mode == CLIModeBox }
+// runsExecutor reports whether this entry's CLI can run a seat's executor:
+// whether it has an in-box runner ([CodingAgents]).
+func (l *LLMProvider) runsExecutor() bool {
+	return slices.Contains(CodingAgents, CLIAgentName(l.AgentName()))
+}
 
 // Timeout is the cap on one stretch of the CLI's own work, applying the
 // default.
@@ -657,26 +675,26 @@ func (l *LLMProvider) validate(path Path) error {
 		p.add(at(path, "auth.mode"), ErrUnknownValue, "%q (want %s)",
 			l.Auth.Mode, names(CLIAgentAuthModes))
 	}
+	// THE SPELLING, and that the entry can be placed at all. Whether the
+	// cell is configured is a question about providers.sandbox, and whether
+	// a seat's executor reaches this entry is one about the seats; both are
+	// asked by the company ([Company.validateSandboxPlacement]). Whether its
+	// CLI launches a run anywhere is the entry's own: a CLI with no in-box
+	// runner serves text phases only, so a launch passes over it in every
+	// chain it is in, and a run_in on it is a placement nothing ever reads —
+	// refused as a value that means nothing where it is written, rather than
+	// admitted and silently ignored, the cell it names unchecked.
 	switch {
-	case l.Mode != "" && !slices.Contains(CLIModes, l.Mode):
-		p.add(at(path, "mode"), ErrUnknownValue, "%q (want %s)",
-			l.Mode, names(CLIModes))
-	case l.RunIn != "" && !l.Box():
-		// A value that means nothing where it is written. In host mode
-		// the CLI is a subprocess of this engine and there is no cell to
-		// choose — an operator who wrote one meant to switch modes.
-		p.add(at(path, "run_in"), ErrConflict,
-			"only box mode runs somewhere: a host-mode CLI is a subprocess of "+
-				"this engine. Set `mode: box`, or remove the field")
-	case l.RunIn != "" && !slices.Contains(BackendPlacements(), l.RunIn):
-		// BACKEND CELLS ONLY. `self` is a seat's answer — "my code work
-		// rides my executor's run" — and a box-mode entry IS that
-		// run, so it has no executor of its own to ride and no backend
-		// resolves it. Accepted here it validated cleanly and failed at
-		// the seat's first turn, every turn, with the manager's "no
-		// backend for self".
+	case l.RunIn == "":
+	case !slices.Contains(Placements, l.RunIn):
 		p.add(at(path, "run_in"), ErrUnknownValue, "%q (want %s)",
-			l.RunIn, names(BackendPlacements()))
+			l.RunIn, names(Placements))
+	case (l.Agent == "" || l.Agent.Valid()) && !l.runsExecutor():
+		p.add(at(path, "run_in"), ErrConflict,
+			"%s has no in-box runner, so no run is ever launched on this entry and nothing "+
+				"reads where it would be placed — only %s launch an executor run. Remove the "+
+				"field, or move the entry to one of those CLIs",
+			l.AgentName(), names(CodingAgents))
 	}
 	p.wrap(l.validateProfile(path))
 	return p.err()
@@ -750,9 +768,9 @@ func (c *Company) validateLLMModels() error {
 // ([cliprofile.Profile.ModelNamesProvider]): OpenCode splits its model flag at
 // the first slash into a provider and a model, so a bare `claude-sonnet-5`
 // names the provider "claude-sonnet-5" and no model, and every call the entry
-// makes — the text calls and a box-mode run alike, which are handed the
-// same value — fails inside the CLI, which OpenCode 2 refuses as "Invalid model
-// reference".
+// makes — its runs on this host and an executor run alike, which are handed
+// the same value — fails inside the CLI, which OpenCode 2 refuses as "Invalid
+// model reference".
 //
 // JUDGED ON THE VALUE THE CLI IS HANDED, the model rendered through the
 // profile's model_args, so an override that puts the provider in the flag
@@ -796,7 +814,7 @@ func (l *LLMProvider) validateModel(path Path) error {
 	}
 	p.add(at(path, "model"), ErrConflict,
 		"the %s CLI reads its model as <provider>/<model> and splits it at the first "+
-			"slash, so %q %s: every call this entry makes, a box-mode run included, "+
+			"slash, so %q %s: every call this entry makes, an executor run included, "+
 			"would fail inside the CLI %s. Name the provider as the CLI spells it%s, e.g. "+
 			"anthropic/claude-sonnet-5 or openrouter/anthropic/claude-sonnet-5, with that "+
 			"provider's key in env (e.g. ANTHROPIC_API_KEY, OPENROUTER_API_KEY) or a "+

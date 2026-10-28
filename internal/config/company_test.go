@@ -49,11 +49,6 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"providers.llm.sub.agent", ErrUnknownValue,
 		},
 		{
-			"unknown mode",
-			"name: Acme\nproviders:\n  llm:\n    sub:\n      model: sonnet\n      mode: batch\n",
-			"providers.llm.sub.mode", ErrUnknownValue,
-		},
-		{
 			"unknown auth mode",
 			"name: Acme\nproviders:\n  llm:\n    sub:\n      model: sonnet\n      auth: {mode: oauth}\n",
 			"providers.llm.sub.auth.mode", ErrUnknownValue,
@@ -69,13 +64,8 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"providers.llm.sub.max_concurrent", ErrOutOfRange,
 		},
 		{
-			"a placement on a host-mode entry",
-			"name: Acme\nproviders:\n  llm:\n    sub:\n      model: sonnet\n      run_in: direct\n",
-			"providers.llm.sub.run_in", ErrConflict,
-		},
-		{
-			"self as a box-mode entry's cell",
-			"name: Acme\nproviders:\n  llm:\n    sub:\n      model: sonnet\n      mode: box\n      run_in: self\n",
+			"a placement that is no cell",
+			"name: Acme\nproviders:\n  llm:\n    sub:\n      model: sonnet\n      run_in: host\n",
 			"providers.llm.sub.run_in", ErrUnknownValue,
 		},
 
@@ -88,11 +78,10 @@ func TestCompanyValidatorRejections(t *testing.T) {
 		{
 			// A CATALOGUE IS A CHOICE, and every default is wrong in a
 			// way nobody sees: `local` runs the coding agent on this
-			// host, an absent block turns code work off while the
-			// config says it is on, and the default this replaced named
-			// a backend the engine had no code to build.
+			// host, and the default this replaced named a backend the
+			// engine had no code to build.
 			"a sandbox block that names no backend",
-			"name: Acme\nproviders:\n  sandbox:\n    default_coding_agent: opencode\n",
+			"name: Acme\nproviders:\n  sandbox:\n    default_max_turns: 40\n",
 			"providers.sandbox", ErrMissing,
 		},
 		{
@@ -106,13 +95,12 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"providers.sandbox.default_max_turns", ErrOutOfRange,
 		},
 		{
-			// A seat that runs code in a company with no catalogue is
-			// offered nothing and told nowhere: the gate reads as
-			// working configuration and its code work quietly never
-			// happens.
-			"a seat that runs code with no catalogue at all",
-			"name: Acme\nroles:\n  - name: SWE\n    sandbox: {enabled: true}\n",
-			"roles[0].sandbox.enabled", ErrMissing,
+			// An agent seat with a model to run on and no catalogue
+			// takes its work and fails every turn at launch: its
+			// executor is its CLI's own run, in a box.
+			"an agent seat with no catalogue at all",
+			"name: Acme\nproviders:\n  llm:\n    sub: {model: sonnet}\nroles:\n  - name: SWE\n",
+			"providers.sandbox", ErrMissing,
 		},
 		{
 			"a setup step that does nothing",
@@ -133,8 +121,13 @@ func TestCompanyValidatorRejections(t *testing.T) {
 		},
 		{
 			"a ceiling below its own base",
-			"name: Acme\nturn_engine:\n  max_tool_rounds: 20\n  execute_max_tool_rounds_ceiling: 10\n",
-			"turn_engine.execute_max_tool_rounds_ceiling", ErrOutOfRange,
+			"name: Acme\nturn_engine:\n  onboarding_max_tool_rounds: 20\n  onboarding_max_tool_rounds_ceiling: 10\n",
+			"turn_engine.onboarding_max_tool_rounds_ceiling", ErrOutOfRange,
+		},
+		{
+			"a negative launch floor",
+			"name: Acme\nturn_engine:\n  executor_min_budget_tokens: -1\n",
+			"turn_engine.executor_min_budget_tokens", ErrOutOfRange,
 		},
 		{
 			"a conversation ledger that keeps nothing",
@@ -348,11 +341,6 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"a Slack bot token with a reference inside it",
 			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        bot_token: \"xoxb-${T}\"\n        signing_secret: \"${S}\"\n",
 			"roles[0].integrations.slack.bot_token", ErrShape,
-		},
-		{
-			"a sandbox block that is never enabled",
-			"name: Acme\nroles:\n  - name: CEO\n    sandbox:\n      env: {GITHUB_TOKEN: \"${T}\"}\n",
-			"roles[0].sandbox.enabled", ErrConflict,
 		},
 		{
 			"a unit with no name",

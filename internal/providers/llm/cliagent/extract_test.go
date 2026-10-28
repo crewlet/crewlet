@@ -224,7 +224,7 @@ func TestAFailureFlagInsideAZeroExitIsAServerFailure(t *testing.T) {
 	if !strings.Contains(err.Error(), "the model refused") {
 		t.Errorf("err = %v, want what the CLI said", err)
 	}
-	if err := prov.benched(); err != nil {
+	if err := prov.SittingOut(); err != nil {
 		t.Errorf("a failed run sat the entry out: %v", err)
 	}
 }
@@ -627,7 +627,7 @@ func TestASpentPlanIsRecognisedEvenWhenTheAnswerIsNotLocated(t *testing.T) {
 			if got := llm.KindOf(err); err == nil || got != tc.want {
 				t.Fatalf("kind = %v (err %v), want %v", got, err, tc.want)
 			}
-			if sat := prov.benched() != nil; sat != (tc.want == llm.KindRateLimit) {
+			if sat := prov.SittingOut() != nil; sat != (tc.want == llm.KindRateLimit) {
 				t.Errorf("sat out = %v, want it only for a spent plan", sat)
 			}
 		})

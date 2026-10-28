@@ -93,8 +93,11 @@ export const ACT_ERRORS = {
   reassignment_budget:
     "It has been handed between seats too many times. A person has to pick it up now.",
   inbox_full: "Your inbox holds too many marks. Mark everything read up to here first.",
+  notes_full:
+    "The turn already holds as many notes as it can before it reads them. Send this again once it has read them, at its next step.",
+  notes_spent:
+    "The turn has taken as many notes as a turn takes, so sending this again changes nothing. Put the rest on the work item.",
   not_running: "It is not running any more.",
-  steer_unsupported: "That turn cannot take a note: it runs in a coding agent's own loop.",
   budget_exhausted:
     "The token budget for this window is spent. Raise it, or wait for the window to reset.",
   unavailable: "This node could not make the change just now. Try again in a moment.",

@@ -52,7 +52,7 @@ not a request handler you can route, it is a place where things run:
 | The agent instance, its state and its turns | The HTTP API, the dashboard, every integration's webhooks |
 | **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | Every [singleton duty](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the sweeps, the trim, the sandbox waiter, the learning passes |
 | Its LLM calls, its knowledge searches, its tool calls | Every other seat's agents and MCP servers |
-| Its sandbox launches, if the role is sandboxed | The company config, the leases and the ledgers — all shared, in the coordination slot |
+| Its executor runs' launches, and a `direct` or `container` box itself, on the satellite's own host | The company config, the leases and the ledgers — all shared, in the coordination slot |
 
 The MCP row is the one that makes this feature what it is. A seat's
 stdio MCP servers are children of the process holding its lease, so
@@ -189,8 +189,8 @@ no estate, serves no API and signs no session cookie. The company document it
 fetches from its peers is sealed under the fleet keyring and authenticated by
 that seal; every request it sends a data node's estate service is signed
 under it, because the data node runs a write as the actor the request names
-and the broker authenticates nothing; and a seat in box mode is handed a
-per-run token signed under it. `crewlet validate` refuses a Tier A file
+and the broker authenticates nothing; and every seat's executor run is handed
+a per-run token signed under it. `crewlet validate` refuses a Tier A file
 without it, naming `secrets.keys`; generate a key once with `crewlet secrets
 keygen` and give every node the same material.
 
@@ -200,19 +200,25 @@ without templating the file. There is a `-roles` flag for the same
 reason; labels have no flag, because `${VAR}` already covers it.
 
 `api.port` can stay set, and one config file works for both shapes: a node
-without the `ingress` role binds it for its [probes](#probe-it) alone —
-`/health` and `/ready` — and serves no API, no dashboard and no webhook on it
-(`api_probes_listening`). Every other path answers `404`, or `401` for a write
-or an always-guarded prefix, exactly as an unknown path does on an ingress
-node. A seat pinned here in
-[box mode](../concepts/llm-backends.md#the-tool-bridge) adds no route either:
-its box calls the seat's tools back over `/mcp/{token}` on the fleet's bridge
-address — the ingress nodes — and the ingress node a call reaches relays it to
-the satellite over the broker connection the satellite already dialled. Give
-the satellite the same `CREWLET_MCP_BRIDGE_URL` as every other node. With
-`api.port: 0` the satellite binds nothing at all, which is the shape for a
-host that must accept no connection of any kind — at the price of no probe;
-its box-mode seats still reach their tools.
+without the `ingress` role binds it for its [probes](#probe-it) —
+`/health` and `/ready` — and serves the network no API, no dashboard and no
+webhook on it (`api_probes_listening`). Every other path answers `404`, or
+`401` for a write or an always-guarded prefix, exactly as an unknown path does
+on an ingress node. A seat pinned here adds no route the network can reach
+either. Its executor's box calls the seat's tools back over
+[`/mcp/{token}`](../concepts/llm-backends.md#the-tool-bridge): a `direct` box,
+a process of the satellite's own host, dials the satellite's `api.port` on
+loopback, where the satellite serves the bridge to its own host alone — so a
+satellite with no address the rest of the fleet can reach runs its `direct`
+seats with nothing to set, provided `api.host` takes every interface or a
+loopback address. A box in any other cell dials the fleet's bridge address —
+the ingress nodes — and the ingress node a call reaches relays it to the
+satellite over the broker connection the satellite already dialled, so give
+the satellite the same `CREWLET_MCP_BRIDGE_URL` as every other node wherever
+such a box runs. With `api.port: 0` the satellite binds nothing at all, which
+is the shape for a host that must accept no connection of any kind — at the
+price of no probe, and of its `direct` boxes needing that address too; its
+seats' executors still reach their tools.
 
 ### 2. Pin the role
 
@@ -450,8 +456,8 @@ the dependency surface before choosing a host for it:
   coordination slot and is never dialled back. That is what makes this
   shape workable in a zone the rest of the fleet is not in. What reaches
   `api.port` is the orchestrator's probes, and nothing else: a seat pinned
-  here in box mode has its box's tool calls relayed to it over the broker
-  by an ingress node, so the box never dials this node. `api.port: 0`
+  here has its executor box's tool calls relayed to it over the broker by
+  an ingress node, so the box never dials this node. `api.port: 0`
   closes the probes too.
 
 ---
@@ -513,28 +519,39 @@ key is rejected, since the company schema forbids unknown fields.)
 
 ---
 
-## Sandboxed seats
+## Agent seats and their boxes
 
-A [sandboxed](../concepts/code-sandbox.md) seat can be pinned like any
-other, with three network facts the engine cannot check for you:
+Every agent seat's executor runs in a [box](../concepts/code-sandbox.md),
+so a seat pinned here brings three facts the engine cannot check
+for you:
 
-- The satellite **launches** the sandbox, so it must reach the sandbox
-  provider (E2B cloud, or your self-hosted `domain`).
-- Whichever node holds the `sandbox-waiter` duty **polls** it. On a
-  satellite (`roles: [seats]`) that duty is on a core node by
+- The satellite **launches** the run. For an `e2b` cell it must reach the
+  sandbox provider (E2B cloud, or your self-hosted `domain`); a `direct` or
+  `container` cell runs on the satellite's own host, where `direct` needs
+  the coding CLI installed, and `container` the container runtime and an
+  image with the coding CLI in it.
+- Whichever node holds the `sandbox-waiter` duty **polls** an `e2b`
+  box. On a satellite (`roles: [seats]`) that duty is on a core node by
   construction — so check that node's reachability too, not just the
-  satellite's.
+  satellite's. A `direct` or `container` box is the satellite's own: it
+  polls, collects and reclaims it itself, with no duty, and a seat that
+  moves to another node asks the satellite to read the box back (see
+  [Code Sandbox](../concepts/code-sandbox.md#durability-completion-and-observability)).
 - `CREWLET_SANDBOX_OTEL_RECEIVER_URL` must name an address the *sandbox*
   can reach, which means an ingress node. It is explicit config and is
   never derived from whichever node launched the run, so a satellite
-  never advertises itself by accident. `CREWLET_MCP_BRIDGE_URL`, for a seat
-  in box mode, is the same: an ingress node's address, the same value on
-  every node, and the ingress node a box's call reaches relays it to the
-  satellite over the broker.
+  never advertises itself by accident. `CREWLET_MCP_BRIDGE_URL`, which
+  every seat's executor box off the satellite's host dials, is the same: an
+  ingress node's address, the same value on every node, and the ingress node
+  a box's call reaches relays it to the satellite over the broker. The one
+  address a satellite derives is its own listener on loopback, which only its
+  own `direct` boxes are handed — for the bridge, and for telemetry where the
+  satellite forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` — and which it serves to
+  its own host alone, so it advertises nothing to the network.
 
-Pinning a sandboxed seat to a node that cannot reach the provider gives
-you a seat that claims cleanly and fails every run. The engine knows
-what a node *says it is*, never what it can talk to.
+Pinning an agent seat to a node that cannot reach its executor's sandbox
+provider gives you a seat that claims cleanly and fails every run. The engine
+knows what a node *says it is*, never what it can talk to.
 
 ---
 

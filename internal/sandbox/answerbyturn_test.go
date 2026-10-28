@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -79,7 +78,7 @@ func givenAgainst(t *testing.T, rig *coordRig, turnID string) (types.SandboxAnsw
 	return given, events.New(given, events.TraceContext{})
 }
 
-// asksAgain is a resumed turn that calls run_sandbox again, and the new job
+// asksAgain is a resumed turn that relaunches its executor, and the new job
 // parks on a question of its own: the run waits on a NEW question, under a new
 // launch, asked an hour after the first.
 func asksAgain(t *testing.T, rig *coordRig) func(context.Context, PendingRun) {
@@ -159,9 +158,11 @@ func TestAnAnswerByTurnResumesARunWithNoConversation(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("the run was resumed %d times, want once", len(calls))
 	}
-	if !strings.Contains(calls[0].Answer, "Answer from founder: use the release branch") {
-		t.Errorf("the resumed turn was told %q, want the answer attributed to the "+
-			"person who gave it", calls[0].Answer)
+	if asked := askedOf(calls[0]); asked.By != "founder" || asked.Answer != "use the release branch" ||
+		calls[0].Answer != "" {
+		t.Errorf("the resumed turn carries the run on with %+v and files %q as its report, "+
+			"want the answer attributed to the person who gave it, and no report",
+			asked, calls[0].Answer)
 	}
 	if calls[0].Trigger == nil || calls[0].Trigger.ID != ev.ID {
 		t.Error("the resume is not traced to the answer that drove it")
@@ -236,8 +237,8 @@ func (s *staleOnce) Get(ctx context.Context, turnID string) (PendingRun, bool, e
 // question — or one person's retry racing their own first try — contend for one
 // record, and the loser is spent rather than resumed or handed back; and the
 // same answer delivered twice is the one answer, spent as it. And when the two
-// are SEPARATED BY A RELAUNCH — the first resumed the run, its turn called
-// run_sandbox again and the new job parked on a question of its own before the
+// are SEPARATED BY A RELAUNCH — the first resumed the run, its turn relaunched
+// its executor and the new job parked on a question of its own before the
 // second arrived — the second is still an answer to the FIRST question, and spent
 // as `not_awaiting`: it used to claim whatever the run waited on by then,
 // resuming it a second time with the first question's answer presented as the
@@ -458,11 +459,14 @@ func TestAnAnswerByTurnWhoseResumeFailedIsRetriedFromItsRecord(t *testing.T) {
 	}
 	got := rig.get("t1")
 	if got.Status != StatusAnswered || got.Answer == nil || got.Answer.Via != types.AnswerViaOperator ||
-		got.Answer.By != "founder" || got.Answer.ByKind != "human" ||
-		got.Answer.OperatorID != "pat:founder-token" ||
 		!slices.Equal(got.Answer.EventIDs, []string{ev.ID.String()}) {
 		t.Fatalf("run %q answer %+v, want the answer by turn recorded on it, owed its resume",
 			got.Status, got.Answer)
+	}
+	if words := openedOn(t, got); words.Via != types.AnswerViaOperator || words.By != "founder" ||
+		words.ByKind != "human" || words.OperatorID != "pat:founder-token" {
+		t.Fatalf("the recorded answer opens to %+v, want the answer by turn with its author, "+
+			"their kind and the credential it came through", words)
 	}
 	if records := rig.answeredRecords(); len(records) != 0 {
 		t.Fatalf("announced %+v for an answer whose resume is still owed", records)
@@ -473,7 +477,8 @@ func TestAnAnswerByTurnWhoseResumeFailedIsRetriedFromItsRecord(t *testing.T) {
 		t.Fatal("nothing was scheduled to retry the recorded answer's resume")
 	}
 	calls := rig.resumer.calls()
-	if len(calls) != 1 || !strings.Contains(calls[0].Answer, "Answer from founder: use the release branch") {
+	if len(calls) != 1 || askedOf(calls[0]).Answer != "use the release branch" ||
+		askedOf(calls[0]).By != "founder" {
 		t.Fatalf("resumed %+v, want the run resumed once with the answer, attributed", calls)
 	}
 	rig.finished("t1")
@@ -731,14 +736,14 @@ func TestAnAnswerByTurnOutlivesItsClaimsNode(t *testing.T) {
 
 	next := reaper(t.Context(), t, rig, rig.pending, 2, nil)
 	revivedUnder(t, rig, 2, 1)
-	if got := rig.get("t1").Answer; got.Via != types.AnswerViaOperator || got.By != given.AnsweredBy ||
+	if got := openedOn(t, rig.get("t1")); got.Via != types.AnswerViaOperator || got.By != given.AnsweredBy ||
 		got.ByKind != given.AnsweredByKind || got.OperatorID != given.OperatorID {
 		t.Fatalf("revived answer %+v, want the answer by turn with who gave it", got)
 	}
 	next.fireRetries()
 	resumedOnceWith(t, rig, next, given.Answer)
-	if calls := next.resumer.calls(); !strings.Contains(calls[0].Answer, given.AnsweredBy) {
-		t.Fatalf("resumed with %q, want the answer attributed to %q", calls[0].Answer, given.AnsweredBy)
+	if calls := next.resumer.calls(); askedOf(calls[0]).By != given.AnsweredBy {
+		t.Fatalf("resumed with %+v, want the answer attributed to %q", askedOf(calls[0]), given.AnsweredBy)
 	}
 }
 

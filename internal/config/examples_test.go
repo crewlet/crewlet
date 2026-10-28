@@ -243,6 +243,72 @@ func undeclaredIdentities(t *testing.T, data []byte) []string {
 	return missing
 }
 
+// THE README'S COMPANY LOADS. README.md is the repository's front page, and
+// the company on it is the first YAML most readers copy and run — and no case
+// read it. When providers.sandbox became required of every company with an
+// agent seat and a model, that company was refused by `crewlet validate` and
+// nothing went red: a sweep of the docs is what found it.
+//
+// EVERY yaml block on the page is held as a company document, so a second one
+// is covered the day it is added, and a block of another kind fails here until
+// this case is given its loader rather than being certified by nobody. A
+// failure names the line of README.md the block starts on.
+func TestTheReadmeCompanyLoads(t *testing.T) {
+	t.Parallel()
+	blocks := yamlBlocksOf(string(readRepoFile(t, "README.md")))
+	if len(blocks) == 0 {
+		t.Fatal("README.md shows no yaml block, so this case certifies nothing: " +
+			"the company moved or its fence changed, and the case has to follow it")
+	}
+	for _, block := range blocks {
+		at := fmt.Sprintf("README.md:%d", block.line)
+		t.Run(at, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := ParseCompany(block.doc)
+			if err != nil {
+				t.Fatalf("%s: the company here is refused — a reader copying it gets "+
+					"a document `crewlet validate` rejects:\n%v", at, err)
+			}
+			o, err := cfg.Organization()
+			if err != nil {
+				t.Fatalf("%s: the company here does not build an org:\n%v", at, err)
+			}
+
+			// WHAT THE PAGE SAYS OF IT, which validation does not hold. "A
+			// four-agent company, with a seat for you": a company with no
+			// human seat is valid — one its agents run alone — and admits
+			// nobody, the reader included, since every person joins on one.
+			var agents, humans int
+			for r := range o.AllRoles() {
+				if r.IsHuman() {
+					humans++
+					continue
+				}
+				agents++
+			}
+			if agents == 0 || humans == 0 {
+				t.Errorf("%s: the company should model both kinds of seat, an agent's "+
+					"and the reader's own: %d agents, %d humans", at, agents, humans)
+			}
+			// "a handle is the seat's identity for good": a file is minted
+			// afresh from its names on every import, so one a reader keeps
+			// states every identity.
+			if missing := undeclaredIdentities(t, block.doc); len(missing) > 0 {
+				t.Errorf("%s: the company leaves identities to be minted from names, "+
+					"which a re-import of an edited copy mints again:\n  %s",
+					at, strings.Join(missing, "\n  "))
+			}
+			// "manages: and lead: name a seat by its handle and a unit by its
+			// key": the block is the page's example of that rule, so every
+			// reference in it resolves. Validation only warns of one that
+			// does not, because a company assembled in pieces carries them.
+			for _, w := range cfg.ReferenceWarnings() {
+				t.Errorf("%s: %s: %s", at, w.Path, w.Message)
+			}
+		})
+	}
+}
+
 // A reader follows the page top to bottom, so every ${VAR} the config
 // references must appear in an export line somewhere on it. An unset one
 // resolves to the empty string and fails much later, somewhere else.
@@ -408,6 +474,30 @@ func quickstartText(t *testing.T) string {
 
 var yamlBlockRE = regexp.MustCompile("(?s)```yaml\n(.*?)```")
 
+// pageYAMLBlock is one ```yaml block of a markdown page, ready to parse.
+type pageYAMLBlock struct {
+	// line is the line of the page the block's first line is on.
+	line int
+	// doc is the block AT ITS PLACE ON THE PAGE: its text behind one empty
+	// line for every page line above it, which YAML reads as nothing, so a
+	// line the parser names (an unknown key, a value of the wrong type) is
+	// the page's own rather than one counted from the fence.
+	doc []byte
+}
+
+// yamlBlocksOf is every ```yaml block of a markdown page, in page order.
+func yamlBlocksOf(page string) []pageYAMLBlock {
+	var out []pageYAMLBlock
+	for _, m := range yamlBlockRE.FindAllStringSubmatchIndex(page, -1) {
+		line := strings.Count(page[:m[2]], "\n") + 1
+		out = append(out, pageYAMLBlock{
+			line: line,
+			doc:  []byte(strings.Repeat("\n", line-1) + page[m[2]:m[3]]),
+		})
+	}
+	return out
+}
+
 // quickstartCompanyBlock finds the Tier B block: the only one with a
 // top-level name, which is exactly what distinguishes the tiers.
 func quickstartCompanyBlock(t *testing.T) string {
@@ -463,6 +553,57 @@ func TestTheProvidersReferenceValidates(t *testing.T) {
 	if _, err := ParseCompany(data); err != nil {
 		t.Fatalf("the Providers reference in configuration.md is refused by validation "+
 			"— an operator copying it gets a document `crewlet validate` rejects:\n%v", err)
+	}
+}
+
+// THE SANDBOX REFERENCE VALIDATES. The block under "Engine provider" in
+// code-sandbox.md writes out every field of providers.sandbox, so it is the
+// one an operator copies whole — and its container-only fields are held to the
+// cells the company's executors reach, so a value that reads as a harmless
+// default there (`runtime: auto` beside `default_run_in: e2b`) is a refusal.
+// Checked through the whole company path: the reference replaces the
+// quickstart's catalogue, so the quickstart's seats are the executors whose
+// cells it is judged against.
+func TestTheSandboxReferenceValidates(t *testing.T) {
+	t.Parallel()
+	page := string(readRepoFile(t, "docs", "concepts", "code-sandbox.md"))
+	start := strings.Index(page, "\n### Engine provider — `providers.sandbox`\n")
+	if start < 0 {
+		t.Fatal("code-sandbox.md has no `Engine provider — providers.sandbox` section")
+	}
+	m := yamlBlockRE.FindStringSubmatch(page[start:])
+	if m == nil || !strings.HasPrefix(m[1], "providers:") {
+		t.Fatal("the providers.sandbox section no longer opens with a providers block")
+	}
+	var reference, company yaml.Node
+	if err := yaml.Unmarshal([]byte(m[1]), &reference); err != nil {
+		t.Fatalf("the providers.sandbox reference is not YAML: %v", err)
+	}
+	sandbox := mappingValue(mappingValue(reference.Content[0], "providers"), "sandbox")
+	if sandbox == nil {
+		t.Fatal("the providers.sandbox reference block carries no providers.sandbox")
+	}
+	if err := yaml.Unmarshal([]byte(quickstartCompanyBlock(t)), &company); err != nil {
+		t.Fatalf("the quickstart's company is not YAML: %v", err)
+	}
+	providers := mappingValue(company.Content[0], "providers")
+	replaced := false
+	for i := 0; providers != nil && i+1 < len(providers.Content); i += 2 {
+		if providers.Content[i].Value == "sandbox" {
+			providers.Content[i+1], replaced = sandbox, true
+		}
+	}
+	if !replaced {
+		t.Fatal("the quickstart's company has no providers.sandbox to replace")
+	}
+	data, err := yaml.Marshal(&company)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if _, err := ParseCompany(data); err != nil {
+		t.Fatalf("the providers.sandbox reference in code-sandbox.md is refused by "+
+			"validation — an operator copying it gets a document `crewlet validate` "+
+			"rejects:\n%v", err)
 	}
 }
 

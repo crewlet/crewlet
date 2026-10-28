@@ -126,10 +126,9 @@ var roleFields = map[string]classified{
 	"LLMSubagent":          {exposureResolved, "provider keys, resolved into the worker chain", "llm"},
 	"LLMAuxiliary":         {exposureResolved, "provider keys, resolved into the auxiliary chain", "llm"},
 	"LLMJudge":             {exposureResolved, "provider keys, resolved into the judge's chain", "llm"},
-	"LLMSandbox":           {exposureResolved, "provider keys, resolved into the coding agent's chain", "llm"},
 	"LearningEnabled":      {exposureGuarded, "an operational setting", ""},
 	"MCPEnv":               {exposureGuarded, "tool credentials and their ${VAR} names; which servers they grant is resolved from mcp_servers", ""},
-	"Sandbox":              {exposureGuarded, "setup commands and env, the usual home of a registry credential", ""},
+	"Sandbox":              {exposureGuarded, "the executor box's setup commands, env and tool servers, the usual home of a registry credential", ""},
 	"Placement":            {exposureGuarded, "node ids and labels describing the deployment", ""},
 	"Integrations":         {exposureGuarded, "vendor identities, bot tokens and signing secrets", ""},
 	"Project":              {exposureGuarded, "a tracker project key: the container this seat files work in", ""},
@@ -560,7 +559,7 @@ func (f *filler) company() *config.Company {
 // now that the projection is DERIVED from the company the node runs.
 var agentOnlyRoleFields = map[string]bool{
 	"LLM": true, "LLMReview": true, "LLMSubagent": true, "LLMAuxiliary": true,
-	"LLMJudge": true, "LLMSandbox": true, "Sandbox": true, "TokenBudget": true,
+	"LLMJudge": true, "Sandbox": true, "TokenBudget": true,
 	"Workers": true, "LearningEnabled": true, "Schedules": true,
 	"MCPEnv": true, "BehavioralGuidelines": true,
 	// How an AGENT seat is drawn; a human seat is drawn as the person it
@@ -1078,7 +1077,7 @@ func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 				// The flat field wins over the mapping's own review.
 				"review":  {"big", "fast"},
 				"execute": {"fast"}, "subagent": {"fast"}, "auxiliary": {"fast"},
-				"judge": {"fast"}, "sandbox": {"fast"}, "onboarding": {"fast"},
+				"judge": {"fast"}, "onboarding": {"fast"},
 			},
 			// Its own jira credentials grant jira; github is its unit's
 			// and it sits in none. Declaration order, builtins first.
@@ -1088,7 +1087,7 @@ func TestTheOrgProjectionPublishesWhatASeatRunsOn(t *testing.T) {
 			seat: "SRE",
 			llm: map[string][]string{
 				"execute": {"default"}, "review": {"default"}, "subagent": {"default"},
-				"auxiliary": {"default"}, "judge": {"default"}, "sandbox": {"default"},
+				"auxiliary": {"default"}, "judge": {"default"},
 				"onboarding": {"default"},
 			},
 			// Inherited from the unit's mcp_env.

@@ -185,8 +185,8 @@ type LiveCall struct {
 	// call was made, how long it took, its tokens and how many tools it
 	// asked for — as the progress frame carries it ([types.PhaseRound]).
 	// Empty on the opening frame, before the phase's first provider call —
-	// and for the whole of a box-mode executor, whose rounds run inside the
-	// coding CLI in its box.
+	// and for the whole of an executor, whose rounds run inside its coding
+	// CLI's run.
 	Rounds []any `json:"rounds"`
 
 	// Invocations is the phase's CLI runs that have ENDED — when each was
@@ -451,10 +451,14 @@ const (
 	// a lost coding run. The same rule the turn list's `failed` applies, so
 	// a turn seeded from the store and one watched live say the same.
 	OutcomeFailed TurnOutcome = "failed"
+	// OutcomeStopped — a PERSON ended the turn: a pause with `stop_running`
+	// reached it at a round, or ended the coding run it was parked on. Not a
+	// failure, whatever else went wrong in it — the turn list's `stopped`.
+	OutcomeStopped TurnOutcome = "stopped"
 )
 
 // TurnOutcomes is the closed set.
-var TurnOutcomes = []TurnOutcome{OutcomeCompleted, OutcomeFailed}
+var TurnOutcomes = []TurnOutcome{OutcomeCompleted, OutcomeFailed, OutcomeStopped}
 
 // Valid reports whether o is an outcome this build knows.
 func (o TurnOutcome) Valid() bool { return slices.Contains(TurnOutcomes, o) }
@@ -482,6 +486,14 @@ type SandboxEntry struct {
 	AgentHandle string `json:"agent_handle"`
 	AgentID     string `json:"agent_id"`
 	CodingAgent string `json:"coding_agent"`
+	// ProviderKey and Model are the executor-chain member the run was
+	// launched on and the model it runs under — see
+	// [types.SandboxRunStarted.ProviderKey]. Empty on a run whose
+	// announcement and record named none. The key is the company's
+	// configuration and reaches an admin alone ([SandboxEntry.For]); the
+	// model is everybody's.
+	ProviderKey string `json:"provider_key,omitempty"`
+	Model       string `json:"model,omitempty"`
 	SandboxID   string `json:"sandbox_id"`
 	Task        string `json:"task"`
 

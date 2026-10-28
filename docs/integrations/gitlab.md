@@ -79,7 +79,7 @@ The `provisioning:` sub-block drives the reconcile described under [Provisioning
 
 ## Per-role wiring
 
-Declare the GitLab **MCP tool server** once in `mcp_servers` as a `shared: false` server. Each agent supplies its own service-account PAT in `role.mcp_env.gitlab`; a sandbox-enabled role also declares the same PAT in `role.sandbox.env` for the git-auth recipe:
+Declare the GitLab **MCP tool server** once in `mcp_servers` as a `shared: false` server. Each agent supplies its own service-account PAT in `role.mcp_env.gitlab`; a seat whose executor run pushes code also declares the same PAT in `role.sandbox.env`, for the git-auth recipe its box runs:
 
 ```yaml
 mcp_servers:
@@ -99,7 +99,6 @@ roles:
         GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"    # per-agent service-account PAT (glab reads it)
         GITLAB_HOST: gitlab.com
     sandbox:
-      enabled: true
       env:
         GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"     # same PAT for the git-auth recipe
 ```
@@ -129,13 +128,13 @@ The default tool server is the **official [`glab` CLI](https://gitlab.com/gitlab
 
 GitLab's **built-in server-side MCP endpoint** (`POST /api/v4/mcp`, Free tier since 19.2) is **not used**. Its authentication is OAuth-only — dynamic client registration with interactive consent per identity, unworkable for headless per-agent identities (PAT auth is an open request, [gitlab-org/gitlab#586184](https://gitlab.com/gitlab-org/gitlab/-/issues/586184)). When PAT auth lands, adopting it is a single-server swap.
 
-As with every MCP surface, the engine hardcodes no tool names — a bundled `mcp:gitlab` [Tool Skill](../concepts/tool-skills.md) frames the tools as read/review/track with authoring pointed at the sandbox, mirroring the `mcp:github` skill.
+As with every MCP surface, the engine hardcodes no tool names — a bundled `mcp:gitlab` [Tool Skill](../concepts/tool-skills.md) frames the tools as read/review/track, with authoring done in the run's own checkout with its shell and git, mirroring the `mcp:github` skill.
 
 ---
 
 ## How code authoring works
 
-Agents that the founder has gated with `role.sandbox.enabled` author code through the **code sandbox**, not through any GitLab tool. An executor that is not in [box mode](../concepts/llm-backends.md#box-mode) has a `run_sandbox` tool: a coding agent (Claude Code / OpenCode) runs inside a sandbox — a remote E2B VM, or a box on the engine host — and opens a merge request **as the agent's own GitLab identity** (the PAT the role declares as `GITLAB_TOKEN` in `role.sandbox.env` — by convention the same PAT as its `mcp_env.gitlab` header). The call is detached — the executor's loop suspends and resumes with the result when the run completes, so the agent reports the MR in the same turn. A box-mode executor is never offered `run_sandbox`: it does its code work in its own run, whose box reads the same `role.sandbox.env` (see [Where code work runs](../concepts/code-sandbox.md#where-code-work-runs)). The full design is in [Code Sandbox](../concepts/code-sandbox.md).
+Agents author code through the **code sandbox**, not through any GitLab tool. Every agent seat's executor is its coding CLI's [own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box) (Claude Code / OpenCode) — a remote E2B VM, a container, or a box on the engine host — and opens a merge request **as the agent's own GitLab identity** (the PAT the role declares as `GITLAB_TOKEN` in `role.sandbox.env` — by convention the same PAT as its `mcp_env.gitlab` header). The run is detached — the turn suspends at launch and resumes with the run's report when it completes, so the agent reports the MR in the same turn. The full design is in [Code Sandbox](../concepts/code-sandbox.md).
 
 The GitLab **git-auth recipe** is config you write, not engine code — the engine ships no git-auth, the same stance as GitHub. Without it a headless `git clone https://gitlab.com/...` dies with `could not read Username`: git has no way to supply the token on its own. The GitLab form of the [recipe on the sandbox page](../concepts/code-sandbox.md#the-git-auth-recipe):
 
@@ -172,21 +171,24 @@ providers:
         env:
           GIT_TERMINAL_PROMPT: "0"
         brief: >-
-          Use $GITLAB_TOKEN (already in your environment — this seat's own
-          GitLab PAT) for all GitLab work: git authenticates to gitlab.com
+          When $GITLAB_TOKEN is in your environment it is this seat's own
+          GitLab PAT, for all GitLab work: git authenticates to gitlab.com
           with it automatically, so just clone, fetch, and push over plain
           HTTPS. SSH-style remotes (`git@gitlab.com:...`) are rewritten to
           HTTPS for you. Never embed the token in a URL. To open a merge
           request, use GitLab push options — no CLI needed:
           `git push -o merge_request.create -o merge_request.target=main
           -o merge_request.title="<title>" origin HEAD:<your-branch>`
-          creates the MR under your own identity. Your git commit identity
-          is preconfigured.
+          creates the MR under your own identity. Without $GITLAB_TOKEN
+          this seat has no GitLab identity: public projects still clone
+          anonymously, but nothing you push is accepted, so hand a code
+          change to the seat that owns the project instead. Your git
+          commit identity is preconfigured.
 ```
 
 Every security property of the GitHub form holds here and for the same reasons — the helper is scoped to the host at **both** layers (the `credential."https://…".helper` key *and* the `host=` check in the script), it stays silent with no token so public clones fall through to anonymous, the `insteadOf` rewrites use `--add` because the key is multi-valued, and the commit identity comes from the engine's generic `$CREWLET_AGENT_*` facts. And the helper is written into the box's home by a command and registered as a quoted shell snippet, as there: git is given the helper's absolute path, which only the box's shell knows (`"$HOME"`, expanded), the helper is made executable, both in commands, and the path is quoted because git runs a helper's value through the shell and a box's home may hold a space ([Local sandboxes](../concepts/code-sandbox.md#local-sandboxes)); this way the one step works in every cell, which is how `examples/nimbus.company.yaml` ships it. Two GitLab-specific wrinkles: the basic-auth **username is arbitrary** for PAT auth (GitLab ignores it — the token is the password, so `oauth2` is a conventional placeholder), and the helper must match the host **including a non-standard port** when the instance runs on one (the dev compose serves `gitlab.local:8929`), so template the host from your `integrations.gitlab.url` rather than copying `gitlab.com` blindly.
 
-Once an MR exists, GitLab tools stay in the picture on the **read/review/track** side: agents read its diff, comment, approve, and follow the MR's webhooks to report back to the original requester. As with GitHub, capture context via `reflect_and_persist(ttl_days=30)` whenever you kick off async work (a sandbox coding job) so the original ask + repo + MR number surface in your `## Personal memory` block on the review-notification turn.
+Once an MR exists, GitLab tools stay in the picture on the **read/review/track** side: agents read its diff, comment, approve, and follow the MR's webhooks to report back to the original requester. As with GitHub, an agent that kicks off async work whose result comes back in a later turn — a merge request waiting on its review — should capture the context with `reflect_and_persist(ttl_days=30)`, so the original ask, the project and the MR number surface in its `## Personal memory` block on the review-notification turn.
 
 ---
 
@@ -445,7 +447,7 @@ The prompt dispatches on the **routing reason**, not the event type, because one
 | `event_type` | Prompt behaviour |
 |---|---|
 | `merge_request.review_requested` | The request and the MR's description, and how a review is declined here: request review from the right reviewer and remove yourself |
-| `merge_request.assigned` / `issue.assigned` | The item, and how an assignment is declined here: reassign it. For an issue it also says where code changes go — the sandbox, which opens an MR under the agent's own identity |
+| `merge_request.assigned` / `issue.assigned` | The item, and how an assignment is declined here: reassign it. For an issue it also says who makes the change and under whose name: the agent itself, in its own checkout — the executor reading the prompt is its coding run, with its own shell and git — opening the MR under its own identity |
 | `note.mention`, `issue.mention`, `merge_request.mention` | Who named the agent and what they wrote. A mention is addressed, so the turn engine holds it to an answer and the prompt does not ask whether the agent was really asked |
 | `issue.close` | **Stop** any in-flight work: an agent that keeps working a closed issue is spending budget on a deliverable nobody will take |
 | `pipeline.failed` | The pipeline and who triggered it. The prompt states plainly that the agent is being told about its own action deliberately, or a seat that has learned "I am not notified of what I did" reads its own name as a routing mistake |
@@ -544,7 +546,7 @@ There is no MCP-server sidecar: the GitLab tool surface is `glab mcp serve`, whi
 
 The full loop this validates: **provision** (service accounts appear with the agents' handles) → **assign/mention** → webhook wakes the agent → it reads/comments as itself → (where the sandbox can reach the instance) opens an MR as itself → the reviewer-added webhook wakes the reviewer → the review lands under the reviewer's identity.
 
-> **Sandbox code-authoring reaches a laptop's instance only from a box that resolves it to the laptop.** The example's seats run `direct`, as processes on the machine running `crewlet run`, so their boxes resolve `gitlab.local` through the same `/etc/hosts` line as the engine and push to it. A seat moved to `run_in: container` does not, as it stands: a container has its own `/etc/hosts` and its own loopback, so the host's `127.0.0.1 gitlab.local` line neither resolves nor routes inside it. Map the name to the host in `local.run_args`, `["--add-host=gitlab.local:host-gateway"]` (the compose service publishes `8929` on every host interface), and the box reaches the instance as a `direct` one does. A seat moved to `run_in: e2b` cannot reach it at all: a cloud E2B sandbox cannot reach your machine's `gitlab.local:8929`, so its `run_sandbox` MRs need a *reachable* instance — a self-hosted E2B domain on the same network, a tunnel, or gitlab.com. Provisioning, webhooks, identity resolution, and all `glab` MCP read/review/track work fine against local compose.
+> **Sandbox code-authoring reaches a laptop's instance only from a box that resolves it to the laptop.** The example's seats run `direct`, as processes on the machine running `crewlet run`, so their boxes resolve `gitlab.local` through the same `/etc/hosts` line as the engine and push to it. A seat whose entry places its runs `run_in: container` does not, as it stands: a container has its own `/etc/hosts` and its own loopback, so the host's `127.0.0.1 gitlab.local` line neither resolves nor routes inside it. Map the name to the host in `local.run_args`, `["--add-host=gitlab.local:host-gateway"]` (the compose service publishes `8929` on every host interface), and the box reaches the instance as a `direct` one does. A seat whose entry places its runs `run_in: e2b` cannot reach it at all: a cloud E2B sandbox cannot reach your machine's `gitlab.local:8929`, so its runs' MRs need a *reachable* instance — a self-hosted E2B domain on the same network, a tunnel, or gitlab.com. Provisioning, webhooks, identity resolution, and all `glab` MCP read/review/track work fine against local compose.
 
 ---
 

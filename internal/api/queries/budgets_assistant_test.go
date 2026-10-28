@@ -44,6 +44,7 @@ name: Acme
 providers:
   llm:
     p: {model: m}
+  sandbox: {fake: true}
 roles:
   - name: CEO
     handle: ceo
@@ -57,6 +58,7 @@ name: Acme
 providers:
   llm:
     p: {model: m}
+  sandbox: {fake: true}
 roles:
   - name: CEO
     handle: ceo

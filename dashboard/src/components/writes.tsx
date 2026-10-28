@@ -55,6 +55,7 @@ import { handleLabel, indexOrg, nameOfIn } from "~/lib/seats.ts";
 import { itemAddress, targetLabel } from "~/lib/work.ts";
 import { useOpenNewTask } from "~/app/newTask.ts";
 import { STEER_NOTE_MAX_RUNES } from "~/contract/steer.ts";
+import { steerReadsSentence } from "~/lib/steer.ts";
 import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
 import { textBudget } from "~/lib/format.ts";
 import { renderTokens } from "~/lib/markdown.ts";
@@ -1448,8 +1449,9 @@ const PAUSE_REASON_MAX = 500;
  * no new turn, what is sent to it waits on its inbox in order, its scheduled
  * runs are skipped — and the turn it is on FINISHES FIRST. Stopping that turn
  * is a separate, explicit choice ("Also stop the current turn"), because a
- * turn stopped at its next round loses what it had not done and is not run
- * again; `stop_running` is sent only when it is ticked.
+ * turn stopped at its next round — and a coding run it has out, which the stop
+ * ends at once with its box — loses what it had not done and is not run again;
+ * `stop_running` is sent only when it is ticked.
  *
  * RESUME IS ONE PRESS: it changes nothing a person has to weigh, and the mail
  * that waited is delivered first, in order.
@@ -1605,7 +1607,8 @@ function PauseSeatDialog({
           label="Also stop the current turn"
           description={
             working
-              ? "Otherwise the current turn finishes first. Unfinished work is lost."
+              ? "Otherwise the current turn finishes first. A stop also ends a coding run " +
+                "it has out, at once. Unfinished work is lost."
               : "It isn’t on a turn now."
           }
         />
@@ -1616,48 +1619,43 @@ function PauseSeatDialog({
 }
 
 // ---------------------------------------------------------------------------
-// A running turn's own control: a note it reads at its next round
+// A running turn's own control: a note it reads at its next step
 // ---------------------------------------------------------------------------
 
 /**
  * Why a turn cannot take a note now, or undefined when it can.
  *
- * A NOTE REACHES A TURN AT THE TOP OF ITS NEXT ROUND IN THE ENGINE'S OWN LOOP
- * (`internal/agent/steer`), so it is offered only while that loop is running.
- * A turn parked on a coding run is inside somebody else's loop — a run it
- * launched, or an executor that runs as a coding agent — which reads no notes,
- * and the engine would answer `steer_unsupported` or `not_running` one press
- * too late. A parked turn's reason names what to do instead.
+ * EVERY TURN THAT IS STILL GOING TAKES ONE (`internal/agent/steer`): a turn in
+ * the engine's own loop reads it at its next round, one whose coding run is out
+ * keeps it on the run's record — read by the run at its next step, or after its
+ * question is answered, or by the review that follows it. Only a turn that has
+ * ended is held, because nothing would ever read the note.
  */
-function steerBlocked(state: { running: boolean; parked: boolean }): string | undefined {
-  if (state.parked) {
-    return "A coding run is working. Answer it, or comment on the task.";
-  }
-  if (!state.running) return "The turn has ended.";
-  return undefined;
+function steerBlocked(running: boolean): string | undefined {
+  return running ? undefined : "The turn has ended.";
 }
 
 /**
- * Steer a running turn: a short note the turn reads at its next round, after
- * the tool call in flight returns, and keeps to for the rest of the turn.
+ * Steer a running turn: a short note the turn reads at its next step — a round
+ * of the engine's own loop, or a step of the coding run it has out — and keeps
+ * to for the rest of the turn.
  *
- * WHAT A PRESS PROMISES IS `pending`: the node running the turn took the note.
- * What became of it — read at a round, or expired because the turn ended first
- * — is the turn's own `agent_turn_steered`, which the trace draws at the round
- * that read it. A retry of an unknown answer reuses the request id, and the
- * request id IS the note's id, so the turn takes it once.
+ * WHAT A PRESS PROMISES IS `pending`: the engine took the note, and says when
+ * the turn will read it (`reads`), which the toast says. What became of it —
+ * read at a round or by the run, or expired because the turn ended first — is
+ * the turn's own `agent_turn_steered`, which the trace draws where it was read.
+ * A retry of an unknown answer reuses the request id, and the request id IS
+ * the note's id, so the turn takes it once.
  */
 export function SteerTurnButton({
   turnId,
   seat,
   running,
-  parked,
 }: {
   turnId: string;
   /** Whose turn it is, by name, for the dialog's title and the toast. */
   seat: string;
   running: boolean;
-  parked: boolean;
 }) {
   const write = useAct("steer_turn");
   const [open, setOpen] = useState(false);
@@ -1669,7 +1667,7 @@ export function SteerTurnButton({
         variant="secondary"
         leadingIcon={<CompassGlyph />}
         showRefusal={false}
-        blocked={steerBlocked({ running, parked })}
+        blocked={steerBlocked(running)}
         onPress={() => setOpen(true)}
       >
         Steer
@@ -1712,7 +1710,7 @@ function SteerTurnDialog({
     if (!pressable(write, blocked)) return;
     const result = await write.run(
       { turn_id: turnId, note: note.trim() },
-      { done: `Sent your note to ${seat}'s turn` },
+      { done: `Sent your note to ${seat}'s turn`, landed: steerReadsSentence },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
@@ -1746,7 +1744,7 @@ function SteerTurnDialog({
         <FormField
           label="Note"
           htmlFor="steer-turn-note"
-          helper={`Read at the next round. ${length} of ${STEER_NOTE_MAX_RUNES} characters.`}
+          helper={`The turn reads it at its next step. ${length} of ${STEER_NOTE_MAX_RUNES} characters.`}
         >
           <Textarea
             id="steer-turn-note"

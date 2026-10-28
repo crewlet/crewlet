@@ -430,11 +430,18 @@ func doctorEntries(company *config.Company, keys []string, resolver *config.Reso
 			}
 			return built.Diagnose(ctx, cliagent.DiagnoseOptions{
 				Smoke: smoke,
+				// THE COMPANY'S OWN ANSWER to which seats launch their
+				// executors on this entry, resolved as validation and the
+				// launch resolve it: an entry no seat's executor chain
+				// holds serves the phases on this host only, and its report says
+				// nothing about runners or a bridge it never needs.
+				ExecutorSeats: company.ExecutorSeatsOn(key),
 				// THE ENGINE'S OWN ANSWERS, not the provider's guess at
 				// them: which runners this build registers and what a
-				// sandbox can dial are facts about the process, and both
-				// decide whether a box-mode entry works at all.
+				// box can dial are facts about the process, and both
+				// decide whether an executor launches on the entry at all.
 				AgentRunners: codingagent.Names(),
+				Cell:         string(company.EntryCell(key)),
 				BridgeURL:    os.Getenv(mcpbridge.BaseURLVar),
 			})
 		}

@@ -55,7 +55,7 @@ func TestAnAnswerArrivingMidTurnIsResumedWhenTheTurnEnds(t *testing.T) {
 		return err == nil
 	})
 	t.Cleanup(release)
-	_, next, err := e.admitResume(t.Context(), "swe")
+	_, next, err := e.admitResume(t.Context(), "swe", sandbox.ResumeAnswer)
 	var refused *sandbox.TurnRefused
 	if err == nil {
 		next()
@@ -84,8 +84,9 @@ func TestAnAnswerArrivingMidTurnIsResumedWhenTheTurnEnds(t *testing.T) {
 	}
 
 	// THE CLAIM IS THE RESUME STARTING: it writes the row whatever the
-	// resumed turn then does, and this rig's suspended conversation is one
-	// no build reads, so the turn itself goes no further.
+	// resumed turn then does, and this rig's seat has no model with an in-box
+	// runner, so the relaunch the answer carries the run on with is refused
+	// and the turn itself goes no further.
 	release()
 	eventually(t, "the answer's resume to start once the seat's turn ended", func() bool {
 		run, found, err := sandbox.NewCoordStore(e.backends.Fleet).Get(t.Context(), "t1")

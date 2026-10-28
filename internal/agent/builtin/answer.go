@@ -53,7 +53,16 @@ func jsonAnswer(v any, narrowWith string) (tools.Result, error) {
 		return failed(fmt.Sprintf("That answer is %d KiB and the limit for one "+
 			"tool answer is %d KiB — it would spend most of this turn's "+
 			"context on a single call. %s",
-			len(data)>>10, ToolAnswerBytes>>10, narrowWith)), nil
+			kib(len(data)), ToolAnswerBytes>>10, narrowWith)), nil
 	}
 	return tools.Result{Output: string(data)}, nil
 }
+
+// kib is n bytes in whole KiB, ROUNDED UP, for a refusal that states a size
+// beside the bound it is past.
+//
+// ROUNDED DOWN, a size one byte past a bound read as the bound itself: an
+// answer of 64 KiB and a byte was refused as "64 KiB and the limit … is 64
+// KiB", which reads as a refusal of something AT its limit and tells the
+// reader nothing about how much to cut.
+func kib(n int) int { return (n + 1<<10 - 1) >> 10 }

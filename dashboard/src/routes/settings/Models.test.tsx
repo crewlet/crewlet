@@ -24,8 +24,9 @@ import { withDerived } from "~/test/org.ts";
 /**
  * Three models, declared in the order a seat that names none falls back
  * through — which a JSON object's sorted keys do not keep, so `llm_order`
- * carries it. `smart` names only its model and a token; `fast` is a
- * box-mode Codex entry on an API key; `spare` forwards the engine's own
+ * carries it. `smart` names only its model and a token; `fast` is a Codex
+ * entry on an API key, which serves text phases only; `spare` is an OpenCode
+ * entry whose executor runs happen on e2b, forwards the engine's own
  * environment, and no seat names it.
  */
 const company = (): CompanyDocument => ({
@@ -35,14 +36,13 @@ const company = (): CompanyDocument => ({
       fast: {
         agent: "codex",
         model: "gpt-5",
-        mode: "box",
-        run_in: "e2b",
         auth: { mode: "api-key", api_key: "${OPENAI_KEY}" },
       },
       smart: { model: "claude-opus-5-5", auth: { token: "${CLAUDE_TOKEN}" } },
       spare: {
         agent: "opencode",
         model: "anthropic/claude-sonnet-5",
+        run_in: "e2b",
         auth: { mode: "inherit-env" },
       },
     },
@@ -141,10 +141,12 @@ test("every model is drawn as the engine will run it, in the order it was declar
   // The CLI and the model under the key; an entry naming no agent drives the default.
   expect(within(row("smart")).getByText("claude-code · claude-opus-5-5")).toBeDefined();
   expect(within(row("fast")).getByText("codex · gpt-5")).toBeDefined();
-  // Where the engine runs it, and the cell a box-mode run happens in.
-  expect(within(row("fast")).getByText("Box")).toBeDefined();
-  expect(within(row("fast")).getByText("· e2b")).toBeDefined();
-  expect(within(row("smart")).getByText("Host")).toBeDefined();
+  // What the engine runs it for, and where its executor runs happen: only a
+  // CLI with an in-box runner runs an executor, so Codex serves text phases.
+  expect(within(row("spare")).getByText("Executor")).toBeDefined();
+  expect(within(row("spare")).getByText("· e2b")).toBeDefined();
+  expect(within(row("smart")).getByText("Executor")).toBeDefined();
+  expect(within(row("fast")).getByText("Text phases")).toBeDefined();
   // How it signs in, and the variable its credential is read from.
   expect(within(row("smart")).getByText("Subscription")).toBeDefined();
   expect(within(row("smart")).getByText("CLAUDE_TOKEN")).toBeDefined();
@@ -154,14 +156,15 @@ test("every model is drawn as the engine will run it, in the order it was declar
   // Who runs on it, off the chains the org projection carries.
   expect(within(row("smart")).getByText("2 seats")).toBeDefined();
   expect(within(row("fast")).getByText("1 seat")).toBeDefined();
-  // The tiles: three models, one of them named by no seat; one in box mode; one billed per token.
+  // The tiles: three models, one of them named by no seat; two that can run an
+  // executor; one billed per token.
   const tile = (label: string) =>
     screen
       .getByText(label, { selector: ".crewlet-statcard__label" })
       .closest(".crewlet-statcard") as HTMLElement;
   expect(within(tile("Models")).getByText("1 named by no seat")).toBeDefined();
-  expect(within(tile("Box mode")).getByText("1")).toBeDefined();
-  expect(within(tile("Box mode")).getByText("runs the executor detached, in a box")).toBeDefined();
+  expect(within(tile("Executors")).getByText("2")).toBeDefined();
+  expect(within(tile("Executors")).getByText("can run a seat’s executor")).toBeDefined();
   expect(within(tile("On an API key")).getByText("1")).toBeDefined();
 });
 
@@ -210,6 +213,10 @@ test("a model's page says the defaults an entry leaves to the engine, as default
   expect(fact("CLI").textContent).toMatch(/default/i);
   expect(within(fact("Timeout")).getByText("10 minutes")).toBeDefined();
   expect(fact("Timeout").textContent).toMatch(/default/i);
+  // AND WHERE ITS EXECUTOR RUNS: an entry naming no run_in runs in the
+  // catalogue's default cell, said as such rather than as nowhere.
+  expect(within(fact("Runs as")).getByText("Executor")).toBeDefined();
+  expect(fact("Runs as").textContent).toMatch(/default cell/);
 });
 
 test("a model's page says how it signs in, and the seats that run on it and fall back to it", async () => {
@@ -218,7 +225,7 @@ test("a model's page says how it signs in, and the seats that run on it and fall
   const signin = screen.getByText("Signing in").closest(".crewlet-card") as HTMLElement;
   expect(within(signin).getByText("API key", { selector: "span" })).toBeDefined();
   expect(within(signin).getByText("OPENAI_KEY")).toBeDefined();
-  // The way to change the CLI, the mode or the sign-in is the entry in Configuration.
+  // The way to change the CLI, where it runs or the sign-in is the entry in Configuration.
   const change = within(signin).getByRole("link", { name: /under Configuration/ });
   expect(change.getAttribute("href")).toContain("entity=fast");
   // The CEO falls back to it; the SWE's reviewer runs on it.

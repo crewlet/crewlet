@@ -31,17 +31,17 @@ func TestABoxThatDoesNotAnswerDelaysNoOtherBox(t *testing.T) {
 
 	release := make(chan struct{})
 	var stuckPolls atomic.Int32
-	rig.runner.PollFunc = func(ctx context.Context, box Sandbox) (bool, error) {
+	rig.runner.PollFunc = func(ctx context.Context, box Sandbox) (JobState, error) {
 		if box.ID() == stuck.SandboxID {
 			stuckPolls.Add(1)
 			select {
 			case <-release:
 			case <-ctx.Done():
-				return false, ctx.Err()
+				return JobRunning, ctx.Err()
 			}
-			return false, nil
+			return JobRunning, nil
 		}
-		return true, nil
+		return JobEnded, nil
 	}
 
 	ticked := make(chan int, 1)
@@ -79,10 +79,10 @@ func TestABoxsPollIsBounded(t *testing.T) {
 	rig.waiter.pollBound = 50 * time.Millisecond
 	rig.launch("t-stuck")
 	var bounded atomic.Bool
-	rig.runner.PollFunc = func(ctx context.Context, _ Sandbox) (bool, error) {
+	rig.runner.PollFunc = func(ctx context.Context, _ Sandbox) (JobState, error) {
 		<-ctx.Done()
 		bounded.Store(true)
-		return false, ctx.Err()
+		return JobRunning, ctx.Err()
 	}
 	done := make(chan struct{})
 	go func() {
@@ -114,7 +114,7 @@ func TestABoxIsPolledByOnePollAtATime(t *testing.T) {
 	entered := make(chan struct{}, 4)
 	var mu sync.Mutex
 	polls := map[string]int{}
-	rig.runner.PollFunc = func(ctx context.Context, box Sandbox) (bool, error) {
+	rig.runner.PollFunc = func(ctx context.Context, box Sandbox) (JobState, error) {
 		mu.Lock()
 		polls[box.ID()]++
 		again := polls[box.ID()] > 1
@@ -128,7 +128,7 @@ func TestABoxIsPolledByOnePollAtATime(t *testing.T) {
 			case <-ctx.Done():
 			}
 		}
-		return false, nil
+		return JobRunning, nil
 	}
 	first := make(chan struct{})
 	go func() {
@@ -193,7 +193,7 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 	stuck := rig.launch("t-1-stuck")
 	rig.launch("t-2-healthy")
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesLocal,
 		Interval: 20 * time.Millisecond, Now: func() time.Time { return rig.now },
 	})
 	if err != nil {
@@ -214,14 +214,14 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 		released       = make(chan struct{})
 		release        sync.Once
 	)
-	rig.runner.PollFunc = func(ctx context.Context, box Sandbox) (bool, error) {
+	rig.runner.PollFunc = func(ctx context.Context, box Sandbox) (JobState, error) {
 		if box.ID() != stuck.SandboxID {
 			// Counted only inside the held box's first poll: its count is
 			// one while that poll runs, and two or more once it has ended.
 			if stuckPollCount.Load() == 1 && stuckInFlight.Load() == 1 && duringHold.Add(1) == want {
 				release.Do(func() { close(released) })
 			}
-			return false, nil
+			return JobRunning, nil
 		}
 		n := stuckPollCount.Add(1)
 		if stuckInFlight.Add(1) > 1 {
@@ -238,9 +238,9 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 		}()
 		select {
 		case <-released:
-			return false, nil
+			return JobRunning, nil
 		case <-ctx.Done():
-			return false, ctx.Err()
+			return JobRunning, ctx.Err()
 		}
 	}
 	waiter.Start(t.Context())
@@ -277,10 +277,10 @@ func TestTheLoopKeepsEveryOtherBoxsCadenceWhileOneIsHeld(t *testing.T) {
 // seconds this case gives it.
 func TestAPollEndsWithTheDutyThatAuthorisedIt(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
+	rig := newWaiterRigIn(t, E2B)
 	rig.launch("t-stuck")
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
 		Interval: 20 * time.Millisecond, DutyTTL: 200 * time.Millisecond,
 		ClaimDuty: func(context.Context) (bool, error) { return true, nil },
 		Now:       func() time.Time { return rig.now },
@@ -290,10 +290,10 @@ func TestAPollEndsWithTheDutyThatAuthorisedIt(t *testing.T) {
 	}
 	waiter.pollBound = 10 * time.Second
 	ended := make(chan error, 1)
-	rig.runner.PollFunc = func(ctx context.Context, _ Sandbox) (bool, error) {
+	rig.runner.PollFunc = func(ctx context.Context, _ Sandbox) (JobState, error) {
 		<-ctx.Done()
 		ended <- ctx.Err()
-		return false, ctx.Err()
+		return JobRunning, ctx.Err()
 	}
 	started := time.Now()
 	if _, err := waiter.Tick(t.Context()); err != nil {
@@ -318,11 +318,11 @@ func TestAPollEndsWithTheDutyThatAuthorisedIt(t *testing.T) {
 // the streak shows it.
 func TestADutyLostStopsEveryPollItAuthorised(t *testing.T) {
 	t.Parallel()
-	rig := newWaiterRig(t)
+	rig := newWaiterRigIn(t, E2B)
 	stuck := rig.launch("t-stuck")
 	var claims atomic.Int32
 	waiter, err := NewWaiter(WaiterOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers,
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: DrivesRemote,
 		Interval: 20 * time.Millisecond, DutyTTL: time.Minute,
 		// Held for the first pass, and a peer's from the second on.
 		ClaimDuty: func(context.Context) (bool, error) { return claims.Add(1) == 1, nil },

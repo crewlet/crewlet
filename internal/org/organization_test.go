@@ -1122,8 +1122,7 @@ units:
           labels:
             zone: eu-west
         sandbox:
-          enabled: true
-          coding_agent: opencode
+          max_turns: 40
           env:
             GITHUB_TOKEN: "${GITHUB_TOKEN_CEO}"
     children:
@@ -1162,7 +1161,8 @@ units:
 	if ceo.Placement.Node != "node-a" || ceo.Placement.Labels["zone"] != "eu-west" {
 		t.Errorf("placement = %+v", ceo.Placement)
 	}
-	if ceo.Sandbox == nil || !ceo.Sandbox.Enabled || ceo.Sandbox.Env["GITHUB_TOKEN"] != "${GITHUB_TOKEN_CEO}" {
+	if ceo.Sandbox == nil || ceo.Sandbox.MaxTurns == nil || *ceo.Sandbox.MaxTurns != 40 ||
+		ceo.Sandbox.Env["GITHUB_TOKEN"] != "${GITHUB_TOKEN_CEO}" {
 		t.Errorf("sandbox = %+v", ceo.Sandbox)
 	}
 	if got := ceo.MCPEnv["atlassian"]["JIRA_API_TOKEN"]; got != "${JIRA_TOKEN_TEAM}" {

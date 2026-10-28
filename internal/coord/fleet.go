@@ -46,7 +46,7 @@ import (
 //   - A detached coding run outlives its turn, its process and sometimes its
 //     node, and is recovered by whichever node owns the seat NEXT. That node
 //     read its own database, found nothing, and left a billed sandbox running
-//     with a suspended conversation nothing could re-enter.
+//     with a parked turn nothing could re-enter.
 //
 // None of these is a lease: nothing here is owned, held or fenced. They are
 // counters, claims and records, and the coordination store is simply where a
@@ -1120,15 +1120,57 @@ type Rebases interface {
 
 // Record is one stored value with the version it was read at.
 //
-// The version is an OPAQUE token: pass back exactly what a read handed you.
-// It is what makes a read-modify-write safe without a transaction — the write
-// lands only if nothing has changed since — and it is the whole of the
-// concurrency story [SandboxRuns] offers, because a detached run's mutations
-// are conditional flips whose conditions are the run's OWN fields.
+// The version is an OPAQUE token, and the store's: it names one write to one
+// incarnation of a record and is never handed out twice, so a record deleted
+// and created again under the same key never answers to a version an earlier
+// incarnation carried. It is what makes a read-decide-write safe without a
+// transaction — a write lands only where the record still stands at the
+// version its decision read — and [SandboxRuns.MutateSandboxRun] is where that
+// comparison is made, inside the store, rather than at every caller.
 type Record struct {
 	Key     string
 	Value   []byte
 	Version uint64
+}
+
+// SandboxRunChange is what a decision handed to [SandboxRuns.MutateSandboxRun]
+// writes.
+//
+// ITS ZERO VALUE WRITES NOTHING, and that is a decision like the other two
+// rather than a missing one: the condition the caller evaluated did not hold —
+// a claim somebody else won, a fence a newer lease outranks — and the record
+// is left exactly as it was read. Put and Delete together are no change at
+// all, and the store refuses them as the contradiction they are.
+type SandboxRunChange struct {
+	// Put is the record's next value, written whole at the version the
+	// decision read. Empty with Delete false writes nothing.
+	Put []byte
+
+	// Delete removes the record at the version the decision read.
+	Delete bool
+}
+
+// Validate refuses a change that both writes and removes the record.
+func (c SandboxRunChange) Validate() error {
+	if c.Delete && len(c.Put) > 0 {
+		return errors.New("coord: a change to a sandbox run either writes it or deletes it, " +
+			"never both")
+	}
+	return nil
+}
+
+// SandboxRunUpdate is one state of a run's record that
+// [SandboxRuns.WatchSandboxRun] delivers.
+type SandboxRunUpdate struct {
+	// Record is the record as it now stands; the zero value when Found is
+	// false.
+	Record Record
+
+	// Found is false while the run has no record: before its create, and
+	// once it is deleted. A watch's first update says so explicitly, which
+	// is the only way a watch can say "this run has no record" — an empty
+	// stream says nothing at all.
+	Found bool
 }
 
 // SandboxRuns is the fleet's record of detached coding runs.
@@ -1139,8 +1181,10 @@ type Record struct {
 // person is being asked. Every decision taken on those fields —
 // the at-most-once tail claim, the epoch fence, the conditional pause expiry —
 // is sandbox's, lives in internal/sandbox where its suite is, and would be
-// nothing but duplication here. So this holds bytes and a version, and the
-// conditions are expressed as compare-and-swap by the package that owns them.
+// nothing but duplication here. So this holds bytes and a version, and every
+// condition is a DECISION the owning package hands to
+// [SandboxRuns.MutateSandboxRun], which the store takes again whenever another
+// writer lands first.
 //
 // It is shared because a run is DETACHED and its seat MOVES. The run outlives
 // its turn, its process and sometimes its node; the node that owns the seat
@@ -1154,6 +1198,29 @@ type Record struct {
 // RAISES rather than answering empty, on every read: "there is no run" starts
 // the work again and abandons a box, and a store that could not be read must
 // never be able to say that.
+//
+// # A lost race is decided again, for the store's patience
+//
+// Every change after the create is a read-decide-write the STORE runs: it
+// reads the record, hands it to the caller's decision, and writes what that
+// decision chose at the version read. A write another writer beat is never
+// sent again as it was — the condition it evaluated may no longer hold — but
+// decided again on the record as it now stands, for as long as the store's
+// patience allows, as every race the fleet store loses is (internal/coord/kv's
+// race.go). Never for a count of attempts, because the writers are many and
+// nothing bounds how many overlap: one run's record takes every tool call its
+// box makes over the bridge — from as many as twenty subagents at once, Claude
+// Code's default — beside its seat's own turns, a peer recovering it, a
+// person's answer and a person's stop. A count of lost races measures how many
+// of them wrote, and a bound on it answers a busy record as one that kept
+// changing.
+//
+// # A run's record is watched by its key
+//
+// A watch is of ONE run ([SandboxRuns.WatchSandboxRun]), so a node that follows
+// a run's record as it changes — rather than reading it again on every call it
+// serves — is told of that run's writes and of no other run's, however busy
+// the fleet.
 type SandboxRuns interface {
 	// SandboxRun reads one run's record.
 	SandboxRun(ctx context.Context, turnID string) (Record, bool, error)
@@ -1172,15 +1239,55 @@ type SandboxRuns interface {
 	// turn's, so a second create is a retried launch, not a second run.
 	CreateSandboxRun(ctx context.Context, turnID string, value []byte) (bool, error)
 
-	// UpdateSandboxRun writes at a version, reporting whether that version
-	// still held. False is a LOST RACE, not a failure — the caller re-reads
-	// and re-decides, because the condition it evaluated may no longer be
-	// true.
-	UpdateSandboxRun(ctx context.Context, turnID string, value []byte, version uint64) (bool, error)
+	// MutateSandboxRun changes one run's record by a decision taken on the
+	// record as it stands, answering the record as the change left it and
+	// whether a change landed.
+	//
+	// decide is handed the record read — its key, value and version — and
+	// answers the change to make ([SandboxRunChange]), whose zero value makes
+	// none. The store writes the change only where the record still stands
+	// at the version decide was handed; where it does not, it reads the
+	// record AGAIN and asks decide again, for as long as its patience
+	// allows. So decide may be called more than once, each time with the
+	// record as it then stands, and must decide from that record alone:
+	// anything it keeps for its caller is the last call's. It is called
+	// holding nothing of the store's, so it may itself read or write the
+	// store — a write it makes is one the change it answers then loses to.
+	//
+	// A RUN WITH NO RECORD DECIDES NOTHING: decide is not called, and the
+	// answer is (Record{}, false, nil) — a run that is gone is the same
+	// non-answer as a decision that changed nothing, never an error. An
+	// error decide returns is returned AS IT IS, with nothing written, so a
+	// caller's own refusal reaches it in its own vocabulary. A write that
+	// still lost when the patience ran out is [ErrUnavailable]: the store
+	// answered every attempt, and another writer changed the record first
+	// each time.
+	//
+	// With true it answers the record as written for a Put — the new value
+	// at its new version — and the record it removed for a Delete; with
+	// false, the record as the last decision read it.
+	MutateSandboxRun(ctx context.Context, turnID string,
+		decide func(current Record) (SandboxRunChange, error)) (Record, bool, error)
 
-	// DeleteSandboxRun removes a record at a version, reporting whether
-	// that version still held.
-	DeleteSandboxRun(ctx context.Context, turnID string, version uint64) (bool, error)
+	// WatchSandboxRun streams one run's record: its state when the watch
+	// began — [SandboxRunUpdate.Found] false where it has none — then each
+	// state it reaches after that, a delete as Found false.
+	//
+	// The first update is CERTIFIED as a listing's answer is: a record that
+	// existed throughout the call is never answered absent, though on a
+	// replicated store it can lag the newest write by a replica's lag, which
+	// the next update then carries. The call returns once it is in hand,
+	// and a failure to read it is the call's error. After it, no update is
+	// older than one already delivered and the newest state is always
+	// delivered, but a state a later write replaced before the watch reached
+	// it may be passed over: a watcher holds the record's current state, not
+	// its history.
+	//
+	// The channel is closed when ctx ends or the watch fails. A CLOSED
+	// CHANNEL IS NOT A DELETE: the watcher has stopped hearing, keeps what it
+	// last knew and watches again, and the new watch's first update is the
+	// state then, so a change made while nobody listened is not lost.
+	WatchSandboxRun(ctx context.Context, turnID string) (<-chan SandboxRunUpdate, error)
 }
 
 // SecretRecord is one stored credential, as coordination holds it.

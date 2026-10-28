@@ -104,27 +104,32 @@ echo "Question recorded; stop now — a person will answer and your work will re
 `
 }
 
-// AskInstruction is the standing instruction telling the agent how and when to
-// ask, which rides a run's system text ([sandbox.LaunchRequest.Ask]).
+// AskInstruction is the standing instruction for the run's one way to wait on
+// a person: parking with the ask shim, for a question the run cannot go on
+// without. The engine composes it into the run's system text beside the way
+// that does not wait ([sandbox.LaunchRequest.Ask]).
+//
+// WHAT HAPPENS NEXT IS SAID, because it is what makes parking worth it: the
+// answer reaches THIS run, in its own session and checkout, as its next
+// prompt — or, when the machine has been reclaimed while the question waited,
+// a fresh run on the branch it names. A run that was not told so guessed
+// rather than stop.
 //
 // The roster and manager give it real names to target, so a --to decision can
 // name a person rather than guess one.
 func AskInstruction(roster []string, manager string) string {
 	lines := []string{
-		"\n## If you get blocked on a human decision",
-		"You are running autonomously and CANNOT pause to ask interactively. " +
-			"If you hit something only a person can answer — an ambiguous spec, a " +
-			"missing detail, a design or framework decision above your remit — do " +
-			"NOT guess:",
+		"### If you cannot go on without the answer",
+		"You CANNOT pause to ask interactively, so park this run rather than guess:",
 		"1. Commit and push your work-in-progress branch.",
 		`2. Run, from inside the repository: crewlet-ask "<a specific, self-contained question>" ` +
 			`--to <audience> --branch <the branch you pushed>`,
 		"   where <audience> is `requester` (the person who asked, for a spec " +
 			"clarification), `team` (a design or technical decision), `manager`, or " +
-			"a teammate's name. Name the branch exactly as you pushed it: if this " +
-			"machine is gone by the time they answer, the work continues on a fresh " +
-			"one from that branch.",
-		"3. Stop. Your work resumes automatically once they reply.",
+			"a teammate's name. Name the branch exactly as you pushed it.",
+		"3. Stop. When they reply, this session continues where you stopped, with " +
+			"their answer as your next prompt. If this machine is gone by then, a " +
+			"fresh run starts from that branch with your question and their answer.",
 	}
 	if len(roster) > 0 {
 		lines = append(lines, "Teammates you can name: "+strings.Join(roster, ", ")+".")
@@ -136,7 +141,8 @@ func AskInstruction(roster []string, manager string) string {
 }
 
 // FindingsInstruction is the standing instruction requiring a durable report,
-// the last part of a run's system text ([finalSystem]).
+// the last part of the system text the runner composes ([finalSystem]) — which
+// only a CLI's instruction about notes follows ([withNoteInstruction]).
 //
 // The coding agent is NOT the last step: its findings go back to the Crewlet
 // agent, which continues the same task. The streamed final message can be lost

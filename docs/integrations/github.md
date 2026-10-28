@@ -23,9 +23,10 @@ Three surfaces, and they are deliberately separate:
   [Acting as the app](#acting-as-the-app-the-seats-token).
 
 GitHub tools are for **reading, reviewing and tracking** code: diffs,
-comments, reviews, run status. **Authoring** code changes goes through the
-[code sandbox](../concepts/code-sandbox.md), which clones, pushes and opens a
-pull request as the agent's own app.
+comments, reviews, run status. **Authoring** code changes is the seat's
+executor run's, with its own shell and git in its
+[box](../concepts/code-sandbox.md), which clones, pushes and opens a pull
+request as the agent's own app.
 
 ---
 
@@ -532,8 +533,6 @@ providers:
   sandbox:
     setup:
       - name: git-auth            # the recipe in the code sandbox guide
-        files:
-          .config/crewlet/github-token: "${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"
         # ...
 
 mcp_servers:
@@ -548,9 +547,12 @@ roles:
     mcp_env:
       github: { Authorization: "Bearer ${GITHUB_APP_TOKEN_SENIOR_ENGINEER}" }
     sandbox:
-      enabled: true
       env:
         GITHUB_TOKEN: "${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"
+      setup:
+        - name: github-token      # the file the completion poll keeps current
+          files:
+            .config/crewlet/github-token: "${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"
     integrations:
       github:
         tier: full_access
@@ -560,9 +562,12 @@ roles:
 `${GITHUB_APP_TOKEN_<HANDLE>}` is answered in three places, and only there: the
 seat's own tool servers (`role.mcp_env`), its coding box's environment and setup
 files (`role.sandbox.env`, `providers.sandbox.setup` and `role.sandbox.setup`),
-and the servers rendered into that box (`role.sandbox.mcp`). A provider-wide
-setup step names one seat's variable only when its file is meant for that seat;
-a recipe shared by several seats belongs on each seat's own `sandbox.setup`.
+and the servers rendered into that box (`role.sandbox.mcp`). Every
+provider-wide setup step reaches every agent seat's box, so a seat's
+`${GITHUB_APP_TOKEN_<HANDLE>}` belongs on that seat's own `sandbox.setup` or
+`sandbox.env`: named in a provider-wide step, it resolves for that seat alone,
+and every other seat's run starts without it and logs `sandbox_env_unresolved`
+at warning, on every launch.
 
 - **Each seat reads only its own.** The token is laid in front of the
   company's secret store for that seat's reads alone. A seat that names
@@ -581,7 +586,9 @@ a recipe shared by several seats belongs on each seat's own `sandbox.setup`.
   that name it, which is where the agent acts with it.
 - **Issued only while GitHub is enabled.** Switching `integrations.github` off
   stops every token at the next read: the seat's tool servers stop for want of
-  their credential, and the next coding run is refused one.
+  their credential, the next coding run starts without one (said as
+  `sandbox_env_unresolved`), and a running job's token file is no longer
+  renewed.
 
 #### How long a token lasts where it is used
 
@@ -592,8 +599,8 @@ engine renews it wherever something holds one:
 |---|---|---|
 | The seat's tool servers on the engine host | a token with at least 10 minutes left | the seat's servers are passed again when it reaches 10 minutes, and each one carrying it is restarted with a fresh token, as a rotated secret restarts it |
 | A coding run's environment (`$GITHUB_TOKEN` in the box) | a token with at least 50 minutes left | it does not: a process's environment cannot change under it, so a run longer than 50 minutes reads the token from a file |
-| A setup file whose whole body is the token | the same token, at launch | the completion poll rewrites the file every time the token behind it is renewed, for as long as the job runs, so it always holds a token with at least 10 minutes left |
-| A tool server rendered into the box | the run's token | it does not: the server is started inside the box once. Past 50 minutes its calls are refused by GitHub; a box-mode seat reaches the seat's own GitHub server, which is renewed, through the [tool bridge](../concepts/llm-backends.md#the-tool-bridge) instead |
+| A setup file whose whole body is the token | the same token, at launch | the completion poll that drives the box — its launching node's for a `direct` or `container` box, the fleet's for an `e2b` one — rewrites the file every time the token behind it is renewed, for as long as the job runs; and a job that continues in its turn's kept box, which runs no setup and which no poll reached while it was paused for the reviewer or a person's answer, has the file rewritten by its launch before it starts. Each rewrite replaces the file whole, so a read never finds it empty or half written. So it always holds a token with at least 10 minutes left, unless the file cannot be written: a job that replaced it with a link or a directory, or made the directory it lies in read-only, or a box out of disk, keeps the token it holds until that expires, and the poll says so once for the file (`sandbox_token_refresh_failed`, with the box's error) rather than on every pass, and writes the current token the first time a write succeeds |
+| A tool server rendered into the box | the run's token | it does not: the server is started inside the box once. Past 50 minutes its calls are refused by GitHub; the seat's executor reaches the seat's own GitHub server, which is renewed, through the [tool bridge](../concepts/llm-backends.md#the-tool-bridge) instead |
 
 The [git-auth recipe](../concepts/code-sandbox.md#the-git-auth-recipe) reads the
 file at every git and `gh` call, which is what lets a coding job run for hours
@@ -603,8 +610,8 @@ as the agent's own app.
 
 | The seat's app | What a value naming the token does |
 |---|---|
-| Not created, not installed, or its key does not resolve | **Waits.** The variable is the GitHub integration's to issue, so a tool server naming it is held back as waiting for the app's installation (or as stopped until a person acts, by what the seat-app pass last recorded), and a coding run is refused with a sentence saying so. The reconcile records the installation within a tick of it, which applies a revision, and every read runs again |
-| Installed, and GitHub refuses the mint (a suspended installation, a revoked key, an installation that has not approved a permission the seat asks for) or cannot be reached | **Fails, with GitHub's reason**, and is retried: the seat's tool servers on their restart schedule, a coding run at the seat's next attempt |
+| Not created, not installed, or its key does not resolve | **Waits.** The variable is the GitHub integration's to issue, so a tool server naming it is held back as waiting for the app's installation (or as stopped until a person acts, by what the seat-app pass last recorded), and a coding run starts without it, said as `sandbox_env_unresolved`: its environment lacks the token, and a setup file whose whole body is the token is not written. The reconcile records the installation within a tick of it, which applies a revision, and every read runs again; a running job's token file is written by the first poll after the app can issue a token, and the wait before that is said once for the job (`sandbox_token_waiting`) |
+| Installed, and GitHub refuses the mint (a suspended installation, a revoked key, an installation that has not approved a permission the seat asks for) or cannot be reached | **Fails, with GitHub's reason**, and is retried on the restart schedule — 15 seconds, doubling to 5 minutes. The engine holds GitHub's answer for each wait and every reader of the installation meets it until the wait ends, so a refusal that lasts until a person acts at GitHub costs one request a wait, not one per read; a key sealed in place of a revoked one is asked about at once. The seat's tool servers are passed again on that schedule, a running job's token file is written by the first poll after GitHub issues a token, and a coding run's environment carries one from the seat's next launch after that. A running job says the refusal once for each reason GitHub gives (`sandbox_token_refresh_failed`): a job that holds a token keeps it until it expires, and a job launched without one is told so, and that the first poll after GitHub issues a token writes it |
 | `integrations.github` is off | **Nothing will issue it**, and it is reported as a variable nothing sets |
 
 ### Running locally, with no public address
@@ -1071,33 +1078,35 @@ seat holds both, the app is its identity. See
 The remote server also exposes GitHub Copilot tools
 (`create_pull_request_with_copilot`, `assign_copilot_to_issue`,
 `request_copilot_review`). They stay reachable and an agent may call any of
-them; Crewlet's own code-authoring path is the
-[code sandbox](../concepts/code-sandbox.md), which is what `run_sandbox`
-drives. The Copilot tools are only on the remote server, not a self-hosted
-one.
+them; Crewlet's own code-authoring path is the seat's executor run in its
+box ([code sandbox](../concepts/code-sandbox.md)), with its own shell and git.
+The Copilot tools are only on the remote server, not a self-hosted one.
 
 ---
 
 ## How code authoring works
 
-A seat the founder has gated with `role.sandbox.enabled` authors code through
-the [code sandbox](../concepts/code-sandbox.md). Where its executor is not in
-[box mode](../concepts/llm-backends.md#box-mode),
-`run_sandbox` is on the executor's surface; it calls it, and a coding agent
-runs in an isolated box and opens a pull request **as the agent's own GitHub
-App**: `role.sandbox.env` names `${GITHUB_APP_TOKEN_<HANDLE>}`, and the
-git-auth recipe reads the same token from a file the engine keeps current
+Every agent seat authors code through the
+[code sandbox](../concepts/code-sandbox.md): its executor is its coding CLI's
+[own run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box),
+which opens a pull request **as the agent's own GitHub App**:
+`role.sandbox.env` names `${GITHUB_APP_TOKEN_<HANDLE>}`, and the git-auth
+recipe reads the same token from a file the engine keeps current
 ([Acting as the app](#acting-as-the-app-the-seats-token)). Commits are made
 as `$CREWLET_AGENT_HANDLE` with `$CREWLET_AGENT_EMAIL`; set the seat's `email`
 to the app's bot noreply address,
 `<bot user id>+<slug>[bot]@users.noreply.github.com`, to have GitHub attribute
 them to the app. The bot user id is not the app id: it is the `id` GitHub
-answers for `GET /users/<slug>[bot]` once the app exists. The call is detached: the
-executor loop suspends and resumes with the result, so the agent reports the
-pull request in the same turn. A box-mode executor is never offered
-`run_sandbox`: it does its code work in its own run, whose box reads the same
-`role.sandbox.env` (see
-[Where code work runs](../concepts/code-sandbox.md#where-code-work-runs)).
+answers for `GET /users/<slug>[bot]` once the app exists. The run is detached:
+the turn suspends at launch and resumes with the run's report, so the agent
+reports the pull request in the same turn.
+
+An issue assigned to the agent says the same in its prompt
+(`issue.assigned`): any code change the issue needs is the agent's own to
+make, in its own checkout, and it opens the pull request under its own
+identity, since the executor reading the prompt is that run. An assigned
+pull request already exists, and its prompt says only how the assignment is
+declined here: reassign it.
 
 GitHub stays in the picture on the read/review/track side. Once the pull
 request exists, its `review_requested` event wakes the reviewer through
@@ -1119,8 +1128,8 @@ rather than silently reviewing.
 
 Roles with GitHub credentials also see the bundled `mcp:github`
 [Tool Skill](../concepts/tool-skills.md) in their executor prompt, which frames
-the GitHub tools as read/review/track tools with authoring pointed at the
-sandbox.
+the GitHub tools as read/review/track tools, with authoring done in the
+run's own checkout with its shell and git.
 
 For team-shared conventions — "Engineering uses semantic commits" — edit the
 knowledge-base page instead. The knowledge base is the single source of truth
@@ -1189,14 +1198,16 @@ units:
 - **An installation token cannot hold a seat's identity.** It authenticates
   as an app rather than a person, so `GET /user` names nobody and the seat is
   reported unresolved.
-- **Code authoring is the sandbox's job.** A role without
-  `role.sandbox.enabled` and an engine-level `providers.sandbox` can still
-  read, review and track through the GitHub tools; it has no engine-supported
-  path to author a pull request.
+- **Code authoring is the executor run's job.** Every agent seat's executor
+  is its coding CLI's own run with a shell and git in its box; a pull request
+  is opened from there with the token its `role.sandbox.env` declares (the
+  seat's own `${GITHUB_APP_TOKEN_<HANDLE>}`, or a personal access token) and a
+  git-auth setup step. A seat that declares none can still read, review and
+  track through the GitHub tools, and pushes nothing.
 - **A tool server inside a box keeps the token it started with.** It is handed
   one good for 50 minutes and is not restarted; past that GitHub refuses its
-  calls. git and `gh` read the file the engine keeps current, and a box-mode
-  seat reaches its own renewed GitHub server through the tool bridge.
+  calls. git and `gh` read the file the engine keeps current, and the seat's
+  executor reaches its own renewed GitHub server through the tool bridge.
 - **An app created with no webhook has one added by a person.** GitHub has no
   API for it; see [Running locally, with no public
   address](#running-locally-with-no-public-address).

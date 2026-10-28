@@ -50,8 +50,9 @@ const (
 	RefusalAlreadyAnswered    = mcp.RefusalAlreadyAnswered
 	RefusalReassignmentBudget = mcp.RefusalReassignmentBudget
 	RefusalInboxFull          = mcp.RefusalInboxFull
+	RefusalNotesFull          = mcp.RefusalNotesFull
+	RefusalNotesSpent         = mcp.RefusalNotesSpent
 	RefusalNotRunning         = mcp.RefusalNotRunning
-	RefusalSteerUnsupported   = mcp.RefusalSteerUnsupported
 	RefusalBudgetExhausted    = mcp.RefusalBudgetExhausted
 	RefusalUnavailable        = mcp.RefusalUnavailable
 	RefusalInternalError      = mcp.RefusalInternalError
@@ -489,10 +490,11 @@ func (v *OriginView) Unregister() []string { return v.reg.UnregisterOrigin(v.ori
 //
 // ONLY WHAT IS NOT ACTIVE, because an active tool's whole definition already
 // reaches the model with every request — as a tool of the CLI's `crewlet` MCP
-// server, in either mode — and a second copy of its
+// server, over the tool bridge to the executor's run in its box and over its
+// phase's tool session for every phase on this host — and a second copy of its
 // description in the system prompt is the same words paid for twice. On the
-// executor, which holds every first-party tool from its first round, that copy
-// was most of its system prompt. What is left is what the model can learn
+// executor, which holds every first-party tool from its launch, that copy was
+// most of its system prompt. What is left is what the model can learn
 // nowhere else: that a server exists, and that a tool it does not hold yet
 // does.
 //

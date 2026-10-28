@@ -331,6 +331,24 @@ func (c *capture) eventTypes(t *testing.T) []string {
 	return out
 }
 
+// settledTurns counts the `agent_turn_completed` frames that ended a turn
+// rather than parked one.
+//
+// A turn whose executor launched its run publishes a completion as it PARKS,
+// marked suspended, and another when the collected run's review ends it — so a
+// count of completions reaches two on one turn that has not finished.
+func (c *capture) settledTurns(t *testing.T) int {
+	t.Helper()
+	n := 0
+	for _, f := range c.snapshot() {
+		if f.kind == "event" && f.decoded && f.eventType == "agent_turn_completed" &&
+			f.payload["suspended"] != true {
+			n++
+		}
+	}
+	return n
+}
+
 // phaseRecords returns the payload of every `agent_phase_completed` frame.
 //
 // The PAYLOAD, which is what separates this from [capture.eventTypes]: a phase
@@ -736,13 +754,23 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	if len(records) == 0 {
 		t.Fatal("no phase record reached the socket with its payload")
 	}
-	// ONE CALL PER PROVIDER CALL: a phase's rounds, as every spend figure
-	// counts them (node/0040).
+	// ONE CALL PER PROVIDER CALL: a phase's rounds, and a coding run's
+	// own turns as its CLI reported them, as every spend figure counts
+	// them (node/0040) — and none for the executor's own record, whose
+	// run's calls are the run's.
 	var wantCalls int
 	for _, rec := range records {
 		rounds, _ := rec["rounds"].([]any)
 		used, _ := rec["rounds_used"].(float64)
-		wantCalls += tokens.PhaseCalls(len(rounds), int(used))
+		turns, _ := rec["cli_turns"].(float64)
+		phase, _ := rec["phase"].(string)
+		wantCalls += tokens.PhaseCalls(tokens.PhaseCounts{
+			Phase: phase, Rounds: len(rounds), RoundsUsed: int(used), CLITurns: int(turns),
+		})
+		if phase == "sandbox" && turns < 1 {
+			t.Errorf("the coding run's record carries no cli_turns; its CLI reported "+
+				"the turns its loop took, which are the run's calls: %v", rec)
+		}
 	}
 	if got := phaseTotals["calls"]; got != float64(wantCalls) {
 		t.Errorf("the rollup counted %v calls over the turn's phases, want the %d "+
@@ -789,6 +817,15 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 		if limit, _ := rec["max_rounds"].(float64); limit < used {
 			t.Errorf("the %v phase ran %v rounds under a stated cap of %v", rec["phase"], used, limit)
 		}
+		// THE EXECUTOR'S RECORD IS COLLECTED, NOT OBSERVED: every executor is
+		// its coding CLI's own run in a box, and its record states that run as
+		// the one round the engine saw — the launch and the answer — with the
+		// calls the run made over the seat's bridge, timed there. The engine
+		// saw none of the run's model requests, so no CLI run of the engine's
+		// covers its round, and the bridge has no request a call's tool_use id
+		// joins it to: the two checks below that read a phase's own requests
+		// are the phases on this host's.
+		collected := rec["phase"] == "execute"
 		calls, _ := rec["tool_executions"].([]any)
 		for _, raw := range calls {
 			call, _ := raw.(map[string]any)
@@ -797,6 +834,9 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 			}
 			if origin, _ := call["origin"].(string); origin == "" {
 				t.Errorf("the %v call %v names no origin", rec["phase"], call["name"])
+			}
+			if collected {
+				continue
 			}
 			// EVERY CALL UNDER THE ID ITS REQUEST GAVE IT: Claude Code hands
 			// the server its tool_use id with each call, which is how the
@@ -812,6 +852,9 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 		// run beside the requests: one contiguous stretch of rounds per run,
 		// together every round the phase used — each run having shown its
 		// requests, as Claude Code's record does — and the model that served.
+		if collected {
+			continue
+		}
 		covered := 0
 		invocations, _ := rec["invocations"].([]any)
 		for _, raw := range invocations {
@@ -1057,11 +1100,15 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// the founder's seat by the invitation that enrolled her, so the capture
 	// can end with a real `/operator/act` answer — the one the dashboard's
 	// session floor is raised from.
+	//
+	// AND THE EXECUTOR'S FLOOR OFF ([withoutExecutorFloor]): the CFO's
+	// ceiling is below it, which validation refuses, since no run of that
+	// seat could ever launch to make the call whose refusal is captured.
 	n := startNode(t, nodeSpec{company: func(doc string) string {
-		doc = strings.Replace(doc, "roles:\n", "roles:\n"+
+		doc = strings.Replace(withoutExecutorFloor(doc), "roles:\n", "roles:\n"+
 			"  - name: CFO\n"+
 			"    handle: cfo\n"+
-			"    llm: scripted\n", 1)
+			"    llm: [scripted, coder]\n", 1)
 		return doc + "\ntimezone: " + middayZone() + "\n"
 	}, boot: withSignIn})
 	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
@@ -1112,15 +1159,10 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	}
 	// BOTH TURNS, the refused seat's and the company's — counted rather than
 	// matched on the item, so a live call that stopped naming it fails the
-	// assertion below by name instead of timing this wait out.
+	// assertion below by name instead of timing this wait out. SETTLED,
+	// not parked: the company's turn parks on its executor's run first.
 	waitFor(t, "both seats' turns to complete", func() bool {
-		ended := 0
-		for _, kind := range frames.eventTypes(t) {
-			if kind == "agent_turn_completed" {
-				ended++
-			}
-		}
-		return ended >= 2
+		return frames.settledTurns(t) >= 2
 	}, func() string {
 		var items []any
 		for _, call := range frames.liveCalls(t) {
@@ -1331,6 +1373,23 @@ func TestAToolActsForTheSeatThatCalledIt(t *testing.T) {
 	}
 }
 
+// withoutExecutorFloor switches off the executor's budget floor
+// (turn_engine.executor_min_budget_tokens) in a golden company document.
+//
+// FOR A CASE WHOSE SUBJECT IS THE CAP REFUSING A CHARGE. The floor refuses
+// every executor launch on a window with less room than one run's opening
+// request, and the budget park holds a seat below it as starved — so a cap of
+// a few hundred tokens under the floor's default is a company whose seats
+// could never launch a run, which validation refuses outright at the
+// ceiling, and no charge would ever be made, let alone refused. The floor, its
+// park and that refusal have their own cases in internal/engine and
+// internal/config; these are about what the cap does to the charges a turn
+// makes.
+func withoutExecutorFloor(doc string) string {
+	return strings.Replace(doc, "turn_engine:\n  max_iterations: 1\n",
+		"turn_engine:\n  max_iterations: 1\n  executor_min_budget_tokens: 0\n", 1)
+}
+
 func TestATightBudgetStopsTheTurnAndCountsTheRoundItRefused(t *testing.T) {
 	t.Parallel()
 	// THE SEAM WAS NEVER SUPPLIED. runner.Config.Budget existed and every
@@ -1341,9 +1400,13 @@ func TestATightBudgetStopsTheTurnAndCountsTheRoundItRefused(t *testing.T) {
 	// than silently un-capping the company.
 	//
 	// THE CAP leaves room for the turn-start prefetch's knowledge query and
-	// ONE round of the turn's own loop, and not for a second — so the cap
-	// bites partway through the turn rather than before it starts, which is
-	// the case a pre-flight check would miss.
+	// ONE round of the turn's own loop — the onboarding pass's — and not for
+	// a second: the executor's run, charged whole when it is collected,
+	// crosses it, and the review after it is refused. So the cap bites
+	// partway through the turn rather than before it starts, which is the
+	// case a pre-flight check would miss. The executor's floor is off
+	// ([withoutExecutorFloor]): it would refuse the launch on the room left,
+	// which is the floor's case and not this one.
 	//
 	// THE CEILING IS WRITTEN WHERE AN OPERATOR WRITES IT, through `/config`
 	// once the node is running, and the case waits for the node to apply it
@@ -1360,7 +1423,7 @@ func TestATightBudgetStopsTheTurnAndCountsTheRoundItRefused(t *testing.T) {
 	aux, round := textReplyUsage.tokens(), toolUseUsage.tokens()
 	limit := aux + round + round/2
 	n := startWith(t, func(doc string) string {
-		return doc + "\ntimezone: " + middayZone() + "\n"
+		return withoutExecutorFloor(doc) + "\ntimezone: " + middayZone() + "\n"
 	})
 	setCompanyCeilings(t, n, map[period.Period]int{period.Day: limit})
 	zone := companyMidday(t, n.engine)
@@ -1509,8 +1572,11 @@ func TestAnOnboardingRefusalEndsTheTurnBeforeTheExecutor(t *testing.T) {
 	t.Parallel()
 	aux, round := textReplyUsage.tokens(), toolUseUsage.tokens()
 	limit := aux + round/2
+	// THE FLOOR OFF, for the reason [withoutExecutorFloor] gives: this cap
+	// is below it, which validation refuses, and the onboarding pass this
+	// case is about would never run.
 	n := startWith(t, func(doc string) string {
-		return doc + fmt.Sprintf("\ntoken_budget: {day: %d}\n", limit)
+		return withoutExecutorFloor(doc) + fmt.Sprintf("\ntoken_budget: {day: %d}\n", limit)
 	})
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "ceo")
