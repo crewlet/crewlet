@@ -72,6 +72,10 @@ type Reach struct {
 
 	// Config is whether the reader may read the company's configuration
 	// (an admin): which entries served a run, and a failure's own text.
+	// It gates the LIVE BROADCAST only. A seat's history read
+	// (maskHistory in internal/api/queries) is held to `audit.seat.read`,
+	// which a lead holds over that seat's trail, so its raw errors are
+	// within the lead's own grant there.
 	Config bool
 
 	// Record is the reader's own record ([iam.RecordOwner]) — the seat a
