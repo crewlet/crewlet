@@ -1292,8 +1292,12 @@ const (
 	// review's fixes (a restore decided once per turn in the session, a
 	// section matched by its path and name, Home's spent week through the
 	// remedy gate) took it to 4602.0 KiB, past it by bytes. 4603 KiB, which
-	// still refuses a doubled baseline.
-	treeBudget = 4<<20 + 507<<10
+	// still refuses a doubled baseline. Saying what became of an answer to a
+	// parked coding run (sent, recorded while its seat is busy and on what,
+	// answered, or not used and why) off the run's own record, rather than
+	// calling a `pending` press answered, took it to 4604.9 KiB. 4605 KiB,
+	// which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 509<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers
