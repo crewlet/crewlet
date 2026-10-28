@@ -44,7 +44,7 @@ func TestEveryListingSkipsARecordItCannotDecode(t *testing.T) {
 		"all":        func() ([]PendingRun, error) { return rig.pending.ListActive(t.Context()) },
 		"by handle":  func() ([]PendingRun, error) { return rig.pending.ListActiveForSeat(t.Context(), "swe") },
 		"by seat id": func() ([]PendingRun, error) { return rig.pending.ListActiveForSeatID(t.Context(), sweSeat()) },
-		"the epochs": func() ([]PendingRun, error) {
+		"every status": func() ([]PendingRun, error) {
 			return rig.pending.list(t.Context(), func(PendingRun) bool { return true })
 		},
 	} {

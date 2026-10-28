@@ -970,8 +970,12 @@ func TestABareRetirementSkipsARecordNothingCanRead(t *testing.T) {
 		t.Fatalf("CreateSandboxRun: %v", err)
 	}
 	bare := &Engine{backends: &Backends{Fleet: fleet}}
-	if err := bare.retireSeatRuns(t.Context(), swe, "swe", "retirement:1", 3); err == nil {
-		t.Fatal("a node with no coordinator let the retirement proceed over a recorded run")
+	// Refused over the READABLE run, and over it alone: a listing that failed
+	// on the unreadable record would refuse too, for the wrong reason.
+	if err := bare.retireSeatRuns(t.Context(), swe, "swe", "retirement:1", 3); err == nil ||
+		!strings.Contains(err.Error(), "still has 1 coding runs") {
+		t.Fatalf("the retirement of a seat with one readable run = %v, want it refused over "+
+			"that run", err)
 	}
 	if err := bare.retireSeatRuns(t.Context(), pm, "pm", "retirement:1", 3); err != nil {
 		t.Fatalf("a seat with no readable run was refused beside an unreadable record: %v", err)
