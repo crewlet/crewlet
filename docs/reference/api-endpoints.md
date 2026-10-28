@@ -411,7 +411,7 @@ node means nothing was done.
 | `POST` | `/webhooks/datadog` | Receive a Datadog monitor alert, authenticated by a constant-time comparison of `X-Crewlet-Token`. Datadog signs nothing, so the token is the whole check: an unset one answers `503`, and one shorter than 26 characters answers `503` too — see [Datadog](../integrations/datadog.md#verification-is-weaker-here-and-that-is-the-providers-ceiling) |
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
 | `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
-| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to the seat's executor, its coding CLI's run in a box — by the node holding the seat, to which the node the call reaches relays it over the broker. Per-run token in the path; all three verbs because that is what the transport uses. `401` for a token that is forged, expired, or names a run that is over; `503` with a `Retry-After` while no node can answer for the run's seat, after waiting up to two seat-lease lifetimes for one; `502` when the seat's holder took the call and stopped answering before it wrote a status |
+| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to the seat's executor, its coding CLI's run in a box — by the node holding the seat, to which the node the call reaches relays it over the broker. Per-run token in the path; all three verbs because that is what the transport uses. `401` for a token that is forged, expired, or names a run that is over; `403 Forbidden: invalid Host header "<host>"` (plain text, from the bridge's own host check) for a call on the node's loopback whose `Host` is neither loopback nor a container runtime's name for the engine host (`host.docker.internal`, `host.containers.internal`), as a proxy or tunnel on the engine host sends one that passes the public `Host` on; `503` with a `Retry-After` while no node can answer for the run's seat, after waiting up to two seat-lease lifetimes for one; `502` when the seat's holder took the call and stopped answering before it wrote a status. Mounted only on a node that has a bridge: one given `CREWLET_MCP_BRIDGE_URL`, or one that runs seats as well as serving the API, for its own `direct` boxes; on any other node the route is absent |
 | `GET` | `/mcp/{token}/steer/notes?after={seq}` | The run's [notes](../concepts/code-sandbox.md#notes-to-a-running-run): the notes waiting for its turn past the cursor, `{"notes": [{seq, id, inbox, message}]}`, held up to ten seconds while none waits and answered at once when one arrives. `503` with a `Retry-After` once the node is stopping (`draining`) or the run's session has ended here (`unavailable`), the held poll included: its notes wait for the session's next opening. The same token, routing and refusals as the bridge; `404` for a run that has nothing to steer |
 | `POST` | `/mcp/{token}/steer/read` | Record the notes the run's CLI put in front of its model, `{"ids": [...]}` (one to ten, at most 64 KiB): `204`, or `503` with a `Retry-After` when the record could not be written, and the notes wait |
 | `GET` `POST` `DELETE` | `/operator/mcp` | Worklet and Doclet, served over MCP to **your** AI assistant. **Always needs a credential**, which for an assistant is a [machine token](#post-iamcredentials-mints-a-machine-token) acting as you: it files and moves work (see [below](#operatormcp--your-own-assistant)). The catalogue is built per request: `503 no_active_revision` until this node's first company brings Worklet or Doclet up, and `404 no_route` on a company that runs neither |
@@ -689,7 +689,7 @@ told they lead nobody goes looking for an authority they already hold.
 | **everybody** | The [overview](../concepts/identity-and-access.md#everybodys-overview), for every principal the guard resolved whose stage may act: `/agents`, `/agents/activity` and the `agent` and `live_call` questions (an agent's **status**, with its **body** to an administrator and to whoever leads the seat, [below](#a-status-reader-never-receives-a-transcript)), `/org`, `/tools`, `/schedules` and their runs, `/budgets`, `/sandbox-runs` (status; the same body rule), `/tokens/*`, `/viewer`, `/stream/snapshot`, `/ws/stream`, `GET /iam/seats` (masked per reader), the `seat_activity` and `colleague` questions, and the cross-app answers filtered row by row: `/feed`, `decisions`, `answered_decisions` and the `knowledge` question |
 | `worklet` | The reads under `/worklet/*`, the [write surface's](#the-human-write-surface) item routes, a project's files (`GET`/`PUT /worklet/files/…`; removing one is the project lead's), every `work_*` question, the socket's `inbox_changed` push, and `/operator/mcp`'s Worklet half. Some verbs also ask a RELATION beside the app: re-routing, a project's policy and taking an item out of circulation are its project lead's, and a person's inbox, queue and person view are their own and their lead's |
 | `doclet` | The reads under `/doclet/pages/*` and `/containers`, the page questions, and writing Doclet's pages. A rename, the trash and a restore are also the container's lead's or the page's creator's; see [the write surface](#the-human-write-surface) |
-| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model (a coding CLI the host runs), a `run_in: self` sandbox), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, `/mcp-servers`, `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/worklet/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, and the two purges (`/worklet/items/{key}/purge`, `/doclet/pages/{id}/purge`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
+| `admin` | Running the company and the engine, and **host access**, conferred like it: the configuration it writes runs commands on every engine host (an `mcp_servers` entry, a seat's `mcp_env`, a `providers.llm` model — a coding CLI the host runs — and a `direct` cell, an entry's `run_in` or `providers.sandbox.default_run_in`, which runs agent seats' executors there as fully permissioned coding CLIs), so a holder can run anything there and read whatever a process there can, the keyring included (see [Identity and Access](../concepts/identity-and-access.md#what-admin-runs)). Every route under `/config*` (the org chart's leads may also read and write what is inside the units they lead: [A lead edits their own team](#a-lead-edits-their-own-team)), `/integrations`, `/mcp-servers`, `/setup`, every `/secrets` route, every `/iam/*` route about anybody but the caller, the deployment's own controls (`/fleet`, `/fleet/broker*`, every `/worklet/retention*` route, `/backup`, `/backups`), the company-wide trail (`/events*`, the socket's `event` push and the snapshot's `events` section, the turn, phase, trace and A2A-channel questions, `/iam/audit`, `/artifacts/trail`), a seat's resolved model chain and tool sources on `/org`, the workspace catalogue's writes, a page in the tool-skills container, and the two purges (`/worklet/items/{key}/purge`, `/doclet/pages/{id}/purge`). It **includes every app**, and it is the **admin path** of every relation rule: a holder is admitted where a lead or an owner would be |
 | `audit.seat.read` | One seat's own trail — `/agents/{id}/memory`, `/agents/{id}/memory/episodes/{episode}`, `/agents/{id}/conversations`, `memory_overview` (filtered to the seats the caller may read), `turns?seat=` and `phases?seat=`, and a coding run's tail (`/sandbox-runs/{turn_id}/tail`) — decided per seat: **its lead**, or `admin` |
 
 A question asked on the socket is decided by the same declaration the REST
@@ -3314,7 +3314,7 @@ coding run is a row of its own, `phase: sandbox`, published when the run is
 collected: its tokens, its `launch_id` (a turn can launch two runs in one
 iteration, so the launch is part of that row's identity), its report as
 `response` and its `activity_transcript` — see
-[each run is published as a phase](../concepts/code-sandbox.md#runs-are-uncapped-each-run-is-published-as-a-phase).
+[each run is published as a phase](../concepts/code-sandbox.md#a-run-is-bounded-by-its-rounds-each-run-is-published-as-a-phase).
 A finished row also carries `duration_ms`, which a live one cannot: it is the
 engine's own measurement of the phase, published on the record rather than
 reconstructed by pairing it with the `agent_phase_started` that shares its key.
@@ -3323,16 +3323,17 @@ CLI's own loop, in another process — never *took no time*. A phase that failed
 before it reached a provider also truncates to zero at this resolution;
 `failed` is what separates the two.
 
-It measures the **whole** phase, including a suspend. A detached coding run
-parks the executor mid-loop and the phase is re-entered later — after a
-restart, possibly on another node — and the parked row carries the clock
-across with the rounds and the tokens, so the one record the phase publishes
-reports the run rather than the seconds spent collecting its answer.
+It measures the phase's **own segments**. The executor launches its run and
+parks, and when the run is collected the same turn re-enters the phase — after
+a restart, possibly on another node — so the one record the phase publishes
+carries the launch segment's time, carried across on the park, plus the
+collection's, and never the run between them: the run's own time and tokens
+are on the `phase: sandbox` row of the box it ran in.
 
 A finished row carries the phase's **timeline** too, and so does every other
 reader of the record — `phases`, `turn`, `trace` and `event` answer the stored
 payload verbatim: `started_at` (when this segment began — not published minus
-`duration_ms`, which on a resumed phase spans a coding run), `rounds[]` (one
+`duration_ms`, which on a resumed phase also counts the launch segment), `rounds[]` (one
 `{round, started_at, duration_ms, model, input_tokens, output_tokens,
 cache_read_tokens, cache_write_tokens, tool_calls, stop_reason}` per model
 request the CLI's record showed, the model's half of the round only;
@@ -3597,7 +3598,7 @@ shaped the same way.
                       while a person has the seat paused, or null) */ }, ... ],
   "events":    [ { /* recent event row, newest first — payload-free, plus
                       a `failed` boolean */ }, ... ],
-  "sandboxes": [ { /* in-flight detached coding run: turn_id, role,
+  "sandboxes": [ { /* an executor run in flight: turn_id, role,
                       agent_handle, agent_id, coding_agent, provider_key and
                       model (the executor-chain member it was launched on),
                       sandbox_id, task, status (the run record's own word),
@@ -4225,7 +4226,7 @@ way. The fields are these:
 - `running_calls` is every tool call running right now, in the order the calls arrived, each `{id, round, name, arguments, started_at}` — a **list**, because a coding CLI may make a response's calls at once. `id` is the call's id, which its `tool_executions` row carries as `call_id` once it has answered. It is absent while no call runs, and never carried forward from an earlier frame: a frame that stops listing a call means the call returned.
 - `steers` is every person's note the phase has read so far, `{round, note_id, boundary}` — the round whose provider call first saw it, and the kind of step that read it (`round`, or `brief`, `tool_batch`, `finish` or `step` for a read by the phase's coding run, which is round 1). What the note said and who sent it are on the turn's `agent_turn_steered` rows. See [steering a running turn](#steering-a-running-turn).
 - `node` is the node running the call.
-- `versions` is `{prompt, response, narration, executions, rounds}`: the version of the copy the call holds of each of its heavy fields — `prompt` numbers `prompt` and `prompt_messages`, `response` the `response`, `narration` the `round_narration`, `executions` the `tool_executions` and `rounds` the `rounds` — a number the node's projection never hands out twice, taken whenever the field is written: every field of a call when the call begins, and after that each field a frame changes. So on the node a tab's socket reads, a version only grows, for every call under every key — and a call built again under its own key (`turn_id`, `phase`, `iteration`), as a suspended Execute phase is when its resumed rounds stream after the checkpoint cleared it, is newer in every field than the copy a tab held from before. A tab that reconnects is sent a snapshot, which replaces every copy it holds. Every surface that carries a call carries it.
+- `versions` is `{prompt, response, narration, executions, rounds}`: the version of the copy the call holds of each of its heavy fields — `prompt` numbers `prompt` and `prompt_messages`, `response` the `response`, `narration` the `round_narration`, `executions` the `tool_executions` and `rounds` the `rounds` — a number the node's projection never hands out twice, taken whenever the field is written: every field of a call when the call begins, and after that each field a frame changes. So on the node a tab's socket reads, a version only grows, for every call under every key — and a call cleared and built again under its own key (`turn_id`, `phase`, `iteration`) is newer in every field than the copy a tab held from before. A tab that reconnects is sent a snapshot, which replaces every copy it holds. Every surface that carries a call carries it.
 
 Beside `live_call`, each seat carries `live_call_seq`: the node projection's
 own sequence — the one `versions` are taken from — read when the seat's call
@@ -4263,8 +4264,8 @@ pushes out of it are trimmed, and each is reassembled on the other side:
   and the tab keeps the copy it holds. They move once a round or once a tool
   call; between those moments a push is the round being written
   (`partial_round`), the call in flight and the light fields. Measured over one
-  long executor phase (thirty rounds, 1 311 frames), each open tab was sent
-  185 MiB with every push whole, and is sent 5.9 MiB.
+  long phase streamed on the engine host (thirty rounds, 1 311 frames), each
+  open tab was sent 185 MiB with every push whole, and is sent 5.9 MiB.
 - **A dropped push is noticed by the next one.** The socket drops a slow tab's
   oldest envelope rather than stalling every other tab, which is why the pushes
   used to be whole: a frame that carried only what changed, dropped, would
@@ -4291,11 +4292,10 @@ pushes out of it are trimmed, and each is reassembled on the other side:
   leaves the call as the answer had it, and its other fields still apply.
 - **A version is never handed out twice**, so "moved" and "newer" are one
   question. Counted per call, a call cleared and built again under the same
-  key — a suspended Execute phase, whose completion checkpoint clears its call
-  and whose resumed rounds stream under the same turn, phase and iteration —
-  numbered its fields from one again, and a tab that had missed the clearing
-  push and the first one after it read every later push as older than the
-  copy it held from before the suspension, and kept that copy.
+  turn, phase and iteration would number its fields from one again, and a tab
+  that had missed the clearing push and the first one after it would read
+  every later push as older than the copy it held from before, and keep that
+  copy.
 
 ### `WS /ws/stream`
 
@@ -5251,7 +5251,7 @@ answers any parked run by naming it:
 | Argument | |
 |---|---|
 | `turn_id` | The parked run's `turn_id`, as [`GET /sandbox-runs`](#get-sandbox-runs) lists it. |
-| `answer` | What the coding agent should be told, at most 32 KiB — it is spliced into the run as one tool reply. |
+| `answer` | What the coding agent should be told, at most 32 KiB. It carries the run on: the coding CLI is launched again in the box the run kept, continuing its own session with the answer as its next message, where the relaunch reuses that box (the box was kept, the member picked runs the same CLI in the same cell, and the box is the resuming node's to drive); otherwise afresh in a new box from the run's pushed branch, told the question and the answer. |
 
 It answers `{"turn_id", "agent_handle", "question", "outcome": "pending"}`:
 the answer is on the inbox of the seat holding the run, and **that** node
@@ -5485,10 +5485,9 @@ offered against **any** knowledge backend, Confluence included — a ranked
 search over the company's own wiki is exactly as useful to an assistant there.
 
 The turn-only tools are deliberately absent: the memory tools (a diary belongs
-to a seat), the skill tools (a skill is loaded into a phase), `a2a_ask` (a
+to a seat), the skill tools (a skill is loaded into a phase) and `a2a_ask` (a
 colleague's answer comes back by waking a seat, and there is nobody here for
-it to reach) and `run_sandbox` (a detached run resumes a suspended phase that
-does not exist — answering a run a seat started is `answer_run`).
+it to reach). Answering a run a seat started is `answer_run`.
 
 ### Seeding a knowledge base with it
 
@@ -7957,7 +7956,7 @@ as every other control of the deployment does, and both are refused during a
 
 ### `GET /sandbox-runs`
 
-Every detached [coding run](../concepts/code-sandbox.md) the engine still
+Every seat's [executor run](../concepts/code-sandbox.md) the engine still
 holds, oldest first — `launching`, `running`, `awaiting_clarification`,
 `reseed`, `answered` and `resumed` run records. An `answered` run has a
 person's reply recorded as the answer to its question and is owed the resume
@@ -7972,9 +7971,9 @@ turn's own events, a `sandbox_run_failed` event naming the reason, or a
 `sandbox_run_stopped` event naming who stopped it.
 
 A `launching` run is one whose coding job has started while the turn that
-started it is still unwinding, so the suspended conversation a resume
-re-enters is not on the row yet; it is listed but never polled, because a
-row nobody lists is a box nobody reclaims.
+started it is still unwinding, so the parked turn state its collection reads
+is not on the row yet; it is listed but never polled, because a row nobody
+lists is a box nobody reclaims.
 
 This query reads the durable row directly. The live projection's panel is
 reconciled against the same record every 30 seconds, but it carries only what
@@ -8833,7 +8832,7 @@ path — its buckets are company days, which only the usage domain holds.
 
 | Band | Phases |
 |------|--------|
-| `execute` | `execute`, `sandbox` (a detached coding run is the executor's own work done elsewhere) |
+| `execute` | `execute`, `sandbox` (the executor's own run, recorded from the box it ran in) |
 | `review` | `review` |
 | `workers` | `subagent` — the workers an executor delegated to |
 | `auxiliary` | `auxiliary`, `judge`, `onboarding`, and any phase this build does not know |

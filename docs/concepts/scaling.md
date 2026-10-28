@@ -27,13 +27,13 @@ node:
   id: "${CREWLET_NODE_ID}"           # distinct and stable, per process
   roles: [data, ingress, seats, workers]   # the default; omit the key
   labels: {zone: eu}                 # optional, matched by role.placement
-  max_concurrent: 32                 # agent turns this process runs at once
+  max_concurrent: 32                 # turn segments this process runs at once; a run in its box holds none
 ```
 
 | Role | What it does |
 |---|---|
 | `data` | Holds the company's durable state on its own disk: a full copy of the replicated estate, and the event log. `workers`' duties and `ingress`'s retention, capacity, eviction and backup surfaces read this node's own copy directly, so both require it (the API's tracker and knowledge-base routes go through the [estate router](#how-a-request-reaches-the-estate) instead). It does not decide the node's broker — its `stream` block does ([broker kinds](../guides/fleet.md#the-broker-members-and-leaves)) — but a data node on a leaf is refused, so every data node is a broker member holding a share of its replicas and a vote in its quorums. A node without it is [stateless](#a-node-that-holds-no-data) |
-| `ingress` | Serves the HTTP API — every integration's webhooks, the dashboard, the REST and WebSocket read surface, and the tool bridge every seat's executor reaches its tools through from its box, which relays each call to the node holding the run's seat |
+| `ingress` | Serves the HTTP API — every integration's webhooks, the dashboard, the REST and WebSocket read surface, and the tool bridge every seat's executor reaches its tools through from its box, which relays each call to the node holding the run's seat — served where the node is given `CREWLET_MCP_BRIDGE_URL`, or, for its own `direct` boxes alone, where it runs `seats` too ([Running a Fleet](../guides/fleet.md#what-a-fleet-needs)) |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns, and answers their executor runs' tool calls, relayed to it from an `ingress` node — through the fleet's `CREWLET_MCP_BRIDGE_URL`, or, for a `direct` box on a node that is `ingress` too, that node's own listener on loopback |
 | `workers` | The company-wide [singleton duties](seat-ownership.md#singleton-duties): the scheduler tick, the sandbox waiter, the maintenance sweep (retention and removed-seat mailbox retirement), the integration reconcile loop, the learning passes (skill clustering, curation, episode compaction, promotion), the state logs' trim, the embedding duty and the identity sweep. These read their work list from the **org**, never from the node's own seats: a `workers` node runs no seats at all, so a duty that iterated the local seats would cover nothing. Creating every seat's mailbox is not among them: every node converges those, at start, on each apply and on its own seat sweep — see [What a mailbox costs](#what-a-mailbox-costs) for why running it everywhere is affordable |
 
@@ -564,8 +564,10 @@ theoretical one:
   and [A seat's memory follows it](seat-ownership.md#a-seats-memory-follows-it).
 - **Per-company singletons remain singletons.** They sit behind leases so any
   node can host them, but the scheduler tick, the curator, clustering, the
-  sandbox waiter and the object store's collector are each one logical
-  instance at a time. A fleet does not parallelise them.
+  fleet's sandbox waiter (the `e2b` boxes) and the object store's collector are
+  each one logical instance at a time. A fleet does not parallelise them. The
+  `direct` and `container` boxes are the exception: every node polls the boxes
+  on its own host itself, under no duty.
 - **A rolling upgrade across a protocol bump has a visible outage window**, and
   a rollback across one needs a full drain. See
   [Mixed-version fleets](seat-ownership.md#mixed-version-fleets).

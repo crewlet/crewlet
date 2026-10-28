@@ -649,10 +649,12 @@ credentials are written in the configuration document.
 | Owns: tracker project, knowledge space | Agent seats. The seat's own `project` and `space`: where unrouted work for the seat goes and where it files its own. Not a permission. Shown unless the company runs no tracker or no knowledge base, as for a unit. Changing either takes `admin`. |
 
 Shown with the reason they are not changed here: per-phase models
-(`llm_review` and the other `llm_*` fields), sandbox (enabled, where it runs),
-workers, placement, learning, tool credentials (names only) and whether the
-seat is the Datadog fallback. Sandbox, placement, workers and tool credentials
-each depend on a company-level block the builder does not edit.
+(`llm_review` and the other `llm_*` fields), the executor box (the seat's
+setup steps, variables, tool servers and turn cap; where it runs is its model
+entry's `run_in`), workers, placement, learning, tool credentials (names only)
+and whether the seat is the Datadog fallback. The executor box, placement,
+workers and tool credentials each depend on a company-level block the builder
+does not edit.
 
 **Delete seat** is on the editor's last tab (**Advanced** for an agent seat,
 **Work** for a human seat) and opens the same dialog as the chart's Delete.

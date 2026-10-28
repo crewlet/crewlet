@@ -61,6 +61,14 @@ every gesture a person must be present for, and the identity domain refuses an
 administrative record written through a machine token at the record itself, so
 a CLI, a duty or a test is held to it exactly as a route is.
 
+## Amendment: one seat-only verb
+
+Since [ADR-0065](0065-every-executor-is-its-coding-clis-own-run.md) every
+agent seat's executor is its coding CLI's own run, launched by the turn
+itself, and no tool starts a coding run, so there is no verb for one.
+`seatOnly` marks one verb, asking a colleague (`a2a_ask`), where the decision
+above names two.
+
 ## What this does not decide
 
 It does not decide **what a team lead may change** in the org chart, which is

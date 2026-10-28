@@ -46,8 +46,9 @@ It won't dump YAML at you first. It asks what the company does, who's on
 it, where *you* sit in the chart, which surfaces the work lives on, and
 what model and budget to use — whose models, and whether you pay with a plan
 or a key, since every model runs through that vendor's own coding CLI (Claude
-Code, Codex, or OpenCode for open models; see
-[LLM Backends](../concepts/llm-backends.md#picking-a-cli)). Give rough answers — it proposes a
+Code, Codex, or OpenCode for open models; only Claude Code and OpenCode can run
+a seat's executor, in a box from `providers.sandbox`, which the company then
+needs; see [LLM Backends](../concepts/llm-backends.md#picking-a-cli)). Give rough answers — it proposes a
 concrete org chart and you correct it. It should also, without being
 asked:
 

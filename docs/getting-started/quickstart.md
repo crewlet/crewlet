@@ -157,7 +157,13 @@ providers:
       state_dir: "./acme-data/sandboxes"
     default_run_in: direct              # the claude binary, run as you, on this host;
                                         # it calls the seat's tools back through this
-                                        # node's own listener, so nothing else to set
+                                        # node's own listener, so nothing else to set.
+                                        # Every seat's executor is Claude Code's own
+                                        # run, fully permissioned (its shell and editor,
+                                        # bypassPermissions) as your own account; to
+                                        # take the runs off it, move them into a
+                                        # container (see Code Sandbox, "Bring your
+                                        # own image")
 
 # Org-wide roles — these sit above all teams and manage team leads.
 roles:
@@ -278,7 +284,9 @@ providers:
     plan:
       model: sonnet
 
-    # OpenAI's models through Codex
+    # OpenAI's models through Codex: for a seat's reviewer, workers and side
+    #   passes (llm_review, llm_subagent, …); only claude-code and opencode run
+    #   a seat's executor
     gpt:
       agent: codex
       model: gpt-5
@@ -361,7 +369,12 @@ refused rather than read as unlimited. When a round would take a window past
 its ceiling, the agent's turn stops immediately and a `budget_exhausted` event
 is emitted, naming the window and when it resets. Until then the agent's new
 messages wait on its inbox rather than being lost, and they are delivered when
-the window turns over — or at once, if you raise the ceiling.
+the window turns over — or at once, if you raise the ceiling. Every turn
+launches an executor, which needs `turn_engine.executor_min_budget_tokens`
+(25000 by default) left in every capped window: a seat whose window leaves less
+waits parked the same way, and a `token_budget` ceiling below that floor is
+refused when you write it. The run's own spend is charged when it is
+collected.
 
 Usage is **durable** — it lives in the fleet's
 [coordination store](../concepts/coordination.md), so it survives restarts and
@@ -591,8 +604,11 @@ opens Live's *Now running* when several are running (or none).
 
 Within five minutes the `hello-crewlet` schedule fires a `TaskAssigned` at the
 CEO. **Live** shows it: *Now running* has the seat working, and **Turns**
-shows the turn as it runs — Execute, then Review, each phase listing the rounds
-it took, the tools each round called, and the prompts the model actually saw.
+shows the turn as it runs — Execute (Claude Code's own run in a box, shown live
+while it works and recorded as one round with the calls it made to the seat's
+tools, beside the run's own card with its activity and tokens), then Review,
+each phase listing the rounds it took, the tools each round called, and the
+prompts the model actually saw.
 A turn has those two phases: Execute both decides and acts, because the frame
 that works out what to do is the frame that does it, and Review then judges
 what the round actually landed. On a seat's very first turn one more runs
@@ -737,7 +753,10 @@ keys edits one the configuration already declares — so one step stays outside
 it. Until it is done the company runs and no agent seat takes a turn; whatever
 is sent to a seat waits on its inbox. The builder's next steps give it: with
 `crewlet run` stopped, write the company to a file with `crewlet config
-export`, add `providers.llm` to it, sign the CLI in with `crewlet llm login`
+export`, add `providers.llm` and `providers.sandbox` to it (`local: {}` with
+`default_run_in: direct` runs every executor on this host — a company with
+agent seats and a model is refused without a sandbox), sign the CLI in with
+`crewlet llm login`
 (a captured token goes into the fleet's secret store through the node's own
 broker, which the command starts while the node is stopped), import the file
 and start the node again
@@ -787,24 +806,33 @@ stream:
     urls: ["nats-leaf://127.0.0.1:7422"]
 coordination:
   type: embedded-kv
-# and the same `secrets:` block as crewlet.yaml, if you configured one:
-# this node decrypts the company document and the secret store itself
+secrets:                  # the same keyring as crewlet.yaml — REQUIRED on
+                          #   every node: this one decrypts the company
+                          #   document and the secret store itself
+  active_key_id: "2026-01"
+  keys:
+    - id: "2026-01"
+      material: "${CREWLET_SECRET_KEY_2026_01}"
 ```
 
 ```bash
-crewlet run -config crewlet.yaml -api-port 8000   # terminal 1
-
-# terminal 2: the agents node's boxes reach their tools through terminal 1
+# both terminals: the fleet's tool-bridge address, the data node's API
 export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"
-crewlet run -config agents.yaml -api-port 0
+
+crewlet run -config crewlet.yaml -api-port 8000   # terminal 1
+crewlet run -config agents.yaml -api-port 0       # terminal 2
 ```
 
 Every seat's executor runs its CLI in a box on the agents node, and the box
 calls the seat's tools back through the tool bridge. A node without the
-`ingress` role serves no route of its own, so its boxes dial the data node's
-API — `CREWLET_MCP_BRIDGE_URL` — which relays each call to the agents node over
-the broker. `-api-port 0` binds nothing on the agents node. Give it a port of
-its own instead (`-api-port 8001`) when something should probe it: without the
+`ingress` role serves no route of its own, so its boxes dial
+`CREWLET_MCP_BRIDGE_URL`, the data node's API, and the data node relays each
+call to the agents node over the broker. The data node needs the variable too:
+a node that runs no seats serves the bridge's route only when it is set, and
+without it every call the agents node's boxes make finds no route there.
+Export it in each terminal, beside the variables from step 3. `-api-port 0`
+binds nothing on the agents node. Give it a port of its own instead
+(`-api-port 8001`) when something should probe it: without the
 `ingress` role it serves `/health` and `/ready` there and nothing else, and its
 `/ready` turns `200` once it has joined the fleet and been admitted — see
 [Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress).
@@ -908,10 +936,11 @@ each), then wire them in:
   so shared procedures surface in the executor's `## Relevant knowledge`
   block; publish version-controlled docs with `crewlet confluence import`
 - Connect a code host — [GitLab](../integrations/gitlab.md) or
-  [GitHub](../integrations/github.md) — and enable the
-  [code sandbox](../concepts/code-sandbox.md) so engineer roles author real
-  merge requests; to take their runs off your own account, move them from
-  `direct` into a container with
+  [GitHub](../integrations/github.md) — and give each seat that pushes its
+  code-host token in `role.sandbox.env` plus the git-auth setup step
+  ([code sandbox](../concepts/code-sandbox.md#the-git-auth-recipe)), so its
+  executor's run opens real merge requests under its own identity; to take the
+  runs off your own account, move them from `direct` into a container with
   [an image of your own](../concepts/code-sandbox.md#bring-your-own-image),
   which dials `CREWLET_MCP_BRIDGE_URL` (on Linux with `api.host` not bound to
   loopback)
@@ -939,8 +968,8 @@ each), then wire them in:
   source and no shell to be in
 - Explore the [Nimbus example](../../examples/) — a seven-seat company on
   Mattermost, running on Claude Code with your Claude plan rather than an API
-  key (`nimbus-claude-cli`), its engineering seats running that CLI as their own
-  agentic loop.
+  key (`nimbus-claude-cli`), every seat running that CLI as its own agentic
+  loop, in a `direct` box on the engine host.
   It is the next step up from this page and still needs nothing but the chat
   server in this repo's compose file; every integration above adds on top of
   it

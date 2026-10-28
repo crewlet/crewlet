@@ -56,7 +56,7 @@ The four reasons a seat is `stopped`, in the order they are stated when more tha
 
 **A failed last turn is not a stop.** A turn guard that fired (stall, max iterations, the delegation-depth cap, a scheduled turn's wall-clock cap, an unhandled exception) fails that turn, and the seat takes its next wake like any other: it reads `idle`, and why its last turn failed is `last_error` and `last_turn.outcome`, which are separate fields.
 
-**The runs are read from the durable record**, not from the turn's stage. A turn that launched a detached coding run is `parked`, and a park says only that a run was launched; the run record — reconciled into the projection at boot and every thirty seconds, and never aged out — says whether that run is still running, has stopped to ask somebody, or is gone. A run parked on a question for thirteen hours is exactly the seat a person most needs to see, and it reads `needs` for as long as it waits.
+**The runs are read from the durable record**, not from the turn's stage. A turn whose executor launched its detached run is `parked` — every turn is, while its run works — and a park says only that a run was launched; the run record — reconciled into the projection at boot and every thirty seconds, and never aged out — says whether that run is still running, has stopped to ask somebody, or is gone. A run parked on a question for thirteen hours is exactly the seat a person most needs to see, and it reads `needs` for as long as it waits.
 
 Beside the state, the projection holds **the turn the seat is on** and **the last turn it ended**. Both are on every seat row of the `agents` push:
 
@@ -81,7 +81,12 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
    WORK ITEM it is on (the trigger's, a colleague's ask's, or a parked
    run's) — announced on agent_turn_started before the prefetch
 
-2. Executor phase
+2. Executor phase: the seat's coding CLI's own run, in a box
+   ├── Launched detached, from the turn's pinned revision: the turn
+   │     PARKS, and the run's collection re-enters this same turn
+   │     for steps 3 and 4 (see Code Sandbox)
+   ├── Its own shell, editor and checkout; the seat's tools reach it
+   │     over the tool bridge as one MCP server, crewlet
    ├── Tool surface = every first-party tool except mark_onboarded,
    │     plus submit_work, activate_tool, list_mcp_server_tools. A tool left out is out
    │     of reach too, and activate_tool cannot reach it
@@ -92,12 +97,11 @@ Each agent, when triggered (by event or task assignment), executes a **turn** th
    │     names, then activate_tool(name) to make it callable from the
    │     next round. Nothing is named in advance, so nothing has to be
    │     reconciled afterwards.
-   └── Ends by calling submit_work: outcome, summary, deliveries,
-         checked against the engine's own record of the turn — every
-         round of it, so a delivery an earlier round made is citable.
-         A round that ends in prose instead is not an end: the loop
-         asks again, naming submit_work, at most twice in a row, before
-         the phase is rescued as incomplete
+   └── Ends by calling submit_work over the bridge: outcome, summary,
+         deliveries, checked against the engine's own record of the
+         turn — every round of it, so a delivery an earlier round made
+         is citable. A run that ends without the call is rescued as
+         incomplete
 
 3. Engine check (no model call), over the whole turn's record
    ├── no_action nobody asked for and nothing acted on -> the turn ends
@@ -164,8 +168,8 @@ Under the two-stage [Turn Engine](turn-engine.md), each phase builds its own nar
 
 | Phase | What's in the prompt |
 |---|---|
-| **Executor** | Identity (role, unit, goal, manager, direct reports, team channel), company mission and vision, full policy text, role profile (backstory, responsibilities, behavioral guidelines), unit context (purpose, goals), team roster with per-member profile (leads only), the `## Human colleagues` note (only in a company with human seats), the executor's contract, ``## When a decision is not yours to make`` (the escalation guidance below; only when the seat holds `comment_on_work_item`), ``## Text somebody else wrote`` (the one sentence that says how to read a fence; see [text somebody else wrote](#text-somebody-else-wrote) below), ``## Sandbox code work`` (only when the seat is offered `run_sandbox`), ``## Your workers`` (the seat's `workers:` templates, one line each; only when it holds `delegate`), [Tool Skills](tool-skills.md) **catalogue** (one-line summary per triggered skill), ``## Tools to discover`` (MCP server names, their tool names hidden behind ``list_mcp_server_tools``; no first-party tool, since every one is offered from the first round with its whole definition). Plus ``## The thread so far``, the chat thread the turn was woken in, read at turn start and handed over rather than left for the agent to fetch (see [the thread block](#the-thread-a-turn-was-woken-in) below); it is not a learning prefetch but the trigger's own context, which is why it leads. Then the five learning prefetches, in the order they render: ``## Personal memory`` (diary), ``## Synthesized skills you've learned``, ``## Relevant knowledge`` (a knowledge-base search built from the trigger), ``## Similar prior work`` (episodes), and ``## Known counterparty``. A first turn's onboarding is not among them: it is [a pass of its own](turn-engine.md#first-turn-onboarding) that runs before the executor, which never reaches `mark_onboarded` and is not told to onboard. On rounds after the first, the user message also carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) as ``## Already done earlier in this turn``. |
-| **Review** | One-line identity, the rules that decide its decision (what each decision means is `submit_review`'s schema; the rule for judging a sandbox run renders only where the executor was offered `run_sandbox`, and `a2a_ask` is named only where the seat holds it), the round's own account of what it set out to do, the outcome word (and who wrote it), the verbatim tool log, the text it produced, and the [Tool Skills](tool-skills.md) catalogue for MCP-server-keyed skills (operator-scoped to the review phase). On rounds after the first, a `## Earlier rounds (already delivered)` section carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) so the duplicate-delivery rule holds turn-wide. No tool catalogue, no policies, no roster, no prefetch. |
+| **Executor** | Identity (role, unit, goal, manager, direct reports, team channel), company mission and vision, full policy text, role profile (backstory, responsibilities, behavioral guidelines), unit context (purpose, goals), team roster with per-member profile (leads only), the `## Human colleagues` note (only in a company with human seats), the executor's contract, ``## When a decision is not yours to make`` (the escalation guidance below; only when the seat holds `comment_on_work_item`), ``## Text somebody else wrote`` (the one sentence that says how to read a fence; see [text somebody else wrote](#text-somebody-else-wrote) below), ``## Your workers`` (the seat's `workers:` templates, one line each; only when it holds `delegate`), [Tool Skills](tool-skills.md) **catalogue** (one-line summary per triggered skill), ``## Tools to discover`` (MCP server names, their tool names hidden behind ``list_mcp_server_tools``; no first-party tool, since every one is offered from the first round with its whole definition). Plus ``## The thread so far``, the chat thread the turn was woken in, read at turn start and handed over rather than left for the agent to fetch (see [the thread block](#the-thread-a-turn-was-woken-in) below); it is not a learning prefetch but the trigger's own context, which is why it leads. Then the five learning prefetches, in the order they render: ``## Personal memory`` (diary), ``## Synthesized skills you've learned``, ``## Relevant knowledge`` (a knowledge-base search built from the trigger), ``## Similar prior work`` (episodes), and ``## Known counterparty``. A first turn's onboarding is not among them: it is [a pass of its own](turn-engine.md#first-turn-onboarding) that runs before the executor, which never reaches `mark_onboarded` and is not told to onboard. On rounds after the first, the user message also carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) as ``## Already done earlier in this turn``. In the box, this prompt goes on the CLI's append channel, followed by ``## Your environment``, ``## When you need a person's answer`` and the report the run writes before it stops ([What a coding agent is told](code-sandbox.md#what-a-coding-agent-is-told)). |
+| **Review** | One-line identity, the rules that decide its decision (what each decision means is `submit_review`'s schema; the rule that the agent ran as a coding CLI with its own shell, whose local work is in no log, renders on every review, and `a2a_ask` is named only where the seat holds it), the round's own account of what it set out to do, the outcome word (and who wrote it), the verbatim tool log, the text it produced, and the [Tool Skills](tool-skills.md) catalogue for MCP-server-keyed skills (operator-scoped to the review phase). On rounds after the first, a `## Earlier rounds (already delivered)` section carries the [prior-work ledger](turn-engine.md#prior-work-ledger-across-self_iterate-rounds) so the duplicate-delivery rule holds turn-wide. No tool catalogue, no policies, no roster, no prefetch. |
 | **Worker** (`delegate`) | The worker's persona (a `workers:` template or the parent's inline prompt), the [Tool Skills](tool-skills.md) catalogue scoped to the tools the worker was granted, ``## Tools to discover`` (what it can reach and was not granted, for a worker that can discover), then the mandated runtime rules (no further delegation, no colleague contact, no write to a shared surface, how to discover where there is something to, the same sentence about fenced text the executor carries, and end by calling `submit_result`, whose own description says only its fields are passed back). |
 
 Why the split: the executor is the frame making every ownership / delegation / policy-sensitive decision AND acting on it, so it gets the whole picture — the two-prompt engine's real cost was never the tokens saved by splitting them, it was sending the identity scaffold twice and throwing away everything the planner had read. The reviewer's question is narrower: is this round's work right, given what the record says it did. Standing memory, the team's docs and the requester's traits are what the executor needed to DO the work; in front of a reviewer they compete with the evidence it is meant to judge.
@@ -180,7 +184,7 @@ Engine guardrails (event triage, tool usage, knowledge-system usage) are carried
 
 There is still no special escalation *mechanism*: an ask is an ordinary comment, a colleague reached any other way (a Slack mention, `a2a_ask`) re-triggers the agent the same way, and the reviewer routes a turn that has *not yet* reached anybody back through `self_iterate` so the next round makes that outreach, and ends one that already has as `done`, because the reply is what re-triggers the agent (no `escalate` tool, no `ask_colleague` decision, and no waiting state).
 
-Tool- and MCP-server-specific guidance (when to call ``reflect_and_persist``, how to mention teammates on Jira vs Slack, when to author code via the [code sandbox](code-sandbox.md) and what the GitHub tools are for) lives in the [Tool Skills](tool-skills.md) registry — modular knowledge-base-sourced fragments (Confluence pages) where each skill carries a short **summary** (always inline in the per-phase catalogue) and a rich **body** that loads on demand via the always-on ``load_tool_skill`` builtin. The engine ships no skill prose; operators seed the skills container with ``crewlet confluence import`` and edit pages in the backend's editor thereafter.
+Tool- and MCP-server-specific guidance (when to call ``reflect_and_persist``, how to mention teammates on Jira vs Slack, how a seat authors code in its own checkout and what the GitHub tools are for — the `mcp:github` and `mcp:gitlab` skills) lives in the [Tool Skills](tool-skills.md) registry — modular knowledge-base-sourced fragments (Confluence pages) where each skill carries a short **summary** (always inline in the per-phase catalogue) and a rich **body** that loads on demand via the always-on ``load_tool_skill`` builtin. The engine ships no skill prose; operators seed the skills container with ``crewlet confluence import`` and edit pages in the backend's editor thereafter.
 
 There is no single monolithic system prompt to read: `internal/agent/prompts` builds one per phase (`BuildOnboarding`, `BuildExecutor`, `BuildReview`, `BuildSubagent`) from the same identity sections, and each phase sees only the guidance and the tool catalogue that phase is meant to act on.
 
@@ -242,19 +246,18 @@ What lands in the prompt:
 
 ## Built-in Tools
 
-The engine ships these tools (`internal/agent/builtin`, registered in the epoch's `tools.Registry` with the origin `builtin`). A tool whose dependency is absent is **omitted** rather than registered and broken, so a company without a store, a knowledge backend or a sandbox gets exactly the tools it can serve, and the node logs the list it registered (`builtin_tools_registered`).
+The engine ships these tools (`internal/agent/builtin`, registered in the epoch's `tools.Registry` with the origin `builtin`). A tool whose dependency is absent is **omitted** rather than registered and broken, so a company without a store or a knowledge backend gets exactly the tools it can serve, and the node logs the list it registered (`builtin_tools_registered`).
 
 | Tool | Registered when | Purpose |
 |------|-----------------|---------|
 | `lookup_colleague` | always | Resolve any colleague identifier (handle, role name, a human's contact ID) to one seat, case-insensitively, with partial and fuzzy fallbacks; a handle a seat **used to** answer to resolves too, ranked below every live match and above every approximate one; returns the candidate list when more than one seat matches. A seat whose holder the identity directory withholds (suspended, retired or removed) is found by name and handle but shows no accounts, and an id copied from one of them names nobody — see [Humans in the Org Chart](humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-configuration-change) |
-| `a2a_ask` | the node has a stream and a coordination store | Ask one AI colleague one question. The colleague is woken on its own inbox and answers in its own turn, so the call returns as soon as the question is sent |
+| `a2a_ask` | the node has a stream and a coordination store | Ask one AI colleague one question. The colleague is woken on its own inbox, and the call returns as soon as the question is sent. The engine replies on the channel only from a colleague's turn that ends without parking on its executor's run — one refused or stopped before the launch, whose reply says it could not answer; a turn that launches its executor sends no reply ([Turn Engine](turn-engine.md#who-is-waiting-and-how-they-get-an-answer)) |
 | `use_skill` | a learning store | Load one of the seat's own [synthesized skills](agent-learning.md#5-synthesizer-skill-induction) on demand |
 | `refine_skill` | a learning store | Replace a synthesized skill's body with a corrected procedure; the previous version is kept |
 | `query_episodes` | a learning store | Recall the seat's own past turns: by meaning (`query`), by conversation, or most recent first |
 | `refresh_memory` | a learning store | Re-run the personal-memory filter mid-turn with a context hint |
 | `reflect_and_persist` | a learning store | Keep a durable fact in the seat's private diary (`kind`: `long`, the default, or `short`) |
 | `mark_onboarded` | a learning store | Stamp the seat's onboarding marker after reading the relevant knowledge-base pages (offered to the onboarding pass, not to the executor) |
-| `run_sandbox` | `providers.sandbox` is configured | Hand a code task to a coding agent in a [sandbox](code-sandbox.md); the executor suspends until the run reports |
 | `load_tool_skill` | the company publishes [Tool Skills](tool-skills.md) | Load the full body of a Tool Skill by exact key (the catalogue carries only the summary). Required skills (the default; `required: false` opts out) must be loaded this way before the tools they cover can be called, and the engine rejects earlier calls with a "load this skill first" error |
 | `search_knowledge` | a knowledge backend | Search the company knowledge base on a query the executor writes itself, over the same seam as the turn-start `## Relevant knowledge` prefetch. It is what a seat woken by a bare pointer uses once it knows what the task actually needs: the prefetch's own search is gated off on such a trigger, because a query built from "PR #42 got a comment" matches the wrong pages or none |
 | `list_artifacts`, `get_artifact`, `list_dashboard_sources`, `get_artifact_format`, `get_company_brand`, `create_artifact`, `publish_artifact`, `update_artifact`, `share_artifact`, `unshare_artifact`, `upload_artifact_asset`, `create_artifact_folder`, `move_artifact` | the node takes artifact uploads: an object store, a coordination store and the estate router | Read, publish, share and file the company's [artifacts](../guides/tools-and-mcp.md#artifacts): interactive pages, documents and sheets, and read the company's adopted brand. Each is decided on the stored artifact (and a folder on its top-level folder) for the seat and again for whoever woke the turn, and every byte goes through the one publish pipeline |
@@ -276,7 +279,7 @@ MCP tools (Jira, Slack, GitHub, and so on) are discovered from the configured MC
 
 Both meta-tools are available to the executor and to the onboarding pass. A worker cannot use the parent's pair (`activate_tool` and `list_mcp_server_tools` are on the worker denylist, because they would activate tools onto the parent's surface); it gets a pair of its own, bound to its filtered grant, so it can discover and activate only read-only tools the parent could already reach.
 
-Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring goes through the [code sandbox](code-sandbox.md). See [GitHub Integration](../integrations/github.md).
+Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the executor run's own work in its box, with its own checkout, shell and git ([code sandbox](code-sandbox.md)). See [GitHub Integration](../integrations/github.md).
 
 ---
 
@@ -306,8 +309,8 @@ The engine runs **genuinely parallel** work within a single process:
 
 - Each delivery is handled in its own goroutine, so seats make progress independently rather than taking turns
 - Multiple agents can be in the `Working` state simultaneously
-- A **per-node concurrency gate** limits how many agent turns run at once: Tier A's `node.max_concurrent` (default 32)
-- A turn takes a slot after the ownership check and before its first model round-trip, and releases it when the turn ends
+- A **per-node concurrency gate** limits how many turn segments run at once: Tier A's `node.max_concurrent` (default 32). It is every road to a turn ([ADR-0063](https://github.com/crewlet/crewlet/blob/main/adr/0063-every-turn-on-a-node-passes-the-nodes-admission.md)), whatever starts the segment
+- A segment takes a slot after the ownership check and before its first model round-trip, and releases it when it ends: a delivery's new turn at the park once its executor has launched; a run's completion, which arrives on the seat's control topic, and a person's answer retried on the coordinator's own schedule, each before it claims the run, until the resume and its settle return — the review and any relaunch it sends back included. An answer carried on inline reuses the slot its delivery took. An executor run in its box holds no slot; each seat runs at most one at a time, so the seats a node holds are what bound the boxes at work
 
 **What the gate is for, and what already bounds itself.** A seat's mailbox is a durable subscription whose handler runs one batch at a time, so a *seat* is already serial — it never runs two turns at once. What is not bounded is how many seats run at once: that is [placement](seat-ownership.md)'s arithmetic over the company's seat count and the live node count, not a statement about the machine this process is on. A node handed forty seats would open forty simultaneous model round-trips and their tool loops. `max_concurrent` is the knob that says how many the host can actually take.
 
@@ -338,7 +341,7 @@ asked anything.
 stateDiagram-v2
     [*] --> Asked: delivery reaches the seat
     Asked --> Runs: every capped window has room
-    Asked --> Parked: a capped window is refusing
+    Asked --> Parked: a capped window is refusing, or leaves less than an executor launch needs
     Runs --> Parked: a round is refused, nothing written outside yet
     Runs --> Recorded: a round is refused after an outside write
     Parked --> Asked: the window turns over
@@ -350,23 +353,33 @@ stateDiagram-v2
   token — and a window that refused a round always has none, because the
   refused round is counted past its ceiling. The refusal stamp is not asked:
   after a ceiling is raised it stays until an admitted charge clears it, and a
-  park taken on it would hold the seat back from the very charge that could. A
-  counter that cannot be read parks nothing: the turn runs and its own meter,
-  which fails closed, is the gate.
+  park taken on it would hold the seat back from the very charge that could.
+  A window is **too short** when it has room but less than
+  `turn_engine.executor_min_budget_tokens` (25000 by default): every turn
+  launches an executor, and the launch would be refused, so the seat is parked
+  on it too. A counter that cannot be read parks nothing: the turn runs and its
+  own meter, which fails closed, is the gate.
 - **Parked.** The seat's inbox takes a pause hold (`budget_window`), the
   delivery is **deferred** — handed back unacked, for one of its deliveries,
   with a reason naming the window: `budget: day window 2026-09-23 resets
   2026-09-24T07:00:00Z` — and an alarm is set for the end of the refusing
   window, the one that ends **last** where several refuse, since nothing can run
   before it. `seat_budget_parked` is logged with the scope, the window, its
-  figures and the reset. And the park is **recorded as the gate's refusal**:
+  figures and the reset (and `floor` and `starved`, which is set where the
+  window was too short rather than refusing, the reason then reading
+  `budget: day window 2026-09-23 leaves 1200 tokens, below the 25000 an
+  executor launch needs (turn_engine.executor_min_budget_tokens); resets …`).
+  A park on a refusing window is **recorded as the gate's refusal**:
   the delivery it defers is the turn whose first charge would have been
   refused, so the window's `refused_at` — "last refused" on every screen and
   in `crewlet budgets show` — is stamped on the scope a charge would be refused
   by, the company's before the seat's, exactly as that charge would have
   stamped it. A window a coding run or a background pass filled used to park
   every delivery its seat was sent while reading as one that had refused
-  nothing.
+  nothing. A too-short window is not stamped: it has room, and the counter
+  stamps only a window with none. A resumed segment — a collected run whose
+  relaunch the floor refuses, or a person's answer waiting to carry a run on —
+  has no delivery to park, and is held on the same window instead.
 - **Released.** At the reset, or at once when a published company changes the
   ceilings of either scope or the company's clock (which moves every window's
   end) — the apply of the revision that changed them — the hold
@@ -412,7 +425,7 @@ through the operator catalogue, or with `crewlet seats pause` — and resume it
 later. While it is paused the seat starts no new turn, its incoming mail waits
 on its inbox in order, and its scheduled runs are skipped. The turn it is on
 finishes first, unless the pause also asked to **stop** it (`stop_running`), in
-which case that turn ends at its next round and a coding run it has out ends
+which case that turn ends at its next round and an executor run it has out ends
 **at once** (see *Stop now* below).
 
 **Who may pause a seat** is the seat's holder — the person the identity
@@ -545,7 +558,7 @@ flowchart TD
    quiescing stops new deliveries, but a turn already delivered and parked
    behind a slot is past that point. **The gate is every road to a turn, not
    only the mailbox's** ([ADR-0063](https://github.com/crewlet/crewlet/blob/main/adr/0063-every-turn-on-a-node-passes-the-nodes-admission.md)):
-   a [coding run](code-sandbox.md) that finishes during the drain resumes its
+   an [executor's run](code-sandbox.md) that finishes during the drain resumes its
    turn from the seat's control topic, and a person's recorded answer from a
    retry, and both ask the same gate before they claim anything. Refused, the
    completion is deferred to the head of the seat's control topic, which is
@@ -570,14 +583,19 @@ flowchart TD
    delivery is acknowledged over that connection, so nothing a running turn
    concludes can be, and a peer runs each of them again. That drain ends this
    step at once, cancels the running turns rather than finishing them twice,
-   and logs `drain_cut` (see *Watching the drain* below). A turn parked on a
-   [detached coding run](code-sandbox.md) is not one of them. It suspended
-   when the run detached and its trigger is already recorded as worked, which
-   is exactly why coding work is detached: a drain that waited for a real
-   coding job would wait for its whole runtime. The run's record lives in the
-   fleet's coordination store rather than in this node, so whichever node
-   holds the seat next picks it up rather than it being lost with this
-   process.
+   and logs `drain_cut` (see *Watching the drain* below). A turn parked on
+   its executor's [detached run](code-sandbox.md) is not one of them: it
+   parked when the run launched and its trigger is already recorded as worked,
+   which is exactly why the executor is detached — a drain that waited for a
+   run would wait for its whole length. The run's record lives in the fleet's
+   coordination store rather than in this node. An `e2b` run is picked up by
+   whichever node holds the seat next; a `direct` or `container` run stays on
+   this host, where only this node can reach its box, so the seat's next
+   holder collects it by asking this node, which polls it again once it is
+   back. A node removed for good has those runs ended as `launch_node_gone`
+   after `providers.sandbox.default_timeout_seconds`, so restart a node with
+   local runs rather than retire it ([A local box is the node's that launched
+   it](code-sandbox.md#durability-completion-and-observability)).
 6. **Release every seat**, each lease given back with its mailbox intact, so
    peers can claim them at once rather than waiting out the lease TTL, and
    each seat's last lifecycle event published. The drain then logs
@@ -587,8 +605,9 @@ flowchart TD
    store the next steps close. Requests still running get a five-second grace
    and are then cut, the live feed stops, and every dashboard socket is
    closed (`api_stopped`).
-8. **Stop the duties**: the sandbox waiter first (its keepalive is what stops
-   a running box being reaped while turns are still finishing), then the
+8. **Stop the duties**: the sandbox waiters first — the fleet's duty for
+   `e2b` boxes and this node's own for the boxes on its host (their keepalive
+   is what stops a running box being reaped while turns are still finishing) — then the
    notification transports, the maintenance duties and the embedding duty.
    The memory fill stops beside them — it only embeds, and spends nothing a
    usage day counts, but it reads the store step 9 closes, and the vectors it

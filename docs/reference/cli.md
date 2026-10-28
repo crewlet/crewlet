@@ -51,7 +51,7 @@ subcommand below is served by it.
 | `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
 | `crewlet assistant eval -suite DIR` | Run a directory of evaluation cases through the Dashboard Assistant's orchestrator and catalogue in process: each case's own scripted rounds by default (deterministic, no model called), or a candidate `providers.llm` entry with `-model KEY`, so a model is measured before the assistant is switched to it. Exits non-zero when any case fails |
 | `crewlet llm list` | Every `providers.llm` entry the company declares, with its CLI, model and how it is signed in |
-| `crewlet llm doctor [KEY]` | Verify `providers.llm` entries end to end — the CLI is installed, something signs it in, a real run calls a tool over the seat's tool route, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before every real completion). Exits non-zero when any entry has a problem |
+| `crewlet llm doctor [KEY]` | Verify `providers.llm` entries end to end — the CLI is installed, something signs it in, a real run calls a tool over the seat's tool route, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before every real completion), and, for an entry a seat's executor launches on, whether its CLI has an in-box runner and which tool bridge its box dials. Exits non-zero when any entry has a problem |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
 | `crewlet llm status <KEY>` | Ask the CLI who it is currently logged in as |
 | `crewlet llm logout <KEY>` | Revoke locally and delete the provider's login — its credential files, or the login document a CLI like OpenCode 2 exports |
@@ -2583,8 +2583,9 @@ offered its model — where a confinement that stopped holding shows first. It i
 the only check that catches a plan whose quota is exhausted, or a profile whose
 tool route, record or `text_paths` no longer match what the CLI does. The same run measures two claims the
 profile makes rather than trusting them: that the CLI's own **shell is
-refused** (it runs on the engine host, so a denial that stopped working is a
-seat reading whatever the engine user can read) and that its **web tool
+refused** (every phase but a seat's executor runs on the engine host — the
+reviewer, a worker, a side pass — so a denial that stopped working is such a
+phase reading whatever the engine user can read) and that its **web tool
 reaches the network** (the one local tool every profile deliberately keeps
 on). Both are believed only on evidence a model cannot invent — the current
 clock, read by the tool. Its `system prompt` lines say where a seat's system
@@ -2592,6 +2593,16 @@ prompt goes and where a side pass's does — added to the CLI's own, in place of
 it, or in the transcript under it ([which channel a call
 takes](../concepts/llm-backends.md#which-channel-a-call-takes)) — and every probe
 is sent as a seat's call, so it runs under the prompt a seat does.
+
+For an entry some agent seat's executor chain holds, `doctor` also prints
+`executor` lines: the seats that launch on it; whether its CLI has an in-box
+runner — only `claude-code` and `opencode` do, and another CLI is skipped at
+launch and serves those seats' phases on this host only, which is a line and
+not a problem; and the tool bridge its box dials — for a `direct` cell this
+node's own listener on loopback where the node serves the API, and for any
+other cell `CREWLET_MCP_BRIDGE_URL`, whose absence there is a problem, since
+every launch on that entry would be refused
+([The executor's run in a box](../concepts/llm-backends.md#the-executors-run-in-a-box)).
 
 Both commands answer "signed in" the same way, from the environment the CLI is
 actually given rather than from the configuration: credential files a login

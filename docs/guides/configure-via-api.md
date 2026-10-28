@@ -235,7 +235,14 @@ consequences worth knowing before you script against it:
   company; you get `400 validation_error` naming the field, even though
   nothing in the body you sent is about it. This is the point of
   validating whole — you never see the rest of the document, so it is the one
-  place that break can be caught.
+  place that break can be caught. The same goes for the executor rules: a
+  company's first `providers.llm` entry, added while it has an agent seat, is
+  refused at `providers.sandbox` unless the document already configures one,
+  because every agent seat's executor runs in a box from that block — which is
+  no collection of its own, so add the two together with `PUT /config` — and an
+  entry or a seat's `llm` that leaves a seat's executor chain with no
+  `claude-code` or `opencode` member is refused, at the seat's `llm` or at the
+  `agent` of the entry a seat with none falls to.
 - **An unknown field is refused, not dropped.** A body carrying `heders`
   where you meant `headers` is `400 invalid_body` naming the field, exactly as
   the whole-document parser refuses an unknown key. A decoder that ignored what

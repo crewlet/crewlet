@@ -168,12 +168,16 @@ providers:
     #
     # See docs/concepts/llm-backends.md.
     default:
-      agent: claude-code            # the default, written out; or codex |
-                                    #   gemini-cli | opencode | muse-code |
-                                    #   kimi-code | hermes | pi | …  Another
-                                    #   CLI reads `model` in its own grammar:
-                                    #   opencode's is <provider>/<model>
-                                    #   (anthropic/claude-sonnet-5).
+      agent: claude-code            # the default, written out; or opencode,
+                                    #   the other CLI that runs a seat's
+                                    #   executor, which reads `model` in its
+                                    #   own grammar, <provider>/<model>
+                                    #   (anthropic/claude-sonnet-5).  Codex,
+                                    #   gemini-cli and the rest serve only a
+                                    #   seat's reviewer, workers and side
+                                    #   passes (llm_review, llm_subagent,
+                                    #   llm_auxiliary), and `run_in` is
+                                    #   refused on them.
       model: haiku                  # whatever `claude --model` accepts:
                                     #   haiku | sonnet | opus, or a full
                                     #   model id.  Haiku is the cheapest
@@ -227,7 +231,8 @@ providers:
                                     #   number mostly buys rate-limit errors.
                                     #   Note it is a SEPARATE ceiling from
                                     #   Tier A's node.max_concurrent (32
-                                    #   turns): turns past this queue for a
+                                    #   turn segments): a reviewer, worker
+                                    #   or side pass past this queues for a
                                     #   CLI slot, and the learning passes
                                     #   below queue for the same four.
       auth:
@@ -365,9 +370,11 @@ providers:
     default_timeout_seconds: 1200                # box TTL / keepalive window — NOT a run cap: the waiter refreshes it every tick so a job runs as long as it needs; this is just the orphan-reclaim grace if the engine stops heart-beating
     default_pause_ttl_seconds: 1800              # a sandbox blocked on a person's answer is PAUSED (exact resume if they reply soon); on a local cell that costs disk rather than a provider's snapshot bill, but it is still held, so the engine reaps it after this long and re-seeds. 0 = never pause, always re-seed; omit the key entirely for this 1800s default.
     # THE ONLY ROUND BOUND ON EVERY SEAT'S TURN.  An executor run is
-    # deliberately never force-stopped on a clock (see
-    # default_timeout_seconds), so nothing else stops one that is thrashing
-    # rather than working.  The shipped default is 96; this company sets
+    # deliberately never force-stopped by its box's TTL (see
+    # default_timeout_seconds); only a turn whose trigger carries a
+    # wall-clock cap — a schedule's timeout_seconds — ends its run at that
+    # deadline, so nothing else stops a run that is thrashing rather than
+    # working.  The shipped default is 96; this company sets
     # 60, because these runs are unattended, on your own machine, spending
     # your own plan window, and on `haiku` — the weaker the model, the
     # likelier a long agentic loop is going in circles rather than
@@ -386,7 +393,8 @@ providers:
     # deliberately with `run_in: container` on the entry and an image (an
     # `e2b` cell would also need the headless token, above).
     # (File steps are not merely discouraged here: a step writing a system
-    # path is REFUSED under `direct`, naming the mode.)
+    # path is REFUSED under `direct`, naming the step, the cell and the
+    # seat.)
 
 # Turn engine — executor/reviewer settings.  Includes the round-cap
 # extension judge for the first-turn onboarding pass: when the pass

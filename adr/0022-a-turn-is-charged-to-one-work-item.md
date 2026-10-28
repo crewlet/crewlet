@@ -91,6 +91,18 @@ the resume stays on that job's record unpaid, and one that finishes after the
 next launch is not recorded at all. So the item can fall short of the turn's
 cost and never exceed it.
 
+## Amendment: every turn parks on its executor
+
+Since [ADR-0065](0065-every-executor-is-its-coding-clis-own-run.md) every
+turn's executor is its coding CLI's own detached run, so every turn completes
+once when it parks at the launch and again each time a run it launched is
+collected: the segments above are every turn's, not only those of a turn that
+chose to detach one. What a parked segment charged to nothing hands on rides
+the turn's parked state (`internal/agent/execstate`, its `Uncharged`), which
+carries no conversation, where the decision above says the suspended
+conversation. And the round-cap judge a segment's tokens include is the
+onboarding pass's, the one pass a judge extends.
+
 ## What this does not decide
 
 It does not decide how a task's turns are listed or numbered on a screen, nor

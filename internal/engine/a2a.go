@@ -53,10 +53,13 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, req Request, r
 		return
 	}
 	if res.Suspended {
-		// The turn is parked on a detached coding run and has not
-		// finished. Answering now would send the asker an artifact from
-		// a turn that is still going; the resumed turn comes back through
-		// this same frame with the same trigger and answers then.
+		// The turn is parked on its executor's run and has not finished.
+		// Answering now would send the asker an artifact from a turn that
+		// is still going. The segment that resumes it does NOT come back
+		// through this frame — it is resumed off the seat's control topic,
+		// which never calls here — so a parked turn sends the asker no
+		// reply, and the idle sweep closes the channel (docs/concepts/
+		// turn-engine.md, "Who is waiting, and how they get an answer").
 		return
 	}
 	channelID := askChannel(ask)

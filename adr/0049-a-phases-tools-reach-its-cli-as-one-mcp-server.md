@@ -30,6 +30,21 @@ CLI's own record shows them, its calls, its cost) is folded back into the shape
 the loop always kept, so a reader cannot tell a phase the CLI drove from one the
 loop drove except by the runs it lists.
 
+**Amended by [ADR-0065](0065-every-executor-is-its-coding-clis-own-run.md), for
+a seat's executor.** A seat's executor is its coding CLI's own run in a box,
+with its own shell and editor, fully permissioned. The seat's tools still reach
+it as this one server, over the bridge, and every bridged call is decided by
+the same surface: the seat's grant and the skill guard, the seat fence before
+and after the call, the tool's schema through `tools.Invoke` with its
+canonical arguments
+([ADR-0059](0059-a-tools-contract-is-its-validators-and-every-fault-comes-back-at-once.md)),
+and the run's end. Its budget is a floor at its launch and
+a charge at its collection, and its rounds are the CLI's own turn cap, so the
+loop's budget, round cap and terminator gates hold the phases on this host
+(the reviewer, workers, the onboarding pass and the side passes), and the
+alternative below of letting the CLI run tools of its own is rejected for
+those phases.
+
 ## Why the obvious alternative is wrong
 
 **Keeping the envelope**, a catalogue in the prompt and a JSON reply the engine

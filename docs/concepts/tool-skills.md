@@ -99,24 +99,24 @@ A walk or a page read that finds the container as the registry was already built
 
 ## Skill file format
 
-Skills are authored as markdown files with YAML frontmatter, the same format the backend pages round-trip to via the per-backend codec ([below](#page-representation)). The repository ships eleven bundled examples under `examples/tool-skills/`.
+Skills are authored as markdown files with YAML frontmatter, the same format the backend pages round-trip to via the per-backend codec ([below](#page-representation)). The repository ships ten bundled examples under `examples/tool-skills/`.
 
 ```markdown
 ---
-key: skill:code_runtime
+key: mcp:github
 trigger:
-  tool: run_sandbox
+  mcp_server: github
 phases: [execute]
-required: false
-title: Running code work in the sandbox
+title: GitHub tools
 summary: |
-  For real code work, call the run_sandbox tool: a coding agent
-  implements in an isolated checkout and pushes a branch or opens a pull
-  or merge request.
+  Read / search code + issues + PRs; review, comment, and track work.
+  Author code in your own checkout with your shell and git, not via these tools.
 ---
 
-When a task needs you to implement or modify code, run tests, or
-reproduce a bug, call `run_sandbox` with a concrete brief …
+You have access to GitHub via MCP. Capabilities:
+
+- Read and search code, files, and repositories.
+- Create and manage issues and pull requests; comment on and review PRs. …
 ```
 
 ### Frontmatter fields
@@ -258,7 +258,7 @@ A skill is practices for the tools its trigger names — and in practice models 
 ```
 Tool 'create_pull_request' is gated behind a required tool skill you
 have not loaded in this session:
-- 'mcp:github': Read / search / review code + issues + PRs. Author code via the sandbox …
+- 'mcp:github': Read / search code + issues + PRs; review, comment, and track work. Author code in your own checkout …
 
 Call `load_tool_skill(key='mcp:github')` to read the required
 practice(s), then retry 'create_pull_request'. Loading is needed once
@@ -267,7 +267,7 @@ per session; after that the tool works normally.
 
 The blocked call never executes; the LLM loads the skill on the next round and retries.
 
-**Session scope, not turn scope.** "Loaded" means the body is in *this model's context*, and the executor, the reviewer and each worker are separate message histories — so a skill loaded by one is genuinely not in front of the others, and each session loads it itself. A round-cap extension continues the same session and keeps the load; a `self_iterate` starts a fresh session and therefore a fresh guard, because its context started over too. A **suspended** executor is the exception in the other direction: it is re-entered as the same message history, possibly on another node, so its loaded keys ride the saved conversation and the rebuilt guard starts from them.
+**Session scope, not turn scope.** "Loaded" means the body is in *this model's context*, and the executor, the reviewer and each worker are separate message histories — so a skill loaded by one is genuinely not in front of the others, and each session loads it itself. A round-cap extension continues the same session and keeps the load; a `self_iterate` starts a fresh session and therefore a fresh guard, because its context started over too. A **parked** executor run is the exception in the other direction: its guard outlives the segment that launched it. The parked turn's state carries the keys the guard held at the launch, and every rebuild of the run's guard starts from them, the collection that re-enters the turn — possibly on another node — included. The skills the run loaded over the bridge are read off its bridged calls, which its row records, and replayed onto the guard where the run goes on calling: when a person's answer carries it on, and when a node reopens a working run's session after a restart or a seat move. The collection replays none of them, since it makes no gated call: it reads the run's calls and its submission, and the turn goes on from what the run submitted. A person's answer that continues the run in the box it parked in continues its CLI's own session too, which still holds what it loaded.
 
 **The exempt set is about deadlock, not policy.** `load_tool_skill` itself, the discovery meta-tools, and the phase submitters are never blocked, whatever a trigger says: gating the unlock would make a session unrecoverable, gating discovery would add rounds without protecting anything, and gating a submitter would brick the phase. A misauthored trigger can cost a phase some tools; it can never cost the phase. Every block also publishes a `phase.tool_skill_blocked` event (agent, phase, tool, skill keys, turn id) so operators can see agents attempting to skip required practices.
 
@@ -305,7 +305,7 @@ Enforcement gates exactly the tools the trigger names:
 - The guard only arms when the session can satisfy it: `load_tool_skill` is an Execute always-on and rides along on every worker surface that can reach it. A surface without it (e.g. a custom always-on override that removed the loader) disables enforcement for that session rather than soft-locking the LLM, with a `skill_guard_disabled_no_loader` warning.
 - A failed `load_tool_skill` call (wrong key, registry error) does **not** unlock anything.
 
-An enforced skill costs the session one extra tool round plus the body tokens, only in sessions that actually use a covered tool: cheap when triggers are narrow and bodies are sized to their blast radius (the tokens are the point: the practices end up in context before the call). When several enforced skills cover the same tool, the block message lists every missing key and the LLM can load them all in a single round of parallel `load_tool_skill` calls. **Most bundled examples ship enforced**: narrow practices like `skill:platform_mentions` gate only their exact tools (and `skill:artifacts`, the artifact design contract, gates only `create_artifact`, `publish_artifact` and `upload_artifact_asset`, never the reads), and the server-wide enforced skills (`mcp:github` / `mcp:gitlab`) keep their bodies to ~100-token orientation one-pagers so the per-session load is near-free. Three bundled skills are advisory (`required: false`): `skill:code_runtime` (advice on briefing `run_sandbox`, not markup correctness, triggered on that tool so it reaches exactly the seats offered it, whichever code host they push to or none), and `skill:getting_unstuck` and `skill:retrieval_research`, practice prose triggered on the commonest calls a seat makes (every chat post, work-item and page comment and `a2a_ask` for the first; every knowledge search, work-item read, episode query and memory refresh for the second), so *enforcing* either would make those calls wait on judgement rather than on markup a call can get wrong, inverting the trigger-width rule above.
+An enforced skill costs the session one extra tool round plus the body tokens, only in sessions that actually use a covered tool: cheap when triggers are narrow and bodies are sized to their blast radius (the tokens are the point: the practices end up in context before the call). When several enforced skills cover the same tool, the block message lists every missing key and the LLM can load them all in a single round of parallel `load_tool_skill` calls. **Most bundled examples ship enforced**: narrow practices like `skill:platform_mentions` gate only their exact tools (and `skill:artifacts`, the artifact design contract, gates only `create_artifact`, `publish_artifact` and `upload_artifact_asset`, never the reads), and the server-wide enforced skills (`mcp:github` / `mcp:gitlab`) keep their bodies to ~100-token orientation one-pagers so the per-session load is near-free. Two bundled skills are advisory (`required: false`): `skill:getting_unstuck` and `skill:retrieval_research`, practice prose triggered on the commonest calls a seat makes (every chat post, work-item and page comment and `a2a_ask` for the first; every knowledge search, work-item read, episode query and memory refresh for the second), so *enforcing* either would make those calls wait on judgement rather than on markup a call can get wrong, inverting the trigger-width rule above.
 
 ---
 

@@ -414,10 +414,13 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 // session can be opened again (internal/api/mcpbridge). It returns the
 // surface, and the meter the session's calls are counted on.
 //
-// FROM THE RUN'S OWN STATE, as [Runner.Resume] rebuilds a parked executor:
-// the surface its launch recorded — its active tools and the skills it had
-// loaded — and then what the run did to it since, read off the calls it made
-// over the bridge, every tool it activated and every skill it loaded. Rebuilt
+// FROM THE RUN'S OWN STATE, as [Runner.continueAgentRun] rebuilds a run a
+// person's answer carries on: the surface its launch recorded — its active
+// tools and the skills it had loaded — and then what the run did to it since,
+// read off the calls it made over the bridge, every tool it activated and
+// every skill it loaded. A collection ([Runner.resumeAgentRun]) rebuilds the
+// launch's record alone, because it makes no gated call: it replays the run's
+// submission and judges its record. Rebuilt
 // from the launch's record alone, the box would find tools it had activated
 // gone and the tools a loaded skill unlocked refused again.
 //

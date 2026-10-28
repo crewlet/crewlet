@@ -1,6 +1,11 @@
 // Package runner drives a turn's phases (onboarding, the executor and the
 // reviewer) against real models and real tools.
 //
+// The executor is never a phase of the engine's tool loop: it is the seat's
+// coding CLI's own run in a box, launched here with the turn parking behind
+// it, and collected back into the same turn for the reviewer (ADR-0065;
+// agentrun.go).
+//
 // It is the wiring between four things that each know nothing about the
 // others: the prompt builder, the tool registry, the provider chain, and the
 // turn loop's [turn.Phases] contract. Everything here is plumbing plus the one

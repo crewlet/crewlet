@@ -6,7 +6,7 @@ Agents interact with external systems and internal engine operations through too
 
 ## Built-in Tools
 
-The engine registers these into each epoch's tool registry with the origin `builtin`. A tool whose dependency is absent (no store, no knowledge backend, no sandbox) is omitted rather than registered and broken; [Agent Runtime § Built-in Tools](../concepts/agent-runtime.md#built-in-tools) says when each one is registered.
+The engine registers these into each epoch's tool registry with the origin `builtin`. A tool whose dependency is absent (no store, no knowledge backend, no A2A channel) is omitted rather than registered and broken; [Agent Runtime § Built-in Tools](../concepts/agent-runtime.md#built-in-tools) says when each one is registered.
 
 | Tool | Description |
 |------|-------------|
@@ -20,7 +20,6 @@ The engine registers these into each epoch's tool registry with the origin `buil
 | `a2a_ask` | Ask one AI colleague one question over the private A2A channel (see [Turn Engine § Colleague-surface tools](../concepts/turn-engine.md#colleague-surface-tools)) |
 | `search_knowledge` | Re-run the shared-knowledge search mid-turn, once the agent knows what the task actually needs. `mode` picks the ranking — `hybrid` by default, `keyword` or `semantic` (see [Search](search.md#three-modes-and-what-an-answer-says-it-served)) — and an answer ranked other than it was asked says so in a sentence: a `semantic` search with nothing to rank by meaning runs nothing, and says that tells the seat nothing about whether a page exists. Registered wherever the company has a knowledge backend at all |
 | `load_tool_skill` | Load the full body of a [Tool Skill](../concepts/tool-skills.md) by key. A key nobody published is answered with the near keys ("did you mean") and the keys that exist, at most 30 |
-| `run_sandbox` | Hand a code task to a coding agent in a [sandbox](../concepts/code-sandbox.md) |
 
 `delegate`, the tool that hands work to short-lived [workers](../concepts/turn-engine.md#workers), is not registered here: it is built per turn for the executor, because it carries that turn's grant.
 
@@ -291,8 +290,12 @@ are declared to an upload the publish pipeline reserves first, each file is put
 through the engine, and the version is decided only after every byte is read
 back verified. A sandbox is never handed an upload URL; the engine lists the
 directory through the box itself, holds every path to the workspace, and
-refuses one file more than a version holds rather than truncating. A box is
-readable after `run_sandbox` returns and until the Execute phase ends.
+refuses one file more than a version holds rather than truncating. The engine
+reads a box only for a turn of the run's own seat whose run's completion it
+has claimed for that turn's resume; a call the run makes over its own bridge
+while it works is refused `not_running`
+([Code Sandbox](../concepts/code-sandbox.md#durability-completion-and-observability)),
+so a seat's executor publishes what it built inline or from a project file.
 
 **Per turn**, an agent makes at most 20 publishes, 10 of them on one artifact,
 and writes at most 128 MiB; past either the call is refused `turn_quota` and
@@ -324,7 +327,7 @@ is (copy the directory into your assistant's skills folder).
 
 ### Per-Role MCP Servers (GitHub)
 
-Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring goes through the [code sandbox](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).
+Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the seat's executor run's, with its own shell and git in its [box](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).
 
 ### Where a tool comes from
 

@@ -7,10 +7,10 @@ Spend draws it.
 
 | | The **budget counter** | The **spend rollup** |
 |---|---|---|
-| What it is | The fleet's shared counter the budget gate charges with every model round, the moment its reply arrives | A breakdown of what the calls consumed, by phase, model, provider entry, auxiliary purpose and seat (or person) |
+| What it is | The fleet's shared counter the budget gate charges with every model round on the engine host the moment its reply arrives, and with an executor run's whole spend when the run is collected | A breakdown of what the calls consumed, by phase, model, provider entry, auxiliary purpose and seat (or person) |
 | Its window | One calendar window — the day, the ISO week or the month — on the company's clock | The live 24 hours, or any run of 1 to 90 company days |
 | Where it lives | The coordination store (`budgets`), one record per scope | The live projection for the last 24 hours; the replicated `usage` domain for every named window |
-| What it is for | Stopping a turn whose round did not fit a ceiling, and every round after it | Understanding where the tokens went |
+| What it is for | Stopping a turn whose round did not fit a ceiling, and every round and launch after it | Understanding where the tokens went |
 | Read by | `GET /budgets`, the `budget` push, the meters on the Spend, Budgets and seat screens | `GET /tokens/breakdown`, `GET /tokens/series`, the figures and chart on Settings › Token spend |
 
 They are never comparable. The counter is the one figure a ceiling can be divided
@@ -30,10 +30,17 @@ token_budget: {day: 3000000, month: 40000000}
 
 Every window is cut on the company's one [clock](../getting-started/configuration.md#the-companys-clock):
 a day runs from local midnight to local midnight, a week is the ISO week from
-Monday, a month runs from the 1st. Every model round is charged in all three
-windows it falls in at once, against the company and against its seat, as soon
-as its reply arrives, and what it asked for runs only while every capped window
-of both had room for it.
+Monday, a month runs from the 1st. Every model round on the engine host — the
+reviewer's, a worker's, the onboarding pass's, a side pass's — is charged in all
+three windows it falls in at once, against the company and against its seat, as
+soon as its reply arrives, and what it asked for runs only while every capped
+window of both had room for it. A seat's executor is its coding CLI's own run in
+a box, whose requests the engine never sees one by one, so its whole spend is
+charged in those windows once, when the run is collected: a **post-charge**,
+which never refuses and can take a window past its ceiling
+(`sandbox_spend_over_budget`), after which the seat's next round and next
+delivery are refused against it until the window turns over. What admits a run
+is the floor at its launch.
 
 **A ceiling has room for one executor run, or it is refused.** Every executor
 launch needs `turn_engine.executor_min_budget_tokens` (default 25 000 — one
@@ -165,7 +172,7 @@ screen folds a phase differently from the next:
 
 | Band | What spent it |
 |---|---|
-| **Execute** | The seat's own turn doing its work — the executor, and a detached coding run it launched, which is the same work done in a box |
+| **Execute** | The seat's own turn doing its work — the executor, which is its coding CLI's own run in a box, recorded from the box as the run's `sandbox` phase |
 | **Review** | The reviewer's pass over that work |
 | **Workers** | The short-lived workers an executor delegated tasks to |
 | **Auxiliary** | Everything that is not the turn's own work: the seats' [auxiliary model](#auxiliary-spend) — the turn-start context, every compaction rewrite, the reflection workers, the background passes and a person's answered questions — the round-cap judge and the first-turn onboarding |
@@ -290,5 +297,5 @@ usage at all is charged an estimate, four characters a token, which
 
 The dashboard measures spend in tokens only. A price is reported only by a
 coding run — a seat's executor run, in its CLI's own figure — and by no
-call on this host, so a currency figure would cover a small minority
-of calls while reading as the company's spend.
+call on this host, so a currency figure would leave out every reviewer,
+worker and auxiliary call while reading as the company's spend.

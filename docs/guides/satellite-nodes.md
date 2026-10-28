@@ -52,7 +52,7 @@ not a request handler you can route, it is a place where things run:
 | The agent instance, its state and its turns | The HTTP API, the dashboard, every integration's webhooks |
 | **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | Every [singleton duty](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the sweeps, the trim, the sandbox waiter, the learning passes |
 | Its LLM calls, its knowledge searches, its tool calls | Every other seat's agents and MCP servers |
-| Its sandbox launches, if the role is sandboxed | The company config, the leases and the ledgers — all shared, in the coordination slot |
+| Its executor runs' launches, and a `direct` or `container` box itself, on the satellite's own host | The company config, the leases and the ledgers — all shared, in the coordination slot |
 
 The MCP row is the one that makes this feature what it is. A seat's
 stdio MCP servers are children of the process holding its lease, so
@@ -513,13 +513,17 @@ key is rejected, since the company schema forbids unknown fields.)
 
 ---
 
-## Sandboxed seats
+## Agent seats and their boxes
 
-A [sandboxed](../concepts/code-sandbox.md) seat can be pinned like any
-other, with three network facts the engine cannot check for you:
+Every agent seat's executor runs in a [box](../concepts/code-sandbox.md),
+so a seat pinned here brings three facts the engine cannot check
+for you:
 
-- The satellite **launches** the sandbox, so it must reach the sandbox
-  provider (E2B cloud, or your self-hosted `domain`).
+- The satellite **launches** the run. For an `e2b` cell it must reach the
+  sandbox provider (E2B cloud, or your self-hosted `domain`); a `direct` or
+  `container` cell runs on the satellite's own host, where `direct` needs
+  the coding CLI installed, and `container` the container runtime and an
+  image with the coding CLI in it.
 - Whichever node holds the `sandbox-waiter` duty **polls** an `e2b`
   box. On a satellite (`roles: [seats]`) that duty is on a core node by
   construction — so check that node's reachability too, not just the
@@ -535,9 +539,9 @@ other, with three network facts the engine cannot check for you:
   the same value on every node, and the ingress node a box's call reaches relays it to the
   satellite over the broker.
 
-Pinning a sandboxed seat to a node that cannot reach the provider gives
-you a seat that claims cleanly and fails every run. The engine knows
-what a node *says it is*, never what it can talk to.
+Pinning an agent seat to a node that cannot reach its executor's sandbox
+provider gives you a seat that claims cleanly and fails every run. The engine
+knows what a node *says it is*, never what it can talk to.
 
 ---
 

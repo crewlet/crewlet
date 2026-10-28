@@ -679,11 +679,12 @@ states with their reasons:
 Go's compiler proves the types line up. It cannot prove a backend is wired,
 and this codebase has two shapes where it is not:
 
-- **A config value with no implementation.** `role.sandbox.run_in: e2b`
-  parses, validates, appears in the generated schema — and the engine refuses
-  it at construction, because the company configured no `e2b:` backend. That
-  refusal is the right behaviour; what would be wrong is accepting it and
-  failing later, inside a turn that has already spent its rounds.
+- **A config value with no implementation.**
+  `providers.sandbox.default_run_in: e2b` parses and appears in the generated
+  schema — and validation refuses it while the company configures no `e2b:`
+  backend, because every executor run placed there would fail at its launch.
+  That refusal is the right behaviour; what would be wrong is accepting it and
+  failing later, inside every turn of every seat that runs there.
 - **A knob nothing reads.** `provisioning.group_webhook` was validated,
   documented and consulted by no code at all, so an operator setting it got
   the default and no error. A config field ships with the code that reads it,

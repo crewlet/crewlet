@@ -23,9 +23,10 @@ Three surfaces, and they are deliberately separate:
   [Acting as the app](#acting-as-the-app-the-seats-token).
 
 GitHub tools are for **reading, reviewing and tracking** code: diffs,
-comments, reviews, run status. **Authoring** code changes goes through the
-[code sandbox](../concepts/code-sandbox.md), which clones, pushes and opens a
-pull request as the agent's own app.
+comments, reviews, run status. **Authoring** code changes is the seat's
+executor run's, with its own shell and git in its
+[box](../concepts/code-sandbox.md), which clones, pushes and opens a pull
+request as the agent's own app.
 
 ---
 
@@ -1120,8 +1121,8 @@ rather than silently reviewing.
 
 Roles with GitHub credentials also see the bundled `mcp:github`
 [Tool Skill](../concepts/tool-skills.md) in their executor prompt, which frames
-the GitHub tools as read/review/track tools with authoring pointed at the
-sandbox.
+the GitHub tools as read/review/track tools, with authoring done in the
+run's own checkout with its shell and git.
 
 For team-shared conventions — "Engineering uses semantic commits" — edit the
 knowledge-base page instead. The knowledge base is the single source of truth

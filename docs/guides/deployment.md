@@ -946,7 +946,7 @@ crewlet run -config crewlet.yaml    # engine + embedded API on :80
 
 (`-api-port 8000` on the command line does the same.) This is the shape every single-host walkthrough in these docs uses, and that embedded server **is** the webhook target the integrations register (e.g. `http://host.docker.internal:8000/webhooks/gitlab`). **Port 80 buys exactly one thing**: a webhook URL with no `:port` suffix, which matters when the address is pasted into a vendor's UI by hand or has to survive a proxy that rewrites ports. It costs a privileged bind — as a non-root process on Linux that needs `sudo sysctl net.ipv4.ip_unprivileged_port_start=80` (persist in `/etc/sysctl.d/`) or `CAP_NET_BIND_SERVICE`.
 
-The two bundled examples land on either side of that trade, which is the clearest way to read it. `examples/nimbus.config.yaml` pays for port 80: its company registers GitLab webhooks, so the address gets pasted into a vendor's UI. `examples/nimbus-claude-cli.config.yaml` takes `api.port: 8000`, because a chat-only company has no inbound webhook at all and gets nothing for the privileged bind — its port only has to match the `CREWLET_MCP_BRIDGE_URL` its own seats dial back on. Make sure nothing else already owns the port you pick.
+The two bundled examples land on either side of that trade, which is the clearest way to read it. `examples/nimbus.config.yaml` pays for port 80: its company registers GitLab webhooks, so the address gets pasted into a vendor's UI. `examples/nimbus-claude-cli.config.yaml` takes `api.port: 8000`, because a chat-only company has no inbound webhook at all and gets nothing for the privileged bind. Its seats' `direct` boxes dial that port on loopback for their tools, at the address the node derives from the socket it binds, so nothing has to match it; `CREWLET_MCP_BRIDGE_URL` comes in only once an entry places its runs in `container` or `e2b`, or on a node without `ingress`. Make sure nothing else already owns the port you pick.
 
 Do **not** also start a second node on the same host with such a file — both read the same `api.port`, and the second binder hits `EADDRINUSE` and fails its boot at once, naming the address, before it has recovered anything.
 
@@ -1006,7 +1006,15 @@ on somebody else's network and reaches only what you publish; it calls
 never holds a credential of anybody's. Leaving them on `api.port` would force that
 port public for every company running remote sandboxes. Point
 `CREWLET_SANDBOX_OTEL_RECEIVER_URL` and `CREWLET_MCP_BRIDGE_URL` at the public
-address.
+address. A proxy on the engine host that connects to the node on `127.0.0.1`
+has to send the bridge a loopback `Host` — nginx's default
+`proxy_set_header Host $proxy_host` with `proxy_pass` naming `127.0.0.1`
+rather than `$host`, Caddy's `header_up Host {upstream_hostport}` — or connect
+on an address of the host that is not loopback: the bridge answers a call that
+reaches it on the loopback under a `Host` that is neither loopback nor a
+container runtime's name for the engine host with `403 Forbidden: invalid
+Host header`, and the run then has none of its seat's tools
+([The tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
 
 **A proxy in front of the bridge needs a request timeout of at least 15
 seconds.** Beside a run's tool calls, the bridge serves the run's poll for its
@@ -1033,8 +1041,13 @@ What to point where:
 - **`api.public.external_url`** is where vendors and sandboxes reach this
   deployment: the **public** listener's address as your proxy or load balancer
   publishes it, required once `api.public.port` is set on an `ingress` node.
-  Every webhook the engine registers, every vendor app it provisions and every
-  per-run sandbox endpoint it hands out is built on it.
+  Every webhook the engine registers and every vendor app it provisions is
+  built on it. The per-run sandbox endpoints a box is handed are not: they are
+  built on `CREWLET_MCP_BRIDGE_URL` and `CREWLET_SANDBOX_OTEL_RECEIVER_URL`,
+  which name the same public address (a `direct` box on an `ingress` node
+  dials its public listener on loopback). A proxy in front of that address
+  that reaches the node on its loopback sends the bridge a loopback `Host`,
+  as above.
 - **`api.external_url`** is where people reach the dashboard — `api.port`'s
   address as your private network or VPN reaches it. It names the session
   cookie and is the only `Origin` a write is accepted from, and every link an
@@ -1389,11 +1402,13 @@ never comes up.
 **Run one `crewlet run`, and scale up before you scale out.** A single
 engine handles many concurrent turns — agent handlers are
 goroutines, so the practical ceiling is your model plans' and keys' rate
-limits and host memory — every model call is a coding CLI process of 200–400 MB,
-up to each `providers.llm` entry's `max_concurrent` (4) at once — not the
-engine's own process count. One node is the design's degenerate case, not
-a lesser path: it holds every lease, and everything a fleet does works
-exactly the same way.
+limits and host memory — every model call is a coding CLI process of 200–400 MB:
+the reviewer's, the workers' and the side passes', up to each `providers.llm`
+entry's `max_concurrent` (4) at once, and beside them one executor run per seat
+at work, on the engine host itself for a `direct` cell, which no
+`max_concurrent` counts — not the engine's own process count. One node is the
+design's degenerate case, not a lesser path: it holds every lease, and
+everything a fleet does works exactly the same way.
 
 Multi-node is supported and certified by a chaos suite that kills nodes
 mid-turn under load. Reach for it when a node's failure is not acceptable
@@ -1493,7 +1508,7 @@ ahead of time when you would rather not do it on the startup path.
 
 What a fleet gets right, each of which was a real defect before:
 
-- *Duplicate Slack posts, duplicate Jira comments, two contradictory plans for one webhook.* A seat's inbox is attached only by the node holding its lease, admission is gated on a renew fresh enough to prove exclusivity, and the turn's tool loop re-checks the seat fence as each CLI run opens and again before and after each of its tool calls — so a node that loses the seat mid-turn stops before its next call rather than running out the turn beside the seat's new owner. A turn that finished but whose delivery was never acked is not re-run, because the [completion ledger](../concepts/seat-ownership.md#the-completion-ledger) records what shipped.
+- *Duplicate Slack posts, duplicate Jira comments, two contradictory plans for one webhook.* A seat's inbox is attached only by the node holding its lease, admission is gated on a renew fresh enough to prove exclusivity, and the turn's tool loop re-checks the seat fence as each CLI run opens and again before and after each of its tool calls, as the tool bridge does around each call of the seat's executor run — so a node that loses the seat mid-turn stops before its next call rather than running out the turn beside the seat's new owner. A turn that finished but whose delivery was never acked is not re-run, because the [completion ledger](../concepts/seat-ownership.md#the-completion-ledger) records what shipped.
 - *Live coding sandboxes torn down mid-run.* Recovery is a per-seat step inside the acquire hook, fenced on the claiming node's epoch, instead of a fleet-wide scan that treated every in-flight run as abandoned.
 - *Config activation.* Delivered by the [control plane](../concepts/control-plane.md) — a shared activation pointer whose own revision is the epoch, polled by every node — rather than the competing-consumer subscription that used to let exactly one replica apply a revision while the rest ran the previous company.
 - *Token budgets.* Shared counters in the coordination slot, one slot per calendar window, so an org cap of 500 k a day is 500 k a day across the fleet — and they cover **every** completion the engine makes on a seat's behalf, the turn loop (the round-cap extension judge included), the coding sandbox, the turn-start context assembly and the auxiliary learning passes alike.
@@ -1501,12 +1516,18 @@ What a fleet gets right, each of which was a real defect before:
 - *Unbounded table growth.* `scheduled_runs` and `conversation_sessions` both answer a short-horizon question and are written on every event that asks it. The migrations always said they were swept on a TTL; the sweep exists, behind the `maintenance` duty. Most fleet-shared records — the delivery dedupe, the rate valve, the completion ledger and each node's apply status — are not swept here at all: each lives in a [coordination](../concepts/coordination.md) bucket whose own age is its retention, so the broker expires them. Agent-to-agent channels are the exception and *are* swept by the duty, because a bucket age cannot tell an open ask from an answered one — and so are the removal markers every bucket with no age keeps, which the duty sweeps after three hours so a listing never re-reads every record the company has ever removed. The apply status is the one that hides: it is keyed by *node* rather than by event, so it does not look short-horizon — but a node that is scaled in, redeployed or crashed would leave its last report behind, which under generated pod names is one per pod that ever ran, and the bucket's one-minute age is what makes that node *vanish* instead.
 
 Two things are still per-process. `max_concurrent`: Tier A's
-`node.max_concurrent` (default 32) is the gate every agent turn takes a slot
-from, and it is per node — so an org's ceiling becomes N × the configured
-value. Size it per node, not per company. And a spent plan: an entry whose CLI
-reported its vendor's rate limit sits out on the node that heard it — until
-the reset the CLI named, an hour at most, or for a minute — while every other
-node learns the same thing from its own calls once per window.
+`node.max_concurrent` (default 32) gates every turn segment the node runs,
+whatever starts it
+([ADR-0063](https://github.com/crewlet/crewlet/blob/main/adr/0063-every-turn-on-a-node-passes-the-nodes-admission.md)):
+a new turn from its onboarding pass to the park at its executor's launch, and
+a resume — a run's collection off the seat's control topic, the review and any
+relaunch it sends back, or a person's answer carrying a parked run on, inline
+or retried — until it and its settle return. The executor run in its box holds
+no slot, and each seat runs at most one at a time. It is per node — so an org's ceiling becomes N × the configured
+value. Size it per node, not per company. And a spent plan: an entry whose CLI reported its
+vendor's rate limit sits out on the node that heard it — until the reset the
+CLI named, an hour at most, or for a minute — while every other node learns
+the same thing from its own calls once per window.
 
 For the model underneath all of this — what a node is, what the fleet shares,
 and where the constants come from — see
@@ -2437,10 +2458,17 @@ stop by the time their size is known, so each is **post-charged** — added to
 the counters in the windows it is recorded in, without a verdict — behind a
 gate that reads the room left *before* it starts:
 
-- **A coding run.** Its box spends while the turn is suspended, so its tokens
-  are known only when the run is collected, and they reach both the seat's
-  counter and the company's in the windows the run is collected in. A run that
-  takes a counter past its cap is logged as `sandbox_spend_over_budget`.
+- **A coding run** — every seat's executor. Its box spends while the turn is
+  parked, so its tokens are known only when the run is collected, and they
+  reach both the seat's counter and the company's in the windows the run is
+  collected in. A run that takes a counter past its cap is logged as
+  `sandbox_spend_over_budget`. Its gate is
+  `turn_engine.executor_min_budget_tokens` (default 25 000): every launch, a
+  turn's first and each relaunch, is refused while a capped window of the seat
+  or the company has less than that left, and the seat
+  [parks](../concepts/agent-runtime.md#the-budget-park) until the window turns
+  over or a ceiling moves; a ceiling below the floor is refused when the
+  document is validated.
 - **An auxiliary pass** — the reflection, profiling, compaction and summary
   calls the [learning subsystem](../concepts/agent-learning.md) makes on a
   seat's behalf. A pass does not start for a seat or company with no room
@@ -2520,3 +2548,4 @@ inside the process to hook them, because the engine loads no plugins.
 - **Communication permissions** — agents can only post to channels they're members of
 - **Manager handoffs** — agents identify their manager from their identity prompt and reach them through the colleague-surface tools (Slack/Jira/Confluence/A2A); engine-detected failures surface to the operator dashboard as the seat's `last_error`, and an unreachable provider as the seat state `stopped`/`provider`
 - **LLM sandboxing** — tool execution results are validated before returning to the agent
+- **Executor runs** — every agent seat's executor is its coding CLI's own fully permissioned run; `direct` runs it on the engine host as the engine's own user, which keeps each box's state apart and not the host, so a host other people or other work share places its seats' runs in `container` or `e2b`, through each `providers.llm` entry's `run_in` or `providers.sandbox.default_run_in` (see [Code Sandbox § Choosing a cell](../concepts/code-sandbox.md#choosing-a-cell))

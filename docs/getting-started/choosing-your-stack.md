@@ -7,10 +7,13 @@ self-hosted path. This page is the decision guide: what each choice implies,
 what you must create **yourself** in the external service, and where the
 detailed setup steps live.
 
-**Only the LLM is required.** The tracker and the knowledge base ship with the
-engine and are on by default; everything else is a surface you add when you
-want your company working where your people already are. A company with one
-signed-in coding CLI and nothing else runs.
+**Only the LLM, and a place for its runs, is required.** The tracker and the
+knowledge base ship with the engine and are on by default; everything else is a
+surface you add when you want your company working where your people already
+are. Every agent seat's executor runs in a [code sandbox](#code-sandbox-where-every-executor-runs)
+cell, and `local: {}` with `default_run_in: direct` is the engine host itself,
+with nothing to sign up for — so a company with one signed-in coding CLI, that
+cell, and nothing else runs.
 
 A useful mental model: for each integration there is usually
 
@@ -364,19 +367,22 @@ Details (scopes, Events API, thread routing, the working-status indicator):
 
 ---
 
-## Code sandbox (optional but recommended for engineer roles)
+## Code sandbox (where every executor runs)
 
-Lets a role's Execute phase run a real coding agent (Claude Code or OpenCode)
-with a shell, a filesystem, and a git checkout, inside an isolated sandbox —
-see the [Code Sandbox](../concepts/code-sandbox.md) concept page.
+Every agent seat's executor is its coding CLI's own run — Claude Code or
+OpenCode — fully permissioned, with a shell, a filesystem and a git checkout,
+in a box from this catalogue, which a company with an agent seat and a model
+must configure. `direct` is the engine host itself; `container` and `e2b` keep
+the run off it. See the [Code Sandbox](../concepts/code-sandbox.md) concept
+page.
 
 | Option | How | Notes |
 |---|---|---|
-| **None** | omit `providers.sandbox` | Roles use the native executor tool-loop; no code authoring. |
-| **E2B cloud** | `e2b: {api_key: "${E2B_API_KEY}"}` | Sign up at <https://e2b.dev>, create an API key in the dashboard. Fastest path. |
-| **Self-hosted E2B** | `e2b: {api_key: …, domain: "${E2B_DOMAIN}"}` | Deploy [e2b-dev/infra](https://github.com/e2b-dev/infra) on your own cloud account, then point the same SDK/code path at it via `domain`. Your cluster issues its own `E2B_API_KEY`. |
-| **Local — container** (recommended on one host) | `local: {image: …}` + `run_in: container` | Docker/Podman on the engine host. Real host isolation, no E2B account. You [bring the image](../concepts/code-sandbox.md#bring-your-own-image), with the coding CLI in it, or a stock one plus a setup step that installs it. Can use a [plan's login](../concepts/llm-backends.md#authentication) instead of an API key. |
-| **Local — direct** | `local: {}` + `run_in: direct` | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up, but the coding agent runs as the engine user with every permission, so it isolates *state*, not the host: it can read whatever your account can. A dedicated VM only. |
+| **None** | omit `providers.sandbox` | Only for a company with no agent seat, or no `providers.llm` entry yet; any other is refused at `providers.sandbox`. |
+| **E2B cloud** | `e2b: {api_key: "${E2B_API_KEY}"}` + `CREWLET_MCP_BRIDGE_URL` | Sign up at <https://e2b.dev>, create an API key in the dashboard. The run is on E2B's network and calls its seat's tools back at `CREWLET_MCP_BRIDGE_URL`, so the engine's API has to be published where E2B's cloud reaches it — see the caveat below. |
+| **Self-hosted E2B** | `e2b: {api_key: …, domain: "${E2B_DOMAIN}"}` + `CREWLET_MCP_BRIDGE_URL` | Deploy [e2b-dev/infra](https://github.com/e2b-dev/infra) on your own cloud account, then point the same SDK/code path at it via `domain`. Your cluster issues its own `E2B_API_KEY`, and the bridge address has to be one your cluster reaches. |
+| **Local — container** (recommended on one host) | `local: {image: …}` + an entry's `run_in: container` (or `default_run_in`) + `CREWLET_MCP_BRIDGE_URL` | Docker/Podman on the engine host. Real host isolation, no E2B account. You [bring the image](../concepts/code-sandbox.md#bring-your-own-image), with the coding CLI in it, or a stock one plus a setup step that installs it. A loopback `CREWLET_MCP_BRIDGE_URL` reaches the box under the runtime's name for the engine host, and on Linux `api.host` must not be loopback. Can use a [plan's login](../concepts/llm-backends.md#authentication) instead of an API key. |
+| **Local — direct** | `local: {}` + an entry's `run_in: direct` (or `default_run_in`) | A process tree on the engine host, using the CLI (and login) already installed there. Fastest to stand up and the natural pair for an entry signed in on a plan — but the coding agent runs fully permissioned as the engine user, so it isolates *state*, not the host: it can read whatever your account can. Only on a dedicated VM, or for the entry that needs the host itself. |
 
 For a local instance, a workstation included, put code work in a container:
 
@@ -389,15 +395,17 @@ providers:
     default_run_in: container
 ```
 
+
 `providers.sandbox` is a **catalogue**, so these are not exclusive: configure
-`e2b:` and `local:` together and give each seat its own `run_in` — the seat
-that needs the host's plan login runs `direct`, the seat whose
-generated code must never touch that host runs `e2b`. Where a seat that names
-none goes is `default_run_in`, which is required whenever some seat's
-executor entry would fall to it on a catalogue offering more than one cell
-(and `local:` alone offers two); a company whose every seat names its own
-needs none — as long as *something* names a cell, since a backend is only
-built for a cell that is reached.
+`e2b:` and `local:` together and give each `providers.llm` entry its own
+`run_in`, pointing each seat at the entry that is right for it — the entry
+signed in on the host's plan runs `direct`, the entry for work that must never
+touch that host runs `e2b`. Where an entry that names none goes is
+`default_run_in`, which is required whenever some seat's executor entry would
+fall to it on a catalogue offering more than one cell (and `local:` alone
+offers two); a company whose every such entry names its own needs none — as
+long as *something* names a cell, since a backend is only built for a cell
+that is reached.
 
 Coding-agent choice: the coding agent **is** the CLI of the entry the seat's
 executor launches on (the first member of its `llm` chain that can run one),
@@ -412,9 +420,26 @@ token, say — counts toward the check that refuses a remote box its entry's log
 cannot follow.
 
 One networking caveat for local development: a **cloud** E2B sandbox cannot
-reach services on your laptop (`localhost` GitLab) — in-sandbox tool
-access to those needs a reachable deployment, a tunnel, or self-hosted E2B on
-the same network.
+reach anything on your laptop, and that includes the engine. Every `e2b` run
+calls all of its seat's tools back through the bridge at
+`CREWLET_MCP_BRIDGE_URL`, so that has to be an address E2B's cloud reaches —
+the engine's API published to the internet, its
+[public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api)
+behind your proxy, or a tunnel to it — and never `localhost` or `127.0.0.1`.
+A proxy or tunnel on your laptop that connects to the engine on `127.0.0.1`
+has to send it a loopback `Host` (ngrok's `--host-header=rewrite`,
+cloudflared's `httpHostHeader: localhost`, Caddy's
+`header_up Host {upstream_hostport}`): the bridge answers a call that reaches
+it on the loopback under a `Host` that is neither loopback nor a container
+runtime's name for the engine host with `403 Forbidden: invalid Host header`
+([The tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
+Left unset, every `e2b` launch is refused; set to an address the VM cannot
+reach, or through a hop that keeps the public `Host`, every call the run makes
+over the bridge fails, so the run has none of its seat's tools, cannot call
+`submit_work`, and is rescued as `incomplete`.
+Services on your laptop the run would use directly (`localhost` GitLab) need
+the same: a reachable deployment, a tunnel, or self-hosted E2B on the same
+network.
 
 ---
 
