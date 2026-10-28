@@ -32,8 +32,13 @@ import (
 //     advertisement view reports about its ALTERNATE only its derived parts —
 //     a pack or object part there may be the client's pack (index-pack's
 //     `early EOF`), so it is counted `unrouted` and left to the next process
-//     over the incarnation itself. A retired incarnation's successor was read
-//     whole and checked: a report about it is dropped.
+//     over the incarnation itself. One run over a MERGE'S STORE — a
+//     compaction's build, in its scratch — reports about the incarnation the
+//     store's links came from (mergeAt): its pack, object and hint parts and
+//     a crash, since the store holds nothing but that copy's packs and the
+//     build reads nothing else; a derived part, of which the store holds
+//     none, is `unrouted`. A retired incarnation's successor was read whole
+//     and checked: a report about it is dropped.
 //   - REPAIRED BY THE NEXT FULL ROUND (repairRound): a linearizable one,
 //     queued with no waiter when none is queued — linearizable, because a
 //     full round's sweep removes every pack its snapshot does not name, and an
@@ -158,7 +163,9 @@ const (
 	// after the reporting run began.
 	reportStale reportOutcome = "stale"
 	// reportUnrouted: a pack or object part, or a hint, from a process in a
-	// scratch or a view, which may be the client's pack; nothing recorded.
+	// push's scratch or a view, which may be the client's pack — or a derived
+	// part from a merge's build, whose store holds no derived file; nothing
+	// recorded.
 	reportUnrouted reportOutcome = "unrouted"
 	// reportAgain: a part dropped for damage again within RebuildQuiet of
 	// its last drop for damage: dropped, not due at once.
@@ -523,19 +530,35 @@ func (c *Cache) observe(ran gitproc.Ran) {
 		inIncarnation, staged = e != nil, e != nil
 	}
 	if !inIncarnation {
-		// A scratch or a view: only its alternate's derived parts and a
-		// crash are the cache's; its pack and object parts, and the packs
-		// its hints name, may be the client's.
-		if e, inc = c.incarnationAt(ran.Alternate); e == nil {
-			return
+		if e, inc = c.mergeAt(ran.Alternate); e != nil {
+			// A MERGE'S BUILD reads nothing but its store's links of the
+			// incarnation's own packs — the very inodes — and writes into its
+			// scratch, which nothing reads back: its pack, object and hint
+			// reports and its crash are that copy's, for its scrub. The store
+			// holds no derived file, so no derived part it names is the
+			// copy's.
+			if derived != 0 {
+				c.countReports(derived, reportUnrouted)
+				derived = 0
+			}
+			if !r.scrubs() {
+				return
+			}
+		} else {
+			// A scratch or a view: only its alternate's derived parts and a
+			// crash are the cache's; its pack and object parts, and the
+			// packs its hints name, may be the client's.
+			if e, inc = c.incarnationAt(ran.Alternate); e == nil {
+				return
+			}
+			if r.stored != 0 {
+				c.countReports(r.stored, reportUnrouted)
+			}
+			if r.hinted {
+				c.countPart(reportHint, reportUnrouted)
+			}
+			r.stored, r.hinted = 0, false
 		}
-		if r.stored != 0 {
-			c.countReports(r.stored, reportUnrouted)
-		}
-		if r.hinted {
-			c.countPart(reportHint, reportUnrouted)
-		}
-		r.stored, r.hinted = 0, false
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()

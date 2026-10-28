@@ -20,14 +20,30 @@
 //
 // The build is ONE `pack-objects --stdin-packs --max-pack-size` over the
 // inputs with NO pack excluded, in a scratch repository whose one alternate is
-// the incarnation the plan was made over — the inputs are read through it,
-// and the build writes nothing but the scratch. Every object of the inputs is
-// in the outputs, an object an input shares with a pack that is no input
-// included: two compactions decided from different snapshots may each retire
-// the pack the other relied on, and both land. So no push decided against the
-// inputs can land a ref whose closure a compaction removed, and nothing fences
-// a compaction against a push: what drops objects is an expunge, never this
-// (ADR-0060).
+// a store holding EXACTLY THE INPUTS — hard links of the packs of the
+// incarnation the plan was made over (internal/code/cache's NewMergeScratch)
+// — so the inputs are read through it, and the build writes nothing but the
+// scratch. Every object of the inputs is in the outputs, an object an input
+// shares with a pack that is no input included: two compactions decided from
+// different snapshots may each retire the pack the other relied on, and both
+// land. So no push decided against the inputs can land a ref whose closure a
+// compaction removed, and nothing fences a compaction against a push: what
+// drops objects is an expunge, never this (ADR-0060).
+//
+// NOTHING BUT THE INPUTS IN REACH, because `--stdin-packs` fills in the name
+// hash its delta search sorts by with a walk from every commit its inputs hold
+// over every tree and blob it can reach, which only an excluded pack stops:
+// over the whole incarnation a roll of a few small packs walked the
+// repository's history, the build's cost and memory following the history
+// while its charge and its deadline follow the roll, so a large repository's
+// every roll was killed at its deadline and its pushes refused
+// compaction_behind. Over the store the walk ends at the inputs' edge — git
+// walks with ignore_missing_links — and the build writes the same packs; its
+// cost follows the roll (BenchmarkCompact's history=source/roll=8 arms: a
+// roll of eight 20 KB pushes built in 19.6 ms at a peak of 0.8 MiB beside
+// the 100 MB source history and in 14.2 ms beside nothing, where over the
+// whole copy it took 451 ms and 100.8 MiB; internal/code/cache's scratch.go
+// has the run).
 //
 // # Who compacts, and how often
 //

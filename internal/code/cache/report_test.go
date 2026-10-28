@@ -465,6 +465,67 @@ func TestAScratchsDerivedReportIsItsAlternates(t *testing.T) {
 	}
 }
 
+// A MERGE'S REPORT IS ITS INCARNATION'S. A compaction's build runs in a
+// scratch over a store holding nothing but the incarnation's own packs,
+// linked, and reads nothing else: what it names of a pack — never a client's,
+// as a push's scratch's may be — is that copy's, and makes the copy's scrub
+// due, where a push's scratch's is counted unrouted; a derived part, of which
+// the store holds none, is nobody's and asks nothing. Once its scratch is
+// removed the store is no merge's, and a report naming it reaches nothing.
+//
+// Mutation: route a merge's report as a push's scratch's (its pack part
+// counted unrouted, the scrub not made due).
+func TestAMergesReportIsItsIncarnations(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	_, p1 := w.push(t, repo, "refs/heads/main", nil)
+	_, p2 := w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+	sc, err := c.NewMergeScratch(t.Context(), s, uuid.Must(uuid.NewV7()).String(),
+		[]string{p1.GitChecksum, p2.GitChecksum})
+	if err != nil {
+		t.Fatalf("NewMergeScratch: %v", err)
+	}
+	report := func(parts gitproc.Part) {
+		t.Helper()
+		began := time.Now()
+		cache.Report(c, gitproc.Ran{Dir: sc.Dir, Alternate: sc.Alternate, Result: gitproc.Result{Began: began,
+			Damage: &gitproc.Damage{Kind: gitproc.ErrCorrupt, Parts: parts, Began: began}}})
+	}
+
+	report(gitproc.PartCommitGraph)
+	if got := reports(w, "commit-graph", "unrouted"); got != 1 {
+		t.Errorf("reports{part=commit-graph,outcome=unrouted} = %d, want the merge's derived report counted and left",
+			got)
+	}
+	if why, _ := cache.ScrubDue(c, repo); why != "" || cache.RepairPending(c, repo) {
+		t.Errorf("a merge's derived report asked the copy for a round (%t) or a scrub (%q)",
+			cache.RepairPending(c, repo), why)
+	}
+
+	report(gitproc.PartPack)
+	if got := reports(w, "pack", "queued"); got != 1 {
+		t.Errorf("reports{part=pack,outcome=queued} = %d, want the merge's pack report the copy's", got)
+	}
+	if got := reports(w, "pack", "unrouted"); got != 0 {
+		t.Errorf("reports{part=pack,outcome=unrouted} = %d: a merge's pack is the incarnation's, never a client's",
+			got)
+	}
+	if why, _ := cache.ScrubDue(c, repo); why == "" {
+		t.Error("a merge's pack report left the copy's scrub not due")
+	}
+
+	sc.Remove()
+	queued := reports(w, "pack", "queued")
+	report(gitproc.PartPack)
+	if got := reports(w, "pack", "queued") + reports(w, "pack", "unrouted"); got != queued {
+		t.Errorf("a report naming a removed merge's store was counted (%d reports, %d before): it is no merge's",
+			got, queued)
+	}
+}
+
 // A REPORT ABOUT A FILE SINCE REWRITTEN DROPS NOTHING. A run that began
 // before this process wrote a derived file may have read the file the write
 // replaced, so its report — however late it arrives — names a file that is

@@ -974,7 +974,9 @@ func Catalogue() []Instrument {
 				"than repaired further, or a sync whose own git met it so, " +
 				"synced again; `unrouted`, a pack, an object or a hint named " +
 				"by a push's own throwaway repository, which may be the " +
-				"client's pack; `again`, a derived file named damaged within " +
+				"client's pack, or a derived file named by a compaction's " +
+				"build, whose store of the packs it merges holds none; " +
+				"`again`, a derived file named damaged within " +
 				"a day of its last drop for damage, whatever the node wrote " +
 				"of it between: dropped and left to the ordinary schedule " +
 				"rather than written again at once; `cooldown`, a stored " +

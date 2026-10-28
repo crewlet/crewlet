@@ -40,11 +40,13 @@ const (
 	reposDir = "repos"
 	// scratchDir holds a receive-pack's scratch repositories, the
 	// advertisement views and — unnamed — the requests' spools (Spool),
-	// every one a request's of the process that made it; and a swap's next
-	// incarnation while it is staged (swap.go), a round's of that process,
-	// renamed into repos/ whole — so a crash before the rename leaves the
-	// incarnation it replaces the highest in repos/, and the boot moves the
-	// staging aside with the rest.
+	// every one a request's of the process that made it; a merge's scratch
+	// and the store of exactly the packs it merges (NewMergeScratch), a
+	// compaction's of that process; and a swap's next incarnation while it
+	// is staged (swap.go), a round's of that process, renamed into repos/
+	// whole — so a crash before the rename leaves the incarnation it replaces
+	// the highest in repos/, and the boot moves the staging aside with the
+	// rest.
 	scratchDir = "scratch"
 	// tmpDir holds every file before its rename into place, and downloads
 	// in progress.
@@ -419,8 +421,9 @@ const (
 	// scratch/ as the janitor measures it (measureScratch), where a file
 	// with a second name is one of an incarnation's own linked in — an
 	// advertisement view's packed-refs, an adopted push's pack before its
-	// scratch goes, a swap's staged links — and its bytes are counted where
-	// that incarnation is. A symbolic link counts as itself.
+	// scratch goes, a merge's store of the packs it merges, a swap's staged
+	// links — and its bytes are counted where that incarnation is. A
+	// symbolic link counts as itself.
 	soleNames
 )
 

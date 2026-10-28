@@ -130,6 +130,118 @@ func TestAScratchIsARepositoryThePoolAccepts(t *testing.T) {
 	}
 }
 
+// A MERGE'S SCRATCH LEANS ON EXACTLY THE PACKS IT MERGES: its one alternate is
+// a store of its own under scratch/, merge.<repository>.<id>.git, holding each
+// pack it names as the incarnation's very .pack, .idx and .rev, linked, and
+// nothing else — no pack it does not merge, no multi-pack-index, no
+// commit-graph, no alternate of its own — a repository the pool accepts. So a
+// git process run in it reads every object of the merged packs and none of
+// the rest: what `pack-objects --stdin-packs` walks to fill in its name hashes
+// ends at the merge's edge, never in the history beside it. None at all, a
+// pack named twice and a pack the incarnation does not hold live are refused,
+// with nothing made; Remove takes the store with the scratch and gives the pin
+// back.
+//
+// Mutation: lean a merge's scratch on the incarnation (its alternate the
+// copy's own directory, as a compaction's build's was), and the third push's
+// commit, in no pack the merge names, is read through it.
+func TestAMergesScratchLeansOnExactlyThePacksItMerges(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	first, p1 := w.push(t, repo, "refs/heads/main", nil)
+	second, p2 := w.push(t, repo, "refs/heads/main", nil)
+	third, p3 := w.push(t, repo, "refs/heads/main", nil)
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+	merged := []string{p1.GitChecksum, p2.GitChecksum}
+	id := uuid.Must(uuid.NewV7()).String()
+
+	sc, err := c.NewMergeScratch(t.Context(), s, id, merged)
+	if err != nil {
+		t.Fatalf("NewMergeScratch: %v", err)
+	}
+	store := w.path("scratch", "merge."+repo+"."+id+".git")
+	switch {
+	case sc.Dir != w.path("scratch", id+".git"):
+		t.Errorf("the merge's scratch is at %s, want %s", sc.Dir, w.path("scratch", id+".git"))
+	case sc.Alternate != store:
+		t.Errorf("the merge's scratch leans on %s, want its store %s", sc.Alternate, store)
+	}
+	if got, want := read(t, filepath.Join(sc.Dir, "objects", "info", "alternates")), store+"/objects\n"; got != want {
+		t.Errorf("the scratch's alternates is %q, want %q", got, want)
+	}
+	if err := gitproc.CheckShape(sc.Dir, sc.Alternate); err != nil {
+		t.Errorf("the pool would refuse to run in the merge's scratch: %v", err)
+	}
+	if got := names(t, filepath.Join(sc.Dir, "objects", "pack")); len(got) != 0 {
+		t.Errorf("the scratch holds %v before any build: a merge reads its packs through its store", got)
+	}
+	var want []string
+	for _, cs := range merged {
+		for _, ext := range []string{".idx", ".pack", ".rev"} {
+			want = append(want, "pack-"+cs+ext)
+		}
+	}
+	slices.Sort(want)
+	if got := names(t, filepath.Join(store, "objects", "pack")); !slices.Equal(got, want) {
+		t.Errorf("the store holds %v, want exactly the merged packs' files %v", got, want)
+	}
+	for _, name := range want {
+		linked := stat(t, filepath.Join(store, "objects", "pack", name))
+		if held := stat(t, filepath.Join(s.Dir, "objects", "pack", name)); !os.SameFile(linked, held) {
+			t.Errorf("the store's %s is not the incarnation's own file", name)
+		}
+	}
+	for _, rel := range []string{"objects/info/alternates", "objects/info/commit-graph", "objects/info/commit-graphs",
+		"objects/pack/multi-pack-index"} {
+		if exists(filepath.Join(store, filepath.FromSlash(rel))) {
+			t.Errorf("the store holds %s: it holds the merged packs and nothing else", rel)
+		}
+	}
+	for _, oid := range []string{first, second} {
+		if _, err := runGitOver(t, w.pool, sc, "cat-file", "-e", oid); err != nil {
+			t.Errorf("%s, in a merged pack, is not read through the store: %v", oid, err)
+		}
+	}
+	if _, err := runGitOver(t, w.pool, sc, "cat-file", "-e", third); err == nil {
+		t.Errorf("%s, in pack-%s which the merge does not name, is read through its scratch", third, p3.GitChecksum)
+	}
+
+	for name, packs := range map[string][]string{
+		"no pack":                        {},
+		"a pack named twice":             {p1.GitChecksum, p1.GitChecksum},
+		"a pack the copy does not hold":  {strings.Repeat("ab", 20)},
+		"one held and one not held live": {p1.GitChecksum, strings.Repeat("cd", 20)},
+	} {
+		if _, err := c.NewMergeScratch(t.Context(), s, uuid.Must(uuid.NewV7()).String(), packs); !errors.Is(err,
+			cache.ErrInvalid) {
+			t.Errorf("NewMergeScratch of %s = %v, want ErrInvalid", name, err)
+		}
+	}
+	if _, err := c.NewMergeScratch(t.Context(), s, id, merged); !errors.Is(err, cache.ErrInvalid) {
+		t.Errorf("a second merge under one id = %v, want ErrInvalid", err)
+	}
+	if got, want := names(t, w.path("scratch")), []string{filepath.Base(sc.Dir), filepath.Base(store)}; !slices.Equal(
+		got, slices.Sorted(slices.Values(want))) {
+		t.Errorf("scratch/ holds %v after the refused merges, want only the one merge's %v", got, want)
+	}
+	if got := cache.Pins(c, repo); got != 2 {
+		t.Errorf("the incarnation has %d pins, want the sync's and the merge's", got)
+	}
+
+	sc.Remove()
+	if exists(sc.Dir) || exists(store) {
+		t.Errorf("Remove left the scratch (%t) or its store (%t)", exists(sc.Dir), exists(store))
+	}
+	if got := cache.Pins(c, repo); got != 1 {
+		t.Errorf("the incarnation has %d pins after the merge's scratch was removed, want the sync's one", got)
+	}
+	if !exists(filepath.Join(s.Dir, "objects", "pack", "pack-"+p1.GitChecksum+".pack")) {
+		t.Error("removing the merge's store removed the incarnation's own pack")
+	}
+}
+
 // A SCRATCH IS NAMED BY A SYNC OF THIS CACHE: its alternate is an
 // incarnation the scratch pins, and only the Synced this cache handed out
 // says which one — so a zero Synced, another cache's, a push id that is not

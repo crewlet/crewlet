@@ -59,13 +59,14 @@ type Uploader interface {
 // Cache is the node's git cache as the compactor reaches it — the
 // *cache.Cache satisfies it: the repository synced and pinned, its live packs
 // for the plan, the build's admission to the maintenance lane, the scratch it
-// writes into — leaning on the incarnation, which it pins — and the outputs'
-// adoption once their rows have applied.
+// writes into — leaning on a store of exactly the packs it merges, linked
+// from the incarnation, which it pins — and the outputs' adoption once their
+// rows have applied.
 type Cache interface {
 	Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error)
 	Packs(s cache.Synced) []code.PackRow
 	AdmitCompaction(s cache.Synced, objects int64, limits code.Limits) (*cache.Compacting, error)
-	NewScratch(ctx context.Context, s cache.Synced, id string) (*cache.Scratch, error)
+	NewMergeScratch(ctx context.Context, s cache.Synced, id string, packs []string) (*cache.Scratch, error)
 	Adopt(ctx context.Context, repoID string, sc *cache.Scratch, packs ...code.PackRef) error
 }
 

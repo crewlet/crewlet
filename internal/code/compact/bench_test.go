@@ -63,6 +63,15 @@ import (
 //     outputs over ⌈the pack bytes it merged ÷ the cut⌉ (outputs/cuts), from
 //     which InputByteCap's half is re-derived — at most code.MaxCompactOutputs
 //     outputs a roll at the cap, whatever pack-objects writes whole.
+//   - history=source/roll=8/beside={history,none}: ONE compaction of eight
+//     one-commit pushes (code.CompactMinMerge) — beside the source history
+//     pushed as one pack, which the roll leaves out, and beside nothing — its
+//     build's wall clock (build-ms) and peak anonymous memory (peak-MiB),
+//     which follow the roll and not the history when the two arms agree: the
+//     build's walk for its name hashes ends at the roll's edge
+//     (cache.Cache.NewMergeScratch), where over the whole copy it ran the
+//     history — 451 ms and 100.8 MiB beside it, against 19.6 ms and 0.8 MiB
+//     (the figures are cache's scratch.go's).
 //   - steady/pushes=6000/rate=300/min/min-merge={4,8,16} (LARGE): 6 000
 //     one-commit pushes of 20 KB through the data node's committer, 300 to a
 //     simulated minute, and a pass of the home's compactor merging at that
@@ -148,6 +157,13 @@ const (
 	// eightNodes is the fleet the min-merge figures are stated for: one
 	// builder and seven git nodes downloading each output once.
 	eightNodes = 8
+
+	// rollPushes and rollPushBytes are the roll= arms' roll: the fewest
+	// one-commit pushes a compaction merges (code.CompactMinMerge), each the
+	// steady arm's push — the ordinary compaction of a busy repository, over
+	// a few dozen objects whatever history stands beside it.
+	rollPushes    = code.CompactMinMerge
+	rollPushBytes = steadyPushBytes
 
 	// swapPushBytes is each of the swap arm's pushes: a file of a kibibyte,
 	// so what its figure follows is the pack count and never the bytes.
@@ -447,6 +463,71 @@ func benchHistory(b *testing.B) {
 	b.Run(fmt.Sprintf("cap=input_byte_cap/cut=%dMiB", scaledCut>>20), func(b *testing.B) {
 		benchCap(b, historyPushes(b, client, src, commits, gittest.HistorySessions))
 	})
+	// THE ROLL'S OWN COST, beside the history and beside nothing: the same
+	// shape of rollPushes one-commit pushes, made last since they extend src's
+	// main — each stamped after the history's newest commit, so no walk of
+	// git's reads the history for a commit older than its parent.
+	b.Run(fmt.Sprintf("roll=%d", rollPushes), func(b *testing.B) {
+		tip := commits[len(commits)-1]
+		history := historyPushes(b, client, src, commits, 1)
+		roll := commitPushes(b, client, src, tip, extend(b, client, src, tip, len(commits), rollPushes,
+			rollPushBytes))
+		alone := gittest.Empty(b)
+		lone := commitPushes(b, client, alone, code.ZeroOID, extend(b, client, alone, "", len(commits), rollPushes,
+			rollPushBytes))
+		b.Run("beside=history", func(b *testing.B) { benchRoll(b, append(slices.Clone(history), roll...)) })
+		b.Run("beside=none", func(b *testing.B) { benchRoll(b, lone) })
+	})
+}
+
+// benchRoll is history=source/roll=…: a compaction of a repository whose last
+// rollPushes pushes are one commit each, a loop, each over a repository of its
+// own — beside=history after the source history pushed as ONE pack, which the
+// roll leaves out, and beside=none alone. The build's wall clock (build-ms)
+// and its peak anonymous memory (peak-MiB) are the roll's, never the
+// history's, when the two arms agree: the build's walk for its name hashes
+// ends at the roll's edge (cache.Cache.NewMergeScratch).
+func benchRoll(b *testing.B, pushes []pushed) {
+	f := newBenchFleet(b, 1)
+	c, _, est := f.compactor(b, code.CompactMinMerge, &traffic{})
+	m := &buildMeasure{}
+	compact.BuildWith(c, m.run)
+	var objects, beside int64
+	for b.Loop() {
+		b.StopTimer()
+		name, _, packs := f.repoOf(b, pushes)
+		cand, ok := f.candidate(b, name)
+		if !ok {
+			b.Fatalf("%s is not listed", name)
+		}
+		seen, _ := est.since(0)
+		b.StartTimer()
+		if outcome, err := compactWhileBusy(b, c, cand); outcome != compact.OutcomeApplied {
+			b.Fatalf("the roll of %d pushes: %s, %v; want applied", rollPushes, outcome, err)
+		}
+		b.StopTimer()
+		applied, _ := est.since(len(seen))
+		if len(applied) != 1 || len(applied[0].Retire) != rollPushes {
+			b.Fatalf("the roll applied %v, want one compaction merging the %d one-commit pushes", applied,
+				rollPushes)
+		}
+		objects, beside = 0, 0
+		for _, p := range packs {
+			if slices.Contains(applied[0].Retire, p.PackID) {
+				objects += p.Objects
+			} else {
+				beside += p.Objects
+			}
+		}
+		b.StartTimer()
+	}
+	peak, took, measured := m.figures()
+	b.ReportMetric(float64(objects), "objects")
+	b.ReportMetric(float64(beside), "beside-objects")
+	b.ReportMetric(float64(took.Microseconds())/1e3/float64(b.N), "build-ms")
+	if measured {
+		b.ReportMetric(float64(peak)/(1<<20), "peak-MiB")
+	}
 }
 
 // historyPushes is the history of src split into n pushes of about equal
@@ -1099,7 +1180,7 @@ func (u *unreached) AdmitCompaction(cache.Synced, int64, code.Limits) (*cache.Co
 	return nil, errUnreached
 }
 
-func (u *unreached) NewScratch(context.Context, cache.Synced, string) (*cache.Scratch, error) {
+func (u *unreached) NewMergeScratch(context.Context, cache.Synced, string, []string) (*cache.Scratch, error) {
 	u.calls.Add(1)
 	return nil, errUnreached
 }

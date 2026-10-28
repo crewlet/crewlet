@@ -37,6 +37,45 @@ import (
 // sync that replaces the cache's packed-refs by rename meanwhile leaves the
 // view naming the refs it was made with.
 //
+// A MERGE'S REPOSITORIES. A merge of a repository's packs — a compaction's
+// build (internal/code/compact) — writes its outputs into a scratch too, and
+// that scratch leans NOT on the incarnation but on an OBJECT STORE HOLDING
+// EXACTLY THE PACKS IT MERGES (NewMergeScratch): a repository of its own under
+// scratch/, merge.<repository>.<id>.git, whose objects/pack holds each merged
+// pack's .pack, .idx and .rev as hard links of the incarnation's — the very
+// inodes, so it holds no byte of its own while the incarnation stands — and
+// nothing else: no other pack, no multi-pack-index, no commit-graph.
+//
+// BECAUSE `pack-objects --stdin-packs` WALKS WHAT IT CAN REACH. To fill in the
+// name hash every object it writes is sorted by for its delta search, it runs
+// a revision walk from every commit its inputs hold, over every tree and blob
+// those reach, and only an object of an EXCLUDED pack stops it (git 2.56.0,
+// builtin/pack-objects.c's read_stdin_packs: revs.no_kept_objects over the
+// packs kept in core). A merge excludes no pack — every object of its inputs
+// is written, an object a pack it does not merge also holds among them
+// (ADR-0060) — so over the incarnation the walk went from a roll's newest
+// commits down the repository's WHOLE HISTORY, keeping a parsed object for
+// every object it met: measured at the review that found it, on the node pin,
+// a merge of eight one-commit packs (32 objects) beside a history of 400 032
+// objects took 1.39 s in the walk, about 3.5 µs an object of the history, for
+// a build charged and deadlined by its roll. Over a store of its inputs alone
+// the walk ends at their edge, since git walks with revs.ignore_missing_links
+// and a parent no input holds is simply not there: 7 ms, and the same pack,
+// byte for byte, its name-hash hints the same. So a merge's cost follows what
+// it merges, never the history beside it — BenchmarkCompact's
+// history=source/roll=8 arms: eight one-commit pushes of 20 KB, 24 objects,
+// built in 19.6 ms at a peak of 0.8 MiB beside the 100 MB source history's
+// 295 680 objects and in 14.2 ms at 0.75 MiB beside nothing, where over the
+// whole copy, as it built before, the same merge took 451 ms and 100.8 MiB
+// (git 2.56.0, the in-process store, -benchtime 1x and one count each, two
+// E-cores of an Intel Core Ultra 7 265U, 2026-10-28).
+//
+// The store is the merge's, as the scratch is: removed with it (Remove), moved
+// aside by a boot with the rest of scratch/, and counted by the janitor only
+// for a link whose incarnation has since gone — a link the incarnation still
+// names is on the disk once, counted there. What a git process run over it
+// reports is about the incarnation the links came from (mergeAt, report.go).
+
 // Both are one request's, and written as such: plain writes with no fsync,
 // because nothing outlives the request — a boot moves every scratch of the
 // process before it into trash/ — and the files are on the disk once:
@@ -44,17 +83,19 @@ import (
 // and an adopted pack counted where their incarnation is (sizeUnder's
 // soleNames).
 
-// Scratch is a repository a push's receive-pack runs in, or a compaction's
-// pack-objects writes its outputs into (NewScratch), or an advertisement view
-// (AdvertiseView). It pins the incarnation it leans on until Remove: its
-// alternate must outlive the push or the build, so the budget never evicts it
-// from under one.
+// Scratch is a repository a push's receive-pack runs in (NewScratch), or a
+// merge's pack-objects writes its outputs into (NewMergeScratch), or an
+// advertisement view (AdvertiseView). It pins the incarnation it leans on —
+// directly, or through the store a merge's links of it make — until Remove:
+// its alternate must outlive the push or the build, so the budget never
+// evicts it from under one.
 type Scratch struct {
 	// Dir is the repository: absolute and clean, scratch/<id>.git — a push's
-	// id, or a compaction's — or scratch/adv-<uuid>.git.
+	// id, or a merge's — or scratch/adv-<uuid>.git.
 	Dir string
-	// Alternate is the incarnation it leans on, whose objects its one
-	// alternates line names: what every git process run in it names as its
+	// Alternate is the repository it leans on, whose objects its one
+	// alternates line names — the incarnation, or a merge's store of exactly
+	// the packs it merges — what every git process run in it names as its
 	// gitproc.Cmd.Alternate, since the pool runs in no repository whose
 	// alternate the call did not name.
 	Alternate string
@@ -63,20 +104,21 @@ type Scratch struct {
 	e    *entry
 	inc  *incarnation
 	view bool
+	// store is a merge's store, scratch/merge.<repository>.<id>.git — its
+	// Alternate — and empty for a push's scratch and a view.
+	store string
 	// remove is Remove's body, run once.
 	remove func()
 }
 
-// NewScratch makes the repository a push's receive-pack runs in, or a
-// compaction's pack-objects writes its outputs into: HEAD the bytes of s's,
-// the pool's config, refs/heads/ and refs/tags/ EMPTY, and one alternate —
-// s's objects — so a thin pack is completed and checked against the cache, and
-// a compaction's inputs are read from it, without a byte of either entering
-// the cache. It pins s's incarnation until Remove. id names it — the push's
-// id, or the compaction's: a canonical lowercase UUID, since it is a path
-// component — and an id names one scratch, once. Its receive-pack NEVER runs
-// with [Cache.AdvertiseConfig]: the alternate's refs are the only negative
-// tips of its connectivity check.
+// NewScratch makes the repository a push's receive-pack runs in: HEAD the
+// bytes of s's, the pool's config, refs/heads/ and refs/tags/ EMPTY, and one
+// alternate — s's objects — so a thin pack is completed and checked against
+// the cache without a byte of it entering the cache. It pins s's incarnation
+// until Remove. id names it — the push's id: a canonical lowercase UUID, since
+// it is a path component — and an id names one scratch, once. Its
+// receive-pack NEVER runs with [Cache.AdvertiseConfig]: the alternate's refs
+// are the only negative tips of its connectivity check.
 func (c *Cache) NewScratch(ctx context.Context, s Synced, id string) (*Scratch, error) {
 	if err := c.handedOut(s, "a scratch"); err != nil {
 		return nil, err
@@ -85,7 +127,41 @@ func (c *Cache) NewScratch(ctx context.Context, s Synced, id string) (*Scratch, 
 		return nil, fmt.Errorf("%w: scratch id %q is not a canonical lowercase UUID (it becomes a path component)",
 			ErrInvalid, id)
 	}
-	return c.newScratch(ctx, s, id+".git", false)
+	return c.newScratch(ctx, s, id, false, nil)
+}
+
+// NewMergeScratch makes the repository a MERGE's pack-objects writes its
+// outputs into — a compaction's build (internal/code/compact) — shaped as
+// NewScratch's, but leaning on a STORE OF EXACTLY THE PACKS IT MERGES rather
+// than on s's incarnation: packs names each by its git checksum, every one a
+// pack live in the incarnation s pins, and its .pack, .idx and .rev are
+// hard-linked from there into scratch/merge.<repository>.<id>.git, the
+// scratch's one alternate (A MERGE'S REPOSITORIES, above). So a
+// `pack-objects --stdin-packs` run in it reads every pack it merges through
+// its alternate, writes into the scratch alone, and walks for its name hashes
+// nothing its inputs do not hold. It pins s's incarnation until Remove, which
+// takes the store with the scratch. id names it — the merge's: a canonical
+// lowercase UUID, since it is a path component — and an id names one scratch,
+// once.
+//
+// A merge of no pack, a pack named twice and a pack the incarnation does not
+// hold live are refused ([ErrInvalid]), with nothing made: the store holds
+// what the merge reads, the incarnation's live files alone. A file that could
+// not be linked — one a repair is replacing in place this moment — is the
+// error, the scratch and its store moved aside.
+func (c *Cache) NewMergeScratch(ctx context.Context, s Synced, id string, packs []string) (*Scratch, error) {
+	if err := c.handedOut(s, "a merge's scratch"); err != nil {
+		return nil, err
+	}
+	switch {
+	case !canonicalID(id):
+		return nil, fmt.Errorf("%w: scratch id %q is not a canonical lowercase UUID (it becomes a path component)",
+			ErrInvalid, id)
+	case len(packs) == 0:
+		return nil, fmt.Errorf("%w: a merge's scratch names the packs it merges, and this one names none",
+			ErrInvalid)
+	}
+	return c.newScratch(ctx, s, id, false, packs)
 }
 
 // AdvertiseView is NewScratch for a push's ADVERTISEMENT: its packed-refs is
@@ -99,13 +175,50 @@ func (c *Cache) AdvertiseView(ctx context.Context, s Synced) (*Scratch, error) {
 	if err := c.handedOut(s, "an advertisement view"); err != nil {
 		return nil, err
 	}
-	return c.newScratch(ctx, s, "adv-"+newV7()+".git", true)
+	return c.newScratch(ctx, s, "adv-"+newV7(), true, nil)
 }
 
-// newScratch makes scratch/<name>, pinning s's incarnation for it. A
-// directory already there under the name is refused; one that could not be
-// written whole is moved into trash/ and its pin given back.
-func (c *Cache) newScratch(ctx context.Context, s Synced, name string, view bool) (*Scratch, error) {
+// mergeStoreName is the name under scratch/ of the store the merge named id of
+// repository repoID leans on: merge.<repoID>.<id>.git — the repository, so a
+// report of a git process run over it finds whose it is (mergeAt), and the
+// merge's own id, so no two merges' stores share a name.
+func mergeStoreName(repoID, id string) string { return "merge." + repoID + "." + id + ".git" }
+
+// mergeAt is the entry whose merge's store dir is, and the incarnation the
+// store's links came from — or nil: a git process run over the store, a
+// merge's build, reads nothing but those links, the very inodes that
+// incarnation holds, so what it reports is about that copy (report.go). A
+// store whose scratch is removed is none.
+func (c *Cache) mergeAt(dir string) (*entry, *incarnation) {
+	if dir == "" || filepath.Dir(dir) != filepath.Join(c.dir, scratchDir) {
+		return nil, nil
+	}
+	parts := strings.Split(filepath.Base(dir), ".")
+	if len(parts) != 4 || parts[0] != "merge" || parts[3] != "git" {
+		return nil, nil
+	}
+	c.mu.Lock()
+	e := c.entries[parts[1]]
+	c.mu.Unlock()
+	if e == nil {
+		return nil, nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if inc := e.merges[dir]; inc != nil && !e.dead {
+		return e, inc
+	}
+	return nil, nil
+}
+
+// newScratch makes scratch/<name>.git, pinning s's incarnation for it — and,
+// for a merge of packs, the store of exactly them it leans on, registered on
+// the entry for the observer (mergeAt). A directory already there under the
+// name is refused; one that could not be written whole is moved into trash/,
+// with its store, and its pin given back.
+func (c *Cache) newScratch(ctx context.Context, s Synced, name string, view bool, merge []string) (*Scratch,
+	error) {
+
 	if !c.enter() {
 		return nil, ErrStopped
 	}
@@ -120,54 +233,132 @@ func (c *Cache) newScratch(ctx context.Context, s Synced, name string, view bool
 		return nil, fmt.Errorf("%w: a scratch names a Synced still held, and %s was released and removed",
 			ErrInvalid, s.Dir)
 	}
+	if err := mergedLive(inc, merge); err != nil {
+		e.mu.Unlock()
+		return nil, fmt.Errorf("%w: a merge's scratch for %s: %w", ErrInvalid, e.id, err)
+	}
 	inc.pins++
 	c.used(e, inc)
 	e.mu.Unlock()
 
-	dir := filepath.Join(c.dir, scratchDir, name)
+	dir := filepath.Join(c.dir, scratchDir, name+".git")
 	if err := os.Mkdir(dir, hostbox.DirMode); err != nil {
 		c.release(e, inc, noReader)
 		if errors.Is(err, fs.ErrExist) {
-			return nil, fmt.Errorf("%w: %s already exists: a push id names one scratch, once", ErrInvalid, dir)
+			return nil, fmt.Errorf("%w: %s already exists: an id names one scratch, once", ErrInvalid, dir)
 		}
 		return nil, fmt.Errorf("cache: making %s: %w", dir, err)
 	}
 	sc := &Scratch{Dir: dir, Alternate: s.Dir, c: c, e: e, inc: inc, view: view}
 	sc.remove = sync.OnceFunc(sc.discard)
-	if err := sc.fill(s.Dir); err != nil {
+	if merge != nil {
+		sc.store = filepath.Join(c.dir, scratchDir, mergeStoreName(e.id, name))
+		sc.Alternate = sc.store
+		e.mu.Lock()
+		if e.merges == nil {
+			e.merges = map[string]*incarnation{}
+		}
+		e.merges[sc.store] = inc
+		e.mu.Unlock()
+	}
+	if err := sc.fill(s.Dir, merge); err != nil {
 		sc.Remove()
 		return nil, fmt.Errorf("cache: making %s for %s: %w", dir, e.id, err)
 	}
 	return sc, nil
 }
 
-// fill writes the scratch's repository, leaning on the incarnation at from.
-func (s *Scratch) fill(from string) error {
-	for _, d := range []string{"refs/heads", "refs/tags", "objects/pack", "objects/info"} {
-		if err := os.MkdirAll(filepath.Join(s.Dir, d), hostbox.DirMode); err != nil {
-			return err
-		}
+// mergedLive holds a merge's packs to inc's live set — each the checksum of a
+// pack live there, named once — and a push's scratch or a view, which names
+// none, to nothing; e.mu is held.
+func mergedLive(inc *incarnation, packs []string) error {
+	if packs == nil {
+		return nil
 	}
+	live := make(map[string]bool, len(inc.live))
+	for _, p := range inc.live {
+		live[p.checksum] = true
+	}
+	named := make(map[string]bool, len(packs))
+	for _, cs := range packs {
+		switch {
+		case named[cs]:
+			return fmt.Errorf("pack-%s is named twice", cs)
+		case !live[cs]:
+			return fmt.Errorf("pack-%s is no pack live in %s", cs, inc.dir)
+		}
+		named[cs] = true
+	}
+	return nil
+}
+
+// fill writes the scratch's repository over the incarnation at from: leaning
+// on it, for a push's scratch or a view; for a merge, leaning on the store of
+// exactly the packs merge names, written and linked from it first.
+func (s *Scratch) fill(from string, merge []string) error {
 	head, err := os.ReadFile(filepath.Join(from, "HEAD"))
 	if err != nil {
 		return err
 	}
-	for _, f := range []struct {
-		name string
-		body []byte
-	}{
-		{"HEAD", head},
-		{"config", []byte(gitproc.RepoConfig)},
-		// The one line naming the incarnation's objects: exactly what the
-		// pool holds a repository to for a call whose Alternate is from.
-		{filepath.Join("objects", "info", "alternates"), []byte(filepath.Join(from, "objects") + "\n")},
-	} {
-		if err := os.WriteFile(filepath.Join(s.Dir, f.name), f.body, hostbox.FileMode); err != nil {
+	if s.store != "" {
+		if err := os.Mkdir(s.store, hostbox.DirMode); err != nil {
+			return err
+		}
+		if err := writeRepo(s.store, head, ""); err != nil {
+			return err
+		}
+		if err := linkPacks(from, s.store, merge); err != nil {
 			return err
 		}
 	}
+	if err := writeRepo(s.Dir, head, s.Alternate); err != nil {
+		return err
+	}
 	if s.view {
 		return os.Link(filepath.Join(from, "packed-refs"), filepath.Join(s.Dir, "packed-refs"))
+	}
+	return nil
+}
+
+// writeRepo writes a repository the pool runs in at dir, which exists: HEAD
+// head, the pool's config, refs/heads/ and refs/tags/ EMPTY, objects/pack/,
+// and — where alternate is set — the one alternates line naming its objects:
+// exactly what the pool holds a repository to for a call whose Alternate is
+// alternate, and no such file where it is not (gitproc's ShapeAlternates).
+func writeRepo(dir string, head []byte, alternate string) error {
+	for _, d := range []string{"refs/heads", "refs/tags", "objects/pack", "objects/info"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), hostbox.DirMode); err != nil {
+			return err
+		}
+	}
+	type file struct {
+		name string
+		body []byte
+	}
+	files := []file{{"HEAD", head}, {"config", []byte(gitproc.RepoConfig)}}
+	if alternate != "" {
+		files = append(files, file{filepath.Join("objects", "info", "alternates"),
+			[]byte(filepath.Join(alternate, "objects") + "\n")})
+	}
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(dir, f.name), f.body, hostbox.FileMode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// linkPacks hard-links every file of each of packs — git checksums — from the
+// incarnation at from into the store at store: its .pack, its .rev, and its
+// .idx LAST (bundleOrder), the very inodes the incarnation holds.
+func linkPacks(from, store string, packs []string) error {
+	for _, cs := range packs {
+		for _, ext := range bundleOrder {
+			rel := filepath.Join("objects", "pack", "pack-"+cs+ext)
+			if err := os.Link(filepath.Join(from, rel), filepath.Join(store, rel)); err != nil {
+				return fmt.Errorf("linking a merged pack's %s into its store: %w", ext, err)
+			}
+		}
 	}
 	return nil
 }
@@ -236,12 +427,24 @@ func (s *Scratch) Pack() (path, checksum string, ok bool, err error) {
 // pin back. Called once the receive-pack in it has ended.
 func (s *Scratch) Remove() { s.remove() }
 
-// discard is Remove's body.
+// discard is Remove's body: the scratch and, for a merge, its store moved
+// aside — the store's registration taken back first, so no report of a run
+// over it is routed to a store being removed — and the pin given back.
 func (s *Scratch) discard() {
 	c := s.c
+	if s.store != "" {
+		s.e.mu.Lock()
+		delete(s.e.merges, s.store)
+		s.e.mu.Unlock()
+	}
 	if c.enter() {
-		if err := toTrash(c.dir, s.Dir, newV7()+"-scratch"); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			c.log.Warn("code_cache_scratch_remove_failed", "path", s.Dir, "error", err)
+		for _, dir := range []string{s.Dir, s.store} {
+			if dir == "" {
+				continue
+			}
+			if err := toTrash(c.dir, dir, newV7()+"-scratch"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				c.log.Warn("code_cache_scratch_remove_failed", "path", dir, "error", err)
+			}
 		}
 		c.leave()
 		c.kick()

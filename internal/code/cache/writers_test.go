@@ -446,9 +446,10 @@ var cacheWriters = []writerRow{
 			"one, own mode's graph and the node's tip",
 		[]cache.DerivedName{cache.DerivedMidx, cache.DerivedGraph, cache.DerivedGraphLayers}},
 	{"internal/code/cache/scratch.go", kindOS,
-		"a push's scratch repository and an advertisement view under scratch/: their directories, HEAD, " +
-			"config and alternates, and a view's packed-refs linked from its incarnation; and a request's " +
-			"spool (Spool), created there and unlinked at once, so it is no file of the cache's", nil},
+		"a push's scratch repository, a merge's and an advertisement view under scratch/: their directories, " +
+			"HEAD, config and alternates, a view's packed-refs linked from its incarnation, and a merge's store " +
+			"of exactly the packs it merges, their files linked from its incarnation; and a request's spool " +
+			"(Spool), created there and unlinked at once, so it is no file of the cache's", nil},
 	{"internal/code/cache/adopt.go", kindOS,
 		"the receiving node's own pack, once its row has applied: linked into tmp/ and from there into " +
 			"objects/pack, and its staging names removed; and a maintainer's own published layer, once its " +
@@ -488,9 +489,9 @@ var cacheWriters = []writerRow{
 			"build runs in its own scratch, never in an incarnation", nil},
 	{"internal/code/compact/build.go", kindGit + " pack-objects",
 		"a compaction's build: ONE `pack-objects --stdin-packs` in the compaction's own SCRATCH " +
-			"(cache.NewScratch), its inputs read through the scratch's one alternate — the incarnation — and its " +
-			"outputs written into the scratch alone, never an incarnation; the outputs enter the cache only by " +
-			"Adopt, once their rows have applied", nil},
+			"(cache.NewMergeScratch), its inputs read through the scratch's one alternate — a store of exactly " +
+			"them, linked from the incarnation — and its outputs written into the scratch alone, never an " +
+			"incarnation; the outputs enter the cache only by Adopt, once their rows have applied", nil},
 	{"internal/code/compact/compactor.go", kindRuntime,
 		"runInSlot hands the build's one Cmd — build.go's pack-objects literal — to the admission's reserved slot " +
 			"(cache.Compacting.Run), unchanged: a function value, so a suite can stand in a builder", nil},

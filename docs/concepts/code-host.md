@@ -428,22 +428,27 @@ planned again until its rows move, so an idle repository costs the minute's
 poll a lookup.
 
 **The build.** One `git pack-objects --stdin-packs` over the packs merged,
-run in a scratch repository whose one alternate is the node's copy — never in
-the copy — and in the node's maintenance lane: at the background indexing's
-own limit, never the slot kept for `crewlet code verify`, with its memory
-charged against the node's background budget beside the indexing's (300
-bytes an object merged, room for a clone of the whole repository however few
-packs it merges, and twice `code.limits.max_blob_bytes` for its delta
-window). It cuts its outputs at 1 GiB. **The outputs hold every object of the
-packs merged** — an object a pack outside the merge also holds included —
-because a merge judges no reachability: no push decided against the packs it
-replaces can land a ref whose history it dropped, and two merges planned from
-different moments never each drop what the other relied on. Each output is
-one bundle in the stored format, every one held to the bundle rule before a
-byte is uploaded and all of them uploaded at once, since an object's key is
-minted as its upload begins and a record may name only keys of the last
-twelve hours. The maintenance slot and the memory go back as soon as the
-build's last git process ends, before the uploads.
+run in a scratch repository — never in the copy — whose one alternate holds
+exactly those packs, hard links of the copy's own files, so the walk git makes
+from the merged packs' commits to sort their objects for delta compression
+ends where they do: over the whole copy it ran the repository's history, and a
+merge of a few small pushes into a large repository cost time and memory in
+proportion to that history. It runs in the node's maintenance lane: at the
+background indexing's own limit, never the slot kept for
+`crewlet code verify`, with its memory charged against the node's background
+budget beside the indexing's (300 bytes an object merged, room for a clone of
+the whole repository however few packs it merges, and twice
+`code.limits.max_blob_bytes` for its delta window). It cuts its outputs at
+1 GiB. **The outputs hold every object of the packs merged** — an object a
+pack outside the merge also holds included — because a merge judges no
+reachability: no push decided against the packs it replaces can land a ref
+whose history it dropped, and two merges planned from different moments never
+each drop what the other relied on. Each output is one bundle in the stored
+format, every one held to the bundle rule before a byte is uploaded and all of
+them uploaded at once, since an object's key is minted as its upload begins
+and a record may name only keys of the last twelve hours. The maintenance slot
+and the memory go back as soon as the build's last git process ends, before
+the uploads.
 
 **The decision.** The home proposes ONE compaction to the repository's
 [committer](#the-committer) through the estate router, as a push is proposed,

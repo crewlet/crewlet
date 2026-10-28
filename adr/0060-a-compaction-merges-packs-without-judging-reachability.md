@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/code`
-- **Enforced-by:** `internal/code/host.TestTheHostPassesTheSuite` (its cases `C2_CompactionDuringPush`, `C3_CompactionDuringFetch` and `C4_ARetiredPackOutlivesItsLongestRead`), held able to fail by `internal/code/codetest.TestTheSuiteCatchesARetirementWithNoGrace`; `internal/objstore/references.TestARetiredTableIsSweptAndOutlivesItsLongestRead`; `internal/code/cache.TestASwapKeepsEveryPackAReaderHolds`; `internal/code/cache.TestAMergeCompactionKeepsTheCommitGraph`; `internal/code/compact.TestACompactionKeepsEveryObjectOfItsInputs`; `internal/code.TestACompactionOfAPackNoLongerLiveIsStale`
+- **Enforced-by:** `internal/code/host.TestTheHostPassesTheSuite` (its cases `C2_CompactionDuringPush`, `C3_CompactionDuringFetch` and `C4_ARetiredPackOutlivesItsLongestRead`), held able to fail by `internal/code/codetest.TestTheSuiteCatchesARetirementWithNoGrace`; `internal/objstore/references.TestARetiredTableIsSweptAndOutlivesItsLongestRead`; `internal/code/cache.TestASwapKeepsEveryPackAReaderHolds`; `internal/code/cache.TestAMergeCompactionKeepsTheCommitGraph`; `internal/code/compact.TestACompactionKeepsEveryObjectOfItsInputs`; `internal/code/compact.TestTheBuildReadsItsInputsThroughTheAlternate`; `internal/code.TestACompactionOfAPackNoLongerLiveIsStale`
 - **Cost-when-tried:** the code host's first build compacted nothing: every push stored one pack, kept live for the repository's life, so a cold sync's length was its pack count — 2 000 packs at the S3 fake's 200 ms first byte took about 26 s at one sync's width (`BenchmarkColdSync`) — every request's pack lookup searched every pack the round's index did not cover, and the code estate's pack rows grew with every push for ever
 - **Tag-status:** unreleased
 
@@ -23,6 +23,12 @@ safe with no fence:
    holds would write less, and is wrong: two compactions decided from
    different snapshots may each retire the pack the other relied on, and both
    land. Dropping objects is an expunge's, the one rewrite that needs a fence.
+   And the build reads its inputs from a store holding EXACTLY them — hard
+   links of the home's copy of each — so the walk `--stdin-packs` makes from
+   their commits to fill in its name hashes ends at their edge: excluding
+   nothing, over the whole copy that walk ran the repository's history, and a
+   merge of a few small packs cost what the history weighs rather than what it
+   merges.
 2. **Only packs that are live and not FULL are inputs**, held to the rows in
    the decide; a plan made from an older snapshot is refused `stale` and made
    again. A full pack (`FullPackBytes`, or its bundle at `FullBundleBytes`) is

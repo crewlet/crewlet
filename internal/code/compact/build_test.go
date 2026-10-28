@@ -6,8 +6,10 @@ import (
 	"context"
 	"crypto/sha1" //nolint:gosec // git's own object ids, which a case computes for blobs it writes.
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -25,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -352,15 +355,41 @@ func TestACompactionKeepsEveryObjectOfItsInputs(t *testing.T) {
 	}
 }
 
-// THE BUILD READS ITS INPUTS THROUGH THE ALTERNATE: the scratch a compaction
-// builds in holds no pack before its pack-objects runs — every input is read
-// from the incarnation its one alternate names — and the build succeeds on the
-// node pin's git. A platform assertion: a git that did not read an alternate's
-// packs for `--stdin-packs` would fail every compaction.
+// THE BUILD READS EXACTLY ITS INPUTS, THROUGH ITS ALTERNATE: the scratch a
+// compaction builds in holds no pack before its pack-objects runs, and its one
+// alternate is a store holding exactly the packs the build is handed — each
+// one's .pack, .idx and .rev the incarnation's own files, linked — and nothing
+// else: no pack the roll leaves out, no multi-pack-index, no commit-graph. So
+// `--stdin-packs`, which walks every commit, tree and blob it can reach to fill
+// in its name hashes, walks the roll and never the history beside it — here a
+// heavy pack live beside the eight light ones merged, which the store does not
+// hold. And the build succeeds on the node pin's git: a platform assertion, as
+// a git that did not read an alternate's packs for `--stdin-packs` would fail
+// every compaction.
+//
+// Mutation: lean the build's scratch on the incarnation (NewMergeScratch's
+// alternate the copy's own directory, as the build's was), and its alternate
+// holds the heavy pack.
 func TestTheBuildReadsItsInputsThroughTheAlternate(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
+	h := x.handmade()
+	heavy := map[string]string{}
+	for i := range 200 {
+		heavy[fmt.Sprintf("heavy/%03d.txt", i)] = fmt.Sprintf("heavy %d\n", i)
+	}
+	tip, objects := h.commit("refs/heads/heavy", heavy)
+	bare, heavyPack := h.pack(objects)
+	keep := x.proposePack(bare, heavyPack, "refs/heads/heavy", tip)
 	x.pushN(code.CompactMinMerge, 4<<10)
+	cand := x.candidate()
+	s, err := x.node().Cache().Sync(x.c.Ctx, cand.ID, statelog.FloorAt(statelog.ReadSession, cand.Version))
+	if err != nil {
+		t.Fatalf("sync the home's copy: %v", err)
+	}
+	copyDir := s.Dir
+	s.Release()
+
 	c, _, _ := x.compactorOf(nil)
 	var (
 		mu     sync.Mutex
@@ -370,25 +399,77 @@ func TestTheBuildReadsItsInputsThroughTheAlternate(t *testing.T) {
 		mu.Lock()
 		builds++
 		mu.Unlock()
-		held, err := os.ReadDir(filepath.Join(cmd.Dir, "objects", "pack"))
-		switch {
-		case err != nil:
-			t.Errorf("the scratch's packs: %v", err)
-		case len(held) > 0:
-			t.Errorf("the scratch holds %d files before the build, want none: its inputs are read through "+
-				"the alternate", len(held))
-		case cmd.Alternate == "" || !strings.Contains(cmd.Alternate, string(filepath.Separator)+"repos"+
-			string(filepath.Separator)):
-			t.Errorf("the build's alternate is %q, want the incarnation it planned over", cmd.Alternate)
+		listed, err := io.ReadAll(cmd.Stdin)
+		if err != nil {
+			return gitproc.Result{}, err
+		}
+		cmd.Stdin = bytes.NewReader(listed)
+		var want []string
+		for line := range strings.Lines(string(listed)) {
+			cs := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(line), "pack-"), ".pack")
+			for _, ext := range []string{".idx", ".pack", ".rev"} {
+				want = append(want, "pack-"+cs+ext)
+			}
+		}
+		slices.Sort(want)
+		if held := filesIn(t, filepath.Join(cmd.Dir, "objects", "pack")); len(held) > 0 {
+			t.Errorf("the scratch holds %v before the build, want nothing: its inputs are read through its "+
+				"alternate", held)
+		}
+		if strings.HasPrefix(cmd.Alternate, copyDir) || strings.HasPrefix(copyDir, cmd.Alternate) {
+			t.Errorf("the build's alternate is %s, the copy it planned over: its walk for name hashes would run "+
+				"the repository's history", cmd.Alternate)
+		}
+		if got := filesIn(t, filepath.Join(cmd.Alternate, "objects", "pack")); !slices.Equal(got, want) {
+			t.Errorf("the build's alternate holds %v, want exactly the files of the packs it is handed %v", got,
+				want)
+		}
+		if slices.Contains(want, "pack-"+heavyPack+".pack") {
+			t.Errorf("the build was handed the heavy pack the roll leaves out: %s", listed)
+		}
+		for _, name := range want {
+			linked, err := os.Stat(filepath.Join(cmd.Alternate, "objects", "pack", name))
+			if err != nil {
+				continue
+			}
+			if held, err := os.Stat(filepath.Join(copyDir, "objects", "pack", name)); err != nil ||
+				!os.SameFile(linked, held) {
+				t.Errorf("the alternate's %s is not the copy's own file (%v)", name, err)
+			}
+		}
+		for _, rel := range []string{"objects/info/commit-graph", "objects/info/commit-graphs",
+			"objects/info/alternates"} {
+			if _, err := os.Lstat(filepath.Join(cmd.Alternate, filepath.FromSlash(rel))); err == nil {
+				t.Errorf("the build's alternate holds %s: it holds the packs merged and nothing else", rel)
+			}
 		}
 		return compact.RunInSlot(ctx, adm, cmd)
 	})
-	if out, err := compactWhileBusy(t, c, x.candidate()); out != compact.OutcomeApplied {
+	if out, err := compactWhileBusy(t, c, cand); out != compact.OutcomeApplied {
 		t.Fatalf("the compaction: %s, %v; want applied", out, err)
 	}
 	if builds != 1 {
 		t.Errorf("the compaction ran %d builds, want one", builds)
 	}
+	if !slices.ContainsFunc(x.rows().Packs, func(r code.PackRow) bool { return r.PackID == keep.PackID }) {
+		t.Error("the heavy pack was merged: the case needs it beside the roll")
+	}
+}
+
+// filesIn is the sorted names of the files in dir; a directory absent holds
+// none.
+func filesIn(t *testing.T, dir string) []string {
+	t.Helper()
+	list, err := os.ReadDir(dir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("listing %s: %v", dir, err)
+	}
+	var out []string
+	for _, d := range list {
+		out = append(out, d.Name())
+	}
+	slices.Sort(out)
+	return out
 }
 
 // builder is a case's stand-in for a build's git: every pack-objects asked of

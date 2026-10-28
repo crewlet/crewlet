@@ -150,6 +150,11 @@ type entry struct {
 	// swap carries is on disk for it to link, and what a git process run in
 	// the staged directory reports is that copy's (swapAt).
 	swap *swapping
+	// merges is every merge's store of the repository's packs standing now
+	// (NewMergeScratch), by its directory, with the incarnation its links
+	// came from: what a git process run over one reports is about that copy
+	// (mergeAt). Each is taken back as its scratch is removed.
+	merges map[string]*incarnation
 	// verifying counts the Verify calls checking the repository: no
 	// maintenance run starts while one does (verify.go), from its listing
 	// to its fsck — which a run in the lane's last free slot would refuse.

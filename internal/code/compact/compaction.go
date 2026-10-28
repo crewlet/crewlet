@@ -46,8 +46,10 @@ var (
 //     busy is the next poll's; a charge the node's memory cannot hold is
 //     refused `memory` and never remembered, since the budget is read again
 //     every pass.
-//  4. BUILD in a scratch named by a fresh compaction id, leaning on the
-//     incarnation ([Compactor.pack]); lay each output out; hold the build's
+//  4. BUILD in a scratch named by a fresh compaction id, leaning on a store of
+//     exactly the packs it merges, linked from the incarnation
+//     ([Compactor.pack]), so its cost follows the roll and never the history
+//     beside it; lay each output out; hold the build's
 //     own COUNT to what one compaction records — past it nothing is uploaded
 //     and the repository's cap is halved — and every output to the BUNDLE
 //     RULE, rebuilding ONCE at the densest offender's own ratio, the plan
@@ -202,7 +204,7 @@ func (c *Compactor) build(ctx context.Context, repoID string, s cache.Synced, ad
 	cut int64, limits code.Limits) (built, error) {
 
 	cid := statelog.NewOpID(c.now(), "")
-	sc, err := c.o.Cache.NewScratch(ctx, s, cid)
+	sc, err := c.o.Cache.NewMergeScratch(ctx, s, cid, p.checksums())
 	if err != nil {
 		return built{}, err
 	}

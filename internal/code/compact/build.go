@@ -69,21 +69,37 @@ type output struct {
 }
 
 // pack runs ONE pack-objects over p's inputs in the admission's reserved slot,
-// in the scratch sc — every input read through the scratch's one alternate,
-// the incarnation the plan was made over, so the scratch holds no input and
-// the build writes into nothing but the scratch — cut at cut, and answers the
-// checksums it printed, one an output, in the order it wrote them: the order
-// their ids are derived in.
+// in the scratch sc — every input read through the scratch's one alternate, a
+// store holding EXACTLY the inputs, hard links of the packs of the incarnation
+// the plan was made over (cache.Cache.NewMergeScratch), so the scratch holds
+// no input and the build writes into nothing but the scratch — cut at cut, and
+// answers the checksums it printed, one an output, in the order it wrote them:
+// the order their ids are derived in.
 //
 // NO EXCLUDED PACK: the inputs are listed and nothing is excluded with a `^`
 // line, so every object an input holds is in the outputs — an object it shares
 // with a pack that is no input is written again rather than left to that pack,
 // because two compactions decided from different snapshots may each retire the
-// pack the other relied on (ADR-0060). The build names no Repairer: the
-// compactor repairs nothing itself, so what the build reports of an input pack
-// or a derived file read through the alternate reaches the cache's observer as
-// it arrives, and the compaction fails; the next poll plans again over the
-// copy the cache repairs.
+// pack the other relied on (ADR-0060).
+//
+// AND NOTHING BUT THE INPUTS IN REACH: to fill in the name hash its delta
+// search sorts by, `--stdin-packs` walks from every commit its inputs hold
+// through every tree and blob it can reach, and only an excluded pack stops it
+// — so over the whole incarnation a roll of a few small packs walked the
+// repository's history, its cost and its memory following the history while
+// its charge and its deadline follow the roll (measured at review, about
+// 3.5 µs an object of a 400 032-object history on the node pin, and 451 ms and
+// 100.8 MiB beside the 100 MB source history in BenchmarkCompact's roll arm:
+// past the deadline of a roll of small pushes from a few million objects, a
+// gigabyte or two of a source repository, so every such roll was killed and
+// the repository went on to refuse pushes compaction_behind). Over a store of
+// the inputs alone the walk ends at their edge, as git walks with
+// ignore_missing_links, and writes the same packs.
+//
+// The build names no Repairer: the compactor repairs nothing itself, so what
+// the build reports of an input — the store's links are the incarnation's own
+// files — reaches the cache's observer as it arrives, and the compaction
+// fails; the next poll plans again over the copy the cache repairs.
 func (c *Compactor) pack(ctx context.Context, adm *cache.Compacting, sc *cache.Scratch, p planned, cut int64,
 	limits code.Limits) ([]string, error) {
 

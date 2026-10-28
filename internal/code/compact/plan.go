@@ -66,6 +66,16 @@ func (p planned) ids() []string {
 	return ids
 }
 
+// checksums is every input's git checksum, in the plan's order: the packs the
+// build's store holds and its stdin names, each file once.
+func (p planned) checksums() []string {
+	out := make([]string, len(p.inputs))
+	for i, in := range p.inputs {
+		out[i] = in.checksum
+	}
+	return out
+}
+
 // objects is what the inputs hold, each file once: the build's memory charge
 // is stated by it ([cache.Cache.AdmitCompaction]), and the outputs may hold
 // no more.

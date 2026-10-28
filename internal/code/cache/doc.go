@@ -82,7 +82,13 @@
 // advertisement runs in a VIEW ([Cache.AdvertiseView]) whose packed-refs is
 // the incarnation's own file under a second name, a snapshot no sync's rename
 // can move. Both pin the incarnation they lean on, so the budget never evicts
-// it from under a push. The pushed pack enters the cache only once its row has
+// it from under a push. A compaction's build writes its outputs into a scratch
+// too ([Cache.NewMergeScratch]), but one leaning on a store of EXACTLY THE
+// PACKS IT MERGES — hard links of the incarnation's files — since its
+// `pack-objects --stdin-packs` walks every commit, tree and blob it can reach
+// to fill in its name hashes, and over the incarnation that was the
+// repository's whole history for a roll of a few packs (scratch.go's A MERGE'S
+// REPOSITORIES). The pushed pack enters the cache only once its row has
 // applied: by [Cache.Adopt], a hard link of the scratch's three files, or, as
 // on every other node, through a sync. Adoptions share the directory, since
 // each links files of its own and group commit answers a repository's pushes
@@ -740,9 +746,11 @@
 //   - ROUTED BY THE PROCESS'S DIRECTORY: a process in an incarnation reports
 //     about it; one in a push's scratch or an advertisement view reports
 //     about its alternate only the derived files, since its pack and object
-//     reports may be the client's pack (counted `unrouted`). A chunk-format
-//     report is narrowed to the files its process loads
-//     (gitproc.Cmd.Loads).
+//     reports may be the client's pack (counted `unrouted`); one over a
+//     merge's store — a compaction's build — reports about the incarnation
+//     the store's links came from everything but a derived file, of which
+//     the store holds none. A chunk-format report is narrowed to the files
+//     its process loads (gitproc.Cmd.Loads).
 //   - REPAIRED BY A ROUND NO REQUEST WAITS FOR, which the observer queues
 //     under the entry's mutex and never its write lock, so it never holds the
 //     run that reported. The round is FULL and LINEARIZABLE — a full round's
@@ -775,7 +783,9 @@
 // died), so the bytes decide — the scrub hashes every file, and the repair
 // round installs again what fails. A crash in a scratch or a view is its
 // alternate's, like a derived report; its pack, object and hint reports may
-// be the client's pack (`unrouted`). Within [ScrubCooldown] of a scrub that
+// be the client's pack (`unrouted`) — but not a merge's, whose store holds the
+// incarnation's packs alone, so every one of them is that copy's. Within
+// [ScrubCooldown] of a scrub that
 // found nothing, a report makes nothing due (`cooldown`), whatever was written
 // since: a request that can provoke a report beside a busy repository is
 // bounded by that and nothing else.

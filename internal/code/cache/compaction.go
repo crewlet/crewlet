@@ -17,12 +17,15 @@ import (
 // small packs (internal/code/compact), and the cache is where it reads them:
 // the live packs of the incarnation it synced, to plan from ([Cache.Packs]);
 // a maintenance slot and the build's memory, to build in
-// ([Cache.AdmitCompaction]); a scratch leaning on the incarnation, to build
-// into (Cache.NewScratch); and once the outputs' rows have applied, their
-// files linked in by adoption (Cache.Adopt), so the node that built them
-// downloads none of them back. THE COMPACTOR NEVER WRITES AN INCARNATION: its
-// pack-objects writes only into its own scratch, and the inputs leave the
-// incarnation as every retired pack does — by the next round's swap (swap.go).
+// ([Cache.AdmitCompaction]); a scratch to build into, leaning on a store of
+// exactly the packs it merges, linked from the incarnation
+// (Cache.NewMergeScratch), so the build's walk for its name hashes ends at the
+// roll's edge rather than running the repository's history; and once the
+// outputs' rows have applied, their files linked in by adoption (Cache.Adopt),
+// so the node that built them downloads none of them back. THE COMPACTOR
+// NEVER WRITES AN INCARNATION: its pack-objects writes only into its own
+// scratch, and the inputs leave the incarnation as every retired pack does —
+// by the next round's swap (swap.go).
 
 // Packs is the live rows of the incarnation s pins, as the rounds over it left
 // them, sorted by pack id: each row's id, its git checksum, its bundle's bytes
