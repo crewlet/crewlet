@@ -761,6 +761,66 @@ func TestAResumedAgentRunPublishesWhatTheRunDid(t *testing.T) {
 	}
 }
 
+// A COLLECTED RUN LISTS THE TOOLS IT ACTIVATED. The round's record states what
+// the run held by its end (tools_available) and, apart from that, what it
+// could still have discovered (tool_catalogue); a run holds a tool it
+// activated over the bridge from that call on, so the collection rebuilds the
+// run's surface as the run left it. Rebuilt from the launch's record alone, as
+// it once was, every MCP tool the run had found and called was published as
+// one it never found, on the same record as the calls to it.
+//
+// Mutation: build the collection's surface from the state's active tools
+// alone, and jira_create is listed undiscovered; replay the failed activation
+// as well, and slack_history is listed held.
+func TestACollectedRunListsTheToolsItActivated(t *testing.T) {
+	t.Parallel()
+	pub := newCapture()
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}, buildOpts{
+		pub: pub,
+		resume: &runner.Resume{
+			State: execstate.State{Version: execstate.Version, Round: 1,
+				ActiveTools: []string{"lookup_colleague", "reflect"}},
+			Answer: "filed the flaky test",
+			Bridged: []runner.BridgedCall{
+				{Call: ledger.Call{Name: runner.ActivateTool, Args: map[string]any{"name": "jira_create"},
+					Result: "jira_create is active"}, Seq: 1},
+				{Call: ledger.Call{Name: "jira_create", Args: map[string]any{"summary": "flaky test"},
+					Result: "created"}, Seq: 2},
+				{Call: ledger.Call{Name: runner.ActivateTool, Args: map[string]any{"name": "slack_history"},
+					Result: "no", Failed: true}, Seq: 3},
+				{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: map[string]any{
+					"outcome": "delivered", "summary": "filed the flaky test",
+					"deliveries": []any{"jira_create"},
+				}}, Seq: 4},
+			},
+		},
+	})
+
+	if _, _, err := r.Resume(context.Background(), nil); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+
+	done := completedPhase(t, pub, "execute")
+	if !slices.Contains(done.ToolsAvailable, "jira_create") {
+		t.Errorf("tools_available = %v, want the tool the run activated and called", done.ToolsAvailable)
+	}
+	if slices.Contains(done.ToolCatalogue, "jira_create") {
+		t.Errorf("tool_catalogue = %v lists a tool the run held as one it could still discover",
+			done.ToolCatalogue)
+	}
+	if !slices.Contains(done.ToolsAvailable, "lookup_colleague") {
+		t.Errorf("tools_available = %v, want what the launch recorded too", done.ToolsAvailable)
+	}
+	// A FAILED ACTIVATION activated nothing: the tool is still the run's to
+	// discover.
+	if slices.Contains(done.ToolsAvailable, "slack_history") {
+		t.Errorf("tools_available = %v holds a tool whose activation failed", done.ToolsAvailable)
+	}
+	if !slices.Contains(done.ToolCatalogue, "slack_history") {
+		t.Errorf("tool_catalogue = %v, want the tool whose activation failed", done.ToolCatalogue)
+	}
+}
+
 // A PHASE THAT RAN HERE IS NATIVE. The backend is a fact about where a phase
 // ran, not a flag the collection sets for everything it touches: the reviewer
 // runs in this process's own loop.

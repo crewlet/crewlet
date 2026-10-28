@@ -862,6 +862,9 @@ type AgentPhaseCompleted struct {
 	// with every first-party tool and NO MCP tool, because sending full
 	// schemas for every server's catalogue is what made a turn expensive; a
 	// tool it activates through discovery joins the list from that round on.
+	// On the execute phase that collects a coding run it is what the run held
+	// when it ended: a tool it activated over the bridge is here, and not in
+	// ToolCatalogue.
 	ToolsAvailable []string `json:"tools_available,omitempty"`
 	// ToolCatalogue is the rest of what the executor could reach, by
 	// discovery and with no schema: the tools of its universe it did not

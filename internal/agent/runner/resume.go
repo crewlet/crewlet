@@ -40,10 +40,13 @@ func (r *Runner) Suspended() (Suspension, bool) {
 // A COMPLETION COLLECTS THE RUN: what it submitted, the calls it made over the
 // bridge, the branches and pull requests it delivered. The round the run was
 // launched in is collected rather than launched again — a resumed turn that
-// started over would pay for the run twice — and the surface and skill-guard
-// state are REPLAYED from the state rather than rebuilt from the plan, because
-// the run's calls were made against the surface it was given, activations
-// included ([Runner.resumeAgentRun]).
+// started over would pay for the run twice ([Runner.resumeAgentRun]). Its
+// surface and skill-guard state are rebuilt as the run left them: the tools
+// and skills the state recorded at the launch, and then every tool the run
+// activated and every skill it loaded over the bridge, read off its bridged
+// calls ([Runner.rebuiltSurface]). The run's calls were made against that
+// surface, and the round's record states it: the tools the run held, and
+// apart from them the ones it could still have discovered.
 //
 // A PERSON'S ANSWER CARRIES THE RUN ON ([Asked]), and so does the LOSS OF ITS
 // JOB with the host it ran on ([Lost]): the same round, relaunched with what

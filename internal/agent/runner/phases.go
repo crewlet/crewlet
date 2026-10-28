@@ -1585,10 +1585,12 @@ func (a armedGuard) tools() tools.Guard    { return a.wrap }
 // and therefore a fresh guard, which is correct — its model's context started
 // over too.
 //
-// The loaded keys are the COLLECTION seed: the run that loaded a skill is the
-// run being collected, and a guard rebuilt empty for its collection's surface
-// would refuse the calls that session had already unlocked. Empty for every
-// other phase.
+// The loaded keys are a PARKED RUN'S seed: what its guard held when it
+// launched, which every later segment's rebuild of the run's surface restores
+// before replaying what the run loaded over the bridge since
+// ([Runner.rebuiltSurface]). A guard rebuilt empty for a run that goes on
+// calling would refuse the calls that session had already unlocked. Empty for
+// every other phase.
 func (r *Runner) guardFor(ph phase.Phase, iteration int, surface *tools.Surface, loaded []string) armedGuard {
 	// THE LOADER MUST BE ACTIVE, not merely in the universe the triggers are
 	// matched over: a guard is armed only where the session can satisfy it,
