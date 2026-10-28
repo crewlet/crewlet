@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -552,8 +553,12 @@ func TestTheGitCachesMaintenanceAlarmFiresOnItsNode(t *testing.T) {
 // atTheBound is a git node's compactor's code seam with every due listing
 // answered as naming one more repository, at the most live packs a repository
 // may hold — the reading a running node's compactor raises the alarm from,
-// shown it without two thousand packs pushed into a repository.
-type atTheBound struct{ codecompact.Estate }
+// shown it without two thousand packs pushed into a repository — and every
+// listing counted.
+type atTheBound struct {
+	codecompact.Estate
+	listings *atomic.Int64
+}
 
 // boundRepo is the repository atTheBound names.
 const boundRepo = "at-the-bound"
@@ -562,6 +567,7 @@ func (e atTheBound) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer
 	if q.Kind != code.ReadCompactionDue {
 		return e.Estate.Read(ctx, q)
 	}
+	e.listings.Add(1)
 	return code.ReadAnswer{Due: []code.CompactionCandidate{{
 		ID: uuid.NewSHA1(uuid.NameSpaceOID, []byte(boundRepo)).String(), Name: boundRepo,
 		LivePacks: code.MaxPacksPerRepo,
@@ -573,28 +579,52 @@ func (e atTheBound) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer
 // for at the pack bound fills its alarm reading's compaction half, which the
 // retention loop's own reading carries into the alarm table — so
 // code_compaction_behind stands on that node, naming the repository, for as
-// long as its pushes would be refused.
+// long as its pushes would be refused. And it is the compactor's FIRST pass
+// that names it: started only once the runtime it reads through is
+// published, that pass finds this node the repository's home.
 //
-// Mutation: leave the compactor's half out of the reading (codeReading), and
-// the alarm never fires.
+// Mutations: leave the compactor's half out of the reading (codeReading), and
+// the alarm never fires; start the compactor where the code host is built,
+// before the runtime is published, and its first pass finds this node home to
+// nothing — the repository is named a listing later.
 func TestTheCompactionBehindAlarmFiresOnItsNode(t *testing.T) {
 	t.Parallel()
 	b := gitNodeBootstrap(t, nil)
 	engine.RequireNodeGit(t, b, parsedCompany(t, gitCompany))
+	var listings atomic.Int64
 	e, err := engine.New(t.Context(), engine.WithCompactorEstate(engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, gitCompany),
 		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
 		GitHook:     codetest.HookCommand(t),
-	}, func(inner codecompact.Estate) codecompact.Estate { return atTheBound{inner} }))
+	}, func(inner codecompact.Estate) codecompact.Estate {
+		return atTheBound{Estate: inner, listings: &listings}
+	}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.WithoutCancel(t.Context())) })
 
-	// THE COMPACTOR'S FIRST PASS, at the host's start, and an evaluation; and
-	// should the first pass have met a placement not yet read, the next pass
-	// a minute on. The rest is room for a loaded machine.
-	deadline := time.Now().Add(codecompact.Poll + statelog.AlarmInterval + time.Minute)
+	// THE COMPACTOR'S READING, read until it names the repository: its first
+	// pass's, at once — the next comes a Poll later, and the deadline leaves
+	// room for it only so that a pass too early fails here by its count rather
+	// than by the clock.
+	deadline := time.Now().Add(codecompact.Poll + time.Minute)
+	for engine.CodeReadingForTest(e).CodeCompactionBehind == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the compactor's reading named no repository at the pack bound after %d listings",
+				listings.Load())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := listings.Load(); n != 1 {
+		t.Errorf("the compactor's reading first named the repository at the bound after %d listings, want its "+
+			"first pass's: a pass started before the runtime it reads through was published finds this node "+
+			"home to nothing", n)
+	}
+
+	// AND THE ALARM, at the retention loop's next evaluation of its reading.
+	// The rest is room for a loaded machine.
+	deadline = time.Now().Add(statelog.AlarmInterval + time.Minute)
 	for {
 		kinds, _ := e.Alarms()
 		if slices.Contains(kinds, statelog.KindCodeCompactionBehind) {

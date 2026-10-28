@@ -349,9 +349,19 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// node (ADR-0060): over the cache and the store the host uses, listing
 	// and proposing through the router's code seam — whose Compact raises
 	// this node's floors past what it landed — and asking the router itself
-	// who is home. Started here, on a lifetime of its own, after the host
-	// whose cache it builds in; stopped before the host, in the one bounded
-	// stop ([native.stopCodeHost]).
+	// who is home. BUILT here, after the host whose cache it builds in, and
+	// STARTED only with the native half's duties ([Engine.startNativeDuties]),
+	// once the runtime this half joins is published and only where the node's
+	// mode publishes: its first pass runs at once, and everything it reads
+	// goes through that runtime — the router resolves this node's git half
+	// from it to place this node among the git nodes, and this node's own copy
+	// answers the due listing from it — so a pass started here found this node
+	// home to nothing and its listing unserved, and the alarm a node that
+	// comes up beside a repository at the pack bound raises waited a minute for
+	// the next pass; and here it started on a node a capacity window restarted
+	// to write nothing, whose compactions stored their outputs all the same.
+	// Stopped before the host, in the one bounded stop ([native.stopCodeHost]);
+	// a stop of one never started ends nothing.
 	var compactions codecompact.Estate = seam
 	if e.compactorEstate != nil {
 		compactions = e.compactorEstate(compactions)
@@ -364,7 +374,6 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		h.Stop(context.WithoutCancel(ctx))
 		return codeHostParts{}, fmt.Errorf("engine: build the compactor: %w", err)
 	}
-	compactor.Start()
 
 	// 10. ITS STATUS, answered for the fleet (codestatus.go) from the moment
 	// the host serves, and withdrawn before it stops ([native.stopCodeHost]):
@@ -402,8 +411,10 @@ func (e *Engine) codeFleet() (int, int, error) {
 // the host stops with itself, and which the engine holds only to READ, for
 // what no request asks (the alarm reading's code half, [Engine.codeReading])
 // — the budget it sized that cache to, the compactor that merges the packs of
-// the repositories this node is home for, started, and what withdraws the
-// host's status answerer ([Engine.serveCodeStatus]).
+// the repositories this node is home for, built and NOT started (the native
+// half's duties start it, past the runtime's publication and the mode's gate:
+// [Engine.startNativeDuties]), and what withdraws the host's status answerer
+// ([Engine.serveCodeStatus]).
 type codeHostParts struct {
 	host           *host.Server
 	reads          *query.Server

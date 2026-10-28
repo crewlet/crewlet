@@ -279,10 +279,13 @@ func runInSlot(ctx context.Context, adm *cache.Compacting, cmd gitproc.Cmd) (git
 // Start runs a pass at once and then one every [Poll], on a goroutine of its
 // own, until [Compactor.Stop]: AT ONCE, so a node that comes up beside a
 // repository at the pack bound starts merging it, and names it in its alarm
-// reading, at its first listing rather than a minute later. A pass that runs
-// past its interval skips the tick rather than overlapping the next, since a
-// ticker drops the ticks its reader is too busy for. A second Start does
-// nothing.
+// reading, at its first listing rather than a minute later — which holds only
+// where its seams answer from the start: the first pass asks Homes who serves
+// git and Estate for the listing, so its caller starts it once both reach this
+// node's own git half and copy (the engine's, once its runtime is published).
+// A pass that runs past its interval skips the tick rather than overlapping
+// the next, since a ticker drops the ticks its reader is too busy for. A second
+// Start does nothing.
 func (c *Compactor) Start() {
 	c.mu.Lock()
 	if c.started || c.life.Err() != nil {

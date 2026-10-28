@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -26,6 +27,17 @@ func Reflects(e *Engine) bool { return e.reflector.Load() != nil }
 // a test outside the package that drives the git walk through a running engine.
 func GitReadForTest(ctx context.Context, e *Engine, q code.GitQuery) (code.GitAnswer, error) {
 	return e.router.Code().GitRead(ctx, q)
+}
+
+// CodeReadingForTest is the code half of e's alarm reading now
+// ([Engine.codeReading]) — its git cache's and its compactor's, read the way
+// every evaluation reads them — for a case outside the package that judges
+// what a running node's compactor found, apart from when the alarm table next
+// evaluates it.
+func CodeReadingForTest(e *Engine) statelog.Reading {
+	var r statelog.Reading
+	e.codeReading(&r)
+	return r
 }
 
 // ItemRanker is the ranker the tracker's item search is built with, so the

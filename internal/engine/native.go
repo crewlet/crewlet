@@ -723,11 +723,13 @@ func (e *Engine) startCollectorOver(ctx context.Context, n *native) error {
 // domain's one writer, which turns the tracker's and the knowledge base's
 // sources into vector records, the trash reaper, which purges what has been in
 // a trash past its term ([Engine.startTrashReaper]), and, where the half hosts
-// code, the purge of deleted repositories ([Engine.startCodeRetention]). ONE
-// CALL FOR BOTH CALLERS, [New] and [Engine.startNativeFor], so halves met at an
-// apply cannot be missing a duty a boot would have armed. The trim, the
-// identity estate's duties and the usage publisher are the core's, armed at
-// boot by [Engine.startCoreDuties].
+// code, the purge of deleted repositories ([Engine.startCodeRetention]) — and,
+// where it serves git, this node's own COMPACTOR, which no lease decides: every
+// git node runs one, for the repositories it is home to. ONE CALL FOR BOTH
+// CALLERS, [New] and [Engine.startNativeFor], so halves met at an apply cannot
+// be missing a duty a boot would have armed. The trim, the identity estate's
+// duties and the usage publisher are the core's, armed at boot by
+// [Engine.startCoreDuties].
 func (e *Engine) startNativeDuties(ctx context.Context) {
 	c, n := e.core.Load(), e.native.Load()
 	if n == nil || c == nil {
@@ -742,6 +744,20 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	// repository removed from code.repos is deleted and never purged, and
 	// its name and its packs are held for ever.
 	e.startCodeRetention(ctx, n)
+	// AND THE COMPACTOR, where the half serves git ([Engine.buildCodeHost]
+	// built it unstarted), started HERE for the two reasons both callers
+	// reach this past: the runtime it reads through is PUBLISHED — its first
+	// pass runs at once, and the router resolves this node's git half from
+	// the published runtime to place it among the git nodes, as this node's
+	// own copy answers the due listing from it, so a pass started before
+	// found this node home to nothing and its listing unserved — and the
+	// node's mode PUBLISHES: a compaction stores its outputs in the object
+	// store and appends its record, and a node a capacity window restarted to
+	// write nothing must start nothing that writes on its own. Its stop is
+	// the code host's ([native.stopCodeHost]).
+	if n.compactor != nil {
+		n.compactor.Start()
+	}
 }
 
 // stopNative ends this node's native halves. Nil-safe, which is the node that
