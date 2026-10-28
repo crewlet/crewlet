@@ -539,7 +539,11 @@ type Coordinator struct {
 	// for; held whether that hold is applied, and holdBusy, holdDirty and
 	// holdGen the serialisation [Coordinator.reconcileHold] runs under. All
 	// under mu.
-	retries   map[string]*answerRetry
+	retries map[string]*answerRetry
+	// refused are the completions the node's gate refused on a condition,
+	// by turn id, kept so the condition's clearing re-fires each at once
+	// ([Coordinator.Readmit]) rather than a poll later. Under mu.
+	refused   map[string]refusedCompletion
 	owed      map[string]map[string]struct{}
 	held      map[string]bool
 	holdBusy  map[string]bool
@@ -641,6 +645,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		moves:     map[string]uint64{},
 		attempts:  map[answerKey]map[string]answerBudget{},
 		retries:   map[string]*answerRetry{},
+		refused:   map[string]refusedCompletion{},
 		owed:      map[string]map[string]struct{}{},
 		held:      map[string]bool{},
 		holdBusy:  map[string]bool{},
@@ -942,9 +947,11 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 			"detail", "this node may not start the turn the completion resumes, so the "+
 				"run is left unclaimed for the waiter to announce again, here once the "+
 				"condition clears or on the seat's next holder")
+		c.keepRefused(ev, trigger, refusalOf(err).Condition)
 		return fmt.Errorf("%w: %w", ErrResumeUnavailable, err)
 	}
 	defer adm.release()
+	c.forgetRefused(ev.TurnID)
 	return c.completeAdmitted(adm, ev, trigger, fence)
 }
 
@@ -3709,6 +3716,13 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	c.releaseOwed(handle)
 	c.mu.Lock()
 	delete(c.runs, handle)
+	// AND ANY COMPLETION IT WAS WAITING TO RE-FIRE: the run is unclaimed,
+	// and the waiter announces it to the successor.
+	for turnID, kept := range c.refused {
+		if kept.ev.AgentHandle == handle {
+			delete(c.refused, turnID)
+		}
+	}
 	c.mu.Unlock()
 	// AND THE SEAT'S INBOX HOLD, which the release's detach has already
 	// dropped with the attachment: forgotten, never lifted — the seat's mail

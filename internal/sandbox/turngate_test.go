@@ -262,3 +262,58 @@ func TestAnInlineAnswerTheNodeRefusesIsStillOwed(t *testing.T) {
 		t.Fatalf("the next holder resumed %d times, want once", len(calls))
 	}
 }
+
+// A COMPLETION REFUSED ON A CONDITION IS RE-FIRED THE MOMENT THE CONDITION
+// CLEARS, for the seat it was refused on, and not after the seat is let go.
+//
+// The waiter would announce it again on its next poll; the signal that the
+// condition cleared ([Coordinator.Readmit]) does not wait for that. A signal for
+// another condition or another seat leaves it kept, and a seat this node lets
+// go of takes its kept completions with it, for the successor's waiter to
+// announce there.
+//
+// Mutation: keep nothing on a refusal, or re-fire on any signal, and the case
+// reads it; leave the kept completion behind on ReleaseSeat and the released
+// seat's run is resumed by a node that no longer holds it.
+func TestARefusedCompletionIsReFiredWhenItsConditionClears(t *testing.T) {
+	t.Parallel()
+	for name, released := range map[string]bool{"held": false, "released": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			gate := gated(rig)
+			gate.refuse(true)
+			rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.runner.Finish(Result{Success: true, Text: "fixed the flake"})
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); !errors.Is(err, errLeaving) {
+				t.Fatalf("OnCompleted = %v, want the gate's refusal", err)
+			}
+
+			gate.refuse(false)
+			rig.coordinator.Readmit("another_condition", "swe")
+			rig.coordinator.Readmit(conditionDrain, "another_seat")
+			if released {
+				rig.coordinator.ReleaseSeat("swe")
+			}
+			rig.coordinator.Readmit(conditionDrain, "swe")
+			// THE COORDINATOR'S OWN GOROUTINES, which a re-fire runs on, are
+			// counted in its in-flight group: waited for here, not stopped,
+			// since stopping would cancel a re-fire before it ran.
+			rig.coordinator.inflight.Wait()
+
+			want := 1
+			if released {
+				want = 0
+			}
+			if calls := rig.resumer.calls(); len(calls) != want {
+				t.Fatalf("resumed %d times after the condition cleared, want %d", len(calls), want)
+			}
+			if asked, _, _ := gate.counts(); asked != 1+want {
+				t.Fatalf("the gate was asked %d times, want %d: a signal for another "+
+					"condition or seat re-fired the completion", asked, 1+want)
+			}
+		})
+	}
+}

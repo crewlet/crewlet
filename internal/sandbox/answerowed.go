@@ -1229,8 +1229,13 @@ func (c *Coordinator) owedRefused(ctx context.Context, run PendingRun, refusal R
 // costs nothing but the attempts it can actually release, and one that turns
 // out not to have released them waits again on whatever refuses it now.
 //
+// The attempts are an owed answer's retry and a completion the node's gate
+// refused on cond ([Coordinator.keepRefused]), which is re-fired at once rather
+// than at the waiter's next announcement of it.
+//
 // Safe from any goroutine, and cheap enough to call on every occurrence of the
-// event: with nothing waiting it is one pass over this node's owed answers.
+// event: with nothing waiting it is one pass over this node's owed answers and
+// refused completions.
 func (c *Coordinator) Readmit(cond Condition, handles ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1248,6 +1253,7 @@ func (c *Coordinator) Readmit(cond Condition, handles ...string) {
 		r.waiting = ""
 		c.scheduleOwedLocked(turnID, 0)
 	}
+	c.refireRefusedLocked(cond, handles)
 }
 
 // signal is what a [Coordinator.Readmit] was for: a condition, on one seat or —

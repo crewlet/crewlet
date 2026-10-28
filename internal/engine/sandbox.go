@@ -1934,7 +1934,7 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		// AND EVERY RESUME, on either route, is a turn this node admits
 		// as it admits a mailbox's: the seat owned fresh, a slot under
 		// node.max_concurrent, and no drain. See [Engine.admitResume].
-		Gate: e.admitResume,
+		Gate: e.turnGate(),
 		// A recorded answer that leaves its run — taken by a turn, on the
 		// inline attempt as on a retry, or handed back — is recorded as
 		// worked in the same completion ledger the dispatcher records a
@@ -2163,7 +2163,7 @@ func (e *Engine) holdSandboxSeat(ctx context.Context, handle string) {
 // What a retried resume the seat's conditions refused waits on — the
 // [sandbox.Condition] each refusal names, and the one each signal re-checks.
 // See [Engine.mayResumeAnswer] for which event moves each, and
-// [Engine.readmitAnswers] for where the engine passes it on.
+// [Engine.readmitResumes] for where the engine passes it on.
 const (
 	// waitOwnership — the seat's lease is not fresh, or the seat is still
 	// being established. Signalled when the seat starts admitting turns:
@@ -2200,6 +2200,15 @@ const (
 	// resume ([sandbox.Coordinator.ReleaseSeat]), or when the node stops.
 	waitDrain sandbox.Condition = "drain"
 )
+
+// turnGate is the gate the coordinator resumes through: [Engine.admitResume],
+// wrapped by [Options.resumeGate] where a case in this package set one.
+func (e *Engine) turnGate() sandbox.TurnGate {
+	if e.resumeGate != nil {
+		return e.resumeGate(e.admitResume)
+	}
+	return e.admitResume
+}
 
 // admitResume is the coordinator's [sandbox.TurnGate]: the node's own
 // admission ([node.Node.AdmitTurn]), with its refusal named as what an
@@ -2246,7 +2255,7 @@ func (e *Engine) admitResume(ctx context.Context, handle string) (context.Contex
 // after a blip (node.Config.SeatAdmitted) — with one heartbeat on the clock
 // behind it for a renew that was merely late; a budget window ends at an
 // instant the counters name. The rest are events this node observes and
-// passes on in [Engine.readmitAnswers]'s callers.
+// passes on in [Engine.readmitResumes]'s callers.
 func (e *Engine) mayResumeAnswer(ctx context.Context, handle string) (sandbox.Refusal, bool) {
 	c := e.conditionsFor(nil)(handle)
 	switch {
@@ -2269,11 +2278,15 @@ func (e *Engine) mayResumeAnswer(ctx context.Context, handle string) (sandbox.Re
 	return sandbox.Refusal{}, false
 }
 
-// readmitAnswers passes on that a condition a retried resume may be waiting on
-// can have cleared, for the named seats or every seat: the coordinator
-// re-checks at once the attempts waiting on exactly that. Nothing to do on a
-// node with no sandbox runtime, which owes no answer.
-func (e *Engine) readmitAnswers(cond sandbox.Condition, handles ...string) {
+// readmitResumes passes on that a condition a resume may be waiting on can have
+// cleared, for the named seats or every seat: the coordinator re-checks at once
+// the attempts waiting on exactly that, an owed answer's retry and a completion
+// the node's admission refused ([sandbox.Coordinator.Readmit]). It is THE hook
+// for whatever ends a condition a refusal names: call it with that condition
+// and the seat, and a refused completion resumes now rather than at the
+// waiter's next poll. Nothing to do on a node with no sandbox runtime, which
+// owes no answer and kept no completion.
+func (e *Engine) readmitResumes(cond sandbox.Condition, handles ...string) {
 	if rt := e.sandbox.Load(); rt != nil {
 		rt.coordinator.Readmit(cond, handles...)
 	}
@@ -2520,8 +2533,10 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 //     spend one of the broker's deliveries ([queue.OutcomeDefer]), so handing a
 //     healthy completion back on a wait would walk it to the dead-letter
 //     boundary while nothing was wrong with it, and a deferral would also
-//     quiesce the attachment, which nothing undoes. The poll's next
-//     announcement is the retry, and it finds the condition cleared or not.
+//     quiesce the attachment, which nothing undoes. The coordinator keeps the
+//     completion and re-fires it when the condition clears
+//     ([Engine.readmitResumes]), and the poll's next announcement is the
+//     backstop for a clearing nothing signals, one poll interval at most.
 //   - A DRAINING NODE ([waitDrain]) DEFERS: the condition does not clear on this
 //     node, which is leaving, so the attachment is quiesced for the rest of the
 //     drain, as a mailbox's is, and the completion goes back to the head of the

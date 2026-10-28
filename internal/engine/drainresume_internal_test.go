@@ -48,6 +48,10 @@ type drainRig struct {
 
 	// collected counts the box collections any engine on the rig made.
 	collected atomic.Int32
+
+	// gate, when set, wraps the gate each engine on the rig resumes through
+	// ([Options.resumeGate]).
+	gate func(sandbox.TurnGate) sandbox.TurnGate
 }
 
 func newDrainRig(t *testing.T) *drainRig {
@@ -79,6 +83,7 @@ func (r *drainRig) start(t *testing.T) *Engine {
 	e, err := New(t.Context(), Options{
 		Bootstrap: &b, Company: parseCompany(t, companyWithoutSandboxDoc),
 		SandboxPollInterval: 50 * time.Millisecond,
+		resumeGate:          r.gate,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -294,6 +299,89 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 			t.Parallel()
 			if got := controlOutcome(tc.err).Outcome; got != tc.want {
 				t.Errorf("controlOutcome(%v) = %s, want %s", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// A COMPLETION REFUSED ON A CONDITION THAT CLEARS BY WAITING RESUMES ONCE IT
+// CLEARS, AND ONCE ONLY, WITHOUT ANY DELIVERY BEING HANDED BACK.
+//
+// The condition is a provider's limit, which no code here names yet: the
+// hand-back keys on the condition's kind, so it needs none. While it holds,
+// every completion the waiter fires is refused and acked, so the control
+// attachment is never quiesced and the run stays unclaimed. Then it clears,
+// and the run is collected once, by whichever comes first:
+//
+//   - the signal (readmitResumes, the hook whatever ends a condition calls),
+//     with the waiter stopped so nothing else could have brought it back;
+//   - the waiter's next poll alone, with no signal, which bounds the wait by
+//     one poll interval;
+//   - both at once, racing, which the at-most-once claim settles.
+//
+// Mutation: drop the kept completion from the coordinator's Readmit and the
+// signalled case never collects; defer or Nak the refusal and the attachment is
+// quiesced, or the completion's deliveries are spent, while it waits.
+func TestACompletionRefusedOnAWaitResumesOnceItClears(t *testing.T) {
+	t.Parallel()
+	const waitLimit sandbox.Condition = "provider_limit"
+	for name, tc := range map[string]struct{ signal, poll bool }{
+		"woken by the signal": {signal: true},
+		"woken by the poll":   {poll: true},
+		"woken by both":       {signal: true, poll: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newDrainRig(t)
+			var limited atomic.Bool
+			limited.Store(true)
+			var refusals atomic.Int32
+			r.gate = func(next sandbox.TurnGate) sandbox.TurnGate {
+				return func(ctx context.Context, handle string) (context.Context, func(), error) {
+					if limited.Load() {
+						refusals.Add(1)
+						return nil, nil, &sandbox.TurnRefused{Cause: errors.New("provider limit reached"),
+							Refusal: sandbox.Refusal{Condition: waitLimit, Reason: "provider limit reached"}}
+					}
+					return next(ctx, handle)
+				}
+			}
+			e := r.start(t)
+			r.seedRun(t, e, "t1")
+			handlers := e.backends.Queue.InFlightCount()
+
+			r.runner.Finish(sandbox.Result{Success: true, Text: "fixed the flaky test"})
+			// TWO REFUSALS: the waiter announced the run again after the
+			// first was acked, which a quiesced attachment would not take.
+			eventually(t, "the waiter's completions to be refused twice", func() bool {
+				return refusals.Load() >= 2
+			})
+			eventually(t, "the refused completions' handlers to return", func() bool {
+				return e.backends.Queue.InFlightCount() == handlers
+			})
+			if deferred(t, e) {
+				t.Fatal("a completion refused on a wait quiesced the seat's control topic")
+			}
+			if got := r.run(t, e, "t1"); got.Status != sandbox.StatusRunning || got.Collected {
+				t.Fatalf("run = %q (collected %v) while the limit held, want it unclaimed",
+					got.Status, got.Collected)
+			}
+
+			if !tc.poll {
+				e.sandboxWaiter.Load().Stop()
+			}
+			limited.Store(false)
+			if tc.signal {
+				e.readmitResumes(waitLimit, "swe")
+			}
+			eventually(t, "the run to be collected once the limit cleared", func() bool {
+				return r.collected.Load() > 0
+			})
+			eventually(t, "the run to leave running", func() bool {
+				return r.run(t, e, "t1").Status != sandbox.StatusRunning
+			})
+			if got := r.collected.Load(); got != 1 {
+				t.Fatalf("the run was collected %d times, want once", got)
 			}
 		})
 	}

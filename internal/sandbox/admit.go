@@ -3,6 +3,10 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"slices"
+
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // TurnGate admits the turn a resume re-enters, or refuses it: the node's own
@@ -94,4 +98,88 @@ func refusalOf(err error) Refusal {
 		return refused.Refusal
 	}
 	return Refusal{Reason: err.Error()}
+}
+
+// refusedCompletion is a completion the node's gate refused on a condition,
+// kept until the condition clears.
+type refusedCompletion struct {
+	cond    Condition
+	ev      types.SandboxRunCompleted
+	trigger *events.Event
+}
+
+// keepRefused keeps a completion the gate refused on cond, for
+// [Coordinator.Readmit] to re-fire the moment cond clears.
+//
+// # Why it is kept, when the waiter announces it again anyway
+//
+// The waiter re-announces a finished run on every poll for as long as its row
+// is running, and that is what makes acknowledging a refused completion safe:
+// nothing is lost with the delivery. But the next poll is up to one
+// [DefaultPollInterval] away, and the end of a condition is an event the
+// engine already observes (a seat's turn ending, a renew proving ownership
+// again, a provider's limit lifting). So the clearing re-fires the completion
+// itself, and the poll is the backstop for a clearing nothing signals. Both
+// may arrive: the claim is at-most-once, so the run resumes once.
+//
+// A refusal that names no condition is not kept: nothing would signal its end.
+// Nor is one for a seat this node lets go of ([Coordinator.ReleaseSeat]): the
+// successor's waiter announces it there. A drain's is kept and never re-fired,
+// since nothing signals a drain's end, until that release drops it.
+func (c *Coordinator) keepRefused(ev types.SandboxRunCompleted, trigger *events.Event, cond Condition) {
+	if cond == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	c.refused[ev.TurnID] = refusedCompletion{cond: cond, ev: ev, trigger: trigger}
+}
+
+// forgetRefused drops a kept completion of turnID's run, once a completion of
+// it has been admitted: from there the claim settles it, whichever announcement
+// carried it.
+func (c *Coordinator) forgetRefused(turnID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.refused, turnID)
+}
+
+// refireRefusedLocked re-fires every kept completion refused on cond, for the
+// named seats or every seat, each on a goroutine of the coordinator's own
+// lifetime. The caller holds c.mu.
+func (c *Coordinator) refireRefusedLocked(cond Condition, handles []string) {
+	if c.closed {
+		return
+	}
+	for turnID, kept := range c.refused {
+		if kept.cond != cond || (len(handles) > 0 && !slices.Contains(handles, kept.ev.AgentHandle)) {
+			continue
+		}
+		delete(c.refused, turnID)
+		c.inflight.Add(1)
+		go func() {
+			defer c.inflight.Done()
+			c.refire(kept)
+		}()
+	}
+}
+
+// refire offers a kept completion to [Coordinator.OnCompleted] again, under
+// the coordinator's own lifetime, as the waiter's next announcement would. A
+// refusal keeps it again; any other failure is left to that announcement.
+func (c *Coordinator) refire(kept refusedCompletion) {
+	ctx := c.life
+	if ctx.Err() != nil {
+		return
+	}
+	if err := c.OnCompleted(ctx, kept.ev, kept.trigger); err != nil {
+		log.InfoContext(ctx, "sandbox_completion_refire_unsettled",
+			"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
+			"error", err.Error(),
+			"detail", "the completion re-fired when its condition cleared was not settled; "+
+				"the waiter's next poll announces it again")
+	}
 }

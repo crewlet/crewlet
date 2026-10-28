@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/node`
-- **Enforced-by:** `internal/node.TestEveryTurnStartIsAdmitted` and `internal/node.TestTheAdmissionGuardFindsEveryRoad` (a syntactic guard: every non-test file under `internal/` and `cmd/` is parsed, `turn.Run` is matched under whatever name a file imports the turn package by and refused through a dot import, and every other edge of the two chains to a turn is an unexported name matched on any operand; it does not see a guarded function carried out of its pinned frames as a stored method value, or a call made through reflection, which review holds), `internal/node.TestTheMailboxTurnIsAdmittedBeforeItRuns`, the compiler (the mailbox's turn is the unexported `engine.Engine.mailboxTurn`, and `sandbox.Coordinator.resumeAndSettle` takes the unexported `admitted` that only `admitTurn` makes), `internal/engine.TestADrainingNodeLeavesACompletionForTheSeatsNextHolder`, `internal/engine.TestARefusedCompletionIsHandedBackByItsCondition`, `internal/engine.TestAResumedTurnTakesASlotUnderTheNodesCeiling`, `internal/node.TestADrainingNodeAdmitsNoTurn`, `internal/node.TestADrainWaitsForATurnNoDeliveryStarted`
+- **Enforced-by:** `internal/node.TestEveryTurnStartIsAdmitted` and `internal/node.TestTheAdmissionGuardFindsEveryRoad` (a syntactic guard: every non-test file under `internal/` and `cmd/` is parsed, `turn.Run` is matched under whatever name a file imports the turn package by and refused through a dot import, and every other edge of the two chains to a turn is an unexported name matched on any operand; it does not see a guarded function carried out of its pinned frames as a stored method value, or a call made through reflection, which review holds), `internal/node.TestTheMailboxTurnIsAdmittedBeforeItRuns`, the compiler (the mailbox's turn is the unexported `engine.Engine.mailboxTurn`, and `sandbox.Coordinator.resumeAndSettle` takes the unexported `admitted` that only `admitTurn` makes), `internal/engine.TestADrainingNodeLeavesACompletionForTheSeatsNextHolder`, `internal/engine.TestARefusedCompletionIsHandedBackByItsCondition`, `internal/engine.TestACompletionRefusedOnAWaitResumesOnceItClears`, `internal/sandbox.TestARefusedCompletionIsReFiredWhenItsConditionClears`, `internal/sandbox.TestAnUnclaimedCompletionIsAnnouncedAgain`, `internal/engine.TestAResumedTurnTakesASlotUnderTheNodesCeiling`, `internal/node.TestADrainingNodeAdmitsNoTurn`, `internal/node.TestADrainWaitsForATurnNoDeliveryStarted`
 - **Measured:** a draining engine (2026-10-27): `engine_draining` with two turns in flight, then two `sandbox_waiter_fired` completions 6 and 9 minutes into the drain, each resuming a full turn (the in-flight count rose from 1 to 2, then 3) on a node whose every mailbox was quiesced and whose API answered `api_refused_while_draining`. Both resumed turns ended `sandbox_resume_abandoned`, and the drain completed 16 minutes after it began, waiting on turns it should never have started.
 - **Cost-when-tried:** the admission lived inside the mailbox subscription's handler (`node.runTurn`), so it was a property of one road rather than of a turn. The sandbox coordinator re-entered suspended turns from the seat's control topic and from its own answer-retry timer, and neither road passed the ownership check, the `node.max_concurrent` slot or the drain's closed gate. A recorded answer's retry was not even counted by the drain, which waited only for the queue's handlers.
 - **Tag-status:** unreleased
@@ -29,6 +29,18 @@ acknowledges it, spending none of its deliveries and quiescing nothing, because
 the waiter announces a finished run again on every poll until a node claims it.
 Only a failure the refusal does not explain is a Nak. A new condition is
 handed back by the rule for its kind with no change to the hand-back.
+
+**An acknowledged completion resumes when its condition clears, within one
+poll at worst.** The coordinator keeps each completion its gate refused on a
+condition, and re-fires it when the engine signals that condition cleared for
+the seat (`Engine.readmitResumes`, the same `sandbox.Coordinator.Readmit` that
+wakes an answer waiting on it, and the hook whatever ends a new condition
+calls). The waiter is the backstop for a clearing nothing signals: it lists
+every active run on every pass, whatever its seat is doing, so the wait is
+bounded by its poll interval (`sandbox.DefaultPollInterval`, 15 seconds). The
+claim is at-most-once, so the two arriving together resume the run once. A
+seat this node lets go of drops its kept completions, for the successor's
+waiter to announce there.
 
 **A turn inside an admitted turn reuses that admission, and skips the
 ownership check for the inner turn.** The inline answer resume runs on the
