@@ -51,6 +51,18 @@ func AskedSomebodyElse(handle string) Refusal {
 		"only they can answer it.", handle)}
 }
 
+// AnsweredAlready is an answer to a coding run's question that another answer
+// was recorded against first, by handle. No time: the person's screen says
+// when, on their own clock, off the run's record.
+func AnsweredAlready(handle string) Refusal {
+	if handle == "" {
+		return Refusal{person: "This question was already answered, so your answer " +
+			"was not used."}
+	}
+	return Refusal{person: fmt.Sprintf("This question was already answered by @%s, "+
+		"so your answer was not used.", handle)}
+}
+
 // NoQuestionForChoice is a choice made where no open question is addressed to
 // the person making it.
 func NoQuestionForChoice() Refusal {

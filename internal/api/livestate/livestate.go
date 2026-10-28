@@ -153,9 +153,11 @@ var stateEvents = map[string]struct{}{
 
 // failureEvents are the engine-detected failures that end a seat's work and
 // are HELD on it until it works again: the seat's frozen call and its
-// `last_error` outlive the turn's own completion. Only one of them stops the
-// seat — [providerFailure]; the budget's stop is read from the meters, which
-// say when it lifts, and a breached guard is a failed turn, not a stop.
+// `last_error` outlive the turn's own completion. None of them stops the seat.
+// A chain that ran out (`llm_unavailable`) is a failed turn, since nothing
+// says the failure lasts; the stop for a limit that does is the provider
+// park's (provider.go). The budget's stop is read from the meters, which say
+// when it lifts, and a breached guard is a failed turn.
 var failureEvents = map[string]struct{}{
 	"llm_unavailable":   {},
 	"turn.guard_breach": {},
@@ -221,6 +223,12 @@ type agentLive struct {
 	// pause.go.
 	paused   *Paused
 	pausedAt stamp
+
+	// providerLimit is the seat's models at their usage limit, nil when they
+	// are not, and providerLimitAt the instant of the event that last moved
+	// it, its own reorder guard. See provider.go.
+	providerLimit   *ProviderLimit
+	providerLimitAt stamp
 }
 
 // overlay renders the seat's own fields. Its state is the projection's to
@@ -237,6 +245,7 @@ func (a *agentLive) overlay() Overlay {
 		Turn:             a.turn.clone(),
 		LastTurn:         a.lastTurn.clone(),
 		Paused:           a.paused.clone(),
+		ProviderLimit:    a.providerLimit.clone(),
 	}
 }
 
@@ -658,6 +667,13 @@ func (s *LiveState) Apply(env *Envelope) (change Change) {
 		return change
 	}
 
+	// THE MODELS' LIMIT, on its own guard, and BEFORE the turn and the state
+	// machine, which read the same phase completion and the same spawn: what
+	// the limit makes of them does not depend on what they make of the seat.
+	if s.applyProviderLimit(agent, *env, payload) {
+		change.agentMoved(id)
+	}
+
 	// THE TURN FIRST, and on its own guards: an event the state machine
 	// below discards as older than the seat's newest (a completion that
 	// lost a race to the next turn's first phase) still ended its turn.
@@ -680,7 +696,8 @@ func movesSeat(eventType string) bool {
 		return true
 	}
 	switch eventType {
-	case "agent_turn_started", "seat_paused", "seat_resumed":
+	case "agent_turn_started", "seat_paused", "seat_resumed",
+		"seat_provider_parked", "seat_provider_released", "provider_fallback":
 		return true
 	}
 	return false
@@ -821,7 +838,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		}
 		agent.lastError = &ErrorInfo{
 			Kind:    kind,
-			Message: str(payload, "last_error", "detail", "error"),
+			Detail:  str(payload, "last_error", "detail", "error"),
 			Phase:   agent.currentPhase,
 			TurnID:  str(payload, "turn_id"),
 			At:      env.Timestamp,

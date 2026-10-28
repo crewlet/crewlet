@@ -1000,7 +1000,7 @@ function AnswerRunDialog({
     const text = answer.trim();
     const result = await write.run(
       { turn_id: turnId, answer: text },
-      { done: `Answered ${seat}'s coding run` },
+      { done: `Sent your answer to ${seat}'s coding run` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };

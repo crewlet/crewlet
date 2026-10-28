@@ -4,13 +4,10 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"slices"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -82,48 +79,19 @@ import (
 // pauseReasonBudget is the hold name the budget park takes on a seat's inbox.
 //
 // A STABLE KEY, like [pauseReasonNoTurnEngine] beside it and for the same
-// reason: holds are keyed by reason so two subsystems gating one inbox cannot
-// release each other's, and a key derived from prose would strand every seat
-// parked under the old wording.
+// reason: see [parkSpec.hold].
 const pauseReasonBudget = "budget_window"
 
-// alarm is an armed reset: stopped when the park is released some other way.
-type alarm interface{ Stop() bool }
+// budgetParkSpec is the budget park's hold and log lines.
+var budgetParkSpec = parkSpec{
+	hold:        pauseReasonBudget,
+	released:    "seat_budget_park_released",
+	notReleased: "seat_budget_park_not_released",
+}
 
 // budgetParks is every seat inbox this node holds for want of budget, by the
-// seat's id.
-type budgetParks struct {
-	mu    sync.Mutex
-	seats map[uuid.UUID]*budgetParking
-
-	// stopped refuses new alarms once the engine is tearing down: an alarm
-	// armed after [Engine.stopBudgetParks] would fire into a closed queue.
-	stopped bool
-
-	// after is the alarm, injectable for tests; nil is time.AfterFunc.
-	//
-	// THE ALARM AND NOT THE CLOCK. What it waits for is measured against
-	// the engine's clock ([Engine.now]), the one the meter that decided the
-	// park cut its windows on: a park with a clock of its own could arm its
-	// alarm for the end of a window the meter beside it was not in.
-	after func(d time.Duration, f func()) alarm
-}
-
-// budgetParking is one parked seat: what the park was decided under, when the
-// refusing window turns over, and the seat's handle, for the log lines.
-type budgetParking struct {
-	handle   string
-	basis    budgetBasis
-	resetsAt time.Time
-	alarm    alarm
-}
-
-func (p *budgetParks) arm(d time.Duration, f func()) alarm {
-	if p.after != nil {
-		return p.after(d, f)
-	}
-	return time.AfterFunc(d, f)
-}
+// seat's id, each with the ceilings it was decided under.
+type budgetParks = seatParks[budgetBasis]
 
 // budgetPark is the dispatcher's budget stage: it parks handle's seat when one
 // of its capped windows is refusing, reporting the deferral reason.
@@ -166,26 +134,14 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 	if err != nil {
 		return "", false, err
 	}
-	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
-
 	// THE RACE WITH THE RELEASE is closed by ordering, as the no-model
-	// pause closes its own: the hold is taken and recorded under the lock,
-	// and the epoch is read again after that. An apply installs its epoch
-	// before it reconciles the parks, so either the reconcile sees this
-	// park or the read below sees the epoch that makes it unnecessary. The
-	// queue call does not drain, so holding the lock across it cannot call
-	// back into here.
-	e.budgetParks.mu.Lock()
-	err = e.backends.Queue.PauseTopic(ctx, subject, group, pauseReasonBudget)
-	if err == nil {
-		e.recordBudgetParkLocked(ctx, seat, handle, m.basis, r.Window.End)
-	}
-	e.budgetParks.mu.Unlock()
-	if err != nil {
+	// pause closes its own: the hold is taken and recorded under the lock
+	// ([seatParks.take]), and the basis is read again after that.
+	if err := e.budgetParks.take(ctx, e, budgetParkSpec, seat, handle, m.basis, r.Window.End,
+		"the window turned over"); err != nil {
 		return "", false, fmt.Errorf("engine: park %s on its budget: %w", handle, err)
 	}
-	reason := fmt.Sprintf("budget: %s window %s resets %s",
-		r.Window.Period, r.Window.Label, rfc3339(r.Window.End))
+	reason := refusingReason(r)
 	if refusing {
 		// THE PARK IS THE GATE SAYING NO, and it is recorded as the
 		// window's refusal ([meter.turnAway]): the delivery it defers is
@@ -197,10 +153,7 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 		// none, so there is no refusal of a charge to record.
 		m.turnAway(ctx, r)
 	} else {
-		reason = fmt.Sprintf("budget: %s window %s leaves %d tokens, below the %d an "+
-			"executor launch needs (turn_engine.executor_min_budget_tokens); resets %s",
-			r.Window.Period, r.Window.Label, max(r.Limit-r.Used, 0), m.basis.floor,
-			rfc3339(r.Window.End))
+		reason = starvedReason(r, m.basis.floor)
 	}
 	log.InfoContext(ctx, "seat_budget_parked", "seat", handle, "scope", r.Scope,
 		"period", string(r.Window.Period), "window", r.Window.Label,
@@ -214,135 +167,80 @@ func (e *Engine) budgetPark(ctx context.Context, handle string) (string, bool, e
 	return reason, true, nil
 }
 
-// budgetHold is what a seat's budget holds a resumed turn back for: a capped
-// window refusing outright, or one leaving less room than an executor launch
-// needs ([meter.starved]) — the two conditions the budget stage parks a seat's
-// mail on — as a refusal that lifts when that window turns over. False where
-// neither holds, and where the counters cannot be read, for the reason
-// [Engine.budgetPark] gives.
+// budgetRefusing is the budget stage's first question ASKED WITHOUT PARKING:
+// whether one of a seat's capped windows is refusing outright, as the refusal
+// that lifts when that window turns over. For a caller that is not a delivery
+// (the turn gate every resume passes, [Engine.seatCannotRun]) and so has no
+// mail of its own to hold: it waits for the window's end rather than parks, and
+// a delivery that arrives meanwhile takes the park itself. An unreadable
+// counter is not a refusal, for the reason [Engine.budgetPark] gives.
 //
-// FOR A RESUME, WHICH HAS NO MAIL TO PARK. A recorded answer's retry asks it
-// before every attempt ([Engine.mayResumeAnswer]) — an answer always relaunches
-// its executor, so a starved window refuses it as surely as a full one — and a
-// collected job's resume that its relaunch was refused for is held on it
-// ([sandbox.ErrResumeHeld]).
-func (e *Engine) budgetHold(ctx context.Context, c *Company, handle string) (sandbox.Refusal, bool) {
+// A FULL WINDOW ONLY, and not one merely too short for a launch, which
+// [Engine.budgetHold] asks as well: the gate passes every resume, and a
+// completion's first model call is its reviewer's, which a window below the
+// launch floor can still pay for. The floor refuses a launch, and a review that
+// sends its run back is held at that relaunch ([Engine.heldByBudget]).
+func (e *Engine) budgetRefusing(ctx context.Context, c *Company, handle string) (sandbox.Refusal, bool) {
 	m := e.meterFor(c, handle)
 	if m == nil || !m.basis.capped() {
 		return sandbox.Refusal{}, false
 	}
 	r, refusing, err := m.refusing(ctx)
-	if err != nil {
+	if err != nil || !refusing {
 		return sandbox.Refusal{}, false
 	}
-	reason := fmt.Sprintf("budget: %s window %s resets %s",
-		r.Window.Period, r.Window.Label, rfc3339(r.Window.End))
-	if !refusing {
-		var starved bool
-		if r, starved, err = m.starved(ctx); err != nil || !starved {
-			return sandbox.Refusal{}, false
-		}
-		reason = fmt.Sprintf("budget: %s window %s leaves %d tokens, below the %d an executor "+
-			"launch needs (turn_engine.executor_min_budget_tokens); resets %s",
-			r.Window.Period, r.Window.Label, max(r.Limit-r.Used, 0), m.basis.floor,
-			rfc3339(r.Window.End))
-	}
-	return sandbox.Refusal{Condition: waitBudget, Reason: reason, Until: r.Window.End}, true
+	return sandbox.Refusal{Condition: waitBudget, Reason: refusingReason(r), Until: r.Window.End}, true
 }
 
-// recordBudgetParkLocked records a park and arms its reset. The caller holds
-// e.budgetParks.mu.
+// budgetHold is what a seat's budget holds a resumed turn back for: a capped
+// window refusing outright ([Engine.budgetRefusing]), or one leaving less room
+// than an executor launch needs ([meter.starved]) — the two conditions the
+// budget stage parks a seat's mail on — as a refusal that lifts when that
+// window turns over. False where neither holds, and where the counters cannot
+// be read, for the reason [Engine.budgetPark] gives.
 //
-// A seat parked again while already parked — a second partition of the drain
-// that parked it — replaces the record, and the earlier alarm is stopped: the
-// ALARM IS THE RECORD'S, never the seat's, so an alarm that fires after its
-// record was replaced releases nothing (see [Engine.releaseBudgetParking]).
-//
-// The alarm releases on context.WithoutCancel(ctx): it fires hours after the
-// delivery that parked the seat has settled and its context has ended, and a
-// release that inherited that cancellation would lift nothing — while the
-// delivery's trace, which the release belongs to, is still worth carrying.
-func (e *Engine) recordBudgetParkLocked(ctx context.Context, seat uuid.UUID, handle string,
-	basis budgetBasis, resetsAt time.Time) {
-	p := &e.budgetParks
-	if p.seats == nil {
-		p.seats = map[uuid.UUID]*budgetParking{}
+// FOR A RESUME THAT WILL LAUNCH, which has no mail to park. A recorded answer's
+// retry asks it before every attempt ([Engine.mayResumeAnswer]) — an answer
+// always relaunches its executor, so a starved window refuses it as surely as a
+// full one — and a collected job's resume that its relaunch was refused for is
+// held on it ([sandbox.ErrResumeHeld]).
+func (e *Engine) budgetHold(ctx context.Context, c *Company, handle string) (sandbox.Refusal, bool) {
+	if refusal, refusing := e.budgetRefusing(ctx, c, handle); refusing {
+		return refusal, true
 	}
-	if old := p.seats[seat]; old != nil && old.alarm != nil {
-		old.alarm.Stop()
+	m := e.meterFor(c, handle)
+	if m == nil || !m.basis.capped() {
+		return sandbox.Refusal{}, false
 	}
-	parking := &budgetParking{handle: handle, basis: basis, resetsAt: resetsAt}
-	p.seats[seat] = parking
-	if p.stopped {
-		return
+	r, starved, err := m.starved(ctx)
+	if err != nil || !starved {
+		return sandbox.Refusal{}, false
 	}
-	// Never a negative wait: a window cut on the engine's clock contains the
-	// moment it was cut at, so its end is ahead of it, but the alarm is
-	// measured on the monotonic clock and a wall clock stepped forward
-	// between the two reads must not arm an alarm that has already passed as
-	// though it had not.
-	wait := max(resetsAt.Sub(e.now()), 0)
-	released := context.WithoutCancel(ctx)
-	parking.alarm = p.arm(wait, func() {
-		e.releaseBudgetParking(released, seat, parking, "the window turned over")
-	})
+	return sandbox.Refusal{Condition: waitBudget, Reason: starvedReason(r, m.basis.floor),
+		Until: r.Window.End}, true
+}
+
+// refusingReason is the reason a seat waits on a window r with no room left:
+// a parked delivery's deferral and a held resume's refusal alike, so the two
+// read the same in a log line and on a dashboard.
+func refusingReason(r refusal) string {
+	return fmt.Sprintf("budget: %s window %s resets %s",
+		r.Window.Period, r.Window.Label, rfc3339(r.Window.End))
+}
+
+// starvedReason is the reason a seat waits on a window r whose room is below
+// floor, the tokens an executor launch needs; see [refusingReason].
+func starvedReason(r refusal, floor int) string {
+	return fmt.Sprintf("budget: %s window %s leaves %d tokens, below the %d an executor "+
+		"launch needs (turn_engine.executor_min_budget_tokens); resets %s",
+		r.Window.Period, r.Window.Label, max(r.Limit-r.Used, 0), floor,
+		rfc3339(r.Window.End))
 }
 
 // releaseBudgetPark lifts the budget hold from one seat's inbox, whatever
 // record holds it.
 func (e *Engine) releaseBudgetPark(ctx context.Context, seat uuid.UUID, why string) {
-	e.budgetParks.mu.Lock()
-	parking := e.budgetParks.seats[seat]
-	e.budgetParks.mu.Unlock()
-	if parking != nil {
-		e.releaseBudgetParking(ctx, seat, parking, why)
-	}
-}
-
-// releaseBudgetParking lifts the hold parking took, if parking is still the
-// seat's record.
-//
-// OUTSIDE THE LOCK for the queue call, because the in-memory twin's resume
-// drains synchronously into the seat's handler, and a delivery that finds the
-// window still refusing comes straight back to [Engine.budgetPark].
-func (e *Engine) releaseBudgetParking(ctx context.Context, seat uuid.UUID, parking *budgetParking, why string) {
-	e.budgetParks.mu.Lock()
-	if e.budgetParks.seats[seat] != parking {
-		// Replaced by a later park, or already released: this alarm, or
-		// this caller, is describing a hold that is somebody else's now.
-		e.budgetParks.mu.Unlock()
-		return
-	}
-	delete(e.budgetParks.seats, seat)
-	if parking.alarm != nil {
-		parking.alarm.Stop()
-	}
-	e.budgetParks.mu.Unlock()
-
-	subject, group := topics.AgentInbox(seat), topics.AgentInboxGroup(seat)
-	if err := e.backends.Queue.ResumeTopic(ctx, subject, group, pauseReasonBudget); err != nil {
-		// Kept on the record with no alarm, as the no-model release keeps
-		// its own: a resume fails only on a client that has stopped, which
-		// is a process on its way out, and the record is what
-		// [Engine.stopBudgetParks] and the seat's release still clear.
-		e.budgetParks.mu.Lock()
-		if _, again := e.budgetParks.seats[seat]; !again {
-			if e.budgetParks.seats == nil {
-				e.budgetParks.seats = map[uuid.UUID]*budgetParking{}
-			}
-			e.budgetParks.seats[seat] = &budgetParking{
-				handle: parking.handle, basis: parking.basis, resetsAt: parking.resetsAt,
-			}
-		}
-		e.budgetParks.mu.Unlock()
-		log.WarnContext(ctx, "seat_budget_park_not_released", "seat", parking.handle,
-			"agent_id", seat.String(), "error", err,
-			"detail", "this seat's held mail stays on its inbox until the queue "+
-				"client is replaced")
-		return
-	}
-	log.InfoContext(ctx, "seat_budget_park_released", "seat", parking.handle,
-		"agent_id", seat.String(), "reason", why)
+	e.budgetParks.release(ctx, e, budgetParkSpec, seat, why)
 }
 
 // reconcileBudgetParks releases every park the company next decides
@@ -358,50 +256,20 @@ func (e *Engine) releaseBudgetParking(ctx context.Context, seat uuid.UUID, parki
 // cost of one delivery, which is cheaper than deciding here what only the
 // counters know.
 func (e *Engine) reconcileBudgetParks(ctx context.Context, next *Company) {
-	e.budgetParks.mu.Lock()
-	var changed []uuid.UUID
-	for seat, parking := range e.budgetParks.seats {
-		if !budgetBasisOf(next, seat).equal(parking.basis) {
-			changed = append(changed, seat)
-		}
-	}
-	e.budgetParks.mu.Unlock()
-	for _, seat := range sortedSeats(slices.Values(changed)) {
+	for _, seat := range e.budgetParks.changed(func(seat uuid.UUID, basis budgetBasis) bool {
+		return budgetBasisOf(next, seat).equal(basis)
+	}) {
 		e.releaseBudgetPark(ctx, seat, "a change of the company moved the ceilings it parked on")
 	}
 }
 
-// forgetBudgetPark drops a released seat's park without resuming anything.
-//
-// The seat's release DETACHED its inbox, and a detach releases every hold the
-// attachment carried, so there is nothing to lift — only an alarm that would
-// otherwise fire into a seat this node no longer holds.
-func (e *Engine) forgetBudgetPark(seat uuid.UUID) {
-	e.budgetParks.mu.Lock()
-	defer e.budgetParks.mu.Unlock()
-	if parking := e.budgetParks.seats[seat]; parking != nil {
-		if parking.alarm != nil {
-			parking.alarm.Stop()
-		}
-		delete(e.budgetParks.seats, seat)
-	}
-}
+// forgetBudgetPark drops a released seat's park without resuming anything;
+// see [seatParks.forget].
+func (e *Engine) forgetBudgetPark(seat uuid.UUID) { e.budgetParks.forget(seat) }
 
-// stopBudgetParks disarms every reset alarm, for a node shutting down.
-//
-// The holds are left to the queue client, which the node's stop detaches: a
-// resume here would only hand a stopping node mail it is about to give back.
-func (e *Engine) stopBudgetParks() {
-	e.budgetParks.mu.Lock()
-	defer e.budgetParks.mu.Unlock()
-	e.budgetParks.stopped = true
-	for _, seat := range sortedSeats(maps.Keys(e.budgetParks.seats)) {
-		if parking := e.budgetParks.seats[seat]; parking.alarm != nil {
-			parking.alarm.Stop()
-			parking.alarm = nil
-		}
-	}
-}
+// stopBudgetParks disarms every reset alarm, for a node shutting down; see
+// [seatParks.stop].
+func (e *Engine) stopBudgetParks() { e.budgetParks.stop() }
 
 // budgetBasisOf is the basis a seat's spend is judged by under c, by the
 // seat's id. A seat c no longer holds is judged by the company's ceilings

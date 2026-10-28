@@ -1129,12 +1129,16 @@ const (
 	// rather than drawn as a card (ADR-0061): the renderer saying which run
 	// of prose opens its block, in the shared Markdown module the entry
 	// loads, took it to 349.1 KiB. 350 KiB, still under two seconds on that
-	// link. Steering a turn whose coding run is out, merged beside it, took it
-	// to 350.0 KiB, past it by bytes: the shared write hook reads a press
-	// label's own sentence for its receipt (`landed`, which says when a note
-	// is read), in the seats chunk the entry loads. 351 KiB, still under two
-	// seconds on that link.
-	initialBudget = 351 << 10
+	// link. A model's usage limit as one condition per entry (ADR-0064): the
+	// queue's wording of it and the CLI names it is said in, the time of day
+	// it lifts, its remedy in the link table, and the store keeping a row a
+	// push leaves as it was, all in the attention queue and the store the
+	// frame loads, took it to 351.0 KiB. 352 KiB, still under two seconds on
+	// that link. Steering a turn whose coding run is out, merged beside it (the
+	// shared write hook reading a press label's own sentence for its receipt,
+	// `landed`, which says when a note is read, in the seats chunk the entry
+	// loads), measured 350.9 KiB with it, under the same 352 KiB.
+	initialBudget = 352 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1296,20 +1300,29 @@ const (
 	// review's fixes (a restore decided once per turn in the session, a
 	// section matched by its path and name, Home's spent week through the
 	// remedy gate) took it to 4602.0 KiB, past it by bytes. 4603 KiB, which
-	// still refuses a doubled baseline. Saying that a person's stop ended a
-	// seat's coding run, merged beside it, took it to 4603.4 KiB: a stopped
-	// turn's tag and a stopped run's span drawn closed rather than failed in
-	// the live view's chunk and the runs board's, a seat whose last turn "was
-	// stopped" in the profile's, the task's "stopped by a person" pill in the
-	// worklet's, and the pause dialog's words in the writes chunk. 4604 KiB,
-	// which still refuses a doubled baseline. Steering a turn whose coding run
-	// is out, merged beside it, took it to 4604.8 KiB: Steer offered on a
-	// parked turn with the toast saying when the note is read (`lib/steer.ts`,
-	// and the press label that reads its receipt in the shared write hook),
-	// and a note read inside a run drawn on the run's bar in the words of its
-	// step, in the live view's chunk. 4605 KiB, which still refuses a doubled
-	// baseline.
-	treeBudget = 4<<20 + 509<<10
+	// still refuses a doubled baseline. A model's usage limit as one
+	// condition per entry (ADR-0064): its wording, the CLI names and its
+	// remedy, the store keeping a row a push leaves as it was, and the Inbox
+	// keeping the rows it drew, took it to 4606.9 KiB. 4607 KiB, which still
+	// refuses a doubled baseline. The review's fixes (a failure's own text
+	// and the spend by model entry kept to an admin, the provider split
+	// offered to an admin alone, and the card that says so) took it to
+	// 4607.0 KiB, past it by bytes. 4608 KiB, which still refuses a doubled
+	// baseline. Saying what became of an answer to a parked coding run (sent,
+	// recorded while its seat is busy and on what, answered, or not used and
+	// why) off the run's own record, drawn with uilet 0.74.0's pending tone
+	// while it is on its way, took it to 4610.7 KiB. 4611 KiB, which still
+	// refuses a doubled baseline. Saying that a person's stop ended a seat's
+	// coding run (a stopped turn's tag and a stopped run's span drawn closed
+	// rather than failed in the live view's chunk and the runs board's, a
+	// seat whose last turn "was stopped" in the profile's, the task's
+	// "stopped by a person" pill in the worklet's, and the pause dialog's
+	// words in the writes chunk) and steering a turn whose coding run is out
+	// (Steer offered on a parked turn with the toast saying when the note is
+	// read, and a note read inside a run drawn on the run's bar in the words
+	// of its step), merged beside it, took it to 4613.5 KiB. 4614 KiB, which
+	// still refuses a doubled baseline.
+	treeBudget = 4<<20 + 518<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

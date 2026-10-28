@@ -21,7 +21,7 @@
  * then opens the next row.
  */
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ButtonLink,
   EmptyState,
@@ -36,6 +36,7 @@ import {
   ReadingPaneReasoning,
   ReadingPaneSection,
   ReadingPaneTitle,
+  RefusalStrip,
   Stack,
   Stepper,
   Text,
@@ -64,6 +65,8 @@ import { TechnicalDetails } from "~/components/common.tsx";
 import { Composer } from "~/components/Composer.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { RUNS_POLL_MS } from "~/lib/runs.ts";
+import { answerFate, type GivenAnswer } from "./answerFate.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
@@ -130,8 +133,14 @@ interface PaneProps {
    * The row was dealt with here. `label` says how ("Answered") for a row that
    * stays in the list as done, with the answer that was given; null for a
    * notice, which leaves its group.
+   *
+   * `hold` keeps the row open rather than moving on to the next one: an
+   * answer the engine has accepted and not yet settled is shown as sent, and
+   * the row stays where the person can see what became of it. Null with
+   * `hold` takes back a label given earlier, for an answer the engine could
+   * not use.
    */
-  onSettled: (label: string | null, answer?: AskAnswer) => void;
+  onSettled: (label: string | null, answer?: AskAnswer, hold?: boolean) => void;
 }
 
 export function InboxPane(props: PaneProps) {
@@ -659,11 +668,28 @@ function RunPane({
   run: SandboxRun;
   frame: Frame;
   now: number;
-  onSettled: (label: string | null, answer?: AskAnswer) => void;
+  onSettled: (label: string | null, answer?: AskAnswer, hold?: boolean) => void;
 }) {
   const write = useAct("answer_run");
   const [text, setText] = useState("");
-  const [answered, setAnswered] = useState<string | null>(null);
+  // THE ANSWER THE ENGINE ACCEPTED, and what it said back about it: the
+  // question it answers and the answer's own id. `pending` is all the press
+  // can say; the run's own record says the rest (see `answerFate`).
+  const [given, setGiven] = useState<GivenAnswer | null>(null);
+  // WHY THE LAST ANSWER WAS NOT USED, said until the person answers again.
+  const [unused, setUnused] = useState<string | null>(null);
+  // ANSWERED BY SOMEBODY ELSE FIRST: nothing is left to answer here.
+  const [superseded, setSuperseded] = useState(false);
+  // THE ENGINE REFUSED THIS ANSWER because the question was answered: said
+  // here off the run's record, on the reader's own clock.
+  const [refusedAnswered, setRefusedAnswered] = useState(false);
+  const runs = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
+  const record = runs.data?.runs.find((r) => r.turn_id === run.turn_id);
+  // WHETHER THIS ANSWER WAS SEEN ON THE RUN, so a record that then goes away
+  // is read as the run finishing with it rather than as the run ending.
+  const seenTaken = useRef(false);
+  const fate = given ? answerFate(given, record, runs.data !== undefined, seenTaken.current) : null;
+  if (fate === "recorded" || fate === "taken") seenTaken.current = true;
   const question = run.question ?? "";
   // A QUESTION THIS READER CAN'T SEE IS NOT ASKED OF THEM: the answer form
   // asked for an answer to a question it never showed.
@@ -673,16 +699,79 @@ function RunPane({
     (hidden ? "This run is waiting on a question you can’t see." : "The run paused on a question");
   const hold = holdLine(run, now);
   const blocked = text.trim() ? undefined : "Write the answer first.";
+  // ONCE PER ANSWER: telling the screen redraws it, and the screen's
+  // callback is a new one on every draw, so the fate is said once.
+  const told = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!given || fate === null || fate === "sent") return;
+    if (told.current === given.answerId + fate) return;
+    told.current = given.answerId + fate;
+    const answer: AskAnswer = { kind: "reply", text: given.text };
+    if (fate === "recorded") {
+      // RECORDED ON THE RUN, its resume waiting for the seat: answered, and
+      // kept open, saying what the seat is doing first.
+      onSettled("Answered", answer, true);
+      return;
+    }
+    if (fate === "taken") {
+      onSettled("Answered", answer);
+      return;
+    }
+    if (fate === "ended") {
+      // NEITHER ANSWERED NOR REFUSED: the run is over, and that is all the
+      // record says. Kept open, as sent, with the run's end said beside it.
+      return;
+    }
+    // NOT USED, so the person is told so and why, never left looking at
+    // "Sent" for an answer the run will not read.
+    if (fate === "superseded") {
+      setUnused("Your answer was not used: another answer was recorded first.");
+      setSuperseded(true);
+    } else {
+      setUnused(
+        fate === "declined"
+          ? `${frame.name}’s run could not use your answer and is waiting on its question again. Answer it again.`
+          : `${frame.name}’s run moved on to a new question before your answer reached it. Answer the question above.`,
+      );
+    }
+    setGiven(null);
+    onSettled(null, undefined, true);
+  }, [fate, given, frame.name, onSettled, record, now]);
+
+  // THE SEAT'S OTHER JOB, while this answer waits for it: another of the
+  // seat's coding runs holding the seat.
+  const busyOn = runs.data?.runs.find(
+    (r) =>
+      r.agent_handle === run.agent_handle &&
+      r.turn_id !== run.turn_id &&
+      (r.status === "launching" || r.status === "running" || r.status === "resumed"),
+  );
+
   const send = async () => {
     if (!pressable(write, blocked)) return;
     const answer = text.trim();
     const result = await write.run(
       { turn_id: run.turn_id, answer },
-      { done: `Answered ${frame.name}’s coding run` },
+      { done: `Sent your answer to ${frame.name}’s coding run` },
     );
+    // THE RECORD IS ASKED AGAIN by the refusal itself: already_answered is a
+    // code that looks again at what the press would have moved
+    // (protocol/writeOutcome.ts), sandbox_runs among it, so who answered and
+    // when arrive without a read of this pane's own.
+    setRefusedAnswered(result?.kind === "refused" && result.code === "already_answered");
     if (result && (result.kind === "applied" || result.kind === "pending")) {
-      setAnswered(answer);
-      onSettled("Answered", { kind: "reply", text: answer });
+      const receipt = (result.receipt ?? {}) as { launch_id?: unknown; answer_id?: unknown };
+      setUnused(null);
+      seenTaken.current = false;
+      setGiven({
+        text: answer,
+        launchId: typeof receipt.launch_id === "string" ? receipt.launch_id : (run.launch_id ?? ""),
+        answerId: typeof receipt.answer_id === "string" ? receipt.answer_id : "",
+      });
+      // SENT, NOT ANSWERED: the row stays open, marked as sent, until the
+      // run's record says the answer was taken or why it was not.
+      onSettled("Sent", { kind: "reply", text: answer }, true);
     }
   };
   return (
@@ -697,16 +786,41 @@ function RunPane({
       <ReadingPaneTitle>{heading}</ReadingPaneTitle>
       {/* THE RUN'S OWN WORDS, verbatim, where the heading is only their start. */}
       {question.trim() !== heading && <ReadingPaneQuote verbatim>{question}</ReadingPaneQuote>}
-      {answered !== null ? (
-        <ReadingPaneOutcome>
-          Answered <strong>{`“${answered}”`}</strong>
+      {given !== null ? (
+        // PENDING UNTIL THE RUN TOOK IT: sent, recorded or ended is never the
+        // success check a used answer gets.
+        <ReadingPaneOutcome tone={fate === "taken" ? "done" : "pending"}>
+          {fate === "taken" ? (
+            <>
+              Answered <strong>{`“${given.text}”`}</strong>
+            </>
+          ) : fate === "recorded" ? (
+            <>
+              Answer recorded.{" "}
+              {busyOn ? busyLine(busyOn, frame.name) : `${frame.name}’s run picks it up next.`}
+            </>
+          ) : fate === "ended" ? (
+            <>Answer sent. {frame.name}’s run has ended.</>
+          ) : (
+            <>Answer sent. Waiting for {frame.name}’s run to take it.</>
+          )}
         </ReadingPaneOutcome>
+      ) : superseded ? (
+        <Stack gap={2}>
+          {unused && <RefusalStrip onDismiss={() => setUnused(null)}>{unused}</RefusalStrip>}
+          {record?.answered_at && (
+            <Text as="p" variant="caption">
+              {answeredAt(record, now)}
+            </Text>
+          )}
+        </Stack>
       ) : hidden ? (
         <Text as="p" variant="body">
           Its lead or an admin can answer it.
         </Text>
       ) : (
         <Stack gap={2}>
+          {unused && <RefusalStrip onDismiss={() => setUnused(null)}>{unused}</RefusalStrip>}
           <Field
             label="Your answer to the run"
             value={text}
@@ -727,7 +841,14 @@ function RunPane({
               </WriteButton>
             }
           />
+          {/* THE ENGINE'S SENTENCE (the refusal catalog's), and only the
+              time beside it on the reader's clock, off the run's record. */}
           <RefusalNote write={write} />
+          {refusedAnswered && record?.answered_at && (
+            <Text as="p" variant="caption">
+              {answeredAt(record, now)}
+            </Text>
+          )}
         </Stack>
       )}
       <Text as="p" variant="caption">
@@ -738,6 +859,26 @@ function RunPane({
       </Text>
     </ReadingPane>
   );
+}
+
+/**
+ * When the answer that was used was recorded, and by whom, on the READER's
+ * clock ([moment]): a value beside the engine's own sentence, never a second
+ * wording of it.
+ */
+function answeredAt(record: SandboxRun, now: number): string {
+  const by = record.answered_by ? ` by @${record.answered_by}` : "";
+  return `Answered${by} at ${moment(record.answered_at ?? "", now)}.`;
+}
+
+/**
+ * What a seat busy on another coding run is doing, for an answer waiting on it:
+ * "The Senior Backend Engineer is busy on GP-4’s run and picks this up next."
+ */
+function busyLine(busy: SandboxRun, name: string): string {
+  const who = busy.role ? `The ${busy.role}` : name;
+  const on = busy.work_item?.key ? `on ${busy.work_item.key}’s run` : "on another coding run";
+  return `${who} is busy ${on} and picks this up next.`;
 }
 
 function SeatPane({ seat, frame }: { seat: SeatCondition; frame: Frame }) {

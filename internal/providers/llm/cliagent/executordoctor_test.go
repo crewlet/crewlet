@@ -22,7 +22,9 @@ func doctorEntry(t *testing.T, agent string) *Provider {
 		"model_args": []any{},
 	}
 	// And everything else that reads such a stream: its requests, its
-	// failure events, the cap's signature in it.
+	// failure events, its structured limit reports, the cap's signature in
+	// it.
+	overrides["limit_events"] = nil
 	if builtin, _ := cliprofile.Builtin(agent); builtin.MCP != nil {
 		overrides["requests"] = nil
 		overrides["cap"] = nil

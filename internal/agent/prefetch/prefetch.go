@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/search"
 )
@@ -605,6 +606,15 @@ func (f *Fetcher) auxCall(ctx context.Context, r Request, purpose types.AuxPurpo
 	call, cancel := context.WithTimeout(ctx, AuxTimeout)
 	defer cancel()
 	completion, err := member.Provider.Complete(call, auxRequest(system, user))
+	if retryAt, _, limited := llm.LimitedUntil(err); limited {
+		// A LIMIT ALREADY REPORTED IS A WAIT, NOT A FAILURE: the backend
+		// sat the entry out and launched nothing, and the block is left
+		// out until it is tried again. A warning per turn per block would
+		// bury the one line that reported the limit.
+		log.InfoContext(ctx, "prefetch_auxiliary_limited", "seat", seat.Handle(),
+			"model", member.Key, "retry_at", retryAt.UTC().Format(time.RFC3339))
+		return "", false
+	}
 	if err != nil {
 		log.WarnContext(ctx, "prefetch_auxiliary_call_failed", "seat", seat.Handle(),
 			"model", member.Key, "error", err.Error())

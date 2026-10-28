@@ -384,6 +384,9 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			run.Launch.CollectFailures = 0
 			run.Launch.CollectFailingSince = time.Time{}
 			run.Launch.Collected = true
+			if run.Launch.CollectedAt.IsZero() && !release.CollectedAt.IsZero() {
+				run.Launch.CollectedAt = release.CollectedAt.UTC()
+			}
 		}
 		// HELD, or not: every release decides it afresh, so a hold an
 		// earlier release put on the run does not outlast the attempt it

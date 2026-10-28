@@ -403,6 +403,9 @@ func operatorSurface(e *engine.Engine, authority authz.Chart) (*operator.Server,
 		Runs: builtin.RunDeps{Desk: sandbox.AnswerDesk{
 			Pending: sandbox.NewCoordStore(e.Backends().Fleet),
 			Queue:   e.Backends().Queue,
+			// WHO ANSWERED FIRST is said only by the answer's seal, which
+			// the node's own fleet keyring opens.
+			Seal: e.AnswerSeal(),
 		}},
 		Pauses: builtin.SeatPauseDeps{
 			Pauses: e.Backends().Fleet, Announce: e.Backends().Queue, Org: chart,

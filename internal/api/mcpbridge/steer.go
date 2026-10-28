@@ -260,7 +260,7 @@ func isNotesPoll(r *http.Request) bool {
 // A RELAYED POLL IS HELD BY TWO NODES, the holder that waits for a note and this
 // one, which waits for the holder's answer, and only the holder's shutdown
 // released it. A node that is stopping relays its polls the longest — its seats
-// are handed to peers, and a direct box goes on dialling its loopback (ADR-0064)
+// are handed to peers, and a direct box goes on dialling its loopback (ADR-0065)
 // — and one it went on waiting on kept its listener busy for the whole grace of
 // a graceful stop and was then cut, which a poller reads as a network error
 // rather than the answer to pause on. Only the poll: a relayed tool call or a

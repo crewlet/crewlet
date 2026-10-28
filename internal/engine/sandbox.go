@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	llmchain "github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -1130,15 +1131,17 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// decides it is lost: the round's relaunch — a reviewer's send-back,
 		// or the run an answer carries on — or a call of its own was refused
 		// because the seat's window is full or too short for a launch. A
-		// window turns over, so this is a wait and not a failure: abandoned
-		// for having acted (the run's own calls, made before the segment
-		// began), the turn was lost for a budget, and handed back for an
-		// ordinary retry, every attempt re-collected the job and ran its
-		// review again into the same refusal. Held, the job waits collected
-		// in its paused box, the seat held behind it, until the window that
-		// refuses it turns over — or a revision raises its ceiling — and is
-		// resumed then ([sandbox.ErrResumeHeld]); an answer's resume waits
-		// on the same refusal in its own series ([Engine.mayResumeAnswer]).
+		// window turns over, so this is a wait and not a failure: handed
+		// back for an ordinary retry, every attempt re-collected the job and
+		// ran its review again into the same refusal. Held, the job waits
+		// collected in its paused box, the seat held behind it, until the
+		// window that refuses it turns over — or a revision raises its
+		// ceiling — and is resumed then ([sandbox.ErrResumeHeld]); an
+		// answer's resume waits on the same refusal in its own series
+		// ([Engine.mayResumeAnswer]). AHEAD OF THE ABANDON, so a segment
+		// that wrote in its own attempt waits for its window too rather than
+		// lose the run's work to one; the run's own calls, made before the
+		// segment began, are no such write ([turn.Work.Inherited]).
 		if held := e.heldByBudget(ctx, company, in.Turn.Handle(), err); held != nil {
 			working = false
 			return held
@@ -1183,6 +1186,19 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// ON THE ROUTE'S OWN TERMS, exactly as the seed above: this is the
 		// same retry rule reached one step later, over the same revert.
 		working = rejoined
+		// UNLESS WHAT BROKE IT IS A WAIT: every model at a usage limit
+		// before this attempt wrote anything — the reviewer's, or every
+		// executor member the relaunch could pick sitting out. The turn
+		// gate's own condition ([Engine.seatCannotRun]), found a round
+		// later, and handed back as its refusal is: a completion is
+		// acknowledged and kept until the condition clears, and an answer
+		// waits for it uncharged. As a failure, a completion was NAKed
+		// into the same limit until its delivery budget ran out, and an
+		// answer spent its attempts on a wait. (A spent window was held
+		// above, before the abandon.)
+		if refusal, refused := resumeRefusal(err); refused {
+			return &sandbox.TurnRefused{Cause: err, Refusal: refusal}
+		}
 		return err
 	}
 	// A resumed turn that suspended AGAIN persists its new conversation the
@@ -1334,10 +1350,11 @@ func runnerAsked(asked *sandbox.AskedRun) *runner.Asked {
 // the entry, while a reviewer's run on it would have moved the chain on at
 // once. A run that ended otherwise, an entry this epoch does not have —
 // renamed or removed since the launch — and one that is not a coding CLI's
-// bench nothing.
+// bench nothing; a run that succeeded starts the entry's backoff over, as a
+// call that was answered does.
 func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.PendingRun, ended sandbox.RunEnding) {
 	if c == nil || c.Models == nil || run.Launch.ProviderKey == "" ||
-		(ended.Text == "" && ended.Error == "") {
+		(ended.Text == "" && ended.Error == "" && ended.Event == "") {
 		return
 	}
 	provider, ok := c.Models.Provider(run.Launch.ProviderKey)
@@ -1348,7 +1365,8 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 	if !isCLI {
 		return
 	}
-	if agent.RunEnded(ended.Text, ended.Error, !ended.Success) {
+	if agent.RunEnded(ctx, cliagent.RunEnd{Answer: ended.Text, Error: ended.Error,
+		Failed: !ended.Success, Event: ended.Event, At: ended.At}) {
 		log.InfoContext(ctx, "executor_run_spent_its_entry",
 			"turn_id", run.TurnID, "seat", run.AgentHandle,
 			"provider_key", run.Launch.ProviderKey,
@@ -2069,6 +2087,10 @@ func (e *Engine) sandboxRuntimeOn(pending sandbox.PendingStore, manager *sandbox
 		// coming round afterwards is dropped rather than run as a second
 		// message. See [sandbox.CoordinatorOptions.Spent].
 		Spent: e.spendAnswer,
+		// And an answer by turn that comes round on the control topic after
+		// it was spent is acknowledged without reaching its run, off the same
+		// ledger. See [sandbox.CoordinatorOptions.WasSpent].
+		WasSpent: e.answerWorked,
 		// Every launch is stamped with the seat lease this node runs the
 		// seat under, so the seat's next holder can fence this node off
 		// the run. See [sandbox.CoordinatorOptions.Lease].
@@ -2107,6 +2129,15 @@ func (e *Engine) spendAnswer(ctx context.Context, handle string, evs []*events.E
 		return
 	}
 	e.dispatch.SpendAnswer(ctx, handle, evs)
+}
+
+// answerWorked reads the ledger [Engine.spendAnswer] writes, for the
+// coordinator ([sandbox.CoordinatorOptions.WasSpent]).
+func (e *Engine) answerWorked(ctx context.Context, handle string, ev *events.Event) bool {
+	if e.dispatch == nil {
+		return false
+	}
+	return e.dispatch.AnswerWorked(ctx, handle, ev)
 }
 
 // runCondenser is the coordinator's [sandbox.Condenser]: the seat's own
@@ -2375,6 +2406,18 @@ const (
 	// names, or at once by an apply that changes the ceilings.
 	waitBudget sandbox.Condition = "budget"
 
+	// waitSeatBusy: another of the seat's turns is running on this node, and
+	// a seat runs one at a time ([node.ErrSeatBusy]). Signalled the moment
+	// that turn is released ([node.Config.SeatTurnEnded]), so the answer is
+	// resumed as the seat's next turn, ahead of its mail, which its owed hold
+	// keeps waiting.
+	waitSeatBusy sandbox.Condition = "seat_busy"
+
+	// waitProvider: every model of the seat's chain is at a usage limit it
+	// already reported. Lifted on the clock when the first is tried again,
+	// which the refusal names (see providerpark.go).
+	waitProvider sandbox.Condition = "provider"
+
 	// waitDrain: this node is draining, and starts no turn. Nothing
 	// signals it, because nothing in the engine undoes a drain
 	// ([Engine.Drain] latches): the wait ends when the drain hands the seat
@@ -2394,7 +2437,8 @@ func (e *Engine) turnGate() sandbox.TurnGate {
 
 // admitResume is the coordinator's [sandbox.TurnGate]: the node's own
 // admission ([node.Node.AdmitTurn]), with its refusal named as what an
-// answer's retry waits on.
+// answer's retry waits on, and then the seat's conditions a turn would only
+// fail on ([Engine.seatCannotRun]).
 //
 // The condition is what the control topic hands a refused completion back by
 // ([controlOutcome]), and the cause stays reachable through the refusal for
@@ -2415,10 +2459,17 @@ func (e *Engine) admitResume(ctx context.Context, handle string) (context.Contex
 	ctx, release, err := e.node.AdmitTurn(ctx, handle)
 	switch {
 	case err == nil:
+		if refusal, refused := e.seatCannotRun(ctx, handle); refused {
+			release()
+			return nil, nil, &sandbox.TurnRefused{Refusal: refusal}
+		}
 		return ctx, release, nil
 	case errors.Is(err, node.ErrDraining):
 		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
 			Condition: waitDrain, Reason: err.Error()}}
+	case errors.Is(err, node.ErrSeatBusy):
+		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
+			Condition: waitSeatBusy, Reason: err.Error()}}
 	case errors.Is(err, node.ErrSeatNotOwned):
 		// THE SAME WAIT [Engine.mayResumeAnswer] names for a seat it
 		// does not find owned, for the same edges.
@@ -2430,6 +2481,50 @@ func (e *Engine) admitResume(ctx context.Context, handle string) (context.Contex
 	}
 }
 
+// seatCannotRun reports whether a turn on handle's seat would only fail on a
+// condition that ends at an instant, and if so what it waits on: one of its
+// capped token windows refusing ([Engine.budgetRefusing], a full window and
+// not one merely below the launch floor, which a completion's review can
+// still run on), or every model of its executor chain at a usage limit it
+// already reported ([Engine.providerRefusing], which says why that chain).
+//
+// ASKED BY THE TURN GATE, so every resume asks it before it claims its run,
+// whatever brought it: a box's completion, a person's answer on its inline
+// attempt or its retry, an answer queued on the control topic. Asked of the
+// counters and of what the entries already know, so it launches nothing.
+// A completion it refuses is acknowledged ([controlOutcome]) and kept for the
+// signal that ends the wait, and the waiter announces it again meanwhile, so
+// it spends none of its deliveries; it used to reach the model, revert, and be
+// NAKed through its whole delivery budget in about ten minutes.
+func (e *Engine) seatCannotRun(ctx context.Context, handle string) (sandbox.Refusal, bool) {
+	if refusal, refusing := e.budgetRefusing(ctx, e.Company(), handle); refusing {
+		return refusal, true
+	}
+	if reason, retry, limited := e.providerRefusing(ctx, handle); limited {
+		return sandbox.Refusal{Condition: waitProvider, Reason: reason, Until: retry}, true
+	}
+	return sandbox.Refusal{}, false
+}
+
+// resumeRefusal is what a reverted resume's failure waits on, if it is the
+// provider half of [Engine.seatCannotRun]'s conditions met mid-turn: a chain
+// every member of which refused for a limit — the reviewer's, or the executor
+// members a relaunch picks from, every one sitting out ([llmchain.Pick]) — until
+// the first is tried again.
+//
+// NOT THE BUDGET HALF. A segment the seat's budget refused is held before the
+// resume is judged at all ([Engine.heldByBudget], ahead of [turn.Abandon]): on
+// a full window, and on one too short for the launch every relaunch makes, and
+// whether or not the segment had acted. A spent window reaching this far is
+// one that has turned over since, which an ordinary retry now runs.
+func resumeRefusal(err error) (sandbox.Refusal, bool) {
+	if limit, limited := llmchain.Limited(err); limited {
+		return sandbox.Refusal{Condition: waitProvider, Reason: limitReason(limit.Keys, limit.RetryAt),
+			Until: limit.RetryAt}, true
+	}
+	return sandbox.Refusal{}, false
+}
+
 // mayResumeAnswer is the coordinator's [sandbox.Admission]: whether a seat may
 // run a RETRIED resume of a recorded answer now, and if not, what that waits
 // on.
@@ -2438,18 +2533,25 @@ func (e *Engine) admitResume(ctx context.Context, handle string) (context.Contex
 // the first attempt runs inside the delivery that carried the answer and so
 // passed them; a retry runs outside any delivery and must not be the one way a
 // turn starts on a seat whose lease is not fresh, that a person paused, that
-// has no model, whose node refuses new work, or whose budget is refusing.
-// Whether a sandbox run holds the seat is deliberately NOT asked: an answer
-// recorded before another of the seat's runs started holding it is still
-// owed, and resuming it beside that job is what it was always admitted to do.
+// has no model, or whose node refuses new work. A full window and a model's
+// limit are the turn gate's, which every resume passes ([Engine.seatCannotRun]);
+// this asks about a window too short for a launch as well ([Engine.budgetHold]),
+// because every answer relaunches its executor and such a window refuses the
+// launch, where the gate lets a completion's review run on it. Whether another
+// of the seat's coding runs holds it
+// is the coordinator's own count, so the coordinator asks that itself first
+// ([sandbox.SeatCoding]), and whether another of its turns is running is the
+// node's, asked at the same gate ([Engine.admitResume]): an answer by turn
+// arrives on the seat's control topic at any moment of its day, and is
+// resumed only once the seat is free of both.
 //
 // EACH REFUSAL NAMES WHAT IT WAITS ON, so the retry waits for that rather than
 // re-checking on a timer (see [sandbox.Coordinator.Readmit]). Ownership is an
-// event — the seat host reports the seat established, or its admission back
-// after a blip (node.Config.SeatAdmitted) — with one heartbeat on the clock
+// event (the seat host reports the seat established, or its admission back
+// after a blip, node.Config.SeatAdmitted) with one heartbeat on the clock
 // behind it for a renew that was merely late; a budget window ends at an
-// instant the counters name. The rest are events this node observes and
-// passes on in [Engine.readmitResumes]'s callers.
+// instant the counters name. The rest are events this node observes and passes
+// on in [Engine.readmitResumes]'s callers.
 func (e *Engine) mayResumeAnswer(ctx context.Context, handle string) (sandbox.Refusal, bool) {
 	c := e.conditionsFor(nil)(handle)
 	switch {
@@ -2487,24 +2589,11 @@ func (e *Engine) readmitResumes(cond sandbox.Condition, handles ...string) {
 	}
 }
 
-// answerRunByTurn hands a person's answer BY TURN to the parked coding run it
-// names, through the runtime current when it arrives.
-//
-// LIVE, for the reason [Engine.answerParkedRun] is: bound to the coordinator
-// when the dispatcher was built, a node whose sandbox arrived by apply had no
-// route for an answer by turn for the life of the process. With no runtime the
-// answer is DEFERRED rather than not-mine — this node cannot resume a run, and
-// the delivery is the seat's next holder's to spend, never this node's to drop.
-func (e *Engine) answerRunByTurn(ctx context.Context, given types.SandboxAnswerGiven,
-	trigger *events.Event) (sandbox.AnswerDisposition, error) {
-
-	rt := e.sandbox.Load()
-	if rt == nil {
-		return sandbox.AnswerDeferred, fmt.Errorf("engine: this node runs no sandbox "+
-			"coordinator to resume run %s with the answer it was given", given.TurnID)
-	}
-	return rt.coordinator.AnswerByTurn(ctx, given, trigger)
-}
+// AnswerSeal is the seal this node's coordinator records a person's answer to a
+// parked run under, over the fleet keyring ([sandbox.CoordinatorOptions.Answers]):
+// for the surfaces that name who gave a run's recorded answer, which only the
+// seal says ([sandbox.OpenedAnswerer]). Nil on an engine assembled without one.
+func (e *Engine) AnswerSeal() *sandbox.AnswerSeal { return e.answers }
 
 // sandboxAccountant charges collected runs, or nil where nothing counts them.
 func (e *Engine) sandboxAccountant() sandbox.Accountant {
@@ -2919,6 +3008,7 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// released the inbox already dropped the hold; the alarm would only
 	// fire into a seat a peer now serves.
 	e.forgetBudgetPark(seat.ID)
+	e.forgetProviderPark(ctx, seat.ID)
 	// AND THE TOOL SESSIONS OF ITS EXECUTOR RUNS, which the seat's next
 	// holder serves from now on: left open here they would pin the seat's
 	// surface in a process that no longer speaks for it, and every box

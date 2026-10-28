@@ -51,6 +51,38 @@ describe("agent overlays", () => {
     expect(row?.current_phase).toBe("execute");
   });
 
+  test("a push that says nothing new keeps every row and tells nobody", () => {
+    // Every push decodes into new objects. A row re-sent unchanged (a seat's
+    // state beside another seat's change, the same refusal once a second)
+    // used to replace the row held, and every screen keyed on it drew it
+    // again: the Inbox redrew thirteen times a second for nothing visible.
+    const store = new Store();
+    store.applySnapshot({
+      agents: [
+        { id: "pm", agent_id: "a-pm", role: "PM", handle: "pm", activity: "idle" },
+        { id: "qa", agent_id: "a-qa", role: "QA", handle: "qa", activity: "idle" },
+      ],
+    });
+    store.applyAgents([{ agent_id: "a-pm", activity: "stopped", stopped_reason: "provider" }]);
+    const held = store.state.agents;
+    const told = vi.fn();
+    store.subscribe(["agents"], told);
+    for (let i = 0; i < 20; i++) {
+      store.applyAgents([
+        { agent_id: "a-pm", activity: "stopped", stopped_reason: "provider" },
+        { agent_id: "a-qa", activity: "idle" },
+      ]);
+    }
+    expect(told).not.toHaveBeenCalled();
+    expect(store.state.agents).toBe(held);
+
+    // A push that moves one row replaces that row and no other.
+    store.applyAgents([{ agent_id: "a-qa", activity: "working" }]);
+    expect(told).toHaveBeenCalledTimes(1);
+    expect(store.state.agents[0]).toBe(held[0]);
+    expect(store.state.agents[1]).not.toBe(held[1]);
+  });
+
   test("a keyed object is DISCARDED rather than half-applied", () => {
     // The server sent a full turn's worth of overlays as an object keyed by
     // role once. Both sides' own suites passed, the socket carried every

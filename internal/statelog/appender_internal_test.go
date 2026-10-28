@@ -86,12 +86,14 @@ func TestEveryBrokerRefusalIsClassifiedByWhatFixesIt(t *testing.T) {
 			[]string{"max_payload refused it", "raise max_payload",
 				"every server of the cluster", "refused at boot",
 				"reconnected to since", "restarted with a smaller limit",
+				// A LIVE RELOAD ONLY ACROSS A RECONNECT: the client is
+				// told of no limit but on one, and since nats.go 1.55.0
+				// a write the server refused part way through ends in
+				// one, so a reloaded limit can reach this refusal.
+				"live reload that this node's connection reconnected across",
 				"the account it signs in to",
 				"split the change", "8388608-byte limit"},
-			// NEVER A LIVE RELOAD: the client is told of no limit but
-			// on a reconnect, so a reloaded one closes the connection
-			// rather than reaching this refusal.
-			[]string{"max_msg_size", "file store", "lowered"}},
+			[]string{"max_msg_size", "file store"}},
 		{"a message too large for the file store",
 			wire(server.NewJSStreamStoreFailedError(server.ErrMsgTooLarge)), faultTooLarge,
 			[]string{"file store", "no server setting raises", "split the change",

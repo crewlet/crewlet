@@ -2,15 +2,19 @@ package queries_test
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -501,5 +505,52 @@ func TestANamedWindowHoldsWhatPeopleCost(t *testing.T) {
 	hers := rollupOf(t, r, map[string]any{"days": 7, "seat": "maya"})
 	if hers.Totals.TotalTokens != 84 || len(hers.ByAgent) != 1 {
 		t.Fatalf("maya's own window = %+v, want her 84 alone", hers)
+	}
+}
+
+// THE PER-ENTRY HALF OF SPEND IS AN ADMIN'S. Spend is everybody's question, and
+// its breakdown by `providers.llm` entry names the company's configuration,
+// which only an admin reads (as Settings, Models is): a reader holding every
+// app is answered every figure but that breakdown, told it was withheld, and
+// refused a series banded by entry, while an admin is answered both.
+//
+// Mutation: answer the rollup whole, or band the series by entry, for anybody,
+// and the reader is told the entry's key.
+func TestTheSpendByEntryIsAnAdminsAlone(t *testing.T) {
+	t.Parallel()
+	f := newSpendFixture(t)
+	f.day("node-a", "2026-09-24", "lead", 1, 0, spent("execute", "sonnet", 5))
+	r := registryOver(t, f.sources())
+	reader := iam.WithPrincipal(t.Context(), iam.Principal{
+		ID: uuid.New(), Login: "token:reader", Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: iam.Apps,
+	})
+	for _, params := range []map[string]any{nil, {"days": 7}} {
+		got, err := r.Answer(reader, "tokens", params)
+		if err != nil {
+			t.Fatalf("tokens %v as a reader: %v", params, err)
+		}
+		rollup, _ := got.(tokens.Rollup)
+		if len(rollup.ByProvider) != 0 || !rollup.EntriesWithheld {
+			t.Errorf("tokens %v as a reader = %+v (withheld %v), want no entry, said so",
+				params, rollup.ByProvider, rollup.EntriesWithheld)
+		}
+		if raw, _ := json.Marshal(got); strings.Contains(string(raw), "zulu") {
+			t.Errorf("tokens %v as a reader names the entry: %s", params, raw)
+		}
+	}
+	if whole := rollupOf(t, r, map[string]any{"days": 7}); len(whole.ByProvider) != 1 ||
+		whole.ByProvider[0].ProviderKey != "zulu" || whole.EntriesWithheld {
+		t.Errorf("tokens as an admin = %+v, want the entry", whole.ByProvider)
+	}
+
+	if _, err := r.Answer(reader, "token_series", map[string]any{"days": 7, "group": "provider"}); !errors.Is(err, queries.ErrUnauthorized) {
+		t.Errorf("token_series by provider as a reader = %v, want an authority refusal", err)
+	}
+	if _, err := r.Answer(reader, "token_series", map[string]any{"days": 7, "group": "model"}); err != nil {
+		t.Errorf("token_series by model as a reader = %v, want it answered", err)
+	}
+	if got := seriesOf(t, r, map[string]any{"days": 7, "group": "provider"}); len(got.ByGroup) == 0 {
+		t.Error("token_series by provider as an admin answered no band")
 	}
 }

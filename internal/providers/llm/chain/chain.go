@@ -196,6 +196,7 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 	}
 
 	var last error
+	failures := make([]error, 0, len(c.members))
 	for i, m := range c.members {
 		if streamed {
 			req.Send(llm.Delta{Restart: true, Model: m.Provider.Model()})
@@ -254,9 +255,10 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 			c.onFallback(Fallback{From: m.Key, To: next, Kind: kind, Err: err})
 		}
 		last = err
+		failures = append(failures, err)
 	}
 
-	return nil, &Error{Attempted: c.Keys(), Err: last}
+	return nil, &Error{Attempted: c.Keys(), Failures: failures, Err: last}
 }
 
 // Pick is the executor's fallback at launch: the first of members that ready
@@ -268,9 +270,15 @@ func (c *Chain) Complete(ctx context.Context, req llm.Request) (*llm.Completion,
 // does: it is logged as provider_fallback, reported to onFallback naming the
 // member that takes over — or none, on the last — and the walk moves on. A
 // fatal refusal is returned as it came, for the reason a fatal call stops the
-// walk, and so is any refusal once ctx is done. Every member refusing retryably is an [*Error] naming them all, so the
-// caller reads an exhausted launch exactly as an exhausted call — the same
-// unavailability the seat reports either way.
+// walk, and so is any refusal once ctx is done. Every member refusing
+// retryably is an [*Error] naming them all, WITH EACH ONE'S REFUSAL
+// ([Error.Failures]), so the caller reads an exhausted launch exactly as an
+// exhausted call: the same unavailability the seat reports either way, and,
+// where every member sits out a limit, the same [Limited] chain a seat is
+// parked on until the first is tried again. Without them a launch every
+// member of which sat out read as a chain that had failed, and every turn
+// launches, so the seat's mail was taken back into the limit until the broker
+// dead-lettered it.
 //
 // The caller filters members that can never take a launch (a CLI with no
 // in-box runner) BEFORE calling: that is a fact of the configuration, not a
@@ -284,7 +292,10 @@ func Pick(ctx context.Context, members []Member, ready func(Member) error,
 			Err:  errors.New("chain: no member can take the launch"),
 		}
 	}
-	var last error
+	var (
+		last     error
+		failures []error
+	)
 	for i, m := range members {
 		err := ready(m)
 		if err == nil {
@@ -306,12 +317,13 @@ func Pick(ctx context.Context, members []Member, ready func(Member) error,
 			onFallback(Fallback{From: m.Key, To: next, Kind: kind, Err: err})
 		}
 		last = err
+		failures = append(failures, err)
 	}
 	attempted := make([]string, len(members))
 	for i, m := range members {
 		attempted[i] = m.Key
 	}
-	return Member{}, &Error{Attempted: attempted, Err: last}
+	return Member{}, &Error{Attempted: attempted, Failures: failures, Err: last}
 }
 
 // Error reports that every member failed retryably.
@@ -323,8 +335,90 @@ type Error struct {
 	// Attempted is every key that was tried, in order.
 	Attempted []string
 
+	// Failures is every member's failure, in the order Attempted names
+	// them: what [Limited] reads to tell a chain every member of which is
+	// sat out from one whose last member happened to be.
+	Failures []error
+
 	// Err is the last member's failure.
 	Err error
+}
+
+// Limit is a chain every member of which refused for a rate limit: the keys,
+// when the first of them is tried again, and when the vendors said the limits
+// lift.
+type Limit struct {
+	// Keys are the members, in the chain's order.
+	Keys []string
+	// RetryAt is the earliest instant any member is tried again: before it,
+	// a call through the chain is refused by every member without one of
+	// them being asked.
+	RetryAt time.Time
+	// ResetsAt is the earliest instant a member's vendor said its limit
+	// lifts, where every member named one; zero where any did not, since a
+	// member that named none may lift sooner than the named ones, and a
+	// person told "4:30 PM" would wait for nothing.
+	ResetsAt time.Time
+	// Said is the head member's own sentence, for whoever is shown why.
+	Said string
+	// Agent and Subscription are the head member's CLI and whether it signs
+	// in on a plan ([llm.Error.Agent]): what the limit is called.
+	Agent        string
+	Subscription bool
+}
+
+// Limited reports whether err is a chain whose every member refused for a rate
+// limit with an instant it is tried again, and what that limit is.
+//
+// EVERY MEMBER, and not the last one: a chain whose head is spent and whose
+// fallback failed for a reason nothing says will last (a server error, a
+// timeout) is worth trying again on the ordinary retry, and treating it as
+// spent would hold a seat for an hour over a blip of its fallback's. A member
+// that names no instant it is tried again is not one this can wait out either.
+func Limited(err error) (Limit, bool) {
+	var exhausted *Error
+	if !errors.As(err, &exhausted) || len(exhausted.Failures) == 0 ||
+		len(exhausted.Failures) != len(exhausted.Attempted) {
+		return Limit{}, false
+	}
+	limit := Limit{Keys: slices.Clone(exhausted.Attempted)}
+	unnamed := false
+	for i, failure := range exhausted.Failures {
+		retryAt, resetsAt, ok := llm.LimitedUntil(failure)
+		if !ok || retryAt.IsZero() {
+			return Limit{}, false
+		}
+		if limit.RetryAt.IsZero() || retryAt.Before(limit.RetryAt) {
+			limit.RetryAt = retryAt
+		}
+		switch {
+		case resetsAt.IsZero():
+			unnamed = true
+		case limit.ResetsAt.IsZero() || resetsAt.Before(limit.ResetsAt):
+			limit.ResetsAt = resetsAt
+		}
+		if i == 0 {
+			limit.Said = saidOf(failure)
+			var head *llm.Error
+			if errors.As(failure, &head) {
+				limit.Agent, limit.Subscription = head.Agent, head.Subscription
+			}
+		}
+	}
+	if unnamed {
+		limit.ResetsAt = time.Time{}
+	}
+	return limit, true
+}
+
+// saidOf is a member's failure as its backend worded it, without the frame
+// [llm.Error.Error] adds.
+func saidOf(err error) string {
+	var failure *llm.Error
+	if errors.As(err, &failure) && failure.Err != nil {
+		return failure.Err.Error()
+	}
+	return err.Error()
 }
 
 func (e *Error) Error() string {

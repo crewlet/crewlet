@@ -253,10 +253,12 @@ func AgentInboxGroup(seat uuid.UUID) string {
 
 // AgentControl returns the seat's sandbox-control subject.
 //
-// Separate from the inbox because a seat awaiting a detached run REQUEUES
-// everything its inbox delivers: a completion riding the inbox would be
-// requeued behind the very wait it exists to end. Attached and detached
-// alongside the inbox, so a completion reaches the seat's owner and only its
+// Separate from the inbox because a seat a detached run holds fetches nothing
+// from its inbox: a completion riding the inbox would wait behind the very run
+// it exists to end. A person's answer to a parked run (an answer by turn) rides
+// it for the same reason: on the inbox it waited behind every run that held the
+// seat and every older message after that. Attached and detached alongside the
+// inbox, so what is addressed to a run reaches the seat's owner and only its
 // owner.
 func AgentControl(seat uuid.UUID) string {
 	if seat == uuid.Nil {

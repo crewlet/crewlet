@@ -55,6 +55,15 @@ type Work struct {
 	// executor, the calls its run made to the seat's tools over the bridge.
 	Calls []ledger.Call
 
+	// Inherited is how many of Calls, at the front, an EARLIER ATTEMPT
+	// made. A resumed executor's record is its run's calls over the bridge,
+	// made before the segment that collects it, because the delivery check
+	// and the iteration ledger are about the whole phase. Those writes are
+	// on the record and stay there; what they are not is THIS attempt's, so
+	// they do not make it one a retry would repeat ([Result.Acted]): a retry
+	// collects the same run and calls none of them again.
+	Inherited int
+
 	// Refs are the branches and pull requests the executor's run reported
 	// delivering, and RefsElided how many more it reported than Refs lists.
 	// The run's own shell, edit and git work happened in its box and is in
@@ -334,8 +343,11 @@ type Result struct {
 	// Suspended marks a turn parked on its executor's run.
 	Suspended bool
 
-	// Acted reports that this turn's own record PROVES it already reached
-	// outside the engine — see [Acted].
+	// Acted reports that this attempt's own record PROVES it already
+	// reached outside the engine (see [Acted]): what a retry of THIS attempt
+	// would repeat. A resumed attempt answers for its own calls, never for
+	// those its executor's run made before the segment that collects it
+	// ([Work.Inherited]).
 	//
 	// It exists for the callers that have to tell a turn which broke
 	// having done nothing from one which broke having already posted,
@@ -527,7 +539,16 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		//
 		// Accumulated with ||, never assigned: a round that read nothing
 		// must not un-say what round one posted.
-		res.Acted = res.Acted || Acted(work.Calls, surface)
+		//
+		// THIS ATTEMPT'S CALLS ONLY. A resumed executor's record opens
+		// with its run's calls over the bridge, made before the segment
+		// that collects it ([Work.Inherited]), and a retry of the resume
+		// does not make those again: it collects the same run. Counted,
+		// every resume that broke before writing anything new (a model at
+		// its usage limit, the reviewer's or the relaunch's, a runner that
+		// could not be built) was settled for good as a turn that had
+		// written, and the coding run's result never reached the seat.
+		res.Acted = res.Acted || Acted(work.Calls[min(work.Inherited, len(work.Calls)):], surface)
 		// ASSIGNED, never accumulated — the opposite of the line above, and
 		// see [Result.Delivered] for why the two questions differ.
 		res.Delivered = Answered(work.Calls, surface, in.Reply)

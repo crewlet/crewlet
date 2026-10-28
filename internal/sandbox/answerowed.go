@@ -151,6 +151,27 @@ const maxDeclinedAnswers = 16
 // [Coordinator.Readmit]).
 type Condition string
 
+// SeatCoding is what an owed answer's resume waits on while another of its
+// seat's runs HOLDS the seat ([Holding]): a seat busy coding takes no other
+// work, a person's answer to another of its runs included (seathold.go), and
+// resuming the answered run beside the job would put two of the seat's turns
+// in flight at once.
+//
+// THIS PACKAGE'S OWN CONDITION, unlike the engine's, because the count it
+// waits on is this coordinator's ([Coordinator.SeatRuns]): the coordinator
+// signals it itself ([Coordinator.Readmit]) the moment the seat's last holding
+// run leaves [Holding], parked, settled or resumed and done.
+const SeatCoding Condition = "seat_coding"
+
+// seatCoding refuses an owed resume on a seat one of whose runs holds it.
+func (c *Coordinator) seatCoding(handle string) (Refusal, bool) {
+	if held, _ := c.SeatRuns(handle); held {
+		return Refusal{Condition: SeatCoding,
+			Reason: "another of the seat's coding runs holds it"}, true
+	}
+	return Refusal{}, false
+}
+
 // Refusal is why a seat may not run a retried resume now, and what would
 // change that.
 type Refusal struct {
@@ -591,7 +612,7 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 		return
 	}
 	defer adm.release()
-	c.resumeOwedAdmitted(adm, run, answer, words, fence)
+	c.resumeOwedAdmitted(adm, run, answer, words, fence, seen)
 }
 
 // resumeOwedAdmitted is an owed answer's claim and resume, under the admission
@@ -602,8 +623,14 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 // admitted turn, so the drain's cut that ends the turn ends the claim with it,
 // and a frame handed only a context could pass the caller's, which the
 // admission never covered.
+//
+// A resume REFUSED after its claim, reverted with a [*TurnRefused] that names a
+// condition (every model at its limit before the turn wrote anything), waits
+// for that condition as a gate's refusal does, and is charged nothing; seen is
+// what had been signalled before the gate was asked, for the reason
+// [Coordinator.waitOwed] gives.
 func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *RecordedAnswer,
-	words AnswerWords, fence Fence,
+	words AnswerWords, fence Fence, seen map[signal]uint64,
 ) {
 	ctx := adm.ctx
 	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, RecordedAnswerTail(run.LaunchID), fence)
@@ -641,6 +668,10 @@ func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *R
 	if disposition == AnswerDeferred {
 		// The claim went back: the run is [StatusAnswered] again with
 		// the same answer on it, owed the same resume.
+		if refusal, refused := waitingRefusal(err); refused {
+			c.owedRefused(ctx, claimed, refusal, seen)
+			return
+		}
 		c.owedFailed(ctx, claimed, err)
 		return
 	}
@@ -655,10 +686,10 @@ func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *R
 	outcome := answeredAs(disposition)
 	if outcome == types.AnswerGone && answer.Via == types.AnswerViaOperator && len(answer.Events) > 0 {
 		// ITS COPY SAYS SO. The run ended before any turn took the answer,
-		// so its ending handed the answer by turn back to the seat's inbox,
-		// where it is spent as reaching a run that is gone and announced
-		// there ([Coordinator.AnswerByTurn]) — once, through the outbox that
-		// survives a crash, rather than here and again there.
+		// so its ending handed the answer by turn back to the seat's control
+		// topic, where it is spent as reaching a run that is gone and
+		// announced there ([Coordinator.AnswerByTurn]) — once, through the
+		// outbox that survives a crash, rather than here and again there.
 		return
 	}
 	c.announceAnswered(ctx, claimed, words.Via, outcome, words.answerer())
@@ -950,11 +981,15 @@ func (c *Coordinator) retryOwed(turnID string) {
 			"letting it go did not land"))
 		return
 	}
+	// What has been signalled so far, read BEFORE the checks: a signal that
+	// lands while they are deciding is one the wait below must not sleep
+	// through. See [Coordinator.waitOwed].
+	seen := c.signalsSeen()
+	if refusal, refused := c.seatCoding(handle); refused {
+		c.waitOwed(ctx, turnID, refusal, seen)
+		return
+	}
 	if c.admit != nil {
-		// What has been signalled so far, read BEFORE the check: a signal
-		// that lands while the check is deciding is one the wait below must
-		// not sleep through. See [Coordinator.waitOwed].
-		seen := c.signalsSeen()
 		if refusal, refused := c.admit(ctx, handle); refused {
 			c.waitOwed(ctx, turnID, refusal, seen)
 			return
@@ -1381,8 +1416,15 @@ func (c *Coordinator) Readmit(cond Condition, handles ...string) {
 //
 // IN THE BACKGROUND because Readmit is a signal sent from the engine's own
 // event paths and must stay cheap; the listing is one read of the store.
+//
+// NOT FOR [SeatCoding], which no hold names. A hold is a resumed turn refused by
+// its seat's conditions as the engine words them ([HeldError], [TurnRefused]),
+// while SeatCoding is the coordinator's own, asked of an owed answer before its
+// turn is admitted at all. Its signal comes every time a seat's last holding run
+// lets go of it ([Coordinator.seatFreed]), and listing every run the fleet holds
+// on each of those, to find none, cost a read of the whole store per freed seat.
 func (c *Coordinator) liftHoldsLocked(cond Condition, handles []string) {
-	if c.closed {
+	if c.closed || cond == SeatCoding {
 		return
 	}
 	c.inflight.Add(1)
@@ -1570,18 +1612,19 @@ func (c *Coordinator) deliverHandBack(ctx context.Context, run PendingRun) error
 	return err
 }
 
-// publishCopies publishes copies to the inbox of the seat that holds run, in
-// order, and reports the ids it published — counting one that can never be
-// published, which is dropped loudly rather than owed for ever — and the error
+// publishCopies publishes copies back to the seat that holds run, in order,
+// and reports the ids it published (counting one that can never be
+// published, which is dropped loudly rather than owed for ever) and the error
 // that stopped it.
 //
-// THE ROW'S SEAT ID NAMES THE INBOX ([inboxSubject]), as it does for an answer
-// by turn ([AnswerDesk.Deliver]): a seat's inbox is named by its id (ADR-0013),
-// and the handle the row also carries is only a label for the log.
+// THE ROW'S SEAT ID NAMES THE SUBJECT ([handBackSubject]), as it does for an
+// answer by turn ([AnswerDesk.Deliver]): a seat's topics are named by its id
+// (ADR-0013), and the handle the row also carries is only a label for the log.
+// Each copy goes back the way its original came: an answer by turn to the
+// control topic, a chat reply to the inbox.
 func (c *Coordinator) publishCopies(ctx context.Context, run PendingRun, copies []HandedBack) ([]string, error) {
 	handle := run.AgentHandle
-	inbox := inboxSubject(run.AgentID)
-	if inbox == "" {
+	if inboxSubject(run.AgentID) == "" {
 		return nil, fmt.Errorf("sandbox: seat %q names no seat id (%q) to hand its reply back to",
 			handle, run.AgentID)
 	}
@@ -1596,7 +1639,7 @@ func (c *Coordinator) publishCopies(ctx context.Context, run PendingRun, copies 
 			published = append(published, copied.ID)
 			continue
 		}
-		if err := c.queue.Publish(ctx, inbox, &ev); err != nil {
+		if err := c.queue.Publish(ctx, handBackSubject(run.AgentID, &ev), &ev); err != nil {
 			return published, fmt.Errorf("sandbox: handing %s back to %s: %w", copied.Original, handle, err)
 		}
 		published = append(published, copied.ID)
@@ -1604,11 +1647,19 @@ func (c *Coordinator) publishCopies(ctx context.Context, run PendingRun, copies 
 	return published, nil
 }
 
-// recoverOwed takes over what a previous holder of the seat left owed on a run
-// — an answer it recorded and did not resume with, or copies a decline it
-// wrote did not publish: the seat's inbox is held behind it, and the first
-// attempt is made at once, off the seat's preparation.
-func (c *Coordinator) recoverOwed(ctx context.Context, run PendingRun) {
+// queueOwed holds the seat's inbox behind what a run is owed and arms its first
+// attempt at once, through the admission every retry passes
+// ([Coordinator.retryOwed]) rather than inline.
+//
+// Two callers, for one reason: neither runs inside a mailbox delivery the
+// seat's own screening admitted, so neither may start the resumed turn without
+// asking. The seat's preparation takes over what a previous holder left owed
+// on a run (an answer it recorded and did not resume with, or copies a
+// decline it wrote did not publish), and an answer by turn arrives on the
+// seat's control topic, at any moment of the seat's day: while another of its
+// runs holds it, in the middle of one of its turns, or while a person has it
+// paused ([Coordinator.AnswerByTurn]).
+func (c *Coordinator) queueOwed(ctx context.Context, run PendingRun) {
 	c.mu.Lock()
 	if _, ok := c.retries[run.TurnID]; !ok {
 		c.retries[run.TurnID] = &answerRetry{handle: run.AgentHandle, launch: run.LaunchID,

@@ -43,7 +43,7 @@
 // on the steer wire (wire.go). From the run's launch to the turn's end they wait
 // on the run's own record in the coordination store, sealed, where any node may
 // file one and the run, its reviewer and whatever resumes the turn take them
-// from (internal/engine, runsteer.go, and ADR-0066). Every read is recorded on
+// from (internal/engine, runsteer.go, and ADR-0067). Every read is recorded on
 // that record by the write that hands the note over, so the record's read notes
 // are the turn's carried notes ([Read]), which open every later phase.
 //

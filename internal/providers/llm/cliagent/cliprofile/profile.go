@@ -255,14 +255,81 @@ type LimitMarker struct {
 	// [Profile.MarkerPath] in the CLI's own failure event.
 	Sentinel string `yaml:"sentinel,omitempty"`
 
-	// ResetSeparator splits the reset value off the sentinel line. Claude
-	// Code emits "Claude AI usage limit reached|1719849600" — a pipe, then
-	// a Unix epoch — so the retry-after is a datum rather than a guess.
-	ResetSeparator string `yaml:"reset_separator,omitempty"`
+	// Reset reads the reset instant out of the line the sentinel matched
+	// on, where the vendor names one.
+	Reset ResetReading `yaml:",inline"`
+}
 
-	// ResetUnit is how to read the value after the separator: "epoch" for
-	// Unix seconds, "seconds" for a delta.
-	ResetUnit string `yaml:"reset_unit,omitempty"`
+// ResetReading says where a vendor's limit report names the instant the limit
+// lifts, and how to read it: the text after Separator, as Unit.
+//
+// A READING THAT FINDS NOTHING IS NOT AN ERROR. The report still classifies as
+// a limit, and the entry sits out a bounded, growing window instead
+// (internal/providers/llm/cliagent), which is the honest answer when the vendor
+// did not say: inventing an instant would hold a seat off a plan that has
+// already reset, or send it back into one that has not.
+type ResetReading struct {
+	// Separator splits the reset value off the report: "|" before an epoch,
+	// "resets " before a time of day.
+	Separator string `yaml:"reset_separator,omitempty"`
+
+	// Unit is how to read the value after the separator; see [ResetUnit].
+	Unit ResetUnit `yaml:"reset_unit,omitempty"`
+}
+
+// ResetUnit is how a [ResetReading] reads the value after its separator.
+type ResetUnit string
+
+const (
+	// ResetEpoch is Unix seconds.
+	ResetEpoch ResetUnit = "epoch"
+	// ResetSeconds is a delay in seconds from the report.
+	ResetSeconds ResetUnit = "seconds"
+	// ResetClock is a time of day followed by the IANA zone it is in, the
+	// way Claude Code 2.1 writes it: "4:30pm (America/Vancouver)",
+	// "4pm (Europe/Berlin)" or "16:30 (Asia/Tokyo)". The instant is the
+	// occurrence of that time nearest the report, so a reset named past
+	// midnight is tomorrow's.
+	ResetClock ResetUnit = "clock"
+)
+
+// Valid reports whether u is a unit a reading can be taken in.
+func (u ResetUnit) Valid() bool {
+	switch u {
+	case ResetEpoch, ResetSeconds, ResetClock:
+		return true
+	}
+	return false
+}
+
+// LimitEvent recognises a spent plan or a rate limit by the CLI's own
+// STRUCTURED report: a stdout event whose fields the CLI writes, such as
+// Claude Code's result event with `is_error: true` and `api_error_status: 429`.
+//
+// IT IS READ BEFORE ANY SENTINEL, because a status code is the one signal a
+// vendor's rewording leaves alone. Claude Code 2.1 replaced "Usage limit
+// reached" with "You've hit your 5-hour limit · resets 4:30pm" while still
+// writing 429 beside it, and a profile that knew only the sentence classified
+// every refusal as a server failure: nothing sat the entry out, and every round
+// of every seat launched a CLI to hear the same refusal.
+//
+// SAFE TO BENCH ON for the reason [MarkerScopeEvents] is: a model chooses the
+// words inside an event's strings, never the keys or the types of the event the
+// CLI writes them in. That holds only where every stdout line is a JSON event,
+// which is why a profile may declare these only with jsonl output and a
+// discriminator, and why every match names the discriminator and at least one
+// other field.
+type LimitEvent struct {
+	// Match picks the report out; see [Match].
+	Match []Match `yaml:"match,omitempty"`
+
+	// SaidPath is where in the event the vendor's own sentence is: what the
+	// operator is shown, and what Reset reads the instant from. Empty shows
+	// the whole line and reads no instant.
+	SaidPath Path `yaml:"said_path,omitempty"`
+
+	// Reset reads the reset instant out of the sentence at SaidPath.
+	Reset ResetReading `yaml:",inline"`
 }
 
 // MarkerScope says WHERE a CLI's failure prose can appear, and therefore
@@ -1195,7 +1262,11 @@ type Profile struct {
 	// means the login is CredentialPaths, a token, a key, or nothing.
 	CredentialStore *CredentialStore `yaml:"credential_store,omitempty"`
 
-	// LimitMarkers recognise a spent subscription.
+	// LimitEvents recognise a spent plan or a rate limit by the CLI's own
+	// structured report, ahead of every sentinel; see [LimitEvent].
+	LimitEvents []LimitEvent `yaml:"limit_events,omitempty"`
+
+	// LimitMarkers recognise a spent subscription by the vendor's words.
 	LimitMarkers []LimitMarker `yaml:"limit_markers,omitempty"`
 
 	// AuthMarkers recognise an expired login.
@@ -1904,10 +1975,9 @@ func (p *Profile) problems() []string {
 		if problem := sentinelProblem(m.Sentinel); problem != "" {
 			add("limit_markers[%d].sentinel %s", i, problem)
 		}
-		if m.ResetSeparator != "" && m.ResetUnit != "epoch" && m.ResetUnit != "seconds" {
-			add("limit_markers[%d].reset_unit %q (want epoch or seconds)", i, m.ResetUnit)
-		}
+		m.Reset.validate(fmt.Sprintf("limit_markers[%d]", i), add)
 	}
+	p.validateLimitEvents(add)
 	// Checked at all, which it was not: an auth marker fires KindAuth, and
 	// KindAuth exhausts the credential exactly as a spent plan does — so an
 	// unusable sentinel costs the same here as it does above.
@@ -2608,11 +2678,53 @@ func (p *Profile) validateEventMarkers(add func(string, ...any)) {
 		}
 	}
 	for i, m := range p.LimitMarkers {
-		if m.ResetSeparator != "" {
+		if m.Reset.Separator != "" {
 			add("limit_markers[%d].reset_separator is set but marker_scope is %s — the "+
 				"sentinel is compared with the whole failure class, so there is no text "+
 				"after it to read a reset from", i, MarkerScopeEvents)
 		}
+	}
+}
+
+// validate holds a reset reading to a unit it can be taken in. what names the
+// declaration, for the message.
+func (r ResetReading) validate(what string, add func(string, ...any)) {
+	switch {
+	case r.Separator == "" && r.Unit != "":
+		add("%s.reset_unit is set with no reset_separator: the unit says how to read "+
+			"the text after the separator, so there is nothing to read", what)
+	case r.Separator != "" && !r.Unit.Valid():
+		add("%s.reset_unit %q (want %s, %s or %s)", what, r.Unit,
+			ResetEpoch, ResetSeconds, ResetClock)
+	}
+}
+
+// validateLimitEvents holds each [LimitEvent] to the one shape in which a
+// model cannot write it: a JSON event stream with a discriminator, matched on
+// that discriminator and on at least one field beside it.
+func (p *Profile) validateLimitEvents(add func(string, ...any)) {
+	if len(p.LimitEvents) == 0 {
+		return
+	}
+	if p.EffectiveOutput() != OutputJSONL || len(p.EventTypePath) == 0 {
+		add("limit_events needs output: %s and an event_type_path: on any other "+
+			"output a line of the model's answer is a line of stdout, and it could spell "+
+			"the report out", OutputJSONL)
+	}
+	for i, e := range p.LimitEvents {
+		what := fmt.Sprintf("limit_events[%d]", i)
+		discriminated := slices.ContainsFunc(e.Match, func(m Match) bool {
+			return slices.Equal(m.Path, p.EventTypePath)
+		})
+		if !discriminated || len(e.Match) < 2 {
+			add("%s.match must name the event type at event_type_path and at least one "+
+				"field the CLI writes beside it, e.g. an error flag or a status code", what)
+		}
+		if e.Reset.Separator != "" && len(e.SaidPath) == 0 {
+			add("%s.reset_separator is set with no said_path: the reset is read from "+
+				"the sentence at said_path", what)
+		}
+		e.Reset.validate(what, add)
 	}
 }
 

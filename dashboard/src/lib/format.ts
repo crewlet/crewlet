@@ -94,6 +94,26 @@ export function fmtTime(ts: string | null | undefined): string {
   });
 }
 
+/**
+ * An instant as a person names a time in a sentence, in the reader's zone and
+ * the reader's own way of writing a time ("4:30 PM", "16:30"), with the day
+ * named when it is not the reader's today ("Wed 2:00 AM"): "Agents resume at
+ * 4:30 PM". Not for a log line, whose seconds are part of the answer
+ * ([fmtTime]).
+ */
+export function fmtClock(ts: string | null | undefined, now: number): string {
+  const d = parseUTC(ts);
+  if (!d) return "";
+  const time = d.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: zone(),
+  });
+  if (readerDay(d) === readerDay(now)) return time;
+  const day = d.toLocaleDateString(undefined, { weekday: "short", timeZone: zone() });
+  return `${day} ${time}`;
+}
+
 export function fmtDateTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;

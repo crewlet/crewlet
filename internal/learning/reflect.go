@@ -8,12 +8,14 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -650,8 +652,17 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 				out.Failed = map[string]error{}
 			}
 			out.Failed[w.Name()] = err
-			log.ErrorContext(ctx, "reflection_worker_failed", "turn_id", tc.TurnID,
-				"worker", w.Name(), "error", err)
+			if retryAt, _, limited := llm.LimitedUntil(err); limited {
+				// THE MODEL IS AT A USAGE LIMIT IT ALREADY REPORTED, and
+				// nothing was launched to hear it again: the worker did
+				// not run, which is what a person reading the log needs,
+				// at the level of a wait rather than of a fault.
+				log.InfoContext(ctx, "reflection_worker_limited", "turn_id", tc.TurnID,
+					"worker", w.Name(), "retry_at", retryAt.UTC().Format(time.RFC3339))
+			} else {
+				log.ErrorContext(ctx, "reflection_worker_failed", "turn_id", tc.TurnID,
+					"worker", w.Name(), "error", err)
+			}
 		}
 		// Counted as RUN whether or not it failed, and whether or not it
 		// had anything to publish: it spent the turn's budget and the

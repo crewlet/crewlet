@@ -2406,6 +2406,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// per-node read drew a dashboard that disagreed with
 			// itself depending on which node answered.
 			Sandbox: sandbox.NewCoordStore(e.Backends().Fleet),
+			// WHO GAVE A RUN'S RECORDED ANSWER, which only the answer's
+			// seal says: opened under this node's fleet keyring.
+			RunAnswers: e.AnswerSeal(),
 			// A RUNNING RUN'S LIVE OUTPUT, answered by the node that
 			// owns the run. The ENGINE's reader, because the answerer
 			// it registered on every node is the other half of the same

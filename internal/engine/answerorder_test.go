@@ -168,12 +168,16 @@ func fixtureInboxGroup(handle string) string {
 type handCranked struct {
 	mu  sync.Mutex
 	due []func()
+	// at is each due timer's delay, beside it in due, for a case that fires
+	// only what was asked for at once ([handCranked.fireNow]).
+	at []time.Duration
 }
 
-func (h *handCranked) after(_ time.Duration, f func()) func() bool {
+func (h *handCranked) after(delay time.Duration, f func()) func() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	fired := false
+	h.at = append(h.at, delay)
 	h.due = append(h.due, func() {
 		if !fired {
 			fired = true
@@ -194,12 +198,34 @@ func (h *handCranked) after(_ time.Duration, f func()) func() bool {
 func (h *handCranked) fire() int {
 	h.mu.Lock()
 	due := h.due
-	h.due = nil
+	h.due, h.at = nil, nil
 	h.mu.Unlock()
 	for _, f := range due {
 		f()
 	}
 	return len(due)
+}
+
+// fireNow fires only the timers armed with no delay, the ones a signal armed,
+// and leaves every timer waiting on the clock, a backstop's included.
+func (h *handCranked) fireNow() int {
+	h.mu.Lock()
+	var now []func()
+	var due []func()
+	var at []time.Duration
+	for i, f := range h.due {
+		if h.at[i] == 0 {
+			now = append(now, f)
+			continue
+		}
+		due, at = append(due, f), append(at, h.at[i])
+	}
+	h.due, h.at = due, at
+	h.mu.Unlock()
+	for _, f := range now {
+		f()
+	}
+	return len(now)
 }
 
 func (h *handCranked) pending() int {

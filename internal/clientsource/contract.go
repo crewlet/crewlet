@@ -87,6 +87,7 @@ var contract = []Entry{
 
 	// spend.ts
 	{"GROUPS", ReadLiteral, "internal/api/queries.TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts"},
+	{"ADMIN_GROUPS", ReadLiteral, "internal/api/queries.TestTheScreenOffersAnAdminsSplitsToAnAdminAlone"},
 	{"BANDS", ReadLiteral, "internal/api/queries.TestTheSpendChartDrawsExactlyTheEnginesPhaseBands"},
 	{"PHASE_BANDS", ReadLiteral, "internal/api/queries.TestEveryPhaseIsDrawnInTheBandTheEngineFoldsItInto"},
 	{"BudgetState", ReadUnion, "internal/events/types.TestTheDashboardKnowsExactlyTheBudgetStatesTheEngineSends"},
@@ -144,6 +145,7 @@ var contract = []Entry{
 	{"DEFAULT_CLI_AUTH_MODE", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"DEFAULT_CLI_TIMEOUT_SECONDS", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"DEFAULT_CLI_MAX_CONCURRENT", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"CLI_PRODUCTS", ReadLiteral, "internal/config.TestEveryBuiltInCLIHasAProductName"},
 
 	// config.ts
 	{"ENTITY_KINDS", ReadLiteral, "internal/api/configapi.TestEntityKindsMatchTheClient"},

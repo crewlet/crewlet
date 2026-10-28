@@ -566,8 +566,9 @@ func TestACompletionResumesTheSuspendedLoop(t *testing.T) {
 		t.Fatalf("the answer does not carry what was delivered: %q", calls[0].Answer)
 	}
 	// AND HOW THE RUN SAID IT ENDED, verbatim, for the resuming node to read
-	// a vendor's spent-plan report off before its next launch.
-	if calls[0].Ended != (RunEnding{Text: "fixed the flake", Success: true}) {
+	// a vendor's spent-plan report off before its next launch, with when it
+	// was read back, which a reset named as a time of day is read against.
+	if calls[0].Ended != (RunEnding{Text: "fixed the flake", Success: true, At: rig.now}) {
 		t.Fatalf("the resume carries the run's ending as %+v, want it verbatim", calls[0].Ended)
 	}
 	// THE JOB'S TOKENS REACH THE SEGMENT THAT PAYS FOR THEM: the resumed

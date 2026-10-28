@@ -147,6 +147,13 @@ func TestAnAnswerByTurnResumesARunWithNoConversation(t *testing.T) {
 	if err != nil || disposition != AnswerConsumed {
 		t.Fatalf("AnswerByTurn = %q, %v, want consumed", disposition, err)
 	}
+	if got := rig.get("t1"); got.Status != StatusAnswered {
+		t.Fatalf("run = %q once the answer arrived, want it answered at once: the record "+
+			"needs nothing from the seat but its lease", got.Status)
+	}
+	if rig.fireRetries() != 1 {
+		t.Fatal("the recorded answer's resume was not queued")
+	}
 	calls := rig.resumer.calls()
 	if len(calls) != 1 {
 		t.Fatalf("the run was resumed %d times, want once", len(calls))
@@ -260,6 +267,7 @@ func TestTwoAnswersByTurnResumeOnce(t *testing.T) {
 			})
 		}
 		wg.Wait()
+		rig.fireRetries()
 
 		if n := len(rig.resumer.calls()); n != 1 {
 			t.Fatalf("two answers resumed the run %d times, want exactly once", n)
@@ -297,6 +305,7 @@ func TestTwoAnswersByTurnResumeOnce(t *testing.T) {
 		if d, err := rig.coordinator.AnswerByTurn(t.Context(), first, firstEv); err != nil || d != AnswerConsumed {
 			t.Fatalf("the first answer = %q, %v, want it to resume the run", d, err)
 		}
+		rig.fireRetries()
 		rig.resumer.during = nil
 		second := rig.get("t1")
 		if second.Status != StatusAwaiting || second.LaunchID == first.LaunchID {
@@ -365,7 +374,7 @@ func TestTheAnswerDeskRefusesAnAnswerNamingNoQuestion(t *testing.T) {
 	desk := AnswerDesk{Pending: store, Queue: rig.queue}
 	given, _ := givenFor("t1")
 	before := rig.queue.count()
-	if err := desk.Deliver(t.Context(), given); err == nil {
+	if _, err := desk.Deliver(t.Context(), given); err == nil {
 		t.Fatal("the desk delivered an answer that names no question")
 	}
 	if rig.queue.count() != before {
@@ -376,7 +385,7 @@ func TestTheAnswerDeskRefusesAnAnswerNamingNoQuestion(t *testing.T) {
 			"the run is read", calls)
 	}
 	given.LaunchID = "launch-1"
-	if err := desk.Deliver(t.Context(), given); err != nil {
+	if _, err := desk.Deliver(t.Context(), given); err != nil {
 		t.Fatalf("the desk refused an answer naming its question: %v", err)
 	}
 }
@@ -483,7 +492,7 @@ func TestAnAnswerByTurnWhoseResumeFailedIsRetriedFromItsRecord(t *testing.T) {
 
 // AN ANSWER BY TURN ITS RUN COULD NOT BE RESUMED WITH IS LET GO OF, and the
 // person told: past the attempts a recorded answer gets, the run waits on its
-// question again and the answer's copy goes back to the seat's inbox — where,
+// question again and the answer's copy goes back to the seat's control topic, where,
 // having no ordinary form, it is spent as `declined`. It is never recorded
 // against the question again, so it cannot circle the run it failed to reach.
 func TestAnAnswerByTurnItsRunCannotTakeIsDeclined(t *testing.T) {
@@ -507,7 +516,7 @@ func TestAnAnswerByTurnItsRunCannotTakeIsDeclined(t *testing.T) {
 	if len(handed) != 1 || handed[0] != declinedCopyID(ev.ID).String() {
 		t.Fatalf("handed back %v, want the answer's copy once", handed)
 	}
-	copied := rig.lastInboxEvent(t)
+	copied := rig.lastHandedBack(t)
 	answer, ok := events.DataAs[*types.SandboxAnswerGiven](copied)
 	if !ok {
 		t.Fatalf("the copy handed back is %T, want the answer by turn it was", copied.Data)
@@ -534,17 +543,17 @@ func TestAnAnswerByTurnItsRunCannotTakeIsDeclined(t *testing.T) {
 	}
 }
 
-// lastInboxEvent is the newest event published to the seat's inbox.
-func (r *coordRig) lastInboxEvent(t *testing.T) *events.Event {
+// lastHandedBack is the newest reply handed back to the seat ([handedBackPublication]).
+func (r *coordRig) lastHandedBack(t *testing.T) *events.Event {
 	t.Helper()
 	r.queue.mu.Lock()
 	defer r.queue.mu.Unlock()
 	for i := len(r.queue.published) - 1; i >= 0; i-- {
-		if p := r.queue.published[i]; p.topic == sweInbox() {
+		if p := r.queue.published[i]; handedBackPublication(p) {
 			return p.event
 		}
 	}
-	t.Fatal("nothing was published to the seat's inbox")
+	t.Fatal("nothing was handed back to the seat")
 	return nil
 }
 
@@ -655,7 +664,8 @@ func TestTheAnswerDeskDeliversToTheRunsSeatID(t *testing.T) {
 		TurnID: "t9", Agent: "a-stale", AgentHandle: "old-handle", Answer: "use main",
 		AnsweredBy: "founder", AnsweredByKind: "human", LaunchID: "the-question-the-person-read",
 	}
-	if err := desk.Deliver(t.Context(), given); err != nil {
+	id, err := desk.Deliver(t.Context(), given)
+	if err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
 	rig.queue.mu.Lock()
@@ -669,8 +679,14 @@ func TestTheAnswerDeskDeliversToTheRunsSeatID(t *testing.T) {
 	if len(delivered) != 1 {
 		t.Fatalf("published %d answers, want one", len(delivered))
 	}
-	if want := topics.AgentInbox(seat); delivered[0].topic != want {
-		t.Errorf("the answer went to %q, want the run's seat inbox %q", delivered[0].topic, want)
+	if delivered[0].event.ID != id {
+		t.Errorf("Deliver answered id %s for the delivery %s: the caller reads the run's "+
+			"record against it", id, delivered[0].event.ID)
+	}
+	if want := topics.AgentControl(seat); delivered[0].topic != want {
+		t.Errorf("the answer went to %q, want the run's seat's control topic %q: on its "+
+			"inbox it waits behind every job that holds the seat and every message before it",
+			delivered[0].topic, want)
 	}
 	got := delivered[0].event.Data.(*types.SandboxAnswerGiven)
 	if got.Agent != seat.String() {
@@ -681,7 +697,7 @@ func TestTheAnswerDeskDeliversToTheRunsSeatID(t *testing.T) {
 			"current %q", got.LaunchID, given.LaunchID, opened.LaunchID)
 	}
 
-	if err := desk.Deliver(t.Context(), types.SandboxAnswerGiven{
+	if _, err := desk.Deliver(t.Context(), types.SandboxAnswerGiven{
 		TurnID: "gone", Answer: "x", LaunchID: "x",
 	}); err == nil {
 		t.Error("an answer to a run that has no row was delivered somewhere")

@@ -284,6 +284,15 @@ type Engine struct {
 	// the window turns over. See budgetpark.go.
 	budgetParks budgetParks
 
+	// providerParks is every seat inbox this node holds because every model
+	// of the seat's chain is limited, each with the alarm that lifts it for
+	// a probe when the first is tried again. See providerpark.go.
+	providerParks providerParks
+
+	// limitProbes is one probe per limited chain, which settles every seat
+	// parked on it. See providerpark.go.
+	limitProbes limitProbes
+
 	// clock is the instant every token-budget window this engine cuts is
 	// read at, and nil is the wall clock — which is what every engine [New]
 	// builds runs on. See [Engine.now] for why there is one and why it is
@@ -824,7 +833,7 @@ type Engine struct {
 
 	// runSteers is this node's half of the notes a turn's coding run holds
 	// on its record, from the run's launch to the turn's end. See
-	// runsteer.go and ADR-0066.
+	// runsteer.go and ADR-0067.
 	runSteers *runSteers
 
 	// presenceWire seals this node's presence frames and opens its peers',
@@ -1846,6 +1855,13 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		SeatAdmitted: func(_ context.Context, s placement.Seat) {
 			e.readmitResumes(waitOwnership, s.Handle)
 		},
+		// And a seat whose turn has ended re-checks what was refused for
+		// the turn running ([node.ErrSeatBusy]): an answer by turn whose
+		// resume arrived mid-turn is the seat's next turn. See
+		// [Engine.admitResume].
+		SeatTurnEnded: func(handle string) {
+			e.readmitResumes(waitSeatBusy, handle)
+		},
 		// A SEAT A PERSON PAUSED is attached already held, so placement
 		// moving it here does not deliver the mail it is holding: the
 		// release on the node it left dropped that node's hold with the
@@ -2120,6 +2136,9 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Budget == nil {
 		d.Budget = e.budgetPark
 	}
+	if d.Provider == nil {
+		d.Provider = e.providerPark
+	}
 	if d.Answer == nil {
 		// THE CALLER THIS METHOD NEVER HAD. TryResumeFromAnswer has been
 		// exported and tested since the clarification path was written, and
@@ -2131,12 +2150,6 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		// node whose sandbox arrived by apply offered no reply to any
 		// parked run for the life of the process.
 		d.Answer = e.answerParkedRun
-	}
-	if d.AnswerByTurn == nil {
-		// The other way an answer reaches a parked run: named by its turn,
-		// from any node, onto this seat's inbox. See [Dispatcher.routeAnswers].
-		// LIVE for the reason Answer is — see [Engine.answerRunByTurn].
-		d.AnswerByTurn = e.answerRunByTurn
 	}
 	if d.NoteDeferred == nil {
 		d.NoteDeferred = e.node.Host().NoteDeliveryDeferred
@@ -2599,6 +2612,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// Before the node's stop detaches the inboxes: an alarm firing into a
 	// client that is closing would log a release it could not make.
 	e.stopBudgetParks()
+	e.stopProviderParks()
 	// And the pause watch, for the same reason: a resume landing on a
 	// client that is closing would lift a hold on nothing.
 	e.stopSeatPauses()

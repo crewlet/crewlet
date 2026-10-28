@@ -34,7 +34,7 @@ import (
 // recorded by the write that hands the note over. What a note SAYS it never
 // reads: a note is sealed by the engine under the fleet keyring before it is
 // filed ([RunNote.Sealed]), and opened by the engine before anything of it
-// reaches a model (internal/engine, runsteer.go, and ADR-0066). The store keeps
+// reaches a model (internal/engine, runsteer.go, and ADR-0067). The store keeps
 // the seal as the bytes it was handed, as it keeps an answer's
 // ([RecordedAnswer.Sealed]).
 //

@@ -106,6 +106,25 @@ func refusalOf(err error) Refusal {
 	return Refusal{Reason: err.Error()}
 }
 
+// waitingRefusal is the refusal err carries, if it names a condition to wait
+// on: a gate's, a resume's that was reverted on one of the gate's own
+// conditions met a round later ([Coordinator.resumeAndSettle]), or a resume its
+// seat's budget held ([HeldError]). A completion's held resume never reaches a
+// caller of this (the hold is on its row), so the last is an answer's, which
+// waits on the window uncharged as it waits on the gate's refusals: charged
+// as a failure, it spent the attempts its answer is bounded by on a wait.
+func waitingRefusal(err error) (Refusal, bool) {
+	var refused *TurnRefused
+	if errors.As(err, &refused) && refused.Condition != "" {
+		return refused.Refusal, true
+	}
+	var held *HeldError
+	if errors.As(err, &held) && held.Refusal.Condition != "" {
+		return held.Refusal, true
+	}
+	return Refusal{}, false
+}
+
 // refusedCompletion is a completion the node's gate refused on a condition,
 // kept until the condition clears.
 type refusedCompletion struct {
@@ -128,6 +147,11 @@ type refusedCompletion struct {
 // again, a provider's limit lifting). So the clearing re-fires the completion
 // itself, and the poll is the backstop for a clearing nothing signals. Both
 // may arrive: the claim is at-most-once, so the run resumes once.
+//
+// A RESUME REFUSED AFTER ITS CLAIM is kept the same way: one whose models were
+// all at their limit before its turn wrote anything is reverted, so the run is
+// back to running as the gate would have left it, and its refusal names the
+// condition ([Coordinator.OnCompleted]).
 //
 // A SIGNAL THAT LANDS WHILE THE GATE IS REFUSING IS NOT LOST. Readmit re-fires
 // only what is kept when it runs, so a condition that cleared between the

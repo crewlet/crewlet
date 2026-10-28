@@ -30,7 +30,7 @@ CLI's own record shows them, its calls, its cost) is folded back into the shape
 the loop always kept, so a reader cannot tell a phase the CLI drove from one the
 loop drove except by the runs it lists.
 
-**Amended by [ADR-0065](0065-every-executor-is-its-coding-clis-own-run.md), for
+**Amended by [ADR-0066](0066-every-executor-is-its-coding-clis-own-run.md), for
 a seat's executor.** A seat's executor is its coding CLI's own run in a box,
 with its own shell and editor, fully permissioned. The seat's tools still reach
 it as this one server, over the bridge, and every bridged call is decided by

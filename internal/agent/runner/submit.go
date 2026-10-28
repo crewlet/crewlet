@@ -3,7 +3,7 @@
 //
 // The executor is never a phase of the engine's tool loop: it is the seat's
 // coding CLI's own run in a box, launched here with the turn parking behind
-// it, and collected back into the same turn for the reviewer (ADR-0065;
+// it, and collected back into the same turn for the reviewer (ADR-0066;
 // agentrun.go).
 //
 // It is the wiring between four things that each know nothing about the

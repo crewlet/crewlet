@@ -642,7 +642,7 @@ describe("what a seat is doing", () => {
     expect(labelOf(paused, now)).toBe("Paused by jane · 12m");
     expect(shownStateOf(stopped("provider"))).toBe("stopped");
     expect(seatWord(stopped("provider"))).toBe("Stopped");
-    expect(labelOf(stopped("provider"), now)).toBe("Stopped: its model provider is unreachable");
+    expect(labelOf(stopped("provider"), now)).toBe("Stopped: its models are at their usage limit");
     expect(labelOf(stopped("unplaced"), now)).toBe("Stopped: not placed on any node");
     // THE LONG FORM OPENS WITH THE SHORT ONE for every state the engine
     // reports, so a pill and the line beside it never name two states.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
@@ -17,8 +18,12 @@ func readiness(refusals map[string]error) func(Member) error {
 
 func sittingOut(key string) error {
 	return &llm.Error{Kind: llm.KindRateLimit, Provider: "cli-agent/claude-code",
-		Err: fmt.Errorf("Usage limit reached on %s — sitting out until 2026-10-23T10:01:00Z", key)}
+		Err:     fmt.Errorf("Usage limit reached on %s — sitting out until 2026-10-23T10:01:00Z", key),
+		RetryAt: sitOutUntil}
 }
+
+// sitOutUntil is when every member [sittingOut] refuses is tried again.
+var sitOutUntil = time.Date(2026, time.October, 23, 10, 1, 0, 0, time.UTC)
 
 // A LAUNCH SKIPS A MEMBER SITTING OUT AND LANDS ON THE NEXT, with no special
 // case: the refusal is a retryable classification, as a call's is, and
@@ -84,11 +89,14 @@ func TestALaunchHandOffNamesTheMemberThatTookOver(t *testing.T) {
 }
 
 // EVERY MEMBER SITTING OUT IS AN EXHAUSTED CHAIN, the same [*Error] an
-// exhausted call reports — so the seat reads "stopped on its provider" for a
-// launch exactly as it does for a call, with no second code path. The last
-// hand-off names no successor.
+// exhausted call reports, each member's refusal on it — so a launch reads
+// exactly as a call does, with no second code path: a chain every member of
+// which is at a limit ([Limited]), which parks the seat until the first is
+// tried again, where a launch that read as a plain failure was retried into the
+// limit. The last hand-off names no successor.
 //
-// Mutation: return the last refusal bare, and errors.As misses.
+// Mutation: return the last refusal bare, and errors.As misses; leave the
+// refusals off the error, and the launch is no limited chain.
 func TestEveryMemberSittingOutIsAnExhaustedChain(t *testing.T) {
 	t.Parallel()
 	var seen []Fallback
@@ -108,6 +116,10 @@ func TestEveryMemberSittingOutIsAnExhaustedChain(t *testing.T) {
 	}
 	if len(seen) != 2 || seen[1].To != "" {
 		t.Errorf("hand-offs = %+v, want the last to name nobody", seen)
+	}
+	if limit, ok := Limited(err); !ok || !limit.RetryAt.Equal(sitOutUntil) ||
+		fmt.Sprint(limit.Keys) != "[primary backup]" {
+		t.Errorf("Limited = %+v, %v; want every member at its limit until %v", limit, ok, sitOutUntil)
 	}
 }
 

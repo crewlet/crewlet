@@ -400,6 +400,15 @@ func (c *Compactor) Fit(ctx context.Context, req Request) (Result, error) {
 	}
 	run := &pass{c: c, req: req, member: member}
 	text, err := run.fit(ctx, req.Text, req.Budget, 0)
+	if retryAt, _, limited := llm.LimitedUntil(err); limited {
+		// A WAIT, NOT A FAILURE: the model is at a usage limit it already
+		// reported, and nothing was launched to hear it again. The caller
+		// takes the error as it takes any compaction it cannot have.
+		log.InfoContext(ctx, "compaction_limited", "seat", seatHandle(req.Seat),
+			"kind", string(req.Kind), "model", member.Key,
+			"retry_at", retryAt.UTC().Format(time.RFC3339))
+		return Result{From: from, Calls: int(run.calls.Load())}, err
+	}
 	if err != nil {
 		log.WarnContext(ctx, "compaction_failed", "seat", seatHandle(req.Seat),
 			"kind", string(req.Kind), "bytes", from, "budget", req.Budget,

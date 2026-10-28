@@ -455,7 +455,15 @@ func TestAnInheritedAnswerResumesAsItsSeatIsEstablished(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	retries.fire()
+	// ONE AFTER THE OTHER: a seat resumes one of its runs at a time
+	// (sandbox.SeatCoding), so the second is resumed once the first has let go
+	// of the seat, on the re-check that letting go arms.
+	for range 3 {
+		if resumer.count() == 2 {
+			break
+		}
+		retries.fire()
+	}
 	if n := resumer.count(); n != 2 {
 		t.Fatalf("%d resumes, want both inherited answers resumed", n)
 	}
@@ -566,9 +574,14 @@ const answerRetryFirst = time.Second
 func answeredRun(t *testing.T, seal *sandbox.AnswerSeal, store sandbox.PendingStore, turnID string) {
 	t.Helper()
 	ctx := t.Context()
+	// THE SEAT'S ID, as every run's row carries it: what an answer the run
+	// lets go of is handed back to. A row without it is one whose ending can
+	// never finish, which holds the seat for good.
+	seatID, _ := org.DeriveAgentID("Nimbus", "swe")
 	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
-		TurnID: turnID, AgentHandle: "swe", Role: "SWE", CodingAgent: "claude-code",
-		ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0", CreatedAt: time.Now().UTC(),
+		TurnID: turnID, AgentID: seatID.String(), AgentHandle: "swe", Role: "SWE",
+		CodingAgent: "claude-code", ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0",
+		CreatedAt: time.Now().UTC(),
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}

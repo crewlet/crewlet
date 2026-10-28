@@ -72,10 +72,10 @@ func cliProvider(t *testing.T, m chainMember) *cliagent.Provider {
 			"output": "text", "prompt_mode": "stdin",
 			// A text stream has no events to tell apart, so the profile's
 			// event filter goes with it — and so does everything else that
-			// reads such a stream: its requests, its MCP failure events, the
-			// cap's signature in it.
+			// reads such a stream: its requests, its MCP failure events, its
+			// structured limit reports, the cap's signature in it.
 			"event_type_path": []any{}, "text_events": []any{},
-			"requests": nil, "cap": nil,
+			"requests": nil, "cap": nil, "limit_events": nil,
 			"mcp": map[string]any{"failure_events": []any{}},
 		}
 	}
@@ -430,9 +430,13 @@ func TestALaunchPassesOverAMemberWithNoRunnerAndAnnouncesNothing(t *testing.T) {
 }
 
 // EVERY RUNNER MEMBER SITTING OUT IS AN EXHAUSTED CHAIN, the same
-// [*chain.Error] an exhausted call reports — so the turn reads as unavailable
-// and the seat as stopped on its provider exactly as for a text phase — and
-// nothing is opened for it.
+// [*chain.Error] an exhausted call reports, each member's refusal on it — so
+// the launch reads as a chain at its limit ([chain.Limited]), on which the seat
+// is parked until the first member is tried again, exactly as for a reviewer's
+// call — and nothing is opened for it.
+//
+// Mutation: drop the refusals from chain.Pick's error, and the launch is no
+// limited chain.
 func TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain(t *testing.T) {
 	t.Parallel()
 	c, seat := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus", spent: true})
@@ -448,6 +452,9 @@ func TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain(t *testing.T) {
 	if llm.KindOf(err) != llm.KindRateLimit {
 		t.Errorf("the exhausted launch classifies as %v, want the rate limit it sat out on",
 			llm.KindOf(err))
+	}
+	if limit, limited := chain.Limited(err); !limited || limit.RetryAt.IsZero() {
+		t.Errorf("chain.Limited = %+v, %v; want the launch read as a chain at its limit", limit, limited)
 	}
 	refusedCleanly(t, e, "t1", jobs)
 }

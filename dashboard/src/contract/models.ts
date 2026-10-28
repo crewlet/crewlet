@@ -27,6 +27,29 @@
  */
 export type CLIAuthMode = "subscription" | "api-key" | "inherit-env";
 
+/**
+ * What each built-in CLI is called where a person reads it: "Claude Code
+ * subscription limit reached", never "claude-code". EXACTLY the engine's
+ * built-in profiles (`cliprofile.BuiltinNames`) bar `custom`, held by
+ * `internal/config.TestEveryBuiltInCLIHasAProductName`, so a profile the
+ * engine ships is named the day it ships. An entry on `custom` describes a
+ * CLI of its own and is called by its key.
+ */
+export const CLI_PRODUCTS: Readonly<Record<string, string>> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  copilot: "GitHub Copilot",
+  "cursor-agent": "Cursor",
+  "gemini-cli": "Gemini CLI",
+  grok: "Grok",
+  hermes: "Hermes",
+  "kimi-code": "Kimi Code",
+  "muse-code": "Muse Code",
+  opencode: "OpenCode",
+  pi: "Pi",
+  "qwen-code": "Qwen Code",
+};
+
 /** The CLI an entry that names no `agent` drives. */
 export const DEFAULT_CLI_AGENT = "claude-code";
 

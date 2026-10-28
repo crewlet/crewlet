@@ -28,7 +28,7 @@ import (
 )
 
 // A person's note to a turn whose coding run is out: it waits sealed on the
-// run's record (ADR-0066).
+// run's record (ADR-0067).
 //
 // # Where a turn's notes wait, and who has to agree on them
 //
@@ -60,7 +60,7 @@ import (
 // is the `read` marker, which only the store's own compare-and-set guards: a
 // party on the broker could re-deliver a genuine note to its own turn, or hide
 // one from in-run delivery, and the note still reaches the reviewer or expires
-// — the residual ADR-0066 states.
+// — the residual ADR-0067 states.
 //
 // # Every read is on the record, so the record is the carry
 //

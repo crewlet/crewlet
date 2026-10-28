@@ -48,6 +48,15 @@ func gatedFleet(t *testing.T, ceiling int, turn node.TurnFunc, seats ...string) 
 func gatedFleetOn(t *testing.T, ceiling int, wrap func(queue.EventQueue) queue.EventQueue,
 	turn node.TurnFunc, seats ...string) *gatedNode {
 	t.Helper()
+	return gatedFleetWith(t, ceiling, wrap, nil, turn, seats...)
+}
+
+// gatedFleetWith is gatedFleetOn with the node's config passed through
+// configure before the node is built, for a case about a hook. A nil configure
+// builds it as it is.
+func gatedFleetWith(t *testing.T, ceiling int, wrap func(queue.EventQueue) queue.EventQueue,
+	configure func(*node.Config), turn node.TurnFunc, seats ...string) *gatedNode {
+	t.Helper()
 	broker := qmem.NewBroker()
 	backend := &coordmem.Backend{}
 
@@ -70,7 +79,7 @@ func gatedFleetOn(t *testing.T, ceiling int, wrap func(queue.EventQueue) queue.E
 		}
 	}
 
-	n, err := node.New(node.Config{
+	cfg := node.Config{
 		Queue: nodeQueue, Coord: backend,
 		NodeID: "node-a", Owner: "node-a:1",
 		Seats: func() []placement.Seat {
@@ -83,7 +92,11 @@ func gatedFleetOn(t *testing.T, ceiling int, wrap func(queue.EventQueue) queue.E
 		LeaseTTL: fleetTTL, HeartbeatInterval: fleetTTL / 4, SweepInterval: fleetTTL / 8,
 		MaxConcurrent: ceiling,
 		Turn:          turn,
-	})
+	}
+	if configure != nil {
+		configure(&cfg)
+	}
+	n, err := node.New(cfg)
 	if err != nil {
 		t.Fatalf("node.New: %v", err)
 	}

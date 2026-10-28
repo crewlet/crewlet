@@ -318,6 +318,94 @@ func TestARefusedCompletionIsReFiredWhenItsConditionClears(t *testing.T) {
 	}
 }
 
+// conditionLimit is what a resume refused for its models' limit waits on, in
+// these cases.
+const conditionLimit Condition = "provider"
+
+// errAtTheLimit is a resumed turn's failure before it wrote anything: every
+// model of its chain at a usage limit, as the engine's resumer reports it.
+var errAtTheLimit = &TurnRefused{Cause: errors.New("llm chain exhausted: usage limit"),
+	Refusal: Refusal{Condition: conditionLimit, Reason: "provider limit: default"}}
+
+// A COMPLETION WHOSE RESUME MEETS A LIMIT BEFORE IT WRITES IS A WAIT, NOT A
+// FAILURE: the claim is given back, the refusal is what the caller reads (the
+// control topic acknowledges it, so it spends none of the completion's
+// deliveries), and the completion is kept for the signal that ends the wait,
+// which resumes it once.
+//
+// Mutation: keep only the gate's refusals in OnCompleted and the signal resumes
+// nothing; hand the refusal back as a plain error and the control topic NAKs
+// it into the same limit until its deliveries run out.
+func TestACompletionWhoseResumeMeetsALimitIsKeptAndResumedOnce(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	gated(rig)
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "fixed the flake"})
+	rig.resumer.failWith(errAtTheLimit)
+	rig.resumer.failsInTurn = true
+
+	payload, ev := rig.completion("t1")
+	err := rig.coordinator.OnCompleted(t.Context(), payload, ev)
+	var refused *TurnRefused
+	if !errors.As(err, &refused) || refused.Condition != conditionLimit {
+		t.Fatalf("OnCompleted = %v, want the resume's refusal naming %q", err, conditionLimit)
+	}
+	if errors.Is(err, ErrResumeAbandoned) {
+		t.Fatalf("OnCompleted = %v, a resume that wrote nothing abandoned", err)
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning {
+		t.Fatalf("run = %q, want the claim given back to running", got.Status)
+	}
+
+	// THE LIMIT LIFTS: its signal re-fires the kept completion, once.
+	rig.resumer.failWith(nil)
+	rig.coordinator.Readmit(conditionLimit, "swe")
+	eventually(t, func() bool { return len(rig.resumer.calls()) == 1 },
+		"the kept completion never resumed on its condition's signal")
+	rig.coordinator.Readmit(conditionLimit, "swe")
+	if calls := rig.resumer.calls(); len(calls) != 1 {
+		t.Fatalf("the completion resumed %d times, want once", len(calls))
+	}
+	eventually(t, func() bool {
+		_, ok, err := rig.pending.Get(t.Context(), "t1")
+		return err == nil && !ok
+	}, "the resumed run was never settled")
+}
+
+// AN ANSWER WHOSE RESUME MEETS A LIMIT BEFORE IT WRITES WAITS, UNCHARGED.
+//
+// A limit lasts hours; the answer's attempts are ten and its window the run's
+// pause_ttl_seconds. Charged as failures, the attempts are spent on the wait
+// and the answer is let go of while nothing was wrong with it.
+//
+// Mutation: charge a refused resume as a failure (owedFailed) and the answer is
+// declined before the limit lifts.
+func TestAnAnswerWhoseResumeMeetsALimitWaitsUncharged(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	answeredAndOwed(t, rig)
+	rig.resumer.failWith(errAtTheLimit)
+	rig.resumer.failsInTurn = true
+
+	for range 3 * MaxAnswerAttempts {
+		if rig.fireRetries() != 1 {
+			t.Fatal("a refused resume stopped waiting")
+		}
+	}
+	if got := rig.get("t1"); got.Status != StatusAnswered || got.Answer == nil {
+		t.Fatalf("run = %q (answer %v), want the answer still recorded on it", got.Status, got.Answer)
+	}
+
+	rig.resumer.failWith(nil)
+	rig.coordinator.Readmit(conditionLimit, "swe")
+	rig.fireRetries()
+	if calls := rig.resumer.calls(); len(calls) != 1 {
+		t.Fatalf("%d resumes once the limit lifted, want 1", len(calls))
+	}
+}
+
 // A CONDITION THAT CLEARS WHILE THE GATE IS REFUSING STILL RE-FIRES THE
 // COMPLETION, at once.
 //

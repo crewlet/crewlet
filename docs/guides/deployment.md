@@ -807,8 +807,8 @@ server's `max_payload`.
 a reloaded `max_payload` to the connections it already holds without telling
 their clients, so a node goes on believing its server carries 8 MiB, and the
 first message past the new limit makes the server close the connection with
-`Maximum Payload Violation`. The NATS client treats that refusal as final and
-does not reconnect, so the node
+`Maximum Payload Violation`. Where the NATS client reads that refusal, it
+treats it as final and does not reconnect, so the node
 [stops itself](#an-external-nats-server) and exits with status 1, naming the
 setting:
 
@@ -817,10 +817,21 @@ crewlet: the node stopped itself: engine: stream: jetstream: the NATS server str
 ```
 
 Restarted against a server still below 8 MiB, it refuses to start with the
-boot refusal above. So a reload that lowers the limit takes down every node
-whose next large message reaches it, and they stay down until the limit is
-raised again — which is the outcome to want from a broker that can no longer
-carry what they send, and the reason not to lower it.
+boot refusal above.
+
+The client does not always read the refusal. A message larger than the
+connection's socket takes at once is still being written when the server
+closes the connection, and when that write fails part way the client closes
+the connection itself, without reading the refusal, and reconnects. The
+reconnect reads the lowered limit, so the node goes on as it does after
+reconnecting to a member configured apart from the others: it logs
+`jetstream_max_payload_below_contract`, and every later message past the limit
+is refused when it is written, a state-log write answering `record_too_large`.
+
+So a reload that lowers the limit either takes down every node whose next
+large message reaches it, until the limit is raised again, or leaves them
+running and refusing every large write. Neither is a broker that carries what
+they send, which is the reason not to lower it.
 
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
@@ -1777,7 +1788,7 @@ from that map — a guard test fails if the two drift.
 | `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `knowledge_read`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
 | `lifecycle` | `assistant_conversation_read`, `assistant_turn_completed`, `backup_requested`, `config_revision_activated`, `config_revision_applied`, `operator_acted`, `org_started`, `org_stopped`, `seat_paused`, `seat_resumed` |
 | `notification` | `external_notification`, `notification_skipped`, `notifications_coalesced`, `turn_trigger_skipped` |
-| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
+| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `agent_turn_started`, `agent_turn_steered`, `agent_turn_stopped`, `auxiliary_spend`, `budget_exhausted`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `seat_provider_parked`, `seat_provider_released`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
 | `task` | `sandbox_clarification_requested`, `sandbox_run_answered`, `sandbox_run_completed`, `sandbox_run_failed`, `sandbox_run_started`, `sandbox_run_stopped`, `scheduled_task_fired`, `task_assigned` |
 | `webhook` | `inbound_delivery` — one row per delivery presented to one seat, from a [webhook route](../reference/api-endpoints.md) or a [Mattermost socket](../integrations/mattermost.md#running-on-a-fleet). The row is filed under the delivery's own label (`webhook:<event>`, `forge:<event>`, `socket:posted`) rather than under `inbound_delivery`, with the provider's exact bytes as its payload |
 
@@ -1798,7 +1809,7 @@ decision as a value, so the rule below can be checked rather than remembered.
 | `raw_webhook` | Already recorded | The delivery is **already** a row (`inbound_delivery`, in the `webhook` category above). This event is the wake an inbound edge publishes for the transports to route, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
 | `a2a_request` | Already recorded | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox — same reason as `raw_webhook`. |
 | `a2a_message` | Already recorded | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
-| `sandbox_answer_given` | Already recorded | The wake an [answer by turn](../concepts/code-sandbox.md#answering-a-parked-run) puts on the seat's inbox, and never a turn. What the answer became is **already** a row (`sandbox_run_answered`), and that a person gave it is their `operator_acted` row — same reason as `a2a_request`. |
+| `sandbox_answer_given` | Already recorded | The command an [answer by turn](../concepts/code-sandbox.md#answering-a-parked-run) puts on the seat's control topic, and never a turn. What the answer became is **already** a row (`sandbox_run_answered`), and that a person gave it is their `operator_acted` row, same reason as `a2a_request`. |
 | `tool_skill_page_changed` | Already recorded | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
 | `reflection_due` | Already recorded | The **wake** that puts a finished turn in front of [post-turn reflection](../concepts/agent-learning.md) on the seat's holder. The turn is **already** a row (`turn_completed`), and what reflecting on it did is its own (`reflection_completed`) — same reason as `a2a_request`. |
 | `custody_batch` | Already recorded | A **carrier**, not an event: a node without the `data` role keeps no event log, so it publishes its events in batches and one data node writes each event inside as the row it is ([custody](#custody-the-rows-of-a-node-without-data)). A row for the batch would describe the transport and repeat every event in it. |
@@ -2546,6 +2557,6 @@ inside the process to hook them, because the engine loads no plugins.
 - **Scope isolation** — agents can only access knowledge within their permitted scopes
 - **Tool availability** — all registered tools available; per-role MCP tools carry role-specific credentials
 - **Communication permissions** — agents can only post to channels they're members of
-- **Manager handoffs** — agents identify their manager from their identity prompt and reach them through the colleague-surface tools (Slack/Jira/Confluence/A2A); engine-detected failures surface to the operator dashboard as the seat's `last_error`, and an unreachable provider as the seat state `stopped`/`provider`
+- **Manager handoffs**: agents identify their manager from their identity prompt and reach them through the colleague-surface tools (Slack/Jira/Confluence/A2A); engine-detected failures surface to the operator dashboard as the seat's `last_error`, and a model at its usage limit as the seat state `stopped`/`provider`
 - **LLM sandboxing** — tool execution results are validated before returning to the agent
 - **Executor runs** — every agent seat's executor is its coding CLI's own fully permissioned run; `direct` runs it on the engine host as the engine's own user, which keeps each box's state apart and not the host, so it is for a dedicated host you are willing to hand to an autonomous agent, the entry that needs the host itself, or a first run on your own machine while its seats take work from you alone, and any other deployment places its seats' runs in `container` or `e2b`, through each `providers.llm` entry's `run_in` or `providers.sandbox.default_run_in` (see [Code Sandbox § Choosing a cell](../concepts/code-sandbox.md#choosing-a-cell))

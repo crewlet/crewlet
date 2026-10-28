@@ -84,7 +84,7 @@ var _ runner.AgentLauncher = (*agentLauncher)(nil)
 // run over opens the same job's session again ([Engine.reopenAgentRun]), and
 // the token the box already holds reaches it.
 //
-// AND WITH THE TURN'S NOTES (ADR-0066). The record the launch opens carries
+// AND WITH THE TURN'S NOTES (ADR-0067). The record the launch opens carries
 // the sealed anchor of the seat the run serves, the notes the brief carries
 // ([runner.AgentRunRequest.Notes]), read by the job the write opens, and — for
 // a turn's first segment — the notes its box still holds, filed waiting in the
@@ -442,10 +442,11 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 //   - a member sitting out its spent plan on this node
 //     ([cliagent.Provider.SittingOut]) is handed off like a call's fallback
 //     ([chain.Pick]), published against this turn through onFallback;
-//   - every runner member sitting out is a [*chain.Error], the same
-//     unavailability an exhausted call reports, so the seat reads as stopped
-//     on its provider exactly as it does when a reviewer's run finds every
-//     member spent.
+//   - every runner member sitting out is a [*chain.Error] carrying each one's
+//     refusal, the same unavailability an exhausted call reports: a chain at
+//     its limit ([chain.Limited]), on which the dispatcher parks the seat and
+//     a resume waits ([Dispatcher.Provider], [resumeRefusal]), exactly as when
+//     a reviewer's call finds every member spent (ADR-0064).
 //
 // A run that meets its limit midway is not relaunched on the next member: its
 // box did the work it did, and the next launch is where the chain moves on.

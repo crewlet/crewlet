@@ -41,7 +41,7 @@ func catalogue() []events.Payload {
 		// auxiliary.go
 		AuxiliarySpend{},
 		// provider.go
-		LLMUnavailable{}, ProviderFallback{},
+		LLMUnavailable{}, ProviderFallback{}, SeatProviderParked{}, SeatProviderReleased{},
 		// agent.go
 		AgentTurnStarted{}, AgentTurnCompleted{}, TurnCompleted{}, AgentPhaseStarted{},
 		AgentPhaseCompleted{}, AgentTurnProgress{}, SubagentBatched{},
@@ -157,6 +157,8 @@ var wireTypes = []string{
 	"sandbox_run_stopped",
 	"scheduled_task_fired",
 	"seat_paused",
+	"seat_provider_parked",
+	"seat_provider_released",
 	"seat_resumed",
 	"skill_archived",
 	"skill_promoted",
@@ -350,7 +352,9 @@ var wireTags = map[string][]string{
 	"custody_batch":                   {"events"},
 	"reflection_due":                  {"turn"},
 	"llm_unavailable":                 {"agent_id", "attempt_count", "last_error", "last_error_kind", "provider_chain", "role", "turn_id", "work_key"},
-	"provider_fallback":               {"agent_id", "error_kind", "from_provider_key", "iteration", "phase", "role", "to_provider_key", "turn_id", "work_key"},
+	"provider_fallback":               {"agent_id", "error_kind", "from_cli", "from_provider_key", "from_subscription", "iteration", "phase", "resets_at", "role", "to_provider_key", "turn_id", "work_key"},
+	"seat_provider_parked":            {"agent_handle", "agent_id", "cli", "provider_keys", "resets_at", "retry_at", "role", "said", "subscription"},
+	"seat_provider_released":          {"agent_handle", "agent_id", "reason", "role"},
 	"agent_turn_started":              {"agent_handle", "agent_id", "conversation_key", "resumed", "role", "started_at", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"agent_turn_completed":            {"agent_id", "cache_read_tokens", "cache_write_tokens", "conversation_key", "decision", "error", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "prompt", "prompt_messages", "response", "review_model", "role", "stopped", "subagent_count", "subagent_input_tokens", "subagent_output_tokens", "subagent_tokens", "suspended", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"turn_completed":                  {"agent_handle", "agent_id", "all_tool_names", "ask", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "plan_summary", "review_outcome", "role", "skills_used", "started_at", "suspended", "task_summary", "tool_sequence", "turn", "turn_id", "work_item", "work_item_basis", "work_key"},

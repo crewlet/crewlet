@@ -714,7 +714,7 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
     providerKey: "",
     live: call.in_progress !== false && !call.failed,
     failed: !!call.failed,
-    error: call.error?.message ?? "",
+    error: call.error?.detail ?? "",
     errorKind: call.error?.kind ?? "",
     // Read off `prompt_messages`, which the engine has always sent and
     // nothing read. Hardcoding "" here meant a RUNNING phase could never

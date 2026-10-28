@@ -29,7 +29,7 @@ acknowledges it, spending none of its deliveries and quiescing nothing, because
 the waiter that drives the run's box announces a finished run again on every
 poll until a node claims it: the fleet's for an `e2b` box, the box host's own
 for a `direct` or `container` one
-([ADR-0064](0064-a-local-box-is-driven-by-the-node-that-launched-it.md)).
+([ADR-0065](0065-a-local-box-is-driven-by-the-node-that-launched-it.md)).
 Only a failure the refusal does not explain is a Nak. A new condition is
 handed back by the rule for its kind with no change to the hand-back.
 

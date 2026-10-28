@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
@@ -17,6 +18,8 @@ import (
 func init() {
 	events.Register[LLMUnavailable]()
 	events.Register[ProviderFallback]()
+	events.Register[SeatProviderParked]()
+	events.Register[SeatProviderReleased]()
 }
 
 // LLMUnavailable fires when the fallback chain is exhausted.
@@ -89,6 +92,17 @@ type ProviderFallback struct {
 	FromProviderKey string `json:"from_provider_key"`
 	ToProviderKey   string `json:"to_provider_key"`
 	ErrorKind       string `json:"error_kind"`
+	// ResetsAt is when the vendor of FromProviderKey said its limit lifts,
+	// for a `rate_limit` hand-off whose report named an instant: what a
+	// screen showing a seat carried onto its fallback says the head is
+	// back at. Absent otherwise.
+	ResetsAt *time.Time `json:"resets_at,omitempty"`
+	// FromCLI and FromSubscription are, for a `rate_limit` hand-off, the
+	// CLI FromProviderKey drives and whether it signs in on a plan: what the
+	// limit is called where a person reads it ("Claude Code subscription
+	// limit reached"), without the entry's configuration. Absent otherwise.
+	FromCLI          string `json:"from_cli,omitempty"`
+	FromSubscription bool   `json:"from_subscription,omitempty"`
 }
 
 // EventType is the "provider_fallback" wire type.
@@ -111,4 +125,81 @@ func (e ProviderFallback) SummaryFor(actor string) string {
 	}
 	return lead(actor, fmt.Sprintf("fallback %s → %s (%s)",
 		e.FromProviderKey, e.ToProviderKey, e.ErrorKind))
+}
+
+// SeatProviderParked records that a seat was PARKED because every member of
+// its model chain refused for a rate limit: its mail waits on its inbox, in
+// order, until the first member is tried again, rather than being redelivered
+// into the same refusal every second (internal/engine/providerpark.go).
+//
+// Published at each park, and again each time the engine's probe (a call
+// outside any turn) meets the same limit, so it is a statement of the seat's
+// condition rather than of a change: a reader holds the latest, and a renewal
+// with the same instants changes nothing it draws. The condition ends when a
+// call through the seat's chain answers.
+type SeatProviderParked struct {
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+
+	// ProviderKeys are the providers.llm keys of the chain, in its order,
+	// every one of which refused.
+	ProviderKeys []string `json:"provider_keys"`
+	// RetryAt is when the park probes the chain: the earliest instant a
+	// member is tried again.
+	RetryAt time.Time `json:"retry_at"`
+	// ResetsAt is when the vendors said the limit lifts, where every member
+	// named an instant; absent where any did not, which a person is told as
+	// a resume time that is not known.
+	ResetsAt *time.Time `json:"resets_at,omitempty"`
+	// Said is the head member's own sentence.
+	Said string `json:"said,omitempty"`
+	// CLI and Subscription are the head member's CLI (`claude-code`) and
+	// whether it signs in on a plan: what the limit is called.
+	CLI          string `json:"cli,omitempty"`
+	Subscription bool   `json:"subscription,omitempty"`
+}
+
+// EventType is the "seat_provider_parked" wire type.
+func (SeatProviderParked) EventType() string { return "seat_provider_parked" }
+
+// Role is the parked seat.
+func (e SeatProviderParked) Role() string { return e.RoleName }
+
+// AgentID is the parked seat's instance.
+func (e SeatProviderParked) AgentID() string { return e.Agent }
+
+// SummaryFor says what the seat waits for, and until when where that is known.
+func (e SeatProviderParked) SummaryFor(actor string) string {
+	if e.ResetsAt == nil {
+		return lead(actor, "is waiting for its model's usage limit to lift")
+	}
+	return lead(actor, "is waiting for its model's usage limit to lift at "+
+		e.ResetsAt.UTC().Format(time.RFC3339))
+}
+
+// SeatProviderReleased records that a seat's provider park was lifted: its
+// probe was answered (or failed for a reason that is not a limit), the seat's
+// chain changed under it, or the node gave the seat up. A probe that meets the
+// limit again lifts nothing, and publishes a [SeatProviderParked] instead.
+type SeatProviderReleased struct {
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	// Reason is why, in the engine's words.
+	Reason string `json:"reason"`
+}
+
+// EventType is the "seat_provider_released" wire type.
+func (SeatProviderReleased) EventType() string { return "seat_provider_released" }
+
+// Role is the released seat.
+func (e SeatProviderReleased) Role() string { return e.RoleName }
+
+// AgentID is the released seat's instance.
+func (e SeatProviderReleased) AgentID() string { return e.Agent }
+
+// SummaryFor names why the wait ended.
+func (e SeatProviderReleased) SummaryFor(actor string) string {
+	return lead(actor, "stopped waiting for its model's usage limit: "+e.Reason)
 }

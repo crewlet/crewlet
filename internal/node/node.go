@@ -31,6 +31,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -150,6 +151,17 @@ type Config struct {
 	// that may already have moved.
 	SeatAdmitted func(ctx context.Context, seat placement.Seat)
 
+	// SeatTurnEnded runs when a turn admitted on a seat ([Node.AdmitTurn])
+	// is released after another turn was refused behind it ([ErrSeatBusy]),
+	// so what was refused learns at that moment that it may try again. Not
+	// for a release nobody waited behind. Nil does nothing. It never fails
+	// anything: the turn is already over.
+	//
+	// The engine's is a recorded answer whose resume arrived while another
+	// of the seat's turns was running, and waits for it to end rather than
+	// re-checking on a timer.
+	SeatTurnEnded func(handle string)
+
 	// SeatDone runs after the mailbox is detached. It never fails a
 	// release: the seat is already gone from this node, and its durable
 	// state belongs to the store rather than to this process.
@@ -214,6 +226,17 @@ type Node struct {
 	// turns is the per-node concurrency gate every turn passes through.
 	turns *gate
 
+	// running is the one turn each seat has admitted and not yet released,
+	// by handle: a seat runs one turn at a time ([ErrSeatBusy]). Guarded by
+	// mu.
+	running map[string]*admission
+	// admissions numbers the admissions that hold a seat's inbox, so each
+	// holds it under a reason of its own ([HoldSeatTurn]).
+	admissions atomic.Uint64
+	// refusedBusy, where set, runs as a turn refused on a busy seat lets go
+	// of mu, for a case that stands the seat's release in that moment.
+	refusedBusy func(handle string)
+
 	// acksLost is the queue's [acksLoss] signal, and nil — never closed —
 	// for a queue without one.
 	acksLost <-chan struct{}
@@ -261,6 +284,7 @@ func New(cfg Config) (*Node, error) {
 		cfg:      cfg,
 		log:      logging.Get("node").With("node_id", cfg.NodeID),
 		attached: map[uuid.UUID]string{},
+		running:  map[string]*admission{},
 		mail:     newMailboxes(),
 		turns:    newGate(cfg.MaxConcurrent),
 		cut:      make(chan struct{}),
@@ -617,12 +641,13 @@ func (n *Node) OnEstablished(ctx context.Context, s placement.Seat, _ coord.Leas
 // runTurn is a mailbox delivery's turn, admitted as every turn on this node is
 // ([Node.AdmitTurn]).
 //
-// A refusal DEFERS the delivery rather than failing it, whichever it was: the
-// events are healthy and nothing has been done with them, so leaving them
-// unacked hands them straight on, to the seat's successor, rather than waiting
-// out a redelivery timer.
+// A seat mid-turn is WAITED FOR, never refused, so its mail spends no delivery
+// on it (see [Node.admit]). Any other refusal DEFERS the delivery rather than
+// failing it: the events are healthy and nothing has been done with them, so
+// leaving them unacked hands them straight on, to the seat's successor, rather
+// than waiting out a redelivery timer.
 func (n *Node) runTurn(ctx context.Context, handle string, evs []*events.Event) queue.Result {
-	ctx, release, err := n.AdmitTurn(ctx, handle)
+	ctx, release, err := n.AdmitTurn(mailboxTurn(ctx), handle)
 	if err != nil {
 		n.host.NoteDeliveryDeferred(handle)
 		return queue.Defer(err.Error())

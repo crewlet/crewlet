@@ -181,26 +181,6 @@ func TestALaunchedRunRecordsWhoWokeItsTurn(t *testing.T) {
 	}
 }
 
-// A NODE WITH A COORDINATOR ROUTES AN ANSWER BY TURN TO IT. Left unwired, the
-// dispatcher hands every such answer back for a coordinator it does not have,
-// and a parked run is never answered however many times a person tries.
-func TestTheDispatcherHandsAnAnswerByTurnToTheCoordinator(t *testing.T) {
-	t.Parallel()
-	e, _ := starting(t, refusingModels(t))
-	rigRuns(t, e, nil)
-	d := e.buildDispatcher(Options{Dispatch: &Dispatcher{NoteDeferred: func(string) {}}}, e.backends)
-	if d.AnswerByTurn == nil {
-		t.Fatal("the dispatcher has no route for an answer by turn on a node with a coordinator")
-	}
-	given := types.SandboxAnswerGiven{TurnID: "no-such-run", AgentHandle: "swe", Answer: "main",
-		LaunchID: "launch-1"}
-	disposition, err := d.AnswerByTurn(t.Context(), given, events.New(given, events.TraceContext{}))
-	if err != nil || disposition != sandbox.AnswerNotMine {
-		t.Fatalf("an answer to a run with no record = %q, %v, want the coordinator's not_mine",
-			disposition, err)
-	}
-}
-
 // THE REQUESTER IS KEPT BY ITS SEAT'S HANDLE, and a sender the org does not
 // hold is nobody: a seat the company does not have is nobody to put a question
 // to, and the run's "requester" then resolves to nobody rather than to a name.

@@ -29,10 +29,11 @@
 // AND IT REACHES THE SEAT ONCE, whatever becomes of the run. A recorded reply
 // is either TAKEN by a resumed turn — written on the row at the last moment
 // before the turn runs ([RecordedAnswer.TakenAt], [ResumeRequest.Begin]) — or
-// LET GO back to the seat's inbox through an outbox on the row
-// ([PendingRun.HandBack]): after its attempts are spent, by an ending no turn
-// reached, or by the seat's next holder reaping a claim whose node stopped
-// before its turn took it ([Coordinator.RecoverSeat]) once the claims of that
+// LET GO back to the seat the way it came, through an outbox on the row
+// ([PendingRun.HandBack]) — a chat reply to the seat's inbox, an answer by turn
+// to its control topic ([handBackSubject]): after its attempts are spent, by an
+// ending no turn reached, or by the seat's next holder reaping a claim whose
+// node stopped before its turn took it ([Coordinator.RecoverSeat]) once the claims of that
 // answer have died too often or for too long. Short of that, such a claim is
 // REVIVED — the answer given back to the run and the run resumed with it
 // ([PendingStore.ReviveAnswer], [Coordinator.revivable]) — because a claim that
@@ -87,7 +88,7 @@
 // See answerseal.go.
 //
 // AND A BOX IN A `direct` OR `container` CELL IS TOUCHED ONLY ON ITS LAUNCHING
-// NODE'S HOST ([PendingRun.LaunchNode], ADR-0064): that node's own waiter polls,
+// NODE'S HOST ([PendingRun.LaunchNode], ADR-0065): that node's own waiter polls,
 // keeps alive, reaps and reclaims it, a seat's holder elsewhere asks the host to
 // read it ([BoxReader]), and a launching node whose presence stays lapsed for
 // the box timeout has its running jobs ended as lost. See boxhost.go.
@@ -307,6 +308,16 @@ type Result struct {
 	DeliveredRefsElided int
 
 	Error string
+
+	// Event is how the CLI said its run ended IN FIELDS, beside the words of
+	// Text and Error: its own terminal event, verbatim — Claude Code's
+	// result line, whose `api_error_status` names a spent plan however the
+	// sentence beside it is worded. It is what an executor's ending is
+	// classified by first, as a call's is (cliagent.Provider.RunEnded), and
+	// nothing else reads it. Set on a run that did not succeed, by a CLI that
+	// prints such an event; empty otherwise, and wherever the line is past
+	// [MaxRunEventBytes] ([boundBox]).
+	Event string
 
 	// Transcript is the agent's activity log — what it said, each tool it
 	// called and the first line of what it ran — rebuilt from its own

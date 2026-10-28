@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -36,7 +37,7 @@ import (
 // own builder wires ([Engine.buildSandboxRuntime]) and its own waiters, the one
 // that drives the rig's box firing completions to the seat's control topic as
 // it does in production. The box is `direct`, so that waiter is this node's
-// own (ADR-0064), and the run's record names this node as the one that
+// own (ADR-0065), and the run's record names this node as the one that
 // launched it. The box and its coding agent are the in-process doubles, so the
 // only thing standing in for production is what runs inside the box.
 
@@ -91,13 +92,6 @@ func (r *drainRig) start(t *testing.T) *Engine {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
-	// A MODEL THE RESUMED TURN CAN REACH, which refuses: the resume then ends
-	// the turn on that refusal and settles the run, rather than handing the
-	// claim back for a seat with no model and collecting the box again.
-	c := e.Company()
-	seat := c.Org.AgentSeatByHandle("swe")
-	seat.LLM = org.ProviderKeys{"only"}
-	c.Models = runnable(t, []phase.Entry{{Key: "only", Provider: refusingProvider{}}}, seat)
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
 		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: r.provider},
 		Runners:   map[string]sandbox.Runner{"claude-code": r.runner},
@@ -126,12 +120,53 @@ func (r *drainRig) start(t *testing.T) *Engine {
 	eventually(t, "the swe seat's control topic to be attached", func() bool {
 		return e.sandboxSeatAttached("swe")
 	})
+	// A MODEL THAT ANSWERS, so a resume the rig admits runs its turn to the
+	// end and settles the run, once: with none, every resume failed and gave
+	// its claim back, and the waiter's next announcement claimed and
+	// collected the run again, so "collected once" was a race between that
+	// announcement and the case's own poll rather than a fact about the
+	// claim. A case that needs another model installs it after this.
+	withModels(t, e, answers{})
 	return e
 }
 
+// stopWaiters stops both of e's waiters, so nothing announces a completion again
+// behind a case's back: the fleet's, and this node's own, which drives the rig's
+// direct box (ADR-0065).
+func stopWaiters(e *Engine) {
+	for _, w := range []*sandbox.Waiter{e.sandboxWaiter.Load(), e.sandboxHostWaiter.Load()} {
+		if w != nil {
+			w.Stop()
+		}
+	}
+}
+
+// answers is a model that answers every call.
+type answers struct{}
+
+func (answers) Model() string { return "opus" }
+
+func (answers) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	return &llm.Completion{Content: "done", Model: "opus"}, nil
+}
+
+// withModels serves e's current company with a registry of the one entry
+// given, as an apply that configured it would.
+func withModels(t *testing.T, e *Engine, entry llm.Provider) {
+	t.Helper()
+	reg, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: entry}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	c := *e.Company()
+	c.Models = reg
+	e.epoch.current.Store(&c)
+}
+
 // seedRun records a coding run on the swe seat whose job is running in the
-// rig's box, suspended into the turn that launched it, as the node that
-// launched it leaves it for the waiter. The job finishes when the case calls
+// rig's box, the turn that launched it parked on it, as the node that launched
+// it leaves it for the waiter: the executor's round, its parked turn state of
+// a version this build resumes. The job finishes when the case calls
 // [sandbox.FakeRunner.Finish].
 func (r *drainRig) seedRun(t *testing.T, e *Engine, turnID string) {
 	t.Helper()
@@ -142,6 +177,7 @@ func (r *drainRig) seedRun(t *testing.T, e *Engine, turnID string) {
 		TurnID: turnID, AgentID: agentID.String(), AgentHandle: "swe", Role: "SWE",
 		CodingAgent: "claude-code", CreatedAt: time.Now().UTC(),
 		Placement: string(sandbox.Direct), LaunchNode: e.id, Reply: "tool",
+		TaskDescription: "fix the flaky test",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
@@ -444,6 +480,8 @@ func TestADrainWaitsForAResumeAdmittedBeforeIt(t *testing.T) {
 		close(drained)
 	}()
 
+	// THE DRAIN'S REFUSAL, which the seat's own (its one turn is running)
+	// precedes until the drain has closed the gate.
 	var refused *sandbox.TurnRefused
 	eventually(t, "the drain to refuse the next resume", func() bool {
 		_, next, err := e.admitResume(t.Context(), "swe")
@@ -451,7 +489,7 @@ func TestADrainWaitsForAResumeAdmittedBeforeIt(t *testing.T) {
 			next()
 			return false
 		}
-		return errors.As(err, &refused)
+		return errors.As(err, &refused) && !errors.Is(err, node.ErrSeatBusy)
 	})
 	if refused.Condition != waitDrain || !errors.Is(refused, node.ErrDraining) {
 		t.Fatalf("a resume on a draining node was refused as %+v, want it waiting on %q "+

@@ -362,7 +362,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			StartedAt: began.UTC(), Caps: caps,
 			Failed: !turn.Stopped(err), Err: err,
 		})
-		return turn.Work{Calls: logged}, describe(surface), err
+		// The asking run's calls, an earlier attempt's: see below.
+		return turn.Work{Calls: logged, Inherited: len(logged)}, describe(surface), err
 	}
 	r.steerBriefed(ctx, state.Round, launched.LaunchID, fresh)
 	launchedAt := state.LaunchedAt
@@ -371,9 +372,11 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	}
 	r.recordAgentSuspension(state.Round, surface, history, launchedAt,
 		time.Duration(state.LaunchMS)*time.Millisecond+time.Since(began))
-	// THE ROUND'S CALLS SO FAR, the run's before it asked: they happened,
-	// and a turn that parks again has acted by them.
-	return turn.Work{Calls: logged, Suspended: true}, describe(surface), nil
+	// THE ROUND'S CALLS SO FAR, the run's before it asked: they happened and
+	// stay on the round's record, as an EARLIER ATTEMPT's
+	// ([turn.Work.Inherited]) — the asking job made them, and a retry of
+	// this continuation relaunches the run rather than making them again.
+	return turn.Work{Calls: logged, Inherited: len(logged), Suspended: true}, describe(surface), nil
 }
 
 // recordAgentSuspension captures what the run's collection needs.
@@ -589,8 +592,17 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 		snapshot: snapshot,
 		run:      run,
 	})
-	// The RUN's calls, not this process's surface's — see the doc above.
+	// The RUN's calls, not this process's surface's — see the doc above —
+	// and every one an EARLIER ATTEMPT's ([turn.Work.Inherited]): the run
+	// made them before this segment began, and a retry of the collection
+	// collects the same run and makes none of them again. They are on the
+	// record, for the delivery check and the ledger; what they are not is
+	// a write this attempt would repeat. Counted as one, a collection that
+	// met its reviewer's usage limit before writing anything was settled
+	// for good as a turn that had written, and the run's result never
+	// reached the seat.
 	work.Calls = logged
+	work.Inherited = len(logged)
 	return work, described, nil
 }
 

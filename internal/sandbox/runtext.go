@@ -374,8 +374,23 @@ func boundBox(result Result) Result {
 	result.Transcript, result.TranscriptElidedLines, result.TranscriptElidedBytes =
 		boundTranscript(result.Transcript)
 	result.DeliveredRefs, result.DeliveredRefsElided = boundRefs(result.DeliveredRefs)
+	if len(result.Event) > MaxRunEventBytes {
+		// DROPPED WHOLE, never cut: a cut event is no JSON, and the one
+		// reader it has classifies a decoded document or nothing.
+		result.Event = ""
+	}
 	return result
 }
+
+// MaxRunEventBytes bounds a result's terminal event ([Result.Event]), which a
+// box's host sends back to the node that asked whole or not at all.
+//
+// SIXTEEN KIB, the bound a question a person reads is held to: a CLI's result
+// line carries its usage and cost beside its last text, and the line a spent
+// plan ends a run on carries one sentence there. A line past this is a run
+// that ended on a long text, which is no limit report, so dropping it costs
+// the field's one reader nothing.
+const MaxRunEventBytes = 16 << 10
 
 // BoxReadCarries are the bounds, tried in turn, a box's host holds each piece
 // of a result's own text to before sending it back to the node that asked

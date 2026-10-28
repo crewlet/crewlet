@@ -89,7 +89,10 @@ var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item",
 	// WHEN A NOTE IS READ, as steer_turn answers it: a steer.Reads value
 	// (`next_step`, `after_answer`), which the dashboard words itself
 	// (lib/steer.ts).
-	"reads"}
+	"reads",
+	// AND THE IDS AN ANSWER TO A RUN IS READ BACK BY: the question it answers
+	// and the answer's own delivery, which a screen finds on the run's record.
+	"launch_id", "answer_id"}
 
 // writtenForThePerson are the answers whose text at one path is a model's
 // answer written FOR the person who asked, by tool and path: the product

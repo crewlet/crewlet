@@ -779,7 +779,7 @@ test("a fault stop is one banner in plain words, the engine's message behind a d
         stopped_reason: "provider",
         last_error: {
           kind: "server",
-          message: "llm chain exhausted after 1 providers (default)",
+          detail: "llm chain exhausted after 1 providers (default)",
           phase: "execute",
           turn_id: "t1",
           at: "2026-09-21T09:00:00Z",
@@ -792,7 +792,7 @@ test("a fault stop is one banner in plain words, the engine's message behind a d
   const callouts = document.querySelectorAll(".prof-notices .crewlet-callout");
   expect(callouts).toHaveLength(1);
   const text = callouts[0]!.textContent ?? "";
-  expect(text).toContain("This seat is stopped: its model provider is unreachable.");
+  expect(text).toContain("This seat is stopped: its models are at their usage limit.");
   expect(text).toContain("Its model provider ran but gave no usable answer.");
   expect(text).not.toContain("server:");
   expect(text).not.toContain("llm chain exhausted");

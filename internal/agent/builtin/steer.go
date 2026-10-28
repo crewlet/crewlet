@@ -76,7 +76,7 @@ type SteerDeps struct {
 
 // RunSteers is where a turn's notes wait from the launch of its coding run to
 // the turn's end: the run's own record in the coordination store, sealed
-// (internal/engine, runsteer.go, and ADR-0066). Declared here, by the consumer.
+// (internal/engine, runsteer.go, and ADR-0067). Declared here, by the consumer.
 type RunSteers interface {
 	// Seat is the seat the turn's run serves, as the record's sealed anchor
 	// names it. Found false where the turn has no run record — it has not

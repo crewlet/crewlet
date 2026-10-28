@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -30,11 +29,13 @@ import (
 // because an answer by turn is not a type its ledger keeps for turns, and the
 // answer-by-turn route never read the ledger. So the redelivery reached the
 // coordinator, found nothing on the run that recognised it, and was announced
-// `gone` or `not_awaiting` after it had resumed the run. Every case here runs
-// the dispatcher with the engine's own ledgered set.
+// `gone` or `not_awaiting` after it had resumed the run. Every case here
+// delivers the answer on the seat's control topic, where it is settled, with
+// the ledger read wired as the engine wires it
+// ([sandbox.CoordinatorOptions.WasSpent]).
 
 // answerBoard records every sandbox_run_answered a coordinator announces, and
-// every copy it hands back to the seat's inbox.
+// every copy of an answer by turn it hands back to the seat's control topic.
 type answerBoard struct {
 	mu       sync.Mutex
 	answered []types.SandboxRunAnswered
@@ -44,7 +45,7 @@ type answerBoard struct {
 func (b *answerBoard) Publish(_ context.Context, topic string, ev *events.Event) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if topic == fixtureInbox("swe") {
+	if _, ok := ev.Data.(*types.SandboxAnswerGiven); ok && topic == topics.AgentControl(fixtureSeat("swe")) {
 		b.inbox = append(b.inbox, ev)
 		return nil
 	}
@@ -97,9 +98,8 @@ func newSpentWorld(t *testing.T) *spentWorld {
 }
 
 // spentHolder is a node holding the seat: its coordinator, and the dispatcher
-// its inbox is routed through, wired as the engine wires them — the
-// coordinator's spend is the dispatcher's own record, and the dispatcher reads
-// the engine's ledgered set.
+// whose completion ledger it spends answers in and reads them back from, wired
+// as the engine wires them.
 type spentHolder struct {
 	coordinator *sandbox.Coordinator
 	dispatcher  *engine.Dispatcher
@@ -121,7 +121,8 @@ func (w *spentWorld) holder(t *testing.T, lease sandbox.Fence, resume sandbox.Re
 		Answers:  fleetAnswers(),
 		Audience: noAudience{}, Queue: w.board, Pending: w.store, Manager: w.manager,
 		Resume: resume, After: h.retries.after, Spent: h.dispatcher.SpendAnswer,
-		Lease: func(string) (sandbox.Fence, bool) { return lease, true },
+		WasSpent: h.dispatcher.AnswerWorked,
+		Lease:    func(string) (sandbox.Fence, bool) { return lease, true },
 	})
 	if err != nil {
 		t.Fatalf("NewCoordinator: %v", err)
@@ -129,8 +130,16 @@ func (w *spentWorld) holder(t *testing.T, lease sandbox.Fence, resume sandbox.Re
 	t.Cleanup(coordinator.Stop)
 	h.coordinator = coordinator
 	h.dispatcher.Answer = coordinator.TryResumeFromAnswer
-	h.dispatcher.AnswerByTurn = coordinator.AnswerByTurn
 	return h
+}
+
+// deliver hands ev to the holder as the seat's control topic does, and fails
+// the case unless it was settled rather than handed back.
+func (h *spentHolder) deliver(t *testing.T, ev *events.Event) {
+	t.Helper()
+	if err := h.coordinator.OnEvent(t.Context(), ev); err != nil {
+		t.Fatalf("the answer on the control topic was handed back: %v", err)
+	}
 }
 
 // parked launches t1 on holder's node and parks it on a question.
@@ -192,17 +201,15 @@ func (w *spentWorld) claimedBy(t *testing.T, run sandbox.PendingRun, given *even
 	}
 }
 
-// redeliveredSilently hands the original delivery to holder's dispatcher again
-// and asserts it was acknowledged without reaching the run, without running a
-// turn, and without any announcement but want.
+// redeliveredSilently hands the original delivery to holder's control topic
+// again and asserts it was acknowledged without reaching the run, without
+// running a turn, and without any announcement but want.
 func (w *spentWorld) redeliveredSilently(t *testing.T, h *spentHolder, original *events.Event,
 	want ...types.AnswerOutcome,
 ) {
 	t.Helper()
 	before := len(w.board.outcomes())
-	if got := h.dispatcher.Dispatch(t.Context(), "swe", []*events.Event{original}); got.Outcome != queue.OutcomeAck {
-		t.Fatalf("the redelivered answer = %v, want it acknowledged", got.Outcome)
-	}
+	h.deliver(t, original)
 	if outcomes := w.board.outcomes(); len(outcomes) != before {
 		t.Fatalf("the redelivered answer was announced %v after %v", outcomes[before:], outcomes[:before])
 	}
@@ -288,7 +295,7 @@ func TestAnAnswerByTurnATurnTookIsNotAnnouncedGone(t *testing.T) {
 	w.redeliveredSilently(t, next, original)
 }
 
-// RESUMED, AND ITS TURN RELAUNCHED. The answer resumed the run inline, and the
+// RESUMED, AND ITS TURN RELAUNCHED. The answer resumed the run, and the
 // resumed turn started another job, so the run is running a launch the answer
 // was never given against. The original coming round — the node stopped before
 // it acknowledged it — is acknowledged, rather than announced not_awaiting
@@ -301,9 +308,8 @@ func TestAnAnswerByTurnWhoseTurnRelaunchedIsNotAnnouncedNotAwaiting(t *testing.T
 	resumer.coordinator = h.coordinator
 	run := w.parked(t, h)
 	original := answerAgainst(run, "use main")
-	if got := h.dispatcher.Dispatch(t.Context(), "swe", []*events.Event{original}); got.Outcome != queue.OutcomeAck {
-		t.Fatalf("the answer = %v, want it spent on its run", got.Outcome)
-	}
+	h.deliver(t, original)
+	h.retries.fire()
 	if resumer.count() != 1 {
 		t.Fatalf("the run was resumed %d times, want once", resumer.count())
 	}
@@ -323,7 +329,7 @@ func (failingResumer) Resume(context.Context, sandbox.ResumeRequest) error {
 
 // A LET-GO'S COPY IS ANNOUNCED ONCE. Every attempt to resume the run with the
 // answer failed, so it was let go of and its copy handed back to the seat's
-// inbox, where it is spent and announced `declined` — and recorded, so the copy
+// control topic, where it is spent and announced `declined`, and recorded, so the copy
 // coming round again, its acknowledgement lost, says nothing a second time. The
 // original, spent before the let-go, is acknowledged without a word too.
 func TestALetGosCopyOfAnAnswerByTurnIsAnnouncedOnce(t *testing.T) {
@@ -332,9 +338,7 @@ func TestALetGosCopyOfAnAnswerByTurnIsAnnouncedOnce(t *testing.T) {
 	h := w.holder(t, sandbox.Fence{Owner: "node-x", Epoch: 1}, failingResumer{})
 	run := w.parked(t, h)
 	original := answerAgainst(run, "use main")
-	if got := h.dispatcher.Dispatch(t.Context(), "swe", []*events.Event{original}); got.Outcome != queue.OutcomeAck {
-		t.Fatalf("the answer = %v, want it recorded on its run", got.Outcome)
-	}
+	h.deliver(t, original)
 	for range sandbox.MaxAnswerAttempts {
 		h.retries.fire()
 	}
@@ -343,9 +347,7 @@ func TestALetGosCopyOfAnAnswerByTurnIsAnnouncedOnce(t *testing.T) {
 		t.Fatalf("handed back %d copies, want the let-go's one", len(copies))
 	}
 	for range 2 {
-		if got := h.dispatcher.Dispatch(t.Context(), "swe", copies); got.Outcome != queue.OutcomeAck {
-			t.Fatalf("the copy = %v, want it spent", got.Outcome)
-		}
+		h.deliver(t, copies[0])
 	}
 	if got := w.board.outcomes(); len(got) != 1 || got[0] != types.AnswerDeclined {
 		t.Fatalf("announced %v, want the let-go announced once, as declined", got)

@@ -206,6 +206,11 @@ type Release struct {
 	// it did not — and one that does is refused.
 	Collected bool
 
+	// CollectedAt is when the job's box was first read back, for
+	// [LaunchRecord.CollectedAt]: written with Collected, onto a record that
+	// does not hold one already.
+	CollectedAt time.Time
+
 	// Fence is the lease the claim was taken under.
 	Fence Fence
 }
@@ -2304,6 +2309,15 @@ type LaunchRecord struct {
 	// CollectFailures is, and never cleared for the job: a later collection
 	// of it that cannot read the box does not put the job back out.
 	Collected bool `json:"collected,omitempty"`
+
+	// CollectedAt is when the collection that FIRST read this job's box back
+	// read it, by that node's clock: what the job's ending is read against
+	// by every later collection of it ([RunEnding.At]), so a reset its CLI
+	// named as a time of day ("resets 4:30pm") is the instant it was then,
+	// not the next 4:30pm after a resume that was held for hours. Written by
+	// the release with Collected ([Release.CollectedAt]) and never moved for
+	// the job; zero for a job no release has handed back collected.
+	CollectedAt time.Time `json:"collected_at,omitzero"`
 
 	// Bridged is what this job's BRIDGED calls cost the engine — the
 	// auxiliary calls the seat's tools made for the coding agent and the

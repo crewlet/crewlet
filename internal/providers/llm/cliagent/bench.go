@@ -1,6 +1,7 @@
 package cliagent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -27,10 +28,11 @@ import (
 // engine asks before it launches and takes the next member of the seat's
 // executor chain that can run in a box when this one sits out. A run that
 // meets the limit after it started is not relaunched on another member — its
-// work so far lives in its own box and session — but how it ended is read
-// against the same markers when it is collected ([Provider.RunEnded]), so the
-// turn's NEXT launch, and every other seat's on this node, skips the spent
-// entry as a call on this host would.
+// work so far lives in its own box and session — but how it ended is read by
+// the same classification every call takes, the CLI's structured limit report
+// first, when it is collected ([Provider.RunEnded]), so the turn's NEXT
+// launch, and every other seat's on this node, skips the spent entry as a call
+// on this host would.
 //
 // # Why the backend benches itself
 //
@@ -59,14 +61,15 @@ import (
 //
 // The bench is the provider's own and is not shared with the fleet: every
 // other node learns the same thing from its own calls, once per window. It ends
-// at the reset instant the CLI named ([cliprofile.LimitMarker]) where its
-// profile can read one, and after [limitBench] where it cannot — which is
-// every shipped profile — and never later than [maxLimitBench]. Short on
-// purpose: a probe costs at most the entry's max_concurrent process launches
-// — the calls that take a slot once the window has ended, before the first of
-// them reports; every call queued behind them is refused once that report
-// lands — while sitting out a plan that has already reset costs the
-// fallback's spend for every minute of it.
+// at the reset instant the vendor named ([cliprofile.ResetReading]), never
+// later than [maxLimitBench]. Where the vendor named none it grows through
+// [limitBackoff], one step per report that finds the window already over, and
+// starts again from the first once a call through the entry answers: a limit
+// that lifts in a minute costs a minute, and one that lasts all afternoon
+// costs four process launches an hour per entry rather than one per round of
+// every seat. Short at first on purpose: sitting out a plan that has already
+// reset costs the fallback's spend, or the seats' whole afternoon where there
+// is no fallback, for every minute of it.
 //
 // A LOGIN IS NOT BENCHED. `crewlet llm login` mends it — usually from another
 // process this one hears nothing from — and the very next call must find it,
@@ -74,43 +77,74 @@ import (
 // finding out that a login is still missing costs a CLI that exits at once
 // rather than a model call.
 
-// limitBench is how long an entry sits out after its CLI reported a spent plan
-// or a rate limit with no reset instant: one minute, so a window that turns
-// over is noticed within a minute — the fallback's spend for at most that
-// long — while one that has not costs at most max_concurrent process launches
-// a minute per entry on this node rather than one per round of every seat.
-const limitBench = time.Minute
+// limitBackoff is how long an entry sits out after a limit report that named
+// no reset instant: the first step for the first report, and each later step
+// for a report that finds the previous window already over, so a probe that
+// meets the same limit waits longer before the next. Capped at the last step,
+// fifteen minutes, which keeps a limit that has lifted from costing more than a
+// quarter of an hour, and a limit that has not from costing more than four
+// probes an hour.
+var limitBackoff = [...]time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute, 15 * time.Minute}
 
 // maxLimitBench caps a reset instant the CLI named: an hour, so an operator
 // who signs in again or raises the plan has the entry back within the hour
 // even when the vendor's window runs for days.
 const maxLimitBench = time.Hour
 
-// bench is the entry's sit-out window, guarded for concurrent calls.
+// bench is the entry's sit-out window and the report behind it, guarded for
+// concurrent calls.
 type bench struct {
 	mu    sync.Mutex
 	until time.Time
 	// said is the CLI's own sentence that started it, repeated on every
 	// call it refuses so the reason never reads as the engine's.
 	said string
+	// resetsAt is when the vendor said the limit lifts, zero where it named
+	// no instant.
+	resetsAt time.Time
+	// unnamed counts the windows sat out for reports that named no reset
+	// since the entry last answered: the step of [limitBackoff] the next
+	// one takes.
+	unnamed int
 }
 
-// bench sits the entry out for retry (the CLI's own reset, or [limitBench]
-// when it named none), capped at [maxLimitBench], and answers when the entry
-// is tried again. A later bench never SHORTENS an earlier one: two seats'
-// calls that both met the spent plan report the same window, and the one that
-// lands last must not cut it.
-func (p *Provider) bench(retry time.Duration, said string) time.Time {
-	if retry <= 0 {
-		retry = limitBench
-	}
-	until := p.now().Add(min(retry, maxLimitBench))
+// bench sits the entry out until reset (the instant the vendor named, or a
+// step of [limitBackoff] when it named none), capped at [maxLimitBench], and
+// answers when the entry is tried again. A later bench never SHORTENS an
+// earlier one: two seats' calls that both met the spent plan report the same
+// window, and the one that lands last must not cut it. For the same reason a
+// report that lands while a window is still in force does not step the
+// backoff: only a probe made after the window ended, and refused again, does.
+func (p *Provider) bench(reset time.Time, said string) time.Time {
+	now := p.now()
 	p.sitOut.mu.Lock()
 	defer p.sitOut.mu.Unlock()
-	if until.After(p.sitOut.until) {
-		p.sitOut.until, p.sitOut.said = until, said
+	b := &p.sitOut
+	var until time.Time
+	if reset.IsZero() {
+		if now.Before(b.until) {
+			// Inside a window already in force: the same refusal, heard
+			// by another call, which neither extends it nor steps on.
+			return b.until
+		}
+		until = now.Add(limitBackoff[min(b.unnamed, len(limitBackoff)-1)])
+		b.unnamed++
+	} else {
+		until = now.Add(min(reset.Sub(now), maxLimitBench))
 	}
-	return p.sitOut.until
+	if until.After(b.until) {
+		b.until, b.said, b.resetsAt = until, said, reset
+	}
+	return b.until
+}
+
+// answered ends the report behind any window: a call through the entry was
+// answered, so whatever limit it reported has lifted, and a later report that
+// names no reset starts the backoff from its first step again.
+func (p *Provider) answered() {
+	p.sitOut.mu.Lock()
+	defer p.sitOut.mu.Unlock()
+	p.sitOut.resetsAt, p.sitOut.unnamed = time.Time{}, 0
 }
 
 // SittingOut is the classified refusal of a call made while the entry sits
@@ -123,29 +157,69 @@ func (p *Provider) bench(retry time.Duration, said string) time.Time {
 // the hand-off reads the same in either place.
 func (p *Provider) SittingOut() error {
 	p.sitOut.mu.Lock()
-	until, said := p.sitOut.until, p.sitOut.said
+	until, said, resets := p.sitOut.until, p.sitOut.said, p.sitOut.resetsAt
 	p.sitOut.mu.Unlock()
 	if !p.now().Before(until) {
 		return nil
 	}
 	return p.limited(fmt.Errorf("%s, sitting out until %s, when this entry is tried again",
-		said, until.UTC().Format(time.RFC3339)), until)
+		said, until.UTC().Format(time.RFC3339)), until, resets)
 }
 
-// limited is a classified rate limit carrying when the entry is tried again,
-// so a caller telling a person to wait can name the instant without reading
-// it out of the vendor's sentence.
-func (p *Provider) limited(err error, until time.Time) error {
+// classified turns a marker's hit into the call's failure: a limit sits the
+// entry out and carries when it is tried again, and anything else is the kind
+// the marker named.
+func (p *Provider) classified(ctx context.Context, hit markerHit, reason string) error {
+	if hit.Kind != llm.KindRateLimit {
+		return p.fail(hit.Kind, fmt.Errorf("%s", reason))
+	}
+	until := p.bench(hit.Reset, reason)
+	// WHERE IT MATCHED, beside what it matched: a sit-out takes the entry
+	// from every seat on this node, and the one question an operator who
+	// doubts it has is whether the vendor said it.
+	resets := "unknown"
+	if !hit.Reset.IsZero() {
+		resets = hit.Reset.UTC().Format(time.RFC3339)
+	}
+	log.WarnContext(ctx, "cli_agent_limit_reported", "provider", p.key, "agent", p.agent,
+		"source", string(hit.Source), "said", reason,
+		"retry_at", until.UTC().Format(time.RFC3339), "resets_at", resets)
+	return p.limited(fmt.Errorf("%s", reason), until, hit.Reset)
+}
+
+// limited is a classified rate limit carrying when the entry is tried again
+// and when the vendor said the limit lifts, so a caller telling a person to
+// wait can name the instant without reading it out of the vendor's sentence.
+func (p *Provider) limited(err error, until, resets time.Time) error {
 	failure := p.failure(llm.KindRateLimit, err)
 	failure.RetryAt = until
+	failure.ResetsAt = resets
 	return failure
 }
 
-// RunEnded reads how one of this entry's EXECUTOR runs ended — the answer its
-// CLI gave, the error it reported and whether it failed, as the in-box runner
-// collected them — against the entry's own limit markers, and sits the entry
-// out exactly as a call on this host that met the same report would. It reports
-// whether it did.
+// RunEnd is how one of an entry's EXECUTOR runs ended, as the in-box runner
+// collected it ([Provider.RunEnded]).
+type RunEnd struct {
+	// Answer is what the run said last, Error the error it reported, and
+	// Failed whether the CLI said the run failed.
+	Answer, Error string
+	Failed        bool
+
+	// Event is the CLI's own terminal event, verbatim, where it prints one
+	// (Claude Code's result line): how the vendor said the run ended in
+	// fields — a status code — beside the words of Answer and Error.
+	Event string
+
+	// At is when the run's ending was first read back: what a reset the
+	// vendor names as a time of day, or as a delay, is read against. Zero
+	// reads it against now.
+	At time.Time
+}
+
+// RunEnded reads how one of this entry's EXECUTOR runs ended by the one
+// classification every call takes, the CLI's structured limit report first
+// ([cliprofile.Profile.LimitEvents]), and sits the entry out exactly as a call
+// on this host that met the same report would. It reports whether it did.
 //
 // THE OTHER HALF OF THE SECOND READER. A launch skips a member that sits out
 // ([Provider.SittingOut]), but an executor's run never goes through
@@ -155,24 +229,51 @@ func (p *Provider) limited(err error, until time.Time) error {
 // seat would already have moved on. The resuming node calls this before the
 // turn launches again, and that node is the one whose launch must see it.
 //
-// ON THE VENDOR'S WORD ALONE, by the one classification every call takes
-// (classifyMarkers): the answer of a run that did not fail counts only where a
-// sentinel opens it, its error anywhere — and for a CLI whose failures are
-// typed events ([cliprofile.MarkerScopeEvents]), the error the runner
-// collected is that event's own payload, read at the profile's marker path as
-// the event it came in.
-func (p *Provider) RunEnded(answer, errText string, failed bool) bool {
-	out := cliOutput{said: nonEmpty(answer, errText), stderr: errText, failed: failed}
-	if p.profile.EffectiveMarkerScope() == cliprofile.MarkerScopeEvents {
-		out.stdout = failureEvent(p.profile, errText)
+// ON THE VENDOR'S WORD ALONE (classifyMarkers): the run's terminal event where
+// the profile reads a limit off one — Claude Code says a spent plan as
+// `api_error_status` 429 on its result line, in a sentence ("You've hit your
+// 5-hour limit") that is deliberately no sentinel — then the sentinels, by the
+// rules a call's output is held to: the answer of a run that did not fail
+// counts only where a sentinel opens it, its error anywhere, and for a CLI
+// whose failures are typed events ([cliprofile.MarkerScopeEvents]) the error
+// the runner collected is that event's own payload, read at the profile's
+// marker path as the event it came in.
+//
+// A RUN THAT SUCCEEDED ON NO LIMIT IS AN ANSWER, as a call's is
+// ([Provider.answered]): the entry's backoff starts again from its first step.
+func (p *Provider) RunEnded(ctx context.Context, end RunEnd) bool {
+	at := end.At
+	if at.IsZero() {
+		at = p.now()
 	}
+	out := cliOutput{said: nonEmpty(end.Answer, end.Error), stderr: end.Error,
+		failed: end.Failed, at: at}
+	var lines []string
+	if event := strings.TrimSpace(end.Event); event != "" {
+		lines = append(lines, event)
+	}
+	if p.profile.EffectiveMarkerScope() == cliprofile.MarkerScopeEvents {
+		if event := failureEvent(p.profile, end.Error); event != "" {
+			lines = append(lines, event)
+		}
+	}
+	out.stdout = strings.Join(lines, "\n")
 	hit, ok := classifyMarkers(p.profile, out)
 	if !ok || hit.Kind != llm.KindRateLimit {
+		if !end.Failed {
+			p.answered()
+		}
 		return false
 	}
-	p.bench(hit.Retry, nonEmpty(hit.Said, firstLine(out.said)))
-	log.Warn("cli_agent_run_limit_reported", "provider", p.key, "agent", p.agent,
-		"source", string(hit.Source), "said", nonEmpty(hit.Said, firstLine(out.said)))
+	said := nonEmpty(hit.Said, firstLine(out.said))
+	until := p.bench(hit.Reset, said)
+	resets := "unknown"
+	if !hit.Reset.IsZero() {
+		resets = hit.Reset.UTC().Format(time.RFC3339)
+	}
+	log.WarnContext(ctx, "cli_agent_run_limit_reported", "provider", p.key, "agent", p.agent,
+		"source", string(hit.Source), "said", said,
+		"retry_at", until.UTC().Format(time.RFC3339), "resets_at", resets)
 	return true
 }
 
@@ -238,10 +339,16 @@ func (p *Provider) CarrySitOut(prev *Provider) {
 	}
 	prev.sitOut.mu.Lock()
 	until, said := prev.sitOut.until, prev.sitOut.said
+	resets, unnamed := prev.sitOut.resetsAt, prev.sitOut.unnamed
 	prev.sitOut.mu.Unlock()
 	p.sitOut.mu.Lock()
 	defer p.sitOut.mu.Unlock()
+	// THE WHOLE REPORT, not only its window: the instant the vendor said the
+	// limit lifts, which a refusal names to a person ("resumes at 4:30"), and
+	// how far the backoff has stepped, so a report after the rebuild that
+	// names no reset takes the next step rather than the first again.
 	if until.After(p.sitOut.until) {
-		p.sitOut.until, p.sitOut.said = until, said
+		p.sitOut.until, p.sitOut.said, p.sitOut.resetsAt = until, said, resets
 	}
+	p.sitOut.unnamed = max(p.sitOut.unnamed, unnamed)
 }

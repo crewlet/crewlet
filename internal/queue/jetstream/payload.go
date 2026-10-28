@@ -75,12 +75,19 @@ import (
 // reading the contract's figure, and the first message past the new limit
 // makes the server close the connection with `Maximum Payload Violation` —
 // a refusal the client treats as final, so the connection is CLOSED for good
-// rather than reconnected. Measured against nats-server v2.15.0 and nats.go
-// v1.54.0. What this side CAN do is notice: [connectionLoss] records that
-// close, the node stops on it and exits naming the setting, and the restart its
-// supervisor makes meets this check, which refuses the lowered limit by name.
-// The deployment guide still tells an operator never to lower it that way,
-// because the noticing is an outage of every node the reload reached.
+// rather than reconnected. Unless the client never reads it: a message the
+// socket takes only part of is still being written when the server closes,
+// and a write that fails part way closes the socket on the client's side and
+// drops the unread refusal, so the client reconnects and reads the lowered
+// limit, which [reconnectWatch] names. Measured against nats-server v2.15.0
+// and nats.go v1.55.0, which added that close; neither outcome can be forced
+// for a message that size, and TestALiveReloadOfALowerMaxPayloadClosesAClientForGood
+// holds the client to the two. What this side CAN do is notice: [connectionLoss]
+// records the close, the node stops on it and exits naming the setting, and the
+// restart its supervisor makes meets this check, which refuses the lowered
+// limit by name. The deployment guide still tells an operator never to lower
+// it that way, because the noticing is an outage of every node the reload
+// reached, and the reconnect leaves them refusing every large write.
 func carriesTheContract(nc *nats.Conn, embedded bool) error {
 	// NAMED BEFORE THE ROUND TRIP: a connection that drops during it no
 	// longer says which member it was talking to, and that member is the

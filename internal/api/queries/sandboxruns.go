@@ -237,7 +237,7 @@ func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 		if filtered && !putTo(run, who) {
 			continue
 		}
-		out = append(out, serialiseRun(run, reach(run)))
+		out = append(out, serialiseRun(run, reach(run), s.answeredBy(run)))
 	}
 	return map[string]any{"runs": out}, nil
 }
@@ -369,6 +369,10 @@ var runKeys = map[string]runShown{
 	"started_at":          runStatus,
 	"updated_at":          runStatus,
 	"answerable_in_chat":  runStatus,
+	"declined_answers":    runStatus, // delivery ids, never what the answers said
+	"answer_ids":          runStatus, // the recorded answer's delivery ids, not its text
+	"answered_by":         runStatus,
+	"answered_at":         runStatus,
 	"reply":               runBody,
 	"bridge_calls":        runBody,
 	"bridge_calls_elided": runStatus, // a count of what was cut, never a call
@@ -385,8 +389,8 @@ var runKeys = map[string]runShown{
 //
 // A KEY THE TABLE DOES NOT NAME IS WITHHELD, which the walk keeps unreachable:
 // left out is the direction a mistake here has to fail in.
-func serialiseRun(run sandbox.PendingRun, r livestate.Reach) map[string]any {
-	row := runRow(run)
+func serialiseRun(run sandbox.PendingRun, r livestate.Reach, answeredBy string) map[string]any {
+	row := runRow(run, answeredBy)
 	asked := r.Record != "" && slices.Contains(run.AudienceHandles, r.Record)
 	for key := range row {
 		switch runKeys[key] {
@@ -412,8 +416,9 @@ func serialiseRun(run sandbox.PendingRun, r livestate.Reach) map[string]any {
 }
 
 // runRow is every fact a coding run's row carries, whoever reads it — see
-// [serialiseRun] for what each reader is shown of it.
-func runRow(run sandbox.PendingRun) map[string]any {
+// [serialiseRun] for what each reader is shown of it. answeredBy is who gave
+// the run's recorded answer, as its seal opens ([Sources.answeredBy]).
+func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 	// HELD, NOT STAMPED. A box parked on a question is being paid for
 	// whether or not the pause instant reached the row, and drawing the raw
 	// stamp showed exactly that box as a live one — the one reading that
@@ -475,6 +480,20 @@ func runRow(run sandbox.PendingRun) map[string]any {
 		"started_at":         isoOrEmpty(run.CreatedAt),
 		"updated_at":         isoOrEmpty(run.UpdatedAt),
 		"answerable_in_chat": answerableInChat(run.ConversationKey),
+		// THE ANSWERS THE QUESTION LET GO OF, by the id of the delivery each
+		// arrived in (answer_run answers it as `answer_id`): a person who
+		// answered is told from here that the run could not take their
+		// answer and is waiting on its question again, rather than left
+		// looking at a question that never changes. Always an array.
+		"declined_answers": nonNil(run.DeclinedAnswers),
+		// THE ANSWER RECORDED ON THE RUN, by its deliveries, who gave it and
+		// when: the first recorded answer wins, and a person whose answer
+		// was not that one is told whose was, rather than shown their own
+		// as taken. Empty on a run with no recorded answer; who gave it,
+		// also where its seal does not open on this node.
+		"answer_ids":  answerIDs(run.Answer),
+		"answered_by": answeredBy,
+		"answered_at": answeredAt(run.Answer),
 		// WHO IS WAITING, which is the question a board full of parked
 		// runs exists to answer and had no field for. Persisted rather
 		// than re-derived precisely because the resumed turn does not see
@@ -505,6 +524,30 @@ func runRow(run sandbox.PendingRun) map[string]any {
 		// was asked nothing. Set by [serialiseRun].
 		"body_withheld": false,
 	}
+}
+
+// answerIDs and answeredAt are the recorded answer's deliveries and instant,
+// empty for a run with none.
+func answerIDs(answer *sandbox.RecordedAnswer) []string {
+	if answer == nil {
+		return []string{}
+	}
+	return nonNil(answer.EventIDs)
+}
+
+// answeredBy is who gave run's recorded answer, which only the answer's seal
+// says: empty for a run with none, and where the seal does not open on this
+// node ([sandbox.OpenedAnswerer]). No copy of it is kept in the clear for a
+// row to read instead.
+func (s Sources) answeredBy(run sandbox.PendingRun) string {
+	return sandbox.OpenedAnswerer(s.RunAnswers, run)
+}
+
+func answeredAt(answer *sandbox.RecordedAnswer) string {
+	if answer == nil {
+		return ""
+	}
+	return isoOrEmpty(answer.RecordedAt)
 }
 
 // answerableInChat reports whether a reply on a chat surface could ever reach

@@ -41,8 +41,9 @@ import (
 // has no text and no answerer, and the only way to them is [AnswerSeal.Open].
 // The deliveries the answer was made of ride beside the seal as the messages
 // they are ([RecordedAnswer.Events]) — the newest raises the working
-// indicator, and a let-go hands them back to the seat's inbox, the route every
-// message takes — and no reader takes the answer or its answerer from them.
+// indicator, and a let-go hands them back to the seat the way each came, a chat
+// reply to its inbox and an answer by turn to its control topic — and no reader
+// takes the answer or its answerer from them.
 //
 // # Two failures, and only one of them waits
 //

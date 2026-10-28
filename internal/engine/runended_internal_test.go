@@ -2,6 +2,7 @@ package engine
 
 import (
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
@@ -16,6 +17,13 @@ import (
 // this node, and the turn's next launch — a reviewer's send-back — takes the
 // chain's next member, announced as the hand-off it is. A run that ended any
 // other way leaves the entry in place.
+//
+// THE ENDING AS COLLECTED, its terminal event included: Claude Code 2.1.312
+// says a spent plan in words no sentinel matches, and as a status on its
+// result line, which is all that reads it.
+//
+// Mutation: leave the event out of what noteRunEnded hands the entry, and the
+// next launch walks into the spent plan.
 func TestARunThatSpentItsPlanMovesTheNextLaunchOn(t *testing.T) {
 	t.Parallel()
 	c, seat := chainCompany(t,
@@ -33,8 +41,10 @@ func TestARunThatSpentItsPlanMovesTheNextLaunchOn(t *testing.T) {
 		t.Fatalf("a run that ended on its answer sat its entry out: %v", err)
 	}
 
-	e.noteRunEnded(t.Context(), c, run, sandbox.RunEnding{
-		Error: "Usage limit reached · resets 5pm", Text: "Usage limit reached · resets 5pm"})
+	const said = "You've hit your 5-hour limit"
+	e.noteRunEnded(t.Context(), c, run, sandbox.RunEnding{Error: said, Text: said,
+		Event: `{"type":"result","is_error":true,"api_error_status":429,"result":"` + said + `"}`,
+		At:    time.Now()})
 	l := launcherOn(e, c, seat, "t1")
 	var handoffs []chain.Fallback
 	if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, &handoffs)); err != nil {
@@ -55,7 +65,7 @@ func TestARunThatSpentItsPlanMovesTheNextLaunchOn(t *testing.T) {
 func TestAnApplyKeepsASpentPlanSpent(t *testing.T) {
 	t.Parallel()
 	before, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
-	if !planOf(t, before).RunEnded("Usage limit reached · resets 5pm", "", false) {
+	if !planOf(t, before).RunEnded(t.Context(), cliagent.RunEnd{Answer: "Usage limit reached · resets 5pm"}) {
 		t.Fatal("the premise: the old entry sits out")
 	}
 	same, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})

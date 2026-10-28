@@ -155,7 +155,7 @@ on its question again. The detail is `internal/sandbox`'s (answerseal.go).
 ## Amendment: a note to a coding run is sealed on its record
 
 A person's note to a turn whose coding run is out waits on the run's record in
-the coordination store ([ADR-0066](0066-a-note-to-a-coding-run-waits-sealed-on-its-record.md)),
+the coordination store ([ADR-0067](0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md)),
 and is still an instruction: the run's CLI or the review reads it as that
 person's words. So the node that files it seals it under the fleet keyring, in
 a key domain of its own (`seat.steer.note`), bound to the turn and the note's

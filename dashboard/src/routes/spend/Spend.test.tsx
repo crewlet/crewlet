@@ -984,3 +984,20 @@ test("every Spend card with a subtitle stacks it under its title", async () => {
     expect(source.match(/subtitlePlacement="below"/g)?.length ?? 0, file).toBe(subtitles);
   }
 });
+
+// THE COMPANY'S MODEL ENTRIES ARE AN ADMIN'S. A reader who is not one is never
+// offered the split by provider entry (the engine refuses it to them), a
+// hand-edited `group=provider` draws the default split instead, and the by
+// model card says the breakdown is shown to admins rather than that nothing
+// was spent.
+test("a reader who is not an admin is offered no split or list by model entry", async () => {
+  mount("#/settings/spend?window=30d&group=provider", <Spend />, {
+    tokens: rollup(1_000, { by_provider: [], entries_withheld: true }),
+    viewer: { ...VIEWER, grants: ["worklet", "doclet"] },
+  });
+  await settle();
+  expect(screen.queryByRole("radio", { name: "Provider" })).toBeNull();
+  expect(screen.getByRole("radio", { name: "Phase" }).getAttribute("aria-checked")).toBe("true");
+  expect(params("token_series").every((p) => p.group !== "provider")).toBe(true);
+  expect(screen.getByText("Shown to admins")).toBeTruthy();
+});

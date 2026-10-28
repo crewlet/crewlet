@@ -101,12 +101,22 @@ func WebhookTopic(source string) string { return "crewlet.webhooks." + source }
 
 // ErrorInfo is why a seat stopped.
 //
-// One shape for every stop — a failed phase, a failed task, an exhausted
-// budget, a dead provider, a guard breach — so one panel explains all of them
+// One shape for every stop (a failed phase, a failed task, an exhausted
+// budget, a dead provider, a guard breach) so one panel explains all of them
 // rather than each kind of failure needing the reader to know where to look.
+//
+// A FAILURE IS TOLD BY ITS KIND, and its own text only to a reader of the
+// company's configuration ([Reach.Config]). The text is what the engine,
+// a vendor or a tool wrote, and it names the company's entries ("llm chain
+// exhausted after 1 providers (default)"); every other reader is sent the
+// kind, which the dashboard words for a person (contract/failures.ts), and
+// finds the rest on the turn's own record.
 type ErrorInfo struct {
-	Kind    string `json:"kind"`
-	Message string `json:"message"`
+	Kind string `json:"kind"`
+	// Detail is the failure in its own words, which [MaskCall],
+	// [Overlay.For] and [MaskRow] leave out for a reader without
+	// [Reach.Config].
+	Detail  string `json:"detail,omitempty"`
 	Phase   string `json:"phase"`
 	TurnID  string `json:"turn_id"`
 	At      string `json:"at"`
@@ -363,6 +373,13 @@ type Overlay struct {
 	// at boot from the coordination record, so a pause taken before this
 	// process started is still on the seat.
 	Paused *Paused `json:"paused"`
+
+	// ProviderLimit is the seat's models at their usage limit, nil when they
+	// are not: one steady condition for as long as the limit lasts, which
+	// says whether the seat waits for it or runs on a fallback. ALWAYS
+	// present, as null when there is none, so a merged overlay never leaves
+	// a seat wearing a limit that lifted. See provider.go.
+	ProviderLimit *ProviderLimit `json:"provider_limit"`
 }
 
 // Stage is where in a turn a seat is.
@@ -619,7 +636,7 @@ func (c *Change) agentMoved(agentID string) {
 // str returns the first non-empty string among keys.
 //
 // FIRST NON-EMPTY, not first present: several payloads name the same thing two
-// ways (role / agent_role, model / provider_key) and the fallback only helps if
+// ways (role / agent_role) and the fallback only helps if
 // an empty value falls through to it.
 func str(payload map[string]any, keys ...string) string {
 	for _, key := range keys {

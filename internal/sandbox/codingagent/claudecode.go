@@ -439,6 +439,11 @@ func (ClaudeCode) Parse(stdout string) sandbox.Result {
 	}
 	if !res.Success {
 		res.Error = msg.failure()
+		// THE LINE ITSELF, for the reader that classifies how the run
+		// ended by the vendor's status rather than its words: a spent plan
+		// is `is_error` with `api_error_status` 429, whatever the sentence
+		// in `result` says this release ([sandbox.Result.Event]).
+		res.Event = text
 	}
 	return res
 }

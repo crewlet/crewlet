@@ -83,6 +83,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AStopIsRecordedWithTheDecisionThatMakesIt", testAStopIsRecordedWithTheDecisionThatMakesIt},
 		{"AStopsCollectionIsRecordedOnceAsAStepOfItsEnding", testAStopsCollectionIsRecordedOnceAsAStepOfItsEnding},
 		{"AStopOfAJobACollectionReadIsRefused", testAStopOfAJobACollectionReadIsRefused},
+		{"AJobKeepsTheInstantItWasFirstCollected", testAJobKeepsTheInstantItWasFirstCollected},
 		{"ARefusedRelaunchIsAnError", testARefusedRelaunchIsAnError},
 		{"AnEndingIsNotAStatus", testAnEndingIsNotAStatus},
 		{"EveryLaunchIsNamedAnew", testEveryLaunchIsNamedAnew},
@@ -1231,6 +1232,50 @@ func testAStopOfAJobACollectionReadIsRefused(t *testing.T, s sandbox.PendingStor
 	}
 	if decided, ok, err := stopIt("t3", relaunch); err != nil || !ok || decided.Stop == nil {
 		t.Fatalf("a stop of the relaunched job = %+v, %v, %v, want it decided", decided.Stop, ok, err)
+	}
+}
+
+// A JOB KEEPS THE INSTANT IT WAS FIRST COLLECTED. A later collection of the
+// same job — its resume held by the seat's budget for hours, say — reads the
+// same ending, and a reset its CLI named as a time of day is read against the
+// first collection's instant: read against the later one, a 4:30pm already past
+// was the next day's, and the entry sat out for nothing. So a release that read
+// the box records the instant once, a later one leaves it, a release that did
+// not read the box records none, and a relaunch's job starts without one.
+func testAJobKeepsTheInstantItWasFirstCollected(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	mustLaunched(t, s, run("t1"))
+	release := releaseOf(mustClaim(t, s, "t1"))
+	release.Collected, release.CollectedAt = true, base
+	if released, err := s.ReleaseClaim(ctx, "t1", release); err != nil || !released {
+		t.Fatalf("release t1 collected = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); !got.Launch.CollectedAt.Equal(base) {
+		t.Fatalf("the first collection's instant reads %v, want %v", got.Launch.CollectedAt, base)
+	}
+	again := releaseOf(mustClaim(t, s, "t1"))
+	again.Collected, again.CollectedAt = true, base.Add(3*time.Hour)
+	if released, err := s.ReleaseClaim(ctx, "t1", again); err != nil || !released {
+		t.Fatalf("release t1 collected again = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); !got.Launch.CollectedAt.Equal(base) {
+		t.Fatalf("a later collection moved the job's first instant to %v, want %v",
+			got.Launch.CollectedAt, base)
+	}
+
+	mustLaunched(t, s, run("t2"))
+	failed := releaseOf(mustClaim(t, s, "t2"))
+	failed.CollectFailedAt = base
+	if released, err := s.ReleaseClaim(ctx, "t2", failed); err != nil || !released {
+		t.Fatalf("release t2 failed collection = %v, %v", released, err)
+	}
+	if got := mustGet(t, s, "t2"); !got.Launch.CollectedAt.IsZero() {
+		t.Fatalf("a release that read no box recorded a collection at %v", got.Launch.CollectedAt)
+	}
+
+	mustLaunched(t, s, run("t1"))
+	if got := mustGet(t, s, "t1"); !got.Launch.CollectedAt.IsZero() {
+		t.Fatal("a relaunch's job inherited the collection instant of the job before it")
 	}
 }
 

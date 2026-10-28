@@ -93,7 +93,7 @@ cost and never exceed it.
 
 ## Amendment: every turn parks on its executor
 
-Since [ADR-0065](0065-every-executor-is-its-coding-clis-own-run.md) every
+Since [ADR-0066](0066-every-executor-is-its-coding-clis-own-run.md) every
 turn's executor is its coding CLI's own detached run, so every turn completes
 once when it parks at the launch and again each time a run it launched is
 collected: the segments above are every turn's, not only those of a turn that

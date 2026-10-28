@@ -624,12 +624,13 @@ func TestAResumeAbandonedBeforeItsTurnHandsTheAnswerOn(t *testing.T) {
 		if d, _ := rig.coordinator.AnswerByTurn(t.Context(), given, ev); d != AnswerConsumed {
 			t.Fatalf("disposition = %q, want the answer recorded on its run", d)
 		}
+		rig.fireRetries()
 		rig.finished("t1")
 		if got := rig.handedBack(); !slices.Equal(got, []string{declinedCopyID(ev.ID).String()}) {
 			t.Fatalf("handed back %v, want the answer's copy once: no turn ever took it", got)
 		}
-		// THE COPY, ON THE SEAT'S INBOX, finds the run gone, and says so.
-		copied := rig.lastInboxEvent(t)
+		// THE COPY, ON THE SEAT'S CONTROL TOPIC, finds the run gone, and says so.
+		copied := rig.lastHandedBack(t)
 		answer, _ := events.DataAs[*types.SandboxAnswerGiven](copied)
 		if d, _ := rig.coordinator.AnswerByTurn(t.Context(), *answer, copied); d != AnswerNotMine {
 			t.Fatalf("the copy = %q, want it spent on a run that is gone", d)
@@ -1154,6 +1155,7 @@ func TestAClaimCarriesTheClaimantsLease(t *testing.T) {
 				if d, _ := rig.coordinator.AnswerByTurn(t.Context(), given, ev); d != AnswerConsumed {
 					t.Fatalf("AnswerByTurn = %q, want it consumed", d)
 				}
+				rig.fireRetries()
 			},
 		},
 	} {
