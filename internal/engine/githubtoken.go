@@ -243,7 +243,7 @@ func issuedAtUse(kind integration.Kind) bool { return kind == integration.KindGi
 // ON WHICHEVER WAITER POLLS THE BOX, and so on both of a node's
 // ([Engine.sandboxWaiterOptions]): a `direct` or `container` box is polled by
 // its launching node's own waiter and by no other, and an `e2b` box by the
-// fleet's, on the node holding its duty (ADR-0063).
+// fleet's, on the node holding its duty (ADR-0064).
 //
 // AND BEFORE A JOB STARTS IN A KEPT BOX, on the node launching it
 // ([sandbox.CoordinatorOptions.Refresh]). A box is paused while its turn's

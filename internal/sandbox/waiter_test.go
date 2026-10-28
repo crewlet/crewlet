@@ -305,6 +305,29 @@ func TestARunningJobFiresNoCompletionUntilItFinishes(t *testing.T) {
 	}
 }
 
+// A FINISHED RUN NOBODY CLAIMED IS ANNOUNCED AGAIN ON THE NEXT TICK.
+//
+// The announcement is a signal, not the work: the run's row is. So a completion
+// whose delivery was acked without a claim (a node that may not start the turn
+// yet, on a condition that clears by waiting) loses nothing, because the run is
+// still running and the next tick fires it again. That is what lets the control
+// topic hand such a completion back without spending a delivery.
+//
+// Mutation: fire a run's completion once and remember it, and the second tick
+// fires nothing for a run that is still waiting for its claim.
+func TestAnUnclaimedCompletionIsAnnouncedAgain(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true})
+	for tick := 1; tick <= 2; tick++ {
+		if fired := rig.tick(); fired != 1 {
+			t.Fatalf("tick %d fired %d completions for a finished run nobody claimed, want 1",
+				tick, fired)
+		}
+	}
+}
+
 // Two publishes, two purposes: the announcement feeds the dashboard's
 // broadcast stream, the control copy reaches the one node that holds the
 // suspended conversation.

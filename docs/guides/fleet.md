@@ -604,7 +604,9 @@ it can talk to.
 ## Draining and rolling upgrades
 
 A node stops by draining: it stops taking new work, lets in-flight turns
-finish, releases each seat as it goes idle, gives back every fleet duty it
+finish, releases each seat as it goes idle (a coding run that finishes during
+the drain, or a person's answer to one, is not resumed here: it is left for
+the seat's next holder, as every turn the drain refuses is), gives back every fleet duty it
 holds once its duty loops have finished their last tick, and exits. Peers
 pick the seats and the duties up. A node that is killed instead releases
 nothing: its seats move after the lease TTL, and its duties after their own

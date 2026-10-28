@@ -315,7 +315,7 @@ func TestTheWiringSurvivesConcurrentDeliveries(t *testing.T) {
 		go func(i int) {
 			defer func() { done <- struct{}{} }()
 			for range 25 {
-				res := e.Dispatch(context.Background(), "ceo",
+				res := engine.MailboxTurn(context.Background(), e, "ceo",
 					[]*events.Event{ev("external_notification")})
 				if res.Outcome == queue.OutcomeAck {
 					ran.Add(1)
@@ -339,7 +339,7 @@ func TestASeatThisNodeDoesNotOwnIsDeferred(t *testing.T) {
 	// node that has claimed nothing owns nothing, so every delivery defers
 	// — and asks the host to resume the consumer when it does claim.
 	e := newEngine(t, engine.Options{})
-	got := e.Dispatch(context.Background(), "ceo", []*events.Event{ev("external_notification")})
+	got := engine.MailboxTurn(context.Background(), e, "ceo", []*events.Event{ev("external_notification")})
 	if got.Outcome != queue.OutcomeDefer {
 		t.Errorf("outcome = %v, want a defer on an unowned seat", got.Outcome)
 	}
@@ -377,7 +377,7 @@ func TestASeatHeldBySandboxDefersRatherThanRunning(t *testing.T) {
 		return c
 	}
 
-	if got := e.Dispatch(context.Background(), "ceo",
+	if got := engine.MailboxTurn(context.Background(), e, "ceo",
 		[]*events.Event{ev("external_notification")}); got.Outcome != queue.OutcomeDefer {
 		t.Errorf("outcome = %v, want a deferral under the sandbox hold", got.Outcome)
 	}
@@ -385,7 +385,7 @@ func TestASeatHeldBySandboxDefersRatherThanRunning(t *testing.T) {
 		t.Fatalf("parked %d partitions and asked for %d holds, want no park and one hold",
 			len(parked), len(held))
 	}
-	if got := e.Dispatch(context.Background(), "cto",
+	if got := engine.MailboxTurn(context.Background(), e, "cto",
 		[]*events.Event{ev("external_notification")}); got.Outcome == queue.OutcomeDefer &&
 		len(held) != 1 {
 		t.Error("a seat waiting on nothing was held too")

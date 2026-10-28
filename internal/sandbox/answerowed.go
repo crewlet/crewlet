@@ -576,6 +576,36 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 		c.dropUnopened(ctx, run, err)
 		return
 	}
+	// ADMITTED BEFORE THE CLAIM, and held through the resume: see
+	// [TurnGate]. The inline attempt asks under the delivery that carried
+	// the answer, whose own admission answers for it; a retry asks afresh.
+	// What was signalled is read first, for the reason [Coordinator.waitOwed]
+	// gives. AFTER THE SEAL OPENS, because opening is a check on this node
+	// alone that starts no turn: an answer that will not open is never
+	// resumed, so it takes no slot and does not wait out a drain to be told
+	// so.
+	seen := c.signalsSeen()
+	adm, err := c.admitTurn(ctx, run.AgentHandle)
+	if err != nil {
+		c.owedRefused(ctx, run, refusalOf(err), seen)
+		return
+	}
+	defer adm.release()
+	c.resumeOwedAdmitted(adm, run, answer, words, fence)
+}
+
+// resumeOwedAdmitted is an owed answer's claim and resume, under the admission
+// [Coordinator.attemptOwed] took for it, and the settling of what they leave.
+//
+// IT TAKES THE ADMISSION, NOT A CONTEXT, and runs under the admission's own,
+// for the reason [Coordinator.resumeAndSettle] does: the claim belongs to the
+// admitted turn, so the drain's cut that ends the turn ends the claim with it,
+// and a frame handed only a context could pass the caller's, which the
+// admission never covered.
+func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *RecordedAnswer,
+	words AnswerWords, fence Fence,
+) {
+	ctx := adm.ctx
 	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, RecordedAnswerTail(run.LaunchID), fence)
 	if err != nil {
 		// THE CLAIM MAY HAVE LANDED, and one that did is a claim nothing on
@@ -601,7 +631,7 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 	c.moveRun(claimed.AgentHandle, StatusAnswered, StatusResumed)
 	// NO REPORT, and the question and its answer instead: the run is not
 	// over, and the turn carries it on with them ([ResumeRequest.Asked]).
-	disposition, err := c.resumeAndSettle(ctx, claimed, "", true, answer.trigger(), runOutcome{
+	disposition, err := c.resumeAndSettle(adm, claimed, "", true, answer.trigger(), runOutcome{
 		InputTokens: claimed.ParkedInputTokens, OutputTokens: claimed.ParkedOutputTokens,
 		CacheReadTokens:  claimed.ParkedCacheReadTokens,
 		CacheWriteTokens: claimed.ParkedCacheWriteTokens,
@@ -924,9 +954,7 @@ func (c *Coordinator) retryOwed(turnID string) {
 		// What has been signalled so far, read BEFORE the check: a signal
 		// that lands while the check is deciding is one the wait below must
 		// not sleep through. See [Coordinator.waitOwed].
-		c.mu.Lock()
-		seen := maps.Clone(c.signals)
-		c.mu.Unlock()
+		seen := c.signalsSeen()
 		if refusal, refused := c.admit(ctx, handle); refused {
 			c.waitOwed(ctx, turnID, refusal, seen)
 			return
@@ -1272,14 +1300,54 @@ func (c *Coordinator) waitOwed(ctx context.Context, turnID string, refusal Refus
 		"reason", refusal.Reason, "recheck_in_s", wait.Seconds())
 }
 
+// signalsSeen is what has been signalled so far, read before a check whose
+// refusal [Coordinator.waitOwed] then waits on.
+func (c *Coordinator) signalsSeen() map[signal]uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return maps.Clone(c.signals)
+}
+
+// owedRefused parks an owed answer whose resume the node's gate refused
+// ([TurnGate]) until what refused it can have changed, as [Coordinator.waitOwed]
+// parks one the seat's conditions refused: NOT A FAILURE, so none of the
+// answer's attempts is spent on a node that is merely draining or renewing.
+//
+// THE SERIES IS OPENED HERE when the refusal is the first thing it meets, which
+// is the inline attempt's case: a wait needs a series to arm, and without one
+// the answer would wait on nothing until the seat moved.
+func (c *Coordinator) owedRefused(ctx context.Context, run PendingRun, refusal Refusal,
+	seen map[signal]uint64,
+) {
+	c.mu.Lock()
+	if c.retries[run.TurnID] == nil {
+		c.retries[run.TurnID] = &answerRetry{handle: run.AgentHandle, launch: run.LaunchID,
+			first: c.now(), window: answerWindow(run)}
+	}
+	c.mu.Unlock()
+	log.InfoContext(ctx, "sandbox_answer_resume_not_admitted",
+		"turn_id", run.TurnID, "agent", run.AgentHandle, "reason", refusal.Reason,
+		"detail", "this node may not start the turn the answer resumes; the answer stays "+
+			"recorded on its run and the resume waits, here or on the seat's next holder")
+	c.waitOwed(ctx, run.TurnID, refusal, seen)
+}
+
 // Readmit re-checks at once every attempt waiting on cond, for the named seats
 // or — named none — every seat: the signal that the condition may have
 // cleared. An attempt waiting on anything else is left waiting, so a signal
 // costs nothing but the attempts it can actually release, and one that turns
 // out not to have released them waits again on whatever refuses it now.
 //
+// The attempts are an owed answer's retry, a completion the node's gate
+// refused on cond ([Coordinator.keepRefused]), which is re-fired at once rather
+// than at the waiter's next announcement of it, and a resume held on cond after
+// its run was collected ([PendingRun.HeldFor]), whose hold is lifted so the
+// next poll announces the job again ([Coordinator.liftHoldsLocked]).
+//
 // Safe from any goroutine, and cheap enough to call on every occurrence of the
-// event: with nothing waiting it is one pass over this node's owed answers.
+// event: with nothing waiting it is one pass over this node's owed answers and
+// refused completions, and one listing of the runs, in the background, for
+// the holds.
 func (c *Coordinator) Readmit(cond Condition, handles ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1298,6 +1366,7 @@ func (c *Coordinator) Readmit(cond Condition, handles ...string) {
 		c.scheduleOwedLocked(turnID, 0)
 	}
 	c.liftHoldsLocked(cond, handles)
+	c.refireRefusedLocked(cond, handles)
 }
 
 // liftHoldsLocked lifts, in the background, every hold on cond this node's

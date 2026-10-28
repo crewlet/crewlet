@@ -1,4 +1,4 @@
-# ADR-0063: A local box is driven by the node that launched it
+# ADR-0064: A local box is driven by the node that launched it
 
 - **Status:** accepted
 - **Authority:** `internal/sandbox`

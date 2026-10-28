@@ -468,6 +468,18 @@ type CoordinatorOptions struct {
 	// [Admission]. Nil admits every retry.
 	Admit Admission
 
+	// Gate is the node's admission, which every resume passes before it
+	// claims its run, on every route: see [TurnGate]. Nil admits every
+	// turn, which a coordinator with no node beneath it (a test's) is
+	// entitled to; the engine passes its node's.
+	//
+	// NOT Admit, which it sits beside: Admit is the seat's own conditions
+	// (a person's pause, a budget, a posture), which a retried answer asks
+	// because it runs outside the delivery that would have screened it. The
+	// gate is the node's question, whether this process may start a turn at
+	// all, and a completion asks it as much as a retry does.
+	Gate TurnGate
+
 	// Lease is the seat lease this node holds a seat under, which a launch
 	// stamps on the run's row ([PendingStore.BeginLaunch]) and every later
 	// write this node makes on the row carries back off it. It is what lets
@@ -683,7 +695,11 @@ type Coordinator struct {
 	// for; held whether that hold is applied, and holdBusy, holdDirty and
 	// holdGen the serialisation [Coordinator.reconcileHold] runs under. All
 	// under mu.
-	retries   map[string]*answerRetry
+	retries map[string]*answerRetry
+	// refused are the completions the node's gate refused on a condition,
+	// by turn id, kept so the condition's clearing re-fires each at once
+	// ([Coordinator.Readmit]) rather than a poll later. Under mu.
+	refused   map[string]refusedCompletion
 	owed      map[string]map[string]struct{}
 	held      map[string]bool
 	holdBusy  map[string]bool
@@ -702,6 +718,8 @@ type Coordinator struct {
 
 	hold  SeatHold
 	admit Admission
+	// gate is [CoordinatorOptions.Gate]; see [Coordinator.admitTurn].
+	gate  TurnGate
 	after func(time.Duration, func()) func() bool
 	// spent is [CoordinatorOptions.Spent]; see [Coordinator.spend].
 	spent func(ctx context.Context, handle string, evs []*events.Event)
@@ -795,6 +813,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		moves:        map[string]uint64{},
 		attempts:     map[answerKey]map[string]answerBudget{},
 		retries:      map[string]*answerRetry{},
+		refused:      map[string]refusedCompletion{},
 		owed:         map[string]map[string]struct{}{},
 		held:         map[string]bool{},
 		holdBusy:     map[string]bool{},
@@ -804,6 +823,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		launchStops:  map[string]launchStop{},
 		hold:         opts.Hold,
 		admit:        opts.Admit,
+		gate:         opts.Gate,
 		after:        opts.After,
 		spent:        opts.Spent,
 		lease:        opts.Lease,
@@ -1084,6 +1104,38 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		return fmt.Errorf("%w: %w", ErrResumeUnavailable,
 			notHeld(ctx, ev.AgentHandle, ev.TurnID, "claiming a completion"))
 	}
+	// ADMITTED BEFORE THE CLAIM, and held through the resume: see
+	// [TurnGate]. A refusal leaves the run unclaimed and running, so the
+	// waiter that drives its box announces its completion again on its next
+	// poll, and keeps the box meanwhile; the error carries the refusal, whose
+	// condition decides what the caller does with this delivery. What was
+	// signalled is read first, for the reason [Coordinator.keepRefused] gives.
+	seen := c.signalsSeen()
+	adm, err := c.admitTurn(ctx, ev.AgentHandle)
+	if err != nil {
+		log.InfoContext(ctx, "sandbox_completion_not_admitted",
+			"turn_id", ev.TurnID, "agent", ev.AgentHandle, "reason", err.Error(),
+			"detail", "this node may not start the turn the completion resumes, so the "+
+				"run is left unclaimed for the waiter to announce again, here once the "+
+				"condition clears or on the seat's next holder")
+		c.keepRefused(ev, trigger, refusalOf(err).Condition, seen)
+		return fmt.Errorf("%w: %w", ErrResumeUnavailable, err)
+	}
+	defer adm.release()
+	c.forgetRefused(ev.TurnID)
+	return c.completeAdmitted(adm, ev, trigger, fence)
+}
+
+// completeAdmitted is a completion's claim, collection and resume, under the
+// admission [Coordinator.OnCompleted] took for it.
+//
+// IT TAKES THE ADMISSION, NOT A CONTEXT, for the reason
+// [Coordinator.resumeOwedAdmitted] gives: everything from the claim on belongs
+// to the admitted turn and runs under the admission's own context.
+func (c *Coordinator) completeAdmitted(adm admitted, ev types.SandboxRunCompleted,
+	trigger *events.Event, fence Fence,
+) error {
+	ctx := adm.ctx
 	run, won, err := c.pending.ClaimForResume(ctx, ev.TurnID, CompletionTail(ev.LaunchID), fence)
 	if err != nil {
 		return fmt.Errorf("sandbox: claiming %s: %w", ev.TurnID, err)
@@ -1161,7 +1213,7 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// survives the handoffs which reset it. Every
 	// disposition that returns an error is the retry, and every one that
 	// does not is an ending.
-	_, err = c.resumeAndSettle(ctx, run, runReport(result), result.Success, trigger, runOutcome{
+	_, err = c.resumeAndSettle(adm, run, runReport(result), result.Success, trigger, runOutcome{
 		DeliveredRefs: result.DeliveredRefs, DeliveredRefsElided: result.DeliveredRefsElided,
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
 		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
@@ -2215,9 +2267,12 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 // A REPLY A TURN TOOK IS SPENT, whatever becomes of the turn, and the line
 // between the two is drawn by the turn's own start ([ResumeRequest.Begin]) —
 // which is where its delivery is recorded as worked, too.
-func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
+func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	answer string, success bool, trigger *events.Event, outcome runOutcome,
 ) (AnswerDisposition, error) {
+	// UNDER THE ADMISSION, which is the only way here: the turn this
+	// re-enters is one the node admitted ([admitted]).
+	ctx := adm.ctx
 	if len(run.ExecuteState) == 0 {
 		// No parked turn to resume, and the run cannot be judged without
 		// one.
@@ -4099,6 +4154,13 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	// AND A STOP OF ONE OF ITS LAUNCHES NO FRAME TOOK: the seat's turns run
 	// on its next holder from here.
 	maps.DeleteFunc(c.launchStops, func(_ string, s launchStop) bool { return s.handle == handle })
+	// AND ANY COMPLETION IT WAS WAITING TO RE-FIRE: the run is unclaimed,
+	// and the waiter that drives its box announces it to the successor.
+	for turnID, kept := range c.refused {
+		if kept.ev.AgentHandle == handle {
+			delete(c.refused, turnID)
+		}
+	}
 	c.mu.Unlock()
 	// AND THE SEAT'S INBOX HOLD, which the release's detach has already
 	// dropped with the attachment: forgotten, never lifted — the seat's mail

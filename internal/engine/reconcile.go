@@ -1271,7 +1271,7 @@ func (r *Reconciler) Run(ctx context.Context) {
 		// posture moves. Only those: an answer waiting on anything else is
 		// not woken by a tick, so the tick is not a poll of it.
 		if r.engine.admits() {
-			r.engine.readmitAnswers(waitPosture)
+			r.engine.readmitResumes(waitPosture)
 		}
 		// A full jittered interval after every tick, nudged or not: an
 		// activation storm must not become an apply storm.
