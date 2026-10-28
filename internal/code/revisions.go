@@ -9,8 +9,6 @@ import (
 	"maps"
 	"slices"
 	"strings"
-
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 // A CHANGE'S REVISIONS ARE DERIVED FROM THE PUSHES THAT MOVE IT, IN THE PUSH'S
@@ -372,39 +370,6 @@ func (b *changeBook) move(e PushEntry) {
 		row.state, row.closeReason = ChangeStateClosed, SourceDeleted
 		row.closedAt = sql.NullInt64{Int64: b.at, Valid: true}
 	}
-}
-
-// write writes what the book's moves made of the changes they reached — each
-// change's row whole, its revisions and its new authors — and answers the rows
-// it wrote, [changeBook.rowCount]. A conflict on a revision's or an author's
-// key is a skip, never an abort, which would stall the log on every node: no
-// record this build applies meets one, since the book adds only what the rows
-// it read do not hold.
-func (b *changeBook) write(ctx context.Context, tx *sql.Tx, maxVariables int) (int, error) {
-	for _, id := range b.touched {
-		if err := writeChange(ctx, tx, *b.rows[id]); err != nil {
-			return 0, fmt.Errorf("code: write change %s: %w", id, err)
-		}
-	}
-	if _, err := store.InsertRows(ctx, tx, maxVariables,
-		`INSERT INTO code_revisions (change_id, n, head_oid, pusher, pusher_kind, push_id, position, at) VALUES `,
-		`(?, ?, ?, ?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, n) DO NOTHING`, len(b.revisions),
-		func(i int) []any {
-			r := b.revisions[i]
-			return []any{r.change, r.n, r.head, r.pusher, string(r.kind), r.pushID, b.packed, b.at}
-		}); err != nil {
-		return 0, fmt.Errorf("code: write the revisions: %w", err)
-	}
-	if _, err := store.InsertRows(ctx, tx, maxVariables,
-		`INSERT INTO code_change_authors (change_id, author, author_kind, first_revision, position) VALUES `,
-		`(?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, author) DO NOTHING`, len(b.authors),
-		func(i int) []any {
-			a := b.authors[i]
-			return []any{a.change, a.author, string(a.kind), a.first, b.packed}
-		}); err != nil {
-		return 0, fmt.Errorf("code: write the authors: %w", err)
-	}
-	return b.rowCount(), nil
 }
 
 // The live changes a push record reads — the changes its branches head and

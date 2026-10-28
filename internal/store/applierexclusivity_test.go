@@ -578,10 +578,12 @@ var allowedReplicatedWriter = []allowance{
 		Prefix: "internal/code/apply", Kind: mechanism,
 		Why: "The code domain's applier — the record dispatch, a repository's " +
 			"lifecycle and the activation fence, the push with its horizons " +
-			"and the purge's parts, the compaction that retires a " +
-			"repository's packs for the outputs that replace them and the " +
-			"publication that replaces the top of its published layer chain, " +
-			"and the sweep of its retired packs past their grace.",
+			"and the purge's parts, a change's lifecycle and the revisions " +
+			"and authors a push writes of the changes it moves, the " +
+			"compaction that retires a repository's packs for the outputs " +
+			"that replace them and the publication that replaces the top of " +
+			"its published layer chain, and the sweep of its retired packs " +
+			"past their grace.",
 	},
 	{
 		Prefix: "internal/search/apply", Kind: mechanism,

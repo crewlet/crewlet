@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // THE LIFECYCLE'S APPLIES: an open's ([Applier.applyChangeOpen]) and every
@@ -224,6 +225,41 @@ func writeChange(ctx context.Context, tx *sql.Tx, r changeRow) error {
 		r.revision, string(r.work.Backend), r.work.ID, r.work.Key, r.work.Project, r.closedAt, r.closeReason,
 		r.mergedAt, string(r.mergedVia), r.mergeOID, r.version, r.position, r.id)
 	return err
+}
+
+// write writes what a push record's [changeBook] made of the changes its
+// entries reached — each change's row whole, its revisions and its new
+// authors — and answers the rows it wrote, [changeBook.rowCount]: the push
+// apply's half of the book, here in the applier's own files, while the model
+// it writes from (revisions.go) is the decide's as much as the apply's. A
+// conflict on a revision's or an author's key is a skip, never an abort,
+// which would stall the log on every node: no record this build applies
+// meets one, since the book adds only what the rows it read do not hold.
+func (b *changeBook) write(ctx context.Context, tx *sql.Tx, maxVariables int) (int, error) {
+	for _, id := range b.touched {
+		if err := writeChange(ctx, tx, *b.rows[id]); err != nil {
+			return 0, fmt.Errorf("code: write change %s: %w", id, err)
+		}
+	}
+	if _, err := store.InsertRows(ctx, tx, maxVariables,
+		`INSERT INTO code_revisions (change_id, n, head_oid, pusher, pusher_kind, push_id, position, at) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, n) DO NOTHING`, len(b.revisions),
+		func(i int) []any {
+			r := b.revisions[i]
+			return []any{r.change, r.n, r.head, r.pusher, string(r.kind), r.pushID, b.packed, b.at}
+		}); err != nil {
+		return 0, fmt.Errorf("code: write the revisions: %w", err)
+	}
+	if _, err := store.InsertRows(ctx, tx, maxVariables,
+		`INSERT INTO code_change_authors (change_id, author, author_kind, first_revision, position) VALUES `,
+		`(?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, author) DO NOTHING`, len(b.authors),
+		func(i int) []any {
+			a := b.authors[i]
+			return []any{a.change, a.author, string(a.kind), a.first, b.packed}
+		}); err != nil {
+		return 0, fmt.Errorf("code: write the authors: %w", err)
+	}
+	return b.rowCount(), nil
 }
 
 // changeNotApplied logs a change record that applies as nothing because its
