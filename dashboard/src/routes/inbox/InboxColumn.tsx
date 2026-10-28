@@ -374,7 +374,11 @@ const InboxItem = memo(function InboxItem({
       leading={<Badge row={row} who={who} />}
       // A ROW IS A LINK ALREADY, so what it says is drawn with its marks and
       // swatches and never a link of its own (`renderTokens`).
-      excerpt={words.excerpt === undefined ? undefined : renderTokens(words.excerpt, "excerpt")}
+      excerpt={
+        words.excerpt === undefined
+          ? undefined
+          : renderTokens(words.excerpt, "excerpt", "text", true)
+      }
       outcome={said ? <AnswerLine words={said} /> : undefined}
       outcomeIcon={said ? <AnswerMark words={said} /> : undefined}
       outcomeTone="success"
@@ -390,7 +394,7 @@ const InboxItem = memo(function InboxItem({
         ) : undefined
       }
     >
-      {renderTokens(words.text, "words")}
+      {renderTokens(words.text, "words", "text", true)}
     </Row>
   );
   // A ROW'S WORDS ARE ITS ASK'S: a bare `#11` in its question is placed by

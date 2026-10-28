@@ -343,19 +343,25 @@ function AskPane({
             {frame.task && <> on {frame.task}</>}
           </>,
         )}
-        <ReadingPaneTitle>{renderTokens(askQuestion(ask), "question")}</ReadingPaneTitle>
-        {context && <ReadingPaneLead>{renderMarkdown(context, CHECKED_WORDS)}</ReadingPaneLead>}
+        <ReadingPaneTitle>
+          {renderTokens(askQuestion(ask), "question", "text", true)}
+        </ReadingPaneTitle>
+        {context && (
+          <ReadingPaneLead>
+            {renderMarkdown(context, { ...CHECKED_WORDS, scoped: true })}
+          </ReadingPaneLead>
+        )}
         {reasoning ? (
           <ReadingPaneReasoning
             title={
               <>
                 {`${frame.name} recommends `}
-                <strong>{renderTokens(reasoning.label, "recommended")}</strong>
+                <strong>{renderTokens(reasoning.label, "recommended", "text", true)}</strong>
               </>
             }
             footer={chips}
           >
-            <p>{renderTokens(reasoning.text, "reasoning", "checked")}</p>
+            <p>{renderTokens(reasoning.text, "reasoning", "checked", true)}</p>
           </ReadingPaneReasoning>
         ) : (
           chips
@@ -447,7 +453,9 @@ function AnsweredPane({
             {frame.task && <> on {frame.task}</>}
           </>,
         )}
-        <ReadingPaneTitle>{renderTokens(askQuestion(ask), "question")}</ReadingPaneTitle>
+        <ReadingPaneTitle>
+          {renderTokens(askQuestion(ask), "question", "text", true)}
+        </ReadingPaneTitle>
         <ReadingPaneOutcome>
           {`${words.who} ${words.verb}`}
           {said && (
@@ -594,14 +602,6 @@ function EvidenceLink({ evidence }: { evidence: WorkDecisionEvidence }) {
 }
 
 /**
- * A cited task, by its key and title as they are now, opened beside the Inbox
- * at its ADDRESS ([itemAddress]) once the read says which task it is.
- */
-function TaskEvidence({ id, label }: { id: string; label?: string }) {
-  const read = useQuery("work_item", { id });
-  const task = read.data?.task;
-  const peek = usePeekControls();
-/**
  * An address the asker cited, by the Inbox's `checked` rule
  * (`LinkMode` in `lib/inlineTokens.ts`): a button only when the dashboard
  * builds it, on a host the company configured and rebuilt from what it names
@@ -644,6 +644,14 @@ function UrlEvidence({ raw }: { raw: string }) {
   );
 }
 
+/**
+ * A cited task, by its key and title as they are now, opened beside the Inbox
+ * at its ADDRESS ([itemAddress]) once the read says which task it is.
+ */
+function TaskEvidence({ id, label }: { id: string; label?: string }) {
+  const read = useQuery("work_item", { id });
+  const task = read.data?.task;
+  const peek = usePeekControls();
   const ref = { kind: "item" as const, id: read.data ? itemAddress(detailItem(read.data)) : id };
   return (
     <ButtonLink

@@ -427,8 +427,8 @@ describe("bare numbers", () => {
   test("a scope spans the renders of one message: a title placed by its context", async () => {
     const el = await draw(
       <TokenScope texts={["Apply the #11 PR body?", "Assigned to you in gophrase/backend."]}>
-        <h1>{renderTokens("Apply the #11 PR body?", "q")}</h1>
-        {md("Assigned to you in gophrase/backend.")}
+        <h1>{renderTokens("Apply the #11 PR body?", "q", "text", true)}</h1>
+        {md("Assigned to you in gophrase/backend.", { scoped: true })}
       </TokenScope>,
       { hosts: GOPHRASE },
     );
@@ -436,6 +436,26 @@ describe("bare numbers", () => {
     expect(el.querySelector("h1 [data-vendor]")?.getAttribute("data-vendor")).toBe("github");
     expect(el.querySelector("h1 a")).toBeNull();
     expect(el.querySelector("h1")?.textContent).toContain("#11");
+  });
+
+  // A REPLY UNDER AN ASK IS ITS OWN MESSAGE: a render that does not say it is
+  // part of the scope around it reads its own words, so the ask's repository
+  // never places the reply's numbers.
+  //
+  // Mutation: let a run read the enclosing scope whatever its render says,
+  // and the reply's #11 links to the ask's repository.
+  test("a render under a scope that is not part of it is its own message", async () => {
+    const el = await draw(
+      <TokenScope texts={["Apply the #11 PR body?", "Assigned to you in gophrase/backend."]}>
+        <section data-reply="plain">{md("Done with #11.")}</section>
+        <section data-reply="own">{md("Merged in gophrase/web, see #5.")}</section>
+      </TokenScope>,
+      { hosts: GOPHRASE },
+    );
+    expect(el.querySelector("[data-reply=plain] [data-vendor]")).toBeNull();
+    expect(
+      [...el.querySelectorAll("[data-reply=own] a")].map((a) => a.getAttribute("href")),
+    ).toEqual(["https://github.com/gophrase/web", "https://github.com/gophrase/web/issues/5"]);
   });
 
   test("with nothing to place it, a number is a word", async () => {

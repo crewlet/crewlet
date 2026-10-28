@@ -3886,7 +3886,9 @@ message names that number in full (`gophrase/backend#11`); or the message
 names exactly one repository. Anything else leaves it words. A message is
 one comment, one page or one answer, and an ask's question, context,
 reasoning and options together (`TokenScope`), so the Inbox's "the #11 PR
-body" is placed by the `gophrase/backend` its context names. A number with a
+body" is placed by the `gophrase/backend` its context names. A render is part
+of a scope only when it says so (`scoped`): a reply drawn under an ask is its
+own message, and its numbers are placed by its own words. A number with a
 leading zero, inside a word, a path or an entity, or in code is never one.
 
 **A token is a link only where a link may be.** Inside a control or a link (an

@@ -828,8 +828,12 @@ export function AnswerAsk({
           // their marks and never as links, which would steal the press.
           options={options.map((o) => ({
             value: o.id,
-            label: renderTokens(o.label, `option-${o.id}`),
-            detail: o.detail === undefined ? undefined : renderTokens(o.detail, `detail-${o.id}`),
+            // PART OF THE ASK'S MESSAGE where a `TokenScope` names one.
+            label: renderTokens(o.label, `option-${o.id}`, "text", true),
+            detail:
+              o.detail === undefined
+                ? undefined
+                : renderTokens(o.detail, `detail-${o.id}`, "text", true),
           }))}
           recommended={recommended}
           pending={write.busy ? chosen : null}

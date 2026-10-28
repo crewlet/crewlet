@@ -65,8 +65,9 @@ const MessageTexts = createContext<readonly string[] | null>(null);
  * One message drawn in several renders: an ask's question, its context, its
  * recommendation and its options are one message to the person reading
  * them, so a bare `#11` in the question is placed by a repository its
- * context names (`messageScope`). Every run inside reads `texts` in place of
- * its own render's source.
+ * context names (`messageScope`). Only a render that says it is part of the
+ * message (`RenderOptions.scoped`) reads `texts`; any other inside it (a
+ * reply in the ask's conversation) is its own message.
  */
 export function TokenScope({ texts, children }: { texts: readonly string[]; children: ReactNode }) {
   return <MessageTexts.Provider value={texts}>{children}</MessageTexts.Provider>;
@@ -112,8 +113,8 @@ function scopeOf(texts: readonly string[], hosts: readonly LinkHost[]): MessageS
  * list ticking its times) reads nothing again. The owners come from the
  * frame's `link_hosts`, which a plain function of the text could not read.
  *
- * `message` is the source the run was rendered from; a [TokenScope] around
- * it names a larger one.
+ * `message` is the message the run was rendered from; undefined, the run is
+ * part of the enclosing [TokenScope]'s (or, with none, its own words).
  */
 export function TokenRun({
   text,
@@ -124,12 +125,12 @@ export function TokenRun({
   text: string;
   links: LinkMode;
   highlight?: readonly string[] | undefined;
-  message: string;
+  message: string | undefined;
 }) {
   const hosts = useLinkHosts();
   const surface = useContext(MessageTexts);
   const owners = useMemo(() => codeHostOwners(hosts), [hosts]);
-  const scope = scopeOf(surface ?? [message], hosts);
+  const scope = scopeOf(message !== undefined ? [message] : (surface ?? [text]), hosts);
   const tokens = useMemo(() => inlineTokens(text, owners, scope), [text, owners, scope]);
   const words = (part: string, at: number): ReactNode =>
     highlight ? <Highlight key={`w${at}`} text={part} terms={highlight} /> : part;

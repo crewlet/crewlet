@@ -626,6 +626,52 @@ describe("the pane", () => {
     expect(pane.textContent).toContain("https://evil.example.net/c?q=secret");
   });
 
+  // A REPLY IS ITS OWN MESSAGE: the ask's repository places the ask's numbers,
+  // never a reply's.
+  test("a reply's bare number is placed by the reply's own words", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    const ask = askItem({ ...DECISION, question: "Apply the #11 PR body?" });
+    ask.ask.body = "Assigned to you in gophrase/backend.";
+    const reply = (id: string, body: string) => ({
+      id,
+      task: "t-12",
+      author: "maya",
+      author_kind: "human",
+      body,
+      reply_to: "c-12",
+      created_at: new Date().toISOString(),
+    });
+    mount({
+      answers: {
+        decisions: decisionsOf(ask),
+        link_hosts: {
+          hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }],
+        },
+        work_comments: {
+          item: "t-12",
+          key: "LEAD-12",
+          title: "Q4 release plan",
+          comments: [
+            reply("c-20", "Done with #11."),
+            reply("c-21", "Merged in gophrase/web, see #5."),
+          ],
+        },
+      },
+    });
+    await settle();
+    const thread = screen.getByRole("region", { name: "Replies to this question" });
+    const hrefs = [...thread.querySelectorAll("a")]
+      .map((a) => a.getAttribute("href"))
+      .filter((h) => h?.startsWith("https://"));
+    expect(hrefs).toEqual([
+      "https://github.com/gophrase/web",
+      "https://github.com/gophrase/web/issues/5",
+    ]);
+    // THE ASK'S OWN TITLE IS STILL PLACED BY ITS CONTEXT.
+    const title = document.querySelector(".crewlet-reading-pane__title")!;
+    expect(title.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
+  });
+
   test("an option answers with one press, through the one write, and marks its notice read", async () => {
     location.hash = "#/inbox?row=ask%3Ac-12";
     mount({
