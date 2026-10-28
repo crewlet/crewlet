@@ -98,7 +98,7 @@ func refuse(kind error, format string, args ...any) error {
 // Plan is what a search runs over a repository's index: the expression, what
 // its matches cannot do without (regexlit.Required) — the clauses, each a set
 // of literals every match holds one of — and the clauses the index can look
-// up. Made by NewPlan, or by a Query's Plan.
+// up, none another implies. Made by NewPlan, or by a Query's Plan.
 type Plan struct {
 	re    *regexp.Regexp
 	need  regexlit.Prefilter
@@ -201,6 +201,7 @@ func newPlan(re *regexp.Regexp, what string) (*Plan, error) {
 			"match holds, so no index narrows it and the search would read every file: search for a longer "+
 			"word, or add one every match contains", what)
 	}
+	p.index = unimplied(p.index)
 	p.share()
 	return p, nil
 }
@@ -281,6 +282,51 @@ func indexable(terms []regexlit.Term) (clause, bool) {
 		c.whole = c.whole || len(a.rest) == 0
 	}
 	return c, true
+}
+
+// unimplied is index without each clause another one implies — every blob
+// the other admits, it admits too, so the intersection of them all is the
+// same without it, and a lookup reads none of its lists: each literal of the
+// other, as the index holds it, is one of its own, and it admits an escape
+// where the other does. Of two alike, the first stays. regexlit.Required
+// requires a part once for every time a pattern repeats it — (foo.*){100}
+// is a hundred clauses of foo, each of which would read foo's lists and hold
+// their every blob — and two clauses whose literals differ only in case are
+// one to an index that lowers them both.
+func unimplied(index []clause) []clause {
+	texts := make([]map[string]bool, len(index))
+	for i, c := range index {
+		texts[i] = map[string]bool{}
+		for _, a := range c.alts {
+			texts[i][a.text] = true
+		}
+	}
+	// implies is whether every blob index[i] admits, index[j] admits too.
+	implies := func(i, j int) bool {
+		if index[i].folded && !index[j].folded {
+			return false
+		}
+		for text := range texts[i] {
+			if !texts[j][text] {
+				return false
+			}
+		}
+		return true
+	}
+	var out []clause
+	for i := range index {
+		implied := false
+		for j := range index {
+			if j != i && implies(j, i) && (j < i || !implies(i, j)) {
+				implied = true
+				break
+			}
+		}
+		if !implied {
+			out = append(out, index[i])
+		}
+	}
+	return out
 }
 
 // share makes each trigram p's lookup reads in more than one place (ref) a

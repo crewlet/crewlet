@@ -237,18 +237,23 @@ func TestAClauseReadsEachListItNamesOnce(t *testing.T) {
 
 // A PLAN READS EACH LIST ITS CLAUSES NAME ONCE. A pattern's clauses share
 // trigrams as an alternation's literals do — foo_a.*foo_b's two clauses both
-// hold foo's — so a lookup decodes a list more than one clause reads once
-// for all of them.
+// hold foo's — and a pattern repeating a part requires it once for each time
+// it does: (foo.*){100} is a hundred clauses of foo to regexlit.Required. So
+// a lookup decodes a list more than one clause reads once for all of them,
+// and looks up no clause another implies.
 //
 // Over a segment of 2 048 blobs, each holding every one of 32 words —
 // w000word, w001word, ... — so that every list the words name names every
 // blob: the plan of all 32, one clause a word, reads no more bytes of
 // postings than the lists it names hold, each once, though every clause
-// holds "wor" and "ord", ten each hold "w00", and so on. Looked up a clause
-// at a time, the 32 clauses read 393 216 bytes of the 163 840 their lists
-// hold.
+// holds "wor" and "ord", ten each hold "w00", and so on; and the plan of one
+// word repeated 32 times looks up one clause, reading and allocating what
+// the plan of the word alone does. Looked up a clause at a time, the 32
+// clauses read 393 216 bytes of the 163 840 their lists hold; and each of
+// the 32 repeated clauses, looked up, held every blob again.
 func TestAPlanReadsEachListItsClausesNameOnce(t *testing.T) {
-	t.Parallel()
+	// Not parallel: runtime.MemStats counts every goroutine's allocations,
+	// and a parallel case's would be counted as the plan's.
 	const blobs, words = 2048, 32
 	alts := make([]string, words)
 	for i := range alts {
@@ -259,44 +264,78 @@ func TestAPlanReadsEachListItsClausesNameOnce(t *testing.T) {
 		texts[i] = []byte("x := " + strings.Join(alts, " ") + "\n")
 	}
 	s := segmentOf(t, texts, 1, 1)
-	plan, err := NewPlan(regexp.MustCompile(strings.Join(alts, ".*")))
-	if err != nil {
-		t.Fatal(err)
+	type cost struct {
+		clauses, read, named int
+		allocated            uint64
 	}
-	if len(plan.index) != words {
-		t.Fatalf("the plan of %d words is %d clauses: the case is not the one it claims", words, len(plan.index))
+	lookup := func(pattern string) cost {
+		plan, err := NewPlan(regexp.MustCompile(pattern))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := reading{s: s}
+		if set, lookupErr := plan.blobs(&r); lookupErr != nil || len(set) != blobs {
+			t.Fatalf("the plan of %s admits %d of the %d blobs, each holding every word (%v)", pattern, len(set),
+				blobs, lookupErr)
+		}
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		got, err := plan.Candidates(s)
+		runtime.ReadMemStats(&after)
+		if err != nil || len(got) != blobs {
+			t.Fatalf("the plan of %s admits %d of the %d blobs, each holding every word (%v)", pattern, len(got),
+				blobs, err)
+		}
+		return cost{clauses: len(plan.index), read: r.read, named: named(s, plan.index...),
+			allocated: after.TotalAlloc - before.TotalAlloc}
 	}
-	r := reading{s: s}
-	if set, lookupErr := plan.blobs(&r); lookupErr != nil || len(set) != blobs {
-		t.Fatalf("the plan of %d words admits %d of the %d blobs, each holding every word (%v)", words, len(set),
-			blobs, lookupErr)
+	every := lookup(strings.Join(alts, ".*"))
+	alone := lookup(alts[0])
+	repeated := lookup(fmt.Sprintf("(%s.*){%d}", alts[0], words))
+	t.Logf("over %d blobs, the plan of %d words, a clause each, read %d bytes of postings (its lists hold %d); the "+
+		"plan of one word read %d and allocated %d, and of it repeated %d times, %d clauses, read %d and "+
+		"allocated %d", blobs, words, every.read, every.named, alone.read, alone.allocated, words,
+		repeated.clauses, repeated.read, repeated.allocated)
+	if every.clauses != words {
+		t.Fatalf("the plan of %d words is %d clauses: the case is not the one it claims", words, every.clauses)
 	}
-	limit := named(s, plan.index...)
-	t.Logf("over %d blobs, the plan of %d words, a clause each, read %d bytes of postings (its lists hold %d)",
-		blobs, words, r.read, limit)
-	if r.read > limit {
+	if every.read > every.named {
 		t.Errorf("the plan of %d words read %d bytes of postings, past the %d the lists it names hold: a list two "+
-			"clauses read is read once a clause", words, r.read, limit)
+			"clauses read is read once a clause", words, every.read, every.named)
+	}
+	if repeated.clauses != 1 || repeated.read != alone.read {
+		t.Errorf("the plan of one word repeated %d times looks up %d clauses and reads %d bytes of postings, and "+
+			"of the word alone %d: a clause another implies is looked up", words, repeated.clauses,
+			repeated.read, alone.read)
+	}
+	if repeated.allocated > alone.allocated+alone.allocated/2 {
+		t.Errorf("the plan of one word repeated %d times allocated %d bytes for its candidates and of the word "+
+			"alone %d: a clause another implies holds its blobs again", words, repeated.allocated,
+			alone.allocated)
 	}
 }
 
 // A LOOKUP ADMITS WHAT ITS LITERALS LOOKED UP ALONE ADMIT. Reading each list
 // a plan names once — the blobs every literal of a clause holds hoisted out
 // of its union, a list more than one place reads decoded once for them all,
-// each literal starting from the least of what it holds — changes how a
-// lookup reads, never what it answers.
+// each literal starting from the least of what it holds — and looking up no
+// clause another implies change how a lookup reads, never what it answers.
 //
 // Over clauses GENERATED to share trigrams every way — a core in every
 // literal, so some trigrams are in them all, and now and then a literal that
 // is the core alone; a core in some; words over a few letters, so others are
-// in some, and in other clauses, by chance — and segments of blobs over the
-// same letters, so lists run from a blob or two to nearly every one, with a
-// letter no blob holds, escapes and binary blobs among them: each clause's
-// blobs are what looking every literal up whole finds — every list of it
-// decoded and intersected, as a lookup did before — and what the blobs' own
-// text says, a blob admitted holding some literal's every trigram, or an
-// escape where the clause is folded. A plan's candidates are the
-// intersection of its clauses', skipped blobs out. And no lookup reads more
+// in some, and in other clauses, by chance — with a clause another implies
+// among them now and then (the same again, one more literal, its literals in
+// capitals, or folded) or one made plain from a folded one, which that one
+// does not imply, since it admits an escape the plain one does not; and
+// segments of blobs over the same letters, so lists run from a blob or two
+// to nearly every one, with a letter no blob holds, escapes and binary blobs
+// among them: each clause's blobs are what looking every literal up whole
+// finds — every list of it decoded and intersected, as a lookup did before —
+// and what the blobs' own text says, a blob admitted holding some literal's
+// every trigram, or an escape where the clause is folded. A plan's
+// candidates are the intersection of every clause generated, a clause it
+// dropped as implied included, skipped blobs out. And no lookup reads more
 // bytes of postings than the lists it names hold, each once: a clause's
 // alone, or a plan's whole.
 //
@@ -305,11 +344,12 @@ func TestAPlanReadsEachListItsClausesNameOnce(t *testing.T) {
 // its clause holds, from a list more than one place reads, from a list it
 // reads alone — and a clause that is its shared trigrams alone, with blobs
 // holding them, a literal no blob can hold, a blob only its escape admits, a
-// list two clauses read, and plans of several clauses that admit some.
+// list two clauses read, a clause dropped as implied, and plans of several
+// clauses that admit some.
 func TestALookupAdmitsWhatItsLiteralsLookedUpAloneAdmit(t *testing.T) {
 	t.Parallel()
 	rng := rand.New(rand.NewPCG(20261028, 7))
-	var clauses, plans, wholes, fromShared, fromHeld, fromAlone, unheld, escaped, across int
+	var clauses, plans, wholes, fromShared, fromHeld, fromAlone, unheld, escaped, across, implied int
 	for range 400 {
 		letters := "abcdefg"[:3+rng.IntN(5)]
 		word := func(least, most int) string {
@@ -360,15 +400,43 @@ func TestALookupAdmitsWhatItsLiteralsLookedUpAloneAdmit(t *testing.T) {
 			}
 			generated = append(generated, terms)
 		}
-		plan := &Plan{}
-		for _, terms := range generated {
+		if rng.IntN(3) == 0 {
+			// A clause one already generated implies — or, from a folded
+			// one, a plain one it does not, since the folded one admits an
+			// escape the plain one does not.
+			terms := slices.Clone(generated[rng.IntN(len(generated))])
+			switch rng.IntN(5) {
+			case 0: // the same again
+			case 1:
+				terms = append(terms, regexlit.Term{Text: word(3, 6), Folded: terms[0].Folded})
+			case 2: // in capitals, which an index lowers
+				for i := range terms {
+					if !terms[i].Folded {
+						terms[i].Text = strings.ToUpper(terms[i].Text)
+					}
+				}
+			case 3: // folded, so admitting an escape too
+				for i := range terms {
+					terms[i].Folded = true
+				}
+			case 4: // plain, so admitting no escape
+				for i := range terms {
+					terms[i].Folded = false
+				}
+			}
+			generated = append(generated, terms)
+		}
+		all := make([]clause, len(generated))
+		for i, terms := range generated {
 			c, ok := indexable(terms)
 			if !ok {
 				t.Fatalf("the clause of %v cannot be looked up: every literal of it is three bytes or more", terms)
 			}
-			plan.index = append(plan.index, c)
+			all[i] = c
 		}
+		plan := &Plan{index: unimplied(slices.Clone(all))}
 		plan.share()
+		implied += len(all) - len(plan.index)
 
 		for _, c := range plan.index {
 			clauses++
@@ -434,7 +502,7 @@ func TestALookupAdmitsWhatItsLiteralsLookedUpAloneAdmit(t *testing.T) {
 		}
 		var want []OID
 		var set []uint32
-		for i, c := range plan.index {
+		for i, c := range all {
 			if i == 0 {
 				set = perLiteral(t, c, s)
 			} else {
@@ -447,8 +515,8 @@ func TestALookupAdmitsWhatItsLiteralsLookedUpAloneAdmit(t *testing.T) {
 			}
 		}
 		if !slices.Equal(got, want) {
-			t.Fatalf("a plan of %d clauses answers %v; its clauses looked up a literal at a time intersect to %v",
-				len(plan.index), got, want)
+			t.Fatalf("a plan of %d clauses, %d of them generated, answers %v; every clause generated, looked up a "+
+				"literal at a time, intersects to %v", len(plan.index), len(all), got, want)
 		}
 		if len(plan.index) > 1 && len(want) > 0 {
 			plans++
@@ -458,10 +526,11 @@ func TestALookupAdmitsWhatItsLiteralsLookedUpAloneAdmit(t *testing.T) {
 	// wrong would pass on cases that never take it.
 	t.Logf("%d clauses: %d their shared trigrams alone; literals read first from the blobs every literal of their "+
 		"clause holds %d times, from a list more than one place reads %d, from a list they read alone %d; %d literals "+
-		"no blob can hold; %d blobs only an escape admits; %d plans with a list two clauses read; %d plans of several "+
-		"clauses answered", clauses, wholes, fromShared, fromHeld, fromAlone, unheld, escaped, across, plans)
+		"no blob can hold; %d blobs only an escape admits; %d plans with a list two clauses read; %d clauses dropped "+
+		"as implied; %d plans of several clauses answered", clauses, wholes, fromShared, fromHeld, fromAlone, unheld,
+		escaped, across, implied, plans)
 	if wholes < 20 || fromShared < 50 || fromHeld < 50 || fromAlone < 50 || unheld < 20 || escaped < 20 ||
-		across < 50 || plans < 40 {
+		across < 50 || implied < 50 || plans < 40 {
 		t.Fatalf("a way a literal is read was hardly met: the generator no longer writes the cases it claims")
 	}
 }

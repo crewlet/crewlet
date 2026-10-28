@@ -43,6 +43,11 @@ import (
 //     what it admits: into nothing, and only until the list passes the last
 //     blob it keeps (reading.listed).
 //
+// And a clause another implies — every blob the other admits, it admits
+// too — is not looked up at all (unimplied): a pattern repeating a part,
+// (foo.*){100}, is a hundred clauses of foo to regexlit.Required, each of
+// which would hold every blob holding foo.
+//
 // A LITERAL READS FIRST THE LEAST OF WHAT IT MUST HOLD, as one looked up
 // alone read its shortest list first: a list of its own decoded straight
 // into the clause's union, or blobs decoded for other places too, which it
