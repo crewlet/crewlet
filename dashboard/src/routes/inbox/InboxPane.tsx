@@ -49,11 +49,9 @@ import {
   ChevronLeftGlyph,
   CircleCheckGlyph,
   FileTextGlyph,
-  GlobeGlyph,
   SquareKanbanGlyph,
   SquareTerminalGlyph,
 } from "@crewlethq/icons/glyphs";
-import { VendorMark } from "@crewlethq/icons";
 import { href } from "~/app/router.tsx";
 import { describeLink } from "~/lib/inlineTokens.ts";
 import { useLinkHosts } from "~/lib/linkHosts.ts";
@@ -71,7 +69,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
 import { answerFate, type GivenAnswer } from "./answerFate.ts";
 import { fmtDateTime } from "~/lib/format.ts";
-import { TokenScope } from "~/components/InlineToken.tsx";
+import { addressMark, InertAddress, TokenScope } from "~/components/InlineToken.tsx";
 import { CHECKED_WORDS, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -617,29 +615,27 @@ function EvidenceLink({ evidence }: { evidence: WorkDecisionEvidence }) {
 function UrlEvidence({ raw }: { raw: string }) {
   const hosts = useLinkHosts();
   const said = describeLink(raw, hosts);
-  const mark = said?.vendor ? (
-    <VendorMark vendor={said.vendor} size="sm" data-vendor={said.vendor} />
-  ) : (
-    <GlobeGlyph size="sm" />
-  );
-  if (said?.canonical) {
+  if (said === null) return <Text variant="caption">{raw}</Text>;
+  if (said.canonical) {
+    // WHAT ITS MARK MEANS IS SAID before its words, and an identifier is set
+    // in mono, as the same address reads in a sentence.
     return (
       <ButtonLink
         variant="secondary"
         size="small"
         href={said.canonical}
         external
-        leadingIcon={mark}
+        leadingIcon={addressMark(said, "sm")}
       >
-        {said.label}
+        <InlineRef kind={said.kind ?? undefined} code={said.code}>
+          {said.label}
+        </InlineRef>
       </ButtonLink>
     );
   }
   return (
     <Text variant="caption">
-      <InlineRef mark={mark} title={raw}>
-        {raw}
-      </InlineRef>
+      <InertAddress said={said} raw={raw} written={raw} />
     </Text>
   );
 }

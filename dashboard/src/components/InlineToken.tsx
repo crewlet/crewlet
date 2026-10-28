@@ -36,7 +36,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { ColorChip, Highlight, InlineRef } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
-import { GlobeGlyph, SquareKanbanGlyph } from "@crewlethq/icons/glyphs";
+import { GlobeGlyph, SquareKanbanGlyph, type GlyphSize } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import {
   codeHostOwners,
@@ -48,6 +48,7 @@ import {
   referenceTarget,
   repositoryTarget,
   type InlineToken as Token,
+  type LinkDescription,
   type LinkMode,
   type MessageScope,
 } from "~/lib/inlineTokens.ts";
@@ -180,30 +181,57 @@ function AddressToken({
   if (said === null) {
     return <InlineRef href={links === "anchor" ? token.href : undefined}>{token.text}</InlineRef>;
   }
-  const mark = said.vendor ? (
-    <VendorMark vendor={said.vendor} data-vendor={said.vendor} />
-  ) : (
-    <GlobeGlyph />
-  );
-  // CHECKED AND NOT THE COMPANY'S: the address as written, whole, so a reader
-  // sees and can copy exactly where it would go, and never a control.
+  // CHECKED AND NOT THE COMPANY'S: the address as written ([InertAddress]).
   if (links === "checked" && said.canonical === null) {
-    return (
-      <InlineRef mark={mark} kind={said.kind ?? undefined} title={token.href}>
-        {token.text}
-      </InlineRef>
-    );
+    return <InertAddress said={said} raw={token.href} written={token.text} />;
   }
   const to = links === "text" ? undefined : links === "checked" ? said.canonical! : token.href;
   return (
     <InlineRef
-      mark={mark}
+      mark={addressMark(said)}
       href={to}
       kind={said.kind ?? undefined}
       title={token.href}
       code={said.code}
     >
       {said.label}
+    </InlineRef>
+  );
+}
+
+/**
+ * The mark an address is drawn with: the mark of the app it belongs to, or a
+ * globe for an address of nobody we know. `size` for a control's icon (an
+ * evidence button); in a sentence the mark takes `InlineRef`'s square.
+ */
+export function addressMark(said: LinkDescription, size?: GlyphSize): ReactNode {
+  return said.vendor ? (
+    <VendorMark vendor={said.vendor} size={size} data-vendor={said.vendor} />
+  ) : (
+    <GlobeGlyph size={size} />
+  );
+}
+
+/**
+ * An address that opens nothing: its mark, what the mark means said to a
+ * screen reader, and the address `written` as its writer wrote it, whole, so a
+ * reader sees and can copy exactly where it would go. Never a control and
+ * never a label the dashboard did not build: under `checked`, every address
+ * that is not rebuilt on the company's own host is drawn this way, in prose
+ * and as an ask's evidence alike.
+ */
+export function InertAddress({
+  said,
+  raw,
+  written,
+}: {
+  said: LinkDescription;
+  raw: string;
+  written: string;
+}) {
+  return (
+    <InlineRef mark={addressMark(said)} kind={said.kind ?? undefined} title={raw}>
+      {written}
     </InlineRef>
   );
 }

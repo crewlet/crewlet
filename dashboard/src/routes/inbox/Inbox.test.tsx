@@ -626,6 +626,42 @@ describe("the pane", () => {
     expect(pane.textContent).toContain("https://evil.example.net/c?q=secret");
   });
 
+  // A CITED ADDRESS READS AS THE SAME ADDRESS DOES IN A SENTENCE: what its
+  // mark means is said before its words, a reference is set in mono, and one
+  // that opens nothing still says whose it is (one helper draws both).
+  //
+  // Mutation: draw the evidence's mark and words by hand, without `kind` and
+  // `code`, and a screen reader hears no "GitHub" and the reference is prose.
+  test("a cited address says what its mark means, live or inert", async () => {
+    location.hash = "#/inbox?row=ask%3Ac-12";
+    mount({
+      answers: {
+        decisions: decisionsOf(
+          askItem({
+            ...DECISION,
+            evidence: [
+              { kind: "url", ref: "https://github.com/gophrase/backend/pull/14" },
+              { kind: "url", ref: "https://github.com/attacker/x" },
+            ],
+          }),
+        ),
+        link_hosts: {
+          hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }],
+        },
+      },
+    });
+    await settle();
+    const evidence = document.querySelector(".inbox-evidence")!;
+    const live = evidence.querySelector("a")!;
+    expect(live.textContent).toContain("GitHub: gophrase/backend#14");
+    expect(live.querySelector(".crewlet-inline-ref--code")).not.toBeNull();
+    const inert = [...evidence.querySelectorAll(".crewlet-inline-ref")].find((r) =>
+      r.textContent?.includes("attacker"),
+    )!;
+    expect(inert.closest("a")).toBeNull();
+    expect(inert.textContent).toBe("GitHub: https://github.com/attacker/x");
+  });
+
   // A REBUILT ADDRESS IS LABELLED FROM WHAT IT WAS REBUILT FROM: a Confluence
   // page's title is the asker's words, which the rebuilt address drops.
   test("a cited Confluence page's button names its space and id, never its title", async () => {
