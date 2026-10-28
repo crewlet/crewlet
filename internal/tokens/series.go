@@ -79,9 +79,12 @@ type Band string
 
 // The four bands, in the order a chart stacks them.
 const (
-	// BandExecute is the seat's own turn doing its work: the executor, and
-	// a detached coding run it launched, which is the same work done
-	// somewhere else.
+	// BandExecute is the seat's own turn doing its work: the executor, which
+	// is its coding CLI's own run in a box. Both records of that run are this
+	// band — the engine's `execute` record of the phase, which states the run
+	// as one round and carries no tokens, and the run's own `sandbox` record
+	// of what it did and spent (see [PhaseCalls]) — so a figure is drawn in
+	// the same band whichever of the two it came from.
 	BandExecute Band = "execute"
 	// BandReview is the reviewer's pass over it.
 	BandReview Band = "review"
