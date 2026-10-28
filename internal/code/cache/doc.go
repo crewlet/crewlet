@@ -993,11 +993,12 @@
 // for a copy serving from a published chain, whose two directories are synced
 // with the rest and whose two chain files are written from the rows.
 // MEASURED (internal/code/compact's BenchmarkCompact, its swap arms: git
-// 2.56.0 over the in-memory store, one bounded run on two E-cores of an Intel
-// Core Ultra 7 265U, 2026-10-28), the sync that swapped a copy of 50 packs
-// took 7.0 ms and linked 150 files, and one of 2 048 took 119 ms and linked
-// 6 144 — the pack count's, never the bytes' — each with its download of the
-// one output the compaction wrote. The
+// 2.56.0 over the in-memory store, Go 1.27.2, one bounded run on two E-cores
+// of an Intel Core Ultra 7 265U, which has SHA instructions, 2026-10-28), the
+// sync that swapped a copy of 50 packs took 7.0 ms and linked 150 files, and
+// one of 2 048 took 119 ms and linked 6 144 — the pack count's, never the
+// bytes' — each with its download of the one output the compaction wrote
+// from the in-memory store, which has no first byte to wait for. The
 // promote carries every per-file verdict of the files it links (the same
 // inodes) — their vouches, a hint's hash, the scrub's schedule, what a repair
 // still owes them — and the repository's own records, every field of an
@@ -1146,8 +1147,10 @@
 // gigabyte and over 10 000 packs at three counts, everything else at six —
 // but the cold syncs, measured again on git 2.56.0 at the pack counts a
 // repository's compactions leave it (BenchmarkColdSync, one bounded run of
-// each arm, -benchtime 1x and one count, on two E-cores of an Intel Core
-// Ultra 7 265U, 2026-10-27 and 28). Every cold-sync figure is the S3 FAKE's,
+// each arm, -benchtime 1x and one count, Go 1.27.2, the S3 fake read through
+// aws-sdk-go-v2/service/s3 v1.114.3, on two E-cores of an Intel Core Ultra 7
+// 265U, which has SHA instructions — every byte a cold sync reads is hashed —
+// 2026-10-27 and 28). Every cold-sync figure is the S3 FAKE's,
 // whose first byte is the arm's rather than a bucket's: what a first byte
 // that long costs the node. A COLD SYNC of pushes of 150 KB, one pack each,
 // from the S3 fake at 30 ms to every request's first byte and 80 MB/s a

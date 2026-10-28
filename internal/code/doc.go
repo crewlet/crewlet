@@ -224,10 +224,11 @@
 //     608.0 bytes with its three index entries (the retired/inputs=16 arm:
 //     4 096 typical pushes' packs merged sixteen at a time, as a compaction
 //     at the floor merges them, the same figure merged eight at a time; one
-//     count of one iteration on two E-cores of an Intel Core Ultra 7 265U,
-//     2026-10-27 and 28), which keeps its object from the collector for
-//     [RetireGrace] until the code-retention duty's sweep removes it, a
-//     [RetentionInterval] later at the most.
+//     count of one iteration, Go 1.27.2, on two E-cores of an Intel Core
+//     Ultra 7 265U, which has SHA instructions, 2026-10-27 and 28), which
+//     keeps its object from the collector for [RetireGrace] until the
+//     code-retention duty's sweep removes it, a [RetentionInterval] later at
+//     the most.
 //
 // So every data node, holding the whole estate, holds 679.9 bytes for each
 // seat's push of the last 181 days (622.6 for a person's), and pack rows that

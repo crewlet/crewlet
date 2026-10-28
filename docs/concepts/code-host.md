@@ -534,12 +534,14 @@ takes 43 to 108 bytes a push on the code log, and the record that sweeps its
 retired rows a day later up to 44 more; a merged pack's row is kept a
 day, about 608 bytes; and a git node drops the merged packs by a move into a
 next directory that links three files a pack it keeps, whatever the packs'
-bytes (a sync that downloaded a merge's output and moved a copy of 50 packs
-took 7 ms, and one of 2 048 took 119 ms). What it buys is the cold read:
-the fifty or so packs a compacted repository holds come up in under a second
-at S3's slow first byte, where the 2 048 a repository may hold take
-27 seconds and the 10 000 of a history nothing merged over two minutes
-([The cache on a git node](#the-cache-on-a-git-node)).
+bytes (over the in-memory store, whose download waits on no first byte, a
+sync that downloaded a merge's output and moved a copy of 50 packs took
+7 ms, and one of 2 048 took 119 ms; from a bucket the output's GET comes on
+top). What it buys is the cold read: from an S3 fake answering each request
+200 ms late — S3's slow first byte — the fifty or so packs a compacted
+repository holds came up in under a second, where the 2 048 a repository may
+hold took 27 seconds and the 10 000 of a history nothing merged over two
+minutes ([The cache on a git node](#the-cache-on-a-git-node)).
 
 **What it does not do.** It removes no object: what no ref reaches stays in
 the repository's packs for as long as it lives. And every merge drops the
@@ -915,7 +917,8 @@ downloads nothing, runs no git and costs three file links a pack it keeps and
 four to six disk syncs (six to nine for a copy that serves from a published
 chain, whose two chain files it writes from the rows), whatever the packs'
 bytes (a sync that downloaded a merge's output and moved a copy of 50 packs
-took 7 ms, and one of 2 048 took 119 ms, measured) — moves it into place
+took 7 ms, and one of 2 048 took 119 ms, measured over the in-memory store,
+whose download waits on no first byte) — moves it into place
 whole, moves the memo of answers
 into it in one rename, and serves every later request from it, while the
 requests already reading the old directory keep

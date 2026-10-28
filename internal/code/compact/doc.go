@@ -134,8 +134,9 @@
 // (bench_test.go), whose arms and what each decides are listed there. Every
 // figure below is of git 2.56.0 over the in-memory store, so what an S3
 // bucket would bill is stated as requests and bytes, never as a bucket's
-// time; each arm ran once (-benchtime 1x, one count) on two E-cores of an
-// Intel Core Ultra 7 265U, on 2026-10-27 and 28.
+// time; each arm ran once (-benchtime 1x, one count) with Go 1.27.2 on two
+// E-cores of an Intel Core Ultra 7 265U, which has SHA instructions, on
+// 2026-10-27 and 28.
 //
 // THE BUILD (history=source/inputs={4,8,16,64}): one compaction of the
 // 100 MB source history — 295 680 objects, 99 MB of bundles pushed as 4, 8,

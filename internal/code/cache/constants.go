@@ -496,13 +496,13 @@ const FsckBytesPerObject = 192
 //
 // 500 BYTES, MEASURED (internal/code/compact's BenchmarkCompact, its
 // history=source/inputs={4,8,16,64} arms: git 2.56.0 over the in-memory
-// store, the build's peak ANONYMOUS memory sampled every millisecond, the
-// method of the figures above; one bounded run, -benchtime 1x and one count,
-// on two E-cores of an Intel Core Ultra 7 265U, 2026-10-27): one build
-// merging the 100 MB history's 295 680 objects held 139 MiB whether they came
-// in 4, 8, 16 or 64 packs — 493.4 to 493.8 bytes an object, the input count
-// adding nothing — and the 64-input figure is rounded up to the next 50
-// bytes. The 300 this replaced was reasoned from git's struct object_entry
+// store, Go 1.27.2, the build's peak ANONYMOUS memory sampled every
+// millisecond, the method of the figures above; one bounded run, -benchtime
+// 1x and one count, on two E-cores of an Intel Core Ultra 7 265U, which has
+// SHA instructions, 2026-10-27): one build merging the 100 MB history's
+// 295 680 objects held 139 MiB whether they came in 4, 8, 16 or 64 packs —
+// 493.4 to 493.8 bytes an object, the input count adding nothing — and the
+// 64-input figure is rounded up to the next 50 bytes. The 300 this replaced was reasoned from git's struct object_entry
 // and a merge reusing every delta its inputs carry, and fell short of the
 // measurement by two fifths: a build admitted at it could hold two thirds
 // more than its budget kept for the build itself. The history is one size,
@@ -522,12 +522,13 @@ const CompactBytesPerObject = 500
 //
 // SIX OF THE EPOCH'S LARGEST BLOB, MEASURED (internal/code/compact's
 // BenchmarkCompact, its blobs=max_blob/inputs=8 arm: git 2.56.0 over the
-// in-memory store, the build's peak anonymous memory sampled every
+// in-memory store, Go 1.27.2, the build's peak anonymous memory sampled every
 // millisecond; one bounded run, -benchtime 1x and one count, on two E-cores
-// of an Intel Core Ultra 7 265U, 2026-10-27): a merge of eight packs, each a
-// revision of one blob of the default max_blob_bytes, 50 MiB, every revision
-// a delta of the one before, held 269.7 MiB — 5.4 blobs, where the two this
-// charged before had admitted it at 170 MiB less than it held. The window
+// of an Intel Core Ultra 7 265U, which has SHA instructions, 2026-10-27): a
+// merge of eight packs, each a revision of one blob of the default
+// max_blob_bytes, 50 MiB, every revision a delta of the one before, held
+// 269.7 MiB — 5.4 blobs, where the two this charged before had admitted it
+// at 170 MiB less than it held. The window
 // itself is held to pack.windowMemory (internal/code/compact's CompactConfig:
 // twice the largest blob, the serve configuration's figure, a per-thread
 // bound the pool's pack.threads=1 makes the build's whole window), so the

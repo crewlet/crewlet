@@ -70,8 +70,9 @@ import (
 // one-commit pushes of 20 KB, 24 objects, built in 19.6 ms at 0.8 MiB beside
 // the history and in 14.2 ms at 0.75 MiB beside nothing, where over the whole
 // copy, as it built before, the same merge of eight took 451 ms and
-// 100.8 MiB (git 2.56.0, the in-process store, -benchtime 1x and one count
-// each, two E-cores of an Intel Core Ultra 7 265U, 2026-10-28).
+// 100.8 MiB (git 2.56.0, the in-process store, Go 1.27.2, -benchtime 1x and
+// one count each, two E-cores of an Intel Core Ultra 7 265U, which has SHA
+// instructions, 2026-10-28).
 //
 // The store is the merge's, as the scratch is: removed with it (Remove), moved
 // aside by a boot with the rest of scratch/, and counted by the janitor only

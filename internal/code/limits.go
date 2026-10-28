@@ -880,14 +880,15 @@ const (
 	// leaves the other half for the round's index and its peel before the
 	// first byte of the request that waited for them. MEASURED, and kept:
 	// internal/code/cache's BenchmarkColdSync, its
-	// bucket=fake/firstbyte=200ms/packs=2048/fetch=16 arm — the S3 fake,
-	// pushes of 150 KB, git 2.56.0, one bounded run (-benchtime 1x, one
-	// count) on two E-cores of an Intel Core Ultra 7 265U, 2026-10-28 —
-	// downloaded the 2 048 in 26.4 s, 77 bundles a second at 204 ms a GET,
-	// and ended its whole round at 26.6 s. Downloads past 27 s would make
-	// this the largest count their rate downloads in 27 s; a round past the
-	// spool wait with its downloads inside them is a finding against the
-	// round's index (internal/code/cache's MidxRoundPacks), never this.
+	// bucket=fake/firstbyte=200ms/packs=2048/fetch=16 arm — the S3 fake
+	// through aws-sdk-go-v2/service/s3 v1.114.3, pushes of 150 KB, git
+	// 2.56.0, Go 1.27.2, one bounded run (-benchtime 1x, one count) on two
+	// E-cores of an Intel Core Ultra 7 265U, which has SHA instructions,
+	// 2026-10-28 — downloaded the 2 048 in 26.4 s, 77 bundles a second at
+	// 204 ms a GET, and ended its whole round at 26.6 s. Downloads past 27 s
+	// would make this the largest count their rate downloads in 27 s; a round
+	// past the spool wait with its downloads inside them is a finding against
+	// the round's index (internal/code/cache's MidxRoundPacks), never this.
 	MaxPacksPerRepo = 2_048
 
 	// CompactFactor is the geometric progression a home keeps a repository's
@@ -907,13 +908,14 @@ const (
 	// SIXTEEN, MEASURED by internal/code/compact's BenchmarkCompact, its
 	// steady/pushes=1200/rate=1/min arms: a repository pushed once a minute
 	// for twenty simulated hours, a pass every minute, its requests counted
-	// on a fleet of eight git nodes (git 2.56.0 over the in-memory store; one
-	// bounded run, -benchtime 1x and one count, on two E-cores of an Intel
-	// Core Ultra 7 265U, 2026-10-28). Merging from 16 packs cost 527 GETs and
-	// PUTs a thousand pushes — 64 PUTs, 449 GETs of the outputs and 13 of a
-	// cold sync of what was left — against 1 081 from 8 and 2 212 from 4:
-	// half the requests, each merge's PUT and GETs bought by twice the
-	// pushes, for a cold sync of 20 live packs at the most rather than 13.
+	// on a fleet of eight git nodes (git 2.56.0 over the in-memory store, Go
+	// 1.27.2; one bounded run, -benchtime 1x and one count, on two E-cores of
+	// an Intel Core Ultra 7 265U, which has SHA instructions, 2026-10-28).
+	// Merging from 16 packs cost 527 GETs and PUTs a thousand pushes — 64
+	// PUTs, 449 GETs of the outputs and 13 of a cold sync of what was left —
+	// against 1 081 from 8 and 2 212 from 4: half the requests, each merge's
+	// PUT and GETs bought by twice the pushes, for a cold sync of 20 live
+	// packs at the most rather than 13.
 	// It costs fewer bytes too (713 MB of outputs stored and downloaded a
 	// thousand pushes, against 873), fewer rows (1.05 packs retired a push,
 	// against 1.13) and fewer records (108 bytes a push on the code log,
