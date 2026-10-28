@@ -57,8 +57,8 @@ var ErrResumeUnavailable = errors.New("sandbox: this node cannot resume the run"
 var ErrResumeAbandoned = errors.New("sandbox: the resumed turn broke and must not be resumed again")
 
 // ErrResumeHeld reports a resumed turn its seat's conditions refused — the
-// token budget it would relaunch its executor under, today — returned wrapped
-// in a [HeldError] that says what the refusal waits for.
+// token budget its review or its relaunch was refused under, today — returned
+// wrapped in a [HeldError] that says what the refusal waits for.
 //
 // NOT A FAILURE, AND NOT A RETRY. The coordinator hands the claim back holding
 // the run's resume until the refusal lifts ([PendingRun.HeldFor]) and spends
@@ -511,9 +511,12 @@ type CoordinatorOptions struct {
 	// applies (the lease, a person's pause, a model, a posture), which a
 	// retried answer asks because it runs outside the delivery that would
 	// have screened it. The gate is whether this process may start the
-	// route's turn at all, and whether its first model call would only meet
-	// a limit or a budget already known, and a completion asks it as much as
-	// a retry does.
+	// route's turn at all, and whether that turn would only meet a condition
+	// already known: its models' limit, or a park this node holds the seat in
+	// for it, and for an answer, whose first call is a launch, the budget the
+	// launch needs. A completion asks it as much as a retry does, and is asked
+	// no budget: its job is collected and charged first, and a budget that
+	// refuses its review or its relaunch holds it then ([ErrResumeHeld]).
 	Gate TurnGate
 
 	// Lease is the seat lease this node holds a seat under, which a launch

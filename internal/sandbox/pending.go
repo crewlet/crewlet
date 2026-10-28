@@ -1156,7 +1156,7 @@ type PendingRun struct {
 
 	// HeldFor and HeldUntil hold back the resume of a job whose collection
 	// the turn could not carry on: its seat's conditions refused it — the
-	// token budget the turn would relaunch its executor under, today — and
+	// token budget its review or its relaunch was refused under, today — and
 	// the resume waits until HeldUntil, the instant the refusal lifts on
 	// the clock alone, or until the condition HeldFor names is signalled
 	// sooner ([Coordinator.Readmit]: a revision raising the ceiling).
