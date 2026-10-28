@@ -789,7 +789,12 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		// model, a response and tool calls with an empty placeholder. The
 		// reorder guard cannot catch it — applyProgress never advances
 		// stateTS — so the check belongs here.
-		if !agent.liveCall.sameCall(str(payload, "turn_id"),
+		//
+		// A CALL ITS PHASE'S FAILURE FROZE IS NOT THAT CALL: a start the
+		// reorder guard above let through is no older than the failure, so
+		// it is the phase running again and seeds a call of its own — see
+		// [LiveCall.runningAs].
+		if !agent.liveCall.runningAs(str(payload, "turn_id"),
 			str(payload, "phase"), num(payload, "iteration")) {
 			agent.liveCall = beginCall(env, payload)
 			agent.liveCall.Versions = s.restamp(nil, agent.liveCall)

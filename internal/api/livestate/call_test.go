@@ -224,6 +224,96 @@ func TestAPhaseRunAgainUnderItsKeyComesBackOnScreen(t *testing.T) {
 	}
 }
 
+// A PHASE THAT RUNS AGAIN AFTER IT FAILED IS DRAWN AS THE NEW RUN. A parked
+// turn's resume that is held or retried runs its review again under the key
+// its earlier attempt failed under, and that failure froze the attempt's call
+// on the seat. Read as the same call, the new run's start left the failed
+// call in place and its first rounds were dropped as older than the round the
+// failed attempt had reached: the seat drew the earlier failure while the
+// review ran again, until the new run passed the old one's round — which a
+// review of four rounds may never do.
+//
+// Mutation: read a frozen call as the one a start or a round names, and the
+// failed call stays on the seat; carry its prompt or its clock into the run
+// again, and the new run is drawn with the failed attempt's.
+func TestAPhaseThatRunsAgainAfterItFailedIsDrawnAsTheNewRun(t *testing.T) {
+	t.Parallel()
+	review := with(planCall(), map[string]any{"phase": "review"})
+	failedAttempt := func(t *testing.T) *livestate.LiveState {
+		t.Helper()
+		s := livestate.New()
+		s.Apply(env("agent_phase_started", review, at("2026-06-14T12:00:01Z")))
+		s.Apply(env("agent_turn_progress", with(review, map[string]any{
+			"round_num": -1, "prompt": "judge the first attempt",
+		}), streamOnly, at("2026-06-14T12:00:02Z")))
+		for i, ts := range []string{"2026-06-14T12:00:03Z", "2026-06-14T12:00:04Z", "2026-06-14T12:00:05Z"} {
+			s.Apply(env("agent_turn_progress", with(review, map[string]any{
+				"round_num": i, "response": "the first attempt",
+			}), streamOnly, at(ts)))
+		}
+		s.Apply(env("agent_phase_completed", with(review, map[string]any{
+			"failed": true, "error": "budget exhausted",
+		}), at("2026-06-14T12:00:06Z")))
+		if call := liveCallOf(t, s, "Lead"); call == nil || !call.Failed || call.RoundNum != 2 {
+			t.Fatalf("live call = %+v, want the first attempt frozen as failed at its third round", call)
+		}
+		return s
+	}
+
+	t.Run("its start first", func(t *testing.T) {
+		t.Parallel()
+		s := failedAttempt(t)
+		was := byName(liveCallOf(t, s, "Lead").Versions)
+		// A straggler start of the failed attempt's own moves nothing.
+		s.Apply(env("agent_phase_started", review, at("2026-06-14T12:00:00Z")))
+		if call := liveCallOf(t, s, "Lead"); call == nil || !call.Failed {
+			t.Fatalf("live call = %+v, want the failure kept against its own straggler", call)
+		}
+
+		s.Apply(env("agent_phase_started", review, at("2026-06-14T13:00:01Z")))
+		call := liveCallOf(t, s, "Lead")
+		if call == nil || call.Failed || !call.InProgress || call.Response != "" || call.RoundNum != -1 {
+			t.Fatalf("live call = %+v, want a fresh placeholder for the run again", call)
+		}
+		s.Apply(env("agent_turn_progress", with(review, map[string]any{
+			"round_num": 0, "response": "the run again",
+		}), streamOnly, at("2026-06-14T13:00:03Z")))
+		call = liveCallOf(t, s, "Lead")
+		if call == nil || call.Response != "the run again" || call.RoundNum != 0 {
+			t.Fatalf("live call = %+v, want the run again's first round", call)
+		}
+		for field, v := range byName(call.Versions) {
+			if v <= was[field] {
+				t.Errorf("the run again's %s is at %d, the failed attempt's was %d; want it newer",
+					field, v, was[field])
+			}
+		}
+	})
+
+	t.Run("its first round first", func(t *testing.T) {
+		t.Parallel()
+		s := failedAttempt(t)
+		s.Apply(env("agent_turn_progress", with(review, map[string]any{
+			"round_num": 0, "response": "the run again",
+		}), streamOnly, at("2026-06-14T13:00:03Z")))
+		call := liveCallOf(t, s, "Lead")
+		if call == nil || call.Failed || !call.InProgress || call.Response != "the run again" {
+			t.Fatalf("live call = %+v, want the run again's first round", call)
+		}
+		if call.StartedAt != "2026-06-14T13:00:03Z" {
+			t.Errorf("started at %q, want the run again's own first instant", call.StartedAt)
+		}
+		// Its own opening frame, overtaken by that round, still names its
+		// prompt: nothing of the failed attempt's is in the way.
+		s.Apply(env("agent_turn_progress", with(review, map[string]any{
+			"round_num": -1, "prompt": "judge it again",
+		}), streamOnly, at("2026-06-14T13:00:02Z")))
+		if call := liveCallOf(t, s, "Lead"); call == nil || call.Prompt != "judge it again" {
+			t.Errorf("live call = %+v, want the run again's own prompt", call)
+		}
+	})
+}
+
 func TestTheCallKeepsTheTimestampEncodingItArrivedIn(t *testing.T) {
 	t.Parallel()
 	// Normalizing is for COMPARISON only. updated_at goes back out on the

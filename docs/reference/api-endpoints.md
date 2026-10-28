@@ -4262,7 +4262,11 @@ is a fact about one node's projection, and a snapshot resets what a tab holds.
 Beside `live_call`, each seat carries `turn`, `last_turn` and `paused`: the turn the seat is on, with its `stage` of `context`, `phase` or `parked`, the newest turn it ended, and who paused the seat, when and why (`null` while nobody has). See [Agent States](../concepts/agent-runtime.md#agent-states).  A call whose phase failed keeps `in_progress: false`
 plus `failed: true` and an `error` object, so the dashboard renders the failure
 instead of an answer that never arrives — and no `partial_round`, because the
-phase is over and nothing is still arriving.
+phase is over and nothing is still arriving. The failed call stays until the
+seat's next work replaces it, and the same phase running again under the same
+turn and iteration — the review of a parked turn's resume that is held or
+retried — replaces it with a call of its own rather than continuing the failed
+one's rounds.
 
 #### What the projection carries, and what the wire sends
 
