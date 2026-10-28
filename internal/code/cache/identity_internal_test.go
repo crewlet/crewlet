@@ -34,8 +34,8 @@ func TestAPackIsKnownByItsInodeAndSize(t *testing.T) {
 		}
 		return path
 	}
-	pack := write(packFileRel(cs, ".pack"), "PACK the bytes of a pack")
-	idx := write(packFileRel(cs, ".idx"), "an index")
+	pack := write(packFileRel(placeLive, cs, ".pack"), "PACK the bytes of a pack")
+	idx := write(packFileRel(placeLive, cs, ".idx"), "an index")
 	before, idxBefore := lstatID(pack), lstatID(idx)
 
 	// Git's freshening: the time moved, an hour on, and not a byte.
@@ -59,7 +59,7 @@ func TestAPackIsKnownByItsInodeAndSize(t *testing.T) {
 	// Another pack under the name is another identity, whatever its time:
 	// written beside it and renamed in, as every writer of a copy places
 	// one, so the two are never one inode.
-	staged := write(packFileRel(cs, ".pack.new"), "PACK the bytes of a pack")
+	staged := write(packFileRel(placeLive, cs, ".pack.new"), "PACK the bytes of a pack")
 	if err := os.Rename(staged, pack); err != nil {
 		t.Fatal(err)
 	}
