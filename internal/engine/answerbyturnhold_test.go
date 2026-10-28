@@ -426,3 +426,56 @@ func TestAnAnswerWaitingOnABusySeatOutlivesThePauseTTL(t *testing.T) {
 		t.Fatalf("t1 resumed into box %q, which the reaper destroyed; want it re-seeded", box)
 	}
 }
+
+// AN ANSWER TO A RUN WHOSE PAUSE RAN OUT REACHES IT, WHILE ANOTHER JOB HOLDS
+// THE SEAT. A parked run whose pause TTL lapses loses its box and reads
+// `reseed`, which is still a question waiting on a person, on the same launch.
+// The person's answer to it is recorded at once, and once the seat is free the
+// run resumes with that answer, re-seeded from its branch in a new box.
+//
+// This is the run a person found stuck: parked, reaped to `reseed`, its seat
+// busy coding, and every answer they gave accepted as `pending` and never seen.
+//
+// Mutation: deliver to the inbox again and the run is never answered; refuse an
+// answer to a reseed run and it is never recorded; resume it into its old box
+// and it resumes into a box the reaper destroyed.
+func TestAnAnswerToARunWhosePauseRanOutReachesItWhileTheSeatIsBusy(t *testing.T) {
+	t.Parallel()
+	order := &sequence{}
+	s := newBusySeat(t, func(*busySeat) sandbox.Resumer { return &orderedResumer{order: order} })
+	s.launch(t, "t1")
+	s.parks(t, "t1", "which branch?")
+	if won, err := s.store.ExpirePause(t.Context(), "t1"); err != nil || !won {
+		t.Fatalf("ExpirePause = %v, %v, want the reaper to take the parked run's box", won, err)
+	}
+	t1 := mustRun(t, s.store, "t1")
+	if t1.Status != sandbox.StatusReseed || t1.SandboxID != "" {
+		t.Fatalf("run = %q in box %q after the reap, want it waiting to be re-seeded",
+			t1.Status, t1.SandboxID)
+	}
+
+	s.launch(t, "t2")
+	s.answer(t, t1, "stack it on gp-4")
+	eventually(t, "the answer to the reseed run to be recorded", func() bool {
+		got := mustRun(t, s.store, "t1")
+		return got.Status == sandbox.StatusAnswered && got.Answer != nil
+	})
+	s.retries.fire()
+	if got := order.answerFor("t1"); got != "" {
+		t.Fatalf("t1 resumed with %q while t2 holds the seat, want it to wait for the seat", got)
+	}
+
+	s.runner.Finish(sandbox.Result{Success: true})
+	complete(t, s.coordinator, s.store, "t2")
+	s.retries.fireNow()
+	if !strings.Contains(order.answerFor("t1"), "stack it on gp-4") {
+		t.Fatalf("t1 was resumed with %q, want the answer given after its pause ran out",
+			order.answerFor("t1"))
+	}
+	order.mu.Lock()
+	box := order.boxes["t1"]
+	order.mu.Unlock()
+	if box != "" {
+		t.Fatalf("t1 resumed into box %q, which the reaper destroyed; want it re-seeded", box)
+	}
+}
