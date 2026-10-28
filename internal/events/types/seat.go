@@ -268,7 +268,8 @@ type AgentTurnSteered struct {
 	// ([SteerBoundary]), and LaunchID the coding run's job that read it —
 	// set for a brief and for every read inside a run, so a reader puts the
 	// note on the job whose record the read belongs to. Both absent on an
-	// expired note, and on a record from a build before them.
+	// expired note, which nothing read — and LaunchID on a read the engine's
+	// own loop made.
 	Boundary SteerBoundary `json:"boundary,omitempty"`
 	LaunchID string        `json:"launch_id,omitempty"`
 

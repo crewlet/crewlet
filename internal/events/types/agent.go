@@ -287,12 +287,12 @@ type PhaseInvocation struct {
 // `round_narration[]` share, so a reader puts the note beside the round it
 // changed. A coding run's record is one round of the engine's, so every note
 // the run read — in its brief, or at a boundary of its own loop — is at round 1,
-// and its Boundary is what tells them apart ([SteerBoundary]); absent on a
-// record from a build before it, which read notes at rounds alone.
+// and its Boundary is what tells them apart ([SteerBoundary]): every read
+// records one.
 type PhaseSteer struct {
 	Round    int           `json:"round"`
 	NoteID   string        `json:"note_id"`
-	Boundary SteerBoundary `json:"boundary,omitempty"`
+	Boundary SteerBoundary `json:"boundary"`
 }
 
 // AgentTurnStarted opens a turn — or one SEGMENT of it, when a parked coding

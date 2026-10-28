@@ -28,9 +28,11 @@ func TestSteerBoundaryValid(t *testing.T) {
 	}
 }
 
-// AN EXPIRED NOTE NAMES NO STEP, and a phase record from a build before the
-// boundary carries none: both fields are additive, absent where they have
-// nothing to say, so an older reader decodes the same bytes it always did.
+// AN EXPIRED NOTE NAMES NO STEP, and a phase's read always names one. Nothing
+// read an expired note, so its record carries no step, job, phase or round —
+// absent rather than zero, as the dashboard reads them. Every read a phase
+// records names the kind of step that read it, so a reader never has to guess
+// one.
 func TestBoundaryAndLaunchIDAreOmittedWhenEmpty(t *testing.T) {
 	t.Parallel()
 	expired := AgentTurnSteered{TurnID: "run-1", NoteID: "n-1", Outcome: SteerExpired, Note: "use staging"}
@@ -43,29 +45,12 @@ func TestBoundaryAndLaunchIDAreOmittedWhenEmpty(t *testing.T) {
 			t.Errorf("an expired note's record carries %s: %s", key, raw)
 		}
 	}
-	steer, err := json.Marshal(PhaseSteer{Round: 2, NoteID: "n-1"})
+	steer, err := json.Marshal(PhaseSteer{Round: 2, NoteID: "n-1", Boundary: SteerBoundaryRound})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(steer) != `{"round":2,"note_id":"n-1"}` {
+	if string(steer) != `{"round":2,"note_id":"n-1","boundary":"round"}` {
 		t.Errorf("a round's read encodes as %s", steer)
-	}
-}
-
-// A RECORD WITHOUT THEM DECODES: the rows an older build published, which a
-// reader of the event log meets beside every new one.
-func TestAnEventWithoutThemDecodes(t *testing.T) {
-	t.Parallel()
-	old := `{"agent_id":"a","agent_handle":"swe","role":"Engineer","turn_id":"run-1",` +
-		`"note_id":"n-1","outcome":"delivered","phase":"review","iteration":1,"round":2,` +
-		`"note":"use staging","steered_by":"founder","steered_by_kind":"human",` +
-		`"sent_at":"2026-10-26T09:00:00Z"}`
-	var ev AgentTurnSteered
-	if err := json.Unmarshal([]byte(old), &ev); err != nil {
-		t.Fatalf("an older record does not decode: %v", err)
-	}
-	if ev.Boundary != "" || ev.LaunchID != "" || ev.Round != 2 || ev.Outcome != SteerDelivered {
-		t.Errorf("decoded %+v", ev)
 	}
 }
 
