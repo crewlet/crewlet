@@ -1344,7 +1344,8 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.SandboxRunComplete
 		// completion is the waiter's announcement of that: what it left is
 		// no result, and its round is carried on, resumed here under this
 		// frame's admission.
-		carry, err := c.carryOnLost(ctx, run)
+		var carry *lostCarry
+		carry, err = c.carryOnLost(ctx, run)
 		if err != nil || carry == nil {
 			return err
 		}
