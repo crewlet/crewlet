@@ -37,13 +37,13 @@
  * # A running coding run is watched, not replayed
  *
  * While a coding run's span is open AND a reader has it open, its live output
- * is asked of the node that owns the run every [SANDBOX_TAIL_POLL_MS]
+ * is asked of the node that reads its box every [SANDBOX_TAIL_POLL_MS]
  * (`sandbox_tail`), and the view holds what it is sent — up to what the run's
  * record will hold — following the end unless the reader scrolled up. Nothing
  * else asks: closing the span, or the run stopping, stops the poll; a job still
  * being set up is not a stopped one. The answer is honest about the ways it can
  * be empty — a run that has not written anything yet, a job not started yet,
- * and an owner that did not answer — and names the owner in the last, because
+ * and a node that did not answer — and names that node in the last, because
  * "nothing to show" and "the node that could show it is silent" send a reader
  * to opposite places.
  */
@@ -972,7 +972,7 @@ export function liveState(answer: SandboxTailAnswer | null | undefined, failed: 
     return failed ? "The run's output could not be read." : "Asking the node that runs it.";
   switch (answer.outcome) {
     case "owner_silent":
-      return "The node that owns this run did not answer.";
+      return "The node that runs it did not answer.";
     case "launching":
       return "The job is being set up.";
     case "box_paused":

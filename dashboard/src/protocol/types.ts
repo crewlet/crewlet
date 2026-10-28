@@ -3753,13 +3753,18 @@ export interface SandboxOutput {
  * tail of that job while it runs, `launching` while its box is still being
  * made, `not_running` with the record's own status once it is not,
  * `box_paused` for a running record whose box is paused (never woken to be
- * read), or the owning node NAMED where it did not answer (`owner_silent`).
+ * read), or the node that reads its box NAMED where it did not answer
+ * (`owner_silent`).
  */
 export interface SandboxTailAnswer {
   outcome: (typeof SANDBOX_TAIL_OUTCOMES)[number];
   turn_id: string;
   launch_id: string;
-  /** The node that owns the run — the one that answered, or did not. */
+  /**
+   * The node that reads the run's box — its owner, or the node that launched a
+   * `direct` or `container` box, whoever holds the seat — the one that
+   * answered, or did not. Absent only for an `e2b` run no node holds.
+   */
   node?: string;
   /** Why the job is not running: the record's status, `replaced`, or absent
    *  where no record is left. */

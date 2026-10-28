@@ -633,7 +633,7 @@ describe("a live tail's announcements", () => {
     expect(liveState(undefined, true)).toBe("The run's output could not be read.");
     expect(
       liveState({ outcome: "owner_silent", turn_id: "t", launch_id: "L", node: "n" }, false),
-    ).toBe("The node that owns this run did not answer.");
+    ).toBe("The node that runs it did not answer.");
     expect(
       liveState(
         { outcome: "not_running", turn_id: "t", launch_id: "L", status: "replaced" },
