@@ -1,7 +1,6 @@
 package node_test
 
 import (
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -32,20 +31,28 @@ import (
 //     buildDispatcher alone;
 //   - a resume: Engine.resumeTurn is reached only from the engine's resumer,
 //     whose Resume the sandbox coordinator reads only in resumeAndSettle,
-//     which takes an admission no frame but admitTurn makes.
+//     which takes an admission no frame but admitTurn makes, and which is
+//     called only from the two frames that claim under one
+//     (completeAdmitted, resumeOwedAdmitted), each called only from the frame
+//     that asked the gate (OnCompleted, attemptOwed).
 //
 // # What it reads, and what it cannot
 //
-// It is SYNTACTIC: it parses every non-test file under internal/ and cmd/ and
-// matches selectors, never types. So each rule is written to survive the moves
-// that defeat a name match. turn.Run is matched through whatever name the file
-// imports the turn package under (an alias, a dot import, which is refused
-// outright), in every package, at package scope as in a function. Every other
-// edge is an unexported name matched on ANY operand, so a copy of the receiver
-// (`eng := e`) or of the field (`d := e.dispatch`) reaches the same rule. What
-// it cannot see is a value that carries a guarded function out of the frames
-// it pins (a method value stored and called later from elsewhere) or a call
-// through reflection. Review holds those; the ADR says so.
+// It is SYNTACTIC: it parses every non-test Go file in the module
+// ([sourcetree.Walk] from the module root, so the root package and any new
+// top-level directory are read too) and matches identifiers and selectors,
+// never types. So each rule is written to survive the moves that defeat a name
+// match. turn.Run is matched through whatever name the file imports the turn
+// package under (an alias, a dot import, which is refused outright), in every
+// package, at package scope as in a function. Every other edge is an unexported
+// name matched on ANY operand, so a copy of the receiver (`eng := e`) or of the
+// field (`d := e.dispatch`) reaches the same rule. The admission type is
+// matched on ANY MENTION, in a signature as in a body (a declared variable,
+// new, a conversion, an alias, a field), because its zero value assigned field
+// by field is an admission as surely as a literal is. What it cannot see is a
+// value that carries a guarded function out of the frames it pins (a method
+// value stored and called later from elsewhere) or a call through reflection.
+// Review holds those; the ADR says so.
 //
 // A rule names the frames allowed to reach what it guards, as
 // "<directory>.<Receiver>.<Function>", and each must still find what it
@@ -156,6 +163,42 @@ func TestTheAdmissionGuardFindsEveryRoad(t *testing.T) {
 			src:   "package node\nfunc (n *Node) sneak() { g := n.turns; g.acquire(nil) }",
 			frame: "internal/node.Node.sneak",
 		},
+		"turn.Run from the module's root package": {
+			path:  "reference.go",
+			src:   "package crewlet\nimport " + turnImport + "\nvar Hook = turn.Run",
+			frame: moduleRoot + ".package scope",
+		},
+		"an admission declared and filled in": {
+			path: "internal/sandbox/road.go",
+			src: "package sandbox\nfunc (c *Coordinator) sneak(ctx context.Context) " +
+				"{ var a admitted; a.ctx = ctx; _ = a }",
+			frame: "internal/sandbox.Coordinator.sneak",
+		},
+		"a completion's claim from another frame": {
+			path:  "internal/sandbox/road.go",
+			src:   "package sandbox\nfunc (c *Coordinator) sneak() { c.completeAdmitted }",
+			frame: "internal/sandbox.Coordinator.sneak",
+		},
+		"an admission from new": {
+			path:  "internal/sandbox/road.go",
+			src:   "package sandbox\nfunc (c *Coordinator) sneak() { a := *new(admitted); _ = a }",
+			frame: "internal/sandbox.Coordinator.sneak",
+		},
+		"an admission through an alias": {
+			path:  "internal/sandbox/road.go",
+			src:   "package sandbox\ntype adm2 = admitted\nfunc (c *Coordinator) sneak() { _ = adm2{} }",
+			frame: "internal/sandbox.package scope",
+		},
+		"an admission taken by another frame": {
+			path:  "internal/sandbox/road.go",
+			src:   "package sandbox\nfunc (c *Coordinator) sneak(adm admitted) {}",
+			frame: "internal/sandbox.Coordinator.sneak",
+		},
+		"the resume called from another frame": {
+			path:  "internal/sandbox/road.go",
+			src:   "package sandbox\nfunc (c *Coordinator) sneak() { c.resumeAndSettle }",
+			frame: "internal/sandbox.Coordinator.sneak",
+		},
 		"another package's Run named turn": {
 			path:  "internal/shortcut/road.go",
 			src:   "package shortcut\nimport turn \"example.com/other/turn\"\nfunc Start() { turn.Run() }",
@@ -199,6 +242,9 @@ const (
 	turnDir     = "internal/agent/turn"
 )
 
+// moduleRoot is how a frame in the module's root package is named.
+const moduleRoot = "(module root)"
+
 // admissionReport is what a scan found: every reach outside its rule's frames,
 // and how often each rule matched at all.
 type admissionReport struct {
@@ -206,76 +252,80 @@ type admissionReport struct {
 	found      []int
 }
 
-// scanAdmission reads every non-test Go file under root's internal/ and cmd/
-// against rules. A tree without one of the two is scanned for the other.
+// scanAdmission reads every non-test Go file in the module at root against
+// rules: the whole tree, as [sourcetree.Walk] defines it, less testdata and
+// hidden directories.
 func scanAdmission(root string, rules []admissionRule) (admissionReport, error) {
 	report := admissionReport{found: make([]int, len(rules))}
 	fset := token.NewFileSet()
-	for _, top := range []string{"internal", "cmd"} {
-		start := filepath.Join(root, top)
-		if _, err := os.Stat(start); errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		err := sourcetree.Walk(start, func(p string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				if name := d.Name(); name == "testdata" || strings.HasPrefix(name, ".") {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if filepath.Ext(p) != ".go" || strings.HasSuffix(p, "_test.go") {
-				return nil
-			}
-			rel, err := filepath.Rel(root, filepath.Dir(p))
-			if err != nil {
-				return err
-			}
-			parsed, err := parser.ParseFile(fset, p, nil, 0)
-			if err != nil {
-				return err
-			}
-			report.scan(fset, sourceFile{dir: filepath.ToSlash(rel), imports: importNames(parsed)},
-				parsed, rules)
-			return nil
-		})
+	err := sourcetree.Walk(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return report, err
+			return err
 		}
-	}
-	return report, nil
+		if d.IsDir() {
+			if name := d.Name(); p != root && (name == "testdata" || strings.HasPrefix(name, ".")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(p) != ".go" || strings.HasSuffix(p, "_test.go") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, filepath.Dir(p))
+		if err != nil {
+			return err
+		}
+		dir := filepath.ToSlash(rel)
+		if dir == "." {
+			dir = moduleRoot
+		}
+		parsed, err := parser.ParseFile(fset, p, nil, 0)
+		if err != nil {
+			return err
+		}
+		report.scan(fset, sourceFile{dir: dir, imports: importNames(parsed)}, parsed, rules)
+		return nil
+	})
+	return report, err
 }
 
-// scan checks one file's declarations against rules: a function's body as the
-// function's frame, and everything else (imports, package-level values) as the
-// package's scope, which no rule allows.
+// scan checks one file's declarations against rules: a function's signature
+// and body as the function's frame, and everything else (imports, types,
+// package-level values) as the package's scope, which no rule allows.
 func (r *admissionReport) scan(fset *token.FileSet, file sourceFile, parsed *ast.File, rules []admissionRule) {
 	for _, decl := range parsed.Decls {
-		var body ast.Node = decl
+		parts := []ast.Node{decl}
 		frame := file.dir + ".package scope"
 		if fn, ok := decl.(*ast.FuncDecl); ok {
-			if fn.Body == nil {
+			parts, frame = []ast.Node{fn.Type}, file.dir+"."+frameName(fn)
+			if fn.Body != nil {
+				parts = append(parts, fn.Body)
+			}
+		}
+		for _, part := range parts {
+			r.check(fset, file, frame, part, rules)
+		}
+	}
+}
+
+// check holds every node under part, in frame, to rules.
+func (r *admissionReport) check(fset *token.FileSet, file sourceFile, frame string, part ast.Node,
+	rules []admissionRule,
+) {
+	withParents(part, func(n, parent ast.Node) {
+		at := site{node: n, parent: parent, file: file}
+		for i, rule := range rules {
+			if (rule.dir != "" && rule.dir != file.dir) || !rule.reaches(at) {
 				continue
 			}
-			body, frame = fn.Body, file.dir+"."+frameName(fn)
-		}
-		withParents(body, func(n, parent ast.Node) {
-			at := site{node: n, parent: parent, file: file}
-			for i, rule := range rules {
-				if (rule.dir != "" && rule.dir != file.dir) || !rule.reaches(at) {
-					continue
-				}
-				r.found[i]++
-				if !slices.Contains(rule.within, frame) {
-					r.violations = append(r.violations, fmt.Sprintf("%s: %s reaches %s, which only "+
-						"%v may: a turn started there skips the node's admission (ADR-0063)",
-						fset.Position(n.Pos()), frame, rule.what, rule.within))
-				}
+			r.found[i]++
+			if !slices.Contains(rule.within, frame) {
+				r.violations = append(r.violations, fmt.Sprintf("%s: %s reaches %s, which only "+
+					"%v may: a turn started there skips the node's admission (ADR-0063)",
+					fset.Position(n.Pos()), frame, rule.what, rule.within))
 			}
-		})
-	}
+		}
+	})
 }
 
 // sourceFile is what a rule may ask about the file a node is in.
@@ -357,6 +407,35 @@ func admissionRules() []admissionRule {
 			within: []string{"internal/sandbox.Coordinator.admitTurn"},
 		},
 		{
+			// ANY MENTION of the type but its own declaration: a variable
+			// of it filled in field by field, new(admitted), a conversion,
+			// an alias or a field holding one is an admission no gate
+			// granted as surely as a literal is. The four frames are the one
+			// that makes it and the three that take it.
+			dir: "internal/sandbox", what: "the admission type",
+			reaches: mentionsType("admitted"),
+			within: []string{"internal/sandbox.Coordinator.admitTurn",
+				"internal/sandbox.Coordinator.resumeAndSettle",
+				"internal/sandbox.Coordinator.completeAdmitted",
+				"internal/sandbox.Coordinator.resumeOwedAdmitted"},
+		},
+		{
+			dir: "internal/sandbox", what: "the resume under an admission",
+			reaches: selects("resumeAndSettle"),
+			within: []string{"internal/sandbox.Coordinator.completeAdmitted",
+				"internal/sandbox.Coordinator.resumeOwedAdmitted"},
+		},
+		{
+			dir: "internal/sandbox", what: "a completion's claim under an admission",
+			reaches: selects("completeAdmitted"),
+			within:  []string{"internal/sandbox.Coordinator.OnCompleted"},
+		},
+		{
+			dir: "internal/sandbox", what: "an owed answer's claim under an admission",
+			reaches: selects("resumeOwedAdmitted"),
+			within:  []string{"internal/sandbox.Coordinator.attemptOwed"},
+		},
+		{
 			dir: "internal/node", what: "a concurrency slot",
 			reaches: selects("acquire"),
 			within:  []string{"internal/node.Node.AdmitTurn"},
@@ -397,6 +476,27 @@ func reachesTurnRun(s site) bool {
 		return true
 	}
 	return false
+}
+
+// mentionsType matches an identifier naming the type, anywhere but the name
+// in its own declaration, a selector's field or method name, or a composite
+// literal's key.
+func mentionsType(name string) func(site) bool {
+	return func(s site) bool {
+		id, ok := s.node.(*ast.Ident)
+		if !ok || id.Name != name {
+			return false
+		}
+		switch p := s.parent.(type) {
+		case *ast.TypeSpec:
+			return p.Name != id
+		case *ast.SelectorExpr:
+			return p.Sel != id
+		case *ast.KeyValueExpr:
+			return p.Key != id
+		}
+		return true
+	}
 }
 
 // importNames maps each path file imports to the name it is used under.

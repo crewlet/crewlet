@@ -405,3 +405,47 @@ func TestAnAnswerWhoseResumeMeetsALimitWaitsUncharged(t *testing.T) {
 		t.Fatalf("%d resumes once the limit lifted, want 1", len(calls))
 	}
 }
+
+// A CONDITION THAT CLEARS WHILE THE GATE IS REFUSING STILL RE-FIRES THE
+// COMPLETION, at once.
+//
+// The gate here signals the clearing itself, after it has decided to refuse and
+// before it returns: the one interleaving in which Readmit runs while nothing
+// is kept yet. Nothing else signals, and no poll runs, so only the keep seeing
+// that signal can bring the completion back.
+//
+// Mutation: read what was signalled after the gate rather than before it, or
+// keep the completion without asking whether its condition was signalled
+// since, and it is never resumed.
+func TestASignalWhileTheGateRefusesIsNotLost(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	var mu sync.Mutex
+	refused := false
+	rig.coordinator.gate = func(ctx context.Context, handle string) (context.Context, func(), error) {
+		mu.Lock()
+		first := !refused
+		refused = true
+		mu.Unlock()
+		if first {
+			// The condition clears, and is signalled, between the
+			// refusal and the keep.
+			rig.coordinator.Readmit(conditionDrain, handle)
+			return nil, nil, &TurnRefused{Cause: errLeaving,
+				Refusal: Refusal{Condition: conditionDrain, Reason: errLeaving.Error()}}
+		}
+		return ctx, func() {}, nil
+	}
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "fixed the flake"})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); !errors.Is(err, errLeaving) {
+		t.Fatalf("OnCompleted = %v, want the gate's refusal", err)
+	}
+	rig.coordinator.inflight.Wait()
+	if calls := rig.resumer.calls(); len(calls) != 1 {
+		t.Fatalf("resumed %d times after a condition cleared while the gate refused, want once",
+			len(calls))
+	}
+}
