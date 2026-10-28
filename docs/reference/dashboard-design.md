@@ -6926,8 +6926,9 @@ section mounts.
 
 **Code is read over REST, never on the socket** (`lib/useCodeQuery.ts`). Its
 questions are the registry's like every other, one answer on every transport,
-but a tab's socket carries its questions in four in-flight slots that the
-frame's own reads wait on, and a code answer is a page a reader scrolls or,
+but the engine answers a socket's questions four at a time and queues the rest
+on that socket (`MaxInFlightQueries` in `internal/api/stream`), the frame's own
+reads among them, and a code answer is a page a reader scrolls or,
 once a repository's pages land, a tree, a file or a diff. So a code question
 is asked on the registry's generic REST form, `GET /query/{what}`, through the
 one REST loader (`useRest`): an answer belongs to its key, a refusal replaces

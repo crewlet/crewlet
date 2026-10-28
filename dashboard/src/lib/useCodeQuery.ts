@@ -5,9 +5,11 @@
  * # Why REST and not the socket
  *
  * The code questions are the query registry's like every other, answered by
- * one implementation on every transport — but a tab's socket carries its
- * questions in four in-flight slots (`protocol/socket.ts`), and the frame's
- * own reads and every screen's first paint wait on those. A code answer is a
+ * one implementation on every transport — but the engine answers a socket's
+ * questions four at a time and queues the rest on that socket
+ * (`MaxInFlightQueries`, internal/api/stream's budget.go; the client sends
+ * every question it is asked at once), and the frame's own reads and every
+ * screen's first paint wait on those four. A code answer is a
  * page a reader scrolls (a repository listing, a push history) or, once the
  * repository's pages land, a tree, a file or a diff read by object id: answers
  * a reader asks for many of, of a size the socket was never sized to carry
