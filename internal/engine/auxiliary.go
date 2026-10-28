@@ -413,6 +413,12 @@ func (e *Engine) conversationBlock(ctx context.Context, c *Company, handle strin
 			opts.MaxChars = 0
 		case err == nil:
 			opts.Earlier = res.Text
+		case llm.KindOf(err) == llm.KindRateLimit:
+			// The compactor said why at Info: the model is at a limit
+			// it already reported, which is a wait and not a fault.
+			log.InfoContext(ctx, "conversation_history_not_condensed", "seat", handle,
+				"turns", len(overflow), "reason", "the auxiliary model is at its usage limit",
+				"detail", "the older turns are left out of this turn's block, and it says how many")
 		default:
 			log.WarnContext(ctx, "conversation_history_not_condensed", "seat", handle,
 				"turns", len(overflow), "error", err.Error(),
