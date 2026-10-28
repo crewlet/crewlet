@@ -401,6 +401,18 @@ const (
 	// body_bytes, and a purge part counts it toward PurgePartBytes.
 	MaxChangeBodyBytes = 32 << 10
 
+	// MaxChangeTitleBytes is the longest title a change carries: ONE LINE a
+	// listing shows whole, as long again as a commit subject git's own
+	// tools wrap at, and short enough beside the refs, the oids and the
+	// handles that code_changes stays inside its page (replicated 0066),
+	// which every head move reads and rewrites.
+	MaxChangeTitleBytes = 256
+
+	// MaxCloseReasonBytes is the longest reason a close of a change gives —
+	// a sentence or two of why, kept on the change's row beside its title,
+	// which replicated 0066 sizes the row by as it does by the title.
+	MaxCloseReasonBytes = 1 << 10
+
 	// HorizonDeletesPerRecord is how many expired PUSH ROWS one push record
 	// removes from its repository: no fewer than the push rows a record can
 	// add (MaxPushesPerRecord), so the push history's removal keeps pace on

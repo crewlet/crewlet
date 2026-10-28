@@ -831,14 +831,15 @@ func (u Usage) RepoReaders(ctx context.Context, q usage.RepoReadsQuery, cursor s
 }
 
 // CodeSeam is the code host's reach into the estate, from every node: a push's
-// proposal, a compaction's and an expunge record's to their repository's
-// committer, and the reads the host's admission, a cache's sync and the REST
-// routes make — each answered by a data node whose copy of the code log
-// serves, this one where it does. Its consumers declare what they call of it.
+// proposal, a compaction's, an expunge record's and a change's to their
+// repository's committer, and the reads the host's admission, a cache's sync
+// and the REST routes make — each answered by a data node whose copy of the
+// code log serves, this one where it does. Its consumers declare what they
+// call of it.
 //
 // ONLY THIS NODE'S OWN WRITES RAISE ITS FLOOR: a proposal that landed — a
-// push's, a compaction's or an expunge record's — and a push this node
-// proposed found landed. A read's position is somebody else's writes, and
+// push's, a compaction's, an expunge record's or a change's — and a push this
+// node proposed found landed. A read's position is somebody else's writes, and
 // observing it would hold every later read this node routes — a `stale` one
 // included — behind the newest linearizable read anybody on the node made,
 // which is the tracker's and the knowledge base's rule too. Each such write
@@ -882,6 +883,20 @@ func (c CodeSeam) Compact(ctx context.Context, p code.CompactionProposal) (code.
 func (c CodeSeam) Expunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
 	out, err := call(ctx, c.r, opCodeExpunge, nil, p)
 	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
+		c.wrote(p.RepoID(), out.Position)
+	}
+	return out, err
+}
+
+// Change asks the repository's committer to decide a write of a change's
+// lifecycle, and raises this node's floors past the record it landed in — this
+// node's own write, which its next read of the change must see on whichever
+// node answers it. A write answered UNCHANGED landed no record, and raises
+// nothing: the position it names is the change's last record, somebody else's
+// write.
+func (c CodeSeam) Change(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
+	out, err := call(ctx, c.r, opCodeChange, nil, p)
+	if !out.Unchanged && (out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending) {
 		c.wrote(p.RepoID(), out.Position)
 	}
 	return out, err

@@ -178,37 +178,66 @@ var codeLogNegligible = map[code.OpKind]string{
 }
 
 // codeLogUnwritten is every op of the code domain that no node of this build
-// appends, with the LISTING the loop that would append it polls for its work —
-// a code.ReadKind the code domain declares for that loop, and serves before
-// the loop exists — and how: the day leaves the op out while no file the
-// crewlet binary is built from names that listing (codeLogPolled), and
-// TestTheCodeLogsDayPricesEveryRecordItTakes fails the day one does.
+// appends, with the one name of the code domain its writer must spell, and
+// how: the day leaves the op out while no file the crewlet binary is built
+// from spells that name (codeLogSpelled), and
+// TestTheCodeLogsDayPricesEveryRecordItTakes fails the day one does. A writer
+// is one of two things, and each has its name:
 //
-// KEYED BY THE LISTING, NOT BY A FILE: the plan names a loop's files, and an
+//   - a LOOP, which polls a LISTING for its work: a code.ReadKind the code
+//     domain declares for that loop, and serves before the loop exists
+//     (listing);
+//   - an ASKER — a tool, a route, the engine's own work — which builds the
+//     PAYLOAD the op's records carry and asks the repository's committer to
+//     decide it: the type the code domain decodes those records into
+//     (payload), which the estate carries to the committer inside its
+//     proposal without ever naming it.
+//
+// KEYED BY THE NAME, NOT BY A FILE: the plan names a writer's files, and an
 // implementer names them after the code they land beside — the compactor's
 // loop and its decide, planned in compact.go and decide_compact.go, landed in
 // compactor.go, poll.go and compaction.go — so a file the plan names may never
-// exist while its loop runs, and a tripwire on it would never fire. Every loop
-// polls its listing, whatever its files are called, and the listing is the
-// code domain's own declaration. The compactor's poll names
-// code.ReadCompactionDue, and the gate holds that it finds it there, so a walk
-// that would find no loop at all fails rather than passes.
+// exist while its writer runs, and a tripwire on it would never fire. Every
+// loop polls its listing and every asker builds its payload, whatever its
+// files are called, and both are the code domain's own declarations. The
+// compactor's poll names code.ReadCompactionDue, and the gate holds that it
+// finds it there, so a walk that would find no writer at all fails rather
+// than passes.
 var codeLogUnwritten = map[code.OpKind]struct {
 	listing code.ReadKind
+	payload reflect.Type
 	how     string
 }{
-	code.OpExpungeBegin: {code.ReadExpungeDue, "an expunge is begun by a repository's maintainer " +
-		"alone, through the estate's code.expunge, for a repository its listing names, and a " +
-		"begin can list a thousand packs"},
-	code.OpExpungeCommit: {code.ReadExpungeDue, "an expunge is committed by the maintainer " +
-		"that began it, through the estate's code.expunge"},
+	code.OpExpungeBegin: {listing: code.ReadExpungeDue, how: "an expunge is begun by a " +
+		"repository's maintainer alone, through the estate's code.expunge, for a repository its " +
+		"listing names, and a begin can list a thousand packs"},
+	code.OpExpungeCommit: {listing: code.ReadExpungeDue, how: "an expunge is committed by the " +
+		"maintainer that began it, through the estate's code.expunge"},
+	// A CHANGE'S LIFECYCLE, decided by its repository's committer since the
+	// committer's change path landed, is appended by no node while nothing
+	// asks for one: the change tools a seat and a person open, edit and close
+	// a change with are its first writer, through the estate's code.change,
+	// and a change's records come at the rate its pushes do — what the day
+	// must price once they exist, which that writer is the one to measure.
+	code.OpChangeOpen: {payload: reflect.TypeFor[code.ChangeOpen](), how: "a change is opened " +
+		"by a seat's or a person's code_open_change, through the estate's code.change"},
+	code.OpChangeEdit: {payload: reflect.TypeFor[code.ChangeEdit](), how: "a change's title, " +
+		"body and work item are set by code_update_change, through the estate's code.change"},
+	code.OpChangeDraft: {payload: reflect.TypeFor[code.ChangeDraft](), how: "a change is made " +
+		"a draft, or ready, by code_update_change, through the estate's code.change"},
+	code.OpChangeRetarget: {payload: reflect.TypeFor[code.ChangeRetarget](), how: "a change is " +
+		"retargeted by code_update_change, through the estate's code.change"},
+	code.OpChangeClose: {payload: reflect.TypeFor[code.ChangeClose](), how: "a change is closed " +
+		"by code_close_change, through the estate's code.change"},
+	code.OpChangeReopen: {payload: reflect.TypeFor[code.ChangeReopen](), how: "a change is " +
+		"reopened by code_close_change, through the estate's code.change"},
 }
 
 // codeLogUnwrittenShapes is every SHAPE of record of an op the day classifies
 // that no node of this build appends, and that nothing but its writer tells
 // apart — records no term of the op was measured on, at a size or a rate its
 // term does not cover — with the listing the loop that would append them
-// polls, as codeLogUnwritten has it, and how.
+// polls, as codeLogUnwritten names a loop's, and how.
 //
 // The op gate cannot see one: its op is classified already, so when its loop
 // lands the code log's day stays short and nothing fails — a publication
@@ -329,8 +358,8 @@ var codeLogKinds = map[code.ObjectKind]string{
 		"merge of the pushes' packs and the sweep of the rows a merge retired (codeLogDay) are " +
 		"on their repository; so are its settings, deletion, restore and purge " +
 		"(codeLogNegligible, by its manager: codeLogManagers), a person's purge of its " +
-		"unreachable objects (codeLogNegligible), an expunge's begin and commit " +
-		"(codeLogUnwritten) and a publication of its layers (codeLogUnwrittenShapes)",
+		"unreachable objects (codeLogNegligible), an expunge's begin and commit and a change's " +
+		"lifecycle (codeLogUnwritten) and a publication of its layers (codeLogUnwrittenShapes)",
 	code.KindBarrier: "a git client's read (codeLogDay)",
 	code.KindName: "a repository's create, on the name it claims (codeLogNegligible, by its " +
 		"manager: codeLogManagers)",
@@ -1041,9 +1070,9 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 // day (codeLogDay, a term for each shape of its records it prices),
 // negligible beside it for the reason given (codeLogNegligible), or appended
 // by no node of this build (codeLogUnwritten) — and that last only while no
-// file the crewlet binary is built from names the listing its loop would
-// poll. Every kind of object the log's records are on says how the day counts
-// them (codeLogKinds).
+// file the crewlet binary is built from names the listing its loop would poll
+// or the payload its asker would build. Every kind of object the log's records
+// are on says how the day counts them (codeLogKinds).
 //
 // AN OP IS CLASSIFIED ONCE, AND ITS RECORDS CHANGE SHAPE UNDER IT: a later
 // writer appends the same op's records at a size or a rate its term was not
@@ -1056,16 +1085,17 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 // tells apart — a publication among compactions — by the listing its loop
 // would poll (codeLogUnwrittenShapes).
 //
-// A new op, kind, way, manager or payload key, or the loop of an unwritten op
+// A new op, kind, way, manager or payload key, or the writer of an unwritten op
 // or shape, fails here until its records are priced into the day — and the
 // share and when a half suffices restated on the pages
 // TestTheDocsPrintTheMeasuredDay holds — or argued out of it.
 //
 // Mutation: declare an op, a kind, a way or a manager in the code domain, add
-// a key to a priced op's payload, or name code.ReadPublicationDue or
-// code.ReadExpungeDue in a non-test file of internal/code/compact, and this
-// fails naming it; take the compactor's poll off code.ReadCompactionDue and
-// it fails saying the walk found no loop.
+// a key to a priced op's payload, name code.ReadPublicationDue or
+// code.ReadExpungeDue in a non-test file of internal/code/compact, or build a
+// code.ChangeOpen in a non-test file of internal/agent/builtin, and this fails
+// naming it; take the compactor's poll off code.ReadCompactionDue and it fails
+// saying the walk found no writer.
 func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 	t.Parallel()
 	const remedy = "price its records into codeLogDay — and restate the code log's share and " +
@@ -1138,27 +1168,51 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 		}
 	}
 
-	// THE LOOPS, each by the listing it polls: an unwritten op or shape stays
-	// unwritten while no file the crewlet binary is built from names its loop's
-	// listing. The walk that looks must find the compactor's, whose merges the
-	// day prices, or it is a walk that would find no loop at all.
-	polled := codeLogPolled(t)
+	// THE WRITERS, each by the name it spells — a loop by the listing it polls,
+	// an asker by the payload it builds: an unwritten op or shape stays
+	// unwritten while no file the crewlet binary is built from spells its
+	// writer's name. The walk that looks must find the compactor's listing,
+	// whose merges the day prices, or it is a walk that would find no writer
+	// at all.
+	var payloads []reflect.Type
+	for op, unwritten := range codeLogUnwritten {
+		if unwritten.payload == nil {
+			continue
+		}
+		if decoded := codeLogPayload(op); unwritten.payload != decoded {
+			t.Errorf("codeLogUnwritten holds %q records unwritten until their asker builds %v, "+
+				"and the code domain decodes them into %v: name the payload the op's records "+
+				"carry, which is what its asker builds", op, unwritten.payload, decoded)
+			continue
+		}
+		payloads = append(payloads, unwritten.payload)
+	}
+	polled, built := codeLogSpelled(t, payloads)
 	if !polled[code.ReadCompactionDue] {
 		t.Errorf("no file the crewlet binary is built from names the compactor's listing (%q), "+
 			"which its poll reads for the merges codeLogDay prices: either the compactor is gone, "+
-			"and its term with it, or codeLogPolled reads no loop and would miss every one this "+
+			"and its term with it, or codeLogSpelled reads no writer and would miss every one this "+
 			"test holds unwritten", code.ReadCompactionDue)
 	}
 	for op, unwritten := range codeLogUnwritten {
 		switch {
-		case !unwritten.listing.Valid() || strings.TrimSpace(unwritten.how) == "":
+		case (unwritten.listing == "") == (unwritten.payload == nil) ||
+			strings.TrimSpace(unwritten.how) == "":
+			t.Errorf("codeLogUnwritten holds %q records unwritten on the listing %q and the "+
+				"payload %v: an unwritten op names the one thing its writer spells — the listing "+
+				"its loop polls or the payload its asker builds — and says how its records would "+
+				"be appended", op, unwritten.listing, unwritten.payload)
+		case unwritten.payload == nil && !unwritten.listing.Valid():
 			t.Errorf("codeLogUnwritten holds %q records unwritten on the listing %q, which is no "+
-				"listing the code domain declares, or does not say how they would be appended",
-				op, unwritten.listing)
+				"listing the code domain declares", op, unwritten.listing)
 		case polled[unwritten.listing]:
 			t.Errorf("a file the crewlet binary is built from names the listing %q, which the "+
 				"loop that appends %q records polls, so a node appends them — %s: %s",
 				unwritten.listing, op, unwritten.how, remedy)
+		case built[unwritten.payload]:
+			t.Errorf("a file the crewlet binary is built from names %v, the payload the asker "+
+				"that appends %q records builds, so a node appends them — %s: %s",
+				unwritten.payload, op, unwritten.how, remedy)
 		}
 	}
 	for _, unwritten := range codeLogUnwrittenShapes {
@@ -1334,15 +1388,19 @@ func encodesItself(rt reflect.Type) bool {
 	return false
 }
 
-// codeLogPolled is every listing of the code domain (a code.ReadKind) that a
-// file the crewlet binary is built from names: a non-test file, read as
-// go/build reads it for this platform, of a package cmd/crewlet reaches through
-// its imports — so no test, and no package only tests import (the suites'
-// harnesses, codetest among them, poll a listing to check it) — outside the
-// code domain's own package, which declares and serves them. A listing is
-// named by the domain's own identifier for it, read off its declaration rather
-// than spelled here, so a listing renamed is the one the walk looks for.
-func codeLogPolled(t *testing.T) map[code.ReadKind]bool {
+// codeLogSpelled is what the code domain's writers spell that a file the
+// crewlet binary is built from names: every listing of the domain (a
+// code.ReadKind), which a loop polls, and each of payloads, which an asker
+// builds. A file is a non-test file, read as go/build reads it for this
+// platform, of a package cmd/crewlet reaches through its imports — so no test,
+// and no package only tests import (the suites' harnesses, codetest among
+// them, poll a listing and build a payload to check them) — outside the code
+// domain's own package, which declares and serves them. Each is found by the
+// domain's own identifier for it, read off its declaration rather than spelled
+// here — a listing's constant, a payload's type — so one renamed is the one
+// the walk looks for.
+func codeLogSpelled(t *testing.T, payloads []reflect.Type) (polled map[code.ReadKind]bool,
+	built map[reflect.Type]bool) {
 	t.Helper()
 	root := sourcetree.Root(t)
 	domain := reflect.TypeFor[code.ReadKind]().PkgPath()
@@ -1403,8 +1461,19 @@ func codeLogPolled(t *testing.T) map[code.ReadKind]bool {
 		}
 	}
 
-	ids := sourcetree.MustIdentifiers(slices.Collect(maps.Keys(listings))...)
-	polled := map[code.ReadKind]bool{}
+	// THE DOMAIN'S NAME FOR EACH PAYLOAD: its type's, which no constant shares.
+	types := map[string]reflect.Type{}
+	for _, payload := range payloads {
+		if payload.PkgPath() != domain || payload.Name() == "" {
+			t.Fatalf("%v is no type the code domain declares by a name, so this walk has no "+
+				"name to find it by", payload)
+		}
+		types[payload.Name()] = payload
+	}
+
+	ids := sourcetree.MustIdentifiers(slices.Concat(slices.Collect(maps.Keys(listings)),
+		slices.Collect(maps.Keys(types)))...)
+	polled, built = map[code.ReadKind]bool{}, map[reflect.Type]bool{}
 	read := map[string]bool{}
 	for queue := []string{"cmd/crewlet"}; len(queue) > 0; queue = queue[1:] {
 		pkgPath := queue[0]
@@ -1450,7 +1519,7 @@ func codeLogPolled(t *testing.T) map[code.ReadKind]bool {
 			}
 			if local == "." {
 				t.Fatalf("%s imports the code domain into its own scope, so this walk cannot "+
-					"tell the domain's listings from its own names", path)
+					"tell the domain's names from its own", path)
 			}
 			ast.Inspect(f, func(n ast.Node) bool {
 				if sel, ok := n.(*ast.SelectorExpr); ok {
@@ -1458,13 +1527,33 @@ func codeLogPolled(t *testing.T) map[code.ReadKind]bool {
 						if listing, ok := listings[sel.Sel.Name]; ok {
 							polled[listing] = true
 						}
+						if payload, ok := types[sel.Sel.Name]; ok {
+							built[payload] = true
+						}
 					}
 				}
 				return true
 			})
 		}
 	}
-	return polled
+	return polled, built
+}
+
+// codeLogPayload is the type the code domain decodes op's records into, on
+// whichever kind of object they are on — read off the domain's own decode, so
+// a payload named for an op is the one its records carry — or nil where it
+// decodes them on none.
+func codeLogPayload(op code.OpKind) reflect.Type {
+	for _, kind := range code.ObjectKinds {
+		decoded, err := code.DecodeMutation(code.MutationRecord{
+			RecordEnvelope: code.RecordEnvelope{Subject: code.Subject{Kind: kind}, Op: op},
+			Mutation:       json.RawMessage("{}"),
+		})
+		if err == nil {
+			return reflect.TypeOf(decoded)
+		}
+	}
+	return nil
 }
 
 // prose is a file of this tree as a reader reads its words: a comment's

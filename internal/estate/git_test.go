@@ -1382,6 +1382,10 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 		{opCodeRead.spec, code.ReadQuery{Kind: code.ReadIntroduced}, false},
 		{opCodeResolveRef.spec, code.RefQuery{Asker: seat}, true},
 		{opCodeResolveRef.spec, code.RefQuery{Asker: person}, false},
+		// A SEAT'S WRITE OF A CHANGE, which its grant decides whether it may
+		// make; a person's consults no chart.
+		{opCodeChange.spec, code.ChangeProposal{Asker: seat}, true},
+		{opCodeChange.spec, code.ChangeProposal{Asker: person}, false},
 	} {
 		if tc.spec.judges == nil {
 			t.Errorf("%s declares no grant", tc.spec.name)

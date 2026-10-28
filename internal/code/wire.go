@@ -786,6 +786,89 @@ type ExpungeResult struct {
 	Request string `json:"request,omitempty"`
 }
 
+// ChangeProposal is one write of a change's lifecycle as its asker hands it to
+// the repository's committer ([Committer.ProposeChange]): EXACTLY ONE of the
+// six records it may be — an open, an edit, a draft's state, a retarget, a
+// close and a reopen, each its op's payload ([ChangeOps]) — decided alone as a
+// record of its own, beside who asks, the floor they read at and the version
+// they formed it against. Its OpID is the record's operation id, its Seen the
+// publish's session floor. What no asker sends — who wrote it, and an open's
+// and a reopen's head — the committer stamps into the record from its asker
+// and its snapshot.
+type ChangeProposal struct {
+	// OpID is the record's operation id, minted once by whoever asks — an
+	// operation id this engine accepts (statelog.CheckCallerOpID) — so the
+	// write asked again under it, of the repository's runner-up after a
+	// committer went silent or by an asker whose answer was lost, is the same
+	// write, collapsed by the operation ledger; an open's change id is
+	// derived from it ([OpenChangeID]).
+	OpID string `json:"op_id"`
+	// Asker is who asks: a person through a credential bound to their human
+	// seat, a seat by its handle, or a token bound to nobody, which the
+	// decide refuses every write. A SEAT'S IS JUDGED FROM THE CHART of the
+	// deciding node's epoch ([CommitterOptions.SeatRules]), so a node that
+	// holds none, or one confirmed behind the company's configuration,
+	// decides none of a seat's — the estate declares the operation to judge
+	// a grant where its asker is a seat. It names no run: a change keeps the
+	// turn and the run that opened it in its own fields.
+	Asker Principal `json:"asker"`
+	// Seen is the code log's position the asker read the repository and the
+	// change at — zero for one that read none. The committer DECIDES AT OR
+	// PAST IT, or refuses `behind` about itself, so the runner-up decides:
+	// from below it the decide would refuse a write formed against what the
+	// asker was shown — an edit stale, an open's branch missing.
+	Seen statelog.Position `json:"seen,omitzero"`
+	// ExpectedVersion is the change's version the write was formed against
+	// (code_changes.version, its records counted from 1 at its open): every
+	// write but an open names one, and one the change is no longer at is
+	// refused stale — another write, an edit or a push that moved its head,
+	// landed first. An open names none: the change does not exist yet.
+	ExpectedVersion int64 `json:"expected_version,omitempty"`
+
+	Open     *ChangeOpen     `json:"open,omitempty"`
+	Edit     *ChangeEdit     `json:"edit,omitempty"`
+	Draft    *ChangeDraft    `json:"draft,omitempty"`
+	Retarget *ChangeRetarget `json:"retarget,omitempty"`
+	Close    *ChangeClose    `json:"close,omitempty"`
+	Reopen   *ChangeReopen   `json:"reopen,omitempty"`
+}
+
+// ChangeResult is what became of one change proposal.
+type ChangeResult struct {
+	// Outcome is applied, pending or unknown for a write whose record was
+	// appended — or, answered from the change's row with no record, applied
+	// and Unchanged — and empty for one refused. Applied is answered only
+	// from the change's row the record wrote, never from the decision.
+	Outcome statelog.Outcome `json:"outcome,omitempty"`
+	// ChangeID is the change the write is about — an open's, its derived id.
+	ChangeID string `json:"change_id,omitempty"`
+	// Number is the change's number on its repository (web!42), read from its
+	// row: an open's is the repository's next_change at the apply that opened
+	// it, which no proposal can name before its record lands.
+	Number int64 `json:"number,omitempty"`
+	// Version is the change's version once the write applied — what the
+	// asker's next write names as its expectation — and 0 where a later
+	// record has moved the change since this one: the change is then read
+	// again before it is written, rather than answered with a version that
+	// carries writes its asker never saw.
+	Version int64 `json:"version,omitempty"`
+	// Position is where the write's record landed — for one asked again under
+	// its own operation id, the record the ledger found; for an Unchanged
+	// answer, the change's row's own — and, for a not_applied or
+	// repo_deleted refusal the log made after the append, where that record
+	// lies applying nowhere.
+	Position statelog.Position `json:"position,omitzero"`
+	// Unchanged is a write that asked for what the change already says — an
+	// edit to its own values, a draft's state it is in, its own target, a
+	// close of a closed change and a reopen of a live one — answered from its
+	// row with no record, at its version.
+	Unchanged bool `json:"unchanged,omitempty"`
+	// Refusal is why it was refused with no record, and Detail its one
+	// sentence.
+	Refusal ChangeRefusal `json:"refusal,omitempty"`
+	Detail  string        `json:"detail,omitempty"`
+}
+
 // RepoSummary is a repository as a listing renders it.
 type RepoSummary struct {
 	RepoRef

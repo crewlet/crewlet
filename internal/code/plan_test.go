@@ -25,7 +25,8 @@ import (
 // tables — the guards, the applier's reads and writes (the tombstones a push
 // sweeps and the ref drops it forgets past their grace, each oldest first,
 // among them, and the fences it reads: an eviction's, the activation's), the
-// lifecycle store's decides, the push decide's reads, the reader's pages in
+// lifecycle store's decides, the push decide's reads, a change's lifecycle's
+// decide, apply and answer, the reader's pages in
 // their first and keyset forms — a snapshot's retired phase and its layers
 // phase among them — and its bounded counts, the purge's bounded count, its
 // parts and its statements over a repository's changes and its published
@@ -443,6 +444,23 @@ func registeredStatements() map[string]statement {
 			[]string{changesNumberKey + " (repo_id=?)", bodyKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all changes": {purgeAllChangesSQL, []any{"repo-1"},
 			[]string{"COVERING INDEX " + changesNumberKey + " (repo_id=?)"}},
+		// A CHANGE'S LIFECYCLE: a change by its key — a decide's, an
+		// apply's and an answer's — and its row written back by the same
+		// key; the live change a source branch heads, by the index partial
+		// on the live states, its predicate as the index spells it; a
+		// change's body read and removed by its key; and the repository's
+		// next number and version by its own.
+		"change row": {changeRowSQL, []any{"repo-1-change-000001"}, []string{changeKey + " (id=?)"}},
+		"write change": {writeChangeSQL, []any{"a change", 10, "open", "refs/heads/main", oid("head-1-4"), 4,
+			"", "", "", "", nil, "", nil, "", "", 4, 3000, "repo-1-change-000002"},
+			[]string{changeKey + " (id=?)"}},
+		"live change on": {liveChangeOnSQL, []any{"repo-1", "refs/heads/f000001"},
+			[]string{"code_changes_open_idx (repo_id=? AND source_ref=?)"}},
+		"change body":        {changeBodySQL, []any{"repo-1-change-000002"}, []string{bodyKey + " (change_id=?)"}},
+		"delete change body": {deleteBodySQL, []any{"repo-1-change-000002"}, []string{bodyKey + " (change_id=?)"}},
+		"next change":        {nextChangeSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
+		"opened":             {openedSQL, []any{3000, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"touched":            {touchedSQL, []any{3000, "repo-1"}, []string{repoKey + " (id=?)"}},
 		// THE FENCES the applier and a writer read — a node's eviction
 		// window and the readmission that closes one, and the activation
 		// fence every config-managed record is held to — each a point read
@@ -633,9 +651,6 @@ func planShapes() map[string]shape {
 // sees a claim, which no code issues yet.
 func claimedReads() map[string]statement {
 	return map[string]statement{
-		"code_changes_open_idx": {`SELECT id FROM code_changes WHERE repo_id = ? AND source_ref = ? AND ` +
-			liveChanges, []any{"repo-1", "refs/heads/f000001"},
-			[]string{"code_changes_open_idx (repo_id=? AND source_ref=?)"}},
 		"code_changes_target_idx": {`SELECT id FROM code_changes WHERE repo_id = ? AND target_ref = ?
 			AND head_oid = ? AND ` + liveChanges, []any{"repo-1", "refs/heads/main", oid("head-1-1")},
 			[]string{"code_changes_target_idx (repo_id=? AND target_ref=? AND head_oid=?)"}},

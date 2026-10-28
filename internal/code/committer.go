@@ -149,7 +149,13 @@ import (
 // the pushes queued around it can never contend on the repository's subject
 // from the same node. An EXPUNGE'S records — a person's request, and the
 // begin and the commit its maintainer builds ([Committer.ProposeExpunge]) —
-// wait and are decided the same way, each alone under its own operation id.
+// wait and are decided the same way, each alone under its own operation id;
+// and so does every write of a CHANGE'S LIFECYCLE ([Committer.ProposeChange]):
+// an open, an edit, a draft's state, a retarget, a close and a reopen — so a
+// change's lifecycle and the pushes that move its branches are decided in the
+// order they arrived, by one writer, and contend on one subject. A seat's
+// write of a change is judged from the chart as a seat's push is, and a node
+// that cannot judge one decides none.
 //
 // # Bounded in count and in bytes
 //
@@ -289,20 +295,22 @@ type repoCommitter struct {
 	queued int
 }
 
-// queued is one proposal waiting for its batch: a push's, or a compaction's or
-// an expunge record's, which wait in the same queue in the same arrival order
-// and are each decided as a batch of their own ([Committer.ProposeCompaction],
-// [Committer.ProposeExpunge]).
+// queued is one proposal waiting for its batch: a push's, or a compaction's,
+// an expunge record's or a change's, which wait in the same queue in the same
+// arrival order and are each decided as a batch of their own
+// ([Committer.ProposeCompaction], [Committer.ProposeExpunge],
+// [Committer.ProposeChange]).
 type queued struct {
-	// p is the push this proposal is; compaction or expunge, where one is
-	// set, is the compaction or the expunge record it is instead, and p then
-	// its zero value.
+	// p is the push this proposal is; compaction, expunge or change, where
+	// one is set, is the compaction, the expunge record or the write of a
+	// change it is instead, and p then its zero value.
 	p          Proposal
 	compaction *CompactionProposal
 	expunge    *ExpungeProposal
-	// bytes is entryBound(p), or a compaction's or an expunge record's
-	// encoded payload; rows is rowBound(p), compactDecidedRows of a
-	// compaction or decidedRows of an expunge record.
+	change     *ChangeProposal
+	// bytes is entryBound(p), or a compaction's, an expunge record's or a
+	// change's encoded payload; rows is rowBound(p), compactDecidedRows of a
+	// compaction or decidedRows of an expunge record or a change.
 	bytes int
 	rows  int
 	// arrived is when the proposal was queued, by the committer's clock;
@@ -336,6 +344,8 @@ func (q *queued) repoID() string {
 		return q.compaction.Compaction.RepoID
 	case q.expunge != nil:
 		return q.expunge.RepoID()
+	case q.change != nil:
+		return q.change.RepoID()
 	}
 	return q.p.RepoID
 }
@@ -345,6 +355,7 @@ const (
 	kindPush       = "push"
 	kindCompaction = "compaction"
 	kindExpunge    = "expunge"
+	kindChange     = "change"
 )
 
 // kind is what q is, as the busy count names it.
@@ -354,41 +365,55 @@ func (q *queued) kind() string {
 		return kindCompaction
 	case q.expunge != nil:
 		return kindExpunge
+	case q.change != nil:
+		return kindChange
 	}
 	return kindPush
 }
 
-// alone reports a proposal decided as a batch of its own — a compaction's or
-// an expunge record's, each a record of its own op — never gathered with
-// pushes.
-func (q *queued) alone() bool { return q.compaction != nil || q.expunge != nil }
+// alone reports a proposal decided as a batch of its own — a compaction's, an
+// expunge record's or a change's, each a record of its own op — never
+// gathered with pushes.
+func (q *queued) alone() bool { return q.compaction != nil || q.expunge != nil || q.change != nil }
 
-// judgedByChart reports a push whose decide reads the chart — a seat's
-// ([PrincipalKind.readsChart]) — which a node behind the company's
-// configuration, or one with no chart yet, never decides. A compaction and an
-// expunge record judge no principal by any chart.
-func (q *queued) judgedByChart() bool { return !q.alone() && q.p.Principal.Kind.readsChart() }
+// judgedByChart reports a proposal whose decide reads the chart — a seat's
+// push, and a seat's write of a change ([PrincipalKind.readsChart]) — which a
+// node behind the company's configuration, or one with no chart yet, never
+// decides. A compaction and an expunge record judge no principal by any
+// chart.
+func (q *queued) judgedByChart() bool {
+	switch {
+	case q.change != nil:
+		return q.change.Asker.Kind.readsChart()
+	case q.alone():
+		return false
+	}
+	return q.p.Principal.Kind.readsChart()
+}
 
-// behindFor is why this node may not decide q now, or "": a push whose
+// behindFor is why this node may not decide q now, or "": a proposal whose
 // decide reads the chart, while the node is confirmed behind the company's
 // configuration ([CommitterOptions.Current]).
 func (c *Committer) behindFor(q *queued) string {
 	if !q.judgedByChart() || c.current == nil || c.current() {
 		return ""
 	}
-	return "this node is behind the company's configuration and decides no seat's push from the chart " +
-		"the fleet replaced; the repository's next committer decides it"
+	return fmt.Sprintf("this node is behind the company's configuration and decides no seat's %s from the "+
+		"chart the fleet replaced; the repository's next committer decides it", q.kind())
 }
 
 // again is what q's asker does after a refusal that decided nothing: a person
-// runs git push again, or asks for a purge again, and a compactor's or a
-// maintainer's next pass plans the repository again from its rows.
+// runs git push again, or asks for a purge again, a compactor's or a
+// maintainer's next pass plans the repository again from its rows, and a
+// change's asker sends its write again.
 func (q *queued) again() string {
 	switch {
 	case q.compaction != nil:
 		return "the next pass plans again"
 	case q.expunge != nil:
 		return q.expunge.again()
+	case q.change != nil:
+		return changeAgain
 	}
 	return "run git push again"
 }
@@ -434,11 +459,12 @@ func (q *queued) shortOfTime(left time.Duration) string {
 }
 
 // answered is one proposal's answer: res a push's, compact a compaction's,
-// expunge an expunge record's.
+// expunge an expunge record's, change a change's.
 type answered struct {
 	res     ProposeResult
 	compact CompactResult
 	expunge ExpungeResult
+	change  ChangeResult
 	err     error
 }
 
@@ -579,7 +605,8 @@ func (c *Committer) await(ctx context.Context, q *queued) answered {
 }
 
 // busy counts q refused busy and answers it so, undecided: a push with every
-// command it carries refused, a compaction or an expunge record refused whole.
+// command it carries refused, a compaction, an expunge record or a change's
+// write refused whole.
 func (c *Committer) busy(q *queued, refusal string) answered {
 	c.countBusy(q.kind(), 1)
 	switch {
@@ -587,6 +614,9 @@ func (c *Committer) busy(q *queued, refusal string) answered {
 		return answered{compact: CompactResult{Refusal: RefusalBusy, Detail: refusal}}
 	case q.expunge != nil:
 		return answered{expunge: ExpungeResult{Refusal: RefusalBusy, Detail: refusal}}
+	case q.change != nil:
+		return answered{change: ChangeResult{ChangeID: q.change.ChangeID(), Refusal: ChangeRefusalBusy,
+			Detail: refusal}}
 	}
 	return answered{res: ProposeResult{Answer: refuseAll(q.p, RefusalBusy, refusal)}}
 }
@@ -712,6 +742,8 @@ func (c *Committer) run(rc *repoCommitter) {
 			c.compact(rc.repoID, first)
 		case first.expunge != nil:
 			c.expunge(rc.repoID, first)
+		case first.change != nil:
+			c.change(rc.repoID, first)
 		default:
 			var batch []*queued
 			batch, carry = c.gather(rc, first)
@@ -733,11 +765,12 @@ func (c *Committer) run(rc *repoCommitter) {
 // first that does not fit is carried to lead the next batch, and admitted
 // again then, since that batch is the one it would start in.
 //
-// A COMPACTION OR AN EXPUNGE RECORD IS NEVER GATHERED: a record carries one
-// op, and each is a record of its own (OpCompact, OpExpungeRequest,
-// OpExpungeBegin, OpExpungeCommit). Met behind pushes, it ends the batch and is
-// carried to be decided alone, after them and before anything queued behind
-// it, so a repository's proposals still land in the order they arrived.
+// A COMPACTION, AN EXPUNGE RECORD OR A CHANGE'S WRITE IS NEVER GATHERED: a
+// record carries one op, and each is a record of its own (OpCompact,
+// OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, and the ops ChangeOps
+// lists). Met behind pushes, it ends the batch and is carried to be decided
+// alone, after them and before anything queued behind it, so a repository's
+// proposals still land in the order they arrived.
 func (c *Committer) gather(rc *repoCommitter, first *queued) ([]*queued, *queued) {
 	batch := []*queued{first}
 	bytes, rows := recordOverheadBytes+first.bytes, first.rows

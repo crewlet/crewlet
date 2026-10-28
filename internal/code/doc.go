@@ -81,6 +81,20 @@
 // BUDGET with the push rows, [PurgePartBytes], since deleting either frees
 // overflow pages a count of rows does not see.
 //
+// ITS LIFECYCLE IS THE COMMITTER'S. An open, an edit, a draft's state, a
+// retarget, a close and a reopen are each a [ChangeProposal] the repository's
+// committer decides ALONE, in the queue its pushes wait in, as a record of its
+// own op ([ChangeOps], decide_change.go): its operation id the asker's — from
+// which an open's change id is derived ([OpenChangeID]), so an open asked
+// again is the same change — its session the asker's Seen, its rules read from
+// one snapshot (who may: whoever may push an open's source branch, and for
+// every other write the change's owner, a principal that maintains the
+// repository, or a person; a branch heading one live change at a time; the
+// version the write was formed against), and its answer read from the change's
+// row. A write that asks for what the change already says is answered from the
+// row with no record. A seat's is judged from the chart of the deciding node's
+// epoch ([SeatRules]), and a node that cannot judge one decides none.
+//
 // # Group commit
 //
 // Because every push to a repository contends on its one subject, a

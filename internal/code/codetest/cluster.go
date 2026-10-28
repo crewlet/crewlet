@@ -77,6 +77,10 @@ type Cluster interface {
 	// last compaction a member's compactor proposed of repoID, under its own
 	// compaction id — as a compactor whose answer came back late asks again.
 	ProposeCompactionAgain(ctx context.Context, node, repoID string) (code.CompactResult, error)
+	// ChangeThrough is a write of a change's lifecycle asked through member
+	// node's own router, as a tool on that member asks it: of the
+	// repository's committer first, its runner-up after (code.change).
+	ChangeThrough(ctx context.Context, node string, p code.ChangeProposal) (code.ChangeResult, error)
 }
 
 // RunFleet runs every case only a fleet of data nodes can make, IN ORDER ON
@@ -167,6 +171,7 @@ func fleetCases() []fleetCase {
 		{"F28_TwoHomesLandOneCompaction", twoHomesLandOneCompaction},
 		{"F29_ACompactionFailsOverToTheRunnerUpCommitter", aCompactionFailsOverToTheRunnerUpCommitter},
 		{"F30_ACompactionAnsweredLateIsCollapsed", aCompactionAnsweredLateIsCollapsed},
+		{"F31_AChangeOpenSurvivesItsCommitter", aChangeOpenSurvivesItsCommitter},
 	}
 }
 

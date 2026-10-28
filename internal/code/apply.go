@@ -443,6 +443,18 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		payloadRepo = p.RepoID
 	case ExpungeCommit:
 		payloadRepo = p.RepoID
+	case ChangeOpen:
+		payloadRepo = p.RepoID
+	case ChangeEdit:
+		payloadRepo = p.RepoID
+	case ChangeDraft:
+		payloadRepo = p.RepoID
+	case ChangeRetarget:
+		payloadRepo = p.RepoID
+	case ChangeClose:
+		payloadRepo = p.RepoID
+	case ChangeReopen:
+		payloadRepo = p.RepoID
 	default:
 		return 0, fmt.Errorf("code: %s is not an op this build applies to a repository "+
 			"(the record at %s)", at.record.Op, at.position)
@@ -484,6 +496,10 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		return a.applyExpungeBegin(ctx, tx, at, p)
 	case ExpungeCommit:
 		return a.applyExpungeCommit(ctx, tx, at, p)
+	case ChangeOpen:
+		return a.applyChangeOpen(ctx, tx, at, p)
+	case ChangeEdit, ChangeDraft, ChangeRetarget, ChangeClose, ChangeReopen:
+		return a.applyChangeWrite(ctx, tx, at, payload)
 	}
 	return 0, fmt.Errorf("code: the record at %s carries a %T", at.position, payload)
 }

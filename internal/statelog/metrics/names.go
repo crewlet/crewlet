@@ -46,6 +46,7 @@ const (
 	CodeCacheRepos                   = "crewlet.code.cache.repos"
 	CodeCacheSwaps                   = "crewlet.code.cache.swaps"
 	CodeCacheSyncDuration            = "crewlet.code.cache.sync.duration"
+	CodeChangeProposals              = "crewlet.code.change.proposals"
 	CodeCommitBatchSize              = "crewlet.code.commit.batch.size"
 	CodeCommitBusy                   = "crewlet.code.commit.busy"
 	CodeCompactBehind                = "crewlet.code.compact.behind"

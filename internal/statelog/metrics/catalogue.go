@@ -710,15 +710,41 @@ func Catalogue() []Instrument {
 				"more slowly than a record commits.",
 		},
 		{
+			Name: CodeChangeProposals, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"op", "outcome"},
+			Shows: "Writes of a change's lifecycle this node's committer was " +
+				"asked to decide, by `op` (`change_open`, `change_edit`, " +
+				"`change_draft`, `change_retarget`, `change_close`, " +
+				"`change_reopen`) and what became of each, by `outcome`: " +
+				"`applied`, its record landed and its change's row says so; " +
+				"`unchanged`, it asked for what the change already said, and " +
+				"nothing was appended; `pending` and `unknown`, its record was " +
+				"appended and is not yet known here to have applied; a " +
+				"refusal's own code — `not_permitted`, `stale`, `change_exists`, " +
+				"`no_source`, `no_target`, `same_ref`, `no_difference`, " +
+				"`change_closed`, `change_merged`, `change_not_found`, " +
+				"`repo_archived`, `repo_deleted`, `busy`, `not_applied`, " +
+				"`unavailable` — which decided nothing; `handed_on`, one this " +
+				"node decided nothing of for a reason about itself (stopping, " +
+				"no chart to judge a seat by, behind the company's " +
+				"configuration), which the estate asks the repository's " +
+				"runner-up; and `failed`, any other error. `stale` climbing is " +
+				"askers writing against a change pushes keep moving; " +
+				"`handed_on` on one node and `applied` on another, a node that " +
+				"cannot judge its seats.",
+		},
+		{
 			Name: CodeCommitBusy, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"kind"},
 			Shows: "Proposals refused `busy`, undecided, by `kind`: `push`, " +
 				"whose client runs `git push` again; `compaction`, which " +
-				"the git node that built it plans again at its next pass; and " +
+				"the git node that built it plans again at its next pass; " +
 				"`expunge`, a record of an expunge of a repository's " +
 				"unreachable objects — a person's purge request, which they " +
 				"ask for again, or the begin or the commit its maintainer " +
-				"built, which it plans again at its next pass. One " +
+				"built, which it plans again at its next pass; and `change`, " +
+				"a write of a change's lifecycle, which its asker sends " +
+				"again. One " +
 				"of three causes that point at different remedies. A BACKLOG: a " +
 				"repository taking pushes faster than one node's committer " +
 				"commits them (its queue of 1 024 proposals, or sixteen " +

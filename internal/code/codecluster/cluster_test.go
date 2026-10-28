@@ -664,6 +664,19 @@ func (c *cluster) GitReadThrough(ctx context.Context, node string, q code.GitQue
 	return code.GitAnswer{}, fmt.Errorf("codecluster: no running member called %q", node)
 }
 
+// ChangeThrough is a write of a change's lifecycle asked through member node's
+// own router (codetest.Cluster).
+func (c *cluster) ChangeThrough(ctx context.Context, node string, p code.ChangeProposal) (code.ChangeResult,
+	error) {
+
+	for _, m := range c.members {
+		if m.id == node && m.isRunning() {
+			return m.router.Load().Code().Change(ctx, p)
+		}
+	}
+	return code.ChangeResult{}, fmt.Errorf("codecluster: no running member called %q", node)
+}
+
 // gitAnswered is how many reads by object id member node's git half has
 // answered.
 func (c *cluster) gitAnswered(t testing.TB, node string) int64 {

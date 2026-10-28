@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
@@ -81,6 +82,22 @@ func (f *fakeNode) ProposeExpunge(_ context.Context, p code.ExpungeProposal) (co
 	}
 	f.codeSeq++
 	return code.ExpungeResult{Outcome: statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
+}
+
+// ProposeChange is a committer that commits every write of a change it is
+// given at the next position on the code log — or refuses every one with
+// codeErr.
+func (f *fakeNode) ProposeChange(_ context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
+	f.note("code.change")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.changes = append(f.changes, p)
+	if f.codeErr != nil {
+		return code.ChangeResult{}, f.codeErr
+	}
+	f.codeSeq++
+	return code.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: p.ChangeID(), Number: 1, Version: 1,
 		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
 }
 
@@ -283,6 +300,7 @@ type codeAnswers struct {
 	git       code.GitAnswer
 	compacted code.CompactResult
 	expunged  code.ExpungeResult
+	changed   code.ChangeResult
 }
 
 func (d *codeDesk) For(context.Context, string) (Backend, bool) { return Backend{Code: d}, true }
@@ -323,6 +341,11 @@ func (d *codeDesk) ProposeCompaction(_ context.Context, p code.CompactionProposa
 func (d *codeDesk) ProposeExpunge(_ context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
 	held, err := d.took(p)
 	return held.expunged, err
+}
+
+func (d *codeDesk) ProposeChange(_ context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
+	held, err := d.took(p)
+	return held.changed, err
 }
 
 func (d *codeDesk) Resolve(_ context.Context, q code.ResolveQuery) (code.RepoRef, error) {
@@ -529,6 +552,44 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		d.mu.Unlock()
 		if got, err := seam.Expunge(ctx, p); err != nil || !reflect.DeepEqual(got, d.expunged) {
 			t.Errorf("expunge %s = (%+v, %v), want %+v", name, got, err, d.expunged)
+		}
+		if got := d.last(); !reflect.DeepEqual(got, p) {
+			t.Errorf("the committer was proposed %s %+v, want %+v", name, got, p)
+		}
+	}
+
+	// A CHANGE'S SIX WRITES, every field of each — the fields the committer
+	// stamps among them, which cross whole whoever set them — and every
+	// field of the answer.
+	title, body := "Retry the flaky upload", "It fails one run in ten.\n\nSee ENG-412."
+	seat := code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}
+	item := &code.ChangeOpen{RepoID: ref.ID, ChangeID: "019a0c2e-0000-7000-8000-0000000000d1",
+		SourceRef: "refs/heads/fix", TargetRef: "refs/heads/main", Head: "6666666666666666666666666666666666666666",
+		Title: title, Body: body, Draft: true, Owner: seat,
+		WorkItem: &types.WorkItem{Backend: types.WorkNative, ID: "task-9", Key: "ENG-412", Project: "ENG"},
+		TurnID:   "019a0c2e-0000-7000-8000-0000000000d2", RunID: "019a0c2e-0000-7000-8000-0000000000d3"}
+	for name, p := range map[string]code.ChangeProposal{
+		"an open": {Open: item},
+		"an edit": {Edit: &code.ChangeEdit{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat, Title: &title,
+			Body: &body, WorkItem: item.WorkItem, ClearWorkItem: true}},
+		"a draft's state": {Draft: &code.ChangeDraft{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
+			Draft: true}},
+		"a retarget": {Retarget: &code.ChangeRetarget{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
+			TargetRef: "refs/heads/release"}},
+		"a close": {Close: &code.ChangeClose{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
+			Reason: "superseded by web!43"}},
+		"a reopen": {Reopen: &code.ChangeReopen{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
+			Head: "7777777777777777777777777777777777777777"}},
+	} {
+		p.OpID, p.Asker, p.Seen, p.ExpectedVersion = "019a0c2e-0000-7000-8000-0000000000d0.code_open_change",
+			seat, at, 4
+		d.mu.Lock()
+		d.changed = code.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: item.ChangeID, Number: 42,
+			Version: 5, Position: at, Unchanged: true, Refusal: code.ChangeRefusalStale,
+			Detail: "app!42 is at version 5, and this write was formed against version 4"}
+		d.mu.Unlock()
+		if got, err := seam.Change(ctx, p); err != nil || !reflect.DeepEqual(got, d.changed) {
+			t.Errorf("change %s = (%+v, %v), want %+v", name, got, err, d.changed)
 		}
 		if got := d.last(); !reflect.DeepEqual(got, p) {
 			t.Errorf("the committer was proposed %s %+v, want %+v", name, got, p)
@@ -787,6 +848,44 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 		}
 		if got := f.client.Code().FloorOf("repo-compacted"); got != compacted {
 			t.Fatalf("an expunge of another repository moved repo-compacted's floor to %v", got)
+		}
+	}
+
+	// AND A CHANGE'S WRITE THIS NODE PROPOSED raises them to the record where
+	// it landed — never where it was refused, and never where it was answered
+	// UNCHANGED from the change's row, whose position is the change's last
+	// record, somebody else's write: the floor of the repository it is about
+	// and of no other.
+	changed := statelog.Position{Stream: codeStream, Generation: 1, Seq: 85}
+	for _, tc := range []struct {
+		answer code.ChangeResult
+		// want is the session's floor after it, and repo the change's
+		// repository's own.
+		want, repo statelog.Position
+	}{
+		{code.ChangeResult{Refusal: code.ChangeRefusalStale, Detail: "app!1 is at version 3"}, expunged,
+			statelog.Position{}},
+		{code.ChangeResult{Outcome: statelog.OutcomeApplied, Number: 1, Version: 3, Unchanged: true,
+			Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: 99}}, expunged, statelog.Position{}},
+		{code.ChangeResult{Outcome: statelog.OutcomeApplied, Number: 1, Version: 4, Position: changed}, changed,
+			changed},
+	} {
+		d.mu.Lock()
+		d.changed = tc.answer
+		d.mu.Unlock()
+		if _, err := f.client.Code().Change(t.Context(), code.ChangeProposal{
+			Close: &code.ChangeClose{RepoID: "repo-changed"}}); err != nil {
+			t.Fatalf("change: %v", err)
+		}
+		if got := f.client.Session().Floors([]string{codeStream}); !slices.Equal(got,
+			[]statelog.Position{tc.want}) {
+			t.Fatalf("after a change answered %+v the code floor is %v, want %v", tc.answer, got, tc.want)
+		}
+		if got := f.client.Code().FloorOf("repo-changed"); got != tc.repo {
+			t.Fatalf("after a change answered %+v its repository's floor is %v, want %v", tc.answer, got, tc.repo)
+		}
+		if got := f.client.Code().FloorOf("repo-expunged"); got != expunged {
+			t.Fatalf("a change of another repository moved repo-expunged's floor to %v", got)
 		}
 	}
 }

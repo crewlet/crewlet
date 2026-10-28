@@ -89,7 +89,10 @@
 // the domain's ledger collapses as it does a push id. An EXPUNGE RECORD'S
 // PROPOSAL (`code.expunge`) — a person's purge request, or the begin or the
 // commit a repository's maintainer built — is asked the same way, under the
-// record's own operation id.
+// record's own operation id, and so is a WRITE OF A CHANGE'S LIFECYCLE
+// (`code.change`) — an open, an edit, a draft's state, a retarget, a close or
+// a reopen — under its asker's operation id, from which an open's change id
+// is derived, so no retry opens a second change.
 //
 // These are the operations keyed on the DATA nodes (a read of a repository's
 // git objects is keyed on the git nodes: below); [op.keyedBy] is the
@@ -237,7 +240,8 @@
 // A GRANT judged from the chart is different — answered anyway by the last
 // resort, it would be decided by the revision that may have revoked it — so
 // an operation that judges one DECLARES it ([op.judgesGrant]: a code read or
-// a ref resolve a seat asks, whose grant on a repository is the chart's), and
+// a ref resolve a seat asks, whose grant on a repository is the chart's, and a
+// seat's write of a change, which its grant decides whether it may make), and
 // a node behind the configuration refuses it even asked last, `behind_config`
 // saying it decides no grant: the soft arm sends the walk to every current
 // data node first, the last resort asks this node again, it refuses again,

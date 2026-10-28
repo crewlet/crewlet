@@ -10,8 +10,8 @@ import (
 // the router ONE adapter rather than each writing its own (ADR-0008).
 //
 // Committer is nil on a node that does not publish — a node in a maintenance
-// mode, which may append nothing — and a proposal, a push's, a compaction's or
-// an expunge record's, is then refused [ErrNotServing], which the router reads
+// mode, which may append nothing — and a proposal, a push's, a compaction's,
+// an expunge record's or a change's, is then refused [ErrNotServing], which the router reads
 // as a node that ran nothing and asks the repository's runner-up with the same
 // operation id. Handing a maintenance-mode node's committer to peers would be
 // the publish the mode exists to rule out.
@@ -57,6 +57,18 @@ func (s Served) ProposeExpunge(ctx context.Context, p ExpungeProposal) (ExpungeR
 			"no expunge", ErrNotServing)
 	}
 	return s.Committer.ProposeExpunge(ctx, p)
+}
+
+// ProposeChange decides one write of a change's lifecycle on this node's
+// committer — see [Committer.ProposeChange] — and, on a node that publishes
+// nothing, refuses it as a push is refused there: the router asks the
+// repository's runner-up with the same operation id.
+func (s Served) ProposeChange(ctx context.Context, p ChangeProposal) (ChangeResult, error) {
+	if s.Committer == nil {
+		return ChangeResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides "+
+			"no change", ErrNotServing)
+	}
+	return s.Committer.ProposeChange(ctx, p)
 }
 
 // Resolve answers a repository by name — see [Reader.Resolve].

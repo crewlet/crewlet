@@ -1049,6 +1049,18 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[ExpungeBegin](rec)
 	case kind == KindRepo && op == OpExpungeCommit:
 		return decodePayload[ExpungeCommit](rec)
+	case kind == KindRepo && op == OpChangeOpen:
+		return decodePayload[ChangeOpen](rec)
+	case kind == KindRepo && op == OpChangeEdit:
+		return decodePayload[ChangeEdit](rec)
+	case kind == KindRepo && op == OpChangeDraft:
+		return decodePayload[ChangeDraft](rec)
+	case kind == KindRepo && op == OpChangeRetarget:
+		return decodePayload[ChangeRetarget](rec)
+	case kind == KindRepo && op == OpChangeClose:
+		return decodePayload[ChangeClose](rec)
+	case kind == KindRepo && op == OpChangeReopen:
+		return decodePayload[ChangeReopen](rec)
 	case kind == KindCompany && op == OpActivate:
 		return decodePayload[Activated](rec)
 	case kind == KindEviction && op == OpEviction:

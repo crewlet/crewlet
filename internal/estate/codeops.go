@@ -7,19 +7,20 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 )
 
-// The code host's operations: a push's proposal, a compaction's and an
-// expunge record's, the reads the host's admission, a cache's sync, the REST
-// routes and a seat's tools make of the rows, and the listings a git node
+// The code host's operations: a push's proposal, a compaction's, an expunge
+// record's and a change's, the reads the host's admission, a cache's sync, the
+// REST routes and a seat's tools make of the rows, and the listings a git node
 // finds the repositories a compaction, a publication or an expunge may be due
 // in by — each naming the CODE domain, so the code copy's own verdict — never
 // the tracker's — decides whether a node answers it (ADR-0049), and its floor
 // is on the code log — and a read of a repository's CONTENT by object id,
 // which names no domain's copy and is asked of the repository's home GIT node
-// ([GitCopy], ADR-0059). A push, a compaction and an expunge record are keyed
-// on their repository's data nodes: see the package doc's "A push is asked of
-// its repository's committer". A read that JUDGES A GRANT from the
-// serving node's chart — one a seat asks — says so ([op.judgesGrant]), and a
-// node behind the company's configuration answers none of it.
+// ([GitCopy], ADR-0059). A push, a compaction, an expunge record and a
+// change's write are keyed on their repository's data nodes: see the package
+// doc's "A push is asked of its repository's committer". An operation that
+// JUDGES A GRANT from the serving node's chart — a read a seat asks, and a
+// seat's write of a change — says so ([op.judgesGrant]), and a node behind the
+// company's configuration answers none of it.
 
 // CodeServer is the code half a data node serves, declared here by its
 // consumer with exactly the methods the operations below call. [code.Served]
@@ -28,6 +29,7 @@ type CodeServer interface {
 	Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error)
 	ProposeCompaction(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error)
 	ProposeExpunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error)
+	ProposeChange(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
 	Resolve(ctx context.Context, q code.ResolveQuery) (code.RepoRef, error)
 	Snapshot(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error)
 	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
@@ -102,6 +104,33 @@ var opCodeExpunge = define("code.expunge", opIdempotentWrite, codeDomain, false,
 		res, err := b.Code.ProposeExpunge(ctx, p)
 		return res, ranNothing(err)
 	}).keyedBy(code.ExpungeProposal.RepoID).answeredOn(laneProposals)
+
+// opCodeChange is a write of a change's lifecycle — an open, an edit, a draft's
+// state, a retarget, a close or a reopen — asked of the repository's COMMITTER
+// exactly as a push's is: an IDEMPOTENT write keyed by its operation id, which
+// its asker minted once and the domain's operation ledger collapses (an open's
+// change id is derived from it, so no retry opens a second change), so an
+// unanswered one is asked of the repository's runner-up with the same id. On
+// the proposals lane, because it waits in the repository's one queue beside
+// its pushes. No actor: the asker travels inside the proposal, checked by its
+// Validate on the node that decides, which records it as the change's owner or
+// as who wrote it.
+//
+// A SEAT'S WRITE JUDGES ITS GRANT from the deciding node's chart — whether it
+// may push the branch an open is from, whether it maintains the repository a
+// change it does not own is on — so a node behind the company's configuration
+// answers none of it ([op.judgesGrant]), even asked last; a person's consults
+// no chart. The committer holds the same line itself, as it does for a seat's
+// push (code.CommitterOptions.Current).
+var opCodeChange = define("code.change", opIdempotentWrite, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, p code.ChangeProposal) (code.ChangeResult, error) {
+		if b.Code == nil {
+			return code.ChangeResult{}, errNoHalf
+		}
+		res, err := b.Code.ProposeChange(ctx, p)
+		return res, ranNothing(err)
+	}).keyedBy(code.ChangeProposal.RepoID).answeredOn(laneProposals).
+	judgesGrant(func(p code.ChangeProposal) bool { return p.Asker.Kind == code.PrincipalAgent })
 
 // proposalAnswers is how many proposals a data node answers at once, on the
 // lane they have to themselves ([laneProposals]): 1 088, THE MOST ONE

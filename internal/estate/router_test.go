@@ -133,13 +133,14 @@ type fakeNode struct {
 	indexBuilding bool
 
 	// proposals is every push proposed to this node's committer,
-	// compactions every compaction, expunges every expunge record, codeSeq
-	// the code log's last position it committed at, and codeErr what its
-	// code half refuses every operation with — a proposal and every read —
-	// where it is set (codeops_test.go).
+	// compactions every compaction, expunges every expunge record, changes
+	// every write of a change, codeSeq the code log's last position it
+	// committed at, and codeErr what its code half refuses every operation
+	// with — a proposal and every read — where it is set (codeops_test.go).
 	proposals   []code.Proposal
 	compactions []code.CompactionProposal
 	expunges    []code.ExpungeProposal
+	changes     []code.ChangeProposal
 	codeSeq     uint64
 	codeErr     error
 
@@ -3433,8 +3434,8 @@ func TestAKeyedOpWithNoKeyIsRefused(t *testing.T) {
 // code log and never its floor on another domain's.
 func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	t.Parallel()
-	ops := []*opSpec{opCodePropose.spec, opCodeCompact.spec, opCodeExpunge.spec, opCodeResolve.spec,
-		opCodeRepoState.spec, opCodePushOutcome.spec, opCodeRead.spec, opCodeResolveRef.spec}
+	ops := []*opSpec{opCodePropose.spec, opCodeCompact.spec, opCodeExpunge.spec, opCodeChange.spec,
+		opCodeResolve.spec, opCodeRepoState.spec, opCodePushOutcome.spec, opCodeRead.spec, opCodeResolveRef.spec}
 	for _, spec := range ops {
 		if spec.domain != "code" || spec.floorStream != (code.Domain{}).Stream().Name ||
 			spec.copies != "code" {
@@ -3472,6 +3473,9 @@ func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	}
 	if _, err := seam.Expunge(ctx, code.ExpungeProposal{Request: &code.ExpungeRequest{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("expunge: %v", err)
+	}
+	if _, err := seam.Change(ctx, code.ChangeProposal{Close: &code.ChangeClose{RepoID: "repo-1"}}); err != nil {
+		t.Fatalf("change: %v", err)
 	}
 	node.mu.Lock()
 	floors := slices.Clone(node.floors)

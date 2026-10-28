@@ -51,11 +51,12 @@ This is the product's current shape, not a configuration choice:
   the server, through its code tools ([Server-side reads](#server-side-reads)),
   under the rule a person's push is judged by too ([Who may read and
   push](#who-may-read-and-push)).
-- **Nothing opens a change yet, and there are no reviews or checks.** A
-  [change](#changes) has the rows it is kept in, but no merge request is
-  opened, reviewed or gated in front of a protected branch in this release.
-  A protection rule decides what a push may do to a ref, and nothing else
-  stands in front of one.
+- **Nothing asks for a change yet, and there are no reviews or checks.** A
+  repository's committer decides a [change](#changes)'s opening, its edits and
+  its close, but no tool, route or push asks it to in this release, and no
+  change is reviewed or gated in front of a protected branch. A protection
+  rule decides what a push may do to a ref, and nothing else stands in front
+  of one.
 - **Nothing publishes a repository's layers.** A git node installs the chain
   the rows name ([Published layers](#published-layers)), and no row names one
   yet, so each node serves from the index and graph it writes itself.
@@ -572,7 +573,7 @@ Four tables hold a change, on every data node:
 | `code_changes` | each change | Its number and title; its state; its source and target branches; the head of its latest revision; who opened it — a seat, or a person by the human seat they hold, with the credential they used; the work item it carries; when it was opened, closed and merged, and how; and how many bytes its description holds |
 | `code_change_bodies` | each change with a description | Its description, up to 32 KiB |
 | `code_change_authors` | each of its authors | Who wrote the change: whoever opened it, and everyone whose push moved its head, each from the revision they first wrote. An author's approval of their own change counts for nothing |
-| `code_revisions` | each time its head moved while it was live | The new head, who pushed it and the push that did. Revision 1 is the source branch's head when the change was opened |
+| `code_revisions` | each time its head moved while it was live | The new head, who pushed it and the push that did. Revision 1 is the source branch's head when the change was opened, and a reopen's revision its head when the change was reopened — each made by whoever opened or reopened it, by no push |
 
 - **A number is the repository's own**, counted from 1 in the order the code
   log applies the records that open changes, so two changes of a repository
@@ -595,6 +596,69 @@ Four tables hold a change, on every data node:
   repository, and the repository's [purge](#deletion-and-purge) removes it:
   each change whole, its revisions, authors and description before its row,
   in the same bounded steps as the rest of the repository's rows.
+
+### Opening, editing and closing a change
+
+Every write of a change's lifecycle is a record of its own on the
+repository's subject, decided by the repository's
+[committer](#the-committer): it waits in the same queue as the repository's
+pushes, in the order it arrived, and is decided alone, never batched with
+them. Six writes:
+
+| Write | What it does | Who may |
+|---|---|---|
+| Open | Proposes a source branch into a target branch: the change's row, its owner as its first author, and its first revision, the source branch's head | Whoever may push the source branch: a person, a seat that writes the repository, and a `full_access` seat from its own namespace (`refs/heads/seats/<handle>/`) — see [Who may read and push](#who-may-read-and-push) |
+| Edit | Sets its title (one line, at most 256 bytes), its description (at most 32 KiB) or the work item it carries | Its owner, a principal that maintains the repository, and any person |
+| Draft | Makes a live change a draft, or a draft ask to be merged | The same |
+| Retarget | Moves its target to another live branch | The same |
+| Close | Closes it without merging it, with a reason of at most 1 KiB | The same |
+| Reopen | Opens a closed change again, at its source branch's head now — a revision of its own, made by whoever reopened it, where the branch moved while the change was closed | The same |
+
+- **A number is the apply's.** The record that opens a change takes the
+  repository's next number when it applies and moves it on, so numbers follow
+  the order the code log applies the opens, and two opens decided at once
+  never share one.
+- **An open asked again is the same change.** A change's id is derived from
+  the open's operation id, and the code log's ledger collapses the open asked
+  again under it — of another data node after its committer stopped
+  answering, or by an asker whose answer was lost — onto the record that
+  landed, so no retry opens a second change.
+- **A branch heads one live change at a time.** An open from a branch that
+  already heads a draft or open change is refused, naming that change, and so
+  is a reopen while another change is live on the branch: a push to the
+  branch revises exactly one change.
+- **Every write but an open names the version it was formed against.** A
+  change's version counts the records that changed its row, 1 at its open; a
+  write naming one the change has moved past — another write, or a push that
+  moved its head, landed first — is refused `stale`, and its asker reads the
+  change again.
+- **A write that asks for what the change already says changes nothing.** An
+  edit to its own values, the draft state it is in, the target it has, a
+  close of a closed change and a reopen of a live one are answered from the
+  change's row, at its version, and append nothing.
+- **A seat is judged by the chart of the node that decides.** A node that
+  holds no chart yet, or one [behind the company's
+  configuration](#a-seats-push), decides none of a seat's writes and hands them
+  to the repository's next committer, as it does a seat's push; a person's is
+  decided as ever.
+
+A write that is refused appends nothing, and says why in one sentence:
+
+| Refusal | Means |
+|---|---|
+| `repo_deleted`, `repo_archived` | The repository is deleted, being purged or gone — in the sentence of the state it is in — or archived and read-only |
+| `change_not_found` | The repository holds no such change |
+| `not_permitted` | The asker may not make the write: an open by one who may not push the source branch, saying what the asker holds and what would admit it; any other write by one who neither owns the change nor maintains the repository, nor is a person |
+| `stale` | The change is at another version than the write was formed against |
+| `same_ref`, `no_source`, `no_target`, `no_difference` | The source and target are one branch; the source or the target is not a live branch; the source is at its target's commit |
+| `change_exists` | The source branch already heads a live change, which the sentence names |
+| `change_closed`, `change_merged` | An edit, a draft's state or a retarget of a closed change, which is reopened first; any write but an open of a merged change, which stays merged |
+| `busy`, `not_applied`, `unavailable` | The committer did not reach the write in time, or the code log refused it or dropped it on every node: nothing was decided, and the write is sent again |
+
+`crewlet.code.change.proposals` counts every write a node's committer was
+asked to decide, by its write and what became of it, and
+`crewlet.code.commit.busy` counts one met busy under `kind` `change` (the
+[metrics reference](../reference/metrics.md)).
 
 ---
 

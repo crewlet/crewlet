@@ -180,13 +180,90 @@ const (
 	// expunge_commit", Since: 2, Path: []string{"op"}, Equals:
 	// string(OpExpungeCommit)}, with the same companions. It is no gate.
 	OpExpungeCommit OpKind = "expunge_commit"
+
+	// OpChangeOpen opens a change (web!42) on a repository: its row, its
+	// owner as its first author and its first revision, the source branch's
+	// head — numbered by the apply from the repository's next_change, which
+	// the same apply advances — on the repository's own subject
+	// ([ChangeOpen]), decided by the repository's committer alone
+	// ([Committer.ProposeChange]).
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this op — none of the domain is on main, so no
+	// image and no release holds it — and while that is so, every build
+	// that meets a change_open record reads it. Once a build without it has
+	// run, a new op is a versionedFields row and this one takes {Name:
+	// "RecordEnvelope.Op change_open", Since: 2, Path: []string{"op"},
+	// Equals: string(OpChangeOpen)}, with RecordVersion at 2 and its line
+	// under "What each version added", a Carrying record in the statelogtest
+	// candidate, and the op excepted from the stamp test's base-format loop —
+	// an older build would otherwise FAIL on the record at DecodeMutation's
+	// default arm rather than retain it. It is no gate.
+	OpChangeOpen OpKind = "change_open"
+
+	// OpChangeEdit sets a live change's title, its body or the work item it
+	// carries ([ChangeEdit]), on the repository's own subject, decided by its
+	// committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// change_edit", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpChangeEdit)}, with the same companions. It is no gate.
+	OpChangeEdit OpKind = "change_edit"
+
+	// OpChangeDraft makes a live change a draft, or makes a draft ask to be
+	// merged ([ChangeDraft]), on the repository's own subject, decided by
+	// its committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// change_draft", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpChangeDraft)}, with the same companions. It is no gate.
+	OpChangeDraft OpKind = "change_draft"
+
+	// OpChangeRetarget moves a live change's target to another live branch
+	// ([ChangeRetarget]), on the repository's own subject, decided by its
+	// committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// change_retarget", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpChangeRetarget)}, with the same companions. It is no gate.
+	OpChangeRetarget OpKind = "change_retarget"
+
+	// OpChangeClose closes a live change without merging it ([ChangeClose]),
+	// on the repository's own subject, decided by its committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// change_close", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpChangeClose)}, with the same companions. It is no gate.
+	OpChangeClose OpKind = "change_close"
+
+	// OpChangeReopen opens a closed change again ([ChangeReopen]) — with a
+	// revision of its own where its source branch moved while it was closed
+	// — on the repository's own subject, decided by its committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// change_reopen", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpChangeReopen)}, with the same companions. It is no gate.
+	OpChangeReopen OpKind = "change_reopen"
 )
 
-// OpKinds are the seventeen, in the order they are documented.
+// OpKinds are the twenty-three, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
 	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit,
+	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen,
+}
+
+// ChangeOps are the six ops of a change's LIFECYCLE, in [OpKinds]' order:
+// what a [ChangeProposal] may be, each decided by the repository's committer
+// as a record of its own.
+func ChangeOps() []OpKind {
+	return []OpKind{OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen}
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -207,9 +284,10 @@ const (
 	ActorConfig ActorKind = "config"
 
 	// ActorSystem is the engine on its own account: the committer's push
-	// batches, compactions and expunge records — a person's purge request
-	// among them, whose person its payload names — and the code-retention
-	// pass's sweeps and purges.
+	// batches, compactions, expunge records and change records — a person's
+	// purge request and every write of a change's lifecycle among them, whose
+	// principal its payload names — and the code-retention pass's sweeps and
+	// purges.
 	ActorSystem ActorKind = "system"
 )
 
