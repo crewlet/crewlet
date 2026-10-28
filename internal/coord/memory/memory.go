@@ -203,6 +203,12 @@ func (b *Backend) TryAcquire(ctx context.Context, resource string, opts coord.Ac
 	if err != nil || pending == nil {
 		return lease, refused, err
 	}
+	// THE MARKER IS GIVEN BACK ON EVERY EXIT, a counter that panics
+	// included: left set, it held the resource against every claimant, its
+	// own owner's retries too, for the life of the process. commit clears it
+	// on every path it takes, so this finds nothing to do unless commit
+	// never ran.
+	defer b.giveBack(resource, pending)
 	// THE ONE STEP OUTSIDE THE LOCK: see the package doc.
 	epoch, err := b.next(ctx, resource)
 	lease, err = b.commit(resource, opts, pending, epoch, err)
@@ -329,6 +335,16 @@ func (b *Backend) commit(resource string, opts coord.AcquireOptions, pending *cl
 	b.write(row, opts, now)
 	lease := row.lease()
 	return &lease, nil
+}
+
+// giveBack clears pending's claiming marker if it is still set, and only
+// pending's: a later claim's marker is never another call's to clear.
+func (b *Backend) giveBack(resource string, pending *claim) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if row := b.rows[resource]; row != nil && row.claiming != nil && row.claiming.id == pending.id {
+		row.claiming = nil
+	}
 }
 
 // write sets what every grant sets, a renew's included.

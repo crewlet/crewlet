@@ -17,6 +17,7 @@ type scriptedCounter struct {
 	mu     sync.Mutex
 	next   map[string]int64
 	fail   error
+	panics bool
 	hold   string
 	minted chan struct{}
 	gate   chan struct{}
@@ -29,6 +30,10 @@ func (c *scriptedCounter) Next(_ context.Context, resource string) (int64, error
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.panics {
+		c.panics = false
+		panic("the counter's client panicked")
+	}
 	if c.fail != nil {
 		err := c.fail
 		c.fail = nil
@@ -123,5 +128,26 @@ func TestAMintHoldsItsResourceAndNothingElse(t *testing.T) {
 	got := <-done
 	if got.err != nil || got.lease == nil || got.lease.Owner != "n1" || got.lease.Epoch != 1 {
 		t.Fatalf("the minting claim = %v, %v; want it granted to n1 at 1", got.lease, got.err)
+	}
+}
+
+// A COUNTER THAT PANICS STILL GIVES THE RESOURCE BACK. The panic is the
+// caller's to see, and the claiming marker goes with it: left set, the
+// resource refused every claim, its own owner's retries included, until the
+// process restarted.
+func TestACounterThatPanicsGivesTheResourceBack(t *testing.T) {
+	t.Parallel()
+	b := &memory.Backend{Epochs: &scriptedCounter{panics: true}}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("the counter's panic did not reach the caller")
+			}
+		}()
+		_, _, _ = acquire(t, b, "seat:a", "n1")
+	}()
+	lease, refused, err := acquire(t, b, "seat:a", "n2")
+	if err != nil || lease == nil || lease.Owner != "n2" {
+		t.Fatalf("the claim after the panic = %v, %q, %v; want it granted", lease, refused, err)
 	}
 }
