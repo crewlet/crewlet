@@ -393,12 +393,15 @@ func aCompactionDuringAFetch(t *testing.T, newFleet NewFleet) {
 	old := s.Dir
 	s.Release()
 
-	req, err := http.NewRequestWithContext(c.Ctx, http.MethodPost, c.URL(0)+"/git-upload-pack",
+	// THE HOST'S OWN NAMES for where a fetch posts and what it sends: a
+	// service spelled here is a second classifier to the gate that keeps
+	// GitAccess the only one (internal/api/auth).
+	req, err := http.NewRequestWithContext(c.Ctx, http.MethodPost, c.URL(0)+host.UploadPackSuffix,
 		strings.NewReader(fetchBody(head)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Content-Type", "application/x-git-upload-pack-request")
+	req.Header.Set("Content-Type", host.UploadPackRequestType)
 	req.Header.Set("Git-Protocol", "version=2")
 	req.SetBasicAuth("crewlet", c.Fleet.Token(t, "ceo"))
 	resp, err := node.Client().Do(req)

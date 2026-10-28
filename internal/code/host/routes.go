@@ -12,9 +12,25 @@ const (
 	// PatternInfoRefs is the advertisement; a GET pattern also matches HEAD.
 	PatternInfoRefs = "GET /git/{repo}/info/refs"
 	// PatternUploadPack is a fetch's RPC.
-	PatternUploadPack = "POST /git/{repo}/git-upload-pack"
+	PatternUploadPack = "POST /git/{repo}" + UploadPackSuffix
 	// PatternReceivePack is a push's RPC.
-	PatternReceivePack = "POST /git/{repo}/git-receive-pack"
+	PatternReceivePack = "POST /git/{repo}" + ReceivePackSuffix
+)
+
+// What a client that speaks the protocol itself, rather than through git,
+// posts to a repository's two RPCs: the path after the repository's own
+// (`/git/{repo}`), and the content type each handler requires, refusing any
+// other `415`. ONE spelling with the patterns above and the handlers' checks,
+// so such a client — the suite holding a fetch's reader still while a
+// compaction runs, say — posts where a route is mounted and what the host
+// takes, and spells no git service of its own: outside this package and
+// GitAccess, a spelled service is what internal/api/auth's
+// TestGitAccessIsTheOneClassifier fails as a second classifier.
+const (
+	UploadPackSuffix       = "/git-upload-pack"
+	UploadPackRequestType  = "application/x-git-upload-pack-request"
+	ReceivePackSuffix      = "/git-receive-pack"
+	ReceivePackRequestType = "application/x-git-receive-pack-request"
 )
 
 // InfoRefs answers a repository's advertisement, a fetch's or a push's.

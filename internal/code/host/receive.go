@@ -71,9 +71,9 @@ const pushCertificateSentence = "this push carries a push certificate (a signed 
 
 func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	start := s.now()
-	if r.Header.Get("Content-Type") != "application/x-git-receive-pack-request" {
+	if r.Header.Get("Content-Type") != ReceivePackRequestType {
 		auth.GitText(w, http.StatusUnsupportedMediaType,
-			"a git-receive-pack request must be application/x-git-receive-pack-request")
+			"a git-receive-pack request must be "+ReceivePackRequestType)
 		return
 	}
 	ctx, end, ok := s.begin(r.Context(), w)

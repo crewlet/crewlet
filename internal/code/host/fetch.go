@@ -29,9 +29,9 @@ import (
 // since the host offers no want-ref (cache.ServeConfig).
 func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 	start := s.now()
-	if r.Header.Get("Content-Type") != "application/x-git-upload-pack-request" {
+	if r.Header.Get("Content-Type") != UploadPackRequestType {
 		auth.GitText(w, http.StatusUnsupportedMediaType,
-			"a git-upload-pack request must be application/x-git-upload-pack-request")
+			"a git-upload-pack request must be "+UploadPackRequestType)
 		return
 	}
 	ctx, end, ok := s.begin(r.Context(), w)
