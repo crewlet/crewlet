@@ -344,6 +344,9 @@ func TestNoToolNamesATaskByAKeyOutsideTheAddressRule(t *testing.T) {
 			"beside the id it routes on, and shows it to nobody as a reference",
 		"moveWorkItem.CallForTurn": "`moved_from` reports the key the item is " +
 			"LEAVING — what it was called, not a reference to it",
+		"evidenceLookup.Task": "the keys a cited task has carried, matched " +
+			"against its evidence label to strip one it repeats, never " +
+			"written anywhere as a reference",
 	}
 	dir := filepath.Join(sourcetree.Root(t), "internal", "agent", "builtin")
 	entries, err := os.ReadDir(dir)
