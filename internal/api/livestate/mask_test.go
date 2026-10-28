@@ -57,7 +57,7 @@ var callFamily = map[string]class{
 var overlayFamily = map[string]class{
 	"activity": status, "stopped_reason": status, "current_phase": status,
 	"current_iteration": status, "live_call_seq": status, "last_error": status,
-	"budget": status, "last_turn": status, "paused": status,
+	"budget": status, "last_turn": status, "paused": status, "provider_limit": status,
 	"live_call": delegated, "turn": delegated,
 }
 
@@ -98,6 +98,9 @@ var nested = map[reflect.Type]map[string]class{
 		"outcome": status},
 	reflect.TypeFor[Paused](): {"by": status, "by_kind": status,
 		"operator_id": status, "at": status, "reason": status, "stop_running": status},
+	reflect.TypeFor[ProviderLimit](): {"provider_key": status, "provider_keys": status,
+		"parked": status, "running_on": status, "resets_at": status, "retry_at": status,
+		"since": status, "said": status},
 }
 
 // jsonField is one field a type puts on the wire.

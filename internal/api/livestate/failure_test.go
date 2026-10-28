@@ -23,11 +23,6 @@ func TestATurnEndingDoesNotClearTheFailureThatCausedIt(t *testing.T) {
 		at("2026-06-14T12:00:01Z")))
 
 	got := overlayOf(t, s, "Lead")
-	if got.Activity != livestate.ActivityStopped || got.StoppedReason == nil ||
-		*got.StoppedReason != livestate.StoppedProvider {
-		t.Errorf("activity = %q (%v), want the seat to stay stopped on its provider",
-			got.Activity, got.StoppedReason)
-	}
 	if got.LastError == nil || got.LastError.Kind != "provider_down" {
 		t.Errorf("last error = %+v, want the cause kept", got.LastError)
 	}

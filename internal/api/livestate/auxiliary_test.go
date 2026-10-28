@@ -43,6 +43,9 @@ func TestAnAuxiliaryRecordMovesNoSeat(t *testing.T) {
 		"kind": "provider_down", "detail": "429 forever",
 	}), at("2026-06-14T12:00:08Z")))
 	s.Apply(env("agent_turn_completed", turnPayload("tn-1", nil), at("2026-06-14T12:00:09Z")))
+	s.Apply(env("seat_provider_parked", map[string]any{
+		"agent_id": "Lead", "provider_keys": []any{"cheap"}, "retry_at": "2026-06-14T13:00:00Z",
+	}, at("2026-06-14T12:00:09Z"), id("park-1")))
 	before := overlayOf(t, s, "Lead")
 	if before.Turn != nil || before.Activity != livestate.ActivityStopped {
 		t.Fatalf("set-up: overlay = %+v, want an ended turn on a stopped seat", before)
@@ -69,7 +72,7 @@ func TestAnAuxiliaryRecordMovesNoSeat(t *testing.T) {
 	}
 	if after.Activity != livestate.ActivityStopped || after.StoppedReason == nil ||
 		*after.StoppedReason != livestate.StoppedProvider {
-		t.Errorf("activity = %q (%v): an auxiliary record cleared the provider hold",
+		t.Errorf("activity = %q (%v): an auxiliary record cleared the provider park",
 			after.Activity, after.StoppedReason)
 	}
 	if !reflect.DeepEqual(before.LastTurn, after.LastTurn) {

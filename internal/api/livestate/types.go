@@ -363,6 +363,13 @@ type Overlay struct {
 	// at boot from the coordination record, so a pause taken before this
 	// process started is still on the seat.
 	Paused *Paused `json:"paused"`
+
+	// ProviderLimit is the seat's models at their usage limit, nil when they
+	// are not: one steady condition for as long as the limit lasts, which
+	// says whether the seat waits for it or runs on a fallback. ALWAYS
+	// present, as null when there is none, so a merged overlay never leaves
+	// a seat wearing a limit that lifted. See provider.go.
+	ProviderLimit *ProviderLimit `json:"provider_limit"`
 }
 
 // Stage is where in a turn a seat is.
