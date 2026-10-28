@@ -132,9 +132,9 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// now current. One still refused waits again, on whatever refuses
 		// it.
 		if c.Models != nil {
-			e.readmitAnswers(waitTurnEngine)
+			e.readmitResumes(waitTurnEngine)
 		}
-		e.readmitAnswers(waitBudget)
+		e.readmitResumes(waitBudget)
 		// AND A PAUSE WHOSE SEAT THIS COMPANY REMOVED goes with the seat.
 		// See seatpause.go.
 		e.clearRemovedSeatPauses(ctx, c)
