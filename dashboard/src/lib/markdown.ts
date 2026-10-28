@@ -54,8 +54,8 @@ import {
   type MarkdownBlock,
   type MarkdownFence,
 } from "@crewlethq/ui";
-import { InlineToken, LabelledLink } from "~/components/InlineToken.tsx";
-import { codeColour, inlineTokens } from "./inlineTokens.ts";
+import { InlineToken, LabelledLink, TokenRun } from "~/components/InlineToken.tsx";
+import { codeColour } from "./inlineTokens.ts";
 import { inlineText, plainText } from "./markdownText.ts";
 
 // --- sectioning ------------------------------------------------------------
@@ -390,7 +390,13 @@ export interface RenderOptions {
 export type InlineOptions = Pick<
   RenderOptions,
   "breaks" | "highlight" | "image" | "links" | "prose"
->;
+> & {
+  /**
+   * The walk is inside a link's own label ([asLabel]), whose words are
+   * words: no `prose` runs there and no inline token is read there.
+   */
+  label?: boolean;
+};
 
 /** Render one run of inline markdown to React nodes. */
 export function renderInline(
@@ -464,7 +470,7 @@ export function renderInline(
             : createElement("span", { key }, alt),
       );
     } else if (g.href !== undefined && options.links === "inert") {
-      out.push(inertLink(key, renderInline(g.label ?? "", key, unprosed(options)), g.href));
+      out.push(inertLink(key, renderInline(g.label ?? "", key, asLabel(options)), g.href));
     } else if (g.auto !== undefined && options.links === "inert") {
       out.push(inertLink(key, [], g.auto));
     } else if (g.auto !== undefined && options.links !== "text" && safeHref(g.auto) !== null) {
@@ -483,9 +489,10 @@ export function renderInline(
       const label = g.label ?? "";
       // A LINK'S LABEL IS TEXT TO ANY LINK INSIDE IT: an anchor inside an
       // anchor is invalid, and a browser splits the outer one around it.
-      const inner = href ? { ...unprosed(options), links: "text" as const } : unprosed(options);
+      const inner = href ? { ...asLabel(options), links: "text" as const } : asLabel(options);
       // A LINK CARRIES THE MARK OF WHERE IT GOES, read from its address and
-      // never from its words (`LabelledLink`).
+      // never from its words (`LabelledLink`), and its words are read as no
+      // token ([asLabel]).
       out.push(
         href
           ? createElement(LabelledLink, { key, href, live: true }, renderInline(label, key, inner))
@@ -587,22 +594,32 @@ function inertLink(key: string, label: ReactNode[], raw: string): ReactNode {
 }
 
 /**
- * Two trailing spaces, or a backslash, is a hard break.
+ * A link's own label, walked as its words.
  *
- * Every other newline inside a paragraph is a SOFT break and renders as a
- * space, which is the one rule that makes a hand-wrapped paragraph read as a
- * paragraph rather than as a column of short lines — unless the reader asked
- * for `breaks: "hard"`, where every newline is a break and the two markers
- * that ask for one are consumed with it rather than left as stray characters.
+ * NOT PROSE: `prose` never runs inside a label.
+ *
+ * NO TOKEN EITHER, because a token's mark says what its words are and a
+ * label's words are not what the link is. `[https://github.com/a/b/pull/1]
+ * (https://evil.example.net)` read as an address drew a GitHub mark and
+ * "a/b#1" inside a link to another host, and `[gophrase/backend#14](...)`
+ * read as a reference did the same. Where a link goes is its address alone,
+ * which [LabelledLink] reads.
  */
-/** A link's label is not prose: `prose` never runs inside one. */
-function unprosed(options: InlineOptions): InlineOptions {
-  if (options.prose === undefined) return options;
-  const rest = { ...options };
+function asLabel(options: InlineOptions): InlineOptions {
+  const rest: InlineOptions = { ...options, label: true };
   delete rest.prose;
   return rest;
 }
 
+/**
+ * Two trailing spaces, or a backslash, is a hard break.
+ *
+ * Every other newline inside a paragraph is a SOFT break and renders as a
+ * space, which is the one rule that makes a hand-wrapped paragraph read as a
+ * paragraph rather than as a column of short lines, unless the reader asked
+ * for `breaks: "hard"`, where every newline is a break and the two markers
+ * that ask for one are consumed with it rather than left as stray characters.
+ */
 function breakLines(text: string, key: string, hard: boolean, options: InlineOptions): ReactNode {
   const { prose } = options;
   // A RUN OF PROSE, read in order: what the caller makes of it first (the
@@ -637,28 +654,21 @@ function soften(text: string): string {
  * words: a record chip the caller drew is never read again.
  *
  * A LINK ONLY WHERE A LINK MAY BE: `links: "anchor"`, the default. Inside a
- * link's own label (`text`) a link is invalid, and in a model's prose
- * (`inert`) nothing the model wrote becomes one; there every token is its
- * words with its mark.
+ * control (`text`) a link is invalid, and in a model's prose (`inert`)
+ * nothing the model wrote becomes one; there every token is its words with
+ * its mark. A link's own label reads no token at all ([asLabel]).
  */
 function tokenise(said: ReactNode, key: string, options: InlineOptions): ReactNode {
   const pieces = Array.isArray(said) ? (said as ReactNode[]) : [said];
   const links = (options.links ?? "anchor") === "anchor";
-  const words = (text: string, k: string): ReactNode =>
-    options.highlight && options.highlight.length > 0
-      ? createElement(Highlight, { key: k, text, terms: options.highlight })
-      : text;
-  return pieces.flatMap((piece, i): ReactNode[] => {
-    if (typeof piece !== "string") return [piece];
-    const out: ReactNode[] = [];
-    let at = 0;
-    for (const token of inlineTokens(piece)) {
-      if (token.at > at) out.push(words(piece.slice(at, token.at), `${key}-${i}-w${at}`));
-      out.push(createElement(InlineToken, { key: `${key}-${i}-k${token.at}`, token, links }));
-      at = token.end;
+  const terms = options.highlight && options.highlight.length > 0 ? options.highlight : undefined;
+  return pieces.map((piece, i): ReactNode => {
+    if (typeof piece !== "string") return piece;
+    // A LABEL'S WORDS ARE WORDS ([asLabel]), marked where a search matched.
+    if (options.label) {
+      return terms ? createElement(Highlight, { key: `${key}-${i}`, text: piece, terms }) : piece;
     }
-    if (at < piece.length) out.push(words(piece.slice(at), `${key}-${i}-w${at}`));
-    return out;
+    return createElement(TokenRun, { key: `${key}-${i}`, text: piece, links, highlight: terms });
   });
 }
 

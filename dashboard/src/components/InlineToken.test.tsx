@@ -1,7 +1,8 @@
 /**
  * Inline tokens as every Markdown surface draws them: a swatch beside a
- * colour, a vendor's mark beside a link to that vendor, a key and a handle
- * linked to what they name.
+ * colour, a vendor's mark beside a link to that vendor, a repository linked
+ * to its code host, a key and a handle linked to what they name as words
+ * alone.
  *
  * What a token becomes is decided by the company's own records, never by the
  * words: a link labelled "github.com" that goes elsewhere carries no GitHub
@@ -83,6 +84,9 @@ async function draw(
 
 const md = (source: string, options: RenderOptions = {}) => renderMarkdown(source, options);
 
+/** GitHub with the company's organization, as `link_hosts` answers it. */
+const GOPHRASE: LinkHost[] = [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }];
+
 /** The colour a swatch is drawn in, or null. */
 function swatch(el: Element | null): string | null {
   const chip = el?.querySelector<HTMLElement>(".crewlet-color-chip");
@@ -138,6 +142,34 @@ describe("addresses and links", () => {
     expect(el.textContent).toContain("github.com.login.example.net");
   });
 
+  // A LABEL IS NEVER READ AS A TOKEN: only where a link goes says what it is.
+  // Mutation: tokenise a label again and each case draws GitHub's mark on a
+  // link to another host.
+  test.each([
+    ["an address", "[https://github.com/gophrase/backend/pull/14](https://evil.example.net/x)"],
+    ["a reference", "[gophrase/backend#14](https://evil.example.net/x)"],
+    ["a repository", "[gophrase/backend](https://evil.example.net/x)"],
+  ])("a label that spells %s draws no mark on a link that goes elsewhere", async (_, source) => {
+    for (const options of [{}, ASSISTANT_WORDS]) {
+      const el = await draw(md(source, options), { hosts: GOPHRASE });
+      expect(el.querySelector("[data-vendor]")).toBeNull();
+      expect(el.textContent).not.toContain("GitHub");
+      // THE WORDS AS WRITTEN, never the reference a token would have said.
+      expect(el.textContent).toContain(source.slice(1, source.indexOf("]")));
+      cleanup();
+    }
+  });
+
+  test("an address on a tenant anybody can register says its host after its label", async () => {
+    const el = await draw(
+      md(
+        "https://evil.atlassian.net/wiki/spaces/D/pages/2/Sign+in+to+GitHub and https://evil.atlassian.net/browse/GP-1",
+      ),
+    );
+    expect(el.textContent).toContain("Sign in to GitHub (evil.atlassian.net)");
+    expect(el.textContent).toContain("GP-1 (evil.atlassian.net)");
+  });
+
   test("an autolink is an address like a bare one", async () => {
     const el = await draw(md("<https://acme.atlassian.net/browse/GP-1>"));
     expect(el.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("atlassian");
@@ -163,6 +195,43 @@ describe("references, keys and seats", () => {
     expect(el.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
   });
 
+  test("a bare repository under one of the company's owners links to its code host", async () => {
+    const el = await draw(md("Assigned to you in gophrase/backend, and/or src/app or 2024/10."), {
+      hosts: GOPHRASE,
+    });
+    const links = [...el.querySelectorAll("a")];
+    expect(links.map((a) => a.getAttribute("href"))).toEqual([
+      "https://github.com/gophrase/backend",
+    ]);
+    expect(links[0]!.querySelector("[data-vendor]")?.getAttribute("data-vendor")).toBe("github");
+    expect(el.textContent).toContain("and/or src/app or 2024/10");
+  });
+
+  test("a repository quoted in code is code", async () => {
+    const el = await draw(md("Clone `gophrase/backend` first."), { hosts: GOPHRASE });
+    expect(el.querySelector("a")).toBeNull();
+    expect(el.querySelector("[data-vendor]")).toBeNull();
+  });
+
+  test("with no owners a bare owner/repo is words", async () => {
+    const el = await draw(md("Assigned to you in gophrase/backend."));
+    expect(el.querySelector("a")).toBeNull();
+    expect(el.querySelector("[data-vendor]")).toBeNull();
+  });
+
+  test("with two code hosts a reference goes to the host whose owners hold it", async () => {
+    const el = await draw(md("PR gophrase/backend#14 and platform/api#3."), {
+      hosts: [
+        { kind: "github", url: "https://github.com", owners: ["gophrase"] },
+        { kind: "gitlab", url: "https://gitlab.example.com", owners: ["platform"] },
+      ],
+    });
+    expect([...el.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
+      "https://github.com/gophrase/backend/issues/14",
+      "https://gitlab.example.com/platform/api/-/issues/3",
+    ]);
+  });
+
   test("with two code hosts a reference either could own is words", async () => {
     const el = await draw(md("PR gophrase/backend#14."), {
       hosts: [
@@ -174,19 +243,25 @@ describe("references, keys and seats", () => {
     expect(el.querySelector("[data-vendor]")).toBeNull();
   });
 
-  test("a key links to its work item only when its project is the company's", async () => {
+  test("a key links to its work item only when its project is the company's, as its words alone", async () => {
     const el = await draw(md("GP-66 follows ISO-8601 and UTF-8."));
     const links = [...el.querySelectorAll("a")];
     expect(links.map((a) => a.getAttribute("href"))).toEqual(["#/worklet/GP-66"]);
+    // NO GLYPH and nothing said before it: the key is what is read.
+    expect(links[0]!.querySelector(".crewlet-inline-ref__mark")).toBeNull();
+    expect(links[0]!.textContent).toBe("GP-66");
     expect(el.textContent).toContain("ISO-8601 and UTF-8");
   });
 
-  test("a handle links to its seat with the seat's face, and a handle the chart lacks is words", async () => {
+  test("a handle links to its seat as its words alone, and a handle the chart lacks is words", async () => {
     const el = await draw(md("@backend-engineer asked @nobody."));
     const links = [...el.querySelectorAll("a")];
     expect(links).toHaveLength(1);
     expect(links[0]!.getAttribute("href")).toBe("#/company/org/seats/backend-engineer");
     expect(links[0]!.getAttribute("title")).toBe("Backend Engineer");
+    // NO FACE and nothing said before it.
+    expect(links[0]!.querySelector(".crewlet-inline-ref__mark")).toBeNull();
+    expect(links[0]!.textContent).toBe("@backend-engineer");
     expect(el.textContent).toContain("@nobody");
   });
 });

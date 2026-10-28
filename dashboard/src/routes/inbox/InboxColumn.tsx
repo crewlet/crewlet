@@ -382,7 +382,7 @@ const InboxItem = memo(function InboxItem({
       onClick={() => onOpen(row.key)}
       aside={
         item ? (
-          <TaskLink item={item} label={rowKey(row)} title={title ?? taskTitleOf(row)} glyph />
+          <TaskLink item={item} label={rowKey(row)} title={title ?? taskTitleOf(row)} />
         ) : undefined
       }
     >

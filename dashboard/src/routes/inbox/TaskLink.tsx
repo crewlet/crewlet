@@ -15,13 +15,13 @@
  * claimed first opens that task, so a row about the task that did not claim it
  * would open the claimant's page and thread from a duplicate's notice.
  *
- * A ROW'S TASK CARRIES THE TASK GLYPH (`glyph`), as a key in the row's words
- * does (`components/InlineToken.tsx`), so the two read as the same thing; the
- * reading pane's byline is the frame's navigation and stays plain.
+ * ITS KEY IS ITS WORDS, in mono and with no glyph, as a key in the row's
+ * words is (`components/InlineToken.tsx`): a mark before a key says nothing
+ * its letters do not, and the marks in a line are kept for what lives
+ * outside the company.
  */
 
-import { InlineRef, Link, peekClickHandler } from "@crewlethq/ui";
-import { SquareKanbanGlyph } from "@crewlethq/icons/glyphs";
+import { Link, peekClickHandler } from "@crewlethq/ui";
 import { peekHref, usePeekControls } from "~/app/frame/peekAddress.ts";
 import type { ObjectRef } from "~/app/frame/objects.ts";
 import { itemAddress, type ItemRef } from "~/lib/work.ts";
@@ -30,15 +30,12 @@ export function TaskLink({
   item,
   label,
   title,
-  glyph = false,
 }: {
   /** What it opens ([itemAddress]). */
   item: ItemRef;
   /** The key it is named by, or "": a turn's task is addressed by id alone. */
   label: string;
   title?: string | undefined;
-  /** Draw the task glyph before the key, as a row does. */
-  glyph?: boolean;
 }) {
   const peek = usePeekControls();
   const ref: ObjectRef = { kind: "item", id: itemAddress(item) };
@@ -49,13 +46,7 @@ export function TaskLink({
       size="inherit"
       onClick={peekClickHandler(() => peek.open(ref))}
     >
-      {glyph ? (
-        <InlineRef mark={<SquareKanbanGlyph />} code={label !== ""}>
-          {label || "Task"}
-        </InlineRef>
-      ) : (
-        <span className="mono">{label || "Task"}</span>
-      )}
+      <span className="mono">{label || "Task"}</span>
       {title ? ` ${title}` : ""}
     </Link>
   );

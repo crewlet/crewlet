@@ -27,6 +27,15 @@
  *     project!7` (a merge request) or `owner/repo@b5362d2` (a commit), the
  *     path two segments or more, at boundaries no path or address continues
  *     across, so `https://x.test/a/b#1` and `/a/b#1` are not one.
+ *  3a. A REPOSITORY is a bare `owner/repo`, exactly two segments, and only
+ *     where `owner` is one the company's code hosts name (`link_hosts`'
+ *     `owners`, any case): `gophrase/backend` is one, and `and/or`,
+ *     `src/app`, `client/server`, `2024/10` and `1/2` are words because no
+ *     company works under `and`, `src` or `2024`. It is at the boundaries a
+ *     reference is, never continued by a slash, a `#`, `!` or `@` (that is
+ *     a reference), or a dot and a letter (`gophrase/backend.py`). Its name
+ *     holds no dot, which in prose is a file's extension or a stop; a
+ *     repository named with one is written as a reference or an address.
  *  4. A COMMIT is seven to forty lowercase hex characters holding a digit and
  *     a letter, and only where the prose says it is one: after the word
  *     `commit`, or after `at`, `at head` or `head` following a reference
@@ -42,6 +51,9 @@
  *     never one.
  *  7. Where two tokens overlap, the one that starts first wins, then the
  *     longer: an address swallows every key and colour spelled inside it.
+ *
+ * Every pattern here runs in time linear in its run: a comment is written by
+ * an agent that may have read anything, and every reader renders it.
  */
 
 import { safeHref } from "@crewlethq/ui";
@@ -70,6 +82,14 @@ export type InlineToken =
       sha: string;
       /** The reference this commit follows in the run, where it follows one. */
       after: { path: string; sep: "#" | "!" | "@" } | null;
+    }
+  | {
+      kind: "repository";
+      at: number;
+      end: number;
+      text: string;
+      owner: string;
+      repo: string;
     }
   | { kind: "key"; at: number; end: number; text: string; project: string }
   | { kind: "mention"; at: number; end: number; text: string; handle: string };
@@ -107,35 +127,47 @@ const COLOUR = /(?<![\p{L}\p{N}_&#/-])#([0-9a-f]{6}|[0-9a-f]{3})(?![\p{L}\p{N}_-
 const ADDRESS = /\bhttps?:\/\/[^\s<>"'`]+/giu;
 const REFERENCE =
   /(?<![\p{L}\p{N}_./@-])((?:[A-Za-z0-9][\w.-]*\/)+[A-Za-z0-9][\w.-]*?)([#!@])([0-9a-f]{7,40}|\d+)(?![\p{L}\p{N}_-])/gu;
+const REPOSITORY =
+  /(?<![\p{L}\p{N}_./@~:#!-])([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9_-]*[A-Za-z0-9_])(?![\p{L}\p{N}_/@#!-]|\.[\p{L}\p{N}])/gu;
 const COMMIT_AFTER = /\b(commit|at head|at|head)\s+([0-9a-f]{7,40})(?![\p{L}\p{N}_-])/gu;
 const KEY = /(?<![\p{L}\p{N}_-])(\p{Lu}[\p{Lu}\p{N}]*)-\p{N}+(?![\p{L}\p{N}_-])/gu;
 const MENTION = /(?<![\p{L}\p{N}_.@/-])@([a-z0-9][a-z0-9-]*)(?![\p{L}\p{N}_-])/gu;
 
-/** An address's own end: a trailing stop or an unbalanced closing bracket is the sentence's. */
+/**
+ * An address's own end: a trailing stop or an unbalanced closing bracket is
+ * the sentence's.
+ *
+ * ONE COUNT, THEN ONE WALK BACK: the brackets are counted once and each one
+ * trimmed is taken off its count. Counting the whole address again for every
+ * character trimmed made `https://x.test/` and 20,000 closing brackets take
+ * seconds, on every render of every reader of the comment holding it.
+ */
 function trimAddress(raw: string): string {
-  let out = raw;
-  for (;;) {
-    const last = out.at(-1);
-    if (last !== undefined && ".,;:!?".includes(last)) {
-      out = out.slice(0, -1);
-      continue;
+  const count = (c: string) => raw.split(c).length - 1;
+  const unmatched = { ")": count(")") - count("("), "]": count("]") - count("[") };
+  let end = raw.length;
+  while (end > 0) {
+    const last = raw[end - 1]!;
+    if (".,;:!?".includes(last)) {
+      end--;
+    } else if ((last === ")" || last === "]") && unmatched[last] > 0) {
+      unmatched[last]--;
+      end--;
+    } else {
+      break;
     }
-    const pairs: Record<string, string> = { ")": "(", "]": "[" };
-    const open = last === undefined ? undefined : pairs[last];
-    if (open !== undefined) {
-      const opens = out.split(open).length - 1;
-      const closes = out.split(last!).length - 1;
-      if (closes > opens) {
-        out = out.slice(0, -1);
-        continue;
-      }
-    }
-    return out;
   }
+  return raw.slice(0, end);
 }
 
-/** Every token in one run of prose, in order, none overlapping (rule 7). */
-export function inlineTokens(text: string): InlineToken[] {
+/** No code host owners: a bare `owner/repo` is never a repository (rule 3a). */
+export const NO_OWNERS: ReadonlySet<string> = new Set();
+
+/**
+ * Every token in one run of prose, in order, none overlapping (rule 7), with
+ * `owners` the code hosts' owners in lower case ([codeHostOwners]).
+ */
+export function inlineTokens(text: string, owners: ReadonlySet<string> = NO_OWNERS): InlineToken[] {
   const found: InlineToken[] = [];
   for (const m of text.matchAll(ADDRESS)) {
     const raw = trimAddress(m[0]);
@@ -155,6 +187,20 @@ export function inlineTokens(text: string): InlineToken[] {
       sep,
       id,
     });
+  }
+  if (owners.size > 0) {
+    for (const m of text.matchAll(REPOSITORY)) {
+      const [whole, owner, repo] = m as unknown as [string, string, string];
+      if (!owners.has(owner.toLowerCase())) continue;
+      found.push({
+        kind: "repository",
+        at: m.index,
+        end: m.index + whole.length,
+        text: whole,
+        owner,
+        repo,
+      });
+    }
   }
   for (const m of text.matchAll(COLOUR)) {
     if (!mixed(m[1]!)) continue;
@@ -263,19 +309,37 @@ function under(url: URL, base: string): string[] | null {
   return segments(url.pathname.slice(prefix.length));
 }
 
-/** A path's segments, each decoded where it decodes. */
+/**
+ * A path's segments, each decoded where it decodes.
+ *
+ * NEVER INTO A SLASH: `a%2Fevil` is one segment, and decoded it read as two,
+ * so `github.com/a%2Fevil/b/pull/1` was labelled `a/evil/b#1`, a repository
+ * the address is not. A segment that decodes to a slash stays as written.
+ */
 function segments(path: string): string[] {
   return path
     .split("/")
     .filter(Boolean)
     .map((part) => {
       try {
-        return decodeURIComponent(part);
+        const decoded = decodeURIComponent(part);
+        return decoded.includes("/") ? part : decoded;
       } catch {
         return part;
       }
     });
 }
+
+/**
+ * A GitHub owner or repository, or a GitLab group or project: letters,
+ * digits, `.`, `_` and `-`, starting with a letter or a digit. A label is
+ * built from these alone; a segment that is anything else (`a%2Fevil`) makes
+ * the address its host and path, which say what it is.
+ */
+const CODE_NAME = /^[A-Za-z0-9][\w.-]*$/u;
+
+/** A commit's SHA in an address, as its label shortens it. */
+const SHA = /^[0-9a-f]{7,40}$/iu;
 
 /** The hosts an app lives at: its public one, and the company's own. */
 function basesOf(hosts: readonly LinkHost[], kind: LinkHostKind, publicBase?: string): string[] {
@@ -299,7 +363,10 @@ function atDomain(host: string, domain: string): boolean {
 
 function describeGitHub(parts: string[], url: URL): LinkDescription {
   const [owner, repo, what, id] = parts;
-  if (owner && repo && (what === "pull" || what === "issues") && id && /^\d+$/.test(id)) {
+  if (!owner || !repo || !CODE_NAME.test(owner) || !CODE_NAME.test(repo)) {
+    return { vendor: "github", label: shortAddress(url), code: false, kind: "GitHub" };
+  }
+  if ((what === "pull" || what === "issues") && id && /^\d+$/.test(id)) {
     const label = `${owner}/${repo}#${id}`;
     return {
       vendor: "github",
@@ -308,11 +375,11 @@ function describeGitHub(parts: string[], url: URL): LinkDescription {
       kind: "GitHub",
     };
   }
-  if (owner && repo && what === "commit" && id) {
+  if (what === "commit" && id && SHA.test(id)) {
     const label = `${owner}/${repo}@${id.slice(0, 7)}`;
     return { vendor: "github", label, code: true, kind: "GitHub" };
   }
-  if (owner && repo && what === undefined) {
+  if (what === undefined) {
     return {
       vendor: "github",
       label: `${owner}/${repo}`,
@@ -330,21 +397,25 @@ function describeGitHub(parts: string[], url: URL): LinkDescription {
 
 function describeGitLab(parts: string[], url: URL): LinkDescription {
   const dash = parts.indexOf("-");
-  const project = (dash < 0 ? parts : parts.slice(0, dash)).join("/");
+  const names = dash < 0 ? parts : parts.slice(0, dash);
+  if (names.length < 2 || !names.every((name) => CODE_NAME.test(name))) {
+    return { vendor: "gitlab", label: shortAddress(url), code: false, kind: "GitLab" };
+  }
+  const project = names.join("/");
   const [what, id] = dash < 0 ? [] : parts.slice(dash + 1);
-  if (project && what === "merge_requests" && id && /^\d+$/.test(id)) {
+  if (what === "merge_requests" && id && /^\d+$/.test(id)) {
     const label = `${project}!${id}`;
     return { vendor: "gitlab", label, code: true, kind: "GitLab" };
   }
-  if (project && what === "issues" && id && /^\d+$/.test(id)) {
+  if (what === "issues" && id && /^\d+$/.test(id)) {
     const label = `${project}#${id}`;
     return { vendor: "gitlab", label, code: true, kind: "GitLab" };
   }
-  if (project && what === "commit" && id) {
+  if (what === "commit" && id && SHA.test(id)) {
     const label = `${project}@${id.slice(0, 7)}`;
     return { vendor: "gitlab", label, code: true, kind: "GitLab" };
   }
-  if (project && dash < 0 && parts.length >= 2) {
+  if (dash < 0) {
     return { vendor: "gitlab", label: project, code: true, kind: "GitLab" };
   }
   return {
@@ -397,21 +468,43 @@ function describeMattermost(parts: string[], url: URL): LinkDescription {
   };
 }
 
-function describeJira(parts: string[]): LinkDescription | null {
+/**
+ * A label on a site anybody can open, with the site said after it.
+ *
+ * A TENANT IS NOBODY'S IN PARTICULAR: anyone can register `*.atlassian.net`,
+ * so an issue key or a page title alone ("Sign in to GitHub") after the
+ * Atlassian mark said whatever its author chose, about a site the company
+ * never configured. Its host after the label says whose it is. A site the
+ * company configured (`link_hosts`) is its own, and its labels stand alone.
+ */
+function onTenant(label: string, tenant: string | null): string {
+  return tenant === null ? label : `${label} (${tenant})`;
+}
+
+function describeJira(parts: string[], tenant: string | null): LinkDescription | null {
   const at = parts.indexOf("browse");
   const key = at < 0 ? undefined : parts[at + 1];
   if (key && /^[A-Z][A-Z0-9]*-\d+$/.test(key)) {
-    return { vendor: "atlassian", label: key, code: true, kind: "Jira" };
+    return {
+      vendor: "atlassian",
+      label: onTenant(key, tenant),
+      code: tenant === null,
+      kind: "Jira",
+    };
   }
   return null;
 }
 
-function describeConfluence(parts: string[], url: URL): LinkDescription | null {
+function describeConfluence(
+  parts: string[],
+  url: URL,
+  tenant: string | null,
+): LinkDescription | null {
   const at = parts.indexOf("pages");
   const slug = at < 0 ? undefined : parts[at + 2];
   if (slug) {
     const title = slug.replace(/\+/g, " ");
-    return { vendor: "atlassian", label: title, code: false, kind: "Confluence" };
+    return { vendor: "atlassian", label: onTenant(title, tenant), code: false, kind: "Confluence" };
   }
   if (parts.includes("wiki") || parts.includes("spaces") || parts.includes("display")) {
     return {
@@ -455,10 +548,13 @@ export function describeLink(raw: string, hosts: readonly LinkHost[]): LinkDescr
   if (mm !== null) return describeMattermost(mm, url);
 
   const cloud = atDomain(url.hostname, "atlassian.net");
-  const jira = firstUnder(url, basesOf(hosts, "jira")) ?? (cloud ? segments(url.pathname) : null);
-  const wiki =
-    firstUnder(url, basesOf(hosts, "confluence")) ?? (cloud ? segments(url.pathname) : null);
-  const atlassian = (jira && describeJira(jira)) ?? (wiki && describeConfluence(wiki, url));
+  const ownJira = firstUnder(url, basesOf(hosts, "jira"));
+  const ownWiki = firstUnder(url, basesOf(hosts, "confluence"));
+  const jira = ownJira ?? (cloud ? segments(url.pathname) : null);
+  const wiki = ownWiki ?? (cloud ? segments(url.pathname) : null);
+  const atlassian =
+    (jira && describeJira(jira, ownJira === null ? url.host : null)) ??
+    (wiki && describeConfluence(wiki, url, ownWiki === null ? url.host : null));
   if (atlassian) return atlassian;
   if (cloud || jira !== null || wiki !== null) {
     return {
@@ -485,8 +581,9 @@ export interface ReferenceTarget {
  * code host configured: that host. None: the vendor the spelling names (`!`
  * is GitLab's merge request, `#` reads as GitHub's), drawn with no link, and
  * a commit names no vendor at all. Both GitHub and GitLab configured: a `#`
- * or `@` could be either, so it is no reference (null) and stays text; `!` is
- * still GitLab's.
+ * or `@` is the host's whose `owners` hold the path's first segment, and one
+ * neither or both hold could be either, so it is no reference (null) and
+ * stays text; `!` is still GitLab's.
  */
 export function referenceTarget(
   path: string,
@@ -496,10 +593,14 @@ export function referenceTarget(
 ): ReferenceTarget | null {
   const github = hosts.find((h) => h.kind === "github")?.url ?? null;
   const gitlab = hosts.find((h) => h.kind === "gitlab")?.url ?? null;
+  const claimed = ownerHost(path.split("/")[0] ?? "", hosts);
   let vendor: "github" | "gitlab";
   if (sep === "!") vendor = "gitlab";
-  else if (github !== null && gitlab !== null) return null;
-  else if (github !== null) vendor = "github";
+  else if (github !== null && gitlab !== null) {
+    // BOTH HOSTS: the one whose owners hold the path's owner, or words.
+    if (claimed === null) return null;
+    vendor = claimed.kind as "github" | "gitlab";
+  } else if (github !== null) vendor = "github";
   else if (gitlab !== null) vendor = "gitlab";
   else if (sep === "#") vendor = "github";
   else return null;
@@ -520,4 +621,37 @@ export function referenceTarget(
     .map((part) => encodeURIComponent(part))
     .join("/");
   return { vendor, href: safeHref(`${base}/${encoded}/${tail}`) };
+}
+
+/** The code host whose `owners` hold `owner` (any case), or null for none or two. */
+function ownerHost(owner: string, hosts: readonly LinkHost[]): LinkHost | null {
+  const name = owner.toLowerCase();
+  const holding = hosts.filter(
+    (h) => (h.kind === "github" || h.kind === "gitlab") && (h.owners ?? []).includes(name),
+  );
+  return holding.length === 1 ? holding[0]! : null;
+}
+
+/**
+ * Where a bare repository points (rule 3a): its owner's code host, at the
+ * repository's page. Null where two hosts name the owner, which could be
+ * either, so the words stay words.
+ */
+export function repositoryTarget(
+  owner: string,
+  repo: string,
+  hosts: readonly LinkHost[],
+): ReferenceTarget | null {
+  const host = ownerHost(owner, hosts);
+  if (host === null) return null;
+  const href = safeHref(`${host.url}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+  return { vendor: host.kind as "github" | "gitlab", href };
+}
+
+/** Every owner the code hosts name, in lower case: what [inlineTokens] reads rule 3a by. */
+export function codeHostOwners(hosts: readonly LinkHost[]): ReadonlySet<string> {
+  const owners = hosts.flatMap((h) =>
+    h.kind === "github" || h.kind === "gitlab" ? (h.owners ?? []) : [],
+  );
+  return owners.length === 0 ? NO_OWNERS : new Set(owners.map((o) => o.toLowerCase()));
 }

@@ -3812,18 +3812,21 @@ Operator-facing words are full of things a reader has to stop and decode:
 `gophrase/backend#14` is a pull request on GitHub, `#ffe100` is a yellow,
 `~design-review` is a Mattermost channel, `GP-66` is a task. Every surface
 `lib/markdown.ts` renders (a page, a description, a comment, the Inbox, an
-assistant's answer, a transcript) draws each with the mark that says what it
-is, at the text's size and on its line (`InlineRef` from `@crewlethq/ui`):
+assistant's answer, a transcript) draws what lives outside the company with
+the mark that says what it is, at the text's size and on its line
+(`InlineRef` from `@crewlethq/ui`), and links the company's own things by
+their words alone:
 
 | Written | Drawn |
 |---|---|
 | `#ffe100` in words, or a code span that is one colour (`` `#fff` ``, `` `rgb(255, 225, 0)` ``) | A swatch before the value |
 | A web address | The mark of the app it belongs to (or a globe), and the reference it is (`gophrase/backend#14`, `Message in gophrase`, `~design-review`, `MOB-12`, a page's title) in place of the whole address, which the link's title keeps |
-| `[label](address)` | Its label, after the mark of the app its address belongs to |
+| `[label](address)` | Its label as written, after the mark of the app its address belongs to |
 | `owner/repo#14`, `group/project!7`, `owner/repo@b5362d2` | The code host's mark, linked to the company's code host |
+| `owner/repo`, under an owner the company works in | The code host's mark, linked to the repository |
 | A SHA after a reference ("at b5362d2") or after the word *commit* | The same, linked to the commit |
-| `GP-66` | The task glyph, linked to the work item |
-| `@miles` | The seat's face, linked to the seat |
+| `GP-66` | Its words, linked to the work item |
+| `@miles` | Its words, linked to the seat |
 
 `lib/inlineTokens.ts` holds the recognition rules and the reasons for each.
 Each rule is a guess that can go wrong in two directions, and both are
@@ -3834,25 +3837,40 @@ refused:
   span (`color: #fff;`) is code; a SHA needs a reference or the word *commit*
   before it, so `deadbeef1` is a word; a key needs its project to be one of
   the company's, so `ISO-8601` and `UTF-8` are words; a handle needs a seat,
-  so `@nobody` is a word and an email address is never a mention; and an
-  address swallows every key and colour spelled inside it.
+  so `@nobody` is a word and an email address is never a mention; a bare
+  `owner/repo` needs its owner to be one the company's code hosts name, so
+  `and/or`, `src/app` and `2024/10` are words; and an address swallows every
+  key and colour spelled inside it.
 - **Too trusting.** A mark is chosen from the address a link GOES TO, parsed,
   and never from its words: a link labelled "github.com/…" that goes
   elsewhere carries no GitHub mark, and a look-alike host
   (`github.com.login.example.net`, `github.com@login.example.net`) is
   nobody's. An app is recognised at its public host exactly (github.com,
   gitlab.com), under its own domain on a dot (`*.slack.com`,
-  `*.atlassian.net`), or at a host the company configured for it.
+  `*.atlassian.net`), or at a host the company configured for it. A link's
+  label is read as its words and never as a token, so
+  `[https://github.com/a/b/pull/1](https://login.example.net)` draws no
+  GitHub mark. A label built from an address names what anybody could have
+  chosen only with its site: an Atlassian Cloud tenant the company did not
+  configure is said after its key or page title ("Sign in to GitHub
+  (evil.atlassian.net)"), and a path segment that decodes to a slash
+  (`a%2Fevil`) or that no code host allows labels nothing, so the address
+  shows as its host and path.
+- **Too slow.** Every pattern runs in time linear in its run, since a
+  comment an agent wrote is rendered by every reader, and a run is read once
+  rather than on every render of the surface around it.
 
 **The company's hosts reach every reader, and nothing else of its
 integrations does.** A self-hosted GitLab, an Enterprise Server, a Mattermost
 or a Jira site lives at an address no rule can guess, so the frame reads
 `link_hosts` once ([API Endpoints](api-endpoints.md)): a kind and a base
 address per configured app, which every reader may ask for, where
-`integrations` is an administrator's. It carries no organization, repository,
-project, team, credential or health, so a bare reference links by the host
-alone, and one GitHub and GitLab could both own (a company with both) is left
-as words. With no code host configured, `owner/repo#14` keeps GitHub's mark
+`integrations` is an administrator's. A code host's row also names its
+owners (the organizations or top-level groups the company works in), which
+is what makes a bare `owner/repo` a repository, and it carries no repository,
+project, team, credential or health. A bare reference links by the host
+alone; with both GitHub and GitLab configured it goes to the host whose
+owners hold it, and one neither or both hold is left as words. With no code host configured, `owner/repo#14` keeps GitHub's mark
 and links nowhere. The project keys a key needs are the reader's own
 `work_projects`, read once by the frame where Worklet is served to them. No
 mark is ever fetched from anywhere: every mark is the design system's.
