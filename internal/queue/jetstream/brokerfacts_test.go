@@ -218,72 +218,128 @@ func TestCreatingAnExistingConsumerErrsOnlyWhenTheConfigDiffers(t *testing.T) {
 }
 
 // A LIVE RELOAD OF A LOWER max_payload CLOSES A CONNECTED CLIENT FOR GOOD, AT
-// ITS FIRST MESSAGE PAST THE NEW LIMIT.
+// ITS FIRST MESSAGE PAST THE NEW LIMIT, UNLESS THAT MESSAGE IS STILL BEING
+// WRITTEN WHEN THE SERVER CLOSES: THEN IT MAY RECONNECT ONTO THE LOWER LIMIT.
 //
-// Two facts, and the deployment guide's "never lower it with a live reload"
-// rests on both, as does what carriesTheContract says it cannot see: the
-// server applies the reloaded limit to the connections it holds WITHOUT an
-// INFO, so the client goes on reading the old figure and no check on this side
-// can learn the new one; and the server's `Maximum Payload Violation` is a
-// refusal the client treats as final, so the connection is CLOSED rather than
-// reconnected, whatever its reconnect policy — reconnect for ever here, as
-// this package dials. A bump that announced a reload, or that reconnected
-// after the refusal, turns this case red, so the warning is rewritten rather
-// than left standing over a hazard that has gone.
+// Three facts, and the deployment guide's "never lower it with a live reload"
+// rests on them, as does what carriesTheContract says it cannot see. The server
+// applies the reloaded limit to the connections it holds WITHOUT an INFO, so
+// the client goes on reading the old figure and no check on this side can
+// learn the new one. A message the socket takes whole is refused with
+// `Maximum Payload Violation`, which the client reads and treats as final, so
+// the connection is CLOSED rather than reconnected, whatever its reconnect
+// policy (reconnect for ever here, as this package dials). And a message the
+// socket takes only part of is still being written when the server closes the
+// connection; since nats.go 1.55.0 a write that fails part way closes the
+// socket on the client's side and drops the refusal unread, so the client
+// reconnects instead and reads the lowered limit. Which of the two the larger
+// message meets is a race between the client's own reader and writer, so that
+// row holds the client to one or the other and to nothing else.
+//
+// A bump that announced a reload, that reconnected after a refusal it read,
+// or that left a connection open on the old figure turns a row red, so the
+// warning is rewritten rather than left standing over a hazard that has
+// changed.
 func TestALiveReloadOfALowerMaxPayloadClosesAClientForGood(t *testing.T) {
 	t.Parallel()
-	const before, after = 8 << 20, 1 << 20
-	opts := &server.Options{Host: "127.0.0.1", Port: -1, NoLog: true,
-		NoSigs: true, MaxPayload: before}
-	ns, err := server.NewServer(opts)
-	if err != nil {
-		t.Fatalf("configure a server: %v", err)
-	}
-	go ns.Start()
-	t.Cleanup(func() {
-		ns.Shutdown()
-		ns.WaitForShutdown()
-	})
-	if !ns.ReadyForConnections(30 * time.Second) {
-		t.Fatal("the server never became ready")
-	}
-	nc, err := nats.Connect(ns.ClientURL(), nats.MaxReconnects(-1),
-		nats.ReconnectWait(50*time.Millisecond))
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	t.Cleanup(nc.Close)
+	const before = 8 << 20
+	for _, tc := range []struct {
+		name string
+		// after is the reloaded limit, and the message is twice it.
+		after int32
+		// reconnects marks the size whose write the server's close can
+		// fail part way, which may end in a reconnect.
+		reconnects bool
+	}{
+		// 8 KiB on the wire, which any socket takes in one write.
+		{"a message the socket takes whole", 4 << 10, false},
+		// 6 MiB, above the 4 MiB Linux and macOS grow a socket's send
+		// buffer to at most by default, and inside the 8 MiB the client
+		// still reads.
+		{"a message still being written when the server closes", 3 << 20, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			opts := &server.Options{Host: "127.0.0.1", Port: -1, NoLog: true,
+				NoSigs: true, MaxPayload: before}
+			ns, err := server.NewServer(opts)
+			if err != nil {
+				t.Fatalf("configure a server: %v", err)
+			}
+			go ns.Start()
+			t.Cleanup(func() {
+				ns.Shutdown()
+				ns.WaitForShutdown()
+			})
+			if !ns.ReadyForConnections(30 * time.Second) {
+				t.Fatal("the server never became ready")
+			}
+			nc, err := nats.Connect(ns.ClientURL(), nats.MaxReconnects(-1),
+				nats.ReconnectWait(50*time.Millisecond))
+			if err != nil {
+				t.Fatalf("connect: %v", err)
+			}
+			t.Cleanup(nc.Close)
 
-	lowered := *opts
-	lowered.MaxPayload = after
-	lowered.Port = ns.Addr().(*net.TCPAddr).Port
-	if err := ns.ReloadOptions(&lowered); err != nil {
-		t.Fatalf("reload a lower max_payload: %v", err)
-	}
-	if err := nc.FlushTimeout(5 * time.Second); err != nil {
-		t.Fatalf("a round trip after the reload: %v", err)
-	}
-	if got := nc.MaxPayload(); got != before {
-		t.Fatalf("after the reload the client reads a max_payload of %d: the "+
-			"server now tells a connected client about a reload, and the "+
-			"guide's warning is to be rewritten", got)
-	}
+			lowered := *opts
+			lowered.MaxPayload = tc.after
+			lowered.Port = ns.Addr().(*net.TCPAddr).Port
+			if err := ns.ReloadOptions(&lowered); err != nil {
+				t.Fatalf("reload a lower max_payload: %v", err)
+			}
+			if err := nc.FlushTimeout(5 * time.Second); err != nil {
+				t.Fatalf("a round trip after the reload: %v", err)
+			}
+			if got := nc.MaxPayload(); got != before {
+				t.Fatalf("after the reload the client reads a max_payload of %d: "+
+					"the server now tells a connected client about a reload, and "+
+					"the guide's warning is to be rewritten", got)
+			}
 
-	_ = nc.Publish("crewlet.fact.oversized", make([]byte, 2*after))
-	_ = nc.Flush()
-	deadline := time.Now().Add(10 * time.Second)
-	for !nc.IsClosed() && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if !nc.IsClosed() {
-		t.Fatalf("a message past the reloaded limit left the client %v rather "+
-			"than closed: it now survives the refusal, and the guide's warning "+
-			"is to be rewritten", nc.Status())
-	}
-	if err := nc.LastError(); err == nil ||
-		!strings.Contains(err.Error(), "Maximum Payload Violation") {
-		t.Errorf("the client closed on %v, not on the server's max_payload refusal",
-			err)
+			_ = nc.Publish("crewlet.fact.oversized", make([]byte, 2*tc.after))
+			_ = nc.Flush()
+			reconnected := func() bool {
+				return nc.Stats().Reconnects > 0 && nc.IsConnected() &&
+					nc.MaxPayload() == int64(tc.after)
+			}
+			deadline := time.Now().Add(10 * time.Second)
+			for !nc.IsClosed() && !reconnected() && time.Now().Before(deadline) {
+				time.Sleep(20 * time.Millisecond)
+			}
+			switch {
+			case nc.IsClosed():
+				if err := nc.LastError(); err == nil ||
+					!strings.Contains(err.Error(), "Maximum Payload Violation") {
+					t.Errorf("the client closed on %v, not on the server's "+
+						"max_payload refusal", err)
+				}
+			case !reconnected():
+				t.Fatalf("a message past the reloaded limit left the client %v "+
+					"after %d reconnects, reading a max_payload of %d: neither "+
+					"closed nor reconnected onto the lowered limit, and the "+
+					"guide's warning is to be rewritten", nc.Status(),
+					nc.Stats().Reconnects, nc.MaxPayload())
+			case !tc.reconnects:
+				t.Fatal("a message the socket took whole left the client " +
+					"reconnected rather than closed: it now survives a refusal " +
+					"it read, and the guide's warning is to be rewritten")
+			default:
+				// AND THE RECONNECT ENDS IT: the client has read the
+				// lowered limit, so the same message sent again is
+				// refused before a byte is written, never sent for the
+				// server to close the connection over again. Every
+				// publisher in this module writes through that check, so
+				// a producer that retries meets record_too_large rather
+				// than a reconnect per attempt.
+				if err := nc.Publish("crewlet.fact.oversized",
+					make([]byte, 2*tc.after)); !errors.Is(err, nats.ErrMaxPayload) {
+					t.Fatalf("after reconnecting onto the lowered limit the "+
+						"client sent the same message with %v rather than "+
+						"refusing it with ErrMaxPayload: every retry would cost "+
+						"a reconnect", err)
+				}
+			}
+		})
 	}
 }
 
