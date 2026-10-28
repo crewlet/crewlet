@@ -792,17 +792,13 @@ function RunPane({
             </>
           ) : fate === "recorded" ? (
             <>
-              Answer recorded: <strong>{`“${given.text}”`}</strong>.{" "}
+              Answer recorded.{" "}
               {busyOn ? busyLine(busyOn, frame.name) : `${frame.name}’s run picks it up next.`}
             </>
           ) : fate === "ended" ? (
-            <>
-              Sent <strong>{`“${given.text}”`}</strong>. {frame.name}’s run has ended.
-            </>
+            <>Answer sent. {frame.name}’s run has ended.</>
           ) : (
-            <>
-              Sent <strong>{`“${given.text}”`}</strong>. Waiting for {frame.name}’s run to take it.
-            </>
+            <>Answer sent. Waiting for {frame.name}’s run to take it.</>
           )}
         </ReadingPaneOutcome>
       ) : superseded ? (
@@ -859,10 +855,6 @@ function RunPane({
 }
 
 /**
- * What a seat busy on another coding run is doing, for an answer waiting on it:
- * "The Senior Backend Engineer is busy on GP-4’s run and picks this up next."
- */
-/**
  * A question somebody else's answer was recorded against first: by whom, and
  * when on the READER's clock ([moment]), never the engine's.
  */
@@ -872,6 +864,10 @@ function answeredAlready(record: SandboxRun | undefined, now: number): string {
   return `This question was already answered${by}${at}, so your answer was not used.`;
 }
 
+/**
+ * What a seat busy on another coding run is doing, for an answer waiting on it:
+ * "The Senior Backend Engineer is busy on GP-4’s run and picks this up next."
+ */
 function busyLine(busy: SandboxRun, name: string): string {
   const who = busy.role ? `The ${busy.role}` : name;
   const on = busy.work_item?.key ? `on ${busy.work_item.key}’s run` : "on another coding run";

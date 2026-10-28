@@ -914,14 +914,14 @@ describe("the pane", () => {
 
     test("is shown as sent while the run still waits on its question", async () => {
       await answerRun({});
-      expect(outcome()).toBe("Sent “Yes, delete it.”. Waiting for CTO’s run to take it.");
+      expect(outcome()).toBe("Answer sent. Waiting for CTO’s run to take it.");
       expect(screen.queryByRole("button", { name: "Send answer" })).toBeNull();
       expect(screen.queryByRole("button", { name: /Answered$/ })).toBeNull();
     });
 
     test("says the run ended, not that it was answered, when its record goes away", async () => {
       await answerRun({ gone: true });
-      expect(outcome()).toBe("Sent “Yes, delete it.”. CTO’s run has ended.");
+      expect(outcome()).toBe("Answer sent. CTO’s run has ended.");
       expect(screen.queryByRole("button", { name: /Answered$/ })).toBeNull();
     });
 
@@ -941,7 +941,7 @@ describe("the pane", () => {
       };
       await answerRun({ status: "answered", answer_ids: ["a1"] }, [busy]);
       expect(outcome()).toBe(
-        "Answer recorded: “Yes, delete it.”. The Senior Backend Engineer is busy on GP-4’s run and picks this up next.",
+        "Answer recorded. The Senior Backend Engineer is busy on GP-4’s run and picks this up next.",
       );
     });
 
