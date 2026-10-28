@@ -2564,7 +2564,7 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 	// A detached run outlives its node, so that window is not hypothetical.
 	if err := e.backends.Queue.Subscribe(ctx, control, group,
 		func(ctx context.Context, ev *events.Event) queue.Result {
-			return e.seatControlOutcome(handle, rt.coordinator.OnEvent(ctx, ev))
+			return controlOutcome(rt.coordinator.OnEvent(ctx, ev))
 		}); err != nil {
 		return fmt.Errorf("attaching the sandbox control topic: %w", err)
 	}
@@ -2609,15 +2609,21 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 //     drain, as a mailbox's is, and the completion goes back to the head of the
 //     topic for the seat's next holder. It costs one delivery, as every handoff
 //     does, which the delivery budget is sized for.
+//   - A SEAT THIS NODE HAS LET GO OF ([sandbox.SeatLost]) DEFERS for the same
+//     reason, and it is the condition a person's answer is refused on as well
+//     as a completion: the delivery belongs to the seat's holder. Naked, it
+//     came back here on every backoff while the attachment outlived the lease,
+//     one delivery each, and an answer walked to the dead-letter subject; the
+//     deferral hands it to the holder for one, and the release that follows
+//     detaches the quiesced attachment, so a later claim attaches a fresh one.
 //
 // # Everything else NAKs
 //
 // A completion this node could not settle (the store failing, a refusal that
-// names no condition, a seat the store says a newer lease owns while this
-// node's host still holds it) comes back on the broker's backoff: to this node
-// once its store recovers, or to the seat's next owner. Acking it would lose
-// the turn. A seat this node's host no longer holds is the one exception, and
-// it is [Engine.seatControlOutcome]'s, because only the host knows it.
+// names no condition, a row the store says a newer lease owns while this
+// node's lease still stands, which the heartbeat settles within a beat) comes
+// back on the broker's backoff: to this node once its store recovers, or to
+// the seat's next owner. Acking it would lose the turn.
 func controlOutcome(err error) queue.Result {
 	if err == nil {
 		return queue.Ack()
@@ -2626,42 +2632,10 @@ func controlOutcome(err error) queue.Result {
 	if !errors.As(err, &refused) || refused.Condition == "" {
 		return queue.Nak(err)
 	}
-	if refused.Condition == waitDrain {
+	if refused.Condition == waitDrain || refused.Condition == sandbox.SeatLost {
 		return queue.Defer(err.Error())
 	}
 	return queue.Ack()
-}
-
-// seatControlOutcome is [controlOutcome] for one seat's control topic on this
-// node, with the one rule only the seat host can apply.
-//
-// # A seat this node has let go of DEFERS
-//
-// A write refused because this node does not hold the seat
-// ([sandbox.ErrSeatNotHeld]) is work this process has lost the right to do,
-// which is what a deferral is for ([queue.OutcomeDefer]): the delivery goes back
-// to the head of the topic for the seat's holder, and this node's attachment is
-// quiesced, so it is not handed the same answer or completion again on a
-// backoff. It costs ONE delivery, as every handoff does. A Nak instead spent one
-// per redelivery for as long as the attachment outlived the lease, and a person's
-// answer that kept coming back to a node refusing it walked to the dead-letter
-// subject. The release that follows the host's letting go detaches the
-// attachment, and a later claim attaches a fresh one.
-//
-// ONLY WHEN THE HOST AGREES. The same sentinel is what the run store answers a
-// write whose row a newer lease has stamped, and the host still holding the seat
-// then means the two disagree: the heartbeat settles which is right within a
-// beat, by dropping the seat or by renewing it. Quiesced on the store's word
-// alone, a seat this node does hold would hear no completion or answer again,
-// since nothing resumes a control attachment, which is a far worse failure than
-// the backoff of a Nak, whose dead letter at least says so.
-func (e *Engine) seatControlOutcome(handle string, err error) queue.Result {
-	if errors.Is(err, sandbox.ErrSeatNotHeld) {
-		if _, held := e.launchFence(handle); !held {
-			return queue.Defer(err.Error())
-		}
-	}
-	return controlOutcome(err)
 }
 
 // sandboxSeatAttached reports whether this node attached the seat's sandbox
