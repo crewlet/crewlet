@@ -22,8 +22,9 @@ import (
 // seal holds it to (code.CheckBundle) — and the delta window held to what the
 // cache's serve configuration bounds a clone's pack-objects to, twice the
 // epoch's max_blob_bytes. A PER-THREAD bound, which the pool's pack.threads=1
-// makes the build's whole window, so the build's memory charge counts it
-// once (cache.CompactWindowBytes).
+// makes the build's whole window — and a bound on the window alone: the build
+// held 5.4 of the largest blobs around it where its search met them, which is
+// what its memory charge counts (cache.CompactWindowBytes, six of them).
 func CompactConfig(maxBlob int64) []gitproc.KV {
 	return []gitproc.KV{
 		{Key: "pack.indexVersion", Value: "2"},

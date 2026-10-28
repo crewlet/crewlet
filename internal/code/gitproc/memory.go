@@ -74,6 +74,21 @@ const TransferShare = CoreMemory / TransfersPerProcess
 // over a repository: each whole-repository step, the node's tip commit-graph
 // beside the tail it covers, and a compaction's build beside the packs it
 // merges).
+//
+// The window's term is pack.windowMemory, which caps the window's entries
+// and not the process around them: a pack-objects whose delta search meets
+// the largest blobs a push may carry holds the object it deltifies and its
+// delta beside the window and the base cache. internal/code/compact's
+// BenchmarkCompact measured that around a compaction's build — the same
+// pack-objects over eight revisions of one 50 MiB blob, each searched against
+// the one before: 269.7 MiB, 74 MiB past the 196 this figure gives the window
+// and the base cache at the defaults (the cache's CompactWindowBytes charges
+// that build six blobs). A transfer searches only what its packs hold whole —
+// an object stored as a delta of one it also sends is sent as stored, and a
+// compacted repository's packs carry the deltas their build found — so this
+// stays the figure of a transfer of no particular repository, and one whose
+// search meets blobs of max_blob_bytes held whole may hold about those
+// 74 MiB more, as a transfer of millions of objects holds more by its objects.
 const TransferMemory int64 = 224 << 20
 
 // TransferBytesPerObject is the memory one transfer of a whole repository —

@@ -269,12 +269,12 @@ served — without one, so each of its clones walks its history — and raises
 [`code_maintenance_refused`](../reference/alarms.md). A single repository of
 50 to 100 GB of history is past what a git node is sized for. A repository's
 home also MERGES its packs ([Compaction](code-host.md#compaction)): the build
-is held to the same background budget — about 300 bytes an object it merges,
-room beside them for a clone of the whole repository and twice
-`code.limits.max_blob_bytes` for its delta window — and refused where the
-budget cannot hold it (`code_cache_compaction_refused`), while its outputs go
-up at once, holding up to sixteen 8 MiB first parts, 128 MiB, on an `s3`
-store, out of what the node keeps back for serving and the store.
+is held to the same background budget — about 500 bytes an object it merges,
+room beside them for a clone of the whole repository and six times
+`code.limits.max_blob_bytes` for its delta search, as measured — and refused
+where the budget cannot hold it (`code_cache_compaction_refused`), while its
+outputs go up at once, holding up to sixteen 8 MiB first parts, 128 MiB, on
+an `s3` store, out of what the node keeps back for serving and the store.
 
 **And by the bytes and CPU it serves, not by its requests.** Measured on git
 2.47.3 over a tree of 10 000 files in two hundred pushes, a 31.5 MB pack: from a

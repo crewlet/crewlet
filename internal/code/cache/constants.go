@@ -494,33 +494,51 @@ const FsckBytesPerObject = 192
 // repository (memory.go's chargeOver) and the build's delta window
 // (CompactWindowBytes).
 //
-// 300 BYTES, PROVISIONAL until BenchmarkCompact's memory arms
-// (inputs={4,8,16,64}/history=source, the peak anonymous memory sampled every
-// millisecond, the method of the figures above) measure it, the 64-input
-// figure rounded up to the next 50 bytes: pack-objects holds an entry an
-// object (some 100–150 bytes in git's struct object_entry, and its hash
-// table) and reuses every delta its inputs carry rather than searching for
-// one, so it lies between the index's 80 — a merge of the inputs' indexes —
-// and a transfer's gitproc.TransferBytesPerObject, which walks reachability as
-// well. Charged by the inputs' objects alone, never the repository's: a
-// compaction merges the small packs, so its own figure follows what it
-// merges — while the clone it shares the node with is of the whole
-// repository, whose room beside it is charged by the repository's objects.
-const CompactBytesPerObject = 300
+// 500 BYTES, MEASURED (internal/code/compact's BenchmarkCompact, its
+// history=source/inputs={4,8,16,64} arms: git 2.56.0 over the in-memory
+// store, the build's peak ANONYMOUS memory sampled every millisecond, the
+// method of the figures above; one bounded run, -benchtime 1x and one count,
+// on two E-cores of an Intel Core Ultra 7 265U, 2026-10-27): one build
+// merging the 100 MB history's 295 680 objects held 139 MiB whether they came
+// in 4, 8, 16 or 64 packs — 493.4 to 493.8 bytes an object, the input count
+// adding nothing — and the 64-input figure is rounded up to the next 50
+// bytes. The 300 this replaced was reasoned from git's struct object_entry
+// and a merge reusing every delta its inputs carry, and fell short of the
+// measurement by two fifths: a build admitted at it could hold two thirds
+// more than its budget kept for the build itself. The history is one size,
+// so the figure folds whatever part of the 139 MiB does not grow with the
+// objects into the objects: a merge of more objects is charged more than it
+// holds, never less, and a merge of a few is charged CompactWindowBytes
+// beside them, far more than any fixed part. Charged by the inputs' objects
+// alone, never the repository's: a compaction merges the small packs, so its
+// own figure follows what it merges — while the clone it shares the node
+// with is of the whole repository, whose room beside it is charged by the
+// repository's objects.
+const CompactBytesPerObject = 500
 
-// CompactWindowBytes is the delta window a compaction's build is charged
-// beside its objects: the pack.windowMemory its pack-objects runs under
-// (internal/code/compact's CompactConfig), twice the epoch's max_blob_bytes —
-// what the serve configuration already bounds a pack-objects' window to.
+// CompactWindowBytes is the delta search a compaction's build is charged
+// beside its objects: what its pack-objects holds around the window it runs
+// under, whatever the objects number — no per-object figure charges it.
 //
-// A PER-THREAD bound, which the pool's pack.threads=1 makes the whole window,
-// held whatever the objects number: pack-objects keeps at least one entry
-// beside the object it deltifies, and that object's delta index, so a merge of
-// eight packs each carrying a revision of a 50 MiB blob peaks near two to three
-// blobs at once — which no per-object figure charges. BenchmarkCompact's
-// inputs=8/blobs=max_blob arm holds the build's peak under the charge, or
-// raises this to the window term it measured.
-func CompactWindowBytes(limits code.Limits) int64 { return 2 * limits.MaxBlobBytes }
+// SIX OF THE EPOCH'S LARGEST BLOB, MEASURED (internal/code/compact's
+// BenchmarkCompact, its blobs=max_blob/inputs=8 arm: git 2.56.0 over the
+// in-memory store, the build's peak anonymous memory sampled every
+// millisecond; one bounded run, -benchtime 1x and one count, on two E-cores
+// of an Intel Core Ultra 7 265U, 2026-10-27): a merge of eight packs, each a
+// revision of one blob of the default max_blob_bytes, 50 MiB, every revision
+// a delta of the one before, held 269.7 MiB — 5.4 blobs, where the two this
+// charged before had admitted it at 170 MiB less than it held. The window
+// itself is held to pack.windowMemory (internal/code/compact's CompactConfig:
+// twice the largest blob, the serve configuration's figure, a per-thread
+// bound the pool's pack.threads=1 makes the build's whole window), so the
+// other 3.4 blobs are what the build holds beside its window — the object it
+// deltifies, its delta, and the bases it reads deltas through — which that
+// bound does not cap. Rounded up to the next whole blob, the measurement
+// being of the worst composition a window meets — every revision deltas
+// against the one before it, so the search holds two at once — and scaled by
+// the epoch's own limit, since what it holds follows the size of the blobs it
+// searches.
+func CompactWindowBytes(limits code.Limits) int64 { return 6 * limits.MaxBlobBytes }
 
 // VerifyHashPerMiB is what a check's hashing is given for each mebibyte of
 // the bundles it reads (CheckBudget), beside the connectivity check's own

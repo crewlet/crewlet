@@ -87,9 +87,10 @@
 // output past the rule anyway is built once more at its own ratio; a second
 // miss halves the next plan the same way. The build holds a slot of the
 // node's MAINTENANCE lane and its charge of the node's background memory
-// (internal/code/cache's AdmitCompaction: 300 bytes an object of the inputs,
-// provisional until BenchmarkCompact's memory arms measure it, beside room for
-// a clone of the repository and twice max_blob_bytes for its delta window) —
+// (internal/code/cache's AdmitCompaction: 500 bytes an object of the inputs,
+// beside room for a clone of the repository and six times max_blob_bytes for
+// its delta search, each what BenchmarkCompact's memory arms measured a build
+// to hold, # Measured) —
 // at the maintainer's limit, never the slot it keeps for a person's verify —
 // and gives both back once its last git process has ended, before the
 // uploads: an upload the store paces may take hours, and holding the slot

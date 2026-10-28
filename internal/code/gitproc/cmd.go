@@ -510,8 +510,8 @@ var allowedConfig = map[string]string{
 		"copy searched for a delta), which sends a cache's clones fewer bytes than `multi`",
 	// The delta window's memory, PER THREAD (pack.threads is the pool's 1): a
 	// cache's pack-objects for a clone, and a compaction's build, whose charge
-	// against the node's background budget counts it (internal/code/cache's
-	// CompactWindowBytes).
+	// against the node's background budget counts it and what the build holds
+	// beside it (internal/code/cache's CompactWindowBytes).
 	"pack.windowmemory": "the cache's serve configuration, and a compaction's pack-objects in its scratch " +
 		"(internal/code/compact's CompactConfig)",
 	"pack.usebitmaps": "the cache's serve configuration",

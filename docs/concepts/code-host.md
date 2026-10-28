@@ -438,11 +438,12 @@ merge of a few small pushes into a large repository cost time and memory in
 proportion to that history. It runs in the node's maintenance lane: at the
 background indexing's own limit, never the slot kept for
 `crewlet code verify`, with its memory charged against the node's background
-budget beside the indexing's (300 bytes an object merged, room for a clone of
-the whole repository however few packs it merges, and twice
-`code.limits.max_blob_bytes` for its delta window). It cuts its outputs at
-1 GiB. **The outputs hold every object of the packs merged** — an object a
-pack outside the merge also holds included — because a merge judges no
+budget beside the indexing's (500 bytes an object merged, room for a clone of
+the whole repository however few packs it merges, and six times
+`code.limits.max_blob_bytes` for its delta search, as a build was measured to
+hold). It cuts its outputs at 1 GiB. **The outputs hold every object of the
+packs merged** — an object a pack outside the merge also holds included —
+because a merge judges no
 reachability: no push decided against the packs it replaces can land a ref
 whose history it dropped, and two merges planned from different moments never
 each drop what the other relied on. Each output is one bundle in the stored
@@ -990,8 +991,8 @@ that walks less than the whole history, the commits the chain lacks, so it is
 charged by the tail rather than the repository: 1 700 bytes an object of the
 tail, from 40 MiB over 5 000 new commits on git 2.56.0. A
 [compaction](#compaction)'s build walks no history, only the packs it merges,
-and is charged by them: 300 bytes an object merged, and twice
-`code.limits.max_blob_bytes` for its delta window. A git node reads its
+and is charged by them: 500 bytes an object merged, and six times
+`code.limits.max_blob_bytes` for its delta search. A git node reads its
 memory — the least of the machine's and any cgroup limit set on its
 container — and keeps 224 MiB of it for every
 git transfer it admits at once and 896 MiB for each core its git runs on, for
