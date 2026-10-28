@@ -397,10 +397,11 @@ A few things worth knowing when deploying Crewlet:
   `container` a Docker or Podman container on the engine host; `direct` runs
   a fully permissioned CLI **as the engine's own user on the engine host**,
   which keeps each box's state apart and not the host — the run can read
-  what that user can. Use `direct` on a workstation or a dedicated VM; on a
-  host other people or other work share, place the runs in `container` or
-  `e2b`. Treat anything you put into a box (tokens in `role.sandbox.env`) as
-  visible to the code that runs there. See
+  what that user can. Use `direct` only on a dedicated host you are willing
+  to hand to an autonomous agent, or for the entry that needs the host
+  itself; for a local instance, a workstation included, place the runs in
+  `container` (or `e2b`). Treat anything you put into a box (tokens in
+  `role.sandbox.env`) as visible to the code that runs there. See
   [Code Sandbox § Local sandboxes](docs/concepts/code-sandbox.md#local-sandboxes).
   E2B boxes are created with secured access, so a box's in-box agent runs a
   command or serves a file only for a holder of that box's access token,
