@@ -1815,12 +1815,17 @@ func applyDelta(inc *incarnation, snap snapshot) {
 // A row that changed in a field left out here is a round that writes no state
 // for it, so the state a restart reads names the row before — its visibility,
 // the objects a request is bounded by, the drop epoch a push is checked at.
+// The redirect too, though a round reads its row by the repository's id, which
+// no old name answers: the state is the row as it was read, whole, rather
+// than the fields a round happens to see move today.
 func sameRepo(a, b code.RepoRef) bool {
 	return a.ID == b.ID && a.Name == b.Name && a.Status == b.Status && a.ManagedBy == b.ManagedBy &&
-		a.Owner == b.Owner && a.Visibility == b.Visibility && a.DefaultBranch == b.DefaultBranch &&
-		a.Description == b.Description && slices.Equal(a.Protections, b.Protections) &&
-		a.DeletedAt.Equal(b.DeletedAt) && a.Refs == b.Refs && a.LivePacks == b.LivePacks &&
-		a.LiveBytes == b.LiveBytes && a.LiveObjects == b.LiveObjects && a.DropEpoch == b.DropEpoch
+		a.Kind == b.Kind && a.Owner == b.Owner && a.Visibility == b.Visibility &&
+		a.DefaultBranch == b.DefaultBranch && a.Description == b.Description &&
+		slices.Equal(a.Protections, b.Protections) && a.DeletedAt.Equal(b.DeletedAt) &&
+		a.LastActivityAt.Equal(b.LastActivityAt) && a.Refs == b.Refs && a.LivePacks == b.LivePacks &&
+		a.LiveBytes == b.LiveBytes && a.LiveObjects == b.LiveObjects && a.DropEpoch == b.DropEpoch &&
+		a.Redirect == b.Redirect && a.RedirectUntil.Equal(b.RedirectUntil)
 }
 
 // account is a completed round's record: its duration by kind, its log line,
