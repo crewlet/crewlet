@@ -305,10 +305,10 @@ type Result struct {
 	// DeliveredRefs are the branches and pull or merge requests the run
 	// reported delivering, in its report's order: the `Delivered:` lines it
 	// wrote, or the pull-request URLs its prose holds where it named none.
-	// They are DISPLAY and a reminder — the run's phase record and the
-	// resumed executor's text carry them — and nothing judges a turn on
-	// them: whether a turn reached anybody is the tool loop's own record of
-	// what ran ([github.com/crewlet/crewlet/internal/agent/turn]).
+	// They are DISPLAY and a reminder — the run's phase record and the run's
+	// report its reviewer reads carry them — and nothing judges a turn on
+	// them: whether a turn reached anybody is the engine's own record of the
+	// calls it made ([github.com/crewlet/crewlet/internal/agent/turn]).
 	DeliveredRefs []string
 
 	// DeliveredRefsElided is how many more refs the run reported than its

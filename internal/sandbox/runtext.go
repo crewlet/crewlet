@@ -18,14 +18,15 @@ import (
 // failure, and its activity transcript.
 //
 // BYTES, because what it bounds is an EVENT. Every one of these rides the
-// run's `agent_phase_completed{phase: sandbox}` record (and the report rides
-// the resumed executor's too, as the tool result it reads), and an event over
-// the queue's 8 MiB [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes]
-// is refused — so an unbounded report does not arrive long, it does not arrive
-// at all, and it takes the run's only spend record with it. It was 100 000
-// RUNES, which is anything from 100 KB to 400 KB on the wire depending on the
-// script the output was written in: a bound on the wrong unit for the only
-// limit that matters.
+// run's `agent_phase_completed{phase: sandbox}` record (and the report and the
+// failure detail ride the collected executor's record too, as the run's report
+// its reviewer judges, [runReport]), and an event over the queue's 8 MiB
+// [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes] is refused — so
+// an unbounded report does not arrive long, it does not arrive at all, and it
+// takes the run's only spend record with it. It was 100 000 RUNES, which is
+// anything from 100 KB to 400 KB on the wire depending on the script the
+// output was written in: a bound on the wrong unit for the only limit that
+// matters.
 //
 // THE WHOLE RECORD FITS, and this is its arithmetic. The record's variable
 // text is the report, the failure detail and the transcript (each at most
@@ -39,9 +40,9 @@ import (
 // promise is no longer one.
 //
 // WHAT HAPPENS PAST IT DEPENDS ON WHO READS THE PIECE. The report and the
-// failure detail are what the resumed executor acts on — what to tell the
-// requester, what blocked the run — so one past the bound is CONDENSED by the
-// seat's auxiliary model ([Condenser]) rather than cut. A cut used to keep the
+// failure detail are what the run's reviewer judges the round on — what it
+// did, what blocked it — so one past the bound is CONDENSED by the seat's
+// auxiliary model ([Condenser]) rather than cut. A cut used to keep the
 // report's head, which a reader takes for the whole report: a run that seems
 // to have said less than it did. The transcript is read by a PERSON — no model
 // and no prompt reads it — so it is not condensed: it keeps whole lines from
@@ -264,8 +265,8 @@ const MaxQuestionBytes = 16 << 10
 // entry per line. A pull-request URL is typically under a hundred bytes, so
 // 16 KiB lists more than a hundred and sixty of them, past what any one run
 // delivers; the refs are deduplicated first, and what does not fit is COUNTED
-// on the record and in the resumed executor's text rather than dropped
-// unsaid.
+// on the record and in the run's report its reviewer reads ([runReport])
+// rather than dropped unsaid.
 const MaxDeliveredRefBytes = 16 << 10
 
 // MaxBranchBytes bounds the branch a parked run records with its question
@@ -321,7 +322,7 @@ const failureReserve = 1 << 10
 // error — and gives the error stream only what is left, so a failure built
 // around a long stderr is one a model can still be shown whole. Composed past
 // it, every such failure was a few hundred bytes over the compactor's input,
-// refused before a model was asked, and the resumed executor read the
+// refused before a model was asked, and the run's record carried the
 // uncondensed fallback although a model was configured.
 const MaxFailureBytes = MaxCondenseBytes - failureReserve
 
@@ -353,8 +354,8 @@ type Condenser interface {
 //
 // Applied ONCE, where every collected result enters the coordinator, and
 // before anything is published or resumed — so the run's phase record, the
-// resumed executor's tool result and the record's retries all carry the same
-// text.
+// run's report its resumed turn files for the reviewer ([runReport]) and the
+// record's retries all carry the same text.
 //
 // THE TRANSCRIPT TOO, and here rather than in the runner: this is the one
 // home of the rule that the run's record fits its event, and the coordinator
@@ -496,8 +497,8 @@ func questionRefusal(bytes int) string {
 // REDACTED FIRST, here rather than trusted to the runner, for the reason the
 // transcript is ([Coordinator.fitResult]): a ref is whatever word a run's
 // report put on its `Delivered:` line, which a box can make a credential, and
-// every reader of the record — its event, the resumed executor's text — reads
-// these. First, so the bound measures what is carried.
+// every reader of the record — its event, the run's report — reads these.
+// First, so the bound measures what is carried.
 func boundRefs(refs []string) ([]string, int) {
 	seen := make(map[string]bool, len(refs))
 	var kept []string

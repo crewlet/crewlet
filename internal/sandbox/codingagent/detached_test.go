@@ -612,9 +612,9 @@ func TestTheCLIsErrorIsNotReplacedByItsStderr(t *testing.T) {
 	}
 }
 
-// THE REPORT LEAVES THE RUNNER WHOLE. It is what the resumed executor reads,
-// and a cut keeping its head reads as the whole report; the coordinator holds
-// it to the record's bound by condensing it.
+// THE REPORT LEAVES THE RUNNER WHOLE. It is what the run's reviewer judges the
+// round on, and a cut keeping its head reads as the whole report; the
+// coordinator holds it to the record's bound by condensing it.
 func TestTheReportLeavesTheRunnerWhole(t *testing.T) {
 	t.Parallel()
 	runner := codingagent.NewClaudeCode()

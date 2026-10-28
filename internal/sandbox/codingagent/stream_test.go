@@ -213,9 +213,9 @@ func TestALinePastTheBoundIsSkippedAndSaid(t *testing.T) {
 }
 
 // THE ERROR STREAM IS READ FROM ITS END, at most what a condensation can take,
-// and what was not read is said by size. It reaches the resumed executor as
-// the failure's detail, so its unread start is marked rather than silent; and
-// its end — the line naming what broke — is always there.
+// and what was not read is said by size. It reaches the run's reviewer as the
+// failure's detail, so its unread start is marked rather than silent; and its
+// end — the line naming what broke — is always there.
 //
 // The read itself is held to the bound too, not only what is shown from it:
 // the box is asked for the bound plus the redaction's context and no more, and
@@ -274,8 +274,8 @@ func TestTheErrorStreamIsReadFromItsEndAndItsStartIsSaid(t *testing.T) {
 // could not read, the exit status, the CLI's error — and the error stream used
 // to be read to the compactor's whole input and carried behind them, so every
 // failure built around a long stderr was a few hundred bytes over what the
-// compactor reads, refused before a model was asked, and the resumed executor
-// read the uncondensed fallback although a model was configured.
+// compactor reads, refused before a model was asked, and the run's record
+// carried the uncondensed fallback although a model was configured.
 //
 // Every sentence a failure can open with, at once, in front of the longest
 // error stream — in lines, and as one line with no break in it, which is kept
