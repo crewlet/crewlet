@@ -248,4 +248,10 @@ func TestAnAnsweredQuestionRefusesTheNextAnswerAndSaysWhose(t *testing.T) {
 	if len(desk.delivered) != 0 {
 		t.Fatalf("delivered %+v for a question already answered", desk.delivered)
 	}
+	// A PERSON IS TOLD WHOSE IT WAS, and their own screen says when on their
+	// own clock: the engine's UTC instant is the model's, never theirs.
+	if person := result.PersonRefusal.Person(); !strings.Contains(person, "@miles") ||
+		strings.Contains(person, "UTC") {
+		t.Fatalf("a person is told %q, want who answered and no engine clock", person)
+	}
 }

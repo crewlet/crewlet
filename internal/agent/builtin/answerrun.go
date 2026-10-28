@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -195,7 +196,8 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// was and when, rather than taken quietly: an answer is recorded the
 		// moment the seat takes it, so a second person answering the same
 		// question finds it answered here.
-		return refused(tools.RefusalNotRunning, answeredAlready(run)), nil
+		return toPerson(refused(tools.RefusalNotRunning, answeredAlready(run)),
+			caveat.AnsweredAlready(run.Answer.By)), nil
 	case !slices.Contains(sandbox.Awaiting, run.Status):
 		return refused(tools.RefusalNotRunning, fmt.Sprintf("Run %s is %s, not "+
 			"waiting for an answer, so there is no question for this to answer.",
