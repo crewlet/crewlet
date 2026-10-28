@@ -602,7 +602,7 @@ func TestThePollWakesAPausedBoxItsRunStillRuns(t *testing.T) {
 	rig.runner.Finish(Result{Text: "done", Success: true})
 
 	if fired := rig.tick(); fired != 1 {
-		t.Errorf("the handed-back run fired %d completion(s); want its job collected anew", fired)
+		t.Errorf("the run fired %d completion(s); want its finished job announced", fired)
 	}
 	if box.Paused() || box.Keepalives() != 1 {
 		t.Errorf("paused=%v keepalives=%d; want the run's box woken and kept alive",
