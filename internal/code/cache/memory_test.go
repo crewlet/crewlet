@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/sourcetree"
@@ -958,16 +959,21 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 // states the bytes an object in words — every step's it names, and the
 // transfer's beside them — and how often the node's memory is read again;
 // and this holds the words to the constants, so a retune cannot leave the
-// alarm reference or the metrics reference stale.
+// alarm reference or the metrics reference stale. A compaction's build is
+// one of those steps, charged its own bytes an object of the packs it merges,
+// the clone's room by the whole repository, and its delta search a multiple
+// of max_blob_bytes.
 //
 // Mutation: change IndexBytesPerObject, GraphBytesPerObject,
-// TipGraphBytesPerObject or MidxDebounce, and the catalogue no longer says
-// what the cache does.
+// TipGraphBytesPerObject, CompactBytesPerObject, CompactWindowBytes'
+// multiple or MidxDebounce, and the catalogue no longer says what the cache
+// does.
 func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 	t.Parallel()
 	bitmap := fmt.Sprintf("%d bytes an object", cache.BitmapBytesPerObject)
 	transfer := fmt.Sprintf("%d more", gitproc.TransferBytesPerObject)
 	reread := "again every " + spell(t, cache.MidxDebounce)
+	window := word(t, windowBlobs(t))
 	ref := statelog.AlarmReference()
 	if strings.Count(ref, bitmap) < 2 || !strings.Contains(ref, transfer) || !strings.Contains(ref, reread) {
 		t.Errorf("the alarm reference does not say %q in both the code_maintenance_refused alarm's meaning and its "+
@@ -983,6 +989,9 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 			fmt.Sprintf("`index` (%d)", cache.IndexBytesPerObject),
 			fmt.Sprintf("`graph` (%d)", cache.GraphBytesPerObject),
 			fmt.Sprintf("`tip-graph` (%d an object of the tail", cache.TipGraphBytesPerObject),
+			fmt.Sprintf("`compact` (%d bytes an object of the packs merged, beside the clone's room — %d bytes "+
+				"an object of the whole repository — and %s times max_blob_bytes for the build's delta search)",
+				cache.CompactBytesPerObject, gitproc.TransferBytesPerObject, window),
 		},
 		metrics.CodeCacheMaintenanceRefused: {reread},
 	} {
@@ -1012,8 +1021,9 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 //
 // Mutation: change any constant the page names — BitmapBytesPerObject,
 // FsckBytesPerObject, gitproc.TransferMemory, MaintenanceMemoryPerCore,
-// MidxPacks, TipGraphBytesPerObject, MaxNewFilters — and the page no longer
-// says what the cache does.
+// MidxPacks, TipGraphBytesPerObject, MaxNewFilters, CompactBytesPerObject,
+// CompactWindowBytes' multiple — and the page no longer says what the cache
+// does.
 func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "code-host.md")
@@ -1071,6 +1081,14 @@ func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 		fmt.Sprintf("charged by the tail rather than the repository: %s bytes an object of the tail",
 			spaced(cache.TipGraphBytesPerObject)),
 		fmt.Sprintf("One write computes at most %s new filters", spaced(cache.MaxNewFilters)),
+		// A COMPACTION'S BUILD, charged as its admission charges it, in the
+		// section that runs it and in the Memory paragraph beside every
+		// other step.
+		fmt.Sprintf("(%d bytes an object merged, room for a clone of the whole repository however few packs "+
+			"it merges, and %s times `code.limits.max_blob_bytes` for its delta search",
+			cache.CompactBytesPerObject, word(t, windowBlobs(t))),
+		fmt.Sprintf("and is charged by them: %d bytes an object merged, and %s times "+
+			"`code.limits.max_blob_bytes` for its delta search", cache.CompactBytesPerObject, word(t, windowBlobs(t))),
 	} {
 		if !strings.Contains(page, want) {
 			t.Errorf("%s does not say %q", path, want)
@@ -1078,16 +1096,32 @@ func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 	}
 }
 
+// windowBlobs is how many of the epoch's largest blob a compaction's build
+// is charged for its delta search (cache.CompactWindowBytes), the multiple
+// the docs spell: a window that is no whole multiple of max_blob_bytes is
+// one they cannot.
+func windowBlobs(t *testing.T) int {
+	t.Helper()
+	const blob = 1 << 20
+	w := cache.CompactWindowBytes(code.Limits{MaxBlobBytes: blob})
+	if w%blob != 0 {
+		t.Fatalf("CompactWindowBytes is %d bytes at a max_blob_bytes of %d, no whole multiple of it: say in the "+
+			"docs how it is written, and here", w, blob)
+	}
+	return int(w / blob)
+}
+
 // THE SCALING PAGE SIZES A GIT NODE BY THE SAME FIGURES: docs/concepts/scaling.md
 // tells an operator that a git node is sized by its memory before its disk,
-// in the bytes an object its bitmap and a clone beside it hold, and sends them
-// to the concept page for everything else — so the two figures it does state
-// are the cache's own and gitproc's, held here as the concept page's are
-// above, or a retune would leave one page saying what the other no longer
-// does.
+// in the bytes an object its bitmap and a clone beside it hold, and what a
+// home's compaction is charged beside them, and sends them to the concept
+// page for everything else — so the figures it does state are the cache's own
+// and gitproc's, held here as the concept page's are above, or a retune would
+// leave one page saying what the other no longer does.
 //
-// Mutation: change BitmapBytesPerObject or gitproc.TransferBytesPerObject,
-// and the scaling page no longer says what the cache charges.
+// Mutation: change BitmapBytesPerObject, gitproc.TransferBytesPerObject,
+// CompactBytesPerObject or CompactWindowBytes' multiple, and the scaling page
+// no longer says what the cache charges.
 func TestTheScalingPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "scaling.md")
@@ -1096,12 +1130,18 @@ func TestTheScalingPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := strings.Join(strings.Fields(string(raw)), " ")
-	want := fmt.Sprintf("writing the bitmap of its background index takes about %s bytes an object, "+
-		"and a clone beside it about %d more — about %s an object",
-		spaced(cache.BitmapBytesPerObject), gitproc.TransferBytesPerObject,
-		spaced(int64(cache.BitmapBytesPerObject+gitproc.TransferBytesPerObject)))
-	if !strings.Contains(page, want) {
-		t.Errorf("%s does not say %q", path, want)
+	for _, want := range []string{
+		fmt.Sprintf("writing the bitmap of its background index takes about %s bytes an object, "+
+			"and a clone beside it about %d more — about %s an object",
+			spaced(cache.BitmapBytesPerObject), gitproc.TransferBytesPerObject,
+			spaced(int64(cache.BitmapBytesPerObject+gitproc.TransferBytesPerObject))),
+		fmt.Sprintf("about %d bytes an object it merges, room beside them for a clone of the whole repository "+
+			"and %s times `code.limits.max_blob_bytes` for its delta search",
+			cache.CompactBytesPerObject, word(t, windowBlobs(t))),
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("%s does not say %q", path, want)
+		}
 	}
 }
 
