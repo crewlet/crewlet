@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/caveat"
 )
@@ -385,8 +387,9 @@ func checkText(field, value string, limit int, required bool) error {
 // declared here — by the one caller that needs it — and implemented by the
 // surface that writes the decision, which holds both readers.
 type EvidenceLookup interface {
-	// TaskID resolves a key or an id to the task's id, or [ErrNoTask].
-	TaskID(ctx context.Context, ref string) (string, error)
+	// Task resolves a key or an id to the task's id and every key it has
+	// been known by, or [ErrNoTask].
+	Task(ctx context.Context, ref string) (CitedTask, error)
 
 	// PageID resolves a page reference — an id, or the
 	// "CONTAINER/Title" address a person and a model name a page by — to
@@ -395,11 +398,53 @@ type EvidenceLookup interface {
 	PageID(ctx context.Context, ref string) (id string, found bool, err error)
 }
 
+// CitedTask is a cited task as [EvidenceLookup] resolves it.
+type CitedTask struct {
+	ID string
+	// Keys are its key and its former keys: what a label may already say
+	// of it ([labelAfterKey]).
+	Keys []string
+}
+
+// labelAfterKey is a task evidence's label without a leading copy of one of
+// the task's keys, and the separator after it.
+//
+// A TASK'S LINK IS DRAWN AS ITS CURRENT KEY, THEN ITS LABEL, so a label that
+// starts with the key reads it twice ("GP-20 GP-20 sitemap fix"). An asker
+// writes a label as a link would say it, and a link to a task says its key,
+// so the label is stored as what follows the key. A former key is stripped
+// too: the label was written while the task carried it, and drawn after the
+// current key it names the task under a key that is not its own.
+func labelAfterKey(label string, keys []string) string {
+	for _, key := range keys {
+		rest, ok := strings.CutPrefix(label, key)
+		if !ok || key == "" {
+			continue
+		}
+		// A WHOLE KEY ONLY: GP-2 is not the start of GP-20, nor GP-20 of
+		// GP-20-b. The boundary is the one a key is recognised at everywhere
+		// else (`dashboard/src/lib/inlineTokens.ts`, rule 5).
+		if r, _ := utf8.DecodeRuneInString(rest); rest != "" &&
+			(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-') {
+			continue
+		}
+		return strings.TrimLeftFunc(rest, keySeparator)
+	}
+	return label
+}
+
+// keySeparator is what an asker writes between a key and what it is: a space,
+// a colon, a comma, a stop, a dash or a middle dot.
+func keySeparator(r rune) bool {
+	return unicode.IsSpace(r) || strings.ContainsRune(":,.-\u2013\u2014\u00b7|", r)
+}
+
 // ValidateDecision is [Decision.Validate] plus the checks that need the
 // world, and returns the decision as it is to be stored.
 //
 // A TASK IS RESOLVED TO ITS ID, because a key is retired by a move and the
-// record is kept for ever; a PAGE MUST EXIST, because a decision citing a page
+// record is kept for ever, and its label loses a leading copy of its key,
+// which the link already says ([labelAfterKey]); a PAGE MUST EXIST, because a decision citing a page
 // that is not there sends the person deciding to a dead link at the moment
 // they are weighing it — and it is stored by ITS id too, for the task's
 // reason: a page's address is its title, and a rename retires the title. Turns, runs and URLs are not looked up: a turn or a
@@ -424,7 +469,7 @@ func ValidateDecision(ctx context.Context, d Decision, lookup EvidenceLookup) (D
 		field := fmt.Sprintf("decision.evidence[%d]", i)
 		switch evidence.Kind {
 		case EvidenceTask:
-			id, err := lookup.TaskID(ctx, evidence.Ref)
+			task, err := lookup.Task(ctx, evidence.Ref)
 			switch {
 			case errors.Is(err, ErrNoTask):
 				missing = append(missing, invalid("%s.ref names the work "+
@@ -434,7 +479,8 @@ func ValidateDecision(ctx context.Context, d Decision, lookup EvidenceLookup) (D
 				return Decision{}, fmt.Errorf("worklet: resolve %s.ref %q: %w",
 					field, evidence.Ref, err)
 			}
-			out.Evidence[i].Ref = id
+			out.Evidence[i].Ref = task.ID
+			out.Evidence[i].Label = labelAfterKey(evidence.Label, task.Keys)
 		case EvidencePage:
 			id, exists, err := lookup.PageID(ctx, evidence.Ref)
 			switch {

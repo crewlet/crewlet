@@ -116,6 +116,28 @@ export function itemAddress(ref: ItemRef): string {
  */
 export const PROJECT_PAGE = 200;
 
+/**
+ * A cited task's evidence label without a leading copy of one of its `keys`
+ * and the separator after it, as the Inbox draws it: after the task's
+ * current key, a label that starts with a key read it twice ("GP-20 GP-20
+ * sitemap fix").
+ *
+ * THE WRITE'S RULE, drawn: the engine stores a label this way
+ * (`worklet.labelAfterKey`), and this keeps a label stored before it did
+ * from reading the key twice. A whole key only: GP-2 is not the start of
+ * GP-20, nor GP-20 of GP-20-b. Both read one case table
+ * (`internal/worklet/testdata/evidence_labels.json`).
+ */
+export function labelAfterKey(label: string, keys: readonly string[]): string {
+  for (const key of keys) {
+    if (key === "" || !label.startsWith(key)) continue;
+    const rest = label.slice(key.length);
+    if (/^[\p{L}\p{N}_-]/u.test(rest)) continue;
+    return rest.replace(/^[\s:,.\-\u2013\u2014\u00b7|]+/u, "");
+  }
+  return label;
+}
+
 /** Where a task's page is: `#/worklet/{address}`. See [itemAddress]. */
 export function itemPath(ref: ItemRef): string[] {
   return ["worklet", itemAddress(ref)];

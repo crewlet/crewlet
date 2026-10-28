@@ -10,11 +10,19 @@
 
 import { describe, expect, test } from "vitest";
 import type { LinkHost } from "~/contract/integrations.ts";
-import { codeColour, describeLink, inlineTokens, referenceTarget } from "./inlineTokens.ts";
+import {
+  codeColour,
+  codeHostOwners,
+  describeLink,
+  inlineTokens,
+  messageScope,
+  referenceTarget,
+  repositoryTarget,
+} from "./inlineTokens.ts";
 
-/** What a run's tokens are, as `kind:text`. */
-function said(text: string): string[] {
-  return inlineTokens(text).map((t) => `${t.kind}:${t.text}`);
+/** What a run's tokens are, as `kind:text`, read under `owners`. */
+function said(text: string, owners: readonly string[] = []): string[] {
+  return inlineTokens(text, new Set(owners)).map((t) => `${t.kind}:${t.text}`);
 }
 
 const GITHUB: LinkHost = { kind: "github", url: "https://github.com" };
@@ -140,6 +148,9 @@ describe("what an address is", () => {
       label: "gophrase/backend#14",
       code: true,
       kind: "GitHub",
+      // ON NO HOST OF THE COMPANY'S, nothing is rebuilt.
+      canonical: null,
+      place: { path: "gophrase/backend", number: "14" },
     });
     expect(describeLink("https://github.com/gophrase/backend/commit/b5362d22aa", [])?.label).toBe(
       "gophrase/backend@b5362d2",
@@ -185,10 +196,35 @@ describe("what an address is", () => {
     expect(describeLink("https://gophrase.slack.com/archives/C07LQ2V4K", [])?.label).toBe(
       "Channel in gophrase",
     );
-    expect(describeLink("https://acme.atlassian.net/browse/GP-1", [])?.label).toBe("GP-1");
+    // A TENANT ANYBODY CAN REGISTER says its host after the label, so a page
+    // titled "Sign in to GitHub" is read as the site it is on; a site the
+    // company configured is its own and its labels stand alone.
+    expect(describeLink("https://acme.atlassian.net/browse/GP-1", [])).toMatchObject({
+      label: "GP-1 (acme.atlassian.net)",
+      code: false,
+    });
     expect(
-      describeLink("https://acme.atlassian.net/wiki/spaces/D/pages/2/Brand+tokens", [])?.label,
+      describeLink("https://acme.atlassian.net/wiki/spaces/D/pages/2/Sign+in+to+GitHub", [])?.label,
+    ).toBe("Sign in to GitHub (acme.atlassian.net)");
+    const own: LinkHost[] = [
+      { kind: "jira", url: "https://acme.atlassian.net" },
+      { kind: "confluence", url: "https://acme.atlassian.net/wiki" },
+    ];
+    expect(describeLink("https://acme.atlassian.net/browse/GP-1", own)?.label).toBe("GP-1");
+    expect(
+      describeLink("https://acme.atlassian.net/wiki/spaces/D/pages/2/Brand+tokens", own)?.label,
     ).toBe("Brand tokens");
+  });
+
+  test("a segment that decodes to a slash, or that no code host allows, labels nothing", () => {
+    // `a%2Fevil` decoded read as two segments, labelling another repository.
+    const spoof = describeLink("https://github.com/a%2Fevil/b/pull/1", []);
+    expect(spoof?.label).not.toContain("a/evil");
+    expect(spoof).toMatchObject({ vendor: "github", code: false });
+    expect(describeLink("https://github.com/a/b/commit/not-a-sha", [])?.label).toBe(
+      "github.com/a/b/commit/not-a-sha",
+    );
+    expect(describeLink("https://gitlab.com/g%2Fx/app/-/issues/3", [])?.code).toBe(false);
   });
 
   test("a look-alike host, a credential before the host and a host by another port are nobody's", () => {
@@ -210,6 +246,8 @@ describe("what an address is", () => {
       label: "grafana.example.com/d/api-latency",
       code: false,
       kind: null,
+      canonical: null,
+      place: null,
     });
     expect(describeLink(`https://example.com/${"a".repeat(80)}`, [])?.label).toHaveLength(48);
     expect(describeLink("javascript:alert(1)", [])).toBeNull();
@@ -243,5 +281,140 @@ describe("where a bare reference points", () => {
     expect(referenceTarget("a/b", "#", "1", [GITHUB, GITLAB])).toBeNull();
     expect(referenceTarget("a/b", "@", "b5362d2", [GITHUB, GITLAB])).toBeNull();
     expect(referenceTarget("a/b", "!", "1", [GITHUB, GITLAB])?.vendor).toBe("gitlab");
+  });
+});
+
+describe("repositories", () => {
+  const OWNERS = ["gophrase"];
+
+  test("a bare owner/repo is a repository only under an owner the code hosts name", () => {
+    expect(said("assigned to you in gophrase/backend.", OWNERS)).toEqual([
+      "repository:gophrase/backend",
+    ]);
+    expect(said("GoPhrase/Backend", OWNERS)).toEqual(["repository:GoPhrase/Backend"]);
+    expect(said("assigned to you in gophrase/backend.")).toEqual([]);
+  });
+
+  test.each(["and/or", "src/app", "client/server", "2024/10", "1/2", "UI/UX"])(
+    "%s is words: no company works under its first part",
+    (text) => {
+      expect(said(`read ${text} here`, OWNERS)).toEqual([]);
+    },
+  );
+
+  test.each([
+    "gophrase/backend/src",
+    "/gophrase/backend",
+    "./gophrase/backend",
+    "~gophrase/backend",
+    "gophrase/backend.py",
+    "x.gophrase/backend",
+    "https://example.com/gophrase/backend",
+  ])("%s is a path or an address, not a repository", (text) => {
+    expect(said(text, OWNERS).filter((t) => t.startsWith("repository:"))).toEqual([]);
+  });
+
+  test("a reference is a reference, not a repository and a number", () => {
+    expect(said("gophrase/backend#11", OWNERS)).toEqual(["reference:gophrase/backend#11"]);
+  });
+
+  test("a repository goes to its owner's code host, and nowhere when two hosts name the owner", () => {
+    const github: LinkHost = { kind: "github", url: "https://github.com", owners: ["gophrase"] };
+    expect(repositoryTarget("GoPhrase", "backend", [github])).toEqual({
+      vendor: "github",
+      href: "https://github.com/GoPhrase/backend",
+    });
+    const both: LinkHost = {
+      kind: "gitlab",
+      url: "https://gitlab.example.com",
+      owners: ["gophrase"],
+    };
+    expect(repositoryTarget("gophrase", "backend", [github, both])).toBeNull();
+    expect(repositoryTarget("other", "backend", [github])).toBeNull();
+    expect(codeHostOwners([github, { kind: "jira", url: "https://j.example.com" }])).toEqual(
+      new Set(["gophrase"]),
+    );
+  });
+});
+
+describe("bare numbers", () => {
+  const GH: LinkHost[] = [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }];
+  /** A run's references as `path#id` for its text, read in a message of `texts`. */
+  const placed = (text: string, texts: readonly string[] = [text]) =>
+    inlineTokens(text, new Set(["gophrase"]), messageScope(texts, GH)).flatMap((t) =>
+      t.kind === "reference" ? [`${t.text}=${t.path}${t.sep}${t.id}`] : [],
+    );
+
+  test.each([
+    ["#7 in gophrase/frontend", "#7 in gophrase/frontend=gophrase/frontend#7"],
+    ["#7 of gophrase/frontend.", "#7 of gophrase/frontend=gophrase/frontend#7"],
+    ["gophrase/frontend PR #7", "gophrase/frontend PR #7=gophrase/frontend#7"],
+    ["gophrase/frontend pull request #7", "gophrase/frontend pull request #7=gophrase/frontend#7"],
+    ["gophrase/frontend issue #7", "gophrase/frontend issue #7=gophrase/frontend#7"],
+    ["platform/api MR #7", "platform/api MR #7=platform/api!7"],
+    ["acme/widget #7", "acme/widget #7=acme/widget#7"],
+  ])("the sentence binds %s", (text, want) => {
+    expect(placed(text)).toEqual([want]);
+  });
+
+  test("the same number in full elsewhere in the message places it, and nothing else does", () => {
+    const texts = ["Review on gophrase/backend#11 and gophrase/web#3.", "Then #11, not #3x or #4."];
+    expect(placed(texts[1]!, texts)).toEqual(["#11=gophrase/backend#11"]);
+  });
+
+  test("a number under two repositories is a word", () => {
+    const texts = ["gophrase/backend#11 and gophrase/web#11.", "Then #11."];
+    expect(placed(texts[1]!, texts)).toEqual([]);
+  });
+
+  test("the message's one repository places a number, from an address too", () => {
+    expect(placed("in gophrase/backend; start after #11")).toContain("#11=gophrase/backend#11");
+    const texts = ["See https://github.com/gophrase/backend/pull/11/files.", "Then #12."];
+    expect(placed(texts[1]!, texts)).toEqual(["#12=gophrase/backend#12"]);
+  });
+
+  test.each([
+    "#011",
+    "&#11;",
+    "C#11",
+    "a#11",
+    "x/#11",
+    "#11a",
+    "#11-b",
+    "#1.5",
+    "https://example.com/#11",
+    "/issues/#11",
+  ])("%s is no bare number", (text) => {
+    expect(placed(text, [text, "gophrase/backend"])).toEqual([]);
+  });
+
+  test("with nothing to place it, a number is a word", () => {
+    expect(placed("Our #1 priority is #11.")).toEqual([]);
+  });
+});
+
+describe("cost", () => {
+  // EVERY PATTERN IS LINEAR IN ITS RUN: a comment an agent wrote is rendered by
+  // every reader, so a run that costs seconds freezes everybody. The bound is
+  // two orders above what a linear pass takes here and two below the
+  // quadratic passes these replaced (about 2.7 s and 0.6 s at this size).
+  //
+  // Mutation: count the brackets again per character trimmed, or bring back
+  // the lazy pattern around a word, and the first two cases exceed it.
+  test.each([
+    ["an address closed by 20,000 brackets", `https://x.test/${")".repeat(20_000)}`],
+    ["a word of 20,000 brackets and a letter", `${")".repeat(20_000)}a`],
+    ["20,000 slashes", `${"a/".repeat(10_000)}b`],
+    ["20,000 stops", "a.".repeat(10_000)],
+    ["10,000 numbers", "#1".repeat(10_000)],
+    ["5,000 keys", "GP-1/".repeat(5_000)],
+    ["10,000 handles", "@a".repeat(10_000)],
+    ["3,000 commits", "commit ".repeat(3_000)],
+    ["10,000 bound numbers", "#1 in a/b ".repeat(10_000)],
+    ["10,000 repositories before a number", "a/b PR ".repeat(10_000)],
+  ])("%s reads in linear time", (_, text) => {
+    const start = performance.now();
+    inlineTokens(text, new Set(["a", "gp"]));
+    expect(performance.now() - start).toBeLessThan(250);
   });
 });

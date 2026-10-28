@@ -15,17 +15,20 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// THE ANSWER EVERY READER GETS CARRIES HOSTS AND NOTHING ELSE.
+// THE ANSWER EVERY READER GETS CARRIES HOSTS, A CODE HOST'S OWNERS, AND
+// NOTHING ELSE.
 //
 // `link_hosts` is everybody's because it is the least of the integrations a
 // reader needs to link a reference, and the moment it carries one more thing
 // it is a second `integrations` answer with the administrator's gate taken
 // off. So the fixture configures every app with everything a block can hold
-// that a reader must not read (each credential, the organization, group,
-// repositories, projects and team), and with a credential, a query and a
-// fragment written into an instance URL, and the case fails on any of them
-// reaching the wire, on any field beside the two, and on any kind outside the
-// closed set.
+// that a reader must not read (each credential, the repositories, projects
+// and team), and with a credential, a query and a fragment written into an
+// instance URL, and the case fails on any of them reaching the wire, on any
+// field beside the three, and on any kind outside the closed set. The owners
+// (an organization, a group, and the owner part of every repository the
+// company or a seat names) are the one thing beside the hosts, and only on a
+// code host.
 func TestTheLinkHostsAnswerCarriesHostsAndNothingElse(t *testing.T) {
 	t.Parallel()
 	const secret = "SECRETMARK"
@@ -49,6 +52,14 @@ func TestTheLinkHostsAnswerCarriesHostsAndNothingElse(t *testing.T) {
 	cfg.Integrations.Confluence = &config.Confluence{
 		URL: "https://wiki.example.com/confluence", Token: secret + "-wiki", WebhookSecret: secret + "-wiki-hook",
 	}
+	// A SEAT'S REPOSITORIES NAME OWNERS TOO, and a value no owner can be is
+	// dropped rather than sent.
+	if len(cfg.Roles) == 0 {
+		t.Fatal("the shared fixture has no role to give a GitHub app")
+	}
+	cfg.Roles[0].Integrations.GitHub = &config.RoleGitHub{
+		Repos: []string{"SeatOwner/SEATREPOMARK", "orgmark/REPOMARK", "-bad/x"},
+	}
 	env := map[string]string{"GHE_URL": "https://github.example.com/api/v3"}
 	body := asMap(t, answer(t, queries.Sources{
 		Company: companySource(t, cfg),
@@ -59,7 +70,7 @@ func TestTheLinkHostsAnswerCarriesHostsAndNothingElse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mark := range []string{secret, "ORGMARK", "REPOMARK", "GROUPMARK", "PROJECTMARK", "TEAMMARK", "CLOUDMARK", "EMAILMARK", "frag", "private_token", "deploy", "${"} {
+	for _, mark := range []string{secret, "REPOMARK", "SEATREPOMARK", "PROJECTMARK", "TEAMMARK", "CLOUDMARK", "EMAILMARK", "frag", "private_token", "deploy", "${", "-bad"} {
 		if strings.Contains(string(raw), mark) {
 			t.Errorf("the answer every reader gets carries %q: %s", mark, raw)
 		}
@@ -70,21 +81,32 @@ func TestTheLinkHostsAnswerCarriesHostsAndNothingElse(t *testing.T) {
 
 	var got []string
 	for _, row := range rows {
-		if len(row) != 2 {
-			t.Errorf("a host row carries %d fields, want kind and url alone: %v", len(row), row)
-		}
 		kind, _ := row["kind"].(string)
+		fields := 2
+		if kind == "github" || kind == "gitlab" {
+			fields = 3
+		}
+		if len(row) != fields {
+			t.Errorf("a %s row carries %d fields, want %d: %v", kind, len(row), fields, row)
+		}
 		if !queries.LinkHostKind(kind).Valid() {
 			t.Errorf("a host row names kind %q, outside the closed set", kind)
 		}
-		got = append(got, kind+" "+row["url"].(string))
+		line := kind + " " + row["url"].(string)
+		if owners, ok := row["owners"].([]any); ok {
+			for _, owner := range owners {
+				line += " " + owner.(string)
+			}
+		}
+		got = append(got, line)
 	}
 	want := []string{
-		// RESOLVED, and the browser's address rather than the REST base.
-		"github https://github.example.com",
+		// RESOLVED, and the browser's address rather than the REST base;
+		// the organization and every repository's owner, lower case, once.
+		"github https://github.example.com orgmark seatowner",
 		// The credential, query and fragment gone; the host lowercased and
 		// the path prefix kept, since a GitLab can live under one.
-		"gitlab https://gitlab.example.com/scm",
+		"gitlab https://gitlab.example.com/scm groupmark",
 		"mattermost https://chat.example.com",
 		// A cloud id's site, never its API gateway.
 		"jira https://acme.atlassian.net",

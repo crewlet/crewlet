@@ -853,13 +853,17 @@ describe("a picture with no resolver", () => {
     expect(el.querySelector("img")).toBeNull();
     const link = el.querySelector("a")!;
     expect(link.getAttribute("href")).toBe("https://example.com/rota.png");
-    expect(link.textContent).toBe("The rota");
+    // ITS WORDS, without what only a screen reader is told ("opens in a new tab").
+    const words = [...link.querySelectorAll(".crewlet-inline-ref__text")].map((t) => t.textContent);
+    expect(words.join("")).toBe("The rota");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
   });
 
   it("names a link to a picture with no alt text by its address", () => {
     const el = draw("![](https://example.com/rota.png)");
-    expect(el.querySelector("a")?.textContent).toBe("https://example.com/rota.png");
+    expect(el.querySelector("a .crewlet-inline-ref__text")?.textContent).toBe(
+      "https://example.com/rota.png",
+    );
   });
 
   it("shows a picture on the dashboard's own origin", () => {
@@ -914,8 +918,8 @@ describe("prose", () => {
   it("never hands over code, a code block or a link's label", () => {
     const anchor = seen("a `code` [label](https://example.com) b\n\n```\nblock\n```");
     expect(anchor.runs).toEqual(["a ", " ", " b"]);
-    const inert = seen("[label](https://example.com) c", { links: "inert" });
-    expect(inert.runs).toEqual([" c"]);
+    const checked = seen("[label](https://example.com) c", { links: "checked" });
+    expect(checked.runs).toEqual([" c"]);
   });
 
   // EACH BLOCK'S FIRST RUN OPENS IT, so a caller knows a sentence's first word

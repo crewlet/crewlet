@@ -16,8 +16,26 @@
 
 /** A word of the run: what lies between spaces. */
 const WORD = /\S+/gu;
-/** What surrounds a word without being part of it: brackets, quotes, stops. */
-const AROUND = /^["'“‘([{<]*(.*?)[.,;:!?"'”’)\]}>]*$/su;
+/** What opens around a word without being part of it: brackets and quotes. */
+const OPENS = new Set(['"', "'", "“", "‘", "(", "[", "{", "<"]);
+/** What closes around a word without being part of it: brackets, quotes, stops. */
+const CLOSES = new Set([".", ",", ";", ":", "!", "?", '"', "'", "”", "’", ")", "]", "}", ">"]);
+
+/**
+ * A word without what surrounds it.
+ *
+ * TWO INDEX WALKS, NEVER A PATTERN: the pattern this replaced (a lazy middle
+ * between two runs of the same characters) retried the closing run from
+ * every place the middle could end, so a word of 20,000 brackets and a letter
+ * took most of a second, on every render of every reader of it.
+ */
+function inner(word: string): string {
+  let from = 0;
+  let to = word.length;
+  while (from < to && OPENS.has(word[from]!)) from++;
+  while (to > from && CLOSES.has(word[to - 1]!)) to--;
+  return word.slice(from, to);
+}
 /** A bare address: a scheme's `://` or a `www.` host. */
 const ADDRESS = /^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/iu;
 /** A part of a word a key could be: a capital, then capitals and digits, then a number. */
@@ -34,17 +52,32 @@ function writtenOut(word: string): boolean {
 export function writtenOutSpans(text: string): Array<readonly [number, number]> {
   const out: Array<readonly [number, number]> = [];
   for (const m of text.matchAll(WORD)) {
-    const word = AROUND.exec(m[0])?.[1] ?? m[0];
+    const word = inner(m[0]);
     if (word !== "" && writtenOut(word)) out.push([m.index, m.index + m[0].length]);
   }
   return out;
 }
 
-/** Whether [at, end) overlaps any of `spans`. */
+/**
+ * Whether [at, end) overlaps any of `spans`, which are in order and apart, as
+ * [writtenOutSpans] returns them.
+ *
+ * A BINARY SEARCH for the first span ending after `at`: a run of a thousand
+ * paths and a thousand keys asked each key of every path, a million checks
+ * for a run every reader renders.
+ */
 export function overlapsAny(
   spans: ReadonlyArray<readonly [number, number]>,
   at: number,
   end: number,
 ): boolean {
-  return spans.some(([from, to]) => at < to && end > from);
+  let low = 0;
+  let high = spans.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (spans[mid]![1] <= at) low = mid + 1;
+    else high = mid;
+  }
+  const next = spans[low];
+  return next !== undefined && next[0] < end;
 }

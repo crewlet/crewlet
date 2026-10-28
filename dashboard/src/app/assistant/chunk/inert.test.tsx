@@ -1,6 +1,10 @@
 /**
- * TestTheAssistantRendersNoLinkAndNoImage: the drawer draws no live link and
- * no picture out of untrusted text, wherever that text arrives.
+ * TestTheAssistantRendersNoWrittenLinkAndNoImage: the drawer draws no link
+ * and no picture out of what untrusted text spells, wherever that text
+ * arrives. A link it draws is one the dashboard or the engine built (a key's,
+ * a reference's on the company's code host, the Open in app card); this
+ * thread renders outside the frame, so no code host or project is known and
+ * the engine's own route is the only one left.
  *
  * ZERO TOLERANCE, OVER THE WHOLE THREAD. `prose.test.tsx` holds the renderer
  * to one sentence per vector; this suite holds the DRAWER to the rule. An
@@ -248,7 +252,7 @@ function renderThread() {
   );
 }
 
-describe("TestTheAssistantRendersNoLinkAndNoImage", () => {
+describe("TestTheAssistantRendersNoWrittenLinkAndNoImage", () => {
   test("nothing in the thread fetches, frames, submits or runs", () => {
     const { container } = renderThread();
     expect([...container.querySelectorAll(LIVE_ELEMENTS)].map((el) => el.outerHTML)).toEqual([]);
