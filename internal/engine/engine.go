@@ -353,8 +353,11 @@ type RunnerInput struct {
 	Task         string
 	Conversation string
 
-	// Metrics is the node's recorder, which the turn's surfaces count their
-	// refusal-loop decisions into. Nil counts nothing.
+	// Metrics is the node's recorder, which every surface of the turn
+	// counts into ([runner.Config.Metrics], where it is copied): its
+	// refusal-loop decisions ([metrics.ToolPolicyRefusalLoops]) and the
+	// calls answered outside their schema ([metrics.ToolArgsOutsideSchema]),
+	// the executor run's bridged calls included. Nil counts nothing.
 	Metrics *metrics.Recorder
 
 	// Compact is the epoch's compactor; the runner binds it to the seat.

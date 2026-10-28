@@ -383,8 +383,11 @@ type Config struct {
 	// required skills.
 	Guard func(*tools.Surface) tools.Guard
 
-	// Counter is where the worker's surface counts its refusal-loop
-	// decisions, the parent turn's recorder. Nil counts nothing.
+	// Counter is where the worker's surface counts what it decides, the
+	// parent turn's recorder: its refusal-loop decisions
+	// (`crewlet.tools.policy_refusal_loops`) and the calls answered outside
+	// their schema (`crewlet.tools.args_outside_schema`), which
+	// [tools.Invoke] counts from the surface's counter. Nil counts nothing.
 	Counter tools.Counter
 
 	// Telemetry receives every child's Result, once, on every path a child

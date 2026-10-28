@@ -42,8 +42,9 @@ type Surface struct {
 	// installed second.
 	guard Guard
 
-	// counter counts the refusal-loop guard's decisions, or nil
-	// ([Surface.WithCounter]).
+	// counter counts the refusal-loop guard's decisions and, handed to
+	// every call's [Invoke], the calls answered outside their schema, or
+	// nil ([Surface.WithCounter]).
 	counter Counter
 
 	mu     sync.Mutex
