@@ -492,7 +492,9 @@ providers:
       env: {}                           # optional — extra child env, ${ENV_VAR}-resolved. The
                                         #   child gets an ALLOWLISTED environment, never the
                                         #   engine's, so declare anything else the CLI needs here —
-                                        #   for opencode, the key of the provider its model names
+                                        #   for opencode, the key of the provider its model names.
+                                        #   An executor run's box gets it too, beneath the seat's
+                                        #   role.sandbox.env
       auth:
         mode: subscription              # subscription (default) | api-key | inherit-env.
                                         #   subscription: the CLI's own login, or a headless token.

@@ -949,28 +949,51 @@ func (p *Provider) SandboxCredentialDocument() string {
 	return p.ws.documentPath()
 }
 
-// SandboxEnv is the credential a coding run carries in its ENVIRONMENT — the
-// headless subscription token, where one is configured.
+// SandboxEnv is the environment a coding run on this entry carries into its
+// box, in any cell: the entry's own env, and the credential its auth mode signs
+// the CLI in with — the headless subscription token where one is configured,
+// an api-key entry's key, the variables inherit-env forwards.
 //
-// A token travels to any box, including a remote one, because it is a single
-// scoped and revocable variable rather than a rotating refresh secret. An
-// api-key entry contributes its key here instead, and a subscription entry
-// with neither contributes nothing at all: the run then needs the credential
-// files, which is why a CLI that mints no token needs a local box.
+// THE WHOLE ENV, NOT ONLY ITS SIGN-IN. An entry's env is extra environment for
+// every invocation of its CLI, and a seat's executor run is one: a gateway's
+// ANTHROPIC_BASE_URL and the bearer token it takes, a Bedrock or Vertex AI
+// switch and its region, a proxy. Cut to the credential names, a box run on
+// an entry that reached its model through a gateway called the vendor directly
+// with the gateway's key, and one on Bedrock called the Anthropic API signed
+// in to nothing, while every other phase of the same entry worked.
 //
-// A CLI that reads its model provider's key from its own environment
-// ([cliprofile.Profile.EnvSignIn]) signs in through env, and that key
-// travels for the same reason a token does — it is the whole sign-in, and a
-// run that dropped it would start the CLI signed in to nothing while the
-// doctor reported the entry healthy.
+// A token or a key travels to any box, including a remote one, because it is a
+// single scoped and revocable variable rather than a rotating refresh secret.
+// A subscription entry with neither contributes no credential at all: the run
+// then needs the credential files, which is why a CLI that mints no token
+// needs a local box.
 //
-// Read off [childEnv] like [Provider.signIn], so a run carries exactly the
-// credentials a run on this host is given: what the auth mode removes from the
-// child it removes from the box.
+// Read off [childEnv] like [Provider.signIn], so a run carries what a run on
+// this host is given of the entry: what the auth mode removes from the child
+// it removes from the box, and what the mode sets in the child — the
+// credential, and [cliprofile.Profile.SubscriptionEnv] — it sets in the box.
+// The rest of that environment is this host's and stays on it: the host
+// allowlist (a direct box is given its own, and a remote one is another
+// machine), the isolation variables (a box points HOME and the XDG
+// directories at its own home, and an entry's env naming one is refused on
+// every write but only warned about where it is applied), and the profile's
+// fixed env and passthrough, which tune a call on this host — a run in a box
+// is configured by its runner (internal/sandbox/codingagent).
+//
+// A BLANK VALUE IS LEFT OUT, by the rule the rest of a run's environment is
+// held to: a reference that resolved to nothing reaches no box as an empty
+// string, and its build already warned (cli_agent_env_unresolved).
 func (p *Provider) SandboxEnv() map[string]string {
 	env := childEnv(p.profile, &Checkout{}, p.env, p.auth)
+	names := slices.Collect(maps.Keys(p.env))
+	names = append(names, p.profile.TokenEnv, p.profile.APIKeyEnv)
+	names = append(names, slices.Collect(maps.Keys(p.profile.SubscriptionEnv))...)
+	isolation := p.profile.IsolationVariables()
 	out := map[string]string{}
-	for _, name := range p.CredentialEnvNames() {
+	for _, name := range names {
+		if name == "" || slices.Contains(isolation, name) {
+			continue
+		}
 		if value := env[name]; strings.TrimSpace(value) != "" {
 			out[name] = value
 		}

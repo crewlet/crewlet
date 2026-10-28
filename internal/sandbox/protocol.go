@@ -215,10 +215,10 @@ type Spec struct {
 	// runner's [Limits].
 	MaxTurns int
 
-	// Env is the run environment: LLM credentials, the generic agent
-	// identity (CREWLET_AGENT_*), the setup steps' env, and role.sandbox.env
-	// — which is where an operator DECLARES an external token. The engine
-	// never names a tool-specific variable itself.
+	// Env is the run environment: the LLM entry's env and sign-in, the
+	// generic agent identity (CREWLET_AGENT_*), the setup steps' env, and
+	// role.sandbox.env — which is where an operator DECLARES an external
+	// token. The engine never names a tool-specific variable itself.
 	Env map[string]string
 
 	// CredentialFiles is a subscription-CLI login: a path relative to the

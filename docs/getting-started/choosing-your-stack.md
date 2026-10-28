@@ -412,7 +412,7 @@ that is reached.
 
 Coding-agent choice: the coding agent **is** the CLI of the entry the seat's
 executor launches on (the first member of its `llm` chain that can run one),
-with that entry's model and that entry's sign-in, so it needs no extra secret.
+with that entry's model, its `env` and its sign-in, so it needs no extra secret.
 **Claude Code** runs a `claude-code` entry; **OpenCode** — version 2, the
 `@opencode/cli` package, in the box — runs an `opencode` entry and so any model
 OpenCode reaches. A seat whose `llm` chain holds no `claude-code` or `opencode`

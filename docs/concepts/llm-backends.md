@@ -392,7 +392,11 @@ trust and proxy settings, because the child gets an
 the engine's. It is `${VAR}`-resolved when the entry is built and redacted on
 every config read; a reference that resolves to nothing is warned about
 (`cli_agent_env_unresolved`) rather than refused, since a CLI whose optional
-variable is unset still runs.
+variable is unset still runs. It reaches **every** invocation of the CLI: each
+call on this host, and a seat's [executor run](#the-executors-run-in-a-box) in
+whichever cell its box is, beneath the seat's own `role.sandbox.env` — so a
+gateway's base URL and the token it takes, or a cloud provider's switch and its
+region, serve the executor as they serve every other phase.
 
 **`auth.mode` defaults to `subscription`, not `inherit-env`**, on purpose: an
 entry that silently picked up a stray `ANTHROPIC_API_KEY` from the engine's
@@ -1063,8 +1067,8 @@ providers:
 ```
 
 The key of the provider the model names goes in `env`, and it
-travels into a box in any cell, a remote one included, like a headless
-token — see [A provider key in `env`](#6-a-provider-key-in-env-opencode-hermes-pi).
+travels into a box in any cell, a remote one included, with the rest of
+`env` — see [A provider key in `env`](#6-a-provider-key-in-env-opencode-hermes-pi).
 A `crewlet llm login` (OpenCode's own `opencode auth login`) signs that
 provider in too, but only in a local cell (`run_in: direct` or
 `container`): the login stays on the engine host — as the document
@@ -3067,11 +3071,10 @@ the provider accepts the key: the smoke test is what proves that — and for a
 model served by an endpoint that takes no key, an answered smoke test is what
 clears the "no sign-in" problem.
 
-**On an `opencode` entry the key also goes into a coding box**, the way a
-headless token does, so it works in a remote cell; the rest of `env`
-is not carried there. That is `opencode`'s alone: [a seat's executor
-run](#the-executors-run-in-a-box) needs a coding-agent runner for the entry's
-own CLI, and `hermes` and `pi` have none. An entry's model is written
+**On an `opencode` entry the key also goes into a coding box**, with the
+rest of `env`, so it works in a remote cell. That is `opencode`'s alone: [a
+seat's executor run](#the-executors-run-in-a-box) needs a coding-agent runner
+for the entry's own CLI, and `hermes` and `pi` have none. An entry's model is written
 for its own CLI and its sign-in is that CLI's, so a run on one is that CLI's
 own run, and a launch passes over a `hermes` or `pi` member of a seat's chain;
 a seat whose chain holds no `claude-code` or `opencode` entry is
@@ -3716,15 +3719,17 @@ that runs often — it skips all three and says so on each line.
   sandbox](code-sandbox.md) work is its executor's own run, on the entry the
   launch picks from its `llm` chain, and runs *that entry's own CLI* as its
   coding agent, so only a `claude-code` or `opencode` entry can do it. On any backend including remote
-  E2B, what travels into the box is the environment that signs the CLI in:
-  a headless token (`crewlet llm login <key> -capture-token`, and Claude
-  Code in the box bills your plan), an `api-key` entry's key, what
-  `inherit-env` forwards, and `opencode`'s
-  [`env` key](#6-a-provider-key-in-env-opencode-hermes-pi). The
+  E2B, what travels into the box is the entry's `env` — a gateway's address,
+  a cloud provider's switch, `opencode`'s
+  [provider key](#6-a-provider-key-in-env-opencode-hermes-pi) — and what
+  signs the CLI in: a headless token (`crewlet llm login <key>
+  -capture-token`, and Claude Code in the box bills your plan), an `api-key`
+  entry's key, what `inherit-env` forwards. The
   login itself — credential files, or OpenCode's exported login — never
   travels to a remote box: it carries a refresh token whose rotation is
-  shared fleet state. So a `claude-code` entry with no headless token or key,
-  or an `opencode` entry signed in only by `crewlet llm login`, needs a
+  shared fleet state. So a `claude-code` entry with no headless token or key
+  (nor a gateway's token or a cloud provider's switch in its `env`), or an
+  `opencode` entry signed in only by `crewlet llm login`, needs a
   [local cell](code-sandbox.md#local-sandboxes) (`providers.sandbox.local`
   plus `run_in: direct` or `container`), which is seeded with the login and,
   when the box closes, writes back one its run refreshed — only while the
