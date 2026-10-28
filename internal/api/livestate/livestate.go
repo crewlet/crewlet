@@ -837,7 +837,7 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		}
 		agent.lastError = &ErrorInfo{
 			Kind:    kind,
-			Message: str(payload, "last_error", "detail", "error"),
+			Detail:  str(payload, "last_error", "detail", "error"),
 			Phase:   agent.currentPhase,
 			TurnID:  str(payload, "turn_id"),
 			At:      env.Timestamp,

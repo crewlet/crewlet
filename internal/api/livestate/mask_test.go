@@ -22,6 +22,8 @@ const (
 	body class = "body"
 	// tracker is the work item a seat is on: the tracker's.
 	tracker class = "tracker"
+	// config is the company's configuration: an admin's ([Reach.Config]).
+	config class = "config"
 	// delegated is masked by another root's row, which the walk checks
 	// the field's type against rather than recursing into it again.
 	delegated class = "delegated"
@@ -85,7 +87,7 @@ var sandboxFields = map[string]class{
 // decisions §4's body list is exhaustive and names none of these: an error's
 // message and a pause's reason are what a reader is told about the seat.
 var nested = map[reflect.Type]map[string]class{
-	reflect.TypeFor[ErrorInfo](): {"kind": status, "message": status,
+	reflect.TypeFor[ErrorInfo](): {"kind": status, "detail": config,
 		"phase": status, "turn_id": status, "at": status, "event_id": status},
 	reflect.TypeFor[CallVersions](): {"prompt": status, "response": status,
 		"narration": status, "executions": status, "rounds": status,
@@ -270,7 +272,7 @@ func TestEveryLiveFieldIsClassified(t *testing.T) {
 						"masks", owner, f.name, f.typ)
 				}
 				continue
-			case body, tracker:
+			case body, tracker, config:
 				continue
 			}
 			if inner == nil {

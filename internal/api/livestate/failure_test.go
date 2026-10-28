@@ -130,7 +130,7 @@ func TestAPhaseFailureLandsOnTheSeat(t *testing.T) {
 	if got == nil {
 		t.Fatal("a failed phase recorded no error")
 	}
-	if got.Kind != "provider_error" || got.Message != "429 from anthropic" {
+	if got.Kind != "provider_error" || got.Detail != "429 from anthropic" {
 		t.Errorf("error = %+v", got)
 	}
 	if got.Phase != "plan" || got.TurnID != "tn-1" {

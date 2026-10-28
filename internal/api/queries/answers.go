@@ -976,8 +976,10 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 // with handle: its body where the authority table's `audit.seat.read` admits
 // them to the seat — an admin, or its lead — through the SAME decision the
 // seat's turns, memory and conversations are read under, never a second copy
-// of who that is; the work item it is on where they hold Worklet; and
-// their own record, to which a coding run's question may be put.
+// of who that is; the work item it is on where they hold Worklet; the
+// company's configuration (which entries served a run, a failure's own text)
+// where they are an admin; and their own record, to which a coding run's
+// question may be put.
 //
 // AN UNDECIDABLE DECISION IS NO BODY: a chart this node cannot read withholds
 // the transcript and still shows the status, because what is withheld is the
@@ -994,7 +996,7 @@ func (s Sources) reach(ctx context.Context, handle string) livestate.Reach {
 		Record: iam.RecordOwner(principal)}
 	switch {
 	case principal.Can(iam.GrantAdmin):
-		r.Body = true
+		r.Body, r.Config = true, true
 	case handle != "":
 		r.Body = authz.Decide(ctx, principal, authz.ActionSeatTrailRead,
 			authz.Object{Kind: authz.KindPerson, Owner: handle}, s.Chart,

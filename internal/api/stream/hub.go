@@ -454,7 +454,7 @@ func (a Audience) Record() string { return a.record }
 // Reach is what this audience may see of the seat with agentID's live state.
 func (a Audience) Reach(agentID string) livestate.Reach {
 	return livestate.Reach{Body: a.Body(agentID), Tracker: a.Has(iam.GrantWorklet),
-		Record: a.record}
+		Config: a.resolved && a.admin, Record: a.record}
 }
 
 // Equal reports whether two audiences receive exactly the same.

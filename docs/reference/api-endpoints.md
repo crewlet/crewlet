@@ -4237,6 +4237,18 @@ plus `failed: true` and an `error` object, so the dashboard renders the failure
 instead of an answer that never arrives — and no `partial_round`, because the
 phase is over and nothing is still arriving.
 
+**A failure is told by its kind, and the company's configuration only to an
+admin.** The `error` object and a seat's `last_error` are
+`{kind, detail, phase, turn_id, at, event_id}`: `kind` is the classifier's
+(`rate_limit`, `auth`, `server`, and the others), which the dashboard words for a
+person, and `detail` is the failure in its own words, sent only to a reader who
+is an admin. Those words name the company's `providers.llm` entries ("llm chain
+exhausted after 1 providers (default)") and carry whatever a vendor or a tool
+wrote, and which entries a company configures is an admin's to read; the same
+goes for each `invocations` entry's `provider_key`, which every other reader,
+a seat's lead included, is sent without. The full text stays in the engine's
+log and on the turn's own record.
+
 #### What the projection carries, and what the wire sends
 
 A running phase moves its seat's row on every progress frame — five times a

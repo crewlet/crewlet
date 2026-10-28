@@ -20,6 +20,18 @@ import "slices"
 // And a WORK ITEM a seat is on is the tracker's: a reader without Worklet
 // is shown that the seat is working, never which item.
 //
+// # The company's configuration is an admin's
+//
+// Which `providers.llm` entries a company configures, and so which of them
+// served a run or failed it, is the company's configuration: the org
+// projection hands only an admin each seat's chain, and Settings, Models is
+// an admin's screen. Two live fields name entries: a CLI run's `provider_key`
+// ([LiveCall.Invocations]) and a failure's own text ([ErrorInfo.Detail]),
+// which also carries whatever a vendor or a tool wrote. Both reach only a
+// reader with [Reach.Config], whatever their reach to the seat's body: a
+// seat's lead reads its trail and is still not an admin. Everybody else is
+// told a failure by its kind.
+//
 // # Why one mask, over every shape a call travels in
 //
 // A live call reaches a reader in two shapes: the projection's own
@@ -58,6 +70,10 @@ type Reach struct {
 	// the seat is on belongs to.
 	Tracker bool
 
+	// Config is whether the reader may read the company's configuration
+	// (an admin): which entries served a run, and a failure's own text.
+	Config bool
+
 	// Record is the reader's own record ([iam.RecordOwner]) — the seat a
 	// coding run's parked question may be put to, which is read there by
 	// the person it is put to whatever their reach to the seat that asked.
@@ -68,6 +84,10 @@ type Reach struct {
 // entry of [LiveCall.RunningCalls]: what the tool was asked to do, which is
 // the body.
 const runningArguments = "arguments"
+
+// invocationEntry is the key of a CLI run's providers.llm entry inside each
+// entry of [LiveCall.Invocations]: the company's configuration.
+const invocationEntry = "provider_key"
 
 // MaskCall is THE ONE MASK of a live call, whichever shape carries it: a
 // [*LiveCall], the projection's own, or the [leanCall] an `agents` push carries
@@ -106,12 +126,16 @@ func (c *LiveCall) For(r Reach) any { return MaskCall(c, r) }
 
 // maskWhole masks the projection's own shape.
 func maskWhole(c *LiveCall, r Reach) any {
-	if r.Body && r.Tracker {
+	if r.Body && r.Tracker && r.Config {
 		return c
 	}
 	dup := *c
 	if !r.Tracker {
 		dup.WorkItem = nil
+	}
+	if !r.Config {
+		dup.Error = dup.Error.For(r)
+		dup.Invocations = withoutEntries(dup.Invocations)
 	}
 	if r.Body {
 		return &dup
@@ -126,12 +150,20 @@ func maskWhole(c *LiveCall, r Reach) any {
 // the push decided which heavy fields to leave out, and a reader with the
 // body is sent exactly those.
 func maskLean(c leanCall, r Reach) any {
-	if r.Body && r.Tracker {
+	if r.Body && r.Tracker && r.Config {
 		return c
 	}
 	dup := *c.LiveCall
 	if !r.Tracker {
 		dup.WorkItem = nil
+	}
+	if !r.Config {
+		dup.Error = dup.Error.For(r)
+		dup.Invocations = withoutEntries(dup.Invocations)
+		if c.Invocations != nil {
+			runs := withoutEntries(*c.Invocations)
+			c.Invocations = &runs
+		}
 	}
 	if r.Body {
 		c.LiveCall = &dup
@@ -182,6 +214,41 @@ func withhold(dup *LiveCall, rounds, runs *[]any) withheldCall {
 	return withheldCall{LiveCall: dup, Rounds: rounds, Invocations: runs, BodyWithheld: true}
 }
 
+// withoutEntries is a CLI run list without the entry each run was served by,
+// as fresh maps: the list's entries are the projection's own, shared with
+// every other variant of the broadcast. Nil stays nil.
+func withoutEntries(runs []any) []any {
+	if runs == nil {
+		return nil
+	}
+	out := make([]any, 0, len(runs))
+	for _, entry := range runs {
+		run, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		fresh := make(map[string]any, len(run))
+		for k, v := range run {
+			if k != invocationEntry {
+				fresh[k] = v
+			}
+		}
+		out = append(out, fresh)
+	}
+	return out
+}
+
+// For is the failure as reader r receives it: without its own text unless
+// they read the company's configuration, as a copy. Nil answers nil.
+func (e *ErrorInfo) For(r Reach) *ErrorInfo {
+	if e == nil || r.Config || e.Detail == "" {
+		return e
+	}
+	dup := *e
+	dup.Detail = ""
+	return &dup
+}
+
 // withheldCall is a live call as a reader without its seat's body receives it.
 //
 // [leanCall]'s trick: each field here SHADOWS the embedded call's field of the
@@ -217,8 +284,10 @@ func (o *Overlay) For(r Reach) any {
 	if o == nil {
 		return nil
 	}
-	return overlayView{Overlay: *o, LiveCall: MaskCall(o.LiveCall, r),
+	view := overlayView{Overlay: *o, LiveCall: MaskCall(o.LiveCall, r),
 		Turn: maskTurn(o.Turn, r)}
+	view.LastError = o.LastError.For(r)
+	return view
 }
 
 // overlayView is an [Overlay] as one reader receives it: a copy of the
@@ -267,11 +336,12 @@ func (e SandboxEntry) For(r Reach) SandboxEntry {
 	return out
 }
 
-// MaskRow masks one `agents` or `seats` row — a roster row with the live
-// overlay merged onto it ([LiveState.MergeAgents]), or an overlay row
-// ([LiveState.OverlayRows]), its call already a [leanCall] where a push left
-// fields out — and returns a NEW map: the call through [MaskCall], the turn
-// through the tracker rule, every other key as it was.
+// MaskRow masks one `agents` or `seats` row (a roster row with the live
+// overlay merged onto it, [LiveState.MergeAgents], or an overlay row,
+// [LiveState.OverlayRows], its call already a [leanCall] where a push left
+// fields out) and returns a NEW map: the call through [MaskCall], the turn
+// through the tracker rule, the failure through [ErrorInfo.For], every other
+// key as it was.
 func MaskRow(row map[string]any, r Reach) map[string]any {
 	if row == nil {
 		return nil
@@ -285,6 +355,9 @@ func MaskRow(row map[string]any, r Reach) map[string]any {
 	}
 	if turn, ok := row["turn"].(*LiveTurn); ok {
 		out["turn"] = maskTurn(turn, r)
+	}
+	if failure, ok := row["last_error"].(*ErrorInfo); ok {
+		out["last_error"] = failure.For(r)
 	}
 	return out
 }
