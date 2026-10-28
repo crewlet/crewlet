@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
@@ -194,7 +195,7 @@ func resumedCalls(s *tools.Surface, state execstate.State) []ledger.Call {
 // this attempt alone.
 func resumedWork(w turn.Work, s *tools.Surface, state execstate.State) turn.Work {
 	parked := parkedCalls(state)
-	w.Calls = append(parked, calls(s)...)
+	w.Calls = slices.Concat(parked, calls(s))
 	w.Inherited = len(parked)
 	return w
 }
