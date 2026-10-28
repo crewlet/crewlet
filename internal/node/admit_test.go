@@ -3,12 +3,14 @@ package node_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -351,4 +353,122 @@ func TestASeatRunsOneTurnAtATime(t *testing.T) {
 	}
 	_, again := admit(t.Context(), t, g.n, "ceo")
 	again()
+}
+
+// A SEAT BUSY WITH A TURN THAT DID NOT COME FROM ITS MAILBOX SPENDS NONE OF ITS
+// MAIL WAITING FOR IT.
+//
+// Every hand-back spends one of a message's deliveries, and a seat can be busy
+// for hours with a resumed coding turn. Had the mailbox handed back each
+// delivery that met the busy seat, its queued mail would have walked into the
+// dead-letter subject. The busy turn holds the seat's inbox instead, so the
+// mail waits on the broker untouched and runs once the turn is released:
+// every message exactly once, oldest first, with the headroom a first delivery
+// has.
+//
+// Mutation: drop the inbox hold from AdmitTurn, and the deliveries meet the
+// busy seat; refuse them instead of waiting, and their headroom is spent.
+func TestASeatBusyWithAnotherTurnSpendsNoneOfItsMail(t *testing.T) {
+	t.Parallel()
+	const queued = 60
+	var mu sync.Mutex
+	var ran []string
+	headroom := map[string]int{}
+	turn := func(ctx context.Context, _ string, evs []*events.Event) queue.Result {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, ev := range evs {
+			p, _ := events.DataAs[*trigger](ev)
+			ran = append(ran, p.Work)
+			left, _ := queue.DeliveriesLeftFor(ctx, ev.ID)
+			headroom[p.Work] = left
+		}
+		return queue.Ack()
+	}
+	g := gatedFleet(t, 4, turn, "ceo")
+
+	_, release := admit(t.Context(), t, g.n, "ceo")
+	base := time.Now().UTC()
+	for i := range queued {
+		ev := events.New(trigger{Work: fmt.Sprintf("w%02d", i)}, events.TraceContext{})
+		ev.Timestamp = base.Add(time.Duration(i) * time.Millisecond)
+		ev.Payload = map[string]any{notify.PartitionField: fmt.Sprintf("c/ceo/%02d", i)}
+		if err := g.q.Publish(t.Context(), inbox("ceo"), ev); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+	}
+	time.Sleep(300 * time.Millisecond)
+	mu.Lock()
+	early := len(ran)
+	mu.Unlock()
+	if early != 0 {
+		t.Fatalf("%d of the seat's messages ran while another of its turns did", early)
+	}
+
+	release()
+	within(t, "the held mail to run", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(ran) >= queued
+	})
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(ran) != queued {
+		t.Fatalf("ran %d turns for %d messages, want each exactly once", len(ran), queued)
+	}
+	first := headroom["w00"]
+	for i, work := range ran {
+		if want := fmt.Sprintf("w%02d", i); work != want {
+			t.Fatalf("turn %d ran %s, want %s: the held mail runs oldest first", i, work, want)
+		}
+		if headroom[work] != first || first <= 0 {
+			t.Fatalf("%s ran with %d deliveries left, want the %d every untouched message has",
+				work, headroom[work], first)
+		}
+	}
+}
+
+// A MAILBOX DELIVERY THAT MEETS A BUSY SEAT WAITS FOR IT, rather than being
+// handed back: the one that was fetched before the busy turn's inbox hold took
+// effect. It runs once the seat's turn is released, on its first delivery.
+//
+// Mutation: refuse the mailbox's turn on a busy seat, and the delivery is
+// deferred.
+func TestAMailboxDeliveryWaitsForABusySeat(t *testing.T) {
+	t.Parallel()
+	ran := make(chan int, 4)
+	turn := func(ctx context.Context, _ string, evs []*events.Event) queue.Result {
+		left, _ := queue.DeliveriesLeftFor(ctx, evs[0].ID)
+		ran <- left
+		return queue.Ack()
+	}
+	g := gatedFleet(t, 4, turn, "ceo")
+	g.send("ceo", "before")
+	var full int
+	select {
+	case full = <-ran:
+	case <-time.After(gateWaitBound):
+		t.Fatal("the seat's first message never ran")
+	}
+
+	// THE BUSY TURN, admitted without its inbox hold, as a turn that won the
+	// seat in the moment between the mailbox's fetch and its admission.
+	_, release := admit(t.Context(), t, g.n, "ceo")
+	g.n.ReleaseSeatTurnHoldForTest("ceo")
+	g.send("ceo", "raced")
+	select {
+	case left := <-ran:
+		t.Fatalf("a mailbox turn ran (%d left) beside the seat's running turn", left)
+	case <-time.After(300 * time.Millisecond):
+	}
+	release()
+	select {
+	case left := <-ran:
+		if left != full {
+			t.Fatalf("the waiting delivery ran with %d deliveries left, want %d: it was handed back", left, full)
+		}
+	case <-time.After(gateWaitBound):
+		t.Fatal("the waiting delivery never ran once the seat was free")
+	}
 }

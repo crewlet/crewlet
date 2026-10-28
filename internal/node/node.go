@@ -633,12 +633,13 @@ func (n *Node) OnEstablished(ctx context.Context, s placement.Seat, _ coord.Leas
 // runTurn is a mailbox delivery's turn, admitted as every turn on this node is
 // ([Node.AdmitTurn]).
 //
-// A refusal DEFERS the delivery rather than failing it, whichever it was: the
-// events are healthy and nothing has been done with them, so leaving them
-// unacked hands them straight on, to the seat's successor, rather than waiting
-// out a redelivery timer.
+// A seat mid-turn is WAITED FOR, never refused, so its mail spends no delivery
+// on it (see [Node.admit]). Any other refusal DEFERS the delivery rather than
+// failing it: the events are healthy and nothing has been done with them, so
+// leaving them unacked hands them straight on, to the seat's successor, rather
+// than waiting out a redelivery timer.
 func (n *Node) runTurn(ctx context.Context, handle string, evs []*events.Event) queue.Result {
-	ctx, release, err := n.AdmitTurn(ctx, handle)
+	ctx, release, err := n.AdmitTurn(mailboxTurn(ctx), handle)
 	if err != nil {
 		n.host.NoteDeliveryDeferred(handle)
 		return queue.Defer(err.Error())

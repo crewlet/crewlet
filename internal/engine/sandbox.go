@@ -2206,12 +2206,12 @@ const (
 	// names, or at once by an apply that changes the ceilings.
 	waitBudget sandbox.Condition = "budget"
 
-	// waitSeatTurn: another of the seat's turns is running on this node, and
+	// waitSeatBusy: another of the seat's turns is running on this node, and
 	// a seat runs one at a time ([node.ErrSeatBusy]). Signalled the moment
 	// that turn is released ([node.Config.SeatTurnEnded]), so the answer is
 	// resumed as the seat's next turn, ahead of its mail, which its owed hold
 	// keeps waiting.
-	waitSeatTurn sandbox.Condition = "seat_turn"
+	waitSeatBusy sandbox.Condition = "seat_busy"
 
 	// waitDrain: this node is draining, and starts no turn. Nothing
 	// signals it, because nothing in the engine undoes a drain
@@ -2247,7 +2247,7 @@ func (e *Engine) admitResume(ctx context.Context, handle string) (context.Contex
 			Condition: waitDrain, Reason: err.Error()}}
 	case errors.Is(err, node.ErrSeatBusy):
 		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
-			Condition: waitSeatTurn, Reason: err.Error()}}
+			Condition: waitSeatBusy, Reason: err.Error()}}
 	case errors.Is(err, node.ErrSeatNotOwned):
 		// THE SAME WAIT [Engine.mayResumeAnswer] names for a seat it
 		// does not find owned, for the same edges.

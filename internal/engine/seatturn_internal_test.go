@@ -60,9 +60,9 @@ func TestAnAnswerArrivingMidTurnIsResumedWhenTheTurnEnds(t *testing.T) {
 	if err == nil {
 		next()
 	}
-	if !errors.As(err, &refused) || refused.Condition != waitSeatTurn || !errors.Is(err, node.ErrSeatBusy) {
+	if !errors.As(err, &refused) || refused.Condition != waitSeatBusy || !errors.Is(err, node.ErrSeatBusy) {
 		t.Fatalf("a resume on a seat mid-turn = %v, want it waiting on %q with the node's "+
-			"busy refusal as its cause", err, waitSeatTurn)
+			"busy refusal as its cause", err, waitSeatBusy)
 	}
 
 	desk := sandbox.AnswerDesk{Pending: sandbox.NewCoordStore(e.backends.Fleet), Queue: e.backends.Queue}

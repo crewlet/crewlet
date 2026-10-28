@@ -1748,7 +1748,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// resume arrived mid-turn is the seat's next turn. See
 		// [Engine.admitResume].
 		SeatTurnEnded: func(handle string) {
-			e.readmitAnswers(waitSeatTurn, handle)
+			e.readmitResumes(waitSeatBusy, handle)
 		},
 		// A SEAT A PERSON PAUSED is attached already held, so placement
 		// moving it here does not deliver the mail it is holding: the
