@@ -7,7 +7,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
@@ -132,8 +131,14 @@ type LostRun struct {
 // by now, or has not answered for the give-up window, is no reason to hold the
 // round any longer: it is carried on without the read, and the line says the
 // job's spend went with its box.
-func (c *Coordinator) carryOnLost(adm admitted, run PendingRun, trigger *events.Event) error {
-	ctx := adm.ctx
+//
+// IT RESUMES NOTHING ITSELF: it returns the carry for its caller, the frame
+// that claimed the completion under the node's admission
+// ([Coordinator.completeAdmitted]), to resume the turn with — the one frame
+// that may, so this road to a turn passes the admission as every other does
+// (ADR-0063). A nil carry with a nil error is a claim this settled already:
+// handed back for the completion's retry, or parked on the job's question.
+func (c *Coordinator) carryOnLost(ctx context.Context, run PendingRun) (*lostCarry, error) {
 	loss := *run.Lost
 	var (
 		result Result
@@ -146,7 +151,7 @@ func (c *Coordinator) carryOnLost(adm admitted, run PendingRun, trigger *events.
 			result, read = c.fitText(ctx, run, cutOff(boxed, loss.Cause)), true
 		case errors.Is(ctx.Err(), context.Canceled), errors.Is(err, ErrBoxHostSilent),
 			!c.collectGivenUp(run, err, c.now()):
-			return c.collectFailed(ctx, run, err)
+			return nil, c.collectFailed(ctx, run, err)
 		default:
 			log.WarnContext(ctx, "sandbox_lost_run_unread", "turn_id", run.TurnID,
 				"launch_id", run.LaunchID, "error", err.Error(),
@@ -166,7 +171,7 @@ func (c *Coordinator) carryOnLost(adm admitted, run PendingRun, trigger *events.
 			// IT ASKED BEFORE IT WENT: the question was written and its CLI
 			// was on its way out, so the run is parked on it as a job that
 			// finished asking is, and the answer carries it on.
-			return c.park(ctx, run, result)
+			return nil, c.park(ctx, run, result)
 		}
 		outcome = runOutcome{
 			DeliveredRefs: result.DeliveredRefs, DeliveredRefsElided: result.DeliveredRefsElided,
@@ -191,8 +196,15 @@ func (c *Coordinator) carryOnLost(adm admitted, run PendingRun, trigger *events.
 	if !read {
 		result = cutOff(Result{}, loss.Cause)
 	}
-	_, err := c.resumeAndSettle(adm, run, runReport(result), false, trigger, outcome)
-	return err
+	return &lostCarry{run: run, report: runReport(result), outcome: outcome}, nil
+}
+
+// lostCarry is what a lost job's round is carried on with: the claimed run as
+// the read left it, the job's report and the outcome its resume settles.
+type lostCarry struct {
+	run     PendingRun
+	report  string
+	outcome runOutcome
 }
 
 // cutOff is what a lost job left, marked as cut off: never a success, whatever

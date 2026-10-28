@@ -1342,8 +1342,14 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.SandboxRunComplete
 	if run.Lost != nil {
 		// THE JOB WAS LOST WITH ITS HOST ([PendingRun.Lost]), and this
 		// completion is the waiter's announcement of that: what it left is
-		// no result, and its round is carried on.
-		return c.carryOnLost(adm, run, trigger)
+		// no result, and its round is carried on, resumed here under this
+		// frame's admission.
+		carry, err := c.carryOnLost(ctx, run)
+		if err != nil || carry == nil {
+			return err
+		}
+		_, err = c.resumeAndSettle(adm, carry.run, carry.report, false, trigger, carry.outcome)
+		return err
 	}
 
 	result, ended, err := c.collect(ctx, run)
