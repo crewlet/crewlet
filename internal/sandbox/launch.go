@@ -888,16 +888,19 @@ const agentRunNote = "You are running inside a command-line coding tool as one s
 // its own collector directly has said so deliberately — silently overriding
 // it would be the engine choosing where somebody else's telemetry goes.
 //
-// THE ENDPOINT IS THE RECEIVER'S AS BOX DIALS IT ([EngineAddress]): the
-// receiver's base is written in the engine host's network, and a loopback
-// one reaches nothing from inside a container. An operator's own value is
-// left as written, in the box's network already.
+// THE ENDPOINT IS THE RECEIVER'S AS BOX DIALS IT: a `direct` box, a process of
+// this host, exports to its node's own listener where the node forwards, and
+// every other box to the fleet's address ([OtelReceiver.Reaches]); that
+// address is written in the engine host's network, and a loopback one reaches
+// nothing from inside a container ([EngineAddress]). An operator's own value
+// is left as written, in the box's network already.
 func withTelemetry(m *Manager, req LaunchRequest, box Sandbox) map[string]string {
 	if m.telemetry == nil {
 		return req.Spec.Env
 	}
 	added := m.telemetry.RunEnv(req.Turn.TraceID, req.Turn.SpanID,
-		req.Turn.TurnID, req.Turn.AgentHandle, otelTokenTTL(req.Spec))
+		req.Turn.TurnID, req.Turn.AgentHandle, req.Spec.Placement == Direct,
+		otelTokenTTL(req.Spec))
 	if len(added) == 0 {
 		return req.Spec.Env
 	}

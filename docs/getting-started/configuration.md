@@ -1575,8 +1575,9 @@ link a person follows stays on `api.external_url`. The per-run sandbox
 endpoints are not: a box is handed its bridge at `CREWLET_MCP_BRIDGE_URL` and
 its telemetry receiver at `CREWLET_SANDBOX_OTEL_RECEIVER_URL`. Publish
 `api.public.port`, keep `api.port` private, and point both variables at the
-public address (a `direct` box on an ingress node dials the public listener on
-loopback, with nothing to set) — see
+public address (a `direct` box dials its own node on loopback with nothing to
+set: an ingress node's public listener, or `api.port` on a node without the
+role) — see
 [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api).
 A node without the `ingress` role binds no public listener at all, so one file
 still serves every role: its seats' executor runs reach their tools through an

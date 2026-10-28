@@ -207,11 +207,11 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 	// that recovers a running run's seat before then has no bridge to serve
 	// the run's box from again.
 	boot.API.Port = ln.Addr().(*net.TCPAddr).Port
-	boot.API.ExternalURL = hostBridgeURL(ln)
+	boot.API.ExternalURL = listenerURL(ln)
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(env), SandboxPollInterval: runPollInterval,
-		BridgeHostURL: hostBridgeURL(ln),
+		BoxHostURL: listenerURL(ln),
 	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)

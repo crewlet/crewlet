@@ -81,9 +81,9 @@ seat's tools reaching it over an MCP bridge, as a detached run that outlives
 the turn. It needs more than a sign-in: a CLI with a coding-agent runner
 (`claude-code` or `opencode`) in the seat's chain, a `providers.sandbox`
 catalogue to place the run in, and a bridge its box can dial — a `direct` box
-dials the node's own listener on loopback, while a `container` or `e2b` box,
-or any box in a fleet whose node serves no API, needs `CREWLET_MCP_BRIDGE_URL`,
-the fleet's address. `crewlet llm doctor` checks all three. Every other phase —
+dials the node's own listener on loopback wherever the node binds `api.port`,
+while a `container` or `e2b` box, or a `direct` one on a node started with
+`api.port: 0`, needs `CREWLET_MCP_BRIDGE_URL`, the fleet's address. `crewlet llm doctor` checks all three. Every other phase —
 the reviewer, delegated workers and the side passes — runs the same CLI on this
 host, its shell and editor denied, calling the seat's tools over MCP. See
 [LLM Backends § Where the CLI runs](../concepts/llm-backends.md#where-the-cli-runs).

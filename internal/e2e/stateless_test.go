@@ -52,6 +52,9 @@ type statelessPair struct {
 	data, agent *node
 	agentStore  string
 	agentBoot   *config.Bootstrap
+	// agentProbes is the stateless node's own listener, serving its probes
+	// and its boxes' routes; nil where it binds none.
+	agentProbes *httptest.Server
 }
 
 func startStatelessPair(t *testing.T) statelessPair {
@@ -64,6 +67,27 @@ func startStatelessPair(t *testing.T) statelessPair {
 // ([nodeEnvironment]).
 func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	env map[string]string) statelessPair {
+	t.Helper()
+	return startStateless(t, amend, env, false)
+}
+
+// startStatelessOnItsOwnListener is [startStatelessPair] in the shape a seat
+// pool with no address of its own runs: the stateless node binds api.port, and
+// is handed that listener as where its own direct boxes dial
+// ([engine.Options.BoxHostURL]) — and NO fleet address, so the one way its
+// executor's box reaches the seat's tools is the node's own probe listener,
+// on loopback, serving the bridge there (internal/api's Probes), as
+// [statelessPair.agentProbes] until the test ends.
+func startStatelessOnItsOwnListener(t *testing.T) statelessPair {
+	t.Helper()
+	return startStateless(t, nil, nil, true)
+}
+
+// startStateless is the pair, its stateless node dialled through the data
+// node's relay at the fleet's address or, with ownListener, served its boxes'
+// routes on its own listener with no fleet address at all.
+func startStateless(t *testing.T, amend func(doc string) string,
+	env map[string]string, ownListener bool) statelessPair {
 	t.Helper()
 	logs.attribute(t)
 	model := newScriptedModel(t)
@@ -97,16 +121,27 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	agentBoot.Stream.Leaf.URLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}
 	agentBoot.Coordination.Type = config.CoordinationEmbeddedKV
 	ring.hold(&agentBoot)
-	// THE FLEET'S BRIDGE ADDRESS FOR THE SEATS NODE, which serves no route of
-	// its own: a node without the ingress role binds nothing a box could
-	// dial, so its executor's box dials the data node — the one serving the
-	// API — and that node relays each call to this one, which holds the seat
-	// (internal/api/mcpbridge).
 	agentEnv := maps.Clone(env)
 	if agentEnv == nil {
 		agentEnv = map[string]string{}
 	}
-	agentEnv[mcpbridge.BaseURLVar] = hostBridgeURL(dataLn)
+	if ownListener {
+		// ITS OWN api.port, the address `crewlet run` hands its direct
+		// boxes, and no fleet address in its environment at all.
+		ln := bridgeListener(t, "")
+		agentBoot.API.Host = "127.0.0.1"
+		agentBoot.API.Port = ln.Addr().(*net.TCPAddr).Port
+		agent := bootNode(t, &agentBoot, cfg, model, agentEnv, listenerURL(ln))
+		probes, _ := serveProbesOn(t, agent, &agentBoot, ln)
+		return statelessPair{data: data, agent: agent, agentStore: agentDir,
+			agentBoot: &agentBoot, agentProbes: probes}
+	}
+	// THE FLEET'S BRIDGE ADDRESS FOR THE SEATS NODE, which binds no listener
+	// here: its executor's box dials the data node — the one serving the API
+	// — and that node relays each call to this one, which holds the seat
+	// (internal/api/mcpbridge). The shape a seats node on api.port 0, or a
+	// box off its host, reaches its tools in.
+	agentEnv[mcpbridge.BaseURLVar] = listenerURL(dataLn)
 	agent := bootNode(t, &agentBoot, cfg, model, agentEnv, "")
 	return statelessPair{data: data, agent: agent, agentStore: agentDir, agentBoot: &agentBoot}
 }
@@ -145,17 +180,18 @@ func dataMemberBootstrap(t *testing.T, port int, ring keyring) *config.Bootstrap
 //
 // THE API IS SERVED ON ln, and the member's api.port names it: the member is
 // the pair's one node with the ingress role, so it is the address the seats
-// node's executor box dials, and an ingress node whose api.port is 0 serves
-// nothing and joins no relay (internal/engine's joinBridgeFleet) — the box's
-// every call would reach a node that cannot hand it to the seat's holder.
+// node's executor box dials where the pair hands it the fleet's address, and
+// an ingress node whose api.port is 0 serves nothing and joins no relay
+// (internal/engine's joinBridgeFleet) — the box's every call would reach a
+// node that cannot hand it to the seat's holder.
 func bootDataMember(t *testing.T, cfg *config.Company, model *scriptedModel,
 	env map[string]string, ln net.Listener, ring keyring) (*node, *config.Bootstrap) {
 	t.Helper()
 	for attempt := 1; ; attempt++ {
 		boot := dataMemberBootstrap(t, leafPort(t), ring)
 		boot.API.Port = ln.Addr().(*net.TCPAddr).Port
-		boot.API.ExternalURL = hostBridgeURL(ln)
-		n, err := newNode(t, nodeOptions(boot, cfg, env, hostBridgeURL(ln)), model)
+		boot.API.ExternalURL = listenerURL(ln)
+		n, err := newNode(t, nodeOptions(boot, cfg, env, listenerURL(ln)), model)
 		switch {
 		case err == nil:
 			return n, boot
@@ -183,13 +219,13 @@ func bootNode(t *testing.T, boot *config.Bootstrap, cfg *config.Company, model *
 // nodeOptions is the engine options every harness node is built with: its
 // bootstrap and company, the harness's activation instant, its own
 // environment ([nodeEnvironment]) rather than the process's, and where a box on
-// this host dials its bridge ([hostBridgeURL]; "" for a node that serves none).
+// this host dials its bridge ([listenerURL]; "" for a node that serves none).
 func nodeOptions(boot *config.Bootstrap, cfg *config.Company, env map[string]string,
 	bridge string) engine.Options {
 	return engine.Options{
 		Bootstrap: boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(env), SandboxPollInterval: runPollInterval,
-		BridgeHostURL: bridge,
+		BoxHostURL: bridge,
 	}
 }
 
@@ -308,6 +344,47 @@ func TestASeatOnAStatelessNodeWritesThroughADataNode(t *testing.T) {
 	if p.agent.engine.Tracker() != nil || p.agent.engine.TrackerWriter() != nil {
 		t.Error("the stateless node runs a local tracker")
 	}
+}
+
+// A SEAT POOL WITH NO ADDRESS OF ITS OWN RUNS ITS SEATS. A node without the
+// ingress role used to hand its direct boxes no address but the fleet's, so
+// one with no CREWLET_MCP_BRIDGE_URL — a satellite on a private host, a
+// Kubernetes seat pool with no route in — refused every executor launch. Now
+// it serves its own boxes the bridge on its own listener, to this host's
+// loopback alone, and its seat files work as any other: the box's call
+// reaches the stateless node's listener, the node holds the seat, and the
+// write runs on the data node through the estate router.
+//
+// Mutation: serve the probe surface without the bridge and the box's every
+// call meets a 404, so the task is never filed; derive no address and the
+// launch is refused.
+func TestAStatelessNodesBoxReachesItsToolsOnItsOwnListener(t *testing.T) {
+	t.Parallel()
+	p := startStatelessOnItsOwnListener(t)
+	if got := p.agent.engine.Bridge().Reaches(false); got != "" {
+		t.Fatalf("the premise: the stateless node has a fleet address, %q", got)
+	}
+	if got := p.agent.engine.Bridge().Reaches(true); got != p.agentProbes.URL {
+		t.Fatalf("a direct box on the stateless node dials %q, want its own listener %q",
+			got, p.agentProbes.URL)
+	}
+	waitFor(t, "the stateless node to be admitted by a data node", hydrated(t, p.agent.engine))
+	waitForSeat(t, p.agent, "ceo")
+
+	p.agent.model.callOnExecute(worklet.CreateWorkItemTool, map[string]any{
+		"project": "ENG", "title": "filed through its own node's listener",
+	})
+	wakeWithMessage(t, p.agent, "ceo")
+	waitFor(t, "the task on the data node", func() bool {
+		got, err := p.data.engine.Tracker().Task(t.Context(), "ENG-1", worklet.DetailWants{},
+			statelog.Freshness{Level: statelog.ReadStale})
+		return err == nil && got.Task.Title == "filed through its own node's listener"
+	})
+	waitFor(t, "the create's answer to reach the model", func() bool {
+		return slices.ContainsFunc(p.agent.model.toolResults(), func(r string) bool {
+			return strings.Contains(r, "ENG-1")
+		})
+	})
 }
 
 // A SEARCH FROM A NODE THAT HOLDS NO INDEX IS ANSWERED BY ONE THAT DOES.
@@ -586,6 +663,15 @@ func TestANodeAdmissionDoesNotApplyToIsReadyOnItsPresence(t *testing.T) {
 // returned beside it, so a case can read the facts /ready judged.
 func serveProbes(t *testing.T, n *node, boot *config.Bootstrap) (*httptest.Server, api.ProbeRuntime) {
 	t.Helper()
+	return serveProbesOn(t, n, boot, nil)
+}
+
+// serveProbesOn is [serveProbes] on ln, a listener the case bound before the
+// node — the one whose address the node hands its own boxes — or on a
+// listener of its own where ln is nil.
+func serveProbesOn(t *testing.T, n *node, boot *config.Bootstrap,
+	ln net.Listener) (*httptest.Server, api.ProbeRuntime) {
+	t.Helper()
 	backends := n.engine.Backends()
 	reconciler, err := n.engine.NewReconciler(t.Context(), engine.ReconcilerOptions{
 		Store: backends.Store, Fleet: backends.Fleet, Queue: backends.Queue,
@@ -602,7 +688,12 @@ func serveProbes(t *testing.T, n *node, boot *config.Bootstrap) (*httptest.Serve
 	if err != nil {
 		t.Fatalf("probe surface: %v", err)
 	}
-	srv := httptest.NewServer(handler)
+	srv := httptest.NewUnstartedServer(handler)
+	if ln != nil {
+		_ = srv.Listener.Close()
+		srv.Listener = ln
+	}
+	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv, opts.Runtime
 }

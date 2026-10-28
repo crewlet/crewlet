@@ -207,7 +207,7 @@ func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 			rig := newCoordRig(t)
 			run := rig.launch("t1")
 			rig.coordinator.countRun("swe", StatusRunning)
-			endpoint := receiver.RunEnv(run.TraceID, run.SpanID, run.TurnID, run.AgentHandle, time.Hour)["OTEL_EXPORTER_OTLP_ENDPOINT"]
+			endpoint := receiver.RunEnv(run.TraceID, run.SpanID, run.TurnID, run.AgentHandle, false, time.Hour)["OTEL_EXPORTER_OTLP_ENDPOINT"]
 			tokens := []string{
 				strings.TrimPrefix(endpoint, engine+"/otlp/"),
 				bridge.Mint("7c9e6679f4a14f3a9d1c0b2e8f5a6d3b~"+run.TurnID, time.Hour),

@@ -200,19 +200,25 @@ without templating the file. There is a `-roles` flag for the same
 reason; labels have no flag, because `${VAR}` already covers it.
 
 `api.port` can stay set, and one config file works for both shapes: a node
-without the `ingress` role binds it for its [probes](#probe-it) alone —
-`/health` and `/ready` — and serves no API, no dashboard and no webhook on it
-(`api_probes_listening`). Every other path answers `404`, or `401` for a write
-or an always-guarded prefix, exactly as an unknown path does on an ingress
-node. A seat pinned here adds no route either: its executor's box calls the
-seat's tools back over [`/mcp/{token}`](../concepts/llm-backends.md#the-tool-bridge)
-on the fleet's bridge address — the ingress nodes — and the ingress node a call
-reaches relays it to the satellite over the broker connection the satellite
-already dialled. Give the satellite the same `CREWLET_MCP_BRIDGE_URL` as every
-other node; a `direct` box here needs it too, since a satellite serves no route
-of its own to dial on loopback. With `api.port: 0` the satellite binds nothing
-at all, which is the shape for a host that must accept no connection of any
-kind — at the price of no probe; its seats' executors still reach their tools.
+without the `ingress` role binds it for its [probes](#probe-it) —
+`/health` and `/ready` — and serves the network no API, no dashboard and no
+webhook on it (`api_probes_listening`). Every other path answers `404`, or
+`401` for a write or an always-guarded prefix, exactly as an unknown path does
+on an ingress node. A seat pinned here adds no route the network can reach
+either. Its executor's box calls the seat's tools back over
+[`/mcp/{token}`](../concepts/llm-backends.md#the-tool-bridge): a `direct` box,
+a process of the satellite's own host, dials the satellite's `api.port` on
+loopback, where the satellite serves the bridge to its own host alone — so a
+satellite with no address the rest of the fleet can reach runs its `direct`
+seats with nothing to set, provided `api.host` takes every interface or a
+loopback address. A box in any other cell dials the fleet's bridge address —
+the ingress nodes — and the ingress node a call reaches relays it to the
+satellite over the broker connection the satellite already dialled, so give
+the satellite the same `CREWLET_MCP_BRIDGE_URL` as every other node wherever
+such a box runs. With `api.port: 0` the satellite binds nothing at all, which
+is the shape for a host that must accept no connection of any kind — at the
+price of no probe, and of its `direct` boxes needing that address too; its
+seats' executors still reach their tools.
 
 ### 2. Pin the role
 
@@ -535,9 +541,13 @@ for you:
   can reach, which means an ingress node. It is explicit config and is
   never derived from whichever node launched the run, so a satellite
   never advertises itself by accident. `CREWLET_MCP_BRIDGE_URL`, which
-  every seat's executor box dials, is the same: an ingress node's address,
-  the same value on every node, and the ingress node a box's call reaches relays it to the
-  satellite over the broker.
+  every seat's executor box off the satellite's host dials, is the same: an
+  ingress node's address, the same value on every node, and the ingress node
+  a box's call reaches relays it to the satellite over the broker. The one
+  address a satellite derives is its own listener on loopback, which only its
+  own `direct` boxes are handed — for the bridge, and for telemetry where the
+  satellite forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` — and which it serves to
+  its own host alone, so it advertises nothing to the network.
 
 Pinning an agent seat to a node that cannot reach its executor's sandbox
 provider gives you a seat that claims cleanly and fails every run. The engine

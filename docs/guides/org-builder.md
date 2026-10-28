@@ -244,8 +244,8 @@ crewlet run
 - **The sandbox is this machine.** A `direct` box runs the CLI as your user
   on the node's own host, and calls the seat's tools back through the node's
   own listener on loopback, so there is nothing else to set — the node only
-  needs its `api.port` and the `ingress` role, which a single node holds. A
-  `container` or `e2b` cell, or a seats node without `ingress`, instead needs
+  needs its `api.port`, whatever its roles. A `container` or `e2b` cell, or a
+  seats node started with `api.port: 0`, instead needs
   `CREWLET_MCP_BRIDGE_URL`, the fleet's address as that box reaches it (see
   [Code Sandbox](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)).
   The CLI runs fully permissioned there, so `direct` is for a first run on

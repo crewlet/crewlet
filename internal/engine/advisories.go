@@ -79,16 +79,17 @@ type bridgeGap struct {
 //     on api.port 0): it serves no route and joins no relay, so nothing
 //     reaches a session it opens, in any cell, whatever else is set;
 //   - with no bridge at all, nothing gives a box an address — not the fleet's
-//     ([mcpbridge.BaseURLVar]), and not this node's own listener, which only
-//     a node serving the API has;
+//     ([mcpbridge.BaseURLVar]), and not this node's own listener, which a
+//     node has where it binds api.port where loopback reaches it;
 //   - otherwise a cell is reached where [mcpbridge.Bridge.Reaches] has an
 //     address for it: a `direct` box dials the node's own listener on
-//     loopback where it serves the route, and every cell dials the fleet's
-//     address where the variable gives one.
+//     loopback where it has one — served to anyone on an ingress node, and
+//     to this host's loopback alone on a node without the role — and every
+//     cell dials the fleet's address where the variable gives one.
 //
-// A node WITHOUT the ingress role on api.port 0 is no gap: it binds nothing
-// and needs nothing bound, because its boxes reach it through an ingress
-// node's relay.
+// A node WITHOUT the ingress role on api.port 0 is not offline: it binds
+// nothing, and its boxes reach it through an ingress node's relay at the
+// fleet's address, so the variable is its fix.
 //
 // THE CELLS THE SEATS' BOXES ARE PLACED IN ([config.Company.SeatBoxes]), and
 // not the catalogue's default alone: a fallback member's `run_in` is a cell a
@@ -119,9 +120,10 @@ func bridgeGaps(cfg *config.Company, offline bool, bridge *mcpbridge.Bridge) []b
 			continue
 		default:
 			// NOT "the box is not on this host": a `container` box is, in a
-			// network of its own, and a `direct` box on a node serving no API
-			// shares the loopback but has no listener there to dial. Either
-			// way the fleet's address is the box's only one.
+			// network of its own, and a `direct` box on a node that binds
+			// no listener loopback reaches (api.port 0, or one address that
+			// is not loopback) shares the loopback but has nothing there to
+			// dial. Either way the fleet's address is the box's only one.
 			//
 			// THE LINUX BIND IS PART OF THE FIX: a loopback address reaches a
 			// container box under its runtime's name for the host, which Docker
@@ -130,7 +132,8 @@ func bridgeGaps(cfg *config.Company, offline bool, bridge *mcpbridge.Bridge) []b
 			// Desktop and Podman's machine deliver it on the host's loopback,
 			// which the bridge admits under that name (internal/api/mcpbridge).
 			fix = "this node hands a box in this cell no listener of its own (the box is " +
-				"not on this host's loopback, or this node serves no API there), so it " +
+				"not on this host's loopback, or this node binds no listener there: " +
+				"api.port 0, or api.host one address that is not loopback), so it " +
 				"dials the fleet's address alone: set " + mcpbridge.BaseURLVar + " to the " +
 				"fleet's address that box reaches (a loopback one reaches a container box " +
 				"on this host under its runtime's name for the host, which on Linux needs " +

@@ -8,9 +8,15 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -220,6 +226,119 @@ func TestTheProbeSurfaceServesNothingButItsProbes(t *testing.T) {
 	for _, path := range []string{"/health", "/ready"} {
 		if status, _ := askProbe(t, h, http.MethodGet, path); status != http.StatusOK {
 			t.Errorf("GET %s = %d, want 200 on a node doing its work", path, status)
+		}
+	}
+}
+
+// A SEATS NODE SERVES ITS OWN BOXES THEIR TWO ROUTES, TO THIS HOST ALONE. A
+// `direct` box is a process of the node's host, handed the node's api.port on
+// loopback for its seat's tools and its telemetry, so the probe surface serves
+// the bridge and the receiver there — to a caller on loopback, read from the
+// connection. To anybody else they are absent, whatever the method, exactly as
+// on a node that serves neither: the network still reaches the probes alone.
+// And on loopback each is the real route: a token the fleet did not sign is
+// refused 401 before anything runs, and a run's own token is forwarded.
+//
+// Mutation: serve the routes to every caller and the off-host rows reach them
+// (a 401, or a forwarded export); mount them behind the host check one route
+// at a time and the off-host GET meets the route's 405 rather than its absence.
+func TestTheProbeSurfaceServesItsOwnBoxesOnThisHostAlone(t *testing.T) {
+	t.Parallel()
+	forwarded := make(chan string, 4)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwarded <- r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+	material := runtoken.OneKey("k", "test-key")
+	bridge, err := mcpbridge.New(mcpbridge.Options{Material: material, HostURL: "http://127.0.0.1:8080"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver, err := sandbox.BuildOtelReceiver(func(name string) string {
+		return map[string]string{sandbox.OtelUpstreamEndpointVar: upstream.URL}[name]
+	}, material, "http://127.0.0.1:8080")
+	if err != nil || receiver == nil {
+		t.Fatalf("the receiver: %v, %v", receiver, err)
+	}
+	export := strings.TrimPrefix(receiver.RunEnv("trace-abc", "span", "turn-1", "engineer", true,
+		time.Hour)["OTEL_EXPORTER_OTLP_ENDPOINT"], "http://127.0.0.1:8080")
+	if !strings.HasPrefix(export, auth.OTLPPrefix) {
+		t.Fatalf("a box on the host was handed no export path of this node's: %q", export)
+	}
+	boot := config.DefaultBootstrap()
+	h, err := api.Probes(api.ProbeOptions{
+		Bootstrap: &boot, Runtime: &fakeProbeRuntime{configured: true, work: doingItsWork()},
+		NodeID: "seats-1", Roles: []string{"seats"}, QueueBackend: "jetstream-leaf",
+		Bridge: bridge, OtelReceiver: receiver,
+	})
+	if err != nil {
+		t.Fatalf("Probes: %v", err)
+	}
+	ask := func(remote, method, path string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader("spans"))
+		r.RemoteAddr = remote
+		r.Header.Set("Content-Type", "application/x-protobuf")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec
+	}
+	code := func(rec *httptest.ResponseRecorder) string {
+		var body map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		s, _ := body["error"].(string)
+		return s
+	}
+
+	// OFF THE HOST: absent, every method, every route under both prefixes.
+	for _, route := range [][2]string{
+		{http.MethodPost, mcpbridge.PathPrefix + "a-token"},
+		{http.MethodGet, mcpbridge.PathPrefix + "a-token"},
+		{http.MethodDelete, mcpbridge.PathPrefix + "a-token"},
+		{http.MethodGet, mcpbridge.PathPrefix + "a-token/steer/notes"},
+		{http.MethodPost, export + "/v1/traces"},
+		{http.MethodGet, export + "/v1/traces"},
+	} {
+		rec := ask("192.0.2.7:41000", route[0], route[1])
+		if rec.Code != http.StatusNotFound || code(rec) != string(httpjson.CodeNoRoute) {
+			t.Errorf("off the host, %s %s = %d %q, want the route's absence", route[0], route[1],
+				rec.Code, code(rec))
+		}
+	}
+	select {
+	case path := <-forwarded:
+		t.Fatalf("an export from off the host was forwarded to %s", path)
+	default:
+	}
+
+	// ON THE HOST: the real routes, over either loopback family.
+	for _, remote := range []string{"127.0.0.1:41000", "[::1]:41000"} {
+		for _, path := range []string{mcpbridge.PathPrefix + "forged-token",
+			mcpbridge.PathPrefix + "forged-token/steer/notes", auth.OTLPPrefix + "forged-token/v1/traces"} {
+			rec := ask(remote, http.MethodPost, path)
+			if rec.Code != http.StatusUnauthorized || code(rec) != string(httpjson.CodeInvalidToken) {
+				t.Errorf("from %s, POST %s = %d %q, want a forged token refused", remote, path,
+					rec.Code, code(rec))
+			}
+		}
+		if rec := ask(remote, http.MethodPost, export+"/v1/traces"); rec.Code != http.StatusOK {
+			t.Fatalf("from %s, a run's own export = %d %s, want it accepted", remote, rec.Code,
+				rec.Body.String())
+		}
+		select {
+		case path := <-forwarded:
+			if path != "/v1/traces" {
+				t.Errorf("the export was forwarded to %s, want /v1/traces", path)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("an accepted export never reached the upstream")
+		}
+	}
+
+	// AND THE PROBES ARE UNCHANGED, to everybody.
+	for _, path := range []string{"/health", "/ready"} {
+		if rec := ask("192.0.2.7:41000", http.MethodGet, path); rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200 on a node doing its work", path, rec.Code)
 		}
 	}
 }

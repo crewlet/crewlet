@@ -6,11 +6,13 @@ the agents in one process; a node with `-roles data,ingress` serves only these
 routes and reaches the rest of the fleet over the event stream. The routes
 below are identical either way.
 
-A node **without** the `ingress` role binds `api.port` too, and serves only
-its two probes there — `/health` and `/ready`: see
-[Probes on a node without ingress](#probes-on-a-node-without-ingress). Its
-seats' executor runs reach their tools through an ingress node's
-[tool bridge](#routes), which relays each call to the node holding the seat.
+A node **without** the `ingress` role binds `api.port` too, and serves the
+network only its two probes there — `/health` and `/ready`: see
+[Probes on a node without ingress](#probes-on-a-node-without-ingress). An
+executor run in a box off its host reaches its tools through an ingress node's
+[tool bridge](#routes), which relays each call to the node holding the seat; a
+`direct` run on its own host dials it there on loopback, where it serves the
+bridge to its own host alone.
 
 There is nothing to install for it — it is compiled into the binary, along
 with the dashboard it serves and the WebSocket that is the dashboard's data
@@ -41,9 +43,11 @@ nothing about the admin routes behind it. It asks for no credential and
 decides before the guard runs, so a guarded route there is that same `404`
 whatever credential is sent. The probes are deliberately
 **not** public: `/health` describes the node to whoever runs it, so point every
-health check at `api.port`. A node without the `ingress` role serves its
-[probes](#probes-on-a-node-without-ingress) on `api.port` and nothing else, on
-either listener — and nothing at all when its `api.port` is `0`. See
+health check at `api.port`. A node without the `ingress` role serves the
+network its [probes](#probes-on-a-node-without-ingress) on `api.port` and
+nothing else, on either listener — beside them only the routes its own boxes
+dial, to its own host's loopback — and nothing at all when its `api.port` is
+`0`. See
 [Deployment → Exposing webhooks without the admin API](../guides/deployment.md#exposing-webhooks-without-the-admin-api).
 
 ---
@@ -192,9 +196,9 @@ serve — and only for one it will serve:
 |---|---|---|
 | `GET /health`, on `api.port` | `503` while the node recovers what it holds, then `200`, `status: "starting"` both times | The `503` is what a startup probe sized for the node's store — and, on a data node of a fleet, for the join it may have to make — bounds; nothing after the recovery holds it. See the phases below. |
 | `GET /ready`, on `api.port` | `503`, `reason: "starting"` | The node does no work and takes no traffic until it serves, so no load balancer and no rollout counts it. |
-| A route this listener will serve | `503 starting`, with `Retry-After: 10` | The caller is told to come back rather than meeting a refused connection, which reads as a node that is not there. On an `ingress` node that is every route of [Which listener serves what](#which-listener-serves-what) on the listener that serves it; a node without `ingress` serves no route but its probes. |
+| A route this listener will serve | `503 starting`, with `Retry-After: 10` | The caller is told to come back rather than meeting a refused connection, which reads as a node that is not there. On an `ingress` node that is every route of [Which listener serves what](#which-listener-serves-what) on the listener that serves it; a node without `ingress` serves the network no route but its probes, and a node without it that runs seats tells a caller on its own host's loopback to come back for `/mcp/` and `/otlp/`, the routes its own boxes dial — a `direct` run outlives its node's restart, and calls back while the node starts. |
 | A request on the artifact origin (`api.artifacts`) | An empty `503` with `Retry-After: 10` for a ticketed path, the runtime or the kit, and the empty `404` or `405` the origin gives anything else | The origin's own refusal under its own inert headers, never a JSON body, which would be a document an artifact page could read. |
-| Anything else | The `404` that listener answers once the node serves | So a socket says no more while the node starts than it does afterwards, and nobody is sent back to wait for a route this node will never serve. On `api.public` that is the router's own `404 no_route`, the probes included; on `api.port` of an `ingress` node with `api.public` set, the `404` naming `api.public` for a route outside parties call; and on `api.port` of a node without `ingress`, the router's own `404` for every path but the two above (once it serves, its guard answers `401` for a path that asks for a credential, and a `404` says no more than that). |
+| Anything else | The `404` that listener answers once the node serves | So a socket says no more while the node starts than it does afterwards, and nobody is sent back to wait for a route this node will never serve. On `api.public` that is the router's own `404 no_route`, the probes included; on `api.port` of an `ingress` node with `api.public` set, the `404` naming `api.public` for a route outside parties call; and on `api.port` of a node without `ingress`, the router's own `404` for every path but the two above and, from its own host's loopback on a node that runs seats, its boxes' two routes (once it serves, its guard answers `401` for a path that asks for a credential, and a `404` says no more than that). |
 
 Nothing here asks for a credential, since nothing is served that one could
 unlock. Every answer carries the security headers every answer of the node's
@@ -410,8 +414,8 @@ node means nothing was done.
 | `POST` | `/webhooks/confluence/{event}` | Receive one Confluence **Cloud** event, authenticated by the shared token the registered URL carries — `X-Crewlet-Token` first, `?token=` as the fallback, because Cloud honours no registration field for a header |
 | `POST` | `/webhooks/datadog` | Receive a Datadog monitor alert, authenticated by a constant-time comparison of `X-Crewlet-Token`. Datadog signs nothing, so the token is the whole check: an unset one answers `503`, and one shorter than 26 characters answers `503` too — see [Datadog](../integrations/datadog.md#verification-is-weaker-here-and-that-is-the-providers-ceiling) |
 | `POST` | `/webhooks/forge` | Receive Forge events (FIT-verified) |
-| `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path) |
-| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to the seat's executor, its coding CLI's run in a box — by the node holding the seat, to which the node the call reaches relays it over the broker. Per-run token in the path; all three verbs because that is what the transport uses. `401` for a token that is forged, expired, or names a run that is over; `403 Forbidden: invalid Host header "<host>"` (plain text, from the bridge's own host check) for a call on the node's loopback whose `Host` is neither loopback nor a container runtime's name for the engine host (`host.docker.internal`, `host.containers.internal`), as a proxy or tunnel on the engine host sends one that passes the public `Host` on; `503` with a `Retry-After` while no node can answer for the run's seat, after waiting up to two seat-lease lifetimes for one; `502` when the seat's holder took the call and stopped answering before it wrote a status. Mounted only on a node that has a bridge: one given `CREWLET_MCP_BRIDGE_URL`, or one that runs seats as well as serving the API, for its own `direct` boxes; on any other node the route is absent |
+| `POST` | `/otlp/{token}/v1/{signal}` | Engine-fronted OTLP receiver for [sandbox](../concepts/code-sandbox.md) telemetry (per-run token in the path). Mounted where `CREWLET_SANDBOX_OTEL_RECEIVER_URL` is set, or, for a node's own `direct` boxes, where it runs seats, binds `api.port` and forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` — on a node without `ingress` to its own host's loopback alone, as the bridge is |
+| `GET` `POST` `DELETE` | `/mcp/{token}` | The [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): one running seat's tool surface, served over streamable-HTTP MCP to the seat's executor, its coding CLI's run in a box — by the node holding the seat, to which the node the call reaches relays it over the broker. Per-run token in the path; all three verbs because that is what the transport uses. `401` for a token that is forged, expired, or names a run that is over; `403 Forbidden: invalid Host header "<host>"` (plain text, from the bridge's own host check) for a call on the node's loopback whose `Host` is neither loopback nor a container runtime's name for the engine host (`host.docker.internal`, `host.containers.internal`), as a proxy or tunnel on the engine host sends one that passes the public `Host` on; `503` with a `Retry-After` while no node can answer for the run's seat, after waiting up to two seat-lease lifetimes for one; `502` when the seat's holder took the call and stopped answering before it wrote a status. Mounted only on a node that has a bridge: one given `CREWLET_MCP_BRIDGE_URL`, or one that runs seats and binds `api.port`, for its own `direct` boxes. A node without `ingress` mounts it on `api.port` beside its probes and serves it to its own host's loopback alone, answering any other caller `404 no_route` (see [Probes on a node without ingress](#probes-on-a-node-without-ingress)); on any other node the route is absent |
 | `GET` | `/mcp/{token}/steer/notes?after={seq}` | The run's [notes](../concepts/code-sandbox.md#notes-to-a-running-run): the notes waiting for its turn past the cursor, `{"notes": [{seq, id, inbox, message}]}`, held up to ten seconds while none waits and answered at once when one arrives. `503` with a `Retry-After` once the node is stopping (`draining`) or the run's session has ended here (`unavailable`), the held poll included: its notes wait for the session's next opening. The same token, routing and refusals as the bridge; `404` for a run that has nothing to steer |
 | `POST` | `/mcp/{token}/steer/read` | Record the notes the run's CLI put in front of its model, `{"ids": [...]}` (one to ten, at most 64 KiB): `204`, or `503` with a `Retry-After` when the record could not be written, and the notes wait |
 | `GET` `POST` `DELETE` | `/operator/mcp` | Worklet and Doclet, served over MCP to **your** AI assistant. **Always needs a credential**, which for an assistant is a [machine token](#post-iamcredentials-mints-a-machine-token) acting as you: it files and moves work (see [below](#operatormcp--your-own-assistant)). The catalogue is built per request: `503 no_active_revision` until this node's first company brings Worklet or Doclet up, and `404 no_route` on a company that runs neither |
@@ -3740,16 +3744,33 @@ A node whose `node.roles` leave out `ingress` — a [satellite](../guides/satell
 or the seats and workers half of a split deployment — serves no API, no
 dashboard and no webhook. But an orchestrator runs every node, and one it
 cannot probe it can neither restart when it wedges nor wait on during a
-rollout. So such a node binds `api.port` for exactly two routes, and binds no
-[public listener](#which-listener-serves-what): its seats' executors reach their
-tools through an ingress node's [tool bridge](#routes), which relays each call
-here. The guard stands in front of them as it does
-on an ingress node, so every other path is judged as one there is: `401` to a
-request that presents no credential, since everything outside the guard's
-exemptions is guarded (`/agents`, say), and `404 no_route` for an exempt path
-this node does not serve (`/dashboard`) and for anything once a credential is
-presented. The node logs `api_probes_listening`. `api.port: 0` binds nothing,
-on this node as on any other.
+rollout. So such a node binds `api.port` for exactly two routes the network
+can reach, and binds no [public listener](#which-listener-serves-what): an
+executor in a box off its host reaches its tools through an ingress node's
+[tool bridge](#routes), which relays each call here. The guard stands in front
+of them as it does on an ingress node, so every other path is judged as one
+there is: `401` to a request that presents no credential, since everything
+outside the guard's exemptions is guarded (`/agents`, say), and `404 no_route`
+for an exempt path this node does not serve (`/dashboard`) and for anything
+once a credential is presented. The node logs `api_probes_listening`, with the
+address its own boxes dial in `box_host_url`. `api.port: 0` binds nothing, on
+this node as on any other.
+
+**A node that runs seats serves its own boxes beside the probes.** A `direct`
+box is a process of the node's host, and dials the node that launched it on
+loopback: the [tool bridge](#routes) under `/mcp/{token}` (its notes route
+included) and, where the node forwards to `OTEL_EXPORTER_OTLP_ENDPOINT`, the
+telemetry receiver under `/otlp/{token}/v1/{signal}`. Both are served here to a
+caller on this host's loopback alone, read from the connection's own address,
+and are the same routes an ingress node serves: a token the fleet did not sign
+answers `401`, and a call for a seat this node has since handed on is relayed to
+its holder. Any caller off the host meets `404 no_route` under both prefixes,
+whatever its method, so the network reaches nothing here but the probes. While
+the node starts, a loopback caller of either is answered `503 starting` with a
+`Retry-After`, as every starting node answers a route it will serve. The node
+hands its boxes this address only where loopback reaches the listener — an
+`api.host` of every interface or a loopback address; one bound to a single
+other address leaves its `direct` boxes to `CREWLET_MCP_BRIDGE_URL`.
 
 `GET /health` is liveness, `200` while the process is alive — through a drain
 and through a broker link that is down — once the node serves; before then it

@@ -792,8 +792,8 @@ coordination:
 ```
 
 The agents node gets a Tier A of its own. It needs no `company.yaml`, no API
-port and no stream directory — it fetches the company from the data node, and
-its store is deleted every time it starts:
+and no stream directory — it fetches the company from the data node, and its
+store is deleted every time it starts:
 
 ```yaml
 # agents.yaml — the agents node
@@ -818,26 +818,30 @@ secrets:                  # the same keyring as crewlet.yaml — REQUIRED on
 ```
 
 ```bash
-# both terminals: the fleet's tool-bridge address, the data node's API
-export CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"
-
 crewlet run -config crewlet.yaml -api-port 8000   # terminal 1
-crewlet run -config agents.yaml -api-port 0       # terminal 2
+crewlet run -config agents.yaml -api-port 8001    # terminal 2
 ```
 
 Every seat's executor runs its CLI in a box on the agents node, and the box
-calls the seat's tools back through the tool bridge. A node without the
-`ingress` role serves no route of its own, so its boxes dial
-`CREWLET_MCP_BRIDGE_URL`, the data node's API, and the data node relays each
-call to the agents node over the broker. The data node needs the variable too:
-a node that runs no seats serves the bridge's route only when it is set, and
-without it every call the agents node's boxes make finds no route there.
-Export it in each terminal, beside the variables from step 3. `-api-port 0`
-binds nothing on the agents node. Give it a port of its own instead
-(`-api-port 8001`) when something should probe it: without the
-`ingress` role it serves `/health` and `/ready` there and nothing else, and its
-`/ready` turns `200` once it has joined the fleet and been admitted — see
-[Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress).
+calls the seat's tools back through the tool bridge. The agents node serves
+that bridge itself, on its own port: a `direct` box is a process of the host it
+runs on, so it dials the node that launched it on loopback, and a node without
+the `ingress` role serves the bridge there to its own host's loopback alone.
+The network still reaches nothing on port 8001 but `/health` and `/ready`, and
+its `/ready` turns `200` once the node has joined the fleet and been admitted —
+see [Probes on a node without
+ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress). So
+neither node needs a bridge address here; export the variables from step 3 in
+each terminal and nothing more.
+
+Started with `-api-port 0` instead, the agents node binds nothing, and its
+boxes have no listener of their own to dial: export
+`CREWLET_MCP_BRIDGE_URL="http://127.0.0.1:8000"`, the data node's API, in both
+terminals. The data node relays each call to the agents node over the broker,
+and it needs the variable too: a node that runs no seats serves the bridge's
+route only when it is set. A box in a `container` or `e2b` cell needs that
+address whatever the agents node binds — see [Where a box dials
+it](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box).
 
 The agents node claims the seats once the data node answers that its copy of
 the company's records is level with its logs, and its seats' tracker and knowledge

@@ -471,19 +471,21 @@ func (p *Provider) executor(opts DiagnoseOptions) (lines, problems []string) {
 	lines = append(lines, fmt.Sprintf("runner: %q is registered", p.agent))
 	switch {
 	case opts.Cell == directCell:
-		// ON THE HOST, so on a node that serves the bridge route itself —
-		// the ingress role and a listener — the node's own listener is the
-		// address, derived by the node that binds it: the variable is not
-		// needed there, and a report calling it missing would send an
-		// operator to set what the quickstart never asks for. Whether this
-		// node is one is its Tier A, which this command does not read; a
-		// seats node that is not says so itself at apply.
-		via := "a node without the ingress role dials " + bridgeURLVar
+		// ON THE HOST, so on a node that binds a listener the box reaches
+		// on loopback — api.port, on every interface or on loopback, which
+		// a node without the ingress role serves its own host alone — the
+		// node's own listener is the address, derived by the node that
+		// binds it: the variable is not needed there, and a report calling
+		// it missing would send an operator to set what the quickstart and
+		// a seat pool never ask for. Whether this node is one is its Tier
+		// A, which this command does not read; a seats node that is not
+		// says so itself at apply.
+		via := "a node on api.port 0 dials " + bridgeURLVar
 		if url := strings.TrimSpace(opts.BridgeURL); url != "" {
-			via = "a node without the ingress role dials " + url
+			via = "a node on api.port 0 dials " + url
 		}
 		lines = append(lines, "tool bridge: this node's own listener, on loopback, "+
-			"where the node serves the API (the ingress role and api.port); "+via)
+			"where the node binds api.port (on every interface or on loopback); "+via)
 	case strings.TrimSpace(opts.BridgeURL) != "":
 		lines = append(lines, "tool bridge: "+opts.BridgeURL)
 	default:

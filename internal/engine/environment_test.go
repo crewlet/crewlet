@@ -47,6 +47,39 @@ func TestAnEngineReadsTheEnvironmentItIsHanded(t *testing.T) {
 	}
 }
 
+// A NODE THAT BOUND A LISTENER HANDS ITS OWN BOXES BOTH ROUTES THERE. The
+// address a `direct` box dials is derived by whoever bound the listener and
+// handed in as BoxHostURL, and it is the whole of what such a box needs: the
+// bridge is built from it with no fleet address set, so a seat pool with none
+// launches its executors; and where this node forwards telemetry — the
+// standard upstream variable set — the receiver is built from it too, so its
+// boxes' spans reach the collector the engine's own already do. Where it does
+// not forward, it builds no receiver, since every export would be dropped.
+//
+// Mutation: build the bridge from the environment alone and the first engine
+// has none; build the receiver from the environment alone and it has no
+// receiver; build it whatever the upstream and the second engine has one.
+func TestAnEngineHandsItsOwnBoxesTheListenerItWasGiven(t *testing.T) {
+	t.Parallel()
+	const host = "http://127.0.0.1:8080"
+	e := newEngine(t, engine.Options{BoxHostURL: host, Environment: config.MapSource{
+		sandbox.OtelUpstreamEndpointVar: "https://collector.example",
+	}})
+	if bridge := e.Bridge(); bridge == nil || bridge.Reaches(true) != host {
+		t.Errorf("the bridge a direct box dials = %v, want one at %s", bridge, host)
+	}
+	if receiver := e.OtelReceiver(); receiver == nil || receiver.Reaches(true) != host {
+		t.Errorf("the receiver a direct box exports to = %v, want one at %s", receiver, host)
+	}
+	silent := newEngine(t, engine.Options{BoxHostURL: host, Environment: config.MapSource{}})
+	if silent.Bridge() == nil {
+		t.Error("a node with its own listener and no fleet address built no bridge")
+	}
+	if receiver := silent.OtelReceiver(); receiver != nil {
+		t.Errorf("a node that forwards no telemetry built a receiver at %q", receiver.Reaches(true))
+	}
+}
+
 // AND A PERSON'S CONTACT IS READ FROM IT TOO, by the surfaces that name people
 // as well as by the configuration: a seat's lookup_colleague finds the founder
 // by an id the handed environment holds and no process sets. Read from the

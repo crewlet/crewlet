@@ -29,6 +29,12 @@ import (
 // is, and the node a call reaches relays it to the seat's holder over the
 // broker (see [mcpbridge.Bridge.Join]): one address for the fleet, whichever
 // node holds the seat.
+//
+// AND A SEATS NODE'S OWN, TO ITS OWN HOST. A box on its launching node's host
+// dials that node's own listener on loopback, so a node without the ingress
+// role serves the same route on api.port beside its probes, to this host's
+// loopback alone ([Probes]): the address its direct boxes are handed needs no
+// API and publishes nothing to the network.
 
 // mountBridge registers the bridge, or says why it did not.
 //

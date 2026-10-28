@@ -1196,12 +1196,15 @@ The endpoint names the run's **job** — the launch the run's durable row record
 — and the seat it acts as, in a token signed under the fleet's keyring and
 expiring with the run, and the session is closed the moment the run ends,
 whatever ended it. Where the box dials it depends on its cell and on the node.
-A **`direct`** box is a process tree on the launching node's own host, so on a
-node that serves the API itself it dials that node's own listener on loopback,
-which the node derives from the socket it binds — nothing to set. Every other
-box — a **`container`** or **`e2b`** box, which cannot reach the host's
-loopback, or a `direct` box on a node without the `ingress` role — dials
-**`CREWLET_MCP_BRIDGE_URL`**, set to a URL that box can reach. A launch whose
+A **`direct`** box is a process tree on the launching node's own host, so on
+any node that binds `api.port` it dials that node's own listener on loopback,
+which the node derives from the socket it binds — nothing to set. A node
+without the `ingress` role serves it the bridge there beside its probes, to its
+own host's loopback alone, so a seat pool with no address of its own runs its
+seats too. Every other box — a **`container`** or **`e2b`** box, which cannot
+reach the host's loopback, or a `direct` box on a node that binds no such
+listener — dials **`CREWLET_MCP_BRIDGE_URL`**, set to a URL that box can
+reach. A launch whose
 box has no address to dial is **refused** rather than started — a coding agent
 with none of the seat's tools cannot answer anybody, cannot touch a ticket and
 cannot submit its work — naming what to set: `api.port` on an `ingress` node
@@ -3579,7 +3582,7 @@ seat's *first turn* and nowhere earlier:
 ```
 executor      : seats: swe, qa
               : runner: "claude-code" is registered
-              : tool bridge: this node's own listener, on loopback, where the node serves the API (the ingress role and api.port); a node without the ingress role dials CREWLET_MCP_BRIDGE_URL
+              : tool bridge: this node's own listener, on loopback, where the node binds api.port (on every interface or on loopback); a node on api.port 0 dials CREWLET_MCP_BRIDGE_URL
 ```
 
 The **seats** line is which agent seats' executor chains hold this entry,
@@ -3589,8 +3592,8 @@ build can actually drive that CLI as a coding agent: there are two runners,
 as skipped at launch rather than faulted — it still serves that seat's text
 calls. The **tool bridge** line is where the run's box dials the seat's
 tools, which turns on the entry's cell: a `direct` box dials the node's own
-listener on loopback where the node serves the API, and the fleet's
-`CREWLET_MCP_BRIDGE_URL` on a node without the `ingress` role; a `container`
+listener on loopback where the node binds `api.port`, whatever its roles, and
+the fleet's `CREWLET_MCP_BRIDGE_URL` on a node that binds none; a `container`
 or `e2b` box dials `CREWLET_MCP_BRIDGE_URL` alone — unset there, every launch
 on the entry is refused, because a coding agent with none of the seat's tools
 cannot answer anybody, touch a ticket or submit its work.

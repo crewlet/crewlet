@@ -1044,8 +1044,9 @@ What to point where:
   Every webhook the engine registers and every vendor app it provisions is
   built on it. The per-run sandbox endpoints a box is handed are not: they are
   built on `CREWLET_MCP_BRIDGE_URL` and `CREWLET_SANDBOX_OTEL_RECEIVER_URL`,
-  which name the same public address (a `direct` box on an `ingress` node
-  dials its public listener on loopback). A proxy in front of that address
+  which name the same public address (a `direct` box dials its own node on
+  loopback instead: an `ingress` node's public listener, or `api.port` on a
+  node without the role). A proxy in front of that address
   that reaches the node on its loopback sends the bridge a loopback `Host`,
   as above.
 - **`api.external_url`** is where people reach the dashboard — `api.port`'s
@@ -1059,16 +1060,19 @@ What to point where:
   operator published this deployment's sockets.
 - **The dashboard and the CLI** stay on `api.port`: `crewlet` commands that
   read a node's own Tier A file dial `api.host:api.port`, which is unchanged.
-- **A node without the `ingress` role** serves its
+- **A node without the `ingress` role** serves the network its
   [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on
   `api.port` and nothing else, and binds no public port whatever the shared
   file says about `api.public` — so one Tier A file still serves every role.
-  Its seats' executor runs reach their tools through the ingress nodes'
-  bridge, which relays each call to them, so every node's
-  `CREWLET_MCP_BRIDGE_URL` is the same: the public address — a `direct` box
-  on such a node included, since the node serves no route of its own to dial
-  on loopback. Its `api.port: 0` (or `-api-port 0`) is still the hard off
-  switch for its probes.
+  An executor in a box off its host reaches its tools through the ingress
+  nodes' bridge, which relays each call to it, so every node's
+  `CREWLET_MCP_BRIDGE_URL` is the same: the public address. A `direct` box on
+  it needs none: the node serves its own boxes the bridge — and, where it
+  forwards to `OTEL_EXPORTER_OTLP_ENDPOINT`, the telemetry receiver — on
+  `api.port` beside the probes, to its own host's loopback alone, provided
+  `api.host` takes every interface or a loopback address. Its `api.port: 0`
+  (or `-api-port 0`) is still the hard off switch for all of it, which leaves
+  its `direct` boxes to the public address too.
 
 `api.host` may stay `0.0.0.0` where the network keeps `api.port` private — a
 container whose public Service or load balancer forwards only `api.public.port`
@@ -1111,10 +1115,12 @@ its own route port, its own peers and, on one host, its own
 [refused](#every-node-embeds-a-member-of-one-cluster). So
 give each node its roles at the command line, and its own `-api-port`: on one
 host two listeners cannot share a port, and only the ingress node's carries
-the API — the other's carries its [probes](#probes) and nothing else:
+the API — the other's carries its [probes](#probes) to the network and, to its
+own host alone, the routes its own `direct` boxes dial:
 
 ```bash
-# Terminal 1: the agents and the fleet duties — /health and /ready only
+# Terminal 1: the agents and the fleet duties — /health and /ready, and its
+# own direct boxes' tool bridge on loopback
 crewlet run -config crewlet.yaml -roles data,seats,workers -api-port 8001
 
 # Terminal 2: the webhook receiver and the dashboard
@@ -1122,11 +1128,11 @@ crewlet run -config crewlet.yaml -roles data,ingress -api-host 0.0.0.0 -api-port
 ```
 
 `-api-port 0` on the first binds nothing at all, which is fine on a host where
-nothing probes it.
+nothing probes it, as long as its boxes have the fleet's address (below).
 
 Give each node a distinct `node.id` (or `CREWLET_NODE_ID`) — two nodes sharing an id miscount the fleet. See [Running a Fleet](fleet.md).
 
-Every agent seat's executor is its coding CLI's run in a box, which calls the seat's tools back through the [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box), so give **both** nodes the same `CREWLET_MCP_BRIDGE_URL`: the ingress node's address as a sandbox reaches it (`http://<host>:8000` here, or its public listener's) — the seats node serves no route a `direct` box could dial on loopback. A box calls that node, and it relays each call to the seats node over the broker, so the seats node needs no port of its own for it — started with `-api-port 0` it still launches its executors. An ingress node started with `-api-port 0` serves no bridge, and refuses its own seats' executor launches, naming `api.port`.
+Every agent seat's executor is its coding CLI's run in a box, which calls the seat's tools back through the [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box). A `direct` box is a process of the seats node's host, so it dials that node's own `api.port` on loopback, where the node serves it the bridge to its own host's loopback alone — the commands above need no bridge address at all. A box in any other cell — `container`, `e2b` — or a `direct` one on a seats node started with `-api-port 0` dials `CREWLET_MCP_BRIDGE_URL`, so give **both** nodes the same value there: the ingress node's address as a sandbox reaches it (`http://<host>:8000` here, or its public listener's). A box calls that node, and it relays each call to the seats node over the broker, so a seats node needs no port of its own for those — started with `-api-port 0` it still launches its executors. An ingress node started with `-api-port 0` serves no bridge, and refuses its own seats' executor launches, naming `api.port`.
 
 **With a [public listener](#exposing-webhooks-without-the-admin-api) on one host,** only the ingress node binds `api.public.port`: a node without `ingress` binds no public port, so the two processes share one Tier A file as they are.
 
@@ -1161,7 +1167,7 @@ both.
 - **`ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
 - **`workers`** runs the company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties) — the scheduler tick, the maintenance sweep, the sandbox waiter, the integration reconcile, the learning passes, the state logs' trim, the embedding duty, the object store's collector and the identity sweep
 
-They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory: signing uses the Tier A keyring, which every node already holds — the SAME keyring on each, or every token one process mints is forged as far as the other is concerned. Rotating that keyring costs nothing in flight: a token names the key that signed it, so a run holding one keeps working until the key is dropped — the runbook is in [Secret store](../concepts/secret-store.md). `CREWLET_MCP_BRIDGE_URL`, which every seat's [executor box](../concepts/llm-backends.md#the-tool-bridge) dials, is the same kind of value: the fleet's address — an `ingress` node, or a load balancer in front of several — and the same on every node. A bridge session lives in the process holding the run's seat, and the node a box's call lands on relays it there over the broker, so a `seats` node without `ingress` serves no bridge of its own. Only a `direct` box on a node that serves the API needs none of it: it dials that node's own listener on loopback.
+They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. A `direct` box needs neither: a node that runs seats, binds `api.port` and forwards to `OTEL_EXPORTER_OTLP_ENDPOINT` hands its own boxes its listener on loopback for both. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory: signing uses the Tier A keyring, which every node already holds — the SAME keyring on each, or every token one process mints is forged as far as the other is concerned. Rotating that keyring costs nothing in flight: a token names the key that signed it, so a run holding one keeps working until the key is dropped — the runbook is in [Secret store](../concepts/secret-store.md). `CREWLET_MCP_BRIDGE_URL`, which every seat's [executor box](../concepts/llm-backends.md#the-tool-bridge) dials, is the same kind of value: the fleet's address — an `ingress` node, or a load balancer in front of several — and the same on every node. A bridge session lives in the process holding the run's seat, and the node a box's call lands on relays it there over the broker, so a `seats` node without `ingress` serves the network no bridge of its own. Only a `direct` box needs none of it: it dials its own node's listener on loopback — on a node without `ingress`, `api.port`, served to that host alone.
 
 Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field), and give the boot a startup probe on `/health`, which answers `503` until the node has recovered what it holds and `200` from then on, while the rest of the boot runs and `/ready` stays `503`. Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic and how long the startup probe has to wait. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain, so give such a pod a `preStop` sleep of a few readiness periods if you need the load balancer to have acted on that `503` before the listener goes. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
 
@@ -1181,10 +1187,12 @@ traffic:
 | A node with `ingress` | `200` while the process is alive, from the moment the node has recovered what it holds — through the rest of its boot, its serving life and a drain — and `503` before that | Should traffic come here: `503` until the node serves, and then `503` while draining, unconfigured, on a `shed` or `stuck` posture, or while its own copy of the estate is out of service and it cannot name a data node to route to (`estate_behind`) |
 | A node without it | The same, with the node's half of the health envelope | Is it doing its work: also `503` while its broker link is down, it does not hold its presence lease, or — running seats — it has not been admitted to claim them |
 
-A node without `ingress` serves **nothing else** on that port — no API, no
-dashboard, no webhook, no tool bridge: its seats' executor runs reach their
-tools through an ingress node, which relays each call to it. The reasons,
-their precedence and both bodies
+A node without `ingress` serves the network **nothing else** on that port —
+no API, no dashboard, no webhook, no tool bridge: an executor run in a box off
+its host reaches its tools through an ingress node, which relays each call to
+it. Its own `direct` boxes dial the port on loopback, and to its own host alone
+it serves them the tool bridge and, where it forwards telemetry, the receiver.
+The reasons, their precedence and both bodies
 are in [Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress).
 
 **While a node starts**, both kinds answer their probes the same way, because
@@ -1193,7 +1201,8 @@ neither serves anything of its own yet: `/health` is `503 {"status": "starting",
 `200 {"status": "starting", "phase": "preparing"}` while it brings up what its
 company configures, and `/ready` is `503` with `reason: "starting"`. Every
 route the node will serve is `503 starting` with a `Retry-After` — a node
-without `ingress` serves none but its probes — and every other path is the
+without `ingress` serves none but its probes, and its own boxes' two routes to
+a caller on its own host — and every other path is the
 `404` it answers once it serves. The bodies are in
 [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting).
 

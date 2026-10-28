@@ -182,8 +182,8 @@ api:
   # request itself.  A sandbox box's endpoints are not built on it: its
   # bridge and telemetry endpoints are built on CREWLET_MCP_BRIDGE_URL and
   # CREWLET_SANDBOX_OTEL_RECEIVER_URL, which name the address a box reaches
-  # (a direct box on a node that serves the API dials its own listener on
-  # loopback).
+  # (a direct box dials its own node's listener on loopback wherever that node
+  # binds api.port).
   #
   # Behind a proxy this is the PUBLIC address (https://nimbus.example.com),
   # not http://localhost.

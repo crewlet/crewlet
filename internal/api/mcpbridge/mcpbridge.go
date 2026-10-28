@@ -108,6 +108,15 @@
 // neither a proxy to the holder's address nor an MCP session on the node a
 // call lands on would hold it.
 //
+// A BOX ON ITS LAUNCHING NODE'S OWN HOST — the `direct` cell — needs no fleet
+// address at all: it dials that node's own listener on loopback
+// ([Options.HostURL]), which every node that runs seats and binds a listener
+// serves it — an ingress node on the listener it serves the route on to
+// anyone, and a node without the role on api.port to this host's loopback
+// alone ([FromLoopback]), beside its probes. The route is the same handler
+// there, so a call for a seat the node has since handed on is relayed to the
+// seat's holder exactly as a call that landed on an ingress node is.
+//
 // # The Host a call may name
 //
 // ITS OWN GUARD AGAINST DNS REBINDING, in place of the SDK's: a call that
@@ -412,14 +421,17 @@ type Options struct {
 	// own listener that serves the route, on loopback, e.g.
 	// "http://127.0.0.1:8080".
 	//
-	// DERIVED, NEVER CONFIGURED, by the process that bound the listener, and
-	// only on a node that serves the route — the ingress role and a bound
-	// listener: a box on the host can always dial the host's own socket, so
-	// asking the operator for an address there — the one setting the
-	// quickstart's company would otherwise need before its first turn —
-	// asked for something this node already knows. PREFERRED to BaseURL for
-	// such a box, because loopback never leaves the host. Empty on a node
-	// that serves no route, whose direct boxes dial BaseURL like any other.
+	// DERIVED, NEVER CONFIGURED, by the process that bound the listener, on
+	// every node that runs seats and binds one: an ingress node serves the
+	// route there to anyone, and a node without the role serves it on
+	// api.port to this host's loopback alone, beside its probes. A box on
+	// the host can always dial the host's own socket, so asking the operator
+	// for an address there — the one setting the quickstart's company, and
+	// every seat pool with no address of its own, would otherwise need
+	// before its first turn — asked for something this node already knows.
+	// PREFERRED to BaseURL for such a box, because loopback never leaves the
+	// host. Empty on a node that binds no listener its own boxes reach on
+	// loopback, whose direct boxes dial BaseURL like any other.
 	HostURL string
 
 	// TTL bounds a minted endpoint. Zero takes [DefaultTTL].
@@ -685,9 +697,8 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 }
 
 // Reaches is the base URL a box dials this bridge at — this node's own
-// listener for a box on its host where it serves the route
-// ([Options.HostURL]), and [BaseURLVar]'s address otherwise — or "" where it
-// has none to dial.
+// listener for a box on its host where it has one ([Options.HostURL]), and
+// [BaseURLVar]'s address otherwise — or "" where it has none to dial.
 func (b *Bridge) Reaches(onHost bool) string {
 	if b == nil {
 		return ""
@@ -995,10 +1006,15 @@ func (b *Bridge) LoopbackBase() bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// fromLoopback reports whether a request arrived on this host's loopback
+// FromLoopback reports whether a request arrived on this host's loopback
 // interface, read from the connection's own address and never from a header
 // a caller could write.
-func fromLoopback(r *http.Request) bool {
+//
+// EXPORTED for the one other place that admits a caller by it: the listener of
+// a node without the ingress role, which serves the routes its own boxes dial
+// to this host's loopback alone (internal/api's probe surface). One predicate,
+// so "a caller on this host" cannot mean two things on two routes a box dials.
+func FromLoopback(r *http.Request) bool {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return false
@@ -1119,7 +1135,7 @@ func (b *Bridge) routed(serve func(http.ResponseWriter, *http.Request, *binding)
 		// ([Session.Loopback]), read from the connection and never from a
 		// header, and is never forwarded: a call that reached another node
 		// is refused by this one's relay ([Bridge.admitRelayed]).
-		if opened != nil && opened.session.Loopback && !fromLoopback(r) {
+		if opened != nil && opened.session.Loopback && !FromLoopback(r) {
 			b.refuse(w, r, sub.run, "the session admits only this host's loopback, and the "+
 				"call came from "+r.RemoteAddr)
 			return

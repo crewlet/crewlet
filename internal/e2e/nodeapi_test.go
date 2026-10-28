@@ -27,8 +27,8 @@ import (
 
 // listenForBridge binds the listener a node's API — and with it the seat's
 // tool bridge — is served on, for the engine the node is built with to name as
-// the address a box on this host dials ([hostBridgeURL],
-// [engine.Options.BridgeHostURL]).
+// the address a box on this host dials ([listenerURL],
+// [engine.Options.BoxHostURL]).
 //
 // BOUND BEFORE THE ENGINE, and held until the server that serves on it: the
 // engine takes the address once, when it builds its bridge
@@ -57,9 +57,10 @@ func listenForBridge(addr string) (net.Listener, error) {
 	return ln, nil
 }
 
-// hostBridgeURL is where a `direct` box on this host dials the bridge served on
-// ln: the listener on loopback, as `crewlet run` derives it for a seats node.
-func hostBridgeURL(ln net.Listener) string { return "http://" + ln.Addr().String() }
+// listenerURL is where this host dials ln: where a `direct` box dials the
+// bridge served on it, as `crewlet run` derives it for a seats node that binds
+// a listener, and where a box anywhere dials it as the fleet's address.
+func listenerURL(ln net.Listener) string { return "http://" + ln.Addr().String() }
 
 // bridgeListener is [listenForBridge] for a case on the test's own goroutine,
 // closing the listener when the test ends if no server took it over.
