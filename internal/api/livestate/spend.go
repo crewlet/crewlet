@@ -78,12 +78,15 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		// key — read off the payload's `role`, the field the store's
 		// `agent_role` column is filled from, so a record from the live
 		// window and the same record from the store print one name.
-		AgentID:      str(payload, "agent_id"),
-		AgentRole:    str(payload, "role"),
-		Phase:        str(payload, "phase"),
-		HostPhase:    str(payload, "host_phase"),
-		Worker:       str(payload, "worker"),
-		Model:        str(payload, "model", "provider_key"),
+		AgentID:   str(payload, "agent_id"),
+		AgentRole: str(payload, "role"),
+		Phase:     str(payload, "phase"),
+		HostPhase: str(payload, "host_phase"),
+		Worker:    str(payload, "worker"),
+		// THE MODEL ALONE, never the entry in its place: an entry's key
+		// is the company's configuration, and the store's usage rows,
+		// which a named window folds, carry no such fallback either.
+		Model:        str(payload, "model"),
 		TurnID:       str(payload, "turn_id"),
 		WorkKey:      str(payload, "work_key"),
 		Iteration:    num(payload, "iteration"),

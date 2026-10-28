@@ -84,6 +84,7 @@ import { conditionsToDecide, watchedIn } from "~/lib/attention.ts";
 import { useAttention } from "~/lib/useAttention.ts";
 import { INBOX_PAGE } from "~/lib/useInboxCounts.ts";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
+import { useStableList } from "~/lib/useStableList.ts";
 import { InboxColumn, taskTitleOf, titleOf, type Settled as Given } from "./InboxColumn.tsx";
 import type { AskAnswer } from "~/components/writes.tsx";
 import { InboxPane } from "./InboxPane.tsx";
@@ -129,6 +130,9 @@ interface Settled extends Given {
  * vanished the moment it was answered left the reader no sign the answer had
  * landed.
  */
+/** A row's key, for [useStableList]. */
+const rowKeyOf = (row: InboxRow) => row.key;
+
 function keepSettled(
   needs: readonly InboxRow[],
   settled: ReadonlyMap<string, Settled>,
@@ -234,8 +238,15 @@ export function Inbox() {
     [bound, notices, decisions.data, agents, attention, updatesRead.data],
   );
 
+  // THE ROWS DRAWN LAST, WHERE NOTHING IN THEM CHANGED. They are derived
+  // from the seats' live state, which the engine pushes many times a second
+  // while a seat works: rows rebuilt on each push, alike in every field, made
+  // every row draw again, and a condition that came and went with each push
+  // moved the rows below it (useStableList).
+  const needsNow = useStableList(rows.needs, rowKeyOf);
+  const updates = useStableList(rows.updates, rowKeyOf);
   const [settled, setSettled] = useState<ReadonlyMap<string, Settled>>(new Map());
-  const needs = useMemo(() => keepSettled(rows.needs, settled), [rows.needs, settled]);
+  const needs = useMemo(() => keepSettled(needsNow, settled), [needsNow, settled]);
   // ANSWERED BEFORE THIS VISIT: a row answered here is in Needs you, never
   // in both places.
   const answered = useMemo(
@@ -247,7 +258,7 @@ export function Inbox() {
     earlierOpen && earlier.notices ? noticeRows(earlierOf(earlier.notices)) : null;
   const order: InboxRow[] = [
     ...needs,
-    ...rows.updates,
+    ...updates,
     ...(answeredOpen ? answered : []),
     ...(snoozedRows ?? []),
     ...(earlierRows ?? []),
@@ -393,7 +404,7 @@ export function Inbox() {
     answer: updatesRead.data,
     bound: notices,
     error: Boolean(updatesRead.error || decisions.error),
-    shown: needs.length + rows.updates.length,
+    shown: needs.length + updates.length,
     watched: watchedIn("seat"),
   });
   const showList = !single || !named;
@@ -442,7 +453,7 @@ export function Inbox() {
         {showList && (
           <InboxColumn
             needs={needs}
-            updates={rows.updates}
+            updates={updates}
             snoozed={{
               rows: snoozedRows,
               more: snoozed.more,

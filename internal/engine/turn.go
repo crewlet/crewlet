@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	llmchain "github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
@@ -87,6 +88,16 @@ type Dispatcher struct {
 	// Nil parks nothing, which is a dispatcher with no counters: every
 	// turn then runs, and its own meter, if it has one, is the gate.
 	Budget func(ctx context.Context, handle string) (reason string, parked bool, err error)
+
+	// Provider parks the seat when every member of the chain a turn ran on
+	// refused for a rate limit, until the first is tried again, and reports
+	// the deferral reason naming the limit; see providerpark.go. An error is
+	// a park that could not be taken, which DEFERS the delivery for the
+	// reason [Dispatcher.Budget]'s does.
+	//
+	// Nil parks nothing: a limited turn is then NAKed like any other
+	// failure, and its redelivery meets the backend's own sit-out.
+	Provider func(ctx context.Context, handle string, limit llmchain.Limit) (reason string, parked bool, err error)
 
 	// Answer offers a delivery to a parked coding run as the reply to the
 	// question it asked, and reports what to DO with the delivery — see
@@ -730,6 +741,23 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 					return result
 				}
 			}
+			// AND A CHAIN EVERY MEMBER OF WHICH IS LIMITED: the seat is
+			// parked until the first is tried again, rather than NAKed
+			// into the same refusal a second later, which, with every
+			// partition of every seat doing it, was a turn started and
+			// failed per seat per second for as long as the limit lasted.
+			// See providerpark.go. Below [turn.Abandon] for the reason the
+			// budget's branch is.
+			if limit, limited := llmchain.Limited(err); limited && d.Provider != nil {
+				result, parked := d.parkOn(ctx, handle, "provider park", func(ctx context.Context) (string, bool, error) {
+					return d.Provider(ctx, handle, limit)
+				})
+				if parked {
+					log.InfoContext(ctx, "turn_provider_parked", "seat", handle,
+						"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
+					return result
+				}
+			}
 			// Nothing this turn did can be proven to have left the
 			// engine, and nothing about the failure says it will recur,
 			// so a redelivery really does run it cleanly.
@@ -762,20 +790,31 @@ func (d *Dispatcher) parkOnBudget(ctx context.Context, handle string) (queue.Res
 	if d.Budget == nil {
 		return queue.Result{}, false
 	}
-	reason, parked, err := d.Budget(ctx, handle)
+	return d.parkOn(ctx, handle, "budget park", func(ctx context.Context) (string, bool, error) {
+		return d.Budget(ctx, handle)
+	})
+}
+
+// parkOn runs one park stage, reporting the disposition when it parked the
+// seat or could not take the park it decided on. what names the park in a
+// deferral that could not take it.
+func (d *Dispatcher) parkOn(ctx context.Context, handle, what string,
+	stage func(context.Context) (string, bool, error)) (queue.Result, bool) {
+
+	reason, parked, err := stage(ctx)
 	if err != nil {
-		// THE PARK COULD NOT BE TAKEN — the hold the budget stage
-		// decided on was refused by the queue — which is this NODE's
-		// condition rather than the message's. Deferred, so the delivery
-		// keeps its place at the head of the seat's inbox and comes back
-		// first once the seat host's next renew resumes the attachment; a
-		// Nak would return it behind the conversation's newer mail
+		// THE PARK COULD NOT BE TAKEN (the hold the stage decided on
+		// was refused by the queue), which is this NODE's condition
+		// rather than the message's. Deferred, so the delivery keeps its
+		// place at the head of the seat's inbox and comes back first
+		// once the seat host's next renew resumes the attachment; a Nak
+		// would return it behind the conversation's newer mail
 		// (queue.OutcomeNak), and the turn that next ran on this seat
 		// would be answering a later message first.
 		if d.NoteDeferred != nil {
 			d.NoteDeferred(handle)
 		}
-		return queue.Defer("budget park could not be taken: " + err.Error()), true
+		return queue.Defer(what + " could not be taken: " + err.Error()), true
 	}
 	if !parked {
 		return queue.Result{}, false

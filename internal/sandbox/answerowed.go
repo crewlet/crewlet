@@ -583,7 +583,7 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 		return
 	}
 	defer adm.release()
-	c.resumeOwedAdmitted(adm, run, answer, fence)
+	c.resumeOwedAdmitted(adm, run, answer, fence, seen)
 }
 
 // resumeOwedAdmitted is an owed answer's claim and resume, under the admission
@@ -594,7 +594,15 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 // admitted turn, so the drain's cut that ends the turn ends the claim with it,
 // and a frame handed only a context could pass the caller's, which the
 // admission never covered.
-func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *RecordedAnswer, fence Fence) {
+//
+// A resume REFUSED after its claim, reverted with a [*TurnRefused] that names a
+// condition (every model at its limit before the turn wrote anything), waits
+// for that condition as a gate's refusal does, and is charged nothing; seen is
+// what had been signalled before the gate was asked, for the reason
+// [Coordinator.waitOwed] gives.
+func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *RecordedAnswer, fence Fence,
+	seen map[signal]uint64,
+) {
 	ctx := adm.ctx
 	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, RecordedAnswerTail(run.LaunchID), fence)
 	if err != nil {
@@ -627,6 +635,10 @@ func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *R
 	if disposition == AnswerDeferred {
 		// The claim went back: the run is [StatusAnswered] again with
 		// the same answer on it, owed the same resume.
+		if refusal, refused := waitingRefusal(err); refused {
+			c.owedRefused(ctx, claimed, refusal, seen)
+			return
+		}
 		c.owedFailed(ctx, claimed, err)
 		return
 	}

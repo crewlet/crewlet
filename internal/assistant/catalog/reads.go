@@ -403,7 +403,9 @@ func readTools() []Tool {
 					col("stopped", "Why stopped", "stopped_reason", tLabel),
 					seat("paused_by", "Paused by", "paused.by"),
 					prose("paused_reason", "Pause reason", "paused.reason"),
-					prose("last_error", "Last error", "last_error.message")},
+					// BY ITS KIND: a failure's own text names the
+					// company's model entries, which only an admin reads.
+					col("last_error", "Last error", "last_error.kind", tLabel)},
 				Open: &cards.Open{Screen: "roster"}}}),
 			Label: func(map[string]any) string { return "Listing the agents" },
 		},
@@ -440,7 +442,7 @@ func readTools() []Tool {
 						fact("Phase", "live.current_phase", tLabel),
 						fact("Last turn", "live.last_turn.outcome", tLabel),
 						fact("Last ended", "live.last_turn.ended_at", tDatetime),
-						fact("Last error", "live.last_error.message", tText)},
+						fact("Last error", "live.last_error.kind", tLabel)},
 					// LABELLED, NOT BY ITS HANDLE: the first parameter's value
 					// was the link's text, a handle the person does not know.
 					Open: &cards.Open{Screen: "seat", Params: map[string]string{"handle": "handle"},
@@ -616,7 +618,9 @@ func readTools() []Tool {
 				"days":   positive("The window in company days. Default 30.", 90),
 				"bucket": oneOf("day (the default) or week.", "day", "week"),
 				"view":   oneOf("over_time (the default) or by_group.", "over_time", "by_group"),
-				"group":  oneOf("by_group only: what to group by.", "phase", "model", "provider", "seat", "unit", "worker"),
+				"group": oneOf("by_group only: what to group by. provider (the company's model entries) "+
+					"is answered to an admin alone and refused to anyone else.",
+					"phase", "model", "provider", "seat", "unit", "worker"),
 			}),
 			Routes: []string{"GET /tokens/series"},
 			Build: func(a map[string]any) (exec.Request, error) {

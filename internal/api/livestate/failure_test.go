@@ -23,11 +23,6 @@ func TestATurnEndingDoesNotClearTheFailureThatCausedIt(t *testing.T) {
 		at("2026-06-14T12:00:01Z")))
 
 	got := overlayOf(t, s, "Lead")
-	if got.Activity != livestate.ActivityStopped || got.StoppedReason == nil ||
-		*got.StoppedReason != livestate.StoppedProvider {
-		t.Errorf("activity = %q (%v), want the seat to stay stopped on its provider",
-			got.Activity, got.StoppedReason)
-	}
 	if got.LastError == nil || got.LastError.Kind != "provider_down" {
 		t.Errorf("last error = %+v, want the cause kept", got.LastError)
 	}
@@ -135,7 +130,7 @@ func TestAPhaseFailureLandsOnTheSeat(t *testing.T) {
 	if got == nil {
 		t.Fatal("a failed phase recorded no error")
 	}
-	if got.Kind != "provider_error" || got.Message != "429 from anthropic" {
+	if got.Kind != "provider_error" || got.Detail != "429 from anthropic" {
 		t.Errorf("error = %+v", got)
 	}
 	if got.Phase != "plan" || got.TurnID != "tn-1" {

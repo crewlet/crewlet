@@ -122,13 +122,18 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// thing a released inbox does is judge a delivery against the
 		// counters, and it must do so under the ceilings now current.
 		e.reconcileBudgetParks(ctx, c)
-		// AND A RETRIED RESUME WAITING ON EITHER: a published company is
-		// the event that brings a model and the one that moves a ceiling,
-		// so the answers waiting on them are re-checked under the company
-		// now current. One still refused waits again, on whatever refuses
-		// it.
+		// AND A SEAT PARKED ON ITS MODELS' LIMIT, when this company's
+		// models are not the ones that refused it: they are built afresh
+		// with each company, and have sat nothing out.
+		e.reconcileProviderParks(ctx, c)
+		// AND A RESUME WAITING ON ANY OF THEM: a published company is the
+		// event that brings a model, the one that moves a ceiling and the
+		// one that builds every entry afresh, so the answers and the
+		// completions waiting on them are re-checked under the company now
+		// current. One still refused waits again, on whatever refuses it.
 		if c.Models != nil {
 			e.readmitResumes(waitTurnEngine)
+			e.readmitResumes(waitProvider)
 		}
 		e.readmitResumes(waitBudget)
 		// AND A PAUSE WHOSE SEAT THIS COMPANY REMOVED goes with the seat.

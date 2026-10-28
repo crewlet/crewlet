@@ -272,6 +272,8 @@ var categories = map[string]placement{
 	"prompt.size":                  {"system", RateEngine},
 	"turn.guard_breach":            {"system", RateEngine},
 	"provider_fallback":            {"system", RateEngine},
+	"seat_provider_parked":         {"system", RateEngine},
+	"seat_provider_released":       {"system", RateEngine},
 	"skill_telemetry_write_failed": {"system", RateEngine},
 	"subagent_batched":             {"system", RateEngine},
 

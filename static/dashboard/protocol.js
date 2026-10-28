@@ -1,3 +1,32 @@
+//#region src/protocol/equal.ts
+/**
+* Whether two values decoded off the wire say the same thing: the same JSON,
+* compared structurally rather than by identity.
+*
+* WHY IT EXISTS: every live push decodes into new objects, so a row the engine
+* sent again unchanged (a seat's state re-sent beside another seat's change,
+* the same refusal reported once a second) was a new row to every screen
+* keyed on identity, which drew it again. The store keeps the row it holds
+* when the push says nothing new, and a screen deriving rows from it keeps
+* the rows it drew, so nothing a person sees moves unless something did.
+*
+* JSON's own values only: objects, arrays, strings, numbers, booleans and
+* null. A key whose value is `undefined` reads as a missing key, as
+* `JSON.stringify` would write it.
+*/
+function sameValue(a, b) {
+	if (a === b) return true;
+	if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+	if (Array.isArray(a) !== Array.isArray(b)) return false;
+	if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((v, i) => sameValue(v, b[i]));
+	const left = a;
+	const right = b;
+	const keys = (o) => Object.keys(o).filter((k) => o[k] !== void 0);
+	const lk = keys(left);
+	if (lk.length !== keys(right).length) return false;
+	return lk.every((k) => Object.hasOwn(right, k) && sameValue(left[k], right[k]));
+}
+//#endregion
 //#region src/contract/wire.ts
 /**
 * A live call's HEAVY fields, by the version that numbers each — the engine's
@@ -277,14 +306,22 @@ var Store = class {
 				live_call_seq: patchSeq ?? heldSeq
 			};
 		};
-		this.state.agents = this.state.agents.map((a) => {
+		let moved = false;
+		const next = this.state.agents.map((a) => {
 			const patch = byID.get(a.agent_id);
-			return patch ? {
+			if (!patch) return a;
+			const merged = {
 				...a,
 				...merge(a, patch)
-			} : a;
+			};
+			if (sameValue(a, merged)) return a;
+			moved = true;
+			return merged;
 		});
-		this.emit("agents");
+		if (moved) {
+			this.state.agents = next;
+			this.emit("agents");
+		}
 		return stale;
 	}
 	/**
@@ -643,7 +680,8 @@ function confirmStepUp() {
 var LIMIT_SETTINGS = [
 	"company_token_budget",
 	"seat_token_budget",
-	"assistant_token_budget"
+	"assistant_token_budget",
+	"model_providers"
 ];
 //#endregion
 //#region src/protocol/remedy.ts

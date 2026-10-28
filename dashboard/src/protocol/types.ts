@@ -205,8 +205,13 @@ export interface TraceAnswer {
 
 /** Why a seat stopped. One shape for every kind of stop. */
 export interface ErrorInfo {
+  /** The classifier's kind, which a screen words for a person
+   *  (`failureWords`). */
   kind: string;
-  message: string;
+  /** The failure in its own words: sent only to an admin, since it names
+   *  the company's model entries and carries what a vendor or a tool wrote
+   *  (`livestate.Reach.Config`). */
+  detail?: string;
   phase: string;
   turn_id: string;
   at: string;
@@ -422,6 +427,30 @@ export interface Paused {
   reason?: string;
   /** Whether the pause also ended the turn the seat was on. */
   stop_running: boolean;
+}
+
+/**
+ * A seat's models at their usage limit (`livestate.ProviderLimit`): ONE steady
+ * condition for as long as the limit lasts, moved only by what says it began
+ * or ended, never by the turns and probes in between.
+ *
+ * It reaches every reader, so it names no `providers.llm` entry: which are
+ * spent and which carries a seat is the company's configuration, an admin's to
+ * read on Settings, Models.
+ */
+export interface ProviderLimit {
+  /** Whether the seat waits for the limit (every model refused) rather than
+   *  running on a fallback, which is not named. */
+  parked: boolean;
+  /** When the vendor said the limit lifts, in UTC; null where unknown. */
+  resets_at: string | null;
+  /** When the condition began, in UTC. */
+  since: string;
+  /** The CLI the limited entry drives (`claude-code`), a key of
+   *  `CLI_PRODUCTS`; empty where the report did not say. */
+  cli: string;
+  /** Whether that CLI signs in on a plan rather than a metered key. */
+  subscription: boolean;
 }
 
 /** The newest turn a seat ended (`livestate.LastTurn`). */
@@ -648,6 +677,9 @@ export interface Overlay {
   /** Who paused the seat, or null while nobody has. Always present, for
    *  `stopped_reason`'s reason: an omitted key would leave a resumed seat paused. */
   paused?: Paused | null;
+  /** The seat's models at their usage limit, or null while they are not.
+   *  Always present, so a limit that lifted is shed. */
+  provider_limit?: ProviderLimit | null;
 }
 
 /**
@@ -938,6 +970,9 @@ export interface Rollup {
   by_phase: PhaseRow[];
   by_model: ModelRow[];
   by_provider?: ProviderSpendRow[];
+  /** True where `by_provider` was left out because the reader is not an
+   *  admin: the company's model entries are its configuration. */
+  entries_withheld?: boolean;
   by_worker: WorkerRow[];
   by_agent: AgentSpendRow[];
   /** The tail of recent turns — the LIVE window's only. A company day holds no

@@ -23,6 +23,7 @@
  */
 
 import type { AgentRow, BudgetWindow, OrgBudget, SandboxRun } from "~/protocol/index.ts";
+import { entryLimits, limitDetail, limitTitle, type EntryLimit } from "./providerLimit.ts";
 import { PERIOD_ADJECTIVE, waitedOn } from "~/lib/budget.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
@@ -103,6 +104,19 @@ export function watchedIn(where: Where): string {
       .filter((subject) => WHERE_OF[subject] === where)
       .map((subject) => SUBJECTS[subject]),
   );
+}
+
+/** The one seat a limit holds, where it holds one, as a row's `who`. */
+function whoOfLimit(limit: EntryLimit): { who?: string } {
+  const seats = [...limit.parked, ...limit.carried];
+  const only = seats.length === 1 ? seats[0] : undefined;
+  return only ? { who: String(only.handle ?? only.id) } : {};
+}
+
+/** The id of a seat's own condition (stopped, or its last turn failed): the
+ *  seat's, whichever it is in, so its row keeps its place and its key. */
+export function seatStateId(agentID: string): string {
+  return `seat-state-${agentID}`;
 }
 
 /**
@@ -338,6 +352,27 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     });
   }
 
+  // --- models at their usage limit ------------------------------------------
+  // ONE ROW PER KIND OF LIMIT, keyed by it, for as long as the limit lasts:
+  // what the seats it holds up are waiting for, and until when
+  // (providerLimit.ts). The seats themselves draw no row of their own for it
+  // below.
+  for (const limit of entryLimits(agents)) {
+    out.push({
+      id: `provider-limit-${limit.key}`,
+      severity: limit.parked.length > 0 ? "critical" : "caution",
+      subject: "seat",
+      icon: "clock",
+      title: limitTitle(limit),
+      detail: limitDetail(limit, now),
+      // THE COMPANY'S MODELS, where a fallback is given or a plan changed,
+      // behind the same gate as the screen it opens (lib/remedy.ts).
+      remedy: { setting: "model_providers" },
+      at: limit.since,
+      ...whoOfLimit(limit),
+    });
+  }
+
   // --- seats ---------------------------------------------------------------
   for (const agent of agents) {
     const state = shownStateOf(agent);
@@ -349,9 +384,21 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     // the window and when it resets, so it is not said twice. A stop whose
     // cause also left a failed turn is ONE row: the stop is what a reader acts
     // on, and the failure is why.
-    if ((state === "paused" || state === "stopped") && agent.stopped_reason !== "budget") {
+    // A SEAT HELD BY ITS MODELS' LIMIT is its entry's row above, which says
+    // until when: its stop, and the failed turn the limit left on it, are
+    // not said twice, once per seat.
+    const limited = agent.provider_limit != null;
+    if (
+      (state === "paused" || state === "stopped") &&
+      agent.stopped_reason !== "budget" &&
+      !(limited && agent.stopped_reason === "provider")
+    ) {
       out.push({
-        id: `stopped-${agent.agent_id}`,
+        // THE SEAT'S OWN ID, whichever condition it is in: a seat moving
+        // between "stopped" and "last turn failed" is one row whose words
+        // change, never one row leaving and another arriving, which a list
+        // keyed on the id would draw as a remount.
+        id: seatStateId(agent.agent_id),
         severity: state === "stopped" && agent.last_error ? "critical" : "caution",
         subject: "seat",
         icon: "pause",
@@ -362,7 +409,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         // began, which is what orders it among the rest and what its row's
         // age says.
         ...(agent.paused?.at ? { at: agent.paused.at } : {}),
-        ...(agent.last_error?.message ? { technical: agent.last_error.message } : {}),
+        ...(agent.last_error?.detail ? { technical: agent.last_error.detail } : {}),
         who,
       });
       continue;
@@ -371,9 +418,9 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     // seat that went on to idle or work again, so the row says what happened
     // to the turn and never calls the seat stopped (the roster files the same
     // seat with the idle ones, `People.tsx`).
-    if (agent.last_error) {
+    if (agent.last_error && !limited) {
       out.push({
-        id: `error-${agent.agent_id}`,
+        id: seatStateId(agent.agent_id),
         severity: "critical",
         subject: "seat",
         icon: "triangle-alert",
@@ -381,7 +428,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         // THE KIND IN PLAIN WORDS, never the machine code or the engine's
         // raw message, which rides along as `technical`.
         detail: failureWords(agent.last_error.kind).sentence,
-        ...(agent.last_error.message ? { technical: agent.last_error.message } : {}),
+        ...(agent.last_error.detail ? { technical: agent.last_error.detail } : {}),
         path: seatPath,
         at: agent.last_error.at,
         who,

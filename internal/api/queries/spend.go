@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -261,6 +263,24 @@ func usageErr(err error) error {
 // put a query on the critical path of every tab, for an answer already held.
 // Anything else names company days, and is read from the usage domain.
 func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
+	rollup, err := s.rollup(ctx, p)
+	if err != nil || readsConfig(ctx) {
+		return rollup, err
+	}
+	return rollup.WithoutEntries(), nil
+}
+
+// readsConfig reports whether the asking principal may read the company's
+// configuration (an admin): which providers.llm entries it configures, and so
+// what each of them served. A spend answer is everybody's; its per-entry half
+// is not.
+func readsConfig(ctx context.Context) bool {
+	principal, how := iam.From(ctx)
+	return how == iam.Resolved && principal.Can(iam.GrantAdmin)
+}
+
+// rollup is the spend breakdown [Sources.tokens] answers, whole.
+func (s Sources) rollup(ctx context.Context, p Params) (tokens.Rollup, error) {
 	if !namesAWindow(p) {
 		// The window this rollup actually covers, reported rather than
 		// assumed: the projection ages its window on its own clock and
@@ -275,7 +295,7 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 	}
 	w, err := s.spendWindowOf(p)
 	if err != nil {
-		return nil, err
+		return tokens.Rollup{}, err
 	}
 	opts := tokens.DailyOptions{Range: w.Range, AgentID: w.AgentID, Seats: s.Seats(), Horizon: w.Horizon}
 	if s.Usage == nil {
@@ -288,7 +308,7 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 	}
 	cells, seats, err := s.spendCells(ctx, w)
 	if err != nil {
-		return nil, err
+		return tokens.Rollup{}, err
 	}
 	return w.label(tokens.FoldDaily(cells, seats, opts)), nil
 }
@@ -327,6 +347,12 @@ func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 		return nil, fmt.Errorf("%w: group must be one of %v, and %q is not — a "+
 			"chart legended by one dimension over another's bands is worse "+
 			"than an error", ErrBadParams, tokens.Groups, group)
+	}
+	if group.AdminOnly() && !readsConfig(ctx) {
+		// ITS BANDS ARE THE COMPANY'S ENTRIES, which only an admin reads
+		// (see [Sources.tokens]); every other grouping is everybody's.
+		return nil, &Refusal{What: "token_series by " + string(group), Reason: authz.ReasonNoGrant,
+			Grants: []iam.Grant{iam.GrantAdmin}}
 	}
 	interval := tokens.Interval(p.String("bucket"))
 	if interval == "" {

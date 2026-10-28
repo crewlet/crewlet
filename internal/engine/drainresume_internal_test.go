@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -11,11 +10,14 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/execstate"
+	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -116,13 +118,43 @@ func (r *drainRig) start(t *testing.T) *Engine {
 	eventually(t, "the swe seat's control topic to be attached", func() bool {
 		return e.sandboxSeatAttached("swe")
 	})
+	// A MODEL THAT ANSWERS, so a resume the rig admits runs its turn to the
+	// end and settles the run, once: with none, every resume failed and gave
+	// its claim back, and the waiter's next announcement claimed and
+	// collected the run again, so "collected once" was a race between that
+	// announcement and the case's own poll rather than a fact about the
+	// claim. A case that needs another model installs it after this.
+	withModels(t, e, answers{})
 	return e
+}
+
+// answers is a model that answers every call.
+type answers struct{}
+
+func (answers) Model() string { return "opus" }
+
+func (answers) Complete(context.Context, llm.Request) (*llm.Completion, error) {
+	return &llm.Completion{Content: "done", Model: "opus"}, nil
+}
+
+// withModels serves e's current company with a registry of the one entry
+// given, as an apply that configured it would.
+func withModels(t *testing.T, e *Engine, entry llm.Provider) {
+	t.Helper()
+	reg, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: entry}})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	c := *e.Company()
+	c.Models = reg
+	e.epoch.current.Store(&c)
 }
 
 // seedRun records a coding run on the swe seat whose job is running in the
 // rig's box, suspended into the turn that launched it, as the node that
-// launched it leaves it for the waiter. The job finishes when the case calls
-// [sandbox.FakeRunner.Finish].
+// launched it leaves it for the waiter: the executor's round that called
+// run_sandbox, the call still open, in a conversation this build resumes. The
+// job finishes when the case calls [sandbox.FakeRunner.Finish].
 func (r *drainRig) seedRun(t *testing.T, e *Engine, turnID string) {
 	t.Helper()
 	ctx := t.Context()
@@ -131,6 +163,7 @@ func (r *drainRig) seedRun(t *testing.T, e *Engine, turnID string) {
 	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
 		TurnID: turnID, AgentID: agentID.String(), AgentHandle: "swe", Role: "SWE",
 		CodingAgent: "claude-code", CreatedAt: time.Now().UTC(),
+		Reply: "tool", TaskDescription: "fix the flaky test",
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}
@@ -139,9 +172,19 @@ func (r *drainRig) seedRun(t *testing.T, e *Engine, turnID string) {
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
-	if suspended, err := store.MarkSuspended(ctx, turnID, sandbox.Suspension{State: json.RawMessage(
-		`{"version":1,"pending_tool_call_id":"call-1","pending_tool_name":"` +
-			builtin.RunSandboxTool + `"}`)}); err != nil || !suspended {
+	blob, err := execstate.Encode(execstate.State{
+		Version: execstate.Version, Round: 1, ActiveTools: []string{builtin.RunSandboxTool},
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: "fix the flaky test"},
+			{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call-1",
+				Name: builtin.RunSandboxTool, Arguments: map[string]any{"brief": "fix the flaky test"}}}},
+		},
+		PendingCallID: "call-1", PendingCallName: builtin.RunSandboxTool,
+	})
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if suspended, err := store.MarkSuspended(ctx, turnID, sandbox.Suspension{State: blob, Iteration: 1}); err != nil || !suspended {
 		t.Fatalf("MarkSuspended = (%v, %v), want the run open to the poll", suspended, err)
 	}
 }

@@ -980,7 +980,16 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	}
 	defer adm.release()
 	c.forgetRefused(ev.TurnID)
-	return c.completeAdmitted(adm, ev, trigger, fence)
+	err = c.completeAdmitted(adm, ev, trigger, fence)
+	if refusal, refused := waitingRefusal(err); refused {
+		// REVERTED ON A WAIT, and so the gate's refusal found a round
+		// later: kept for the signal that ends it, and handed back by the
+		// condition it names, as the gate's own is. Against what was
+		// signalled before the gate was asked, so a signal that landed
+		// while the resume ran re-fires it at once.
+		c.keepRefused(ev, trigger, refusal.Condition, seen)
+	}
+	return err
 }
 
 // completeAdmitted is a completion's claim, collection and resume, under the
@@ -2231,8 +2240,20 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 		// conversation is permanently lost with the row stranded in resumed.
 		// The claim's count is given back first, and the hand-back counts
 		// the run in the set it returns to.
-		log.ErrorContext(ctx, "sandbox_resume_failed",
-			"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
+		//
+		// A resume the resumer REFUSED on a condition it names (its models
+		// all at their limit before it wrote anything) is a wait rather
+		// than a failure, and is said as one; its caller waits on it.
+		if refusal, refused := waitingRefusal(err); refused {
+			log.InfoContext(ctx, "sandbox_resume_refused",
+				"turn_id", run.TurnID, "revert_to", claimedFrom(run),
+				"condition", string(refusal.Condition), "reason", refusal.Reason,
+				"detail", "the resumed turn met a condition that ends by waiting before it "+
+					"wrote anything; the run is reverted and resumed once the condition clears")
+		} else {
+			log.ErrorContext(ctx, "sandbox_resume_failed",
+				"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
+		}
 		c.uncountRun(run.AgentHandle, StatusResumed)
 		if unclaimErr := c.unclaim(ctx, run, false, resumeUnrevertedDetail); unclaimErr != nil {
 			//nolint:nilerr // Deliberate, and the same answer the
