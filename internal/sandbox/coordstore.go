@@ -310,13 +310,15 @@ func (s *CoordStore) Get(ctx context.Context, turnID string) (PendingRun, bool, 
 // lease and the write are one compare-and-swap, so the loser sees `resumed` on
 // its re-read, or a job that is no longer its own, or a newer lease, and
 // reports false. A fenced claim stamps its lease on the row, and a zero one
-// claims only a row no lease owns — see the contract on [PendingStore].
+// claims only a row no lease owns — see the contract on [PendingStore]. And a
+// row whose resume is held, at this store's instant, is no claim's.
 func (s *CoordStore) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
 ) (PendingRun, bool, error) {
 	var before string
+	now := s.clock()
 	run, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if run.LaunchID != tail.Launch || !slices.Contains(tail.From, run.Status) ||
-			!slices.Contains(Claimable, run.Status) || superseded(*run, fence) {
+			!slices.Contains(Claimable, run.Status) || superseded(*run, fence) || run.Held(now) {
 			return false
 		}
 		before = run.Status

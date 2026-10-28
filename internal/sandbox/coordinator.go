@@ -1262,7 +1262,9 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.SandboxRunComplete
 		// at-least-once redelivery, the retry a failed resume opened), or
 		// the row no longer holds its job running: parked on the question
 		// that job asked, replaced by the turn's next launch, or over —
-		// or a newer lease than this node's owns it.
+		// or a newer lease than this node's owns it, or its resume is
+		// held on it (a duplicate queued behind the resume that held it,
+		// which the poll announces again once the hold lifts).
 		log.InfoContext(ctx, "sandbox_completion_already_claimed",
 			"turn_id", ev.TurnID, "launch_id", ev.LaunchID)
 		return nil

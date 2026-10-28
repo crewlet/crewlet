@@ -1167,7 +1167,9 @@ type PendingRun struct {
 	// THE ROW STAYS RUNNING, so its seat stays held behind it and the
 	// seat's mail waits, as a seat whose own turn was refused for budget
 	// waits; the poll only announces no completion for it while the hold
-	// lasts ([PendingRun.Held]). Retried at once instead — handed back for
+	// lasts ([PendingRun.Held]), and no claim takes it meanwhile, an
+	// announcement made before the hold included
+	// ([PendingStore.ClaimForResume]). Retried at once instead — handed back for
 	// the broker to redeliver, re-announced by the next poll — every retry
 	// re-collected the job and ran its review again, spending what the
 	// window had left on a relaunch the same refusal was waiting for.
@@ -1422,6 +1424,16 @@ type PendingStore interface {
 	// had fenced, took it and ran the turn on a seat it did not hold. Nothing
 	// that claims holds no lease where a lease exists: a recovery fences
 	// under the lease it took the seat with.
+	//
+	// NOT WHILE ITS RESUME IS HELD ([PendingRun.Held], at the store's own
+	// instant): the claim IS the resume, and the hold says the resume
+	// waits. The waiter announces nothing for a held row, but an
+	// announcement made before the hold was written can still be on the
+	// seat's control topic, queued behind the very resume that held it:
+	// claimed, it collected the job again, waking the box the hold keeps
+	// asleep, and its review was refused into the same hold. A hold lifted
+	// ([PendingStore.LiftHold]), or past its instant, leaves the row
+	// claimable as before.
 	ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence) (PendingRun, bool, error)
 
 	// ReleaseClaim hands a claimed run back to the status it was claimed
