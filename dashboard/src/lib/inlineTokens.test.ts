@@ -424,9 +424,11 @@ describe("bare numbers", () => {
 
 describe("cost", () => {
   // EVERY PATTERN IS LINEAR IN ITS RUN: a comment an agent wrote is rendered by
-  // every reader, so a run that costs seconds freezes everybody. The bound is
-  // two orders above what a linear pass takes here and two below the
+  // every reader, so a run that costs seconds freezes everybody. Every case is
+  // a run of about 20,000 characters, ONE SIZE, so one bound holds them all:
+  // it is two orders above what a linear pass takes here and two below the
   // quadratic passes these replaced (about 2.7 s and 0.6 s at this size).
+  // A case five times the size took 330 ms on a loaded runner, linearly.
   //
   // Mutation: count the brackets again per character trimmed, or bring back
   // the lazy pattern around a word, and the first two cases exceed it.
@@ -439,8 +441,8 @@ describe("cost", () => {
     ["5,000 keys", "GP-1/".repeat(5_000)],
     ["10,000 handles", "@a".repeat(10_000)],
     ["3,000 commits", "commit ".repeat(3_000)],
-    ["10,000 bound numbers", "#1 in a/b ".repeat(10_000)],
-    ["10,000 repositories before a number", "a/b PR ".repeat(10_000)],
+    ["2,000 bound numbers", "#1 in a/b ".repeat(2_000)],
+    ["3,000 repositories before a number", "a/b PR ".repeat(3_000)],
   ])("%s reads in linear time", (_, text) => {
     const start = performance.now();
     inlineTokens(text, new Set(["a", "gp"]));
