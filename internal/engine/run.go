@@ -789,6 +789,8 @@ type Engine struct {
 
 	// usageEvery is Options.usageEvery.
 	usageEvery time.Duration
+	// resumeGate is Options.resumeGate.
+	resumeGate func(sandbox.TurnGate) sandbox.TurnGate
 
 	// history is the fleet's turn-level history reader, and
 	// stopHistoryServe withdraws this node as one of its answerers. See
@@ -1041,6 +1043,14 @@ type Options struct {
 	// host's decision, and the knob exists only so a case can put the next
 	// tick out of reach and see what claims a seat without one.
 	sweepEvery time.Duration
+
+	// resumeGate wraps the gate the sandbox coordinator resumes through
+	// ([Engine.turnGate]), nil for the node's admission as it stands.
+	// UNEXPORTED for the reason usageEvery is: the admission is the node's
+	// decision, and the knob exists only so a case can refuse a resume on a
+	// condition the node has no way to produce on demand, and watch the
+	// refused completion come back when it clears.
+	resumeGate func(sandbox.TurnGate) sandbox.TurnGate
 }
 
 // New assembles an engine.
@@ -1274,6 +1284,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
 		usageEvery:          opts.usageEvery,
+		resumeGate:          opts.resumeGate,
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
 		sessions:            sessions,
@@ -1713,7 +1724,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// node served the request — so behind a load balancer a refresh
 		// tells a different story each time.
 		Status: e.nodeStatus,
-		Turn:   e.Dispatch,
+		Turn:   e.mailboxTurn,
 		// Before the mailbox opens and after it closes — see node.Config.
 		// A seat mid-detached-run must have its runs recovered and its mail
 		// parked before anything can deliver to it.
@@ -1730,7 +1741,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// handle ([sandbox.Coordinator.Readmit]) and the hook is handed the
 		// whole seat — see [node.Config.SeatAdmitted].
 		SeatAdmitted: func(_ context.Context, s placement.Seat) {
-			e.readmitAnswers(waitOwnership, s.Handle)
+			e.readmitResumes(waitOwnership, s.Handle)
 		},
 		// A SEAT A PERSON PAUSED is attached already held, so placement
 		// moving it here does not deliver the mail it is holding: the
@@ -2681,13 +2692,16 @@ func newObjectives(rec *metrics.Recorder) *objectives.Meter {
 	return objectives.NewMeter(rec, nil)
 }
 
-// Dispatch delivers one inbox partition to a seat.
+// mailboxTurn delivers one inbox partition to a seat: the node's TurnFunc
+// ([node.Config.Turn]), which [New] installs and nothing else calls.
 //
-// This is the node's TurnFunc, exported because it is also the entry point for
-// a delivery that did not come from the seat's own subscription — a sandbox
-// run completing, which resumes a suspended Execute loop rather than waiting
-// for the broker to hand the seat something.
-func (e *Engine) Dispatch(ctx context.Context, handle string, evs []*events.Event) queue.Result {
+// UNEXPORTED BECAUSE IT IS NOT AN ENTRY POINT. The node calls it only after it
+// has admitted the delivery's turn ([node.Node.AdmitTurn]), so a caller that
+// reached it any other way would start a turn the node never admitted
+// (ADR-0063). A turn that does not arrive by the mailbox, a coding run's
+// completion or a person's recorded answer, re-enters through the sandbox
+// coordinator's resume, which asks the same admission itself.
+func (e *Engine) mailboxTurn(ctx context.Context, handle string, evs []*events.Event) queue.Result {
 	return e.dispatch.Dispatch(ctx, handle, evs)
 }
 

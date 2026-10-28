@@ -371,7 +371,7 @@ func (e *Engine) adoptSeatPauses(ctx context.Context, next map[uuid.UUID]coord.S
 	// waiting on the pauses for: one this node had not read at all, and one
 	// lifted while it was not listening. A seat still paused is re-checked
 	// and waits again.
-	e.readmitAnswers(waitPause)
+	e.readmitResumes(waitPause)
 	log.InfoContext(ctx, "seat_pauses_read", "paused", len(next))
 }
 
@@ -397,9 +397,9 @@ func (e *Engine) applySeatPause(ctx context.Context, u coord.SeatPauseUpdate) {
 		// has not applied yet — re-checks every seat waiting on a pause,
 		// which costs one look each, since a seat still paused waits again.
 		if handle, ok := e.seatHandle(u.Seat.String()); ok {
-			e.readmitAnswers(waitPause, handle)
+			e.readmitResumes(waitPause, handle)
 		} else {
-			e.readmitAnswers(waitPause)
+			e.readmitResumes(waitPause)
 		}
 		return
 	}

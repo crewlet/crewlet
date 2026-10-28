@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
@@ -1930,6 +1931,10 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].
 		Hold:  seatHold{engine: e},
 		Admit: e.mayResumeAnswer,
+		// AND EVERY RESUME, on either route, is a turn this node admits
+		// as it admits a mailbox's: the seat owned fresh, a slot under
+		// node.max_concurrent, and no drain. See [Engine.admitResume].
+		Gate: e.turnGate(),
 		// A recorded answer that leaves its run — taken by a turn, on the
 		// inline attempt as on a retry, or handed back — is recorded as
 		// worked in the same completion ledger the dispatcher records a
@@ -2158,7 +2163,7 @@ func (e *Engine) holdSandboxSeat(ctx context.Context, handle string) {
 // What a retried resume the seat's conditions refused waits on — the
 // [sandbox.Condition] each refusal names, and the one each signal re-checks.
 // See [Engine.mayResumeAnswer] for which event moves each, and
-// [Engine.readmitAnswers] for where the engine passes it on.
+// [Engine.readmitResumes] for where the engine passes it on.
 const (
 	// waitOwnership — the seat's lease is not fresh, or the seat is still
 	// being established. Signalled when the seat starts admitting turns:
@@ -2187,7 +2192,49 @@ const (
 	// Lifted on the clock when the window turns over, which the refusal
 	// names, or at once by an apply that changes the ceilings.
 	waitBudget sandbox.Condition = "budget"
+
+	// waitDrain: this node is draining, and starts no turn. Nothing
+	// signals it, because nothing in the engine undoes a drain
+	// ([Engine.Drain] latches): the wait ends when the drain hands the seat
+	// back, which lets go of the answer for the seat's next holder to
+	// resume ([sandbox.Coordinator.ReleaseSeat]), or when the node stops.
+	waitDrain sandbox.Condition = "drain"
 )
+
+// turnGate is the gate the coordinator resumes through: [Engine.admitResume],
+// wrapped by [Options.resumeGate] where a case in this package set one.
+func (e *Engine) turnGate() sandbox.TurnGate {
+	if e.resumeGate != nil {
+		return e.resumeGate(e.admitResume)
+	}
+	return e.admitResume
+}
+
+// admitResume is the coordinator's [sandbox.TurnGate]: the node's own
+// admission ([node.Node.AdmitTurn]), with its refusal named as what an
+// answer's retry waits on.
+//
+// The condition is what the control topic hands a refused completion back by
+// ([controlOutcome]), and the cause stays reachable through the refusal for
+// whoever logs or tests it.
+func (e *Engine) admitResume(ctx context.Context, handle string) (context.Context, func(), error) {
+	ctx, release, err := e.node.AdmitTurn(ctx, handle)
+	switch {
+	case err == nil:
+		return ctx, release, nil
+	case errors.Is(err, node.ErrDraining):
+		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
+			Condition: waitDrain, Reason: err.Error()}}
+	case errors.Is(err, node.ErrSeatNotOwned):
+		// THE SAME WAIT [Engine.mayResumeAnswer] names for a seat it
+		// does not find owned, for the same edges.
+		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
+			Condition: waitOwnership, Reason: err.Error(),
+			Until: e.now().Add(e.node.Host().HeartbeatInterval())}}
+	default:
+		return nil, nil, err
+	}
+}
 
 // mayResumeAnswer is the coordinator's [sandbox.Admission]: whether a seat may
 // run a RETRIED resume of a recorded answer now, and if not, what that waits
@@ -2208,7 +2255,7 @@ const (
 // after a blip (node.Config.SeatAdmitted) — with one heartbeat on the clock
 // behind it for a renew that was merely late; a budget window ends at an
 // instant the counters name. The rest are events this node observes and
-// passes on in [Engine.readmitAnswers]'s callers.
+// passes on in [Engine.readmitResumes]'s callers.
 func (e *Engine) mayResumeAnswer(ctx context.Context, handle string) (sandbox.Refusal, bool) {
 	c := e.conditionsFor(nil)(handle)
 	switch {
@@ -2231,11 +2278,15 @@ func (e *Engine) mayResumeAnswer(ctx context.Context, handle string) (sandbox.Re
 	return sandbox.Refusal{}, false
 }
 
-// readmitAnswers passes on that a condition a retried resume may be waiting on
-// can have cleared, for the named seats or every seat: the coordinator
-// re-checks at once the attempts waiting on exactly that. Nothing to do on a
-// node with no sandbox runtime, which owes no answer.
-func (e *Engine) readmitAnswers(cond sandbox.Condition, handles ...string) {
+// readmitResumes passes on that a condition a resume may be waiting on can have
+// cleared, for the named seats or every seat: the coordinator re-checks at once
+// the attempts waiting on exactly that, an owed answer's retry and a completion
+// the node's admission refused ([sandbox.Coordinator.Readmit]). It is THE hook
+// for whatever ends a condition a refusal names: call it with that condition
+// and the seat, and a refused completion resumes now rather than at the
+// waiter's next poll. Nothing to do on a node with no sandbox runtime, which
+// owes no answer and kept no completion.
+func (e *Engine) readmitResumes(cond sandbox.Condition, handles ...string) {
 	if rt := e.sandbox.Load(); rt != nil {
 		rt.coordinator.Readmit(cond, handles...)
 	}
@@ -2446,13 +2497,7 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 	// A detached run outlives its node, so that window is not hypothetical.
 	if err := e.backends.Queue.Subscribe(ctx, control, group,
 		func(ctx context.Context, ev *events.Event) queue.Result {
-			if err := rt.coordinator.OnEvent(ctx, ev); err != nil {
-				// NAK, so a completion this node could not settle comes
-				// back — to this node once its store recovers, or to the
-				// seat's next owner. Acking it would lose the turn.
-				return queue.Nak(err)
-			}
-			return queue.Ack()
+			return controlOutcome(rt.coordinator.OnEvent(ctx, ev))
 		}); err != nil {
 		return fmt.Errorf("attaching the sandbox control topic: %w", err)
 	}
@@ -2468,6 +2513,54 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 	// its recovery would be told its live run had ended.
 	e.bridge.SeatReady(seat.ID)
 	return nil
+}
+
+// controlOutcome is what a seat's control-topic delivery leaves with the broker,
+// given what the coordinator made of it.
+//
+// # A refusal is handed back by the condition it names
+//
+// A completion the node's admission refused ([Engine.admitResume]) left its run
+// unclaimed and running, so the delivery carries nothing that is lost with it:
+// the waiter announces a finished run again on every poll for as long as its
+// row is running ([sandbox.Waiter]). What a refusal does to the delivery is
+// therefore keyed on the condition it names ([sandbox.TurnRefused]), never on
+// which error caused it, so a condition a later change adds is handed back by
+// the rule for its kind with nothing here to edit:
+//
+//   - A CONDITION THAT CLEARS BY WAITING (the seat's ownership not yet proven
+//     again, and any limit a seat sits out) is ACKED. A Nak or a deferral each
+//     spend one of the broker's deliveries ([queue.OutcomeDefer]), so handing a
+//     healthy completion back on a wait would walk it to the dead-letter
+//     boundary while nothing was wrong with it, and a deferral would also
+//     quiesce the attachment, which nothing undoes. The coordinator keeps the
+//     completion and re-fires it when the condition clears
+//     ([Engine.readmitResumes]), and the poll's next announcement is the
+//     backstop for a clearing nothing signals, one poll interval at most.
+//   - A DRAINING NODE ([waitDrain]) DEFERS: the condition does not clear on this
+//     node, which is leaving, so the attachment is quiesced for the rest of the
+//     drain, as a mailbox's is, and the completion goes back to the head of the
+//     topic for the seat's next holder. It costs one delivery, as every handoff
+//     does, which the delivery budget is sized for.
+//
+// # Everything else NAKs
+//
+// A completion this node could not settle (the seat held elsewhere, the store
+// failing, a refusal that names no condition) comes back on the broker's
+// backoff: to this node once its store recovers, or to the seat's next owner.
+// Acking it would lose the turn.
+func controlOutcome(err error) queue.Result {
+	if err == nil {
+		return queue.Ack()
+	}
+	var refused *sandbox.TurnRefused
+	if !errors.As(err, &refused) || refused.Condition == "" {
+		return queue.Nak(err)
+	}
+	if refused.Condition == waitDrain {
+		return queue.Defer(err.Error())
+	}
+	return queue.Ack()
 }
 
 // sandboxSeatAttached reports whether this node attached the seat's sandbox

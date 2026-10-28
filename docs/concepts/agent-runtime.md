@@ -502,7 +502,7 @@ flowchart TD
     S2["2. Stop claiming, give up presence"] --> S3
     S3["3. Close the concurrency gate"] --> S4
     S4["4. Quiesce every held seat"] --> S5
-    S5["5. Wait for in-flight handlers"] --> S6
+    S5["5. Wait for in-flight handlers and turns"] --> S6
     S6["6. Release every seat"] --> S7
     S7["7. Close the HTTP listener<br/>dashboard · REST · webhooks · probes"] --> S8
     S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance · embedding<br/>memory fill · learning · scheduler · last auxiliary-spend flush<br/>custody keeper leaves its group · usage publisher's last flush<br/>integrations · memory sync · object collector · trash reaper"] --> S9
@@ -524,14 +524,25 @@ flowchart TD
    rather than waiting out a redelivery timer) instead of starting fresh LLM
    rounds mid-drain. The gate closes *before* the mailboxes quiesce:
    quiescing stops new deliveries, but a turn already delivered and parked
-   behind a slot is past that point.
+   behind a slot is past that point. **The gate is every road to a turn, not
+   only the mailbox's** ([ADR-0063](https://github.com/crewlet/crewlet/blob/main/adr/0063-every-turn-on-a-node-passes-the-nodes-admission.md)):
+   a [coding run](code-sandbox.md) that finishes during the drain resumes its
+   turn from the seat's control topic, and a person's recorded answer from a
+   retry, and both ask the same gate before they claim anything. Refused, the
+   completion is deferred to the head of the seat's control topic, which is
+   quiesced for the rest of the drain, the run is left unclaimed, and the
+   answer stays recorded on its run, so the seat's next holder resumes either
+   one. The sandbox waiter keeps running meanwhile, so
+   the box stays alive for it.
 4. **Quiesce every held seat.** The node stops taking new work while staying
    attached. This is what makes the wait below terminate: without it the
    mailbox keeps feeding this node work for as long as its peers keep
    publishing, and "wait until nothing is running" never comes true.
-5. **Wait for in-flight handlers**, indefinitely: running turns finish their
-   rounds until the count hits 0, with `drain_in_progress` logging the
-   in-flight count every 10 s. The one stop that does not wait is a node that
+5. **Wait for in-flight handlers and turns**, indefinitely: running turns
+   finish their rounds until both counts hit 0, the deliveries being worked
+   and the turns holding a slot of the gate (a retried answer's resume holds a
+   slot and no delivery), with `drain_in_progress` logging what is still in
+   flight every 10 s. The one stop that does not wait is a node that
    [stopped itself](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too)
    because its own connection to the stream was closed for good: every
    delivery is acknowledged over that connection, so nothing a running turn
