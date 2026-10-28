@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/google/uuid"
 )
 
 // busySeat is one seat wired end to end as a node wires it: its inbox routed
@@ -70,11 +69,6 @@ func newBusySeat(t *testing.T, resume func(*busySeat) sandbox.Resumer) *busySeat
 	s.coordinator = coordinator
 	d.Answer = coordinator.TryResumeFromAnswer
 	d.HoldSandbox = coordinator.HoldSeat
-	// AS THE ENGINE FORWARDS ONE: the same event, to the seat's control topic.
-	d.ForwardAnswer = func(ctx context.Context, ev *events.Event) error {
-		given, _ := events.DataAs[*types.SandboxAnswerGiven](ev)
-		return q.Publish(ctx, topics.AgentControl(uuid.MustParse(given.Agent)), ev)
-	}
 	d.Conditions = func(handle string) inbox.Conditions {
 		held, awaits := coordinator.SeatRuns(handle)
 		return inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true,
@@ -430,44 +424,5 @@ func TestAnAnswerWaitingOnABusySeatOutlivesThePauseTTL(t *testing.T) {
 	order.mu.Unlock()
 	if box != "" {
 		t.Fatalf("t1 resumed into box %q, which the reaper destroyed; want it re-seeded", box)
-	}
-}
-
-// AN ANSWER BY TURN ALREADY ON A SEAT'S INBOX IS RECORDED AND RESUMED ONCE.
-// A node on an earlier build delivered answers to the inbox, and the owner's
-// engine had four waiting there when it was upgraded. Whichever consumer reads
-// one moves it to the seat's control topic, where it takes the same
-// record-then-resume path as one delivered there: the first is recorded and
-// resumes the run, the next finds its question answered, and none is run as a
-// turn.
-//
-// Mutation: drop the dispatcher's forward, and the answer is run as a turn or
-// stranded on the inbox.
-func TestAnAnswerByTurnOnTheInboxTakesTheControlPath(t *testing.T) {
-	t.Parallel()
-	order := &sequence{}
-	s := newBusySeat(t, func(*busySeat) sandbox.Resumer { return &orderedResumer{order: order} })
-	s.launch(t, "t1")
-	t1 := s.parks(t, "t1", "which branch?")
-
-	for _, text := range []string{"use main", "use the release branch"} {
-		if err := s.q.Publish(t.Context(), fixtureInbox("swe"), answerAgainst(t1, text)); err != nil {
-			t.Fatalf("Publish: %v", err)
-		}
-	}
-	eventually(t, "the first answer to be recorded off the inbox", func() bool {
-		run, found, _ := s.store.Get(t.Context(), "t1")
-		return !found || run.Status != sandbox.StatusAwaiting
-	})
-	settle()
-	s.retries.fire()
-	if got := order.list(); !slices.Equal(got, []string{"resume:t1"}) {
-		t.Fatalf("the seat did %v, want t1 resumed once", got)
-	}
-	if !strings.Contains(order.answerFor("t1"), "use main") {
-		t.Fatalf("t1 was resumed with %q, want the first answer", order.answerFor("t1"))
-	}
-	if ran := s.ordinary.ran(); len(ran) != 0 {
-		t.Fatalf("an answer by turn on the inbox was run as a turn: %q", ran)
 	}
 }

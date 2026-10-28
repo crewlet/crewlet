@@ -1,20 +1,15 @@
 package engine
 
 import (
-	"context"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/google/uuid"
 )
 
 // noAudience resolves every question to nobody: the coordinators built with
@@ -161,63 +156,6 @@ func TestALaunchedRunRecordsWhoWokeItsTurn(t *testing.T) {
 	if ref.Requester != "ada" {
 		t.Fatalf("the run's turn reference names requester %q, want ada", ref.Requester)
 	}
-}
-
-// AN ANSWER BY TURN ON A SEAT'S INBOX GOES TO THE SEAT'S CONTROL TOPIC, the
-// same event under the same id, addressed by the seat id it was stamped with.
-// It was settled on the inbox, where it waited behind every coding job that
-// held the seat and every older message, so a busy seat never reached it; one
-// a node on that build put there is moved to where answers by turn are settled
-// now, and one naming no seat is refused rather than published nowhere.
-func TestTheDispatcherForwardsAnAnswerByTurnToTheSeatsControlTopic(t *testing.T) {
-	t.Parallel()
-	e, _ := starting(t, refusingModels(t))
-	sent := &topicLog{}
-	e.backends.Queue = sent
-	d := e.buildDispatcher(Options{Dispatch: &Dispatcher{NoteDeferred: func(string) {}}}, e.backends)
-	if d.ForwardAnswer == nil {
-		t.Fatal("the dispatcher has no route for an answer by turn that reached the inbox")
-	}
-	seat := uuid.MustParse("0f1d4c07-6d2a-4e2b-9a3c-5b8e17d04c21")
-	given := types.SandboxAnswerGiven{TurnID: "t1", Agent: seat.String(), AgentHandle: "swe",
-		Answer: "main", LaunchID: "launch-1"}
-	ev := events.New(given, events.TraceContext{})
-	if err := d.ForwardAnswer(t.Context(), ev); err != nil {
-		t.Fatalf("ForwardAnswer: %v", err)
-	}
-	if got := sent.sent(); len(got) != 1 || got[0].topic != topics.AgentControl(seat) || got[0].ev.ID != ev.ID {
-		t.Fatalf("forwarded %+v, want the same event once on %s", got, topics.AgentControl(seat))
-	}
-
-	given.Agent = ""
-	if err := d.ForwardAnswer(t.Context(), events.New(given, events.TraceContext{})); err == nil {
-		t.Fatal("an answer naming no seat id was forwarded, want it refused")
-	}
-}
-
-// topicLog is a queue that records where each event was published.
-type topicLog struct {
-	queue.EventQueue
-	mu   sync.Mutex
-	pubs []topicPub
-}
-
-type topicPub struct {
-	topic string
-	ev    *events.Event
-}
-
-func (q *topicLog) Publish(_ context.Context, topic string, ev *events.Event) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.pubs = append(q.pubs, topicPub{topic: topic, ev: ev})
-	return nil
-}
-
-func (q *topicLog) sent() []topicPub {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return slices.Clone(q.pubs)
 }
 
 // THE REQUESTER IS KEPT BY ITS SEAT'S HANDLE, and a sender the org does not

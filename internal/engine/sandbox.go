@@ -2318,24 +2318,6 @@ func (e *Engine) readmitResumes(cond sandbox.Condition, handles ...string) {
 	}
 }
 
-// forwardAnswer moves an answer by turn that reached a seat's inbox to that
-// seat's control topic ([Dispatcher.forwardAnswers]), addressed by the seat id
-// the answer was stamped with off its run's row ([sandbox.AnswerDesk.Deliver]).
-// The SAME EVENT, id and all, so the run's record and the completion ledger
-// recognise it there as they would have recognised the original.
-func (e *Engine) forwardAnswer(ctx context.Context, ev *events.Event) error {
-	given, ok := events.DataAs[*types.SandboxAnswerGiven](ev)
-	if !ok {
-		return fmt.Errorf("engine: event %s is not an answer by turn", ev.ID)
-	}
-	seat, err := uuid.Parse(given.Agent)
-	if err != nil || seat == uuid.Nil {
-		return fmt.Errorf("engine: the answer by turn %s names no seat id (%q) to forward it to",
-			ev.ID, given.Agent)
-	}
-	return e.backends.Queue.Publish(ctx, topics.AgentControl(seat), ev)
-}
-
 // sandboxAccountant charges collected runs, or nil where nothing counts them.
 func (e *Engine) sandboxAccountant() sandbox.Accountant {
 	if e.backends == nil || e.backends.Fleet == nil {

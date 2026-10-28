@@ -116,14 +116,6 @@ type Dispatcher struct {
 	// the question it would answer ([sandbox.PendingRun.AskedAt]).
 	Answer func(ctx context.Context, handle string, reply sandbox.Reply) (sandbox.AnswerDisposition, error)
 
-	// ForwardAnswer moves an answer BY TURN that reached the seat's inbox to
-	// the seat's control topic, where answers by turn are settled
-	// ([sandbox.Coordinator.OnAnswerGiven]): see [Dispatcher.forwardAnswers].
-	// Nil hands such a delivery back, as a forward that failed does: an
-	// answer addressed to a run is never a turn, and never this frame's to
-	// drop.
-	ForwardAnswer func(ctx context.Context, ev *events.Event) error
-
 	// NoteDeferred tells the seat host a consumer stopped, so the next
 	// successful renew resumes it.
 	NoteDeferred func(handle string)
@@ -410,14 +402,6 @@ type holding struct {
 // narrows held at each point where the delivery stops being answerable for an
 // event.
 func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.Event, held *holding) queue.Result {
-	// AN ANSWER BY TURN IS NOT THIS SEAT'S MAIL, and goes to the topic that
-	// settles it before the screening can hold it, offer it to a parked
-	// question or run it as a turn: see [Dispatcher.forwardAnswers].
-	evs, forwarded, settled := d.forwardAnswers(ctx, handle, evs)
-	if settled {
-		return forwarded
-	}
-	held.events = evs
 	if len(evs) == 0 {
 		return queue.Ack()
 	}
@@ -1201,69 +1185,6 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 		return sandbox.AnswerNotMine, err
 	}
 	return disposition, err
-}
-
-// forwardAnswers moves every answer BY TURN in a delivery to the seat's
-// control topic, and returns what is left for the ordinary route.
-//
-// # Why an answer by turn is not inbox mail
-//
-// It is addressed to a RUN, and the inbox is the seat's mail: held for as long
-// as any of the seat's coding runs holds the seat, and worked oldest first
-// after that. An answer by turn delivered here waited behind every job the seat
-// took on and every message it had not got to yet, any of which could launch
-// the next job and hold the seat again, and on a busy seat it never arrived:
-// the person was told `pending`, and the run waited out its pause TTL. So
-// answer_run delivers to the control topic ([sandbox.AnswerDesk.Deliver]),
-// which no hold stops, and the coordinator records the answer on arrival and
-// resumes the run as soon as the seat is free
-// ([sandbox.Coordinator.AnswerByTurn]).
-//
-// # Why one still arrives here
-//
-// Nothing this build writes puts one on the inbox. One that is here was put
-// there by a node on a build that did, during a fleet's rolling upgrade or
-// before a single node's restart, and it is still a person's answer to a
-// question that may still be waiting. Run as a turn, it would be read by the
-// seat as a message from nobody about a run it cannot see; dropped, the
-// answer is lost. So it is moved to where it is settled, under its own id,
-// which the completion ledger and the run's record recognise there exactly as
-// they would have recognised the original.
-//
-// # A forward that fails hands the delivery back
-//
-// With a NAK, so the broker's backoff spaces the attempts and its dead-letter
-// subject is the loud end of a forward that never lands. Nothing else in the
-// delivery has run, and nothing in it is lost.
-func (d *Dispatcher) forwardAnswers(ctx context.Context, handle string,
-	evs []*events.Event,
-) ([]*events.Event, queue.Result, bool) {
-	var answers, rest []*events.Event
-	for _, ev := range evs {
-		if _, ok := events.DataAs[*types.SandboxAnswerGiven](ev); ok {
-			answers = append(answers, ev)
-			continue
-		}
-		rest = append(rest, ev)
-	}
-	if len(answers) == 0 {
-		return evs, queue.Result{}, false
-	}
-	for _, ev := range answers {
-		if d.ForwardAnswer == nil {
-			return nil, queue.Nak(fmt.Errorf("engine: %s received an answer by turn on its "+
-				"inbox and this node has no route to the seat's control topic", handle)), true
-		}
-		if err := d.ForwardAnswer(ctx, ev); err != nil {
-			return nil, queue.Nak(fmt.Errorf("engine: moving the answer by turn %s from %s's "+
-				"inbox to its control topic: %w", ev.ID, handle, err)), true
-		}
-		log.InfoContext(ctx, "sandbox_answer_by_turn_forwarded",
-			"agent_handle", handle, "event_id", ev.ID.String(),
-			"detail", "an answer by turn reached the seat's inbox and was moved to its "+
-				"control topic, where answers by turn are recorded and resumed")
-	}
-	return rest, queue.Result{}, false
 }
 
 // answerOwedReason is the deferral reason a chat reply is handed back with

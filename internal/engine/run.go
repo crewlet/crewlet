@@ -2031,12 +2031,6 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 		// parked run for the life of the process.
 		d.Answer = e.answerParkedRun
 	}
-	if d.ForwardAnswer == nil {
-		// An answer by turn that reached the seat's inbox goes to the
-		// seat's control topic, where it is settled. See
-		// [Dispatcher.forwardAnswers].
-		d.ForwardAnswer = e.forwardAnswer
-	}
 	if d.NoteDeferred == nil {
 		d.NoteDeferred = e.node.Host().NoteDeliveryDeferred
 	}

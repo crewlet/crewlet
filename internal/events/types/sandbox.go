@@ -318,10 +318,7 @@ func (e SandboxRunFailed) SummaryFor(actor string) string {
 // the run only while the run still waits on the question it was given against.
 //
 // NEVER A TURN. The sandbox coordinator settles it, and whatever it becomes
-// (resumed, not awaiting, gone) the delivery is spent there. One that reaches
-// the seat's inbox, put there by a node on an earlier build, is moved to the
-// control topic rather than run: a turn woken by it would act on a message
-// addressed to a run.
+// (resumed, not awaiting, gone) the delivery is spent there.
 //
 // KEPT OUT OF THE EVENT STORE, like the other inbox wakes: what happened to
 // the answer is [SandboxRunAnswered], and that the person gave it is their
