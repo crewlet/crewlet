@@ -739,9 +739,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // "N buckets" in this file against the open table below.
 func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*FleetStore, error) {
 	if js == nil {
-		return nil, errors.New("coord/kv: a JetStream client is required — built " +
-			"over the stream's own connection, in the API its broker speaks " +
-			"(see internal/jsapi)")
+		return nil, errNoJetStream
 	}
 	if err := cfg.normalize(); err != nil {
 		return nil, err

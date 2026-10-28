@@ -139,7 +139,7 @@ func TestAConditionalWriteIsAnsweredByWhatTheLeaderDecided(t *testing.T) {
 		}
 		leases := openStore(t, nc, time.Minute)
 		for name, kv := range map[string]jetstream.KeyValue{
-			"leases": leases.leases.kv, "duties": leases.duties.kv, "epochs": leases.epochs,
+			"leases": leases.leases.kv, "duties": leases.duties.kv, "epochs": leases.counter.kv,
 		} {
 			if _, ok := kv.(settledBucket); !ok {
 				t.Errorf("the lease store's %s bucket is a %T, not settled", name, kv)

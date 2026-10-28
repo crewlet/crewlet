@@ -163,6 +163,18 @@ type Condition string
 // run leaves [Holding], parked, settled or resumed and done.
 const SeatCoding Condition = "seat_coding"
 
+// SeatLost is a control-topic delivery refused because this node no longer
+// holds the seat it is for: [ErrSeatNotHeld], with the node's own lease agreeing
+// ([Coordinator.OnEvent]). The delivery belongs to the seat's holder, and it
+// does not clear on this node, which is letting the seat go, so it is handed
+// on to the holder rather than retried here.
+//
+// NOT EVERY [ErrSeatNotHeld]. The run store answers it too for a row a newer
+// lease has stamped, and while this node's lease still stands the two disagree
+// for at most a heartbeat, which settles which is right; handing a delivery on
+// for a seat this node does hold would leave it deaf to it.
+const SeatLost Condition = "seat_lost"
+
 // seatCoding refuses an owed resume on a seat one of whose runs holds it.
 func (c *Coordinator) seatCoding(handle string) (Refusal, bool) {
 	if held, _ := c.SeatRuns(handle); held {

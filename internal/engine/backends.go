@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/store"
@@ -802,6 +803,19 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 // sandbox run — a BILLED box — was forgotten by the process that launched it.
 // What persistence the records get is the same choice as the event log's:
 // stream.store_dir.
+//
+// # AND THE FENCING COUNTER IS A RECORD, whatever the coordination slot says
+//
+// The in-process lease table is right about OWNERSHIP and was wrong about the
+// TOKEN. A seat's epoch is written into fleet records (a sandbox run's
+// owner_epoch) and compared with later, so it has to outlive the process as
+// those records do. Counted beside the in-process leases, it restarted at 1 on
+// every boot, and after a graceful restart the seat's new holder was refused
+// as older than its own previous self on every run that self had parked: an
+// answer to such a run was never recorded, and its resume and reap were
+// refused too. So a single node's leases mint from the same persistent counter
+// a fleet's lease store does (coord/kv.Epochs), in the same bucket, which also
+// carries the tokens across a move from local coordination to a fleet.
 func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends, js natsjs.JetStream) error {
 	// ONE CEILING OVER THE WHOLE BRING-UP, because this is where the
 	// sequence actually is: every replicated bucket of both coordination
@@ -821,19 +835,67 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 	}
 	out.Fleet = shared
 
+	var epochs *kv.Epochs
 	if b.Coordination.Type != config.CoordinationEmbeddedKV {
-		out.Coord = coordmem.New()
-		return nil
+		epochs, err = kv.OpenEpochs(ctx, js, kv.EpochsConfig{
+			Replicas:  b.Stream.Replicas,
+			Clustered: clusteredStream(b),
+		})
+		if err != nil {
+			return fmt.Errorf("engine: coordination: %w", err)
+		}
+		out.Coord = &coordmem.Backend{Epochs: epochs}
+	} else {
+		leases, err := kv.Open(ctx, js, kv.Config{
+			TTL:       leaseTTL(b),
+			Replicas:  b.Stream.Replicas,
+			Clustered: clusteredStream(b),
+		})
+		if err != nil {
+			return fmt.Errorf("engine: coordination: %w", err)
+		}
+		out.Coord, epochs = leases, leases.Epochs()
 	}
-	leases, err := kv.Open(ctx, js, kv.Config{
-		TTL:       leaseTTL(b),
-		Replicas:  b.Stream.Replicas,
-		Clustered: clusteredStream(b),
-	})
+	return floorSeatEpochs(ctx, epochs, shared)
+}
+
+// floorSeatEpochs raises each seat's fencing counter above every epoch its
+// sandbox run records carry, BEFORE this node claims a seat.
+//
+// The counter is the only source of tokens, so a row should never carry one
+// above it, and on a deployment that has only ever minted from this bucket none
+// does. One that did not (local coordination before its counter was
+// persistent), or one whose epochs bucket was deleted and re-created, has rows
+// stamped above an empty counter, and the seat's next holder would be refused
+// as older than its own previous self on every one of them: an answer to a
+// parked run never recorded, its resume and reap refused. Raising the counter
+// is the whole repair, because the seat's next claim then mints above the rows
+// and its recovery fences them to the new lease.
+//
+// EVERY BOOT, on every topology, rather than once: it costs one listing of the
+// runs, and a floor at or below the counter changes nothing, so a fleet's
+// nodes doing it concurrently agree.
+func floorSeatEpochs(ctx context.Context, epochs *kv.Epochs, fleet coord.Fleet) error {
+	floors, err := sandbox.NewCoordStore(fleet).OwnerEpochs(ctx)
 	if err != nil {
-		return fmt.Errorf("engine: coordination: %w", err)
+		return fmt.Errorf("engine: coordination: list the sandbox runs to floor each "+
+			"seat's fencing epoch above them (the coordination store's sandbox runs "+
+			"bucket on the stream's broker, kept under stream.store_dir, must be "+
+			"readable for the node to start): %w", err)
 	}
-	out.Coord = leases
+	for seat, floor := range floors {
+		resource := coord.SeatResource(seat)
+		raised, err := epochs.Floor(ctx, resource, floor)
+		if err != nil {
+			return fmt.Errorf("engine: coordination: raise the fencing epoch of %s to %d: %w",
+				resource, floor, err)
+		}
+		if raised {
+			log.InfoContext(ctx, "seat_epoch_floored", "seat", seat, "epoch", floor,
+				"detail", "a sandbox run carries a fencing epoch the counter had not "+
+					"reached, so the seat's next claim mints above it")
+		}
+	}
 	return nil
 }
 
