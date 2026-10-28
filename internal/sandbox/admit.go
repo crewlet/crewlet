@@ -65,9 +65,15 @@ func (r *TurnRefused) Unwrap() error { return r.Cause }
 //
 // UNEXPORTED, AND THE ONE WAY TO A RESUME. [Coordinator.resumeAndSettle] is
 // the only frame that calls the [Resumer], and it takes one of these rather
-// than a bare context, so a route that would resume a turn without admitting
-// it does not compile. Only [Coordinator.admitTurn] makes one (a guard test
-// holds every other frame to that).
+// than a bare context, so a resume cannot be written outside this package
+// without one. INSIDE it the compiler proves nothing: any frame here could
+// declare one and fill it in. What holds that is the guard
+// (internal/node.TestEveryTurnStartIsAdmitted): only [Coordinator.admitTurn]
+// may mention this type in a value (a literal, a variable, new, a conversion,
+// an alias, a field), only it and the three frames that take one
+// (resumeAndSettle, completeAdmitted, resumeOwedAdmitted) may name it at all,
+// and each of those three is called only from the frame that asked the gate
+// for it, or from one of the other two.
 type admitted struct {
 	ctx     context.Context
 	release func()
