@@ -104,7 +104,9 @@ const (
 	// result not yet returned to the receiver — the durable record the
 	// receiver never heard about. Hit on the committer's batch goroutine,
 	// never in a request, so a crash here holds the batch, and the dead
-	// node's Committer.Stop that waits for it, until the release.
+	// node's Committer.Stop that waits for it, until the release. The change
+	// writer beside the committer hits it too, after a record of a change's
+	// conversation, on the goroutine its publish runs on.
 	CommitterAfterAppend Point = "committer.after_append"
 	// HostAfterPropose: the committer has answered.
 	HostAfterPropose Point = "host.after_propose"

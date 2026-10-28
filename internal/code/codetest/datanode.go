@@ -72,11 +72,12 @@ type DataOptions struct {
 // DataNode is one data node's code domain, composed as the engine composes it
 // for one domain (internal/engine's statelog.go): its store, its applier over
 // its OWN durable consumer of the code log, its write authority — handed to
-// the committer wrapped by the fault publisher that hits
-// codefault.CommitterAfterAppend, so a declaration or an eviction never fires
-// the committer's point — and its read authority with a REAL barrier, so
-// `linearizable` is the read a node serves; and over them the domain's reader,
-// committer, lifecycle store and retention pass.
+// the committer and the change writer beside it wrapped by the fault publisher
+// that hits codefault.CommitterAfterAppend, so a declaration or an eviction
+// never fires the committer's point — and its read authority with a REAL
+// barrier, so `linearizable` is the read a node serves; and over them the
+// domain's reader, committer, change writer, lifecycle store and retention
+// pass.
 //
 // ITS LIFETIME IS THE TEST THAT STARTED IT, whatever restarts it: a topology
 // that outlives the case restarting one of its nodes must not lose the node
@@ -108,6 +109,10 @@ type dataIncarnation struct {
 
 	reader    *code.Reader
 	committer *code.Committer
+	// changes is the change writer beside the committer, over the same
+	// fault publisher: a conversation's record appended and its writer dead
+	// before it answered is the committer's point as much as a push's.
+	changes   *code.ChangeWriter
 	lifecycle *code.Store
 	operator  *code.Store
 
@@ -285,6 +290,16 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	}); err != nil {
 		t.Fatalf("codetest: %s: build the committer: %v", d.o.ID, err)
 	}
+	if p.changes, err = code.NewChangeWriter(code.ChangeWriterOptions{
+		Publisher: &faultPublisher{inner: pub, faults: d.o.Faults, appends: &d.appends},
+		DB:        p.estate.Reader(), NodeID: d.o.ID,
+		Retention: func() time.Duration { return deletedRetention },
+		// NO CHART, as the committer's: every conversation case of the
+		// suite writes as a person, whose comment reads no chart.
+		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{}, false },
+	}); err != nil {
+		t.Fatalf("codetest: %s: build the change writer: %v", d.o.ID, err)
+	}
 	if p.lifecycle, err = code.NewStore(code.StoreOptions{Publisher: pub, DB: p.estate.Reader(),
 		NodeID: d.o.ID}); err != nil {
 		t.Fatalf("codetest: %s: build the lifecycle store: %v", d.o.ID, err)
@@ -316,7 +331,7 @@ func (d *DataNode) Served() code.Served {
 	if p == nil {
 		return code.Served{}
 	}
-	return code.Served{Committer: p.committer, Reader: p.reader}
+	return code.Served{Committer: p.committer, ChangeWriter: p.changes, Reader: p.reader}
 }
 
 // Store is the node's lifecycle store, publishing under its own id.
@@ -632,6 +647,7 @@ func (d *DataNode) Kill() {
 	go func() {
 		defer close(p.stopping)
 		p.committer.Stop(ended)
+		p.changes.Stop(ended)
 	}()
 	p.stopApplier()
 	p.consumer.Close()
@@ -664,6 +680,7 @@ func (d *DataNode) StopCommitter() {
 	bounded, cancel := context.WithTimeout(context.Background(), statelog.DefaultResolveBudget)
 	defer cancel()
 	p.committer.Stop(bounded)
+	p.changes.Stop(bounded)
 }
 
 // teardown ends every incarnation: the crashes released FIRST, before anything
@@ -682,6 +699,7 @@ func (d *DataNode) teardown() {
 			<-p.stopping
 		} else {
 			p.committer.Stop(context.Background())
+			p.changes.Stop(context.Background())
 		}
 		p.stopApplier()
 		p.consumer.Close()

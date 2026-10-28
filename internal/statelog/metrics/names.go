@@ -53,6 +53,7 @@ const (
 	CodeCompactDuration              = "crewlet.code.compact.duration"
 	CodeCompactRefusals              = "crewlet.code.compact.refusals"
 	CodeCompactRuns                  = "crewlet.code.compact.runs"
+	CodeConversationWrites           = "crewlet.code.conversation.writes"
 	CodeFetchDuration                = "crewlet.code.fetch.duration"
 	CodeGitCPU                       = "crewlet.code.git.cpu"
 	CodeGitLentCores                 = "crewlet.code.git.lent_cores"

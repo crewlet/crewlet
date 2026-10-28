@@ -71,7 +71,7 @@ func TestTheCodeDomainsDeclaration(t *testing.T) {
 			code.MaxRecordBytes, spec.MaxRecordBytes)
 	}
 	want := []string{string(code.KindName), string(code.KindRepo), string(code.KindEviction),
-		string(code.KindGeneration), string(code.KindCompany)}
+		string(code.KindGeneration), string(code.KindCompany), string(code.KindChange)}
 	if !slices.Equal(spec.ArbitratedKinds, want) {
 		t.Errorf("the arbitrated kinds are %v, want %v", spec.ArbitratedKinds, want)
 	}

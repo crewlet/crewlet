@@ -782,18 +782,18 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 // applyPurgePart deletes one bounded part of a deleted repository's rows, in a
 // fixed order — its pushes, then its refs, then its packs, then the packs a
 // record retired, then its ref drops, then its changes, each whole: its
-// revisions, its authors, its body and then its row ([purgeChanges]) — so
-// every node deletes the same rows. THE PART IS THE GUARD: only the row's
-// purge_parts + 1 deletes anything, so a redelivered or stale part deletes
-// nothing more.
+// revisions, its authors, its conversation, its body and then its row
+// ([purgeChanges]) — so every node deletes the same rows. THE PART IS THE
+// GUARD: only the row's purge_parts + 1 deletes anything, so a redelivered or
+// stale part deletes nothing more.
 //
 // BOUNDED BY ROWS AND BY BYTES: at most PurgePartRows rows, and its wide rows
 // only until what they weigh reaches PurgePartBytes — the push rows by their
-// row_bytes, and after them the changes by their bodies' body_bytes, one
-// budget for both, because deleting either frees overflow pages a count does
-// not see. A part whose pushes were cut by bytes deletes nothing else: the
-// refs and packs wait for a part whose pushes are done, and the changes for
-// one whose wide rows left room.
+// row_bytes, and after them the changes by their bodies' body_bytes and their
+// conversations' text_bytes, one budget for all, because deleting any of them
+// frees overflow pages a count does not see. A part whose pushes were cut by
+// bytes deletes nothing else: the refs and packs wait for a part whose pushes
+// are done, and the changes for one whose wide rows left room.
 //
 // A RETIRED PACK'S ROW GOES WITH ITS REPOSITORY, its grace or not: the grace
 // is for a reader that began on the pack before it was retired, and no read
@@ -957,17 +957,17 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // redelivery of the marker's own record, which its gate lets through by op id,
 // deletes nothing and inserts nothing. Unbounded statements are safe because
 // the decide forms a purge only once at most PurgePartRows of the
-// repository's pushes, refs, packs, retired packs, ref drops and changes'
-// revisions, authors, bodies and rows remain AND the pushes and the bodies
-// among them weigh at most PurgePartBytes — a part's own bounds — and it
-// holds at most MaxProtectionsPerRepo rules, MaxPathOwners path owners (one row
-// each, their globs packed into it) and a published chain of at most
-// MaxPublishedLayers layers of MaxLayerParts parts each: with the name claim,
-// the row, its kind's count and the marker that is PurgePartRows +
-// MaxProtectionsPerRepo + MaxPathOwners + MaxPublishedLayers × (1 +
-// MaxLayerParts) + 4 rows, which the limits test holds within MaxRecordRows. A
-// change's revisions, authors and body go before the changes, through which
-// alone they are found.
+// repository's pushes, refs, packs, retired packs, ref drops, changes'
+// revisions, authors, bodies and rows and their conversations' rows remain AND
+// the pushes, the bodies and the conversations' text among them weigh at most
+// PurgePartBytes — a part's own bounds — and it holds at most
+// MaxProtectionsPerRepo rules, MaxPathOwners path owners (one row each, their
+// globs packed into it) and a published chain of at most MaxPublishedLayers
+// layers of MaxLayerParts parts each: with the name claim, the row, its kind's
+// count and the marker that is PurgePartRows + MaxProtectionsPerRepo +
+// MaxPathOwners + MaxPublishedLayers × (1 + MaxLayerParts) + 4 rows, which the
+// limits test holds within MaxRecordRows. A change's revisions, authors, body
+// and conversation go before the changes, through which alone they are found.
 //
 // AN OLD NAME a rename left redirecting to the repository is NOT released
 // here: how many a repository holds is bounded by nothing a part counts — one
@@ -985,8 +985,9 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	deleted := 0
 	for _, stmt := range []string{
 		purgeAllPushesSQL, purgeAllRefsSQL, purgeAllPacksSQL, purgeAllRetiredSQL, purgeAllDropsSQL,
-		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllBodiesSQL, purgeAllChangesSQL, purgeAllLayerPartsSQL,
-		purgeAllLayersSQL, clearProtectionsSQL, clearPathOwnersSQL,
+		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllReviewersSQL, purgeAllParticipantsSQL,
+		purgeAllCommentsSQL, purgeAllBodiesSQL, purgeAllConversationsSQL, purgeAllChangesSQL,
+		purgeAllLayerPartsSQL, purgeAllLayersSQL, clearProtectionsSQL, clearPathOwnersSQL,
 	} {
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)
 		if err != nil {

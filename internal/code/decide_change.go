@@ -371,11 +371,12 @@ func (e *ChangeEdit) validFields() error {
 	return stampedBy("edit", e.By)
 }
 
-// stampedBy refuses a record's By an asker set: the committer stamps it from
-// the proposal's asker.
+// stampedBy refuses a record's By an asker set: the node that decides the
+// write stamps it from the write's asker — the committer a change's lifecycle,
+// the change writer its conversation.
 func stampedBy(what string, by Principal) error {
 	if by != (Principal{}) {
-		return badField(what+".by", "the committer stamps who wrote it from the proposal's asker, and an asker "+
+		return badField(what+".by", "the deciding node stamps who wrote it from the write's asker, and an asker "+
 			"sends none")
 	}
 	return nil

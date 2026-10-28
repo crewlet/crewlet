@@ -268,6 +268,37 @@ const (
 	// change_reopen", Since: 2, Path: []string{"op"}, Equals:
 	// string(OpChangeReopen)}, with the same companions. It is no gate.
 	OpChangeReopen OpKind = "change_reopen"
+
+	// OpReviewers asks reviewers of a live change, or withdraws the ask
+	// ([ReviewerRequest]), on the CHANGE's own subject ([KindChange]),
+	// written by the repository's committing data node ([ChangeWriter]).
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// reviewers", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpReviewers)}, with the same companions. It is no gate.
+	OpReviewers OpKind = "reviewers"
+
+	// OpComment says something on a change — a thread of its own, anchored
+	// to a line of one of its revisions or not, or a reply to a thread
+	// ([Comment]) — on the change's own subject, written by the repository's
+	// committing data node.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// comment", Since: 2, Path: []string{"op"}, Equals: string(OpComment)},
+	// with the same companions. It is no gate.
+	OpComment OpKind = "comment"
+
+	// OpThreadResolve marks a thread of a change's comments resolved, or
+	// open again ([ThreadResolve]), on the change's own subject, written by
+	// the repository's committing data node.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// thread_resolve", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpThreadResolve)}, with the same companions. It is no gate.
+	OpThreadResolve OpKind = "thread_resolve"
 )
 
 // OpKinds are the twenty-six, in the order they are documented.
@@ -276,6 +307,7 @@ var OpKinds = []OpKind{
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
 	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpRename, OpReleaseName, OpHold,
 	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen,
+	OpReviewers, OpComment, OpThreadResolve,
 }
 
 // ChangeOps are the six ops of a change's LIFECYCLE, in [OpKinds]' order:
@@ -283,6 +315,14 @@ var OpKinds = []OpKind{
 // as a record of its own.
 func ChangeOps() []OpKind {
 	return []OpKind{OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen}
+}
+
+// ConversationOps are the ops of a change's CONVERSATION, in [OpKinds]' order:
+// what a [ConversationWrite] may be, each a record of its own on the change's
+// subject ([KindChange]), written by the repository's committing data node
+// ([ChangeWriter]).
+func ConversationOps() []OpKind {
+	return []OpKind{OpReviewers, OpComment, OpThreadResolve}
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -309,9 +349,10 @@ const (
 	// ActorSystem is the engine on its own account: the committer's push
 	// batches, compactions, expunge records and change records — a person's
 	// purge request and every write of a change's lifecycle among them, whose
-	// principal its payload names — the code-retention pass's sweeps and
-	// purges, and a reanchor nobody named, recorded under the node that ran
-	// it.
+	// principal its payload names — the change writer's records of a change's
+	// conversation, whose principal its payload names too, the code-retention
+	// pass's sweeps and purges, and a reanchor nobody named, recorded under the
+	// node that ran it.
 	ActorSystem ActorKind = "system"
 
 	// ActorAgent is a seat of the chart, by its handle: a repository's

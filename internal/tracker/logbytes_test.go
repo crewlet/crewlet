@@ -241,6 +241,20 @@ var codeLogUnwritten = map[code.OpKind]struct {
 		"by code_close_change, through the estate's code.change"},
 	code.OpChangeReopen: {payload: reflect.TypeFor[code.ChangeReopen](), how: "a change is " +
 		"reopened by code_close_change, through the estate's code.change"},
+	// A CHANGE'S CONVERSATION, written by the change writer beside each
+	// committer since its subject landed, is appended by no node while
+	// nothing asks for it: the review and comment tools a seat and a person
+	// discuss a change with are its first writer, through the estate's
+	// code.conversation, and a conversation's records come at the rate its
+	// reviewers and commenters write — what the day must price once they
+	// exist, which that writer is the one to measure.
+	code.OpReviewers: {payload: reflect.TypeFor[code.ReviewerRequest](), how: "reviewers are asked " +
+		"by code_request_review, and by code_open_change's reviewers, through the estate's " +
+		"code.conversation"},
+	code.OpComment: {payload: reflect.TypeFor[code.Comment](), how: "a change is commented on by " +
+		"code_comment_on_change, through the estate's code.conversation"},
+	code.OpThreadResolve: {payload: reflect.TypeFor[code.ThreadResolve](), how: "a thread is " +
+		"resolved by code_comment_on_change's resolve, through the estate's code.conversation"},
 }
 
 // codeLogUnwrittenShapes is every SHAPE of record of an op the day classifies
@@ -399,6 +413,8 @@ var codeLogKinds = map[code.ObjectKind]string{
 	code.KindGeneration: "a reanchor (codeLogNegligible)",
 	code.KindCompany:    "the activation fence (codeLogNegligible)",
 	code.KindTrimmed:    "the trim's sweep of the anchors (codeLogNegligible)",
+	code.KindChange: "a change's conversation — its asks for review, its comments and its threads' " +
+		"resolutions — on the change (codeLogUnwritten)",
 }
 
 // The reference company's chart, as a seat's tools hold it. Its work is filed

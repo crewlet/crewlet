@@ -734,6 +734,30 @@ func Catalogue() []Instrument {
 				"cannot judge its seats.",
 		},
 		{
+			Name: CodeConversationWrites, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"op", "outcome"},
+			Shows: "Writes of a change's conversation this node's change writer " +
+				"was asked to decide — each a record on the change's own " +
+				"subject, never in the repository's committer queue — by `op` " +
+				"(`reviewers`, `comment`, `thread_resolve`) and what became of " +
+				"each, by `outcome`: `applied`, its record landed and the " +
+				"change's conversation holds it; `unchanged`, it asked for what " +
+				"the conversation already said, and nothing was appended; " +
+				"`pending` and `unknown`, its record was appended and is not yet " +
+				"known here to have applied; a refusal's own code — " +
+				"`not_permitted`, `no_reviewer`, `too_many_reviewers`, " +
+				"`unknown_revision`, `change_closed`, `change_merged`, " +
+				"`thread_gone`, `change_not_found`, `repo_archived`, " +
+				"`repo_deleted`, `busy`, `not_applied`, `unavailable` — which " +
+				"decided nothing; `handed_on`, one this node decided nothing of " +
+				"for a reason about itself (stopping, no chart to judge a seat " +
+				"or a reviewer by, behind the company's configuration), which " +
+				"the estate asks the repository's runner-up; and `failed`, any " +
+				"other error. `busy` climbing is a change written faster than " +
+				"one node writes it — its writes wait their turn one at a time " +
+				"— or one the change kept moving under for every round.",
+		},
+		{
 			Name: CodeCommitBusy, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"kind"},
 			Shows: "Proposals refused `busy`, undecided, by `kind`: `push`, " +

@@ -134,15 +134,17 @@ type fakeNode struct {
 
 	// proposals is every push proposed to this node's committer,
 	// compactions every compaction, expunges every expunge record, changes
-	// every write of a change, codeSeq the code log's last position it
-	// committed at, and codeErr what its code half refuses every operation
-	// with — a proposal and every read — where it is set (codeops_test.go).
-	proposals   []code.Proposal
-	compactions []code.CompactionProposal
-	expunges    []code.ExpungeProposal
-	changes     []code.ChangeProposal
-	codeSeq     uint64
-	codeErr     error
+	// every write of a change, conversations every write of a change's
+	// conversation, codeSeq the code log's last position it committed at, and
+	// codeErr what its code half refuses every operation with — a proposal and
+	// every read — where it is set (codeops_test.go).
+	proposals     []code.Proposal
+	compactions   []code.CompactionProposal
+	expunges      []code.ExpungeProposal
+	changes       []code.ChangeProposal
+	conversations []code.ConversationWrite
+	codeSeq       uint64
+	codeErr       error
 
 	// codeHalf, where it is set, is this node's code half in place of the
 	// fake's own answers: a REAL reader, for a case about what the code
@@ -3435,7 +3437,8 @@ func TestAKeyedOpWithNoKeyIsRefused(t *testing.T) {
 func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	t.Parallel()
 	ops := []*opSpec{opCodePropose.spec, opCodeCompact.spec, opCodeExpunge.spec, opCodeChange.spec,
-		opCodeResolve.spec, opCodeRepoState.spec, opCodePushOutcome.spec, opCodeRead.spec, opCodeResolveRef.spec}
+		opCodeConversation.spec, opCodeResolve.spec, opCodeRepoState.spec, opCodePushOutcome.spec,
+		opCodeRead.spec, opCodeResolveRef.spec}
 	for _, spec := range ops {
 		if spec.domain != "code" || spec.floorStream != (code.Domain{}).Stream().Name ||
 			spec.copies != "code" {
@@ -3476,6 +3479,9 @@ func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	}
 	if _, err := seam.Change(ctx, code.ChangeProposal{Close: &code.ChangeClose{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("change: %v", err)
+	}
+	if _, err := seam.Converse(ctx, code.ConversationWrite{Comment: &code.Comment{RepoID: "repo-1"}}); err != nil {
+		t.Fatalf("converse: %v", err)
 	}
 	node.mu.Lock()
 	floors := slices.Clone(node.floors)

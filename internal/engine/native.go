@@ -138,9 +138,12 @@ type native struct {
 	// ([builtWith.runsCode]) and nil otherwise: a log runs in every
 	// register, but a committer exists only where somebody asked for pushes
 	// to be decided. Handed out only through [Engine.writeSide], so a node
-	// in a maintenance mode decides nothing.
-	codeStore *code.Store
-	committer *code.Committer
+	// in a maintenance mode decides nothing. changeWriter is the committer's
+	// sibling, built and handed out with it: the writer of changes'
+	// conversations, each on the change's own subject.
+	codeStore    *code.Store
+	committer    *code.Committer
+	changeWriter *code.ChangeWriter
 
 	// codeHost is this node's git surface (internal/code/host) — its cache,
 	// its git pool, the hook relay — built only where the company that
@@ -409,6 +412,17 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				Metrics: e.metrics, Logger: logging.Get("code"),
 			}); err != nil {
 				return fmt.Errorf("engine: code committer: %w", err)
+			}
+			// AND ITS SIBLING, which the estate asks a change's
+			// conversation of on the same node: the same epoch's chart
+			// a reviewer and a seat are judged by, the same posture gate
+			// and the same retention its repo_deleted sentence names.
+			if n.changeWriter, err = code.NewChangeWriter(code.ChangeWriterOptions{
+				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
+				Retention: e.codeDeletedRetention, SeatRules: e.codeSeatRules, Current: e.admits,
+				Metrics: e.metrics, Logger: logging.Get("code"),
+			}); err != nil {
+				return fmt.Errorf("engine: code change writer: %w", err)
 			}
 		}
 		// AND ITS GIT SURFACE, on a node with the git role: the cache it

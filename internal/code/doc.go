@@ -77,9 +77,10 @@
 //
 // The bodies, revisions and authors carry no repo_id, reached by their
 // change's key, so a purge takes a repository's changes WHOLE in number order,
-// each one's dependents before its row, and the bounded count reaches them as
-// the final purge does ([purgeChanges]). A part weighs the bodies in ONE BYTE
-// BUDGET with the push rows, [PurgePartBytes], since deleting either frees
+// each one's dependents — its conversation's among them — before its row, and
+// the bounded count reaches them as the final purge does ([purgeChanges]). A
+// part weighs the bodies and the conversations' comments in ONE BYTE BUDGET
+// with the push rows, [PurgePartBytes], since deleting any of them frees
 // overflow pages a count of rows does not see.
 //
 // ITS LIFECYCLE IS THE COMMITTER'S. An open, an edit, a draft's state, a
@@ -112,9 +113,10 @@
 // committer's next batch.
 //
 // ITS READS ARE ITS REPOSITORY'S (changeread.go). A listing ([ReadChanges])
-// names a repository, a work item or a state, and walks the ONE index its
-// filters lead — a work item's changes, an owner's in a state, a repository's
-// in a state (replicated 0069), a repository's, the company's in a state —
+// names a repository, a work item, a state, a reviewer or what its changes
+// wait on, and walks the ONE index its filters lead — a reviewer's standing
+// asks, a work item's changes, an owner's in a state, a repository's in a
+// state (replicated 0069), a repository's, the company's in a state —
 // newest first, testing every filter that index does not seek on the rows the
 // page read, so a page is the rows it read and never scans past its limit
 // for the few it keeps. One change ([ReadChange]) is read by its number on
@@ -124,6 +126,36 @@
 // asker or the seat it reads for may not read it; a listing that names none
 // leaves out the changes of every repository either may not, and of a
 // deleted one.
+//
+// # A change's conversation is rows on its own subject
+//
+// What is said ABOUT a change — who is asked to review it, its comments and
+// the threads they form — is code_conversations, code_reviewers,
+// code_participants and code_comments, written by records on the CHANGE's own
+// subject ([KindChange], change.<id>) and by no record on its repository's:
+// one table, one subject's writer. Each write is a [ConversationWrite] the
+// estate asks of the repository's committing data node, whose [ChangeWriter]
+// — the committer's sibling, sharing none of its queue — decides it in ONE
+// snapshot under PatternArbitrated, its session the asker's Seen, as a record
+// of its own op ([ConversationOps], decide_conversation.go): who may ask for
+// review and who may be asked (rule D21, the reviewers judged by the deciding
+// node's chart whoever asks — [ConversationWrite.JudgesChart]), a reply only to
+// a thread's root, a thread resolved by its starter, an author, a maintainer or
+// a person. The writer takes ONE CHANGE'S WRITES ONE AT A TIME, so two of them
+// never lose rounds to each other at the broker, and a comment's id is derived
+// from the write's operation id ([CommentID]), so a comment asked again of the
+// repository's runner-up is the comment that landed. Every record names the
+// repository's path and the change's in its scope, since its decide reads the
+// repository's rows; the deletion gate reads the repository off its payload
+// ([gatedRepo]); its apply is pure over the record — a reviewer's kind, stamped
+// from the chart by the writer, rides it (apply_conversation.go); and a
+// conversation's comments are weighed on its counters row (text_bytes), so a
+// purge takes it with its change, cutting a heavy one by its comments
+// ([purgeChanges]). It is READ WITH ITS CHANGE (conversationread.go): a
+// listing naming a reviewer, or what waits on a review, walks the reviewer's
+// standing asks (code_reviewers_reviewer_idx), and a change read pages one
+// part of its conversation — its reviewers, or its comments a thread at a
+// time — the detail on its revisions' first page counting it.
 //
 // # Group commit
 //

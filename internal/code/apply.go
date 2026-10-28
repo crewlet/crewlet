@@ -64,7 +64,9 @@ func (*Applier) Committed(context.Context) {}
 //     nowhere, for ever — otherwise a redelivery months later would resurrect
 //     rows an operator's configuration removed. Its hit is counted on the
 //     marker, an operator surface: a repository still catching records
-//     months after its purge is a writer nobody stopped.
+//     months after its purge is a writer nobody stopped. A record on a
+//     CHANGE's subject is about the repository its payload names, read off
+//     the record's body ([gatedRepo]).
 //
 // The eviction window first, the knowledge base's order: a record both gates
 // drop is dropped either way, so the order decides only which gate COUNTS it.
@@ -82,7 +84,7 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 			}
 		}
 	}
-	repoID, ok := gatedRepo(rec.Subject)
+	repoID, ok := gatedRepo(rec.Subject, rec.Payload)
 	if !ok {
 		return "", false, nil
 	}
@@ -157,6 +159,8 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		return a.applyCreate(ctx, tx, at)
 	case KindRepo:
 		return a.applyRepo(ctx, tx, at)
+	case KindChange:
+		return a.applyChange(ctx, tx, at)
 	}
 	// A KIND THIS BUILD DOES NOT KNOW REACHES HERE ONLY BY WAY OF A RECORD AT
 	// A VERSION IT CAN READ, which is a writer publishing a kind it never

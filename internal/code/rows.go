@@ -27,7 +27,10 @@ func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows
 // guarding row and no marker — releasing a name is part of a purge, not a
 // destruction of its own. The COMPANY's fence has its row. Every other object
 // is created by its first record and removed by nothing, so false for both is
-// the answer rather than an omission.
+// the answer rather than an omission. A CHANGE's subject is no exception: the
+// framework asks both only of a create-only write, and every write on a
+// change's subject is arbitrated; its repository's marker drops its records at
+// the apply gate ([gatedRepo]) and its rows go with the repository's purge.
 func codeGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (deleted, guard bool, err error) {
 	switch ObjectKind(subj.Kind) {
 	case KindRepo:
@@ -145,12 +148,15 @@ func NewGates(db store.ReplicatedReader) *Gates { return &Gates{db: db} }
 // either way, so this order decides only which reason is REPORTED, and
 // [Applier.Gated]'s opposite order only which one a drop is COUNTED under.
 //
-// THE RECORD'S BODY IS NOT READ: both gates are keyed on what the subject and
-// the writer name — a repository subject names its repository, and a name
-// subject's create checks the marker in its own apply ([gatedRepo]) — so the
-// answer is the same whether the publisher hands the body or not.
+// THE BODY IS READ ONLY FOR A CHANGE'S SUBJECT, by the rule the applier's own
+// gate asks ([gatedRepo]): a repository subject names its repository and a
+// name subject's create checks the marker in its own apply, but a change's
+// subject names its change, and the repository it is about is in its payload.
+// Handed no body — the record there is another operation's — a change's record
+// is answered from the subject alone, ungated by a marker, and the re-decide
+// that leads to meets the repository gone in its own snapshot.
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
-	writer, opID string, p statelog.Position, _ []byte) (statelog.Reason, bool, error) {
+	writer, opID string, p statelog.Position, body []byte) (statelog.Reason, bool, error) {
 
 	if g == nil || g.db.IsZero() {
 		return "", false, nil
@@ -158,7 +164,7 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	var reason statelog.Reason
 	var gated bool
 	err := g.db.Read(ctx, func(tx *sql.Tx) error {
-		if repoID, ok := gatedRepo(subj); ok {
+		if repoID, ok := gatedRepo(subj, body); ok {
 			var author sql.NullString
 			err := tx.QueryRowContext(ctx, markerSQL, repoID).Scan(&author)
 			switch {
@@ -210,15 +216,23 @@ func evictedAt(at int64, from, readmitted sql.NullInt64) bool {
 	return evicted && !back
 }
 
-// gatedRepo is the repository whose deletion marker gates a record on subj: a
-// repository subject names its own. A NAME subject names none — its create's
-// payload names the repository, which the gate reader is not handed — so the
-// create's apply checks the marker itself. ONE FUNCTION, asked by
-// [Applier.Gated] and [Gates.GatedAt] alike, because [statelog.Gates] holds
-// the two to one answer.
-func gatedRepo(subj statelog.Subject) (string, bool) {
-	if ObjectKind(subj.Kind) == KindRepo {
+// gatedRepo is the repository whose deletion marker gates a record on subj
+// with the body given: a repository subject names its own; a CHANGE's subject
+// names its change, and the repository is the one its payload names
+// ([changeRepoOf]) — none where no body is handed, or one this build cannot
+// decode. A NAME subject names none — its create's payload names the
+// repository, which the gate reader is not handed — so the create's apply
+// checks the marker itself. ONE FUNCTION, asked by [Applier.Gated] and
+// [Gates.GatedAt] alike, because [statelog.Gates] holds the two to one answer.
+func gatedRepo(subj statelog.Subject, body []byte) (string, bool) {
+	switch ObjectKind(subj.Kind) {
+	case KindRepo:
 		return subj.ID, true
+	case KindChange:
+		if body == nil {
+			return "", false
+		}
+		return changeRepoOf(body)
 	}
 	return "", false
 }

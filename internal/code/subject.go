@@ -20,7 +20,7 @@ import (
 // and the deferral this build files it under is formed from that literal.
 type ObjectKind string
 
-// The seven kinds.
+// The eight kinds.
 //
 // EXPORTED AND ENUMERATED because the readers that compare against them cannot
 // see each other: the publisher builds the subject, the applier's dispatch
@@ -64,19 +64,49 @@ const (
 	// on one subject per floor. The framework removes the anchors in the
 	// transaction that applies it; this domain writes nothing for it.
 	KindTrimmed ObjectKind = statelog.TrimmedKind
+
+	// KindChange is one change (web!42), by its id — the subject what is said
+	// ABOUT a change is written on: who is asked to review it, its comments
+	// and the threads they form ([ConversationOps]). ITS OWN SUBJECT, NEVER
+	// ITS REPOSITORY'S: a change's lifecycle is on the repository's subject,
+	// in the committer's one queue beside the pushes that move its branches,
+	// and a comment decided there would wait behind a push's batch and
+	// contend with every push to the repository over rows it never writes.
+	// ARBITRATED, and published only by the repository's committing data
+	// node ([ChangeWriter]), which takes one change's writes one at a time.
+	// A table is written by the records of ONE subject: the repository's
+	// keep code_changes, its authors, revisions and body, and this one the
+	// conversation's tables.
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this kind — none of the domain is on main, so
+	// no image and no release holds it — and while that is so, every build
+	// that meets a record on a change's subject reads it. Once a build
+	// without it has run, a new kind is a versionedFields row (a kind is a
+	// VALUE of a field every record carries, statelog.VersionedField.Equals)
+	// and this one takes {Name: "Subject.Kind change", Since: 2, Path:
+	// []string{"subject", "k"}, Equals: string(KindChange)}, with
+	// RecordVersion at 2 and its line under "What each version added", a
+	// Carrying record in the statelogtest candidate, and the kind excepted
+	// from the stamp test's base-format loop — an older build would otherwise
+	// FAIL on the record at Apply's unknown-kind arm rather than retain it.
+	// It is no gate.
+	KindChange ObjectKind = "change"
 )
 
-// ObjectKinds are the seven, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the eight, and THE ORDER IS LOAD-BEARING.
 //
 // [statelogtest] publishes the FIRST THREE a domain declares, twice each, in
 // order — so the declaration decides what the framework's own suite certifies.
 // These three are a real sequence: a create on a name, whose payload makes the
 // repository; a push on that repository; and an eviction. A push on a
 // repository no create made is a malformed record under a strict replay, so
-// the repository before its name would certify a failure.
+// the repository before its name would certify a failure. A kind added later
+// is APPENDED, so the three never move: a change's subject is last, and a
+// record on it needs a change no record of the suite's opens.
 var ObjectKinds = []ObjectKind{
 	KindName, KindRepo, KindEviction, KindGeneration, KindCompany,
-	KindBarrier, KindTrimmed,
+	KindBarrier, KindTrimmed, KindChange,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -85,7 +115,7 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// FIVE OF SEVEN DO. The barrier shares one subject across the whole domain, so
+// SIX OF EIGHT DO. The barrier shares one subject across the whole domain, so
 // an expectation there would serialise every linearizable read behind every
 // other one; and a trimmed record REMOVES anchors, so an anchor of its own
 // would be the one row it exists not to leave behind (ADR-0050).
@@ -138,6 +168,10 @@ func NameSubject(name string) Subject { return Subject{Kind: KindName, ID: NameT
 
 // RepoSubject is one repository — what every record about it arbitrates on.
 func RepoSubject(id string) Subject { return Subject{Kind: KindRepo, ID: id} }
+
+// ChangeSubject is one change — what every record of its conversation
+// arbitrates on.
+func ChangeSubject(id string) Subject { return Subject{Kind: KindChange, ID: id} }
 
 // EvictionSubject is one node's standing on this log, so an eviction and the
 // readmission that inverts it contend with each other and with nothing else.

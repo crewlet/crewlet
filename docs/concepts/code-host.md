@@ -59,14 +59,16 @@ This is the product's current shape, not a configuration choice:
   no live turn holds ([Repositories made by tools](#repositories-made-by-tools));
   the tools that ask it arrive with seats' code writes, so today every
   repository is one `code.repos` declares.
-- **Nothing asks for a change yet, and there are no reviews or checks.** A
-  repository's committer decides a [change](#changes)'s opening, its edits and
-  its close, a push to a change's branches writes its revisions, merges it or
-  closes it, and a data node answers a listing of changes and one change in
-  detail ([Reading changes](#reading-changes)) — but no tool, route or push
-  opens or reads one in this release, and no change is reviewed or gated in
-  front of a protected branch. A protection rule decides what a push may do to
-  a ref, and nothing else stands in front of one. So a repository's [path
+- **Nothing asks for a change or its discussion yet, and there are no checks.**
+  A repository's committer decides a [change](#changes)'s opening, its edits
+  and its close, a push to a change's branches writes its revisions, merges it
+  or closes it, the [change writer](#reviews-and-findings) beside the committer
+  decides who is asked to review it and what is said on it, and a data node
+  answers a listing of changes and one change in detail
+  ([Reading changes](#reading-changes)) — but no tool, route or push opens,
+  reads or discusses a change in this release, and no change is gated in front
+  of a protected branch. A protection rule decides what a push may do to a ref,
+  and nothing else stands in front of one. So a repository's [path
   owners](#path-owners) are recorded and read, and no review is asked of them
   yet.
 - **Nothing publishes a repository's layers.** A git node installs the chain
@@ -778,8 +780,9 @@ Four tables hold a change, on every data node:
   the row still says how long it is, so a purge weighs it without reading it.
 - **A change has no horizon of its own.** It is kept as long as its
   repository, and the repository's [purge](#deletion-and-purge) removes it:
-  each change whole, its revisions, authors and description before its row,
-  in the same bounded steps as the rest of the repository's rows.
+  each change whole, its revisions, authors, description and
+  [conversation](#reviews-and-findings) before its row, in the same bounded
+  steps as the rest of the repository's rows.
 
 ### Opening, editing and closing a change
 
@@ -892,14 +895,23 @@ answer that holds every record the code log had committed when it was asked.
 
 - **A listing of changes**, newest first, a page at a time. It names a
   **repository**, a **work item** — by its identity across trackers,
-  `<backend>:<id>`, such as `native:<task id>` — or a **state**, and may
-  narrow further by an **owner** (a seat by its handle, or a person by the
-  human seat they hold) and by whichever of the three it did not name. One
-  that names none of the three is refused: no index holds every change the
-  company has, and an owner's changes are kept by state, so an owner's are
-  listed in a state, or in a repository, or on a work item. A repository's
-  changes are listed by number; every other listing in the order the records
-  that opened its changes landed on the code log.
+  `<backend>:<id>`, such as `native:<task id>` — a **state**, a **reviewer**
+  or **what its changes wait on**, and may narrow further by an **owner** (a
+  seat by its handle, or a person by the human seat they hold) and by
+  whichever of the others it did not name. One that names none of them is
+  refused: no index holds every change the company has, and an owner's
+  changes are kept by state, so an owner's are listed in a state, or in a
+  repository, or on a work item. A repository's changes are listed by
+  number; a reviewer's by the change's id, which is minted as the change is
+  opened; every other listing in the order the records that opened its
+  changes landed on the code log.
+- **The changes waiting on a reviewer** are a listing that names a
+  `reviewer` — the changes whose ask of that reviewer still stands, a closed
+  or merged change's among them, since nothing withdraws an ask when a change
+  ends — or `needs=review`, the **live** ones alone, the asker's own where it
+  names no reviewer: what waits on your review, read from the asks themselves
+  rather than from every change the company holds. A credential bound to no
+  seat is nobody's reviewer, and its `needs=review` is refused.
 - **One change**, by its number on its repository — `web!42` — with its row
   (title, state, branches, head and revision, version, owner, the work item it
   carries, when it was opened, closed or merged and how), its description and
@@ -907,13 +919,14 @@ answer that holds every record the code log had committed when it was asked.
   revisions alone, after the revision the page before it ended at. A number
   the repository does not hold is "no such change", naming it (`web!43`).
 
-**A listing reads the one index its filters lead with** — a work item's
-changes; an owner's in a state; a repository's in a state; a repository's;
-the company's in a state — so a repository's open changes are read without
-its closed and merged history, however long that grows. A filter that index
-does not hold — a repository beside a work item or an owner, a state beside a
-work item, an owner beside a repository with no state — is tested on each
-change the page read, never by reading further: a page is the changes it
+**A listing reads the one index its filters lead with** — a reviewer's
+standing asks; a work item's changes; an owner's in a state; a repository's
+in a state; a repository's; the company's in a state — so a repository's open
+changes are read without its closed and merged history, however long that
+grows. A filter that index does not hold — a repository beside a work item,
+an owner or a reviewer, a state beside a work item or a reviewer, an owner
+beside a repository with no state, a work item beside a reviewer — is tested
+on each change the page read, never by reading further: a page is the changes it
 **read**, not the changes it kept, so it can be short, or empty with a cursor,
 and a reader pages until no cursor comes back. A page reads 50 changes unless
 asked for fewer or more, 200 at most; a change's revisions come 200 a page,
@@ -933,6 +946,139 @@ push](#who-may-read-and-push)):
   repository's state, a deleted one's included, since it was named.
 - A seat reading for a colleague is held to both grants, as every code read in
   such a turn is ([Reads made for somebody else](#reads-made-for-somebody-else)).
+
+---
+
+## Reviews and findings
+
+What is said ABOUT a change — who is asked to review it, its comments and the
+threads they form — is its **conversation**: rows on the code log like the
+change itself, written by records on a subject of the change's own
+(`crewlet.code.log.change.<id>`), never on its repository's. A change's
+lifecycle stays where its pushes are, in the repository's
+[committer](#the-committer); a comment shares nothing with those pushes, and
+decided in the committer's queue it would wait behind their batches and
+contend with every push to the repository.
+
+- **One node writes a change's conversation.** A write is asked of the
+  repository's committing data node — the node its pushes are asked of — and
+  decided there by the **change writer** beside the committer, in one
+  snapshot, as a record of its own; a git node never publishes one. The writer
+  takes ONE CHANGE'S WRITES ONE AT A TIME — two published at once would read
+  one expectation, and one of them would lose a round to the other — and
+  different changes' side by side. A write waits for its change's turn while
+  its asker's attempt has room for it, and is refused `busy`, undecided, the
+  moment it does not. A node that stops answering is replaced by the
+  repository's next data node, under the same operation id, so a write asked
+  again is the write that landed, never a second one.
+- **A write is decided at or past what its asker read.** The asker names the
+  position on the code log it read the change at, and the writer decides only
+  once its own copy holds it, or refuses as a node that is behind, which the
+  next node answers: a reply to a comment the asker was shown is never refused
+  because the writer has not seen the comment yet.
+- **A table is written by one subject's records.** The repository's records
+  keep the change's row, its body, its authors and its revisions; the change's
+  keep its conversation's four tables:
+
+| Table | A row for | What it holds |
+|---|---|---|
+| `code_conversations` | each change that has been discussed | Its counters — its comments — what its comments weigh, and the version and position of its last record |
+| `code_reviewers` | each reviewer it has asked | A seat, or a person by the human seat they hold; whether the ask stands or was withdrawn — a withdrawn ask is kept, so the change says who was once asked — who asked, and the note they asked with, at most 1 KiB |
+| `code_participants` | everybody who takes part in it | Each reviewer asked and each author of a comment, by handle and kind |
+| `code_comments` | each comment | Its thread, its parent, who said it — a seat, or a person with the credential they used — the line it points at, whether its thread is resolved and by whom, the turn that said it, and its body, at most 32 KiB |
+
+### Reading a conversation
+
+A change's conversation is read with the change: one change's read names the
+**part** it pages beside it — its revisions, which a read naming no part
+pages and whose first page carries the change's detail, its **reviewers** or
+its **comments** — every page held to the reader's grant on the repository as
+the change's own rows are ([Reading changes](#reading-changes)).
+
+- **The detail counts the conversation**: its comments, and the version and
+  position of its last record — the floor a read of its parts is asked at, so
+  a comment just written is read back with the change.
+- **Comments come a thread at a time**: a thread's first comment and then its
+  replies in the order they were said, threads in the order they started; a
+  page holds 50 unless asked for fewer or more, 200 at most, and ends at the
+  reply's byte budget first where comments are long. A comment names its
+  thread, the root it replies to, who said it — a seat, or a person and the
+  credential they used — the line a thread's first comment points at, and
+  whether its thread is resolved and by whom.
+- **Reviewers come by handle**, a withdrawn ask among them, 200 a page and
+  1 000 at most: who was asked, by whom, with what note, and whether the ask
+  stands.
+
+### Asking for review
+
+An **ask for review** names reviewers to ask, reviewers whose ask is
+withdrawn, or both. A seat is named by its handle and a person by the human
+seat they hold; which is which is read off the chart.
+
+- **Who may ask:** an author of the change, a principal that reviews the
+  repository (`review`, `write` or `maintain` — see [Who may read and
+  push](#who-may-read-and-push)), and any person.
+- **Who may be asked:** a person, always; a seat only where the chart lets it
+  review the repository, and never an author of the change, whose review of
+  their own change would count for nothing. A seat that may not is refused
+  `not_permitted`, the sentence naming what it holds and what would admit it.
+- **A change asks at most 32 reviewers at once.** A withdrawn ask no longer
+  counts, and an ask past the bound is refused `too_many_reviewers`.
+- **Only a live change is reviewed.** An ask for review of a closed change is
+  refused `change_closed`, and of a merged one `change_merged`.
+- **An ask that moves nothing changes nothing.** Asking reviewers who are
+  asked already, and withdrawing nobody who is, is answered from the rows and
+  appends nothing.
+- **The chart judges every reviewer, whoever asks.** A node that holds no
+  chart yet, or one [behind the company's configuration](#a-seats-push),
+  decides no ask for review — and no seat's write of a conversation at all —
+  and hands it to the repository's next data node.
+
+### Comments and threads
+
+A **comment** says something on a change, in any state — a change is
+discussed after it merges too. It is anybody's who reads the repository, and a
+credential bound to no seat says nothing: every comment names who said it.
+
+- **A thread is one level deep.** A comment starts a thread of its own, or
+  replies to the first comment of a thread on the same change; a reply to a
+  reply, to another change's comment or to nothing is refused `thread_gone`.
+  A comment's id is derived from its operation id, so a comment asked again is
+  the comment that landed.
+- **A thread's first comment may point at a line**: a file, a revision of the
+  change, a side of its diff and the line, with the blob read there. A
+  revision the change has not reached is refused `unknown_revision`.
+- **A thread is resolved, or opened again,** by whoever started it, an author
+  of the change, a principal that maintains the repository or a person —
+  anybody else is refused `not_permitted` — and its first comment names who
+  resolved it.
+
+A write of a conversation that is refused appends nothing, and says why in one
+sentence:
+
+| Refusal | Means |
+|---|---|
+| `repo_deleted`, `repo_archived` | The repository is deleted, being purged or gone, or archived and read-only |
+| `change_not_found` | The repository holds no such change |
+| `not_permitted` | The asker may not make the write, or a reviewer asked may not review the change — the sentence says which, and what would admit it |
+| `no_reviewer` | A reviewer asked is no seat of the chart |
+| `too_many_reviewers` | The change would ask more than 32 reviewers at once |
+| `unknown_revision` | A comment points at a revision the change has not reached |
+| `change_closed`, `change_merged` | An ask for review of a change that is not live |
+| `thread_gone` | A reply or a resolution names no thread of the change |
+| `busy`, `not_applied`, `unavailable` | The writer did not reach the write in time, or the code log refused it or dropped it on every node: nothing was decided, and the write is sent again |
+
+- **A conversation goes with its repository.** A repository's
+  [purge](#deletion-and-purge) removes each change's conversation before the
+  change's own row, within the purge's bounded steps: a conversation is
+  weighed by what its comments hold, read off its counters row, and one
+  heavier than a step is cut by its comments, oldest thread first. A record
+  about a purged repository's change applies nowhere, as one about the
+  repository does.
+
+`crewlet.code.conversation.writes` counts every write of a conversation a
+node's change writer was asked to decide, by its write and what became of it
+(the [metrics reference](../reference/metrics.md)).
 
 ---
 
@@ -1023,14 +1169,15 @@ the log can replay), the fleet-singleton `code-retention` duty purges it (see
   bounded part of the repository's rows — its push history, its refs, its
   packs and the ones a compaction retired, its
   [ref drops](#retention-and-history), then its [changes](#changes), each
-  whole: a change's revisions, authors and description, then its row — and
-  the last leaves only a **deletion marker**, which drops every later record
-  about the repository on every node, for ever
+  whole: a change's revisions, authors, [conversation](#reviews-and-findings)
+  and description, then its row — and the last leaves only a **deletion
+  marker**, which drops every later record about the repository on every
+  node, for ever — on the repository and on its changes alike
   ([the deletion gate](../guides/replication.md#applied-is-not-permanent)).
   A step is bounded by how many rows it removes and by what its widest rows
-  weigh: the push records and the change descriptions it removes together
-  stop at about 32 MiB, so a repository with long descriptions takes more
-  steps rather than longer ones;
+  weigh: the push records, the change descriptions and the comments it
+  removes together stop at about 32 MiB, so a repository with long
+  descriptions or long discussions takes more steps rather than longer ones;
 - every data node applies every step on its one write lane, so the duty paces
   itself: after each step it waits twice the step's duration, a third of the
   lane, and a pass stops after a minute of steps and the next resumes from

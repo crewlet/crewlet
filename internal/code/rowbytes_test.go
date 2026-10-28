@@ -97,6 +97,14 @@ func TestARowsComputedSizeIsItsEncodingsLength(t *testing.T) {
 		var revision RevisionRow
 		fill(rng, reflect.ValueOf(&revision).Elem())
 		check("revision", revision, revision.encodedBytes())
+
+		var reviewer ReviewerRow
+		fill(rng, reflect.ValueOf(&reviewer).Elem())
+		check("reviewer", reviewer, reviewer.encodedBytes())
+
+		var comment CommentRow
+		fill(rng, reflect.ValueOf(&comment).Elem())
+		check("comment", comment, comment.encodedBytes())
 	}
 }
 

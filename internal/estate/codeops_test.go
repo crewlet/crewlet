@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -99,6 +100,22 @@ func (f *fakeNode) ProposeChange(_ context.Context, p code.ChangeProposal) (code
 	}
 	f.codeSeq++
 	return code.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: p.ChangeID(), Number: 1, Version: 1,
+		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
+}
+
+// Converse is a change writer that writes every write of a change's
+// conversation it is given at the next position on the code log — or refuses
+// every one with codeErr.
+func (f *fakeNode) Converse(_ context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
+	f.note("code.conversation")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.conversations = append(f.conversations, w)
+	if f.codeErr != nil {
+		return code.ConversationResult{}, f.codeErr
+	}
+	f.codeSeq++
+	return code.ConversationResult{Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
 }
 
@@ -244,6 +261,85 @@ func (f *fakeNode) proposalsTo(repo string) []code.Proposal {
 	return out
 }
 
+// conversedOn is every serving node a write of a conversation of a change of
+// repo was asked of, sorted.
+func (f *fleet) conversedOn(repo string) []string {
+	var out []string
+	for name, n := range f.nodes {
+		n.mu.Lock()
+		asked := slices.ContainsFunc(n.conversations, func(w code.ConversationWrite) bool {
+			return w.RepoID() == repo
+		})
+		n.mu.Unlock()
+		if asked {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// A CONVERSATION RECORD IS PUBLISHED BY THE COMMITTING NODE: a write of a
+// change's conversation is asked of the repository's committer — the first of
+// the rendezvous order of the repository over every data node, the node a push
+// to it is proposed on — whichever node asks, so one node's change writer takes
+// a change's writes one at a time and a git node never publishes one; and an
+// unanswered one is asked of the runner-up under the same operation id.
+//
+// Mutation: key the operation by nothing, and the writes spread over whichever
+// node answered last; key it by the change, and a repository's conversations
+// leave its committer.
+func TestAConversationRecordIsPublishedByTheCommittingNode(t *testing.T) {
+	t.Parallel()
+	holders := []string{"data-a", "data-b", "data-c", "data-d"}
+	f := newFleet(t, holders...)
+	r := f.router(t, "agent-2", nil)
+	for i := range 16 {
+		repo := fmt.Sprintf("repo-%02d", i)
+		committer := rendezvous.Order(repo, holders)[0]
+		w := code.ConversationWrite{OpID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d.code_comment_on_change", i),
+			Comment: &code.Comment{RepoID: repo, ChangeID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d", 100+i),
+				Body: "why?"}}
+		if _, err := r.Code().Converse(t.Context(), w); err != nil {
+			t.Fatalf("converse on %s: %v", repo, err)
+		}
+		if got := f.conversedOn(repo); !slices.Equal(got, []string{committer}) {
+			t.Fatalf("a comment on a change of %s was asked of %v, want its committing node %s alone", repo,
+				got, committer)
+		}
+		if _, err := r.Code().Propose(t.Context(), proposalTo(repo, "push-"+repo)); err != nil {
+			t.Fatalf("propose to %s: %v", repo, err)
+		}
+		if got := f.proposedOn(repo); !slices.Equal(got, []string{committer}) {
+			t.Fatalf("a push to %s was proposed on %v, and its conversation on %s", repo, got, committer)
+		}
+	}
+
+	// THE RUNNER-UP, under the same operation id, once the committer ran
+	// nothing.
+	repo := "repo-handed-on"
+	order := rendezvous.Order(repo, holders)
+	f.nodes[order[0]].set(func(n *fakeNode) { n.codeErr = code.ErrNotServing })
+	w := code.ConversationWrite{OpID: "019a0c2e-0000-7000-8000-0000000000f0.code_comment_on_change",
+		Comment: &code.Comment{RepoID: repo, ChangeID: "019a0c2e-0000-7000-8000-0000000000f1", Body: "why?"}}
+	if _, err := r.Code().Converse(t.Context(), w); err != nil {
+		t.Fatalf("converse: %v", err)
+	}
+	runnerUp := f.nodes[order[1]]
+	runnerUp.mu.Lock()
+	var asked []code.ConversationWrite
+	for _, got := range runnerUp.conversations {
+		if got.RepoID() == repo {
+			asked = append(asked, got)
+		}
+	}
+	runnerUp.mu.Unlock()
+	if len(asked) != 1 || !reflect.DeepEqual(asked[0], w) {
+		t.Fatalf("the runner-up %s was asked %+v, want the very write its committer ran nothing of", order[1],
+			asked)
+	}
+}
+
 // proposedOn is every serving node a push to repo was proposed on, sorted.
 func (f *fleet) proposedOn(repo string) []string {
 	var out []string
@@ -319,6 +415,7 @@ type codeAnswers struct {
 	expunged  code.ExpungeResult
 	changed   code.ChangeResult
 	lifecycle code.LifecycleResult
+	conversed code.ConversationResult
 }
 
 func (d *codeDesk) For(context.Context, string) (Backend, bool) { return Backend{Code: d}, true }
@@ -364,6 +461,11 @@ func (d *codeDesk) ProposeExpunge(_ context.Context, p code.ExpungeProposal) (co
 func (d *codeDesk) ProposeChange(_ context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
 	held, err := d.took(p)
 	return held.changed, err
+}
+
+func (d *codeDesk) Converse(_ context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
+	held, err := d.took(w)
+	return held.conversed, err
 }
 
 func (d *codeDesk) Resolve(_ context.Context, q code.ResolveQuery) (code.RepoRef, error) {
@@ -622,6 +724,36 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		}
 	}
 
+	// A CHANGE'S CONVERSATION'S WRITES, every field of each — the fields the
+	// writer stamps among them, which cross whole whoever set them — and
+	// every field of the answer.
+	comment := &code.Comment{RepoID: ref.ID, ChangeID: item.ChangeID, CommentID: "019a0c2e-0000-7000-8000-0000000000e1",
+		ThreadID: "019a0c2e-0000-7000-8000-0000000000e2", ParentID: "019a0c2e-0000-7000-8000-0000000000e2", By: seat,
+		Body: "Why two retries?", TurnID: "019a0c2e-0000-7000-8000-0000000000d2",
+		Anchor: &code.CommentAnchor{Revision: 3, Path: "upload/retry.go", Side: code.SideNew, Line: 42,
+			BlobOID: "8888888888888888888888888888888888888888"}}
+	for name, w := range map[string]code.ConversationWrite{
+		"an ask for review": {Reviewers: &code.ReviewerRequest{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
+			Request:  []code.Reviewer{{Handle: "plat-lead", Kind: code.PartyAgent}, {Handle: "founder", Kind: code.PartyPerson}},
+			Withdraw: []string{"cto"}, Note: "the retry loop"}},
+		"a comment": {Comment: comment},
+		"a thread's resolution": {ThreadResolve: &code.ThreadResolve{RepoID: ref.ID, ChangeID: item.ChangeID,
+			ThreadID: comment.ThreadID, Resolved: true, By: seat}},
+	} {
+		w.OpID, w.Asker, w.Seen = "019a0c2e-0000-7000-8000-0000000000e0.code_comment_on_change", seat, at
+		d.mu.Lock()
+		d.conversed = code.ConversationResult{Outcome: statelog.OutcomeApplied, ID: comment.CommentID, Position: at,
+			Unchanged: true, Refusal: code.ConversationRefusalThreadGone,
+			Detail: "app!42 holds no thread 019a0c2e-0000-7000-8000-0000000000e2"}
+		d.mu.Unlock()
+		if got, err := seam.Converse(ctx, w); err != nil || !reflect.DeepEqual(got, d.conversed) {
+			t.Errorf("converse %s = (%+v, %v), want %+v", name, got, err, d.conversed)
+		}
+		if got := d.last(); !reflect.DeepEqual(got, w) {
+			t.Errorf("the change writer was asked %s %+v, want %+v", name, got, w)
+		}
+	}
+
 	resolveQ := code.ResolveQuery{Name: "app", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}}
 	if got, err := seam.Resolve(ctx, resolveQ); err != nil || !reflect.DeepEqual(got, ref) {
 		t.Errorf("resolve = (%+v, %v), want %+v", got, err, ref)
@@ -672,6 +804,14 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		{Kind: code.ReadPublicationDue, Cursor: "1700000000000000/" + ref.ID,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		{Kind: code.ReadExpungeDue, Cursor: ref.ID, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		// THE CONVERSATION'S FILTERS AND PARTS, each crossing whole: a
+		// filter dropped on the wire would answer the wider listing.
+		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadChanges,
+			Reviewer: "plat-lead", Needs: code.NeedReview, Repo: "app", State: code.ChangeStateOpen,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadChange, Repo: "app",
+			Change: 3, Part: code.PartComments, Cursor: "40/" + ref.ID, Limit: 20,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 	} {
 		if got, err := seam.Read(ctx, q); err != nil || !reflect.DeepEqual(got, d.read) {
 			t.Errorf("read %s = (%+v, %v), want %+v", q.Kind, got, err, d.read)
@@ -1005,6 +1145,40 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 		}
 		if got := f.client.Code().FloorOf("repo-expunged"); got != expunged {
 			t.Fatalf("a lifecycle request of another repository moved repo-expunged's floor to %v", got)
+		}
+	}
+
+	// AND A WRITE OF A CHANGE'S CONVERSATION THIS NODE ASKED FOR raises the
+	// SESSION'S floor to the record where it landed — never where it was
+	// refused or answered unchanged — and never its repository's: a
+	// conversation moves no git content, and the repository's floor is what
+	// a read of its objects has its git node sync to.
+	conversed := statelog.Position{Stream: codeStream, Generation: 1, Seq: 97}
+	for _, tc := range []struct {
+		answer code.ConversationResult
+		want   statelog.Position
+	}{
+		{code.ConversationResult{Refusal: code.ConversationRefusalThreadGone, Detail: "app!1 holds no thread"},
+			lived},
+		{code.ConversationResult{Outcome: statelog.OutcomeApplied, Unchanged: true,
+			Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: 99}}, lived},
+		{code.ConversationResult{Outcome: statelog.OutcomeApplied, ID: "c-1", Position: conversed}, conversed},
+	} {
+		d.mu.Lock()
+		d.conversed = tc.answer
+		d.mu.Unlock()
+		if _, err := f.client.Code().Converse(t.Context(), code.ConversationWrite{
+			Comment: &code.Comment{RepoID: "repo-changed"}}); err != nil {
+			t.Fatalf("converse: %v", err)
+		}
+		if got := f.client.Session().Floors([]string{codeStream}); !slices.Equal(got,
+			[]statelog.Position{tc.want}) {
+			t.Fatalf("after a conversation's write answered %+v the code floor is %v, want %v", tc.answer, got,
+				tc.want)
+		}
+		if got := f.client.Code().FloorOf("repo-changed"); got != changed {
+			t.Fatalf("after a conversation's write answered %+v its repository's floor is %v, want %v — a "+
+				"conversation moves no git content", tc.answer, got, changed)
 		}
 	}
 }

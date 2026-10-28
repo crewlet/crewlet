@@ -25,10 +25,14 @@ import (
 //
 // # A listing walks the one index its filters lead
 //
-// Every listing names a repository, a work item or a state ([ReadQuery.State]
-// says why), and walks ONE index, chosen by its filters in this order
-// ([walkOf]):
+// Every listing names a repository, a work item, a state, a reviewer or what
+// its changes wait on ([ReadQuery.State] says why), and walks ONE index,
+// chosen by its filters in this order ([walkOf]):
 //
+//   - a reviewer, or a need of a review: code_reviewers_reviewer_idx
+//     (replicated 0070), the changes whose ask of that reviewer stands —
+//     the set a reviewer is asked to work through, newest change first
+//     (conversationread.go);
 //   - a work item named: code_changes_work_idx (recreated in its order by
 //     replicated 0069), the item's changes — the narrowest set a listing
 //     names, and still paged, since a recurring item gathers a change every
@@ -41,11 +45,13 @@ import (
 //   - a state: code_changes_state_idx, the company's changes in that state.
 //
 // NEWEST FIRST, always: a repository's walks by number, which is the order the
-// code log opened its changes in (a number is the apply's); every other by the
-// position of the record that opened each change and then its id, since one
-// record can open several. A filter the walked index does not seek — a
-// repository beside a work item or an owner, a state beside a work item, an
-// owner beside a repository's or a work item's walk — is tested on each row
+// code log opened its changes in (a number is the apply's); a reviewer's by the
+// change's id, a UUIDv7 minted when it was opened; every other by the position
+// of the record that opened each change and then its id, since one record can
+// open several. A filter the walked index does not seek — a repository beside
+// a work item, an owner or a reviewer, a state beside a work item or a
+// reviewer, an owner beside a repository's, a work item's or a reviewer's
+// walk, a work item beside a reviewer's — is tested on each row
 // the page read, never written into the statement: a test inside a statement
 // that no index serves reads every row it rejects before its LIMIT fills,
 // without bound, where a page that reads LIMIT rows and keeps what passes reads
@@ -97,6 +103,9 @@ const (
 	// of the record that opened each and then by id; its cursor is a
 	// [logCursor] of the two.
 	byOpening
+	// byAsk is the changes a reviewer is asked to review, newest first by
+	// the change's id; its cursor is the last id a page read.
+	byAsk
 )
 
 // changeWalk is the one index a listing of changes walks, as its filters
@@ -109,17 +118,22 @@ type changeWalk struct {
 	// before a page's cursor and its limit.
 	keys  []any
 	order changeOrder
-	// repo, state and owner are the filters its index does not seek, which a
-	// page tests on each row it read ([changeWalk.keeps]).
-	repo, state, owner bool
+	// repo, state, owner and work are the filters its index does not seek,
+	// which a page tests on each row it read ([changeWalk.keeps]); live
+	// keeps a draft or open change alone, for a listing of what a live
+	// change waits on.
+	repo, state, owner, work, live bool
 }
 
 // walkOf is the walk q's filters choose, repoID the id of the repository q
 // names — "" where it names none. q is a listing [ReadQuery.validate] passed:
-// it names a repository, a work item or a state.
+// it names a repository, a work item, a state, a reviewer or a need.
 func walkOf(q ReadQuery, repoID string) changeWalk {
 	named := repoID != ""
 	switch {
+	case q.Reviewer != "" || q.Needs == NeedReview:
+		return changeWalk{index: reviewerAsksKey, keys: []any{q.waitedOn()}, order: byAsk, repo: named,
+			state: q.State != "", owner: q.Owner != "", work: q.Work != "", live: q.Needs == NeedReview}
 	case q.Work != "":
 		backend, id, _ := cutWork(q.Work)
 		return changeWalk{index: changesWorkKey, keys: []any{string(backend), id}, order: byOpening,
@@ -137,8 +151,11 @@ func walkOf(q ReadQuery, repoID string) changeWalk {
 
 // cursor is where a page that read row last ends, in the walk's order.
 func (w changeWalk) cursor(row changeRow) string {
-	if w.order == byNumber {
+	switch w.order {
+	case byNumber:
 		return strconv.FormatInt(row.number, 10)
+	case byAsk:
+		return row.id
 	}
 	return logCursor(row.opened, row.id)
 }
@@ -146,9 +163,12 @@ func (w changeWalk) cursor(row changeRow) string {
 // resume is what a page after cursor binds between the walk's keys and its
 // limit, and false where cursor is no cursor of this walk's order.
 func (w changeWalk) resume(cursor string) ([]any, bool) {
-	if w.order == byNumber {
+	switch w.order {
+	case byNumber:
 		n, err := strconv.ParseInt(cursor, 10, 64)
 		return []any{n}, err == nil && n > 0
+	case byAsk:
+		return []any{cursor}, bareUUIDv7("cursor", cursor) == nil
 	}
 	// THE >= BESIDE THE OR keeps the index's range seek, which a bare OR
 	// of the two terms would give up (planner.go).
@@ -160,7 +180,8 @@ func (w changeWalk) resume(cursor string) ([]any, bool) {
 // not seek, repoID the repository q names.
 func (w changeWalk) keeps(row changeRow, q ReadQuery, repoID string) bool {
 	return (!w.repo || row.repoID == repoID) && (!w.state || row.state == q.State) &&
-		(!w.owner || row.owner == q.Owner)
+		(!w.owner || row.owner == q.Owner) && (!w.work || row.work.Ref() == q.Work) &&
+		(!w.live || row.state.Live())
 }
 
 // read is one page of the walk's rows: at most limit, after cursor where it
@@ -169,6 +190,8 @@ func (w changeWalk) keeps(row changeRow, q ReadQuery, repoID string) bool {
 // every text this issues to the plan it registers (readindex_test.go).
 func (w changeWalk) read(ctx context.Context, tx *sql.Tx, cursor string, limit int) ([]changeRow, error) {
 	switch w.index {
+	case reviewerAsksKey:
+		return w.readAsked(ctx, tx, cursor, limit)
 	case changesWorkKey:
 		return w.readBy(ctx, tx, changesOfWorkSQL, changesOfWorkAfterSQL, cursor, limit)
 	case changesOwnerKey:
@@ -341,10 +364,11 @@ func listedReposIn(ctx context.Context, tx *sql.Tx, scanned []changeRow, asker P
 	return listed, rows.Err()
 }
 
-// change serves one change by its number: on a first page its detail and its
-// first page of revisions, and on a later page, after the number of the last
-// revision the page before served, its revisions alone — every page judged
-// against the grant from the repository's row ([readableIn]).
+// change serves one change by its number: on a first page of its revisions
+// its detail beside them, and on a later page, after the number of the last
+// revision the page before served, its revisions alone; and a page of the
+// part of its conversation the read names ([ReadQuery.Part]) — every page
+// judged against the grant from the repository's row ([readableIn]).
 func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
 	repo, err := readableIn(ctx, tx, q.Repo, q.Asker, q.CeilingSeat, chart)
 	if err != nil {
@@ -357,6 +381,12 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	if !found {
 		return fmt.Errorf("%w: %s", ErrChangeNotFound, ChangeRef(repo.ref.Name, q.Change))
 	}
+	switch q.Part {
+	case PartReviewers:
+		return r.changeReviewers(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
+	case PartComments:
+		return r.changeComments(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
+	}
 	limit := min(limitOr(q.Limit, defaultRevisionLimit), r.pageRows)
 	var rows *sql.Rows
 	if q.Cursor == "" {
@@ -368,7 +398,12 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if authorsErr != nil {
 			return authorsErr
 		}
-		out.Change = &ChangeDetail{ChangeSummary: repo.summary(row), Body: body, Authors: authors}
+		conversation, conversationErr := conversationRowIn(ctx, tx, row.id)
+		if conversationErr != nil {
+			return conversationErr
+		}
+		out.Change = &ChangeDetail{ChangeSummary: repo.summary(row), Body: body, Authors: authors,
+			Conversation: conversation}
 		rows, err = tx.QueryContext(ctx, revisionsSQL, row.id, limit)
 	} else {
 		n, parseErr := strconv.ParseInt(q.Cursor, 10, 64)
@@ -461,20 +496,30 @@ func (r changeRow) wire() ChangeRow {
 }
 
 // validateChanges is [ReadQuery.validate] for a `changes` listing: it names a
-// repository, a work item or a state — what the indexes it walks are led by
-// ([walkOf]) — each a value one could be, and an owner by a seat's handle.
+// repository, a work item, a state, a reviewer or a need — what the indexes it
+// walks are led by ([walkOf]) — each a value one could be, an owner and a
+// reviewer by a seat's handle, and a need of a review whose reviewer it
+// names or whose asker is bound to a seat.
 func (q ReadQuery) validateChanges() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
-	case q.Repo == "" && q.Work == "" && q.State == "":
-		return refused("state", "a listing of changes names a repository, a work item or a state, which "+
-			"the indexes it walks are each led by — no index holds every change the company has, and an "+
-			"owner's changes are kept by state")
+	case q.Repo == "" && q.Work == "" && q.State == "" && q.Reviewer == "" && q.Needs == "":
+		return refused("state", "a listing of changes names a repository, a work item, a state, a reviewer "+
+			"or what its changes wait on, which the indexes it walks are each led by — no index holds every "+
+			"change the company has, and an owner's changes are kept by state")
 	case q.State != "" && !q.State.Valid():
 		return refused("state", fmt.Sprintf("%q is not one of %v", q.State, ChangeStates()))
 	case q.Owner != "" && !org.ValidHandle(q.Owner):
 		return refused("owner", fmt.Sprintf("%q is not a seat's handle: a change's owner is a seat, or the "+
 			"human seat a person holds", q.Owner))
+	case q.Reviewer != "" && !org.ValidHandle(q.Reviewer):
+		return refused("reviewer", fmt.Sprintf("%q is not a seat's handle: a reviewer is a seat, or the "+
+			"human seat a person holds", q.Reviewer))
+	case q.Needs != "" && !q.Needs.Valid():
+		return refused("needs", fmt.Sprintf("%q is not one of %v", q.Needs, Needs()))
+	case q.Needs != "" && q.waitedOn() == "":
+		return refused("needs", fmt.Sprintf("needs=%s is the asker's own unless it names whose — a "+
+			"reviewer — and this credential is bound to no seat", q.Needs))
 	}
 	if q.Work != "" {
 		if _, _, why := cutWork(q.Work); why != "" {

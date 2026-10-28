@@ -494,6 +494,60 @@ func (r RevisionRow) encodedBytes() int {
 	return n + field("position", positionBytes(r.Position), false) + field("at", timeBytes(r.At), false)
 }
 
+// encodedBytes is the length of the reviewer's JSON encoding.
+func (r ReviewerRow) encodedBytes() int {
+	n := 2 + field("reviewer", stringBytes(r.Reviewer), true) +
+		field("kind", stringBytes(string(r.Kind)), false) +
+		field("reason", stringBytes(string(r.Reason)), false) +
+		field("state", stringBytes(string(r.State)), false) +
+		field("requested_by", stringBytes(r.RequestedBy), false) +
+		field("requested_by_kind", stringBytes(string(r.RequestedByKind)), false)
+	if r.Note != "" {
+		n += field("note", stringBytes(r.Note), false)
+	}
+	return n + field("position", positionBytes(r.Position), false)
+}
+
+// encodedBytes is the length of the comment's JSON encoding.
+func (c CommentRow) encodedBytes() int {
+	n := 2 + field("id", stringBytes(c.ID), true) +
+		field("thread_id", stringBytes(c.ThreadID), false)
+	if c.ParentID != "" {
+		n += field("parent_id", stringBytes(c.ParentID), false)
+	}
+	n += field("author", stringBytes(c.Author), false) +
+		field("author_kind", stringBytes(string(c.AuthorKind)), false)
+	if c.AuthorOperatorID != "" {
+		n += field("author_operator_id", stringBytes(c.AuthorOperatorID), false)
+	}
+	if c.Anchor != nil {
+		n += field("anchor", c.Anchor.encodedBytes(), false)
+	}
+	if c.Resolved {
+		n += field("resolved", trueBytes, false)
+	}
+	if c.ResolvedBy != "" {
+		n += field("resolved_by", stringBytes(c.ResolvedBy), false)
+	}
+	if c.ResolvedByKind != "" {
+		n += field("resolved_by_kind", stringBytes(string(c.ResolvedByKind)), false)
+	}
+	if c.TurnID != "" {
+		n += field("turn_id", stringBytes(c.TurnID), false)
+	}
+	return n + field("body", stringBytes(c.Body), false) +
+		field("position", positionBytes(c.Position), false) + field("at", timeBytes(c.At), false)
+}
+
+// encodedBytes is the length of the anchor's JSON encoding.
+func (a CommentAnchor) encodedBytes() int {
+	return 2 + field("revision", intBytes(a.Revision), true) +
+		field("path", stringBytes(a.Path), false) +
+		field("side", stringBytes(string(a.Side)), false) +
+		field("line", intBytes(int64(a.Line)), false) +
+		field("blob_oid", stringBytes(a.BlobOID), false)
+}
+
 // encodedBytes is the length of the command's JSON encoding.
 func (c Command) encodedBytes() int {
 	n := 2 + field("ref", stringBytes(c.Ref), true) + field("old", stringBytes(c.Old), false) +

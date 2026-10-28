@@ -66,7 +66,8 @@ const (
 	laneShared lane = ""
 
 	// laneProposals answers proposals alone — a push's, a compaction's, an
-	// expunge record's and a change's — on [ProposalSubject].
+	// expunge record's and a change's, and a write of a change's conversation,
+	// which waits its change's turn on the same node — on [ProposalSubject].
 	laneProposals lane = "proposals"
 
 	// laneGitReads answers a repository's git reads alone ([GitCopy]) — on

@@ -103,3 +103,93 @@ func aChangeOpenSurvivesItsCommitter(t *testing.T, c Cluster) {
 	restarted = true
 	rc.converged()
 }
+
+// commentOf is a comment on a change of the repository, asked by
+// [changeAsker] under an operation id of its own — a reply to parent where one
+// is named.
+func commentOf(repoID, changeID, parent, body string) code.ConversationWrite {
+	return code.ConversationWrite{OpID: statelog.NewOpID(time.Now(), "code_comment_on_change"),
+		Asker: changeAsker, Comment: &code.Comment{RepoID: repoID, ChangeID: changeID, ParentID: parent,
+			Body: body}}
+}
+
+// F32: a comment whose writer dies after appending its record and before it
+// answered is asked of the repository's runner-up under its OWN operation id,
+// which the ledger collapses onto the record that landed: the comment is
+// answered applied, by the id that record gave it, and no second comment is
+// said — asked again it is the same comment, appending nothing. A reply to it,
+// whose decide reads the thread's root, lands through another member; and the
+// dead writer, back, applies the records every member does.
+func aConversationSurvivesItsWriter(t *testing.T, c Cluster) {
+	rc := newRepoCase(t, c, "fleet-f32")
+	writer := rc.committer()
+	r := rc.other(writer)
+	p := NewPerson(t, c, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	rc.mustPush(p, work, r, "main")
+	p.Commit(work, map[string]string{"README.md": "two\n"}, "two")
+	rc.mustPush(p, work, r, "HEAD:refs/heads/feature")
+	opened, err := c.ChangeThrough(rc.ctx, r, openOf(rc.id, "refs/heads/feature", "Two"))
+	if err != nil || opened.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the change to discuss answered %+v, %v; want it opened", opened, err)
+	}
+
+	say := commentOf(rc.id, opened.ChangeID, "", "Why two?")
+	held, reached := make(chan struct{}), make(chan struct{})
+	c.Faults().Arm(codefault.CommitterAfterAppend, codefault.Action{Once: true, Block: held, Reached: reached})
+	defer close(held)
+	type answer struct {
+		res code.ConversationResult
+		err error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		res, err := c.ConverseThrough(rc.ctx, r, say)
+		done <- answer{res, err}
+	}()
+	select {
+	case <-reached:
+	case got := <-done:
+		t.Fatalf("the comment ended before its writer appended it: %+v, %v", got.res, got.err)
+	}
+	c.Kill(t, writer)
+	restarted := false
+	defer func() {
+		if !restarted {
+			c.Restart(t, writer)
+		}
+	}()
+	got := <-done
+	if got.err != nil || got.res.Outcome != statelog.OutcomeApplied || got.res.ID != code.CommentID(say.OpID) {
+		t.Fatalf("a comment whose writer died after appending it answered %+v, %v; want comment %s applied",
+			got.res, got.err, code.CommentID(say.OpID))
+	}
+
+	appended := 0
+	for _, n := range c.DataNodes() {
+		appended += c.Appends(n)
+	}
+	again, err := c.ConverseThrough(rc.ctx, rc.other(writer, r), say)
+	if err != nil || again.Outcome != statelog.OutcomeApplied || again.ID != got.res.ID ||
+		again.Position != got.res.Position {
+		t.Fatalf("the comment asked again answered %+v, %v; want the same comment at %s", again, err,
+			got.res.Position)
+	}
+	after := 0
+	for _, n := range c.DataNodes() {
+		after += c.Appends(n)
+	}
+	if after != appended {
+		t.Fatalf("the comment asked again appended %d records, want none", after-appended)
+	}
+	reply, err := c.ConverseThrough(rc.ctx, r, commentOf(rc.id, opened.ChangeID, got.res.ID,
+		"Because one is not."))
+	if err != nil || reply.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("a reply to the comment answered %+v, %v; want it applied in the comment's thread", reply, err)
+	}
+	rc.converged()
+	c.Restart(t, writer)
+	restarted = true
+	rc.converged()
+}

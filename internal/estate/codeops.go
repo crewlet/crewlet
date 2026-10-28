@@ -30,6 +30,7 @@ type CodeServer interface {
 	ProposeCompaction(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error)
 	ProposeExpunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error)
 	ProposeChange(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
+	Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error)
 	Resolve(ctx context.Context, q code.ResolveQuery) (code.RepoRef, error)
 	Snapshot(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error)
 	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
@@ -132,6 +133,34 @@ var opCodeChange = define("code.change", opIdempotentWrite, codeDomain, false,
 		return res, ranNothing(err)
 	}).keyedBy(code.ChangeProposal.RepoID).answeredOn(laneProposals).
 	judgesGrant(func(p code.ChangeProposal) bool { return p.Asker.Kind == code.PrincipalAgent })
+
+// opCodeConversation is a write of a change's CONVERSATION — an ask for review,
+// a comment or a thread's resolution — asked of the repository's COMMITTING
+// data node, keyed by the repository as a change's lifecycle is, and answered
+// there by its change writer (code.ChangeWriter), which publishes it on the
+// change's own subject, never in the committer's queue: an IDEMPOTENT write
+// keyed by its operation id, which its asker minted once and the domain's
+// operation ledger collapses (a comment's id is derived from it, so no retry
+// says it twice), so an unanswered one is asked of the repository's runner-up
+// with the same id. On the proposals lane, because it holds its answer slot
+// while it waits for its change's turn on that node. No actor: the asker
+// travels inside the write, checked by its Validate on the node that decides,
+// which records it as who wrote it.
+//
+// A WRITE THE CHART JUDGES — a seat's, and an ask of reviewers by anybody,
+// since each reviewer is judged by the chart — is declared so
+// (code.ConversationWrite.JudgesChart, the writer's own rule), and a node
+// behind the company's configuration answers none of it, even asked last; a
+// person's comment consults no chart.
+var opCodeConversation = define("code.conversation", opIdempotentWrite, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, w code.ConversationWrite) (code.ConversationResult, error) {
+		if b.Code == nil {
+			return code.ConversationResult{}, errNoHalf
+		}
+		res, err := b.Code.Converse(ctx, w)
+		return res, ranNothing(err)
+	}).keyedBy(code.ConversationWrite.RepoID).answeredOn(laneProposals).
+	judgesGrant(code.ConversationWrite.JudgesChart)
 
 // proposalAnswers is how many proposals a data node answers at once, on the
 // lane they have to themselves ([laneProposals]): 1 088, THE MOST ONE

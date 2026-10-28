@@ -424,6 +424,26 @@ const (
 	// which replicated 0066 sizes the row by as it does by the title.
 	MaxCloseReasonBytes = 1 << 10
 
+	// MaxReviewersPerChange is the most reviewers a change asks at once: the
+	// tracker's own bound on the people one item mentions (its MaxMentions),
+	// because a request is a mention that waits for an answer — and the
+	// readers who weigh a change's readiness read each requested reviewer's
+	// latest verdict, so the set they read is bounded by it too. A reviewer
+	// withdrawn no longer counts against it.
+	MaxReviewersPerChange = 32
+
+	// MaxReviewNoteBytes is the longest note a request for review carries —
+	// a sentence or two of what to look at, kept on each requested
+	// reviewer's narrow row as a change's close reason is on its own.
+	MaxReviewNoteBytes = 1 << 10
+
+	// MaxCommentBytes is the longest comment on a change: as long as the
+	// change's own description (MaxChangeBodyBytes) and a comment on a task
+	// in the engine's own tracker, the text a review's discussion most often
+	// quotes from. Weighed into its conversation's text_bytes, which a purge
+	// part counts toward PurgePartBytes as it does a change's body.
+	MaxCommentBytes = 32 << 10
+
 	// HorizonDeletesPerRecord is how many expired PUSH ROWS one push record
 	// removes from its repository: no fewer than the push rows a record can
 	// add (MaxPushesPerRecord), so the push history's removal keeps pace on

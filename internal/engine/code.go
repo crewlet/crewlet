@@ -199,6 +199,12 @@ func (e *Engine) stopCommitter(ctx context.Context) { e.native.Load().stopCommit
 // within it when the broker answers — it is the bound every write's own wait
 // for its applier takes — and when the broker does not, the push ids the batch
 // carried collapse on whatever landed when their clients push again.
+//
+// THE CHANGE WRITER STOPS WITH IT, for the same two reasons: a write of a
+// change's conversation waiting its change's turn is answered "not serving" and
+// taken to the runner-up, and a publish in flight finishes before the estate
+// subject cancels its answer and before the admission is withdrawn. One bound
+// for both, the writer's stop after the committer's.
 func (n *native) stopCommitter(ctx context.Context) {
 	if n == nil || n.committer == nil {
 		return
@@ -206,6 +212,9 @@ func (n *native) stopCommitter(ctx context.Context) {
 	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), statelog.DefaultResolveBudget)
 	defer cancel()
 	n.committer.Stop(bounded)
+	if n.changeWriter != nil {
+		n.changeWriter.Stop(bounded)
+	}
 }
 
 // clientTerm is one log's census term of readers that are neither seats nor

@@ -131,6 +131,17 @@ func CommitterQueued(c *Committer, repoID string) int {
 	return 0
 }
 
+// ChangeWriterHolders is how many writes of changeID hold or wait for its turn
+// on w.
+func ChangeWriterHolders(w *ChangeWriter, changeID string) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if t := w.turns[changeID]; t != nil {
+		return t.holders
+	}
+	return 0
+}
+
 // The committer's batching bounds, for the limits test.
 const (
 	RecordOverheadBytes = recordOverheadBytes

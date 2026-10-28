@@ -1397,6 +1397,15 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 		{opCodeChange.spec, code.ChangeProposal{Asker: person}, false},
 		{opCodeLifecycle.spec, code.LifecycleRequest{Kind: code.LifecycleHold, Actor: seat}, true},
 		{opCodeLifecycle.spec, code.LifecycleRequest{Kind: code.LifecycleCreate, Actor: person}, true},
+		// A WRITE OF A CHANGE'S CONVERSATION THE CHART JUDGES: a seat's, and an
+		// ask of reviewers by anybody, each reviewer judged by the chart; a
+		// person's comment and withdrawal consult none.
+		{opCodeConversation.spec, code.ConversationWrite{Asker: seat, Comment: &code.Comment{}}, true},
+		{opCodeConversation.spec, code.ConversationWrite{Asker: person, Comment: &code.Comment{}}, false},
+		{opCodeConversation.spec, code.ConversationWrite{Asker: person, Reviewers: &code.ReviewerRequest{
+			Request: []code.Reviewer{{Handle: "dev"}}}}, true},
+		{opCodeConversation.spec, code.ConversationWrite{Asker: person, Reviewers: &code.ReviewerRequest{
+			Withdraw: []string{"dev"}}}, false},
 	} {
 		if tc.spec.judges == nil {
 			t.Errorf("%s declares no grant", tc.spec.name)

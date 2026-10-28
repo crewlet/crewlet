@@ -504,6 +504,17 @@ func TestOnlyAReadOfChangesTakesItsFields(t *testing.T) {
 		"refs of a work item":           {code.ReadQuery{Kind: code.ReadRefs, Repo: "web", Work: "native:task-1"}, "work:"},
 		"a detail of a change's number": {code.ReadQuery{Kind: code.ReadRepo, Repo: "web", Change: 1}, "change:"},
 		"a changes listing in brief":    {code.ReadQuery{Kind: code.ReadChanges, Repo: "web", Brief: true}, "brief:"},
+		"a listing of nobody's review":  {code.ReadQuery{Kind: code.ReadChanges, Reviewer: "Not A Handle"}, "reviewer:"},
+		"a listing of no need":          {code.ReadQuery{Kind: code.ReadChanges, Needs: "lunch"}, "needs:"},
+		"a listing of a part":           {code.ReadQuery{Kind: code.ReadChanges, Repo: "web", Part: code.PartComments}, "part:"},
+		"a change of no part":           {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, Part: "diff"}, "part:"},
+		"a change for a reviewer":       {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, Reviewer: "dev"}, "reviewer:"},
+		"a change that needs":           {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1, Needs: code.NeedReview}, "needs:"},
+		"a history of a part":           {code.ReadQuery{Kind: code.ReadPushes, Repo: "web", Part: code.PartReviewers}, "part:"},
+		"comments past their page": {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1,
+			Part: code.PartComments, Limit: code.MaxCommentsPerPage + 1}, "limit:"},
+		"reviewers past their page": {code.ReadQuery{Kind: code.ReadChange, Repo: "web", Change: 1,
+			Part: code.PartReviewers, Limit: code.MaxReviewersPerPage + 1}, "limit:"},
 	} {
 		tc.q.Asker, tc.q.Fresh = asker, stale
 		if _, err := n.reader.Read(t.Context(), tc.q); !errors.Is(err, code.ErrInvalid) ||
@@ -519,6 +530,11 @@ func TestOnlyAReadOfChangesTakesItsFields(t *testing.T) {
 		"an introduced page in a state":   {Kind: code.ReadIntroduced, State: "open", Introduced: &code.IntroducedQuery{RepoID: "id"}},
 		"an introduced page of a work item": {Kind: code.ReadIntroduced, Work: "native:task-1",
 			Introduced: &code.IntroducedQuery{RepoID: "id"}},
+		"an introduced page of a reviewer": {Kind: code.ReadIntroduced, Reviewer: "dev",
+			Introduced: &code.IntroducedQuery{RepoID: "id"}},
+		"a duty listing that needs":        {Kind: code.ReadCompactionDue, MinPacks: 1, Needs: code.NeedReview},
+		"a publication listing's part":     {Kind: code.ReadPublicationDue, Part: code.PartComments},
+		"an expunge listing of a reviewer": {Kind: code.ReadExpungeDue, Reviewer: "dev"},
 	} {
 		q.Fresh = stale
 		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrInvalid) {
@@ -529,6 +545,7 @@ func TestOnlyAReadOfChangesTakesItsFields(t *testing.T) {
 		"a repository's listing after a position": {Repo: "web", Cursor: "123/0190f3c4-0000-7000-8000-000000000001"},
 		"a state's listing after a number":        {State: "open", Cursor: "12"},
 		"a repository's listing after nothing":    {Repo: "web", Cursor: "0"},
+		"a reviewer's listing after a number":     {Reviewer: "dev", Cursor: "12"},
 	} {
 		q.Kind, q.Asker, q.Fresh = code.ReadChanges, asker, stale
 		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrBadCursor) {
@@ -538,5 +555,12 @@ func TestOnlyAReadOfChangesTakesItsFields(t *testing.T) {
 	if _, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadChanges, Repo: "web",
 		Fresh: statelog.Freshness{Level: statelog.ReadSession}}); !errors.Is(err, code.ErrBadLevel) {
 		t.Errorf("a listing of changes at a bare session = %v, want ErrBadLevel", err)
+	}
+	// A NEED IS SOMEBODY'S: the asker's own where it names no reviewer, so a
+	// credential bound to no seat names nobody it could be.
+	if _, err := n.reader.Read(t.Context(), code.ReadQuery{Asker: unbound, Kind: code.ReadChanges,
+		Needs: code.NeedReview, Fresh: stale}); !errors.Is(err, code.ErrInvalid) ||
+		!strings.Contains(err.Error(), "needs:") {
+		t.Errorf("a need of a credential bound to nobody = %v, want ErrInvalid naming needs", err)
 	}
 }

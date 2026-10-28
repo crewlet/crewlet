@@ -1265,7 +1265,16 @@ func scanIntroduced(rows *sql.Rows) (IntroducedRow, int, error) {
 //     listing's bounds, for rows as narrow as a ref's — an oid, a handle, a
 //     push id, a position and an instant, about 250 bytes — so a page of
 //     1 000 is about 250 KB, and a change pushed two hundred times is one
-//     page.
+//     page;
+//   - a change's reviewers: a revision's bounds, for rows as narrow — two
+//     handles, a reason, a state, a position, and a note most asks leave
+//     empty — so a change's every ask, MaxReviewersPerChange at once and
+//     the withdrawn ones beside them, is one page, and one of notes at
+//     their 1 KiB ends at the byte budget first;
+//   - a change's comments: a listing of changes' bounds, 50 a screen of a
+//     timeline and 200 at most, over rows of a few hundred bytes to
+//     MaxCommentBytes — 200 one-line comments are under 100 KB, and a page
+//     of long ones ends at the byte budget first.
 //
 // The maxima are exported for a client that pages: the most a page may ask
 // for of each, which a page past them is refused naming.
@@ -1366,8 +1375,11 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	case ReadChange:
 		// A FIRST PAGE IS READ AS THE DETAIL IT CARRIES, a point read of the
 		// repository whose records write the change, as a first page of
-		// refs is; a later page is a page of revisions, a set.
-		query = fresh.Resolved(resolver(q.Repo), q.Cursor != "")
+		// refs is; a later page is a page of revisions, a set, and so is
+		// every page of a part of its conversation — whose records name the
+		// repository's path in their scope too, so the repository's
+		// deferrals order them.
+		query = fresh.Resolved(resolver(q.Repo), q.Cursor != "" || !q.Part.detailed())
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.change(ctx, tx, q, chart, &out) }
 	case ReadIntroduced:
 		// A POINT READ OF THE REPOSITORY, as a snapshot is: an index built
@@ -1417,9 +1429,10 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 // refused naming it, never clamped — or a field outside the kind that reads
 // it: a status filter outside a listing of repositories, a prefix outside a
 // refs listing, a brief or one push outside a push history, a change's number
-// outside a change read, a state, an owner or a work item outside a listing
-// of changes, a range outside an `introduced` read, a run outside a
-// `run_pushes` read, a floor of live packs outside a `compaction_due` read.
+// or a part of it outside a change read, a state, an owner, a work item, a
+// reviewer or a need outside a listing of changes, a range outside an
+// `introduced` read, a run outside a `run_pushes` read, a floor of live packs
+// outside a `compaction_due` read.
 func (q ReadQuery) validate() error {
 	if !q.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %v", ErrInvalid, q.Kind, ReadKinds())
@@ -1474,6 +1487,15 @@ func (q ReadQuery) validate() error {
 		return fmt.Errorf("%w: owner: only a listing of changes is narrowed to a change's owner", ErrInvalid)
 	case q.Work != "" && q.Kind != ReadChanges:
 		return fmt.Errorf("%w: work: only a listing of changes is narrowed to a work item", ErrInvalid)
+	case q.Reviewer != "" && q.Kind != ReadChanges:
+		return fmt.Errorf("%w: reviewer: only a listing of changes is narrowed to a reviewer", ErrInvalid)
+	case q.Needs != "" && q.Kind != ReadChanges:
+		return fmt.Errorf("%w: needs: only a listing of changes is narrowed to what its changes wait on",
+			ErrInvalid)
+	case q.Part != "" && q.Kind != ReadChange:
+		return fmt.Errorf("%w: part: only a change read names a part of the change", ErrInvalid)
+	case q.Part != "" && !q.Part.Valid():
+		return fmt.Errorf("%w: part: %q is not one of %v", ErrInvalid, q.Part, ChangeParts())
 	}
 	switch {
 	case q.Kind == ReadRepos, q.Kind == ReadChanges && q.Repo == "":
@@ -1500,7 +1522,7 @@ func (q ReadQuery) validate() error {
 		}
 	}
 	bound := map[ReadKind]int{ReadRepos: MaxReposPerPage, ReadPushes: MaxPushesPerPage,
-		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: MaxRevisionsPerPage}[q.Kind]
+		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: q.Part.maxPerPage()}[q.Kind]
 	switch {
 	case q.Limit < 0:
 		return fmt.Errorf("%w: limit: %d", ErrInvalid, q.Limit)
@@ -1549,6 +1571,12 @@ func (q ReadQuery) validateIntroduced() error {
 		return refused("work", "only a listing of changes is narrowed to a work item")
 	case q.RunPushes != nil:
 		return refused("run_pushes", "only a run_pushes read names a coding run")
+	case q.Reviewer != "":
+		return refused("reviewer", "only a listing of changes is narrowed to a reviewer")
+	case q.Needs != "":
+		return refused("needs", "only a listing of changes is narrowed to what its changes wait on")
+	case q.Part != "":
+		return refused("part", "only a change read names a part of the change")
 	case !onLog(in.After) || !onLog(in.Through) || !onLog(in.Before):
 		return refused("introduced", "every position it names is on the code log")
 	case in.Descending && in.Before.IsZero():
@@ -1615,7 +1643,7 @@ func (q ReadQuery) validateRunPushes() error {
 		{"repo", q.Repo != ""}, {"status", len(q.Status) > 0}, {"prefix", q.Prefix != ""},
 		{"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0}, {"brief", q.Brief},
 		{"push", q.Push != ""}, {"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""},
-		{"work", q.Work != ""},
+		{"work", q.Work != ""}, {"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 	} {
 		if f.set {
 			return refused(f.field, "a run_pushes read names its repositories in its run and filters nothing")
@@ -1657,6 +1685,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
 		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
+		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -1689,6 +1718,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
+		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -1717,6 +1747,7 @@ func (q ReadQuery) validateExpungeDue() error {
 		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
+		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_due read lists every repository with an expunge open or a "+

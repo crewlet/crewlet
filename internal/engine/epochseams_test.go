@@ -29,24 +29,27 @@ const (
 	// one sound: told to answer anyway, a node behind would judge it by the
 	// chart the fleet replaced, which may be the revision that revoked it.
 	// So a grant field is judged only where a node behind the
-	// configuration REFUSES it rather than answers it last. FIVE exist, the
+	// configuration REFUSES it rather than answers it last. SIX exist, the
 	// chart a SEAT is judged by on the serving node: code.ReaderOptions.Roster,
 	// a read of the rows; query.Options.Roster, a read by object id on a git
 	// node; host.Options.Roster, an engine write a git node builds;
 	// code.CommitterOptions.SeatRules, a seat's push on the committer that
-	// decides it; and code.StoreOptions.SeatRules, a tool's lifecycle
+	// decides it; code.ChangeWriterOptions.SeatRules, a seat's write of a
+	// change's conversation, and every reviewer an ask names, on the change
+	// writer beside it; and code.StoreOptions.SeatRules, a tool's lifecycle
 	// request — a person's as well as a seat's, since a create's owner is
 	// judged against the chart too — on the lifecycle store that decides it,
 	// refused there by its own gate, code.StoreOptions.Current, and by the
 	// estate's declaration on code.lifecycle. The git node's own gates,
 	// query.Options.Current and host.Options.Current, refuse a seat's read
 	// and a seat's write there themselves (unready, behind_config) rather
-	// than judging them; the committer's,
-	// code.CommitterOptions.Current, refuses a seat's push there as a node
-	// that ran nothing, so the repository's next committer decides it, even
-	// when this node is asked last; a data node refuses a seat's read of the
-	// rows by the operation's own declaration (the estate's op.judgesGrant
-	// on code.read and code.resolve_ref, held by
+	// than judging them; the committer's and the change writer's,
+	// code.CommitterOptions.Current and code.ChangeWriterOptions.Current,
+	// refuse such a write there as a node that ran nothing, so the
+	// repository's next committing node decides it, even when this node is
+	// asked last; a data node refuses a seat's read of the rows by the
+	// operation's own declaration (the estate's op.judgesGrant on code.read
+	// and code.resolve_ref, held by
 	// estate.TestEveryOperationThatJudgesAGrantIsDeclared), even asked last
 	// (M3-O8's hard arm). The tracker's own permission checks read an
 	// authority the ASKING node forms from its own.
@@ -82,24 +85,25 @@ func (c seamClass) valid() bool {
 // reads through: the tracker writer's dependencies, the estate's backend and
 // the serving node's own seams — and the options struct each half a
 // [estate.Backend] field holds is BUILT from, where one is, since that is where
-// what the half reads is decided: the code host's committer, lifecycle store
-// and reader options, the knowledge searcher's, the page reader's and the page
-// store's, the identity directory's reader's, the artifacts estate's and its
-// datastore's readers' and writers', and the item search's ranker and the
-// fan-out it and the knowledge searcher answer through. (The tracker's reader,
-// the link index and the usage reader take what they read as arguments, which
-// their Backend rows name.) A Backend row that only named its half would see
-// nothing added to the options behind it: the knowledge searcher read the
-// epoch's skills container and embedding model through options no row covered.
-// And a GIT node's query server's options and its code host's: it serves a
-// seat's read of a repository by object id, and builds a seat's engine write,
-// from its own epoch's chart, which is the same question a serving decide's
-// grant is.
+// what the half reads is decided: the code host's committer, change writer,
+// lifecycle store and reader options, the knowledge searcher's, the page
+// reader's and the page store's, the identity directory's reader's, the
+// artifacts estate's and its datastore's readers' and writers', and the item
+// search's ranker and the fan-out it and the knowledge searcher answer through.
+// (The tracker's reader, the link index and the usage reader take what they
+// read as arguments, which their Backend rows name.) A Backend row that only
+// named its half would see nothing added to the options behind it: the
+// knowledge searcher read the epoch's skills container and embedding model
+// through options no row covered. And a GIT node's query server's options and
+// its code host's: it serves a seat's read of a repository by object id, and
+// builds a seat's engine write, from its own epoch's chart, which is the same
+// question a serving decide's grant is.
 var servingSeams = []reflect.Type{
 	reflect.TypeFor[tracker.WriterDeps](),
 	reflect.TypeFor[estate.Backend](),
 	reflect.TypeFor[estate.ServerSeams](),
 	reflect.TypeFor[code.CommitterOptions](),
+	reflect.TypeFor[code.ChangeWriterOptions](),
 	reflect.TypeFor[code.StoreOptions](),
 	reflect.TypeFor[code.ReaderOptions](),
 	reflect.TypeFor[query.Options](),
@@ -148,8 +152,9 @@ var classified = map[string]struct {
 		"pages.SearcherOptions, whose reads are classified there; its scope is ServerSeams.Seat"},
 	"estate.Backend.Backlinks": {seamNone, "the node's link index"},
 	"estate.Backend.Usage":     {seamNone, "the usage rows"},
-	"estate.Backend.Code": {seamNone, "the committer, the reader and the lifecycle store, built over " +
-		"code.CommitterOptions, code.ReaderOptions and code.StoreOptions"},
+	"estate.Backend.Code": {seamNone, "the committer, the change writer, the reader and the lifecycle " +
+		"store, built over code.CommitterOptions, code.ChangeWriterOptions, code.ReaderOptions and " +
+		"code.StoreOptions"},
 	"estate.Backend.Git": {seamNone, "the git half a git operation is answered from; what it reads " +
 		"is classified on query.Options, which it is built over"},
 	"estate.Backend.Identity": {seamNone, "the identity directory's reader, built over " +
@@ -188,6 +193,20 @@ var classified = map[string]struct {
 	"code.CommitterOptions.Now":     {seamNone, "the decide's clock"},
 	"code.CommitterOptions.Metrics": {seamNone, "the node's instruments"},
 	"code.CommitterOptions.Logger":  {seamNone, "where a failed batch is reported"},
+
+	"code.ChangeWriterOptions.Publisher": {seamNone, "the code log's write authority"},
+	"code.ChangeWriterOptions.DB":        {seamNone, "the replicated rows a write's answer is read from"},
+	"code.ChangeWriterOptions.NodeID":    {seamNone, "the deciding node"},
+	"code.ChangeWriterOptions.Retention": {seamValue, "the instant a repo_deleted refusal names"},
+	"code.ChangeWriterOptions.SeatRules": {seamGrant, "the chart a seat's write of a change's " +
+		"conversation is judged by — whether it reads, reviews or maintains the repository — and every " +
+		"reviewer an ask names, whoever asks: whether the seat may review it"},
+	"code.ChangeWriterOptions.Current": {seamGate, "whether this node serves the company's configuration: " +
+		"a write the chart judges behind it is handed to the repository's next committing node, decided " +
+		"nowhere here"},
+	"code.ChangeWriterOptions.Now":     {seamNone, "the decide's clock"},
+	"code.ChangeWriterOptions.Metrics": {seamNone, "the node's instruments"},
+	"code.ChangeWriterOptions.Logger":  {seamNone, "where a failed write is reported"},
 
 	"code.StoreOptions.Publisher": {seamNone, "the code log's write authority"},
 	"code.StoreOptions.DB":        {seamNone, "the replicated rows a lifecycle write decides from"},

@@ -78,7 +78,11 @@ func TestEveryChangeTableIsClassified(t *testing.T) {
 	}
 	slices.Sort(tables)
 	repository := []string{"code_change_authors", "code_change_bodies", "code_changes", "code_revisions"}
-	for _, table := range repository {
+	// AND THE CHANGE'S OWN SUBJECT'S, its conversation: rebuilt from the
+	// records on the change's subject and compared on every node like the
+	// repository's.
+	conversation := []string{"code_comments", "code_conversations", "code_participants", "code_reviewers"}
+	for _, table := range slices.Concat(repository, conversation) {
 		if !slices.Contains(tables, table) {
 			t.Fatalf("the schema's change tables are %v, and %s is not among them — the walk below is "+
 				"not looking at the tables a change is kept in", tables, table)
@@ -99,10 +103,10 @@ func TestEveryChangeTableIsClassified(t *testing.T) {
 				"that last creates it says it is %s:\n\t%s", table, class, classWord(class), stated)
 		}
 	}
-	for _, table := range repository {
+	for _, table := range slices.Concat(repository, conversation) {
 		if class := classes[table]; !code.Reproducible(table) || class != statelog.Replicated {
-			t.Errorf("%s is classed %s (reproducible: %v): a change's rows on its repository's subject "+
-				"are the log's, rebuilt and compared on every node", table, class, code.Reproducible(table))
+			t.Errorf("%s is classed %s (reproducible: %v): a change's rows, on its repository's subject and "+
+				"its own, are the log's, rebuilt and compared on every node", table, class, code.Reproducible(table))
 		}
 	}
 }

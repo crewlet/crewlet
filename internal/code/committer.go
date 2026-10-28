@@ -1296,13 +1296,22 @@ func (c *Committer) refused(ctx context.Context, repoID string, batch []Proposal
 // which leaves the refusal what it is, because the marker answered it and the
 // name is only how the sentence says so.
 func (c *Committer) purgedDetail(ctx context.Context, repoID, opID string) string {
+	return purgedDetail(ctx, c.db, c.log, repoID, opID)
+}
+
+// purgedDetail is [Committer.purgedDetail] over db, logging an unread marker to
+// log — the ONE reading of a purged repository's refusal, which the committer
+// and the change writer ([ChangeWriter]) both answer with, since one deletion
+// marker drops every record about the repository, on its own subject and on its
+// changes' alike.
+func purgedDetail(ctx context.Context, db store.ReplicatedReader, log *slog.Logger, repoID, opID string) string {
 	gone := RepoGone{ID: repoID, Purged: true}
-	if err := c.db.Read(ctx, func(tx *sql.Tx) error {
+	if err := db.Read(ctx, func(tx *sql.Tx) error {
 		name, _, err := deletionIn(ctx, tx, repoID)
 		gone.Name = name
 		return err
 	}); err != nil {
-		c.log.WarnContext(ctx, "code_deletion_marker_unread", "repo", repoID, "op_id", opID,
+		log.WarnContext(ctx, "code_deletion_marker_unread", "repo", repoID, "op_id", opID,
 			"error", err)
 	}
 	return gone.Detail()

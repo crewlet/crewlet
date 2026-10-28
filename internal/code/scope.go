@@ -35,6 +35,7 @@ const (
 	pathName       = "n"
 	pathRepo       = "r"
 	pathActivation = "a"
+	pathChange     = "c"
 )
 
 // NamePath is a repository name's claim.
@@ -43,6 +44,17 @@ func NamePath(token string) string { return pathDomain + "/" + pathName + "/" + 
 // RepoPath is one repository: its row, its refs, its packs, its pushes and its
 // protection rules — everything a record on its subject may write.
 func RepoPath(id string) string { return pathDomain + "/" + pathRepo + "/" + id }
+
+// ChangePath is one change's conversation: who is asked to review it, its
+// comments, who takes part and its counters — everything a record on the
+// change's own subject may write. BESIDE the repository's path rather than
+// under it, as a repository's is beside its name's: a change is filed by its
+// id, and its repository is named in each record's payload. A record on a
+// change's subject names BOTH paths ([ChangeWriter]): its decide reads what
+// the repository's records write — the change's row, the repository's status
+// — so a record of the repository's this node could not decode leaves the
+// conversation's decide reading stale rows, and the scope probe must find it.
+func ChangePath(id string) string { return pathDomain + "/" + pathChange + "/" + id }
 
 // ActivationPath is the activation fence's row.
 func ActivationPath() string { return pathDomain + "/" + pathActivation }

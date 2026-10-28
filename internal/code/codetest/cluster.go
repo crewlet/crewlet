@@ -81,6 +81,11 @@ type Cluster interface {
 	// node's own router, as a tool on that member asks it: of the
 	// repository's committer first, its runner-up after (code.change).
 	ChangeThrough(ctx context.Context, node string, p code.ChangeProposal) (code.ChangeResult, error)
+	// ConverseThrough is a write of a change's conversation asked through
+	// member node's own router, as a tool on that member asks it: of the
+	// repository's committing node first, its runner-up after
+	// (code.conversation).
+	ConverseThrough(ctx context.Context, node string, w code.ConversationWrite) (code.ConversationResult, error)
 }
 
 // RunFleet runs every case only a fleet of data nodes can make, IN ORDER ON
@@ -172,6 +177,7 @@ func fleetCases() []fleetCase {
 		{"F29_ACompactionFailsOverToTheRunnerUpCommitter", aCompactionFailsOverToTheRunnerUpCommitter},
 		{"F30_ACompactionAnsweredLateIsCollapsed", aCompactionAnsweredLateIsCollapsed},
 		{"F31_AChangeOpenSurvivesItsCommitter", aChangeOpenSurvivesItsCommitter},
+		{"F32_AConversationSurvivesItsWriter", aConversationSurvivesItsWriter},
 	}
 }
 

@@ -26,8 +26,13 @@ import (
 // proposal there, and asked of the next data node.
 type Served struct {
 	Committer *Committer
-	Reader    *Reader
-	Store     *Store
+	// ChangeWriter is the writer of changes' conversations, beside the
+	// committer on every node that publishes, and nil where the committer is:
+	// a write of a change's conversation is then refused [ErrNotServing], as
+	// a proposal is.
+	ChangeWriter *ChangeWriter
+	Reader       *Reader
+	Store        *Store
 }
 
 // Lifecycle decides one lifecycle request on this node's lifecycle store —
@@ -84,6 +89,18 @@ func (s Served) ProposeChange(ctx context.Context, p ChangeProposal) (ChangeResu
 			"no change", ErrNotServing)
 	}
 	return s.Committer.ProposeChange(ctx, p)
+}
+
+// Converse decides one write of a change's conversation on this node's change
+// writer — see [ChangeWriter.Converse] — and, on a node that publishes
+// nothing, refuses it as a push is refused there: the router asks the
+// repository's runner-up with the same operation id.
+func (s Served) Converse(ctx context.Context, w ConversationWrite) (ConversationResult, error) {
+	if s.ChangeWriter == nil {
+		return ConversationResult{}, fmt.Errorf("%w: this node publishes nothing, so it writes no change's "+
+			"conversation", ErrNotServing)
+	}
+	return s.ChangeWriter.Converse(ctx, w)
 }
 
 // Resolve answers a repository by name — see [Reader.Resolve].

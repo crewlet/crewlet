@@ -92,7 +92,12 @@
 // record's own operation id, and so is a WRITE OF A CHANGE'S LIFECYCLE
 // (`code.change`) — an open, an edit, a draft's state, a retarget, a close or
 // a reopen — under its asker's operation id, from which an open's change id
-// is derived, so no retry opens a second change.
+// is derived, so no retry opens a second change. A WRITE OF A CHANGE'S
+// CONVERSATION (`code.conversation`) — an ask for review, a comment or a
+// thread's resolution — is keyed by the same repository and asked of the same
+// node, whose change writer publishes it on the change's own subject rather
+// than in the committer's queue, under its asker's operation id, from which a
+// comment's id is derived.
 //
 // These are the operations keyed on the DATA nodes (a read of a repository's
 // git objects is keyed on the git nodes: below); [op.keyedBy] is the
@@ -240,8 +245,10 @@
 // A GRANT judged from the chart is different — answered anyway by the last
 // resort, it would be decided by the revision that may have revoked it — so
 // an operation that judges one DECLARES it ([op.judgesGrant]: a code read or
-// a ref resolve a seat asks, whose grant on a repository is the chart's, and a
-// seat's write of a change, which its grant decides whether it may make), and
+// a ref resolve a seat asks, whose grant on a repository is the chart's, a
+// seat's write of a change, which its grant decides whether it may make, and a
+// write of a change's conversation the chart judges — a seat's, or an ask of
+// reviewers by anybody, each reviewer judged by the chart), and
 // a node behind the configuration refuses it even asked last, `behind_config`
 // saying it decides no grant: the soft arm sends the walk to every current
 // data node first, the last resort asks this node again, it refuses again,

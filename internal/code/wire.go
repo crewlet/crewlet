@@ -832,6 +832,26 @@ type ReadQuery struct {
 	State ChangeState `json:"state,omitempty"`
 	Owner string      `json:"owner,omitempty"`
 	Work  string      `json:"work,omitempty"`
+	// Reviewer and Needs narrow a `changes` listing by what its changes ask
+	// of somebody, each refused on every other kind (conversationread.go):
+	// Reviewer, the changes whose ask of that reviewer stands — a seat by
+	// its handle, or a person by the human seat they hold; and Needs, the
+	// changes waiting on what it names ([Need]). A listing either names
+	// walks the ONE index of who the changes wait on and tests every other
+	// filter on the rows it read, as every listing does.
+	//
+	// THE CHANGES KINDS CAME WITH THIS BUILD'S LINE: no build that carries
+	// the code domain has run without these two — none of it is on main —
+	// so no build ignores them and answers the wider listing they narrow.
+	Reviewer string `json:"reviewer,omitempty"`
+	Needs    Need   `json:"needs,omitempty"`
+	// Part is the list a `change` read pages beside the change — its
+	// revisions, which "" names too, its reviewers or its comments
+	// ([ChangeParts]) — refused on every other kind. The change's detail
+	// rides a first page of its revisions alone; every page of another part
+	// carries that part's rows, held to the grant again as every page of a
+	// change is. Under the same condition as Reviewer: no build ignores it.
+	Part ChangePart `json:"part,omitempty"`
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
 	Introduced *IntroducedQuery `json:"introduced,omitempty"`
@@ -849,16 +869,19 @@ type ReadQuery struct {
 	// Limit is repos 1..500 (0 = 100), pushes and run_pushes 1..200 (0 =
 	// 50), refs 1..1 000 (0 = 200), changes 1..200 (0 = 50) — the rows a
 	// page READS, whatever its filters keep of them — a change's revisions
-	// 1..1 000 (0 = 200) and introduced 1..MaxSnapshotItems (0 = the most);
-	// a page of a duty listing — `compaction_due`, `publication_due`,
-	// `expunge_due` — is MaxSnapshotItems and names none.
+	// and its reviewers 1..1 000 (0 = 200), its comments 1..200 (0 = 50),
+	// and introduced 1..MaxSnapshotItems (0 = the most); a page of a duty
+	// listing — `compaction_due`, `publication_due`, `expunge_due` — is
+	// MaxSnapshotItems and names none.
 	Limit int                `json:"limit,omitempty"`
 	Fresh statelog.Freshness `json:"fresh"`
 }
 
 // ReadAnswer is a [ReadQuery]'s answer: Changes is a `changes` listing's page;
-// Change a `change` read's detail, on its first page alone; and Revisions a
-// page of that change's revisions, newest first, on every page of it.
+// Change a `change` read's detail, on the first page of its revisions alone;
+// Revisions a page of that change's revisions, newest first, on every page of
+// them; and Reviewers and Comments a page of the part of its conversation a
+// `change` read names ([ReadQuery.Part]).
 type ReadAnswer struct {
 	Repos []RepoSummary `json:"repos,omitempty"`
 	Repo  *RepoDetail   `json:"repo,omitempty"`
@@ -870,6 +893,8 @@ type ReadAnswer struct {
 	Changes    []ChangeSummary        `json:"changes,omitempty"`
 	Change     *ChangeDetail          `json:"change,omitempty"`
 	Revisions  []RevisionRow          `json:"revisions,omitempty"`
+	Reviewers  []ReviewerRow          `json:"reviewers,omitempty"`
+	Comments   []CommentRow           `json:"comments,omitempty"`
 	Introduced []IntroducedRow        `json:"introduced,omitempty"`
 	Due        []CompactionCandidate  `json:"due,omitempty"`
 	Publish    []PublicationCandidate `json:"publish,omitempty"`
@@ -1094,6 +1119,72 @@ type ChangeResult struct {
 	Detail  string        `json:"detail,omitempty"`
 }
 
+// ConversationWrite is one write of a change's conversation as its asker hands
+// it to the repository's committing data node ([ChangeWriter.Converse]):
+// EXACTLY ONE of the records it may be — an ask for review, a comment and a
+// thread's resolution, each its op's payload ([ConversationOps]) — decided as a
+// record of its own on the change's subject, beside who asks and the floor
+// they read at. Its OpID is the record's operation id, its Seen the publish's
+// session floor. What no asker sends — who wrote it, a reviewer's kind, a
+// comment's id and thread — the writer stamps into the record from its asker,
+// the chart and its snapshot.
+type ConversationWrite struct {
+	// OpID is the record's operation id, minted once by whoever asks — an
+	// operation id this engine accepts (statelog.CheckCallerOpID) — so the
+	// write asked again under it, of the repository's runner-up after a
+	// writer went silent or by an asker whose answer was lost, is the same
+	// write, collapsed by the operation ledger; a comment's id is derived
+	// from it ([CommentID]).
+	OpID string `json:"op_id"`
+	// Asker is who asks: a person through a credential bound to their human
+	// seat, or a seat by its handle; a token bound to nobody writes nothing.
+	// A SEAT'S IS JUDGED FROM THE CHART of the deciding node's epoch
+	// ([ChangeWriterOptions.SeatRules]), and so is every reviewer an ask
+	// names, whoever asks ([ConversationWrite.JudgesChart]): a node that holds
+	// no chart, or one confirmed behind the company's configuration, decides
+	// none of those. It names no run: a comment keeps the turn that said it
+	// in its own field.
+	Asker Principal `json:"asker"`
+	// Seen is the code log's position the asker read the change at — zero
+	// for one that read none. The writer DECIDES AT OR PAST IT, or refuses
+	// `behind` about itself, so the runner-up decides: from below it the
+	// decide would refuse a write formed against what the asker was shown —
+	// a change it was shown open as missing, a revision it read as unknown.
+	Seen statelog.Position `json:"seen,omitzero"`
+
+	Reviewers     *ReviewerRequest `json:"reviewers,omitempty"`
+	Comment       *Comment         `json:"comment,omitempty"`
+	ThreadResolve *ThreadResolve   `json:"thread_resolve,omitempty"`
+}
+
+// ConversationResult is what became of one write of a change's conversation.
+type ConversationResult struct {
+	// Outcome is applied, pending or unknown for a write whose record was
+	// appended — or, answered from the rows with no record, applied and
+	// Unchanged — and empty for one refused. Applied is answered only once
+	// the change's conversation holds the record's rows, never from the
+	// decision.
+	Outcome statelog.Outcome `json:"outcome,omitempty"`
+	// ID is what the write made that is named apart from its change — a
+	// comment's id ([CommentID]) — and "" for a write that made none.
+	ID string `json:"id,omitempty"`
+	// Position is where the write's record landed — for one asked again under
+	// its own operation id, the record the ledger found; for an Unchanged
+	// answer, the conversation's last record — and, for a not_applied or
+	// repo_deleted refusal the log made after the append, where that record
+	// lies applying nowhere.
+	Position statelog.Position `json:"position,omitzero"`
+	// Unchanged is a write that asked for what the conversation already
+	// says — an ask of reviewers already asked and of withdrawals of none
+	// who are, a thread's state it is in — answered from the rows with no
+	// record.
+	Unchanged bool `json:"unchanged,omitempty"`
+	// Refusal is why it was refused with no record, and Detail its one
+	// sentence.
+	Refusal ConversationRefusal `json:"refusal,omitempty"`
+	Detail  string              `json:"detail,omitempty"`
+}
+
 // RepoSummary is a repository as a listing renders it.
 type RepoSummary struct {
 	RepoRef
@@ -1211,6 +1302,56 @@ type ChangeDetail struct {
 	// Authors is everyone who wrote it — whoever opened it, and everyone whose
 	// push moved its head — by handle.
 	Authors []ChangeAuthor `json:"authors"`
+	// Conversation is what its conversation counts, nil for a change nobody
+	// has discussed; its rows are read a part at a time ([ReadQuery.Part]).
+	Conversation *ConversationRow `json:"conversation,omitempty"`
+}
+
+// ConversationRow is a change's conversation's counters
+// (code_conversations): its comments, and the version and position of the
+// last record on the change's subject — the floor a read of its parts is
+// asked at.
+type ConversationRow struct {
+	Comments int64             `json:"comments"`
+	Version  int64             `json:"version"`
+	Position statelog.Position `json:"position"`
+}
+
+// ReviewerRow is one reviewer a change has asked (code_reviewers): a seat by
+// its handle or a person by the human seat they hold, why they were asked,
+// whether the ask stands, who asked with what note, and the record that last
+// moved it.
+type ReviewerRow struct {
+	Reviewer        string            `json:"reviewer"`
+	Kind            PartyKind         `json:"kind"`
+	Reason          ReviewerReason    `json:"reason"`
+	State           ReviewerState     `json:"state"`
+	RequestedBy     string            `json:"requested_by"`
+	RequestedByKind PartyKind         `json:"requested_by_kind"`
+	Note            string            `json:"note,omitempty"`
+	Position        statelog.Position `json:"position"`
+}
+
+// CommentRow is one comment on a change (code_comments): its thread — its own
+// id for a thread's first comment — the root it replies to, who said it — a
+// seat, or a person with the credential they used — the line a thread's first
+// comment points at, whether its thread is resolved and by whom, the turn that
+// said it, what it says, and its record's position and broker instant.
+type CommentRow struct {
+	ID               string            `json:"id"`
+	ThreadID         string            `json:"thread_id"`
+	ParentID         string            `json:"parent_id,omitempty"`
+	Author           string            `json:"author"`
+	AuthorKind       PartyKind         `json:"author_kind"`
+	AuthorOperatorID string            `json:"author_operator_id,omitempty"`
+	Anchor           *CommentAnchor    `json:"anchor,omitempty"`
+	Resolved         bool              `json:"resolved,omitempty"`
+	ResolvedBy       string            `json:"resolved_by,omitempty"`
+	ResolvedByKind   PartyKind         `json:"resolved_by_kind,omitempty"`
+	TurnID           string            `json:"turn_id,omitempty"`
+	Body             string            `json:"body"`
+	Position         statelog.Position `json:"position"`
+	At               time.Time         `json:"at"`
 }
 
 // ChangeAuthor is one author of a change (code_change_authors): a seat by its

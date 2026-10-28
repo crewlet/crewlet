@@ -700,6 +700,19 @@ func (c *cluster) ChangeThrough(ctx context.Context, node string, p code.ChangeP
 	return code.ChangeResult{}, fmt.Errorf("codecluster: no running member called %q", node)
 }
 
+// ConverseThrough is a write of a change's conversation asked through member
+// node's own router (codetest.Cluster).
+func (c *cluster) ConverseThrough(ctx context.Context, node string, w code.ConversationWrite) (
+	code.ConversationResult, error) {
+
+	for _, m := range c.members {
+		if m.id == node && m.isRunning() {
+			return m.router.Load().Code().Converse(ctx, w)
+		}
+	}
+	return code.ConversationResult{}, fmt.Errorf("codecluster: no running member called %q", node)
+}
+
 // gitAnswered is how many reads by object id member node's git half has
 // answered.
 func (c *cluster) gitAnswered(t testing.TB, node string) int64 {

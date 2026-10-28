@@ -153,21 +153,24 @@ func (s *Store) repoName(ctx context.Context, id string) (string, bool, error) {
 // The purge's decide statements. remainingSQL is the tracker's BOUNDED COUNT:
 // the decide needs "more than PurgePartRows", never the total, so each table
 // a part deletes from — the pushes, the refs, the packs, the retired packs, the
-// ref drops and the changes' revisions, authors, bodies and rows — is counted
-// at most PurgePartRows + 1 deep (?2, against the repository ?1), and beside
-// them what the wide rows among them weigh, summed over the same depth: the
-// push rows' row_bytes from code_pushes_repo_idx, which carries every row's
-// width, and the changes' body_bytes from their own narrow rows, never from
-// the bodies, whose overflow pages a read would walk. Past PurgePartRows
-// pushes or changes the count alone already forms a part, and short of it
-// each sum is the whole. A table left out of the count — or a wide row left
-// out of the sum — is one the final purge's unbounded statements would
-// delete whatever it held.
+// ref drops, the changes' revisions, authors, bodies and rows, and their
+// conversations' reviewers, participants, comments and rows — is counted at
+// most PurgePartRows + 1 deep (?2, against the repository ?1), and beside them
+// what the wide rows among them weigh, summed over the same depth: the push
+// rows' row_bytes from code_pushes_repo_idx, which carries every row's width,
+// the changes' body_bytes from their own narrow rows, never from the bodies,
+// whose overflow pages a read would walk, and their conversations' text_bytes
+// from the conversations' narrow rows, never from the comments. Past
+// PurgePartRows pushes or changes the count alone already forms a part, and
+// short of it each sum is the whole. A table left out of the count — or a wide
+// row left out of the sum — is one the final purge's unbounded statements
+// would delete whatever it held.
 //
-// A CHANGE'S REVISIONS, AUTHORS AND BODY ARE COUNTED THROUGH THEIR CHANGE,
-// the changes in number order ([changesNumberKey]) and each one's rows by its
-// key — the dependents carry no repo_id — which is also how the final purge
-// reaches them, so the count is of exactly the rows it would delete.
+// A CHANGE'S REVISIONS, AUTHORS, BODY AND CONVERSATION ARE COUNTED THROUGH
+// THEIR CHANGE, the changes in number order ([changesNumberKey]) and each
+// one's rows by its key — the dependents carry no repo_id — which is also how
+// the final purge reaches them, so the count is of exactly the rows it would
+// delete.
 const (
 	repoNameSQL  = `SELECT name FROM code_repos WHERE id = ?`
 	remainingSQL = `SELECT
@@ -182,11 +185,22 @@ const (
 			CROSS JOIN code_change_authors AS a WHERE c.repo_id = ?1 AND a.change_id = c.id LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
 			CROSS JOIN code_change_bodies AS b WHERE c.repo_id = ?1 AND b.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
+			CROSS JOIN code_reviewers AS r WHERE c.repo_id = ?1 AND r.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
+			CROSS JOIN code_participants AS p WHERE c.repo_id = ?1 AND p.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
+			CROSS JOIN code_comments AS m WHERE c.repo_id = ?1 AND m.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
+			CROSS JOIN code_conversations AS v WHERE c.repo_id = ?1 AND v.change_id = c.id LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes INDEXED BY ` + changesNumberKey + `
 			WHERE repo_id = ?1 LIMIT ?2)),
 		(SELECT COALESCE(SUM(row_bytes), 0) FROM
 			(SELECT row_bytes FROM code_pushes WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COALESCE(SUM(body_bytes), 0) FROM
 			(SELECT body_bytes FROM code_changes INDEXED BY ` + changesNumberKey + `
-				WHERE repo_id = ?1 LIMIT ?2))`
+				WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COALESCE(SUM(text_bytes), 0) FROM
+			(SELECT v.text_bytes FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
+				CROSS JOIN code_conversations AS v WHERE c.repo_id = ?1 AND v.change_id = c.id LIMIT ?2))`
 )
