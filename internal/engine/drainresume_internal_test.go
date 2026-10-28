@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -256,27 +257,38 @@ func TestADrainingNodeLeavesACompletionForTheSeatsNextHolder(t *testing.T) {
 	})
 }
 
-// A DRAIN REFUSAL DEFERS A CONTROL DELIVERY, AND NOTHING ELSE DOES.
+// A REFUSED COMPLETION IS HANDED BACK BY THE CONDITION ITS REFUSAL NAMES.
 //
-// Deferred, the attachment is quiesced and the completion goes back unspent:
-// right for a node that is leaving, which would refuse every redelivery the
-// same way. Any other failure is a Nak, because nothing un-quiesces a control
-// attachment, and a seat whose ownership merely blipped would stay deaf to its
-// completions for as long as this node held it.
-func TestOnlyADrainDefersAControlDelivery(t *testing.T) {
+// A node that is leaving defers: the attachment is quiesced for the rest of the
+// drain and the completion waits at the head for the seat's next holder. A
+// condition that clears by waiting is acked, which spends none of the broker's
+// deliveries and quiesces nothing: the run is left unclaimed and the waiter
+// announces it again on its next poll (TestAnUnclaimedCompletionIsAnnouncedAgain).
+// A condition this build names nowhere yet, a provider's limit here, takes the
+// waiting rule with no change to the hand-back, which is the point of keying it
+// on the condition. Only a failure the refusal does not explain is a Nak.
+//
+// Mutation: key the hand-back on node.ErrDraining again and the provider limit
+// is a Nak, walking a healthy completion to the dead-letter boundary one
+// delivery at a time; defer every refusal and a seat whose ownership merely
+// blipped quiesces its control topic for as long as this node holds it.
+func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 	t.Parallel()
-	drain := &sandbox.TurnRefused{Cause: node.ErrDraining,
-		Refusal: sandbox.Refusal{Condition: waitDrain, Reason: node.ErrDraining.Error()}}
-	owned := &sandbox.TurnRefused{Cause: node.ErrSeatNotOwned,
-		Refusal: sandbox.Refusal{Condition: waitOwnership, Reason: node.ErrSeatNotOwned.Error()}}
+	refusal := func(cond sandbox.Condition, cause error) error {
+		return errors.Join(sandbox.ErrResumeUnavailable, &sandbox.TurnRefused{Cause: cause,
+			Refusal: sandbox.Refusal{Condition: cond, Reason: cause.Error()}})
+	}
 	for name, tc := range map[string]struct {
 		err  error
 		want queue.Outcome
 	}{
-		"settled":                  {err: nil, want: queue.OutcomeAck},
-		"the node is draining":     {err: errors.Join(sandbox.ErrResumeUnavailable, drain), want: queue.OutcomeDefer},
-		"the seat is not provable": {err: errors.Join(sandbox.ErrResumeUnavailable, owned), want: queue.OutcomeNak},
-		"the store failed":         {err: errors.New("store unavailable"), want: queue.OutcomeNak},
+		"settled":                    {err: nil, want: queue.OutcomeAck},
+		"the node is draining":       {err: refusal(waitDrain, node.ErrDraining), want: queue.OutcomeDefer},
+		"the seat is not provable":   {err: refusal(waitOwnership, node.ErrSeatNotOwned), want: queue.OutcomeAck},
+		"a provider's limit":         {err: refusal("provider_limit", errors.New("provider limit reached")), want: queue.OutcomeAck},
+		"a refusal naming no wait":   {err: refusal("", errors.New("refused")), want: queue.OutcomeNak},
+		"the seat is held elsewhere": {err: fmt.Errorf("%w: seat held elsewhere", sandbox.ErrResumeUnavailable), want: queue.OutcomeNak},
+		"the store failed":           {err: errors.New("store unavailable"), want: queue.OutcomeNak},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

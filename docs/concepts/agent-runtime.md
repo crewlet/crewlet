@@ -529,9 +529,10 @@ flowchart TD
    a [coding run](code-sandbox.md) that finishes during the drain resumes its
    turn from the seat's control topic, and a person's recorded answer from a
    retry, and both ask the same gate before they claim anything. Refused, the
-   completion goes back unspent (the control topic is quiesced for the rest
-   of the drain) and the answer stays recorded on its run, so the seat's next
-   holder resumes either one. The sandbox waiter keeps running meanwhile, so
+   completion is deferred to the head of the seat's control topic, which is
+   quiesced for the rest of the drain, the run is left unclaimed, and the
+   answer stays recorded on its run, so the seat's next holder resumes either
+   one. The sandbox waiter keeps running meanwhile, so
    the box stays alive for it.
 4. **Quiesce every held seat.** The node stops taking new work while staying
    attached. This is what makes the wait below terminate: without it the

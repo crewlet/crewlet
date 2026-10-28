@@ -931,16 +931,17 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 			notHeld(ctx, ev.AgentHandle, ev.TurnID, "claiming a completion"))
 	}
 	// ADMITTED BEFORE THE CLAIM, and held through the resume: see
-	// [TurnGate]. A refusal leaves the run unclaimed and hands the
-	// completion back, so it reaches the seat's next holder, or this node
-	// once it may start turns again; meanwhile the waiter's keepalive keeps
-	// the box.
+	// [TurnGate]. A refusal leaves the run unclaimed and running, so the
+	// waiter announces its completion again on its next poll, and keeps the
+	// box meanwhile; the error carries the refusal, whose condition decides
+	// what the caller does with this delivery.
 	adm, err := c.admitTurn(ctx, ev.AgentHandle)
 	if err != nil {
 		log.InfoContext(ctx, "sandbox_completion_not_admitted",
 			"turn_id", ev.TurnID, "agent", ev.AgentHandle, "reason", err.Error(),
 			"detail", "this node may not start the turn the completion resumes, so the "+
-				"run is left unclaimed and the completion goes back for the seat's next holder")
+				"run is left unclaimed for the waiter to announce again, here once the "+
+				"condition clears or on the seat's next holder")
 		return fmt.Errorf("%w: %w", ErrResumeUnavailable, err)
 	}
 	defer adm.release()

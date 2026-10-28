@@ -2205,9 +2205,9 @@ const (
 // admission ([node.Node.AdmitTurn]), with its refusal named as what an
 // answer's retry waits on.
 //
-// The cause stays reachable through the refusal, so the control topic can tell
-// a node that is leaving from a seat it cannot prove it holds
-// ([controlOutcome]).
+// The condition is what the control topic hands a refused completion back by
+// ([controlOutcome]), and the cause stays reachable through the refusal for
+// whoever logs or tests it.
 func (e *Engine) admitResume(ctx context.Context, handle string) (context.Context, func(), error) {
 	ctx, release, err := e.node.AdmitTurn(ctx, handle)
 	switch {
@@ -2505,27 +2505,47 @@ func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
 // controlOutcome is what a seat's control-topic delivery leaves with the broker,
 // given what the coordinator made of it.
 //
-// A DRAINING NODE DEFERS: the completion is handed back unspent and the control
-// attachment quiesced, as a mailbox's deliveries are, because this process has
-// lost the right to start the turn it resumes and every redelivery would be
-// refused the same way until the drain hands the seat back
-// ([node.ErrDraining]). The seat's next holder collects it, or a later fire of
-// the waiter's poll, whichever comes first. One-way like the drain itself:
-// nothing un-quiesces a control attachment, and nothing needs to, because the
-// drain ends by detaching it.
+// # A refusal is handed back by the condition it names
 //
-// ANY OTHER FAILURE NAKS, so a completion this node could not settle comes back
-// on the broker's backoff: to this node once its store recovers, or to the
-// seat's next owner. Acking it would lose the turn.
+// A completion the node's admission refused ([Engine.admitResume]) left its run
+// unclaimed and running, so the delivery carries nothing that is lost with it:
+// the waiter announces a finished run again on every poll for as long as its
+// row is running ([sandbox.Waiter]). What a refusal does to the delivery is
+// therefore keyed on the condition it names ([sandbox.TurnRefused]), never on
+// which error caused it, so a condition a later change adds is handed back by
+// the rule for its kind with nothing here to edit:
+//
+//   - A CONDITION THAT CLEARS BY WAITING (the seat's ownership not yet proven
+//     again, and any limit a seat sits out) is ACKED. A Nak or a deferral each
+//     spend one of the broker's deliveries ([queue.OutcomeDefer]), so handing a
+//     healthy completion back on a wait would walk it to the dead-letter
+//     boundary while nothing was wrong with it, and a deferral would also
+//     quiesce the attachment, which nothing undoes. The poll's next
+//     announcement is the retry, and it finds the condition cleared or not.
+//   - A DRAINING NODE ([waitDrain]) DEFERS: the condition does not clear on this
+//     node, which is leaving, so the attachment is quiesced for the rest of the
+//     drain, as a mailbox's is, and the completion goes back to the head of the
+//     topic for the seat's next holder. It costs one delivery, as every handoff
+//     does, which the delivery budget is sized for.
+//
+// # Everything else NAKs
+//
+// A completion this node could not settle (the seat held elsewhere, the store
+// failing, a refusal that names no condition) comes back on the broker's
+// backoff: to this node once its store recovers, or to the seat's next owner.
+// Acking it would lose the turn.
 func controlOutcome(err error) queue.Result {
-	switch {
-	case err == nil:
+	if err == nil {
 		return queue.Ack()
-	case errors.Is(err, node.ErrDraining):
-		return queue.Defer(err.Error())
-	default:
+	}
+	var refused *sandbox.TurnRefused
+	if !errors.As(err, &refused) || refused.Condition == "" {
 		return queue.Nak(err)
 	}
+	if refused.Condition == waitDrain {
+		return queue.Defer(err.Error())
+	}
+	return queue.Ack()
 }
 
 // sandboxSeatAttached reports whether this node attached the seat's sandbox

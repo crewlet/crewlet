@@ -32,8 +32,9 @@ import (
 //
 // An error, and a [*TurnRefused] when the refusal names what would lift it: an
 // answer's retry waits on that ([Coordinator.waitOwed]), and a completion is
-// handed back carrying it, so the caller that hands it back can tell a node
-// that is leaving from a seat it cannot prove it holds.
+// handed back carrying it, so the caller that settles the delivery keys what it
+// does on the condition (a node that is leaving, or a condition that clears by
+// waiting) rather than on the error behind it.
 //
 // Admitted, it returns the context the turn runs under, which the admission may
 // end (a drain that can no longer wait for it), and the release, which the
@@ -42,6 +43,11 @@ type TurnGate func(ctx context.Context, handle string) (context.Context, func(),
 
 // TurnRefused is a [TurnGate]'s refusal: what an answer's retry waits on, and
 // the gate's own cause, which [errors.Is] reaches through it.
+//
+// ITS CONDITION IS THE DATA A CALLER DECIDES ON. A gate that refuses for a new
+// reason (a provider's limit, a spent budget) names a new [Condition], and every
+// caller that keys on the condition handles it by its kind with no change of
+// its own: an answer waits on it, and a completion is handed back by it.
 type TurnRefused struct {
 	Refusal
 	Cause error
