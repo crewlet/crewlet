@@ -320,7 +320,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	}
 	p.remember(err)
 	if err == nil {
-		p.answered()
+		p.answered(p.now())
 	}
 	return comp, err
 }

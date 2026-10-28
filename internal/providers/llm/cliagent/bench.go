@@ -64,12 +64,17 @@ import (
 // at the reset instant the vendor named ([cliprofile.ResetReading]), never
 // later than [maxLimitBench]. Where the vendor named none it grows through
 // [limitBackoff], one step per report that finds the window already over, and
-// starts again from the first once a call through the entry answers: a limit
-// that lifts in a minute costs a minute, and one that lasts all afternoon
-// costs four process launches an hour per entry rather than one per round of
-// every seat. Short at first on purpose: sitting out a plan that has already
-// reset costs the fallback's spend, or the seats' whole afternoon where there
-// is no fallback, for every minute of it.
+// starts again from the first once the entry answers after the window it sat
+// out: a limit that lifts in a minute costs a minute, and one that lasts all
+// afternoon costs four process launches an hour per entry rather than one per
+// round of every seat. Short at first on purpose: sitting out a plan that has
+// already reset costs the fallback's spend, or the seats' whole afternoon where
+// there is no fallback, for every minute of it.
+//
+// A WINDOW IS DATED BY ITS REPORT, not by the clock that reads it
+// ([Provider.bench]): a run's ending is read on every collection of its job,
+// and the same ending read twice is one report, which opens one window and
+// takes one step.
 //
 // A LOGIN IS NOT BENCHED. `crewlet llm login` mends it — usually from another
 // process this one hears nothing from — and the very next call must find it,
@@ -108,29 +113,42 @@ type bench struct {
 	unnamed int
 }
 
-// bench sits the entry out until reset (the instant the vendor named, or a
-// step of [limitBackoff] when it named none), capped at [maxLimitBench], and
-// answers when the entry is tried again. A later bench never SHORTENS an
-// earlier one: two seats' calls that both met the spent plan report the same
-// window, and the one that lands last must not cut it. For the same reason a
-// report that lands while a window is still in force does not step the
-// backoff: only a probe made after the window ended, and refused again, does.
-func (p *Provider) bench(reset time.Time, said string) time.Time {
-	now := p.now()
+// bench sits the entry out for the report made at `at`: until reset (the
+// instant the vendor named, or a step of [limitBackoff] when it named none),
+// capped at [maxLimitBench], and answers when the entry is tried again. A later
+// bench never SHORTENS an earlier one: two seats' calls that both met the spent
+// plan report the same window, and the one that lands last must not cut it.
+// For the same reason a report made while a window is still in force does not
+// step the backoff: only a probe made after the window ended, and refused
+// again, does.
+//
+// THE WINDOW RUNS FROM THE REPORT, NOT FROM THE CLOCK THAT READS IT. A call's
+// report is read as it is made, but a run's ending is read when its job is
+// collected ([Provider.RunEnded]), and a completion held on a limit is
+// collected again when its hold lifts. Dated by the reading, the same ending
+// opened a fresh window on every collection and, naming no reset, stepped the
+// backoff as a probe that met the limit again would: the resume that waited
+// out one window found the entry benched again before any call was made, held
+// itself for a longer one, and went round again at every step, a quarter of an
+// hour at a time, with nothing ever asking the vendor whether the quota was
+// back. Dated by the report, an ending read again lands inside the window its
+// first reading opened, or opens the same one, and moves nothing.
+func (p *Provider) bench(reset time.Time, said string, at time.Time) time.Time {
 	p.sitOut.mu.Lock()
 	defer p.sitOut.mu.Unlock()
 	b := &p.sitOut
 	var until time.Time
 	if reset.IsZero() {
-		if now.Before(b.until) {
+		if at.Before(b.until) {
 			// Inside a window already in force: the same refusal, heard
-			// by another call, which neither extends it nor steps on.
+			// by another call or read again, which neither extends it
+			// nor steps on.
 			return b.until
 		}
-		until = now.Add(limitBackoff[min(b.unnamed, len(limitBackoff)-1)])
+		until = at.Add(limitBackoff[min(b.unnamed, len(limitBackoff)-1)])
 		b.unnamed++
 	} else {
-		until = now.Add(min(reset.Sub(now), maxLimitBench))
+		until = at.Add(min(reset.Sub(at), maxLimitBench))
 	}
 	if until.After(b.until) {
 		b.until, b.said, b.resetsAt = until, said, reset
@@ -138,13 +156,31 @@ func (p *Provider) bench(reset time.Time, said string) time.Time {
 	return b.until
 }
 
-// answered ends the report behind any window: a call through the entry was
-// answered, so whatever limit it reported has lifted, and a later report that
-// names no reset starts the backoff from its first step again.
-func (p *Provider) answered() {
+// answered ends the report behind the entry's window, for an answer heard at
+// `at` once that window is over: the limit has lifted, so a later report that
+// names no reset starts the backoff from its first step again, and no refusal
+// names the reset of a limit that is over.
+//
+// NOT AN ANSWER FROM INSIDE THE WINDOW, OR FROM BEFORE IT. No call is made
+// while the entry sits out, but one already running when another call's report
+// opened the window can answer inside it; and a run's ending is read when its
+// job is collected, which is hours after the run ended for a completion its
+// seat's conditions held, and again on every collection. Either says the
+// vendor answered at some instant before the report or inside its window,
+// which is not that the limit lifted. Taken as one, it erased the reset the
+// vendor named while the entry still sat it out, so every refusal in the
+// window read "resume time unknown", and it restarted a backoff the limit had
+// earned. One comparison holds both: a window runs from the report that
+// opened it ([Provider.bench]), so an answer from before that report is from
+// before the window's end as well.
+func (p *Provider) answered(at time.Time) {
 	p.sitOut.mu.Lock()
 	defer p.sitOut.mu.Unlock()
-	p.sitOut.resetsAt, p.sitOut.unnamed = time.Time{}, 0
+	b := &p.sitOut
+	if at.Before(b.until) {
+		return
+	}
+	b.resetsAt, b.unnamed = time.Time{}, 0
 }
 
 // SittingOut is the classified refusal of a call made while the entry sits
@@ -173,7 +209,7 @@ func (p *Provider) classified(ctx context.Context, hit markerHit, reason string)
 	if hit.Kind != llm.KindRateLimit {
 		return p.fail(hit.Kind, fmt.Errorf("%s", reason))
 	}
-	until := p.bench(hit.Reset, reason)
+	until := p.bench(hit.Reset, reason, p.now())
 	// WHERE IT MATCHED, beside what it matched: a sit-out takes the entry
 	// from every seat on this node, and the one question an operator who
 	// doubts it has is whether the vendor said it.
@@ -211,8 +247,11 @@ type RunEnd struct {
 	Event string
 
 	// At is when the run's ending was first read back: what a reset the
-	// vendor names as a time of day, or as a delay, is read against. Zero
-	// reads it against now.
+	// vendor names as a time of day, or as a delay, is read against, and
+	// the instant the ending is dated by — the window a limit report opens
+	// runs from it, and a success counts only once dated after the entry's
+	// window ([Provider.bench], [Provider.answered]). The same on every
+	// reading of one job's ending. Zero reads it as made now.
 	At time.Time
 }
 
@@ -239,8 +278,16 @@ type RunEnd struct {
 // the runner collected is that event's own payload, read at the profile's
 // marker path as the event it came in.
 //
-// A RUN THAT SUCCEEDED ON NO LIMIT IS AN ANSWER, as a call's is
-// ([Provider.answered]): the entry's backoff starts again from its first step.
+// READ AGAINST ITS OWN INSTANT, AND SO ONCE ([RunEnd.At]): a held completion
+// is collected again when its hold lifts, and the same ending read again is
+// the same report, which sits out the window its first reading opened and
+// nothing more ([Provider.bench]). One whose window is already over sits
+// nothing out, and reports that it did not: the limit's next word is the next
+// call's.
+//
+// A RUN THAT SUCCEEDED ON NO LIMIT IS AN ANSWER, as a call's is, once its
+// ending is dated after the entry's window ([Provider.answered]): the entry's
+// backoff starts again from its first step.
 func (p *Provider) RunEnded(ctx context.Context, end RunEnd) bool {
 	at := end.At
 	if at.IsZero() {
@@ -261,12 +308,20 @@ func (p *Provider) RunEnded(ctx context.Context, end RunEnd) bool {
 	hit, ok := classifyMarkers(p.profile, out)
 	if !ok || hit.Kind != llm.KindRateLimit {
 		if !end.Failed {
-			p.answered()
+			p.answered(at)
 		}
 		return false
 	}
 	said := nonEmpty(hit.Said, firstLine(out.said))
-	until := p.bench(hit.Reset, said)
+	until := p.bench(hit.Reset, said, at)
+	if !p.now().Before(until) {
+		log.InfoContext(ctx, "cli_agent_run_limit_report_over", "provider", p.key,
+			"agent", p.agent, "said", said, "reported_at", at.UTC().Format(time.RFC3339),
+			"retry_at", until.UTC().Format(time.RFC3339),
+			"detail", "the run's limit report is older than the window it opened, which is "+
+				"over; the entry sits nothing out on it")
+		return false
+	}
 	resets := "unknown"
 	if !hit.Reset.IsZero() {
 		resets = hit.Reset.UTC().Format(time.RFC3339)

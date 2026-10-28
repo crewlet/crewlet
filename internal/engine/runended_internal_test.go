@@ -58,6 +58,37 @@ func TestARunThatSpentItsPlanMovesTheNextLaunchOn(t *testing.T) {
 	}
 }
 
+// A RECOLLECTED ENDING BENCHES NOTHING ITS FIRST READING DID NOT. The segment
+// that collects a job reads the job's ending every time, and a completion held
+// on a limit is collected again when its hold lifts: the ending the entry is
+// handed is dated by the job's first collection, so a report whose window is
+// over sits nothing out, and the review the hold waited for reaches the model.
+// Dated by the reading, every collection benched the entry afresh, before any
+// call could find out whether the quota was back, and held the completion
+// again for longer.
+//
+// Mutation: leave At out of what noteRunEnded hands the entry, and the
+// hour-old report benches the entry again.
+func TestARecollectedEndingBenchesItsEntryNoMore(t *testing.T) {
+	t.Parallel()
+	c, _ := chainCompany(t, chainMember{key: "plan", agent: "opencode", model: "anthropic/claude-sonnet-5"})
+	run := sandbox.PendingRun{TurnID: "t0", AgentHandle: "swe",
+		Launch: sandbox.LaunchRecord{ProviderKey: "plan"}}
+	quota := sandbox.RunEnding{Error: `{"type":"provider.quota","message":"You have exhausted your quota"}`,
+		At: time.Now().Add(-time.Hour)}
+	e := &Engine{}
+
+	e.noteRunEnded(t.Context(), c, run, quota)
+	if err := planOf(t, c).SittingOut(); err != nil {
+		t.Fatalf("an ending first collected an hour ago sat its entry out again: %v", err)
+	}
+	quota.At = time.Now()
+	e.noteRunEnded(t.Context(), c, run, quota)
+	if planOf(t, c).SittingOut() == nil {
+		t.Error("the same report, first collected now, sits nothing out: the case proves nothing")
+	}
+}
+
 // AN APPLY KEEPS A SPENT PLAN SPENT. Every apply rebuilds every entry, so an
 // edit to anything else handed the node's seats the spent entry back, and each
 // relearned the window with a call or a launch. An entry whose spec is

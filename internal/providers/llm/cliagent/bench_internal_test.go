@@ -130,7 +130,7 @@ func TestACallQueuedWhenTheEntryIsSatOutLaunchesNothing(t *testing.T) {
 	<-arrived
 
 	// The call holding the slot reports the spent plan, and lets it go.
-	p.bench(clock.read().Add(time.Minute), "Claude AI usage limit reached")
+	p.bench(clock.read().Add(time.Minute), "Claude AI usage limit reached", clock.read())
 	<-p.slots
 
 	err := <-done
@@ -185,7 +185,7 @@ func TestAnUnnamedResetBacksOffAndStartsAgainOnceAnswered(t *testing.T) {
 	p := &Provider{now: clock.read}
 	window := func() time.Duration {
 		at := clock.read()
-		return p.bench(time.Time{}, "limited").Sub(at)
+		return p.bench(time.Time{}, "limited", at).Sub(at)
 	}
 	if got := window(); got != time.Minute {
 		t.Fatalf("first window %v, want a minute", got)
@@ -201,7 +201,7 @@ func TestAnUnnamedResetBacksOffAndStartsAgainOnceAnswered(t *testing.T) {
 		}
 	}
 	clock.advance(p.sitOut.until.Sub(clock.read()))
-	p.answered()
+	p.answered(clock.read())
 	if got := window(); got != time.Minute {
 		t.Errorf("a limit after the entry answered sits out %v, want the first step again", got)
 	}
@@ -214,8 +214,8 @@ func TestALaterBenchNeverShortensAnEarlierOne(t *testing.T) {
 	t.Parallel()
 	clock := &testClock{now: time.Now()}
 	p := &Provider{now: clock.read}
-	p.bench(clock.read().Add(30*time.Minute), "first")
-	p.bench(clock.read().Add(time.Minute), "second")
+	p.bench(clock.read().Add(30*time.Minute), "first", clock.read())
+	p.bench(clock.read().Add(time.Minute), "second", clock.read())
 	if left := p.sitOut.until.Sub(clock.read()); left != 30*time.Minute {
 		t.Errorf("sits out %v after a shorter report, want the 30 minutes the first set", left)
 	}

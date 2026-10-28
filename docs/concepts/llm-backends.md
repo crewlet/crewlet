@@ -705,9 +705,11 @@ sentence, until the window ends:
   than five minutes ago is the window turning over as the report was read, and
   reads as no instant;
 - otherwise after a window that grows with each probe the limit refuses again:
-  **1, 2, 5, then 15 minutes**, and back to the first step once a call through
-  the entry answers. A limit that lifts in a minute costs a minute, and one that
-  lasts all afternoon costs four probes an hour. A probe costs at most the
+  **1, 2, 5, then 15 minutes**, and back to the first step once the entry
+  answers after the window it sat out (an answer from inside the window, a
+  call already running when it began, says nothing about the limit). A limit
+  that lifts in a minute costs a minute, and one that lasts all afternoon
+  costs four probes an hour. A probe costs at most the
   entry's `max_concurrent` process launches (the calls that take a slot once
   the window ends, before the first of them answers); every call queued behind
   them is refused as soon as one reports the plan still spent.
@@ -757,8 +759,14 @@ against the same `limit_events` and `limit_markers`, by the same rules as a
 call, and sits the entry out before the turn launches again
 (`cli_agent_run_limit_reported`). A reset named as a time of day is read against
 when the run's ending was first collected, so a resume held for hours past it
-reads it as over rather than as the next day's. A run that succeeded answers
-for the entry, so its backoff starts again from the first step. A launch picks
+reads it as over rather than as the next day's, and the sit-out runs from then
+too: a job collected again after a hold reads the same ending as the same
+report, which sits out nothing more once its window is over
+(`cli_agent_run_limit_report_over`) and takes no step of the backoff, so the
+review the hold waited for reaches the model. A run that succeeded answers for
+the entry once its ending is dated after the entry's window, so its backoff
+starts again from the first step; one from before the window's end says nothing
+about the limit, and the window keeps the reset the vendor named. A launch picks
 the first member of the seat's chain that is not sitting out, so a reviewer
 sending the turn back an hour into the same window moves to the next entry
 rather than walking into the same limit, and a launch every member of which
