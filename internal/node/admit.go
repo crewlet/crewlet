@@ -79,7 +79,7 @@ var ErrSeatBusy = errors.New("node: another turn is running on the seat")
 
 // ErrDraining is a turn refused because this node is draining. The node is
 // handing its seats to peers, and a turn started now would run inside a
-// shutdown that waits for it. The caller hands the work back, unspent, for the
+// shutdown that waits for it. The caller hands the work back, undone, for the
 // seat's next holder.
 var ErrDraining = errors.New("node: this node is draining")
 

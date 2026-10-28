@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -47,6 +48,10 @@ type drainRig struct {
 
 	// collected counts the box collections any engine on the rig made.
 	collected atomic.Int32
+
+	// gate, when set, wraps the gate each engine on the rig resumes through
+	// ([Options.resumeGate]).
+	gate func(sandbox.TurnGate) sandbox.TurnGate
 }
 
 func newDrainRig(t *testing.T) *drainRig {
@@ -78,6 +83,7 @@ func (r *drainRig) start(t *testing.T) *Engine {
 	e, err := New(t.Context(), Options{
 		Bootstrap: &b, Company: parseCompany(t, companyWithoutSandboxDoc),
 		SandboxPollInterval: 50 * time.Millisecond,
+		resumeGate:          r.gate,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -256,32 +262,126 @@ func TestADrainingNodeLeavesACompletionForTheSeatsNextHolder(t *testing.T) {
 	})
 }
 
-// A DRAIN REFUSAL DEFERS A CONTROL DELIVERY, AND NOTHING ELSE DOES.
+// A REFUSED COMPLETION IS HANDED BACK BY THE CONDITION ITS REFUSAL NAMES.
 //
-// Deferred, the attachment is quiesced and the completion goes back unspent:
-// right for a node that is leaving, which would refuse every redelivery the
-// same way. Any other failure is a Nak, because nothing un-quiesces a control
-// attachment, and a seat whose ownership merely blipped would stay deaf to its
-// completions for as long as this node held it.
-func TestOnlyADrainDefersAControlDelivery(t *testing.T) {
+// A node that is leaving defers: the attachment is quiesced for the rest of the
+// drain and the completion waits at the head for the seat's next holder. A
+// condition that clears by waiting is acked, which spends none of the broker's
+// deliveries and quiesces nothing: the run is left unclaimed and the waiter
+// announces it again on its next poll (TestAnUnclaimedCompletionIsAnnouncedAgain).
+// A condition this build names nowhere yet, a provider's limit here, takes the
+// waiting rule with no change to the hand-back, which is the point of keying it
+// on the condition. Only a failure the refusal does not explain is a Nak.
+//
+// Mutation: key the hand-back on node.ErrDraining again and the provider limit
+// is a Nak, walking a healthy completion to the dead-letter boundary one
+// delivery at a time; defer every refusal and a seat whose ownership merely
+// blipped quiesces its control topic for as long as this node holds it.
+func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 	t.Parallel()
-	drain := &sandbox.TurnRefused{Cause: node.ErrDraining,
-		Refusal: sandbox.Refusal{Condition: waitDrain, Reason: node.ErrDraining.Error()}}
-	owned := &sandbox.TurnRefused{Cause: node.ErrSeatNotOwned,
-		Refusal: sandbox.Refusal{Condition: waitOwnership, Reason: node.ErrSeatNotOwned.Error()}}
+	refusal := func(cond sandbox.Condition, cause error) error {
+		return errors.Join(sandbox.ErrResumeUnavailable, &sandbox.TurnRefused{Cause: cause,
+			Refusal: sandbox.Refusal{Condition: cond, Reason: cause.Error()}})
+	}
 	for name, tc := range map[string]struct {
 		err  error
 		want queue.Outcome
 	}{
-		"settled":                  {err: nil, want: queue.OutcomeAck},
-		"the node is draining":     {err: errors.Join(sandbox.ErrResumeUnavailable, drain), want: queue.OutcomeDefer},
-		"the seat is not provable": {err: errors.Join(sandbox.ErrResumeUnavailable, owned), want: queue.OutcomeNak},
-		"the store failed":         {err: errors.New("store unavailable"), want: queue.OutcomeNak},
+		"settled":                    {err: nil, want: queue.OutcomeAck},
+		"the node is draining":       {err: refusal(waitDrain, node.ErrDraining), want: queue.OutcomeDefer},
+		"the seat is not provable":   {err: refusal(waitOwnership, node.ErrSeatNotOwned), want: queue.OutcomeAck},
+		"a provider's limit":         {err: refusal("provider_limit", errors.New("provider limit reached")), want: queue.OutcomeAck},
+		"a refusal naming no wait":   {err: refusal("", errors.New("refused")), want: queue.OutcomeNak},
+		"the seat is held elsewhere": {err: fmt.Errorf("%w: seat held elsewhere", sandbox.ErrResumeUnavailable), want: queue.OutcomeNak},
+		"the store failed":           {err: errors.New("store unavailable"), want: queue.OutcomeNak},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if got := controlOutcome(tc.err).Outcome; got != tc.want {
 				t.Errorf("controlOutcome(%v) = %s, want %s", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// A COMPLETION REFUSED ON A CONDITION THAT CLEARS BY WAITING RESUMES ONCE IT
+// CLEARS, AND ONCE ONLY, WITHOUT ANY DELIVERY BEING HANDED BACK.
+//
+// The condition is a provider's limit, which no code here names yet: the
+// hand-back keys on the condition's kind, so it needs none. While it holds,
+// every completion the waiter fires is refused and acked, so the control
+// attachment is never quiesced and the run stays unclaimed. Then it clears,
+// and the run is collected once, by whichever comes first:
+//
+//   - the signal (readmitResumes, the hook whatever ends a condition calls),
+//     with the waiter stopped so nothing else could have brought it back;
+//   - the waiter's next poll alone, with no signal, which bounds the wait by
+//     one poll interval;
+//   - both at once, racing, which the at-most-once claim settles.
+//
+// Mutation: drop the kept completion from the coordinator's Readmit and the
+// signalled case never collects; defer or Nak the refusal and the attachment is
+// quiesced, or the completion's deliveries are spent, while it waits.
+func TestACompletionRefusedOnAWaitResumesOnceItClears(t *testing.T) {
+	t.Parallel()
+	const waitLimit sandbox.Condition = "provider_limit"
+	for name, tc := range map[string]struct{ signal, poll bool }{
+		"woken by the signal": {signal: true},
+		"woken by the poll":   {poll: true},
+		"woken by both":       {signal: true, poll: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newDrainRig(t)
+			var limited atomic.Bool
+			limited.Store(true)
+			var refusals atomic.Int32
+			r.gate = func(next sandbox.TurnGate) sandbox.TurnGate {
+				return func(ctx context.Context, handle string) (context.Context, func(), error) {
+					if limited.Load() {
+						refusals.Add(1)
+						return nil, nil, &sandbox.TurnRefused{Cause: errors.New("provider limit reached"),
+							Refusal: sandbox.Refusal{Condition: waitLimit, Reason: "provider limit reached"}}
+					}
+					return next(ctx, handle)
+				}
+			}
+			e := r.start(t)
+			r.seedRun(t, e, "t1")
+			handlers := e.backends.Queue.InFlightCount()
+
+			r.runner.Finish(sandbox.Result{Success: true, Text: "fixed the flaky test"})
+			// TWO REFUSALS: the waiter announced the run again after the
+			// first was acked, which a quiesced attachment would not take.
+			eventually(t, "the waiter's completions to be refused twice", func() bool {
+				return refusals.Load() >= 2
+			})
+			eventually(t, "the refused completions' handlers to return", func() bool {
+				return e.backends.Queue.InFlightCount() == handlers
+			})
+			if deferred(t, e) {
+				t.Fatal("a completion refused on a wait quiesced the seat's control topic")
+			}
+			if got := r.run(t, e, "t1"); got.Status != sandbox.StatusRunning || got.Collected {
+				t.Fatalf("run = %q (collected %v) while the limit held, want it unclaimed",
+					got.Status, got.Collected)
+			}
+
+			if !tc.poll {
+				e.sandboxWaiter.Load().Stop()
+			}
+			limited.Store(false)
+			if tc.signal {
+				e.readmitResumes(waitLimit, "swe")
+			}
+			eventually(t, "the run to be collected once the limit cleared", func() bool {
+				return r.collected.Load() > 0
+			})
+			eventually(t, "the run to leave running", func() bool {
+				return r.run(t, e, "t1").Status != sandbox.StatusRunning
+			})
+			if got := r.collected.Load(); got != 1 {
+				t.Fatalf("the run was collected %d times, want once", got)
 			}
 		})
 	}
@@ -368,6 +468,11 @@ func TestADrainWaitsForAResumeAdmittedBeforeIt(t *testing.T) {
 // completion waits for a slot before it claims the run, and runs the moment
 // one frees.
 //
+// THE WAIT IS OBSERVED, NOT SLEPT ON: the completion's handler is seen parked
+// for the slot ([node.Node.TurnsWaiting]), which it can only be before its
+// claim, and an ungated completion is seen collected instead; either ends the
+// wait, and only the first is right.
+//
 // Mutation: drop the gate from the engine's coordinator and the completion is
 // collected and resumed beside the turn holding the only slot.
 func TestAResumedTurnTakesASlotUnderTheNodesCeiling(t *testing.T) {
@@ -389,7 +494,9 @@ func TestAResumedTurnTakesASlotUnderTheNodesCeiling(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatal("the waiter never fired the finished job's completion")
 	}
-	time.Sleep(500 * time.Millisecond)
+	eventually(t, "the completion to park for the node's one slot", func() bool {
+		return e.node.TurnsWaiting() > 0 || r.collected.Load() > 0
+	})
 	if got := r.collected.Load(); got != 0 {
 		t.Fatalf("the completion was collected %d times while the node's one slot was held", got)
 	}

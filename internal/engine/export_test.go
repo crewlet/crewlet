@@ -7,10 +7,20 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
+
+// MailboxTurn hands e one inbox partition for handle's seat as the node's
+// mailbox does once it has admitted the turn ([Engine.mailboxTurn]), for a test
+// outside the package whose subject is the dispatcher behind it rather than the
+// node's admission in front of it.
+func MailboxTurn(ctx context.Context, e *Engine, handle string, evs []*events.Event) queue.Result {
+	return e.mailboxTurn(ctx, handle, evs)
+}
 
 // Reflects reports whether e has built its reflect dispatcher, for a test
 // outside the package that drives an engine through its public surface.

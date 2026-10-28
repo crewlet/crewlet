@@ -3,6 +3,10 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"slices"
+
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // TurnGate admits the turn a resume re-enters, or refuses it: the node's own
@@ -32,8 +36,9 @@ import (
 //
 // An error, and a [*TurnRefused] when the refusal names what would lift it: an
 // answer's retry waits on that ([Coordinator.waitOwed]), and a completion is
-// handed back carrying it, so the caller that hands it back can tell a node
-// that is leaving from a seat it cannot prove it holds.
+// handed back carrying it, so the caller that settles the delivery keys what it
+// does on the condition (a node that is leaving, or a condition that clears by
+// waiting) rather than on the error behind it.
 //
 // Admitted, it returns the context the turn runs under, which the admission may
 // end (a drain that can no longer wait for it), and the release, which the
@@ -42,6 +47,11 @@ type TurnGate func(ctx context.Context, handle string) (context.Context, func(),
 
 // TurnRefused is a [TurnGate]'s refusal: what an answer's retry waits on, and
 // the gate's own cause, which [errors.Is] reaches through it.
+//
+// ITS CONDITION IS THE DATA A CALLER DECIDES ON. A gate that refuses for a new
+// reason (a provider's limit, a spent budget) names a new [Condition], and every
+// caller that keys on the condition handles it by its kind with no change of
+// its own: an answer waits on it, and a completion is handed back by it.
 type TurnRefused struct {
 	Refusal
 	Cause error
@@ -55,9 +65,15 @@ func (r *TurnRefused) Unwrap() error { return r.Cause }
 //
 // UNEXPORTED, AND THE ONE WAY TO A RESUME. [Coordinator.resumeAndSettle] is
 // the only frame that calls the [Resumer], and it takes one of these rather
-// than a bare context, so a route that would resume a turn without admitting
-// it does not compile. Only [Coordinator.admitTurn] makes one (a guard test
-// holds every other frame to that).
+// than a bare context, so a resume cannot be written outside this package
+// without one. INSIDE it the compiler proves nothing: any frame here could
+// declare one and fill it in. What holds that is the guard
+// (internal/node.TestEveryTurnStartIsAdmitted): only [Coordinator.admitTurn]
+// may mention this type in a value (a literal, a variable, new, a conversion,
+// an alias, a field), only it and the three frames that take one
+// (resumeAndSettle, completeAdmitted, resumeOwedAdmitted) may name it at all,
+// and each of those three is called only from the frame that asked the gate
+// for it, or from one of the other two.
 type admitted struct {
 	ctx     context.Context
 	release func()
@@ -88,4 +104,111 @@ func refusalOf(err error) Refusal {
 		return refused.Refusal
 	}
 	return Refusal{Reason: err.Error()}
+}
+
+// refusedCompletion is a completion the node's gate refused on a condition,
+// kept until the condition clears.
+type refusedCompletion struct {
+	cond    Condition
+	ev      types.SandboxRunCompleted
+	trigger *events.Event
+}
+
+// keepRefused keeps a completion the gate refused on cond, for
+// [Coordinator.Readmit] to re-fire the moment cond clears.
+//
+// # Why it is kept, when the waiter announces it again anyway
+//
+// The waiter re-announces a finished run on every poll for as long as its row
+// is running, and that is what makes acknowledging a refused completion safe:
+// nothing is lost with the delivery. But the next poll is up to one
+// [DefaultPollInterval] away, and the end of a condition is an event the
+// engine already observes (a seat's turn ending, a renew proving ownership
+// again, a provider's limit lifting). So the clearing re-fires the completion
+// itself, and the poll is the backstop for a clearing nothing signals. Both
+// may arrive: the claim is at-most-once, so the run resumes once.
+//
+// A SIGNAL THAT LANDS WHILE THE GATE IS REFUSING IS NOT LOST. Readmit re-fires
+// only what is kept when it runs, so a condition that cleared between the
+// gate's answer and the keep would leave the completion kept for a signal that
+// has already been and gone, until the next poll. So the caller reads what was
+// signalled BEFORE it asks the gate (seen), and the keep, under the lock
+// Readmit takes, re-fires at once instead of keeping when cond has been
+// signalled for the seat since: the same rule [Coordinator.waitOwed] applies
+// to an answer.
+//
+// A refusal that names no condition is not kept: nothing would signal its end.
+// Nor is one for a seat this node lets go of ([Coordinator.ReleaseSeat]): the
+// successor's waiter announces it there. A drain's is kept and never re-fired,
+// since nothing signals a drain's end, until that release drops it.
+func (c *Coordinator) keepRefused(ev types.SandboxRunCompleted, trigger *events.Event, cond Condition,
+	seen map[signal]uint64,
+) {
+	if cond == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	kept := refusedCompletion{cond: cond, ev: ev, trigger: trigger}
+	if c.signalledSinceLocked(cond, ev.AgentHandle, seen) {
+		c.refireLocked(kept)
+		return
+	}
+	c.refused[ev.TurnID] = kept
+}
+
+// forgetRefused drops a kept completion of turnID's run, once a completion of
+// it has been admitted: from there the claim settles it, whichever announcement
+// carried it.
+func (c *Coordinator) forgetRefused(turnID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.refused, turnID)
+}
+
+// refireRefusedLocked re-fires every kept completion refused on cond, for the
+// named seats or every seat, each on a goroutine of the coordinator's own
+// lifetime. The caller holds c.mu.
+func (c *Coordinator) refireRefusedLocked(cond Condition, handles []string) {
+	if c.closed {
+		return
+	}
+	for turnID, kept := range c.refused {
+		if kept.cond != cond || (len(handles) > 0 && !slices.Contains(handles, kept.ev.AgentHandle)) {
+			continue
+		}
+		delete(c.refused, turnID)
+		c.refireLocked(kept)
+	}
+}
+
+// refireLocked re-fires one kept completion on a goroutine of the
+// coordinator's own lifetime, which [Coordinator.Stop] waits for. The caller
+// holds c.mu and has checked the coordinator is not closed.
+func (c *Coordinator) refireLocked(kept refusedCompletion) {
+	c.inflight.Add(1)
+	go func() {
+		defer c.inflight.Done()
+		c.refire(kept)
+	}()
+}
+
+// refire offers a kept completion to [Coordinator.OnCompleted] again, under
+// the coordinator's own lifetime, as the waiter's next announcement would. A
+// refusal keeps it again; any other failure is left to that announcement.
+func (c *Coordinator) refire(kept refusedCompletion) {
+	ctx := c.life
+	if ctx.Err() != nil {
+		return
+	}
+	if err := c.OnCompleted(ctx, kept.ev, kept.trigger); err != nil {
+		log.InfoContext(ctx, "sandbox_completion_refire_unsettled",
+			"turn_id", kept.ev.TurnID, "agent", kept.ev.AgentHandle, "condition", string(kept.cond),
+			"error", err.Error(),
+			"detail", "the completion re-fired when its condition cleared was not settled; "+
+				"the waiter's next poll announces it again")
+	}
 }

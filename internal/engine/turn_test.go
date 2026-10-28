@@ -1387,7 +1387,7 @@ func TestTheTriggersDelegationReachesTheTurn(t *testing.T) {
 	ask := ev("a2a_request")
 	ask.DelegationDepth = 2
 	ask.DelegationChain = []string{"ceo", "cto"}
-	if res := e.Dispatch(context.Background(), "ceo", []*events.Event{ask}); res.Outcome != queue.OutcomeAck {
+	if res := engine.MailboxTurn(context.Background(), e, "ceo", []*events.Event{ask}); res.Outcome != queue.OutcomeAck {
 		t.Fatalf("dispatch = %+v", res)
 	}
 
