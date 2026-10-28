@@ -157,3 +157,25 @@ func TestAnUpgradeOwnsTheRunsItsPredecessorsCounterStamped(t *testing.T) {
 			"starts just above the highest epoch the seat's rows carry", after.Epoch)
 	}
 }
+
+// ONE RUN RECORD NOTHING CAN READ DOES NOT STOP THE BOOT. The floor skips it,
+// logged, and still floors every seat whose runs it can read: failing the
+// boot over it stopped every node of the company starting.
+func TestAnUnreadableRunRecordDoesNotStopTheBoot(t *testing.T) {
+	t.Parallel()
+	r := newRestartRig(t)
+	first := r.boot(t)
+	_, old := r.parkUnder(t, sandbox.Fence{Owner: "node-0/old-build", Epoch: 2})
+	old.coordinator.Stop()
+	if _, err := first.Fleet.CreateSandboxRun(t.Context(), "t-garbled", []byte("{not json")); err != nil {
+		t.Fatalf("CreateSandboxRun: %v", err)
+	}
+	first.Close(context.WithoutCancel(t.Context()))
+
+	second := r.boot(t)
+	t.Cleanup(func() { second.Close(context.WithoutCancel(t.Context())) })
+	if after := r.claim(t, second, "node-0/next"); after.Epoch != 3 {
+		t.Fatalf("the first claim beside an unreadable record minted %d, want 3: the "+
+			"readable run's epoch still floors the seat", after.Epoch)
+	}
+}

@@ -38,3 +38,23 @@ func TestOwnerEpochsIsTheHighestEachSeatsRunsCarry(t *testing.T) {
 		t.Fatalf("OwnerEpochs = %v, want swe at 5 and qa at 1", got)
 	}
 }
+
+// ONE RECORD THAT DOES NOT DECODE IS SKIPPED, and every other seat is still
+// floored: failing the read over it stopped every node starting.
+func TestOwnerEpochsSkipsARecordItCannotDecode(t *testing.T) {
+	t.Parallel()
+	fleet := memory.NewFleet()
+	store := NewCoordStore(fleet)
+	swe := uuid.New()
+	if _, err := store.BeginLaunch(t.Context(), PendingRun{TurnID: "t1", AgentID: swe.String(),
+		AgentHandle: "h", CodingAgent: "claude-code"}, Fence{Owner: "n1", Epoch: 4}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if _, err := fleet.CreateSandboxRun(t.Context(), "t-garbled", []byte("{not json")); err != nil {
+		t.Fatalf("CreateSandboxRun: %v", err)
+	}
+	got, err := store.OwnerEpochs(t.Context())
+	if err != nil || len(got) != 1 || got[swe] != 4 {
+		t.Fatalf("OwnerEpochs = %v, %v; want swe at 4 with the garbled record skipped", got, err)
+	}
+}

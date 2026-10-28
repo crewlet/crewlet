@@ -878,7 +878,10 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 func floorSeatEpochs(ctx context.Context, epochs *kv.Epochs, fleet coord.Fleet) error {
 	floors, err := sandbox.NewCoordStore(fleet).OwnerEpochs(ctx)
 	if err != nil {
-		return fmt.Errorf("engine: coordination: read the epochs the sandbox runs carry: %w", err)
+		return fmt.Errorf("engine: coordination: list the sandbox runs to floor each "+
+			"seat's fencing epoch above them (the coordination store's sandbox runs "+
+			"bucket on the stream's broker, kept under stream.store_dir, must be "+
+			"readable for the node to start): %w", err)
 	}
 	for seat, floor := range floors {
 		resource := coord.SeatResource(seat)

@@ -804,13 +804,28 @@ func (s *CoordStore) ListActive(ctx context.Context) ([]PendingRun, error) {
 // has to stay above, so its next holder is never older than a row it must
 // write ([coord/kv.Epochs.Floor] is what the engine raises it with at boot).
 // A row naming no seat, or written by no lease, carries no epoch to keep above.
+//
+// A RECORD THAT DOES NOT DECODE IS SKIPPED, loudly, and the rest are still
+// read. Its epoch cannot be known, and no lease can write it either, since
+// every write decodes the row first; failing the whole read over it stopped
+// every node of the company starting, on one record. A listing that fails as
+// a whole is still an error.
 func (s *CoordStore) OwnerEpochs(ctx context.Context) (map[uuid.UUID]int64, error) {
-	runs, err := s.list(ctx, func(PendingRun) bool { return true })
+	records, err := s.runs.SandboxRuns(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sandbox: list runs: %w", err)
 	}
 	out := map[uuid.UUID]int64{}
-	for _, run := range runs {
+	for _, record := range records {
+		run, err := decodeRun(record)
+		if err != nil {
+			log.ErrorContext(ctx, "sandbox_run_undecodable", "key", record.Key, "error", err,
+				"detail", "this run record cannot be read, so the seat's fencing epoch is "+
+					"not floored above it; no lease can write it either",
+				"remedy", "remove the record from the sandbox runs bucket once you know "+
+					"its run is over (see the deployment guide)")
+			continue
+		}
 		seat := seatOf(run.AgentID)
 		if seat == uuid.Nil || run.OwnerEpoch <= 0 {
 			continue
