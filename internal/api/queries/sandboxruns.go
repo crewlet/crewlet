@@ -366,6 +366,7 @@ var runKeys = map[string]runShown{
 	"started_at":          runStatus,
 	"updated_at":          runStatus,
 	"answerable_in_chat":  runStatus,
+	"declined_answers":    runStatus, // delivery ids, never what the answers said
 	"reply":               runBody,
 	"bridge_calls":        runBody,
 	"bridge_calls_elided": runStatus, // a count of what was cut, never a call
@@ -466,6 +467,12 @@ func runRow(run sandbox.PendingRun) map[string]any {
 		"started_at":         isoOrEmpty(run.CreatedAt),
 		"updated_at":         isoOrEmpty(run.UpdatedAt),
 		"answerable_in_chat": answerableInChat(run.ConversationKey),
+		// THE ANSWERS THE QUESTION LET GO OF, by the id of the delivery each
+		// arrived in (answer_run answers it as `answer_id`): a person who
+		// answered is told from here that the run could not take their
+		// answer and is waiting on its question again, rather than left
+		// looking at a question that never changes. Always an array.
+		"declined_answers": nonNilStrings(run.DeclinedAnswers),
 		// WHO IS WAITING, which is the question a board full of parked
 		// runs exists to answer and had no field for. Persisted rather
 		// than re-derived precisely because the resumed turn does not see

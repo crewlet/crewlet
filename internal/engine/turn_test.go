@@ -2798,7 +2798,8 @@ func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
 	return sandbox.Audience{}
 }
 
-// answerGiven is an operator's answer by turn, as it arrives on a seat's inbox.
+// answerGiven is an operator's answer by turn, as a node on an earlier build
+// put it on a seat's inbox.
 func answerGiven(turnID string) *events.Event {
 	return events.New(types.SandboxAnswerGiven{
 		TurnID: turnID, AgentHandle: "ceo", Answer: "use main",
@@ -2807,74 +2808,59 @@ func answerGiven(turnID string) *events.Event {
 	}, events.TraceContext{})
 }
 
-// AN ANSWER BY TURN IS NEVER RUN AS A TURN, whatever it became. It is
-// addressed to a parked run and not to the seat: resumed, found not waiting or
-// found gone, it is spent where it was routed, and only an answer the run is
-// still owed comes back — as a NAK, the spaced return. A seat BUSY CODING takes
-// no other work until that run settles or parks, an answer to another of its
-// runs included, so an answer that raced the seat's hold is deferred under it
-// and resumes nothing beside the job; a node that does not hold the seat
-// routes nothing at all.
+// AN ANSWER BY TURN IS NEVER RUN AS A TURN, AND NEVER WAITS ON THE SEAT'S MAIL.
+// One that reaches the inbox is moved to the seat's control topic, where
+// answers by turn are settled, whatever the seat is doing: busy coding, paused,
+// or not provably this node's. Those are what the resume waits on, and the
+// coordinator asks them there; held here, the answer waited behind every job
+// and every older message the seat had, and a busy seat never reached it. A
+// forward that fails, or a node with no route, hands the delivery back with a
+// NAK rather than dropping a person's answer.
 func TestAnAnswerEventIsNeverRunAsATurn(t *testing.T) {
 	t.Parallel()
 	free := inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true}
 	held := free
 	held.SeatHeldBySandbox = true
+	paused := free
+	paused.Paused = true
 	for name, tc := range map[string]struct {
-		conds       inbox.Conditions
-		disposition sandbox.AnswerDisposition
-		unwired     bool
-		outcome     queue.Outcome
-		routed      bool
+		conds   inbox.Conditions
+		forward error
+		unwired bool
+		outcome queue.Outcome
 	}{
-		"resumed":                          {free, sandbox.AnswerConsumed, false, queue.OutcomeAck, true},
-		"not waiting or gone":              {free, sandbox.AnswerNotMine, false, queue.OutcomeAck, true},
-		"an answer this build cannot read": {free, sandbox.AnswerDisposition(""), false, queue.OutcomeAck, true},
-		"still owed":                       {free, sandbox.AnswerDeferred, false, queue.OutcomeNak, true},
-		"a seat another job holds":         {held, sandbox.AnswerConsumed, false, queue.OutcomeDefer, false},
-		"a node with no coordinator":       {free, "", true, queue.OutcomeNak, false},
-		"a node that does not hold the seat": {
-			inbox.Conditions{}, sandbox.AnswerConsumed, false, queue.OutcomeDefer, false},
-		// AN ANSWER WAITS BEHIND A PAUSE, like the seat's other mail:
-		// resuming a run is work, and a paused seat does none. The park
-		// the screening makes holds it for the resume.
-		"a seat a person paused": {
-			inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true, Paused: true},
-			sandbox.AnswerConsumed, false, queue.OutcomeAck, false},
-		"a node that has not read the pauses": {
-			inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true, PauseUnknown: true},
-			sandbox.AnswerConsumed, false, queue.OutcomeDefer, false},
+		"a free seat":                        {free, nil, false, queue.OutcomeAck},
+		"a seat another job holds":           {held, nil, false, queue.OutcomeAck},
+		"a seat a person paused":             {paused, nil, false, queue.OutcomeAck},
+		"a node that does not hold the seat": {inbox.Conditions{}, nil, false, queue.OutcomeAck},
+		"a forward the broker refused":       {free, errors.New("broker unavailable"), false, queue.OutcomeNak},
+		"a node with no route":               {free, nil, true, queue.OutcomeNak},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			r := &recorder{}
 			d := dispatcher(t, r)
 			d.Conditions = func(string) inbox.Conditions { return tc.conds }
-			var routed []string
+			var forwarded []uuid.UUID
 			if !tc.unwired {
-				d.AnswerByTurn = func(_ context.Context, given types.SandboxAnswerGiven,
-					_ *events.Event) (sandbox.AnswerDisposition, error) {
-					routed = append(routed, given.TurnID)
-					return tc.disposition, nil
+				d.ForwardAnswer = func(_ context.Context, ev *events.Event) error {
+					forwarded = append(forwarded, ev.ID)
+					return tc.forward
 				}
 			}
-			got := d.Dispatch(context.Background(), "ceo", []*events.Event{answerGiven("t1")})
+			answer := answerGiven("t1")
+			got := d.Dispatch(context.Background(), "ceo", []*events.Event{answer})
 			if got.Outcome != tc.outcome {
 				t.Errorf("outcome = %v, want %v", got.Outcome, tc.outcome)
 			}
 			if len(r.reqs) != 0 {
 				t.Errorf("an answer by turn was run as a turn: %+v", r.reqs)
 			}
-			if (len(routed) == 1) != tc.routed {
-				t.Errorf("routed to the run %v, want routed=%v", routed, tc.routed)
+			if len(r.parked) != 0 {
+				t.Errorf("an answer by turn was parked with the seat's mail: %v", r.parked)
 			}
-			if tc.routed && len(r.parked) != 0 {
-				t.Errorf("an answer routed to its run was also parked: %v", r.parked)
-			}
-			if tc.conds.Paused && (len(r.parked) != 1 ||
-				!slices.Equal(r.holds, []inbox.Hold{inbox.HoldSeatPaused})) {
-				t.Errorf("a paused seat's answer parked %v under holds %v, want one park "+
-					"under the pause's own hold", r.parked, r.holds)
+			if !tc.unwired && !slices.Equal(forwarded, []uuid.UUID{answer.ID}) {
+				t.Errorf("forwarded %v, want the answer itself once", forwarded)
 			}
 		})
 	}
@@ -2887,9 +2873,7 @@ func TestAnAnswerIsTakenOutOfTheDeliveryBeforeTheTurn(t *testing.T) {
 	t.Parallel()
 	r := &recorder{result: turn.Result{Decision: phase.Done, Artifact: "posted"}}
 	d := dispatcher(t, r)
-	d.AnswerByTurn = func(context.Context, types.SandboxAnswerGiven, *events.Event) (sandbox.AnswerDisposition, error) {
-		return sandbox.AnswerConsumed, nil
-	}
+	d.ForwardAnswer = func(context.Context, *events.Event) error { return nil }
 	answer, other := answerGiven("t1"), ev("notification")
 	got := d.Dispatch(context.Background(), "ceo", []*events.Event{answer, other})
 	if got.Outcome != queue.OutcomeAck {

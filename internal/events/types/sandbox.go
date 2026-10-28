@@ -284,9 +284,9 @@ func (e SandboxRunFailed) SummaryFor(actor string) string {
 	return lead(actor, "lost a sandbox run to "+reason)
 }
 
-// SandboxAnswerGiven is the wake an answer BY TURN puts on the seat's own
-// inbox: a person answering a parked coding run's question by naming the run,
-// rather than by replying on the conversation it was asked in.
+// SandboxAnswerGiven is the command an answer BY TURN puts on the seat's
+// control topic: a person answering a parked coding run's question by naming
+// the run, rather than by replying on the conversation it was asked in.
 //
 // # Why a second way in
 //
@@ -297,24 +297,31 @@ func (e SandboxRunFailed) SummaryFor(actor string) string {
 // pause TTL while the person who knew the answer had nowhere to put it. An
 // answer by turn names the run instead, and it can be given from any node.
 //
-// # Why on the seat's INBOX
+// # Why on the seat's CONTROL topic
 //
-// Because only the node holding the seat can resume the turn, and the seat's
-// inbox is how anything reaches that node — a durable subscription that the
+// Because only the node holding the seat can record and resume it, and the
+// seat's topics are how anything reaches that node: durable subscriptions the
 // holder, and only the holder, consumes. So an answer accepted on one node is
-// carried out on another, it survives a restart in between, and it WAITS
-// BEHIND A PAUSE exactly as a person's chat reply would: a paused seat takes
-// nothing off its inbox, this included — and behind another of the seat's
-// coding runs, which the seat finishes or parks before it takes the answer.
+// carried out on another, and it survives a restart in between.
 //
-// AND IT NAMES THE QUESTION, not only the run, because any of those waits can
-// outlast the question: see [SandboxAnswerGiven.LaunchID]. It resumes the run
-// only while the run still waits on the question it was given against.
+// The control topic and not the inbox, because the answer is addressed to a
+// run, like the completion that topic was made for. The inbox is the seat's
+// mail: held for as long as any of the seat's coding runs holds the seat, and
+// worked oldest first after that. An answer that rode it waited behind every
+// job the seat took on and every message it had not got to, and on a busy
+// seat it never arrived. On the control topic it is recorded on arrival, and
+// its resume waits for what a resume must (another of the seat's runs holding
+// it, a turn in flight, a person's pause) and is then the seat's next turn.
 //
-// NEVER A TURN. The dispatcher routes it to the coding run it names before
-// the inbox screening runs, and whatever that answers — resumed, not
-// awaiting, gone — the delivery is spent there: an answer that fell through
-// to the ordinary route would wake the seat on a message addressed to a run.
+// AND IT NAMES THE QUESTION, not only the run, because the resume can wait
+// longer than the question does: see [SandboxAnswerGiven.LaunchID]. It resumes
+// the run only while the run still waits on the question it was given against.
+//
+// NEVER A TURN. The sandbox coordinator settles it, and whatever it becomes
+// (resumed, not awaiting, gone) the delivery is spent there. One that reaches
+// the seat's inbox, put there by a node on an earlier build, is moved to the
+// control topic rather than run: a turn woken by it would act on a message
+// addressed to a run.
 //
 // KEPT OUT OF THE EVENT STORE, like the other inbox wakes: what happened to
 // the answer is [SandboxRunAnswered], and that the person gave it is their
@@ -324,10 +331,10 @@ type SandboxAnswerGiven struct {
 	TurnID string `json:"turn_id"`
 
 	// Agent is the seat that run belongs to, by its derived id, and its
-	// inbox is the one this travels on (topics.AgentInbox) — carried in
-	// the payload as well so the dispatcher that routes it can refuse one
-	// that reached the wrong seat. The id, because the inbox is named by
-	// it (ADR-0013).
+	// control topic is the one this travels on (topics.AgentControl).
+	// Carried in the payload as well, so the coordinator that settles it can
+	// refuse one that reached the wrong seat. The id, because the topic is
+	// named by it (ADR-0013).
 	Agent string `json:"agent_id"`
 
 	// AgentHandle is the seat's handle when the answer was given, for a
@@ -353,9 +360,9 @@ type SandboxAnswerGiven struct {
 	// LaunchID is the QUESTION this answers: the job the run held when it
 	// asked, off the row the answer was accepted against. Every new question
 	// comes with a new job — nothing but a launch opens one — so the job
-	// identifies it. An answer reaches the seat some time after it was given —
-	// behind a pause, behind another of the seat's coding runs, after a
-	// NAK's backoff, as a retried copy — and by then the run can have been
+	// identifies it. An answer reaches the seat some time after it was given
+	// (after a seat handoff, after a NAK's backoff, as a retried copy), and
+	// by then the run can have been
 	// resumed by somebody else's answer and parked on a NEW question. Named
 	// only by its turn, the late answer then resumed the run a second time,
 	// as the answer to a question its giver never saw. Carrying the

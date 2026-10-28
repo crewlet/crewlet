@@ -36,7 +36,7 @@ const MaxRunAnswerBytes = ToolAnswerBytes / 2
 // the implementation.
 type RunDesk interface {
 	Run(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
-	Deliver(ctx context.Context, given types.SandboxAnswerGiven) error
+	Deliver(ctx context.Context, given types.SandboxAnswerGiven) (uuid.UUID, error)
 }
 
 // RunDeps are answer_run's dependencies.
@@ -83,14 +83,19 @@ type runParties struct {
 //
 // # What it promises, and what it does not
 //
-// It answers `pending`: the answer is on the seat's inbox and the node holding
-// the seat will resume the run with it — but that node is the only one that
-// can, and it may be paused, busy with another of the seat's coding runs
-// (which it finishes or parks before it takes this answer, as it would a chat
-// reply), or restarting. What the answer became is announced there as
-// `sandbox_run_answered` (`resumed`, `not_awaiting`, `gone` or `declined`).
-// What it refuses up front is what this node can know: a run that is not
-// waiting for an answer (`not_running`).
+// It answers `pending`: the answer is on the seat's control topic, and the
+// node holding the seat records it on the run when it takes it off (the run
+// then reads `answered`) and resumes the run with it once the seat is free of
+// any other coding run, any turn in flight and a person's pause. That node is
+// the only one that can, and it may be restarting, so the answer's fate is
+// settled there and not here. The result names the question it answers
+// (`launch_id`) and the answer's own id (`answer_id`), and the run's record is
+// what says what became of it: `answered` on that question once it is
+// recorded, the id among the question's `declined_answers` if the run let it
+// go, or a new question if the run moved past this one first. Each is also
+// announced as `sandbox_run_answered` (`resumed`, `not_awaiting`, `gone` or
+// `declined`). What it refuses up front is what this node can know: a run that
+// is not waiting for an answer (`not_running`).
 //
 // # It answers the question it was given against
 //
@@ -113,12 +118,13 @@ func (t *answerRun) Name() string { return AnswerRunTool }
 
 func (t *answerRun) Description() string {
 	return "Answer a coding run that stopped to ask a person a question, by " +
-		"naming the run's turn. The run resumes with your answer as the reply " +
-		"to the question it is waiting on now, on the node that holds its seat, " +
-		"once that seat is free of any other coding run. Use this for any " +
-		"parked run — including one started by a schedule, an assignment or a " +
-		"colleague, which has no conversation to reply in. Find parked runs " +
-		"and their questions on the sandbox-runs board."
+		"naming the run's turn. The answer is recorded on the run at once, and " +
+		"the run resumes with it as the reply to the question it is waiting on " +
+		"now, on the node that holds its seat, as soon as that seat is free of " +
+		"any other coding run. Use this for any parked run, including one " +
+		"started by a schedule, an assignment or a colleague, which has no " +
+		"conversation to reply in. Find parked runs and their questions on the " +
+		"sandbox-runs board."
 }
 
 func (t *answerRun) Parameters() map[string]any {
@@ -210,7 +216,8 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		LaunchID: run.LaunchID,
 	}
 	outcome := statelog.OutcomePending
-	if err := t.deps.Desk.Deliver(ctx, given); err != nil {
+	answerID, err := t.deps.Desk.Deliver(ctx, given)
+	if err != nil {
 		// THE PUBLISH MAY HAVE LANDED, so this is `unknown` rather than a
 		// refusal — see [sandbox.AnswerDesk.Deliver]. Answering it again is
 		// safe: both copies name the question they answer, so whichever is
@@ -220,10 +227,17 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"turn_id", run.TurnID, "seat", parties.handle, "error", err.Error())
 		outcome = statelog.OutcomeUnknown
 	}
-	return jsonResult(map[string]any{
+	result := map[string]any{
 		"turn_id": run.TurnID, "agent_handle": parties.handle,
 		"question": run.Question, "outcome": string(outcome),
-	})
+		// THE QUESTION IT ANSWERS AND THE ANSWER'S OWN ID, which the run's
+		// record is read against to learn what became of it.
+		"launch_id": run.LaunchID,
+	}
+	if answerID != uuid.Nil {
+		result["answer_id"] = answerID.String()
+	}
+	return jsonResult(result)
 }
 
 // errUnreadableSeatID is the error a pending run's row carries when the seat

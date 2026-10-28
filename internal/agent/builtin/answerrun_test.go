@@ -34,9 +34,12 @@ func (d *deskFake) Run(_ context.Context, turnID string) (sandbox.PendingRun, bo
 	return run, ok, nil
 }
 
-func (d *deskFake) Deliver(_ context.Context, given types.SandboxAnswerGiven) error {
+// deliveredID is the id deskFake answers every delivery with.
+var deliveredID = uuid.MustParse("6f1c2b8e-3d4a-4e5f-9a0b-1c2d3e4f5a6b")
+
+func (d *deskFake) Deliver(_ context.Context, given types.SandboxAnswerGiven) (uuid.UUID, error) {
 	d.delivered = append(d.delivered, given)
-	return d.deliverErr
+	return deliveredID, d.deliverErr
 }
 
 // answerRunTool is the operator catalogue's answer_run over these fakes, called
@@ -85,12 +88,15 @@ func parked(t *testing.T, turnID, status string) sandbox.PendingRun {
 		Question: "which branch?", LaunchID: "launch-" + turnID}
 }
 
-// AN ANSWER IS PUT ON THE SEAT'S INBOX AS THE PERSON WHO GAVE IT, naming the
-// question it answers, and the caller is told `pending`: the node holding the
-// seat resumes the run, and this one cannot say what that became. The question
-// — the job the run held when it asked — is what keeps an answer
-// that reaches the seat late from resuming the run as the answer to a later
-// question.
+// AN ANSWER IS DELIVERED AS THE PERSON WHO GAVE IT, naming the question it
+// answers, and the caller is told `pending`: the node holding the seat records
+// and resumes it, and this one cannot say what that became. The question (the
+// job the run held when it asked) is what keeps an answer that reaches the
+// seat late from resuming the run as the answer to a later question. And the
+// caller is told the question and the answer's own id, which is what it reads
+// the run's record against to learn what became of the answer: recorded on
+// that question, let go of among its declined answers, or overtaken by a new
+// one.
 func TestAnswerRunDeliversTheAnswerAsThePersonAndAnswersPending(t *testing.T) {
 	t.Parallel()
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusReseed)}}
@@ -113,8 +119,10 @@ func TestAnswerRunDeliversTheAnswerAsThePersonAndAnswersPending(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.Output), &answer); err != nil {
 		t.Fatal(err)
 	}
-	if answer["outcome"] != "pending" || answer["question"] != "which branch?" {
-		t.Errorf("answer = %v, want pending with the question it answered", answer)
+	if answer["outcome"] != "pending" || answer["question"] != "which branch?" ||
+		answer["launch_id"] != "launch-t1" || answer["answer_id"] != deliveredID.String() {
+		t.Errorf("answer = %v, want pending with the question it answered and the "+
+			"answer's own id", answer)
 	}
 }
 

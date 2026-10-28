@@ -53,15 +53,22 @@ import "context"
 // beside the first would put two of its turns in flight at once, each acting
 // for the seat with no view of the other.
 //
-// So the answer waits on the inbox with everything else and is the first thing
-// the seat is offered when the job stops holding it. Nothing is lost: the reply
-// keeps its place, the question keeps its anchor, and a box that outlives
-// `pause_ttl_seconds` meanwhile re-seeds from its branch when the answer
-// arrives. An answer BY TURN waits the same way: one that raced the hold is
-// deferred under it rather than recorded and resumed beside the job. The answer used to be
-// offered on a held seat, beside the park the hold replaced, and that meant
-// consuming the held seat's mail to look for it — and a consumed message that
-// is not the answer has nowhere to go but back onto the inbox, in a loop.
+// So a chat reply waits on the inbox with everything else and is offered when
+// the job stops holding the seat. Nothing is lost: the reply keeps its place,
+// the question keeps its anchor, and a box that outlives `pause_ttl_seconds`
+// meanwhile re-seeds from its branch when the answer arrives. The answer used
+// to be offered on a held seat, beside the park the hold replaced, and that
+// meant consuming the held seat's mail to look for it, and a consumed message
+// that is not the answer has nowhere to go but back onto the inbox, in a loop.
+//
+// AN ANSWER BY TURN DOES NOT WAIT ON THE INBOX. It names its run, so nothing
+// has to be read to find it, and it travels on the seat's control topic, which
+// no hold stops ([AnswerDesk.Deliver]). It used to ride the inbox, and there it
+// waited out every job that held the seat and then every older message, any of
+// which could start the next job: on a busy seat it never arrived. Now it is
+// recorded on arrival, and the rule above still holds for its RESUME, which
+// waits for the job holding the seat ([SeatCoding]) and is then the first thing
+// the seat does, its inbox held behind it.
 //
 // WHO HAS TO AGREE ON IT: this node alone. The hold lives in this process's
 // queue client, keyed on the subscription, and is derived from this node's

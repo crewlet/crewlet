@@ -439,6 +439,14 @@ type CoordinatorOptions struct {
 	// where a refusal to move the answer would lose it. Nil records nothing.
 	Spent func(ctx context.Context, handle string, evs []*events.Event)
 
+	// WasSpent reports whether a delivery is recorded as worked in the same
+	// ledger [CoordinatorOptions.Spent] writes, for an answer by turn that
+	// comes round on the control topic after it was spent
+	// ([Coordinator.OnAnswerGiven]). FAILS OPEN, as every ledger read does:
+	// unreadable, the delivery reaches [Coordinator.AnswerByTurn], which finds
+	// what the run says about it. Nil reads every delivery as unspent.
+	WasSpent func(ctx context.Context, handle string, ev *events.Event) bool
+
 	// After schedules f to run after d, in its own goroutine, and returns a
 	// function that cancels it and reports whether it had not started —
 	// time.AfterFunc's contract. Nil is time.AfterFunc; a test replaces it
@@ -558,6 +566,8 @@ type Coordinator struct {
 	after func(time.Duration, func()) func() bool
 	// spent is [CoordinatorOptions.Spent]; see [Coordinator.spend].
 	spent func(ctx context.Context, handle string, evs []*events.Event)
+	// wasSpent is [CoordinatorOptions.WasSpent]; see [Coordinator.OnAnswerGiven].
+	wasSpent func(ctx context.Context, handle string, ev *events.Event) bool
 	// lease is [CoordinatorOptions.Lease]; see [Coordinator.leaseOf].
 	lease func(handle string) (Fence, bool)
 
@@ -652,6 +662,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		gate:      opts.Gate,
 		after:     opts.After,
 		spent:     opts.Spent,
+		wasSpent:  opts.WasSpent,
 		lease:     opts.Lease,
 	}
 	if c.now == nil {
@@ -813,16 +824,27 @@ func setOf(status string) (holding, awaiting int) {
 // job holds it.
 func (c *Coordinator) adjust(handle string, holding, awaiting int) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.moves[handle]++
-	runs := c.runs[handle]
+	was := c.runs[handle]
+	runs := was
 	runs.holding = max(runs.holding+holding, 0)
 	runs.awaiting = max(runs.awaiting+awaiting, 0)
 	if runs == (seatRuns{}) {
 		delete(c.runs, handle)
-		return
+	} else {
+		c.runs[handle] = runs
 	}
-	c.runs[handle] = runs
+	c.mu.Unlock()
+	c.seatFreed(handle, was, runs)
+}
+
+// seatFreed signals [SeatCoding] for a seat whose last holding run has just
+// left [Holding], so an answer owed on it is resumed now rather than at its
+// backstop. Called outside c.mu, which [Coordinator.Readmit] takes.
+func (c *Coordinator) seatFreed(handle string, was, now seatRuns) {
+	if was.holding > 0 && now.holding == 0 {
+		c.Readmit(SeatCoding, handle)
+	}
 }
 
 // OnEvent routes a seat's control-topic delivery.
@@ -835,6 +857,8 @@ func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 		return c.OnStarted(ctx, *payload)
 	case *types.SandboxRunCompleted:
 		return c.OnCompleted(ctx, *payload, ev)
+	case *types.SandboxAnswerGiven:
+		return c.OnAnswerGiven(ctx, *payload, ev)
 	}
 	return nil
 }
@@ -904,12 +928,14 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 			c.mu.Unlock()
 			continue
 		}
+		was := c.runs[handle]
 		if counts == (seatRuns{}) {
 			delete(c.runs, handle)
 		} else {
 			c.runs[handle] = counts
 		}
 		c.mu.Unlock()
+		c.seatFreed(handle, was, counts)
 		// The hold follows the recount, as it follows every transition.
 		c.reconcileHold(ctx, handle)
 		return
@@ -1603,13 +1629,33 @@ func (c *Coordinator) owes(turnID string) bool {
 // rather than by replying on the conversation it was asked in, and resumes the
 // run with it.
 //
+// # On the control topic, never the seat's mail
+//
+// The answer is addressed to a RUN, so it travels the way everything else
+// addressed to a run does: on the seat's control topic ([AnswerDesk.Deliver],
+// [Coordinator.OnAnswerGiven]), which no hold stops and no backlog stands in
+// front of. It rode the seat's inbox, and there it waited behind every coding
+// run that held the seat (a held inbox fetches nothing) and then behind every
+// older message the seat had not worked yet, any of which could launch the
+// next job and hold the seat again. A seat with a backlog and steady coding
+// work never reached it: the person was told `pending`, the run waited out its
+// pause TTL, and nothing in the log said why, because nothing had fetched the
+// answer to say anything about it.
+//
+// What the seat's mail used to give it for free, it now asks for: RECORDING
+// needs nothing from the seat but its lease, so it happens on arrival and the
+// run reads `answered` at once; the RESUME starts a turn, so it waits, through
+// [Coordinator.queueOwed], for the seat to be free of another coding run
+// ([SeatCoding]), of a turn in flight and of a person's pause, and is then the
+// first thing the seat does, its inbox held behind it.
+//
 // # Recorded first, like a chat reply
 //
 // The answer is RECORDED on the run ([PendingStore.RecordAnswer], as
 // [types.AnswerViaOperator]) before anything is done with it, exactly as the
 // chat route records a reply ([Coordinator.TryResumeFromAnswer]), and from
-// that moment the run owns it: the first attempt at the resume runs inline,
-// every retry is this coordinator's, the seat's inbox waits behind it, and
+// that moment the run owns it: every attempt at the resume is this
+// coordinator's, admitted as a retry is, the seat's inbox waits behind it, and
 // everything that keeps a recorded reply exactly-once keeps this one —
 // the take a resumed turn makes ([ResumeRequest.Begin]), the let-go an ending
 // makes, and the seat's next holder reviving a claim whose node stopped before
@@ -1621,9 +1667,8 @@ func (c *Coordinator) owes(turnID string) bool {
 // # The question it answers, and no other
 //
 // An answer is given against the question the person READ, and it reaches
-// the seat's inbox some time later: behind a pause, behind a seat busy on
-// another of its coding runs, after a NAK's backoff, or as a second copy of a
-// retried `answer_run`. By then the run may have been answered by somebody
+// the seat some time later: after a seat handoff, after a NAK's backoff, or as
+// a second copy of a retried `answer_run`. By then the run may have been answered by somebody
 // else, resumed, called `run_sandbox` again, and parked on a NEW question —
 // and an answer that claimed whatever the run is waiting on now resumed it a
 // second time with the first question's answer presented as the second's.
@@ -1643,9 +1688,9 @@ func (c *Coordinator) owes(turnID string) bool {
 //
 // # What the caller does with each answer
 //
-// The delivery is a [types.SandboxAnswerGiven] on the seat's inbox, and it is
-// NEVER A TURN, so two of the three dispositions mean the same thing to the
-// dispatcher — spend it — and only one hands it back:
+// The delivery is a [types.SandboxAnswerGiven] on the seat's control topic,
+// and it is NEVER A TURN, so two of the three dispositions mean the same thing
+// to [Coordinator.OnAnswerGiven] (spend it) and only one hands it back:
 //
 //   - [AnswerConsumed] — the answer is the run's: recorded now, or already —
 //     a redelivery of the very event a record holds — and its resume is the
@@ -1672,7 +1717,7 @@ func (c *Coordinator) owes(turnID string) bool {
 // cause under it. Once RECORDED, the resume is bounded like a chat reply's
 // ([MaxAnswerAttempts], [answerWindow]), and an answer every attempt failed to
 // resume with is let go of: the run waits on its question again, and the copy
-// handed back to the seat's inbox is spent here as `declined`, so the person
+// handed back to the seat's control topic is spent here as `declined`, so the person
 // is told to answer again rather than left waiting on a run that is not using
 // their answer.
 //
@@ -1747,7 +1792,7 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 			// stopping before it acked. Spent as the answer it is — and if
 			// this node is not already driving its resume, it starts.
 			if run.Status == StatusAnswered && !c.owes(run.TurnID) {
-				c.resumeOwed(ctx, run)
+				c.queueOwed(ctx, run)
 			}
 			return AnswerConsumed, nil
 		}
@@ -1796,11 +1841,60 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 			"answered_by", given.AnsweredBy, "answered_by_kind", given.AnsweredByKind,
 			"operator_id", given.OperatorID)
 		c.clearAnswerAttempts(recorded.AgentHandle, recorded.TurnID)
-		c.resumeOwed(ctx, recorded)
+		c.queueOwed(ctx, recorded)
 		return AnswerConsumed, nil
 	}
 	return AnswerDeferred, fmt.Errorf("sandbox: run %s kept changing under the answer it was given",
 		given.TurnID)
+}
+
+// OnAnswerGiven settles one answer BY TURN off the seat's control topic: an
+// error hands the delivery back, and nil spends it.
+//
+// SPENT BEFORE IS SPENT NOW. A delivery recorded as worked
+// ([CoordinatorOptions.WasSpent]) is acknowledged without reaching its run or
+// being announced again: its run took it, let it go or was reaped, and asked
+// again it would find nothing that recognised the answer and announce `gone`
+// or `not_awaiting` about an answer that resumed it. Read BEFORE the
+// coordinator is asked, because by then the run says nothing about it.
+//
+// EVERY DISPOSITION BUT ONE SPENDS IT, and is recorded as worked
+// ([CoordinatorOptions.Spent]) so a copy that comes round after is the same
+// nothing: recorded on its run, let go of, or announced as not the run's. Only
+// [AnswerDeferred], an answer the run is still owed and that could not be
+// recorded, goes back to the broker, whose backoff spaces the attempts and
+// whose dead-letter subject is the loud end of a record that never lands.
+func (c *Coordinator) OnAnswerGiven(ctx context.Context, given types.SandboxAnswerGiven, ev *events.Event) error {
+	handle := given.AgentHandle
+	if c.wasSpent != nil && ev != nil && c.wasSpent(ctx, handle, ev) {
+		log.InfoContext(ctx, "sandbox_answer_by_turn_already_spent",
+			"agent_handle", handle, "turn_id", given.TurnID, "event_id", ev.ID.String(),
+			"detail", "this answer by turn was spent before (taken by a resumed turn, let go "+
+				"of, or settled), so its redelivery is acknowledged without reaching its run "+
+				"or being announced again")
+		return nil
+	}
+	disposition, err := c.AnswerByTurn(ctx, given, ev)
+	switch {
+	case disposition == AnswerDeferred:
+		if err == nil {
+			err = fmt.Errorf("sandbox: the answer to run %s could not be recorded", given.TurnID)
+		}
+		return fmt.Errorf("sandbox: %s is still owed this answer: %w", handle, err)
+	case !disposition.Valid():
+		log.ErrorContext(ctx, "sandbox_answer_disposition_unknown",
+			"agent_handle", handle, "turn_id", given.TurnID, "disposition", disposition.String(),
+			"detail", "an answer by turn was given no disposition this build knows; it is "+
+				"spent, because an answer addressed to a run is never a turn")
+	case err != nil:
+		log.WarnContext(ctx, "sandbox_answer_by_turn_failed",
+			"agent_handle", handle, "turn_id", given.TurnID,
+			"disposition", disposition.String(), "error", err)
+	}
+	if c.spent != nil && ev != nil {
+		c.spent(ctx, handle, []*events.Event{ev})
+	}
+	return nil
 }
 
 // errRunMovedOn is a resume's report that the run it would have ended moved on
@@ -3223,7 +3317,7 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 				"turn_id", run.TurnID, "error", err.Error())
 		}
 		c.countRun(run.AgentHandle, run.Status)
-		c.recoverOwed(ctx, run)
+		c.queueOwed(ctx, run)
 		tally.parked++
 	case StatusAwaiting, StatusReseed:
 		// NOTHING IS DONE TO THE RUN — its answer is what moves it —
@@ -3264,7 +3358,7 @@ func (c *Coordinator) recoverRun(ctx context.Context, run PendingRun, owner stri
 	// resume publishes it first ([Coordinator.retryOwed]).
 	if len(run.HandBack) > 0 &&
 		slices.Contains([]string{StatusRunning, StatusAwaiting, StatusReseed}, run.Status) {
-		c.recoverOwed(ctx, run)
+		c.queueOwed(ctx, run)
 	}
 }
 

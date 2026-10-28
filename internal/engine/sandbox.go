@@ -1942,6 +1942,10 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		// coming round afterwards is dropped rather than run as a second
 		// message. See [sandbox.CoordinatorOptions.Spent].
 		Spent: e.spendAnswer,
+		// And an answer by turn that comes round on the control topic after
+		// it was spent is acknowledged without reaching its run, off the same
+		// ledger. See [sandbox.CoordinatorOptions.WasSpent].
+		WasSpent: e.answerWorked,
 		// Every launch is stamped with the seat lease this node runs the
 		// seat under, so the seat's next holder can fence this node off
 		// the run. See [sandbox.CoordinatorOptions.Lease].
@@ -1967,6 +1971,15 @@ func (e *Engine) spendAnswer(ctx context.Context, handle string, evs []*events.E
 		return
 	}
 	e.dispatch.SpendAnswer(ctx, handle, evs)
+}
+
+// answerWorked reads the ledger [Engine.spendAnswer] writes, for the
+// coordinator ([sandbox.CoordinatorOptions.WasSpent]).
+func (e *Engine) answerWorked(ctx context.Context, handle string, ev *events.Event) bool {
+	if e.dispatch == nil {
+		return false
+	}
+	return e.dispatch.AnswerWorked(ctx, handle, ev)
 }
 
 // runCondenser is the coordinator's [sandbox.Condenser]: the seat's own
@@ -2193,6 +2206,13 @@ const (
 	// names, or at once by an apply that changes the ceilings.
 	waitBudget sandbox.Condition = "budget"
 
+	// waitSeatTurn: another of the seat's turns is running on this node, and
+	// a seat runs one at a time ([node.ErrSeatBusy]). Signalled the moment
+	// that turn is released ([node.Config.SeatTurnEnded]), so the answer is
+	// resumed as the seat's next turn, ahead of its mail, which its owed hold
+	// keeps waiting.
+	waitSeatTurn sandbox.Condition = "seat_turn"
+
 	// waitDrain: this node is draining, and starts no turn. Nothing
 	// signals it, because nothing in the engine undoes a drain
 	// ([Engine.Drain] latches): the wait ends when the drain hands the seat
@@ -2216,6 +2236,9 @@ func (e *Engine) admitResume(ctx context.Context, handle string) (context.Contex
 	case errors.Is(err, node.ErrDraining):
 		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
 			Condition: waitDrain, Reason: err.Error()}}
+	case errors.Is(err, node.ErrSeatBusy):
+		return nil, nil, &sandbox.TurnRefused{Cause: err, Refusal: sandbox.Refusal{
+			Condition: waitSeatTurn, Reason: err.Error()}}
 	case errors.Is(err, node.ErrSeatNotOwned):
 		// THE SAME WAIT [Engine.mayResumeAnswer] names for a seat it
 		// does not find owned, for the same edges.
@@ -2236,9 +2259,12 @@ func (e *Engine) admitResume(ctx context.Context, handle string) (context.Contex
 // passed them; a retry runs outside any delivery and must not be the one way a
 // turn starts on a seat whose lease is not fresh, that a person paused, that
 // has no model, whose node refuses new work, or whose budget is refusing.
-// Whether a sandbox run holds the seat is deliberately NOT asked: an answer
-// recorded before another of the seat's runs started holding it is still
-// owed, and resuming it beside that job is what it was always admitted to do.
+// Whether another of the seat's coding runs holds it is the coordinator's own
+// count, so the coordinator asks that itself first ([sandbox.SeatCoding]),
+// and whether another of its turns is running is the node's, asked at the
+// gate ([Engine.admitResume]): an answer by turn arrives on the seat's control
+// topic at any moment of its day, and is resumed only once the seat is free
+// of both.
 //
 // EACH REFUSAL NAMES WHAT IT WAITS ON, so the retry waits for that rather than
 // re-checking on a timer (see [sandbox.Coordinator.Readmit]). Ownership is an
@@ -2279,23 +2305,22 @@ func (e *Engine) readmitAnswers(cond sandbox.Condition, handles ...string) {
 	}
 }
 
-// answerRunByTurn hands a person's answer BY TURN to the parked coding run it
-// names, through the runtime current when it arrives.
-//
-// LIVE, for the reason [Engine.answerParkedRun] is: bound to the coordinator
-// when the dispatcher was built, a node whose sandbox arrived by apply had no
-// route for an answer by turn for the life of the process. With no runtime the
-// answer is DEFERRED rather than not-mine — this node cannot resume a run, and
-// the delivery is the seat's next holder's to spend, never this node's to drop.
-func (e *Engine) answerRunByTurn(ctx context.Context, given types.SandboxAnswerGiven,
-	trigger *events.Event) (sandbox.AnswerDisposition, error) {
-
-	rt := e.sandbox.Load()
-	if rt == nil {
-		return sandbox.AnswerDeferred, fmt.Errorf("engine: this node runs no sandbox "+
-			"coordinator to resume run %s with the answer it was given", given.TurnID)
+// forwardAnswer moves an answer by turn that reached a seat's inbox to that
+// seat's control topic ([Dispatcher.forwardAnswers]), addressed by the seat id
+// the answer was stamped with off its run's row ([sandbox.AnswerDesk.Deliver]).
+// The SAME EVENT, id and all, so the run's record and the completion ledger
+// recognise it there as they would have recognised the original.
+func (e *Engine) forwardAnswer(ctx context.Context, ev *events.Event) error {
+	given, ok := events.DataAs[*types.SandboxAnswerGiven](ev)
+	if !ok {
+		return fmt.Errorf("engine: event %s is not an answer by turn", ev.ID)
 	}
-	return rt.coordinator.AnswerByTurn(ctx, given, trigger)
+	seat, err := uuid.Parse(given.Agent)
+	if err != nil || seat == uuid.Nil {
+		return fmt.Errorf("engine: the answer by turn %s names no seat id (%q) to forward it to",
+			ev.ID, given.Agent)
+	}
+	return e.backends.Queue.Publish(ctx, topics.AgentControl(seat), ev)
 }
 
 // sandboxAccountant charges collected runs, or nil where nothing counts them.
