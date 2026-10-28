@@ -2523,6 +2523,15 @@ func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.R
 // it spends none of its deliveries; it used to reach the model, revert, and be
 // NAKed through its whole delivery budget in about ten minutes.
 func (e *Engine) seatCannotRun(ctx context.Context, handle string, route sandbox.ResumeRoute) (sandbox.Refusal, bool) {
+	// A COMPLETION ON A SEAT A PERSON STOPPED is refused nothing here: the
+	// turn it re-enters is closed as stopped at its first round by the seat's
+	// fence, before any model call or launch, so neither the budget nor a
+	// limit can refuse it, and held back for either it kept the work a person
+	// asked to stop open until the condition cleared
+	// ([sandbox.Coordinator.StopSeat] ends the wait it was held in).
+	if route == sandbox.ResumeCompletion && e.seatStopping(handle) {
+		return sandbox.Refusal{}, false
+	}
 	c := e.Company()
 	if route == sandbox.ResumeAnswer {
 		if refusal, held := e.budgetHold(ctx, c, handle); held {
@@ -2536,6 +2545,17 @@ func (e *Engine) seatCannotRun(ctx context.Context, handle string, route sandbox
 		return sandbox.Refusal{Condition: waitProvider, Reason: reason, Until: retry}, true
 	}
 	return sandbox.Refusal{}, false
+}
+
+// seatStopping reports whether a person's pause asks handle's seat to stop
+// its running work ([Engine.stopFor]): what the seat's fence closes a turn
+// on at its next round.
+func (e *Engine) seatStopping(handle string) bool {
+	seat, err := e.seatID(handle)
+	if err != nil {
+		return false
+	}
+	return e.stopFor(seat, handle) != nil
 }
 
 // resumeRefusal is what a reverted resume's failure waits on, if it is the

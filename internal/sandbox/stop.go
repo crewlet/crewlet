@@ -73,6 +73,8 @@ import (
 // or handed back for a retry ([LaunchRecord.Collected]) — is its turn's, for the
 // reason a claimed one is: the store refuses its stop, and the turn's fence ends
 // its resume at the first round, charging the job once, as the resume it is.
+// What that resume was WAITING on is ended here, so it comes at once rather than
+// when the wait would have ended ([Coordinator.endCollectedWait]).
 //
 // IDEMPOTENT, which is what lets every way a stop can reach a seat call it — the
 // pause landing, a complete re-read of the pauses, the seat's acquisition while
@@ -100,10 +102,12 @@ func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) e
 			continue
 		}
 		if run.Launch.Collected {
+			heldHere := c.endCollectedWait(endCtx, run)
 			log.InfoContext(ctx, "sandbox_stop_left_to_turn", "turn_id", run.TurnID, "seat", handle,
-				"launch_id", run.LaunchID, "held", run.HeldFor != "",
-				"detail", "the run's job is over and was collected; its turn's resume, held or "+
-					"retried, is stopped by the seat's fence at its first round")
+				"launch_id", run.LaunchID, "held", run.HeldFor != "", "held_here", heldHere,
+				"detail", "the run's job is over and was collected; whatever its turn's resume "+
+					"waited on is ended, and the resume is stopped by the seat's fence at its "+
+					"first round")
 			continue
 		}
 		stop := by
@@ -136,6 +140,52 @@ func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) e
 		c.uncountRun(handle, run.Status)
 	}
 	return nil
+}
+
+// endCollectedWait ends whatever the resume of run's collected job waits on, for
+// a person's stop: a hold on its row ([PendingRun.HeldFor]) is lifted, so the
+// waiter's next poll announces the job, and a completion of it this node kept
+// for a condition, held here or refused at the gate ([Coordinator.keepRefused]),
+// is re-fired at once. Reports whether this node was holding the job itself.
+//
+// WHY A STOP ENDS THE WAIT. The stop leaves a collected job to its turn, whose
+// fence closes it as stopped at its first round, before any model call or
+// launch. But that round comes only when the resume does, and a resume held for
+// a model's limit waits up to the hour the entry is sat out, one held for the
+// budget until its window turns over: the turn stayed open, its job neither
+// resumed nor ended, for as long as the condition lasted after a person had
+// asked for the work to stop. A resume of a seat a person stopped is refused
+// nothing by those conditions (the engine's gate admits it), since the turn
+// it re-enters ends before it could meet either.
+//
+// A KEEP FOR ANOTHER JOB of the same turn is dropped, as an announcement drops
+// it ([Coordinator.stillRefused]): the stop decides this job.
+func (c *Coordinator) endCollectedWait(ctx context.Context, run PendingRun) bool {
+	if run.HeldFor != "" {
+		lifted, err := c.pending.LiftHold(ctx, run.TurnID, run.HeldFor)
+		switch {
+		case err != nil:
+			log.WarnContext(ctx, "sandbox_stop_hold_unlifted", "turn_id", run.TurnID,
+				"agent", run.AgentHandle, "condition", string(run.HeldFor), "error", err.Error(),
+				"detail", "the stopped seat's collected job stays held until its condition "+
+					"clears, and its turn is stopped then")
+		case lifted:
+			log.InfoContext(ctx, "sandbox_resume_hold_lifted", "turn_id", run.TurnID,
+				"agent", run.AgentHandle, "condition", string(run.HeldFor))
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	kept, ok := c.refused[run.TurnID]
+	if !ok {
+		return false
+	}
+	delete(c.refused, run.TurnID)
+	if kept.ev.LaunchID != run.LaunchID || c.closed {
+		return false
+	}
+	c.refireLocked(kept)
+	return !kept.heldUntil.IsZero()
 }
 
 // collectStopped is the stop's own step of its ending: what the run had spent

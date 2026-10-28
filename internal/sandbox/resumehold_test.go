@@ -438,6 +438,59 @@ func TestAReadBackJobsBoxSleepsUntilItIsCollectedAgain(t *testing.T) {
 	}
 }
 
+// A PERSON'S STOP ENDS THE WAIT OF A COLLECTED JOB'S RESUME. The stop leaves a
+// job a collection read back to its turn, whose fence closes it as stopped at
+// its first round; but a resume held for a model's limit waits up to the hour
+// the entry is sat out, and one held for the budget until its window turns
+// over, and until then the turn stayed open and its job neither resumed nor
+// ended. So the stop ends the wait: a completion its node held is re-fired at
+// once, and a hold on the row is lifted for the waiter's next poll. The turn
+// resumes now, inside the window, for its fence to close.
+//
+// Mutation: leave the wait to the condition in StopSeat, and the held job is
+// not resumed before its instant.
+func TestAStopEndsTheWaitOfACollectedJobsResume(t *testing.T) {
+	t.Parallel()
+	for name, held := range map[string]func(t *testing.T, rig *coordRig) (types.SandboxRunCompleted, *events.Event){
+		"held here for a limit": func(t *testing.T, rig *coordRig) (types.SandboxRunCompleted, *events.Event) {
+			return limitedAfterClaim(t, rig, rig.now.Add(time.Hour))
+		},
+		"held on its row for the budget": func(t *testing.T, rig *coordRig) (types.SandboxRunCompleted, *events.Event) {
+			rig.launch("t1")
+			rig.coordinator.countRun("swe", StatusRunning)
+			rig.resumer.failWith(budgetHeld(rig.now.Add(time.Hour)))
+			rig.runner.Finish(Result{Success: true, Text: "fixed the flake"})
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("a held resume was NAKed: %v", err)
+			}
+			if got := rig.get("t1"); got.HeldFor != "budget" {
+				t.Fatalf("the premise: the row is held for %q, want the budget", got.HeldFor)
+			}
+			return payload, ev
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			payload, ev := held(t, rig)
+			rig.resumer.failWith(nil)
+			if err := rig.coordinator.StopSeat(t.Context(), "swe", RunStop{By: "ana", ByKind: "human"}); err != nil {
+				t.Fatalf("StopSeat: %v", err)
+			}
+			// THE WAITER'S NEXT POLL, inside the window the wait was for.
+			if rig.tick() == 1 {
+				_ = rig.coordinator.OnCompleted(t.Context(), payload, ev)
+			}
+			rig.coordinator.inflight.Wait()
+			if calls := rig.resumer.calls(); len(calls) != 1 {
+				t.Fatalf("the stopped seat's held job resumed %d times inside its window, want once, "+
+					"for its turn's fence to close", len(calls))
+			}
+		})
+	}
+}
+
 // A LIMIT A RESUME MET IS ITS NODE'S ALONE, AND SO IS THE HOLD. The models'
 // sit-out is the node's own, which no peer shares and a restart forgets
 // (ADR-0064), so the hold is kept in the node's memory and never written to

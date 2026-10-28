@@ -2313,7 +2313,8 @@ type LaunchRecord struct {
 	// round. So a stop leaves it ([Stoppable]): ended by the stop instead,
 	// its turn's close charged the work item the job's spend a second time,
 	// under the stop's own segment, on top of what the resume that gave the
-	// claim back had charged under its own.
+	// claim back had charged under its own. The stop ends what that resume
+	// waits on instead ([Coordinator.endCollectedWait]).
 	//
 	// ON THE JOB'S RECORD, written by the release, for the reason
 	// CollectFailures is, and never cleared for the job: a later collection

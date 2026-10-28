@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -465,4 +466,34 @@ func TestAPublishedCompanyResumesACompletionKeptForALimit(t *testing.T) {
 			t.Fatalf("the kept completion was admitted %d times under the new company, want once", got)
 		}
 	})
+}
+
+// A PERSON WHO STOPS A SEAT WHOSE FINISHED RUN WAITS FOR A LIMIT STOPS IT NOW.
+// The run's resume met the limit after its claim, so its node holds the job and
+// the seat is parked on the limit, up to an hour on its probe. The stop ends the
+// hold, and the turn gate admits the stopped seat's completion past the park,
+// because the turn it re-enters is closed as stopped at its first round, before
+// any model call: the run ends at once, inside the window, and the model is not
+// asked again.
+//
+// Mutation: refuse a stopped seat's completion at the gate as any other
+// (seatCannotRun), and the run waits for the park while the stop stands.
+func TestAStopReachesACompletionWaitingForALimit(t *testing.T) {
+	t.Parallel()
+	lr := newLimitedResume(t, time.Hour)
+	calls := lr.model.calls.Load()
+	swe := seatIn(t, lr.e, "swe")
+	lr.e.applySeatPause(t.Context(), coord.SeatPauseUpdate{Seat: swe,
+		Pause: &coord.SeatPause{Seat: swe, By: "ana", StopRunning: true}})
+	store := sandbox.NewCoordStore(lr.e.backends.Fleet)
+	eventually(t, "the stopped seat's waiting run to end", func() bool {
+		_, found, err := store.Get(t.Context(), "t1")
+		return err == nil && !found
+	})
+	if got := lr.admitted.Load() - lr.settled; got != 1 {
+		t.Errorf("the stopped seat's completion was admitted %d times, want once", got)
+	}
+	if got := lr.model.calls.Load(); got != calls {
+		t.Errorf("the stopped turn asked the model %d more times, want none", got-calls)
+	}
 }
