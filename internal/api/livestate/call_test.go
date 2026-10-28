@@ -194,34 +194,32 @@ func TestTheStragglerGuardComparesInstantsNotEncodings(t *testing.T) {
 	}
 }
 
-func TestAResumedPhaseComesBackOnScreen(t *testing.T) {
+func TestAPhaseRunAgainUnderItsKeyComesBackOnScreen(t *testing.T) {
 	t.Parallel()
 	// The counterfactual to the straggler guard, and the reason it is a
-	// timestamp rather than a flag: a suspended Execute phase publishes a
-	// completion CHECKPOINT under these exact coordinates, then resumes
-	// the same loop when the detached run lands and streams more rounds
-	// under them. Those rounds are strictly newer, and swallowing them
-	// would leave a resumed sandbox phase invisible for the rest of its
-	// run.
+	// timestamp rather than a flag: a parked turn's resume that runs again —
+	// held until its seat's budget has room, or retried — opens its review
+	// again under the coordinates the attempt before it COMPLETED under, and
+	// streams that review's rounds under them. Those rounds are strictly
+	// newer than the completion, and swallowing them would leave the review
+	// invisible for the rest of its run.
 	//
-	// The resumed round is spelled naive and the checkpoint aware, which
-	// is the mixed encoding that made this break: compared raw, nine
-	// minutes later sorts BEFORE the checkpoint.
-	base := with(planCall(), map[string]any{"phase": "execute"})
+	// The later round is spelled naive and the completion aware, which is the
+	// mixed encoding that made this break: compared raw, nine minutes later
+	// sorts BEFORE the completion.
+	base := with(planCall(), map[string]any{"phase": "review"})
 	s := livestate.New()
 	s.Apply(env("agent_phase_started", base))
-	s.Apply(env("agent_phase_completed",
-		with(base, map[string]any{"notes": "suspended: the executor's run is launched"}),
-		at("2026-06-14T12:00:05+00:00")))
+	s.Apply(env("agent_phase_completed", base, at("2026-06-14T12:00:05+00:00")))
 	s.Apply(env("agent_turn_progress",
-		with(base, map[string]any{"round_num": 4, "response": "back from the sandbox"}),
+		with(base, map[string]any{"round_num": 1, "response": "judged again"}),
 		streamOnly, at("2026-06-14T12:09:00")))
 
 	call := liveCallOf(t, s, "Lead")
 	if call == nil {
-		t.Fatal("the resumed phase never came back on screen")
+		t.Fatal("the review run again never came back on screen")
 	}
-	if call.Response != "back from the sandbox" {
+	if call.Response != "judged again" {
 		t.Errorf("response = %q", call.Response)
 	}
 }

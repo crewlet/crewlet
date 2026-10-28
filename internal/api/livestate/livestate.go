@@ -314,10 +314,11 @@ type LiveState struct {
 	// phase that finished, which nothing would ever clear.
 	//
 	// The timestamp is what makes this safe for a phase published under the
-	// same coordinates more than once — a parked executor whose collection
-	// later publishes its record under the coordinates its launch used:
-	// whatever comes later is strictly newer than the checkpoint, so only a
-	// round at or before it is dropped.
+	// same coordinates more than once — the review of a parked turn's resume
+	// that runs again, held or retried, under the turn, phase and iteration
+	// of the attempt before it (see [CallVersions]): whatever comes later is
+	// strictly newer than that attempt's completion, so only a round at or
+	// before it is dropped.
 	finishedCalls *boundedSet[stamp]
 
 	// spend holds per-phase RECORDS rather than a folded rollup, so the
