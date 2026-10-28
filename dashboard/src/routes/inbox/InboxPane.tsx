@@ -21,7 +21,7 @@
  * then opens the next row.
  */
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ButtonLink,
   EmptyState,
@@ -36,6 +36,7 @@ import {
   ReadingPaneReasoning,
   ReadingPaneSection,
   ReadingPaneTitle,
+  RefusalStrip,
   Stack,
   Stepper,
   Text,
@@ -63,6 +64,7 @@ import { TechnicalDetails } from "~/components/common.tsx";
 import { Composer } from "~/components/Composer.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { RUNS_POLL_MS, answerFate, type GivenAnswer } from "~/lib/runs.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
@@ -129,8 +131,14 @@ interface PaneProps {
    * The row was dealt with here. `label` says how ("Answered") for a row that
    * stays in the list as done, with the answer that was given; null for a
    * notice, which leaves its group.
+   *
+   * `hold` keeps the row open rather than moving on to the next one: an
+   * answer the engine has accepted and not yet settled is shown as sent, and
+   * the row stays where the person can see what became of it. Null with
+   * `hold` takes back a label given earlier, for an answer the engine could
+   * not use.
    */
-  onSettled: (label: string | null, answer?: AskAnswer) => void;
+  onSettled: (label: string | null, answer?: AskAnswer, hold?: boolean) => void;
 }
 
 export function InboxPane(props: PaneProps) {
@@ -658,11 +666,19 @@ function RunPane({
   run: SandboxRun;
   frame: Frame;
   now: number;
-  onSettled: (label: string | null, answer?: AskAnswer) => void;
+  onSettled: (label: string | null, answer?: AskAnswer, hold?: boolean) => void;
 }) {
   const write = useAct("answer_run");
   const [text, setText] = useState("");
-  const [answered, setAnswered] = useState<string | null>(null);
+  // THE ANSWER THE ENGINE ACCEPTED, and what it said back about it: the
+  // question it answers and the answer's own id. `pending` is all the press
+  // can say; the run's own record says the rest (see `answerFate`).
+  const [given, setGiven] = useState<GivenAnswer | null>(null);
+  // WHY THE LAST ANSWER WAS NOT USED, said until the person answers again.
+  const [unused, setUnused] = useState<string | null>(null);
+  const runs = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
+  const record = runs.data?.runs.find((r) => r.turn_id === run.turn_id);
+  const fate = given ? answerFate(given, record, runs.data !== undefined) : null;
   const question = run.question ?? "";
   // A QUESTION THIS READER CAN'T SEE IS NOT ASKED OF THEM: the answer form
   // asked for an answer to a question it never showed.
@@ -672,16 +688,48 @@ function RunPane({
     (hidden ? "This run is waiting on a question you can’t see." : "The run paused on a question");
   const hold = holdLine(run, now);
   const blocked = text.trim() ? undefined : "Write the answer first.";
+  // ONCE PER ANSWER: telling the screen redraws it, and the screen's
+  // callback is a new one on every draw, so the fate is said once.
+  const told = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!given || fate === null || fate === "sent") return;
+    if (told.current === given.answerId + fate) return;
+    told.current = given.answerId + fate;
+    const answer: AskAnswer = { kind: "reply", text: given.text };
+    if (fate === "taken") {
+      onSettled("Answered", answer);
+      return;
+    }
+    // NOT USED, so the person is told so and asked again, never left looking
+    // at "Sent" for an answer the run will not read.
+    setUnused(
+      fate === "declined"
+        ? `${frame.name}’s run could not use your answer and is waiting on its question again. Answer it again.`
+        : `${frame.name}’s run moved on to a new question before your answer reached it. Answer the question above.`,
+    );
+    setGiven(null);
+    onSettled(null, undefined, true);
+  }, [fate, given, frame.name, onSettled]);
+
   const send = async () => {
     if (!pressable(write, blocked)) return;
     const answer = text.trim();
     const result = await write.run(
       { turn_id: run.turn_id, answer },
-      { done: `Answered ${frame.name}’s coding run` },
+      { done: `Sent your answer to ${frame.name}’s coding run` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) {
-      setAnswered(answer);
-      onSettled("Answered", { kind: "reply", text: answer });
+      const receipt = (result.receipt ?? {}) as { launch_id?: unknown; answer_id?: unknown };
+      setUnused(null);
+      setGiven({
+        text: answer,
+        launchId: typeof receipt.launch_id === "string" ? receipt.launch_id : (run.launch_id ?? ""),
+        answerId: typeof receipt.answer_id === "string" ? receipt.answer_id : "",
+      });
+      // SENT, NOT ANSWERED: the row stays open, marked as sent, until the
+      // run's record says the answer was taken or why it was not.
+      onSettled("Sent", { kind: "reply", text: answer }, true);
     }
   };
   return (
@@ -696,9 +744,11 @@ function RunPane({
       <ReadingPaneTitle>{heading}</ReadingPaneTitle>
       {/* THE RUN'S OWN WORDS, verbatim, where the heading is only their start. */}
       {question.trim() !== heading && <ReadingPaneQuote verbatim>{question}</ReadingPaneQuote>}
-      {answered !== null ? (
+      {given !== null ? (
         <ReadingPaneOutcome>
-          Answered <strong>{`“${answered}”`}</strong>
+          {fate === "taken" ? "Answered " : "Sent "}
+          <strong>{`“${given.text}”`}</strong>
+          {fate === "taken" ? "" : `. Waiting for ${frame.name}’s run to take it.`}
         </ReadingPaneOutcome>
       ) : hidden ? (
         <Text as="p" variant="body">
@@ -706,6 +756,7 @@ function RunPane({
         </Text>
       ) : (
         <Stack gap={2}>
+          {unused && <RefusalStrip onDismiss={() => setUnused(null)}>{unused}</RefusalStrip>}
           <Field
             label="Your answer to the run"
             value={text}

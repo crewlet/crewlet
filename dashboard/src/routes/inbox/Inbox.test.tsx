@@ -142,6 +142,8 @@ const QUIET: Record<string, Answer> = {
 
 let asked: { kind: string; params: Record<string, unknown> }[];
 let posted: { tool: string; args: Record<string, unknown> }[];
+/** What the engine answers a press of each tool with, where not `applied`. */
+let actAnswers: Record<string, { outcome: string; receipt: Record<string, unknown> }>;
 
 /**
  * Midday on the company's clock (the fixture org keeps UTC).
@@ -160,18 +162,20 @@ beforeEach(() => {
   location.hash = "#/inbox";
   asked = [];
   posted = [];
+  actAnswers = {};
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init: RequestInit) => {
       const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
       const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
       posted.push({ tool, args: body.args });
+      const answer = actAnswers[tool] ?? { outcome: "applied", receipt: {} };
       return new Response(
         JSON.stringify({
           tool,
-          outcome: "applied",
-          position: "CREWLET_TRACKER_LOG@1:99",
-          receipt: {},
+          outcome: answer.outcome,
+          position: answer.outcome === "applied" ? "CREWLET_TRACKER_LOG@1:99" : null,
+          receipt: answer.receipt,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
@@ -820,6 +824,81 @@ describe("the pane", () => {
     expect(posted).toEqual([
       { tool: "answer_run", args: { turn_id: "turn-7", answer: "Yes, delete it." } },
     ]);
+  });
+
+  // AN ANSWER TO A PARKED RUN IS SENT, NOT ANSWERED, UNTIL THE RUN SAYS SO.
+  //
+  // `answer_run` answers `pending`: the answer is on its way to the node that
+  // holds the run's seat. The pane drew that as "Answered" and dropped the
+  // question, and a person whose answer never reached the run was told it had
+  // while the question kept coming back. The pane now says what the run's own
+  // record says: sent while it still waits on the question, answered once it
+  // is recorded there, and asked again, with the reason, when the question
+  // let the answer go.
+  //
+  // Mutation: settle on `pending` as before, and the first case reads
+  // "Answered"; ignore `declined_answers`, and the last never asks again.
+  describe("an answer by turn", () => {
+    const parked = {
+      turn_id: "turn-7",
+      launch_id: "q1",
+      agent_handle: "cto",
+      status: "awaiting_clarification",
+      question: "May I delete the fixtures directory?",
+      paused_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      updated_at: new Date(Date.now() - 5 * 60_000).toISOString(),
+      pause_ttl_seconds: 3_600,
+      declined_answers: [] as string[],
+    };
+    const answerRun = async (after: Record<string, unknown>) => {
+      actAnswers = {
+        answer_run: { outcome: "pending", receipt: { launch_id: "q1", answer_id: "a1" } },
+      };
+      location.hash = "#/inbox?row=run%3Aturn-7";
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: parked.paused_at, run: parked }),
+          // THE RUN'S RECORD, as the engine holds it once the answer was sent.
+          sandbox_runs: () =>
+            Promise.resolve({
+              runs: [
+                posted.some((p) => p.tool === "answer_run") ? { ...parked, ...after } : parked,
+              ],
+            }),
+        },
+      });
+      await settle();
+      fireEvent.change(screen.getByRole("textbox", { name: "Your answer to the run" }), {
+        target: { value: "Yes, delete it." },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send answer" }));
+      await settle();
+      await settle();
+    };
+    const outcome = () => document.querySelector(".crewlet-reading-pane__outcome")?.textContent;
+
+    test("is shown as sent while the run still waits on its question", async () => {
+      await answerRun({});
+      expect(outcome()).toBe("Sent “Yes, delete it.”. Waiting for CTO’s run to take it.");
+      expect(screen.queryByRole("button", { name: "Send answer" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /Answered$/ })).toBeNull();
+    });
+
+    test("is answered once the run's record says it was taken", async () => {
+      await answerRun({ status: "answered" });
+      expect(outcome()).toBe("Answered “Yes, delete it.”");
+    });
+
+    test("is asked again, with the reason, when the question let it go", async () => {
+      await answerRun({ declined_answers: ["a1"] });
+      expect(outcome()).toBeUndefined();
+      expect(
+        screen.getByText(
+          "CTO’s run could not use your answer and is waiting on its question again. Answer it again.",
+        ),
+      ).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Send answer" })).toBeTruthy();
+    });
   });
 
   // NO EM DASH SHIPS: the copy the inbox draws is written with commas,
