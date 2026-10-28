@@ -84,11 +84,17 @@ type Compacting struct {
 //   - ErrStopped, and ErrInvalid for a Synced this cache did not hand out or
 //     a negative count.
 //
-// The charge is chargeOver(inputs, CompactBytesPerObject, inputs) — the
-// merged packs' objects, with room beside them for one transfer of the
-// repository, as every background step is charged — and
+// The charge is chargeOver(inputs, CompactBytesPerObject, the repository's
+// objects) — the merged packs' objects, with room beside them for one
+// transfer of the WHOLE repository, as every background step is charged — and
 // CompactWindowBytes(limits), the build's delta window, which no count of
-// objects charges.
+// objects charges. The build's own memory follows what it merges, while the
+// clone it shares the node with is of the repository, however few packs the
+// build merges: charged by its inputs alone, a merge of a large repository's
+// few small packs would be admitted beside a clone the budget kept no room
+// for. The repository's objects are the incarnation s pins, read under its
+// entry's lock: the count its rounds keep (incarnation.objects), as every
+// maintainer step's charge reads it.
 //
 // ITS PIN, ITS SLOT AND ITS RELEASE are a check's (Cache.AdmitVerify): a slot
 // held from the admission to the build's last process, so the build and the
@@ -113,7 +119,10 @@ func (c *Cache) AdmitCompaction(s Synced, inputs int64, limits code.Limits) (*Co
 		return nil, err
 	}
 	label := cmp.Or(s.Repo.Name, s.entry.id)
-	mem := chargeOver(inputs, CompactBytesPerObject, inputs) + CompactWindowBytes(limits)
+	s.entry.mu.Lock()
+	objects := s.inc.objects
+	s.entry.mu.Unlock()
+	mem := chargeOver(inputs, CompactBytesPerObject, objects) + CompactWindowBytes(limits)
 	if budget := c.maint.budgetNow(); mem > budget {
 		c.compactionRefused(s, mem)
 		return nil, fmt.Errorf("cache: compact %s: %w: its build needs about %d bytes, and this node can give "+

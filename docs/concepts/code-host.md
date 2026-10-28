@@ -429,18 +429,18 @@ run in a scratch repository whose one alternate is the node's copy — never in
 the copy — and in the node's maintenance lane: at the background indexing's
 own limit, never the slot kept for `crewlet code verify`, with its memory
 charged against the node's background budget beside the indexing's (300
-bytes an object merged, room for a clone of the repository, and twice
-`code.limits.max_blob_bytes` for its delta window). It cuts its outputs at
-1 GiB. **The outputs hold every object of the packs merged** — an object a
-pack outside the merge also holds included — because a merge judges no
-reachability: no push decided against the packs it replaces can land a ref
-whose history it dropped, and two merges planned from different moments never
-each drop what the other relied on. Each output is one bundle in the stored
-format, every one held to the bundle rule before a byte is uploaded and all
-of them uploaded at once, since an object's key is minted as its upload
-begins and a record may name only keys of the last twelve hours. The
-maintenance slot and the memory go back as soon as the build's last git
-process ends, before the uploads.
+bytes an object merged, room for a clone of the whole repository however few
+packs it merges, and twice `code.limits.max_blob_bytes` for its delta
+window). It cuts its outputs at 1 GiB. **The outputs hold every object of the
+packs merged** — an object a pack outside the merge also holds included —
+because a merge judges no reachability: no push decided against the packs it
+replaces can land a ref whose history it dropped, and two merges planned from
+different moments never each drop what the other relied on. Each output is
+one bundle in the stored format, every one held to the bundle rule before a
+byte is uploaded and all of them uploaded at once, since an object's key is
+minted as its upload begins and a record may name only keys of the last
+twelve hours. The maintenance slot and the memory go back as soon as the
+build's last git process ends, before the uploads.
 
 **The decision.** The home proposes ONE compaction to the repository's
 [committer](#the-committer) through the estate router, as a push is proposed,
@@ -975,8 +975,12 @@ transfer slot keeps for it — the clone of a repository with no bitmap walks
 its whole history. The node's tip over a published chain is the one step
 that walks less than the whole history, the commits the chain lacks, so it is
 charged by the tail rather than the repository: 1 700 bytes an object of the
-tail, from 40 MiB over 5 000 new commits on git 2.56.0. A git node reads its memory — the least of the machine's
-and any cgroup limit set on its container — and keeps 224 MiB of it for every
+tail, from 40 MiB over 5 000 new commits on git 2.56.0. A
+[compaction](#compaction)'s build walks no history, only the packs it merges,
+and is charged by them: 300 bytes an object merged, and twice
+`code.limits.max_blob_bytes` for its delta window. A git node reads its
+memory — the least of the machine's and any cgroup limit set on its
+container — and keeps 224 MiB of it for every
 git transfer it admits at once and 896 MiB for each core its git runs on, for
 the store, the broker, the engine and its reads. Both count only the cores the
 memory backs at 2 GiB a core: a container limited in memory and not in CPU sees
@@ -984,15 +988,16 @@ its host's every core, so a node of 64 cores and 16 GiB admits 32 transfers
 rather than 256, and runs as the eight-core node its memory makes it. What is
 left is the budget of its background work, and every step of it — the
 bitmap, the index without one (a cold cache's included), the commit-graph, the
-tip, a connectivity check — is held to the budget together with everything in
-flight, each charged its own figure an object of what it walks and room beside
-it for one clone of the whole repository. A step whose charge alone is past
-the budget never runs on the node, and the repository is served without it: a
-bitmap refused leaves the repository indexed without one — its pushes keep
-joining an index, so lookups stay fast, while a clone walks its history —
-keeping the bitmap the node wrote while it could until 256 packs have
-gathered outside it. Each step refused is logged once as
-`code_cache_maintenance_refused` with its charge and the budget and counted
+tip, a connectivity check, a compaction's build — is held to the budget
+together with everything in flight, each charged its own figure an object of
+what it walks and room beside it for one clone of the whole repository. A
+step whose charge alone is past the budget never runs on the node, and the
+repository is served without it: a bitmap refused leaves the repository
+indexed without one — its pushes keep joining an index, so lookups stay fast,
+while a clone walks its history — keeping the bitmap the node wrote while it
+could until 256 packs have gathered outside it. Each step refused is logged
+once as `code_cache_maintenance_refused` — a compaction's build as
+`code_cache_compaction_refused` — with its charge and the budget and counted
 by `crewlet.code.cache.maintenance.refusals`, and a refused bitmap raises the
 [`code_maintenance_refused`](../reference/alarms.md) alarm for as long as it
 stays refused. A refused tip raises nothing: the copy is still served through

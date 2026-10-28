@@ -21,15 +21,18 @@ import (
 // commit-graph over an installed chain (TipGraphBytesPerObject), holds memory
 // in proportion to the TAIL it covers — the commits no installed layer holds
 // — and is charged so (chargeOver), with the room for a clone of the whole
-// repository beside it that every step keeps. Each write's figure is its
-// declaration's own (derived.go, Write.BytesPerObject), which the plan and a
-// refusal's line read from the declaration, never beside it; the check is no
-// write and keeps its own. The largest repository
-// the defaults admit is some 60 million objects, which no node holds a bitmap
-// of; and on a node with less memory than a run needs, every duty cycle's run
-// was killed by the kernel, which may as well have chosen the engine. So each
-// is held to a BUDGET of the node's memory: what it has, less what it keeps
-// for its other work.
+// repository beside it that every step keeps; and a compaction's build, which
+// the cache admits to a slot of the maintenance lane (compaction.go), in
+// proportion to the packs it merges (CompactBytesPerObject), charged so with
+// the same room beside it and its delta window (CompactWindowBytes). Each
+// write's figure is its declaration's own (derived.go, Write.BytesPerObject),
+// which the plan and a refusal's line read from the declaration, never beside
+// it; the check and the build are no writes and keep their own. The largest
+// repository the defaults admit is some 60 million objects, which no node
+// holds a bitmap of; and on a node with less memory than a run needs, every
+// duty cycle's run was killed by the kernel, which may as well have chosen
+// the engine. So each is held to a BUDGET of the node's memory: what it has,
+// less what it keeps for its other work.
 //
 // WHAT THE NODE HAS is what its git pool read at boot — the least of its
 // physical memory and every cgroup limit set on the process or above it
@@ -88,15 +91,16 @@ import (
 // date — those of the tail, which a publication bounds — so the alarm's
 // "served without a bitmap" would be false of it, and the gauge says it.
 
-// chargeOver is what a git process the cache starts is admitted at, writing
+// chargeOver is what a git process the cache starts or admits is charged at,
 // over stepObjects objects of a repository of repoObjects: its own perObject
 // bytes an object of what it covers, and room beside it for one transfer of
-// the WHOLE repository at gitproc.TransferBytesPerObject. Every step but one
+// the WHOLE repository at gitproc.TransferBytesPerObject. Every step but two
 // covers the whole repository (stepObjects is repoObjects); the node's tip
-// commit-graph covers the tail alone (maintain.go), so its own memory follows
-// the tail, while the clone it shares the node with is of the repository —
-// charged by the tail alone, a large repository's tip would be admitted
-// beside a clone the budget kept no room for.
+// commit-graph covers the tail alone (maintain.go), and a compaction's build
+// the packs it merges (compaction.go), so the own memory of each follows what
+// it covers, while the clone it shares the node with is of the repository —
+// charged by the tail or the merged packs alone, a large repository's tip or
+// merge would be admitted beside a clone the budget kept no room for.
 func chargeOver(stepObjects, perObject, repoObjects int64) int64 {
 	return stepObjects*perObject + repoObjects*gitproc.TransferBytesPerObject
 }

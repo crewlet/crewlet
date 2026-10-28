@@ -3,6 +3,7 @@ package cache_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -180,6 +181,52 @@ func TestACompactionPastTheBudgetIsRefusedOnce(t *testing.T) {
 	adm, err := c.AdmitCompaction(s, 1, limits)
 	if err != nil {
 		t.Fatalf("the compaction once the node grew = %v, want it admitted", err)
+	}
+	adm.Release()
+}
+
+// A COMPACTION KEEPS ROOM FOR A CLONE OF ITS WHOLE REPOSITORY: its build is
+// charged CompactBytesPerObject an object of the packs it merges — its own
+// memory follows them — and, beside it, room for one transfer of the WHOLE
+// repository, as every background step keeps (chargeOver), and its delta
+// window: the clone it shares the node with is of the repository however few
+// packs the build merges, and a merge of a large repository's few small packs
+// charged by those packs alone is admitted beside a clone the budget kept no
+// room for.
+//
+// Mutation: charge the clone's room by the objects merged
+// (chargeOver(inputs, CompactBytesPerObject, inputs)), and a merge of one
+// object fits a budget that holds no clone of its repository beside it.
+func TestACompactionKeepsRoomForACloneOfItsWholeRepository(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	var objects int64
+	for range 3 {
+		_, row := w.push(t, repo, "refs/heads/main", nil)
+		objects += row.Objects
+	}
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+	const inputs = 1
+	if objects <= inputs {
+		t.Fatalf("the repository holds %d objects, want more than the %d a merge of it takes", objects, inputs)
+	}
+	limits := code.Limits{MaxBlobBytes: 1}
+	charge := inputs*cache.CompactBytesPerObject + objects*gitproc.TransferBytesPerObject +
+		cache.CompactWindowBytes(limits)
+	cache.SetMaintenanceBudget(c, charge-1)
+	_, err := c.AdmitCompaction(s, inputs, limits)
+	if !errors.Is(err, cache.ErrNoMemory) || !strings.Contains(err.Error(), fmt.Sprintf("needs about %d bytes", charge)) {
+		t.Fatalf("a merge of %d object of a repository of %d on a budget of %d = %v, want ErrNoMemory at a "+
+			"charge of %d: %d bytes an object merged, %d an object of the WHOLE repository for a clone's room "+
+			"beside it, and its window", inputs, objects, charge-1, err, charge, cache.CompactBytesPerObject,
+			gitproc.TransferBytesPerObject)
+	}
+	cache.SetMaintenanceBudget(c, charge)
+	adm, err := c.AdmitCompaction(s, inputs, limits)
+	if err != nil {
+		t.Fatalf("the same merge on a budget of exactly its charge, %d = %v, want it admitted", charge, err)
 	}
 	adm.Release()
 }
