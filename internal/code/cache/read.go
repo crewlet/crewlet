@@ -592,7 +592,7 @@ func (s *snapshot) addRetired(r code.RetiredRow) error {
 	case s.retiredFrom.IsZero():
 		return fmt.Errorf("pack %s/%s is served retired by a full answer that serves no retirements", r.PackID,
 			r.Part)
-	case !packChecksum.MatchString(r.GitChecksum):
+	case !packChecksum().MatchString(r.GitChecksum):
 		return fmt.Errorf("retired pack %s/%s names %q, which is no pack checksum", r.PackID, r.Part,
 			r.GitChecksum)
 	case r.Position.Stream != topics.CodeLogStream || r.Position.Valid() != nil:

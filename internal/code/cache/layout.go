@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"syscall"
 
@@ -94,15 +93,17 @@ const tagContent = tagSignature + "\n" + tagMarker + ": disposable copies of a c
 const maxTagBytes = 4 << 10
 
 // incarnationName matches a repository's directory under repos/: a canonical
-// lowercase UUID, then the incarnation's number with no leading zero.
-var incarnationName = regexp.MustCompile(`^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([1-9][0-9]*)\.git$`)
+// lowercase UUID, then the incarnation's number with no leading zero —
+// compiled at its first use, as every file-name pattern of this package is
+// (lazyPattern).
+var incarnationName = lazyPattern(`^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([1-9][0-9]*)\.git$`)
 
 // parseIncarnation reads a directory name under repos/: the repository's id
 // and the incarnation's number, or false for anything else — a name that is
 // not the grammar, an id that is not a canonical UUID, or a number past what
 // an int holds.
 func parseIncarnation(name string) (string, int, bool) {
-	m := incarnationName.FindStringSubmatch(name)
+	m := incarnationName().FindStringSubmatch(name)
 	if m == nil || !canonicalID(m[1]) {
 		return "", 0, false
 	}

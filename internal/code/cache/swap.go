@@ -1253,7 +1253,7 @@ func (c *Cache) swapped(s *swapping, next *incarnation, took time.Duration) {
 	dropped := 0
 	s.e.mu.Lock()
 	for key := range s.inc.leaving {
-		if packChecksum.MatchString(key.name) {
+		if packChecksum().MatchString(key.name) {
 			dropped++
 		}
 	}

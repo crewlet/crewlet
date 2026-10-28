@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"maps"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"time"
 
@@ -437,7 +436,7 @@ func (c *Cache) Rebuild(ctx context.Context, failed Synced, f Failure) (Synced, 
 			"and %q is not one", ErrInvalid, reason)
 	}
 	for _, cs := range f.Packs {
-		if !packChecksum.MatchString(cs) {
+		if !packChecksum().MatchString(cs) {
 			return Synced{}, fmt.Errorf("%w: %q is no pack checksum (forty lowercase hex digits)", ErrInvalid, cs)
 		}
 	}
@@ -467,8 +466,9 @@ func (c *Cache) Rebuild(ctx context.Context, failed Synced, f Failure) (Synced, 
 	return c.rebuild(ctx, failed, f, true, nil)
 }
 
-// packChecksum is a pack's checksum as its file names spell it.
-var packChecksum = regexp.MustCompile(`^[0-9a-f]{40}$`)
+// packChecksum is a pack's checksum as its file names spell it, compiled at
+// its first use as every file-name pattern of this package is (lazyPattern).
+var packChecksum = lazyPattern(`^[0-9a-f]{40}$`)
 
 // repairRequest is Rebuild for a request's pack or object damage — steps 1
 // and 2 of the paragraphs above; Cache.run hands a round that repaired

@@ -7,7 +7,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -92,8 +91,9 @@ var requiredDirs = []string{"refs/heads", "refs/tags", "objects/pack", "objects/
 var fixedDirs = []string{".", "refs", "refs/heads", "refs/tags", "objects", "objects/info", "objects/pack"}
 
 // packFileName matches a pack's three files, its checksum the first group:
-// which of them the image keeps is the rows' to say.
-var packFileName = regexp.MustCompile(`^pack-([0-9a-f]{40})\.(pack|idx|rev)$`)
+// which of them the image keeps is the rows' to say. Compiled at its first
+// use, as every file-name pattern of this package is (lazyPattern).
+var packFileName = lazyPattern(`^pack-([0-9a-f]{40})\.(pack|idx|rev)$`)
 
 // packRel is the directory of an incarnation its packs live in, relative to
 // it; where each derived file lives is its declaration's (derived.go).
@@ -923,7 +923,7 @@ func (c *Cache) packStrays(e *entry, inc *incarnation, snap snapshot, history bo
 	leaving := map[leaveKey]Event{}
 	for _, s := range strays {
 		key, ev := leaveKey{s.place, s.name}, EventPackRemoved
-		if m := packFileName.FindStringSubmatch(s.name); m != nil {
+		if m := packFileName().FindStringSubmatch(s.name); m != nil {
 			key.name = m[1]
 			switch {
 			case s.place == placeDropping && places[key.name] == placeNone:

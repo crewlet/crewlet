@@ -1472,7 +1472,7 @@ func readTip(dir string, layers []string) tipLayer {
 	}
 	id := lines[len(layers)]
 	info, err := os.Lstat(filepath.Join(dir, tipRel(id)))
-	if err != nil || !info.Mode().IsRegular() || !graphLayerName.MatchString(filepath.Base(tipRel(id))) {
+	if err != nil || !info.Mode().IsRegular() || !graphLayerName().MatchString(filepath.Base(tipRel(id))) {
 		return tipLayer{}
 	}
 	return tipLayer{id: id, bytes: info.Size()}

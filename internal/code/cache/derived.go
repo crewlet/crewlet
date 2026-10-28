@@ -8,6 +8,7 @@ import (
 	"regexp/syntax"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code/gitproc"
@@ -693,24 +694,31 @@ func (d *Derived) tree() bool {
 	return slices.ContainsFunc(d.Owns, func(o Owned) bool { return o.Main && o.Tree })
 }
 
-// The patterns of DerivedFiles, compiled once: a regular expression is
-// immutable and safe to share, so every copy DerivedFiles answers holds the
-// same ones.
+// The patterns of DerivedFiles, compiled once, at their FIRST USE: a regular
+// expression is immutable and safe to share, so every copy DerivedFiles
+// answers holds the same ones — and none is compiled at init, because the
+// code host's proc-receive hook is this binary, exec'd once a push, and every
+// package it links runs its initialisation before the hook's first statement
+// (cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit). A pattern holding
+// a forty-digit checksum compiles to an instruction for every digit, and
+// these and the package's three other file-name patterns were nearly all
+// this package allocated at init — about 215 KB of its 217 under the race
+// detector, on every push, for a hook that opens no cache.
 var (
-	midxMain   = regexp.MustCompile(`^multi-pack-index$`)
-	midxBitmap = regexp.MustCompile(`^multi-pack-index-[0-9a-f]{40}\.bitmap$`)
-	midxRev    = regexp.MustCompile(`^multi-pack-index-([0-9a-f]{40})\.rev$`)
-	midxLock   = regexp.MustCompile(`^multi-pack-index\.lock$`)
-	tmpBitmap  = regexp.MustCompile(`^tmp_bitmap_[A-Za-z0-9]+$`)
-	graphMain  = regexp.MustCompile(`^commit-graph$`)
-	graphLock  = regexp.MustCompile(`^commit-graph\.lock$`)
+	midxMain   = lazyPattern(`^multi-pack-index$`)
+	midxBitmap = lazyPattern(`^multi-pack-index-[0-9a-f]{40}\.bitmap$`)
+	midxRev    = lazyPattern(`^multi-pack-index-([0-9a-f]{40})\.rev$`)
+	midxLock   = lazyPattern(`^multi-pack-index\.lock$`)
+	tmpBitmap  = lazyPattern(`^tmp_bitmap_[A-Za-z0-9]+$`)
+	graphMain  = lazyPattern(`^commit-graph$`)
+	graphLock  = lazyPattern(`^commit-graph\.lock$`)
 	// provenanceRunName is a run of the provenance index:
 	// crewlet/provenance.<n>, n the run's number in decimal from 1, as the
 	// index's record names it (provenanceRun).
-	provenanceRunName = regexp.MustCompile(`^provenance\.[1-9][0-9]*$`)
+	provenanceRunName = lazyPattern(`^provenance\.[1-9][0-9]*$`)
 	// memoTreeName is the memo's directory, crewlet/memo, which it owns whole
 	// (Owned.Tree): every entry in it an answer, named by its key's hex.
-	memoTreeName = regexp.MustCompile(`^memo$`)
+	memoTreeName = lazyPattern(`^memo$`)
 	// The installed chain's files, as git 2.56.0 names them (midx.c's
 	// get_midx_chain_filename and get_split_midx_filename_ext,
 	// commit-graph.c's get_commit_graph_chain_filename and
@@ -718,20 +726,29 @@ var (
 	// under objects/pack/multi-pack-index.d, a commit-graph layer and its chain
 	// file under objects/info/commit-graphs. No .rev: git writes a layer's
 	// reverse index as its RIDX chunk, as it writes a whole index's.
-	layerChainName  = regexp.MustCompile(`^multi-pack-index-chain$`)
-	layerMidxName   = regexp.MustCompile(`^multi-pack-index-([0-9a-f]{40})\.midx$`)
-	layerBitmapName = regexp.MustCompile(`^multi-pack-index-[0-9a-f]{40}\.bitmap$`)
-	graphChainName  = regexp.MustCompile(`^commit-graph-chain$`)
-	graphLayerName  = regexp.MustCompile(`^graph-([0-9a-f]{40})\.graph$`)
+	layerChainName  = lazyPattern(`^multi-pack-index-chain$`)
+	layerMidxName   = lazyPattern(`^multi-pack-index-([0-9a-f]{40})\.midx$`)
+	layerBitmapName = lazyPattern(`^multi-pack-index-[0-9a-f]{40}\.bitmap$`)
+	graphChainName  = lazyPattern(`^commit-graph-chain$`)
+	graphLayerName  = lazyPattern(`^graph-([0-9a-f]{40})\.graph$`)
 	// What the node's TIP write holds while it runs, as git 2.56.0's
 	// commit-graph.c writes a split layer (write_commit_graph_file): the
 	// chain file's lock, held from the layer's start to the chain's commit,
 	// and the layer itself as a temporary file (mks_tempfile_m of
 	// "tmp_graph_XXXXXX", six of git's mkstemp letters and digits) until it
 	// is renamed graph-<checksum>.graph.
-	graphChainLock = regexp.MustCompile(`^commit-graph-chain\.lock$`)
-	tmpGraph       = regexp.MustCompile(`^tmp_graph_[A-Za-z0-9]{6}$`)
+	graphChainLock = lazyPattern(`^commit-graph-chain\.lock$`)
+	tmpGraph       = lazyPattern(`^tmp_graph_[A-Za-z0-9]{6}$`)
 )
+
+// lazyPattern is expr compiled at its first use and shared from then on
+// (sync.OnceValue): every file-name pattern of this package is one, so none
+// is compiled at init. A pattern that does not compile panics at its first
+// use rather than at init — and every one is a literal this package's tests
+// compile through DerivedFiles' validation and the readers that call it.
+func lazyPattern(expr string) func() *regexp.Regexp {
+	return sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(expr) })
+}
 
 // The installed chain's two directories, relative to an incarnation.
 const (
@@ -810,18 +827,18 @@ func DerivedFiles() []Derived {
 			{Step: StepIndex, Trigger: TriggerRound, Lane: gitproc.ClassRead,
 				Deadline:       func(c Covers) time.Duration { return gitproc.PackWorkDeadline(c.IndexBytes) },
 				BytesPerObject: IndexBytesPerObject, Writer: Writer{maintainFile, procIndex}, Args: roundIndexArgs,
-				Holds: []FilePattern{{"objects/pack", midxLock}}},
+				Holds: []FilePattern{{"objects/pack", midxLock()}}},
 			{Step: StepBitmap, Trigger: TriggerMaintainer, Lane: gitproc.ClassMaintenance, Deadline: maintained,
 				BytesPerObject: BitmapBytesPerObject, Writer: Writer{maintainFile, procIndex}, Args: bitmapArgs,
-				Holds: []FilePattern{{"objects/pack", midxLock}, {"objects/pack", tmpBitmap}}},
+				Holds: []FilePattern{{"objects/pack", midxLock()}, {"objects/pack", tmpBitmap()}}},
 			{Step: StepIndex, Trigger: TriggerMaintainer, Lane: gitproc.ClassMaintenance, Deadline: maintained,
 				BytesPerObject: IndexBytesPerObject, Writer: Writer{maintainFile, procIndex}, Args: plainArgs,
-				Holds: []FilePattern{{"objects/pack", midxLock}}},
+				Holds: []FilePattern{{"objects/pack", midxLock()}}},
 		},
 		Owns: []Owned{
-			{FilePattern: FilePattern{"objects/pack", midxMain}, File: "multi-pack-index", Main: true},
-			{FilePattern: FilePattern{"objects/pack", midxBitmap}, File: "bitmap"},
-			{FilePattern: FilePattern{"objects/pack", midxRev}, File: "midx-rev", Prior: true},
+			{FilePattern: FilePattern{"objects/pack", midxMain()}, File: "multi-pack-index", Main: true},
+			{FilePattern: FilePattern{"objects/pack", midxBitmap()}, File: "bitmap"},
+			{FilePattern: FilePattern{"objects/pack", midxRev()}, File: "midx-rev", Prior: true},
 		},
 		Check:     CheckTrailer,
 		Part:      gitproc.PartMultiPackIndex,
@@ -844,8 +861,8 @@ func DerivedFiles() []Derived {
 		Inputs: []Input{InputPacks, InputRefs},
 		Writes: []Write{{Step: StepGraph, Trigger: TriggerMaintainer, Lane: gitproc.ClassMaintenance,
 			Deadline: maintained, BytesPerObject: GraphBytesPerObject, Writer: Writer{maintainFile, procGraph},
-			Args: graphArgs, Holds: []FilePattern{{"objects/info", graphLock}}}},
-		Owns:      []Owned{{FilePattern: FilePattern{"objects/info", graphMain}, File: "commit-graph", Main: true}},
+			Args: graphArgs, Holds: []FilePattern{{"objects/info", graphLock()}}}},
+		Owns:      []Owned{{FilePattern: FilePattern{"objects/info", graphMain()}, File: "commit-graph", Main: true}},
 		Check:     CheckTrailer,
 		Part:      gitproc.PartCommitGraph,
 		Freshness: FreshDebounced,
@@ -878,7 +895,7 @@ func DerivedFiles() []Derived {
 					"from their mapped files through one buffer — nothing held a push or a ref, but one key's " +
 					"ordinals"},
 		},
-		Owns:      []Owned{{FilePattern: FilePattern{engineRoot, provenanceRunName}, File: "provenance"}},
+		Owns:      []Owned{{FilePattern: FilePattern{engineRoot, provenanceRunName()}, File: "provenance"}},
 		Check:     CheckRunTrailer,
 		Freshness: FreshAtRound,
 		// Its input is the push rows, which no pack and no ref of the
@@ -897,7 +914,7 @@ func DerivedFiles() []Derived {
 				"has answered whole: one page of at most code.MaxGitAnswerBytes held at a time, and of a diff's " +
 				"stat the counts of one page's files, about 24 bytes a file, written into that page's staged " +
 				"entry once the stat has counted past it (MemoBatch.Extend)"}},
-		Owns:      []Owned{{FilePattern: FilePattern{engineRoot, memoTreeName}, File: "memo", Main: true, Tree: true}},
+		Owns:      []Owned{{FilePattern: FilePattern{engineRoot, memoTreeName()}, File: "memo", Main: true, Tree: true}},
 		Check:     CheckEntryDigest,
 		Freshness: FreshImmutable,
 		// An object id names one object for ever, so no pack added, removed or
@@ -925,9 +942,9 @@ func DerivedFiles() []Derived {
 				"and its copy buffer as a pack's download is, into tmp/ and renamed in once the layer is held to " +
 				"its row; the chain file from the rows, a line a layer"}},
 		Owns: []Owned{
-			{FilePattern: FilePattern{layersDir, layerChainName}, File: "layers-chain", Main: true},
-			{FilePattern: FilePattern{layersDir, layerMidxName}, File: "layer-midx", Named: true},
-			{FilePattern: FilePattern{layersDir, layerBitmapName}, File: "layer-bitmap"},
+			{FilePattern: FilePattern{layersDir, layerChainName()}, File: "layers-chain", Main: true},
+			{FilePattern: FilePattern{layersDir, layerMidxName()}, File: "layer-midx", Named: true},
+			{FilePattern: FilePattern{layersDir, layerBitmapName()}, File: "layer-bitmap"},
 		},
 		Check:     CheckLayers,
 		Part:      gitproc.PartMultiPackIndex,
@@ -962,11 +979,11 @@ func DerivedFiles() []Derived {
 					return gitproc.PackWorkDeadline(c.DiskBytes) + gitproc.HistoryWalk(c.Objects)
 				},
 				BytesPerObject: TipGraphBytesPerObject, Writer: Writer{maintainFile, procGraph}, Args: tipGraphArgs,
-				Holds: []FilePattern{{graphLayersDir, graphChainLock}, {graphLayersDir, tmpGraph}}},
+				Holds: []FilePattern{{graphLayersDir, graphChainLock()}, {graphLayersDir, tmpGraph()}}},
 		},
 		Owns: []Owned{
-			{FilePattern: FilePattern{graphLayersDir, graphChainName}, File: "graph-chain", Main: true},
-			{FilePattern: FilePattern{graphLayersDir, graphLayerName}, File: "graph-layer", Named: true},
+			{FilePattern: FilePattern{graphLayersDir, graphChainName()}, File: "graph-chain", Main: true},
+			{FilePattern: FilePattern{graphLayersDir, graphLayerName()}, File: "graph-layer", Named: true},
 		},
 		Check:     CheckLayers,
 		Part:      gitproc.PartCommitGraph,

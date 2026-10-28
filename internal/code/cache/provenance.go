@@ -337,7 +337,7 @@ func appendRunRel(buf []byte, n uint64) []byte {
 // runNumber is the number a run's file name carries, or false for a name
 // that is no run's.
 func runNumber(name string) (uint64, bool) {
-	if !provenanceRunName.MatchString(name) {
+	if !provenanceRunName().MatchString(name) {
 		return 0, false
 	}
 	n, err := strconv.ParseUint(name[len("provenance."):], 10, 64)

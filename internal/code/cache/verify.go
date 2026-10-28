@@ -802,7 +802,7 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 			return true
 		case kind == dirEntry:
 			return false
-		case slices.Contains(packDirs, rel) && packFileName.MatchString(name):
+		case slices.Contains(packDirs, rel) && packFileName().MatchString(name):
 			return true
 		}
 		return running && im.holderOf(rel, name) >= 0
@@ -896,7 +896,7 @@ func (c *Cache) list(ctx context.Context, e *entry, inc *incarnation) (*listing,
 			unexpected(filepath.Join(f.place.rel(), d.Name()))
 			continue
 		}
-		m := packFileName.FindStringSubmatch(d.Name())
+		m := packFileName().FindStringSubmatch(d.Name())
 		if m == nil {
 			continue // a declaration's
 		}

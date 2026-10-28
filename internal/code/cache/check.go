@@ -578,7 +578,7 @@ func packIndexOf(rel string) ([hashTrailer]byte, string, bool) {
 	if !slices.Contains(packDirs, filepath.Clean(dir)) {
 		return key, "", false
 	}
-	m := packFileName.FindStringSubmatch(name)
+	m := packFileName().FindStringSubmatch(name)
 	if m == nil || m[2] == "pack" {
 		return key, "", false
 	}
@@ -610,7 +610,7 @@ func vouch(inc *incarnation, rel string, id fileID) {
 		inc.vouched.packs[key] = v
 		return
 	}
-	if packFileName.MatchString(filepath.Base(rel)) {
+	if packFileName().MatchString(filepath.Base(rel)) {
 		return // a .pack
 	}
 	if inc.vouched.derived == nil {
@@ -1025,7 +1025,7 @@ func (ck checked) still(im *image, dir string) (map[string]packFinding, derivedD
 			}
 			continue
 		}
-		m := packFileName.FindStringSubmatch(filepath.Base(f.rel))
+		m := packFileName().FindStringSubmatch(filepath.Base(f.rel))
 		if m == nil {
 			continue
 		}

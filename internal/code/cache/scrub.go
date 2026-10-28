@@ -719,7 +719,7 @@ func (c *Cache) scrub(ctx context.Context, e *entry, inc *incarnation, trigger c
 		case v == hashSound:
 			c.countCheck(f.kind, checkSound, trigger)
 			out.sound++
-			if m := packFileName.FindStringSubmatch(filepath.Base(f.rel)); m != nil {
+			if m := packFileName().FindStringSubmatch(filepath.Base(f.rel)); m != nil {
 				soundOf[m[1]]++
 			}
 			e.mu.Lock()
@@ -761,7 +761,7 @@ func scrubFiles(im *image, dir string, chains map[string][]byte) ([]checkedFile,
 		}
 		held := map[string]int{}
 		for _, d := range list {
-			if m := packFileName.FindStringSubmatch(d.Name()); m != nil && d.Type().IsRegular() {
+			if m := packFileName().FindStringSubmatch(d.Name()); m != nil && d.Type().IsRegular() {
 				held[m[1]]++
 			}
 		}

@@ -491,7 +491,7 @@ func (m repairMark) heldOffFor(now time.Time, seed []string) error {
 
 // packOfRel is the checksum of the pack whose file rel is, or false.
 func packOfRel(rel string) (string, bool) {
-	m := packFileName.FindStringSubmatch(filepath.Base(rel))
+	m := packFileName().FindStringSubmatch(filepath.Base(rel))
 	if m == nil {
 		return "", false
 	}

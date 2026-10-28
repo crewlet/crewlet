@@ -481,9 +481,9 @@ func TestAFailedWriteClearsWhatItHoldsListingEachDirectoryOnce(t *testing.T) {
 		{"the round's index", []Write{round}, []string{lock}, map[string][]string{}},
 		{"the maintainer's index without a bitmap", []Write{plain}, []string{lock}, map[string][]string{}},
 		{"the graph and the index with its bitmap", []Write{graph, bitmap}, []string{graphLock, lock},
-			map[string][]string{"objects/pack": {tmpBitmap.String()}}},
+			map[string][]string{"objects/pack": {tmpBitmap().String()}}},
 		{"a write held twice", []Write{bitmap, bitmap}, []string{lock},
-			map[string][]string{"objects/pack": {tmpBitmap.String()}}},
+			map[string][]string{"objects/pack": {tmpBitmap().String()}}},
 	} {
 		named, listed := clearPlan(tc.writes)
 		var got []string

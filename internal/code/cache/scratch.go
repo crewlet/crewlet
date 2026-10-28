@@ -392,7 +392,7 @@ func (s *Scratch) Packs() ([]ScratchPack, error) {
 	var indexes []string
 	for _, d := range list {
 		have[d.Name()] = true
-		if m := packFileName.FindStringSubmatch(d.Name()); m != nil && m[2] == "idx" {
+		if m := packFileName().FindStringSubmatch(d.Name()); m != nil && m[2] == "idx" {
 			indexes = append(indexes, m[1])
 		}
 	}
