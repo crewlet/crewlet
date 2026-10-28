@@ -80,7 +80,12 @@ func TestAResumeAtItsModelsLimitIsAWaitNotAFailure(t *testing.T) {
 	withModels(t, e, entry)
 	turns := e.node.InFlightTurns()
 
-	_, _, err := e.admitResume(t.Context(), "swe")
+	_, release, err := e.admitResume(t.Context(), "swe")
+	if err == nil {
+		// Admitted: the slot is given back before the case fails, so the
+		// engine's stop does not wait on it.
+		release()
+	}
 	var refused *sandbox.TurnRefused
 	if !errors.As(err, &refused) || refused.Condition != waitProvider || !refused.Until.Equal(retry) {
 		t.Fatalf("admitResume on a limited seat = %v, want a refusal waiting on %q until %v",
