@@ -151,18 +151,28 @@ func codeLogOp(day []codeLogTerm, op code.OpKind) codeLogTerm {
 
 // codeLogNegligible is every op of the code domain whose records the code
 // log's day leaves out, and why: each is appended at the rate a person edits
-// the company's document or runs a command, or the trim sweeps what the log
-// no longer holds — a few records a day beside 3 000 pushes and the tens of
-// thousands of reads around them.
+// the company's document or runs a command, at the rate the company makes,
+// renames and retires repositories (each manager's rate argued in
+// codeLogManagers), or as the trim and the code-retention duty sweep what the
+// log no longer needs — a few records a day beside 3 000 pushes and the tens
+// of thousands of reads around them.
 var codeLogNegligible = map[code.OpKind]string{
 	code.OpCreate: "a repository is created when an activation of the company's document " +
-		"declares it",
+		"declares it, or a person's or a seat's tool makes one: once a repository",
 	code.OpSettings: "a repository's settings change when an activation of the company's " +
-		"document changes them",
+		"document changes them, or a tool changes, archives, unarchives or protects it",
 	code.OpDelete: "a repository is deleted when an activation of the company's document " +
-		"drops it",
+		"drops it, a tool deletes it, or the code-retention duty expires a scratch repository " +
+		"idle code.scratch.idle_days: once a repository until a restore",
 	code.OpRestore: "a deleted repository returns when an activation of the company's " +
-		"document declares it again",
+		"document declares it again, or a tool restores it",
+	code.OpRename: "a tool's rename of a repository a tool made: one record a rename, on the " +
+		"name it claims",
+	code.OpReleaseName: "the code-retention duty's release of a renamed repository's old name " +
+		"once its redirect ends (code.RedirectWindow, a month): once a rename",
+	code.OpHold: "a live turn's hold on a scratch repository idle code.HoldRecordAfter (22 h) " +
+		"or more, recorded once a turn and repository: a seat taking up an experiment left a " +
+		"day or more before",
 	code.OpPurgePart: "a deleted repository's rows go in bounded parts once it is past its " +
 		"retention: once a repository",
 	code.OpPurge:    "a deleted repository's last part: once a repository",
@@ -294,6 +304,16 @@ var codeLogManagers = map[code.ManagedBy]string{
 	code.ManagedConfig: "a repository code.repos declares: an activation of the company's " +
 		"document creates, settles, deletes and restores it, and its purge follows its " +
 		"deletion — codeLogNegligible's reasons",
+	code.ManagedTools: "a repository a person's or a seat's tool makes: its create and every " +
+		"rename, settings change, deletion and restore is a deliberate act of one record, about " +
+		"a push's own in size — under a kibibyte, two with the longest description " +
+		"(code.TestAScratchCreateCostsTheLogOneSmallRecord) — and the reference company's 3 000 " +
+		"pushes a day go to repositories it already has. The caps bound how many exist, not how " +
+		"fast: a seat holds at most code.scratch.max_per_seat (50) scratch repositories, each " +
+		"counted until its purge a week after its deletion, so one making and deleting them at " +
+		"the cap makes about seven a day, and every one of the reference company's hundred " +
+		"seats doing so would append under 0.73 MB of creates a day, a tenth of the day's " +
+		"least (7.3 MB), before their deletions and purges",
 }
 
 // codeLogFields is every key the payload of an op the day prices declares, as
@@ -357,12 +377,14 @@ var codeLogKinds = map[code.ObjectKind]string{
 	code.KindRepo: "a push (codeLogDay, by the way its pack was built: codeLogPushVias), a " +
 		"merge of the pushes' packs and the sweep of the rows a merge retired (codeLogDay) are " +
 		"on their repository; so are its settings, deletion, restore and purge " +
-		"(codeLogNegligible, by its manager: codeLogManagers), a person's purge of its " +
-		"unreachable objects (codeLogNegligible), an expunge's begin and commit and a change's " +
-		"lifecycle (codeLogUnwritten) and a publication of its layers (codeLogUnwrittenShapes)",
+		"(codeLogNegligible, by its manager: codeLogManagers), a live turn's hold on it and a " +
+		"person's purge of its unreachable objects (codeLogNegligible), an expunge's begin and " +
+		"commit and a change's lifecycle (codeLogUnwritten) and a publication of its layers " +
+		"(codeLogUnwrittenShapes)",
 	code.KindBarrier: "a git client's read (codeLogDay)",
-	code.KindName: "a repository's create, on the name it claims (codeLogNegligible, by its " +
-		"manager: codeLogManagers)",
+	code.KindName: "a repository's create and a tool's rename of it, each on the name it " +
+		"claims (codeLogNegligible, by its manager: codeLogManagers), and an old name's release " +
+		"(codeLogNegligible)",
 	code.KindEviction:   "an operator's eviction or readmission (codeLogNegligible)",
 	code.KindGeneration: "a reanchor (codeLogNegligible)",
 	code.KindCompany:    "the activation fence (codeLogNegligible)",
