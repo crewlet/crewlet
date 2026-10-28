@@ -501,7 +501,10 @@ as one is there — its log says why the merge has not landed:
 `code_cache_compaction_refused` for a build the node's memory cannot hold,
 `code_compaction_refused` for a refusal (`store_full` among them: an object
 store with no room, which holds the repository back until the store has the
-room, never retried as a blip), `code_compaction_failed` for a build, an
+room for that merge, never retried as a blip, and lets it go once that merge's
+outputs are stored, so a later merge is held back only by a refusal of its
+own),
+`code_compaction_failed` for a build, an
 upload or an answer that failed, each tried again at the next poll. A
 repository that takes pushes faster than one node merges them shows as
 `crewlet.code.compact.duration` against the pushes' rate

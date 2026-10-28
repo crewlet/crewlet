@@ -63,7 +63,8 @@ var (
 //     M3-O40). The scratch, and its pin of the incarnation, stay to the end.
 //  5. UPLOAD every output at once ([uploadAll]); a store with no room is
 //     refused `store_full` and the repository held back until it has the room
-//     ([Compactor.releaseHeld]).
+//     ([Compactor.releaseHeld]), and outputs stored drop the repository's own
+//     hold, whatever the store ([Compactor.stored]).
 //  6. PROPOSE one compaction through the estate's router, under its write
 //     attempt, and answer what the committer decided: applied adopts the
 //     outputs into this node's cache by link — so the node that built them
@@ -293,7 +294,7 @@ func (c *Compactor) upload(ctx context.Context, cand code.CompactionCandidate, b
 	for i, o := range b.outs {
 		b.proposal.Compaction.Add[i] = o.ref
 	}
-	c.stored(ctx)
+	c.stored(ctx, cand.ID)
 	return "", nil
 }
 

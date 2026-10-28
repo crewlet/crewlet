@@ -3,6 +3,7 @@ package compact_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -354,5 +355,88 @@ func TestAStoreWithNoRoomHoldsACompactionBackUntilItHasTheRoom(t *testing.T) {
 				t.Errorf("the repository holds %d live packs, want the one output", live)
 			}
 		})
+	}
+}
+
+// A REPOSITORY'S STORED OUTPUTS ANSWER ITS OWN HOLD, on a store that holds a
+// reservation as on any: a repository the listing goes on naming once its
+// compaction landed — one keeping eight full packs, or one a capped roll
+// leaves listed — whose first roll a full store refused is planned again at
+// its next, smaller roll as soon as the room holds THAT roll, though the room
+// is below what the first would have stored. The refusal it was held back for
+// is answered by its own outputs, stored; a refusal of a later roll would set
+// an estimate of its own.
+//
+// Mutation: keep a repository's own hold, on a store that holds a
+// reservation, once its outputs are stored (Compactor.stored), and the second
+// roll is skipped at every pass — held to the first roll's estimate, which the
+// room no longer reaches.
+func TestAStoredCompactionReleasesItsOwnHold(t *testing.T) {
+	t.Parallel()
+	full := &objstore.Full{Remedy: "the operator raises the bucket's reservation", Err: errors.New("no room")}
+	x := newFixture(t)
+	// THE FIRST ROLL: eight pushes of ten files each, thirteen objects a push,
+	// so its output outweighs the next roll's pushes of one file — four
+	// objects each — more than twice over, and git's split leaves it out of
+	// that roll.
+	heavy := make([]int, 10)
+	for i := range heavy {
+		heavy[i] = 4 << 10
+	}
+	x.pushN(code.CompactMinMerge, heavy...)
+	var first int64
+	for _, p := range x.rows().Packs {
+		first += p.Size
+	}
+
+	var (
+		mu   sync.Mutex
+		room int64
+	)
+	setRoom := func(n int64) {
+		mu.Lock()
+		defer mu.Unlock()
+		room = n
+	}
+	rs := &recordingStore{Store: x.store}
+	rs.refuse = func() error { return full }
+	rs.usage = func() (objstore.Usage, bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return objstore.Usage{Bytes: 1 << 30, MaxBytes: 1<<30 + room}, true, nil
+	}
+	// LISTED WHATEVER ITS PACK COUNT, as a repository keeping eight full packs
+	// beside its small ones is.
+	comp, rec, _ := x.compactorOf(func(o *compact.Options) {
+		o.Objects, o.Estate = rs, &listed{Estate: served{x.fleet}}
+	})
+
+	if report := pollWhileBusy(t, comp, rec); report.Refused != 1 {
+		t.Fatalf("the pass whose outputs the store refused for room reported %+v, want it refused", report)
+	}
+	rs.set(func(r *recordingStore) { r.refuse = nil })
+	setRoom(first)
+	if report := pollWhileBusy(t, comp, rec); report.Compacted != 1 {
+		t.Fatalf("the pass once the store had room for the first roll reported %+v, want it compacted", report)
+	}
+
+	// THE SECOND ROLL: every pack pushed since the first roll's output, which
+	// its split leaves out.
+	outputs := x.rows().Packs
+	x.pushN(code.CompactMinMerge, 1<<10)
+	var second int64
+	for _, p := range x.rows().Packs {
+		if !slices.ContainsFunc(outputs, func(o code.PackRow) bool { return o.PackID == p.PackID }) {
+			second += p.Size
+		}
+	}
+	if second >= first {
+		t.Fatalf("the premise: the second roll weighs %d bytes, want it under the first's %d", second, first)
+	}
+	setRoom(first - 1)
+	if report := pollWhileBusy(t, comp, rec); report.Compacted != 1 {
+		t.Errorf("the pass over the next roll, %d bytes, with room for it and not for the first roll's %d "+
+			"reported %+v, want it compacted: the repository's own outputs, stored, answered its hold", second,
+			first, report)
 	}
 }

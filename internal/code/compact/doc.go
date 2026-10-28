@@ -103,7 +103,12 @@
 // own bucket, whose reservation says its room, once a pass's read of it holds
 // what the compaction would store; on a provider's bucket, which says nothing,
 // by one held repository let through an hour after the last refusal, the
-// collector's own interval, whose outputs stored release every other.
+// collector's own interval, whose outputs stored release every other. On
+// either, a repository's OWN hold goes once its own outputs are stored: the
+// refusal it was held back for is answered, and a refusal of a later roll
+// sets an estimate of its own — kept, the first roll's estimate held back
+// every later roll of a repository the listing goes on naming, however small,
+// once the room fell below it.
 //
 // # What it raises
 //

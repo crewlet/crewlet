@@ -194,8 +194,9 @@ type Compactor struct {
 	caps map[string]int64
 	// held is every repository a full object store refused an output of,
 	// with what its compaction would store — the estimate a store's room is
-	// held to before it is planned again — and fullAt the last such
-	// refusal.
+	// held to before it is planned again — until its own outputs are stored
+	// ([Compactor.stored]) or the listing stops naming it; and fullAt the
+	// last such refusal.
 	held   map[string]int64
 	fullAt time.Time
 	// behind is the last pass's repositories this node is home for at the

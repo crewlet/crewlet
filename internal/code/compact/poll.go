@@ -224,9 +224,12 @@ func (c *Compactor) isHeld(repoID string) bool {
 // smallest — is let through once [collect.CollectInterval] has passed since
 // the last refusal, the soonest the collector, the one thing in the engine
 // that frees room in such a bucket, can have made any; its outputs stored,
-// every hold is released (heldStored). So a full provider's bucket costs a
-// node one build an hour, never one a repository a poll. A failed read of the
-// room holds every repository back for the pass.
+// every hold is released ([Compactor.stored]). So a full provider's bucket
+// costs a node one build an hour, never one a repository a poll. A failed read
+// of the room holds every repository back for the pass. On either store, a
+// repository's own hold goes once its own outputs are stored: the refusal it
+// was held back for is answered, and a later refusal sets an estimate of its
+// own.
 func (c *Compactor) releaseHeld(ctx context.Context) (map[string]bool, error) {
 	c.mu.Lock()
 	type hold struct {
@@ -277,14 +280,30 @@ func (c *Compactor) holdFull(repoID string, estimate int64) {
 	c.fullAt = c.now()
 }
 
-// stored is a compaction whose outputs the store took. On a provider's bucket,
-// which says nothing of its room, a write it takes is the one way this node
-// learns the room came back, so every repository held back for it is released.
-// On a store that holds a reservation the room is read every pass instead
-// ([Compactor.releaseHeld]) — one output taken says nothing of a larger one —
-// and nothing is released here.
-func (c *Compactor) stored(ctx context.Context) {
+// stored is a compaction of repoID whose outputs the store took.
+//
+// ITS OWN HOLD GOES, WHATEVER THE STORE: the refusal it was held back for is
+// answered by these very outputs, stored, and a refusal of a later roll of it
+// sets an estimate of its own. Kept, the estimate of the roll a full store
+// first refused went on holding the repository back for as long as the
+// listing named it — on a store that holds a reservation nothing else drops a
+// hold of a repository still listed, and one that keeps eight full packs, or
+// that a capped roll leaves listed, is listed for good — so once the room fell
+// back below that first roll's size, as the outputs just stored and a day of
+// retired inputs make usual, every later roll of it, however small, was
+// skipped at every pass, until its pushes were refused compaction_behind; and
+// the stale estimate was charged against the room every other held repository
+// is released by.
+//
+// THE REST, by what the store says of its room. On a provider's bucket, which
+// says nothing of it, a write it takes is the one way this node learns the
+// room came back, so every repository held back for it is released. On a store
+// that holds a reservation the room is read every pass instead
+// ([Compactor.releaseHeld]) — one roll's outputs taken say nothing of a larger
+// one's — and no other hold is released here.
+func (c *Compactor) stored(ctx context.Context, repoID string) {
 	c.mu.Lock()
+	delete(c.held, repoID)
 	holding := len(c.held) > 0
 	c.mu.Unlock()
 	if !holding {
