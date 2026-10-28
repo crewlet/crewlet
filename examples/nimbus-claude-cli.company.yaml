@@ -273,13 +273,16 @@ providers:
     #     serving the API, a load balancer in front of several included —
     #     the node a call lands on relays it to the one holding the seat.
 
-    # AN API KEY AS A BACKSTOP.  A spent plan window arrives as prose on a
-    # successful exit ("Usage limit reached. Resets at 4pm."); the engine
-    # matches that wording, reports RATE_LIMIT — which the ordinary fallback
-    # chain treats as retryable — and sits the entry out for a minute before
-    # trying the plan again.  So `llm: [default, metered]` on a role carries
-    # it onto a key for the rest of the window and back again afterwards,
-    # with no operator in the loop.  The same CLI on an Anthropic API key,
+    # AN API KEY AS A BACKSTOP.  A spent plan window is read from Claude
+    # Code's own result event first (`is_error` with `api_error_status:
+    # 429`, which its profile's `limit_events` match), and from the vendor's
+    # sentence ("You've hit your 5-hour limit · resets 4:30pm") where no such
+    # event arrives; the engine reports RATE_LIMIT — which the ordinary
+    # fallback chain treats as retryable — and sits the entry out until the
+    # reset the vendor named, never more than an hour away, or for 1, 2, 5,
+    # then 15 minutes where it named none, before trying the plan again.  So
+    # `llm: [default, metered]` on a role carries it onto a key for the rest
+    # of the window and back again afterwards, with no operator in the loop.  The same CLI on an Anthropic API key,
     # with a state_dir of its own (the default, per key), since it is not
     # the subscription's login:
     #
