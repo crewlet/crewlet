@@ -21,9 +21,10 @@
  * whole, here.
  *
  * EVERY CARD IS THE ENGINE'S: built from tool results and its own route
- * table, never from the model's words. Only prose is the model's, and it is
- * drawn inert (`ASSISTANT_WORDS` in `lib/markdown.ts`): no live link and no
- * picture. A card this build cannot draw is a sentence saying so.
+ * table, never from the model's words. Only prose is the model's, and no
+ * address it writes is opened (`ASSISTANT_WORDS` in `lib/markdown.ts`): a link
+ * is live only where the dashboard built it, and no picture is fetched. A card
+ * this build cannot draw is a sentence saying so.
  *
  * A DEEP RUN IS ONE CARD, NOT A STEP AMONG STEPS: the step whose `deep` is set
  * is drawn as `DeepWorkCard` (its goal, its limits, its latest activity),

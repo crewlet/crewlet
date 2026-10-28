@@ -1,12 +1,14 @@
 /**
- * A model's words, drawn inert.
+ * A model's words: nothing it WROTE is live.
  *
  * THE ASSISTANT'S PROSE IS WRITTEN BY A MODEL that may have read anything, so
- * nothing in it is live: a link is its label and the host it names, never an
- * anchor and never focusable; an autolink is its host and path; a picture is
- * its alt text, never fetched. Navigation from the assistant is only an
- * engine-built Open in app card. Each case renders through the drawer's own
- * `ReplyProse`, so a renderer change that lets one through fails here.
+ * an address it writes opens nothing: a link is its label and the host it
+ * names, never an anchor and never focusable; an autolink is its address as
+ * written; an app route it spells is its label; a picture is its alt text,
+ * never fetched. What does link is what the dashboard built from checked
+ * parts (`links: "checked"`, held in `components/InlineToken.test.tsx`).
+ * Each case renders through the drawer's own `ReplyProse`, outside the frame,
+ * so a renderer change that lets one through fails here.
  */
 
 import { cleanup, render } from "@testing-library/react";
