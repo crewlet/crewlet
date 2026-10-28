@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/queue"
@@ -85,6 +86,11 @@ type gate struct {
 	// [queue.Inflight] gives: a WaitGroup cannot be counted up while a
 	// drain is waiting on it.
 	running queue.Inflight
+
+	// waiting counts the turns parked for a slot while the node is at its
+	// ceiling ([Node.TurnsWaiting]): the one state a caller cannot see from
+	// the slots, since a turn that waits holds none.
+	waiting atomic.Int64
 }
 
 // DefaultMaxConcurrent is how many turns one process runs at once when
@@ -143,6 +149,8 @@ func (g *gate) acquire(ctx context.Context) (func(), bool) {
 		return nil, false
 	default:
 	}
+	g.waiting.Add(1)
+	defer g.waiting.Add(-1)
 	select {
 	case g.slots <- struct{}{}:
 		g.running.Begin()

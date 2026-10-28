@@ -50,10 +50,12 @@ func admitting(ctx context.Context, n *node.Node, handle string) <-chan error {
 }
 
 // A TURN ADMITTED OUTSIDE THE MAILBOX COUNTS AGAINST THE CEILING, and frees its
-// slot when it is released, once.
+// slot when it is released, once. The turn behind it is counted as waiting
+// ([node.Node.TurnsWaiting]) for as long as it is parked, and no longer.
 //
 // Mutation: admit without acquiring a slot and the second admission is not
-// held; release without freeing it and the waiter is never admitted.
+// held; release without freeing it and the waiter is never admitted; leave
+// the waiting count up after the wait and it is still one at the end.
 func TestATurnAdmittedOutsideTheMailboxHoldsASlot(t *testing.T) {
 	t.Parallel()
 	g := gatedFleet(t, 1, idleTurn, "ceo", "cto")
@@ -63,10 +65,11 @@ func TestATurnAdmittedOutsideTheMailboxHoldsASlot(t *testing.T) {
 		t.Fatalf("in flight = %d with one turn admitted, want 1", got)
 	}
 	waiting := admitting(t.Context(), g.n, "cto")
+	within(t, "the second turn to park for the slot", func() bool { return g.n.TurnsWaiting() == 1 })
 	select {
 	case err := <-waiting:
 		t.Fatalf("a second turn was answered (%v) under a ceiling of one", err)
-	case <-time.After(100 * time.Millisecond):
+	default:
 	}
 
 	release()
@@ -80,6 +83,9 @@ func TestATurnAdmittedOutsideTheMailboxHoldsASlot(t *testing.T) {
 		t.Fatal("the waiting turn was not admitted when the slot freed")
 	}
 	within(t, "every slot to be free", func() bool { return g.n.InFlightTurns() == 0 })
+	if got := g.n.TurnsWaiting(); got != 0 {
+		t.Fatalf("turns waiting = %d once the waiting turn was admitted, want 0", got)
+	}
 }
 
 // A SEAT THIS NODE DOES NOT HOLD ADMITS NOTHING, and says so by the sentinel a

@@ -727,6 +727,11 @@ func (n *Node) ResumeClaiming(ctx context.Context) {
 // InFlightTurns is how many turns hold a concurrency slot right now.
 func (n *Node) InFlightTurns() int { return n.turns.inFlight() }
 
+// TurnsWaiting is how many turns are parked for a concurrency slot right now,
+// because the node is at node.max_concurrent. A turn counts
+// here from the moment it asks for a slot until it takes one or gives up.
+func (n *Node) TurnsWaiting() int { return int(n.turns.waiting.Load()) }
+
 // acksGone reports whether the queue's [acksLoss] signal has closed. A queue
 // without one leaves the channel nil, which never has, and the default arm
 // answers that.

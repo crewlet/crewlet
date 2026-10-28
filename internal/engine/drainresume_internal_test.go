@@ -378,6 +378,11 @@ func TestADrainWaitsForAResumeAdmittedBeforeIt(t *testing.T) {
 // completion waits for a slot before it claims the run, and runs the moment
 // one frees.
 //
+// THE WAIT IS OBSERVED, NOT SLEPT ON: the completion's handler is seen parked
+// for the slot ([node.Node.TurnsWaiting]), which it can only be before its
+// claim, and an ungated completion is seen collected instead; either ends the
+// wait, and only the first is right.
+//
 // Mutation: drop the gate from the engine's coordinator and the completion is
 // collected and resumed beside the turn holding the only slot.
 func TestAResumedTurnTakesASlotUnderTheNodesCeiling(t *testing.T) {
@@ -399,7 +404,9 @@ func TestAResumedTurnTakesASlotUnderTheNodesCeiling(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatal("the waiter never fired the finished job's completion")
 	}
-	time.Sleep(500 * time.Millisecond)
+	eventually(t, "the completion to park for the node's one slot", func() bool {
+		return e.node.TurnsWaiting() > 0 || r.collected.Load() > 0
+	})
 	if got := r.collected.Load(); got != 0 {
 		t.Fatalf("the completion was collected %d times while the node's one slot was held", got)
 	}
