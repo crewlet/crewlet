@@ -1318,7 +1318,7 @@ const (
 	// baseline. Linking only what the dashboard built in the assistant and the
 	// Inbox (each address rebuilt on the company's own host), placing a bare
 	// `#11` by its message, a bare `owner/repo` under the company's owners and
-	// uilet 0.75.1's smaller marks took it to 4629.4 KiB, again all in the lazy
+	// uilet 0.75.1's smaller marks took it to 4629.3 KiB, again all in the lazy
 	// chunks that render Markdown: the first load is 348.9 KiB. 4630 KiB, which
 	// still refuses a doubled baseline.
 	treeBudget = 4<<20 + 534<<10

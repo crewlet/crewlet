@@ -2931,7 +2931,10 @@ under an update about a comment (whose comment is quoted above, so it is not
 listed again unless the update carries only a preview of it), and
 "Conversation on this task" under any other update. It is read a page at a
 time from `work_comments`, the newest page polled, and **Earlier comments**
-reads the page before. A comment's author is the seat a person wrote it as
+reads the page before. A reply thread is narrowed by the engine (`thread`), so
+the button appears only when that conversation has earlier comments, and an
+empty one reads as its heading, "No replies yet." and the reply box, one
+spacing step apart. A comment's author is the seat a person wrote it as
 (the engine records it so), one by a credential bound to no seat is drawn
 under its own login, and a comment with no author reads "The engine"; never
 the credential it came through. The reply box at its end writes as you:

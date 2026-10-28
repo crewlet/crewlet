@@ -458,6 +458,10 @@ func (s Sources) mayReadItem(ctx context.Context, principal iam.Principal,
 // coverage it reports describe one instant, and a cursor from `work_item`'s
 // own `comments_cursor` continues exactly where that page stopped. `limit`
 // is held to [worklet.MaxCommentPage].
+//
+// `thread` narrows the pages to one comment's conversation and `with_root`
+// keeps that comment in it ([worklet.CommentThread]), so a pane drawing one
+// question's replies is told there are earlier ones only when there are.
 func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 	ref := strings.TrimSpace(p.String("item"))
 	if ref == "" {
@@ -470,7 +474,11 @@ func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 	detail, err := s.Work.Task(ctx, ref, worklet.DetailWants{
 		Comments:      true,
 		CommentCursor: strings.TrimSpace(p.String("cursor")),
-		CommentLimit:  Clamp(p.Int("limit", 0), worklet.DetailComments, worklet.MaxCommentPage),
+		CommentThread: worklet.CommentThread{
+			Root:     strings.TrimSpace(p.String("thread")),
+			WithRoot: p.Bool("with_root", false),
+		},
+		CommentLimit: Clamp(p.Int("limit", 0), worklet.DetailComments, worklet.MaxCommentPage),
 	}, fresh)
 	switch {
 	case errors.Is(err, worklet.ErrNoTask):

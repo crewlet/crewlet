@@ -8781,7 +8781,7 @@ a.live-row:focus-visible {
 .inbox-thread {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--spacing-3);
 }
 .inbox-thread-earlier {
   align-self: flex-start;
@@ -8789,7 +8789,7 @@ a.live-row:focus-visible {
 .inbox-thread-list {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--spacing-3);
   margin: 0;
   padding: 0;
   list-style: none;
