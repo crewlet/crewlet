@@ -2111,16 +2111,20 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	// turn never began (a recorded reply goes back to the seat through the
 	// row), and settled without a word where it did, because the turn may
 	// already have acted and a retry must not re-enter it.
-	defer func() {
+	defer func(ctx context.Context) {
 		if p := recover(); p != nil {
 			var note *failureNote
 			if !began.Load() {
 				note = &failureNote{reason: types.SandboxFailureResumeBroken, detail: resumeBrokenDetail}
 			}
-			c.settleAbandoned(context.WithoutCancel(ctx), run, note)
+			// DETACHED, bounded: the panic may be the cancellation's own,
+			// and an ending on a dead context would write nothing.
+			settle, cancel := detached(ctx)
+			defer cancel()
+			c.settleAbandoned(settle, run, note)
 			panic(p)
 		}
-	}()
+	}(ctx)
 	begin := func(ctx context.Context) error {
 		if claimedAnswer(run) {
 			// THE TURN TAKES THE ANSWER, on the row, or it does not run —

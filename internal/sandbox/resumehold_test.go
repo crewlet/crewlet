@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"slices"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // A RESUMED RUN KEEPS ITS SEAT HELD FOR THE WHOLE RESUMED TURN, and lets go of
@@ -171,6 +173,16 @@ func TestEveryResumeExitLetsGoOfTheSeat(t *testing.T) {
 			if held, _ := rig.coordinator.SeatRuns("swe"); held || holds.holding("swe") {
 				t.Fatalf("after a panic the seat is still held (counted %v, inbox %v)",
 					held, holds.holding("swe"))
+			}
+			// ANNOUNCED ONLY WHERE NO TURN RAN, as an abandoned resume is: a
+			// turn that began publishes its own failed completion.
+			broken := false
+			for _, f := range rig.failures() {
+				broken = broken || f.Reason == types.SandboxFailureResumeBroken
+			}
+			if broken != beforeTurn {
+				t.Fatalf("resume_broken announced %v, want %v: it is the run's only account "+
+					"where its turn never began, and a second one where it did", broken, beforeTurn)
 			}
 		})
 	}
