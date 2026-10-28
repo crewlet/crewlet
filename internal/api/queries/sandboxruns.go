@@ -367,6 +367,9 @@ var runKeys = map[string]runShown{
 	"updated_at":          runStatus,
 	"answerable_in_chat":  runStatus,
 	"declined_answers":    runStatus, // delivery ids, never what the answers said
+	"answer_ids":          runStatus, // the recorded answer's delivery ids, not its text
+	"answered_by":         runStatus,
+	"answered_at":         runStatus,
 	"reply":               runBody,
 	"bridge_calls":        runBody,
 	"bridge_calls_elided": runStatus, // a count of what was cut, never a call
@@ -473,6 +476,13 @@ func runRow(run sandbox.PendingRun) map[string]any {
 		// answer and is waiting on its question again, rather than left
 		// looking at a question that never changes. Always an array.
 		"declined_answers": nonNilStrings(run.DeclinedAnswers),
+		// THE ANSWER RECORDED ON THE RUN, by its deliveries, who gave it and
+		// when: the first recorded answer wins, and a person whose answer
+		// was not that one is told whose was, rather than shown their own
+		// as taken. Empty on a run with no recorded answer.
+		"answer_ids":  answerIDs(run.Answer),
+		"answered_by": answeredBy(run.Answer),
+		"answered_at": answeredAt(run.Answer),
 		// WHO IS WAITING, which is the question a board full of parked
 		// runs exists to answer and had no field for. Persisted rather
 		// than re-derived precisely because the resumed turn does not see
@@ -500,6 +510,29 @@ func runRow(run sandbox.PendingRun) map[string]any {
 		// was asked nothing. Set by [serialiseRun].
 		"body_withheld": false,
 	}
+}
+
+// answerIDs, answeredBy and answeredAt are the recorded answer's deliveries,
+// giver and instant, empty for a run with none.
+func answerIDs(answer *sandbox.RecordedAnswer) []string {
+	if answer == nil {
+		return []string{}
+	}
+	return nonNilStrings(answer.EventIDs)
+}
+
+func answeredBy(answer *sandbox.RecordedAnswer) string {
+	if answer == nil {
+		return ""
+	}
+	return answer.By
+}
+
+func answeredAt(answer *sandbox.RecordedAnswer) string {
+	if answer == nil {
+		return ""
+	}
+	return isoOrEmpty(answer.RecordedAt)
 }
 
 // answerableInChat reports whether a reply on a chat surface could ever reach
