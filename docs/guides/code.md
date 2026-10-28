@@ -367,11 +367,15 @@ nothing.
 files it touches whose earlier versions an earlier step stored, so a history
 pushed in steps takes more room than one pack of it — measured on this
 project's own history, 34 MB as one pack, about twice that in eleven steps. The
-object store keeps those bytes and every git node serving the repository caches
-them, since nothing repacks them yet. Run a large import with
-`code.limits.max_push_bytes` at its 1 GiB ceiling, which takes the fewest steps,
-and leave `code.limits.repo_max_bytes` room for the steps rather than for the
-source's own pack size.
+object store keeps the steps' packs as they were pushed, and every git node
+serving the repository caches them, until the repository's home git node
+merges them ([A busy repository's packs are merged](#a-busy-repositorys-packs-are-merged)).
+A merge may store a file a step kept whole as a delta again, but how much that
+saves depends on the history, so leave `code.limits.repo_max_bytes`, the object
+store and the git nodes' caches room for the repository as it was pushed rather
+than for the source's own pack size. Run a large import with
+`code.limits.max_push_bytes` at its 1 GiB ceiling, which takes the fewest
+steps.
 
 **Resuming.** A step that fails — a network drop, a node restarting, a rule
 that refuses it — stops the import with git's own reason, and every step before

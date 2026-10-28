@@ -491,10 +491,10 @@ func (r *Reader) Snapshot(ctx context.Context, q StateQuery) (RepoSnapshot, erro
 // rows, and a round that sweeps the cache's whole directory and rewrites its
 // refs where the delta was applied in place. Only those the full answer
 // would not serve — past the bound, or where its caller asked for none —
-// weigh against the delta alone: a cache two thousand compactions behind
-// reads the fifty packs its repository holds rather than twenty thousand
-// retirements, and gives up only telling a retired pack file from one no row
-// accounts for.
+// weigh against the delta alone: a cache a thousand compactions behind reads
+// the fifty packs its repository holds rather than some sixteen thousand
+// retirements ([MaxFullRetirements]), and gives up only telling a retired
+// pack file from one no row accounts for.
 //
 // EACH FLOOR'S RETIREMENTS ARE COUNTED ONCE, in one bounded statement over the
 // index the retired phase reads, deep enough for every question asked of
