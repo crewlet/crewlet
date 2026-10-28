@@ -13,3 +13,9 @@ func (n *Node) ReleaseSeatTurnHoldForTest(handle string) {
 		n.holdInbox(context.Background(), handle, held.hold, false)
 	}
 }
+
+// OnBusyRefusalForTest runs hook as a turn refused on a busy seat lets go of
+// the node's lock, before the refusal returns.
+func (n *Node) OnBusyRefusalForTest(hook func(handle string)) {
+	n.refusedBusy = hook
+}

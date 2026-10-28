@@ -233,6 +233,9 @@ type Node struct {
 	// admissions numbers the admissions that hold a seat's inbox, so each
 	// holds it under a reason of its own ([HoldSeatTurn]).
 	admissions atomic.Uint64
+	// refusedBusy, where set, runs as a turn refused on a busy seat lets go
+	// of mu, for a case that stands the seat's release in that moment.
+	refusedBusy func(handle string)
 
 	// acksLost is the queue's [acksLoss] signal, and nil — never closed —
 	// for a queue without one.

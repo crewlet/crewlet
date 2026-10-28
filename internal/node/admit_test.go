@@ -365,6 +365,43 @@ func TestASeatRunsOneTurnAtATime(t *testing.T) {
 	}
 }
 
+// A TURN REFUSED ON A BUSY SEAT HEARS IT FREED, HOWEVER CLOSE THE RELEASE.
+//
+// The refused turn (a resume) waits for the seat's next [Config.SeatTurnEnded],
+// and the running turn's release announces one only if somebody was refused
+// behind it. Marked once the refusal had let go of the node's lock, a release
+// landing in that moment freed the seat, read no refusal, and announced
+// nothing: the resume waited for its fifteen-second backstop with the seat
+// free. Here the release runs in exactly that moment.
+//
+// Mutation: mark the refusal after the lock is let go, and the release
+// announces nothing.
+func TestATurnRefusedAsTheSeatIsReleasedHearsItFreed(t *testing.T) {
+	t.Parallel()
+	ended := make(chan string, 2)
+	g := gatedFleetWith(t, 4, nil, func(cfg *node.Config) {
+		cfg.SeatTurnEnded = func(handle string) { ended <- handle }
+	}, idleTurn, "ceo")
+
+	_, release := admit(t.Context(), t, g.n, "ceo")
+	g.n.OnBusyRefusalForTest(func(string) { release() })
+	if _, second, err := g.n.AdmitTurn(t.Context(), "ceo"); !errors.Is(err, node.ErrSeatBusy) {
+		if second != nil {
+			second()
+		}
+		t.Fatalf("a turn on a seat mid-turn = %v, want ErrSeatBusy", err)
+	}
+	select {
+	case handle := <-ended:
+		if handle != "ceo" {
+			t.Fatalf("the ending announced is %q, want ceo's", handle)
+		}
+	case <-time.After(gateWaitBound):
+		t.Fatal("ceo's turn was released as a turn was refused behind it, " +
+			"and the refused turn was never told the seat is free")
+	}
+}
+
 // A SEAT BUSY WITH A TURN THAT DID NOT COME FROM ITS MAILBOX SPENDS NONE OF ITS
 // MAIL WAITING FOR IT.
 //

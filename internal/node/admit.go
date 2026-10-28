@@ -184,14 +184,24 @@ func (n *Node) AdmitTurn(ctx context.Context, handle string) (context.Context, f
 			hold: fmt.Sprintf("%s:%d", HoldSeatTurn, n.admissions.Add(1))}
 		n.mu.Lock()
 		running, busy := n.running[handle]
-		if !busy {
+		switch {
+		case !busy:
 			n.running[handle] = held
+		case !fromMailbox:
+			// MARKED UNDER THE LOCK the running turn's release frees the
+			// seat under ([Node.freeSeat]), so that release either finds
+			// the seat free for this turn or reads the mark: set once the
+			// lock was let go, a release landing in between announced
+			// nothing, and the refused turn waited for its backstop.
+			running.contended.Store(true)
 		}
 		n.mu.Unlock()
 		if busy {
 			free()
 			if !fromMailbox {
-				running.contended.Store(true)
+				if n.refusedBusy != nil {
+					n.refusedBusy(handle)
+				}
 				return nil, nil, fmt.Errorf("%w %q", ErrSeatBusy, handle)
 			}
 			// A MAILBOX DELIVERY WAITS, unspent, and asks again once the
