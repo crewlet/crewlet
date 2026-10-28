@@ -70,8 +70,10 @@ const TransferShare = CoreMemory / TransfersPerProcess
 // repository holds more, by TransferBytesPerObject an object: that is no
 // figure a lane can be sized by, since a lane does not know which repository
 // each slot will serve, so whoever knows the repository charges it (the
-// cache's background work keeps room for one beside each whole-repository
-// process it starts).
+// cache's background work keeps room for one beside every process it starts
+// over a repository: each whole-repository step, the node's tip commit-graph
+// beside the tail it covers, and a compaction's build beside the packs it
+// merges).
 const TransferMemory int64 = 224 << 20
 
 // TransferBytesPerObject is the memory one transfer of a whole repository —

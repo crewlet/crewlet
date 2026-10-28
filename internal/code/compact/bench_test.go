@@ -98,7 +98,8 @@ import (
 //     revision of one blob of the default max_blob_bytes, so the delta search
 //     holds two of them at once: the build's peak anonymous memory (peak-MiB)
 //     against what it was admitted at (charge-MiB: its objects at
-//     cache.CompactBytesPerObject with a clone's room beside them, and
+//     cache.CompactBytesPerObject, room beside them for a clone of the whole
+//     repository — whose every object it merges — and
 //     cache.CompactWindowBytes), and the window the peak leaves past the
 //     per-object charge (window-MiB). A peak past the charge raises
 //     CompactWindowBytes to the window measured.
@@ -886,9 +887,11 @@ func benchBlobs(b *testing.B) {
 	if !measured {
 		return
 	}
+	// THE ADMISSION'S CHARGE: the objects merged, and a clone's room of the
+	// whole repository — the same objects, since the arm merges every pack
+	// the repository holds — and the window.
 	perObject := objects * cache.CompactBytesPerObject
-	charge := objects*(cache.CompactBytesPerObject+gitproc.TransferBytesPerObject) +
-		cache.CompactWindowBytes(limits)
+	charge := perObject + objects*gitproc.TransferBytesPerObject + cache.CompactWindowBytes(limits)
 	b.ReportMetric(float64(peak)/(1<<20), "peak-MiB")
 	b.ReportMetric(float64(charge)/(1<<20), "charge-MiB")
 	b.ReportMetric(float64(peak-perObject)/(1<<20), "window-MiB")

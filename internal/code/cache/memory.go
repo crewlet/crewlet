@@ -66,7 +66,12 @@ import (
 // bitmap — holds a third of what the bitmap does, gigabytes over the largest.
 // So the budget keeps room for one such clone beside each run, and holds no
 // more: what bounds the transfers themselves is the transfer lane, which
-// knows no repository (gitproc).
+// knows no repository (gitproc). The two steps whose own figure is not their
+// whole repository's — the node's tip, over the tail, and a compaction's
+// build, over the packs it merges — keep the same room for a clone of the
+// WHOLE repository beside them (chargeOver): the clone they share the node
+// with is of the repository, and a compaction runs on the repository's home,
+// which its clones are asked of, whenever its pushes keep it due.
 //
 // WHAT IT REFUSES is a step whose charge alone is past the budget, which never
 // starts on this node, and the repository is served without it — slower,

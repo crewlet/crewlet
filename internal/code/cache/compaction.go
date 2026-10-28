@@ -93,11 +93,18 @@ type Compacting struct {
 // CompactWindowBytes(limits), the build's delta window, which no count of
 // objects charges. The build's own memory follows what it merges, while the
 // clone it shares the node with is of the repository, however few packs the
-// build merges: charged by its inputs alone, a merge of a large repository's
-// few small packs would be admitted beside a clone the budget kept no room
-// for. The repository's objects are the incarnation s pins, read under its
-// entry's lock: the count its rounds keep (incarnation.objects), as every
-// maintainer step's charge reads it.
+// build merges: a compaction runs on the repository's home, the git node its
+// clones and fetches are asked of, every minute that pushes keep its packs
+// due — a busy repository is one that is read — and charged by its inputs
+// alone, a home merging eight small pushes into a repository of three million
+// objects would keep a few kilobytes of a clone's 720 MB, the room every other
+// step over that repository keeps. The repository's objects are the
+// incarnation s pins, read under its entry's lock: the count its rounds keep
+// (incarnation.objects), as every maintainer step's charge reads it. A node
+// whose budget cannot hold the build and that room together is refused the
+// build (ErrNoMemory): it is too small to serve a clone of the repository
+// beside its own background work, and while that lasts the home's alarm names
+// the repository its pushes are refused for (code_compaction_behind).
 //
 // ITS PIN, ITS SLOT AND ITS RELEASE are a check's (Cache.AdmitVerify): a slot
 // held from the admission to the build's last process, so the build and the

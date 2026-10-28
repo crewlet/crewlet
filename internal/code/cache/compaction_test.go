@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -188,11 +189,13 @@ func TestACompactionPastTheBudgetIsRefusedOnce(t *testing.T) {
 // A COMPACTION KEEPS ROOM FOR A CLONE OF ITS WHOLE REPOSITORY: its build is
 // charged CompactBytesPerObject an object of the packs it merges — its own
 // memory follows them — and, beside it, room for one transfer of the WHOLE
-// repository, as every background step keeps (chargeOver), and its delta
-// window: the clone it shares the node with is of the repository however few
-// packs the build merges, and a merge of a large repository's few small packs
-// charged by those packs alone is admitted beside a clone the budget kept no
-// room for.
+// repository, gitproc.TransferBytesPerObject an object its live packs hold, as
+// every background step keeps (chargeOver), and its delta window: the clone it
+// shares the node with is of the repository however few packs the build
+// merges, and a merge of a large repository's few small packs charged by those
+// packs alone is admitted beside a clone the budget kept no room for. A budget
+// a byte short of that refuses it ErrNoMemory, naming the charge, and that
+// budget admits it.
 //
 // Mutation: charge the clone's room by the objects merged
 // (chargeOver(inputs, CompactBytesPerObject, inputs)), and a merge of one
@@ -216,17 +219,31 @@ func TestACompactionKeepsRoomForACloneOfItsWholeRepository(t *testing.T) {
 	charge := inputs*cache.CompactBytesPerObject + objects*gitproc.TransferBytesPerObject +
 		cache.CompactWindowBytes(limits)
 	cache.SetMaintenanceBudget(c, charge-1)
-	_, err := c.AdmitCompaction(s, inputs, limits)
-	if !errors.Is(err, cache.ErrNoMemory) || !strings.Contains(err.Error(), fmt.Sprintf("needs about %d bytes", charge)) {
+	if adm, err := c.AdmitCompaction(s, inputs, limits); !errors.Is(err, cache.ErrNoMemory) ||
+		!strings.Contains(err.Error(), fmt.Sprintf("needs about %d bytes", charge)) {
+		if adm != nil {
+			adm.Release()
+		}
 		t.Fatalf("a merge of %d object of a repository of %d on a budget of %d = %v, want ErrNoMemory at a "+
 			"charge of %d: %d bytes an object merged, %d an object of the WHOLE repository for a clone's room "+
 			"beside it, and its window", inputs, objects, charge-1, err, charge, cache.CompactBytesPerObject,
 			gitproc.TransferBytesPerObject)
 	}
 	cache.SetMaintenanceBudget(c, charge)
-	adm, err := c.AdmitCompaction(s, inputs, limits)
-	if err != nil {
-		t.Fatalf("the same merge on a budget of exactly its charge, %d = %v, want it admitted", charge, err)
+	// ASKED AGAIN WHILE BUSY: the maintainer may hold the lane a moment for
+	// the commit-graph a sync leaves due, and at a budget of exactly this
+	// charge nothing may stand beside the build — ErrBusy is a moment's state,
+	// which the compactor asks again at its next poll.
+	deadline := time.Now().Add(hangDetector)
+	for {
+		adm, err := c.AdmitCompaction(s, inputs, limits)
+		if err == nil {
+			adm.Release()
+			return
+		}
+		if !errors.Is(err, gitproc.ErrBusy) || time.Now().After(deadline) {
+			t.Fatalf("the same merge on a budget of exactly its charge, %d = %v, want it admitted", charge, err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	adm.Release()
 }

@@ -1129,9 +1129,10 @@ func Catalogue() []Instrument {
 				"packs pushed since the repository's last publication): a copy " +
 				"serving from a published chain walks those packs' commits by " +
 				"date. Slower, never wrong. `compact` (300 bytes an object of " +
-				"the packs merged, beside the clone's room and twice " +
-				"max_blob_bytes for the build's delta window): the " +
-				"repository's home cannot merge its small packs, " +
+				"the packs merged, beside the clone's room — 240 bytes an " +
+				"object of the whole repository — and twice max_blob_bytes " +
+				"for the build's delta window): the repository's home cannot " +
+				"merge its small packs, " +
 				"so its pack count grows with its pushes until a git node with " +
 				"more memory is its home or this one is given more — and at " +
 				"the pack bound its pushes are refused, which " +
