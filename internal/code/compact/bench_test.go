@@ -86,16 +86,22 @@ import (
 //     plus a minute's pushes, which confirms Poll; retired/push is the roll's
 //     ρ; rewrite-B/pushed-B what the outputs weigh over what was pushed,
 //     O(log n) at factor 2; record-B/push the compactions' records on the
-//     code log a push, their signed frames included; and got-B/pushed-B what
-//     the other git node downloads over what was pushed, about 1 + log₂(the
-//     largest merged pack ÷ a push's) — stated in scaling.md (M3-decisions
-//     M3-O63). Every arm states, per 1 000 pushes, the GETs a cold sync of
-//     the result makes (cold-gets/kpush, cold-MB/kpush), the compactions' PUTs
-//     (puts/kpush, put-MB/kpush) and the GETs every git node but the builder
-//     makes of their outputs on a fleet of eight (fleet-gets/kpush,
-//     fleet-MB/kpush: the measured node's times seven, since each runs the
-//     same rounds over the same rows) — requests, S3's billing unit, and
-//     bytes, which a node's disk writes.
+//     code log a push, their signed frames included; sweep-B/push the
+//     records the code-retention duty appends a day later to remove the rows
+//     those compactions retired, a push, and sweeps how many records that is
+//     — a pass of the duty at every code.RetentionInterval of the arm's
+//     simulated time, its clock code.RetireGrace past the instant that
+//     quarter hour's last pass ended, one retire_sweep record for each
+//     repository holding a row past the grace, as the duty sweeps them; and
+//     got-B/pushed-B what the other git node downloads over what was pushed,
+//     about 1 + log₂(the largest merged pack ÷ a push's) — stated in
+//     scaling.md (M3-decisions M3-O63). Every arm states, per 1 000 pushes,
+//     the GETs a cold sync of the result makes (cold-gets/kpush,
+//     cold-MB/kpush), the compactions' PUTs (puts/kpush, put-MB/kpush) and
+//     the GETs every git node but the builder makes of their outputs on a
+//     fleet of eight (fleet-gets/kpush, fleet-MB/kpush: the measured node's
+//     times seven, since each runs the same rounds over the same rows) —
+//     requests, S3's billing unit, and bytes, which a node's disk writes.
 //   - steady/pushes=1200/rate=1/min/min-merge={4,8,16} (LARGE): the same, a
 //     QUIET repository pushed once a minute, so every floor binds — a merge
 //     waits until that many packs have gathered — and the floors' costs
@@ -104,9 +110,11 @@ import (
 //     with the fewest GETs and PUTs a thousand pushes here, where it saves
 //     more than a tenth of them against the floor before it — 16, which
 //     halved 8's (code's limits.go has each floor's figures). Its
-//     retired/push and record-B/push are a merge at the floor's: the rows
-//     and the records a repository pushed more slowly than its home polls
-//     costs.
+//     retired/push, record-B/push and sweep-B/push are a merge at the
+//     floor's: the rows and the records a repository pushed more slowly than
+//     its home polls costs, each merge's retirements swept by a record of
+//     their own, since a merge of sixteen a minute apart is about one a
+//     quarter hour.
 //   - blobs=max_blob/inputs=8 (LARGE): one compaction over eight packs, each a
 //     revision of one blob of the default max_blob_bytes, so the delta search
 //     holds two of them at once: the build's peak anonymous memory (peak-MiB)
@@ -171,6 +179,12 @@ const (
 	// eightNodes is the fleet the min-merge figures are stated for: one
 	// builder and seven git nodes downloading each output once.
 	eightNodes = 8
+
+	// retentionTick is the code-retention duty's tick in the steady arms'
+	// simulated minutes, a pass of the home's compactor each: the duty's own
+	// code.RetentionInterval, a quarter of an hour, so a sweep removes what
+	// the compactions of one quarter hour retired, as the duty's passes do.
+	retentionTick = int(code.RetentionInterval / time.Minute)
 
 	// rollPushes and rollPushBytes are the roll= arms' roll: the fewest
 	// one-commit pushes a compaction merges (code.CompactMinMerge), each the
@@ -723,6 +737,8 @@ type steadyFigures struct {
 	compactions, retired   int
 	outputBytes            int64
 	recordBytes            int64
+	sweeps, swept          int
+	sweepBytes             int64
 	puts, putBytes         int64
 	outputGets, outputGot  int64
 	otherGot               int64
@@ -731,7 +747,9 @@ type steadyFigures struct {
 
 // steadyRun lands pushes into a fresh repository on a fleet of its own, the
 // home's compactor merging at minMerge passing every perMinute pushes, the
-// other git node syncing after every push and every pass; its figures.
+// other git node syncing after every push and every pass, and the
+// code-retention duty sweeping, a day on, what each quarter hour of passes
+// retired; its figures.
 func steadyRun(b *testing.B, pushes []pushed, perMinute, minMerge int) steadyFigures {
 	b.Helper()
 	b.StopTimer()
@@ -744,6 +762,13 @@ func steadyRun(b *testing.B, pushes []pushed, perMinute, minMerge int) steadyFig
 	b.StartTimer()
 
 	fig := steadyFigures{pushes: len(pushes)}
+	// ticks are the instants the duty's passes judge the grace from, one a
+	// retentionTick of passes and one after the last: each read once its
+	// quarter hour's last pass has applied its compaction, so every
+	// retirement of that quarter hour carries a broker instant at or before
+	// it, and none of a later one does.
+	var ticks []time.Time
+	passes := 0
 	for i, p := range pushes {
 		pack, at := f.propose(b, id, p)
 		fig.pushedBytes += pack.Size
@@ -760,6 +785,10 @@ func steadyRun(b *testing.B, pushes []pushed, perMinute, minMerge int) steadyFig
 		before := f.logBytes(b)
 		pollWhileBusy(b, c, rec)
 		fig.recordBytes += f.logBytes(b) - before
+		passes++
+		if passes%retentionTick == 0 || i == len(pushes)-1 {
+			ticks = append(ticks, time.Now())
+		}
 		applied, last := est.since(len(seen))
 		if len(applied) == 0 {
 			continue
@@ -790,6 +819,27 @@ func steadyRun(b *testing.B, pushes []pushed, perMinute, minMerge int) steadyFig
 	for _, r := range rows.Packs {
 		fig.coldGetBytes += r.Size
 	}
+	// THE SWEEPS, A DAY ON: the duty's pass at each tick, its clock
+	// code.RetireGrace past the tick — the pass a day after that quarter hour,
+	// which judges the grace by its own clock against the broker's instant on
+	// each retirement — so each removes what one quarter hour retired, in a
+	// retire_sweep record for the repository, as the duty's passes do. Every
+	// row the compactions retired is swept by the last, which is past them
+	// all.
+	before := f.logBytes(b)
+	for _, tick := range ticks {
+		report := f.fleet.Retain(b, tick.Add(code.RetireGrace))
+		if len(report.Failed) != 0 {
+			b.Fatalf("the duty's pass a day after %v failed a sweep: %v", tick, report.Failed)
+		}
+		fig.sweeps += report.Sweeps
+		fig.swept += report.SweptRows
+	}
+	fig.sweepBytes = f.logBytes(b) - before
+	if fig.swept != fig.retired {
+		b.Fatalf("the duty's passes swept %d retired pack rows, and the compactions retired %d: "+
+			"every retirement is swept once its grace has passed", fig.swept, fig.retired)
+	}
 	b.StartTimer()
 	return fig
 }
@@ -803,6 +853,8 @@ func (fig steadyFigures) report(b *testing.B) {
 	b.ReportMetric(float64(fig.retired)/float64(fig.pushes), "retired/push")
 	b.ReportMetric(float64(fig.outputBytes)/float64(fig.pushedBytes), "rewrite-B/pushed-B")
 	b.ReportMetric(float64(fig.recordBytes)/float64(fig.pushes), "record-B/push")
+	b.ReportMetric(float64(fig.sweeps), "sweeps")
+	b.ReportMetric(float64(fig.sweepBytes)/float64(fig.pushes), "sweep-B/push")
 	b.ReportMetric(float64(fig.otherGot)/float64(fig.pushedBytes), "got-B/pushed-B")
 	b.ReportMetric(float64(fig.coldGets)/kpush, "cold-gets/kpush")
 	b.ReportMetric(float64(fig.coldGetBytes)/1e6/kpush, "cold-MB/kpush")
