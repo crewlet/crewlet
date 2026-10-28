@@ -131,7 +131,10 @@ func TestAnAnswerToARunParkedBeforeAGracefulRestartIsRecordedAfterIt(t *testing.
 	r.release(t, first, before)
 	first.Close(context.WithoutCancel(t.Context()))
 
-	_ = r.answeredAfter(t, run)
+	if after := r.answeredAfter(t, run); after.Epoch != before.Epoch+1 {
+		t.Errorf("the claim after a graceful restart minted %d, want %d: the counter "+
+			"carries on from the tenure before it", after.Epoch, before.Epoch+1)
+	}
 }
 
 // AN UPGRADE OWNS THE RUNS ITS PREDECESSOR'S COUNTER STAMPED. A node that ran a
