@@ -134,7 +134,14 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 			next.title = *p.Title
 		}
 		if p.Body != nil {
-			body, next.bodyBytes = p.Body, int64(len(*p.Body))
+			// Measured through body, the declared variable, never p: a type
+			// switch's variable is a value internal/sourcetree/decltype
+			// cannot type, and the cache's writers gate
+			// (TestNothingButSyncWritesACache) refuses one handed to a call
+			// it cannot type either, len among them, since it cannot tell
+			// it from a gitproc.Cmd.
+			body = p.Body
+			next.bodyBytes = int64(len(*body))
 		}
 		switch {
 		case p.WorkItem != nil:
