@@ -154,8 +154,10 @@ type RunFiled struct {
 // that took it once answers `accepted` without taking it twice.
 //
 // What it refuses is what the turn said: `not_running` for a turn that has
-// ended, and `conflict` for one already holding as many unread notes as it
-// takes, or one that has taken as many notes as a turn takes.
+// ended, `notes_full` for one already holding as many unread notes as may wait,
+// and `notes_spent` for one that has taken as many notes as a turn takes — and
+// `unavailable` where the run's record, or the node running the turn, could not
+// be read or written.
 type steerTurn struct {
 	deps      SteerDeps
 	authorize Authorizer
