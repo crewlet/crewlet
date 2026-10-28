@@ -63,7 +63,7 @@
 // human seat `pat`, whose person holds a token like every person's. Fleet.Write
 // asks a write of the git nodes' code hosts IN PROCESS, the repository's home
 // first and stamped so, the next asked only where one refuses about itself —
-// the walk a keyed write takes (WriteThrough). The cases (F31–F37, ADR-0062)
+// the walk a keyed write takes (WriteThrough). The cases (F32–F38, ADR-0062)
 // hold what a person's clone then reads of the commit — its author, its
 // committer, its dates, its tree — and what the push row says of who built it,
 // that one write asked again is one push, that a conflict and a refusal store

@@ -23,7 +23,7 @@ import (
 )
 
 // THE ENGINE WRITE'S OWN CASES, beside the suite's (internal/code/codetest's
-// F31–F37): what one git node's code host does with a write it is asked.
+// F32–F38): what one git node's code host does with a write it is asked.
 
 // linear is the freshness a write is judged at where a case does not say.
 var linear = statelog.Freshness{Level: statelog.ReadLinearizable}

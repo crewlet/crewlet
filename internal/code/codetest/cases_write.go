@@ -107,7 +107,7 @@ func seeded(t *testing.T, newFleet NewFleet, s Shape, files map[string]string) (
 	return c, p, work, head
 }
 
-// F31: a seat's commit through a tool lands as one push: a person's clone of
+// F32: a seat's commit through a tool lands as one push: a person's clone of
 // its branch sees the commit — the seat its author, the engine its committer,
 // the operation's second its author date, its tree exactly the change — and
 // the push row says it was the engine's build and which run made it.
@@ -167,7 +167,7 @@ func anEngineCommitLands(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// F32: one write asked again is one push: asked while the first is still
+// F33: one write asked again is one push: asked while the first is still
 // landing (the git node's in-flight join), after it landed, and after another
 // push moved the branch on — every answer applied with the one commit, one
 // push row, and nothing built twice.
@@ -240,7 +240,7 @@ func anEngineWriteRetriedIsOnePush(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// F33: a revert that does not apply cleanly stores nothing — no object, no
+// F34: a revert that does not apply cleanly stores nothing — no object, no
 // record — and answers the conflict with its three stage blobs, each readable
 // by its id through the fleet's reads.
 func aRevertThatConflictsStoresNothing(t *testing.T, newFleet NewFleet) {
@@ -278,7 +278,7 @@ func aRevertThatConflictsStoresNothing(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// F34: a write the seat's grant refuses is not_permitted naming what it holds
+// F35: a write the seat's grant refuses is not_permitted naming what it holds
 // and what the write needs, with nothing uploaded and nothing recorded: a
 // read_only seat moves no branch and holds no namespace of its own, while a
 // full_access seat writes in its own (P2 D24).
@@ -311,7 +311,7 @@ func aWriteTheGrantRefusesIsNotPermitted(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// F35: a seat's writes past code.limits.pushes_per_seat_day are refused
+// F36: a seat's writes past code.limits.pushes_per_seat_day are refused
 // push_quota by the committer, and the log holds only the ones it admitted.
 func aSeatPastItsQuotaIsRefused(t *testing.T, newFleet NewFleet) {
 	limits := code.Limits{PushesPerSeatDay: 2}
@@ -354,7 +354,7 @@ func baseIf(create bool, head string) string {
 	return ""
 }
 
-// F36: `direct_push: persons` refuses a seat's write to the branch it
+// F37: `direct_push: persons` refuses a seat's write to the branch it
 // protects, protected_direct, and lands a person's.
 func aSeatsPushToAPersonsBranchIsRefused(t *testing.T, newFleet NewFleet) {
 	c, _, _, head := seeded(t, newFleet, Shape{}, map[string]string{"README.md": "one\n"})
@@ -372,7 +372,7 @@ func aSeatsPushToAPersonsBranchIsRefused(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// F37: a git node killed at every point of an engine write's path leaves one
+// F38: a git node killed at every point of an engine write's path leaves one
 // push or none — never two — that every cache converges to and the same write
 // asked again completes as one push.
 func anEngineWriteCrashedAtEveryPointIsOnePush(t *testing.T, newFleet NewFleet) {
@@ -381,7 +381,7 @@ func anEngineWriteCrashedAtEveryPointIsOnePush(t *testing.T, newFleet NewFleet) 
 	}
 }
 
-// writeCrashAt is F37 at one point: A CRASH, never a Block, as F21's is. The
+// writeCrashAt is F38 at one point: A CRASH, never a Block, as F21's is. The
 // ask the crash held is a caller whose node died under it: it is answered
 // nothing — the hold ends only at the teardown (codefault.Script.ReleaseCrashes)
 // — and the case asks the write again as that caller's retry would.

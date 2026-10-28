@@ -120,14 +120,13 @@ func byPoint(t *testing.T, counts map[codefault.Point]int) map[codefault.Point]i
 }
 
 // A fault point is ONE step, named once: F21 kills the node at every point
-// of PushPath(), C6 the home at every point of CompactPath(), F37 the git node
+// of PushPath(), C6 the home at every point of CompactPath(), F38 the git node
 // at every point of WritePath() — the write's own and the one landing's — and
 // a cache case holds a sync — or crashes it — at each of the sync's, so a
-// point hit at
-// two sites fires at whichever runs first and a point hit at none is a fault
-// no case can make — the swap's rename among them, which a case copies the
-// disk at as a crash would leave it. The two upload points are each hit in
-// the one closure their caller hands code.StoreBundle.
+// point hit at two sites fires at whichever runs first and a point hit at
+// none is a fault no case can make — the swap's rename among them, which a
+// case copies the disk at as a crash would leave it. The two upload points
+// are each hit in the one closure their caller hands code.StoreBundle.
 func TestEveryPointHasOneHitSite(t *testing.T) {
 	root := sourcetree.Root(t)
 	dirs := make([]string, len(hitDirs))
