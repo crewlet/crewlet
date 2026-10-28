@@ -499,10 +499,14 @@ commit ([When packs leave a copy](#the-cache-on-a-git-node)). A request
 already reading the old directory finishes on it.
 
 **A day's grace.** A retired pack keeps its object for a day — longer than the
-longest read of the largest bundle a row can name, with an hour of clock skew
-beside it — so a clone that began on it before the merge finishes. Then the
-`code-retention` duty removes its row, and the object collector deletes the
-object at its next pass ([Deletion and purge](#deletion-and-purge)).
+longest read a clone of the largest bundle a row can name may take (21 hours
+21 minutes), by more than the two hours the clocks of the broker that stamped
+the retirement and the node sweeping it may disagree by while no node raises
+[`clock_skew`](../reference/alarms.md) — so a clone that began on it before the
+merge finishes
+([Live, retired and derived references](object-store.md#live-retired-and-derived-references)).
+Then the `code-retention` duty removes its row, and the object collector
+deletes the object at its next pass ([Deletion and purge](#deletion-and-purge)).
 
 **When it cannot keep up.** A repository at the 2 048 live packs one may hold
 refuses a push carrying objects `compaction_behind` ([Limits](#limits)), and
