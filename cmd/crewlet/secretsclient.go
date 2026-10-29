@@ -383,7 +383,7 @@ func (c *secretsClient) callWith(ctx context.Context, method, path, contentType 
 			"read: %s", path, limit, tooLong)
 	}
 	if resp.StatusCode/100 != 2 {
-		return c.refusal(resp.StatusCode, path, resp.Header.Get("Content-Type"), raw)
+		return c.refusal(resp.StatusCode, path, resp.Header, raw)
 	}
 	if out == nil {
 		return nil
@@ -421,13 +421,14 @@ const maxRowAnswerBytes = 64 << 10
 const maxListingBytes = 64 << 20
 
 // refusal turns a status code into something an operator can act on.
-func (c *secretsClient) refusal(status int, path, contentType string, raw []byte) error {
+func (c *secretsClient) refusal(status int, path string, header http.Header, raw []byte) error {
+	own := ownBody(header, raw)
 	var body struct {
 		Error  string `json:"error"`
 		Detail string `json:"detail"`
 		Hint   string `json:"hint"`
 	}
-	_ = json.Unmarshal(raw, &body)
+	_ = json.Unmarshal(own, &body)
 	switch {
 	case status == http.StatusNotFound && body.Error == "not_found":
 		// THE SENTINEL, so a caller can tell "no such secret" from
@@ -446,12 +447,14 @@ func (c *secretsClient) refusal(status int, path, contentType string, raw []byte
 			withRefusalDetail(strings.TrimPrefix(
 				strings.SplitN(path, "?", 2)[0], "/secrets/"), "", body.Hint))
 	}
-	if msg, ok := credentialRefusal(status, raw, true); ok {
-		return &nodeRefusal{Status: status, Code: body.Error, msg: c.base + ": " + msg}
+	if own != nil {
+		if msg, ok := credentialRefusal(status, own, true); ok {
+			return &nodeRefusal{Status: status, Code: body.Error, msg: c.base + ": " + msg}
+		}
 	}
 	msg := body.Error
 	if msg == "" {
-		msg = foreignAnswer(contentType, raw)
+		msg = foreignAnswer(header.Get("Content-Type"), raw)
 	}
 	// A [nodeRefusal], so a caller can tell a refused credential from a
 	// node that is failing ([refusedTheToken]): the remedy for the first is

@@ -1759,6 +1759,11 @@ const EngineHeader = "X-Crewlet-Engine"
 // EngineHeaderValue is [EngineHeader]'s one value.
 const EngineHeaderValue = "1"
 
+// Marked reports whether an answer's headers carry the engine's mark
+// ([EngineHeader]): the one test a client applies before it reads an answer
+// as the engine's, whatever its body says.
+func Marked(h http.Header) bool { return h.Get(EngineHeader) == EngineHeaderValue }
+
 // NoActiveRevisionRetry is the Retry-After a `503 no_active_revision` carries:
 // the control plane's reconcile poll, because a node that has not been handed
 // a company takes the active revision on its next one, so a client told to

@@ -121,7 +121,7 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 			"the engine rather than something in front of it", c.base, c.answerCap, landed)
 	}
 	if resp.StatusCode/100 != 2 {
-		return "", 0, c.refusal(resp.StatusCode, resp.Header.Get("Content-Type"), raw)
+		return "", 0, c.refusal(resp.StatusCode, resp.Header, raw)
 	}
 	var body struct {
 		RevisionID string `json:"revision_id"`
@@ -153,7 +153,8 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 const maxConfigResponseBytes = 16 * configapi.MaxBodyBytes
 
 // refusal turns a status code into something an operator can act on.
-func (c *configClient) refusal(status int, contentType string, raw []byte) error {
+func (c *configClient) refusal(status int, header http.Header, raw []byte) error {
+	own := ownBody(header, raw)
 	var body struct {
 		Error   string `json:"error"`
 		Detail  string `json:"detail"`
@@ -166,9 +167,11 @@ func (c *configClient) refusal(status int, contentType string, raw []byte) error
 		Node    string `json:"node"`
 		Outcome string `json:"outcome"`
 	}
-	_ = json.Unmarshal(raw, &body)
-	if msg, ok := credentialRefusal(status, raw, true); ok {
-		return fmt.Errorf("%s: %s", c.base, msg)
+	_ = json.Unmarshal(own, &body)
+	if own != nil {
+		if msg, ok := credentialRefusal(status, own, true); ok {
+			return fmt.Errorf("%s: %s", c.base, msg)
+		}
 	}
 	switch {
 	case status == http.StatusNotFound:
@@ -202,7 +205,7 @@ func (c *configClient) refusal(status int, contentType string, raw []byte) error
 	}
 	msg := body.Error
 	if msg == "" {
-		msg = foreignAnswer(contentType, raw)
+		msg = foreignAnswer(header.Get("Content-Type"), raw)
 	}
 	return fmt.Errorf("%s answered %d for PUT /config: %s", c.base, status,
 		withRefusalDetail(msg, body.Detail, body.Hint))

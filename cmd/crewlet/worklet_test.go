@@ -83,7 +83,7 @@ func newFakePurgeNode(t *testing.T) *fakePurgeNode {
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(body)
 	})
-	n.server = httptest.NewServer(mux)
+	n.server = httptest.NewServer(asEngine(mux))
 	t.Cleanup(n.server.Close)
 	return n
 }
@@ -337,7 +337,7 @@ func TestAPurgeTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 // that is a refusal: nothing was done.
 func TestAPurgeTheNodeDoesNotServeIsRefusedNotUnknown(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(httpjson.Mux(http.NewServeMux()))
+	server := httptest.NewServer(asEngine(httpjson.Mux(http.NewServeMux())))
 	t.Cleanup(server.Close)
 	stdout, stderr, err := cli(t, "worklet", "purge", "t-1",
 		"-reason", "why", "-confirm", "ENG-42", bootstrapForURL(t, server.URL))
