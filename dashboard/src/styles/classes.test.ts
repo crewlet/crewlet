@@ -952,7 +952,8 @@ describe("every class the dashboard names", () => {
 // arrives with the screen's chunk rather than in the first paint: `create.css`,
 // the create pages', `charter.css`, the Principles editor's, `brand.css`, the
 // brand's (Company › Brand, a kit's view and its gallery cover), and
-// `folders.css`, the folders' (their tiles, dialogs, row and fact). Each is
+// `folders.css`, the folders' (their tiles, dialogs, row and fact), and
+// `models.css`, Settings › Models' (its list, model page, wizard and By job). Each is
 // appended after the entry's sheets, so each of its rules must select a class
 // of the screen it arrives with, or a tie it wins would change other screens
 // from the moment a reader first opened that one.
@@ -968,6 +969,10 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
   "brand.css": {
     importer: "routes/brand/BrandPreview.tsx",
     owns: /\.(?:brand-[a-z-]+|artifacts-preview-brand)\b/,
+  },
+  "models.css": {
+    importer: "routes/settings/models/Models.tsx",
+    owns: /\.models-[a-z_-]+\b/,
   },
   "folders.css": {
     importer: "routes/artifacts/MoveDialog.tsx",
