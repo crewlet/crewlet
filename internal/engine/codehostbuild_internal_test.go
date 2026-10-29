@@ -398,8 +398,17 @@ func TestAVolumeNotMadeYetIsItsAncestors(t *testing.T) {
 // happened to fall within 16 KiB of a 128 KiB boundary — one boot in eight —
 // and at every other boot the cache took seven eighths of the pool.
 //
+// A FILESYSTEM OF NO BLOCKS IS APART AT ONCE, however the cache's volume
+// moves: the space left is the only reading the instant is for, and it can
+// make nothing one with procfs. Read for an instant first, a cache volume a
+// suite's other cases wrote to between every pair of reads was judged to share
+// with /proc once its reads ran out (TestAnotherFilesystemIsAnotherVolume, in
+// a loaded run).
+//
 // Mutation: compare the device ids alone, and the pooled rows go red; compare
-// the space left to the byte, and the row of two block sizes goes red.
+// the space left to the byte, and the row of two block sizes goes red; ask
+// whether the cache's volume moved before whether either filesystem has
+// blocks, and the row of procfs beside a busy disk goes red.
 func TestTwoDirectoriesOnOnePoolAreOneVolume(t *testing.T) {
 	t.Parallel()
 	const kib = int64(1) << 10
@@ -446,6 +455,10 @@ func TestTwoDirectoriesOnOnePoolAreOneVolume(t *testing.T) {
 			volumeStat{dev: 2, fsid: [2]int32{8, 2}, blocks: 1000, avail: 300 << 20}, false, false},
 		{"a cache volume that never holds still", nil,
 			volumeStat{dev: 2, fsid: [2]int32{8, 2}, blocks: 1000, avail: 300 << 20}, false, true},
+		// PROCFS BESIDE A BUSY DISK: no instant is needed, since no reading of
+		// space makes a filesystem of no blocks one with anything.
+		{"a cache volume that never holds still beside a filesystem of no blocks", nil,
+			volumeStat{dev: 2, fsid: [2]int32{2, 2}}, false, false},
 		{"a directory that cannot be read", []volumeStat{disk}, volumeStat{}, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
