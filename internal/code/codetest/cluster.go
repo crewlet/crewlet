@@ -177,7 +177,7 @@ func fleetCases() []fleetCase {
 		{"F29_ACompactionFailsOverToTheRunnerUpCommitter", aCompactionFailsOverToTheRunnerUpCommitter},
 		{"F30_ACompactionAnsweredLateIsCollapsed", aCompactionAnsweredLateIsCollapsed},
 		{"F31_AChangeOpenSurvivesItsCommitter", aChangeOpenSurvivesItsCommitter},
-		{"F32_AConversationSurvivesItsWriter", aConversationSurvivesItsWriter},
+		{"F39_AConversationSurvivesItsWriter", aConversationSurvivesItsWriter},
 	}
 }
 

@@ -113,7 +113,7 @@ func commentOf(repoID, changeID, parent, body string) code.ConversationWrite {
 			Body: body}}
 }
 
-// F32: a comment whose writer dies after appending its record and before it
+// F39: a comment whose writer dies after appending its record and before it
 // answered is asked of the repository's runner-up under its OWN operation id,
 // which the ledger collapses onto the record that landed: the comment is
 // answered applied, by the id that record gave it, and no second comment is
