@@ -1329,8 +1329,7 @@ export function SetupForm({
           <KeyCheck
             verdict={verdicts[key]}
             onTest={() => void check(section, r)}
-            empty={(values[key] ?? "").trim() === ""}
-            held={r.present}
+            keeps={r.present === true && (values[key] ?? "").trim() === ""}
             together={r.check_with !== undefined && r.check_with.length > 0}
             missing={missingFor(section, r)}
           />
@@ -1352,10 +1351,15 @@ export function SetupForm({
 
   /**
    * The labels of the fields a check of `r` still needs, in form order: the
-   * credential itself and every field it is checked with. A credential
-   * counts only when typed, since the test is of the box, never the store.
-   * Any other field counts when it holds a value or the default the engine
-   * reads for it.
+   * credential itself and every field it is checked with.
+   *
+   * A CREDENTIAL COUNTS ONLY WHEN TYPED, because the test is of the box,
+   * never the store: a key held in the sealed store is not on screen, so a
+   * result about it would read as one about a box that is empty. Any other
+   * field (Datadog's region) counts when it holds a value OR has a default,
+   * because the form shows that default as the field's answer and the
+   * engine checks against exactly that value when the box is blank, so the
+   * person can see what the test will use.
    */
   function missingFor(section: SetupSection, r: SetupRequirement): string[] {
     const own = ownBy.get(sectionKey(section)) ?? [];
@@ -1424,8 +1428,8 @@ const VERDICT_TONE = {
  * A credential's Test control and what the app said about the value in the box.
  *
  * A TEST OF THE BOX, NEVER OF THE STORE: an empty box over a held key has
- * nothing to send, so the control waits for a value, and says the held one
- * stays when nothing is typed.
+ * nothing to send, so the control waits for a value (`missing`), and says the
+ * held one stays when nothing is typed (`keeps`).
  *
  * ONE CONTROL FOR KEYS CHECKED TOGETHER (`together`): it waits for every
  * field the check is made with (`missing` names those still empty), and the
@@ -1435,15 +1439,13 @@ const VERDICT_TONE = {
 function KeyCheck({
   verdict,
   onTest,
-  empty,
-  held,
+  keeps,
   together,
   missing,
 }: {
   verdict: SetupVerdict | "checking" | undefined;
   onTest: () => void;
-  empty: boolean;
-  held: boolean;
+  keeps: boolean;
   together: boolean;
   missing: string[];
 }) {
@@ -1468,7 +1470,7 @@ function KeyCheck({
       </Button>
       {verdict !== undefined && verdict !== "checking" ? (
         <StatusDot tone={VERDICT_TONE[verdict.outcome] ?? "neutral"}>{verdict.detail}</StatusDot>
-      ) : empty && held ? (
+      ) : keeps ? (
         <span className="t-caption">A key is stored. Leave this empty to keep it.</span>
       ) : null}
     </div>
