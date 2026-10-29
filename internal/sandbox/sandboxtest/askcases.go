@@ -30,6 +30,7 @@ var askCases = []struct {
 	{"AJobAsksOneQuestion", testAJobAsksOneQuestion},
 	{"TheNextJobOpensWithNoQuestion", testTheNextJobOpensWithNoQuestion},
 	{"AnInvalidAskIsAnError", testAnInvalidAskIsAnError},
+	{"AnAnswerCutsTheRoundWhereTheAskingJobStopped", testAnAnswerCutsTheRoundWhereTheAskingJobStopped},
 }
 
 // branchDecision is a decision a run asks with: two options, its
@@ -259,5 +260,57 @@ func testAnInvalidAskIsAnError(t *testing.T, s sandbox.PendingStore) {
 	}
 	if row := mustGet(t, s, "t1"); row.Question != "" || row.Audience != "" {
 		t.Errorf("a refused ask wrote %q to %q", row.Question, row.Audience)
+	}
+}
+
+// AN ANSWER CUTS THE ROUND WHERE THE ASKING JOB STOPPED. The job that
+// continues one which asked is opened after every call the row holds then, and
+// the row records that place ([sandbox.PendingRun.AnsweredThrough]): the
+// collection reports no submission from before it, made without the answer. A
+// job carried on after a loss keeps the cut, which the answer made and the loss
+// did not move; a new round has none.
+//
+// Mutation: leave the place unwritten, or write it on every continuation, and
+// the round reports a submission made before the answer, or loses one made
+// after it.
+func testAnAnswerCutsTheRoundWhereTheAskingJobStopped(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const turn = "t-answer-cut"
+	call := func(launch string, seq int, name string) {
+		t.Helper()
+		if _, err := s.AppendBridgeCall(ctx, turn, sandbox.BridgeAppend{Launch: launch,
+			Call: sandbox.BridgeCall{Name: name, Seq: seq, At: base}}); err != nil {
+			t.Fatalf("AppendBridgeCall: %v", err)
+		}
+	}
+	carryOn := func() string {
+		t.Helper()
+		next := run(turn)
+		next.Continues = true
+		return mustLaunched(t, s, next)
+	}
+
+	asking := mustLaunched(t, s, run(turn))
+	call(asking, 1, "submit_work")
+	call(asking, 2, "ask_and_wait")
+	if got, err := s.RecordAsk(ctx, turn, asking, branchAsk()); err != nil || got != sandbox.AskRecorded {
+		t.Fatalf("RecordAsk = %q, %v; want it recorded", got, err)
+	}
+	if got := mustGet(t, s, turn); got.AnsweredThrough != 0 {
+		t.Fatalf("a round no answer carried on is cut at %d, want 0", got.AnsweredThrough)
+	}
+	answered := carryOn()
+	if got := mustGet(t, s, turn); got.AnsweredThrough != 2 || len(got.BridgeCalls) != 2 {
+		t.Fatalf("the answer's job opened with the cut at %d over %d calls, want 2 over the "+
+			"asking job's 2", got.AnsweredThrough, len(got.BridgeCalls))
+	}
+	call(answered, 3, "read_file")
+	carryOn()
+	if got := mustGet(t, s, turn); got.AnsweredThrough != 2 {
+		t.Errorf("a job carried on without an answer moved the cut to %d, want 2", got.AnsweredThrough)
+	}
+	mustLaunched(t, s, run(turn))
+	if got := mustGet(t, s, turn); got.AnsweredThrough != 0 {
+		t.Errorf("a new round starts cut at %d, want 0", got.AnsweredThrough)
 	}
 }

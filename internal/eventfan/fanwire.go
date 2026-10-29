@@ -207,10 +207,11 @@ type listParams struct {
 	Before       *cursorWire `json:"before,omitempty"`
 	Limit        int         `json:"limit"`
 
-	ChannelID string `json:"channel_id,omitempty"`
-	AgentID   string `json:"agent_id,omitempty"`
-	Suspended *bool  `json:"suspended,omitempty"`
-	Failed    *bool  `json:"failed,omitempty"`
+	ChannelID  string `json:"channel_id,omitempty"`
+	AgentID    string `json:"agent_id,omitempty"`
+	AnsweredBy string `json:"answered_by,omitempty"`
+	Suspended  *bool  `json:"suspended,omitempty"`
+	Failed     *bool  `json:"failed,omitempty"`
 
 	// FeedOnly is [store.ListQuery.FeedOnly]: the rows the activity feed
 	// carries, which every view merged with the live ring asks for.
@@ -226,8 +227,8 @@ func listParamsOf(q store.ListQuery) listParams {
 		TraceID: q.TraceID, Actor: q.Actor, TurnID: q.TurnID,
 		WorkKey: q.WorkKey, WorkItem: q.WorkItem, RelatedAgent: q.RelatedAgent,
 		Since: q.Since, Until: q.Until, Before: cursorOf(q.Before), Limit: q.Limit,
-		ChannelID: q.ChannelID, AgentID: q.AgentID, Suspended: q.Suspended,
-		Failed: q.Failed, FeedOnly: q.FeedOnly, At: q.At,
+		ChannelID: q.ChannelID, AgentID: q.AgentID, AnsweredBy: q.AnsweredBy,
+		Suspended: q.Suspended, Failed: q.Failed, FeedOnly: q.FeedOnly, At: q.At,
 	}
 }
 
@@ -237,8 +238,8 @@ func (p listParams) query() store.ListQuery {
 		TraceID: p.TraceID, Actor: p.Actor, TurnID: p.TurnID,
 		WorkKey: p.WorkKey, WorkItem: p.WorkItem, RelatedAgent: p.RelatedAgent,
 		Since: p.Since, Until: p.Until, Before: p.Before.cursor(), Limit: p.Limit,
-		ChannelID: p.ChannelID, AgentID: p.AgentID, Suspended: p.Suspended,
-		Failed: p.Failed, FeedOnly: p.FeedOnly, At: p.At,
+		ChannelID: p.ChannelID, AgentID: p.AgentID, AnsweredBy: p.AnsweredBy,
+		Suspended: p.Suspended, Failed: p.Failed, FeedOnly: p.FeedOnly, At: p.At,
 	}
 }
 

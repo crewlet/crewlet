@@ -40,6 +40,7 @@ func TestEveryPartiallyIndexedFilterSeeksItsIndex(t *testing.T) {
 		{"work_item", ListQuery{WorkItem: "native:t-1"}, "crewlet_events_work_item_idx"},
 		{"channel_id", ListQuery{ChannelID: "ch-1"}, "crewlet_events_channel_idx"},
 		{"agent_id", ListQuery{AgentID: "id-sre"}, "crewlet_events_agent_id_time_idx"},
+		{"answered_by", ListQuery{AnsweredBy: "ana"}, "crewlet_events_answered_by_idx"},
 	} {
 		query, args := c.q.listSQL(DefaultListLimit, now())
 		plan := planOf(t, db, query, args)

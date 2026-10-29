@@ -44,7 +44,7 @@ type RunAsked struct {
 	LaunchID        string             `json:"launch_id"`
 	AgentHandle     string             `json:"agent_handle"`
 	Question        string             `json:"question"`
-	QuestionContext string             `json:"question_context,omitempty"`
+	QuestionContext string             `json:"question_context"`
 	Decision        *decision.Decision `json:"decision,omitempty"`
 	AskedAt         time.Time          `json:"asked_at"`
 	WorkItem        *types.WorkItem    `json:"work_item,omitempty"`
@@ -56,11 +56,14 @@ type RunAsked struct {
 // answered it. Newest first, at most [worklet.MaxAnswered], with whether the
 // window held more.
 //
-// SELECTED BY WHO ANSWERED, off the records' `answered_by` tag, and only those
-// read whole: a listing carries no payload, and the question and its answer
-// are in it. By who answered rather than by whom it was put to, because a
-// run's question can be put to a whole team, and one teammate's answer is
-// that teammate's decision, not everybody's.
+// SELECTED BY WHO ANSWERED, in the log's own read ([store.ListQuery.AnsweredBy],
+// a range seek on schema/0053's index) and over the window alone, and only
+// those read whole: a listing carries no payload, and the question and its
+// answer are in it. Read through the tags instead, every answer every person
+// gave in the window was paged through to keep one person's. By who answered
+// rather than by whom it was put to, because a run's question can be put to a
+// whole team, and one teammate's answer is that teammate's decision, not
+// everybody's.
 func (s Sources) answeredRuns(ctx context.Context, handle string, since time.Time,
 ) ([]AnsweredRunAsk, bool, error) {
 	if s.Events == nil || handle == "" {
@@ -73,19 +76,13 @@ func (s Sources) answeredRuns(ctx context.Context, handle string, since time.Tim
 	reach := s.runReach(ctx)
 	for {
 		listing, _, err := s.Events.List(ctx, store.ListQuery{
-			Type:  types.SandboxRunAnswered{}.EventType(),
-			Limit: MaxEventPage, Before: before,
+			Type: types.SandboxRunAnswered{}.EventType(), AnsweredBy: handle,
+			Since: since, Limit: MaxEventPage, Before: before,
 		})
 		if err != nil {
 			return nil, false, err
 		}
 		for _, rec := range listing.Rows {
-			if rec.Time.Before(since) {
-				return out, false, nil
-			}
-			if rec.Tags["answered_by"] != handle {
-				continue
-			}
 			whole, _, err := s.Events.ByID(ctx, rec.ID)
 			if errors.Is(err, store.ErrNotFound) {
 				// SWEPT SINCE THE LISTING: nothing left to show.

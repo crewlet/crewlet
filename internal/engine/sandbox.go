@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -1030,39 +1031,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// NO onboarding on a resume. The pass is a seat's FIRST turn, and this
 	// turn already ran its first phase — running it here would spend the
 	// resumed turn's opening on orientation for a seat that is mid-task.
-	input.Resume = &runner.Resume{
-		State: in.State, Answer: in.Answer,
-		// WHICH BOX DID THE WORK. Off the run's own row, because this
-		// process may not be the one that launched it — and it is the only
-		// thing that can say a phase ran in a sandbox rather than in this
-		// process's own tool loop.
-		Run: runner.RunRecord{
-			CodingAgent: in.Run.CodingAgent,
-			SandboxID:   in.Run.SandboxID,
-			// AND WHICH ENTRY RAN IT, as the launch recorded the member it
-			// picked: the executor's record and its spend are charged to
-			// that entry and model, which a fallback makes other than the
-			// chain's head — and which the chain resolved now could name
-			// differently again.
-			ProviderKey:   in.Run.Launch.ProviderKey,
-			Model:         in.Run.Launch.Model,
-			LaunchID:      in.Run.LaunchID,
-			DeliveredRefs: in.DeliveredRefs,
-			RefsElided:    in.RefsElided,
-		},
-		// THE RUN'S OWN TOOL CALLS, off its durable row. The executor called
-		// them over the bridge, possibly in another process, so this list is
-		// the only record of what the phase did — its submission included.
-		Bridged: bridgedCalls(in.Run.BridgeCalls),
-		// AND A PERSON'S ANSWER, which carries the run on rather than
-		// reporting it — see [runner.Asked] — or the loss of its job with its
-		// host, which carries its round on ([runner.Lost]).
-		Asked: runnerAsked(in.Asked),
-		Lost:  runnerLost(in.Lost),
-		// AND EVERY NOTE THE TURN HAS READ, off the record every read is
-		// written on — the briefs', the run's own and earlier reviews'.
-		Steered: e.runSteers.carried(in.Run),
-	}
+	input.Resume = runnerResume(in, e.runSteers.carried(in.Run))
 	r, err := company.RunnerFor(in.Turn.Handle(), e.seatRegistry(company, in.Turn.Handle()), input)
 	if err != nil {
 		return err
@@ -1367,6 +1336,50 @@ func (e *Engine) heldByBudget(ctx context.Context, company *Company, handle stri
 		return nil
 	}
 	return &sandbox.HeldError{Refusal: refusal, Err: err}
+}
+
+// runnerResume is the collection a resumed segment's runner takes, read off the
+// run's row and the resume's own input: what the run did, where, under which
+// entry, and what carries it on. steered is every note the turn has read
+// ([runSteers.carried]).
+func runnerResume(in resumeInput, steered []steer.Read) *runner.Resume {
+	return &runner.Resume{
+		State: in.State, Answer: in.Answer,
+		// WHICH BOX DID THE WORK. Off the run's own row, because this
+		// process may not be the one that launched it, and it is the only
+		// thing that can say a phase ran in a sandbox rather than in this
+		// process's own tool loop.
+		Run: runner.RunRecord{
+			CodingAgent: in.Run.CodingAgent,
+			SandboxID:   in.Run.SandboxID,
+			// AND WHICH ENTRY RAN IT, as the launch recorded the member it
+			// picked: the executor's record and its spend are charged to
+			// that entry and model, which a fallback makes other than the
+			// chain's head, and which the chain resolved now could name
+			// differently again.
+			ProviderKey:   in.Run.Launch.ProviderKey,
+			Model:         in.Run.Launch.Model,
+			LaunchID:      in.Run.LaunchID,
+			DeliveredRefs: in.DeliveredRefs,
+			RefsElided:    in.RefsElided,
+		},
+		// THE RUN'S OWN TOOL CALLS, off its durable row. The executor called
+		// them over the bridge, possibly in another process, so this list is
+		// the only record of what the phase did, its submission included.
+		Bridged: bridgedCalls(in.Run.BridgeCalls),
+		// AND WHERE A PERSON'S ANSWER CUT THE ROUND, as the row recorded it
+		// when the job carried on by that answer opened: no submission
+		// made before it is the round's.
+		Answered: in.Run.AnsweredThrough,
+		// AND A PERSON'S ANSWER, which carries the run on rather than
+		// reporting it (see [runner.Asked]), or the loss of its job with its
+		// host, which carries its round on ([runner.Lost]).
+		Asked: runnerAsked(in.Asked),
+		Lost:  runnerLost(in.Lost),
+		// AND EVERY NOTE THE TURN HAS READ, off the record every read is
+		// written on: the briefs', the run's own and earlier reviews'.
+		Steered: steered,
+	}
 }
 
 // runnerAsked is the coordinator's account of an answered question in the

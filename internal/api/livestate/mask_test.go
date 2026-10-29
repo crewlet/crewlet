@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
@@ -607,4 +608,34 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+// A LIVE RUN'S ASK HAS THE BOARD'S SHAPE: its context always on the wire,
+// empty where it gave none, and its choice only where it offers one; and both
+// are withheld, with the question, from a reader the question is not put to
+// (ADR-0068).
+//
+// Mutation: drop either from the mask, or put omitempty back on the context,
+// and this fails.
+func TestALiveRunsAskIsItsBodyAndHasOneShape(t *testing.T) {
+	t.Parallel()
+	entry := SandboxEntry{TurnID: "t1", Question: "Which branch?",
+		QuestionContext: "Both build.", AudienceHandles: []string{"ana"},
+		Decision: &decision.Decision{Question: "Which branch?", Role: decision.RoleApprover,
+			Options: []decision.Option{{ID: "a", Label: "A"}, {ID: "b", Label: "B"}}}}
+	asked := entry.For(Reach{Record: "ana"})
+	if asked.QuestionContext == "" || asked.Decision == nil {
+		t.Errorf("the person it is put to was shown %+v, want the context and the choice", asked)
+	}
+	stranger := entry.For(Reach{Record: "bo"})
+	if stranger.Question != "" || stranger.QuestionContext != "" || stranger.Decision != nil {
+		t.Errorf("a reader the question is not put to was shown %+v", stranger)
+	}
+	raw, err := json.Marshal(SandboxEntry{TurnID: "t2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"question_context":""`) || strings.Contains(string(raw), `"decision"`) {
+		t.Errorf("an entry with no context and no choice reads %s, want the context empty and no decision", raw)
+	}
 }

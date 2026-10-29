@@ -256,15 +256,28 @@ func Refuse(format string, args ...any) error { return invalid(format, args...) 
 // Validate is the whole structural contract of a decision: every fault at
 // once, joined into one refusal (ADR-0059), because a decision is written
 // again once it is refused and a refusal naming one fault of several spends
-// that attempt on the next.
-func (d Decision) Validate() error {
+// that attempt on the next. Each fault names its field under `decision.`, as
+// a work item's ask carries it ([Decision.ValidateAt]).
+func (d Decision) Validate() error { return d.ValidateAt(FieldPrefix) }
+
+// FieldPrefix is where a work item's ask carries its decision: the argument
+// `decision`, whose fields a refusal names as `decision.options[0].id`.
+const FieldPrefix = "decision."
+
+// ValidateAt is [Decision.Validate] naming each field under prefix, the path
+// its caller's arguments carry the decision at: `decision.` on a work item's
+// ask, and nothing on a coding run's, whose arguments carry the decision's
+// fields at their top (`options[0].label`, `recommended`). A refusal names a
+// field the way the caller wrote it, or the caller is told to fix an argument
+// it never sent.
+func (d Decision) ValidateAt(prefix string) error {
 	var found []error
 	note := func(err error) {
 		if err != nil {
 			found = append(found, err)
 		}
 	}
-	note(CheckText("decision.question", d.Question, MaxQuestion, true))
+	note(CheckText(prefix+"question", d.Question, MaxQuestion, true))
 	switch n := len(d.Options); {
 	case n < MinOptions:
 		note(invalid("a decision has %d option(s) and needs at "+
@@ -277,7 +290,7 @@ func (d Decision) Validate() error {
 	}
 	seen := make(map[string]bool, len(d.Options))
 	for i, option := range d.Options {
-		field := fmt.Sprintf("decision.options[%d]", i)
+		field := fmt.Sprintf("%soptions[%d]", prefix, i)
 		switch {
 		case !optionIDPattern.MatchString(option.ID):
 			note(invalid("%s.id is %q and must be 1 to 32 of "+
@@ -292,30 +305,30 @@ func (d Decision) Validate() error {
 		note(CheckText(field+".detail", option.Detail, MaxOptionDetail, false))
 	}
 	if d.Recommended != "" && !seen[d.Recommended] {
-		note(invalid("decision.recommended is %q, which is not one "+
-			"of its options (%s)", d.Recommended,
+		note(invalid("%srecommended is %q, which is not one "+
+			"of its options (%s)", prefix, d.Recommended,
 			strings.Join(d.OptionIDs(), ", ")))
 	}
-	note(CheckText("decision.rationale", d.Rationale, MaxRationale, false))
+	note(CheckText(prefix+"rationale", d.Rationale, MaxRationale, false))
 	if len(d.Evidence) > MaxEvidence {
 		note(invalid("a decision cites %d pieces of evidence and the "+
 			"maximum is %d: put the rest on a page and cite the page",
 			len(d.Evidence), MaxEvidence))
 	}
 	for i, evidence := range d.Evidence {
-		note(evidence.validate(fmt.Sprintf("decision.evidence[%d]", i)))
+		note(evidence.validate(fmt.Sprintf("%sevidence[%d]", prefix, i)))
 	}
 	if !d.Role.Valid() {
-		note(invalid("decision.role is %q and must be %q (the "+
+		note(invalid("%srole is %q and must be %q (the "+
 			"answer is the decision) or %q (the answer is an input to it)",
-			d.Role, RoleApprover, RoleContributor))
+			prefix, d.Role, RoleApprover, RoleContributor))
 	}
 	if d.Inform != nil {
 		if !d.Inform.Surface.Valid() {
-			note(invalid("decision.inform.surface is %q and must be "+
-				"%q or %q", d.Inform.Surface, InformMattermost, InformSlack))
+			note(invalid("%sinform.surface is %q and must be "+
+				"%q or %q", prefix, d.Inform.Surface, InformMattermost, InformSlack))
 		}
-		note(CheckText("decision.inform.channel", d.Inform.Channel,
+		note(CheckText(prefix+"inform.channel", d.Inform.Channel,
 			MaxInformChannel, true))
 	}
 	return Join(found)

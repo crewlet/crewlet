@@ -708,11 +708,17 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 	return answer, nil
 }
 
-// answeredDecisions answers what one person decided lately: the asks put to
-// them and closed within [worklet.AnsweredWindow], by them or by somebody
-// else, newest closing first, at most [worklet.MaxAnswered]. Each is the ask
-// as `decisions` listed it while it was open, who answered it and when, the
-// option chosen or the words, and the asker's first record on the task since.
+// answeredDecisions answers what one person decided lately, within
+// [worklet.AnsweredWindow], newest closing first, at most [worklet.MaxAnswered]:
+//
+//   - A work item's asks put to them and closed, by them or by somebody else.
+//     Each is the ask as `decisions` listed it while it was open, who answered
+//     it and when, the option chosen or the words, and the asker's first
+//     record on the task since.
+//   - A coding run's questions THEY answered, and only those ([Sources.answeredRuns]):
+//     a run's question can be put to a whole team, and one teammate's answer
+//     is that teammate's decision, so a question somebody else answered is in
+//     the other person's list and not in this one.
 //
 // THE SAME SCOPE AS `decisions` ([Sources.recordHandle] with
 // [authz.ActionPersonRead]): no `handle` is the caller's own record, and

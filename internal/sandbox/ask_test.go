@@ -53,13 +53,33 @@ func TestAnAskIsRefusedWithEveryFaultAtOnce(t *testing.T) {
 		"context is 16385 bytes",
 		"to is empty",
 		`branch is "wip t1"`,
-		"decision.question differs",
-		"decision.inform is set",
+		"question differs from its decision's",
+		"inform is set",
 		"needs at least 2",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not say %q: %v", want, err)
 		}
+	}
+	// NAMED AS THE RUN'S ARGUMENTS CARRY THEM, at their top: never under a
+	// `decision.` the run never sent.
+	if strings.Contains(err.Error(), "decision.") {
+		t.Errorf("the refusal names a field under decision.: %v", err)
+	}
+}
+
+// EACH FAULT IS NAMED ONCE. A run's decision is asked in the ask's own
+// question, and an over-long question is one fault, said once, rather than
+// once for the ask and again for its decision.
+//
+// Mutation: check the ask's question beside its decision's, and it is said
+// twice.
+func TestAnAsksQuestionIsRefusedOnce(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("q", decision.MaxQuestion+1)
+	err := Ask{Question: long, To: AskToTeam, Decision: choosing(long)}.Validate()
+	if got := strings.Count(err.Error(), "question is 301 bytes"); got != 1 {
+		t.Errorf("the over-long question is named %d times: %v", got, err)
 	}
 }
 

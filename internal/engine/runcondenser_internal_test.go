@@ -17,8 +17,8 @@ import (
 
 // A COLLECTED RUN'S CONDENSATION IS THE TURN'S, AND IT FITS THE RECORD.
 //
-// The coordinator condenses a run's report, failure or question past what the
-// run's record carries, and trusts two things of the engine's condenser: that
+// The coordinator condenses a run's report or failure past what the run's
+// record carries, and trusts two things of the engine's condenser: that
 // the call is filed as part of the turn the run belongs to — the turn stage,
 // the run's turn id and its unit of work, with the purpose naming what was
 // rewritten — and that the text it hands back, its label included, is within

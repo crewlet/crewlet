@@ -35,6 +35,11 @@ func (d *askDesk) RecordAsk(_ context.Context, turnID, launch string, ask sandbo
 	return d.outcome, nil
 }
 
+// Get reads no row: the desk records asks and holds none of the run.
+func (d *askDesk) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
+	return sandbox.PendingRun{}, false, d.err
+}
+
 // askCall calls `ask_and_wait` as the job "launch-1" of the run "run-1" makes
 // it over its bridge.
 func askCall(t *testing.T, desk *askDesk, args map[string]any) tools.Result {
@@ -177,17 +182,24 @@ func TestEveryFaultOfARunsAskIsNamedAtOnce(t *testing.T) {
 func TestARunIsToldWhatBecameOfItsAsk(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name string
-		desk *askDesk
-		want string
+		name  string
+		desk  *askDesk
+		want  string
+		class tools.Refusal
 	}{
-		{"already asked", &askDesk{outcome: sandbox.AskAlreadyAsked}, "already asked"},
-		{"not running", &askDesk{outcome: sandbox.AskNotRunning}, "no longer running"},
-		{"a failed store", &askDesk{err: errors.New("coord: unreachable")}, "Nothing was asked"},
+		// NOT A CONFLICT: a conflict tells the run to try again, and a
+		// second question is refused for as long as the first stands.
+		{"already asked", &askDesk{outcome: sandbox.AskAlreadyAsked}, "already asked",
+			tools.RefusalNotRunning},
+		{"not running", &askDesk{outcome: sandbox.AskNotRunning}, "no longer running",
+			tools.RefusalNotRunning},
+		{"a failed store", &askDesk{err: errors.New("coord: unreachable")}, "Nothing was asked",
+			tools.RefusalInternalError},
 	} {
 		got := askCall(t, tc.desk, askArgs())
-		if !got.Failed || !strings.Contains(got.Output, tc.want) {
-			t.Errorf("%s: ask_and_wait = %+v, want refused saying %q", tc.name, got, tc.want)
+		if !got.Failed || !strings.Contains(got.Output, tc.want) || tools.RefusalOf(got) != tc.class {
+			t.Errorf("%s: ask_and_wait = %+v (%s), want a %s refusal saying %q", tc.name, got,
+				tools.RefusalOf(got), tc.class, tc.want)
 		}
 	}
 	tool := builtin.NewAskAndWait(builtin.RunAskDeps{Desk: &askDesk{outcome: sandbox.AskRecorded}})
@@ -249,5 +261,108 @@ func TestAnAskThatDidNotLandIsSaidToTheRun(t *testing.T) {
 		map[string]any{"question": "Which branch?", "to": "requester"})
 	if err != nil || !got.Failed || !strings.Contains(got.Output, "Nothing was asked: call it again") {
 		t.Fatalf("an unreachable record answered %+v, %v; want the run told to ask again", got, err)
+	}
+}
+
+// A RUN'S ASK IS REFUSED IN ITS OWN ARGUMENTS' NAMES, EVERY FAULT IN ONE PASS.
+// The choice's fields sit at the top of the run's arguments, so a fault is
+// named `options[0].label` or `recommended`, never under a `decision.` the run
+// never sent; and evidence that names nothing is checked in the same pass as
+// the shape, so a run that fixes what it was told is not refused again for
+// what it was not (ADR-0059, ADR-0068).
+//
+// Mutation: check the evidence only once the shape passes, or name the
+// fields under `decision.`, and this fails.
+func TestARunsAskIsRefusedInItsOwnNamesInOnePass(t *testing.T) {
+	t.Parallel()
+	args := askArgs()
+	args["options"].([]any)[0].(map[string]any)["label"] = ""
+	args["recommended"] = "neither"
+	args["evidence"] = []any{map[string]any{"kind": "task", "ref": "ENG-404"}}
+	desk := &askDesk{outcome: sandbox.AskRecorded}
+	got := askCall(t, desk, args)
+	if !got.Failed || len(desk.recorded) != 0 {
+		t.Fatalf("a malformed ask was recorded: %+v", got)
+	}
+	for _, want := range []string{"options[0].label is empty", `recommended is "neither"`,
+		`evidence[0].ref names the work item "ENG-404"`} {
+		if !strings.Contains(got.Output, want) {
+			t.Errorf("the refusal does not say %q:\n%s", want, got.Output)
+		}
+	}
+	if strings.Contains(got.Output, "decision.") {
+		t.Errorf("the refusal names a field the run never sent:\n%s", got.Output)
+	}
+}
+
+// gatedTool is a submission that records whether it was called.
+type gatedTool struct{ called int }
+
+func (g *gatedTool) Name() string               { return "submit_work" }
+func (g *gatedTool) Description() string        { return "Submit your work." }
+func (g *gatedTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
+func (g *gatedTool) Call(context.Context, map[string]any) (tools.Result, error) {
+	g.called++
+	return tools.Result{Output: "submitted"}, nil
+}
+
+// A JOB THAT ASKED IS PARKED, AND ITS RUN IS TOLD SO IF IT SUBMITS. Once the
+// job's question is on its row, a `submit_work` it makes is refused with the
+// instruction to end its turn and never reaches the submission: accepted, the
+// CLI read it as delivered and ended believing so while the turn waited on a
+// person (ADR-0068). A job that has not asked, and a call no job makes, submit
+// as before; a row that cannot be read refuses the call as the node's fault,
+// so the run calls again.
+//
+// Mutation: drop the gate's row read, and the asking job's submission lands.
+func TestAJobThatAskedCannotSubmit(t *testing.T) {
+	t.Parallel()
+	store := sandbox.NewCoordStore(memory.NewFleet())
+	run, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{TurnID: "run-1",
+		AgentHandle: "swe", Status: sandbox.StatusLaunching}, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	ask := builtin.NewAskAndWait(builtin.RunAskDeps{Desk: store})
+	inner := &gatedTool{}
+	submit := ask.Gate(inner)
+	if submit.Name() != "submit_work" {
+		t.Fatalf("the gated submission is named %q", submit.Name())
+	}
+	turn := &turnctx.Turn{RunID: "run-1"}
+	job := turnctx.WithJob(t.Context(), run.LaunchID)
+	call := func(ctx context.Context, turn *turnctx.Turn) tools.Result {
+		t.Helper()
+		got, err := submit.(tools.SeatCallable).CallForTurn(ctx, turn, map[string]any{})
+		if err != nil {
+			t.Fatalf("submit_work: %v", err)
+		}
+		return got
+	}
+
+	if got := call(job, turn); got.Failed || inner.called != 1 {
+		t.Fatalf("a job that has not asked submitted %+v (called %d); want it through", got, inner.called)
+	}
+	if got, err := ask.CallForTurn(job, turn, map[string]any{
+		"question": "Which branch should I target?", "to": "requester"}); err != nil || got.Failed {
+		t.Fatalf("ask_and_wait: %+v, %v", got, err)
+	}
+	parked := call(job, turn)
+	if !parked.Failed || tools.RefusalOf(parked) != tools.RefusalNotRunning ||
+		!strings.Contains(parked.Output, "END YOUR TURN") || inner.called != 1 {
+		t.Fatalf("the asking job's submission answered %+v (called %d); want a not-running "+
+			"refusal telling it to end its turn", parked, inner.called)
+	}
+	if got := call(turnctx.WithJob(t.Context(), "an-earlier-job"), turn); got.Failed || inner.called != 2 {
+		t.Fatalf("a job the row no longer holds was refused for the next job's question: %+v", got)
+	}
+	if got := call(t.Context(), nil); got.Failed || inner.called != 3 {
+		t.Fatalf("a call no run made was refused: %+v", got)
+	}
+
+	down := builtin.NewAskAndWait(builtin.RunAskDeps{Desk: &askDesk{err: errors.New("coord: unreachable")}})
+	got, err := down.Gate(inner).(tools.SeatCallable).CallForTurn(job, turn, map[string]any{})
+	if err != nil || !got.Failed || !strings.Contains(got.Output, "Nothing was submitted") || inner.called != 3 {
+		t.Fatalf("an unreadable row answered %+v, %v; want the run told to submit again", got, err)
 	}
 }

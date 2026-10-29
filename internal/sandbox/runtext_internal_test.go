@@ -156,7 +156,7 @@ func TestAnUncondensedAccountDropsWholeLinesAndSaysSo(t *testing.T) {
 func TestTheCoordinatorsPrefixFitsTheRoomARunnerLeavesIt(t *testing.T) {
 	t.Parallel()
 	deadline := time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC)
-	prefix := len(endedAtDeadline(Result{Error: "x"}, deadline).Error) - len("x")
+	prefix := len(endedAtDeadline(Result{Error: "x"}, deadline, "").Error) - len("x")
 	if prefix > failureReserve/2 {
 		t.Errorf("the deadline's sentence takes %d of the %d-byte reserve; want at most half", prefix, failureReserve)
 	}
@@ -185,7 +185,7 @@ func TestTheCoordinatorsPrefixFitsTheRoomARunnerLeavesIt(t *testing.T) {
 	c := &Coordinator{condense: condenser}
 	failure := lines("stderr", MaxFailureBytes/48)
 	failure += strings.Repeat("e", MaxFailureBytes-len(failure))
-	ended := endedAtDeadline(Result{Error: failure}, deadline)
+	ended := endedAtDeadline(Result{Error: failure}, deadline, "")
 	got := c.fitText(t.Context(), PendingRun{}, ended)
 	if got.Success || got.Error != "(condensed)" {
 		t.Fatalf("the ended run reads success %v, failure %.80q; want it failed and its failure condensed",

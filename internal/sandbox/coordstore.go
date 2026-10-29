@@ -213,6 +213,9 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 			CodingAgent: existing.CodingAgent, Status: existing.Status,
 			LaunchNode: existing.LaunchNode,
 		}
+		// And whether the job it replaces asked, which the reset clears
+		// below and the round's cut is decided by.
+		continuesAnswer := run.Continues && existing.asked()
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
 		existing.Launch = run.Launch
@@ -280,8 +283,17 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// EXCEPT FOR A JOB THAT CONTINUES ONE THAT ASKED: that is the same
 		// round carried on, and the calls made before the question are its
 		// calls ([PendingRun.Continues]).
-		if !run.Continues {
+		//
+		// AND WHERE THE ANSWER CUT THE ROUND: a job that continues one which
+		// asked starts after every call the row holds now
+		// ([PendingRun.AnsweredThrough]). A job that continues a lost one
+		// keeps the cut it had, and a new round has none.
+		switch {
+		case !run.Continues:
 			existing.BridgeCalls, existing.BridgeCallsElided = nil, 0
+			existing.AnsweredThrough = 0
+		case continuesAnswer:
+			existing.AnsweredThrough = existing.LastBridgeSeq()
 		}
 		// AND THE PREVIOUS JOB'S CHARGE IS NOT THIS JOB'S. Carried over,
 		// it would tell this job's completion that its spend is already
@@ -978,49 +990,83 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 		return "", fmt.Errorf("sandbox: recording the question run %s asked: %w", turnID, err)
 	}
 	ask = ask.Redacted()
-	outcome := AskNotRunning
-	_, _, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
+	// WHY NOT, as the decision that last ran saw it. Never "recorded": only
+	// the store's own answer says a write landed, and a decision that agreed
+	// to write can lose its race to a writer that removed the row, after which
+	// no decision runs at all.
+	refusal := AskNotRunning
+	_, won, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
 		switch {
 		case run.LaunchID != launch ||
 			(run.Status != StatusLaunching && run.Status != StatusRunning):
-			outcome = AskNotRunning
+			refusal = AskNotRunning
 			return false
 		case run.asked():
-			outcome = AskAlreadyAsked
+			refusal = AskAlreadyAsked
 			return false
 		}
 		run.Question, run.QuestionContext = ask.Question, ask.Context
 		run.Decision, run.Audience, run.Branch = ask.Decision, ask.To, ask.Branch
-		outcome = AskRecorded
+		refusal = AskNotRunning
 		return true
 	})
-	if errors.Is(err, ErrRunEnding) {
+	switch {
+	case errors.Is(err, ErrRunEnding):
 		return AskNotRunning, nil
-	}
-	if err != nil {
+	case err != nil:
 		return "", err
+	case won:
+		return AskRecorded, nil
 	}
-	return outcome, nil
+	return refusal, nil
 }
 
 // appendBounded adds one call and drops from the MIDDLE past the cap.
 //
-// The start and the end are what explain a run — how it set about the work and
-// how it finished — so a log truncated to its last N loses the half a reader
+// The start and the end are what explain a run (how it set about the work and
+// how it finished), so a log truncated to its last N loses the half a reader
 // most often needs. The count of what was dropped rides along, because a log
 // that silently skips is a log that lies about what the run did.
+//
+// AND THE MIDDLE GIVES UP ITS ORDINARY CALLS FIRST. A call that ends the run
+// ([EndsRun]: a submission, an ask) is what the round's record and its
+// reviewer read the run's outcome by, and dropped from the middle, a long
+// run's record lost the question it parked on or the submission it was
+// corrected by. So the call dropped is the oldest ordinary one after the
+// head, never the one just made; and only a log with no ordinary call left
+// there gives up the oldest of the others, so the log stays at its cap
+// whatever the run calls.
 func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCall, int) {
 	calls = append(calls, next)
 	if len(calls) <= MaxBridgeCalls {
 		return calls, elided
 	}
 	head := MaxBridgeCalls / 2
-	tail := MaxBridgeCalls - head
-	dropped := len(calls) - MaxBridgeCalls
+	drop := len(calls) - MaxBridgeCalls
+	// The candidates: everything after the head but the call just made.
+	candidates := calls[head : len(calls)-1]
+	ordinary := 0
+	for _, call := range candidates {
+		if !EndsRun(call.Name) {
+			ordinary++
+		}
+	}
+	dropOrdinary := min(drop, ordinary)
+	dropAny := drop - dropOrdinary
 	kept := make([]BridgeCall, 0, MaxBridgeCalls)
 	kept = append(kept, calls[:head]...)
-	kept = append(kept, calls[len(calls)-tail:]...)
-	return kept, elided + dropped
+	for _, call := range candidates {
+		switch {
+		case !EndsRun(call.Name) && dropOrdinary > 0:
+			dropOrdinary--
+		case EndsRun(call.Name) && dropAny > 0:
+			dropAny--
+		default:
+			kept = append(kept, call)
+		}
+	}
+	kept = append(kept, next)
+	return kept, elided + drop
 }
 
 // MarkSuspended writes the parked turn's state and opens the run to the

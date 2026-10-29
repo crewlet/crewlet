@@ -646,3 +646,37 @@ func TestAParkedQuestionReachesItsAudience(t *testing.T) {
 		}
 	}
 }
+
+// A RUN'S ASK HAS ONE SHAPE ON EVERY READER. The question and its context are
+// always on the row, the context empty where the run gave none, and the choice
+// it offers is there only where it offers one, never as a null: a client read
+// the context's absence as a question of another kind and split a new open
+// question on its first sentence (ADR-0068).
+//
+// Mutation: send `decision: null` on an open question, or leave the context
+// out where it is empty, and this fails.
+func TestARunsAskHasOneShapeOnTheBoard(t *testing.T) {
+	t.Parallel()
+	open := parkedRun()
+	open.QuestionContext, open.Decision = "", nil
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Sandbox: fixedRuns{open}, Chart: flatChart{}})
+	got, err := r.Answer(asGrants(t, "", iam.GrantAdmin), "sandbox_runs", nil)
+	if err != nil {
+		t.Fatalf("sandbox_runs: %v", err)
+	}
+	raw, err := json.Marshal(got.(map[string]any)["runs"].([]any)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &row); err != nil {
+		t.Fatal(err)
+	}
+	if string(row["question_context"]) != `""` {
+		t.Errorf("question_context is %s on an open question, want an empty string", row["question_context"])
+	}
+	if d, present := row["decision"]; present {
+		t.Errorf("decision is %s on an open question, want it absent", d)
+	}
+}

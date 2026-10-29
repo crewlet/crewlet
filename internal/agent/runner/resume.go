@@ -78,7 +78,8 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	if asked := r.cfg.Resume.Asked; asked != nil {
 		return r.continueAgentRun(ctx, history, state, asked, logged)
 	}
-	if lost := r.cfg.Resume.Lost; lost != nil && !submitted(logged) {
+	if lost := r.cfg.Resume.Lost; lost != nil &&
+		!submitted(bridgedLedger(sinceAnswer(bridged, r.cfg.Resume.Answered))) {
 		return r.continueAgentRun(ctx, history, state, lost, logged)
 	}
 	return r.resumeAgentRun(ctx, history, state, r.cfg.Resume.Answer, bridged)
@@ -86,7 +87,8 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 
 // submitted reports whether a round's calls hold a submission its run made:
 // a `submit_work` the bridge did not refuse, which the round's collection
-// replays as its outcome ([replaySubmission]).
+// replays as its outcome ([replaySubmission]). Handed only the calls made since
+// the answer that carried the round on ([sinceAnswer]), as the replay is.
 func submitted(calls []ledger.Call) bool {
 	return slices.ContainsFunc(calls, func(call ledger.Call) bool {
 		return call.Name == SubmitWorkTool && !call.Failed

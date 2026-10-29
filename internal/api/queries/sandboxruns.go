@@ -439,7 +439,7 @@ func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 	// acts on ([sandbox.PendingRun.HeldSince]), so the screen and the
 	// reclaim cannot disagree about which boxes are held.
 	heldSince, _ := run.HeldSince()
-	return map[string]any{
+	return withDecision(run, map[string]any{
 		"turn_id": run.TurnID,
 		// The unit of work behind that run, so a board row links back to
 		// the trigger rather than only to the one execution that detached.
@@ -472,14 +472,12 @@ func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 		// provider default.
 		"placement":        run.Placement,
 		"task_description": run.TaskDescription,
-		// THE QUESTION AS IT WAS ASKED (ADR-0068): one sentence, its
-		// Markdown context, and the choice it offers, which a person
-		// answers with one press. The context is empty and the decision
-		// null on an open question with nothing to add, never absent: a
-		// reader shown the question is shown all of it.
+		// THE QUESTION AS IT WAS ASKED (ADR-0068): one sentence and its
+		// Markdown context, always sent, the context empty where it gave
+		// none, as every reader of a run's ask sends them. The choice it
+		// offers is added below where it has one ([withDecision]).
 		"question":         run.Question,
 		"question_context": run.QuestionContext,
-		"decision":         run.Decision,
 		"audience":         run.Audience,
 		// WHO THE QUESTION IS PUT TO, resolved against the chart when the
 		// run parked, and whether that is a fallback — the seat's lead
@@ -543,7 +541,17 @@ func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 		// draws "not shown to you" over a run's task rather than a run that
 		// was asked nothing. Set by [serialiseRun].
 		"body_withheld": false,
+	})
+}
+
+// withDecision adds the choice a run's question offers to its row, and leaves
+// the key ABSENT on an open question, as every reader of a run's ask does:
+// absent is "no choice", never a null a client has to tell from one.
+func withDecision(run sandbox.PendingRun, row map[string]any) map[string]any {
+	if run.Decision != nil {
+		row["decision"] = run.Decision
 	}
+	return row
 }
 
 // answerIDs and answeredAt are the recorded answer's deliveries and instant,
