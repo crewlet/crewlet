@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -111,12 +112,14 @@ func TestAReadsOwnWaitsEndWhileItsAskerListens(t *testing.T) {
 // database is one no read may touch.
 func laggingLinearizableRead(t *testing.T) func(context.Context) error {
 	t.Helper()
-	return laggingReadOn(t, committedAppender{})
+	return laggingReadOn(t, committedAppender{}, nil)
 }
 
-// laggingReadOn is [laggingLinearizableRead] appending its barriers to log, so
-// a case can count them across the nodes of a fleet.
-func laggingReadOn(t *testing.T, log statelog.Appender) func(context.Context) error {
+// laggingReadOn is [laggingLinearizableRead] appending its barriers to log,
+// and counting into waits — where it is not nil — every wait it begins with
+// time left to spend ([laggingWaiter]), so a case can count both across the
+// nodes of a fleet.
+func laggingReadOn(t *testing.T, log statelog.Appender, waits *atomic.Int64) func(context.Context) error {
 	t.Helper()
 	domain := tracker.Domain{}
 	spec := domain.Stream()
@@ -143,7 +146,7 @@ func laggingReadOn(t *testing.T, log statelog.Appender) func(context.Context) er
 	at := statelog.Position{Stream: spec.Name, Generation: 1, Seq: 1}
 	reader, err := statelog.NewReader(statelog.ReaderDeps{
 		Domain: domain, Spec: spec, Mode: statelog.ModeNormal,
-		DB: untouchedDB{t}, Index: index, Waiter: laggingWaiter{at: at},
+		DB: untouchedDB{t}, Index: index, Waiter: laggingWaiter{at: at, waits: waits},
 		Health: func() (statelog.Health, error) {
 			lag, first, floor := uint64(0), uint64(1), uint64(0)
 			return statelog.Health{Position: at, AppliedThrough: at.Seq, Drained: true,
@@ -173,19 +176,33 @@ func (committedAppender) LastSeq(context.Context, string) (uint64, bool, error) 
 	return 0, false, nil
 }
 
-// laggingWaiter is an applier that never reaches what a read waits for.
-type laggingWaiter struct{ at statelog.Position }
+// laggingWaiter is an applier that never reaches what a read waits for. waits,
+// where it is not nil, counts every wait begun with time left to spend — each
+// runs to its end, since nothing is ever reached — and none begun with none: a
+// read that a node asked before it already waited out waits no time.
+type laggingWaiter struct {
+	at    statelog.Position
+	waits *atomic.Int64
+}
 
 func (w laggingWaiter) Reached() statelog.Position { return w.at }
 
 func (w laggingWaiter) WaitReached(ctx context.Context, _ statelog.Position) error {
+	w.count(ctx)
 	<-ctx.Done()
 	return ctx.Err()
 }
 
 func (w laggingWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet, _ statelog.Position) error {
+	w.count(ctx)
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+func (w laggingWaiter) count(ctx context.Context) {
+	if w.waits != nil && ctx.Err() == nil {
+		w.waits.Add(1)
+	}
 }
 
 // untouchedDB is a database no read may open a transaction on.

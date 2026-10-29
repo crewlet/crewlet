@@ -41,6 +41,18 @@ func (countedAppender) LastSeq(context.Context, string) (uint64, bool, error) {
 // them only as its last resort — and whether the asking node holds a copy of
 // its own, asked first and in-process, or asked in-process LAST, its copy
 // lagging and its peers' refusing: the walk pays the same.
+//
+// COUNTED, NOT TIMED: the barriers the nodes append, and the waits they begin
+// with time left to spend, every one of which runs to its end here. Held to a
+// read budget and a half of wall-clock time, the walk held its other
+// questions — each a signed request and reply over the memory broker, five of
+// them where the copies lag their logs and each is asked twice — to half a
+// budget together beside its one wait, and in a loaded run (race-detector
+// suites of three packages on four cores, beside a second runner's) that walk
+// took 3.95 s with one barrier in it, against those 3 s.
+//
+// Mutation: hand the nodes asked after the first a whole read budget of their
+// own for the position it waited out, and every node's wait is counted.
 func TestAReadEveryDataNodeRefusesBehindPaysForOneBarrierAndOneWait(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -55,11 +67,11 @@ func TestAReadEveryDataNodeRefusesBehindPaysForOneBarrierAndOneWait(t *testing.T
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			var appends atomic.Int64
+			var appends, waits atomic.Int64
 			f := newFleet(t, "data-a", "data-b", "data-c")
 			for name, n := range f.nodes {
 				n.set(func(n *fakeNode) {
-					n.levelRead = laggingReadOn(t, countedAppender{n: &appends})
+					n.levelRead = laggingReadOn(t, countedAppender{n: &appends}, &waits)
 					n.notReady = tc.lagging || (tc.localLagging && name == "data-a")
 				})
 			}
@@ -68,9 +80,7 @@ func TestAReadEveryDataNodeRefusesBehindPaysForOneBarrierAndOneWait(t *testing.T
 				r = f.router(t, "data-a", f.nodes["data-a"])
 			}
 
-			begun := time.Now()
 			_, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
-			took := time.Since(begun)
 			var refusal *statelog.Refused
 			if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseBehind {
 				t.Fatalf("a read every node refuses = %v, want the refusal %q", err, statelog.RefuseBehind)
@@ -83,9 +93,8 @@ func TestAReadEveryDataNodeRefusesBehindPaysForOneBarrierAndOneWait(t *testing.T
 			if got := appends.Load(); got != 1 {
 				t.Errorf("the walk appended %d barriers to the log for one read, want one", got)
 			}
-			if limit := statelog.ReadBudget + statelog.ReadBudget/2; took >= limit {
-				t.Errorf("the walk took %v, past one read budget (%v) and the questions beside it",
-					took, statelog.ReadBudget)
+			if got := waits.Load(); got != 1 {
+				t.Errorf("the walk waited out %d read budgets for one read, want one", got)
 			}
 		})
 	}
@@ -96,7 +105,11 @@ func TestAReadEveryDataNodeRefusesBehindPaysForOneBarrierAndOneWait(t *testing.T
 // first one asked waits its whole read budget for it and answers `behind`,
 // and every node asked after it checks the floor rather than waiting for it
 // again. Each waited its whole budget before, so a walk of three nodes behind
-// one floor took six seconds to say nobody had it.
+// one floor took six seconds to say nobody had it. Counted, not timed, as the
+// read's own waits are ([TestAReadEveryDataNodeRefusesBehindPaysForOneBarrierAndOneWait]).
+//
+// Mutation: hand the nodes asked after the first a whole read budget of their
+// own for the floor it waited out, and every node's wait is counted.
 func TestAFloorEveryDataNodeIsBehindIsWaitedForOnce(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t, "data-a", "data-b", "data-c")
@@ -105,23 +118,22 @@ func TestAFloorEveryDataNodeIsBehindIsWaitedForOnce(t *testing.T) {
 	}
 	f.client.Observe(statelog.Position{Stream: trackerStream, Generation: 1, Seq: 5})
 
-	begun := time.Now()
 	_, err := f.client.Work().Tasks(t.Context(), tracker.Query{}, time.Now())
-	took := time.Since(begun)
 	var unserved *ErrUnserved
 	if !errors.As(err, &unserved) {
 		t.Fatalf("a read no node has the floor for = %v, want it unserved", err)
 	}
+	waits := 0
 	for name, n := range f.nodes {
 		n.mu.Lock()
 		floors := len(n.floors)
+		waits += n.waits
 		n.mu.Unlock()
 		if floors == 0 {
 			t.Errorf("%s was never asked for the floor", name)
 		}
 	}
-	if limit := statelog.ReadBudget + statelog.ReadBudget/2; took >= limit {
-		t.Errorf("the walk took %v, past one read budget (%v) and the questions beside it",
-			took, statelog.ReadBudget)
+	if waits != 1 {
+		t.Errorf("the walk waited out %d read budgets for one floor, want one", waits)
 	}
 }

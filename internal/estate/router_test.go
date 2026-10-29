@@ -74,6 +74,11 @@ type fakeNode struct {
 	// notAdmitting is a copy that serves requests and admits no seat.
 	notAdmitting bool
 
+	// waits counts the floor waits this node began with time left to spend —
+	// a wait for a floor it is behind, run to its end — and none of a floor a
+	// node asked before it already waited out, which is waited for no time.
+	waits int
+
 	// behindConfig is a node the control plane has confirmed behind the
 	// company's configuration — shed or stuck ([Backend.Current] false).
 	behindConfig bool
@@ -408,6 +413,9 @@ func (f *fakeNode) backend() Backend {
 			f.floors = append(f.floors, at)
 			behind, abandoned, release := f.behind, f.abandoned, f.release
 			behind = behind || (f.behindOn != "" && at.Stream == f.behindOn)
+			if behind && ctx.Err() == nil {
+				f.waits++
+			}
 			f.mu.Unlock()
 			switch {
 			case abandoned:
