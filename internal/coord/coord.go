@@ -263,6 +263,30 @@ func ProtocolGateCounts(resource string) bool {
 // failure a backend did not wrap for a fact.
 var ErrUnavailable = errors.New("coordination store unavailable")
 
+// ErrClaimInFlight is a claim answered while another claim of the same
+// resource BY THE SAME OWNER is still minting its fencing epoch: neither a
+// grant nor a refusal is true yet, and the sibling is one store round trip
+// from committing, or from giving the record back.
+//
+// AN [ErrUnavailable], which errors.Is reports it as: it is the unknown arm
+// of the tri-state, and every caller that branches on ErrUnavailable (a
+// scheduler failing closed for a tick, a duty passing the unknown through)
+// treats it exactly as before. Named so that a caller which knows the sibling
+// is its own, and that it ends, can tell it apart from a store that cannot
+// answer at all.
+var ErrClaimInFlight error = claimInFlight{}
+
+// claimInFlight is [ErrClaimInFlight]'s type: comparable, so errors.Is finds
+// the sentinel itself, and an ErrUnavailable by its Is.
+type claimInFlight struct{}
+
+func (claimInFlight) Error() string {
+	return ErrUnavailable.Error() + ": a claim by this owner is still minting its epoch"
+}
+
+// Is reports that the in-flight claim is the unknown arm, [ErrUnavailable].
+func (claimInFlight) Is(target error) bool { return target == ErrUnavailable }
+
 // ErrTTLTooLong reports a claim or renew asking for a TTL the store cannot
 // honour.
 //
