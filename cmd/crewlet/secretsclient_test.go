@@ -140,7 +140,7 @@ type secretsRequest struct {
 func newFakeSecretsNode(t *testing.T) *fakeSecretsNode {
 	t.Helper()
 	n := &fakeSecretsNode{t: t}
-	n.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	n.server = httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		n.requests++
 		n.last = secretsRequest{
@@ -157,7 +157,7 @@ func newFakeSecretsNode(t *testing.T) *fakeSecretsNode {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
-	}))
+	})))
 	t.Cleanup(n.server.Close)
 	return n
 }
@@ -334,7 +334,7 @@ func TestA404WithoutTheBodyIsReportedAsAMissingSurface(t *testing.T) {
 // it is not told it is "not a Crewlet node" either: it is one, missing a role.
 func TestTheRoutersOwn404IsAMissingSurfaceNotAMissingSecret(t *testing.T) {
 	t.Parallel()
-	server := httptest.NewServer(httpjson.Mux(http.NewServeMux()))
+	server := httptest.NewServer(asEngine(httpjson.Mux(http.NewServeMux())))
 	t.Cleanup(server.Close)
 	c, err := newSecretsClient(tokenEnviron(cliFixtureToken), bootWithAPI(t, "127.0.0.1", 1, "ops-token"), server.URL, secretsList)
 	if err != nil {
@@ -977,9 +977,9 @@ func secretsNodeReading(t *testing.T, fleet coord.Fleet, cipher secrets.Cipher,
 		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin},
 		ReauthAt: time.Now().Add(time.Hour),
 	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mux.ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), caller)))
-	}))
+	})))
 	t.Cleanup(server.Close)
 	client, err := newSecretsClient(tokenEnviron("ops-token"),
 		bootWithAPI(t, "127.0.0.1", 1, "ops-token"), server.URL, secretsList)
@@ -1070,10 +1070,10 @@ func TestAValueSetWithTheEngineStoppedAtTheLimitIsReadBackThroughANode(t *testin
 func TestAWritePastTheSizeEveryStoreKeepsIsNotSentToTheNode(t *testing.T) {
 	t.Parallel()
 	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
 		httpjson.Fail(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge)
-	}))
+	})))
 	t.Cleanup(server.Close)
 	client, err := newSecretsClient(tokenEnviron("ops-token"),
 		bootWithAPI(t, "127.0.0.1", 1, "ops-token"), server.URL, secretsList)

@@ -32,12 +32,12 @@ func TestAnIamWritePassesTheNodesCrossSiteCheck(t *testing.T) {
 	var reached bool
 	var boot config.Bootstrap
 	boot.API.ExternalURL = "https://crewlet.example.com"
-	node := httptest.NewServer(auth.NewCSRF(&boot).Middleware(
+	node := httptest.NewServer(asEngine(auth.NewCSRF(&boot).Middleware(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			reached = true
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"position":"1:1"}`))
-		})))
+		}))))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -234,7 +234,7 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 		method, path, person, auth string
 		body                       map[string]any
 	}
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen.method, seen.path = r.Method, r.URL.Path
 		seen.person = r.URL.Query().Get("person")
 		seen.auth = r.Header.Get("Authorization")
@@ -244,7 +244,7 @@ func TestIamTokenAsksForWhatTheRouteReads(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"c-1","person":"p-1","token":"cwl_pat_the-value",` +
 			`"grants":["worklet"],` +
 			`"expires_at":"2026-07-01T00:00:00Z"}`))
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -346,14 +346,14 @@ func TestTheCLIStoresEveryAppWithAdmin(t *testing.T) {
 	// THROUGH THE COMMAND, onto the wire, on each subcommand that sends a
 	// set: an invitation, a create, a grant and a mint.
 	var bodies []map[string]any
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		bodies = append(bodies, body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"id":"x-1","outcome":"applied","position":"p"}`))
-	}))
+	})))
 	defer node.Close()
 	cfg := bootstrapWithKeyring(t, "k1")
 	for _, args := range [][]string{
@@ -401,14 +401,14 @@ func TestTheCLIStoresEveryAppWithAdmin(t *testing.T) {
 func TestAPersonsInviteDefaultsToEveryApp(t *testing.T) {
 	t.Parallel()
 	var bodies []map[string]any
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		bodies = append(bodies, body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"id":"x-1","outcome":"applied","position":"p"}`))
-	}))
+	})))
 	defer node.Close()
 	cfg := bootstrapWithKeyring(t, "k1")
 	for _, args := range [][]string{
@@ -622,13 +622,13 @@ func TestAnIamWriteSaysWhetherItLandedHere(t *testing.T) {
 		{http.StatusOK, "applied"},
 		{http.StatusAccepted, "pending"},
 	} {
-		node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(tc.status)
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": "p-1",
 				"outcome": tc.outcome, "position": "CREWLET_IAM_LOG@0:9",
 				"op_id": "people:update:p-1:k"})
-		}))
+		})))
 		t.Setenv(apiTokenEnv, "a-tier-a-token")
 		cfg := bootstrapWithKeyring(t, "k1")
 		var out, errs bytes.Buffer
@@ -665,12 +665,12 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 	// holds the one sent back to that rule before anything is sent.
 	op := statelog.NewOpID(time.Now(), "")
 	var keys []string
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		keys = append(keys, r.Header.Get("Idempotency-Key"))
 		httpjson.UnknownOutcome(w, 2, op, false, httpjson.Detail{
 			"detail": "this node cannot establish what happened to this change",
 			"landed": []string{"seat"}})
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -719,10 +719,10 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 
 	// THE CONTROL: a 503 that wrote nothing carries the op id too, and is
 	// not said to have maybe landed.
-	refused := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	refused := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, 0, httpjson.Detail{
 			"detail": "the log is full", "op_id": op})
-	}))
+	})))
 	defer refused.Close()
 	err = run([]string{"iam", "bind", "p-1", "sre", "-config", cfg, "-api",
 		refused.URL}, &out, &errs)
@@ -740,10 +740,10 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 // trail. Mutation: prescribe the key for every 503 again and this goes red.
 func TestAnUnknownMintIsNotRetriedUnderAKey(t *testing.T) {
 	op := statelog.NewOpID(time.Now(), "")
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		httpjson.UnknownOutcome(w, 2, op, false, httpjson.Detail{
 			"detail": "no token was issued: mint again for one you hold"})
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -774,14 +774,14 @@ func TestAnUnknownMintIsNotRetriedUnderAKey(t *testing.T) {
 // and the advice names no other node.
 func TestAnUnvouchedIamWriteIsRetriedThroughAnotherNode(t *testing.T) {
 	op := statelog.NewOpID(time.Now(), "")
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": "unavailable",
 			"detail":    "this node's operation ledger cannot vouch for this change",
 			"op_id":     op,
 			"unvouched": true})
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -806,10 +806,10 @@ func TestAnUnvouchedIamWriteIsRetriedThroughAnotherNode(t *testing.T) {
 // and the node is asked.
 func TestAnIamKeyTheEngineNeverMintedIsRefusedBeforeItIsSent(t *testing.T) {
 	var asked bool
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		asked = true
 		w.WriteHeader(http.StatusOK)
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -846,7 +846,7 @@ func TestAnIamInviteAndCreateTakeTheSeatTheOperatorNamed(t *testing.T) {
 	// the retry the create prints is one this command accepts, which a
 	// hand-written `op-1` is not.
 	personOp, machineOp := statelog.NewOpID(time.Now(), ""), statelog.NewOpID(time.Now(), "")
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		asked = append(asked, r.Method+" "+r.URL.Path)
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -870,7 +870,7 @@ func TestAnIamInviteAndCreateTakeTheSeatTheOperatorNamed(t *testing.T) {
 				`"expires_at":"2026-06-21T12:00:00Z",` +
 				`"detail":"a retry under the same Idempotency-Key hands back this same link"}`))
 		}
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -1031,7 +1031,7 @@ func TestACreateSaysWhatBecameOfItsLink(t *testing.T) {
 func TestAnUnknownCreateIsRetriedUnderItsKeyForTheSameLink(t *testing.T) {
 	op := statelog.NewOpID(time.Now(), "")
 	var keys []string
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.Header.Get("Idempotency-Key")
 		keys = append(keys, key)
 		if key == "" {
@@ -1047,7 +1047,7 @@ func TestAnUnknownCreateIsRetriedUnderItsKeyForTheSameLink(t *testing.T) {
 			"outcome": "applied", "position": "x", "op_id": op,
 			"url":        "https://crewlet.example.com/dashboard#/reset/c-1.same",
 			"expires_at": "2026-06-21T12:00:00Z"})
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -1112,11 +1112,11 @@ func TestARefusalAboutASeatNamesTheCommandThatClearsIt(t *testing.T) {
 			[]string{"crewlet iam seats -unheld"}, []string{"iam bind"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(tc.status)
 				_ = json.NewEncoder(w).Encode(tc.answer)
-			}))
+			})))
 			defer node.Close()
 			t.Setenv(apiTokenEnv, "a-tier-a-token")
 			cfg := bootstrapWithKeyring(t, "k1")
@@ -1162,7 +1162,7 @@ func TestIamSeatsSaysWhoHoldsEachSeat(t *testing.T) {
 	// fullFails makes the unfiltered listing a 503, for the -unheld case
 	// whose count could not be read.
 	fullFails := false
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		queries = append(queries, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Query().Get("unheld") == "true" {
@@ -1175,7 +1175,7 @@ func TestIamSeatsSaysWhoHoldsEachSeat(t *testing.T) {
 			return
 		}
 		_, _ = w.Write([]byte(answer))
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -1312,10 +1312,10 @@ func TestIamSeatsNamesAMaskedHolderRatherThanReadingItVacant(t *testing.T) {
 		`{"handle":"c","name":"C","holder":{"kind":"person"}},` +
 		`{"handle":"d","name":"D","holder":{"name":"CI","kind":"machine"}},` +
 		`{"handle":"v","name":"V"}]}`
-	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(answer))
-	}))
+	})))
 	defer node.Close()
 	t.Setenv(apiTokenEnv, "a-tier-a-token")
 	cfg := bootstrapWithKeyring(t, "k1")
@@ -1380,11 +1380,11 @@ func TestAListingsMoreLineIsACommandThatRuns(t *testing.T) {
 			"0192f00d-0000-7000-8000-0000000000cc"},
 	} {
 		var asked []url.Values
-		node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		node := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			asked = append(asked, r.URL.Query())
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(tc.answer))
-		}))
+		})))
 		t.Setenv(apiTokenEnv, "a-tier-a-token")
 		cfg := bootstrapWithKeyring(t, "k1")
 		var out, errs bytes.Buffer

@@ -320,11 +320,11 @@ as refused. A refusal from the node means nothing was done.
 answer, every refusal, the router's own `404` and `405`, the canonical-path
 refusal and the `503 starting` of a node still starting. A body alone cannot
 say whose answer it is, since a proxy can answer JSON with an `error` field of
-its own; this header is set by nothing in front of the node. The dashboard
-reads an answer as the node's only when it carries both the header and a code,
-so a proxy's `403` or `413` is a write whose outcome is unknown, never a
-refusal asking for a grant or a smaller document. The CLI reads the code. A
-proxy in front of the node must pass the header through unchanged.
+its own; this header is set by nothing in front of the node. The dashboard and
+the CLI read an answer as the node's only when it carries both the header and a
+code, so a proxy's `401`, `403` or `413` is an answer that says nothing about
+what the node did, never a refused token, a grant to ask for or a smaller
+document. A proxy in front of the node must pass the header through unchanged.
 
 ---
 
