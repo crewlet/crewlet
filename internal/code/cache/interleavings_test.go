@@ -278,8 +278,11 @@ type interleaved struct {
 	heads map[string]string
 }
 
-// interleave runs one seed and answers the outcomes its operations reached.
-func interleave(t *testing.T, seed uint64) map[string]bool {
+// startInterleaving is one seed's run before its first step: a world of two
+// repositories, each with a pushed commit to start from, and a cache open
+// over it on the run's clock and fault script — the start every interleaving
+// of this package's shares, whatever operations it draws after.
+func startInterleaving(t *testing.T, seed uint64) *interleaving {
 	w := newSyncWorld(t, onMemory)
 	in := &interleaving{
 		t: t, w: w, rng: rand.New(rand.NewPCG(seed, 1)), clk: newClock(), faults: &codefault.Script{},
@@ -297,6 +300,12 @@ func interleave(t *testing.T, seed uint64) map[string]bool {
 	}
 	in.c = w.open(t, in.options)
 	in.remember()
+	return in
+}
+
+// interleave runs one seed and answers the outcomes its operations reached.
+func interleave(t *testing.T, seed uint64) map[string]bool {
+	in := startInterleaving(t, seed)
 
 	total := 0
 	for _, o := range interleavingOps {

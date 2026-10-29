@@ -20,8 +20,9 @@
 // a git process that may write are a reviewed list, each with its reason, and
 // seeded interleavings of what a node's cache meets — pushes, refused
 // pushes, adoptions, syncs killed mid-step, crashes, evictions, rebuilds,
-// maintenance, a log recreated backwards — end every time in caches equal to
-// ones rebuilt from nothing at the same position.
+// maintenance, a log recreated backwards, expunges crashed at each of their
+// steps — end every time in caches equal to ones rebuilt from nothing at the
+// same position.
 //
 // # Convergence, priced for a push on every node
 //

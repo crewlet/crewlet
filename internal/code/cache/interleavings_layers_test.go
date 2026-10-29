@@ -229,7 +229,9 @@ func (f *fakeLog) nameOf(repo string) string {
 
 // unpublishedPacks is repo's live pack rows no layer of its published chain
 // names: what a compaction may merge, since a node's chain loads only over
-// every pack it names and the decide refuses a compaction that retires one.
+// every pack it names and the decide refuses a compaction that retires one —
+// and none an expunge's begin left dropping, which the decide refuses as an
+// input too (its commit retires them).
 func (f *fakeLog) unpublishedPacks(repo string) []code.PackRow {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -242,7 +244,7 @@ func (f *fakeLog) unpublishedPacks(repo string) []code.PackRow {
 	}
 	var out []code.PackRow
 	for _, p := range r.packs {
-		if !named[p.GitChecksum] {
+		if !named[p.GitChecksum] && p.State != code.PackDropping {
 			out = append(out, p)
 		}
 	}
