@@ -269,6 +269,18 @@ const (
 	// string(OpChangeReopen)}, with the same companions. It is no gate.
 	OpChangeReopen OpKind = "change_reopen"
 
+	// OpChangeLanded records a live change MERGED because its target came to
+	// hold its head — moved past it, by a push that did not set it to exactly
+	// that head — as the repository's home git node found it ([ChangeLanded]),
+	// on the repository's own subject, decided by its committer alone against
+	// the change's head and the target row the home read.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// change_landed", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpChangeLanded)}, with the same companions. It is no gate.
+	OpChangeLanded OpKind = "change_landed"
+
 	// OpReviewers asks reviewers of a live change, or withdraws the ask
 	// ([ReviewerRequest]), on the CHANGE's own subject ([KindChange]),
 	// written by the repository's committing data node ([ChangeWriter]).
@@ -338,20 +350,22 @@ const (
 	OpRevise OpKind = "revise"
 )
 
-// OpKinds are the thirty-two, in the order they are documented.
+// OpKinds are the thirty-three, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
 	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpRename, OpReleaseName, OpHold,
-	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen,
+	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen, OpChangeLanded,
 	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise,
 }
 
-// ChangeOps are the six ops of a change's LIFECYCLE, in [OpKinds]' order:
+// ChangeOps are the seven ops of a change's LIFECYCLE, in [OpKinds]' order:
 // what a [ChangeProposal] may be, each decided by the repository's committer
-// as a record of its own.
+// as a record of its own — a landing, which the repository's home git node
+// asks, among them.
 func ChangeOps() []OpKind {
-	return []OpKind{OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen}
+	return []OpKind{OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen,
+		OpChangeLanded}
 }
 
 // ConversationOps are the ops of a change's CONVERSATION, in [OpKinds]' order:

@@ -1,0 +1,587 @@
+package home
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
+)
+
+// Backstop is the interval between two of a home's backstop passes, and how
+// long one repository's turn may take: ONE MINUTE, the compactor's cadence
+// (internal/code/compact's Poll), so a home's background work runs at one
+// cadence on every git node. A pass is one indexed listing a worker, and a
+// minute is what a nudge lost costs its repository's work at the most.
+const Backstop = time.Minute
+
+// Concurrency is how many repositories one home works at once: TWO. A turn
+// waits on reads and records — a facts read holds one unit of the answering
+// node's seat git-work share for its git (code.ShareOf: half its read lane),
+// a record one turn of its repository's committer — so two keep a burst of
+// nudges from queueing behind one large repository's turn. On a git node of
+// four cores or fewer two facts reads at once hold that node's whole share,
+// and a seat's read waits for a unit at most code.GitShareWait before another
+// git node answers it (code.UnreadyShare). PROVISIONAL (M4's spec names
+// BenchmarkHomeLoop for it): nothing yet measures a home's turns, so two
+// stays until that benchmark's burst — every repository of a node due at
+// once — shows a nudged repository waiting longer than one Backstop for its
+// turn at two, and then becomes the fewest that keep that wait.
+const Concurrency = 2
+
+// Placement answers who is a repository's home — the router satisfies it
+// (estate.Router.Home and HomeOf): a nudge's one repository ([Placement.Home]),
+// and a pass's whole listing against ONE reading of who serves git
+// ([Placement.HomeOf]). An error is UNKNOWN, never "not home": a node that
+// cannot tell works nothing rather than guess.
+type Placement interface {
+	Home(repoID string) (string, error)
+	HomeOf(repoIDs []string) (map[string]bool, error)
+}
+
+// Nudges is the code log as the home watches it: the subject and position of
+// every record appended under a filter, headers alone, and every moment the
+// watch may have missed one — internal/queue/jetstream's DomainLog.Watch, its
+// sequences as positions on the code log, which the engine adapts.
+type Nudges interface {
+	Watch(ctx context.Context, filter string, h Nudged) (Watching, error)
+}
+
+// Nudged is what a watch tells the loop, ONE CALL AT A TIME and none once
+// [Watching.Stop] has returned, each on the queue's delivery path: the subject
+// and position of each record appended under the filter, and a position at or
+// past every record the watch may have missed.
+type Nudged struct {
+	Subject func(subject string, at statelog.Position)
+	Gap     func(through statelog.Position)
+}
+
+// Watching is a watch that has begun, stopped by its caller.
+type Watching interface{ Stop() }
+
+// Worker is one kind of work a repository's home owes, from the rows: the
+// repositories it has work in (Due, every page from its cursor, read at floor
+// where floor is set and stale where it is zero) and one repository's work
+// (Work, its rows read at or past floor). Work runs under the turn's context
+// — one [Backstop] at the most — and a repository with more than a turn holds
+// is listed again by the next pass.
+type Worker interface {
+	Name() string
+	Due(ctx context.Context, floor statelog.Position, cursor string) (repos []string, next string, err error)
+	Work(ctx context.Context, repoID string, floor statelog.Position) error
+}
+
+// Options builds a [Loop]. Every field but Metrics, Logger and Now is
+// required, and New refuses a missing one by name.
+type Options struct {
+	// Estate is the code log and the git reads as the home's change work
+	// reaches them: the router's code seam.
+	Estate Estate
+	// Placement answers who is home; Nudges is the code log's watch.
+	Placement Placement
+	Nudges    Nudges
+	// NodeID is this node: the home every placement answer is compared
+	// with, and the node every record the home asks names.
+	NodeID string
+	// Metrics nil records nothing; Logger nil is the package's own
+	// (component code.home); Now nil is time.Now.
+	Metrics *metrics.Recorder
+	Logger  *slog.Logger
+	Now     func() time.Time
+}
+
+// ErrOptions is an Options value New refuses, wrapped naming every field.
+var ErrOptions = errors.New("home: refused options")
+
+// PollReport is what one backstop pass did: how many repositories its
+// workers' listings named, and how many of those it scheduled — the ones this
+// node is home to.
+type PollReport struct {
+	Listed, Scheduled int
+}
+
+// The outcomes of crewlet.code.home.passes: a repository's turn of a worker
+// that did its work, failed, or was cut by its turn's bound; and of
+// crewlet.code.home.nudges: a record's repository scheduled here, home
+// elsewhere, home unknown — who serves git unreadable — a subject that names
+// no repository, and a gap, which schedules a pass.
+const (
+	outcomeWorked = "worked"
+	outcomeFailed = "failed"
+	outcomeCut    = "cut"
+
+	nudgeScheduled = "scheduled"
+	nudgeElsewhere = "elsewhere"
+	nudgeUnknown   = "unknown"
+	nudgeIgnored   = "ignored"
+	nudgeGap       = "gap"
+)
+
+// repoSubjects is the filter the loop watches the code log under: every
+// record on a repository's subject — a push, a change's open, edit, retarget,
+// close, reopen and landing.
+var repoSubjects = topics.CodeLogPrefix + "." + string(code.KindRepo) + ".>"
+
+// Loop is one git node's home work: its registered workers' repositories,
+// scheduled by the nudges and the backstop, worked [Concurrency] at a time.
+type Loop struct {
+	o   Options
+	log *slog.Logger
+	now func() time.Time
+	// backstop is the passes' interval and a turn's bound: [Backstop], a
+	// suite's own (export_test.go).
+	backstop time.Duration
+
+	mu      sync.Mutex
+	workers []Worker
+	started bool
+	// pending is every (worker, repository) queued, at the furthest floor
+	// it was asked at, and queue their order; busy is every pair a turn is
+	// working, and again every busy pair asked for once more meanwhile, at
+	// the furthest floor — worked once more when its turn ends.
+	pending map[turnKey]statelog.Position
+	queue   []turnKey
+	busy    map[turnKey]bool
+	again   map[turnKey]statelog.Position
+	// gap is the furthest position a Gap reached that no pass has read at
+	// yet, and watch the watch while it runs.
+	gap   statelog.Position
+	watch Watching
+
+	// ready says a pair is queued, kick that a Gap asks for a pass before
+	// its tick; each holds one signal, which is all either needs.
+	ready chan struct{}
+	kick  chan struct{}
+
+	life context.Context
+	end  context.CancelFunc
+	wg   sync.WaitGroup
+}
+
+// turnKey is one worker's work in one repository.
+type turnKey struct {
+	worker int
+	repo   string
+}
+
+// New builds a Loop with the change work registered, refusing every required
+// field missing, by name, in one error. It starts nothing: [Loop.Start] does.
+func New(o Options) (*Loop, error) {
+	var missing []string
+	need := func(absent bool, name string) {
+		if absent {
+			missing = append(missing, name)
+		}
+	}
+	need(o.Estate == nil, "Estate")
+	need(o.Placement == nil, "Placement")
+	need(o.Nudges == nil, "Nudges")
+	need(!config.ValidNodeID(o.NodeID), "NodeID")
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("%w: %s missing", ErrOptions, strings.Join(missing, ", "))
+	}
+	l := &Loop{o: o, log: o.Logger, now: o.Now, backstop: Backstop,
+		pending: map[turnKey]statelog.Position{}, busy: map[turnKey]bool{}, again: map[turnKey]statelog.Position{},
+		ready: make(chan struct{}, 1), kick: make(chan struct{}, 1)}
+	if l.log == nil {
+		l.log = logging.Get("code.home")
+	}
+	if l.now == nil {
+		l.now = time.Now
+	}
+	l.life, l.end = context.WithCancel(context.Background())
+	l.workers = []Worker{&changes{estate: o.Estate, node: o.NodeID, metrics: o.Metrics, log: l.log, now: l.now}}
+	return l, nil
+}
+
+// Register adds a worker before the loop starts: its repositories are listed
+// at every pass and nudged as every worker's are. A worker named twice, or one
+// registered once the loop runs, is refused.
+func (l *Loop) Register(w Worker) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	switch {
+	case l.started:
+		return fmt.Errorf("home: worker %q registered once the loop runs: register before Start", w.Name())
+	case l.named(w.Name()):
+		return fmt.Errorf("home: a worker named %q is registered already", w.Name())
+	}
+	l.workers = append(l.workers, w)
+	return nil
+}
+
+// named reports a registered worker of that name. Called under mu.
+func (l *Loop) named(name string) bool {
+	for _, w := range l.workers {
+		if w.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Start begins the watch, runs a pass at once and then one every [Backstop],
+// and works what they schedule, [Concurrency] repositories at a time, on
+// goroutines of its own, until [Loop.Stop]. The watch BEGINS BEFORE THE PASS,
+// so a record appended in between is told to the watch or is in the rows the
+// pass reads; a watch that could not begin is asked again before every pass,
+// the backstop doing its work meanwhile. Its caller starts it once the
+// runtime its seams read through is published and the node writes: its first
+// pass asks who serves git and lists the rows at once, and every turn asks
+// records of the repositories' writers. A second Start does nothing.
+func (l *Loop) Start() {
+	l.mu.Lock()
+	if l.started || l.life.Err() != nil {
+		l.mu.Unlock()
+		return
+	}
+	l.started = true
+	workers := len(l.workers)
+	l.mu.Unlock()
+	l.wg.Add(1 + Concurrency)
+	go l.passes()
+	for range Concurrency {
+		go l.turns()
+	}
+	l.log.Info("code_home_started", "node", l.o.NodeID, "workers", workers, "backstop", l.backstop,
+		"concurrency", Concurrency)
+}
+
+// Stop ends the loop: the watch, the passes and every turn in flight — a
+// facts read cut, a record asked of a committer cancelled, which lands or
+// does not on its own — and waits for them to end, until ctx does.
+// Idempotent; a stop of a loop never started ends nothing.
+func (l *Loop) Stop(ctx context.Context) {
+	l.end()
+	l.mu.Lock()
+	started, w := l.started, l.watch
+	l.watch = nil
+	l.mu.Unlock()
+	if w != nil {
+		w.Stop()
+	}
+	if !started {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		l.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		l.log.Warn("code_home_stop_unfinished", "error", ctx.Err(),
+			"detail", "a repository's turn was still running when the stop's wait ended")
+	}
+}
+
+// passes runs a pass at once and then at every tick, or at once again where a
+// Gap asks for one, each after asking for the watch where none runs.
+func (l *Loop) passes() {
+	defer l.wg.Done()
+	tick := time.NewTicker(l.backstop)
+	defer tick.Stop()
+	for {
+		l.ensureWatch()
+		floor := l.takeGap()
+		if _, err := l.Poll(l.life, floor); err != nil && l.life.Err() == nil {
+			l.log.Warn("code_home_pass_failed", "error", err)
+		}
+		select {
+		case <-l.life.Done():
+			return
+		case <-tick.C:
+		case <-l.kick:
+		}
+	}
+}
+
+// ensureWatch begins the watch where none runs, and leaves none where it
+// cannot begin — the backstop passes the work meanwhile, and the next pass
+// asks again.
+func (l *Loop) ensureWatch() {
+	l.mu.Lock()
+	running := l.watch != nil
+	l.mu.Unlock()
+	if running || l.life.Err() != nil {
+		return
+	}
+	w, err := l.o.Nudges.Watch(l.life, repoSubjects, Nudged{Subject: l.nudged, Gap: l.gapped})
+	if err != nil {
+		if l.life.Err() == nil {
+			l.log.Warn("code_home_watch_failed", "error", err, "detail", "the home's change work waits for its "+
+				"backstop, a minute at the most, until the watch begins")
+		}
+		return
+	}
+	l.mu.Lock()
+	if l.life.Err() != nil {
+		// STOPPED WHILE IT BEGAN: Stop read no watch to stop, so this one
+		// is stopped here.
+		l.mu.Unlock()
+		w.Stop()
+		return
+	}
+	l.watch = w
+	l.mu.Unlock()
+}
+
+// takeGap is the furthest position a Gap reached since the last pass, zero
+// for none, and forgets it: the pass about to run reads at it.
+func (l *Loop) takeGap() statelog.Position {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	floor := l.gap
+	l.gap = statelog.Position{}
+	return floor
+}
+
+// Poll is one backstop pass: every worker's listing, every page, read at
+// floor — a Gap's position, so the rows hold what the watch may have missed —
+// or stale where it is zero; who serves git, ONE READING for every repository
+// the pass lists; and every listed repository this node is home to scheduled
+// for that worker, at floor. A placement that cannot be read schedules
+// nothing that pass; a worker whose listing fails is skipped, the others
+// listed. Logged code_home_pass, at DEBUG unless it scheduled something.
+func (l *Loop) Poll(ctx context.Context, floor statelog.Position) (PollReport, error) {
+	began := l.now()
+	l.mu.Lock()
+	workers := l.workers
+	l.mu.Unlock()
+	var (
+		report PollReport
+		failed []error
+		every  []string
+	)
+	listed := make([][]string, len(workers))
+	seen := map[string]bool{}
+	for i, w := range workers {
+		ids, err := listing(ctx, w, floor)
+		if err != nil {
+			failed = append(failed, fmt.Errorf("home: list the repositories %s work is due in: %w", w.Name(), err))
+			continue
+		}
+		listed[i] = ids
+		report.Listed += len(ids)
+		for _, id := range ids {
+			if !seen[id] {
+				seen[id] = true
+				every = append(every, id)
+			}
+		}
+	}
+	if len(every) > 0 {
+		homes, err := l.o.Placement.HomeOf(every)
+		if err != nil {
+			failed = append(failed, fmt.Errorf("home: who serves git could not be read, so this pass schedules "+
+				"nothing: %w", err))
+			return report, errors.Join(failed...)
+		}
+		for i, ids := range listed {
+			for _, id := range ids {
+				if homes[id] {
+					l.schedule(i, id, floor)
+					report.Scheduled++
+				}
+			}
+		}
+	}
+	log := l.log.Debug
+	if report.Scheduled > 0 {
+		log = l.log.Info
+	}
+	log("code_home_pass", "listed", report.Listed, "scheduled", report.Scheduled, "floor", floor.String(),
+		"took", l.now().Sub(began))
+	return report, errors.Join(failed...)
+}
+
+// listing is every repository w's listing names, every page.
+func listing(ctx context.Context, w Worker, floor statelog.Position) ([]string, error) {
+	var out []string
+	cursor := ""
+	for {
+		ids, next, err := w.Due(ctx, floor, cursor)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ids...)
+		if next == "" {
+			return out, nil
+		}
+		cursor = next
+	}
+}
+
+// nudged is the watch's word that a record landed on subject at at: the
+// repository it names scheduled for every worker at that position, where this
+// node is its home. Called on the queue's delivery path, so it schedules work
+// and does none.
+func (l *Loop) nudged(subject string, at statelog.Position) {
+	kind, repoID, ok := topics.CodeLogPath(subject)
+	if !ok || kind != string(code.KindRepo) {
+		l.nudge(nudgeIgnored)
+		return
+	}
+	home, err := l.o.Placement.Home(repoID)
+	switch {
+	case err != nil:
+		l.nudge(nudgeUnknown)
+		l.log.Debug("code_home_nudge_unplaced", "repo", repoID, "at", at.String(), "error", err,
+			"detail", "who serves git could not be read; the backstop lists the repository at its next pass")
+		return
+	case home != l.o.NodeID:
+		l.nudge(nudgeElsewhere)
+		return
+	}
+	l.mu.Lock()
+	workers := len(l.workers)
+	l.mu.Unlock()
+	for i := range workers {
+		l.schedule(i, repoID, at)
+	}
+	l.nudge(nudgeScheduled)
+}
+
+// gapped is the watch's word that it may have missed records up to through:
+// a pass is asked for at once, reading at through.
+func (l *Loop) gapped(through statelog.Position) {
+	l.mu.Lock()
+	l.gap = further(l.gap, through)
+	l.mu.Unlock()
+	l.nudge(nudgeGap)
+	select {
+	case l.kick <- struct{}{}:
+	default:
+	}
+}
+
+// nudge counts one of the watch's words.
+func (l *Loop) nudge(outcome string) {
+	if l.o.Metrics != nil {
+		l.o.Metrics.Add(metrics.CodeHomeNudges, 1, metrics.Attrs{"outcome": outcome})
+	}
+}
+
+// schedule queues worker's work in repoID at floor: once, at the furthest
+// floor it was asked at — and, where a turn is working it now, once more
+// after that turn.
+func (l *Loop) schedule(worker int, repoID string, floor statelog.Position) {
+	k := turnKey{worker: worker, repo: repoID}
+	l.mu.Lock()
+	switch held, queued := l.pending[k]; {
+	case l.busy[k]:
+		l.again[k] = further(l.again[k], floor)
+	case queued:
+		l.pending[k] = further(held, floor)
+	default:
+		l.pending[k] = floor
+		l.queue = append(l.queue, k)
+	}
+	l.mu.Unlock()
+	l.signal()
+}
+
+// signal says a pair is queued.
+func (l *Loop) signal() {
+	select {
+	case l.ready <- struct{}{}:
+	default:
+	}
+}
+
+// turns works the queue, one pair at a time, until the loop stops.
+func (l *Loop) turns() {
+	defer l.wg.Done()
+	for {
+		k, floor, ok := l.next()
+		if !ok {
+			select {
+			case <-l.life.Done():
+				return
+			case <-l.ready:
+			}
+			continue
+		}
+		l.turn(k, floor)
+	}
+}
+
+// next takes the queue's first pair and marks it busy — signalling again where
+// more are queued, so another turn takes the next rather than waiting for this
+// one's — or answers false for an empty queue or a stopped loop.
+func (l *Loop) next() (turnKey, statelog.Position, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.queue) == 0 || l.life.Err() != nil {
+		return turnKey{}, statelog.Position{}, false
+	}
+	k := l.queue[0]
+	l.queue = l.queue[1:]
+	floor := l.pending[k]
+	delete(l.pending, k)
+	l.busy[k] = true
+	if len(l.queue) > 0 {
+		l.signal()
+	}
+	return k, floor, true
+}
+
+// turn works one pair under a context one [Backstop] long, counts it, and
+// queues it once more where it was asked for again meanwhile.
+func (l *Loop) turn(k turnKey, floor statelog.Position) {
+	l.mu.Lock()
+	w := l.workers[k.worker]
+	l.mu.Unlock()
+	ctx, cancel := context.WithTimeout(l.life, l.backstop)
+	began := l.now()
+	err := w.Work(ctx, k.repo, floor)
+	cut := ctx.Err() != nil && l.life.Err() == nil
+	cancel()
+	outcome := outcomeWorked
+	switch {
+	case cut:
+		outcome = outcomeCut
+		l.log.Info("code_home_turn_cut", "worker", w.Name(), "repo", k.repo, "took", l.now().Sub(began),
+			"detail", "the repository's work outlasted its turn; the next pass lists what is left of it")
+	case err != nil && l.life.Err() == nil:
+		outcome = outcomeFailed
+		l.log.Warn("code_home_turn_failed", "worker", w.Name(), "repo", k.repo, "error", err,
+			"detail", "the next pass lists what is left of the repository's work")
+	}
+	if l.o.Metrics != nil && l.life.Err() == nil {
+		l.o.Metrics.Add(metrics.CodeHomePasses, 1, metrics.Attrs{"worker": w.Name(), "outcome": outcome})
+	}
+	l.mu.Lock()
+	delete(l.busy, k)
+	if again, asked := l.again[k]; asked {
+		delete(l.again, k)
+		l.pending[k] = again
+		l.queue = append(l.queue, k)
+		l.signal()
+	}
+	l.mu.Unlock()
+}
+
+// further is the later of two positions on the code log — the zero position
+// earliest — which is the floor a pair asked twice is read at.
+func further(a, b statelog.Position) statelog.Position {
+	switch {
+	case a.IsZero():
+		return b
+	case b.IsZero():
+		return a
+	case b.Packed() > a.Packed():
+		return b
+	}
+	return a
+}

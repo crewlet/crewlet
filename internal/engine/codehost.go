@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/code/readaudit"
@@ -245,8 +246,11 @@ func (e *Engine) gitHook() ([]string, error) {
 //
 // nodeID is the core runtime's resolved id ([core.nodeID]), which the native
 // half no longer holds a copy of: every proposal the host makes names it as the
-// node that received the push ([host.Options.NodeID]).
-func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.Bootstrap) (codeHostParts, error) {
+// node that received the push ([host.Options.NodeID]). codeLog is this node's
+// own code log, whose records the home's nudges watch.
+func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.Bootstrap,
+	codeLog *runningLog) (codeHostParts, error) {
+
 	// 1. THE DIRECTORY, prepared BEFORE git's HOME exists, since it names it.
 	// Absolute: a store path written relative resolves against the working
 	// directory the store itself is opened from.
@@ -383,17 +387,72 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		return codeHostParts{}, fmt.Errorf("engine: build the compactor: %w", err)
 	}
 
-	// 10. ITS STATUS, answered for the fleet (codestatus.go) from the moment
+	// 10. THE HOME'S CHANGE WORK (internal/code/home): every live change's
+	// facts read and recorded, or the change landed, by the repository's
+	// HOME git node — listing and asking through the router's code seam,
+	// whose writes raise this node's floors past what they landed, asking the
+	// router who is home, and nudged by a watch on this node's own code log,
+	// each record's position read as this node's applier numbers the log.
+	// BUILT here beside the compactor and STARTED with it, by the native
+	// half's duties ([Engine.startNativeDuties]), for the compactor's two
+	// reasons: its first pass reads through the published runtime, and it
+	// asks records of the repositories' writers, which a node restarted to
+	// write nothing must not. Stopped BEFORE the compactor, first in the one
+	// bounded stop ([native.stopCodeHost]): its facts reads are answered by
+	// this node's git reads, which that stop ends after it.
+	homeLoop, err := codehome.New(codehome.Options{
+		Estate: seam, Placement: e.router, Nudges: codeNudges{log: codeLog.log, runner: codeLog.runner},
+		NodeID: nodeID, Metrics: e.metrics,
+	})
+	if err != nil {
+		h.Stop(context.WithoutCancel(ctx))
+		return codeHostParts{}, fmt.Errorf("engine: build the home's change work: %w", err)
+	}
+
+	// 11. ITS STATUS, answered for the fleet (codestatus.go) from the moment
 	// the host serves, and withdrawn before it stops ([native.stopCodeHost]):
 	// under the host's lifetime rather than this call's, as the host runs.
 	withdraw, err := e.serveCodeStatus(context.WithoutCancel(ctx), h)
 	if err != nil {
+		homeLoop.Stop(context.WithoutCancel(ctx))
 		compactor.Stop(context.WithoutCancel(ctx))
 		h.Stop(context.WithoutCancel(ctx))
 		return codeHostParts{}, fmt.Errorf("engine: serve the code host's status on %s: %w", topics.CodeStatus, err)
 	}
-	return codeHostParts{host: h, reads: reads, cache: c, size: size, compactor: compactor,
+	return codeHostParts{host: h, reads: reads, cache: c, size: size, compactor: compactor, home: homeLoop,
 		withdrawStatus: withdraw}, nil
+}
+
+// codeNudges is this node's own code log as the home's change work watches it
+// (codehome.Nudges): the log's watch (jetstream.DomainLog.Watch), each
+// record's sequence — and a gap's — a position on the code log in the
+// generation this node's applier last committed in. A sequence the watch
+// tells is the broker's, before any applier has applied it; read at the
+// position, the home's next read of the rows waits for its copy to hold it.
+// A REANCHOR, which an operator runs when the log is recreated, moves the
+// generation under a node until its applier follows: a position of the old
+// generation floors nothing in the new, and the home reads the rows as they
+// stand — at worst a nudge spent, which the backstop's next pass makes up.
+type codeNudges struct {
+	log    *jetstream.DomainLog
+	runner *statelog.Runner
+}
+
+// Watch begins the watch, its handler's sequences turned into positions.
+func (n codeNudges) Watch(ctx context.Context, filter string, h codehome.Nudged) (codehome.Watching, error) {
+	at := func(seq uint64) statelog.Position {
+		return statelog.Position{Stream: topics.CodeLogStream, Generation: n.runner.Committed().Generation, Seq: seq}
+	}
+	w, err := n.log.Watch(ctx, filter, jetstream.WatchHandler{
+		Subject: func(subject string, seq uint64) { h.Subject(subject, at(seq)) },
+		Gap:     func(through uint64) { h.Gap(at(through)) },
+	})
+	if err != nil {
+		// NO WATCH, never a nil one inside the interface, which a caller
+		// testing the watch against nil would take for a running one.
+		return nil, err
+	}
+	return w, nil
 }
 
 // codeFleet is how many live nodes serve git and how many hold the estate,
@@ -440,16 +499,18 @@ func (g gitHalf) Write(ctx context.Context, w code.EngineWrite) (code.EngineWrit
 // the host stops with itself, and which the engine holds only to READ, for
 // what no request asks (the alarm reading's code half, [Engine.codeReading])
 // — the budget it sized that cache to, the compactor that merges the packs of
-// the repositories this node maintains and publishes their layers, built and
-// NOT started (the native half's duties start both its loops, past the
-// runtime's publication and the mode's gate: [Engine.startNativeDuties]), and
-// what withdraws the host's status answerer ([Engine.serveCodeStatus]).
+// the repositories this node maintains and publishes their layers, and the
+// home's change work, each built and NOT started (the native half's duties
+// start the compactor's two loops and the home's, past the runtime's
+// publication and the mode's gate: [Engine.startNativeDuties]), and what
+// withdraws the host's status answerer ([Engine.serveCodeStatus]).
 type codeHostParts struct {
 	host           *host.Server
 	reads          *query.Server
 	cache          *cache.Cache
 	size           codeCacheSize
 	compactor      *codecompact.Compactor
+	home           *codehome.Loop
 	withdrawStatus queue.Unsubscribe
 }
 
@@ -821,14 +882,18 @@ func (e *Engine) stopCodeHost(ctx context.Context) { e.native.Load().stopCodeHos
 // while something of this one still writes in it, and waiting for it again
 // changes nothing.
 //
-// THE COMPACTOR FIRST, inside the same one stop: it proposes through the
-// router and holds a maintenance slot of the cache the host stops with itself,
-// so it is ended — its build killed, its uploads abandoned, an unproposed
-// compaction's outputs left to the collector — before the cache is. THEN THE
-// STATUS ANSWERER: a node that has decided to stop serving git stops answering
-// for its host before the host and the cache its answers read stop, so no
-// peer is told of a cache that is going. Its withdrawal waits only for answers
-// already in flight, each read from memory.
+// THE HOME'S CHANGE WORK FIRST, inside the same one stop: its turns read facts
+// of this node's git reads and ask records of the repositories' writers, so
+// it is ended — a facts read cut, a record's ask cancelled, which lands or
+// does not on its own — before the git reads and the cache it reads are. THEN
+// THE COMPACTOR: it proposes through the router and holds a maintenance slot
+// of the cache the host stops with itself, so it is ended — its build killed,
+// its uploads abandoned, an unproposed compaction's outputs left to the
+// collector — before the cache is. THEN THE STATUS ANSWERER: a node that has
+// decided to stop serving git stops answering for its host before the host
+// and the cache its answers read stop, so no peer is told of a cache that is
+// going. Its withdrawal waits only for answers already in flight, each read
+// from memory.
 //
 // THEN THE GIT READS, for the same reason and one more: a peer's read is
 // answered on this node's git lane by the query server, which the host does
@@ -843,12 +908,15 @@ func (e *Engine) stopCodeHost(ctx context.Context) { e.native.Load().stopCodeHos
 // every write after it, cuts the writes in flight — one cut before its
 // landing ran nothing, and is answered not serving, about this node, so its
 // walk asks the next git node the same push — and waits for them.
-// All four share the one budget, and a second caller waits for the first.
+// All five share the one budget, and a second caller waits for the first.
 func (n *native) stopCodeHost(ctx context.Context) {
 	if n == nil || n.codeHost == nil {
 		return
 	}
 	n.codeHostStop.stop(ctx, func(ctx context.Context) {
+		if n.home != nil {
+			n.home.Stop(ctx)
+		}
 		if n.compactor != nil {
 			n.compactor.Stop(ctx)
 		}

@@ -182,10 +182,11 @@ func compareQ(repo, base, head string) code.GitQuery {
 		Compare: &code.CompareQuery{Base: base, Head: head}}
 }
 
-// factsQ, reanchorQ and interdiffQ are a person's reads of a change's
-// revisions, asked as the other reads here are.
+// factsQ is the home's read of a revision's facts — the engine's own, which
+// names no asker — and reanchorQ and interdiffQ are a person's reads of a
+// change's revisions, asked as the other reads here are.
 func factsQ(repo, head, target string) code.GitQuery {
-	return code.GitQuery{Kind: code.GitRevisionFacts, RepoID: repo, Asker: person, Home: true,
+	return code.GitQuery{Kind: code.GitRevisionFacts, RepoID: repo, Home: true,
 		RevisionFacts: &code.RevisionFactsQuery{Head: head, Target: target}}
 }
 

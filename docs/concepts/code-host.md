@@ -60,19 +60,21 @@ This is the product's current shape, not a configuration choice:
   no live turn holds ([Repositories made by tools](#repositories-made-by-tools));
   the tools that ask it arrive with seats' code writes, so today every
   repository is one `code.repos` declares.
-- **Only a push opens a change, nothing asks for its discussion yet, and
-  there are no checks.** A push opens a [change](#changes) from its options
+- **Only a push opens a change, only its home asks for its review, and there
+  are no checks.** A push opens a [change](#changes) from its options
   ([A change a push opens](#a-change-a-push-opens)); a repository's committer
   decides a change's opening, its edits and its close, a push to a change's
-  branches writes its revisions, merges it or closes it, the [change
-  writer](#reviews-and-findings) beside the committer decides who is asked to
-  review it and what is said on it, and a data node answers a listing of
-  changes and one change in detail ([Reading changes](#reading-changes)) —
+  branches writes its revisions, merges it or closes it, the repository's home
+  records each revision's facts — asking a review of the [path
+  owners](#path-owners) whose paths it touches — and lands a change whose head
+  its target holds ([The home's change work](#the-homes-change-work)), the
+  [change writer](#reviews-and-findings) beside the committer decides who is
+  asked to review it and what is said on it, and a data node answers a listing
+  of changes and one change in detail ([Reading changes](#reading-changes)) —
   but no tool or route opens, edits, reads or discusses a change in this
   release, and no change is gated in front of a protected branch. A protection
   rule decides what a push may do to a ref, and nothing else stands in front
-  of one. So a repository's [path owners](#path-owners) are recorded and read,
-  and no review is asked of them yet.
+  of one.
 - **Nothing drops an object a push stored.** A force-push or a deletion
   leaves the history behind it in the repository's packs, fetchable by its
   id, for as long as the repository lives. The object each such push left is
@@ -197,8 +199,10 @@ unit — whose [effective lead](organization-model.md#lead-inheritance) a review
 is asked of — or a seat, and the globs of the paths it owns. What a path owner
 is for is **review routing**: a change whose revision touches an owner's paths
 asks it for a review once the revision's facts are recorded ([Recorded on the
-change](#recorded-on-the-change)) — which nothing records yet ([What it does
-not do yet](#what-it-does-not-do-yet)). It **grants nothing**. A seat named a path owner reads
+change](#recorded-on-the-change)), which its repository's home does for every
+live change ([The home's change work](#the-homes-change-work)) — and today
+only a push opens one ([A change a push opens](#a-change-a-push-opens)). It
+**grants nothing**. A seat named a path owner reads
 and pushes the repository by its [grant](#who-may-read-and-push) exactly as it
 did before — owning `deploy/**` lets no seat push there that could not, and a
 `visibility: unit` repository still shuts out a seat outside its unit,
@@ -974,8 +978,11 @@ moves — and each push of a record sees what the ones before it did.
   merges the change whatever order the refs were sent in. One record merges at
   most 64 changes, the lowest numbers first; a change past it stays open with
   its head in its target. A push that moves the target past the head rather
-  than onto it leaves the change open: nothing in this release yet finds a
-  head inside its target.
+  than onto it is no move of the head the push's own apply can see — whether
+  one commit holds another is git's to say — so the repository's home finds
+  it when it reads the revision's facts and lands the change: `merged`, by
+  `push`, at the target's tip it found holding the head ([The home's change
+  work](#the-homes-change-work)).
 - **Deleting the source branch closes the change**: `closed`, its reason
   `source_deleted` — after the same push's merges, so a push that sets the
   target to the head and deletes the branch leaves the change merged.
@@ -3337,6 +3344,53 @@ A write of facts that is refused appends nothing: `superseded` is the home's
 alone, answered to no person and no seat, and a closed or merged change takes
 no facts (`change_closed`, `change_merged`). `crewlet.code.conversation.writes`
 counts them under `op` `revise`, beside the conversation's other writes.
+
+### The home's change work
+
+A repository's [home](#the-home-git-node) — the first git node of its order,
+which its git reads are asked of first — owes its live changes their facts:
+every git node runs a **home loop** for the repositories it is home to, and
+the rows are its work list. A change is **due** while its head revision holds
+no facts against the branch it merges into: a push that moves its head, and a
+retarget, make it due again, and the facts recorded take it off. A change of
+an archived or a deleted repository is nobody's work, and neither is one
+whose target branch is gone, until the branch is pushed again or the change
+retargeted.
+
+For each due change the home reads the revision's facts against its target's
+tip as the rows hold it, then either
+
+- **lands it**, where the target holds its head already — a push moved the
+  target past it — as a record on the repository's subject the committer
+  decides against the change's head and the tip the home read: a head pushed
+  since, a retarget or the target moved again are each refused `stale`,
+  recorded nowhere, for the home's next read; or
+- **records its facts**, its touched paths matched against the repository's
+  path owners on the home ([Recorded on the change](#recorded-on-the-change)).
+
+Two things put a repository's work in front of its home:
+
+- **A nudge.** Every git node watches the code log's repository subjects —
+  each record's subject and position, never its body — and a record on a
+  repository it is home to schedules that repository's work at once, read at
+  the record's position so the node's copy holds the record before the rows
+  are read.
+- **The backstop.** Once a minute, and at once when it starts, every git node
+  lists the repositories holding a due change and works the ones it is home
+  to, judged against one reading of who serves git. A nudge only shortens the
+  wait: one lost — a member restarting, the watch's consumer gone, who serves
+  git unreadable for a moment — leaves the work for the next pass, a minute at
+  the most, and a repository whose home moved is found by its new home's next
+  pass.
+
+There is no lease: two nodes that each take themselves for a repository's
+home both read, and the records' own guards take one. A node works two
+repositories at once, one turn of a minute at the most each, a repository
+with more due work than a turn finishing it at the passes that follow.
+`crewlet.code.home.passes` counts the turns by what became of them,
+`crewlet.code.home.nudges` the code log's word to the loop, and
+`crewlet.code.home.facts.duration` each facts read (the [metrics
+reference](../reference/metrics.md)).
 
 ### Where lines are in another revision
 

@@ -153,12 +153,18 @@ func TestAReadOfAChangesRevisionsIsRefusedByField(t *testing.T) {
 	const a, b = "0123456789abcdef0123456789abcdef01234567", "89abcdef0123456789abcdef0123456789abcdef"
 	asker := code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ci"}
 	repo := "01920000-0000-7000-8000-000000000001"
+	// A REVISION'S FACTS ARE THE ENGINE'S OWN READ, its repository's home's,
+	// which names no asker.
 	facts := func(m func(q *code.RevisionFactsQuery)) code.GitQuery {
-		q := code.GitQuery{Kind: code.GitRevisionFacts, RepoID: repo, Asker: asker,
+		q := code.GitQuery{Kind: code.GitRevisionFacts, RepoID: repo,
 			RevisionFacts: &code.RevisionFactsQuery{Head: a, Target: b}}
 		m(q.RevisionFacts)
 		return q
 	}
+	asked := facts(func(*code.RevisionFactsQuery) {})
+	asked.Asker = asker
+	ceiling := facts(func(*code.RevisionFactsQuery) {})
+	ceiling.CeilingSeat = "dev"
 	anchor := code.LineAnchor{ID: "f-1", Path: "src/a.go", Side: code.SideNew, BlobOID: b, Start: 3, End: 4}
 	reanchor := func(m func(q *code.ReanchorQuery)) code.GitQuery {
 		q := code.GitQuery{Kind: code.GitReanchor, RepoID: repo, Asker: asker,
@@ -187,6 +193,8 @@ func TestAReadOfAChangesRevisionsIsRefusedByField(t *testing.T) {
 		field string // "" is a valid query
 	}{
 		{"facts", facts(func(*code.RevisionFactsQuery) {}), ""},
+		{"facts a principal asks", asked, "asker"},
+		{"facts read for a seat", ceiling, "asker"},
 		{"facts of an abbreviation", facts(func(q *code.RevisionFactsQuery) { q.Head = a[:7] }),
 			"revision_facts.head"},
 		{"facts against the zero id", facts(func(q *code.RevisionFactsQuery) { q.Target = code.ZeroOID }),

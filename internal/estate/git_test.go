@@ -1594,6 +1594,8 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 		// make; a person's consults no chart.
 		{opCodeChange.spec, code.ChangeProposal{Asker: seat}, true},
 		{opCodeChange.spec, code.ChangeProposal{Asker: person}, false},
+		// A LANDING, the home's own write naming no asker, judges no grant.
+		{opCodeChange.spec, code.ChangeProposal{Landed: &code.ChangeLanded{}}, false},
 		{opCodeLifecycle.spec, code.LifecycleRequest{Kind: code.LifecycleHold, Actor: seat}, true},
 		{opCodeLifecycle.spec, code.LifecycleRequest{Kind: code.LifecycleCreate, Actor: person}, true},
 		// A WRITE OF A CHANGE'S CONVERSATION THE CHART JUDGES: a seat's, and an

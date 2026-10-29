@@ -627,6 +627,21 @@ func registeredStatements() map[string]statement {
 			[]string{"SCAN json_each AS j", "code_findings_raiser_idx (change_id=? AND raiser=? AND state=?)"}},
 		"standing verdict": {standingVerdictSQL, []any{"repo-1-change-000001", "seat-0"},
 			[]string{participantKey + " (change_id=? AND handle=?)"}},
+		// THE HOME'S DUE LISTING (changesdue.go): the repositories holding a
+		// due change, after a cursor, walking the index partial on the live
+		// states in its order, each change checked against its facts' key,
+		// its target's row by the refs' key and its repository's state by its
+		// key; one repository's state by its key; and one repository's due
+		// changes after a source branch, the same index's range, each joined
+		// to its target's row by the refs' key and checked against its
+		// facts' key.
+		"due repositories": {dueReposSQL, []any{"", MaxSnapshotItems},
+			[]string{"code_changes_open_idx (repo_id>?)", factsKey + " (change_id=? AND n=?)",
+				refsKey + " (repo_id=? AND ref=?)", repoKey + " (id=?)"}},
+		"due repository": {dueRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
+		"due changes": {dueChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
+			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",
+				factsKey + " (change_id=? AND n=?)"}},
 		// A REVISION'S FACTS: one revision's by their key, a decide's and an
 		// apply's; whether a change holds any, by the key's prefix; who
 		// stands on request_changes before a revision, a range of the

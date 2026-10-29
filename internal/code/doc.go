@@ -95,7 +95,19 @@
 // version the write was formed against), and its answer read from the change's
 // row. A write that asks for what the change already says is answered from the
 // row with no record. A seat's is judged from the chart of the deciding node's
-// epoch ([SeatRules]), and a node that cannot judge one decides none.
+// epoch ([SeatRules]), and a node that cannot judge one decides none. A
+// LANDING ([ChangeLanded]) is the repository's home git node's own write, of a
+// change whose target came to hold its head by a push past it — which no
+// push's apply can see, since only git says one commit holds another — naming
+// no asker and judged by no chart, decided against the change's head and the
+// target's tip the home read.
+//
+// ITS HOME'S WORK LIST IS ITS ROWS (changesdue.go): a live change whose head
+// revision holds no facts against the branch it merges into, on an active
+// repository, its target a live branch, is due its home's change work
+// ([ReadChangesDue], the engine's own read), which records the facts
+// ([Revise]) or lands the change — each taking it off the list by its own
+// row.
 //
 // ITS REVISIONS ARE ITS PUSHES' (revisions.go). The apply of the push record
 // that moves a live change's source writes the change's next revision and
@@ -698,12 +710,13 @@
 //
 // Three of those reads are of a change's revisions: a revision's FACTS against
 // its target ([GitRevisionFacts]) — its merge base, the files it touches and
-// the patch-id of its diff — where lines anchored in one revision are in
-// another ([GitReanchor]), and what the change changed between two
-// ([GitInterdiff]). Each names its commits by the whole ids the rows record,
-// never an abbreviation: an interdiff compares two revisions' bases as ids,
-// which an abbreviation would make two spellings of one commit. A
-// revision's touched list is bounded by [MaxTouchedPaths] and by
+// the patch-id of its diff, the engine's own read, which its repository's home
+// asks naming no asker ([GitReadKind.EnginesOwn]) — where lines anchored in
+// one revision are in another ([GitReanchor]), and what the change changed
+// between two ([GitInterdiff]). Each names its commits by the whole ids the
+// rows record, never an abbreviation: an interdiff compares two revisions'
+// bases as ids, which an abbreviation would make two spellings of one commit.
+// A revision's touched list is bounded by [MaxTouchedPaths] and by
 // [MaxTouchedBytes] of JSON, so the facts that carry it are one page; past
 // either the revision touches all. And [Reanchor] is the one rule that places
 // lines anchored in a blob, by the zero-context hunks of its diff ([Hunk]):

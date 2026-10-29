@@ -566,6 +566,30 @@ type RunPushesQuery struct {
 	After statelog.Position `json:"after"`
 }
 
+// ChangesDueQuery is a `changes_due` read of ONE repository's due change work:
+// the repository by its id, which its home was nudged about or found listed.
+type ChangesDueQuery struct {
+	RepoID string `json:"repo_id"`
+}
+
+// ChangeDue is one live change a `changes_due` read names: its head revision
+// has no facts against the branch it merges into, which is a live branch of
+// its repository. The change by its id and number, its head revision and
+// head, its source branch — the listing's order and cursor — and its target
+// with the tip the rows hold for it and the position of the record that moved
+// it there: everything its home reads the revision's facts against and
+// records them with, from the one snapshot the read was answered from.
+type ChangeDue struct {
+	ID          string            `json:"id"`
+	Number      int64             `json:"number"`
+	Revision    int64             `json:"revision"`
+	Head        string            `json:"head"`
+	SourceRef   string            `json:"source_ref"`
+	TargetRef   string            `json:"target_ref"`
+	Tip         string            `json:"tip"`
+	TipPosition statelog.Position `json:"tip_position"`
+}
+
 // MaxRunRepos is the most repositories one [RunPushesQuery] names: the most a
 // coding run is given — each costs a clone before its coding agent starts,
 // inside its setup budget, and a run that needs more is a task to split — so a
@@ -716,6 +740,15 @@ const (
 	// maintainer polls for the expunges it owes. The engine's own read, as
 	// `compaction_due` is.
 	ReadExpungeDue ReadKind = "expunge_due"
+	// ReadChangesDue is the change work a repository's HOME git node owes
+	// ([ChangesDueQuery]): with no repository, the active repositories
+	// holding a LIVE change whose head revision has no facts against the
+	// branch it merges into, by id; with one, those changes of that
+	// repository, by source branch, each with its target's tip as the rows
+	// hold it ([ChangeDue]), beside the repository's path owners. The
+	// engine's own read, as `compaction_due` is: what its home polls and is
+	// nudged into reading.
+	ReadChangesDue ReadKind = "changes_due"
 )
 
 // ReadKinds is the closed set.
@@ -728,7 +761,7 @@ const (
 // one that reads [ReadQuery.RunPushes].
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
-		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue}
+		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadChangesDue}
 }
 
 // Valid reports a kind this build knows.
@@ -744,9 +777,9 @@ type ReadQuery struct {
 	// [ErrNotPermitted]. Required rather than defaulted, because a default
 	// would be a reader nobody named, and an optional asker is a hole any
 	// caller that forgot it opens. REFUSED on `introduced`, on `run_pushes`
-	// and on the duty listings `compaction_due`, `publication_due` and
-	// `expunge_due`, which no principal makes: an asker there would be judged
-	// by nothing.
+	// and on the duty listings `compaction_due`, `publication_due`,
+	// `expunge_due` and `changes_due`, which no principal makes: an asker
+	// there would be judged by nothing.
 	Asker Principal `json:"asker"`
 	// CeilingSeat is the handle of the seat the asking seat's turn is acting
 	// FOR — the colleague whose ask woke it — and "" for a read made for its
@@ -879,6 +912,14 @@ type ReadQuery struct {
 	// kind refuses the read as a kind it does not know (ErrInvalid) — the
 	// run's pushes unread, never answered as none.
 	RunPushes *RunPushesQuery `json:"run_pushes,omitempty"`
+	// ChangesDue is a `changes_due` read's repository: nil lists the
+	// repositories a home owes change work in, and one names the repository
+	// whose due changes the read pages. Refused on every other kind. An
+	// estate request's field and no record's, so it takes no versionedFields
+	// row: a node of a build that predates the kind refuses the read as a
+	// kind it does not know (ErrInvalid) — the home's work waits, never
+	// answered as none.
+	ChangesDue *ChangesDueQuery `json:"changes_due,omitempty"`
 	// MinPacks is a `compaction_due` read's floor — the repositories
 	// holding at least this many live packs — REQUIRED, at least 1, for that
 	// kind and refused on every other.
@@ -892,8 +933,8 @@ type ReadQuery struct {
 	// log order, introduced and run_pushes, 1..MaxSnapshotItems (0 = the
 	// most) — run_pushes' the pushes of its run's repositories a page READS,
 	// whatever few of them name the run; a page of a duty listing —
-	// `compaction_due`, `publication_due`, `expunge_due` — is MaxSnapshotItems
-	// and names none.
+	// `compaction_due`, `publication_due`, `expunge_due`, `changes_due` — is
+	// MaxSnapshotItems and names none.
 	Limit int                `json:"limit,omitempty"`
 	Fresh statelog.Freshness `json:"fresh"`
 }
@@ -922,9 +963,16 @@ type ReadAnswer struct {
 	Due        []CompactionCandidate  `json:"due,omitempty"`
 	Publish    []PublicationCandidate `json:"publish,omitempty"`
 	Expunge    []ExpungeCandidate     `json:"expunge,omitempty"`
-	Next       string                 `json:"next,omitempty"`
-	Position   statelog.Position      `json:"position"`
-	Level      statelog.ReadLevel     `json:"level"`
+	// DueRepos is a `changes_due` listing's page of repositories, by id;
+	// DueChanges a page of one repository's due changes, by source branch,
+	// beside PathOwners, its path owners as its settings carry them, read in
+	// the same snapshot — what its home matches the touched paths against.
+	DueRepos   []string           `json:"due_repos,omitempty"`
+	DueChanges []ChangeDue        `json:"due_changes,omitempty"`
+	PathOwners []PathOwner        `json:"path_owners,omitempty"`
+	Next       string             `json:"next,omitempty"`
+	Position   statelog.Position  `json:"position"`
+	Level      statelog.ReadLevel `json:"level"`
 }
 
 // ExpungeCandidate is one repository an `expunge_due` read lists: the expunge
@@ -1083,7 +1131,9 @@ type ChangeProposal struct {
 	// holds none, or one confirmed behind the company's configuration,
 	// decides none of a seat's — the estate declares the operation to judge
 	// a grant where its asker is a seat. It names no run: a change keeps the
-	// turn and the run that opened it in its own fields.
+	// turn and the run that opened it in its own fields. A LANDING NAMES
+	// NONE: it is the repository's home git node's own write, which no
+	// principal asks and no chart judges.
 	Asker Principal `json:"asker"`
 	// Seen is the code log's position the asker read the repository and the
 	// change at — zero for one that read none. The committer DECIDES AT OR
@@ -1093,9 +1143,12 @@ type ChangeProposal struct {
 	Seen statelog.Position `json:"seen,omitzero"`
 	// ExpectedVersion is the change's version the write was formed against
 	// (code_changes.version, its records counted from 1 at its open): every
-	// write but an open names one, and one the change is no longer at is
-	// refused stale — another write, an edit or a push that moved its head,
-	// landed first. An open names none: the change does not exist yet.
+	// write but an open and a landing names one, and one the change is no
+	// longer at is refused stale — another write, an edit or a push that
+	// moved its head, landed first. An open names none: the change does not
+	// exist yet. A landing names none either: it is guarded by what its home
+	// read — the change's head and target and the target's tip — and an edit
+	// of its title between the read and the landing changes none of those.
 	ExpectedVersion int64 `json:"expected_version,omitempty"`
 
 	Open     *ChangeOpen     `json:"open,omitempty"`
@@ -1104,6 +1157,9 @@ type ChangeProposal struct {
 	Retarget *ChangeRetarget `json:"retarget,omitempty"`
 	Close    *ChangeClose    `json:"close,omitempty"`
 	Reopen   *ChangeReopen   `json:"reopen,omitempty"`
+	// Landed is a landing the repository's home git node asks, with NO
+	// Asker: the engine's own write ([ChangeLanded]).
+	Landed *ChangeLanded `json:"landed,omitempty"`
 }
 
 // ChangeResult is what became of one change proposal.
@@ -1615,7 +1671,9 @@ const (
 	// GitRevisionFacts is what a change's revision is against its target's
 	// tip: their merge base, the change's patch-id and the files it touches,
 	// and whether its head is in the target already — what the repository's
-	// home git node records on the change for each revision.
+	// home git node records on the change for each revision, or lands it by.
+	// THE ENGINE'S OWN READ ([GitReadKind.EnginesOwn]): every reader of a
+	// revision's facts after the home reads the rows, never git.
 	GitRevisionFacts GitReadKind = "revision_facts"
 	// GitReanchor is where lines anchored in one revision's files — a
 	// finding's, a comment's — are in another revision's: moved by the
@@ -1638,6 +1696,15 @@ func GitReadKinds() []GitReadKind {
 // Valid reports a kind this build answers.
 func (k GitReadKind) Valid() bool { return slices.Contains(GitReadKinds(), k) }
 
+// EnginesOwn reports a kind THE ENGINE ALONE reads — a revision's facts, which
+// the repository's home git node reads to record them on the change, or to
+// land it — so a read of it names NO asker and no seat it reads for, is held
+// to no grant and is recorded as nobody's read: an asker there would be
+// judged for a read it never made, and a `visibility: unit` repository's
+// readers would be told the engine read it. As the duty listings of the rows
+// are ([ReadQuery]'s `compaction_due`), and for the same reason.
+func (k GitReadKind) EnginesOwn() bool { return k == GitRevisionFacts }
+
 // GitQuery is one read of a repository by object id: exactly the sub-query of
 // its Kind is set.
 type GitQuery struct {
@@ -1648,7 +1715,8 @@ type GitQuery struct {
 	// and held to the repository's read grant by the git node that answers,
 	// from its own epoch's chart ([GrantOf]): a seat by its relation to the
 	// repository, a person or a token by ADR-0055's rules, which read no
-	// chart. Never trusted for anything but the grant.
+	// chart. Never trusted for anything but the grant. REFUSED on a kind the
+	// engine alone reads ([GitReadKind.EnginesOwn]), which names none.
 	Asker Principal `json:"asker"`
 	// CeilingSeat is the seat the asking seat's turn is acting for, whose
 	// grant the git node judges beside the asker's, from the same chart and
@@ -1967,12 +2035,21 @@ func (q GitQuery) Validate() error {
 	}
 	// WHO ASKS IS NAMED, or nothing is read: the answer is held to the
 	// asker's grant, and an absent asker would be judged as somebody nobody
-	// named.
-	if why := q.Asker.invalid(); why != "" {
-		return fmt.Errorf("%w: asker: %s", ErrInvalid, why)
-	}
-	if why := ceilingInvalid(q.Asker, q.CeilingSeat); why != "" {
-		return fmt.Errorf("%w: %s", ErrInvalid, why)
+	// named — but for a kind the engine alone reads, which names nobody, an
+	// asker there being judged for a read it never made.
+	switch {
+	case q.Kind.EnginesOwn():
+		if q.Asker != (Principal{}) || q.CeilingSeat != "" {
+			return fmt.Errorf("%w: asker: a %s read is the engine's own — its repository's home git node's — "+
+				"which no principal makes", ErrInvalid, q.Kind)
+		}
+	default:
+		if why := q.Asker.invalid(); why != "" {
+			return fmt.Errorf("%w: asker: %s", ErrInvalid, why)
+		}
+		if why := ceilingInvalid(q.Asker, q.CeilingSeat); why != "" {
+			return fmt.Errorf("%w: %s", ErrInvalid, why)
+		}
 	}
 	if len(q.Cursor) > maxGitCursorBytes {
 		return fmt.Errorf("%w: cursor: %d bytes is no cursor a git read issues", ErrBadCursor, len(q.Cursor))

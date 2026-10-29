@@ -1425,6 +1425,12 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// from the committer's own snapshot.
 		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.expungeDue(ctx, tx, q, &out) }
+	case ReadChangesDue:
+		// A SET READ, of the domain or of the one repository
+		// (changesdue.go): every record the home asks after it is decided
+		// again from its writer's own snapshot.
+		query = q.changesDueQuery(fresh)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.changesDue(ctx, tx, q, &out) }
 	}
 	answer, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
 		out = ReadAnswer{}
@@ -1466,6 +1472,8 @@ func (q ReadQuery) validate() error {
 		return q.validatePublicationDue()
 	case ReadExpungeDue:
 		return q.validateExpungeDue()
+	case ReadChangesDue:
+		return q.validateChangesDue()
 	}
 	// WHO ASKS IS NAMED, or nothing is read: an answer is held to the
 	// asker's grant, and an absent asker would be judged as somebody nobody
@@ -1481,6 +1489,9 @@ func (q ReadQuery) validate() error {
 		return fmt.Errorf("%w: introduced: only an introduced read names a range of pushes", ErrInvalid)
 	case q.RunPushes != nil:
 		return fmt.Errorf("%w: run_pushes: only a run_pushes read names a coding run", ErrInvalid)
+	case q.ChangesDue != nil:
+		return fmt.Errorf("%w: changes_due: only a changes_due read names the repository its home owes "+
+			"change work in", ErrInvalid)
 	case q.MinPacks != 0:
 		return fmt.Errorf("%w: min_packs: only a compaction_due read names a floor of live packs", ErrInvalid)
 	case q.Prefix != "" && q.Kind != ReadRefs:
@@ -1589,6 +1600,9 @@ func (q ReadQuery) validateIntroduced() error {
 		return refused("work", "only a listing of changes is narrowed to a work item")
 	case q.RunPushes != nil:
 		return refused("run_pushes", "only a run_pushes read names a coding run")
+	case q.ChangesDue != nil:
+		return refused("changes_due", "only a changes_due read names the repository its home owes change work "+
+			"in")
 	case q.Reviewer != "":
 		return refused("reviewer", "only a listing of changes is narrowed to a reviewer")
 	case q.Needs != "":
@@ -1663,6 +1677,7 @@ func (q ReadQuery) validateRunPushes() error {
 		{"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0}, {"brief", q.Brief},
 		{"push", q.Push != ""}, {"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""},
 		{"work", q.Work != ""}, {"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"changes_due", q.ChangesDue != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a run_pushes read names its repositories in its run and filters nothing")
@@ -1705,6 +1720,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"changes_due", q.ChangesDue != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -1738,6 +1754,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"changes_due", q.ChangesDue != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -1767,6 +1784,7 @@ func (q ReadQuery) validateExpungeDue() error {
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"changes_due", q.ChangesDue != nil},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_due read lists every repository with an expunge open or a "+

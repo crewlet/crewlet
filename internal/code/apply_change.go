@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/store"
@@ -93,11 +94,14 @@ func (a *Applier) applyChangeOpen(ctx context.Context, tx *sql.Tx, at applyConte
 }
 
 // applyChangeWrite writes one write of a change beyond its open — an edit, a
-// draft's state, a retarget, a close or a reopen — into its change's row: the
-// row read by its key, moved as the record says, and written back whole with
-// one more version at the record's position; an edit's body where it sets one,
-// a reopen's revision where its head moved while the change was closed, and
-// the repository's version.
+// draft's state, a retarget, a close, a reopen or a landing — into its
+// change's row: the row read by its key, moved as the record says, and written
+// back whole with one more version at the record's position; an edit's body
+// where it sets one, a reopen's revision where its head moved while the change
+// was closed, and the repository's version. A landing merges the change at the
+// tip its home found its head in — `push`, as one whose push set the target to
+// its head is — and applies as nothing where the change is not at the head the
+// home found, which only a record the ledger would have collapsed meets.
 func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyContext, payload any) (int, error) {
 	var repoID, changeID string
 	switch p := payload.(type) {
@@ -110,6 +114,8 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 	case ChangeClose:
 		repoID, changeID = p.RepoID, p.ChangeID
 	case ChangeReopen:
+		repoID, changeID = p.RepoID, p.ChangeID
+	case ChangeLanded:
 		repoID, changeID = p.RepoID, p.ChangeID
 	default:
 		return 0, fmt.Errorf("code: the change record at %s carries a %T", at.position, payload)
@@ -187,6 +193,14 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 		if p.Head != row.head {
 			next.head, next.revision, revision = p.Head, row.revision+1, &p
 		}
+	case ChangeLanded:
+		if !row.state.Live() || row.revision != p.Revision || row.head != p.HeadOID || row.target != p.TargetRef {
+			return changeNotApplied(ctx, at, repoID, changeID, "a landing takes a live change at the head and the "+
+				"target its home found, and it is "+string(row.state)+" at revision "+
+				strconv.FormatInt(row.revision, 10)+" into "+row.target)
+		}
+		next.state, next.mergedVia, next.mergeOID = ChangeStateMerged, MergedViaPush, p.TargetOID
+		next.mergedAt = sql.NullInt64{Int64: at.at(), Valid: true}
 	}
 	next.version, next.position = row.version+1, at.packed
 	if err := writeChange(ctx, tx, next); err != nil {

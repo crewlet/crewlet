@@ -715,7 +715,9 @@ func Catalogue() []Instrument {
 			Shows: "Writes of a change's lifecycle this node's committer was " +
 				"asked to decide, by `op` (`change_open`, `change_edit`, " +
 				"`change_draft`, `change_retarget`, `change_close`, " +
-				"`change_reopen`) and what became of each, by `outcome`: " +
+				"`change_reopen`, and `change_landed`, a landing its " +
+				"repository's home git node found) and what became of each, by " +
+				"`outcome`: " +
 				"`applied`, its record landed and its change's row says so; " +
 				"`unchanged`, it asked for what the change already said, and " +
 				"nothing was appended; `pending` and `unknown`, its record was " +
@@ -801,6 +803,51 @@ func Catalogue() []Instrument {
 				"repository is an attribute — which one is hot is a question " +
 				"for its rows and the node's `code_commit_busy` lines, a " +
 				"repository a minute, not a time series a repository.",
+		},
+		{
+			Name: CodeHomePasses, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"worker", "outcome"},
+			Shows: "Turns this node took as the HOME git node of a repository — " +
+				"one worker's work in one repository, scheduled by a nudge from " +
+				"the code log or by the minute's backstop pass — by `worker` " +
+				"(`changes`: its live changes' facts recorded, or a change whose " +
+				"head its target holds landed) and `outcome`: `worked`, its due " +
+				"work done; `failed`, a read or a record that decided nothing for " +
+				"a reason of the node's or the log's (`code_home_turn_failed` " +
+				"says which), the rest worked and the repository listed again by " +
+				"the next pass; and `cut`, more work than one turn's minute, the " +
+				"rest listed again by the next pass. A refusal that the rows moved " +
+				"since — a revision's facts superseded, a landing stale — is the " +
+				"rows answering, and the turn `worked`. `cut` climbing on one node " +
+				"is a home with more changes than its two turns keep up with.",
+		},
+		{
+			Name: CodeHomeNudges, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "The code log's word to this node's home loop, one a record " +
+				"on a repository's subject, by `outcome`: `scheduled`, this node " +
+				"is the repository's home and its work was queued at the " +
+				"record's position; `elsewhere`, another git node is its home; " +
+				"`unknown`, who serves git could not be read, and the backstop " +
+				"lists the repository within a minute; `ignored`, a subject that " +
+				"names no repository; and `gap`, the watch may have missed records " +
+				"— its consumer lost, its connection back — and a pass was run at " +
+				"once at the position it reaches. Every git node watches every " +
+				"repository, so `elsewhere` is most of every node's count but its " +
+				"homes'; `gap` climbing is a watch that keeps losing its consumer.",
+		},
+		{
+			Name: CodeHomeFactsDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"outcome"},
+			Shows: "One revision's facts as this node's home loop asked them of " +
+				"the repository's git nodes — its merge base, the files it touches " +
+				"and its patch-id against its target's tip — by `outcome`: " +
+				"`answered` or `failed`. Read by the home itself unless its copy " +
+				"cannot answer, the runner-up then: a 1 MiB patch takes some 20 " +
+				"ms and one at the 256 MiB bound some 2.3 s on two cores. " +
+				"Durations near the read's ten seconds of git are changes past " +
+				"what a home identifies — their patch-ids omitted — or a home " +
+				"short of the CPU its reads run on.",
 		},
 		{
 			Name: CodeCompactRuns, Kind: KindCounter, Unit: UnitCount,

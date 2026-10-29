@@ -310,3 +310,46 @@ func TestTheBaseIsWhereTheHistoriesMeet(t *testing.T) {
 		t.Errorf("a history sharing nothing carries the id %q, want git's of its diff from the empty tree", f.PatchID)
 	}
 }
+
+// unnameable is a query.Pool whose walk of a change's touched paths lists one
+// ordinary path and then path, as git lists one of a tree a client built with
+// git's plumbing rather than from a work tree, and that runs every other
+// process on the pool beneath.
+type unnameable struct {
+	query.Pool
+	path string
+}
+
+func (p unnameable) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
+	if !slices.Contains(c.Args, "--name-only") {
+		return p.Pool.Run(ctx, c)
+	}
+	if _, err := c.Stdout.Write([]byte("a.txt\x00" + p.path + "\x00")); err != nil {
+		return gitproc.Result{}, err
+	}
+	return gitproc.Result{}, nil
+}
+
+// A PATH NO READ COULD NAME BACK TOUCHES ALL: a tree built with git's plumbing
+// may hold a path past code.MaxGitPathBytes, which no work tree could, and the
+// revise that records a revision's facts refuses a touched list holding one —
+// so the facts list no such path, and touch all, as past the list's bounds,
+// rather than leave the change due to its home with every revise refused.
+//
+// Mutation: drop nameable from the walk's stop, and the facts list the path.
+func TestAPathNoReadCouldNameTouchesAll(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	base := x.commit(map[string]string{"keep.txt": "k\n"}, "base")
+	head := x.commit(map[string]string{"a.txt": "a\n"}, "one file")
+	repo := x.repo(codetest.RepoName)
+	long := strings.Repeat("d/", code.MaxGitPathBytes/2) + "f.txt"
+	if _, err := code.GitPath("touched", long, "", false); err == nil {
+		t.Fatalf("the premise: a path of %d bytes is one a read by oid names", len(long))
+	}
+	s := x.server(0, query.Options{Git: unnameable{Pool: x.f.Nodes()[0].Pool(), path: long}})
+	if f := x.facts(s, repo, head, base); !f.TouchesAll || len(f.Touched) != 0 {
+		t.Fatalf("the facts of a change touching a path no read names list %d paths (touches all %t), want "+
+			"them to touch all, with no list", len(f.Touched), f.TouchesAll)
+	}
+}

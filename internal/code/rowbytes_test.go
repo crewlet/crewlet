@@ -86,6 +86,10 @@ func TestARowsComputedSizeIsItsEncodingsLength(t *testing.T) {
 		fill(rng, reflect.ValueOf(&publishing).Elem())
 		check("publication candidate", publishing, publishing.encodedBytes())
 
+		var due ChangeDue
+		fill(rng, reflect.ValueOf(&due).Elem())
+		check("due change", due, due.encodedBytes())
+
 		var layer LayerRow
 		fill(rng, reflect.ValueOf(&layer).Elem())
 		check("layer row", layer, layer.encodedBytes())

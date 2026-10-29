@@ -239,6 +239,18 @@ func (c CompactionCandidate) encodedBytes() int {
 		field("version", positionBytes(c.Version), false)
 }
 
+// encodedBytes is the length of the due change's JSON encoding.
+func (c ChangeDue) encodedBytes() int {
+	return 2 + field("id", stringBytes(c.ID), true) +
+		field("number", intBytes(c.Number), false) +
+		field("revision", intBytes(c.Revision), false) +
+		field("head", stringBytes(c.Head), false) +
+		field("source_ref", stringBytes(c.SourceRef), false) +
+		field("target_ref", stringBytes(c.TargetRef), false) +
+		field("tip", stringBytes(c.Tip), false) +
+		field("tip_position", positionBytes(c.TipPosition), false)
+}
+
 // encodedBytes is the length of the candidate's JSON encoding.
 func (c PublicationCandidate) encodedBytes() int {
 	n := 2 + field("id", stringBytes(c.ID), true) +

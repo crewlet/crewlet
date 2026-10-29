@@ -15,11 +15,12 @@ import (
 // by every asker, so a second seat's read of a page the first one's read cut is
 // a read of the repository too. A refused read records nothing, and neither
 // does any read of a `visibility: company` repository, which every seat reads
-// by declaration.
+// by declaration, nor the engine's own read, which nobody made.
 //
 // Mutation: drop the visibility check, and the company repository's read is
 // recorded; answer a memo hit at once, as an early return, and the second
-// seat's read is missing.
+// seat's read is missing; record the engine's own read, and the home's facts
+// read is recorded as somebody's.
 func TestAUnitRepositorysToolReadIsRecorded(t *testing.T) {
 	t.Parallel()
 	settings := codetest.Settings()
@@ -78,5 +79,13 @@ func TestAUnitRepositorysToolReadIsRecorded(t *testing.T) {
 	mustRead(t, s, treeQ(x.repo("open"), code.TreeQuery{Rev: head}))
 	if after := rec.all(); len(after) != len(want) {
 		t.Errorf("a read of a visibility: company repository was recorded: %+v", after[len(want):])
+	}
+
+	// THE ENGINE'S OWN READ IS NOBODY'S: the home's read of a revision's
+	// facts names no asker, and a read of the unit repository it answers is
+	// recorded as nobody's read of it.
+	mustRead(t, s, factsQ(repo, head, head))
+	if after := rec.all(); len(after) != len(want) {
+		t.Errorf("the engine's own read of a visibility: unit repository was recorded: %+v", after[len(want):])
 	}
 }

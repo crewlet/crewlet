@@ -9,15 +9,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // A CHANGE'S LIFECYCLE, DECIDED: an open, an edit of what it says of itself, a
-// draft's state, a retarget, a close and a reopen are each a [ChangeProposal]
-// its asker hands the repository's committer ([Committer.ProposeChange]),
+// draft's state, a retarget, a close, a reopen and a landing are each a
+// [ChangeProposal] its asker — the repository's home git node, for a landing —
+// hands the repository's committer ([Committer.ProposeChange]),
 // which decides it in ONE snapshot, alone, as a record of its own op
 // ([ChangeOps]) on the REPOSITORY's subject — the subject every push that
 // moves the change's branches is on too, so the broker arbitrates a change's
@@ -70,12 +73,22 @@ import (
 //     too, and takes a closed change's source only where it is a live branch
 //     (no_source) that heads no other live change (change_exists).
 //
+// A LANDING ([ChangeLanded]) is the repository's home git node's own write,
+// which names no asker and judges no grant: it meets its change on this
+// repository (change_not_found); a closed change, which nobody lands
+// (change_closed); and then the rows its home read — the change's head
+// revision and head, its target branch, and the target's tip, each where the
+// home read it — else stale, decided against rows the home did not read, for
+// its next pass to read again. The decide runs no git: whether the tip holds
+// the head is the home's finding, which the tip it names makes true, since a
+// branch's tip holds what it held whatever moved it there.
+//
 // A write that asks for what the change already says — an edit to its own
 // values, a draft's state it is in, the target it has, a close of a closed
-// change, a reopen of a live one — is ANSWERED UNCHANGED from the change's row,
-// with no record: nothing moves, so nothing is appended, and a write asked
-// again after its answer was lost, under a new operation id, lands on what the
-// first did rather than refused.
+// change, a reopen of a live one, a landing of a merged one — is ANSWERED
+// UNCHANGED from the change's row, with no record: nothing moves, so nothing
+// is appended, and a write asked again after its answer was lost, under a new
+// operation id, lands on what the first did rather than refused.
 //
 // # A seat's write is decided only by a node that can judge it
 //
@@ -87,19 +100,21 @@ import (
 // are decided as ever, since no rule of theirs reads the chart.
 
 // Validate refuses a proposal no committer could decide ([ErrInvalidProposal],
-// naming the field), before it is queued: anything but exactly one of the six
-// records; an operation id this engine does not accept
+// naming the field), before it is queued: anything but exactly one of the
+// seven records; an operation id this engine does not accept
 // (statelog.CheckCallerOpID); an asker that is no principal, or that names a
-// run; a Seen that is no position on the code log; a repository id that is no
-// UUID in its canonical spelling; a change id that is no bare UUIDv7 — and an
-// open's that is not [OpenChangeID] of its operation id; an open that names a
+// run — and a landing that names any asker, being the home's own; a Seen that
+// is no position on the code log; a repository id that is no UUID in its
+// canonical spelling; a change id that is no bare UUIDv7 — and an open's that
+// is not [OpenChangeID] of its operation id; an open or a landing that names a
 // version, or any other write that names none; a branch that is no branch a
 // change may name ([branchProblem]); a title, a body, a close's reason, a work
 // item, a turn or a run its bounds refuse; an edit that sets nothing, or sets
 // a work item and clears it; a field the committer stamps — who wrote it, an
-// open's or a reopen's head — set by the asker; and a record past what one
-// proposal may carry ([EntryRoom]). What the repository and the change hold is
-// the decide's to judge, from the rows.
+// open's or a reopen's head — set by the asker; a landing of no revision, of a
+// head or a tip that is no whole object id, or found by a node no node id
+// names; and a record past what one proposal may carry ([EntryRoom]). What the
+// repository and the change hold is the decide's to judge, from the rows.
 func (p ChangeProposal) Validate() error {
 	_, err := p.measure()
 	return err
@@ -141,6 +156,8 @@ func (p ChangeProposal) record() (OpKind, any) {
 		return OpChangeClose, *p.Close
 	case p.Reopen != nil:
 		return OpChangeReopen, *p.Reopen
+	case p.Landed != nil:
+		return OpChangeLanded, *p.Landed
 	}
 	return "", nil
 }
@@ -192,6 +209,8 @@ func (p ChangeProposal) RepoID() string {
 		return p.Close.RepoID
 	case p.Reopen != nil:
 		return p.Reopen.RepoID
+	case p.Landed != nil:
+		return p.Landed.RepoID
 	}
 	return ""
 }
@@ -211,15 +230,26 @@ func (p ChangeProposal) ChangeID() string {
 		return p.Close.ChangeID
 	case p.Reopen != nil:
 		return p.Reopen.ChangeID
+	case p.Landed != nil:
+		return p.Landed.ChangeID
 	}
 	return ""
 }
 
+// judgesChart reports a proposal whose decide reads the deciding node's chart:
+// a SEAT'S write, whose grant the chart says. A person's and a token's consult
+// none, and neither does a landing, which names no asker and judges no grant —
+// so a node behind the company's configuration, or holding no chart yet, still
+// decides a landing. ONE ANSWER, which the committer queues and decides by.
+func (p ChangeProposal) judgesChart() bool {
+	return p.Landed == nil && p.Asker.Kind.readsChart()
+}
+
 // decidedRows is the most rows p's record makes its apply touch: an open's
 // change, body, first author, first revision and the repository's row; an
-// edit's change, body and repository; a draft's state's, a retarget's and a
-// close's change and repository; a reopen's change, the revision a moved
-// source makes, and the repository.
+// edit's change, body and repository; a draft's state's, a retarget's, a
+// close's and a landing's change and repository; a reopen's change, the
+// revision a moved source makes, and the repository.
 func (p ChangeProposal) decidedRows() int {
 	switch {
 	case p.Open != nil:
@@ -235,19 +265,26 @@ func (p ChangeProposal) decidedRows() int {
 func (p ChangeProposal) validFields() error {
 	set := 0
 	for _, isSet := range []bool{p.Open != nil, p.Edit != nil, p.Draft != nil, p.Retarget != nil,
-		p.Close != nil, p.Reopen != nil} {
+		p.Close != nil, p.Reopen != nil, p.Landed != nil} {
 		if isSet {
 			set++
 		}
 	}
 	if set != 1 {
 		return fmt.Errorf("%w: a change proposal is exactly one of an open, an edit, a draft's state, a "+
-			"retarget, a close and a reopen, and this one sets %d", ErrInvalidProposal, set)
+			"retarget, a close, a reopen and a landing, and this one sets %d", ErrInvalidProposal, set)
 	}
 	if err := statelog.CheckCallerOpID(p.OpID); err != nil {
 		return badField("op_id", "%v", err)
 	}
 	switch why := p.Asker.invalid(); {
+	case p.Landed != nil:
+		// THE HOME'S OWN WRITE: a landing is found by the repository's home
+		// git node and asked by no principal, so one naming an asker would
+		// be recorded as somebody nobody named.
+		if p.Asker != (Principal{}) {
+			return badField("asker", "a landing is the repository's home git node's own, which no principal asks")
+		}
 	case why != "":
 		return fmt.Errorf("%w: asker: %s", ErrInvalidProposal, why)
 	case !p.Asker.Run.IsZero():
@@ -269,8 +306,15 @@ func (p ChangeProposal) validFields() error {
 	if err := bareUUIDv7("change_id", p.ChangeID()); err != nil {
 		return err
 	}
-	if p.Open != nil {
+	switch {
+	case p.Open != nil:
 		return p.validOpen()
+	case p.Landed != nil:
+		if p.ExpectedVersion != 0 {
+			return badField("expected_version", "%d; a landing names no version — it is held to the head and the "+
+				"target its home read", p.ExpectedVersion)
+		}
+		return p.Landed.validFields()
 	}
 	if p.ExpectedVersion < 1 {
 		return badField("expected_version", "%d; a write to a change names the version it was formed against, "+
@@ -341,6 +385,29 @@ func (p ChangeProposal) validOpen() error {
 	case o.Owner != (Principal{}):
 		return badField("open.owner", "the committer stamps the change's owner from the proposal's asker, and an "+
 			"asker sends none")
+	}
+	return nil
+}
+
+// validFields holds a landing to [ChangeProposal.Validate]'s rules: a revision
+// from 1, whole object ids for the head and the target's tip, the target a
+// branch a change may name, and the node a node id config admits.
+func (l *ChangeLanded) validFields() error {
+	if l.Revision < 1 {
+		return badField("landed.revision", "%d; a change's revisions count from 1", l.Revision)
+	}
+	for _, id := range []struct{ field, id string }{
+		{"landed.head_oid", l.HeadOID}, {"landed.target_oid", l.TargetOID},
+	} {
+		if !gitref.ValidOID(id.id) || id.id == ZeroOID {
+			return badField(id.field, "%q is not a whole object id", id.id)
+		}
+	}
+	if why := branchProblem(l.TargetRef); why != "" {
+		return badField("landed.target_ref", "%s", why)
+	}
+	if !config.ValidNodeID(l.Node) {
+		return badField("landed.node", "%q is not a node id config admits", l.Node)
 	}
 	return nil
 }
@@ -488,7 +555,7 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 		return d.refuse(ChangeRefusalRepoArchived, fmt.Sprintf("repository %s is archived and read-only "+
 			"(code.repos archived: true): its changes are read, and written nothing", repo.name))
 	}
-	if p.Asker.Kind.readsChart() && seats.Roster == nil {
+	if p.judgesChart() && seats.Roster == nil {
 		// THE CALLER'S BUG: the committer hands a seat's write on to the
 		// repository's next committer before deciding it with no chart.
 		return changeDecision{}, fmt.Errorf("code: a seat's change to %s reached the decide with no chart to "+
@@ -507,6 +574,11 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 			p.ChangeID()))
 	}
 	named := ChangeRef(repo.name, row.number)
+	if p.Landed != nil {
+		// THE HOME'S OWN, which names no asker: its rules are the rows its
+		// home read, never a grant.
+		return decideLanded(ctx, tx, p, repo, row, named, d)
+	}
 	if why := mayWrite(p.Asker, row, grant, named); why != "" {
 		return d.refuse(ChangeRefusalNotPermitted, why)
 	}
@@ -643,6 +715,43 @@ func decideRetarget(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo push
 	if heads[target] == "" {
 		return d.refuse(ChangeRefusalNoTarget, fmt.Sprintf("%s holds no live %s to merge into", repo.name,
 			target))
+	}
+	_, d.payload = p.stamped("")
+	return d, nil
+}
+
+// decideLanded is a landing's rules over row — see this file's head: a change
+// that is not closed, answered unchanged where it is merged already; then the
+// change's head revision and head, its target branch and the target's tip as
+// its home read them (stale otherwise).
+func decideLanded(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRepo, row changeRow, named string,
+	d changeDecision) (changeDecision, error) {
+
+	l := p.Landed
+	switch row.state {
+	case ChangeStateMerged:
+		d.unchanged = &row
+		return d, nil
+	case ChangeStateClosed:
+		return d.refuse(ChangeRefusalChangeClosed, fmt.Sprintf("%s is closed, and a closed change is landed by "+
+			"nobody: reopen it, and its home finds its head in its target again", named))
+	}
+	switch {
+	case row.revision != l.Revision || row.head != l.HeadOID:
+		return d.refuse(ChangeRefusalStale, fmt.Sprintf("%s is at revision %d, its head %s, and its home found "+
+			"revision %d's head %s in its target: the home reads the change again", named, row.revision,
+			short(row.head), l.Revision, short(l.HeadOID)))
+	case row.target != l.TargetRef:
+		return d.refuse(ChangeRefusalStale, fmt.Sprintf("%s merges into %s, and its home found its head in %s: "+
+			"the home reads the change again", named, row.target, l.TargetRef))
+	}
+	heads, err := refsNamed(ctx, tx, p.RepoID(), []string{l.TargetRef})
+	if err != nil {
+		return changeDecision{}, fmt.Errorf("code: read the target %s lands in: %w", named, err)
+	}
+	if tip := heads[l.TargetRef]; tip != l.TargetOID {
+		return d.refuse(ChangeRefusalStale, fmt.Sprintf("%s of %s is at %s, and the home found %s's head in it "+
+			"at %s: the home reads the target again", l.TargetRef, repo.name, short(tip), named, short(l.TargetOID)))
 	}
 	_, d.payload = p.stamped("")
 	return d, nil

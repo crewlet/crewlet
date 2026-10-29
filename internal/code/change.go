@@ -53,8 +53,9 @@ func (s ChangeState) Live() bool { return s == ChangeStateDraft || s == ChangeSt
 type MergedVia string
 
 // MergedViaPush is a change whose target came to hold its head by a push:
-// one that set the target to exactly the change's head, or one that moved the
-// target past it, which the repository's home git node finds and records.
+// one that set the target to exactly the change's head, which the push's own
+// apply records, or one that moved the target past it, which the repository's
+// home git node finds and records ([ChangeLanded]).
 const MergedViaPush MergedVia = "push"
 
 // MergedVias is the closed set.
@@ -129,7 +130,9 @@ const (
 	ChangeRefusalNotPermitted ChangeRefusal = "not_permitted"
 	// ChangeRefusalStale is a write formed against a version of the change
 	// it is no longer at ([ChangeProposal.ExpectedVersion]): another write
-	// — an edit, or a push that moved its head — landed first.
+	// — an edit, or a push that moved its head — landed first. And a landing
+	// ([ChangeLanded]) whose change's head, target branch or target's tip
+	// moved since its home read them.
 	ChangeRefusalStale ChangeRefusal = "stale"
 	// ChangeRefusalSameRef is a change whose source and target are one
 	// branch.
@@ -291,6 +294,31 @@ type ChangeReopen struct {
 	// Head is the source branch's head as the deciding snapshot held it.
 	// STAMPED BY THE COMMITTER; an asker sends none.
 	Head string `json:"head,omitempty"`
+}
+
+// ChangeLanded records a live change MERGED because its target came to hold
+// its head: a push moved the target past the head rather than onto it, which
+// no push's own apply can see (it would need git), so the repository's home
+// git node finds it — the head inside the target's tip — and asks this
+// record of the committer. The home's own write, naming no asker, guarded by
+// what the home read: the change's revision and head, its target branch, and
+// the tip that branch was at. A head that moved since, a retarget, or a target
+// moved on is the landing decided against rows the home did not read — stale,
+// and its next pass reads the rows again.
+type ChangeLanded struct {
+	RepoID   string `json:"repo_id"`
+	ChangeID string `json:"change_id"`
+	// Revision and HeadOID are the change's head revision the home found
+	// inside its target, and its head.
+	Revision int64  `json:"revision"`
+	HeadOID  string `json:"head_oid"`
+	// TargetRef is the change's target branch and TargetOID the tip it was
+	// at, holding the head: the commit the change merged at (merge_oid).
+	TargetRef string `json:"target_ref"`
+	TargetOID string `json:"target_oid"`
+	// Node is the git node that found it: the repository's home as it took
+	// itself to be.
+	Node string `json:"node"`
 }
 
 // OpenChangeID is the id of the change an open under opID opens: DERIVED from

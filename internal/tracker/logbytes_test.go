@@ -297,15 +297,46 @@ var codeLogUnwritten = map[code.OpKind]struct {
 		"through the estate's code.conversation"},
 	code.OpFindingResolve: {payload: reflect.TypeFor[code.FindingResolve](), how: "findings are " +
 		"answered or dismissed by code_resolve_finding, through the estate's code.conversation"},
-	// A REVISION'S FACTS, recorded by the change writer for the repository's
-	// home git node, are appended by no node while no home reads them: the
-	// home's change work is their writer, through the estate's
-	// code.conversation, once for each revision of a live change and once
-	// more for each retarget.
-	code.OpRevise: {payload: reflect.TypeFor[code.Revise](), how: "a revision's facts are read by its " +
-		"repository's home git node and recorded through the estate's code.conversation, once a revision " +
-		"of a live change and once more a retarget"},
 }
+
+// codeLogRiders is every op of the code domain a node of this build appends
+// ONLY ABOUT AN OBJECT ANOTHER OP'S RECORDS MAKE, with that op — on — and how:
+// its writer runs, and its records come at no rate while no node makes the
+// object they are about. So the day leaves it out exactly while on is
+// unwritten (codeLogUnwritten), and while no priced op's payload declares a
+// key that would make one (makers: a push's own options opening a change, the
+// day M4's push options land) — and TestTheCodeLogsDayPricesEveryRecordItTakes
+// fails naming the rider the day either changes: whoever prices the records
+// that make the object prices the records about it beside them.
+//
+// A CHANGE IS THE OBJECT TODAY: the home git node's change work (internal/code/
+// home) records a revision's facts and lands a change, both only about a LIVE
+// change, which only a change_open — or a reopen of a change one opened —
+// makes. Its writer is no file this build is made from, so no change is ever
+// live and neither rider appends a record.
+var codeLogRiders = map[code.OpKind]struct {
+	on     code.OpKind
+	makers []codeLogMaker
+	how    string
+}{
+	code.OpRevise: {on: code.OpChangeOpen, makers: changeMakers, how: "a revision's facts are read by its " +
+		"repository's home git node and recorded through the estate's code.conversation, once a revision " +
+		"of a live change and once more a retarget — a push's rate where every push revises a change"},
+	code.OpChangeLanded: {on: code.OpChangeOpen, makers: changeMakers, how: "a change whose target came to " +
+		"hold its head is landed by its repository's home git node through the estate's code.change, once " +
+		"a change at the most"},
+}
+
+// codeLogMaker is a key of a priced op's payload whose records would make the
+// object a rider is about — every key it declares under it.
+type codeLogMaker struct {
+	op  code.OpKind
+	key string
+}
+
+// changeMakers is every key of a priced op's payload that would open a change:
+// a push's options naming one (M4's push options, PushEntry.Change).
+var changeMakers = []codeLogMaker{{op: code.OpPush, key: "pushes.change"}}
 
 // codeLogUnwrittenShapes is every SHAPE of record of an op the day classifies
 // that no node of this build appends, and that nothing but its writer tells
@@ -456,8 +487,8 @@ var codeLogKinds = map[code.ObjectKind]string{
 		"on their repository; so are its settings, deletion, restore and purge " +
 		"(codeLogNegligible, by its manager: codeLogManagers), a live turn's hold on it and a " +
 		"person's purge of its unreachable objects (codeLogNegligible), an expunge's begin and " +
-		"commit and a change's lifecycle (codeLogUnwritten) and a publication of its layers " +
-		"(codeLogUnwrittenShapes)",
+		"commit and a change's lifecycle (codeLogUnwritten), a change's landing, which rides its open " +
+		"(codeLogRiders), and a publication of its layers (codeLogUnwrittenShapes)",
 	code.KindBarrier: "a git client's read (codeLogDay)",
 	code.KindName: "a repository's create and a tool's rename of it, each on the name it " +
 		"claims (codeLogNegligible, by its manager: codeLogManagers), and an old name's release " +
@@ -467,8 +498,8 @@ var codeLogKinds = map[code.ObjectKind]string{
 	code.KindCompany:    "the activation fence (codeLogNegligible)",
 	code.KindTrimmed:    "the trim's sweep of the anchors (codeLogNegligible)",
 	code.KindChange: "a change's conversation — its asks for review, its comments, its threads' " +
-		"resolutions, its reviews and the answers to their findings — and its revisions' facts, on the " +
-		"change (codeLogUnwritten)",
+		"resolutions, its reviews and the answers to their findings — on the change (codeLogUnwritten), " +
+		"and its revisions' facts, which ride its open (codeLogRiders)",
 }
 
 // The reference company's chart, as a seat's tools hold it. Its work is filed
@@ -1173,13 +1204,16 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 // that has no room for it, and a company that lowered its code log to a half
 // on the barrier count would fill it first.
 //
-// So every op the code domain declares is exactly one of three: priced by the
+// So every op the code domain declares is exactly one of four: priced by the
 // day (codeLogDay, a term for each shape of its records it prices),
-// negligible beside it for the reason given (codeLogNegligible), or appended
-// by no node of this build (codeLogUnwritten) — and that last only while no
-// file the crewlet binary is built from names the listing its loop would poll
-// or the payload its asker would build. Every kind of object the log's records
-// are on says how the day counts them (codeLogKinds).
+// negligible beside it for the reason given (codeLogNegligible), appended by
+// no node of this build (codeLogUnwritten) — and that only while no file the
+// crewlet binary is built from names the listing its loop would poll or the
+// payload its asker would build — or appended only about objects an
+// unwritten op makes (codeLogRiders), and that only while that op is
+// unwritten and no priced op's payload declares a key that would make one.
+// Every kind of object the log's records are on says how the day counts them
+// (codeLogKinds).
 //
 // AN OP IS CLASSIFIED ONCE, AND ITS RECORDS CHANGE SHAPE UNDER IT: a later
 // writer appends the same op's records at a size or a rate its term was not
@@ -1201,8 +1235,9 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 // a key to a priced op's payload, name code.ReadPublicationDue or
 // code.ReadExpungeDue in a non-test file of internal/code/compact, or build a
 // code.ChangeOpen in a non-test file of internal/agent/builtin, and this fails
-// naming it; take the compactor's poll off code.ReadCompactionDue and it fails
-// saying the walk found no writer.
+// naming it — and naming the revise and the landing that ride it; take the
+// compactor's poll off code.ReadCompactionDue and it fails saying the walk
+// found no writer.
 func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 	t.Parallel()
 	const remedy = "price its records into codeLogDay — and restate the code log's share and " +
@@ -1239,13 +1274,16 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 		if _, found := codeLogUnwritten[op]; found {
 			in = append(in, "codeLogUnwritten")
 		}
+		if _, found := codeLogRiders[op]; found {
+			in = append(in, "codeLogRiders")
+		}
 		switch len(in) {
 		case 0:
 			t.Errorf("the code log takes %q records, which its day neither prices nor leaves out "+
 				"for a reason: %s", op, remedy)
 		case 1:
 		default:
-			t.Errorf("%q is in %s: an op is priced, negligible or unwritten, one of the three",
+			t.Errorf("%q is in %s: an op is priced, negligible, unwritten or a rider, one of the four",
 				op, strings.Join(in, " and "))
 		}
 	}
@@ -1262,6 +1300,7 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 		{"codeLogUnwritten", slices.Collect(maps.Keys(codeLogUnwritten))},
 		{"codeLogUnwrittenShapes", shapeOps},
 		{"codeLogFields", slices.Collect(maps.Keys(codeLogFields))},
+		{"codeLogRiders", slices.Collect(maps.Keys(codeLogRiders))},
 	} {
 		for _, op := range listed.ops {
 			if !op.Valid() {
@@ -1320,6 +1359,37 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 			t.Errorf("a file the crewlet binary is built from names %v, the payload the asker "+
 				"that appends %q records builds, so a node appends them — %s: %s",
 				unwritten.payload, op, unwritten.how, remedy)
+		}
+	}
+	// THE RIDERS, each unwritten exactly while the op that makes its object is,
+	// and no priced op's payload declares a key that would make one.
+	for op, rider := range codeLogRiders {
+		maker, unwritten := codeLogUnwritten[rider.on]
+		switch {
+		case strings.TrimSpace(rider.how) == "" || !rider.on.Valid():
+			t.Errorf("codeLogRiders holds %q records unwritten while %q is, which is no op the code domain "+
+				"declares, or does not say how its records would be appended", op, rider.on)
+		case !unwritten:
+			t.Errorf("%q records are about objects only %q records make, which the day no longer holds "+
+				"unwritten, so a node makes them, and appends these about them — %s: %s", op, rider.on,
+				rider.how, remedy)
+		case polled[maker.listing] || built[maker.payload]:
+			t.Errorf("a file the crewlet binary is built from appends %q records, which make the objects %q "+
+				"records are about, so a node appends these too — %s: %s", rider.on, op, rider.how, remedy)
+		}
+		for _, m := range rider.makers {
+			fields, priced := codeLogFields[m.op]
+			if !priced {
+				t.Errorf("codeLogRiders reads the keys of %q records for what would make %q's objects, and "+
+					"the day prices no such records", m.op, op)
+				continue
+			}
+			for _, key := range payloadKeys(t, fields.payload) {
+				if strings.HasPrefix(key, m.key) {
+					t.Errorf("%q records declare the key %q, which makes the objects %q records are about, so "+
+						"a node appends these too — %s: %s", m.op, key, op, rider.how, remedy)
+				}
+			}
 		}
 	}
 	for _, unwritten := range codeLogUnwrittenShapes {

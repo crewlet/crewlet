@@ -407,7 +407,7 @@ func (q *queued) alone() bool { return q.compaction != nil || q.expunge != nil |
 func (q *queued) judgedByChart() bool {
 	switch {
 	case q.change != nil:
-		return q.change.Asker.Kind.readsChart()
+		return q.change.judgesChart()
 	case q.alone():
 		return false
 	}

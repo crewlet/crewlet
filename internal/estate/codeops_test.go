@@ -717,7 +717,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		}
 	}
 
-	// A CHANGE'S SIX WRITES, every field of each — the fields the committer
+	// A CHANGE'S SEVEN WRITES, every field of each — the fields the committer
 	// stamps among them, which cross whole whoever set them — and every
 	// field of the answer.
 	title, body := "Retry the flaky upload", "It fails one run in ten.\n\nSee ENG-412."
@@ -739,6 +739,9 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Reason: "superseded by web!43"}},
 		"a reopen": {Reopen: &code.ChangeReopen{RepoID: ref.ID, ChangeID: item.ChangeID, By: seat,
 			Head: "7777777777777777777777777777777777777777"}},
+		"a landing": {Landed: &code.ChangeLanded{RepoID: ref.ID, ChangeID: item.ChangeID, Revision: 3,
+			HeadOID: "7777777777777777777777777777777777777777", TargetRef: "refs/heads/main",
+			TargetOID: "8888888888888888888888888888888888888888", Node: "node-b"}},
 	} {
 		p.OpID, p.Asker, p.Seen, p.ExpectedVersion = "019a0c2e-0000-7000-8000-0000000000d0.code_open_change",
 			seat, at, 4
@@ -863,6 +866,10 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		{Kind: code.ReadPublicationDue, Cursor: "1700000000000000/" + ref.ID,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		{Kind: code.ReadExpungeDue, Cursor: ref.ID, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		// THE HOME'S DUE CHANGE WORK, of every repository and of one.
+		{Kind: code.ReadChangesDue, Cursor: ref.ID, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		{Kind: code.ReadChangesDue, ChangesDue: &code.ChangesDueQuery{RepoID: ref.ID}, Cursor: "refs/heads/fix",
+			Fresh: statelog.FloorAt(statelog.ReadSession, at)},
 		// THE CONVERSATION'S FILTERS AND PARTS, each crossing whole: a
 		// filter dropped on the wire would answer the wider listing.
 		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadChanges,

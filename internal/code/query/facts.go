@@ -156,7 +156,14 @@ func (r *read) touched(ctx context.Context, base, head string, limit int) ([]str
 		if len(paths) > 0 {
 			c++ // the comma before it
 		}
-		if long || !utf8.Valid(rec) || len(paths) == r.s.touchedPaths || cost+c > limit {
+		// A PATH THE FACTS' RECORD COULD NOT CARRY TOUCHES ALL, as one past
+		// the list's bounds does: bytes that are not UTF-8, which JSON cannot
+		// carry exactly, and one no read by oid could name back (code.GitPath:
+		// past code.MaxGitPathBytes, or not clean), which the revise that
+		// records the facts refuses — a list holding it would leave its change
+		// due to its home for ever, its every revise refused.
+		if long || !utf8.Valid(rec) || len(paths) == r.s.touchedPaths || cost+c > limit ||
+			!nameable(rec) {
 			all = true
 			return errStop
 		}
@@ -185,6 +192,13 @@ func (r *read) touched(ctx context.Context, base, head string, limit int) ([]str
 		return nil, false, err
 	}
 	return paths, false, nil
+}
+
+// nameable reports a touched path a read by oid could name back, and so one a
+// revision's facts may list (code.GitPath).
+func nameable(rec []byte) bool {
+	_, err := code.GitPath("touched", string(rec), "", false)
+	return err == nil
 }
 
 // patchID is `git patch-id --verbatim` of the diff from base to head: "" for

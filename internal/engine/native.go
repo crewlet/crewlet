@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	codecompact "github.com/crewlet/crewlet/internal/code/compact"
+	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
@@ -181,6 +182,12 @@ type native struct {
 	// because the alarm reading's producers gate follows a call only
 	// through one ([Engine.codeReading]).
 	compactor *codecompact.Compactor
+
+	// home is the change work of the repositories this node is the home git
+	// node of (internal/code/home), built and started with codeHost and the
+	// compactor, and nil where they are; stopped first in the code host's one
+	// bounded stop, before the compactor.
+	home *codehome.Loop
 
 	// gitCacheSize is how this node sized gitCache when it built the host —
 	// what [Engine.warnTiers] compares with each applied epoch's repository
@@ -443,12 +450,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// shutdown stops it first.
 		if e.hostsGit(built) {
 			var parts codeHostParts
-			if parts, err = e.buildCodeHost(ctx, nodeID, boot); err != nil {
+			if parts, err = e.buildCodeHost(ctx, nodeID, boot, running); err != nil {
 				return err
 			}
 			n.codeHost, n.gitReads, n.gitCache, n.gitCacheSize = parts.host, parts.reads, parts.cache,
 				parts.size
-			n.compactor = parts.compactor
+			n.compactor, n.home = parts.compactor, parts.home
 			n.withdrawCodeStatus = parts.withdrawStatus
 		}
 	}
@@ -756,12 +763,13 @@ func (e *Engine) startCollectorOver(ctx context.Context, n *native) error {
 // sources into vector records, the trash reaper, which purges what has been in
 // a trash past its term ([Engine.startTrashReaper]), and, where the half hosts
 // code, the purge of deleted repositories ([Engine.startCodeRetention]) — and,
-// where it serves git, this node's own COMPACTOR, which no lease decides: every
-// git node runs one, for the repositories it maintains. ONE CALL FOR BOTH
-// CALLERS, [New] and [Engine.startNativeFor], so halves met at an apply cannot
-// be missing a duty a boot would have armed. The trim, the identity estate's
-// duties and the usage publisher are the core's, armed at boot by
-// [Engine.startCoreDuties].
+// where it serves git, this node's own COMPACTOR and its HOME'S CHANGE WORK,
+// which no lease decides: every git node runs both, the compactor for the
+// repositories it maintains and the change work for those it is home to. ONE
+// CALL FOR BOTH CALLERS, [New] and [Engine.startNativeFor], so halves met at
+// an apply cannot be missing a duty a boot would have armed. The trim, the
+// identity estate's duties and the usage publisher are the core's, armed at
+// boot by [Engine.startCoreDuties].
 func (e *Engine) startNativeDuties(ctx context.Context) {
 	c, n := e.core.Load(), e.native.Load()
 	if n == nil || c == nil {
@@ -790,6 +798,12 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	// ([native.stopCodeHost]).
 	if n.compactor != nil {
 		n.compactor.Start()
+	}
+	// AND THE HOME'S CHANGE WORK, for the compactor's two reasons: its first
+	// pass asks the published runtime who is home and lists the rows its
+	// copy answers, and every turn asks a repository's writers for records.
+	if n.home != nil {
+		n.home.Start()
 	}
 }
 
