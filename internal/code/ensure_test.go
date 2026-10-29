@@ -115,12 +115,14 @@ func TestEnsureReposAnswersWhatEnsureRepoAnswers(t *testing.T) {
 
 // AN ACTIVATION THAT CHANGES NOTHING IS ONE PUBLISH, however many repositories
 // it declares: the batch read finds every one as declared — every other one
-// naming path owners, which the read takes beside its rules — and no
-// repository's own subject is published to — where EnsureRepo spent two
-// publishes a repository to find the same.
+// naming path owners, which the read takes beside its rules, and the rest a
+// rule with a merge gate, which it takes with its rule — and no repository's
+// own subject is published to — where EnsureRepo spent two publishes a
+// repository to find the same.
 //
 // Mutation: leave the path owners out of the batch read — every repository
-// naming them reads as changed and is published to, red.
+// naming them reads as changed and is published to, red; leave the gates out
+// of it — every gated repository does, red.
 func TestAnUnchangedActivationIsOnePublish(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -133,6 +135,10 @@ func TestAnUnchangedActivationIsOnePublish(t *testing.T) {
 				{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "dev"}, Paths: []string{name + "/**"}},
 				{Owner: code.Owner{Kind: code.OwnerUnit, Ref: "ENG"}, Paths: []string{"**/*.go", "docs/**"}},
 			}
+		} else {
+			gate := aGate()
+			gate.Checks = []string{name}
+			s.Protections[0].Gate = &gate
 		}
 		n.ensure(name, s, t1)
 		declared = append(declared, code.Declared{Name: name, Settings: s})

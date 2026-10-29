@@ -456,19 +456,27 @@ func packPaths(paths []string) string { return strings.Join(paths, "\n") }
 
 func unpackPaths(packed string) []string { return strings.Split(packed, "\n") }
 
-// insertProtections writes a repository's rules in the record's order. A
-// pattern the record names twice — which no writer forms, the settings being
-// sorted and unique — keeps its first rule rather than aborting the
-// transaction on every node.
+// insertProtections writes a repository's rules in the record's order, each
+// with its merge gate as the record encodes it ([gateColumn]). A pattern the
+// record names twice — which no writer forms, the settings being sorted and
+// unique — keeps its first rule rather than aborting the transaction on every
+// node.
 func insertProtections(ctx context.Context, tx *sql.Tx, maxVariables int, repoID string,
 	rules []Protection) (int, error) {
 
+	gates := make([]string, len(rules))
+	for i, r := range rules {
+		var err error
+		if gates[i], err = gateColumn(r.Gate); err != nil {
+			return 0, err
+		}
+	}
 	return store.InsertRows(ctx, tx, maxVariables,
-		`INSERT INTO code_protections (repo_id, pattern, allow_force, allow_delete, direct_push) VALUES `,
-		`(?, ?, ?, ?, ?)`, `ON CONFLICT (repo_id, pattern) DO NOTHING`, len(rules),
+		`INSERT INTO code_protections (repo_id, pattern, allow_force, allow_delete, direct_push, gate) VALUES `,
+		`(?, ?, ?, ?, ?, ?)`, `ON CONFLICT (repo_id, pattern) DO NOTHING`, len(rules),
 		func(i int) []any {
 			r := rules[i]
-			return []any{repoID, r.Pattern, r.AllowForce, r.AllowDelete, string(r.DirectPush)}
+			return []any{repoID, r.Pattern, r.AllowForce, r.AllowDelete, string(r.DirectPush), gates[i]}
 		})
 }
 

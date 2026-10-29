@@ -4,9 +4,9 @@
 //
 // # A repository is rows
 //
-// A repository's settings, its protection rules, its path owners, its refs and
-// the list of packs it holds are replicated tables, and only this package's
-// applier writes them:
+// A repository's settings, its protection rules and their merge gates, its path
+// owners, its refs and the list of packs it holds are replicated tables, and
+// only this package's applier writes them:
 // every change is ONE record on the code log, arbitrated at the broker and
 // applied into N identical SQL copies with the checkpoint in the same
 // transaction as the rows. That is ADR-0002 — the stream is the write-ahead
@@ -789,6 +789,33 @@
 // some three times the time of code as long ([MaxClassedBlobBytes] has the
 // measure), where keeping every comment to the walk's end took nine, and
 // thirty times the allocation.
+//
+// # A protection rule's merge gate rides it whole
+//
+// A branch rule carries its MERGE GATE ([MergeGate]) — who may merge into the
+// branches it matches, the approvals it waits for and the paths only a person
+// approves, the checks that must pass, how a queue lands a change — as ONE
+// value on the rule ([Protection.Gate]), stored as one column of its JSON
+// (code_protections.gate) rather than a column a field: nothing filters on a
+// field of a gate, and whatever judges a merge reads a target's matching
+// rules and each gate whole. A record carries every field of it explicitly,
+// its writer having resolved each default, in the one order [CanonicalGate]
+// forms; [RepoSettings.Validate] holds it to that order, to its bounds
+// ([MaxHumanPaths], [MaxRequiredChecks]) and to [MaxGateBytes] of JSON, and
+// refuses one on a tag rule — a tag never moves, so no merge reaches it. A
+// class that exempts a change from an approval is a PATH class: an approval
+// already carries across a revision that changed nothing, so no_code_change
+// has nothing to exempt.
+//
+// TWO RULES ARE COMPARED BY VALUE ([Protection.Equal]), never by ==: a gate is
+// a pointer, and two reads of one rule are two pointers. Compared by ==, every
+// reconcile of an unchanged declaration would write a settings record for each
+// gated repository ([RepoSettings.equal]), and every sync round of a git node
+// would write its state again (the cache's sameRepo). A push is judged by its
+// rules' flags and direct push and never by a gate, so the push decide reads
+// its rules without the column ([pushRulesIn]): decoding up to sixty-four
+// gates at every round, inside the snapshot that holds a reader connection,
+// would buy that decide nothing.
 //
 // # What this package does not do
 //

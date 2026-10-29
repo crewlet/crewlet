@@ -71,6 +71,53 @@ const (
 	// — 2 048 globs — and the bytes the repository's settings carry.
 	CodeMaxPathOwnerPaths = 32
 
+	// CodeMaxHumanPaths is the most HUMAN PATHS one protection rule's merge
+	// gate names: the parts of a repository's tree a change touching which
+	// waits for a person's approval — `.crewlet/**`, `deploy/**`,
+	// `migrations/**`. A JUDGMENT: a gate keeps a person in front of a few
+	// directories, and thirty-two is past any rule's; it is one of the two
+	// lists a gate's bytes grow with ([CodeMaxGateBytes]).
+	CodeMaxHumanPaths = 32
+
+	// CodeMaxRequiredChecks is the most checks one rule's merge gate
+	// requires, by name: a target's checks are its tests split a few ways —
+	// unit, lint, integration, a build a platform — and thirty-two is past any
+	// CI's required set. A JUDGMENT, as [CodeMaxHumanPaths] is, and the other
+	// list a gate's bytes grow with.
+	CodeMaxRequiredChecks = 32
+
+	// CodeMaxGateBytes is the most one rule's merge gate may weigh as the
+	// code log records it: its canonical JSON. EIGHT KIBIBYTES, because a
+	// repository carries up to [CodeMaxProtections] rules and every create,
+	// settings change and restore carries them whole: sixty-four gates at the
+	// bound are 512 KiB of the settings, beside path owners at theirs (about
+	// 1.6 MB), under the one record of the code log they must fit — and of the
+	// repository row every read, sync and cache state carries. Each count alone
+	// stays under it — thirty-two human paths of gitref's widest ordinary
+	// globs (128 bytes) with both classes in `unless` are about 6 KB, and
+	// thirty-two checks at their longest names about 2 KB — so what it refuses
+	// is a gate at both counts' bounds at once, or one whose globs JSON spells
+	// long (`&`, `<` and `>` are six bytes each).
+	CodeMaxGateBytes = 8 << 10
+
+	// CodeMaxQueueDepth is the most candidates a gated target's speculative
+	// queue tests at once — each the target's tip with the next waiting
+	// changes merged on it. EIGHT: at a 5 % chance that a change's checks
+	// fail, a round of eight lands whole under two times in three
+	// (0.95⁸ = 66 %), and past it the candidates a red one rebuilds cost
+	// more than the round lands.
+	CodeMaxQueueDepth = 8
+
+	// CodeMaxQueueBatch is the most waiting changes one candidate takes (a
+	// red batch is bisected): eight, so a round at both bounds is sixty-four
+	// changes — the most one candidate's record names.
+	CodeMaxQueueBatch = 8
+
+	// CodeMaxCheckNameBytes is the longest name a check takes: sixty-four
+	// bytes of [ValidCodeCheckName]'s alphabet, a CI job's name rather than a
+	// sentence.
+	CodeMaxCheckNameBytes = 64
+
 	// CodeMaxDescriptionBytes bounds a repository description: one
 	// paragraph, which rides every settings record and every listing row.
 	CodeMaxDescriptionBytes = 1_024
@@ -357,6 +404,32 @@ func validDomainName(s string) bool {
 			if c := label[i]; !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '-') {
 				return false
 			}
+		}
+	}
+	return true
+}
+
+// ValidCodeCheckName reports a name a check may have: a lowercase letter or a
+// digit, then up to sixty-three more of them, `.`, `_` and `-` —
+// ^[a-z0-9][a-z0-9._-]{0,63}$, at most [CodeMaxCheckNameBytes]. THE ONE RULE a
+// check is named by, read wherever a name is written: a protection rule's
+// required checks here and in the code domain's record of a merge gate, so a
+// rule cannot require a check no repository can define — a gate that
+// requirement would keep shut for good.
+//
+// LOWERCASE AND NO SPACE because a name is matched exactly wherever it is
+// read and is typed on command lines: two spellings of one name would be two
+// checks, and a name with a space one a shell splits.
+func ValidCodeCheckName(name string) bool {
+	if name == "" || len(name) > CodeMaxCheckNameBytes {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		switch c := name[i]; {
+		case 'a' <= c && c <= 'z', '0' <= c && c <= '9':
+		case i > 0 && (c == '.' || c == '_' || c == '-'):
+		default:
+			return false
 		}
 	}
 	return true

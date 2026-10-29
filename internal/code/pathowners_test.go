@@ -282,13 +282,14 @@ func TestAPathOwnerGrantsNothing(t *testing.T) {
 
 // THE LARGEST SETTINGS FIT WHERE THEY TRAVEL. Every path glob of every owner
 // at gitref's bound, each byte one JSON spells longest (`&`, six bytes), beside
-// every protection rule's pattern and the description spelled the same way, is
-// the widest a repository's settings can be — and they must fit the code log's
-// record whole, since a create, a settings change and a restore each carry
-// them: a declaration past it would be refused at every activation. And the
-// detail that answers them must fit the room a full page of refs beside it
-// leaves in the estate's reply, which a refs listing's first page carries both
-// in ([code.MaxPageBytes]).
+// every protection rule's pattern and the description spelled the same way,
+// and every rule's merge gate at MaxGateBytes, is the widest a repository's
+// settings can be — and they must fit the code log's record whole, since a
+// create, a settings change and a restore each carry them: a declaration past
+// it would be refused at every activation. And the detail that answers them
+// must fit the room a full page of refs beside it leaves in the estate's
+// reply, which a refs listing's first page carries both in
+// ([code.MaxPageBytes]).
 func TestTheLargestSettingsFitTheirRecordAndTheDetail(t *testing.T) {
 	t.Parallel()
 	wide := func(n int) string { return strings.Repeat("&", n) }
@@ -308,10 +309,11 @@ func TestTheLargestSettingsFitTheirRecordAndTheDetail(t *testing.T) {
 	s := suiteSettings()
 	s.Description = wide(code.MaxDescriptionBytes)
 	s.Protections = nil
+	gate := widestGate(t)
 	for i := range code.MaxProtectionsPerRepo {
 		head := fmt.Sprintf("refs/heads/%02d", i)
 		s.Protections = append(s.Protections, code.Protection{Pattern: head + wide(gitref.MaxRefNameBytes-len(head)),
-			AllowForce: true, AllowDelete: true, DirectPush: code.DirectPersons})
+			AllowForce: true, AllowDelete: true, DirectPush: code.DirectPersons, Gate: &gate})
 	}
 	s.PathOwners = code.CanonicalPathOwners(owners)
 	if err := s.Validate(); err != nil {

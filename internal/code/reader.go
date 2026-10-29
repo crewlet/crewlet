@@ -1957,12 +1957,15 @@ func protectionsOf(ctx context.Context, tx *sql.Tx, ids []string, repos []RepoSu
 		at[s.ID] = i
 	}
 	for rows.Next() {
-		var id, direct string
+		var id, direct, gate string
 		var p Protection
-		if err := rows.Scan(&id, &p.Pattern, &p.AllowForce, &p.AllowDelete, &direct); err != nil {
+		if err := rows.Scan(&id, &p.Pattern, &p.AllowForce, &p.AllowDelete, &direct, &gate); err != nil {
 			return fmt.Errorf("code: read the listing's protections: %w", err)
 		}
 		p.DirectPush = DirectPush(direct)
+		if p.Gate, err = gateFrom(gate); err != nil {
+			return fmt.Errorf("code: read repository %s's rule %s: %w", id, p.Pattern, err)
+		}
 		i := at[id]
 		repos[i].Protections = append(repos[i].Protections, p)
 	}
@@ -3148,7 +3151,7 @@ const (
 			ON h.repo_id = r.id AND h.ref = 'refs/heads/' || r.default_branch AND h.target != ''
 		WHERE r.status IN (SELECT value FROM json_each(?)) AND r.name > ?
 		ORDER BY r.name LIMIT ?`
-	protectionsOfSQL = `SELECT repo_id, pattern, allow_force, allow_delete, direct_push
+	protectionsOfSQL = `SELECT repo_id, pattern, allow_force, allow_delete, direct_push, gate
 		FROM code_protections WHERE repo_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))
 		ORDER BY repo_id, pattern`
 	// repoGrantSQL is what a grant reads of one repository's row, and its

@@ -789,12 +789,15 @@ func reposIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repoRow,
 	}
 	defer func() { _ = rules.Close() }()
 	for rules.Next() {
-		var id, direct string
+		var id, direct, gate string
 		var p Protection
-		if err := rules.Scan(&id, &p.Pattern, &p.AllowForce, &p.AllowDelete, &direct); err != nil {
+		if err := rules.Scan(&id, &p.Pattern, &p.AllowForce, &p.AllowDelete, &direct, &gate); err != nil {
 			return nil, fmt.Errorf("code: read the declared repositories' protections: %w", err)
 		}
 		p.DirectPush = DirectPush(direct)
+		if p.Gate, err = gateFrom(gate); err != nil {
+			return nil, fmt.Errorf("code: read repository %s's rule %s: %w", id, p.Pattern, err)
+		}
 		if row, ok := out[id]; ok {
 			row.Protections = append(row.Protections, p)
 			out[id] = row
@@ -1189,10 +1192,30 @@ func pathOwnersIn(ctx context.Context, tx *sql.Tx, id string) ([]PathOwner, erro
 	return out, nil
 }
 
-// protectionsIn reads a repository's rules, sorted by pattern — the order a
-// declaration's settings carry them in.
+// protectionsIn reads a repository's rules, each with its merge gate, sorted by
+// pattern — the order a declaration's settings carry them in.
 func protectionsIn(ctx context.Context, tx *sql.Tx, id string) ([]Protection, error) {
-	rows, err := tx.QueryContext(ctx, protectionsSQL, id)
+	return rulesIn(ctx, tx, protectionsSQL, id, true)
+}
+
+// pushRulesIn reads a repository's rules as a PUSH is judged by them: each
+// pattern and what it lets a push do, and NO GATE, which no push rule reads —
+// a push is held to its rule's flags and its direct push, and a merge gate
+// holds the merges a change makes. The push decide reads its rules in every
+// round's snapshot, on the reader connection that snapshot holds, and that is
+// why it reads only what it decides by: a repository's gates are up to
+// [MaxProtectionsPerRepo] of [MaxGateBytes] of JSON each, decoded for nothing
+// at every round while every other replicated read on the node waits for the
+// connection — the cost [verdicts.formBefore] keeps out of the snapshot.
+func pushRulesIn(ctx context.Context, tx *sql.Tx, id string) ([]Protection, error) {
+	return rulesIn(ctx, tx, pushRulesSQL, id, false)
+}
+
+// rulesIn reads a repository's rules by query — [protectionsSQL] with the
+// gates, which gated says it carries, or [pushRulesSQL] without — sorted by
+// pattern.
+func rulesIn(ctx context.Context, tx *sql.Tx, query, id string, gated bool) ([]Protection, error) {
+	rows, err := tx.QueryContext(ctx, query, id)
 	if err != nil {
 		return nil, fmt.Errorf("code: read %s's protections: %w", id, err)
 	}
@@ -1200,11 +1223,18 @@ func protectionsIn(ctx context.Context, tx *sql.Tx, id string) ([]Protection, er
 	var out []Protection
 	for rows.Next() {
 		var p Protection
-		var direct string
-		if err := rows.Scan(&p.Pattern, &p.AllowForce, &p.AllowDelete, &direct); err != nil {
+		var direct, gate string
+		dest := []any{&p.Pattern, &p.AllowForce, &p.AllowDelete, &direct}
+		if gated {
+			dest = append(dest, &gate)
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("code: read %s's protections: %w", id, err)
 		}
 		p.DirectPush = DirectPush(direct)
+		if p.Gate, err = gateFrom(gate); err != nil {
+			return nil, fmt.Errorf("code: read %s's rule %s: %w", id, p.Pattern, err)
+		}
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
@@ -1231,7 +1261,11 @@ const (
 	repoRowSQL = `SELECT name, status, managed_by, kind, owner_kind, owner, visibility, default_branch,
 		description, config_epoch, purge_parts, deleted_at, last_activity_at, version FROM code_repos
 		WHERE id = ?`
-	protectionsSQL = `SELECT pattern, allow_force, allow_delete, direct_push FROM code_protections
+	protectionsSQL = `SELECT pattern, allow_force, allow_delete, direct_push, gate FROM code_protections
+		WHERE repo_id = ? ORDER BY pattern`
+	// pushRulesSQL is protectionsSQL without the gate, the push decide's
+	// ([pushRulesIn]).
+	pushRulesSQL = `SELECT pattern, allow_force, allow_delete, direct_push FROM code_protections
 		WHERE repo_id = ? ORDER BY pattern`
 	pathOwnersSQL = `SELECT owner_kind, owner, paths FROM code_path_owners
 		WHERE repo_id = ? ORDER BY owner_kind, owner`

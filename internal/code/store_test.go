@@ -2,6 +2,7 @@ package code_test
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"slices"
@@ -118,7 +119,7 @@ func (n *node) settingsOf(name string) code.RepoSettings {
 		}
 		s.Archived = status == string(code.RepoStatusArchived)
 		rows, err := tx.QueryContext(n.t.Context(), `
-			SELECT pattern, allow_force, allow_delete, direct_push FROM code_protections
+			SELECT pattern, allow_force, allow_delete, direct_push, gate FROM code_protections
 			WHERE repo_id = ? ORDER BY pattern`, id)
 		if err != nil {
 			return err
@@ -126,8 +127,15 @@ func (n *node) settingsOf(name string) code.RepoSettings {
 		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var p code.Protection
-			if err := rows.Scan(&p.Pattern, &p.AllowForce, &p.AllowDelete, &p.DirectPush); err != nil {
+			var gate string
+			if err := rows.Scan(&p.Pattern, &p.AllowForce, &p.AllowDelete, &p.DirectPush, &gate); err != nil {
 				return err
+			}
+			if gate != "" {
+				p.Gate = new(code.MergeGate)
+				if err := json.Unmarshal([]byte(gate), p.Gate); err != nil {
+					return err
+				}
 			}
 			s.Protections = append(s.Protections, p)
 		}
@@ -221,6 +229,7 @@ func TestEveryDeclaredSettingsChangeWritesOneRecord(t *testing.T) {
 			}
 			return s
 		}(),
+		"a rule gated": gatedSettings(aGate()),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

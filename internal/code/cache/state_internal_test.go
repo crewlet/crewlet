@@ -2,6 +2,7 @@ package cache
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -39,6 +41,114 @@ func TestARoundComparesEveryFieldOfARepositorysRow(t *testing.T) {
 		case name != "Position" && same:
 			t.Errorf("two rows differing in %s alone are found the same", name)
 		}
+	}
+}
+
+// TWO READS OF ONE GATED ROW ARE ONE ROW. Every round reads its repository's
+// row afresh, and a rule's merge gate is a pointer, so two reads of a rule
+// carrying one are two pointers: compared by ==, a gated repository's row
+// would read as changed at every round, and every round would write its state
+// again. Two decodes of one row compare the same, and the same row with one
+// field of a gate changed does not.
+//
+// Mutation: compare the rules with slices.Equal in sameRepo — the two reads
+// are found different, red.
+func TestTwoReadsOfOneGatedRowAreTheSame(t *testing.T) {
+	t.Parallel()
+	row := code.RepoRef{ID: "repo-1", Name: "web", Protections: []code.Protection{{
+		Pattern: "refs/heads/main", DirectPush: code.DirectPersons, Gate: &code.MergeGate{
+			MergeBy: code.MergeByMaintainers, Approvals: code.ApprovalsOne, Checks: []string{"unit"},
+			Landing: code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats,
+		},
+	}}}
+	raw, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var one, two code.RepoRef
+	if err := json.Unmarshal(raw, &one); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &two); err != nil {
+		t.Fatal(err)
+	}
+	if !sameRepo(one, two) {
+		t.Error("two reads of one gated repository's row are found different: every round would write its state")
+	}
+	two.Protections[0].Gate.Checks = []string{"lint", "unit"}
+	if sameRepo(one, two) {
+		t.Error("two rows whose gates require different checks are found the same")
+	}
+}
+
+// THE WIDEST STATE THIS CACHE WRITES FITS ITS READ, with half of it again to
+// spare: a repository whose every rule is at the domain's bounds — a 255-byte
+// pattern and a merge gate of code.MaxGateBytes, every byte of the pattern one
+// JSON spells as six — and whose description is spelled the same way, beside
+// every bounded list of a state at its bound. A state past maxStateBytes is
+// refused as unreadable, and its repository would start cold at every boot.
+//
+// The gates are counted at their bound rather than built: each one a record
+// may carry is at most MaxGateBytes of JSON, so the widest state is the state
+// with none plus a gate member of that width a rule.
+func TestTheWidestStateFitsItsRead(t *testing.T) {
+	t.Parallel()
+	wide := func(n int) string { return strings.Repeat("&", n) }
+	maxPosition := statelog.Position{Stream: code.Domain{}.Stream().Name, Generation: ^uint32(0), Seq: ^uint64(0)}
+	const most = int64(^uint64(0) >> 1)
+	row := code.RepoRef{
+		ID: "0190f3c4-0000-7000-8000-000000000001", Name: strings.Repeat("a", 63),
+		Status: code.RepoStatusArchived, ManagedBy: code.ManagedConfig, Kind: code.RepoProject,
+		Owner: code.Owner{Kind: code.OwnerUnit, Ref: wide(64)}, Visibility: code.VisibilityCompany,
+		DefaultBranch: wide(gitref.MaxRefNameBytes - len("refs/heads/")), Description: wide(code.MaxDescriptionBytes),
+		DeletedAt: time.Now(), LastActivityAt: time.Now(), Refs: most, LivePacks: most, LiveBytes: most,
+		LiveObjects: most, DropEpoch: most, Position: maxPosition,
+	}
+	for i := range code.MaxProtectionsPerRepo {
+		head := fmt.Sprintf("refs/heads/%02d", i)
+		row.Protections = append(row.Protections, code.Protection{Pattern: head + wide(gitref.MaxRefNameBytes-len(head)),
+			AllowForce: true, AllowDelete: true, DirectPush: code.DirectPersons})
+	}
+	layers := make([]string, code.MaxPublishedLayers)
+	for i := range layers {
+		layers[i] = strings.Repeat("f", 40)
+	}
+	runs := make([]provenanceRun, MaxProvenanceRuns)
+	for i := range runs {
+		runs[i] = provenanceRun{N: ^uint64(0), Bytes: most, From: most, Through: most, Pushes: most, Commits: most,
+			Moves: most}
+	}
+	cohorts := make([]memoCohort, maxStateCohorts)
+	for i := range cohorts {
+		cohorts[i] = memoCohort{N: ^uint64(0), Bytes: most}
+	}
+	st := state{
+		Format: stateFormat, RepoID: row.ID, StreamCreated: time.Now(), Position: maxPosition, Repo: row,
+		RefsDigest: strings.Repeat("f", 64), Refs: int(most), Packs: int(most), DiskBytes: most, DroppingBytes: most,
+		Maintained: maintainedState{LastRun: time.Now(), Took: time.Duration(most)}, LeavingSince: maxPosition,
+		Derived: map[DerivedName]derivedState{},
+	}
+	for _, d := range DerivedFiles() {
+		entry := derivedState{Bytes: most, Covers: int(most), Step: "x"}
+		switch d.Name {
+		case DerivedProvenance:
+			entry.Provenance = &provenanceState{Stream: time.Now(), From: most, Through: most, GapFrom: most,
+				GapThrough: most, Complete: true, Oldest: most, OldestAt: time.Now(), Next: ^uint64(0), Runs: runs}
+		case DerivedMemo:
+			entry.Cohorts = cohorts
+		case DerivedLayers, DerivedGraphLayers:
+			entry.Layers, entry.Tip, entry.TipOver = layers, strings.Repeat("f", 40), strings.Repeat("f", 32)
+		}
+		st.Derived[d.Name] = entry
+	}
+	raw, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	widest := len(raw) + code.MaxProtectionsPerRepo*(len(`,"gate":`)+code.MaxGateBytes)
+	if widest+widest/2 > maxStateBytes {
+		t.Errorf("the widest state is %d bytes: maxStateBytes (%d) is less than half again of it, and a state "+
+			"past it is unreadable", widest, maxStateBytes)
 	}
 }
 

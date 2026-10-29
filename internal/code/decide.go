@@ -237,10 +237,12 @@ import (
 // snapshot it would hold one of the reader pool's few connections for all of
 // its length. Every round compares its own snapshot's rules, whole, with those
 // the verdicts were formed under, and forms them again inside the snapshot
-// only when they differ — a settings record changing THIS repository's
-// protections, which only an activation writes, landing between the read
-// and the round or between two rounds. Every other round, the first
-// included, pays the reads alone.
+// only when they differ — a record changing THIS repository's protections,
+// an activation's settings or a tool's protect request, landing between the
+// read and the round or between two rounds. Every other round, the first
+// included, pays the reads alone. The rules a round reads are what a push is
+// judged by and nothing more: a rule's merge gate holds merges, so neither
+// read decodes one ([pushRulesIn]).
 
 // verdicts are one batch's protection verdicts, formed before its publish
 // ([verdicts.formBefore]) and kept across the rounds of that one publish
@@ -272,9 +274,13 @@ type verdict struct {
 
 // under makes stored the rules the verdicts answer from: the verdicts kept
 // from the batch's earlier rounds when stored are the rules those read, field
-// by field and in order, and none otherwise.
+// by field and in order, and none otherwise — compared BY VALUE
+// ([Protection.Equal]), since each round reads its rules again and a rule's
+// gate is a pointer: compared by ==, two reads of one gated rule would be two
+// rules, and every round would form every verdict again. The decide reads no
+// gate ([pushRulesIn]); the comparison holds whichever columns it reads.
 func (v *verdicts) under(stored []Protection) error {
-	if v.set && slices.Equal(v.stored, stored) {
+	if v.set && slices.EqualFunc(v.stored, stored, Protection.Equal) {
 		return nil
 	}
 	rules, err := ParseProtections(stored)
@@ -339,7 +345,7 @@ func (v *verdicts) formBefore(ctx context.Context, db store.ReplicatedReader, re
 	var stored []Protection
 	if err := db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
-		stored, err = protectionsIn(ctx, tx, repoID)
+		stored, err = pushRulesIn(ctx, tx, repoID)
 		return err
 	}); err != nil {
 		return
@@ -503,7 +509,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		return nil, nil, 0, 0, fmt.Errorf("code: a seat's push to %s reached the decide with no chart to judge "+
 			"it by — the committer hands such a push to the repository's next committer", repoID)
 	}
-	stored, err := protectionsIn(ctx, tx, repoID)
+	stored, err := pushRulesIn(ctx, tx, repoID)
 	if err != nil {
 		return nil, nil, 0, 0, err
 	}

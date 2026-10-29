@@ -362,7 +362,60 @@ func (p Protection) encodedBytes() int {
 	if p.AllowDelete {
 		n += field("allow_delete", trueBytes, false)
 	}
-	return n + field("direct_push", stringBytes(string(p.DirectPush)), false)
+	n += field("direct_push", stringBytes(string(p.DirectPush)), false)
+	if p.Gate != nil {
+		n += field("gate", p.Gate.encodedBytes(), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the gate's JSON encoding: what a record
+// carries of it and what [MaxGateBytes] bounds.
+func (g MergeGate) encodedBytes() int {
+	n := 2 + field("merge_by", stringBytes(string(g.MergeBy)), true) +
+		field("approvals", stringBytes(string(g.Approvals)), false)
+	if len(g.ApprovalsUnless) > 0 {
+		n += field("approvals_unless", classesBytes(g.ApprovalsUnless), false)
+	}
+	if len(g.HumanPaths) > 0 {
+		list := 2 + len(g.HumanPaths) - 1
+		for _, h := range g.HumanPaths {
+			list += 2 + field("glob", stringBytes(h.Glob), true)
+			if len(h.Unless) > 0 {
+				list += field("unless", classesBytes(h.Unless), false)
+			}
+		}
+		n += field("human_paths", list, false)
+	}
+	if len(g.Checks) > 0 {
+		n += field("checks", stringsBytes(g.Checks), false)
+	}
+	n += field("landing", 2+field("policy", stringBytes(string(g.Landing.Policy)), true)+
+		field("depth", intBytes(int64(g.Landing.Depth)), false)+
+		field("batch", intBytes(int64(g.Landing.Batch)), false), false)
+	if g.OwnersApprove {
+		n += field("owners_approve", trueBytes, false)
+	}
+	n += field("delete_source", stringBytes(string(g.DeleteSource)), false)
+	if g.AutoRevert {
+		n += field("auto_revert", trueBytes, false)
+	}
+	if g.AgentsEditChecks {
+		n += field("agents_edit_checks", trueBytes, false)
+	}
+	return n
+}
+
+// classesBytes is the length of a list of change classes.
+func classesBytes(classes []ChangeClass) int {
+	n := 2
+	for i, c := range classes {
+		if i > 0 {
+			n++
+		}
+		n += stringBytes(string(c))
+	}
+	return n
 }
 
 // members is the length of the repository's own members, without the braces

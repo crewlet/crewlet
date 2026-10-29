@@ -399,13 +399,21 @@ func pathOwnersInvalid(owners []PathOwner) string {
 	return ""
 }
 
-// Protection is one rule over the refs a pattern matches.
+// Protection is one rule over the refs a pattern matches: what a push to one
+// of them may do, and — on a branch rule — what a merge into one needs.
+//
+// COMPARED BY [Protection.Equal], never ==: its gate is a pointer.
 type Protection struct {
 	// Pattern is refs/heads/<glob> or refs/tags/<glob> (gitref's grammar).
 	Pattern     string     `json:"pattern"`
 	AllowForce  bool       `json:"allow_force,omitempty"`
 	AllowDelete bool       `json:"allow_delete,omitempty"`
 	DirectPush  DirectPush `json:"direct_push"`
+	// Gate is the rule's merge gate ([MergeGate]), nil for a rule with none
+	// — and always nil on a tag rule: a tag never moves, so no merge reaches
+	// one. A push decides nothing by it: a push is held to the fields above,
+	// and the merge gate holds the merges a change makes.
+	Gate *MergeGate `json:"gate,omitempty"`
 }
 
 // RepoSettings is everything about a repository its manager decides, carried
@@ -437,7 +445,8 @@ type RepoSettings struct {
 	// Visibility is who may read it besides persons and Tier A tokens.
 	Visibility Visibility `json:"visibility"`
 	// Protections are sorted by Pattern and unique — the canonical order,
-	// so two nodes deciding one declaration form byte-identical records.
+	// so two nodes deciding one declaration form byte-identical records —
+	// each one's gate in its one form too ([CanonicalGate]).
 	Protections []Protection `json:"protections,omitempty"`
 	// PathOwners are who owns which of its paths, in the one form a record
 	// carries them in ([CanonicalPathOwners]): at most [MaxPathOwners], each
@@ -517,10 +526,23 @@ func (s RepoSettings) Validate() error {
 		case p.AllowForce && strings.HasPrefix(p.Pattern, "refs/tags/"):
 			return fmt.Errorf("%w: protections[%d].allow_force: a tag never moves, so "+
 				"allow_force has nothing to allow on %s", ErrInvalid, i, p.Pattern)
+		case p.Gate != nil && strings.HasPrefix(p.Pattern, "refs/tags/"):
+			return fmt.Errorf("%w: protections[%d].gate: a tag never moves, so no merge reaches %s "+
+				"and a merge gate has nothing to hold", ErrInvalid, i, p.Pattern)
 		case i > 0 && s.Protections[i-1].Pattern >= p.Pattern:
 			return fmt.Errorf("%w: protections[%d].pattern: %q is not after %q — the "+
 				"rules are sorted by pattern and unique, so one declaration forms one "+
 				"record on every node", ErrInvalid, i, p.Pattern, s.Protections[i-1].Pattern)
+		}
+		if p.Gate == nil {
+			continue
+		}
+		switch field, why := p.Gate.invalid(); {
+		case why == "":
+		case field == "":
+			return fmt.Errorf("%w: protections[%d].gate: %s", ErrInvalid, i, why)
+		default:
+			return fmt.Errorf("%w: protections[%d].gate.%s: %s", ErrInvalid, i, field, why)
 		}
 	}
 	if why := pathOwnersInvalid(s.PathOwners); why != "" {
@@ -530,14 +552,15 @@ func (s RepoSettings) Validate() error {
 }
 
 // equal compares two settings field by field, Protections and PathOwners as
-// slices (both are sorted by Validate's rule, and each path owner's globs too),
-// and IGNORES ConfigEpoch — the activation a value came from is not a
-// difference in the value.
+// slices (both are sorted by Validate's rule, and each path owner's globs too)
+// of values compared by value — a rule's gate is a pointer, which
+// [Protection.Equal] follows — and IGNORES ConfigEpoch: the activation a value
+// came from is not a difference in the value.
 func (s RepoSettings) equal(o RepoSettings) bool {
 	return s.ManagedBy == o.ManagedBy && s.Kind == o.Kind && s.Owner == o.Owner &&
 		s.DefaultBranch == o.DefaultBranch && s.Description == o.Description &&
 		s.Archived == o.Archived && s.Visibility == o.Visibility &&
-		slices.Equal(s.Protections, o.Protections) &&
+		slices.EqualFunc(s.Protections, o.Protections, Protection.Equal) &&
 		slices.EqualFunc(s.PathOwners, o.PathOwners, PathOwner.equal)
 }
 
