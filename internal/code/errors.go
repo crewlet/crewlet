@@ -25,6 +25,12 @@ var (
 	// grant guards.
 	ErrChangeNotFound = errors.New("code: no such change")
 
+	// ErrCheckNotFound is an attempt of a check a repository does not hold
+	// — never queued, or past the history its rows keep — under the commit,
+	// name and attempt a `check` read named, which it names; of a repository
+	// the asker may read, as [ErrChangeNotFound] is.
+	ErrCheckNotFound = errors.New("code: no such check")
+
 	// ErrPurging is a repository being removed part by part: its name
 	// returns when the purge completes.
 	ErrPurging = errors.New("code: the repository is being purged; its name returns when the purge completes")

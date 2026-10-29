@@ -32,6 +32,7 @@ type CodeServer interface {
 	ProposeExpunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error)
 	ProposeChange(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
 	Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error)
+	PublishChecks(ctx context.Context, r code.ChecksRequest) (code.ChecksResult, error)
 	Resolve(ctx context.Context, q code.ResolveQuery) (code.RepoRef, error)
 	Snapshot(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error)
 	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
@@ -163,6 +164,28 @@ var opCodeConversation = define("code.conversation", opIdempotentWrite, codeDoma
 	}).keyedBy(code.ConversationWrite.RepoID).answeredOn(laneProposals).
 	judgesGrant(code.ConversationWrite.JudgesChart)
 
+// opCodeChecks is a write of a repository's CHECKS — an attempt queued by the
+// repository's home, a claim of one by the git node that runs it, its holder's
+// naming of the box it made, an attempt's ending — asked of the repository's
+// COMMITTING data node, keyed by the repository as a push is, and answered
+// there by its checks writer (code.ChecksWriter), which publishes it on the
+// repository's checks subject, never in the committer's queue, one write of a
+// repository's checks at a time: so a second claim of an attempt is refused
+// before it appends, and a git node never publishes a check's record. An
+// IDEMPOTENT write keyed by its operation id, which its asker minted once and
+// the domain's operation ledger collapses, so an unanswered one is asked of the
+// repository's runner-up with the same id. On the proposals lane, because it
+// holds its answer slot while it waits for its repository's turn on that node.
+// No actor: every write is the engine's own, and names no principal.
+var opCodeChecks = define("code.checks", opIdempotentWrite, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, r code.ChecksRequest) (code.ChecksResult, error) {
+		if b.Code == nil {
+			return code.ChecksResult{}, errNoHalf
+		}
+		res, err := b.Code.PublishChecks(ctx, r)
+		return res, ranNothing(err)
+	}).keyedBy(code.ChecksRequest.RepoID).answeredOn(laneProposals)
+
 // proposalAnswers is how many proposals a data node answers at once, on the
 // lane they have to themselves ([laneProposals]): 1 088, THE MOST ONE
 // REPOSITORY'S COMMITTER HOLDS — a full queue (code.CommitterInbox) and the
@@ -236,8 +259,12 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // commit is built from; the repositories a compaction may be due in, most
 // live packs first, which a git node polls for the ones it is home for; the
 // repositories a publication may be due in, least recently published first;
-// and the repositories an expunge is owed in, an expunge open or a purge
-// requested. A seat's read on a node that holds no chart is that node's
+// the repositories an expunge is owed in, an expunge open or a purge
+// requested; a repository's checks — a change's, a commit's, the
+// repository's newest ended first, or every readable repository's since a
+// moment — and one attempt whole, each held to the grant on its repository;
+// and the change heads a repository's home owes a dispatch of their checks
+// (checks_due). A seat's read on a node that holds no chart is that node's
 // code.ErrNotServing — it ran nothing — so the walk asks the next.
 //
 // A SEAT'S READ JUDGES ITS GRANT from the serving node's chart (which
@@ -246,9 +273,9 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // (code.ReadQuery.CeilingSeat), so the same declaration covers it — so a node
 // behind the company's configuration answers none of it ([op.judgesGrant]); a
 // person's or a token's consults no chart, and a `run_pushes` page, an
-// `introduced` page and the `compaction_due`, `publication_due` and
-// `expunge_due` listings name no asker at all, so each is answered there as a
-// last resort.
+// `introduced` page and the `compaction_due`, `publication_due`,
+// `expunge_due`, `changes_due` and `checks_due` listings name no asker at all,
+// so each is answered there as a last resort.
 var opCodeRead = define("code.read", opRead, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q code.ReadQuery) (code.ReadAnswer, error) {
 		if b.Code == nil {

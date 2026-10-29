@@ -239,6 +239,93 @@ func (c CompactionCandidate) encodedBytes() int {
 		field("version", positionBytes(c.Version), false)
 }
 
+// encodedBytes is the length of the check row's JSON encoding.
+func (r CheckRow) encodedBytes() int {
+	n := 2 + field("repo_id", stringBytes(r.RepoID), true) +
+		field("oid", stringBytes(r.OID), false) +
+		field("name", stringBytes(r.Name), false) +
+		field("attempt", intBytes(int64(r.Attempt)), false) +
+		field("state", stringBytes(string(r.State)), false)
+	for _, s := range []struct {
+		key, value string
+	}{
+		{"purpose", string(r.Purpose)}, {"change_id", r.ChangeID},
+	} {
+		if s.value != "" {
+			n += field(s.key, stringBytes(s.value), false)
+		}
+	}
+	if r.Revision != 0 {
+		n += field("revision", intBytes(int64(r.Revision)), false)
+	}
+	for _, s := range []struct {
+		key, value string
+	}{
+		{"candidate_id", r.CandidateID}, {"entry_id", r.EntryID}, {"target", r.Target}, {"base", r.Base},
+		{"defs_oid", r.DefsOID},
+	} {
+		if s.value != "" {
+			n += field(s.key, stringBytes(s.value), false)
+		}
+	}
+	if r.Required {
+		n += field("required", trueBytes, false)
+	}
+	if r.RunIn != "" {
+		n += field("run_in", stringBytes(string(r.RunIn)), false)
+	}
+	if r.TimeoutSeconds != 0 {
+		n += field("timeout_seconds", intBytes(int64(r.TimeoutSeconds)), false)
+	}
+	for _, s := range []struct {
+		key, value string
+	}{
+		{"reason", string(r.Reason)}, {"runner", r.Runner}, {"placement", string(r.Placement)}, {"box", r.Box},
+	} {
+		if s.value != "" {
+			n += field(s.key, stringBytes(s.value), false)
+		}
+	}
+	if r.Borrowed {
+		n += field("borrowed", trueBytes, false)
+	}
+	if r.Reporter != "" {
+		n += field("reporter", stringBytes(r.Reporter), false)
+	}
+	for _, t := range []struct {
+		key string
+		at  time.Time
+	}{
+		{"queued_at", r.QueuedAt}, {"started_at", r.StartedAt}, {"finished_at", r.FinishedAt},
+	} {
+		if !t.at.IsZero() {
+			n += field(t.key, timeBytes(t.at), false)
+		}
+	}
+	if r.DurationMs != 0 {
+		n += field("duration_ms", intBytes(r.DurationMs), false)
+	}
+	if r.ExitCode != nil {
+		n += field("exit_code", intBytes(int64(*r.ExitCode)), false)
+	}
+	if r.Summary != "" {
+		n += field("summary", stringBytes(r.Summary), false)
+	}
+	if r.FailuresOmitted != 0 {
+		n += field("failures_omitted", intBytes(int64(r.FailuresOmitted)), false)
+	}
+	if r.URL != "" {
+		n += field("url", stringBytes(r.URL), false)
+	}
+	if !r.Queued.IsZero() {
+		n += field("queued", positionBytes(r.Queued), false)
+	}
+	if !r.Finished.IsZero() {
+		n += field("finished", positionBytes(r.Finished), false)
+	}
+	return n
+}
+
 // encodedBytes is the length of the due change's JSON encoding.
 func (c ChangeDue) encodedBytes() int {
 	return 2 + field("id", stringBytes(c.ID), true) +

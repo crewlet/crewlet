@@ -143,6 +143,7 @@ type fakeNode struct {
 	expunges      []code.ExpungeProposal
 	changes       []code.ChangeProposal
 	conversations []code.ConversationWrite
+	checks        []code.ChecksRequest
 	codeSeq       uint64
 	codeErr       error
 
@@ -3440,8 +3441,8 @@ func TestAKeyedOpWithNoKeyIsRefused(t *testing.T) {
 func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	t.Parallel()
 	ops := []*opSpec{opCodePropose.spec, opCodeCompact.spec, opCodeExpunge.spec, opCodeChange.spec,
-		opCodeConversation.spec, opCodeResolve.spec, opCodeRepoState.spec, opCodePushOutcome.spec,
-		opCodeRead.spec, opCodeResolveRef.spec}
+		opCodeConversation.spec, opCodeChecks.spec, opCodeResolve.spec, opCodeRepoState.spec,
+		opCodePushOutcome.spec, opCodeRead.spec, opCodeResolveRef.spec}
 	for _, spec := range ops {
 		if spec.domain != "code" || spec.floorStream != (code.Domain{}).Stream().Name ||
 			spec.copies != "code" {
@@ -3485,6 +3486,10 @@ func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	}
 	if _, err := seam.Converse(ctx, code.ConversationWrite{Comment: &code.Comment{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("converse: %v", err)
+	}
+	if _, err := seam.Checks(ctx, code.ChecksRequest{Started: &code.CheckStarted{CheckKey: code.CheckKey{
+		RepoID: "repo-1"}}}); err != nil {
+		t.Fatalf("checks: %v", err)
 	}
 	node.mu.Lock()
 	floors := slices.Clone(node.floors)

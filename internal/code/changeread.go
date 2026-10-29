@@ -353,32 +353,47 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 func listedReposIn(ctx context.Context, tx *sql.Tx, scanned []changeRow, asker Principal, ceilingSeat string,
 	chart Roster) (map[string]listedRepo, error) {
 
+	ids := make([]string, 0, len(scanned))
+	for _, row := range scanned {
+		ids = append(ids, row.repoID)
+	}
+	return listedReposAmong(ctx, tx, ids, asker, ceilingSeat, chart, "a page of changes")
+}
+
+// listedReposAmong is every repository of ids — each named once however often
+// it is named, in any order — whose rows a listing across repositories serves,
+// by id: active or archived, and read by both asker and the seat it reads for
+// ([JudgeRead]) — each read in ONE statement over the page's repositories, and
+// judged once a page. what names the page in a failure's sentence.
+func listedReposAmong(ctx context.Context, tx *sql.Tx, ids []string, asker Principal, ceilingSeat string,
+	chart Roster, what string) (map[string]listedRepo, error) {
+
 	listed := map[string]listedRepo{}
 	named := map[string]bool{}
-	var ids []string
-	for _, row := range scanned {
-		if !named[row.repoID] {
-			named[row.repoID] = true
-			ids = append(ids, row.repoID)
+	var distinct []string
+	for _, id := range ids {
+		if !named[id] {
+			named[id] = true
+			distinct = append(distinct, id)
 		}
 	}
-	if len(ids) == 0 {
+	if len(distinct) == 0 {
 		return listed, nil
 	}
-	list, err := jsonList(ids)
+	list, err := jsonList(distinct)
 	if err != nil {
 		return nil, err
 	}
 	rows, err := tx.QueryContext(ctx, listedReposSQL, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the repositories a page of changes names: %w", err)
+		return nil, fmt.Errorf("code: read the repositories %s names: %w", what, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var ref RepoRef
 		var status, owners, visibility string
 		if scanErr := rows.Scan(&ref.ID, &ref.Name, &status, &owners, &ref.Owner.Ref, &visibility); scanErr != nil {
-			return nil, fmt.Errorf("code: read the repositories a page of changes names: %w", scanErr)
+			return nil, fmt.Errorf("code: read the repositories %s names: %w", what, scanErr)
 		}
 		ref.Status, ref.Owner.Kind, ref.Visibility = RepoStatus(status), OwnerKind(owners), Visibility(visibility)
 		if ref.Status != RepoStatusActive && ref.Status != RepoStatusArchived {

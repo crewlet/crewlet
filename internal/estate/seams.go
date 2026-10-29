@@ -833,7 +833,8 @@ func (u Usage) RepoReaders(ctx context.Context, q usage.RepoReadsQuery, cursor s
 // CodeSeam is the code host's reach into the estate, from every node: a push's
 // proposal, a compaction's, an expunge record's and a change's to their
 // repository's committer, a write of a change's conversation to the change
-// writer beside it, and the reads the host's admission, a cache's sync and the
+// writer beside it and a write of a repository's checks to the checks writer
+// beside it, and the reads the host's admission, a cache's sync and the
 // REST routes make — each answered by a data node whose copy of the code log
 // serves, this one where it does — and a repository's read by object id and its
 // engine write, each asked of the repository's home git node ([GitCopy]). Its
@@ -841,8 +842,9 @@ func (u Usage) RepoReaders(ctx context.Context, q usage.RepoReadsQuery, cursor s
 //
 // ONLY THIS NODE'S OWN WRITES RAISE ITS FLOOR: a proposal that landed — a
 // push's, a compaction's, an expunge record's or a change's — a push this
-// node proposed found landed, a write of a change's conversation that landed,
-// and an engine write this node asked that landed. A read's position is
+// node proposed found landed, a write of a change's conversation or of a
+// repository's checks that landed, and an engine write this node asked that
+// landed. A read's position is
 // somebody else's writes, and observing it would hold every later read this
 // node routes — a `stale` one included — behind the newest linearizable read
 // anybody on the node made, which is the tracker's and the knowledge base's
@@ -850,8 +852,8 @@ func (u Usage) RepoReaders(ctx context.Context, q usage.RepoReadsQuery, cursor s
 // code log, which every operation this node routes to a data node carries;
 // and the floor of the REPOSITORY it wrote ([CodeSeam.FloorOf]), which a read
 // of that repository's content by object id carries to its git node — and a
-// read of any other repository does not. A conversation's write moves no git
-// content, and raises the session's alone.
+// read of any other repository does not. A conversation's write and a check's
+// move no git content, and raise the session's alone.
 type CodeSeam struct{ r *Router }
 
 // Code answers the code host.
@@ -916,6 +918,20 @@ func (c CodeSeam) Change(ctx context.Context, p code.ChangeProposal) (code.Chang
 // UNCHANGED landed no record, and raises nothing.
 func (c CodeSeam) Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
 	out, err := call(ctx, c.r, opCodeConversation, nil, w)
+	if !out.Unchanged && (out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending) {
+		c.r.Observe(out.Position)
+	}
+	return out, err
+}
+
+// Checks asks the repository's committing data node to decide a write of the
+// repository's checks, and raises this node's SESSION floor past the record it
+// landed in — this node's own write, which its next read of the attempt must
+// see on whichever node answers it. NEVER THE REPOSITORY'S OWN FLOOR, for a
+// conversation's reason: a check moves no ref and no pack. A write answered
+// UNCHANGED landed no record, and raises nothing.
+func (c CodeSeam) Checks(ctx context.Context, r code.ChecksRequest) (code.ChecksResult, error) {
+	out, err := call(ctx, c.r, opCodeChecks, nil, r)
 	if !out.Unchanged && (out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending) {
 		c.r.Observe(out.Position)
 	}

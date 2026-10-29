@@ -1519,6 +1519,83 @@ A failed run's **log** is one object in the [object store](object-store.md),
 named by a `code_check_logs` row: a live reference, audited and carried by
 every backup, since nothing builds it again.
 
+### Who records a check
+
+A check's records are written by the repository's **committing data node** —
+the node its pushes are [decided by](#the-committer), the first of the
+repository's rendezvous order over the live data nodes — whichever node asks:
+the repository's home queuing a change head's checks, or the git node that
+runs one claiming it and ending it. **No git node publishes a check's record
+itself**: it asks the committing data node, through the estate's
+`code.checks`, as a push's receiver asks for a push to be decided. That node's
+**checks writer** — beside its committer, sharing none of its queue — takes
+one repository's check writes **one at a time**, each decided against the
+rows every earlier one left and published once the one before it applied
+there, so:
+
+- **a second claim of an attempt is refused before it appends**: a runner
+  asking for an attempt another runner holds, or one that has ended, is told
+  `claimed` with the holder's name, appends nothing, and starts no box. The
+  holder's own claim asked again changes nothing, and its record naming the
+  box it made sets the box once;
+- **an attempt follows the one before it, ended**: the home's dispatch queues
+  a commit's first attempt, and one already queued — a second dispatch of the
+  same head — is answered from its row, queuing nothing; the next attempt is
+  queued only once the one before it ended (`not_finished` before), and none
+  passes the tenth (`attempts_exhausted`);
+- **the home queues again only what its infrastructure ended** — an attempt
+  whose runner was lost or whose box or setup failed — and only while that
+  attempt is below the third: a dead runner's check runs at most three
+  attempts (`attempts_exhausted` past it), and an attempt that passed, failed,
+  or ended any other way is never queued again by the home (`rerun_genuine`);
+- **an ending the row would not keep appends nothing**: an infrastructure
+  ending after a measurement — a lost runner reported once its run had already
+  failed — is answered from the row as it stands.
+
+Where two nodes both believe they decide for a repository — the committing
+node gone quiet, its runner-up asked — each may append, and the
+[join](#what-the-log-records-of-a-check) converges what they wrote: two claims
+keep one runner's, and the runner whose claim the row does not keep, reading
+the row back, makes no box. A request carries the floor its asker read at, so
+a node deciding it has applied what the asker saw first or says it is behind,
+and the asker asks the next node.
+
+Each write is asked under an **operation id** its asker mints once, so a write
+asked again — of the runner-up after the committing node went silent, or after
+an answer was lost — is the same write, collapsed onto the record that landed.
+
+An ending that applied and that its attempt's row keeps is announced **once**,
+by the node that wrote it, as a `code_check_finished` event in that node's
+[event log](event-system.md) — never by the applier every data node runs,
+which would record it once a node — naming the attempt, what it was for, how
+it ended and where it ran. It is kept out of the activity feed: every push of
+every change ends each check its file defines, faster than a person reads a
+feed, and an attempt's ending is read where it is asked.
+
+The writer counts what it decided on three instruments: the attempts it
+queued (`crewlet.code.checks.queued`, by purpose), the endings the rows kept
+(`crewlet.code.checks.finished`, by state and placement) and every claim's
+outcome (`crewlet.code.checks.claims`) — `claimed` is git nodes racing for one
+attempt, each losing a box it never made, and `lost` above zero is two nodes
+writing one repository's checks at once ([metrics](../reference/metrics.md)).
+
+### Reading a repository's checks
+
+A repository's checks are read through `code.read`, held to the reader's
+grant on the repository as every other read of it is:
+
+- **`checks`**: one repository's attempts, newest ended first and every
+  attempt not yet ended after them; one change's, by commit, name and attempt;
+  one commit's; or — naming no repository — every repository's the reader may
+  read whose attempts ended since a moment, newest ended first. Each is a page
+  of at most 200 attempts (50 unless asked), resuming exactly where the page
+  before ended;
+- **`check`**: one attempt whole — its row, the definition it ran under, the
+  last of its output, the failures its ending named and its kept log;
+- **`checks_due`**: the engine's own, which no person or seat may make — the
+  live changes whose head commit no attempt of any check has been queued at,
+  which the repository's home polls for the heads whose checks it dispatches.
+
 ### How long a check is kept
 
 A check's rows are kept **30 days** after it ended: past that, a check is one

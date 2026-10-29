@@ -143,12 +143,15 @@ type native struct {
 	// each alarm evaluation, for what it refused busy for a backlog — on
 	// every data node that holds one, the git role or not — and its reading
 	// is assigned field by field in [Engine.codeReading] itself, where the
-	// reading's producers gate finds each field written. changeWriter is the
-	// committer's sibling, built and handed out with it: the writer of
-	// changes' conversations, each on the change's own subject.
+	// reading's producers gate finds each field written. changeWriter and
+	// checksWriter are the committer's siblings, built and handed out with
+	// it: the writers of changes' conversations, each on the change's own
+	// subject, and of repositories' checks, each on its repository's checks
+	// subject.
 	codeStore    *code.Store
 	committer    *code.Committer
 	changeWriter *code.ChangeWriter
+	checksWriter *code.ChecksWriter
 
 	// codeHost is this node's git surface (internal/code/host) — its cache,
 	// its git pool, the hook relay, and the engine writes it builds — built
@@ -441,6 +444,17 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				Metrics: e.metrics, Logger: logging.Get("code"),
 			}); err != nil {
 				return fmt.Errorf("engine: code change writer: %w", err)
+			}
+			// AND THE WRITER OF REPOSITORIES' CHECKS, which the estate asks
+			// a check's record of on the same node: the retention its
+			// repo_deleted sentence names, and the node's event stream an
+			// applied ending is announced on, once, from here.
+			if n.checksWriter, err = code.NewChecksWriter(code.ChecksWriterOptions{
+				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
+				Retention: e.codeDeletedRetention, Events: e.checkEvents(),
+				Metrics: e.metrics, Logger: logging.Get("code"),
+			}); err != nil {
+				return fmt.Errorf("engine: code checks writer: %w", err)
 			}
 		}
 		// AND ITS GIT SURFACE, on a node with the git role: the cache it

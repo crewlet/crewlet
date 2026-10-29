@@ -418,6 +418,16 @@ code_fetched               # one reader's reads of a `visibility: unit`
                            # auxiliary_spend is: the usage publisher derives
                            # who read each repository from these rows
                            # (code-host.md, "Who read it")
+code_check_finished        # one attempt of a check of a commit ENDED, as
+                           # its row on the code log keeps the ending:
+                           # repository by id and name, commit, check name
+                           # and attempt, purpose, target branch, a head
+                           # check's change, state and reason, placement,
+                           # whether the target requires it, and how long it
+                           # ran. Published ONCE, by the data node whose
+                           # checks writer wrote the ending, on its apply —
+                           # never by an applier. STORED AND NOT FED
+                           # (code-host.md, "Who records a check")
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —
                            # period, window label, resets_at — with its
@@ -590,17 +600,21 @@ given a category while declaring an anonymous rate, and a type given a category
 while declaring no rate author at all, both fail the suite in
 `internal/events`. An unstated author is not a claim that the rate is bounded.
 
-**Stored, not fed.** Two types are rows like every other and are kept out of
+**Stored, not fed.** Three types are rows like every other and are kept out of
 the activity feed: `auxiliary_spend`, which is accounting rather than activity,
-and `code_fetched`, which is an audit. The feed is a ring of the whole
+`code_fetched`, which is an audit, and `code_check_finished`, which is
+counted rather than watched. The feed is a ring of the whole
 company's last few hundred events — every node's is fed by a fleet-wide
 broadcast — and a turn writes several auxiliary records beside its own phases,
 a compaction a burst, while a busy company's readers of its unit repositories —
 a CI token fetching on every build, seats reading files a line range at a
-time — write a record each every fifteen seconds, faster than anybody reads a
-feed: in the feed either would push out the turns and failures a reader is
-watching. Who read a repository is answered where it is
-asked instead ([Code Host § Who read it](code-host.md#who-read-it)). The class is declared beside the category
+time — write a record each every fifteen seconds, and every push of every
+change ends each check its repository defines, faster than anybody reads a
+feed: in the feed any of them would push out the turns and failures a reader
+is watching. Who read a repository, and how a change's checks ended, are
+answered where they are asked instead ([Code Host § Who read
+it](code-host.md#who-read-it), [§ Who records a
+check](code-host.md#who-records-a-check)). The class is declared beside the category
 map in `internal/events` and asked by every read of the feed's rows: the live
 projection, its startup seed, and every view a reader scrolls on from the feed
 — the dashboard's event log pages and its axis, the Live strip, a seat's latest

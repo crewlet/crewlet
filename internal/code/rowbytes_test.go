@@ -90,6 +90,10 @@ func TestARowsComputedSizeIsItsEncodingsLength(t *testing.T) {
 		fill(rng, reflect.ValueOf(&due).Elem())
 		check("due change", due, due.encodedBytes())
 
+		var attempt CheckRow
+		fill(rng, reflect.ValueOf(&attempt).Elem())
+		check("check row", attempt, attempt.encodedBytes())
+
 		var layer LayerRow
 		fill(rng, reflect.ValueOf(&layer).Elem())
 		check("layer row", layer, layer.encodedBytes())

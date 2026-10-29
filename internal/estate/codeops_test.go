@@ -119,6 +119,22 @@ func (f *fakeNode) Converse(_ context.Context, w code.ConversationWrite) (code.C
 		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
 }
 
+// PublishChecks is a checks writer that writes every write of a repository's
+// checks it is given at the next position on the code log — or refuses every
+// one with codeErr.
+func (f *fakeNode) PublishChecks(_ context.Context, r code.ChecksRequest) (code.ChecksResult, error) {
+	f.note("code.checks")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checks = append(f.checks, r)
+	if f.codeErr != nil {
+		return code.ChecksResult{}, f.codeErr
+	}
+	f.codeSeq++
+	return code.ChecksResult{Outcome: statelog.OutcomeApplied, Holder: f.name,
+		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
+}
+
 // codeRefusal is what this node's code half refuses every operation with, or
 // nil.
 func (f *fakeNode) codeRefusal() error {
@@ -340,6 +356,86 @@ func TestAConversationRecordIsPublishedByTheCommittingNode(t *testing.T) {
 	}
 }
 
+// checkedOn is every serving node a write of repo's checks was asked of,
+// sorted.
+func (f *fleet) checkedOn(repo string) []string {
+	var out []string
+	for name, n := range f.nodes {
+		n.mu.Lock()
+		asked := slices.ContainsFunc(n.checks, func(r code.ChecksRequest) bool { return r.RepoID() == repo })
+		n.mu.Unlock()
+		if asked {
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// A CHECK RECORD IS PUBLISHED BY A DATA NODE — the repository's committing
+// one: a write of a repository's checks is asked of the first of the
+// rendezvous order of the repository over every data node, the node its pushes
+// are proposed on, whichever node asks — a git node running the check among
+// them, which never publishes one — so one node's checks writer takes a
+// repository's check writes one at a time; and an unanswered one is asked of
+// the runner-up under the same operation id.
+//
+// Mutation: key the operation by nothing — publish on the node that asks — and
+// the writes spread over whichever node answered last, red.
+func TestACheckRecordIsPublishedByADataNode(t *testing.T) {
+	t.Parallel()
+	holders := []string{"data-a", "data-b", "data-c", "data-d"}
+	f := newFleet(t, holders...)
+	r := f.router(t, "git-1", nil)
+	claim := func(repo string, i int) code.ChecksRequest {
+		return code.ChecksRequest{OpID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d.code_check_claim", i),
+			Started: &code.CheckStarted{CheckKey: code.CheckKey{RepoID: repo,
+				OID: "1111111111111111111111111111111111111111", Name: "unit", Attempt: 1},
+				Runner: "git-1", Placement: code.PlacementContainer,
+				StartedAt: time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)}}
+	}
+	for i := range 16 {
+		repo := fmt.Sprintf("019a0c2e-0000-7000-8000-%012d", 200+i)
+		committer := rendezvous.Order(repo, holders)[0]
+		if _, err := r.Code().Checks(t.Context(), claim(repo, i)); err != nil {
+			t.Fatalf("a claim on %s: %v", repo, err)
+		}
+		if got := f.checkedOn(repo); !slices.Equal(got, []string{committer}) {
+			t.Fatalf("a claim of a check of %s was asked of %v, want its committing node %s alone", repo, got,
+				committer)
+		}
+		if _, err := r.Code().Propose(t.Context(), proposalTo(repo, "push-"+repo)); err != nil {
+			t.Fatalf("propose to %s: %v", repo, err)
+		}
+		if got := f.proposedOn(repo); !slices.Equal(got, []string{committer}) {
+			t.Fatalf("a push to %s was proposed on %v, and its checks written on %s", repo, got, committer)
+		}
+	}
+
+	// THE RUNNER-UP, under the same operation id, once the committer ran
+	// nothing.
+	repo := "019a0c2e-0000-7000-8000-0000000002f0"
+	order := rendezvous.Order(repo, holders)
+	f.nodes[order[0]].set(func(n *fakeNode) { n.codeErr = code.ErrNotServing })
+	w := claim(repo, 99)
+	if _, err := r.Code().Checks(t.Context(), w); err != nil {
+		t.Fatalf("a claim: %v", err)
+	}
+	runnerUp := f.nodes[order[1]]
+	runnerUp.mu.Lock()
+	var asked []code.ChecksRequest
+	for _, got := range runnerUp.checks {
+		if got.RepoID() == repo {
+			asked = append(asked, got)
+		}
+	}
+	runnerUp.mu.Unlock()
+	if len(asked) != 1 || !reflect.DeepEqual(asked[0], w) {
+		t.Fatalf("the runner-up %s was asked %+v, want the very write its committer ran nothing of", order[1],
+			asked)
+	}
+}
+
 // proposedOn is every serving node a push to repo was proposed on, sorted.
 func (f *fleet) proposedOn(repo string) []string {
 	var out []string
@@ -416,6 +512,7 @@ type codeAnswers struct {
 	changed   code.ChangeResult
 	lifecycle code.LifecycleResult
 	conversed code.ConversationResult
+	checked   code.ChecksResult
 	wrote     code.EngineWriteResult
 }
 
@@ -467,6 +564,11 @@ func (d *codeDesk) ProposeChange(_ context.Context, p code.ChangeProposal) (code
 func (d *codeDesk) Converse(_ context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
 	held, err := d.took(w)
 	return held.conversed, err
+}
+
+func (d *codeDesk) PublishChecks(_ context.Context, r code.ChecksRequest) (code.ChecksResult, error) {
+	held, err := d.took(r)
+	return held.checked, err
 }
 
 func (d *codeDesk) Resolve(_ context.Context, q code.ResolveQuery) (code.RepoRef, error) {
@@ -644,6 +746,23 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 				State: code.FindingDisputed, ResolutionNote: "the client backs off", ResolvedBy: "dev",
 				ResolvedByKind: code.PartyAgent, ResolvedCommit: "7777777777777777777777777777777777777777",
 				ResolvedPosition: at, Position: at}},
+			// A PAGE OF CHECKS AND ONE ATTEMPT WHOLE, every field of each.
+			Checks: []code.CheckRow{{CheckKey: code.CheckKey{RepoID: ref.ID,
+				OID: "6666666666666666666666666666666666666666", Name: "unit", Attempt: 2},
+				State: code.CheckStateFailed, Purpose: code.PurposeCandidate, ChangeID: "change-1", Revision: 3,
+				CandidateID: "cand-1", EntryID: "entry-1", Target: "refs/heads/main",
+				Base: "7777777777777777777777777777777777777777", DefsOID: "8888888888888888888888888888888888888888",
+				Required: true, RunIn: code.CellE2B, TimeoutSeconds: 600, Reason: code.CheckReasonTimedOut,
+				Runner: "git-a", Placement: code.PlacementE2B, Box: "box-7", Borrowed: true, Reporter: "founder",
+				QueuedAt: created, StartedAt: created, FinishedAt: created, DurationMs: 600_000,
+				ExitCode: new(137), Summary: "timed out", FailuresOmitted: 2, URL: "https://ci.example.com/1",
+				Queued: at, Finished: at}},
+			Check: &code.CheckDetail{CheckRow: code.CheckRow{CheckKey: code.CheckKey{RepoID: ref.ID,
+				OID: "6666666666666666666666666666666666666666", Name: "lint", Attempt: 1},
+				State: code.CheckStatePassed}, Def: &code.CheckDef{Name: "lint", Run: "make lint",
+				TimeoutSeconds: 60}, Tail: "ok", Failures: []code.CheckFailure{{Path: "a.go", Line: 3,
+				TestID: "lint/a", Message: "unused"}},
+				Log: &code.CheckLog{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("l")), Size: 9}},
 			Next: "c-2", Position: at, Level: statelog.ReadSession},
 	}}
 	serveDesk(t, f, d)
@@ -816,6 +935,52 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		}
 	}
 
+	// A REPOSITORY'S CHECK WRITES, every field of each — an attempt queued
+	// with its definition whole, a claim and its holder's naming of the box,
+	// an ending with its failures and log — and every field of the answer.
+	attempt := code.CheckKey{RepoID: ref.ID, OID: "6666666666666666666666666666666666666666", Name: "unit",
+		Attempt: 2}
+	exit := 1
+	for name, req := range map[string]code.ChecksRequest{
+		"an attempt queued": {Queued: &code.CheckQueued{CheckKey: attempt, Purpose: code.PurposeHead,
+			ChangeID: item.ChangeID, Revision: 3, CandidateID: "cand-1", EntryID: "entry-1",
+			Target: "refs/heads/main", Base: "7777777777777777777777777777777777777777",
+			DefsOID: "8888888888888888888888888888888888888888",
+			Def: &code.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 600, Paths: []string{"**/*.go"},
+				Report: code.CheckReport{JUnit: "out/junit.xml", SARIF: "out/lint.sarif"}, RunIn: code.CellContainer,
+				Checkout: code.CheckCheckout{Cone: []string{"cmd", "internal"}}, Env: []string{"NPM_TOKEN"}},
+			Required: true, Reason: code.QueueRequeue, Skipped: true, QueuedAt: created}},
+		"a claim naming its box": {Started: &code.CheckStarted{CheckKey: attempt, Runner: "git-a",
+			Placement: code.PlacementE2B, Box: "box-7", Borrowed: true, StartedAt: created}},
+		"an ending": {Finished: &code.CheckFinished{CheckKey: attempt, State: code.CheckStateFailed,
+			Reason: code.CheckReasonExit, ExitCode: &exit, DurationMs: 61_000, Summary: "2 of 40 failed",
+			Tail: "--- FAIL: TestRetry", Failures: []code.CheckFailure{{Path: "upload/retry_test.go", Line: 12,
+				TestID: "TestRetry", Message: "want 2, got 3"}}, FailuresOmitted: 4,
+			Log: &code.CheckLog{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("log")), Size: 900},
+			URL: "https://ci.example.com/run/1", FinishedAt: created}},
+	} {
+		req.OpID, req.Seen = "019a0c2e-0000-7000-8000-0000000000f0.code_check", at
+		d.mu.Lock()
+		d.checked = code.ChecksResult{Outcome: statelog.OutcomeApplied, Unchanged: true,
+			Refusal: code.CheckRefusalClaimed, Detail: "attempt 2 of check unit is held by runner git-b",
+			Holder: "git-b", Position: at, Row: &code.CheckRow{CheckKey: attempt, State: code.CheckStateRunning,
+				Purpose: code.PurposeHead, ChangeID: item.ChangeID, Revision: 3, CandidateID: "cand-1",
+				EntryID: "entry-1", Target: "refs/heads/main", Base: "7777777777777777777777777777777777777777",
+				DefsOID: "8888888888888888888888888888888888888888", Required: true, RunIn: code.CellContainer,
+				TimeoutSeconds: 600, Reason: code.CheckReasonExit, Runner: "git-b",
+				Placement: code.PlacementContainer, Box: "box-8", Borrowed: true, Reporter: "founder",
+				QueuedAt: created, StartedAt: created, FinishedAt: created, DurationMs: 61_000, ExitCode: &exit,
+				Summary: "2 of 40 failed", FailuresOmitted: 4, URL: "https://ci.example.com/run/1",
+				Queued: at, Finished: at}}
+		d.mu.Unlock()
+		if got, err := seam.Checks(ctx, req); err != nil || !reflect.DeepEqual(got, d.checked) {
+			t.Errorf("checks %s = (%+v, %v), want %+v", name, got, err, d.checked)
+		}
+		if got := d.last(); !reflect.DeepEqual(got, req) {
+			t.Errorf("the checks writer was asked %s %+v, want %+v", name, got, req)
+		}
+	}
+
 	resolveQ := code.ResolveQuery{Name: "app", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}}
 	if got, err := seam.Resolve(ctx, resolveQ); err != nil || !reflect.DeepEqual(got, ref) {
 		t.Errorf("resolve = (%+v, %v), want %+v", got, err, ref)
@@ -878,6 +1043,21 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadChange, Repo: "app",
 			Change: 3, Part: code.PartComments, Cursor: "40/" + ref.ID, Limit: 20,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		// A REPOSITORY'S CHECKS — a change's at a commit, the window since a
+		// moment, one attempt whole — and the home's due check work, of every
+		// repository and of one.
+		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, CeilingSeat: "lead", Kind: code.ReadChecks,
+			Repo: "app", Checks: &code.CheckQuery{Change: 3, OID: "6666666666666666666666666666666666666666"},
+			Cursor: "unit/1", Limit: 20, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
+			Kind: code.ReadChecks, Checks: &code.CheckQuery{Since: created}, Limit: 50,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadCheck, Repo: "app",
+			Checks: &code.CheckQuery{OID: "6666666666666666666666666666666666666666", Name: "unit", Attempt: 2},
+			Fresh:  statelog.Freshness{Level: statelog.ReadLinearizable}},
+		{Kind: code.ReadChecksDue, Cursor: ref.ID, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		{Kind: code.ReadChecksDue, ChecksDue: &code.ChecksDueQuery{RepoID: ref.ID}, Cursor: "refs/heads/fix",
+			Fresh: statelog.FloorAt(statelog.ReadSession, at)},
 	} {
 		if got, err := seam.Read(ctx, q); err != nil || !reflect.DeepEqual(got, d.read) {
 			t.Errorf("read %s = (%+v, %v), want %+v", q.Kind, got, err, d.read)

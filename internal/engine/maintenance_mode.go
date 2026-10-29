@@ -310,11 +310,13 @@ type writeSet struct {
 	tracker *tracker.Writer
 	pages   *pages.Store
 	// committer decides the pushes this node is asked to commit, changes the
-	// writes of changes' conversations it is asked beside them, and code is
-	// the lifecycle store the repositories' reconcile and retention write
-	// through — all the code host's, where the company hosts code.
+	// writes of changes' conversations it is asked beside them, checks the
+	// writes of repositories' checks, and code is the lifecycle store the
+	// repositories' reconcile and retention write through — all the code
+	// host's, where the company hosts code.
 	committer *code.Committer
 	changes   *code.ChangeWriter
+	checks    *code.ChecksWriter
 	code      *code.Store
 }
 
@@ -338,7 +340,7 @@ func (e *Engine) writeSide() writeSet {
 		return writeSet{}
 	}
 	return writeSet{tracker: n.writer, pages: n.pages, committer: n.committer, changes: n.changeWriter,
-		code: n.codeStore}
+		checks: n.checksWriter, code: n.codeStore}
 }
 
 // Mode is what this node started for.

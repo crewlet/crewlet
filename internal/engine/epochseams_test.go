@@ -104,6 +104,7 @@ var servingSeams = []reflect.Type{
 	reflect.TypeFor[estate.ServerSeams](),
 	reflect.TypeFor[code.CommitterOptions](),
 	reflect.TypeFor[code.ChangeWriterOptions](),
+	reflect.TypeFor[code.ChecksWriterOptions](),
 	reflect.TypeFor[code.StoreOptions](),
 	reflect.TypeFor[code.ReaderOptions](),
 	reflect.TypeFor[query.Options](),
@@ -152,9 +153,9 @@ var classified = map[string]struct {
 		"pages.SearcherOptions, whose reads are classified there; its scope is ServerSeams.Seat"},
 	"estate.Backend.Backlinks": {seamNone, "the node's link index"},
 	"estate.Backend.Usage":     {seamNone, "the usage rows"},
-	"estate.Backend.Code": {seamNone, "the committer, the change writer, the reader and the lifecycle " +
-		"store, built over code.CommitterOptions, code.ChangeWriterOptions, code.ReaderOptions and " +
-		"code.StoreOptions"},
+	"estate.Backend.Code": {seamNone, "the committer, the change writer, the checks writer, the reader " +
+		"and the lifecycle store, built over code.CommitterOptions, code.ChangeWriterOptions, " +
+		"code.ChecksWriterOptions, code.ReaderOptions and code.StoreOptions"},
 	"estate.Backend.Git": {seamNone, "the git half a git operation is answered from; what it reads " +
 		"is classified on query.Options, which it is built over"},
 	"estate.Backend.Identity": {seamNone, "the identity directory's reader, built over " +
@@ -207,6 +208,15 @@ var classified = map[string]struct {
 	"code.ChangeWriterOptions.Now":     {seamNone, "the decide's clock"},
 	"code.ChangeWriterOptions.Metrics": {seamNone, "the node's instruments"},
 	"code.ChangeWriterOptions.Logger":  {seamNone, "where a failed write is reported"},
+
+	"code.ChecksWriterOptions.Publisher": {seamNone, "the code log's write authority"},
+	"code.ChecksWriterOptions.DB":        {seamNone, "the replicated rows a write's answer is read from"},
+	"code.ChecksWriterOptions.NodeID":    {seamNone, "the deciding node"},
+	"code.ChecksWriterOptions.Retention": {seamValue, "the instant a repo_deleted refusal names"},
+	"code.ChecksWriterOptions.Events":    {seamNone, "the node's event stream an applied ending is announced on"},
+	"code.ChecksWriterOptions.Now":       {seamNone, "the decide's clock"},
+	"code.ChecksWriterOptions.Metrics":   {seamNone, "the node's instruments"},
+	"code.ChecksWriterOptions.Logger":    {seamNone, "where a failed write is reported"},
 
 	"code.StoreOptions.Publisher": {seamNone, "the code log's write authority"},
 	"code.StoreOptions.DB":        {seamNone, "the replicated rows a lifecycle write decides from"},

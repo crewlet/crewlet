@@ -31,6 +31,11 @@ type Served struct {
 	// a write of a change's conversation is then refused [ErrNotServing], as
 	// a proposal is.
 	ChangeWriter *ChangeWriter
+	// ChecksWriter is the writer of repositories' checks, beside the
+	// committer on every node that publishes, and nil where the committer
+	// is: a write of a repository's checks is then refused [ErrNotServing],
+	// as a proposal is.
+	ChecksWriter *ChecksWriter
 	Reader       *Reader
 	Store        *Store
 }
@@ -101,6 +106,18 @@ func (s Served) Converse(ctx context.Context, w ConversationWrite) (Conversation
 			"conversation", ErrNotServing)
 	}
 	return s.ChangeWriter.Converse(ctx, w)
+}
+
+// PublishChecks decides one write of a repository's checks on this node's
+// checks writer — see [ChecksWriter.Publish] — and, on a node that publishes
+// nothing, refuses it as a push is refused there: the router asks the
+// repository's runner-up with the same operation id.
+func (s Served) PublishChecks(ctx context.Context, r ChecksRequest) (ChecksResult, error) {
+	if s.ChecksWriter == nil {
+		return ChecksResult{}, fmt.Errorf("%w: this node publishes nothing, so it writes no repository's "+
+			"checks", ErrNotServing)
+	}
+	return s.ChecksWriter.Publish(ctx, r)
 }
 
 // Resolve answers a repository by name — see [Reader.Resolve].

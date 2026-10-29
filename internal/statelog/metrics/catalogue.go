@@ -736,6 +736,48 @@ func Catalogue() []Instrument {
 				"cannot judge its seats.",
 		},
 		{
+			Name: CodeChecksQueued, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"purpose"},
+			Shows: "Attempts of checks this node's checks writer queued — each a " +
+				"record on its repository's checks subject that applied here, " +
+				"counted once, by the node that published it — by `purpose`: " +
+				"`head`, a change's head; `candidate`, a merge queue's candidate; " +
+				"`tip`, a protected branch's tip; `bisect`, a landing between a " +
+				"green tip and a red one. A head recorded skipped at its dispatch " +
+				"is counted under crewlet.code.checks.finished alone.",
+		},
+		{
+			Name: CodeChecksFinished, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"state", "placement"},
+			Shows: "Attempts of checks that ended, as their rows keep the ending " +
+				"— counted once, by the node whose checks writer published it — " +
+				"by `state` (`passed`, `failed`, `errored`, `cancelled`, " +
+				"`skipped`) and `placement` (`container`, `e2b`, `external`, or " +
+				"`none` for one no runner claimed). An ending the row did not " +
+				"keep — a later infrastructure ending beside a measurement — is " +
+				"not counted. `errored` climbing on one placement is that " +
+				"placement's cells failing the checks they run.",
+		},
+		{
+			Name: CodeChecksClaims, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Claims of queued attempts this node's checks writer decided, " +
+				"by `outcome`: `won`, the claim landed and its runner holds the " +
+				"attempt; `claimed`, refused before it appended — another runner " +
+				"holds the attempt, or it ended; `lost`, the claim landed and " +
+				"the row keeps another runner's, which a second node publishing " +
+				"for the repository landed first; `unchanged`, the holder's own " +
+				"claim sent again; `no_such_check`, `repo_deleted`, `busy`, " +
+				"`not_applied` and `unavailable`, which decided nothing; " +
+				"`pending` and `unknown`, appended and not yet known here to " +
+				"have applied; `handed_on`, one this node decided nothing of for " +
+				"a reason about itself, which the estate asks the repository's " +
+				"runner-up; and `failed`, any other error. `claimed` is git " +
+				"nodes racing for one attempt, each losing one box it never " +
+				"made; `lost` above zero is two nodes publishing one " +
+				"repository's checks at once.",
+		},
+		{
 			Name: CodeConversationWrites, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"op", "outcome"},
 			Shows: "Writes of a change's conversation this node's change writer " +

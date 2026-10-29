@@ -1292,7 +1292,14 @@ func scanIntroduced(rows *sql.Rows) (IntroducedRow, int, error) {
 //     MaxFindingBodyBytes and a suggestion up to MaxSuggestionBytes — so a
 //     review of MaxFindingsPerReview findings is one page of them where
 //     they say what a reviewer's finding usually says, and a page of
-//     findings with long suggestions ends at the byte budget first.
+//     findings with long suggestions ends at the byte budget first;
+//   - a listing of checks: a listing of changes' bounds, 50 a screen and
+//     200 at most, over rows of about 700 bytes — a key, a state, a target,
+//     a runner and five instants and positions — beside a summary of up to
+//     CheckSummaryBytes, so 200 attempts summarised in a line are under
+//     200 KB, and a page of summaries at their 4 KiB ends near 950 KB, under
+//     the byte budget; the bound is on the rows a page READS, so a window a
+//     seat reads little of costs what a full page does and no more.
 //
 // The maxima are exported for a client that pages: the most a page may ask
 // for of each, which a page past them is refused naming.
@@ -1305,6 +1312,8 @@ const (
 	MaxRefsPerPage       = 1_000
 	defaultChangeLimit   = 50
 	MaxChangesPerPage    = 200
+	defaultCheckLimit    = 50
+	MaxChecksPerPage     = 200
 	defaultRevisionLimit = 200
 	MaxRevisionsPerPage  = 1_000
 )
@@ -1431,6 +1440,22 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// again from its writer's own snapshot.
 		query = q.changesDueQuery(fresh)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.changesDue(ctx, tx, q, &out) }
+	case ReadChecks:
+		// A SET READ, of the repository it names or of the domain for the
+		// window (checksread.go).
+		query = q.checksQuery(fresh)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.checks(ctx, tx, q, chart, &out) }
+	case ReadCheck:
+		// A POINT READ of the repository's checks, as a change's detail is
+		// one of the repository's rows.
+		query = q.checksQuery(fresh)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.check(ctx, tx, q, chart, &out) }
+	case ReadChecksDue:
+		// A SET READ, of the domain or of the one repository, as
+		// changes_due's: the dispatch that follows is decided again by the
+		// repository's checks writer from its own snapshot.
+		query = q.checksQuery(fresh)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.dueCheckWork(ctx, tx, q, &out) }
 	}
 	answer, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
 		out = ReadAnswer{}
@@ -1474,6 +1499,8 @@ func (q ReadQuery) validate() error {
 		return q.validateExpungeDue()
 	case ReadChangesDue:
 		return q.validateChangesDue()
+	case ReadChecksDue:
+		return q.validateChecksDue()
 	}
 	// WHO ASKS IS NAMED, or nothing is read: an answer is held to the
 	// asker's grant, and an absent asker would be judged as somebody nobody
@@ -1492,6 +1519,12 @@ func (q ReadQuery) validate() error {
 	case q.ChangesDue != nil:
 		return fmt.Errorf("%w: changes_due: only a changes_due read names the repository its home owes "+
 			"change work in", ErrInvalid)
+	case q.ChecksDue != nil:
+		return fmt.Errorf("%w: checks_due: only a checks_due read names the repository its home owes "+
+			"check work in", ErrInvalid)
+	case q.Checks != nil && q.Kind != ReadChecks && q.Kind != ReadCheck:
+		return fmt.Errorf("%w: checks: only a checks or a check read names a change's, a commit's or an "+
+			"attempt's checks", ErrInvalid)
 	case q.MinPacks != 0:
 		return fmt.Errorf("%w: min_packs: only a compaction_due read names a floor of live packs", ErrInvalid)
 	case q.Prefix != "" && q.Kind != ReadRefs:
@@ -1527,7 +1560,7 @@ func (q ReadQuery) validate() error {
 		return fmt.Errorf("%w: part: %q is not one of %v", ErrInvalid, q.Part, ChangeParts())
 	}
 	switch {
-	case q.Kind == ReadRepos, q.Kind == ReadChanges && q.Repo == "":
+	case q.Kind == ReadRepos, q.Kind == ReadChanges && q.Repo == "", q.Kind == ReadChecks && q.Repo == "":
 	case !ValidName(q.Repo):
 		return fmt.Errorf("%w: repo: %q is not a repository name", ErrInvalid, q.Repo)
 	}
@@ -1549,9 +1582,14 @@ func (q ReadQuery) validate() error {
 			return fmt.Errorf("%w: change: %d is no change's number: a repository numbers its changes "+
 				"from 1", ErrInvalid, q.Change)
 		}
+	case ReadChecks, ReadCheck:
+		if err := q.validateChecks(); err != nil {
+			return err
+		}
 	}
 	bound := map[ReadKind]int{ReadRepos: MaxReposPerPage, ReadPushes: MaxPushesPerPage,
-		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: q.Part.maxPerPage()}[q.Kind]
+		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: q.Part.maxPerPage(),
+		ReadChecks: MaxChecksPerPage}[q.Kind]
 	switch {
 	case q.Limit < 0:
 		return fmt.Errorf("%w: limit: %d", ErrInvalid, q.Limit)
@@ -1603,6 +1641,11 @@ func (q ReadQuery) validateIntroduced() error {
 	case q.ChangesDue != nil:
 		return refused("changes_due", "only a changes_due read names the repository its home owes change work "+
 			"in")
+	case q.ChecksDue != nil:
+		return refused("checks_due", "only a checks_due read names the repository its home owes check work in")
+	case q.Checks != nil:
+		return refused("checks", "only a checks or a check read names a change's, a commit's or an attempt's "+
+			"checks")
 	case q.Reviewer != "":
 		return refused("reviewer", "only a listing of changes is narrowed to a reviewer")
 	case q.Needs != "":
@@ -1677,7 +1720,8 @@ func (q ReadQuery) validateRunPushes() error {
 		{"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0}, {"brief", q.Brief},
 		{"push", q.Push != ""}, {"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""},
 		{"work", q.Work != ""}, {"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
-		{"changes_due", q.ChangesDue != nil},
+		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
+		{"checks_due", q.ChecksDue != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a run_pushes read names its repositories in its run and filters nothing")
@@ -1720,7 +1764,8 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
-		{"changes_due", q.ChangesDue != nil},
+		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
+		{"checks_due", q.ChecksDue != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -1754,7 +1799,8 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
-		{"changes_due", q.ChangesDue != nil},
+		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
+		{"checks_due", q.ChecksDue != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -1784,7 +1830,8 @@ func (q ReadQuery) validateExpungeDue() error {
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
-		{"changes_due", q.ChangesDue != nil},
+		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
+		{"checks_due", q.ChecksDue != nil},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_due read lists every repository with an expunge open or a "+

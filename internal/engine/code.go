@@ -165,6 +165,17 @@ func OperatorCode(e *Engine) (estate.CodeSeam, bool) {
 	return e.router.Code(), true
 }
 
+// checkEvents is the event stream this node's checks writer announces an
+// applied ending on — its queue's, the one every event of this node is
+// published to — and nil, never a typed nil, where it holds none: a node with
+// no queue records no event of any kind.
+func (e *Engine) checkEvents() code.EventPublisher {
+	if e.backends == nil || e.backends.Queue == nil {
+		return nil
+	}
+	return e.backends.Queue
+}
+
 // stopCommitter ends this node's committer: a proposal queued on it is
 // answered "not serving", which every asker reads as a node that ran nothing
 // and takes to the repository's runner-up with the same push id, and a batch
@@ -200,11 +211,12 @@ func (e *Engine) stopCommitter(ctx context.Context) { e.native.Load().stopCommit
 // for its applier takes — and when the broker does not, the push ids the batch
 // carried collapse on whatever landed when their clients push again.
 //
-// THE CHANGE WRITER STOPS WITH IT, for the same two reasons: a write of a
-// change's conversation waiting its change's turn is answered "not serving" and
-// taken to the runner-up, and a publish in flight finishes before the estate
-// subject cancels its answer and before the admission is withdrawn. One bound
-// for both, the writer's stop after the committer's.
+// THE CHANGE WRITER AND THE CHECKS WRITER STOP WITH IT, for the same two
+// reasons: a write of a change's conversation or of a repository's checks
+// waiting its turn is answered "not serving" and taken to the runner-up, and a
+// publish in flight finishes before the estate subject cancels its answer and
+// before the admission is withdrawn. One bound for all three, the writers'
+// stops after the committer's.
 func (n *native) stopCommitter(ctx context.Context) {
 	if n == nil || n.committer == nil {
 		return
@@ -214,6 +226,9 @@ func (n *native) stopCommitter(ctx context.Context) {
 	n.committer.Stop(bounded)
 	if n.changeWriter != nil {
 		n.changeWriter.Stop(bounded)
+	}
+	if n.checksWriter != nil {
+		n.checksWriter.Stop(bounded)
 	}
 }
 

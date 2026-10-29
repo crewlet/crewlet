@@ -750,6 +750,25 @@ const (
 	// engine's own read, as `compaction_due` is: what its home polls and is
 	// nudged into reading.
 	ReadChangesDue ReadKind = "changes_due"
+	// ReadChecks lists attempts of checks ([CheckRow]), held to the asker's
+	// grant: one repository's, newest ended first and every attempt not yet
+	// ended after them; one change's of it, or one commit's, by commit, name
+	// and attempt ([CheckQuery]); or, naming no repository, the WINDOW —
+	// every repository's the asker may read whose attempts ended at or after
+	// [CheckQuery.Since], newest ended first.
+	ReadChecks ReadKind = "checks"
+	// ReadCheck is one attempt read whole ([CheckDetail]): its row, its
+	// definition, its tail, the failures its ending named and its kept log —
+	// held to the asker's grant on its repository.
+	ReadCheck ReadKind = "check"
+	// ReadChecksDue is the check work a repository's HOME git node owes
+	// ([ChecksDueQuery]): with no repository, the active repositories holding
+	// a LIVE change whose head commit no attempt of any check has been queued
+	// at, by id; with one, those changes of that repository, by source
+	// branch, each with its target's tip as the rows hold it ([ChangeDue]) —
+	// the tip whose checks file defines what the home dispatches. The
+	// engine's own read, as `changes_due` is.
+	ReadChecksDue ReadKind = "checks_due"
 )
 
 // ReadKinds is the closed set.
@@ -762,7 +781,8 @@ const (
 // one that reads [ReadQuery.RunPushes].
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
-		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadChangesDue}
+		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadChangesDue, ReadChecks,
+		ReadCheck, ReadChecksDue}
 }
 
 // Valid reports a kind this build knows.
@@ -779,8 +799,8 @@ type ReadQuery struct {
 	// would be a reader nobody named, and an optional asker is a hole any
 	// caller that forgot it opens. REFUSED on `introduced`, on `run_pushes`
 	// and on the duty listings `compaction_due`, `publication_due`,
-	// `expunge_due` and `changes_due`, which no principal makes: an asker
-	// there would be judged by nothing.
+	// `expunge_due`, `changes_due` and `checks_due`, which no principal
+	// makes: an asker there would be judged by nothing.
 	Asker Principal `json:"asker"`
 	// CeilingSeat is the handle of the seat the asking seat's turn is acting
 	// FOR — the colleague whose ask woke it — and "" for a read made for its
@@ -921,6 +941,15 @@ type ReadQuery struct {
 	// kind it does not know (ErrInvalid) — the home's work waits, never
 	// answered as none.
 	ChangesDue *ChangesDueQuery `json:"changes_due,omitempty"`
+	// Checks narrows a `checks` read to a change's attempts or a commit's,
+	// or bounds its window; and names the one attempt a `check` read is of,
+	// REQUIRED there. Refused on every other kind. ChecksDue is a
+	// `checks_due` read's repository, as ChangesDue is a `changes_due`
+	// read's, and refused on every other kind. Estate request fields and no
+	// record's, so they take no versionedFields row: a node of a build that
+	// predates the kinds refuses the read as a kind it does not know.
+	Checks    *CheckQuery     `json:"checks,omitempty"`
+	ChecksDue *ChecksDueQuery `json:"checks_due,omitempty"`
 	// MinPacks is a `compaction_due` read's floor — the repositories
 	// holding at least this many live packs — REQUIRED, at least 1, for that
 	// kind and refused on every other.
@@ -933,9 +962,10 @@ type ReadQuery struct {
 	// findings 1..200 (0 = 50), and the engine's own two reads of pushes in
 	// log order, introduced and run_pushes, 1..MaxSnapshotItems (0 = the
 	// most) — run_pushes' the pushes of its run's repositories a page READS,
-	// whatever few of them name the run; a page of a duty listing —
-	// `compaction_due`, `publication_due`, `expunge_due`, `changes_due` — is
-	// MaxSnapshotItems and names none.
+	// whatever few of them name the run; checks 1..200 (0 = 50), the rows a
+	// page READS, as a listing of changes; a page of a duty listing —
+	// `compaction_due`, `publication_due`, `expunge_due`, `changes_due`,
+	// `checks_due` — is MaxSnapshotItems and names none.
 	Limit int                `json:"limit,omitempty"`
 	Fresh statelog.Freshness `json:"fresh"`
 }
@@ -968,12 +998,18 @@ type ReadAnswer struct {
 	// DueChanges a page of one repository's due changes, by source branch,
 	// beside PathOwners, its path owners as its settings carry them, read in
 	// the same snapshot — what its home matches the touched paths against.
-	DueRepos   []string           `json:"due_repos,omitempty"`
-	DueChanges []ChangeDue        `json:"due_changes,omitempty"`
-	PathOwners []PathOwner        `json:"path_owners,omitempty"`
-	Next       string             `json:"next,omitempty"`
-	Position   statelog.Position  `json:"position"`
-	Level      statelog.ReadLevel `json:"level"`
+	// A `checks_due` read answers in the same two fields: its repositories
+	// in DueRepos, one repository's changes in DueChanges, with no owners.
+	DueRepos   []string    `json:"due_repos,omitempty"`
+	DueChanges []ChangeDue `json:"due_changes,omitempty"`
+	PathOwners []PathOwner `json:"path_owners,omitempty"`
+	// Checks is a page of a `checks` read, and Check a `check` read's one
+	// attempt whole.
+	Checks   []CheckRow         `json:"checks,omitempty"`
+	Check    *CheckDetail       `json:"check,omitempty"`
+	Next     string             `json:"next,omitempty"`
+	Position statelog.Position  `json:"position"`
+	Level    statelog.ReadLevel `json:"level"`
 }
 
 // ExpungeCandidate is one repository an `expunge_due` read lists: the expunge
@@ -1273,6 +1309,172 @@ type ConversationResult struct {
 	// sentence.
 	Refusal ConversationRefusal `json:"refusal,omitempty"`
 	Detail  string              `json:"detail,omitempty"`
+}
+
+// ChecksRequest is one write of a repository's checks as its asker hands it to
+// the repository's committing data node ([ChecksWriter.Publish]): EXACTLY ONE
+// of the records it may be — an attempt queued (or recorded skipped), a claim
+// of one or its holder's naming of the box it made, and an attempt's ending —
+// decided as a record of its own on the repository's checks subject, beside
+// the operation id it is asked under and the floor its asker read at. The
+// engine's own: the home queues and requeues, a runner claims and ends, and
+// none of those names a principal.
+//
+// A CHECKS SWEEP IS NO REQUEST: the code-retention duty's [Store.ChecksSweep]
+// publishes it on the node that holds the duty, deciding only "rows past the
+// history are held", which no other write of the subject races — so the
+// writer that takes a repository's checks one at a time has nothing to order
+// it by.
+//
+// THE CODE DOMAIN'S RECORD FORMAT IS UNTOUCHED: an estate request's type and
+// no record's — what it carries rides the code log as the payloads it names,
+// whose rows are the checks subject's ([KindChecks]) — so it takes no
+// versionedFields row.
+type ChecksRequest struct {
+	// OpID is the record's operation id, minted once by whoever asks — an
+	// operation id this engine accepts (statelog.CheckCallerOpID) — so the
+	// write asked again under it, of the repository's runner-up after a
+	// writer went silent or by an asker whose answer was lost, is the same
+	// write, collapsed by the operation ledger.
+	OpID string `json:"op_id"`
+	// Seen is the code log's position the asker read the attempt at — a
+	// runner's own claim, for the record naming its box; the home's read, for
+	// a requeue — and zero for one that read none. The writer DECIDES AT OR
+	// PAST IT, or refuses `behind` about itself, so the runner-up decides:
+	// from below it the decide would answer a claim it was shown as no
+	// attempt at all.
+	Seen statelog.Position `json:"seen,omitzero"`
+
+	Queued   *CheckQueued   `json:"queued,omitempty"`
+	Started  *CheckStarted  `json:"started,omitempty"`
+	Finished *CheckFinished `json:"finished,omitempty"`
+}
+
+// ChecksResult is what became of one write of a repository's checks.
+type ChecksResult struct {
+	// Outcome is applied, pending or unknown for a write whose record was
+	// appended — or, answered from the rows with no record, applied and
+	// Unchanged — and empty for one refused. Applied is answered only once
+	// the attempt's row holds what the record carried, never from the
+	// decision.
+	Outcome statelog.Outcome `json:"outcome,omitempty"`
+	// Unchanged is a write that asked for what the attempt's row already
+	// says — an attempt queued that is, a claim its holder sends again, an
+	// ending the row's own ending is kept over — answered from the row with
+	// no record.
+	Unchanged bool `json:"unchanged,omitempty"`
+	// Refusal is why it was refused with no record, and Detail its one
+	// sentence.
+	Refusal CheckRefusal `json:"refusal,omitempty"`
+	Detail  string       `json:"detail,omitempty"`
+	// Holder is the runner that holds the attempt as the rows say — on a
+	// claim refused `claimed`, the one that does; on a claim applied, the one
+	// the join kept, which is the claim's own runner unless a claim another
+	// writer published landed with a lower (StartedAt, Runner) — and "" for
+	// an attempt no runner holds. A runner whose claim answered another
+	// holder starts no box.
+	Holder string `json:"holder,omitempty"`
+	// Row is the attempt as the rows hold it once the write applied, or as
+	// the refusal or the unchanged answer read it — nil where the repository
+	// holds none.
+	Row *CheckRow `json:"row,omitempty"`
+	// Position is where the write's record landed — for one asked again under
+	// its own operation id, the record the ledger found; for an Unchanged
+	// answer, the row's last record — and, for a not_applied or repo_deleted
+	// refusal the log made after the append, where that record lies applying
+	// nowhere.
+	Position statelog.Position `json:"position,omitzero"`
+}
+
+// CheckRow is one attempt of one check of one commit as its row holds it
+// (code_checks): its key and state, and what its queue, its run and its
+// ending say — every column but the wide ones a listing leaves to a read of
+// the one attempt ([CheckDetail]): its definition, its tail and its failures.
+type CheckRow struct {
+	CheckKey
+	State   CheckState   `json:"state"`
+	Purpose CheckPurpose `json:"purpose,omitempty"`
+	// ChangeID and Revision are a head check's change and revision;
+	// CandidateID and EntryID a candidate's queue entry.
+	ChangeID    string `json:"change_id,omitempty"`
+	Revision    int    `json:"revision,omitempty"`
+	CandidateID string `json:"candidate_id,omitempty"`
+	EntryID     string `json:"entry_id,omitempty"`
+	// Target is the branch the commit is checked for, Base what its diff is
+	// read against, and DefsOID the checks file its definition came from.
+	Target  string `json:"target,omitempty"`
+	Base    string `json:"base,omitempty"`
+	DefsOID string `json:"defs_oid,omitempty"`
+	// Required reports a check the target's protection requires; RunIn and
+	// TimeoutSeconds are its definition's.
+	Required       bool      `json:"required,omitempty"`
+	RunIn          CheckCell `json:"run_in,omitempty"`
+	TimeoutSeconds int       `json:"timeout_seconds,omitempty"`
+	// Reason is why its ending ended it, "" before one.
+	Reason CheckReason `json:"reason,omitempty"`
+	// Runner, Placement, Box and Borrowed are its claim's; Reporter is the
+	// human seat of the person whose CI reported its ending.
+	Runner    string         `json:"runner,omitempty"`
+	Placement CheckPlacement `json:"placement,omitempty"`
+	Box       string         `json:"box,omitempty"`
+	Borrowed  bool           `json:"borrowed,omitempty"`
+	Reporter  string         `json:"reporter,omitempty"`
+	// QueuedAt, StartedAt and FinishedAt are its queue's, its claim's and
+	// its ending's instants, each zero before it.
+	QueuedAt   time.Time `json:"queued_at,omitzero"`
+	StartedAt  time.Time `json:"started_at,omitzero"`
+	FinishedAt time.Time `json:"finished_at,omitzero"`
+	DurationMs int64     `json:"duration_ms,omitempty"`
+	ExitCode   *int      `json:"exit_code,omitempty"`
+	// Summary is what a reader is told first; FailuresOmitted how many
+	// failures its ending counted past the ones it names; URL a reported
+	// run's own page.
+	Summary         string `json:"summary,omitempty"`
+	FailuresOmitted int    `json:"failures_omitted,omitempty"`
+	URL             string `json:"url,omitempty"`
+	// Queued and Finished are the positions of the records whose queue and
+	// whose ending the row keeps: zero before either.
+	Queued   statelog.Position `json:"queued,omitzero"`
+	Finished statelog.Position `json:"finished,omitzero"`
+}
+
+// CheckDetail is one attempt read whole ([ReadCheck]): its row, the
+// definition it ran under, its output's tail, the failures its ending named,
+// and the log a failed run kept — each nil or empty where the attempt carries
+// none.
+type CheckDetail struct {
+	CheckRow
+	Def      *CheckDef      `json:"def,omitempty"`
+	Tail     string         `json:"tail,omitempty"`
+	Failures []CheckFailure `json:"failures,omitempty"`
+	Log      *CheckLog      `json:"log,omitempty"`
+}
+
+// CheckQuery narrows a `checks` read to one change's attempts or one
+// commit's, or names the one attempt a `check` read is of — each on the
+// repository the read names ([ReadQuery.Repo]).
+type CheckQuery struct {
+	// Change is a change's number on the repository: its attempts, of every
+	// commit it was checked at. A `checks` read's alone.
+	Change int64 `json:"change,omitempty"`
+	// OID is a commit's whole id: its attempts — of the change Change names,
+	// where it names one — and the commit a `check` read's attempt is of.
+	OID string `json:"oid,omitempty"`
+	// Name and Attempt are the one attempt a `check` read is of, REQUIRED
+	// there and refused on a `checks` read.
+	Name    string `json:"name,omitempty"`
+	Attempt int    `json:"attempt,omitempty"`
+	// Since bounds a `checks` read of EVERY repository — the window, which
+	// names no repository — to the attempts that ended at or after it; zero
+	// is the whole of what the rows keep ([CheckHistory]). Refused beside a
+	// repository, whose listing is its own attempts newest ended first.
+	Since time.Time `json:"since,omitzero"`
+}
+
+// ChecksDueQuery is a `checks_due` read of ONE repository's due check work:
+// the repository by its id, which its home was nudged about or found listed.
+type ChecksDueQuery struct {
+	RepoID string `json:"repo_id"`
 }
 
 // RepoSummary is a repository as a listing renders it.

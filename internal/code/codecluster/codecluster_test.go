@@ -167,6 +167,81 @@ func compactionMeetsTheCommitter(t *testing.T, c *cluster, p *codetest.Person) {
 	}
 }
 
+// TWO NODES QUEUE ONE CHECK: two members asking at once for the same attempt
+// queued — two homes each believing a head is theirs to dispatch, each under
+// an operation id of its own — meet at the repository's committing data node,
+// whose checks writer decides the one after the other: the first appends, the
+// second is answered from the attempt's row, and the fleet holds ONE row,
+// queued, appended once by the committer alone.
+//
+// Mutation: answer the attempt queued already by appending again, and the
+// committer appends twice for one attempt — red.
+func TestTwoNodesQueueOneCheck(t *testing.T) {
+	const name = "checks-one-row"
+	c := startCluster(t, "nats")
+	c.Declare(t, code.Declared{Name: name, Settings: codetest.Settings()})
+	if err := c.Settle(t.Context()); err != nil {
+		t.Fatalf("settle the fleet: %v", err)
+	}
+	rows, err := c.Rows(t.Context(), name, codetest.Linearizable)
+	if err != nil {
+		t.Fatalf("the rows of %s: %v", name, err)
+	}
+	repo := rows.Repo.ID
+	members := c.DataNodes()
+	committer := c.Committer(repo)
+	before := map[string]int{}
+	for _, m := range members {
+		before[m] = c.Appends(m)
+	}
+	key := code.CheckKey{RepoID: repo, OID: "1111111111111111111111111111111111111111", Name: "unit", Attempt: 1}
+	askers := members[:2]
+	results := make([]code.ChecksResult, len(askers))
+	errs := make([]error, len(askers))
+	var wg sync.WaitGroup
+	for i, m := range askers {
+		req := code.ChecksRequest{OpID: statelog.NewOpID(time.Now(), "code_check_dispatch"),
+			Queued: &code.CheckQueued{CheckKey: key, Purpose: code.PurposeTip, Target: "refs/heads/main",
+				Def:    &code.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 600},
+				Reason: code.QueueDispatch, QueuedAt: time.Now().UTC()}}
+		wg.Go(func() { results[i], errs[i] = c.member(t, m).router.Load().Code().Checks(t.Context(), req) })
+	}
+	wg.Wait()
+	unchanged := 0
+	for i, res := range results {
+		if errs[i] != nil || res.Outcome != statelog.OutcomeApplied || res.Row == nil ||
+			res.Row.State != code.CheckStateQueued {
+			t.Fatalf("the dispatch asked through %s answered (%+v, %v), want applied with the queued row",
+				askers[i], res, errs[i])
+		}
+		if res.Unchanged {
+			unchanged++
+		}
+	}
+	if unchanged != 1 {
+		t.Errorf("%d of the two dispatches were answered from the row, want the second of them", unchanged)
+	}
+	for _, m := range members {
+		grew := c.Appends(m) - before[m]
+		switch {
+		case m == committer && grew != 1:
+			t.Errorf("the committer %s appended %d records for one attempt queued twice, want one", m, grew)
+		case m != committer && grew != 0:
+			t.Errorf("%s appended %d records of a check, and the repository's committer is %s", m, grew,
+				committer)
+		}
+	}
+	read, err := c.member(t, members[len(members)-1]).router.Load().Code().Read(t.Context(), code.ReadQuery{
+		Kind: code.ReadChecks, Repo: name, Checks: &code.CheckQuery{OID: key.OID}, Fresh: codetest.Linearizable,
+		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:ceo", Seat: "ceo"}})
+	if err != nil {
+		t.Fatalf("read the commit's checks: %v", err)
+	}
+	if len(read.Checks) != 1 || read.Checks[0].CheckKey != key || read.Checks[0].State != code.CheckStateQueued {
+		t.Fatalf("the fleet holds %+v for the attempt, want one queued row", read.Checks)
+	}
+}
+
 // EVERY MEMBER ROUTES A GIT READ TO ONE HOME (ADR-0059): a read of a
 // repository by object id through any member's router is answered by the
 // repository's home — the first of its rendezvous order over the running

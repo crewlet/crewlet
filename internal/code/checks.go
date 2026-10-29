@@ -103,6 +103,15 @@ const (
 	// flaky check and still one row a rerun.
 	MaxCheckAttempts = 10
 
+	// AutoRequeueAttempts is the most attempts the home's own requeue takes a
+	// check of a commit to — three: an attempt its INFRASTRUCTURE ended (its
+	// runner lost, its box or its setup failed: [CheckReason.Requeued]) is
+	// queued again by the home while the attempt that ended is below it, so a
+	// dead runner's check runs at most three attempts. Past it the engine
+	// stops spending boxes on a check its cells keep failing, and only a
+	// rerun somebody asks for runs it again, up to MaxCheckAttempts.
+	AutoRequeueAttempts = 3
+
 	// CheckSummaryBytes is the longest summary an ending carries: 4 KiB, a
 	// paragraph a reader takes in at a glance.
 	CheckSummaryBytes = 4 << 10
@@ -303,6 +312,83 @@ func CheckReasons() []CheckReason {
 
 // Valid reports a reason this build knows.
 func (r CheckReason) Valid() bool { return slices.Contains(CheckReasons(), r) }
+
+// ranIn reports an ending only an attempt a runner claimed reaches: a run
+// that exited or ran past its timeout, a runner lost, a box or a setup that
+// failed — and never a check cancelled or errored before any runner took it.
+func (r CheckReason) ranIn() bool {
+	return r == CheckReasonExit || r == CheckReasonTimedOut || r.Requeued()
+}
+
+// Requeued reports an ending the home queues again on its own, below
+// [AutoRequeueAttempts]: one its infrastructure caused — the runner lost, the
+// box or its setup failed — and never one the commit or its definition did.
+func (r CheckReason) Requeued() bool {
+	return r == CheckReasonRunnerLost || r == CheckReasonBoxFailed || r == CheckReasonSetupFailed
+}
+
+// CheckRefusal is why a repository's checks writer decided nothing of a write
+// of its checks ([ChecksRequest]) — a code its asker reads as "<code>:
+// <sentence>", the sentence the decide's ([ChecksResult.Detail]). A named
+// string, so a code this build does not know is a value rather than a panic.
+// NONE IS EVER RECORDED: a refused write appends nothing, so no record of the
+// code log carries one and none takes a versionedFields row.
+type CheckRefusal string
+
+// The codes, in the order the decide's rules reach them (checkswriter.go) and
+// then the writer's own.
+const (
+	// CheckRefusalRepoDeleted is a write about a repository that is deleted,
+	// being purged, purged or not there at all — in the sentence of the
+	// state it is in ([RepoGone]).
+	CheckRefusalRepoDeleted CheckRefusal = "repo_deleted"
+	// CheckRefusalRepoArchived is an attempt queued on an archived
+	// repository, which is read-only: nothing moves in it to be checked.
+	CheckRefusalRepoArchived CheckRefusal = "repo_archived"
+	// CheckRefusalNoSuchCheck is a write about an attempt the repository does
+	// not hold: a claim or an ending of none, a requeue of a check no attempt
+	// of which ran, or an attempt that follows none the rows hold.
+	CheckRefusalNoSuchCheck CheckRefusal = "no_such_check"
+	// CheckRefusalNotFinished is an attempt queued while the one before it
+	// has not ended: a check of a commit runs one attempt at a time.
+	CheckRefusalNotFinished CheckRefusal = "not_finished"
+	// CheckRefusalAttemptsExhausted is an attempt past the last a check of a
+	// commit makes ([MaxCheckAttempts]), or a requeue past the last the home
+	// takes one to ([AutoRequeueAttempts]).
+	CheckRefusalAttemptsExhausted CheckRefusal = "attempts_exhausted"
+	// CheckRefusalRerunGenuine is an attempt asked again of a check whose
+	// latest attempt the home may not queue again: one that measured the
+	// commit — passed or failed — or ended for any reason its infrastructure
+	// did not cause ([CheckReason.Requeued]).
+	CheckRefusalRerunGenuine CheckRefusal = "rerun_genuine"
+	// CheckRefusalClaimed is a claim of an attempt another runner holds, or
+	// one that has ended — naming the runner that holds it
+	// ([ChecksResult.Holder]). A runner's refusal, never a tool's: the loser
+	// starts no box.
+	CheckRefusalClaimed CheckRefusal = "claimed"
+
+	// CheckRefusalBusy is a write the repository's checks writer did not
+	// reach in time — its asker's attempt run short behind the repository's
+	// other check writes — and decided nothing: it is sent again.
+	CheckRefusalBusy CheckRefusal = "busy"
+	// CheckRefusalNotApplied is a write whose record was durable on the code
+	// log and applied nowhere: a gate drops it on every node.
+	CheckRefusalNotApplied CheckRefusal = "not_applied"
+	// CheckRefusalUnavailable is the code log refusing the write.
+	CheckRefusalUnavailable CheckRefusal = "unavailable"
+)
+
+// CheckRefusals is every code, in this order.
+func CheckRefusals() []CheckRefusal {
+	return []CheckRefusal{
+		CheckRefusalRepoDeleted, CheckRefusalRepoArchived, CheckRefusalNoSuchCheck, CheckRefusalNotFinished,
+		CheckRefusalAttemptsExhausted, CheckRefusalRerunGenuine, CheckRefusalClaimed,
+		CheckRefusalBusy, CheckRefusalNotApplied, CheckRefusalUnavailable,
+	}
+}
+
+// Valid reports a code this build knows.
+func (r CheckRefusal) Valid() bool { return slices.Contains(CheckRefusals(), r) }
 
 // Ends reports whether r is a reason an attempt ends in state s — the one
 // pairing a writer forms and [CheckFinished.Validate] holds it to: a run that

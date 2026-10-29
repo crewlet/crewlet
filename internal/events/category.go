@@ -319,6 +319,13 @@ var categories = map[string]placement{
 	// credentials and seats the company holds — a token's builds, a seat's
 	// turns — never by a stranger.
 	"code_fetched": {"system", RateAuthenticated},
+	// An attempt of a check of a commit ENDED, as its row keeps the ending —
+	// PERSISTED, since a node's day counts it from these rows, and NOT FED:
+	// see [unfed]. AUTHENTICATED-rated: an attempt follows from a push the
+	// guard admitted — a seat's, a person's, a token's — so its pace is set
+	// by the credentials and seats the company holds, bounded by the cells
+	// that run checks.
+	"code_check_finished": {"system", RateAuthenticated},
 
 	// Learning: the reflection subsystem and the skill lifecycle, grouped
 	// so a dashboard's category filter can include or exclude all of that
@@ -492,6 +499,14 @@ var unfed = map[string]string{
 		"hundred events. Who read a repository is answered where it is asked: " +
 		"the code host's readers route and `code_repo_readers`, summed across " +
 		"the fleet from the usage domain these rows are derived into",
+	"code_check_finished": "COUNTED, NOT WATCHED: one record per attempt of a " +
+		"check that ended, and every push of every change ends each check its " +
+		"repository's checks file defines — a busy company's faster than a " +
+		"person reads a feed, pushing the turns, failures and deliveries a " +
+		"reader watches out of a ring that holds the whole company's last few " +
+		"hundred events. An attempt's ending is read where it is asked — the " +
+		"change's checks, the repository's — from its row on the code log; " +
+		"these rows are what a node's day counts",
 }
 
 // liveOnly is the subset of [excluded] that still drives the live projection.

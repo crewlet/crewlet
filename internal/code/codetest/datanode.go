@@ -120,7 +120,10 @@ type dataIncarnation struct {
 	// changes is the change writer beside the committer, over the same
 	// fault publisher: a conversation's record appended and its writer dead
 	// before it answered is the committer's point as much as a push's.
-	changes   *code.ChangeWriter
+	changes *code.ChangeWriter
+	// checks is the checks writer beside the committer, over the same fault
+	// publisher, for the change writer's reason.
+	checks    *code.ChecksWriter
 	lifecycle *code.Store
 	operator  *code.Store
 
@@ -316,6 +319,15 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	}); err != nil {
 		t.Fatalf("codetest: %s: build the change writer: %v", d.o.ID, err)
 	}
+	// THE CHECKS WRITER, as the engine builds it beside the committer, with no
+	// event stream: the suite reads what a check's record did from its rows.
+	if p.checks, err = code.NewChecksWriter(code.ChecksWriterOptions{
+		Publisher: &faultPublisher{inner: pub, faults: d.o.Faults, appends: &d.appends},
+		DB:        p.estate.Reader(), NodeID: d.o.ID,
+		Retention: func() time.Duration { return deletedRetention },
+	}); err != nil {
+		t.Fatalf("codetest: %s: build the checks writer: %v", d.o.ID, err)
+	}
 	if p.lifecycle, err = code.NewStore(code.StoreOptions{Publisher: pub, DB: p.estate.Reader(),
 		NodeID: d.o.ID}); err != nil {
 		t.Fatalf("codetest: %s: build the lifecycle store: %v", d.o.ID, err)
@@ -347,7 +359,7 @@ func (d *DataNode) Served() code.Served {
 	if p == nil {
 		return code.Served{}
 	}
-	return code.Served{Committer: p.committer, ChangeWriter: p.changes, Reader: p.reader}
+	return code.Served{Committer: p.committer, ChangeWriter: p.changes, ChecksWriter: p.checks, Reader: p.reader}
 }
 
 // Store is the node's lifecycle store, publishing under its own id.
@@ -684,6 +696,7 @@ func (d *DataNode) Kill() {
 		defer close(p.stopping)
 		p.committer.Stop(ended)
 		p.changes.Stop(ended)
+		p.checks.Stop(ended)
 	}()
 	p.stopApplier()
 	p.consumer.Close()
@@ -717,6 +730,7 @@ func (d *DataNode) StopCommitter() {
 	defer cancel()
 	p.committer.Stop(bounded)
 	p.changes.Stop(bounded)
+	p.checks.Stop(bounded)
 }
 
 // teardown ends every incarnation: the crashes released FIRST, before anything
@@ -736,6 +750,7 @@ func (d *DataNode) teardown() {
 		} else {
 			p.committer.Stop(context.Background())
 			p.changes.Stop(context.Background())
+			p.checks.Stop(context.Background())
 		}
 		p.stopApplier()
 		p.consumer.Close()

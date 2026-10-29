@@ -59,6 +59,7 @@ import (
 
 func init() {
 	events.Register[CodeFetched]()
+	events.Register[CodeCheckFinished]()
 }
 
 // CodeFetchedVia is how a unit repository's contents were read.
@@ -179,4 +180,77 @@ func (e CodeFetched) SummaryFor(actor string) string {
 		what += " " + strconv.FormatInt(e.Reads, 10) + " times"
 	}
 	return lead(actor, what+" ("+strconv.FormatInt(e.Bytes, 10)+" bytes)")
+}
+
+// CodeCheckFinished records that one attempt of a check of a commit ENDED —
+// passed, failed, errored, cancelled, or skipped at its dispatch — as the
+// attempt's row on the code log keeps the ending: published ONCE, by the data
+// node whose checks writer published the record that set it (internal/code's
+// ChecksWriter), on that record's apply — never by an applier, which every
+// data node runs. An ending the row did not keep — a later infrastructure
+// ending beside a measurement, an ending asked again — is announced by none.
+//
+// # Why an event, beside the row
+//
+// The row is the attempt's state, replicated, and kept CheckHistory; the event
+// is what a NODE'S DAY counts, from its own event log, as a day counts every
+// other activity it derives (store.DB.UsageForDay) — the row is no day's, and
+// a count read off the rows at a day's close would count each attempt on
+// every data node. So the event carries what a day files the ending under and
+// nothing a reader of the attempt needs: the attempt is read from its row.
+//
+// # Where it is filed
+//
+// Persisted, in the `system` category, and kept out of the activity feed
+// (internal/events' unfed list): every push of every change ends each check
+// its file defines, a busy company's faster than a person reads a feed, and an
+// attempt's ending is read where it is asked — the change's checks, the
+// repository's.
+type CodeCheckFinished struct {
+	// RepoID is the repository's id, which outlives its name; RepoName its
+	// name when the ending applied.
+	RepoID   string `json:"repo_id"`
+	RepoName string `json:"repo_name"`
+
+	// OID is the commit checked, Name the check and Attempt the attempt.
+	OID     string `json:"oid"`
+	Name    string `json:"name"`
+	Attempt int    `json:"attempt"`
+
+	// Purpose is what the attempt was for (internal/code's CheckPurpose:
+	// head, candidate, tip, bisect); ChangeID a head check's change, and
+	// Target the branch the commit was checked for.
+	Purpose  string `json:"purpose"`
+	ChangeID string `json:"change_id,omitempty"`
+	Target   string `json:"target"`
+
+	// State is the ending (internal/code's CheckState) and Reason why
+	// (CheckReason); Placement is where it ran — container, e2b or external
+	// — and empty for an attempt no runner claimed.
+	State     string `json:"state"`
+	Reason    string `json:"reason"`
+	Placement string `json:"placement,omitempty"`
+
+	// Required reports a check its target's protection requires;
+	// DurationMs is how long its run took, 0 for none.
+	Required   bool  `json:"required,omitempty"`
+	DurationMs int64 `json:"duration_ms,omitempty"`
+}
+
+// EventType is the "code_check_finished" wire type.
+func (CodeCheckFinished) EventType() string { return "code_check_finished" }
+
+// SummaryFor names the check, its attempt, the commit's first twelve digits,
+// the repository and how it ended.
+func (e CodeCheckFinished) SummaryFor(actor string) string {
+	commit := e.OID
+	if len(commit) > 12 {
+		commit = commit[:12]
+	}
+	what := "check " + e.Name + " (attempt " + strconv.Itoa(e.Attempt) + ") of " + e.RepoName + "@" + commit +
+		" " + e.State
+	if e.Reason != "" {
+		what += " (" + e.Reason + ")"
+	}
+	return lead(actor, what)
 }
