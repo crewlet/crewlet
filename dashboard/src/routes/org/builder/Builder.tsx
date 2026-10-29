@@ -2004,7 +2004,7 @@ function BuilderScreen({
             {documentManagedBy === null ? (
               <>
                 No model provider is set, so agents can’t work. Add one under{" "}
-                <a className="t-link" href={href(MODELS_PATH, { flow: "add" })}>
+                <a className="prose-link" href={href(MODELS_PATH, { flow: "add" })}>
                   Settings, Models
                 </a>
                 , or from a terminal on the node’s host, starting from the company the store holds:
