@@ -406,7 +406,7 @@ func registeredStatements() map[string]statement {
 			[]string{"SCAN json_each AS j", seatDaysKey + " (seat=? AND day<?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		// A CODING RUN'S PUSHES TO ONE REPOSITORY, above its launch in log
 		// order: the repository's pushes by position, each row tested for
-		// the run — which no index carries (replicated 0068) — never a sort.
+		// the run — which no index carries (replicated 0070) — never a sort.
 		"run pushes first": {runPushesFirstSQL, []any{"repo-1", "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", 10, 50},
 			[]string{"code_pushes_repo_idx (repo_id=? AND position>?)"}},
 		"run pushes after": {runPushesAfterSQL, []any{"repo-1", "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", 10, 10, "p", 50},

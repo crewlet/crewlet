@@ -19,7 +19,7 @@ import (
 // repository taking 70 pushes a minute (the large model's monorepo), for a run
 // of an hour and one of a week that pushed once every five minutes, beside an
 // hour's run in a quiet repository that takes a push every ten minutes. What
-// it costs is the scan: the read has no index of its own (replicated 0068), so
+// it costs is the scan: the read has no index of its own (replicated 0070), so
 // it reads every push the repository took during the run, a lookup of each
 // row's page to test the run it names, and `rows/op` is how many. Each row is a
 // push of one command and three introduced commits, about 400 bytes, as an

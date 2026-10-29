@@ -545,7 +545,7 @@ type IntroducedQuery struct {
 // run's own — every push made to the run's repositories DURING the run, read
 // once, when the engine collects it. An index on the run would hold an entry
 // for every box push on every data node for the history's 181 days to serve
-// that one read a run (replicated 0068 says what it would cost);
+// that one read a run (replicated 0070 says what it would cost);
 // BenchmarkRunPushes measures what the scan costs instead.
 type RunPushesQuery struct {
 	Run   string            `json:"run"`

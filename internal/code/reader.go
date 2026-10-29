@@ -2175,7 +2175,7 @@ func (r *Reader) introduced(ctx context.Context, tx *sql.Tx, q ReadQuery, cp sta
 //
 // WHAT A PAGE READS IS EVERY PUSH MADE TO A REPOSITORY DURING THE RUN, each a
 // lookup of its row to test the run it names: code_pushes_repo_idx carries
-// no run (replicated 0068 says why), so a page reads up to the pushes the
+// no run (replicated 0070 says why), so a page reads up to the pushes the
 // run's repositories took between its launch and its last push to fill
 // itself. A PAGE IS BOUNDED BY WHAT IT KEEPS, NEVER BY WHAT IT SCANS, because
 // the scan is cheap at the large model's busiest repository, 70 pushes a
