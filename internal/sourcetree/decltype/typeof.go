@@ -41,7 +41,15 @@ func (w *World) TypeOf(e ast.Expr, f *File) Type {
 			if p == nil {
 				return unreadFrom(ip)
 			}
-			return w.packageValue(p, x.Sel.Name)
+			if t := w.packageValue(p, x.Sel.Name); t.Known() || t.fromUnread {
+				return t
+			}
+			if p.types[x.Sel.Name].spec != nil {
+				// A TYPE of the package named where a value goes: a method
+				// expression's receiver (lib.T.M), as identType's own.
+				return Spelled(x, f)
+			}
+			return Type{}
 		}
 		return w.member(w.TypeOf(x.X, f), x.Sel.Name)
 	case *ast.CallExpr:
@@ -140,7 +148,18 @@ func (w *World) identType(id *ast.Ident, f *File) Type {
 				return w.basic("bool")
 			}
 		}
-		return w.packageValue(f.Package, id.Name)
+		if t := w.packageValue(f.Package, id.Name); t.Known() || t.fromUnread {
+			return t
+		}
+		if f.Package.types[id.Name].spec != nil {
+			// A TYPE named where a value goes — a method expression's
+			// receiver, as the TypeSpec case below — declared in another
+			// file of the package, which the parser's file-scoped
+			// resolution does not see: a package never declares a value and
+			// a type by one name, so the name is the type.
+			return Spelled(id, f)
+		}
+		return Type{}
 	}
 	switch d := id.Obj.Decl.(type) {
 	case *ast.Field:

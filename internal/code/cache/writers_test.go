@@ -1299,6 +1299,12 @@ func (m *writerMatch) handoff(call *ast.CallExpr) {
 			m.handed++
 			continue
 		}
+		if typeOperand(call, i) {
+			// A TYPE, handed nothing: new(g.Cmd) makes a Cmd, judged
+			// wherever it is handed on, and decltype types a type named
+			// where a value goes as that type.
+			continue
+		}
 		var param decltype.Type
 		if i < len(params) {
 			param = params[i]
@@ -1341,16 +1347,19 @@ func (m *writerMatch) typed(t decltype.Type) bool {
 	return how == decltype.Resolved || how == decltype.Outside
 }
 
-// noValue reports whether call's i-th argument is no value a Cmd could be:
-// the type make or new is handed, an untyped nil, or a constant — no
-// constant is a struct. Each is what the walk cannot type on either side of
-// a call in the tree as it stands: make's operand, nil, and the constants
-// an iota list continues, which decltype leaves unknown.
+// typeOperand reports whether call's i-th argument is the TYPE the builtin
+// make or new is handed — an operand that is no value at all, so it hands no
+// Cmd on whatever it names.
+func typeOperand(call *ast.CallExpr, i int) bool {
+	fn, ok := ast.Unparen(call.Fun).(*ast.Ident)
+	return ok && i == 0 && fn.Obj == nil && (fn.Name == "make" || fn.Name == "new")
+}
+
+// noValue reports whether call's i-th argument is no value a Cmd could be: an
+// untyped nil, or a constant — no constant is a struct. Each is what the walk
+// cannot type on either side of a call in the tree as it stands: nil, and the
+// constants an iota list continues, which decltype leaves unknown.
 func noValue(call *ast.CallExpr, i int) bool {
-	if fn, ok := ast.Unparen(call.Fun).(*ast.Ident); ok && i == 0 && fn.Obj == nil &&
-		(fn.Name == "make" || fn.Name == "new") {
-		return true
-	}
 	id, ok := ast.Unparen(call.Args[i]).(*ast.Ident)
 	switch {
 	case !ok:

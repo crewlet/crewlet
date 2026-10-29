@@ -50,13 +50,16 @@
 // package-level one by its package's declarations, in any file; a field by
 // the struct it is selected on, a method by the type that declares it or the
 // interface that lists it, each promoted through embedding at the shallowest
-// depth as the language resolves a selector ([World.Select]); a call by the
-// results its function, method, interface method or function value declares,
-// a conversion and a composite literal by their type, a builtin by its own
-// rule; an element by its collection; a comma-ok's second value as a bool; a
-// basic literal by its default type. Pointers are transparent, as a selector
-// makes them. GENERICS ARE FOLLOWED, because every seam of the estate router
-// is one (`call[A, R any](…, o op[A, R], …) (R, error)`): a generic type's
+// depth as the language resolves a selector ([World.Select]) — and a method
+// expression (T.M, (*T).M, pkg.T.M) as the method value T declares, whether
+// T is declared in the expression's own file, another of its package's or an
+// imported package; a call by the results its function, method, interface
+// method or function value declares, a conversion and a composite literal by
+// their type, a builtin by its own rule; an element by its collection; a
+// comma-ok's second value as a bool; a basic literal by its default type.
+// Pointers are transparent, as a selector makes them. GENERICS ARE FOLLOWED,
+// because every seam of the estate router is one
+// (`call[A, R any](…, o op[A, R], …) (R, error)`): a generic type's
 // parameters are bound by its instantiation, a generic function's by its
 // explicit type arguments or by unifying each parameter's type with its
 // argument's, as the compiler infers them, and a generic method's by the
@@ -85,8 +88,10 @@
 // dynamic type the walk cannot follow; a type switch's variable and a value
 // of a type parameter nothing binds, which are unknown; an element of a
 // composite literal whose type is elided; a constant repeating the
-// specification before it (const ( a T = iota; b )), which is unknown; an
-// untyped constant's type where it is not its default type; and a method
+// specification before it (const ( a T = iota; b )), which is unknown; a
+// method expression's receiver parameter, which its type as the method value
+// leaves out; an untyped constant's type where it is not its default type;
+// and a method
 // declared with an alias of its receiver's type as the receiver, which a
 // selector on that type finds Absent.
 //

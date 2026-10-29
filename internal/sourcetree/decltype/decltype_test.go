@@ -23,8 +23,10 @@ import (
 // (parameters, variadics, :=, var, range clauses over every collection and
 // an iterator, comma-ok), package values in another file and another
 // package, fields and methods promoted through embedding and through an
-// interface embedding one of another package, method values, calls of
-// function-typed fields, conversions, composite literals, elements, basic
+// interface embedding one of another package, method values, method
+// expressions on a type this file, another file of its package, another
+// package and an unread one declares, calls of function-typed fields,
+// conversions, composite literals, elements, basic
 // literals, comparisons, generics bound by instantiation, explicit
 // arguments, inference and a generic receiver; a package outside the module
 // read from a directory it was given; values only a package the walk does not

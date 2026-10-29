@@ -267,6 +267,18 @@ func unknown(x any) {
 	want(nil, "unknown")
 	want(x.(*Inner), "example.com/m/a.Inner")
 }
+
+// A METHOD EXPRESSION is typed as the method value its type declares, the
+// type named in this file, another package of the module, or a package
+// outside it.
+func methodExpressions() {
+	want(Inner.Method, "func")
+	want((*Inner).Method, "func")
+	want(Inner.Method(Inner{}), "string")
+	want(b.Item.Key, "func")
+	want((*lib.Client).Conn, "func")
+	want(time.Time.Unix, "unread time")
+}
 `,
 
 	// Another file of the package, and a renamed import.
@@ -279,6 +291,16 @@ func otherFile() *Inner { return nil }
 func renamed() {
 	want(bee.Make(), "example.com/m/b.Item")
 	want(pkgVar.Name, "string")
+}
+
+// A METHOD EXPRESSION on a type another file of the package declares, which
+// the parser's file-scoped resolution does not see, and on one of a renamed
+// import.
+func otherFilesMethodExpressions() {
+	want(Inner.Method, "func")
+	want((*Inner).Method, "func")
+	want(Inner.Method(Inner{}), "string")
+	want(bee.Item.Key, "func")
 }
 `,
 
@@ -300,6 +322,8 @@ func plan9() {
 	"b/b.go": `package b
 
 type Item struct{ ID string }
+
+func (Item) Key() string { return "" }
 
 type Named interface{ Name() string }
 
