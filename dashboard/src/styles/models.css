@@ -154,6 +154,15 @@
   gap: var(--spacing-3);
 }
 
+/* Review's list of the seats that change model, one change to a line. */
+.models-changes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding-inline-start: var(--spacing-4);
+}
+
 /* Who uses it: the seat chips, the summary lines, the per-phase grid. */
 .models-who__seats {
   display: flex;
@@ -277,45 +286,40 @@
 }
 
 /*
- * A model's row head: its CLI's mark level with the key's line, not floating
- * in the middle of the cell, and the key and model id one line each with an
- * ellipsis, whole in the tooltip (design QA M15).
+ * A model's row head: its CLI's mark centred against the two lines beside it
+ * (the owner's call, over the earlier level-with-the-key), and the key and
+ * model id one line each with an ellipsis, whole in the tooltip (design QA
+ * M15).
  */
 .models-entry-cell {
   display: inline-flex;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--spacing-2);
   min-width: 0;
   max-inline-size: 100%;
 }
 
-.models-entry-cell__names {
+/*
+ * A label over its value, one line each: a model's key over its id, a
+ * sign-in's route over its secret's name. ONE RULE FOR BOTH, so the two pairs
+ * a row draws are spaced alike by construction.
+ */
+.models-pair {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  /* A link to the row's own page, drawn as the row's text. */
+}
+
+/* A cell's words raised over the row's link, as a link to the row's page drawn as its text. */
+.models-row-reveal {
+  display: block;
+  min-width: 0;
   color: inherit;
   text-decoration: none;
 }
 
 .models-clamp {
   display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* The sign-in's secret name on one line, whole in the tooltip (QA M15). */
-.models-signin {
-  display: flex;
-  min-width: 0;
-}
-
-.models-signin > .col {
-  min-width: 0;
-}
-
-.models-signin .mono {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -573,10 +577,4 @@
 /* A long name or model id on one line, whole on hover (design QA M15). */
 .models-review-head__names {
   min-width: 0;
-}
-
-.models-clamp {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }

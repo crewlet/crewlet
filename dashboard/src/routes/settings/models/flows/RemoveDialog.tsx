@@ -34,8 +34,8 @@ import { useNavigator } from "~/app/router.tsx";
 import { listed, plural } from "~/lib/format.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
-import { getConfig, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
-import { managedSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
+import { getEntity, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
+import { managedSentence, unsettledSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
 import type { ConfigWarning } from "~/protocol/types.ts";
 import type { ModelReference, ModelRepoint } from "~/protocol/models.ts";
 import { removeModel, type Removal } from "../api.ts";
@@ -158,6 +158,19 @@ export function summaryOf(key: string, removal: Removal, mood: "says" | "audit" 
   return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}${mood === "says" ? "." : ""}`;
 }
 
+/**
+ * Where each place that ran on the model goes, one line each, by the seat's
+ * name: "Product Manager, coding: default-host → default". Said before the
+ * removal is confirmed, so no seat moves unannounced.
+ */
+export function movesOf(key: string, removal: Removal, seats: ModelsData["seats"]): string[] {
+  return removal.repoint.map((r) => {
+    const where = placeWords(seats, r.at);
+    if (removal.assistantOff && r.at.assistant === "chat") return `${where}: turned off`;
+    return `${where}: ${key} → ${r.to ?? "left unset"}`;
+  });
+}
+
 /** A field's chain after the removal, as the revision writes it. */
 function chainAfter(ref: ModelReference, removing: string, to: string | null): string[] {
   const out: string[] = [];
@@ -168,8 +181,17 @@ function chainAfter(ref: ModelReference, removing: string, to: string | null): s
   return out;
 }
 
-/** A refusal in one sentence a person can act on; an answer that refused nothing says nothing. */
-function refusalWords(refusal: ConfigWriteOutcome | ConfigRefusal, key: string): string {
+/**
+ * A refusal in one sentence a person can act on; an answer that refused
+ * nothing says nothing. `stage` is what was asked: a dry run (`check`)
+ * removes nothing whatever came back, and only the removal (`remove`) may
+ * have landed when its answer did not.
+ */
+function refusalWords(
+  refusal: ConfigWriteOutcome | ConfigRefusal,
+  key: string,
+  stage: "check" | "remove",
+): string {
   switch (refusal.kind) {
     case "valid":
     case "saved":
@@ -186,8 +208,11 @@ function refusalWords(refusal: ConfigWriteOutcome | ConfigRefusal, key: string):
       return `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
     case "starting":
       return `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
-    case "unreachable":
-      return "The engine did not answer, so the model may or may not have been removed. Close this and look at the list before trying again.";
+    case "unsettled":
+      // A CHECK STORES NOTHING, whoever answered it; only the removal itself may have landed.
+      return stage === "check"
+        ? `${unsettledSentence(refusal)} Nothing was removed.`
+        : `${unsettledSentence(refusal)} ${key} may or may not have been removed. Close this and look at the list before trying again.`;
     case "problems":
       return refusal.problems.map((p) => p.message).join(" ");
   }
@@ -236,7 +261,14 @@ export function RemoveDialog({
   const [check, setCheck] = useState<Check>({ kind: "checking" });
   const [confirm, setConfirm] = useState("");
   const [removing, setRemoving] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
+  /**
+   * What the last removal came to, where it did not remove: its title says
+   * "Not removed" only where the engine said so. An unsettled answer may have
+   * removed it, and a title saying otherwise sent the person to remove it again.
+   */
+  const [notice, setNotice] = useState<{ readonly title: string; readonly words: string } | null>(
+    null,
+  );
   const models = data.models;
   const modelsRef = useRef(models);
   modelsRef.current = models;
@@ -247,14 +279,15 @@ export function RemoveDialog({
     const abort = new AbortController();
     setLoad({ kind: "loading" });
     void (async () => {
-      const read = await getConfig(abort.signal);
-      if (read.kind !== "document") {
+      // THE ENTRY'S OWN TAG is the precondition a removal takes, never the document's.
+      const read = await getEntity("llm-providers", key, abort.signal);
+      if (read.kind !== "entity") {
         setLoad({
           kind: "failed",
           message:
-            read.kind === "none"
-              ? "No company is configured, so there is no model to remove."
-              : refusalWords(read, key),
+            read.kind === "missing"
+              ? `${key} is no longer in the configuration, so there is nothing to remove.`
+              : refusalWords(read, key, "check"),
         });
         return;
       }
@@ -265,7 +298,7 @@ export function RemoveDialog({
         abort.signal,
       );
       if (answer.outcome.kind !== "valid" && answer.references.length === 0) {
-        setLoad({ kind: "failed", message: refusalWords(answer.outcome, key) });
+        setLoad({ kind: "failed", message: refusalWords(answer.outcome, key, "check") });
         return;
       }
       const refs = answer.references;
@@ -323,7 +356,11 @@ export function RemoveDialog({
       nav.to(["settings", "models"]);
       return;
     }
-    setNotice(refusalWords(answer.outcome, key));
+    setNotice({
+      title:
+        answer.outcome.kind === "unsettled" ? "Not known whether it was removed" : "Not removed",
+      words: refusalWords(answer.outcome, key, "remove"),
+    });
     if (answer.outcome.kind === "conflict") setReads((n) => n + 1);
   }
 
@@ -408,7 +445,12 @@ export function RemoveDialog({
             </>
           )}
 
-          <CheckCallout check={check} summary={summaryOf(key, removal)} data={data} />
+          <CheckCallout
+            check={check}
+            summary={summaryOf(key, removal)}
+            moves={movesOf(key, removal, data.seats)}
+            data={data}
+          />
 
           <Disclosure title="Every change in the revision">
             <ul className="models-revision" aria-label="Every change in the revision">
@@ -437,8 +479,8 @@ export function RemoveDialog({
           </Disclosure>
 
           {notice ? (
-            <Callout variant="danger" title="Not removed" live="polite">
-              {notice}
+            <Callout variant="danger" title={notice.title} live="polite">
+              {notice.words}
             </Callout>
           ) : null}
           <ConfirmField phrase={key} value={confirm} onValueChange={setConfirm} />
@@ -451,16 +493,18 @@ export function RemoveDialog({
 function checkOf(outcome: ConfigWriteOutcome, key: string): Check {
   if (outcome.kind === "valid" || outcome.kind === "saved")
     return { kind: "valid", warnings: outcome.warnings };
-  return { kind: "refused", message: refusalWords(outcome, key) };
+  return { kind: "refused", message: refusalWords(outcome, key, "check") };
 }
 
 function CheckCallout({
   check,
   summary,
+  moves,
   data,
 }: {
   check: Check;
   summary: string;
+  moves: readonly string[];
   data: ModelsData;
 }) {
   if (check.kind === "checking") {
@@ -481,6 +525,13 @@ function CheckCallout({
     <Callout variant="info" title="Ready to remove" live="polite">
       <span className="models-stack">
         <span>{summary}</span>
+        {moves.length > 0 ? (
+          <ul className="models-checklist" aria-label="Where each moves">
+            {moves.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        ) : null}
         {check.warnings.length > 0 ? (
           <ul className="models-checklist" aria-label="Also changes">
             {check.warnings.map((w, i) => (

@@ -28,7 +28,7 @@ import {
 } from "~/contract/models.ts";
 import { href } from "~/app/router.tsx";
 import { listed } from "~/lib/format.ts";
-import { SEAT_JOBS, agentRoles, type Dropped } from "~/lib/modelUses.ts";
+import { SEAT_JOBS, agentRoles, type Dropped, type Uses } from "~/lib/modelUses.ts";
 import type { CompanyDocument, ConfigProblem, ConfigWarning } from "~/protocol/types.ts";
 import { CliMark, MARK_SIZE } from "../../CliMark.tsx";
 import type { ModelsData } from "../../data.ts";
@@ -47,7 +47,7 @@ import {
 } from "../draft.ts";
 import type { WizardStep } from "../../parts.tsx";
 import { webToolsWords } from "./LimitsStep.tsx";
-import { summaryOf } from "./UseItFor.tsx";
+import { summaryOf, useChanges } from "./UseItFor.tsx";
 
 /** Where the engine's check of the change stands. */
 export type ReviewCheck =
@@ -149,6 +149,7 @@ export function Review({
   after,
   dropped,
   editing,
+  served,
   keptCredential,
   problems,
   check,
@@ -162,6 +163,8 @@ export function Review({
   after: CompanyDocument | null;
   dropped: readonly Dropped[];
   editing: boolean;
+  /** What the model is used for today: none for a model being added. */
+  served: Uses;
   keptCredential: boolean;
   problems: readonly ConfigProblem[];
   check: ReviewCheck;
@@ -178,6 +181,7 @@ export function Review({
     [before, after, draft, data.seats, editing],
   );
   const orphans = orphansOf(data, draft);
+  const changes = useChanges(data, draft.key, served, draft.uses);
   const stored = (what: string) =>
     keptCredential ? (
       `${what}, the stored one`
@@ -202,6 +206,21 @@ export function Review({
 
   return (
     <div className="models-stack">
+      {/* WHO CHANGES MODEL FIRST, above every other summary: an edit made for a
+          sign-in moved two seats, and said so only inside a summary line. */}
+      {changes.length > 0 ? (
+        <Callout variant="warning" title="Who uses a model changes from today">
+          <ul className="models-changes" aria-label="Seats that change model">
+            {changes.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </Callout>
+      ) : editing ? (
+        <Text as="p" variant="caption" tone="secondary">
+          No seat changes model.
+        </Text>
+      ) : null}
       <div className="models-review-head">
         <CliMark agent={draft.agent} size={MARK_SIZE} named tooltip />
         <span className="col models-review-head__names">
