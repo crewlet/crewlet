@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -16,6 +17,13 @@ import (
 func retryNode(t *testing.T, fleet coord.Fleet) (*Engine, *Company) {
 	t.Helper()
 	c, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
+	// THE ENTRY AS THE REVISION WRITES IT, on a CLI that is not there: a
+	// "retry now" builds its probe from the revision, and a case must never
+	// start a real CLI.
+	spec := c.Config.Providers.LLM["plan"]
+	spec.StateDir = t.TempDir()
+	spec.Overrides = map[string]any{"binary": filepath.Join(t.TempDir(), "no-cli-here")}
+	c.Config.Providers.LLM["plan"] = spec
 	e := epochEngine(c)
 	e.backends = &Backends{Fleet: fleet}
 	e.startModelRetries(t.Context())

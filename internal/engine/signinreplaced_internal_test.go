@@ -87,3 +87,55 @@ func TestALaunchRecordsTheSignInItsJobWasHanded(t *testing.T) {
 		t.Errorf("the job's record names sign-in %q, want the entry's %q", row.Launch.SignInID, want)
 	}
 }
+
+// A RUN'S ENDING IS THE SIGN-IN'S IT LAUNCHED WITH. A run launched on a
+// credential since replaced ran on the old one to its end: its refusal is not
+// the new sign-in's last failure or readiness verdict, and its limit benches
+// no new account. A run on the sign-in the entry still uses records as it
+// always did.
+//
+// Mutation: record every ending on the entry whatever it launched with, and
+// the refused run becomes the new sign-in's failure, its verdict, and its
+// limit.
+func TestARunsEndingIsTheSignInsItLaunchedWith(t *testing.T) {
+	t.Parallel()
+	// DATED WHEN EACH CASE RUNS, not when the table is built: a parallel case
+	// can start minutes later, past the window a limit's report opens.
+	refused := func() sandbox.RunEnding {
+		return sandbox.RunEnding{Text: "Failed to authenticate. API Error: 401 {\"type\":\"error\"}",
+			Error: "Failed to authenticate. API Error: 401", At: time.Now()}
+	}
+	spent := func() sandbox.RunEnding {
+		return sandbox.RunEnding{Error: "You've hit your 5-hour limit", Text: "You've hit your 5-hour limit",
+			Event: `{"type":"result","is_error":true,"api_error_status":429,"result":"You've hit your 5-hour limit"}`,
+			At:    time.Now()}
+	}
+	for name, ended := range map[string]func() sandbox.RunEnding{"a refusal": refused, "a limit": spent} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ending := ended()
+			c, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
+			stale := sandbox.PendingRun{TurnID: "t0", AgentHandle: "swe",
+				Launch: sandbox.LaunchRecord{ProviderKey: "plan", SignInID: "an-older-sign-in"}}
+			e := epochEngine(c)
+			e.noteRunEnded(t.Context(), c, stale, ending)
+			state := planOf(t, c).Plan().State(time.Now())
+			if state.LastFailure != nil || len(state.SittingOut) != 0 {
+				t.Fatalf("an ending on a replaced sign-in landed on the current one: %+v", state)
+			}
+			if err := planOf(t, c).Unready(t.Context()); err != nil {
+				t.Fatalf("the current sign-in reads unready after another's ending: %v", err)
+			}
+			if rot := e.signInReplaced(t.Context(), c, resumeInput{Run: stale, Ended: ending}); name == "a refusal" && rot == nil {
+				t.Error("the refused run is not carried on with the new sign-in")
+			}
+
+			current := stale
+			current.Launch.SignInID = string(planOf(t, c).SignInID())
+			e.noteRunEnded(t.Context(), c, current, ending)
+			if after := planOf(t, c).Plan().State(time.Now()); after.LastFailure == nil && len(after.SittingOut) == 0 {
+				t.Errorf("an ending on the sign-in in use recorded nothing: %+v", after)
+			}
+		})
+	}
+}

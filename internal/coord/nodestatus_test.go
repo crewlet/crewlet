@@ -257,6 +257,7 @@ func modelBeat() coord.NodeStatus {
 			Parked: []coord.ParkedSeat{
 				{Seat: uuid.MustParse("6f1c2a3b-4d5e-5f60-8172-839405a6b7c8"), Since: at.Add(time.Second)},
 			},
+			ParkedCount: 1, ParkedSince: at.Add(time.Second),
 		}, {
 			Key: "codex-review", SignIn: "credentials",
 			LastFailure: &coord.ModelFailure{Kind: "auth", At: at, Said: "Not logged in. Run codex login."},
@@ -366,5 +367,35 @@ func TestAModelRowNamingNothingIsDropped(t *testing.T) {
 	}
 	if got.Runners != nil {
 		t.Errorf("runners = %+v from a node that sent none, want nil", got.Runners)
+	}
+}
+
+// A MODEL ROW'S PARKED SEATS ARE BOUNDED ON THE WIRE, and the count and the
+// first wait travel whole: a hundred seats parked on one plan put eight ids on
+// the beat, the longest-waiting, beside how many there are and when the first
+// of them parked, which is what the waiting alarm is judged from.
+//
+// Mutation: publish every seat, or name the eight lowest ids rather than the
+// longest-waiting, or drop the count, and this fails.
+func TestAModelRowsParkedSeatsAreBounded(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	var parked []coord.ParkedSeat
+	for i := range 100 {
+		parked = append(parked, coord.ParkedSeat{
+			Seat:  uuid.NewSHA1(uuid.NameSpaceURL, []byte{byte(i)}),
+			Since: at.Add(-time.Duration(i) * time.Minute),
+		})
+	}
+	status := coord.NodeStatus{Models: []coord.ModelStatus{{Key: "default", SignIn: "token", Parked: parked}}}
+	got, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: status.Meta()})
+	row := got.Models[0]
+	if len(row.Parked) != coord.MaxModelParkedSeats || row.ParkedCount != 100 {
+		t.Fatalf("the row named %d seat(s) of %d, want %d of 100", len(row.Parked), row.ParkedCount,
+			coord.MaxModelParkedSeats)
+	}
+	if want := at.Add(-99 * time.Minute); !row.ParkedSince.Equal(want) || !row.Parked[0].Since.Equal(want) {
+		t.Errorf("the wait reads from %v (first named %v), want the longest-waiting seat's %v",
+			row.ParkedSince, row.Parked[0].Since, want)
 	}
 }
