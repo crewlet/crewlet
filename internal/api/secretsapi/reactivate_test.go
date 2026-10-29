@@ -371,3 +371,45 @@ func TestAReactivationAsksConfigWriteBeforeAnythingChanges(t *testing.T) {
 		t.Errorf("a deferred batch = %d %s, want it stored without config.write", code, body)
 	}
 }
+
+// A SINGLE WRITE DEFERS AS THE BATCH DOES, for a value the batch cannot carry.
+//
+// A value that is not UTF-8 has no JSON spelling, so it travels only as the
+// single route's raw body. Sealed with `?defer_reload=true` it re-activates
+// nothing, and the batch after it re-activates once for both: a sync of one
+// binary value and several text ones is one activation.
+func TestASingleWriteDefersForAValueTheBatchCannotCarry(t *testing.T) {
+	t.Parallel()
+	c := &company{reads: map[string][]string{
+		"KEY_FILE":  {"tools[0].env.KEY_FILE"},
+		"API_TOKEN": {"providers.llm.default.auth.api_key"},
+		"BASE_URL":  {"providers.llm.default.env.BASE_URL"},
+	}}
+	h := over(t, c)
+	binary := string([]byte{0xff, 0xfe, 0x00, 0x81})
+	code, body := call(t, h, http.MethodPut, "/secrets/KEY_FILE?defer_reload=true", binary)
+	if code != http.StatusOK {
+		t.Fatalf("a deferred single write = %d %s", code, body)
+	}
+	if got := decoded(t, body)["bytes"]; got != float64(len(binary)) {
+		t.Errorf("the deferred binary value sealed %v bytes, want %d", got, len(binary))
+	}
+	if reload, _ := decoded(t, body)["reload"].(map[string]any); reload["deferred"] != true ||
+		len(c.summaries()) != 0 {
+		t.Fatalf("a deferred single write = reload %v, reloads %q; want it said deferred and none made",
+			reload, c.summaries())
+	}
+	code, body = call(t, h, http.MethodPut, "/secrets",
+		`{"values": {"API_TOKEN": "sk-1", "BASE_URL": "https://gw.example.com"}}`)
+	if code != http.StatusOK || len(c.summaries()) != 1 {
+		t.Fatalf("the batch after it = %d %s, reloads %q; want one activation for all three",
+			code, body, c.summaries())
+	}
+	for _, bad := range []string{"?defer_reload=yes", "?defer_reload=true&defer_reload=true",
+		"?defer_reload=true&source=api", "?source=api"} {
+		if code, body := call(t, h, http.MethodPut, "/secrets/KEY_FILE"+bad, "x"); code != http.StatusBadRequest ||
+			decoded(t, body)["error"] != "invalid_query" {
+			t.Errorf("%s = %d %s, want 400 invalid_query", bad, code, body)
+		}
+	}
+}

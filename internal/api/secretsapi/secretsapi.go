@@ -620,11 +620,8 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if !noQuery(w, r, "PUT /secrets/{name}",
-		"who stored a value is the credential this request authenticated "+
-			"with (updated_by, updated_by_kind, operator_id), and its source "+
-			"is this route's own, "+string(secrets.SourceAPI)+"; send the "+
-			"value as the body and nothing in the query") {
+	deferred, ok := deferQuery(w, r)
+	if !ok {
 		return
 	}
 	// THE SHARED READER, not a copy of it. This route answered
@@ -636,7 +633,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		httpjson.Refuse(w, err)
 		return
 	}
-	written, ok := s.write(w, r, map[string]string{name: string(body)}, true)
+	written, ok := s.write(w, r, map[string]string{name: string(body)}, !deferred)
 	if !ok {
 		return
 	}
@@ -881,6 +878,37 @@ func (s *Service) reactivate(ctx context.Context, names []string, readBy map[str
 // would read every one as overwritten and write it again, for ever, with
 // nothing failing. So any parameter is a 400 before the body is read, and the
 // answer says what the route reads instead.
+// deferQuery reads PUT /secrets/{name}'s one query parameter, `defer_reload`:
+// exactly `true` or `false`, given once, or absent for false. Anything else is
+// refused, as every other parameter is.
+//
+// THE BATCH'S `defer_reload` FOR A VALUE THE BATCH CANNOT CARRY. The batch is
+// JSON, and a value that is not UTF-8 (a binary key file a Kubernetes Secret
+// holds) has no JSON spelling: it travels only as this route's raw body. A
+// writer syncing such a value beside text ones seals it here deferred, then
+// sends the rest as one batch whose single re-activation covers both, rather
+// than paying a re-activation per binary value.
+func deferQuery(w http.ResponseWriter, r *http.Request) (deferred, ok bool) {
+	const hint = "who stored a value is the credential this request authenticated " +
+		"with (updated_by, updated_by_kind, operator_id), and its source is this " +
+		"route's own, " + string(secrets.SourceAPI) + "; send the value as the body, " +
+		"and in the query only defer_reload=true to seal it without re-activating"
+	query := r.URL.Query()
+	values, given := query["defer_reload"]
+	if !given {
+		return false, noQuery(w, r, "PUT /secrets/{name}", hint)
+	}
+	if len(query) > 1 || len(values) != 1 || (values[0] != "true" && values[0] != "false") {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery, map[string]string{
+			"detail": "PUT /secrets/{name} takes defer_reload=true or defer_reload=false, " +
+				"once, and no other parameter",
+			"hint": hint,
+		})
+		return false, false
+	}
+	return values[0] == "true", true
+}
+
 func noQuery(w http.ResponseWriter, r *http.Request, route, hint string) bool {
 	if r.URL.RawQuery == "" {
 		return true
