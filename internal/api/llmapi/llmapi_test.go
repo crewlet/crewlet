@@ -599,7 +599,8 @@ func TestADeviceSignInIsOneAtATime(t *testing.T) {
 	if code != http.StatusOK || body["status"] != "cancelled" {
 		t.Errorf("cancel = %d %v", code, body)
 	}
-	if row := r.audit.last(t); row.ProviderKey != "codex-review" || row.Action != types.ModelDeviceSignIn {
+	// A CANCEL IS ITS OWN GESTURE in the trail, never read as a start.
+	if row := r.audit.last(t); row.ProviderKey != "codex-review" || row.Action != types.ModelDeviceSignInCancel {
 		t.Errorf("a cancel audited as %+v", row)
 	}
 	if code, _ := r.do(t, http.MethodDelete, "/llm/device-sign-ins/"+uuid.NewString(), "", nil); code != http.StatusNotFound {
@@ -841,5 +842,35 @@ func TestACreateNeverSealsOverAValueStoredDuringItsTest(t *testing.T) {
 	}
 	if got := r.secrets.rows["ANTHROPIC_API_KEY_SONNET"].value; got != "theirs" || len(r.config.reloads) != 0 {
 		t.Errorf("the stored value is %q, reloads %v: the create sealed over it", got, r.config.reloads)
+	}
+}
+
+// A CALL THE GUARD TURNS AWAY IS IN THE TRAIL TOO.
+//
+// The router refuses a member's call, and a stale proof's, before the handler
+// runs, so the handler's record never saw them: the trail held every call on
+// a model but the ones somebody was not allowed to make.
+func TestACallTheGuardRefusesIsAudited(t *testing.T) {
+	t.Parallel()
+	member := iam.Principal{ID: uuid.New(), Login: "sam.member", Kind: iam.KindPerson,
+		Stage: iam.StageActive, ReauthAt: time.Now().Add(time.Hour)}
+	r := newRigAs(t, member)
+	if code, body := r.do(t, http.MethodPut, "/llm/providers/sonnet/credential", sonnetKey, nil); code != http.StatusForbidden {
+		t.Fatalf("a member's credential write = %d %v", code, body)
+	}
+	if row := r.audit.last(t); row.Action != types.ModelCredential || row.ProviderKey != "sonnet" ||
+		row.Outcome != types.AuditRefused || row.Refusal != "unauthorized" || row.ActorName == "" {
+		t.Errorf("the refused call is audited as %+v", row)
+	}
+
+	stale := iam.Principal{ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: iam.AllGrants, ReauthAt: time.Now().Add(-time.Hour)}
+	r = newRigAs(t, stale)
+	if code, _ := r.do(t, http.MethodDelete, "/llm/device-sign-ins/"+uuid.NewString(), "", nil); code != http.StatusForbidden {
+		t.Fatalf("a stale proof's cancel = %d", code)
+	}
+	if row := r.audit.last(t); row.Action != types.ModelDeviceSignInCancel ||
+		row.Outcome != types.AuditRefused || row.Refusal != "step_up_required" {
+		t.Errorf("the step-up refusal is audited as %+v", row)
 	}
 }

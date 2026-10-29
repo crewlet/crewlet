@@ -3859,7 +3859,8 @@ every node, and the gestures that change it. It reads one question,
 [`llm_entries`](../reference/api-endpoints.md#get-llmentries), and writes
 through the [model routes](../reference/api-endpoints.md#llm-models-settings--models),
 each its own verb and each recorded in the Audit log as a `model_acted` row,
-refused ones included.
+refused ones included, and a device sign-in's end (approved, failed, expired or
+cancelled) as one more, attributed to whoever started it.
 
 **Status comes from every node's heartbeat.** Each node publishes, per model,
 how it signs in there, whether it sits out a vendor's limit and until when,

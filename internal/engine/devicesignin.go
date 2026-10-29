@@ -12,11 +12,15 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/tracing"
 )
 
 // A DEVICE SIGN-IN, the engine's half (M11 of the Models design): a person
@@ -436,7 +440,36 @@ func (e *Engine) endDeviceSignIn(sessionCtx context.Context, key string, id uuid
 	}
 	log.InfoContext(ctx, "device_sign_in_ended", "provider", key, "session", id.String(),
 		"status", string(status), "detail", detail)
+	e.publishSignInEnded(ctx, key, status, detail != "", by.Name, string(by.Kind), by.OperatorID)
 	return final
+}
+
+// publishSignInEnded puts how a device sign-in ended into the audit trail, as
+// a `model_acted` of the person who started it: the route that started it
+// answered with a pending code, and the login it stored, or did not, is
+// decided minutes later on the node that ran it. faulted is an approved
+// session whose login could not be stored or carried to the fleet.
+func (e *Engine) publishSignInEnded(ctx context.Context, key string,
+	status coord.DeviceSignInStatus, faulted bool, actorName, actorKind, operatorID string) {
+
+	if e.backends == nil || e.backends.Queue == nil {
+		return
+	}
+	outcome := types.AuditApplied
+	if status == coord.DeviceFailed || (status == coord.DeviceApproved && faulted) {
+		outcome = types.AuditFailed
+	}
+	ev := events.NewFrom(types.NewModelActed(types.ModelActed{ActorName: actorName,
+		ActorKind: actorKind, OperatorID: operatorID, Action: types.ModelDeviceSignInEnded,
+		ProviderKey: key, Status: string(status), Outcome: outcome}), tracing.TraceOf(ctx))
+	ev.Source = types.OperatorSource
+	publishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), deviceFinalWriteBudget)
+	defer cancel()
+	if err := e.backends.Queue.Publish(publishCtx, topics.Event(ev.Type), ev); err != nil {
+		log.WarnContext(ctx, "device_sign_in_end_not_audited", "provider", key,
+			"status", string(status), "error", err,
+			"detail", "the session's record and the log line say how it ended")
+	}
 }
 
 // sealDeviceLogin exports the login a device sign-in made as the entry's
@@ -587,6 +620,10 @@ func (e *Engine) sweepDeviceSignIns(ctx context.Context) {
 					"session", s.ID.String(), "node", s.Node,
 					"detail", "the node running the sign-in is gone; the session is failed so "+
 						"a new one can start")
+				// THE NODE THAT RAN IT CANNOT SAY SO, so the sweep that
+				// ended it does, once: the update above is conditional.
+				e.publishSignInEnded(ctx, s.Entry, coord.DeviceFailed, false, s.By,
+					string(s.ByKind), s.OperatorID)
 			}
 		}
 	}

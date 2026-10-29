@@ -2373,11 +2373,19 @@ store as an apply would, so a check or a credential test of one asks
 proof, and never the assistant's. A credential test's `dry_run=true` is asked at
 the write's own proof, not a check's: it runs the CLI and spends tokens.
 
-**Every call is audited**, refused ones included, as one `model_acted` in the
-runtime audit (`actor`, `actor_kind`, `operator_id`, `action`, `provider_key`,
-the secret `names` a credential call touched and never a value, `dry_run`,
-`outcome` and `refusal`, and the `revision_id` a credential's re-activation
-activated). The node is the envelope's.
+**Every call is audited**, refused ones included (by the route, or by the
+guard before it: a member's `403 unauthorized`, a stale proof's
+`step_up_required`), as one `model_acted` in the runtime audit (`actor`,
+`actor_kind`, `operator_id`, `action`, `provider_key`, the secret `names` a
+credential call touched and never a value, `dry_run`, `outcome` and `refusal`,
+and the `revision_id` a credential's re-activation activated). The node is the
+envelope's. `action` is `check`, `retry`, `clear`, `credential`,
+`host_login_check`, `device_sign_in` (a start) or `device_sign_in_cancel`. How
+a device sign-in **ended** is a row of its own, `device_sign_in_ended`, with
+`status` (`approved`, `failed`, `expired` or `cancelled`), published by the node
+that ran the session, or by the sweep that fails one whose node is gone, and
+attributed to whoever started it; an approved session whose login could not be
+stored or carried to the fleet is `outcome: "failed"`.
 
 #### `GET /llm/entries`
 

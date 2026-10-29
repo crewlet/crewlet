@@ -15,7 +15,7 @@ func init() {
 // the model routes (internal/api/llmapi), each its own route.
 type ModelAction string
 
-// The six model gestures.
+// The model gestures.
 const (
 	// ModelCheck is the doctor over the API: a model's checks run on the
 	// answering node, a few tokens of a real call.
@@ -27,9 +27,15 @@ const (
 	// ModelCredential tests candidate credential values and, unless it
 	// was a dry run, seals them and re-activates what reads them.
 	ModelCredential ModelAction = "credential"
-	// ModelDeviceSignIn is a Codex device sign-in: started, cancelled,
-	// or ended (approved, failed, expired).
+	// ModelDeviceSignIn is a Codex device sign-in started.
 	ModelDeviceSignIn ModelAction = "device_sign_in"
+	// ModelDeviceSignInCancel is a running device sign-in cancelled.
+	ModelDeviceSignInCancel ModelAction = "device_sign_in_cancel"
+	// ModelDeviceSignInEnded is how a device sign-in ended (approved,
+	// failed, expired or cancelled), published by the node that ran it
+	// and attributed to whoever started it: the moment a login is stored
+	// is the one an audit is opened to find, and no route call marks it.
+	ModelDeviceSignInEnded ModelAction = "device_sign_in_ended"
 	// ModelHostLoginCheck reads a host CLI login's status on the
 	// answering node.
 	ModelHostLoginCheck ModelAction = "host_login_check"
@@ -37,7 +43,7 @@ const (
 
 // ModelActions is every action, for the gate holding the dashboard's copy.
 var ModelActions = []ModelAction{ModelCheck, ModelRetry, ModelClear, ModelCredential,
-	ModelDeviceSignIn, ModelHostLoginCheck}
+	ModelDeviceSignIn, ModelDeviceSignInCancel, ModelDeviceSignInEnded, ModelHostLoginCheck}
 
 // Valid reports whether a is an action this build records.
 func (a ModelAction) Valid() bool { return slices.Contains(ModelActions, a) }
@@ -80,7 +86,10 @@ type ModelActed struct {
 	// RevisionID is the revision a credential write's re-activation
 	// activated, empty when it made none.
 	RevisionID string `json:"revision_id,omitempty"`
-	Failed     bool   `json:"failed,omitempty"`
+	// Status is how a device sign-in ended, on [ModelDeviceSignInEnded]
+	// alone: approved, failed, expired or cancelled.
+	Status string `json:"status,omitempty"`
+	Failed bool   `json:"failed,omitempty"`
 }
 
 // EventType is the "model_acted" wire type.
@@ -105,7 +114,17 @@ func (e ModelActed) SummaryFor(actor string) string {
 			what = "tested a credential for"
 		}
 	case ModelDeviceSignIn:
-		what = "signed in"
+		what = "started a device sign-in for"
+	case ModelDeviceSignInCancel:
+		what = "cancelled the device sign-in for"
+	case ModelDeviceSignInEnded:
+		// THE SESSION ENDED, not the person's gesture: said as what
+		// became of the sign-in they started.
+		text := "device sign-in for model " + e.ProviderKey + " " + deviceEndWords(e.Status)
+		if e.Outcome == AuditFailed && e.Status == "approved" {
+			text += ", and its login was not stored everywhere"
+		}
+		return lead(actorPossessive(actor), text)
 	case ModelHostLoginCheck:
 		what = "checked the host login of"
 	}
@@ -124,4 +143,28 @@ func (e ModelActed) SummaryFor(actor string) string {
 func NewModelActed(e ModelActed) ModelActed {
 	e.Failed = e.Outcome.failed()
 	return e
+}
+
+// deviceEndWords is how a device sign-in ended, as a sentence ends.
+func deviceEndWords(status string) string {
+	switch status {
+	case "approved":
+		return "was approved"
+	case "expired":
+		return "expired before it was approved"
+	case "cancelled":
+		return "was cancelled"
+	case "":
+		return "ended"
+	}
+	return string(status)
+}
+
+// actorPossessive is actor's, for a phrase about something they started;
+// empty stays empty, so [lead] capitalises the phrase.
+func actorPossessive(actor string) string {
+	if actor == "" {
+		return ""
+	}
+	return actor + "'s"
 }
