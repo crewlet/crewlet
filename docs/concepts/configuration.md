@@ -1367,15 +1367,15 @@ step-up, a grant the caller does not hold) logs one `write_refused` at INFO,
 on the `api.config`, `api.secrets` or `api.llm` logger: `route` (the pattern
 the request was served on, such as `PUT /secrets/{name}` or
 `DELETE /config/llm-providers/{id}`, never the path, which would name it),
-`method`, `status`, `code` (the problem's code from the answer's `error`), `by`, `kind`,
-`operator`, `base_revision` (the `If-Match` written against, where it is one
-revision tag of at most 128 bytes, and `<invalid>` otherwise), `dry_run` and
-`request_id`. It never carries a value, a secret's name or the problem's
-detail. INFO rather than WARNING because a refusal is the engine working as
-meant: a stale tab or an expired step-up refuses routinely. Each write answers
-an `X-Request-Id` header, the caller's own where it sent one (one token of at
-most 128 bytes of letters, digits and `._~:+/=-`) and a minted UUID where not,
-so a refusal a user reports can be found in the log by it.
+`method`, `status`, `code` (the problem's code from the answer's `error`),
+`by`, `kind`, `operator`, `base_revision` (the `If-Match` written against,
+where it is one revision tag of at most 128 bytes, and `<invalid>` otherwise),
+`dry_run` and `request_id`. It never carries a value, a secret's name or the
+problem's detail. INFO rather than WARNING because a refusal is the engine
+working as meant: a stale tab or an expired step-up refuses routinely. Each
+write answers an `X-Request-Id` header: the caller's own where it sent one
+(one token of at most 128 bytes of letters, digits and `._~:+/=-`), a minted
+UUID where not, so a refusal a user reports can be found in the log by it.
 
 See the [API endpoints reference](../reference/api-endpoints.md#config--live-config-management-auth-gated) for the per-route auth + status semantics.
 
