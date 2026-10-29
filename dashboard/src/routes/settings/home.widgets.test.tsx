@@ -91,15 +91,16 @@ function widget(key: string): ComponentType {
 }
 
 function mount(key: string, answer: ReturnType<typeof fleet>) {
+  return mountAnswering(key, { fleet: answer, config_audit: [revision] });
+}
+
+/** A widget with the questions it asks answered from `answers`, and every other one left waiting. */
+function mountAnswering(key: string, answers: Record<string, unknown>) {
   const Widget = widget(key);
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
-    what === "fleet"
-      ? Promise.resolve(answer)
-      : what === "config_audit"
-        ? Promise.resolve([revision])
-        : new Promise(() => {});
+    what in answers ? Promise.resolve(answers[what]) : new Promise(() => {});
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <SessionReading>
@@ -164,5 +165,59 @@ describe("the Configuration widget", () => {
     const view = mount("settings.config", fleet([current, node("current-1")]));
     await screen.findByText("of 2 nodes");
     expect(await figure(view.container, "Nodes behind")).toBe("0");
+  });
+});
+
+describe("the Models widget", () => {
+  const model = (key: string, health: string, used: boolean) => ({
+    key,
+    agent: "claude-code",
+    model: "sonnet",
+    health,
+    sign_in: { route: "api-key", resolves: true },
+    sitting_out: null,
+    last_success: null,
+    waiting: null,
+    used_by: used ? [{ seat: "pm", job: "executor", position: 0 }] : [],
+  });
+
+  // WHAT NEEDS THE READER LEADS: a model that cannot answer, then one nothing
+  // runs on, then the rest. Mutation: drop the sort and "fine" leads.
+  test("leads with a model that cannot answer, then one nothing runs on", async () => {
+    mountAnswering("settings.models", {
+      llm_entries: {
+        reading: "member",
+        node: "n0",
+        nodes: [],
+        alarms: null,
+        entries: [
+          model("fine", "ready", true),
+          model("idle", "ready", false),
+          model("spent", "sitting_out", true),
+        ],
+      },
+    });
+    await screen.findByText(/^spent:/);
+    const rows = [...document.querySelectorAll(".crewlet-list-item, li")]
+      .map((li) => li.textContent ?? "")
+      .filter((t) => /^(fine|idle|spent):/.test(t));
+    expect(rows.map((t) => t.split(":")[0])).toEqual(["spent", "idle", "fine"]);
+    expect(rows[0]).toMatch(/Sitting out/);
+    expect(rows[1]).toMatch(/Unused/);
+    expect(rows[2]).toMatch(/Ready/);
+    expect(screen.queryByText(/each ready and in use/)).toBeNull();
+  });
+
+  test("says so when every model is ready and in use", async () => {
+    mountAnswering("settings.models", {
+      llm_entries: {
+        reading: "member",
+        node: "n0",
+        nodes: [],
+        alarms: null,
+        entries: [model("fine", "ready", true)],
+      },
+    });
+    expect(await screen.findByText("1 model, each ready and in use.")).toBeTruthy();
   });
 });
