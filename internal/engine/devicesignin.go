@@ -284,12 +284,23 @@ func (e *Engine) StartDeviceSignIn(ctx context.Context, key string, by iam.Actor
 		ended <- final
 	}()
 
+	// endOf is the session's end, once it is cancelled: what its record
+	// says, or, where the person's request ends first, the session as it
+	// was claimed. A CLI slow to exit holds the session, never the request.
+	endOf := func() (coord.DeviceSignIn, bool) {
+		select {
+		case final := <-ended:
+			return final, true
+		case <-ctx.Done():
+			return stored, false
+		}
+	}
 	wait := time.NewTimer(deviceCodeWait)
 	defer wait.Stop()
 	select {
 	case got := <-codes:
 		if got.err != nil {
-			final := <-ended
+			final, _ := endOf()
 			return final, fmt.Errorf("%w: %w", ErrDeviceSignInUnavailable, got.err)
 		}
 		return got.record, nil
@@ -299,8 +310,12 @@ func (e *Engine) StartDeviceSignIn(ctx context.Context, key string, by iam.Actor
 		}
 		return final, fmt.Errorf("%w: %s", ErrDeviceSignInUnavailable, final.Detail)
 	case <-wait.C:
-		cancel(fmt.Errorf("the CLI printed no device code within %s", deviceCodeWait))
-		final := <-ended
+		why := fmt.Errorf("the CLI printed no device code within %s", deviceCodeWait)
+		cancel(why)
+		final, ok := endOf()
+		if !ok {
+			return final, fmt.Errorf("%w: %w", ErrDeviceSignInUnavailable, why)
+		}
 		return final, fmt.Errorf("%w: %s", ErrDeviceSignInUnavailable, final.Detail)
 	case <-ctx.Done():
 		// The person's request ended; the session goes on, and its record

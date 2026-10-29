@@ -220,10 +220,12 @@ type limitProbes struct {
 	waits map[uuid.UUID]parkWait
 }
 
-// parkWait is one seat's wait: when it began, and when its last park was
-// released for a reason that does not end the wait (zero while it is parked).
+// parkWait is one seat's wait: when it began, when its last park was released
+// for a reason that does not end the wait (zero while it is parked), and the
+// entries of the chain it last parked on.
 type parkWait struct {
 	since, releasedAt time.Time
+	keys              []string
 }
 
 // parkCarryWindow is how soon after a release that does not end the wait a
@@ -475,7 +477,7 @@ func (e *Engine) joinLimitProbe(ctx context.Context, basis providerBasis, seat u
 		if !known || (!wait.releasedAt.IsZero() && now.Sub(wait.releasedAt) > parkCarryWindow) {
 			wait = parkWait{since: now}
 		}
-		wait.releasedAt = time.Time{}
+		wait.releasedAt, wait.keys = time.Time{}, basis.keys
 		p.waits[seat] = wait
 		probe.since[seat] = wait.since
 	}
@@ -951,6 +953,19 @@ func (e *Engine) parkedByEntry() map[string][]coord.ParkedSeat {
 			for _, key := range probe.basis.keys {
 				out[key] = append(out[key], coord.ParkedSeat{Seat: seat, Since: since})
 			}
+		}
+	}
+	// A WAIT BETWEEN A RELEASE AND ITS RE-PARK is still a wait: the seat is
+	// reported on the chain it last parked on, from when it began, for as
+	// long as a park would continue it. Left out, a heartbeat in that gap
+	// cleared the waiting alarm the re-park then raised again.
+	now := e.now()
+	for seat, wait := range p.waits {
+		if wait.releasedAt.IsZero() || now.Sub(wait.releasedAt) > parkCarryWindow {
+			continue
+		}
+		for _, key := range wait.keys {
+			out[key] = append(out[key], coord.ParkedSeat{Seat: seat, Since: wait.since})
 		}
 	}
 	for key := range out {

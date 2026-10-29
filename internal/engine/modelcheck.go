@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"maps"
 	"os"
-	"path/filepath"
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -30,15 +28,15 @@ import (
 // call is; a draft is built here with no plan registry of the node's, so what
 // a candidate met says nothing about the sign-in the entry runs on.
 //
-// A DRAFT OR A CANDIDATE NEVER TOUCHES THE LIVE ENTRY'S DISK. Both run in a
-// throwaway home made here and removed on every way out, an answer, a
-// refusal, a cancelled context or a panic alike. A draft is built with that
-// home as its state directory, so the bundle it names is restored there and
-// nowhere else, and where the draft would sign in with a login the active
-// revision keeps on this node (its state directory is an active entry's), the
-// home is seeded with a COPY of that login: read, never written. Built on the
-// live entry's own directory instead, a draft's bundle replaced the login every
-// seat on the entry was signed in with, before anything was stored or applied.
+// A DRAFT OR A CANDIDATE NEVER WRITES THE LIVE ENTRY'S DISK but as a seat on
+// it does. A candidate runs in a throwaway home made here and removed on every
+// way out, an answer, a refusal, a cancelled context or a panic alike. A draft
+// that would sign in with a login the active revision keeps on this node runs
+// on that login as the entry's seats do, and any other draft runs in the
+// throwaway home with only its own bundle ([Engine.draftAgent]). Built on the
+// live entry's directory with a bundle of its own, a draft replaced the login
+// every seat on the entry was signed in with, before anything was stored or
+// applied.
 //
 // [ErrNoModel] for an existing entry the active revision does not have.
 func (e *Engine) CheckModel(ctx context.Context, key string, draft *config.LLMProvider,
@@ -79,7 +77,7 @@ func (e *Engine) CheckModel(ctx context.Context, key string, draft *config.LLMPr
 		}
 		spliced.Providers.LLM[key] = *draft
 		company = &spliced
-		built, err := e.isolatedDraft(ctx, c, key, *draft, home)
+		built, err := e.draftAgent(ctx, c, key, *draft, home)
 		if err != nil {
 			return cliagent.Diagnosis{}, err
 		}
@@ -99,23 +97,43 @@ func (e *Engine) CheckModel(ctx context.Context, key string, draft *config.LLMPr
 	return agent.Diagnose(ctx, opts), nil
 }
 
-// isolatedDraft builds draft with home as its state directory, seeded with a
-// copy of the login an active entry keeps where the draft would share that
-// entry's state directory, and restores the bundle the draft names there.
-func (e *Engine) isolatedDraft(ctx context.Context, c *Company, key string, draft config.LLMProvider,
+// draftAgent builds draft for its check, writing the live entry's disk only as
+// every seat on it does.
+//
+// A DRAFT ON A LIVE LOGIN is built on that login's own state directory: it is
+// on the directory and the CLI of an active entry, and names no bundle other
+// than that entry's, so it would sign in exactly as that entry's seats do. Its
+// calls check the login out of the shared directory under the shared login's
+// lock, and carry a login the CLI refreshed back into it
+// ([cliagent.Checkout.Release]); nothing is restored, the bundle being the one
+// the apply already restored there. A COPY of the live login in a throwaway
+// home was the wrong move: a CLI that refreshed its token during the check
+// rotated the vendor's refresh token inside the copy, the copy was removed, and
+// the live directory kept the retired token, which signs every seat out at the
+// next expiry; and the copy was read without the lock.
+//
+// ANY OTHER DRAFT runs in home, the check's throwaway home: one that names a
+// bundle of its own, restored into home and never over the live login, and
+// one on a directory no active entry keeps, which it would otherwise make on
+// the node's disk. Nothing of a live login is copied into home.
+func (e *Engine) draftAgent(ctx context.Context, c *Company, key string, draft config.LLMProvider,
 	home string) (*cliagent.Provider, error) {
 
-	wouldShare, _ := draft.ResolvedStateDir(key)
+	dir, err := draft.ResolvedStateDir(key)
+	if err != nil {
+		return nil, fmt.Errorf("engine: the draft's state_dir: %w", err)
+	}
+	if liveKey, live, ok := e.loginKeptIn(c, dir, draft.AgentName()); ok {
+		own := e.bundleOf(key, draft)
+		if own == "" || own == e.bundleOf(liveKey, live) {
+			return BuildCLIAgent(key, draft, e.resolver(), nil)
+		}
+	}
 	isolated := draft
 	isolated.StateDir = home
 	built, err := BuildCLIAgent(key, isolated, e.resolver(), nil)
 	if err != nil {
 		return nil, err
-	}
-	if live := e.loginKeptIn(c, wouldShare, draft.AgentName()); live != nil {
-		if err := copyLogin(live.Workspace().CredentialsDir(), built.Workspace().CredentialsDir()); err != nil {
-			return nil, fmt.Errorf("engine: copy the login the draft signs in with: %w", err)
-		}
 	}
 	if err := built.RestoreConfiguredBundle(ctx); err != nil && !errors.Is(err, cliagent.ErrLoggedOut) {
 		return nil, err
@@ -124,56 +142,28 @@ func (e *Engine) isolatedDraft(ctx context.Context, c *Company, key string, draf
 }
 
 // loginKeptIn is the active entry, on agent's CLI, whose state directory is
-// dir, nil where none is: the entry whose login a draft on that directory
-// would sign in with.
-func (e *Engine) loginKeptIn(c *Company, dir, agent string) *cliagent.Provider {
+// dir: the entry whose login a draft on that directory would sign in with.
+func (e *Engine) loginKeptIn(c *Company, dir, agent string) (string, config.LLMProvider, bool) {
 	if dir == "" || c.Config == nil {
-		return nil
+		return "", config.LLMProvider{}, false
 	}
 	for _, key := range slices.Sorted(maps.Keys(c.Config.Providers.LLM)) {
 		spec := c.Config.Providers.LLM[key]
 		if got, err := spec.ResolvedStateDir(key); err != nil || got != dir || spec.AgentName() != agent {
 			continue
 		}
-		if live, ok := e.cliEntry(key); ok {
-			return live
+		if _, ok := e.cliEntry(key); ok {
+			return key, spec, true
 		}
 	}
-	return nil
+	return "", config.LLMProvider{}, false
 }
 
-// copyLogin copies the regular files under src into dst, which it makes,
-// keeping their relative paths and modes: a read of a login, never a move. A
-// src that does not exist is a login of nothing.
-func copyLogin(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-		switch {
-		case errors.Is(err, fs.ErrNotExist) && path == src:
-			return nil
-		case err != nil:
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o700)
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, raw, info.Mode().Perm())
-	})
+// bundleOf is the credential bundle spec under key restores, read as
+// [BuildCLIAgent] reads it: "" for none.
+func (e *Engine) bundleOf(key string, spec config.LLMProvider) string {
+	source := spec.CredentialSources(key).Bundle
+	return resolveOrConvention(e.resolver(), source.Value, source.Fallback)
 }
 
 // checkHomeRoot is where a candidate's throwaway home is made: the process's

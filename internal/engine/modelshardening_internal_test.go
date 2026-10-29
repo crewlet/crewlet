@@ -60,6 +60,48 @@ func TestAStartWhoseCodeCannotBeRecordedSaysSo(t *testing.T) {
 	}
 }
 
+// stubbornLogin is a device login that prints its code and then ends only when
+// finish is closed, whatever its context says: a CLI slow to exit.
+type stubbornLogin struct{ finish chan struct{} }
+
+func (f *stubbornLogin) login(_ context.Context, _ *cliagent.Provider, out func(cliagent.DeviceCode)) error {
+	out(cliagent.DeviceCode{URL: "https://auth.example.com/codex/device", Code: "QXJM-7KPD",
+		ExpiresAt: time.Now().Add(15 * time.Minute)})
+	<-f.finish
+	return errors.New("cancelled")
+}
+
+// A START WHOSE CODE CANNOT BE RECORDED ANSWERS ITS CALLER IN TIME. The
+// session is cancelled, and the start waits for its end only as long as the
+// person's request lasts: a CLI slow to exit holds the session, not the
+// request.
+//
+// Mutation: wait for the session's end whatever the caller's context says,
+// and this start never answers.
+func TestAFailedCodeWriteHonoursItsCaller(t *testing.T) {
+	t.Parallel()
+	fleet, leases := failingCodeWrite{coordmemory.NewFleet()}, coordmemory.New()
+	e := signInNode(t, fleet, leases, "node-1", &fakeDeviceLogin{finish: make(chan error)})
+	stubborn := &stubbornLogin{finish: make(chan struct{})}
+	t.Cleanup(func() { close(stubborn.finish) })
+	e.signIns.login = stubborn.login
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	answered := make(chan error, 1)
+	go func() {
+		_, err := e.StartDeviceSignIn(ctx, "codex-review", person)
+		answered <- err
+	}()
+	select {
+	case err := <-answered:
+		if !errors.Is(err, ErrDeviceSignInUnavailable) || !strings.Contains(err.Error(), "could not be recorded") {
+			t.Fatalf("StartDeviceSignIn = %v; want unavailable, saying the code could not be recorded", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("a start whose code could not be recorded did not answer once its caller's context ended")
+	}
+}
+
 // slowWriter is a config writer whose re-activation takes delay.
 type slowWriter struct {
 	delay   time.Duration
@@ -293,18 +335,27 @@ func snapshot(t *testing.T, dir string) map[string]string {
 	return out
 }
 
-// A DRAFT CHECK LEAVES THE LIVE ENTRY'S DISK ALONE. A draft on the live entry's
-// state directory, naming a bundle with a newer login, is checked in a home of
-// its own seeded with a copy of the live login: the live directory is
-// byte-identical after, and the throwaway home is gone.
+// A DRAFT WITH A BUNDLE OF ITS OWN LEAVES THE LIVE ENTRY'S DISK ALONE. A draft
+// on the live entry's state directory, naming a bundle with a newer login, is
+// checked in a home of its own holding that bundle and nothing of the live
+// login: a smoke call whose CLI refreshes its token writes that home, the live
+// directory is byte-identical after, and the throwaway home is gone.
 //
 // Mutation: build the draft on its own state directory, and its bundle
-// replaces the login every seat on the entry signs in with.
+// replaces the login every seat on the entry signs in with, or its refresh is
+// carried over it.
 func TestADraftCheckLeavesTheLiveEntrysDiskAlone(t *testing.T) {
 	t.Parallel()
 	missing := map[string]any{"binary": filepath.Join(t.TempDir(), "no-cli-here")}
-	stateDir := t.TempDir()
-	spec := config.LLMProvider{Agent: "claude-code", Model: "opus", StateDir: stateDir, Overrides: missing}
+	root := t.TempDir()
+	stateDir, homes := filepath.Join(root, "state"), filepath.Join(root, "homes")
+	for _, dir := range []string{stateDir, homes} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spec := config.LLMProvider{Agent: "claude-code", Model: "opus", StateDir: stateDir,
+		Overrides: map[string]any{"binary": refreshingCLI(t, root)}}
 	live, err := BuildCLIAgent("plan", spec, config.NewResolver(config.MapSource{}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -331,12 +382,12 @@ func TestADraftCheckLeavesTheLiveEntrysDiskAlone(t *testing.T) {
 	e := epochEngine(&Company{Models: models, Config: &config.Company{Providers: config.Providers{
 		LLM: map[string]config.LLMProvider{"plan": spec}, Sandbox: &config.SandboxProvider{Fake: true}}}})
 	e.environ = config.MapSource{"PLAN_NEWER_LOGIN": blob}
-	e.checkHomes = t.TempDir()
+	e.checkHomes = homes
 
 	before := snapshot(t, stateDir)
 	draft := spec
 	draft.Auth.CredentialBundle = "${PLAN_NEWER_LOGIN}"
-	if _, err := e.CheckModel(t.Context(), "plan", &draft, nil, false); err != nil {
+	if _, err := e.CheckModel(t.Context(), "plan", &draft, nil, true); err != nil {
 		t.Fatalf("CheckModel(draft): %v", err)
 	}
 	after := snapshot(t, stateDir)
@@ -350,6 +401,102 @@ func TestADraftCheckLeavesTheLiveEntrysDiskAlone(t *testing.T) {
 	}
 	if left, _ := os.ReadDir(e.checkHomes); len(left) != 0 {
 		t.Errorf("the draft's check left its home behind: %v", left)
+	}
+}
+
+// refreshingCLI is a claude-code CLI that answers --version and, on any other
+// run, refreshes its login (writes "refreshed" over its credentials file) and
+// fails: a token refresh during a call. It writes only under root, never the
+// credentials of the host it runs on.
+func refreshingCLI(t *testing.T, root string) string {
+	t.Helper()
+	cli := filepath.Join(t.TempDir(), "refreshing-claude")
+	script := "#!/bin/sh\n" +
+		"case \"$1\" in --version) echo '2.1.310 (Claude Code)'; exit 0;; esac\n" +
+		"case \"$CLAUDE_CONFIG_DIR\" in " + root + "/*)\n" +
+		"  mkdir -p \"$CLAUDE_CONFIG_DIR\"\n" +
+		"  printf '%s' '{\"claudeAiOauth\":{\"accessToken\":\"refreshed\"}}' > \"$CLAUDE_CONFIG_DIR/.credentials.json\";;\n" +
+		"esac\n" +
+		"exit 1\n"
+	if err := os.WriteFile(cli, []byte(script), 0o700); err != nil { //nolint:gosec // the test's own stub
+		t.Fatal(err)
+	}
+	return cli
+}
+
+// A DRAFT CHECK ON THE LIVE LOGIN CARRIES A REFRESH BACK. A draft that names no
+// bundle of its own signs in with the login the active entry keeps, and its
+// smoke call checks that login out as a seat does: a CLI that refreshes its
+// token during the check writes the shared directory, so the vendor's rotated
+// refresh token is the one every seat signs in with next.
+//
+// Mutation: run the draft in a throwaway home seeded with a copy of the live
+// login, and the refresh is removed with the home while the live directory
+// keeps the token the vendor has just retired.
+func TestADraftCheckCarriesARefreshedLoginBack(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	stateDir, homes := filepath.Join(root, "state"), filepath.Join(root, "homes")
+	for _, dir := range []string{stateDir, homes} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cli := refreshingCLI(t, root)
+	spec := config.LLMProvider{Agent: "claude-code", Model: "opus", StateDir: stateDir,
+		Overrides: map[string]any{"binary": cli}}
+	live, err := BuildCLIAgent("plan", spec, config.NewResolver(config.MapSource{}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := adoptLogin(t.Context(), t, live, ".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"live"}}`); err != nil {
+		t.Fatalf("the live login: %v", err)
+	}
+	models, err := phase.NewRegistry([]phase.Entry{{Key: "plan", Provider: live}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := epochEngine(&Company{Models: models, Config: &config.Company{Providers: config.Providers{
+		LLM: map[string]config.LLMProvider{"plan": spec}, Sandbox: &config.SandboxProvider{Fake: true}}}})
+	e.checkHomes = homes
+
+	draft := spec
+	draft.Model = "sonnet"
+	if _, err := e.CheckModel(t.Context(), "plan", &draft, nil, true); err != nil {
+		t.Fatalf("CheckModel(draft): %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(live.Workspace().CredentialsDir(), ".credentials.json"))
+	if err != nil {
+		t.Fatalf("the live login after the draft's check: %v", err)
+	}
+	if !strings.Contains(string(got), `"refreshed"`) {
+		t.Errorf("the login the CLI refreshed during the draft's check never reached the live "+
+			"directory, which still holds %s", got)
+	}
+	if left, _ := os.ReadDir(homes); len(left) != 0 {
+		t.Errorf("the draft's check left its home behind: %v", left)
+	}
+}
+
+// A DRAFT WHOSE STATE DIRECTORY CANNOT BE NAMED IS SAID. With no state_dir, no
+// CLI home and no home directory, the draft names no directory to sign in
+// from, and its check says so rather than answering for a home it would never
+// run in.
+//
+// Mutation: drop the error naming the draft's state directory, and the check
+// answers as if the draft were fine.
+func TestADraftWithNoStateDirectoryIsSaid(t *testing.T) {
+	// Not parallel: it clears the process's home.
+	t.Setenv("HOME", "")
+	t.Setenv(config.CLIHomeEnv, "")
+	e := epochEngine(&Company{Config: &config.Company{Providers: config.Providers{
+		LLM: map[string]config.LLMProvider{}, Sandbox: &config.SandboxProvider{Fake: true}}}})
+	e.checkHomes = t.TempDir()
+	draft := config.LLMProvider{Agent: "claude-code", Model: "opus",
+		Overrides: map[string]any{"binary": filepath.Join(t.TempDir(), "no-cli-here")}}
+	if _, err := e.CheckModel(t.Context(), "plan", &draft, nil, false); err == nil ||
+		!strings.Contains(err.Error(), "state_dir") {
+		t.Fatalf("CheckModel(a draft with no state directory) = %v; want its state_dir named", err)
 	}
 }
 
@@ -376,12 +523,14 @@ func TestAFailedRetryNowLeavesThisNodesSitOut(t *testing.T) {
 
 // A WAIT OUTLIVES AN APPLY'S RELEASE. An apply that brings new models releases
 // every park and the seat parks again at once on the same limit: the same
-// wait, still dated from when it began, so `llm_limit_waiting` does not go out
-// and come back with every config change. A wait that ended (the chain
-// answered), or a park long after a release, begins a new one.
+// wait, still dated from when it began, and reported between the release and
+// the re-park too, so `llm_limit_waiting` does not go out and come back with
+// every config change. A wait that ended (the chain answered), or a park long
+// after a release, begins a new one, and a release no park follows stops
+// being reported once a park would no longer continue it.
 //
-// Mutation: date the wait by the probe the seat is on, or end it on every
-// release, and this fails.
+// Mutation: date the wait by the probe the seat is on, end it on every
+// release, or report only the seats parked now, and this fails.
 func TestAWaitOutlivesAnApplysRelease(t *testing.T) {
 	t.Parallel()
 	began := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
@@ -409,6 +558,10 @@ func TestAWaitOutlivesAnApplysRelease(t *testing.T) {
 	at(10 * time.Second)
 	e.leaveLimitProbe(seat, old)
 	e.parkReleased(seat)
+	at(15 * time.Second)
+	if got := since(); !got.Equal(began) {
+		t.Errorf("a wait between a release and its re-park reads from %v, want %v", got, began)
+	}
 	at(20 * time.Second)
 	e.joinLimitProbe(t.Context(), next, seat, "swe", retry)
 	if got := since(); !got.Equal(began) {
@@ -430,6 +583,13 @@ func TestAWaitOutlivesAnApplysRelease(t *testing.T) {
 	e.joinLimitProbe(t.Context(), next, seat, "swe", retry)
 	if got := since(); !got.Equal(began.Add(2*time.Minute + parkCarryWindow + time.Second)) {
 		t.Errorf("a park long after a release reads from %v, want a new wait", got)
+	}
+
+	e.leaveLimitProbe(seat, next)
+	e.parkReleased(seat)
+	at(3*time.Minute + 2*parkCarryWindow)
+	if rows := e.parkedByEntry()["plan"]; len(rows) != 0 {
+		t.Errorf("a seat released longer ago than a park would continue still reads as waiting: %+v", rows)
 	}
 }
 
