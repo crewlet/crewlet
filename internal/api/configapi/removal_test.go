@@ -115,6 +115,31 @@ func TestARemovalNamesEveryDependantItLeavesUnanswered(t *testing.T) {
 	}
 }
 
+// A REMOVAL IS DECIDED ON THE ENTRY'S OWN TAG, as an edit of it is: the one
+// its GET answers. The document's tag names the whole revision and is
+// refused, so a client that sends it (as the dashboard once did, for every
+// model) learns at once rather than removing on a guess.
+func TestARemovalIsDecidedOnTheEntrysOwnTag(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, removalDoc)
+	document := s.do(t, http.MethodGet, "/config", "", nil).Header().Get("ETag")
+	entry := s.do(t, http.MethodGet, "/config/llm-providers/codex-review", "", nil).Header().Get("ETag")
+	if document == "" || entry == "" || document == entry {
+		t.Fatalf("tags: document %q, entry %q, want two different tags", document, entry)
+	}
+	code, body := removeModel(t, s, "codex-review", "?dry_run=true", "",
+		map[string]string{"If-Match": document})
+	if code != http.StatusPreconditionFailed || body["error"] != "version_moved" {
+		t.Errorf("removal on the document's tag = %d %v, want 412 version_moved", code, body)
+	}
+	code, body = removeModel(t, s, "codex-review", "?dry_run=true", "",
+		map[string]string{"If-Match": entry})
+	if code != http.StatusUnprocessableEntity || body["error"] != "validation_error" {
+		t.Errorf("removal on the entry's tag = %d %v, want 422 naming its dependants", code, body)
+	}
+}
+
 // A REMOVAL REPOINTS BY IDENTITY, IN ONE REVISION.
 //
 // `to` replaces the entry in its chain where it stood, null removes it, and a
