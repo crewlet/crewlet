@@ -26,7 +26,10 @@ import (
 // code_resolve, code_read, code_diff, code_compare, code_landed_in, code_log
 // and code_blame — each named for its authority row, and ONE list
 // ([CodeTools]) that a seat's registry and the operator catalogue both take,
-// so a schema, a default and a refusal's words are written once.
+// so a schema, a default and a refusal's words are written once. The code
+// WRITES join the same list where the code host's writes are wired
+// (codewrite.go), through the same resolution of a repository — and the same
+// turn's hold on it (codehold.go).
 //
 // # Every read is judged where it is answered
 //
@@ -183,6 +186,31 @@ type CodeDeps struct {
 	// code read rather than every one to whoever asks a seat for it.
 	Requesters Requesters
 	Chart      authz.Chart
+
+	// Writer is the code host's writes — an engine-built write asked of the
+	// repository's home git node, and a repository's lifecycle request asked
+	// of a data node — the same routed code host Code reads. Nil omits every
+	// code WRITE tool and leaves the reads as they are: a surface that reads
+	// the company's code and changes none of it. See codewrite.go.
+	Writer CodeWriter
+
+	// Holder records a turn's hold on a scratch repository it names
+	// ([HoldRepo]), set wherever the tools are offered to seats and
+	// independently of Writer, because a seat that only reads still holds
+	// what it reads. Nil records none: a turn that reaches a scratch
+	// repository idle long enough to need its hold recorded is refused
+	// rather than sent there unordered against an expiry in flight. An
+	// operator's call has no turn, and holds nothing either way.
+	Holder CodeHolder
+
+	// Now is the clock a hold's idle threshold is read on, read after the
+	// hold is taken; nil is the wall clock.
+	Now func() time.Time
+
+	// ops is how a write tool's call names its operation ([operations]):
+	// derived from a seat's turn or a request's own key, or held by the
+	// operator's assistant over MCP, which [OperatorTools] alone says.
+	ops operations
 }
 
 // serves reports whether every half the tools read through is wired: the code
@@ -192,16 +220,22 @@ func (d CodeDeps) serves() bool { return d.Code != nil && d.Requesters != nil &&
 // CodeTools are the code tools a seat and an operator share: ONE list, so a
 // schema, a default and a refusal's words are written once, and nil where
 // deps are not wholly wired ([CodeDeps.serves]) — a company that hosts no
-// code. Every one reads; none delivers anywhere.
+// code. The reads first, which deliver nothing; then, where the code host's
+// writes are wired ([CodeDeps.Writer]), the writes ([CodeWrites]), each a
+// delivery to the code host's surface.
 func CodeTools(deps CodeDeps) []tools.Callable {
 	if !deps.serves() {
 		return nil
 	}
-	return []tools.Callable{
+	out := []tools.Callable{
 		&codeListRepos{deps: deps}, &codeGetRepo{deps: deps}, &codeResolve{deps: deps},
 		&codeRead{deps: deps}, &codeDiff{deps: deps}, &codeCompare{deps: deps},
 		&codeLandedIn{deps: deps}, &codeLog{deps: deps}, &codeBlame{deps: deps},
 	}
+	if deps.Writer != nil {
+		out = append(out, codeWriteTools(deps)...)
+	}
+	return out
 }
 
 // codeCandidates are [CodeTools] as a registry's candidates: all of them, or
@@ -217,16 +251,43 @@ func codeCandidates(deps CodeDeps) []candidate {
 // codeAnnotations classifies one code tool for the delivery gate and the
 // sub-agent guard; false for a name that is not one.
 //
-// EVERY ONE IS A PROVEN READ, and idempotent: asking twice costs a round and
+// EVERY READ IS A PROVEN READ, and idempotent: asking twice costs a round and
 // changes nothing. So a turn that only read code is a turn that delivered
 // nothing (the delivery check), a worker may be handed them (the guard), and
 // the operator catalogue audits no call to one, as it audits no read — the
 // operator's own `code_repo_readers` among them.
+//
+// EVERY WRITE IS A WRITE TO A SHARED SURFACE — a branch, a repository, a
+// protection every colleague of the company reads — so `ReadOnly: No` with
+// `OpenWorld: Yes`, which [mcp.WritesToSharedSurface] reads as true: a worker
+// acting under its parent's name is given none of them (a second, unbudgeted
+// writer with the parent's grant), the delivery check counts a call to one as
+// a delivery, and the operator catalogue audits every call. IDEMPOTENT, every
+// one, because each is held to what its caller read: a commit, a revert, a
+// pick and a deletion to the branch's head (`expected_head`), a branch's
+// creation to its absence, a repository's to its free name, and a setting or
+// a protection set again is the same setting — so a call made twice leaves
+// what one call left, which is what makes a retry after a lost answer safe.
+// DESTRUCTIVE only where a call can take away what somebody else made with
+// nothing kept to undo it by the same tool: a branch deleted (its commits stay
+// in the repository, its name and head only in the push history) and a
+// repository deleted (restorable until its purge, then gone). A commit moves a
+// branch forward over its history, which keeps every earlier version; a
+// setting or a protection is set back by the same tool, the record of each
+// change keeping what it replaced; and an archive is undone by an unarchive.
 func codeAnnotations(name string) (tools.Annotations, bool) {
 	for _, tool := range append(CodeToolNames(), CodeRepoReadersTool) {
 		if tool == name {
 			return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}, true
 		}
+	}
+	if slices.Contains(CodeWrites(), name) {
+		destructive := mcp.No
+		if name == CodeDeleteBranchTool || name == CodeDeleteRepoTool {
+			destructive = mcp.Yes
+		}
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: destructive, Idempotent: mcp.Yes,
+			OpenWorld: mcp.Yes}, true
 	}
 	return tools.Annotations{}, false
 }
@@ -255,8 +316,13 @@ func CodeAskerOf(a Actor) code.Principal {
 
 // ---- who asks, and what a call names ------------------------------------ //
 
-// asker is who this call reads as, or the refusal it is answered with.
-func (d CodeDeps) asker(ctx context.Context, turn *turnctx.Turn, tool string) (code.Principal, *tools.Result) {
+// asker is who this call reads as, or the refusal it is answered with: the
+// caller as a write would name them ([Actor], its run's call log on it, as
+// [WorkDeps.actor] puts it there) and the principal a repository's grant
+// judges.
+func (d CodeDeps) asker(ctx context.Context, turn *turnctx.Turn, tool string) (Actor, code.Principal,
+	*tools.Result) {
+
 	resolve := actorFor
 	if d.Actor != nil {
 		resolve = func(turn *turnctx.Turn) (Actor, error) { return d.Actor(ctx, turn) }
@@ -265,22 +331,27 @@ func (d CodeDeps) asker(ctx context.Context, turn *turnctx.Turn, tool string) (c
 	if err != nil {
 		r := refusedBy(tools.RefusalForbidden, err, tool+" can only be called during a turn, on "+
 			"behalf of a seat, or by a signed-in caller.")
-		return code.Principal{}, &r
+		return Actor{}, code.Principal{}, &r
 	}
+	// THE RUN'S CALL LOG IS THE TURN'S, whoever resolved the rest — a write's
+	// operation counts the run's earlier calls to the tool from it ([opIDFor]).
+	actor.Calls = turn.CallLog()
 	p := CodeAskerOf(actor)
 	if err := p.Validate(); err != nil {
 		r := refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s could not name who is asking "+
 			"in the terms a repository's grant is judged by, so it read nothing.", tool))
-		return code.Principal{}, &r
+		return Actor{}, code.Principal{}, &r
 	}
-	return p, nil
+	return actor, p, nil
 }
 
-// codeCaller is who one call of a code tool reads as: the asker its grant is
-// judged by, and — inside a turn a colleague seat woke — that seat, whose own
-// grant bounds the asker's on every read the call makes
-// ([code.ReadQuery.CeilingSeat]), "" for a call made for nobody else.
+// codeCaller is who one call of a code tool reads as: the caller as a write
+// and a hold name them, the asker its grant is judged by, and — inside a turn
+// a colleague seat woke — that seat, whose own grant bounds the asker's on
+// every read the call makes ([code.ReadQuery.CeilingSeat]), "" for a call made
+// for nobody else.
 type codeCaller struct {
+	actor   Actor
 	asker   code.Principal
 	ceiling string
 }
@@ -321,11 +392,11 @@ func (d CodeDeps) caller(ctx context.Context, turn *turnctx.Turn, tool string) (
 func (d CodeDeps) callerOn(ctx context.Context, turn *turnctx.Turn, tool string,
 	action authz.Action) (codeCaller, *tools.Result) {
 
-	asker, refusal := d.asker(ctx, turn, tool)
+	actor, asker, refusal := d.asker(ctx, turn, tool)
 	if refusal != nil {
 		return codeCaller{}, refusal
 	}
-	c := codeCaller{asker: asker}
+	c := codeCaller{actor: actor, asker: asker}
 	if asker.Kind != code.PrincipalAgent {
 		return c, nil
 	}
@@ -446,14 +517,22 @@ func (d CodeDeps) repo(ctx context.Context, turn *turnctx.Turn, tool string, c c
 // ceiling's. And it holds only while it is true: a later read that answers
 // the name with another id ([CodeDeps.sameRepo]), or the id gone
 // ([CodeDeps.failed]), forgets it.
+//
+// AND THE TURN'S HOLD, taken here on a MISS, before the call sends anything
+// else about the repository ([HoldRepo]): a scratch repository the turn names
+// is never expired while the turn is unended (M3-decisions M3-O61). Taken
+// after the read that resolved the name — the hold is ON the id the name
+// resolves to, and decided at that read's position — and before the memo
+// keeps the resolution, so a resolution the turn reuses is always one its
+// hold was taken for: a hold that failed keeps nothing, the call is refused
+// with nothing more sent, and the next call naming the repository resolves
+// it, and takes its hold, again. A HIT takes none: its hold was taken with
+// it, and a turn's holds only grow.
 func (d CodeDeps) repoRead(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	name string, first *code.ReadQuery) (code.RepoRef, *code.ReadAnswer, *tools.Result) {
 
-	key := codeRepoKey{asker: c.asker, name: name}
-	if held, ok := turn.LookedUp().Load(key); ok {
-		if ref, ok := held.(code.RepoRef); ok {
-			return ref, nil, nil
-		}
+	if held := lookedUpRepo(turn, c.asker, name); held != nil {
+		return *held, nil, nil
 	}
 	q := code.ReadQuery{Kind: code.ReadRepo}
 	if first != nil {
@@ -471,7 +550,11 @@ func (d CodeDeps) repoRead(ctx context.Context, turn *turnctx.Turn, tool string,
 		return code.RepoRef{}, nil, &r
 	}
 	ref := answer.Repo.RepoRef
-	turn.LookedUp().Store(key, ref)
+	if err := HoldRepo(ctx, turn, d.Holder, c.actor, ref, d.Now); err != nil {
+		r := holdFailure(ctx, tool, ref, err)
+		return code.RepoRef{}, nil, &r
+	}
+	turn.LookedUp().Store(codeRepoKey{asker: c.asker, name: name}, ref)
 	if first == nil {
 		return ref, nil, nil
 	}
@@ -512,6 +595,21 @@ func (d CodeDeps) failed(ctx context.Context, turn *turnctx.Turn, tool string, a
 		forget(turn, asker, repo)
 	}
 	return codeFailure(ctx, tool, repo.Name, err)
+}
+
+// lookedUpRepo is the turn's resolution of name as asker resolved it — one
+// [CodeDeps.repoRead] kept, its hold taken — or nil where the turn holds none
+// (or there is no turn).
+func lookedUpRepo(turn *turnctx.Turn, asker code.Principal, name string) *code.RepoRef {
+	held, ok := turn.LookedUp().Load(codeRepoKey{asker: asker, name: name})
+	if !ok {
+		return nil
+	}
+	ref, ok := held.(code.RepoRef)
+	if !ok {
+		return nil
+	}
+	return &ref
 }
 
 // forget drops the turn's resolution of repo's name, as asker asked it.

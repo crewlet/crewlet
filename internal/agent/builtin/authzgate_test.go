@@ -233,11 +233,11 @@ func operatorDeps(t *testing.T) builtin.OperatorDeps {
 		Knowledge:    full.Knowledge,
 		Artifacts:    full.Artifacts,
 		ArtifactData: full.ArtifactData,
-		// THE CODE READ TOOLS, over the seams the seat's registry is built
-		// with — the code host and the requester ceiling's halves — read as
-		// the request's principal as the surface reads them.
-		Code: builtin.CodeDeps{Code: full.Code.Code, Requesters: full.Code.Requesters, Chart: full.Code.Chart,
-			Actor: builtin.PrincipalActor},
+		// THE CODE TOOLS, over the seams the seat's registry is built with —
+		// the code host, its writes, and the requester ceiling's halves —
+		// read as the request's principal as the surface reads them.
+		Code: builtin.CodeDeps{Code: full.Code.Code, Writer: full.Code.Writer, Holder: full.Code.Holder,
+			Requesters: full.Code.Requesters, Chart: full.Code.Chart, Actor: builtin.PrincipalActor},
 		// WHO READ A UNIT REPOSITORY, an admin's read beside the code
 		// reads it stands with: left nil, it is a verb no seat holds and
 		// this walk would never see.

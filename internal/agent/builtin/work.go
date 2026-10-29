@@ -3967,17 +3967,12 @@ func capitalize(clause string) string {
 	return string(clause[0]-'a'+'A') + clause[1:]
 }
 
-// bindOperation settles which operation this call is, or answers the refusal:
-// [operations.bind], seeded wherever the actor already carries the identity a
-// derived id is built from ([Actor.OperationSeed]) — a turn's, or a request's
-// own key. What it settles is the actor's [Actor.Operation], which every write
-// the call makes derives its id from ([opIDFor], [commentID]).
+// bindOperation settles which operation this call is, or answers the refusal
+// ([operations.bindActor]).
 func (d WorkDeps) bindOperation(actor Actor, tool string,
 	args map[string]any) (Actor, string) {
 
-	op, refusal := d.ops.bind(tool, args, actor.OperationSeed() != "")
-	actor.Operation = op
-	return actor, refusal
+	return d.ops.bindActor(actor, tool, args)
 }
 
 // withOperation puts the call's operation on its answer, where it has one:

@@ -59,6 +59,16 @@ type bridgedRun struct {
 // agent would.
 func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridgedRun {
 	t.Helper()
+	c, seat := splitLoginCompany(t, "api", "codex")
+	return launchBridgedOn(t, c, &turnctx.Turn{RunID: turnID, Seat: seat}, offered...)
+}
+
+// launchBridgedOn is [launchBridged] for turn, a turn of c's seat, as the
+// engine builds the turn it launches — its holds included, where a case gives
+// it some.
+func launchBridgedOn(t *testing.T, c *Company, turn *turnctx.Turn, offered ...tools.Callable) bridgedRun {
+	t.Helper()
+	seat := turn.Seat
 	server := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(server.Close)
 	bridge := bridgeFor(t, mcpbridge.Options{
@@ -68,7 +78,6 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
 	server.Config.Handler = mux
 
-	c, seat := splitLoginCompany(t, "api", "codex")
 	e, jobs := launchRig(t, c, bridge)
 	reg := tools.NewRegistry()
 	var names []string
@@ -79,7 +88,7 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 		names = append(names, tool.Name())
 	}
 	launcher := &agentLauncher{
-		engine: e, turn: &turnctx.Turn{RunID: turnID, Seat: seat}, seat: seat,
+		engine: e, turn: turn, seat: seat,
 		codingAgent: "claude-code", placement: sandbox.E2B,
 	}
 	if err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{

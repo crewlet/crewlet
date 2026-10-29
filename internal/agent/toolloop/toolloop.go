@@ -382,6 +382,46 @@ func withCallRound(ctx context.Context, round int) context.Context {
 	return context.WithValue(ctx, roundKey{}, prior+round)
 }
 
+// modelKey carries the model a tool call was made on; see [CallModel].
+type modelKey struct{}
+
+// CallModel is the model the tool call ctx carries was made on: in this loop's
+// own dispatch the ROUND's — the model its completion reported, else the
+// provider's configured one, the precedence [Round.Model] records — and over
+// the MCP bridge, where a coding CLI in agent mode makes the call, the model
+// the run's launch pointed that CLI at; "" where neither set it, a bridged
+// call whose launch named no model and left the CLI to choose its own.
+//
+// Read by a tool whose write has to say which model made it — a seat's code
+// write names it on its push row — and never by the loop itself. ONE VALUE
+// FOR A RUN WHICHEVER PATH MADE THE CALL: a native round and a bridged call of
+// the same seat set it from the same source of truth for that path, so one
+// run's pushes name one model.
+func CallModel(ctx context.Context) string {
+	model, _ := ctx.Value(modelKey{}).(string)
+	return model
+}
+
+// WithCallModel is ctx carrying the model a tool call is made on — THE ONE
+// SETTER of [CallModel]: called by this loop's dispatch beside the round it
+// stamps, and by the MCP bridge for a call a coding CLI made, with the model
+// the run's launch named. Two setters spelling the key would be two places a
+// call could carry a model the other path never sets.
+func WithCallModel(ctx context.Context, model string) context.Context {
+	return context.WithValue(ctx, modelKey{}, model)
+}
+
+// roundModel is the model a round ran on: the completion's own report where it
+// names one, else the provider's configured identity — the precedence the
+// phase's own model follows, per round, in one place, so the round's record
+// ([Round.Model]) and the model its calls are told ([CallModel]) never differ.
+func roundModel(completion *llm.Completion, provider llm.Provider) string {
+	if completion.Model != "" {
+		return completion.Model
+	}
+	return provider.Model()
+}
+
 // Narration is one round's model turn — what it said — KEPT ATTACHED TO ITS
 // ROUND.
 //
@@ -1082,13 +1122,9 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		// The completion's model where it names one, the configured
 		// identity where the backend filled nothing in — the same
 		// precedence the phase's own model follows, per round.
-		roundModel := completion.Model
-		if roundModel == "" {
-			roundModel = cfg.Provider.Model()
-		}
 		rounds = append(rounds, Round{
 			Round: roundsUsed, StartedAt: roundStarted, Duration: took,
-			Model:        roundModel,
+			Model:        roundModel(completion, cfg.Provider),
 			InputTokens:  completion.InputTokens,
 			OutputTokens: completion.OutputTokens,
 			CacheRead:    completion.CacheRead,
@@ -1404,7 +1440,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		finishingRetries, emptyRetries = 0, 0
 
 		suspended, pendingID, pendingName, payload, err := runCalls(
-			ctx, cfg, completion.ToolCalls, roundsUsed, &msgs, &execs,
+			ctx, cfg, completion.ToolCalls, roundsUsed, roundModel(completion, cfg.Provider), &msgs, &execs,
 			func(running RunningCall) { publish(roundsUsed, &running) })
 		if err != nil {
 			return nil, err
@@ -1446,13 +1482,15 @@ func runCalls(
 	cfg Config,
 	calls []llm.ToolCall,
 	round int,
+	model string,
 	msgs *[]llm.Message,
 	execs *[]Execution,
 	announce func(RunningCall),
 ) (suspended bool, pendingID, pendingName string, payload map[string]any, err error) {
 	// Every call this round makes is told which round it is in, on the
-	// phase's scale — see [CallRound].
-	callCtx := withCallRound(ctx, round)
+	// phase's scale — see [CallRound] — and which model the round ran on
+	// ([CallModel]), which a seat's code write names on its push.
+	callCtx := WithCallModel(withCallRound(ctx, round), model)
 	for _, call := range calls {
 		// THE FENCE AGAIN, PER CALL. The round check is one per model
 		// turn, and a round is every tool the model asked for in it — a

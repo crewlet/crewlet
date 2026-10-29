@@ -326,6 +326,19 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.CodeLogTool:       false,
 		builtin.CodeBlameTool:     false,
 
+		// AND ITS WRITES, every one a branch or a repository every colleague
+		// reads: a worker writing one would write with its parent's grant.
+		builtin.CodeCommitFilesTool:   true,
+		builtin.CodeRevertTool:        true,
+		builtin.CodeCherryPickTool:    true,
+		builtin.CodeCreateBranchTool:  true,
+		builtin.CodeDeleteBranchTool:  true,
+		builtin.CodeCreateRepoTool:    true,
+		builtin.CodeUpdateRepoTool:    true,
+		builtin.CodeDeleteRepoTool:    true,
+		builtin.CodeRestoreRepoTool:   true,
+		builtin.CodeProtectBranchTool: true,
+
 		// THE DEPLOYMENT'S HEALTH: two reads of what the fleet already
 		// publishes, which a worker of a granted seat may be handed.
 		builtin.FleetHealthTool: false,
@@ -1047,10 +1060,11 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// with the artifacts half.
 		ArtifactData: artifactDataDeps(newFakeData()),
 		// AND THE CODE HOST, whose nine read tools register only over a
-		// code host and the requester ceiling's halves beside it: left out,
-		// every walk over this fixture met their nine authority rows as
-		// rules no registered tool answers.
-		Code: codeDeps(newCodeHost()),
+		// code host and the requester ceiling's halves beside it, and whose
+		// ten writes only where its writes are wired too: left out, every
+		// walk over this fixture met their nineteen authority rows as rules
+		// no registered tool answers.
+		Code: writeDeps(newCodeHost(), &codeWrites{}),
 		// AND THE HEALTH TOOLS, over a lease table and the git nodes' status
 		// scatter — code_status's code half wired as the code reads are, the
 		// requester ceiling's halves beside the code host: left out, their two

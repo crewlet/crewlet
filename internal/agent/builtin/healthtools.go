@@ -530,7 +530,7 @@ func (t *codeStatus) judge(ctx context.Context, turn *turnctx.Turn, c codeCaller
 		wg.Go(func() {
 			slots <- struct{}{}
 			defer func() { <-slots }()
-			ok, err := t.readable(ctx, turn, c, id, name)
+			ok, err := t.readable(ctx, c, lookedUpRepo(turn, c.asker, name), id, name)
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -565,16 +565,21 @@ func (t *codeStatus) judge(ctx context.Context, turn *turnctx.Turn, c codeCaller
 // rides on it ([code.ReadQuery.CeilingSeat]) exactly as on theirs, and a
 // repository the asker may read and that seat may not is answered
 // code.ErrAboveCeiling — left out here as the asker's own refusal is. A
-// resolution the turn already holds was made by that read, for the same
-// asker and in the same turn, so for the same ceiling.
-func (t *codeStatus) readable(ctx context.Context, turn *turnctx.Turn, c codeCaller,
+// resolution the turn already holds (held) was made by that read, for the
+// same asker and in the same turn, so for the same ceiling, and answers with
+// no read.
+//
+// WHAT IT READS IT KEEPS NOWHERE, and it takes no turn to keep it in: the hot
+// list names repositories no call of the turn chose, so it holds none of them
+// from a scratch repository's expiry — as code_list_repos holds none — and a
+// resolution it kept in the turn's lookups would be one a later code tool
+// reused with no hold taken. Only [CodeDeps.repoRead] keeps a resolution,
+// once the turn's hold on it is taken ([HoldRepo]).
+func (t *codeStatus) readable(ctx context.Context, c codeCaller, held *code.RepoRef,
 	id, name string) (bool, error) {
 
-	key := codeRepoKey{asker: c.asker, name: name}
-	if held, ok := turn.LookedUp().Load(key); ok {
-		if ref, ok := held.(code.RepoRef); ok {
-			return ref.ID == id, nil
-		}
+	if held != nil {
+		return held.ID == id, nil
 	}
 	answer, err := t.deps.Code.read(ctx, c, code.ReadQuery{Kind: code.ReadRepo, Repo: name, Fresh: seatRead})
 	switch {
@@ -586,6 +591,5 @@ func (t *codeStatus) readable(ctx context.Context, turn *turnctx.Turn, c codeCal
 	case answer.Repo == nil:
 		return false, fmt.Errorf("builtin: the code host answered repository %s's read with no detail", name)
 	}
-	turn.LookedUp().Store(key, answer.Repo.RepoRef)
 	return answer.Repo.ID == id, nil
 }

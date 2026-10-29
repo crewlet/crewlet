@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
@@ -261,9 +262,11 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&savePage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
 		{&commentOnPage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
 	}
-	// AND THE CODE READ TOOLS, the very list the operator catalogue takes
-	// ([CodeTools]): reads, so none of them names a delivery surface — and
-	// the health tools after them, the same way ([HealthTools]).
+	// AND THE CODE TOOLS, the very list the operator catalogue takes
+	// ([CodeTools]): the reads, which name no delivery surface, and where
+	// the code host's writes are wired the writes, each a delivery to it
+	// (the switch below) — and the health tools after them, the same way
+	// ([HealthTools]).
 	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps),
 		codeCandidates(deps.Code), healthCandidates(deps.Health))
 
@@ -291,6 +294,10 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			opts = append(opts, tools.DeliversTo(tracker.Source))
 		case slices.Contains(PageWrites(), c.tool.Name()):
 			opts = append(opts, tools.DeliversTo(pages.Source))
+		case slices.Contains(CodeWrites(), c.tool.Name()):
+			// AND A CODE WRITE REACHES THE CODE HOST: a branch moved or a
+			// repository changed is the answer to work that came from it.
+			opts = append(opts, tools.DeliversTo(code.Source))
 		}
 		// THE GATE WRAPS EVERY ONE, and it wraps HERE rather than at
 		// each tool: the authority table is keyed on the tool's own

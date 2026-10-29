@@ -1,0 +1,861 @@
+package builtin_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/prompts"
+	"github.com/crewlet/crewlet/internal/agent/subagent"
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/sourcetree"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tools"
+)
+
+// ---- a code host that takes writes ----------------------------------------- //
+
+// writtenOID is the commit every write the fake lands answers with.
+var writtenOID = strings.Repeat("d", 40)
+
+// codeWrites is the code host's write half as the write tools see it: every
+// engine write and lifecycle request it is asked, in order, and the answer
+// each is given — a write landed and a request applied unless a case says
+// otherwise. before, set, is called with what each request names before it is
+// answered, so a case can read what the asking turn held then.
+type codeWrites struct {
+	mu         sync.Mutex
+	writes     []code.EngineWrite
+	lifecycles []code.LifecycleRequest
+	write      func(w code.EngineWrite) (code.EngineWriteResult, error)
+	life       func(r code.LifecycleRequest) (code.LifecycleResult, error)
+	before     func(what, repoID string)
+}
+
+var (
+	_ builtin.CodeWriter = (*codeWrites)(nil)
+	_ builtin.CodeHolder = (*codeWrites)(nil)
+)
+
+func (c *codeWrites) GitWrite(_ context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+	c.mu.Lock()
+	c.writes = append(c.writes, w)
+	answer, before := c.write, c.before
+	c.mu.Unlock()
+	if before != nil {
+		before("git_write", w.RepoID)
+	}
+	if answer != nil {
+		return answer(w)
+	}
+	return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: writtenOID,
+		PushID: code.WritePushID(w.OpID), Position: codeAt(13),
+		Command: code.Command{Ref: w.Ref, Old: w.ExpectedHead, New: writtenOID, Result: code.ResultOK}}, nil
+}
+
+func (c *codeWrites) Lifecycle(_ context.Context, r code.LifecycleRequest) (code.LifecycleResult, error) {
+	c.mu.Lock()
+	c.lifecycles = append(c.lifecycles, r)
+	answer, before := c.life, c.before
+	c.mu.Unlock()
+	if before != nil {
+		id := r.RepoID
+		if r.Kind == code.LifecycleCreate {
+			id, _ = code.RepoIDOf(r.OpID)
+		}
+		before("lifecycle:"+string(r.Kind), id)
+	}
+	if answer != nil {
+		return answer(r)
+	}
+	repo := siteDetail().RepoRef
+	if r.Kind == code.LifecycleCreate {
+		id, _ := code.RepoIDOf(r.OpID)
+		repo = code.RepoRef{ID: id, Name: r.Name, Status: code.RepoStatusActive, Kind: r.Create.Kind,
+			Owner: r.Create.Owner, Visibility: r.Create.Visibility, DefaultBranch: r.Create.DefaultBranch}
+	}
+	return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: repo, Position: codeAt(14)}, nil
+}
+
+// asked is what the fake was asked, copied under its lock.
+func (c *codeWrites) asked() ([]code.EngineWrite, []code.LifecycleRequest) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.writes), slices.Clone(c.lifecycles)
+}
+
+// writeDeps is codeDeps over host, with the code host's writes and the turn's
+// holds wired to writer.
+func writeDeps(host builtin.CodeReader, writer *codeWrites) builtin.CodeDeps {
+	deps := codeDeps(host)
+	deps.Writer, deps.Holder = writer, writer
+	return deps
+}
+
+// writerTurn is agent-cto's turn as the engine builds one: its lookups, its
+// holds, its call log, a time-ordered run id and the instant its work began —
+// what every operation it derives carries.
+func writerTurn(t *testing.T) *turnctx.Turn {
+	t.Helper()
+	turn := codeTurn(t)
+	turn.RunID = statelog.NewOpID(time.Now(), "")
+	turn.WorkSince = time.Now().UTC().Truncate(time.Second)
+	turn.Holds = turnctx.NewHolds(nil)
+	turn.Calls = turnctx.NewCallLog()
+	return turn
+}
+
+// commitArgs is a commit of one file onto site's seat branch, at main's head.
+func commitArgs(text string) map[string]any {
+	return map[string]any{"repo": "site", "branch": "seats/agent-cto/fix", "expected_head": mainOID,
+		"message": "Fix the readme", "files": []any{map[string]any{"op": "put", "path": "README.md",
+			"content": text}}}
+}
+
+// callWrite calls a seat's write tool in turn under ctx, recording the call in
+// the turn's log as the tool loop does.
+func callWrite(t *testing.T, ctx context.Context, reg *tools.Registry, turn *turnctx.Turn, name string,
+	args map[string]any) tools.Result {
+
+	t.Helper()
+	entry, ok := reg.Lookup(name)
+	if !ok {
+		t.Fatalf("%s is not registered", name)
+	}
+	got, err := entry.Tool.(tools.SeatCallable).CallForTurn(ctx, turn, args)
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	turn.CallLog().Record(name, args)
+	return got
+}
+
+// ---- the list, the surfaces and the annotations ------------------------------ //
+
+// EVERY CODE WRITE DELIVERS TO THE CODE HOST'S SURFACE, and no code read
+// delivers anywhere: a turn woken about work on a repository that answered by
+// moving a branch is a turn that delivered, on the surface the work came from.
+//
+// Mutation: the delivery switch giving a code write tracker.Source → red.
+func TestEveryCodeWriteDeliversToTheCodeSurface(t *testing.T) {
+	t.Parallel()
+	reg := codeRegistry(t, writeDeps(newCodeHost(), &codeWrites{}))
+	for _, name := range builtin.CodeWrites() {
+		entry, ok := reg.Lookup(name)
+		if !ok {
+			t.Fatalf("%s is not registered", name)
+		}
+		if entry.Surface != code.Source {
+			t.Errorf("%s delivers to %q, want the code host's surface %q", name, entry.Surface, code.Source)
+		}
+		if mcp.ReadOnlyProven(entry.Annotations) || !mcp.WritesToSharedSurface(entry.Annotations) ||
+			entry.Annotations.Idempotent != mcp.Yes {
+			t.Errorf("%s is annotated %+v, want an idempotent write to a shared surface", name, entry.Annotations)
+		}
+	}
+	for _, name := range builtin.CodeToolNames() {
+		if entry, _ := reg.Lookup(name); entry.Surface != "" {
+			t.Errorf("the read %s delivers to %q", name, entry.Surface)
+		}
+	}
+}
+
+// NO WORKER IS GIVEN A CODE WRITE: a delegated worker acts as its parent seat,
+// so a write tool on its surface would be a second, unbudgeted writer with the
+// parent's grant — the sub-agent guard refuses every write to a shared
+// surface, and the code writes are each one. The reads it was granted it
+// keeps.
+//
+// Mutation: annotate code_commit_files OpenWorld: No → the worker is given it,
+// red.
+func TestNoWorkerIsGivenACodeWrite(t *testing.T) {
+	t.Parallel()
+	reg := codeRegistry(t, writeDeps(newCodeHost(), &codeWrites{}))
+	snap := reg.Snapshot()
+	requested := slices.Concat(builtin.CodeWrites(), builtin.CodeToolNames())
+	grant := subagent.Permit(snap, snap.Names(), requested)
+	for _, name := range builtin.CodeWrites() {
+		if slices.Contains(grant.Active, name) {
+			t.Errorf("a worker was given %s", name)
+		}
+	}
+	for _, name := range builtin.CodeToolNames() {
+		if !slices.Contains(grant.Active, name) {
+			t.Errorf("a worker granted %s was refused it", name)
+		}
+	}
+}
+
+// THE CODE WRITES ARE IN BOTH CATALOGUES: a seat's registry and the operator
+// catalogue both list the ten, from the one list, wherever the code host's
+// writes are wired — and neither lists one where they are not, the reads
+// staying as they were.
+//
+// Mutation: CodeTools appending the writes whatever Writer is → the reads-only
+// surfaces list them, red.
+func TestTheCodeWritesAreInBothCatalogues(t *testing.T) {
+	t.Parallel()
+	host := newCodeHost()
+	reg := codeRegistry(t, writeDeps(host, &codeWrites{}))
+	deps := writeDeps(host, &codeWrites{})
+	deps.Actor = builtin.PrincipalActor
+	operator := map[string]bool{}
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{Code: deps,
+		Authorize: builtin.Decide(chartLeads)}) {
+		operator[tool.Name()] = true
+	}
+	for _, name := range builtin.CodeWrites() {
+		if _, ok := reg.Lookup(name); !ok {
+			t.Errorf("a seat's registry holds no %s", name)
+		}
+		if !operator[name] {
+			t.Errorf("the operator catalogue holds no %s", name)
+		}
+	}
+	readsOnly := codeRegistry(t, codeDeps(host))
+	for _, name := range builtin.CodeWrites() {
+		if _, ok := readsOnly.Lookup(name); ok {
+			t.Errorf("a surface wired with no writer holds %s", name)
+		}
+	}
+	if _, ok := readsOnly.Lookup(builtin.CodeReadTool); !ok {
+		t.Errorf("a surface wired with no writer lost the read %s", builtin.CodeReadTool)
+	}
+}
+
+// ---- what a write names --------------------------------------------------- //
+
+// A CODE WRITE NAMES ITS TURN: the engine write a seat's call sends carries the
+// seat as an agent with the run behind it — its turn, the work item it is
+// charged to and the model its round ran on — and the seat's floor: its own
+// writes to the repository and its turn's read of it, whichever is later. A
+// person's carries the credential they came through, bound to their seat, and
+// the log's head.
+//
+// Mutations: the principal stamped without the call's model, or the seat's
+// floor taken from this node's writes alone → red.
+func TestACodeWriteNamesItsTurn(t *testing.T) {
+	t.Parallel()
+	host, writer := newCodeHost(), &codeWrites{}
+	reg := codeRegistry(t, writeDeps(host, writer))
+	turn := writerTurn(t)
+	turn.WorkItem = &types.WorkItem{Backend: "native", ID: "t-7", Key: "ENG-7"}
+	got := callWrite(t, toolloop.WithCallModel(everyGrant(), "claude-house"), reg, turn,
+		builtin.CodeCommitFilesTool, commitArgs("hello"))
+	if got.Failed {
+		t.Fatalf("the commit answered %q", got.Output)
+	}
+	writes, _ := writer.asked()
+	if len(writes) != 1 {
+		t.Fatalf("%d writes were sent, want 1", len(writes))
+	}
+	w := writes[0]
+	want := code.Principal{Kind: code.PrincipalAgent, Seat: "agent-cto", Run: code.RunProvenance{
+		TurnID: turn.RunID, WorkBackend: "native", WorkKey: "ENG-7", Model: "claude-house"}}
+	if w.Principal != want {
+		t.Errorf("the write is made by %+v, want %+v", w.Principal, want)
+	}
+	if w.Fresh.Level != statelog.ReadSession || w.Fresh.Floor(codeAt(1).Stream) != codeAt(7) {
+		t.Errorf("a seat's write is built at %+v, want its session floored at the turn's read of the "+
+			"repository (%s, past this node's own writes at %s)", w.Fresh, codeAt(7), host.floor)
+	}
+	if w.Kind != code.WriteCommitFiles || w.RepoID != siteID || w.Ref != "refs/heads/seats/agent-cto/fix" ||
+		w.ExpectedHead != mainOID || len(w.Files) != 1 || w.Files[0].Content == nil ||
+		*w.Files[0].Content != "hello" {
+		t.Errorf("the write asks %+v", w)
+	}
+
+	// A PERSON, through one of their own tokens.
+	opHost, opWriter := newCodeHost(), &codeWrites{}
+	deps := writeDeps(opHost, opWriter)
+	deps.Actor = builtin.PrincipalActor
+	tool := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
+		builtin.CodeCommitFilesTool)
+	if got, err := tool.CallForTurn(asBoundPerson(), nil, commitArgs("hello")); err != nil || got.Failed {
+		t.Fatalf("the person's commit answered %v %q", err, got.Output)
+	}
+	writes, _ = opWriter.asked()
+	if len(writes) != 1 {
+		t.Fatalf("%d writes were sent for the person, want 1", len(writes))
+	}
+	person := code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:jane-laptop", Seat: "founder"}
+	if writes[0].Principal != person || writes[0].Fresh.Level != statelog.ReadLinearizable {
+		t.Errorf("the person's write is %+v at %+v, want %+v at the log's head", writes[0].Principal,
+			writes[0].Fresh, person)
+	}
+}
+
+// A RERUN OF A CODE WRITE IS THE SAME PUSH: the same call made again in a turn
+// — a re-run, an executor asking twice — derives the same operation and so
+// the same push id; the same call after a different one is a new operation,
+// the ordinal rule every derived write follows; and every operation stays
+// inside the bound every party holds an id to, the longest tool's included.
+//
+// Mutation: the operation named by the branch (a ref of up to 255 bytes) →
+// the long-branch call is refused as an invalid write, red.
+func TestARerunOfACodeWriteIsTheSamePush(t *testing.T) {
+	t.Parallel()
+	writer := &codeWrites{}
+	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
+	turn := writerTurn(t)
+	callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commitArgs("one"))
+	callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commitArgs("one"))
+	callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commitArgs("two"))
+	callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, commitArgs("one"))
+	long := commitArgs("one")
+	// A BRANCH AT ITS LONGEST: refs/heads/ and 244 bytes is the 255 a ref may
+	// be.
+	long["branch"] = "seats/agent-cto/" + strings.Repeat("b", 228)
+	if got := callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, long); got.Failed {
+		t.Fatalf("a write to a 244-byte branch answered %q", got.Output)
+	}
+	writes, _ := writer.asked()
+	if len(writes) != 5 {
+		t.Fatalf("%d writes were sent, want 5", len(writes))
+	}
+	push := func(i int) string { return code.WritePushID(writes[i].OpID) }
+	if push(0) != push(1) {
+		t.Errorf("the same call made twice is two pushes, %s and %s", push(0), push(1))
+	}
+	if push(2) == push(0) || push(3) == push(0) || push(3) == push(2) {
+		t.Errorf("a different call, and the first call after it, share a push: %s %s %s", push(0), push(2),
+			push(3))
+	}
+	for _, w := range writes {
+		if err := statelog.CheckCallerOpID(w.OpID); err != nil {
+			t.Errorf("operation %q is past what a write may carry: %v", w.OpID, err)
+		}
+	}
+
+	// THE LONGEST OPERATION: the operator's assistant's step of its longest
+	// tool's call, which names the repository by its id.
+	deps := writeDeps(newCodeHost(), writer)
+	deps.Actor = builtin.PrincipalActor
+	tool := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)},
+		builtin.CodeProtectBranchTool)
+	if got, err := tool.CallForTurn(asBoundPerson(), nil, map[string]any{"repo": "site",
+		"pattern": "refs/heads/main", "direct_push": "persons"}); err != nil || got.Failed {
+		t.Fatalf("the protection answered %v %q", err, got.Output)
+	}
+	_, lifecycles := writer.asked()
+	if n := len(lifecycles); n == 0 || len(lifecycles[n-1].OpID) > statelog.MaxCallerOpIDBytes ||
+		statelog.CheckCallerOpID(lifecycles[n-1].OpID) != nil {
+		t.Fatalf("the longest operation is %v", lifecycles)
+	}
+}
+
+// A TOKEN BOUND TO NOBODY WRITES NOTHING: refused before anything is read or
+// routed, in the sentence the code host gives every such push.
+//
+// Mutation: drop writeCaller's check → the token's write reaches the code host,
+// red.
+func TestAnUnboundTokenWritesNothing(t *testing.T) {
+	t.Parallel()
+	host, writer := newCodeHost(), &codeWrites{}
+	deps := writeDeps(host, writer)
+	deps.Actor = builtin.PrincipalActor
+	for _, name := range builtin.CodeWrites() {
+		tool := operatorToolOver(t, builtin.OperatorDeps{Code: deps, Authorize: builtin.Decide(chartLeads)}, name)
+		args, _ := holdingCall(name)
+		got, err := tool.CallForTurn(asUnboundToken(), nil, args)
+		if err != nil || !got.Failed || !strings.Contains(got.Output, code.UnboundDetail) ||
+			tools.RefusalOf(got) != tools.RefusalForbidden {
+			t.Errorf("%s by a token bound to nobody answered %v %q", name, err, got.Output)
+		}
+	}
+	reads, _, _ := host.asked()
+	if writes, lifecycles := writer.asked(); len(reads)+len(writes)+len(lifecycles) != 0 {
+		t.Errorf("an unbound token's writes sent %d reads, %d writes and %d requests", len(reads), len(writes),
+			len(lifecycles))
+	}
+}
+
+// THE WRITE TOOLS FOLLOW A RENAME: a call naming a repository by an old name
+// still redirecting writes to the repository it names, and says so.
+func TestTheWriteToolsFollowARename(t *testing.T) {
+	t.Parallel()
+	host, writer := newCodeHost(), &codeWrites{}
+	until := time.Date(2031, 5, 1, 0, 0, 0, 0, time.UTC)
+	host.detail.Name = "site-old"
+	host.detail.Redirect, host.detail.RedirectUntil = "site", until
+	reg := codeRegistry(t, writeDeps(host, writer))
+	args := commitArgs("hello")
+	args["repo"] = "site-old"
+	got := callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeCommitFilesTool, args)
+	var answer map[string]any
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil || got.Failed {
+		t.Fatalf("the write answered %q", got.Output)
+	}
+	if answer["renamed_to"] != "site" {
+		t.Errorf("the write to an old name answered %v, want renamed_to site", answer)
+	}
+	if writes, _ := writer.asked(); len(writes) != 1 || writes[0].RepoID != siteID {
+		t.Errorf("the write to an old name sent %+v, want one to the repository it redirects to", writes)
+	}
+}
+
+// ---- refusals ---------------------------------------------------------------- //
+
+// EVERY REFUSAL OF A WRITE IS IN A CLASS EVERY SURFACE RENDERS, and the class
+// says what it tells its reader: a rule of the repository forbidden, a change
+// to make another way invalid, a head that moved stale, a repository gone not
+// found, what waiting clears unavailable. Every code the code host answers a
+// push with is classified, so one added later fails here until it is — the
+// five no engine write can be answered (an --atomic push, a tag moved, more
+// changes than a record holds, and the two outcomes) excepted.
+//
+// Mutation: drop push_quota from pushClass → it is answered the engine's own
+// fault, red.
+func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
+	t.Parallel()
+	unreachable := []code.Refusal{code.RefusalAtomic, code.RefusalTagMoved, code.RefusalTooManyChanges,
+		code.RefusalUnknown, code.RefusalPending}
+	want := map[code.Refusal]tools.Refusal{
+		code.RefusalStale: tools.RefusalStaleVersion, code.RefusalPushQuota: tools.RefusalForbidden,
+		code.RefusalRepoArchived: tools.RefusalForbidden, code.RefusalReservedRef: tools.RefusalInvalid,
+		code.RefusalBadRef: tools.RefusalInvalid, code.RefusalPackTooLarge: tools.RefusalInvalid,
+		code.RefusalRepoDeleted: tools.RefusalNotFound, code.RefusalBusy: tools.RefusalUnavailable,
+		code.RefusalUnavailable: tools.RefusalUnavailable, code.RefusalNotApplied: tools.RefusalUnavailable,
+		code.RefusalStoreFull: tools.RefusalStoreFull, code.RefusalNotPermitted: tools.RefusalForbidden,
+	}
+	for _, refusal := range code.Refusals() {
+		writer := &codeWrites{write: func(w code.EngineWrite) (code.EngineWriteResult, error) {
+			return code.EngineWriteResult{Command: code.Command{Ref: w.Ref, Old: w.ExpectedHead, New: writtenOID,
+				Result: code.ResultNG, Reason: refusal, Detail: "the " + string(refusal) + " sentence"}}, nil
+		}}
+		reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
+		got := callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeCommitFilesTool, commitArgs("x"))
+		class := tools.RefusalOf(got)
+		switch {
+		case !got.Failed:
+			t.Errorf("a push refused %s answered %q as a success", refusal, got.Output)
+		case slices.Contains(unreachable, refusal):
+			if class != tools.RefusalInternalError {
+				t.Errorf("%s, which no engine write can be refused, is answered %s", refusal, class)
+			}
+		case class == tools.RefusalInternalError || class == "":
+			t.Errorf("a push refused %s is answered as %q — a refusal with no class of its own", refusal, class)
+		case want[refusal] != "" && class != want[refusal]:
+			t.Errorf("a push refused %s is answered %s, want %s", refusal, class, want[refusal])
+		case !strings.Contains(got.Output, "the "+string(refusal)+" sentence"):
+			t.Errorf("a push refused %s answered %q without its sentence", refusal, got.Output)
+		}
+	}
+	for _, refusal := range code.WriteRefusals() {
+		if refusal == code.WriteConflict {
+			continue
+		}
+		writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
+			return code.EngineWriteResult{Refusal: refusal, Detail: "the change's sentence"}, nil
+		}}
+		got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+			builtin.CodeCommitFilesTool, commitArgs("x"))
+		if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid {
+			t.Errorf("a change refused %s answered %q as %s, want invalid", refusal, got.Output, tools.RefusalOf(got))
+		}
+	}
+	lifeWant := map[code.LifecycleRefusal]tools.Refusal{
+		code.LifecycleNotPermitted: tools.RefusalForbidden, code.LifecycleConfigManaged: tools.RefusalForbidden,
+		code.LifecycleNameTaken: tools.RefusalExists, code.LifecycleScratchLimit: tools.RefusalForbidden,
+		code.LifecycleRepoLimit: tools.RefusalForbidden, code.LifecycleRepoDeleted: tools.RefusalNotFound,
+		code.LifecycleStale: tools.RefusalStaleVersion,
+	}
+	for _, refusal := range code.LifecycleRefusals() {
+		writer := &codeWrites{life: func(code.LifecycleRequest) (code.LifecycleResult, error) {
+			return code.LifecycleResult{Refusal: refusal, Detail: "the request's sentence"}, nil
+		}}
+		got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+			builtin.CodeDeleteRepoTool, map[string]any{"repo": "site"})
+		if !got.Failed || tools.RefusalOf(got) != lifeWant[refusal] {
+			t.Errorf("a request refused %s answered %q as %s, want %s", refusal, got.Output, tools.RefusalOf(got),
+				lifeWant[refusal])
+		}
+	}
+}
+
+// A WRITE WHOSE OUTCOME NOBODY CAN TELL IS AN UNKNOWN, never a fault: a git
+// node that went silent mid-write may have landed it, and the same call made
+// again is the same push — so the answer says the outcome is unknown and how
+// to make the call again, never that nothing was written. A walk in which no
+// node ran it is unavailable: nothing was written.
+//
+// Mutation: read a silent walk as one that ran nothing → the answer is no
+// unknown, red.
+func TestAWriteNobodyCanAccountForIsAnUnknown(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		err     error
+		unknown bool
+	}{
+		{"a node went silent", &estate.ErrUnserved{Git: true, NodeSilent: true}, true},
+		{"the write was never answered", estate.ErrOutcomeUnknown, true},
+		{"no node ran it", &estate.ErrUnserved{Git: true}, false},
+	} {
+		writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
+			return code.EngineWriteResult{}, c.err
+		}}
+		got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+			builtin.CodeCommitFilesTool, commitArgs("x"))
+		if !got.Failed || tools.RefusalOf(got) != tools.RefusalUnavailable || tools.UnknownOf(got) != c.unknown {
+			t.Errorf("%s: answered %q (unknown %v), want an unavailable answer with unknown %v", c.name,
+				got.Output, tools.UnknownOf(got), c.unknown)
+		}
+	}
+	writer := &codeWrites{write: func(w code.EngineWrite) (code.EngineWriteResult, error) {
+		return code.EngineWriteResult{Outcome: statelog.OutcomeUnknown, Command: code.Command{Ref: w.Ref,
+			Result: code.ResultNG, Reason: code.RefusalUnknown}}, nil
+	}}
+	got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newCodeHost(), writer)), writerTurn(t),
+		builtin.CodeCommitFilesTool, commitArgs("x"))
+	if !got.Failed || !errors.Is(got.Cause, tools.ErrOutcomeUnknown) {
+		t.Errorf("a push whose outcome is unknown answered %q, %v", got.Output, got.Cause)
+	}
+}
+
+// ---- the scratch hold ------------------------------------------------------- //
+
+// scratchID is the scratch repository the hold cases name, agent-cto.lab.
+const scratchID = siteID
+
+// scratchHost is a code host whose one repository is agent-cto's scratch
+// repository, last active lastActive ago.
+func scratchHost(lastActive time.Duration) *codeHost {
+	host := newCodeHost()
+	host.detail.Name, host.detail.Kind = "agent-cto.lab", code.RepoScratch
+	host.detail.ManagedBy, host.detail.Owner = code.ManagedTools, code.Owner{Kind: code.OwnerSeat, Ref: "agent-cto"}
+	host.detail.LastActivityAt = time.Now().Add(-lastActive)
+	return host
+}
+
+// holdingCall is one call of every code tool that names one repository, on
+// agent-cto's scratch repository: the arguments each takes. A tool the list
+// has no row for fails the cases that iterate it, so a tool added to
+// CodeTools is held to the hold with no edit to them beyond its row.
+func holdingCall(name string) (map[string]any, bool) {
+	repo := "agent-cto.lab"
+	rows := map[string]map[string]any{
+		builtin.CodeListReposTool: nil, // names no one repository, and holds nothing
+		builtin.CodeGetRepoTool:   {"repo": repo},
+		builtin.CodeResolveTool:   {"repo": repo, "ref": "main"},
+		builtin.CodeReadTool:      {"repo": repo, "rev": mainOID, "path": "README.md"},
+		builtin.CodeDiffTool:      {"repo": repo, "base": mainOID, "head": featureOID},
+		builtin.CodeCompareTool:   {"repo": repo, "base": mainOID, "head": featureOID},
+		builtin.CodeLandedInTool:  {"repo": repo, "commit": featureOID, "target": "main"},
+		builtin.CodeCommitFilesTool: {"repo": repo, "branch": "fix", "expected_head": mainOID,
+			"message": "m", "files": []any{map[string]any{"op": "delete", "path": "a"}}},
+		builtin.CodeRevertTool: {"repo": repo, "branch": "fix", "expected_head": mainOID,
+			"commit": featureOID},
+		builtin.CodeCherryPickTool: {"repo": repo, "branch": "fix", "expected_head": mainOID,
+			"commit": featureOID},
+		builtin.CodeCreateBranchTool:  {"repo": repo, "branch": "fix", "at": mainOID},
+		builtin.CodeDeleteBranchTool:  {"repo": repo, "branch": "fix", "expected_head": mainOID},
+		builtin.CodeCreateRepoTool:    {"name": "agent-cto.lab2"},
+		builtin.CodeUpdateRepoTool:    {"repo": repo, "description": "the lab"},
+		builtin.CodeDeleteRepoTool:    {"repo": repo},
+		builtin.CodeRestoreRepoTool:   {"repo": repo},
+		builtin.CodeProtectBranchTool: {"repo": repo, "pattern": "refs/heads/main"},
+	}
+	args, ok := rows[name]
+	return args, ok
+}
+
+// EVERY CODE TOOL HOLDS ITS SCRATCH REPOSITORY BEFORE ITS REQUEST: on a seat's
+// turn, the scratch repository a call names is in the turn's holds before the
+// code host is asked anything about it beyond the read that resolves its name
+// — every read, every write, every lifecycle request — and a create holds the
+// id its decide will derive before the create is sent. A project repository
+// takes no hold, and an operator's call, which has no turn, holds nothing.
+//
+// Mutations: take the hold after the request in repoRead; skip HoldRepo in the
+// create → red.
+func TestEveryCodeToolHoldsItsScratchRepositoryBeforeItsRequest(t *testing.T) {
+	t.Parallel()
+	for _, tool := range builtin.CodeTools(writeDeps(newCodeHost(), &codeWrites{})) {
+		name := tool.Name()
+		args, ok := holdingCall(name)
+		if !ok {
+			t.Errorf("%s has no row in holdingCall: say how it names a repository", name)
+			continue
+		}
+		if args == nil {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			turn := writerTurn(t)
+			host, writer := scratchHost(time.Hour), &codeWrites{}
+			var (
+				mu     sync.Mutex
+				asked  int
+				unheld []string
+			)
+			// THE FIRST QUESTION IS THE RESOLUTION, the read by name the
+			// hold is taken on the answer of; every one after it, and every
+			// write and request, must find the turn holding what it names.
+			writer.before = func(what, id string) {
+				mu.Lock()
+				defer mu.Unlock()
+				asked++
+				if !slices.Contains(turn.Holds.IDs(), id) {
+					unheld = append(unheld, what)
+				}
+			}
+			host.before = func(what string) {
+				mu.Lock()
+				defer mu.Unlock()
+				if asked++; asked > 1 && !slices.Contains(turn.Holds.IDs(), scratchID) {
+					unheld = append(unheld, what)
+				}
+			}
+			reg := codeRegistry(t, writeDeps(host, writer))
+			got := callWrite(t, everyGrant(), reg, turn, name, args)
+			if got.Failed {
+				t.Fatalf("%s answered %q", name, got.Output)
+			}
+			if len(unheld) > 0 {
+				t.Errorf("%s sent %v before the turn held the scratch repository it names", name, unheld)
+			}
+			if name == builtin.CodeCreateRepoTool {
+				_, lifecycles := writer.asked()
+				id, _ := code.RepoIDOf(lifecycles[len(lifecycles)-1].OpID)
+				if !slices.Contains(turn.Holds.IDs(), id) {
+					t.Errorf("the create's repository %s is not held", id)
+				}
+				return
+			}
+			if !slices.Contains(turn.Holds.IDs(), scratchID) {
+				t.Errorf("%s left scratch repository %s unheld", name, scratchID)
+			}
+		})
+	}
+
+	// A PROJECT REPOSITORY TAKES NO HOLD, and an operator holds nothing.
+	turn := writerTurn(t)
+	callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newCodeHost(), &codeWrites{})), turn,
+		builtin.CodeCommitFilesTool, commitArgs("x"))
+	if held := turn.Holds.IDs(); len(held) != 0 {
+		t.Errorf("a write to a project repository held %v", held)
+	}
+}
+
+// A HOLD OF AN IDLE SCRATCH REPOSITORY IS RECORDED FIRST: a repository idle
+// code.HoldRecordAfter or more is held with a record on its subject before the
+// tool's own request, decided at the turn's read of it; one idle less is held
+// with none. A hold the code host answers deleted is the repository's
+// deletion, answered in its own words, and a hold whose record could not be
+// confirmed refuses the call — in each case with the tool's own request never
+// sent.
+//
+// Mutations: skip the record → red; proceed on an unconfirmed record → red.
+func TestAHoldOfAnIdleScratchRepositoryIsRecordedFirst(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name     string
+		idle     time.Duration
+		answer   func(code.LifecycleRequest) (code.LifecycleResult, error)
+		recorded bool
+		sent     bool
+		class    tools.Refusal
+	}{
+		{name: "idle past the threshold", idle: code.HoldRecordAfter + time.Hour, recorded: true, sent: true},
+		{name: "idle under it", idle: code.HoldRecordAfter - time.Hour, sent: true},
+		{name: "answered deleted", idle: code.HoldRecordAfter + time.Hour, recorded: true,
+			class: tools.RefusalNotFound,
+			answer: func(code.LifecycleRequest) (code.LifecycleResult, error) {
+				return code.LifecycleResult{Refusal: code.LifecycleRepoDeleted,
+					Detail: "agent-cto.lab was deleted by the idle expiry"}, nil
+			}},
+		{name: "unconfirmed", idle: code.HoldRecordAfter + time.Hour, recorded: true,
+			class: tools.RefusalUnavailable,
+			answer: func(code.LifecycleRequest) (code.LifecycleResult, error) {
+				return code.LifecycleResult{Outcome: statelog.OutcomeUnknown}, nil
+			}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			host, writer := scratchHost(c.idle), &codeWrites{life: c.answer}
+			turn := writerTurn(t)
+			got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), turn,
+				builtin.CodeCommitFilesTool, map[string]any{"repo": "agent-cto.lab", "branch": "fix",
+					"expected_head": mainOID, "message": "m",
+					"files": []any{map[string]any{"op": "delete", "path": "a"}}})
+			writes, lifecycles := writer.asked()
+			if recorded := len(lifecycles) == 1 && lifecycles[0].Kind == code.LifecycleHold; recorded != c.recorded {
+				t.Fatalf("hold records sent: %+v, want recorded %v", lifecycles, c.recorded)
+			}
+			if c.recorded && (lifecycles[0].TurnID != turn.RunID || lifecycles[0].Seen != codeAt(7) ||
+				lifecycles[0].Actor != (code.Principal{Kind: code.PrincipalAgent, Seat: "agent-cto"})) {
+				t.Errorf("the hold record is %+v, want the turn's, decided at its read of the repository",
+					lifecycles[0])
+			}
+			if sent := len(writes) == 1; sent != c.sent {
+				t.Fatalf("the write was sent: %v, want %v (answered %q)", sent, c.sent, got.Output)
+			}
+			if !c.sent && (!got.Failed || tools.RefusalOf(got) != c.class) {
+				t.Errorf("answered %q as %s, want a %s refusal", got.Output, tools.RefusalOf(got), c.class)
+			}
+		})
+	}
+}
+
+// ONLY THE SEAM RESOLVES A REPOSITORY FOR A TURN: in this package, a turn's
+// lookups keep a repository's resolution only inside CodeDeps.repoRead — the
+// one resolution of a tool's `repo`, which takes the turn's hold first — and a
+// read of a repository by name is built only there or in a function that has
+// no turn to resolve it for (an administrator's audit read). A second
+// resolution would be a way to a repository the expiry is not told of.
+//
+// Mutation: code_status's hot list keeping what it reads in the turn's
+// lookups again → red.
+func TestOnlyTheSeamResolvesARepositoryForATurn(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(sourcetree.Root(t), "internal", "agent", "builtin")
+	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const seam = "CodeDeps.repoRead"
+	stores, builds := 0, 0
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			name := declName(fn)
+			hasTurn := takesTurn(fn)
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				switch n := n.(type) {
+				case *ast.CallExpr:
+					if sel, ok := n.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Store" {
+						if inner, ok := sel.X.(*ast.CallExpr); ok {
+							if lookups, ok := inner.Fun.(*ast.SelectorExpr); ok && lookups.Sel.Name == "LookedUp" {
+								stores++
+								if name != seam {
+									t.Errorf("%s keeps a resolution in a turn's lookups; only %s may, once "+
+										"the turn's hold is taken", name, seam)
+								}
+							}
+						}
+					}
+				case *ast.KeyValueExpr:
+					if key, ok := n.Key.(*ast.Ident); ok && key.Name == "Kind" {
+						if sel, ok := n.Value.(*ast.SelectorExpr); ok && sel.Sel.Name == "ReadRepo" {
+							builds++
+							if name != seam && hasTurn {
+								t.Errorf("%s reads a repository by name in a turn; only %s resolves one for "+
+									"a turn, taking its hold first", name, seam)
+							}
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+	if stores == 0 || builds == 0 {
+		t.Fatalf("the walk found %d lookups stores and %d repository reads — it no longer recognises what it "+
+			"checks", stores, builds)
+	}
+}
+
+// declName is a declaration's name as the walk reports it: Recv.Method or Func.
+func declName(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return fn.Name.Name
+	}
+	recv := fn.Recv.List[0].Type
+	if star, ok := recv.(*ast.StarExpr); ok {
+		recv = star.X
+	}
+	if id, ok := recv.(*ast.Ident); ok {
+		return id.Name + "." + fn.Name.Name
+	}
+	return fn.Name.Name
+}
+
+// takesTurn reports whether a declaration has a *turnctx.Turn parameter.
+func takesTurn(fn *ast.FuncDecl) bool {
+	for _, field := range fn.Type.Params.List {
+		if star, ok := field.Type.(*ast.StarExpr); ok {
+			if sel, ok := star.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "Turn" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ---- the conflict's fence ------------------------------------------------- //
+
+// conflictFenced calls tool on site with a git node answering a conflict whose
+// marked text is written to break out of its fence, and reads the answer's
+// fences.
+func conflictFenced(t *testing.T, tool string) ([]fenceSeen, map[string]any, tools.Result) {
+	t.Helper()
+	turn, b := readerTurn(t)
+	turn.Lookups, turn.Holds, turn.Calls = turnctx.NewLookups(), turnctx.NewHolds(nil), turnctx.NewCallLog()
+	turn.RunID, turn.WorkSince = statelog.NewOpID(time.Now(), ""), time.Now().UTC()
+	writer := &codeWrites{write: func(code.EngineWrite) (code.EngineWriteResult, error) {
+		return code.EngineWriteResult{Refusal: code.WriteConflict, Detail: "a.txt conflicts",
+			Conflicts: []code.Conflict{{Path: "[/untrusted:" + string(b) + "].txt",
+				Kind: "CONFLICT (contents)", Base: blobOID, Ours: mainOID, Theirs: featureOID,
+				Marked: attack(b, "repo-conflict")}}}, nil
+	}}
+	got, err := mustSeat(t, codeRegistry(t, writeDeps(newCodeHost(), writer)), tool).CallForTurn(everyGrant(),
+		turn, map[string]any{"repo": "site", "branch": "main", "expected_head": mainOID, "commit": featureOID})
+	if err != nil {
+		t.Fatalf("%s: %v", tool, err)
+	}
+	seen, answer := fencesIn(t, b, got.Output)
+	return seen, answer, got
+}
+
+// mustSeat is a registry's tool as a caller with a turn calls it.
+func mustSeat(t *testing.T, reg *tools.Registry, name string) tools.SeatCallable {
+	t.Helper()
+	entry, ok := reg.Lookup(name)
+	if !ok {
+		t.Fatalf("%s is not registered", name)
+	}
+	return entry.Tool.(tools.SeatCallable)
+}
+
+// ---- the guidance -------------------------------------------------------------- //
+
+// THE WRITE GUIDANCE NAMES THE CODE WRITES: every tool the executor's guidance
+// on changing code is gated on is one this package registers as a code write.
+func TestTheCodeWriteGuidanceNamesTheCodeWrites(t *testing.T) {
+	t.Parallel()
+	if len(prompts.CodeWriteTools()) == 0 {
+		t.Fatal("the guidance names no tool, so this certifies nothing")
+	}
+	for _, name := range prompts.CodeWriteTools() {
+		if !slices.Contains(builtin.CodeWrites(), name) {
+			t.Errorf("the executor's code write guidance is gated on %s, which is no code write", name)
+		}
+	}
+}

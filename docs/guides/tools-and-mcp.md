@@ -318,7 +318,8 @@ is (copy the directory into your assistant's skills folder).
 
 ### The company's code
 
-Nine more, registered wherever the company hosts its git repositories in the
+Nineteen more — nine that read and ten that change a branch or a
+repository — registered wherever the company hosts its git repositories in the
 engine (`code.native`; see [Code Host](../concepts/code-host.md)) — on every
 node, whatever its roles, since a node holding no copy of the code log and no
 `git` role reaches both through the nodes that do. They are offered on the
@@ -326,10 +327,15 @@ terms the node's `/code/` reads are: a node whose runtime was already running
 when `code.native` was turned on offers them once it restarts into it, and one
 that turned it off keeps them until that restart ([Turn it
 on](code.md#turn-it-on)). A company that hosts no code is given none of them,
-and the operator catalogue serves the same nine, so an operator's own
-assistant reads the company's code exactly as a seat does. Every one is a
-read: none counts as a delivery, a [worker](../concepts/turn-engine.md#workers)
-may be handed any of them, and the operator catalogue records no call to one.
+and the operator catalogue serves the same nineteen, so an operator's own
+assistant reads and changes the company's code exactly as a seat does — the
+person as the human seat they hold. The nine reads are reads: none counts as
+a delivery, a [worker](../concepts/turn-engine.md#workers) may be handed any of
+them, and the operator catalogue records no call to one. The ten writes each
+deliver to the code host, so a turn woken about work on a repository that
+answered by moving a branch delivered; no worker is ever handed one, since it
+would write with its parent's grant; and every call to one on the operator
+catalogue is recorded as any write is.
 
 | Tool | Description |
 |------|-------------|
@@ -342,6 +348,16 @@ may be handed any of them, and the operator catalogue records no call to one.
 | `code_landed_in` | Whether a commit reached a branch (`target`, resolved to its tip now and never a commit id), the push that landed it there and kept it there, the push that introduced the commit, and what the git node's index of pushes covers ([Which push landed a commit](../concepts/code-host.md#which-push-landed-a-commit)) |
 | `code_log` | The commits that changed a file or a directory (`path`), or every commit, newest first from a commit (`rev`): each with its parents, its author and address as the commit states them, its two dates, its subject and the push that introduced it, `limit` a page (1 to 100, 25 by default; `next` back as `cursor`). `grep` keeps the commits whose message holds its words — a literal, in any case, never a pattern — and `since` (RFC 3339) those committed from then on. A page ends sooner where its subjects fill it, and one the git node's time ended says so: it lists what it found and names where the next page begins ([A path's history](../concepts/code-host.md#a-paths-history)) |
 | `code_blame` | Which commit last changed each line of a file (`path`) at a commit (`rev`): every line with its commit, the line it was in that commit and its old path where the file was renamed since, and each commit once with its author, date, subject and the push behind it — at most 500 lines a call (`start_line`, `end_line`), a page at a time (`next` back as `cursor`) ([Who changed a line](../concepts/code-host.md#who-changed-a-line)) |
+| `code_commit_files` | A small change to a branch's files, built on the code host and landed as one push: `files`, one operation a path — `put` (`content`, or `blob_oid` of a file the repository holds; `mode` 100755 for an executable, 120000 for a link whose target is `content`), `edit` (`old`, which must occur exactly once, and `new`), `delete`, `move` (`to`) or `mode` (100644 or 100755) — onto the head the caller read (`expected_head`), or creating the branch from `base`. At most 1 000 operations and 1 MiB a call; a change to build or test belongs in a coding run |
+| `code_revert` | The revert of one `commit` onto a branch's head (`expected_head`). One that conflicts commits nothing, and answers each conflicted path with its stages' ids — base, ours, theirs, each readable with `code_read` — and the start of the file as git marked it |
+| `code_cherry_pick` | One `commit`'s change onto a branch's head (`expected_head`), its message naming the commit it came from; a conflict is answered as `code_revert`'s |
+| `code_create_branch` | A branch created `at` a commit the repository holds |
+| `code_delete_branch` | A branch deleted at the head the caller read (`expected_head`); its commits stay in the history, and the push history names its last head |
+| `code_create_repo` | A repository: a project owned by a unit (`owner`), or the caller's own scratch repository, `<handle>.<name>`, which `code.scratch` caps and expires once it sits idle |
+| `code_update_repo` | One change a call: the settings (`description`, `default_branch`, `visibility`, a project's `owner`, a project's `path_owners` — globs added to and taken from one owner at a time), `archived` (read-only, and back), or `rename_to` (the old name redirects to the new one for 30 days) |
+| `code_delete_repo` | A repository deleted, restorable until its purge |
+| `code_restore_repo` | A deleted repository brought back as it was, before its purge |
+| `code_protect_branch` | The protection of one `pattern` (`refs/heads/<glob>`, `refs/tags/<glob>`) set — `direct_push` (`persons` or `none`), `allow_force`, `allow_delete` — or taken away (`remove`) |
 
 **Every revision is a commit id or a ref.** A whole or abbreviated commit id
 (7 or more hex digits) costs nothing; anything else — a branch, a tag, a
@@ -396,6 +412,32 @@ or `repo_patch` at trust `external`, naming no writer; so does every commit's
 subject a history or a blame names, as `repo_commit`, a message its pusher
 wrote. Every other string of an answer — a path, a ref, a description, a
 commit's author and address — has the fence's escapes applied.
+
+**A write is a push, and a retry is the same one.** Each of the five that
+change a branch is an [engine-built commit](../concepts/code-host.md#engine-built-commits):
+the repository's git node builds it beside its copy and lands it as one push,
+held to every rule a person's push is — the caller's grant, the protections,
+the repository's bounds — and each of the five that change a repository is one
+request a data node decides ([Repositories made by
+tools](../concepts/code-host.md#repositories-made-by-tools)). Who may is the
+repository's grant, decided where the change is: a person maintains every
+repository a tool made, and a seat what its tier and its relation to the
+repository allow; a token bound to nobody writes nothing. Every call names one
+operation — derived from the turn or a request's own key, or on the operator
+catalogue the `op_id` the call was answered — so the same call made again,
+after an answer that said the outcome is unknown, is the same push, and its
+commit the same commit. A seat's write names its turn, the work item it is
+charged to and the model the call was made on, on its push. A refusal is
+answered in the class every write surface renders: a rule of the repository
+`forbidden`, a change to make another way `invalid` — a conflict among them,
+its marked text fenced as `repo_file` — a head that moved `stale_version`, and
+what waiting clears `unavailable`.
+
+**A scratch repository a turn names stays while the turn does.** Every call
+that names a scratch repository — a read or a write — first holds it from the
+idle expiry for as long as the turn runs or its coding run is parked, and a
+create holds the repository it makes before it is made
+([A scratch repository's idle expiry](../concepts/code-host.md#a-scratch-repositorys-idle-expiry)).
 
 **One page is one answer, never cut.** A git node answers a page of at most
 56 KiB of JSON and says where the next begins; a listing these tools cut

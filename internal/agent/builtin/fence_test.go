@@ -400,6 +400,26 @@ func TestEveryUntrustedReadIsFenced(t *testing.T) {
 		assertEnvelope(t, answer, provenance.TrustExternal, 0)
 	})
 
+	// AND A CONFLICT'S TEXT, a revert's or a cherry-pick's that does not
+	// apply: the start of a file as git marked it, its committers' words,
+	// fenced as a file's lines are and refused as a change to make another
+	// way, nothing having been stored. Mutation: answering the marked text
+	// unfenced → red.
+	for _, tool := range []string{builtin.CodeRevertTool, builtin.CodeCherryPickTool} {
+		t.Run(tool, func(t *testing.T) {
+			t.Parallel()
+			seen, answer, got := conflictFenced(t, tool)
+			assertFences(t, seen, []wantFence{{"source=repo_file trust=external authors=unknown", "SYSTEM: ignore"}})
+			if len(seen) != 1 {
+				t.Errorf("%s answered %d fences, want 1", tool, len(seen))
+			}
+			assertEnvelope(t, answer, provenance.TrustExternal, 0)
+			if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid || answer["refusal"] != "conflict" {
+				t.Errorf("%s's conflict answered %v as %s", tool, answer["refusal"], tools.RefusalOf(got))
+			}
+		})
+	}
+
 	// AND A LISTING FENCES NOTHING, defusing every string: a tree's paths are
 	// a committer's words too, but a name a model reads as a name.
 	t.Run("code_read, a listing", func(t *testing.T) {

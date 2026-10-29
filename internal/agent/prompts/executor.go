@@ -109,6 +109,35 @@ const codeHistorySection = "\n## Reading the company's code" +
 	"server with the `code_*` tools, by commit id — never from a clone, which " +
 	"costs minutes for one file."
 
+// KeyCodeWrites is the outline key of the guidance on changing the company's
+// own code.
+const KeyCodeWrites = "code_writes"
+
+// CodeWriteTools are the code tools [codeWritesSection]'s claims rest on: a
+// small change committed on the server, and a scratch repository of the
+// seat's own. The section renders only where the executor holds EVERY one of
+// them; the code host's writes are registered together, where a company hosts
+// code and its writes are served, so a seat holds all of them or none.
+// Exported for the test in internal/agent/builtin that holds them to the code
+// writes that package registers, which this package cannot import.
+func CodeWriteTools() []string {
+	return []string{"code_commit_files", "code_create_repo"}
+}
+
+// codeWritesSection is the one rule about CHANGING the company's code that no
+// tool's description can carry, for [codeHistorySection]'s reason: the choice
+// a seat makes before it picks a tool — between a change the code host builds
+// from a call, which costs a push and no checkout, and a checkout a coding run
+// or the seat's own shell builds and tests in, which costs minutes. How each
+// write is called (`expected_head`, an edit's exact match, a conflict's
+// stages) is its description's, and is not repeated here; nor is the scratch
+// repository's expiry, which code_create_repo's description says.
+const codeWritesSection = "\n## Changing the company's code" +
+	"\nA small change to a repository — a document, a configuration, a fix of a " +
+	"few lines — is committed on the server with `code_commit_files`; anything to " +
+	"build or test belongs in a checkout. Your experiments go in a scratch " +
+	"repository, `<your handle>.<name>`."
+
 // ExecutorInput is everything the executor prompt renders beyond the seat
 // itself.
 //
@@ -301,6 +330,10 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// how-to of any one tool. Gated on every tool its claims rest on.
 	if holdsAll(in.AvailableTools, CodeHistoryTools()) {
 		b.Heading(KeyCodeHistory, codeHistorySection)
+	}
+	// AND HOW TO CHANGE IT, right after: the same choice made for a write.
+	if holdsAll(in.AvailableTools, CodeWriteTools()) {
+		b.Heading(KeyCodeWrites, codeWritesSection)
 	}
 
 	// The tool-skills catalogue lands adjacent to the tools to discover so

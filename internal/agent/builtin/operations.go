@@ -125,6 +125,19 @@ func (o operations) bind(tool string, args map[string]any, seeded bool) (op, ref
 	return held, ""
 }
 
+// bindActor settles which operation actor's call is, or answers the refusal:
+// [operations.bind], seeded wherever the actor already carries the identity a
+// derived id is built from ([Actor.OperationSeed]) — a turn's, or a request's
+// own key. What it settles is the actor's [Actor.Operation], which every write
+// the call makes derives its id from ([opIDFor], [commentID]). The families
+// whose writes are named by [opIDFor] — the tracker's and the code host's —
+// each call this, so the seed is read one way for both.
+func (o operations) bindActor(actor Actor, tool string, args map[string]any) (Actor, string) {
+	op, refusal := o.bind(tool, args, actor.OperationSeed() != "")
+	actor.Operation = op
+	return actor, refusal
+}
+
 // mintedAt is the instant an operation is minted at — see [operations.now].
 func (o operations) mintedAt() time.Time {
 	if o.now == nil {

@@ -3,6 +3,7 @@ package prompts
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -74,9 +75,10 @@ func TestExecutorPromptIsByteStableAcrossRounds(t *testing.T) {
 		Discoverable: "- MCP server `github`",
 		// comment_on_work_item DELIBERATELY, so the escalation guidance
 		// it gates is inside the bytes held stable across rounds — and the
-		// code tools for the same reason, for the code guidance.
+		// code tools for the same reason, for the code guidance — the
+		// reads' and the writes'.
 		AvailableTools: append([]string{"post_message", "refresh_memory", "comment_on_work_item"},
-			CodeHistoryTools()...),
+			slices.Concat(CodeHistoryTools(), CodeWriteTools())...),
 		ThreadContext:     "- **Ana Ruiz (ana)**: staging redirects in a loop",
 		PersonalMemory:    "- prefers short replies",
 		RelevantKnowledge: "- **Runbook**: steps",

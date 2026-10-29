@@ -85,6 +85,10 @@ type codeHost struct {
 	readErr  error
 	gitErr   error
 	git      func(q code.GitQuery) code.GitAnswer
+	// before, set, is called with each question's kind before it is
+	// answered, outside the host's lock — so a case can read what the asking
+	// turn held when the question arrived.
+	before func(what string)
 
 	reads    []code.ReadQuery
 	resolves []code.RefQuery
@@ -129,6 +133,9 @@ func (h *codeHost) named(name string) (code.RepoRef, error) {
 }
 
 func (h *codeHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	if h.before != nil {
+		h.before("read:" + string(q.Kind))
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.reads = append(h.reads, q)
@@ -175,6 +182,9 @@ func (h *codeHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 }
 
 func (h *codeHost) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
+	if h.before != nil {
+		h.before("resolve_ref")
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.resolves = append(h.resolves, q)
@@ -205,6 +215,9 @@ func (h *codeHost) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswe
 }
 
 func (h *codeHost) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	if h.before != nil {
+		h.before("git_read:" + string(q.Kind))
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.gits = append(h.gits, q)
@@ -282,9 +295,11 @@ func codeRequesters() requesters {
 	}
 }
 
-// codeDeps is the code tools wired over host as every surface wires them: the
-// code host, beside who a turn is acting for and the chart that decides them
-// (the requester ceiling), without either of which no code tool is offered.
+// codeDeps is the code read tools wired over host as every surface wires them:
+// the code host, beside who a turn is acting for and the chart that decides
+// them (the requester ceiling), without either of which no code tool is
+// offered. The writes join where the code host's writes are wired
+// ([writeDeps]).
 func codeDeps(host builtin.CodeReader) builtin.CodeDeps {
 	return builtin.CodeDeps{Code: host, Requesters: codeRequesters(), Chart: chartLeads}
 }
@@ -342,7 +357,7 @@ func refusedCode(t *testing.T, reg *tools.Registry, turn *turnctx.Turn, name str
 func operatorCode(t *testing.T, host builtin.CodeReader, clone func(string) string) map[string]tools.Callable {
 	t.Helper()
 	out := map[string]tools.Callable{}
-	deps := codeDeps(host)
+	deps := writeDeps(host, &codeWrites{})
 	deps.Actor, deps.CloneURL = builtin.PrincipalActor, clone
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Code:      deps,
@@ -374,21 +389,26 @@ func asUnboundToken() context.Context {
 // ---- one list, two surfaces --------------------------------------------- //
 
 // THE CODE TOOLS ARE ONE LIST: a seat's registry and the operator catalogue,
-// built over the same deps, hold the same nine tools — every one the authority
-// table names, in the list's own order — with byte-identical descriptions and
-// schemas, because both take [builtin.CodeTools]; and a company that hosts no
-// code is given none on either — nor is a surface that wired the code host and
-// left out who a turn is acting for, or the chart that decides them, which
-// would read for whoever messaged a seat whatever the seat itself may.
+// built over the same deps, hold the same nineteen tools — the nine reads,
+// then the ten writes, every one the authority table names, in the list's own
+// order — with byte-identical descriptions and schemas but for the one
+// argument the operator surface alone offers, the writes' `op_id`, which no
+// read and no seat's tool offers; because both take [builtin.CodeTools]. A
+// company that hosts no code is given none on either — nor is a surface that
+// wired the code host and left out who a turn is acting for, or the chart that
+// decides them, which would read for whoever messaged a seat whatever the seat
+// itself may.
 //
 // Mutation: OperatorTools omitting codeCandidates, or building a list of its
-// own with one schema edited; CodeTools serving over the code host alone → red.
+// own with one schema edited; CodeTools serving over the code host alone; the
+// writes' op_id offered to a seat → red.
 func TestTheCodeToolsAreOneList(t *testing.T) {
 	t.Parallel()
 	host := newCodeHost()
-	reg := codeRegistry(t, codeDeps(host))
+	reg := codeRegistry(t, writeDeps(host, &codeWrites{}))
 	operator := operatorCode(t, host, nil)
-	for _, name := range builtin.CodeToolNames() {
+	every := slices.Concat(builtin.CodeToolNames(), builtin.CodeWrites())
+	for _, name := range every {
 		entry, ok := reg.Lookup(name)
 		if !ok {
 			t.Errorf("a seat's registry holds no %s", name)
@@ -399,18 +419,33 @@ func TestTheCodeToolsAreOneList(t *testing.T) {
 			t.Errorf("the operator catalogue holds no %s", name)
 			continue
 		}
+		write := slices.Contains(builtin.CodeWrites(), name)
+		opParams := tool.Parameters()
+		props, _ := opParams["properties"].(map[string]any)
+		_, offered := props["op_id"]
+		if _, seatOffers := propertiesOf(entry.Tool)["op_id"]; seatOffers || offered != write {
+			t.Errorf("%s offers op_id to a seat: %v, and to the operator: %v — want the operator's writes alone",
+				name, seatOffers, offered)
+		}
+		without := map[string]any{}
+		for key, value := range props {
+			if key != "op_id" {
+				without[key] = value
+			}
+		}
+		opParams["properties"] = without
 		seatSchema, _ := json.Marshal(entry.Tool.Parameters())
-		opSchema, _ := json.Marshal(tool.Parameters())
+		opSchema, _ := json.Marshal(opParams)
 		if string(seatSchema) != string(opSchema) || entry.Tool.Description() != tool.Description() {
 			t.Errorf("%s is described or shaped differently on the two surfaces", name)
 		}
 	}
 	var listed []string
-	for _, tool := range builtin.CodeTools(codeDeps(host)) {
+	for _, tool := range builtin.CodeTools(writeDeps(host, &codeWrites{})) {
 		listed = append(listed, tool.Name())
 	}
-	if !slices.Equal(listed, builtin.CodeToolNames()) {
-		t.Errorf("CodeTools lists %v, want %v", listed, builtin.CodeToolNames())
+	if !slices.Equal(listed, every) {
+		t.Errorf("CodeTools lists %v, want %v", listed, every)
 	}
 
 	none := codeRegistry(t, builtin.CodeDeps{})
@@ -438,14 +473,24 @@ func TestTheCodeToolsAreOneList(t *testing.T) {
 	}
 }
 
-// EVERY CODE TOOL IS A PROVEN READ, on both surfaces: the registry carries the
+// EVERY CODE READ IS A PROVEN READ, on both surfaces: the registry carries the
 // hint the delivery check reads, and the operator catalogue advertises the one
-// it audits nothing on. Mutation: one code tool off codeAnnotations (the
-// default arm's shared write) → red.
+// it audits nothing on — every code tool that is not one of the ten writes,
+// on a registry that holds the writes too. Mutation: one code read off
+// codeAnnotations (the default arm's shared write) → red.
 func TestEveryCodeToolIsAProvenRead(t *testing.T) {
 	t.Parallel()
-	reg := codeRegistry(t, codeDeps(newCodeHost()))
-	for _, name := range builtin.CodeToolNames() {
+	reg := codeRegistry(t, writeDeps(newCodeHost(), &codeWrites{}))
+	var reads []string
+	for _, tool := range builtin.CodeTools(writeDeps(newCodeHost(), &codeWrites{})) {
+		if !slices.Contains(builtin.CodeWrites(), tool.Name()) {
+			reads = append(reads, tool.Name())
+		}
+	}
+	if !slices.Equal(reads, builtin.CodeToolNames()) {
+		t.Fatalf("the code tools that are not writes are %v, want the reads %v", reads, builtin.CodeToolNames())
+	}
+	for _, name := range reads {
 		entry, ok := reg.Lookup(name)
 		if !ok {
 			t.Fatalf("%s is not registered", name)
@@ -1468,28 +1513,32 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
-// codeCatalogueBudget is the most bytes the nine code tools' definitions may
-// add to a tool catalogue as a CLI's prompt renders it.
+// codeCatalogueBudget is the most bytes the nineteen code tools' definitions
+// may add to a tool catalogue as a CLI's prompt renders it.
 //
-// 14 000: measured at 13 070 (~3 268 tokens), so ~7% headroom — a sentence can
+// 24 400: measured at 22 802 (~5 701 tokens), so ~7% headroom — a sentence can
 // be added and a tool cannot, the executor prompt's rule (a code tool a later
 // part adds raises this deliberately, with its measured cost). 10 654 → 9 570
 // when the revision grammar, written into each of the six revision arguments,
 // was stated once in code_resolve's description; 9 570 → 9 627 when
 // code_list_repos said that a turn a colleague woke lists only what the
-// colleague may read too, so a seat reading a short page for them knows why;
-// and the budget 10 300 → 14 000 when code_log and code_blame joined, 9 627 →
+// colleague may read too, so a seat reading a short page for them knows why.
+// The budget 10 300 → 14 000 when code_log and code_blame joined, 9 627 →
 // 13 070 measured: 3 443 bytes (~861 tokens) for the two, each a history's or
 // a blame's question answered on the server in place of a clone, with their
 // descriptions cut to what a model needs (how a page goes on is `cursor`'s to
-// say, and only it says it).
-const codeCatalogueBudget = 14_000
+// say, and only it says it). And 14 000 → 24 400 when the ten code writes
+// joined the list, deliberately, with their measured cost: 13 070 → 22 802,
+// the writes' 9 732 bytes after each argument was cut to what its name and
+// type do not say (15 120 as first written: an owner's and a path owner's
+// nested schemas spelled out three times over).
+const codeCatalogueBudget = 24_400
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
-// code carries the nine definitions on every round of every turn: a CLI's
+// code carries the nineteen definitions on every round of every turn: a CLI's
 // catalogue rides in the user text (cliagent.RenderPrompt), so nothing caches
 // them, and each byte is paid again every round. Measured as that catalogue
-// renders them — indented, HTML-escaped, the nine added to a catalogue
+// renders them — indented, HTML-escaped, the nineteen added to a catalogue
 // already holding a tool, so each one's separator and indentation count — and
 // held to a budget, so a later description edit is a decision rather than
 // drift, as the executor prompt's budgets make a sentence one
@@ -1507,7 +1556,7 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 	other := llm.ToolDef{Name: "lookup_colleague", Description: "Who to ask.",
 		Parameters: map[string]any{"type": "object"}}
 	with := []llm.ToolDef{other}
-	for _, tool := range builtin.CodeTools(codeDeps(newCodeHost())) {
+	for _, tool := range builtin.CodeTools(writeDeps(newCodeHost(), &codeWrites{})) {
 		with = append(with, llm.ToolDef{Name: tool.Name(), Description: tool.Description(),
 			Parameters: tool.Parameters()})
 	}
@@ -1555,13 +1604,14 @@ func TestThePagesNameEveryCodeTool(t *testing.T) {
 	for _, m := range regexp.MustCompile("\\| `(code_[a-z_]+)` \\|").FindAllStringSubmatch(guide[start:end], -1) {
 		rows = append(rows, m[1])
 	}
-	if !slices.Equal(rows, builtin.CodeToolNames()) {
-		t.Errorf("the tools guide's code table lists %v, want %v in that order", rows, builtin.CodeToolNames())
+	every := slices.Concat(builtin.CodeToolNames(), builtin.CodeWrites())
+	if !slices.Equal(rows, every) {
+		t.Errorf("the tools guide's code table lists %v, want %v in that order", rows, every)
 	}
 	reference := readPage(t, "docs/reference/api-endpoints.md")
 	served := reference[strings.Index(reference, "### What it serves"):]
 	served = served[:strings.Index(served, "**An argument a tool does not take is refused")]
-	for _, name := range builtin.CodeToolNames() {
+	for _, name := range every {
 		if !strings.Contains(served, "`"+name+"`") {
 			t.Errorf("docs/reference/api-endpoints.md's account of what /operator/mcp serves does not name %s", name)
 		}

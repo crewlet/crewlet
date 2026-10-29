@@ -115,3 +115,66 @@ func TestTheCodeToolsAreServedPerCallAndAuditedAsReads(t *testing.T) {
 		t.Error("the next call after the company stops hosting code is still offered the code tools")
 	}
 }
+
+// writingHost is listingHost with the code host's writes: never asked here,
+// since what is under test is which tools are offered.
+type writingHost struct{ listingHost }
+
+func (*writingHost) GitWrite(context.Context, code.EngineWrite) (code.EngineWriteResult, error) {
+	return code.EngineWriteResult{}, code.ErrNotServing
+}
+
+func (*writingHost) Lifecycle(context.Context, code.LifecycleRequest) (code.LifecycleResult, error) {
+	return code.LifecycleResult{}, code.ErrNotServing
+}
+
+// THE CODE WRITES ARE SERVED WHERE THE CODE HOST'S WRITES ARE, AND A PERSON MAY
+// PRESS THEM: the catalogue holds the ten writes beside the reads exactly
+// while the call's code half carries the code host's writes, advertises each
+// as the write it is, and the act transport's account of what a person may
+// press (Acts) names every one — admitted for every person, and decided per
+// repository by the grant. A code half with no writer offers the reads alone.
+//
+// Mutation: the code writes annotated as reads → absent from Acts, red.
+func TestTheCodeWritesAreServedAndActable(t *testing.T) {
+	t.Parallel()
+	var writing atomic.Bool
+	host := &writingHost{}
+	s := newSurface(t, operator.Options{
+		Halves: func() (operator.Halves, bool) {
+			halves := operator.Halves{Work: builtin.WorkDeps{Reader: stubWorkReader{}, Writer: stubWorkWriter}}
+			halves.Code = builtin.CodeDeps{Code: host, Requesters: noRequesters{}, Chart: authz.NoChart{}}
+			if writing.Load() {
+				halves.Code.Writer, halves.Code.Holder = host, host
+			}
+			return halves, true
+		},
+		Org: company, Audit: &auditLog{},
+	})
+	for _, name := range builtin.CodeWrites() {
+		if slices.Contains(s.Tools(), name) {
+			t.Errorf("a code half with no writer offers %s", name)
+		}
+	}
+	writing.Store(true)
+	acts, err := s.Acts(t.Context(), founder)
+	if err != nil {
+		t.Fatalf("Acts: %v", err)
+	}
+	for _, name := range builtin.CodeWrites() {
+		if !slices.Contains(s.Tools(), name) {
+			t.Errorf("a code half with the code host's writes offers no %s", name)
+		}
+		if crewletmcp.ReadOnlyProven(s.Annotations(name)) {
+			t.Errorf("%s is advertised as a read", name)
+		}
+		if !slices.Contains(acts, name) {
+			t.Errorf("the act transport would not serve %s to a person: acts %v", name, acts)
+		}
+	}
+	for _, name := range builtin.CodeToolNames() {
+		if slices.Contains(acts, name) {
+			t.Errorf("the act transport would serve the read %s", name)
+		}
+	}
+}

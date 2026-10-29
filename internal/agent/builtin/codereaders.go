@@ -274,7 +274,7 @@ func (t *codeRepoReaders) Call(ctx context.Context, args map[string]any) (tools.
 func (t *codeRepoReaders) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
-	asker, refusal := t.code.asker(ctx, turn, t.Name())
+	_, asker, refusal := t.code.asker(ctx, turn, t.Name())
 	if refusal != nil {
 		return *refusal, nil
 	}

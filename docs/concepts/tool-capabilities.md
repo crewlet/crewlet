@@ -55,11 +55,27 @@ read as `Unknown`.
 
 First-party builtins declare their own annotations in code, registered
 with `tools.Registry.RegisterWith`, so the same classification works for
-them. The [code tools](../guides/tools-and-mcp.md#the-companys-code), for
-one, are each a proven, idempotent read: a worker may be handed any of them,
-a turn that only read code delivered nothing, and the operator catalogue
-records no call to one. So is the operator-only `code_repo_readers` beside
-them, which no seat's registry ever holds: annotations say what a tool does,
+them. The [code tools](../guides/tools-and-mcp.md#the-companys-code)' seven
+reads, for one, are each a proven, idempotent read: a worker may be handed any
+of them, a turn that only read code delivered nothing, and the operator
+catalogue records no call to one. Their ten writes — `code_commit_files`,
+`code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`,
+`code_create_repo`, `code_update_repo`, `code_delete_repo`,
+`code_restore_repo` and `code_protect_branch` — are each `read_only: false`
+with `open_world: true`: a branch or a repository is a surface every colleague
+reads, so `mcp.WritesToSharedSurface` keeps every one from a worker, which
+would write under its parent's grant; each is registered as a delivery to the
+code host, so a turn woken about a repository that moved a branch delivered;
+and each is `idempotent: true`, since every one is held to what its caller
+read — a commit to the head it names, a create to a free name — and the same
+call made again is the same operation. `code_delete_branch` and
+`code_delete_repo` are also `destructive: true`: each takes away what somebody
+else made with nothing the same tool keeps to undo it. A seat holding the
+writes is also told, in its executor prompt's `code_writes` section, the one
+choice no description can carry: a small change is committed on the server,
+and anything to build or test belongs in a checkout. The operator-only
+`code_repo_readers` beside them is a proven, idempotent read like the seven,
+which no seat's registry ever holds: annotations say what a tool does,
 never who may call it, and who read a unit's repository is an admin's — a
 person's — question, decided by the authority table before anything is read
 ([Who read it](code-host.md#who-read-it)). And so are the

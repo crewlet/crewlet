@@ -33,7 +33,8 @@ import (
 //
 // What is left is the surface an operator's assistant actually needs: read
 // the board, file and move work, read and write the wiki, search what the
-// company knows, read the company's code, and read the deployment's health.
+// company knows, read and change the company's code, and read the
+// deployment's health.
 
 // OperatorDeps are the halves an operator surface can serve.
 type OperatorDeps struct {
@@ -46,9 +47,10 @@ type OperatorDeps struct {
 	Artifacts    ArtifactDeps
 	ArtifactData ArtifactDataDeps
 
-	// Code is the code read tools' — the SAME [CodeTools] list a seat's
-	// registry takes, its Actor the request's principal. The zero value
-	// omits them: a company that hosts no code.
+	// Code is the code tools' — the SAME [CodeTools] list a seat's registry
+	// takes, its Actor the request's principal: the reads, and the writes
+	// where its Writer is set. The zero value omits them: a company that
+	// hosts no code.
 	Code CodeDeps
 
 	// Readers is `code_repo_readers`' half beside Code — who read a
@@ -116,10 +118,12 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 	// the call brought back with it is that operation again ([operations]).
 	// This is the only place that says so, for every family of write tools
 	// built below — the tracker's here, the artifacts' and the datastore's
-	// from deps.Artifacts — because it is a fact about this surface rather
-	// than a setting. The artifacts mint on their own clock.
+	// from deps.Artifacts, the code host's from deps.Code — because it is a
+	// fact about this surface rather than a setting. The artifacts mint on
+	// their own clock.
 	deps.Work.ops = operations{callerOperations: true}
 	deps.Artifacts.ops = operations{callerOperations: true, now: deps.Artifacts.Now}
+	deps.Code.ops = operations{callerOperations: true}
 	work, pages := deps.Work, deps.Pages
 	candidates := []candidate{
 		{&listWorkItems{deps: work}, work.Reader != nil},
@@ -201,9 +205,12 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 	}
 	candidates = slices.Concat(candidates,
 		artifactOperatorCandidates(deps), artifactDataOperatorCandidates(deps),
-		// THE CODE READ TOOLS, the list a seat's registry takes whole: a
-		// person reads every repository, so their assistant answers the
-		// same questions a seat's turn does, about all of them.
+		// THE CODE TOOLS, the list a seat's registry takes whole: a person
+		// reads every repository and maintains every one a tool made, so
+		// their assistant answers the same questions a seat's turn does,
+		// about all of them, and makes the same changes, as the human seat
+		// the person holds. An operator holds no turn, so it holds nothing
+		// from a scratch repository's expiry.
 		codeCandidates(deps.Code),
 		// AND THE HEALTH TOOLS, the list a granted seat's registry takes:
 		// the deployment as an administrator reads it, which the table

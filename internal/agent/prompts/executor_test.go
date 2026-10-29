@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -230,6 +231,38 @@ func TestTheCodeHistoryGuidanceNeedsACodeTool(t *testing.T) {
 		t.Errorf("the guidance is not its own %q section of the outline", KeyCodeHistory)
 	}
 	for _, missing := range CodeHistoryTools() {
+		var some []string
+		for _, name := range held {
+			if name != missing {
+				some = append(some, name)
+			}
+		}
+		excludes(t, BuildExecutor(engineer(), ExecutorInput{AvailableTools: some}).Text, heading)
+	}
+}
+
+// THE CODE WRITES GUIDANCE NEEDS THE CODE WRITES: it is rendered for a seat
+// that holds every write its claims rest on — the code host's writes are
+// registered together — and for no other, so no prompt sends a seat to commit
+// with a tool its surface does not carry; a seat that only reads code is told
+// how to read it and nothing about changing it.
+//
+// Mutation: the gate dropped (rendered unconditionally), or read as "any one
+// of them" → red.
+func TestTheCodeWritesGuidanceNeedsTheCodeWrites(t *testing.T) {
+	t.Parallel()
+	const heading = "## Changing the company's code"
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{}).Text, heading, "code_commit_files")
+	reads := append([]string{"submit_work"}, CodeHistoryTools()...)
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{AvailableTools: reads}).Text, heading)
+
+	held := append(slices.Clone(reads), CodeWriteTools()...)
+	p := BuildExecutor(engineer(), ExecutorInput{AvailableTools: held})
+	contains(t, p.Text, heading, "`code_commit_files`", "belongs in a checkout", "`<your handle>.<name>`")
+	if _, ok := slice(p, KeyCodeWrites); !ok {
+		t.Errorf("the guidance is not its own %q section of the outline", KeyCodeWrites)
+	}
+	for _, missing := range CodeWriteTools() {
 		var some []string
 		for _, name := range held {
 			if name != missing {

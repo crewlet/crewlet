@@ -3,6 +3,7 @@ package toolloop_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -44,6 +45,8 @@ type timedSurface struct {
 	latest *toolloop.Result
 	atCall []toolloop.Result
 	rounds []int
+	// models is the model each call was told it was made on.
+	models []string
 }
 
 func (s *timedSurface) ToolDefs() []llm.ToolDef { return []llm.ToolDef{def("read"), def("write")} }
@@ -58,6 +61,7 @@ func (s *timedSurface) Execute(ctx context.Context, _ llm.ToolCall) (toolloop.To
 		round = -1
 	}
 	s.rounds = append(s.rounds, round)
+	s.models = append(s.models, toolloop.CallModel(ctx))
 	time.Sleep(s.delay)
 	return toolloop.ToolResult{Output: "ok", Origin: s.origin, Server: s.server}, nil
 }
@@ -255,6 +259,42 @@ func TestACallIsToldItsRoundOnThePhasesScale(t *testing.T) {
 	}
 	if _, ok := toolloop.CallRound(t.Context()); ok {
 		t.Error("a context no loop stamped answers a round")
+	}
+}
+
+// A CALL KNOWS ITS ROUND'S MODEL: each round's calls are told the model that
+// round ran on — the completion's own report, else the provider's configured
+// identity, the precedence the round's own record follows — so a write a
+// seat's tool makes names the model behind it, and a phase a fallback moved
+// between members names the member that made each call. A context no loop
+// stamped names none.
+//
+// Mutation: stamp the model once per loop, from its first round → the second
+// round's call is told the first member, red.
+func TestACallKnowsItsRoundsModel(t *testing.T) {
+	t.Parallel()
+	p := &scriptedProvider{turns: []llm.Completion{
+		{Model: "first-member", Content: "one", ToolCalls: []llm.ToolCall{toolCall("1", "read")}},
+		{Model: "second-member", Content: "two", ToolCalls: []llm.ToolCall{toolCall("2", "read")}},
+		{Content: "three", ToolCalls: []llm.ToolCall{toolCall("3", "read")}},
+		{Content: "done"},
+	}}
+	s := &timedSurface{}
+	res, err := toolloop.Run(t.Context(), toolloop.Config{Provider: p, Surface: s, MaxRounds: 5})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := []string{"first-member", "second-member", p.Model()}
+	if !slices.Equal(s.models, want) {
+		t.Errorf("the calls were told models %v, want %v — each its own round's", s.models, want)
+	}
+	for i, model := range want {
+		if res.Rounds[i].Model != model {
+			t.Errorf("round %d records model %q and its call was told %q", i+1, res.Rounds[i].Model, model)
+		}
+	}
+	if got := toolloop.CallModel(t.Context()); got != "" {
+		t.Errorf("a context no loop stamped names model %q", got)
 	}
 }
 

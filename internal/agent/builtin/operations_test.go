@@ -47,7 +47,8 @@ import (
 func TestEveryWriteFamilyBindsOneWay(t *testing.T) {
 	t.Parallel()
 	key := statelog.NewOpID(time.Now(), "request")
-	families := []familyRig{trackerFamily(t, key), artifactFamily(t, key), datastoreFamily(t, key)}
+	families := []familyRig{trackerFamily(t, key), artifactFamily(t, key), datastoreFamily(t, key),
+		codeFamily(t, key)}
 
 	// THE OPERATOR'S ASSISTANT IS MINTED AN OPERATION FOR ITS CALL, and every
 	// case below brings one of these back.
@@ -402,6 +403,49 @@ func datastoreFamily(t *testing.T, key string) familyRig {
 				return 0, ""
 			}
 			return len(data.writes), data.calls[len(data.calls)-1].OpKey
+		},
+	}
+}
+
+// codeFamily is the code host's writes, by a branch created at a commit, made
+// by agent-cto's turn on its own registry and by a person — through their own
+// token, bound to the human seat they hold — on the operator's catalogue.
+func codeFamily(t *testing.T, key string) familyRig {
+	t.Helper()
+	writer := &codeWrites{}
+	deps := writeDeps(newCodeHost(), writer)
+	operator := func(keyed bool) builtin.OperatorDeps {
+		d := deps
+		d.Actor = builtin.PrincipalActor
+		if keyed {
+			// THE ACT ROUTE'S ACTOR: the request's principal, carrying its
+			// key and the instant the key was minted at.
+			d.Actor = func(ctx context.Context, turn *turnctx.Turn) (builtin.Actor, error) {
+				actor, err := builtin.PrincipalActor(ctx, turn)
+				actor.WorkKey = key
+				actor.WorkSince, _ = statelog.OpMintedAt(key)
+				return actor, err
+			}
+		}
+		return builtin.OperatorDeps{Code: d, Authorize: builtin.Decide(chartLeads)}
+	}
+	tool := builtin.CodeCreateBranchTool
+	return familyRig{
+		tool:  tool,
+		one:   map[string]any{"repo": "site", "branch": "seats/agent-cto/a", "at": mainOID},
+		other: map[string]any{"repo": "site", "branch": "seats/agent-cto/b", "at": mainOID},
+		on: map[bindSurface]familyTool{
+			onSeatTurn: {tool: asSeatCallable(t, registered(t, builtin.Deps{Code: deps}, tool)),
+				ctx: everyGrant(), turn: writerTurn(t)},
+			onKeyedRequest: {tool: operatorToolOver(t, operator(true), tool), ctx: asBoundPerson()},
+			onOperatorMCP:  {tool: operatorToolOver(t, operator(false), tool), ctx: asBoundPerson()},
+		},
+		writes: func() (int, string) {
+			writes, _ := writer.asked()
+			if len(writes) == 0 {
+				return 0, ""
+			}
+			return len(writes), writes[len(writes)-1].OpID
 		},
 	}
 }

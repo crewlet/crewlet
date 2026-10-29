@@ -33,6 +33,17 @@ import (
 // push — its proposal and its row, whose shapes are the domain's own — so no
 // field here takes a versionedFields row.
 
+// Source is the code host as a delivery's SURFACE: the name a seat's code
+// write delivers to (internal/agent/builtin registers every code write tool
+// with tools.DeliversTo(Source)), and the notification source the code feed
+// publishes a repository's wakes under once it exists — reserved here, by the
+// writes that are its first reader, so the delivery gate compares a write's
+// surface and a wake's source in one spelling, as tracker.Source and
+// pages.Source are each one. FIXED: a wake published under another spelling
+// would find no delivery to it, and the gate would read every obligation
+// about code as reaching nobody.
+const Source = "code"
+
 // EngineWriteKind is what an engine write builds: a closed set
 // ([EngineWriteKinds]). M4's apply_suggestions and M5's rebase and merge are
 // further kinds of the same write.

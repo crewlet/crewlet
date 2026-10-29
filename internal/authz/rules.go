@@ -128,6 +128,29 @@ const (
 	// the credentials and the seats that read it and how much.
 	ActionCodeRepoReaders Action = "code_repo_readers"
 
+	// THE CODE WRITE TOOLS, a seat's and a person's assistant's, named after
+	// the tools and decided as the git transport's push is: admitted for
+	// every principal, and judged per repository where it is decided — an
+	// engine write by the grant's ref rule and the protections on the git
+	// node that builds it and again at the repository's committer, a
+	// repository's lifecycle by the one lifecycle rule on the data node that
+	// decides it (code.GrantOf and the lifecycle's refusal, ADR-0058). Five
+	// change a branch — files committed, a commit reverted or picked, a
+	// branch created or deleted — and five a repository: made, changed
+	// (settings, archive, rename), deleted, restored, or a branch protected.
+	// Named apart from the dotted ActionCodeRead and ActionCodeGit, which no
+	// tool serves.
+	ActionCodeCommitFiles   Action = "code_commit_files"
+	ActionCodeRevert        Action = "code_revert"
+	ActionCodeCherryPick    Action = "code_cherry_pick"
+	ActionCodeCreateBranch  Action = "code_create_branch"
+	ActionCodeDeleteBranch  Action = "code_delete_branch"
+	ActionCodeCreateRepo    Action = "code_create_repo"
+	ActionCodeUpdateRepo    Action = "code_update_repo"
+	ActionCodeDeleteRepo    Action = "code_delete_repo"
+	ActionCodeRestoreRepo   Action = "code_restore_repo"
+	ActionCodeProtectBranch Action = "code_protect_branch"
+
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead    Action = "get_person"
 	ActionMyWork        Action = "my_work"
@@ -721,6 +744,24 @@ var rules = map[Action]rule{
 	ActionCodeLandedIn:  {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeLog:       {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeBlame:     {class: ClassEverybody, recency: iam.RecencyAny},
+	// AND THE CODE WRITE TOOLS, on code.git's own footing: the gate admits
+	// every principal and the repository decides — an engine write by the
+	// grant's ref rule and the protections, a lifecycle request by the one
+	// lifecycle rule — on the node that decides it, from its own chart. Not
+	// human-only, since committing is a seat's work; and no proof, as a push
+	// asks none: who may move which ref is the grant's question, which a
+	// table row keyed on the verb cannot answer before the repository is
+	// read.
+	ActionCodeCommitFiles:   {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeRevert:        {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeCherryPick:    {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeCreateBranch:  {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeDeleteBranch:  {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeCreateRepo:    {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeUpdateRepo:    {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeDeleteRepo:    {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeRestoreRepo:   {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeProtectBranch: {class: ClassEverybody, recency: iam.RecencyAny},
 	// BUT WHO READ A REPOSITORY IS ADMIN'S, as the company-wide trail is
 	// ([ActionAuditRead]): the answer names every person, credential and
 	// seat that read a unit's code and how much, which is an audit of the

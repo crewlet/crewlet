@@ -24,6 +24,12 @@
 //
 //   - A CREDENTIAL A BOX MAY HOLD. The endpoint is per-run, its token expires
 //     with the run, and nothing secret enters the box — see internal/runtoken.
+//   - THE MODEL A CALL WAS MADE ON. A native tool loop tells each call its
+//     round's model; a bridged call was made by a vendor CLI's own loop, whose
+//     rounds the engine never sees, so each is told the model the run's
+//     launch pointed that CLI at ([Session.Model]) — the one a seat's code
+//     write names on its push, so a run's pushes name one model whichever
+//     path made them.
 //   - A DURABLE LEDGER. A native tool loop keeps its calls in memory and the
 //     turn writes them at the end. A bridged run outlives its launching turn
 //     and can outlive the process, so every call is appended where a resume
@@ -54,6 +60,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
@@ -97,6 +104,14 @@ type Session struct {
 	// Handle and Role name the seat, for the logs and the handshake.
 	Handle string
 	Role   string
+
+	// Model is the model the run's launch pointed its coding CLI at — the
+	// value the launch records on the run's row (sandbox.LaunchRecord.Model)
+	// — or "" where it named none and left the CLI to choose. Every bridged
+	// call carries it as the model it was made on ([toolloop.CallModel]), the
+	// value a native loop gives a call from its round, so a seat's code write
+	// made through this bridge names the model its run's other writes name.
+	Model string
 
 	// Surface is the seat's live tool surface for this run — the SAME
 	// object a native loop would execute against. See the package doc for
@@ -663,7 +678,10 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 			return failure(err.Error()), nil
 		}
 
-		res, err := s.Surface.Execute(s.actingAs(ctx),
+		// THE MODEL THE CALL WAS MADE ON, set here and nowhere else on this
+		// path: a vendor CLI's own loop made it, and the one model the engine
+		// knows that loop runs is the one the run's launch named.
+		res, err := s.Surface.Execute(toolloop.WithCallModel(s.actingAs(ctx), s.Model),
 			llm.ToolCall{Name: name, Arguments: args})
 		if err != nil {
 			// The surface returns an error only for something that

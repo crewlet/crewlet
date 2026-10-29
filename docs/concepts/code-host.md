@@ -48,19 +48,18 @@ This is the product's current shape, not a configuration choice:
   with their own API token ([Persons and their
   tokens](#persons-and-their-tokens)). A seat's coding box is admitted to git
   with its run's own credential ([Coding boxes](#coding-boxes)), but no launch
-  gives a run a repository yet, so no box clones or pushes. A seat READS the company's repositories, on
-  the server, through its code tools ([Server-side reads](#server-side-reads)),
-  under the rule a person's push is judged by too ([Who may read and
-  push](#who-may-read-and-push)). A git node can build a seat's or a
-  person's commit itself and land it as a push, and every node asks such a
-  write of the repository's home git node ([Engine-built
-  commits](#engine-built-commits)), but no tool asks for one yet.
-- **No tool asks for a repository yet.** The code host decides a request to
-  create, rename, archive, delete, restore or protect a repository, a seat's
-  own scratch repositories among them, and expires an idle scratch repository
-  no live turn holds ([Repositories made by tools](#repositories-made-by-tools));
-  the tools that ask it arrive with seats' code writes, so today every
-  repository is one `code.repos` declares.
+  gives a run a repository yet, so no box clones or pushes. A seat reads and
+  changes the company's repositories through its code tools instead
+  ([The company's code](../guides/tools-and-mcp.md#the-companys-code)): its
+  reads are answered on the server ([Server-side reads](#server-side-reads)),
+  and each change it asks — files committed, a commit reverted or picked, a
+  branch created or deleted — is built on the repository's home git node and
+  landed as a push ([Engine-built commits](#engine-built-commits)), under the
+  rule a person's push is judged by too ([Who may read and
+  push](#who-may-read-and-push)). A seat and a person's assistant create,
+  rename, archive, delete, restore and protect repositories through the same
+  tools, a seat's own scratch repositories among them
+  ([Repositories made by tools](#repositories-made-by-tools)).
 - **No check runs yet.** A repository defines its checks in
   `.crewlet/checks.yaml`, `crewlet validate` reads that file as the code host
   does, and the code log has the records a check's attempts take

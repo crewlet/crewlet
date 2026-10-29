@@ -48,6 +48,12 @@ var _ runner.AgentLauncher = (*agentLauncher)(nil)
 // hold a working key to a seat's whole tool surface — the window this closes
 // is the difference between a credential that expires with a job and one that
 // expires on a four-hour clock.
+//
+// AND OPENED KNOWING THE RUN'S MODEL: the executor's run is resolved first, so
+// the session carries the model the launch points the coding CLI at
+// ([mcpbridge.Session.Model]) — every bridged call is made on it, and a seat's
+// code write names it on its push, as a native round's call names its round's
+// — and a run the launch refuses opens no session to close.
 func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunRequest) error {
 	e := l.engine
 	var (
@@ -85,25 +91,13 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 			"seat, so a bridged call would have nobody to act as; this is an " +
 			"assembly fault in the runner, not a setting")
 	}
-	// The run's calls, and with each what they have cost the engine so far,
-	// for the segment that resumes from the run to pay — bound to the run's
-	// job by the launch below, before the box that makes them exists.
-	ledger := newBridgeLedger(pending, req.Spend)
-	endpoint := e.bridge.Open(&mcpbridge.Session{
-		RunID:   l.turn.RunID,
-		Handle:  l.turn.Handle(),
-		Role:    l.seat.Name,
-		Surface: req.Surface,
-		Ledger:  ledger,
-	})
-	if endpoint == "" {
-		// NO ENDPOINT IS A REFUSAL, not a degraded run. A coding agent
-		// with none of the seat's tools cannot answer anybody, cannot
-		// touch a ticket and cannot submit its work — it would burn a
-		// subscription producing prose nothing collects, and the turn
-		// would be rescued as incomplete with no sign of why.
-		return fmt.Errorf("agent mode needs a tool bridge the box can dial, and this "+
-			"engine has none: set %s to a URL a sandbox can reach", mcpbridge.BaseURLVar)
+	// NO BRIDGE IS A REFUSAL, not a degraded run, and is said before the
+	// run's environment is assembled: a node builds no bridge where no
+	// bridge URL is configured ([Options.Bridge]), and a run that would
+	// start with none is refused below anyway, after its environment's
+	// lines had described a run that never starts.
+	if e.bridge == nil {
+		return errNoBridgeURL
 	}
 
 	company := e.Company()
@@ -124,18 +118,38 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	if gate != nil {
 		servers = e.boxServers(ctx, company, l.seat, gate)
 	}
+
+	run, refused := l.executorRun(company, runEnv.env)
+	if refused != nil {
+		return refused
+	}
+	model, env := run.model, run.env
+
+	// The run's calls, and with each what they have cost the engine so far,
+	// for the segment that resumes from the run to pay — bound to the run's
+	// job by the launch below, before the box that makes them exists.
+	ledger := newBridgeLedger(pending, req.Spend)
+	endpoint := e.bridge.Open(&mcpbridge.Session{
+		RunID:   l.turn.RunID,
+		Handle:  l.turn.Handle(),
+		Role:    l.seat.Name,
+		Model:   model,
+		Surface: req.Surface,
+		Ledger:  ledger,
+	})
+	if endpoint == "" {
+		// NO ENDPOINT IS A REFUSAL, not a degraded run. A coding agent
+		// with none of the seat's tools cannot answer anybody, cannot
+		// touch a ticket and cannot submit its work — it would burn a
+		// subscription producing prose nothing collects, and the turn
+		// would be rescued as incomplete with no sign of why.
+		return errNoBridgeURL
+	}
 	// THE SEAT'S OWN SERVERS PLUS THE BRIDGE. Both, because they answer
 	// different questions: a scoped MCP server is a credential the box
 	// holds, and the bridge is the seat's engine-side surface — its
 	// colleagues, its channels, its memory, its submission.
 	servers = withBridge(servers, endpoint)
-
-	run, refused := l.executorRun(company, runEnv.env)
-	if refused != nil {
-		e.bridge.Close(l.turn.RunID)
-		return refused
-	}
-	model, env := run.model, run.env
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		Placement:       l.placement,
 		CodingAgent:     l.codingAgent,
@@ -185,6 +199,11 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	}
 	return nil
 }
+
+// errNoBridgeURL is an agent-mode launch on a node with no bridge a box can
+// dial: no bridge URL is configured, which is what the operator sets.
+var errNoBridgeURL = fmt.Errorf("agent mode needs a tool bridge the box can dial, and this "+
+	"engine has none: set %s to a URL a sandbox can reach", mcpbridge.BaseURLVar)
 
 // executorRun is the [codingRun] an agent-mode run works under.
 //

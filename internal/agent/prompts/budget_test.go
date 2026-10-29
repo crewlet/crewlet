@@ -72,7 +72,12 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 // (code_blame and code_log, the same family): the sentence the headroom was
 // left for.
 //
-// Measured at ~875, so this leaves ~6%: enough that a sentence can be added,
+// 930 -> 1010 for a section, deliberately: the guidance on changing code
+// (`code_writes`), which a seat of a company serving the code host's writes
+// renders, measures ~72 after it was cut to the one choice no tool's
+// description can carry, and took the prompt from ~875 to ~947.
+//
+// Measured at ~947, so this leaves ~6%: enough that a sentence can be added,
 // tight enough that a section cannot. The plain contract alone — no tracker,
 // no workers, no sandbox, no code — measures ~508 of it.
 //
@@ -85,7 +90,7 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 func TestTheExecutorPromptStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), referenceExecutor(t)).Text
-	withinBudget(t, "executor", p, 930)
+	withinBudget(t, "executor", p, 1010)
 }
 
 // THE REFERENCE RENDERS EVERY GATED SECTION. A budget measured on an input
@@ -96,7 +101,8 @@ func TestTheExecutorPromptStaysUnderBudget(t *testing.T) {
 func TestTheBudgetReferenceRendersEveryGatedSection(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), referenceExecutor(t))
-	for _, key := range []string{"escalation", "sandbox", "workers", KeyCodeHistory, KeyDiscoverableTools} {
+	for _, key := range []string{"escalation", "sandbox", "workers", KeyCodeHistory, KeyCodeWrites,
+		KeyDiscoverableTools} {
 		if _, ok := slice(p, key); !ok {
 			t.Errorf("the reference executor renders no %q section, so the budgets "+
 				"below are measured on a smaller prompt than production's", key)
@@ -163,7 +169,7 @@ func referenceExecutor(t *testing.T) ExecutorInput {
 		AvailableTools: append([]string{
 			"activate_tool", escalationTool, "create_work_item", "delegate",
 			"list_mcp_server_tools", "run_sandbox", "submit_work",
-		}, CodeHistoryTools()...),
+		}, slices.Concat(CodeHistoryTools(), CodeWriteTools())...),
 		Workers:       referenceWorkers(),
 		OffersSandbox: true,
 	}
@@ -280,6 +286,10 @@ func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 // (it names history and blame too), so the prose is ~1,326 and the turn
 // ~2,406, ~3% headroom — inside the budget, with nothing taken from the
 // allowance.
+//
+// 2490 -> 2565 for the code writes guidance (~72 tokens), the same exception
+// for the same reason: rendered only for a seat of a company serving the code
+// host's writes. The turn is ~2,478 with it, so ~3% headroom, as before it.
 func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	seat := bigLead(500)
@@ -304,7 +314,7 @@ func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 // wholeTurnBudget is the budget TestTheWholeTurnStaysUnderBudget holds the
 // turn to, and the size its control has to exceed: one number, so the control
 // cannot go on proving the allowance against a budget the assertion left.
-const wholeTurnBudget = 2490
+const wholeTurnBudget = 2565
 
 // THE LADDER, and it is an order rather than a set: a lead reads profiles,
 // then names, then one line telling it where the rest of its team went.

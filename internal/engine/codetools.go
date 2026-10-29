@@ -5,17 +5,20 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 )
 
-// THE CODE READ TOOLS' ENGINE WIRING: the same deps for a seat's registry and
-// for the operator catalogue, over the code host through this node's estate
-// router — its own copy of the code log where it serves, a data node's
-// otherwise, and a repository's home git node for its content — the address a
-// person's git clones from, and whoever a turn is acting for with the chart
-// that decides them (the requester ceiling, the artifacts tools' own:
-// [turnRequesters] and [ChartAuthorityOf]).
+// THE CODE TOOLS' ENGINE WIRING: the same deps for a seat's registry and for
+// the operator catalogue, over the code host through this node's estate router
+// — its own copy of the code log where it serves, a data node's otherwise, and
+// a repository's home git node for its content and its engine-built writes —
+// the address a person's git clones from, and whoever a turn is acting for
+// with the chart that decides them (the requester ceiling, the artifacts tools'
+// own: [turnRequesters] and [ChartAuthorityOf]).
 
-// CodeToolDeps are the code read tools' dependencies on this node, or the zero
-// value (which serves none of them) where this node's RUNNING runtime serves
-// no code host.
+// CodeToolDeps are the code tools' dependencies on this node, or the zero value
+// (which serves none of them) where this node's RUNNING runtime serves no code
+// host: the reads, the writes, and the seam a seat's turn holds a scratch
+// repository through — the router's one code seam behind all three, so a node
+// that serves a seat's reads serves its writes and keeps its holds on the same
+// terms.
 //
 // [OperatorCode]'S ANSWER, the one the code host's REST reads get, and through
 // it [Engine.nativeHalves]' — so a seat's code tools and a person's `/code/`
@@ -44,8 +47,16 @@ func CodeToolDeps(e *Engine) builtin.CodeDeps {
 	// into its lease and an apply does not rebuild the clone, so a value
 	// holding this epoch's chart would judge a requester by an organisation
 	// a later activation replaced.
-	return builtin.CodeDeps{Code: seam, CloneURL: e.cloneURL, Requesters: turnRequesters{engine: e},
-		Chart: ChartAuthorityOf(e)}
+	//
+	// AND THE WRITES AND THE HOLDS, over the same seam: an engine write is
+	// asked of the repository's home git node and a lifecycle request — a
+	// tool's, or a turn's hold record on a scratch repository it named —
+	// of a data node, each through the router a read takes. The holder is
+	// wired whether or not a seat writes, since a seat that only reads
+	// still holds what it reads; an operator's call has no turn and holds
+	// nothing whatever is wired here.
+	return builtin.CodeDeps{Code: seam, Writer: seam, Holder: seam, CloneURL: e.cloneURL,
+		Requesters: turnRequesters{engine: e}, Chart: ChartAuthorityOf(e)}
 }
 
 // CodeReaderDeps are `code_repo_readers`' dependencies on this node — who read
