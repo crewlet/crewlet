@@ -58,9 +58,9 @@ test("a started sign-in shows the address and the code, and follows the session 
   open();
   const link = await screen.findByRole("link", { name: /Open auth\.openai\.com/ });
   expect(link.getAttribute("href")).toBe(SESSION.url);
-  // QA Minor 11: the address is the next thing to do, so it takes the focus.
-  // Focus moves once the address has rendered: waited for, not read once, so a loaded run agrees.
-  await waitFor(() => expect(document.activeElement).toBe(link));
+  // QA Minor 11: the address is the next thing to do, so it takes the focus,
+  // in the same commit that draws it: read once, the moment it is there.
+  expect(document.activeElement).toBe(link);
   expect(screen.getByText("QXJM-7KPD")).toBeDefined();
   await waitFor(() => {
     const last = polled.calls.at(-1)!;

@@ -14,7 +14,7 @@
  * approved, and stops saying the sign-in was refused.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Button,
   ButtonLink,
@@ -82,6 +82,8 @@ export function DeviceDialog({
     setError(null);
     startDeviceSignIn(key, abort.signal).then(
       (answer) => {
+        // AN ANSWER THAT LANDS AFTER THE DIALOG LEFT is not this dialog's to show.
+        if (abort.signal.aborted) return;
         if (answer.kind === "ok") setSession(answer.value);
         else if (answer.code === "sign_in_in_progress" && isDevice(answer.body.running))
           setSession(answer.body.running);
@@ -115,10 +117,13 @@ export function DeviceDialog({
 
   // THE ADDRESS TAKES THE FOCUS when it arrives (design QA Minor 11): it is
   // the next thing to do, and Cancel, which the dialog opened on while the
-  // sign-in started, is not.
+  // sign-in started, is not. IN THE COMMIT THAT DRAWS IT, as a layout effect:
+  // a passive one ran after the commit, so for a moment the address was on
+  // the page without the focus, and a key pressed then went to Cancel. It
+  // depends on the address alone, never on whether a poll has answered.
   const focused = useRef(false);
   const hasLink = Boolean(session?.url && !deviceEnded(session.status));
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!hasLink || focused.current) return;
     focused.current = true;
     openRef.current?.focus();
