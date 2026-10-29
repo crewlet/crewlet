@@ -329,6 +329,12 @@ type Resume struct {
 	// Bridged holds the round's calls so far.
 	Lost *Lost
 
+	// Rotated is set when the run's job ended refused by its vendor on a
+	// sign-in that was replaced while it ran: the turn carries the round on
+	// once, with the new sign-in, rather than collecting the refusal (see
+	// [Rotated]), unless the round's calls already hold its submission.
+	Rotated *Rotated
+
 	// Steered is every note the turn had read when the run was collected,
 	// and where, in the order read — off the run's record, which every read
 	// is written on: a brief's, the run's own and a reviewer's. The

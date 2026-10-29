@@ -423,7 +423,11 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 	if c == nil {
 		return nil
 	}
-	return &sandbox.Continuation{SessionID: c.SessionID, Brief: c.Brief}
+	out := &sandbox.Continuation{SessionID: c.SessionID, Brief: c.Brief}
+	if c.SignInReplaced {
+		out.Reason = sandbox.FollowUpSignInReplaced
+	}
+	return out
 }
 
 // member is the executor-chain member this launch runs on: the first one that

@@ -82,6 +82,12 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		!submitted(bridgedLedger(sinceAnswer(bridged, r.cfg.Resume.Answered))) {
 		return r.continueAgentRun(ctx, history, state, lost, logged)
 	}
+	// AND SO DOES A JOB REFUSED ON A SIGN-IN REPLACED WHILE IT RAN, on the
+	// same condition. See [Rotated].
+	if rotated := r.cfg.Resume.Rotated; rotated != nil &&
+		!submitted(bridgedLedger(sinceAnswer(bridged, r.cfg.Resume.Answered))) {
+		return r.continueAgentRun(ctx, history, state, rotated, logged)
+	}
 	return r.resumeAgentRun(ctx, history, state, r.cfg.Resume.Answer, bridged)
 }
 
