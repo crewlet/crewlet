@@ -8,10 +8,23 @@
  */
 
 import { expect, test } from "vitest";
-import type { ConfigUnsettled } from "~/protocol/configAnswer.ts";
+import { classifyConfigRefusal, type ConfigUnsettled } from "~/protocol/configAnswer.ts";
 import { failureWords } from "./words.ts";
 
+/** A proxy's refusal in the engine's own shape, without its mark, as the one classifier reads it. */
+function proxied(status: number): ConfigUnsettled {
+  const read = classifyConfigRefusal({
+    status,
+    body: { error: "forbidden", detail: "blocked by policy" },
+    fromEngine: false,
+  });
+  if (read.kind !== "unsettled") throw new Error(`a proxy's ${status} read as ${read.kind}`);
+  return read;
+}
+
 const CAUSES: readonly [string, ConfigUnsettled, string][] = [
+  ["a proxy answered 403", proxied(403), "The engine did not answer."],
+  ["a proxy answered 413", proxied(413), "The engine did not answer."],
   [
     "nothing answered",
     { kind: "unsettled", answered: false, status: 0, detail: "Failed to fetch" },

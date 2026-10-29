@@ -234,9 +234,15 @@ export function classifyCheck(
   // A MANAGED DOCUMENT IS NEVER THE GRANT MISSING, whoever drafts: it is a
   // 403 too (ADR-0030), and read as a whole-company draft's missing grant it
   // sent somebody who holds every grant to an administrator who cannot help
-  // them.
+  // them. A 403 the ENGINE did not write (a proxy's) is no grant of anybody's,
+  // and stays the unsettled answer the classifier reads it as.
   const refusal = classifyConfigRefusal(answer);
-  if (answer.status === 403 && scope === null && refusal.kind !== "managed") {
+  if (
+    answer.status === 403 &&
+    scope === null &&
+    refusal.kind !== "managed" &&
+    refusal.kind !== "unsettled"
+  ) {
     return { status: "guarded", code: text(isRecord(answer.body) ? answer.body.error : "") };
   }
   switch (refusal.kind) {

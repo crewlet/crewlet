@@ -31,6 +31,7 @@ import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type { ToolAnnotations, ToolRow } from "~/protocol/index.ts";
 import type { McpServersStatusAnswer } from "~/contract/mcp.ts";
 import { withDerived } from "~/test/org.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 // What the registry advertises for a tool whose server sent no hints: four
 // `unknown`s, which is what the engine writes rather than leaving the object
@@ -641,7 +642,7 @@ test("a server's page for a name the answer does not carry says so", async () =>
 const json = (payload: unknown, status: number, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json", ...headers },
   });
 
 interface Call {
@@ -911,6 +912,15 @@ const FAILURES: readonly [string, () => Response, string][] = [
     () => new Response("<html>504 Gateway Time-out</html>", { status: 504 }),
     "The engine did not answer.",
   ],
+  ...([403, 413] as const).map((status): [string, () => Response, string] => [
+    `a proxy's ${status} in the engine's shape, without its mark`,
+    () =>
+      new Response(JSON.stringify({ error: "forbidden", detail: "blocked by policy" }), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      }),
+    "The engine did not answer.",
+  ]),
   [
     "the engine's own 500",
     () => json({ error: "internal", detail: "store: disk full" }, 500),

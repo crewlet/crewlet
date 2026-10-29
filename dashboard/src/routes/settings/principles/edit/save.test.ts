@@ -16,6 +16,7 @@ import {
   type CharterWrite,
   type SaveTransport,
 } from "./save.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 const CHARTER: Charter = {
   mission: "Ship it",
@@ -251,7 +252,7 @@ describe("the charter's route", () => {
   const json = (payload: unknown, status: number, headers: Record<string, string> = {}) =>
     new Response(JSON.stringify(payload), {
       status,
-      headers: { "Content-Type": "application/json", ...headers },
+      headers: { ...ENGINE_HEADERS, "Content-Type": "application/json", ...headers },
     });
 
   test("a read is the charter and the tag a write hands back", async () => {

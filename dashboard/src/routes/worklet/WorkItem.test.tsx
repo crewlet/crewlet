@@ -48,6 +48,7 @@ import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { DUPLICATE, DUPLICATE_TITLE, SHARED_KEY, collidingHits } from "~/test/keyCollision.ts";
 import { pick } from "~/testing.tsx";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -1842,7 +1843,7 @@ test("a race lost on a duplicate's page reads the duplicate's history", async ()
       posted.push({ tool, args: body.args });
       return new Response(JSON.stringify({ error: "stale_version", tool, detail: "" }), {
         status: 409,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
       });
     }),
   );

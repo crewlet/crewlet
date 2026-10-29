@@ -16,6 +16,7 @@ import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import type { ArtifactDetail, ArtifactDoc } from "~/protocol/index.ts";
 import { append, loadRichEditor, retype } from "~/test/richEditor.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 beforeAll(() => loadRichEditor());
 
@@ -64,7 +65,10 @@ let sent: { method: string; path: string; ifMatch: string | null; body: unknown 
 let publishAnswer: () => Response;
 
 const json = (status: number, body: unknown) =>
-  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
+  });
 
 beforeEach(() => {
   location.hash = `#/artifacts/${ID}`;

@@ -30,6 +30,7 @@ import type {
 } from "~/protocol/index.ts";
 import { emptyDay } from "~/test/myWork.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -253,7 +254,7 @@ beforeEach(() => {
         const path = new URL(String(url), "http://engine.test").pathname;
         return new Response(JSON.stringify(path === "/iam/seats" ? { seats: [] } : {}), {
           status: path === "/iam/seats" ? 200 : 404,
-          headers: { "Content-Type": "application/json" },
+          headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
         });
       }
       const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
@@ -261,7 +262,7 @@ beforeEach(() => {
       posted.push({ tool, args: body.args });
       return new Response(JSON.stringify(reply.body), {
         status: reply.status,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
       });
     }),
   );

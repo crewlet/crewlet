@@ -18,6 +18,7 @@ import { rest } from "./rest.ts";
 import { currentSessionNeed, sessionRestored } from "./signin.ts";
 import { LiveSocket } from "./socket.ts";
 import { Store } from "./store.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 /** A WebSocket the test drives: every dial is recorded, and nothing opens by itself. */
 class ScriptedWebSocket {
@@ -90,7 +91,7 @@ beforeEach(() => {
         if (probeDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, probeDelayMs));
         return new Response(JSON.stringify(probeBody), {
           status: probeStatus,
-          headers: probeHeaders,
+          headers: { ...ENGINE_HEADERS, ...probeHeaders },
         });
       }
       return snapshotAnswer();
@@ -250,7 +251,13 @@ describe("the engine's close codes", () => {
     let land!: () => void;
     snapshotAnswer = () =>
       new Promise<Response>((resolve) => {
-        land = () => resolve(new Response(JSON.stringify({ status: "ok" }), { status: 200 }));
+        land = () =>
+          resolve(
+            new Response(JSON.stringify({ status: "ok" }), {
+              headers: ENGINE_HEADERS,
+              status: 200,
+            }),
+          );
       });
     started();
     dial(0).open();
@@ -481,7 +488,10 @@ describe("what a dial presents", () => {
 describe("the degraded-mode poll", () => {
   const snapshotReads = () => fetches.filter((url) => url.endsWith("/stream/snapshot")).length;
   const refusal = (headers: Record<string, string>) => async () =>
-    new Response(JSON.stringify({ error: "identity_unavailable" }), { status: 503, headers });
+    new Response(JSON.stringify({ error: "identity_unavailable" }), {
+      status: 503,
+      headers: { ...ENGINE_HEADERS, ...headers },
+    });
 
   /** A socket that opened and then dropped, which starts the poll. */
   async function dropped(): Promise<LiveSocket> {
@@ -514,7 +524,10 @@ describe("the degraded-mode poll", () => {
   // read a 401 as the ordinary tick and the snapshot is read again.
   test("a 401 is not asked again on a timer", async () => {
     snapshotAnswer = async () =>
-      new Response(JSON.stringify({ error: "invalid_token" }), { status: 401 });
+      new Response(JSON.stringify({ error: "invalid_token" }), {
+        headers: ENGINE_HEADERS,
+        status: 401,
+      });
     await dropped();
     await vi.advanceTimersByTimeAsync(120_000);
     expect(snapshotReads()).toBe(1);
@@ -544,7 +557,10 @@ describe("the degraded-mode poll", () => {
 
   test("a snapshot read keeps the tick, and the poll ends when the socket is back", async () => {
     snapshotAnswer = async () =>
-      new Response(JSON.stringify({ agents: [], events: [] }), { status: 200 });
+      new Response(JSON.stringify({ agents: [], events: [] }), {
+        headers: ENGINE_HEADERS,
+        status: 200,
+      });
     await dropped();
     await vi.advanceTimersByTimeAsync(5_000);
     expect(snapshotReads()).toBe(2);

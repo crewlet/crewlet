@@ -31,6 +31,7 @@ import { BridgeLog, RunScreen } from "./Runs.tsx";
 import type { SandboxRun } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 afterEach(() => {
   cleanup();
@@ -281,7 +282,7 @@ function mountPage(answers: Record<string, unknown>, outcome = "pending") {
       posted.push({ tool, args: body.args });
       return new Response(JSON.stringify({ tool, outcome, position: "", receipt: {} }), {
         status: 200,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
       });
     }),
   );
@@ -479,7 +480,7 @@ test("an answer to a question the run moved on from says so and draws the new on
       refused = true;
       return new Response(JSON.stringify({ error: "stale_version", tool: "answer_run" }), {
         status: 409,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
       });
     }),
   );

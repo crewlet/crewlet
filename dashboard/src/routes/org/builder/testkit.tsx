@@ -34,6 +34,7 @@ import type { DraftStorage } from "./model/persistence.ts";
 import { fixtureDerived } from "./model/testkit.ts";
 import { builderSurfaces } from "./surfaces.ts";
 import { healthFrame } from "~/test/health.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 export class InertWebSocket {
   static CONNECTING = 0;
@@ -59,7 +60,7 @@ export type Script = (request: SentRequest, engine: Engine) => Response | null |
 export const json = (payload: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json", ...headers },
   });
 
 /** A small company with a model provider, two root seats and a unit. */

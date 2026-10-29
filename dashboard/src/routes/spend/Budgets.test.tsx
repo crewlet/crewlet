@@ -34,6 +34,7 @@ import {
   resetPageContextForTest,
   setFramePage,
 } from "~/app/assistant/context.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -165,7 +166,7 @@ async function settle() {
 const json = (payload: unknown, status: number, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json", ...headers },
   });
 
 interface Call {

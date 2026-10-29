@@ -30,6 +30,7 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
@@ -145,7 +146,7 @@ let posted: { tool: string; body: { request_id: string; args: Record<string, unk
 function json(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
   });
 }
 
