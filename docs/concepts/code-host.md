@@ -1520,7 +1520,7 @@ records share nothing with the repository's pushes, and decided in its
 | `check_queued` | An attempt is queued on a commit: what it is for (a change's head, a merge queue's candidate, a protected branch's tip, a bisection), the branch it is checked for, the checks file it was read from and its definition whole — so it runs under the definition it was queued with, whatever the file says by the time a box starts — whether that branch requires it, and why it was queued: dispatched, run again by a seat or a person, queued again after its runner was lost, or reported by a person's own CI. Or the attempt is recorded `skipped`: its change touched none of its `paths` |
 | `check_started` | A runner claims the attempt — and, once it has made one, names its box |
 | `check_finished` | The attempt ended: its state and why, its exit status, how long it ran, its summary (at most 4 KiB), the last 16 KiB of its output, the failures its reports named (at most 200, weighing at most 64 KiB, the rest counted), the link a person's CI reported, and the log a failed run kept |
-| `checks_sweep` | The rows that ended before an instant are removed — the `code-retention` duty's, for a repository whose checks stopped ending ([How long a check is kept](#how-long-a-check-is-kept)) |
+| `checks_sweep` | The rows that ended before an instant are removed — the `code-retention` duty's, for a repository whose checks stopped ending, swept back to the 30 days once a row of it outlived them by a day ([How long a check is kept](#how-long-a-check-is-kept)) |
 
 An attempt's **state** is one of seven: `queued`; `running`; and the five
 endings — `passed` and `failed`, which measured the commit (a run past its
@@ -1645,10 +1645,15 @@ past.
   about a mebibyte — so a repository whose checks keep ending keeps a month of
   them by itself, and no other repository's rows are touched.
 - **A repository whose checks stopped ending is swept** by the
-  `code-retention` duty: each pass lists the repositories holding rows past
-  the 30 days and appends a `checks_sweep` on each one's checks subject, which
-  every data node applies as an ending's removal ([Deletion and
-  purge](#deletion-and-purge)).
+  `code-retention` duty: each pass lists the repositories holding a row that
+  ended more than **31 days** ago — the 30 days and a day's grace — and
+  appends a `checks_sweep` on each one's checks subject removing every row of
+  it past the 30 days, which every data node applies as an ending's removal
+  ([Deletion and purge](#deletion-and-purge)). A repository whose checks end
+  more often than once a day removes such rows itself first, each ending
+  taking up to 500 of them, so the duty does not repeat what its endings do;
+  an idle one keeps its checks 30 to 31 days, and is swept at most once a
+  day.
 - **A check queued and never ended is kept** until it ends, or its repository
   is purged.
 - **A repository's purge takes its checks and their logs** with the rest of
@@ -1715,7 +1720,8 @@ repository, never by a node's own sweep:
   it holds three of a thousand fast-forwards.
 - **Check history** — a check's rows are kept 30 days after it ended, removed
   by each later ending of its repository and, where its checks stopped
-  ending, by the `code-retention` duty's sweep record ([How long a check is
+  ending, by the `code-retention` duty's sweep record once a row has outlived
+  the 30 days by a day ([How long a check is
   kept](#how-long-a-check-is-kept)).
 - **A purge** — below.
 
@@ -1739,7 +1745,8 @@ the log can replay), the fleet-singleton `code-retention` duty purges it (see
   retired more than a day ago, so the collector can take their objects (see
   [Live, retired and derived references](object-store.md#live-retired-and-derived-references)),
   then the check rows that ended more than 30 days ago in a repository whose
-  checks stopped ending ([How long a check is kept](#how-long-a-check-is-kept)),
+  checks stopped ending — one holding a row that ended more than 31 days ago
+  ([How long a check is kept](#how-long-a-check-is-kept)) —
   then finishes every purge already begun — whatever the retention, since a
   purge has no undo — then purges the repositories deleted longest ago first,
   then releases every renamed repository's old name whose redirect has ended,

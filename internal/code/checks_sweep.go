@@ -20,10 +20,11 @@ import (
 // instant — so a repository whose checks keep ending keeps its history at
 // thirty days by itself. One whose checks stopped ending keeps whatever it
 // held for ever, since nothing of its own would ever remove it; so the
-// code-retention duty lists the repositories holding rows past the history
+// code-retention duty lists the repositories holding a row past the history
+// by [CheckSweepGrace] — which no repository whose checks keep ending holds —
 // and publishes a checks_sweep record on each one's checks subject
-// ([Retention.Pass]'s checks step), which every node applies as the horizon an
-// ending applies.
+// ([Retention.Pass]'s checks step) removing its rows past the history, which
+// every node applies as the horizon an ending applies.
 //
 // BY RECORDS, NEVER BY A NODE-LOCAL JOB, as the retired packs' sweep: the rows
 // are replicated, and a delete each node made on its own clock would leave
@@ -108,8 +109,9 @@ type checksCursor struct {
 
 // checksQuery asks for one page of the checks listing.
 type checksQuery struct {
-	// cutoff is now less CheckHistory: an ending is listed only once its
-	// finished_at is before it.
+	// cutoff is now less CheckHistory less CheckSweepGrace: an ending is
+	// listed only once its finished_at is before it, and its repository's
+	// step then sweeps every row past the history.
 	cutoff time.Time
 
 	// after is the last entry of the page before; nil for the first.
@@ -131,8 +133,9 @@ type checksPage struct {
 	next *checksCursor
 }
 
-// checksDue lists one page of the repositories holding check rows past the
-// history, oldest ending first, resuming after q.after.
+// checksDue lists one page of the repositories holding check rows that ended
+// before q.cutoff — past the history by the grace — oldest ending first,
+// resuming after q.after.
 //
 // ONE ENTRY AN (INSTANT, REPOSITORY), never a row: an ending's rows of one
 // repository at one instant are swept together, so the statement groups them
@@ -175,17 +178,18 @@ func (r *Reader) checksDue(ctx context.Context, q checksQuery) (checksPage, erro
 		return nil
 	})
 	if err != nil {
-		return checksPage{}, fmt.Errorf("code: list the repositories holding checks past %v: %w", CheckHistory, err)
+		return checksPage{}, fmt.Errorf("code: list the repositories holding checks that ended before %s: %w",
+			q.cutoff.UTC().Format(time.RFC3339), err)
 	}
 	return page, nil
 }
 
 // checksDueSQL is the code-retention pass's listing of the repositories
-// holding checks past the history, one row an (instant, repository): grouped
-// by code_checks_recent_idx's own two leading columns, so the plan reads the
-// groups in its order and sorts nothing, the index's predicate repeated as
-// written so the planner may use it at all, and the >= beside the OR what
-// keeps the index's range seek (planner.go).
+// holding checks past the history by the grace, one row an (instant,
+// repository): grouped by code_checks_recent_idx's own two leading columns, so
+// the plan reads the groups in its order and sorts nothing, the index's
+// predicate repeated as written so the planner may use it at all, and the >=
+// beside the OR what keeps the index's range seek (planner.go).
 const checksDueSQL = `SELECT repo_id, finished_at FROM code_checks INDEXED BY code_checks_recent_idx
 	WHERE finished_at > 0 AND finished_at < ? AND finished_at >= ? AND (finished_at > ? OR repo_id > ?)
 	GROUP BY finished_at, repo_id

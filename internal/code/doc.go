@@ -231,7 +231,10 @@
 // its own repository's oldest past its broker instant, bounded by
 // [CheckHorizonRows] and [CheckHorizonBytes], and the retention duty's
 // checks_sweep ([Store.ChecksSweep], [Retention.Pass]'s checks step) does
-// the same for a repository whose checks stopped ending. The deletion gate
+// the same for a repository whose checks stopped ending — one holding a row
+// past the history by [CheckSweepGrace], which no repository whose checks
+// keep ending holds, so the duty never repeats an ending's horizon and
+// sweeps a repository at most once a grace. The deletion gate
 // reads the repository off the subject, so a check that ends after its
 // repository's purge writes nothing, and the purge's parts take its checks
 // after its changes, in the same rows-and-bytes budget.
@@ -1346,6 +1349,14 @@
 // under the other session's disk load, averaged 378 ms). A sweep of a few
 // rows is a seventeenth of a purge part, and [RetentionPassBudget] states
 // what the sweeps take of a pass before the purges have the rest.
+//
+// A CHECKS SWEEP (BenchmarkChecksSweepStep, the whole step as the retention
+// pass's pacer times it; one bounded run, -benchtime 5x and one count, on
+// two E-cores of a Core Ultra 7 265U under other sessions' load): 3.5 ms for
+// a sweep of eight rows, each with its log, and 13 ms for [CheckHorizonRows]
+// rows and their logs, the most one step removes. [RetentionPassBudget]
+// prices the checks step from them: listed only past [CheckSweepGrace], a
+// repository is swept at most once a day.
 //
 // A COMPACTION RECORD (BenchmarkApplyACompaction, the record applied and
 // committed against a repository of [MaxPacksPerRepo] live packs, each arm

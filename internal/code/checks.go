@@ -67,9 +67,14 @@ import (
 // repository's rows that ended before its broker instant less the history,
 // oldest first, at most [CheckHorizonRows] rows and [CheckHorizonBytes] bytes
 // of them, so the history keeps pace with the checks that end; and the
-// code-retention duty's checks_sweep does the same for a repository whose rows
-// outlive the history with no check of its own ending — an idle one, whose
-// rows nothing would ever remove otherwise ([Store.ChecksSweep]).
+// code-retention duty's checks_sweep does the same for a repository whose
+// checks have STOPPED ending — an idle one, whose rows nothing would ever
+// remove otherwise ([Store.ChecksSweep]). The duty tells it by its rows: a
+// repository holding a row that outlived the history by [CheckSweepGrace] is
+// one no ending of its own has reached for that long — or one whose endings'
+// bounded horizons fell that far behind — and it sweeps such a repository
+// whole, back to the history. A repository whose checks keep ending is never
+// listed, and none of its rows is removed twice.
 //
 // # Base format, as a stated condition
 //
@@ -92,6 +97,35 @@ import (
 // the branch has long moved past — and a page that cites a check cites one
 // still held.
 const CheckHistory = 30 * 24 * time.Hour
+
+// CheckSweepGrace is how long past [CheckHistory] a repository's check rows
+// outlive it before the code-retention duty sweeps them: a day. The duty lists
+// only a repository holding a row that ended before its clock less the history
+// less this grace, and sweeps it back to the history; a repository whose
+// checks keep ending removes its own rows with each ending, so its rows never
+// outlive the history by the grace, and the duty never appends a record that
+// one of its endings would have made anyway.
+//
+// A DAY, because it bounds both of what it trades:
+//   - what the duty appends: a sweep leaves a repository no row past the
+//     history, so its next row to outlive it by the grace does so a grace
+//     later at the soonest — a repository is swept at most once a grace (a
+//     step more for every CheckHorizonRows rows past the first), so
+//     CodeMaxRepos repositories make at most CodeMaxRepos sweeps a day, about
+//     104 a pass at RetentionInterval (limits.go's RetentionPassBudget prices
+//     them). Listed at the history itself, a repository was swept whenever a
+//     row of it had crossed the history since its last ending: at the code
+//     host's design point, one push an hour a repository, a large share of
+//     CodeMaxRepos every pass — thousands of records, each of which the
+//     repository's next ending would have made anyway, every data node
+//     applying all of them, ahead of the purges on one budget;
+//   - what an idle repository keeps: rows at most the grace past the
+//     history, a thirtieth of it more, which no reader notices.
+//
+// So a repository whose checks end more often than once a day — a change's
+// head checked on every push, say — keeps its history by itself and is never
+// listed, and one checked less often is swept at most once a day.
+const CheckSweepGrace = 24 * time.Hour
 
 // The record's bounds. Each is the payload's own, refused by its Validate
 // before a writer forms a record, so the largest record a check takes fits
@@ -717,9 +751,9 @@ func (f CheckFinished) Validate() error {
 
 // ChecksSweep removes a repository's check rows that ended before Through,
 // oldest first — the code-retention duty's, for a repository whose rows
-// outlive [CheckHistory] with no check of its own ending to remove them
-// ([OpChecksSweep], [Store.ChecksSweep]). In the base format, under the
-// condition the subject states.
+// outlive [CheckHistory] by [CheckSweepGrace] with no check of its own ending
+// to remove them ([OpChecksSweep], [Store.ChecksSweep]). In the base format,
+// under the condition the subject states.
 type ChecksSweep struct {
 	RepoID string `json:"repo_id"`
 	// Through is the duty holder's cutoff: its clock less CheckHistory.

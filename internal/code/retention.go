@@ -43,15 +43,18 @@ import (
 // its own index, oldest retirement first, one entry a retiring record rather
 // than a row.
 //
-// Then the CHECKS: every repository holding check rows that ended before the
-// pass's clock less [CheckHistory] is swept ([Store.ChecksSweep]) — one
-// checks_sweep record on its checks subject removing up to [CheckHorizonRows]
-// of them, oldest first, the repository stepped again while rows past the
-// history are left. A repository whose checks keep ending removes its own
-// history with each ending; this is for one whose checks stopped ending, whose
-// rows nothing else would ever remove. Its listing is a page at a time over
-// code_checks_recent_idx, oldest ending first, one entry an instant and a
-// repository rather than a row.
+// Then the CHECKS: every repository holding a check row that ended before the
+// pass's clock less [CheckHistory] less [CheckSweepGrace] is swept
+// ([Store.ChecksSweep]) back to the history — one checks_sweep record on its
+// checks subject removing up to [CheckHorizonRows] of its rows that ended
+// before the clock less the history, oldest first, the repository stepped
+// again while rows past the history are left. A repository whose checks keep
+// ending removes its own history with each ending, so its rows never outlive
+// the history by the grace and it is never listed; this is for one whose
+// checks stopped ending — or whose endings' bounded horizons fell a grace
+// behind — whose rows nothing else would ever remove. Its listing is a page at
+// a time over code_checks_recent_idx, oldest ending first, one entry an
+// instant and a repository rather than a row.
 //
 // Then every PURGING repository, whatever the retention: a purge once begun
 // is always finished, because its rows are already partly gone, its name is
@@ -103,15 +106,18 @@ import (
 // the next pass that can. Held in this process: a duty that moves to another
 // node, or a process that dies, leaves it to the next activation's reconcile.
 
-// retentionPage is how many repositories one read of the purge listing names,
-// and how many retiring records one read of the retired listing names — each
-// at most one sweep step: a pass that steps one-step repositories at the
-// measured 83 ms a part reaches about 240 of them in RetentionPassBudget at
-// RetentionLaneShare, and one sweeping at the code host's design point meets
-// some 370 retiring records (limits.go), so a page is about what one pass
-// consumes of either listing, read as one statement over an index. A burst of
-// sweeps reads further pages of the same statement — sixteen at most in a
-// pass, which takes about four thousand steps of a few rows.
+// retentionPage is how many entries one read of each of the pass's listings
+// names — repositories of the purge listing, retiring records of the retired
+// one, (instant, repository) pairs of the checks one — each at most one
+// sweep step: a pass that steps one-step repositories at the measured 83 ms a
+// part reaches about 240 of them in RetentionPassBudget at
+// RetentionLaneShare, one sweeping at the code host's design point meets some
+// 370 retiring records, and the checks listing names a hundred-odd
+// repositories a pass at most (CheckSweepGrace; limits.go), so a page is
+// about what one pass consumes of any listing, read as one statement over an
+// index. A burst of sweeps reads further pages of the same statement —
+// sixteen at most in a pass, which takes about four thousand steps of a few
+// rows.
 const retentionPage = 256
 
 // retentionIdlePerStep is how many times a step's own duration the pass
@@ -246,11 +252,12 @@ type RetentionReport struct {
 }
 
 // Pass hands on what an earlier pass purged and could not, sweeps every
-// repository's retired pack rows past [RetireGrace] and its check rows past
-// [CheckHistory], then steps what is due a purge — every purging repository,
-// then every one deleted past the current retention, each oldest deletion
-// first — until its purge is done, the pass's budget runs out, or the context
-// ends, pacing every step to the pass's share of the write lane.
+// repository's retired pack rows past [RetireGrace] and an idle repository's
+// check rows past [CheckHistory] ([CheckSweepGrace]), then steps what is due
+// a purge — every purging repository, then every one deleted past the current
+// retention, each oldest deletion first — until its purge is done, the pass's
+// budget runs out, or the context ends, pacing every step to the pass's share
+// of the write lane.
 //
 // A repository whose sweep or purge fails is reported in
 // [RetentionReport.Failed] and the pass goes on to the next: one repository's
@@ -518,20 +525,26 @@ func (r *Retention) sweep(ctx context.Context, now time.Time, pace *pacer,
 }
 
 // sweepChecks steps every repository the checks listing names — the
-// repositories holding check rows past [CheckHistory], once each however many
-// of its endings the listing names — until nothing past the history is left,
-// the pass's budget runs out (stop) or the context ends (the error).
+// repositories holding a check row past [CheckHistory] by [CheckSweepGrace],
+// once each however many of its endings the listing names — back to the
+// history, until nothing past the history and the grace is left, the pass's
+// budget runs out (stop) or the context ends (the error).
 //
-// A repository whose checks keep ending removes its own history, and is
-// listed here only for what its endings' bounded horizons left; an IDLE one,
-// whose checks stopped ending, has nothing else that would ever remove it. The
-// listing is a stale read and each step decides again inside its own snapshot,
-// so a repository whose rows an ending's horizon or a purge removed since the
-// listing read them is simply answered nothing.
+// LISTED PAST THE GRACE, SWEPT TO THE HISTORY. A repository whose checks keep
+// ending removes its own history with each ending, so it holds no row past
+// the history by the grace and is not listed: a step on it would append a
+// record its next ending makes anyway, on every data node, ahead of the
+// purges. A repository holding such a row is one no ending of its own reached
+// for the grace — an IDLE one, which nothing else would ever sweep, or one
+// whose endings' bounded horizons fell that far behind — and its step removes
+// every row past the history, so it is listed again a grace later at the
+// soonest. The listing is a stale read and each step decides again inside its
+// own snapshot, so a repository whose rows an ending's horizon or a purge
+// removed since the listing read them is simply answered nothing.
 func (r *Retention) sweepChecks(ctx context.Context, now time.Time, pace *pacer,
 	report *RetentionReport) (stop bool, err error) {
 
-	q := checksQuery{cutoff: now.Add(-CheckHistory), limit: cmp.Or(r.page, retentionPage)}
+	q := checksQuery{cutoff: now.Add(-CheckHistory - CheckSweepGrace), limit: cmp.Or(r.page, retentionPage)}
 	stepped := map[string]bool{}
 	for {
 		page, err := r.Reader.checksDue(ctx, q)

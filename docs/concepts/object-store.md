@@ -956,8 +956,10 @@ uploaded more than a day ago (see
 [One object per upload](#one-object-per-upload)). So is the log a failed
 [check](code-host.md#checks) kept — at most its last 64 MiB, named by its
 `code_check_logs` row — since nothing builds it again once its run is gone:
-its row goes with its check's, 30 days after the check ended or with its
-repository's purge, and the collector's next pass takes its bytes.
+its row goes with its check's, 30 days after the check ended (up to a day
+more in a repository whose checks stopped ending, [How long a check is
+kept](code-host.md#how-long-a-check-is-kept)) or with its repository's purge,
+and the collector's next pass takes its bytes.
 
 The first retired rows are the [code host's](code-host.md): when a compaction
 merges a repository's small packs into a larger one, each pack it replaced

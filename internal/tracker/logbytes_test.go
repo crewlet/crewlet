@@ -362,15 +362,15 @@ var codeLogRiders = map[code.OpKind]struct {
 	// a check_queued record makes — no priced op's payload makes one, so they
 	// name no maker — and come at its rate: two claims' records and an ending
 	// an attempt, and a sweep only where an idle repository's attempts
-	// outlive the history.
+	// outlive the history by code.CheckSweepGrace, once a grace at most.
 	code.OpCheckStarted: {on: code.OpCheckQueued, how: "an attempt is claimed by the git node that runs " +
 		"it, and its box named by that node, through the estate's code.checks: two records an attempt"},
 	code.OpCheckFinished: {on: code.OpCheckQueued, how: "an attempt is ended by its runner — or by its " +
 		"repository's home, cancelled for a head its change moved on from or errored for a runner it " +
 		"lost — through the estate's code.checks: one record an attempt"},
 	code.OpChecksSweep: {on: code.OpCheckQueued, how: "the code-retention pass sweeps an idle repository's " +
-		"attempts past code.CheckHistory, which its own endings no longer remove: a record an idle " +
-		"repository holding them, a pass"},
+		"attempts past code.CheckHistory, which its own endings no longer remove, once one has outlived it " +
+		"by code.CheckSweepGrace: a record an idle repository holding them, a day at most"},
 }
 
 // codeLogMaker is a key of a priced op's payload whose records make the object

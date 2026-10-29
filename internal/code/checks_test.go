@@ -47,8 +47,9 @@ func (n *node) publishCheck(repo string, op code.OpKind, payload any) (statelog.
 }
 
 // seedEnded writes count check rows of repoID straight into a node's estate,
-// each ended at the instant at — rows a case needs past or inside the
-// history, which no record of this build can end at an instant it chooses.
+// each ended at the instant at and keyed by it — rows a case needs past or
+// inside the history, which no record of this build can end at an instant it
+// chooses.
 func (n *node) seedEnded(repoID string, at time.Time, count int) {
 	n.t.Helper()
 	for i := range count {
@@ -59,28 +60,42 @@ func (n *node) seedEnded(repoID string, at time.Time, count int) {
 			summary, def, failures, tail)
 			VALUES (?, ?, ?, 1, 'passed', 'tip', '', 0, '', '', 'refs/heads/main', '', '', 0, '', 600, 'exit',
 				'node-a', 'container', '', 0, '', ?, ?, ?, 1000, 0, 0, 1, 2, 4, '', 'ok', '', '', '')`,
-			repoID, oidOf(fmt.Sprint(repoID, i)), fmt.Sprintf("check-%d", i), store.EncodeTime(at),
+			repoID, oidOf(fmt.Sprint(repoID, at.UnixNano(), i)), fmt.Sprintf("check-%d", i), store.EncodeTime(at),
 			store.EncodeTime(at), store.EncodeTime(at))
 	}
+}
+
+// checksOf counts repoID's check rows.
+func (n *node) checksOf(repoID string) int {
+	n.t.Helper()
+	return n.count(`SELECT COUNT(*) FROM code_checks WHERE repo_id = ?`, repoID)
 }
 
 // AN IDLE REPOSITORY'S CHECKS ARE SWEPT (M5-D34): a repository whose checks
 // keep ending removes its own history with each ending, and one whose checks
 // stopped ending has nothing of its own that ever would — so the retention
-// pass lists the repositories holding check rows that ended before its clock
-// less CheckHistory and publishes a checks_sweep on each one's checks subject,
-// which removes them. A repository whose rows are inside the history is not
-// listed, and keeps them.
+// pass lists the repositories holding a check row that ended before its clock
+// less CheckHistory less CheckSweepGrace, and publishes a checks_sweep on
+// each one's checks subject which removes EVERY row of it past the history,
+// the ones inside the grace too: a swept repository is swept whole. A
+// repository whose rows are past the history but inside the grace — its next
+// ending may yet come — is not listed and keeps them, and nor is one whose
+// rows are inside the history.
 //
 // Mutation: leave the checks step out of the pass, and the idle repository
-// keeps its rows — red.
+// keeps its rows — red; sweep to the listing's cutoff rather than the
+// history, and it keeps the two inside the grace — red; list at the history
+// itself, and the recent repository is swept too — red.
 func TestAnIdleRepositorysChecksAreSwept(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	n.ensure("idle", described("idle"), t1)
+	n.ensure("recent", described("recent"), t1)
 	n.ensure("busy", described("busy"), t1)
-	idle, busy := n.mustID("idle"), n.mustID("busy")
-	n.seedEnded(idle, harnessAt.Add(-code.CheckHistory-24*time.Hour), 3)
+	idle, recent, busy := n.mustID("idle"), n.mustID("recent"), n.mustID("busy")
+	n.seedEnded(idle, harnessAt.Add(-code.CheckHistory-code.CheckSweepGrace-time.Hour), 3)
+	n.seedEnded(idle, harnessAt.Add(-code.CheckHistory-time.Hour), 2)
+	n.seedEnded(recent, harnessAt.Add(-code.CheckHistory-time.Hour), 1)
 	n.seedEnded(busy, harnessAt.Add(-24*time.Hour), 2)
 	// THE BROKER'S INSTANT IS THE PASS'S CLOCK, so the sweep's cutoff — the
 	// pass's clock less the history — falls before the record's own.
@@ -92,22 +107,87 @@ func TestAnIdleRepositorysChecksAreSwept(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Pass: %v", err)
 	}
-	if report.ChecksSweeps != 1 || report.ChecksSweptRows != 3 || len(report.Failed) != 0 || report.Remain {
-		t.Fatalf("the pass reported %+v; want one checks sweep of three rows", report)
+	if report.ChecksSweeps != 1 || report.ChecksSweptRows != 5 || len(report.Failed) != 0 || report.Remain {
+		t.Fatalf("the pass reported %+v; want one checks sweep of the idle repository's five rows", report)
 	}
 	want := []string{fmt.Sprintf("%s %s", code.OpChecksSweep, code.ChecksSubject(idle))}
 	if got := n.opsAfter(before); !slices.Equal(got, want) {
 		t.Fatalf("the pass appended %v, want %v", got, want)
 	}
-	if left := n.count(`SELECT COUNT(*) FROM code_checks WHERE repo_id = ?`, idle); left != 0 {
+	if left := n.checksOf(idle); left != 0 {
 		t.Fatalf("the idle repository keeps %d check rows past the history", left)
 	}
-	if kept := n.count(`SELECT COUNT(*) FROM code_checks WHERE repo_id = ?`, busy); kept != 2 {
+	if kept := n.checksOf(recent); kept != 1 {
+		t.Fatalf("the recent repository keeps %d of its 1 row inside the grace", kept)
+	}
+	if kept := n.checksOf(busy); kept != 2 {
 		t.Fatalf("the busy repository keeps %d of its 2 rows inside the history", kept)
 	}
 	again, err := passOver(n.store, n.reader, &p).Pass(t.Context())
 	if err != nil || again.ChecksSweeps != 0 {
-		t.Fatalf("a second pass swept again (%+v, %v): nothing is past the history now", again, err)
+		t.Fatalf("a second pass swept again (%+v, %v): nothing is past the history by the grace now", again, err)
+	}
+}
+
+// AN ACTIVE REPOSITORY'S CHECKS ARE LEFT TO ITS ENDINGS: a repository whose
+// checks keep ending removes its history with each ending, so a row that
+// crossed the history since its last ending — here half a minute before the
+// pass, its last ending a minute before — is its next ending's to remove. The
+// pass appends nothing for it: a sweep would be a record that ending makes
+// anyway, applied by every data node, ahead of the purges on the pass's one
+// budget — at the code host's design point, thousands of them a pass. Its
+// next ending removes the row.
+//
+// Mutation: list the repositories holding rows past the history itself, with
+// no grace, and the pass sweeps the active repository — red.
+func TestAnActiveRepositorysChecksAreLeftToItsEndings(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.ensure("active", described("active"), t1)
+	repo := n.mustID("active")
+	crossed := harnessAt.Add(-code.CheckHistory - 30*time.Second)
+	n.seedEnded(repo, crossed, 1)
+	// end publishes one attempt of a check, queued and ended at the broker
+	// instant at, as its runner's records are.
+	end := func(name string, at time.Time) {
+		t.Helper()
+		n.storedAt = func(uint64, time.Time) time.Time { return at }
+		key := code.CheckKey{RepoID: repo, OID: oidOf(name), Name: name, Attempt: 1}
+		exit := 0
+		if _, err := n.publishCheck(repo, code.OpCheckQueued, code.CheckQueued{CheckKey: key,
+			Purpose: code.PurposeTip, Target: "refs/heads/main", Reason: code.QueueDispatch,
+			Def: &code.CheckDef{Name: name, Run: "make test", TimeoutSeconds: 600}, QueuedAt: at}); err != nil {
+			t.Fatalf("queue %s: %v", name, err)
+		}
+		if _, err := n.publishCheck(repo, code.OpCheckFinished, code.CheckFinished{CheckKey: key,
+			State: code.CheckStatePassed, Reason: code.CheckReasonExit, ExitCode: &exit,
+			FinishedAt: at}); err != nil {
+			t.Fatalf("end %s: %v", name, err)
+		}
+	}
+	end("unit", harnessAt.Add(-time.Minute))
+	if held := n.checksOf(repo); held != 2 {
+		t.Fatalf("the premise: the repository holds %d rows, want the one that crossed the history after its "+
+			"last ending's cutoff, and that ending's own", held)
+	}
+	n.storedAt = func(uint64, time.Time) time.Time { return harnessAt }
+	before := n.end()
+	var p purged
+	report, err := passOver(n.store, n.reader, &p).Pass(t.Context())
+	if err != nil {
+		t.Fatalf("Pass: %v", err)
+	}
+	if report.ChecksSweeps != 0 || len(report.Failed) != 0 {
+		t.Fatalf("the pass reported %+v; want no checks sweep of a repository whose checks keep ending", report)
+	}
+	if got := n.opsAfter(before); len(got) != 0 {
+		t.Fatalf("the pass appended %v, want nothing: the repository's next ending removes its row", got)
+	}
+	end("lint", harnessAt.Add(time.Minute))
+	if left := n.count(`SELECT COUNT(*) FROM code_checks WHERE repo_id = ? AND finished_at = ?`, repo,
+		store.EncodeTime(crossed)); left != 0 || n.checksOf(repo) != 2 {
+		t.Fatalf("the repository's next ending left the row that crossed the history (%d of %d rows)", left,
+			n.checksOf(repo))
 	}
 }
 
