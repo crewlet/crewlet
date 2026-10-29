@@ -383,7 +383,10 @@ the repository is expired at the duty's next pass if it is still idle.
 Each pass fixes its cutoff, and the position its page of due repositories was
 read at, **before** it reads the holds — every run row the fleet holds,
 whatever its status, and the running turns of every node holding a seat
-lease, each asked and each required to answer within two seconds — and
+lease, each asked and each required to answer within two seconds, whichever
+other nodes answer too; the rows are read again once the nodes have answered,
+since a turn's first coding run moves its holds from its node's memory onto
+the run's new row meanwhile — and
 decides each expiry against that page: a repository with any record on it
 since, or active since the cutoff, is kept. A turn taking its hold on a
 repository idle 22 hours or more also records it on the repository, which the

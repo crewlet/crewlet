@@ -284,6 +284,64 @@ func TestANodeHoldingNoSeatNeverStandsInForAHolder(t *testing.T) {
 	}
 }
 
+// A HOLD MOVING ONTO ITS TURN'S FIRST ROW IS NEVER MISSED. A native turn's
+// first launch writes its holds on a NEW row (BeginLaunch), and the turn
+// suspends and forgets them in memory as its frame returns. A row written
+// after the reader listed the run store, by a turn whose frame returned before
+// the running turns were asked, was in neither answer, and the pass expired a
+// scratch repository the parked run depends on (M3-decisions M3-O61). Here
+// the run store lists no row first and, as it answers, the turn launches — its
+// row written, its frame returned — so the running turns hold nothing when
+// asked: the rows read after the ask hold the key. And a listing after the
+// ask that fails is an unknown, named, like the first.
+//
+// Mutations: drop the listing after the ask — repo-s reads unheld, red; read
+// its failure as nothing held — no error, red.
+func TestAHoldMovingOntoItsTurnsFirstRowIsNeverMissed(t *testing.T) {
+	t.Parallel()
+	var self runningTurns
+	runs := &launchingRuns{launch: self.running(turnctx.NewHolds([]string{"repo-s"})),
+		row: sandbox.PendingRun{TurnID: "run-s", AgentHandle: "dev", Status: sandbox.StatusAwaiting,
+			CodeHolds: []string{"repo-s"}}}
+	got, err := holdsReader{runs: runs, self: &self}.holds(t.Context(), []string{"repo-s", "repo-z"})
+	if err != nil || !got["repo-s"] || got["repo-z"] || len(got) != 1 {
+		t.Fatalf("a turn that launched while its holds were read: %v, %v — want repo-s held, "+
+			"from the row its launch wrote", got, err)
+	}
+	if runs.listed != 2 {
+		t.Fatalf("the run store was listed %d times, want once before the ask and once after", runs.listed)
+	}
+
+	runs = &launchingRuns{launch: func() {}, failAfter: true}
+	if _, err := (holdsReader{runs: runs, self: &self}).holds(t.Context(), []string{"repo-s"}); err == nil ||
+		!strings.Contains(err.Error(), "after the running turns were asked") {
+		t.Fatalf("a run store that could not be listed after the ask = %v, want an error naming it", err)
+	}
+}
+
+// launchingRuns is a run store a turn's first launch lands in while it is
+// being listed: its first listing holds no row and, as it answers, the turn
+// launches — its row written, its frame returned (launch forgets its set);
+// every later listing holds the row, or fails where failAfter is set.
+type launchingRuns struct {
+	launch    func()
+	row       sandbox.PendingRun
+	failAfter bool
+	listed    int
+}
+
+func (r *launchingRuns) ListRuns(context.Context) ([]sandbox.PendingRun, error) {
+	r.listed++
+	switch {
+	case r.listed == 1:
+		r.launch()
+		return nil, nil
+	case r.failAfter:
+		return nil, errors.New("the coordination store refused the listing")
+	}
+	return []sandbox.PendingRun{r.row}, nil
+}
+
 // A TURN HOLDS WHAT ITS ROW MAY: the most one turn may hold
 // (turnctx.MaxHolds) is the most its run row carries (sandbox.MaxCodeHolds),
 // so a turn's whole set always fits the row a launch writes it on — and

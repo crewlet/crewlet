@@ -43,13 +43,15 @@ import (
 // — a status a newer build added included ([sandbox.PendingStore.ListRuns]),
 // since a run is unended exactly while it has a record — and (b) any running
 // turn of any process holding a seat lease, asked over the queue's ephemeral
-// verbs on [topics.CodeHolds]. A turn runs only under its seat's lease, and
-// seat leases are released after a drain's turns finish, while the presence
-// lease is given back first, so the seat holders are who must answer: a
-// presence listing would miss a draining node's running turns. A node that
-// holds no seat lease is stopping its turns, whatever such a turn launched is a
-// row, and the rest of its work is redone under a new turn id by the seat's
-// next holder.
+// verbs on [topics.CodeHolds]; and the rows are read AGAIN after the ask,
+// because a turn's first launch moves its holds from its memory onto a new
+// row while the ask is on its way ([holdsReader.holds]). A turn runs only
+// under its seat's lease, and seat leases are released after a drain's turns
+// finish, while the presence lease is given back first, so the seat holders
+// are who must answer: a presence listing would miss a draining node's
+// running turns. A node that holds no seat lease is stopping its turns,
+// whatever such a turn launched is a row, and the rest of its work is redone
+// under a new turn id by the seat's next holder.
 //
 // THE ASK ENDS WHEN EVERY HOLDER THE LEASES NAME HAS ANSWERED, never at a
 // count of replies: every engine answers the question, whatever its roles
@@ -300,6 +302,28 @@ type holdsReader struct {
 
 // holds answers which of keys a live turn holds, or an error naming what it
 // could not read — never an answer on an unknown.
+//
+// THE ROWS ARE READ ON BOTH SIDES OF THE ASK, and a key any of the three
+// reads shows is held, because a turn's holds MOVE between the two places it
+// keeps them, and each move must land inside some read:
+//
+//   - A FIRST LAUNCH moves them from the turn's memory onto a NEW row: the
+//     launch writes the sealed set on the row it opens (BeginLaunch), the
+//     turn suspends, and its frame returns and forgets the set
+//     ([runningTurns]). A row written after (a) listed the store, by a turn
+//     whose frame returned before (b)'s question reached its node, is in
+//     neither answer — and between the two reads the pass waits on the
+//     seat-lease listing, a certified listing of the coordination store
+//     whose p99 on a loaded fleet reached seconds, against a move that takes
+//     two coordination writes and a box's start. The row was written before
+//     the frame returned, so before (b) missed it: (c), which starts after
+//     (b) ends, lists it — unless the run has ENDED and deleted it, when
+//     nothing holds the repository any more.
+//   - A RESUME moves them the other way, from the row into the resumed
+//     turn's memory, while the row stays until the run ends: (a) lists it.
+//
+// One more listing of the run store a page of DUE repositories — the bucket
+// every completion poll reads whole — is what closing the first move costs.
 func (r holdsReader) holds(ctx context.Context, keys []string) (map[string]bool, error) {
 	asked := make(map[string]bool, len(keys))
 	for _, key := range keys {
@@ -309,21 +333,29 @@ func (r holdsReader) holds(ctx context.Context, keys []string) (map[string]bool,
 	if len(keys) == 0 {
 		return held, nil
 	}
-	// (a) EVERY RUN ROW, WHATEVER ITS STATUS: a parked run holds what its
-	// turn named for as long as it has a record.
 	if r.runs == nil {
 		return nil, errors.New("engine: this node has no run store to read the parked runs' holds from")
 	}
-	runs, err := r.runs.ListRuns(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("engine: the run store could not be listed for the parked runs' holds: %w", err)
-	}
-	for _, run := range runs {
-		for _, key := range run.CodeHolds {
-			if asked[key] {
-				held[key] = true
+	// rows marks what every run row, WHATEVER ITS STATUS, holds: a parked
+	// run holds what its turn named for as long as it has a record.
+	rows := func(when string) error {
+		runs, err := r.runs.ListRuns(ctx)
+		if err != nil {
+			return fmt.Errorf("engine: the run store could not be listed %s for the parked runs' holds: %w",
+				when, err)
+		}
+		for _, run := range runs {
+			for _, key := range run.CodeHolds {
+				if asked[key] {
+					held[key] = true
+				}
 			}
 		}
+		return nil
+	}
+	// (a) THE ROWS, before the running turns are asked.
+	if err := rows("before the running turns were asked"); err != nil {
+		return nil, err
 	}
 	// (b) EVERY RUNNING TURN, asked of every process holding a seat lease.
 	running, err := r.running(ctx, keys)
@@ -334,6 +366,11 @@ func (r holdsReader) holds(ctx context.Context, keys []string) (map[string]bool,
 		if asked[key] {
 			held[key] = true
 		}
+	}
+	// (c) THE ROWS AGAIN, after: a first launch's holds, moved onto a new row
+	// while (b) was on its way.
+	if err := rows("after the running turns were asked"); err != nil {
+		return nil, err
 	}
 	return held, nil
 }
