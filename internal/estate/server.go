@@ -69,8 +69,10 @@ type ServerOptions struct {
 // before it, because a node that answered its reads and no proposal would be
 // asked first for every push to the repositories it commits for, and cost
 // each one a whole write attempt before the runner-up — and a git node that
-// answered no git read would be every repository's silent home. A node
-// serving git ([ServerOptions.Git]) registers the git lane beside the others.
+// answered no git read would be every repository's silent home, as one that
+// answered no engine write would be to every write's walk. A node serving git
+// ([ServerOptions.Git]) registers the git lanes, the reads' and the writes'
+// ([gitLanes]), beside the others.
 func Serve(ctx context.Context, q Server, opts ServerOptions) (queue.Unsubscribe, error) {
 	switch {
 	case q == nil || opts.Local == nil:

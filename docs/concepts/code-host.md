@@ -51,8 +51,9 @@ This is the product's current shape, not a configuration choice:
   the server, through its code tools ([Server-side reads](#server-side-reads)),
   under the rule a person's push is judged by too ([Who may read and
   push](#who-may-read-and-push)). A git node can build a seat's or a
-  person's commit itself and land it as a push ([Engine-built
-  commits](#engine-built-commits)), but no tool asks it for one yet.
+  person's commit itself and land it as a push, and every node asks such a
+  write of the repository's home git node ([Engine-built
+  commits](#engine-built-commits)), but no tool asks for one yet.
 - **No tool asks for a repository yet.** The code host decides a request to
   create, rename, archive, delete, restore or protect a repository, a seat's
   own scratch repositories among them, and expires an idle scratch repository
@@ -2965,6 +2966,8 @@ and is asked last for thirty seconds, and a node that went silent is asked
 last of all. The reads travel on a lane of their own on each git node, so a
 read waiting on its copy's sync never holds a slot the node answers its other
 estate requests through, and each is a signed estate request like any other.
+[Engine-built commits](#which-git-node-builds-a-write) are asked of the same
+home, on a lane of their own beside the reads'.
 
 **One node fills a copy.** A git node that holds no copy of the repository
 starts a download of one only for the read that names it the one node of its
@@ -3613,9 +3616,10 @@ reverted or cherry-picked, a branch created or deleted — is built by the code
 host itself, on a git node holding the repository ([its home](#the-home-git-node)
 first), and lands as a **push**: the same landing a person's `git push` takes
 from its pack on, held to the same rules, one record on the code log, and
-answered applied only from that record's applied row. Nothing in this release
-asks a git node for one yet ([What it does not do yet](#what-it-does-not-do-yet));
-this is what a git node does with one.
+answered applied only from that record's applied row. Every node asks a write
+of the repository's home git node first ([Which git node builds a
+write](#which-git-node-builds-a-write)); nothing in this release asks for one
+yet ([What it does not do yet](#what-it-does-not-do-yet)).
 
 | Kind | What it does |
 |---|---|
@@ -3714,6 +3718,47 @@ first waits for it and is answered what it is; asked again after it landed,
 and after the branch moved on, a write is answered from its push's row with
 nothing built; and a write that cannot learn whether it already landed is
 answered `busy` — make the same call again — never `stale`.
+
+### Which git node builds a write
+
+A write is asked of the repository's [home git node](#the-home-git-node) first
+— the node its reads are asked of, whose copy they keep warm — then of its
+runner-up, in the order every node computes alike, whichever node the write was
+asked through
+([ADR-0059](https://github.com/crewlet/crewlet/blob/main/adr/0059-a-repositorys-git-work-is-asked-of-its-home-git-node.md)).
+
+- **A git node that runs none of it is passed over.** One whose code host is
+  stopping, or that holds no configuration yet to sign the commit by, answers
+  that it ran nothing: the write is asked of the next git node at once, and the
+  node that refused is asked last for thirty seconds. One that cannot build it
+  in time for a reason of its own — its copy still syncing, its seats' share of
+  the read lane full, or behind the company's configuration, for a seat's
+  write — is passed over the same way, and asked first again next time.
+- **One that goes silent is passed over with the same write.** The write's push
+  is its caller's operation's ([A retry is the same
+  push](#a-retry-is-the-same-push)), so the next git node builds the same push
+  and the same commit: where the silent node had landed it, the next answers
+  from the push's row with nothing built, and where it had not, the
+  repository's committer lands the one push once.
+- **A write waits at most 82 seconds on one git node**, whatever its caller
+  allows: the waits of every stage at their whole budgets — a unit of the node's
+  share (2 s), three reads of the rows (6 s), the build's git (10 s), the
+  bundle's upload (30 s), the proposal (33 s) and the answer's way back (1 s).
+  A git node fits the write into that, answering `busy` before anything is
+  uploaded where the proposal would no longer fit, so a healthy node always
+  answers inside it and only a wedged one costs it — after which the next git
+  node is asked.
+- **Writes travel on a lane of their own** on each git node, beside the reads':
+  a write holds its slot through its upload, its proposal and the wait for its
+  row, so on the reads' lane a burst of writes would hold the slots every read
+  of the node's repositories is answered through. What bounds the git a node's
+  writes run is its [seat git-work share](#server-side-reads), never the lane.
+- **A write no git node would take is refused before any is asked** — a branch
+  git refuses, a path a checkout cannot make, a seat's write that names no
+  turn — naming what is wrong.
+- **A write that landed is in the next read made through the same node.** It
+  raises that node's floor on its repository, so the node's next read of the
+  repository, on whichever git node answers it, includes the write.
 
 ### What a write is refused
 

@@ -185,18 +185,20 @@ var (
 	ErrSliceTooLarge = errors.New("code: the read is too large to answer whole; narrow it")
 )
 
-// ErrGitUnready is a read by oid ([GitQuery]) that THIS git node could not
-// answer inside its budget, for a reason about the node rather than about the
-// repository's content — so another git node may answer it, and a walk asking
-// git nodes in turn moves on from this one without holding it against the
-// node: a node that is syncing, at its share, holding no chart or holding no
-// copy now is the right node a moment later. Every other refusal of a read is about the
-// request or the repository (ErrNotPermitted, ErrObjectNotFound, …) and is the
-// answer wherever it is asked.
+// ErrGitUnready is a read by oid ([GitQuery]) or an engine write
+// ([EngineWrite]) that THIS git node could not answer inside its budget, for a
+// reason about the node rather than about the repository's content — so
+// another git node may answer it, and a walk asking git nodes in turn moves on
+// from this one without holding it against the node: a node that is syncing,
+// at its share, holding no chart or holding no copy now is the right node a
+// moment later. Every other refusal of a read or a write is about the request
+// or the repository (ErrNotPermitted, ErrObjectNotFound, …) and is the answer
+// wherever it is asked.
 //
 // ITS REASON CROSSES THE WIRE, because the walk acts on it: whether the one
-// node a walk lets fill a copy ([GitQuery.Home]) is still the one depends on
-// why that node did not answer ([UnreadyReason.PassesFill]).
+// node a walk lets fill a copy ([GitQuery.Home], [EngineWrite.Home]) is still
+// the one depends on why that node did not answer
+// ([UnreadyReason.PassesFill]).
 type ErrGitUnready struct {
 	// Reason is which of [UnreadyReasons] holds.
 	Reason UnreadyReason
@@ -205,7 +207,7 @@ type ErrGitUnready struct {
 }
 
 func (e *ErrGitUnready) Error() string {
-	return fmt.Sprintf("code: this git node cannot answer the read now (%s): %s", e.Reason, e.Detail)
+	return fmt.Sprintf("code: this git node cannot answer now (%s): %s", e.Reason, e.Detail)
 }
 
 // UnreadyReason is why a git node answered a read [ErrGitUnready]: a closed

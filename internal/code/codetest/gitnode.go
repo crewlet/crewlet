@@ -413,17 +413,34 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 }
 
 // Git is the node's git half as the estate's router and server ask for it
-// (estate.LocalGit): its running incarnation's query server, read again at
-// every request so a restarted node's is the one asked, and none while the
-// node is killed or stopped — which the serving side answers `no_backend`, as
-// a git node whose code host is not built answers.
+// (estate.LocalGit): its running incarnation's query server for a read by
+// object id and its host for an engine write, as the engine pairs the two
+// over one cache, one pool and one share — read again at every request so a
+// restarted node's is the one asked, and none while the node is killed or
+// stopped, which the serving side answers `no_backend`, as a git node whose
+// code host is not built answers.
 func (g *GitNode) Git() (estate.GitServer, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.cur == nil {
 		return nil, false
 	}
-	return g.cur.query, true
+	return gitHalf{reads: g.cur.query, writes: g.cur.host}, true
+}
+
+// gitHalf is one incarnation's git half: its query server's reads and its
+// host's engine writes (estate.GitServer).
+type gitHalf struct {
+	reads  *query.Server
+	writes *host.Server
+}
+
+func (h gitHalf) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	return h.reads.Read(ctx, q)
+}
+
+func (h gitHalf) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+	return h.writes.Write(ctx, w)
 }
 
 // BackgroundBudget is what the node's presence row says its cache gives its

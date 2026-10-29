@@ -68,6 +68,11 @@ type DataOptions struct {
 	// a seat's write of a change's conversation and every reviewer an ask
 	// names; nil is the fixture chart on UTC (FixtureSeatRules).
 	SeatRules func() (code.SeatRules, bool)
+	// Current is whether the node serves the company's configuration, as
+	// its committer reads it before it decides a seat's push
+	// (code.CommitterOptions.Current) — false is a node confirmed behind
+	// it, which decides none; nil is current.
+	Current func() bool
 }
 
 // DataNode is one data node's code domain, composed as the engine composes it
@@ -286,8 +291,9 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		Retention: func() time.Duration { return deletedRetention },
 		// THE CHART A SEAT'S PUSH IS DECIDED BY — an engine write's, a seat's
 		// own commit landed as a push — the one the git nodes judge it by
-		// before they build it.
-		SeatRules: seatRules,
+		// before they build it; and the node's posture, which decides no
+		// seat's push while it is behind the company's configuration.
+		SeatRules: seatRules, Current: d.o.Current,
 	}); err != nil {
 		t.Fatalf("codetest: %s: build the committer: %v", d.o.ID, err)
 	}

@@ -115,7 +115,8 @@ type RouterOptions struct {
 
 // Timing is every duration the router waits on that a test must be able to
 // scale: one attempt's budget on one data node for a read and for a write, one
-// git read's on one git node, and the admission question's whole budget.
+// git read's and one engine write's on one git node, and the admission
+// question's whole budget.
 //
 // [Production] is the value every node runs, and nothing in the engine builds
 // another. A suite that drives the router from outside this package builds its
@@ -163,6 +164,11 @@ type RouterOptions struct {
 //     node's committer is. A suite that needs a wedged committer to cost less
 //     has to shorten the committer's budget with it, which is the committer's
 //     to expose rather than the router's to assume.
+//   - A git write attempt no longer than [minGitWriteAttempt]: the proposal
+//     the write makes needs a whole [minWriteAttempt] left after its upload,
+//     and the git node is served until a reply's margin before the attempt
+//     ends, so under the bound every engine write is answered busy before
+//     its upload — "a git write's attempt must hold the proposal it makes".
 //
 // The admission budget bounds a floorless question ([opPing]), so it has only
 // to be a positive duration.
@@ -174,8 +180,8 @@ type RouterOptions struct {
 // wedged data node for ever rather than move on to the next; and a zero
 // admission budget is a deadline already past, so every placement sweep would
 // withhold every seat's claim — a wiring mistake that reads as a fleet with no
-// data node in it. A negative field is a deadline already past for any of the
-// three.
+// data node in it. A negative field is a deadline already past for any of
+// them.
 type Timing struct {
 	// ReadAttempt bounds one read's wait on one data node — see
 	// [ReadAttempt]. Longer than [minReadAttempt].
@@ -190,14 +196,18 @@ type Timing struct {
 	// GitReadAttempt bounds one git read's wait on one git node — see
 	// [GitReadAttempt]. Longer than [minReadAttempt].
 	GitReadAttempt time.Duration
+	// GitWriteAttempt bounds one engine write's wait on one git node, its
+	// caller's deadline only ever shortening it — see [GitWriteAttempt].
+	// Longer than [minGitWriteAttempt].
+	GitWriteAttempt time.Duration
 }
 
 // Production is the timing every node runs: [ReadAttempt], writeAttempt,
-// admissionAsk and [GitReadAttempt], whose reasons are written at their
-// definitions.
+// admissionAsk, [GitReadAttempt] and [GitWriteAttempt], whose reasons are
+// written at their definitions.
 func Production() Timing {
 	return Timing{ReadAttempt: ReadAttempt, WriteAttempt: writeAttempt, AdmissionAsk: admissionAsk,
-		GitReadAttempt: GitReadAttempt}
+		GitReadAttempt: GitReadAttempt, GitWriteAttempt: GitWriteAttempt}
 }
 
 // minReadAttempt is what every read attempt must be longer than: the reply's
@@ -224,6 +234,16 @@ const minReadAttempt = code.ReplyMargin
 // a write whose caller left less than it for the proposal after the upload —
 // and two sums would let the two disagree on what a proposal needs.
 const minWriteAttempt = code.MinProposeAttempt
+
+// minGitWriteAttempt is what every git write attempt must be longer than: the
+// proposal the write makes ([minWriteAttempt]) and the reply's margin. The git
+// node is served until a reply's margin before the attempt ends
+// (code.AnswerBy), and it uploads a write's bundle only while the proposal's
+// whole attempt is still left after the upload (internal/code/host's deadline
+// rule) — so an attempt no longer than the two together leaves no write any
+// time to sync, build or upload in, and answers every one busy before its
+// upload. See [Timing].
+const minGitWriteAttempt = minWriteAttempt + code.ReplyMargin
 
 // refusal is why a router may not be built with t, naming the first field it
 // refuses, or nil.
@@ -252,6 +272,13 @@ func (t Timing) refusal() error {
 			"than %v — the answer's trip back (code.ReplyMargin), which a git node leaves between "+
 			"the end of its waits and its asker's deadline, so an attempt no longer leaves it no "+
 			"time to sync its copy or run the read; %s", t.GitReadAttempt, minReadAttempt, production)
+	case t.GitWriteAttempt <= minGitWriteAttempt:
+		return fmt.Errorf("estate: a router's Timing.GitWriteAttempt is %v, and it must be longer "+
+			"than %v — a git write's attempt must hold the proposal it makes: the git node uploads a "+
+			"write only while the proposal's own attempt (code.MinProposeAttempt, %v) is left after "+
+			"the upload, and answers its asker the reply's trip (code.ReplyMargin, %v) before the "+
+			"attempt ends, so an attempt no longer answers every write busy before its upload; %s",
+			t.GitWriteAttempt, minGitWriteAttempt, minWriteAttempt, code.ReplyMargin, production)
 	}
 	return nil
 }
@@ -1165,12 +1192,20 @@ func (x exchange) record(rep reply) {
 	}
 }
 
-// budgetFor is one attempt's budget on one data node: the router's own attempt
-// ([Router.wholeAttempt]) — or, for a write whose caller has a deadline, that
-// deadline (zero), since a gesture the caller gave five minutes must not be
-// abandoned after one.
+// budgetFor is one attempt's budget on one node: the router's own attempt
+// ([Router.wholeAttempt]) — or, for a write on a DATA node whose caller has a
+// deadline, that deadline (zero), since a gesture the caller gave five
+// minutes must not be abandoned after one.
+//
+// NEVER FOR A GIT WRITE, which keeps the router's own attempt whatever its
+// caller allows ([GitWriteAttempt]): its git node fits every stage of it —
+// the sync, the build, the upload and the proposal — into that attempt, so
+// one silent through it is wedged rather than slow, and the walk's next git
+// node builds the same push. Given a turn's deadline minutes away, a wedged
+// home was waited on until the turn's tool call gave up, and its runner-up
+// never asked.
 func (r *Router) budgetFor(ctx context.Context, spec *opSpec) time.Duration {
-	if _, bounded := ctx.Deadline(); bounded && spec.class != opRead {
+	if _, bounded := ctx.Deadline(); bounded && spec.class != opRead && !spec.git {
 		return 0
 	}
 	return r.wholeAttempt(spec)
@@ -1178,8 +1213,9 @@ func (r *Router) budgetFor(ctx context.Context, spec *opSpec) time.Duration {
 
 // wholeAttempt is the router's own attempt on one node for spec's class:
 // [Timing.ReadAttempt] for a read, [Timing.GitReadAttempt] for a git read on a
-// git node and [Timing.WriteAttempt] for a write — what a request waits where
-// nothing shorter bounds it, and what a node's silence must last to be
+// git node, [Timing.GitWriteAttempt] for an engine write on one and
+// [Timing.WriteAttempt] for a write on a data node — what a request waits
+// where nothing shorter bounds it, and what a node's silence must last to be
 // evidence it is gone rather than slow ([Router.ask]).
 func (r *Router) wholeAttempt(spec *opSpec) time.Duration {
 	switch {
@@ -1187,6 +1223,8 @@ func (r *Router) wholeAttempt(spec *opSpec) time.Duration {
 		return r.timing.GitReadAttempt
 	case spec.class == opRead:
 		return r.timing.ReadAttempt
+	case spec.git:
+		return r.timing.GitWriteAttempt
 	}
 	return r.timing.WriteAttempt
 }

@@ -197,6 +197,10 @@ var floorless = map[string]string{
 	"code.git_read": "reads a git node's cache, not a domain's copy (GitCopy): the asker's " +
 		"floor travels in the query, as the cache's sync level, and an object id names " +
 		"the same object at every position",
+	"code.git_write": "builds over a git node's cache, not a domain's copy (GitCopy): the " +
+		"asker's floor travels in the write, as the cache's sync level, and the push it " +
+		"lands is decided by the repository's committer, whose proposal carries the floor " +
+		"its builder read",
 
 	"usage.spend": "reads the usage domain, whose log no write of the asker's lands " +
 		"on: every node publishes its own days, so there is no position to see",

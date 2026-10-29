@@ -265,37 +265,54 @@
 // # A repository's git work is asked of its home git node
 //
 // An operation on a repository's git OBJECTS — a read by object id of a tree,
-// a file, a diff — is answered by a node with the `git` role from its own
-// cache, never by a data node's copy. That is ADR-0059, amending ADR-0025:
-// the router's walk has a second placement beside the data nodes, every live
-// git node ([RouterOptions.Git]), keyed by repository ([op.keyedOnGit]), and
-// such an operation names the git half rather than a domain's copy
-// ([GitCopy]), so no copy verdict, no dispatch floor and no lag gate holds it
-// back — its floor travels in its arguments and is the git node's cache's
-// sync level. It is asked in rendezvous.Order(repository, every live git
-// node) — the repository's HOME first, its runner-up next, the keyed order's
-// demotions and no sticky node, this node at its place where its git half is
-// built ([LocalGit], resolved per request, since the code host is built at
-// boot or at the first apply that hosts code) — on a lane of its own
-// ([laneGitReads]) a git node registers from boot. The home is a preference,
-// never ownership: no lease, no epoch. A git node that cannot answer inside
-// its budget — its copy still syncing, its share full — answers `behind`,
-// its reason beside it ([reply.Unready]), and is not demoted, so its askers
-// come back once it is warm; and ONE node a walk FILLS a copy at a time: the
-// walk stamps its effective home's attempt (code.GitQuery.Home), and every
-// other git node holding no copy answers at once that it holds none, so a
-// repository nobody holds costs the fleet one download rather than one a git
-// node. The fill moves to the next node of the walk only past one bringing no
-// copy up for the read — behind its configuration for a seat, failing on its
-// own, no code host — so a home that will not serve a read for a reason that
-// lasts never leaves its repository unreadable ([Router.routeGit]); a home at
-// its share keeps it, since the share is the node's and not the repository's.
-// Every git request is a signed estate request like any other, and every
-// attempt — a peer's, or this node's own git half in process — is held to the
-// git read attempt and SERVED UNTIL ITS ANSWER IS DUE, a reply's margin before
-// the attempt ends (code.AnswerBy), so a busy git node is heard saying so
-// rather than taken for a gone one, and a read is answered alike whichever
-// node asked it ([GitReadAttempt]).
+// a file, a diff, and an ENGINE WRITE, a seat's or a person's commit built
+// beside a copy of them and landed as a push (ADR-0062) — is answered by a
+// node with the `git` role from its own cache, never by a data node's copy.
+// That is ADR-0059, amending ADR-0025: the router's walk has a second
+// placement beside the data nodes, every live git node ([RouterOptions.Git]),
+// keyed by repository ([op.keyedOnGit]), and such an operation names the git
+// half rather than a domain's copy ([GitCopy]), so no copy verdict, no
+// dispatch floor and no lag gate holds it back — its floor travels in its
+// arguments and is the git node's cache's sync level. It is asked in
+// rendezvous.Order(repository, every live git node) — the repository's HOME
+// first, its runner-up next, the keyed order's demotions and no sticky node,
+// this node at its place where its git half is built ([LocalGit], resolved per
+// request, since the code host is built at boot or at the first apply that
+// hosts code) — on lanes of their own, the reads' and the writes'
+// ([laneGitReads], [laneGitWrites]), which a git node registers from boot. The
+// home is a preference, never ownership: no lease, no epoch. A git node that
+// cannot answer inside its budget — its copy still syncing, its share full —
+// answers `behind`, its reason beside it ([reply.Unready]), and is not
+// demoted, so its askers come back once it is warm; and ONE node a walk FILLS
+// a copy at a time: the walk stamps its effective home's attempt
+// (code.GitQuery.Home, code.EngineWrite.Home), and every other git node holding
+// no copy answers at once that it holds none, so a repository nobody holds
+// costs the fleet one download rather than one a git node. The fill moves to
+// the next node of the walk only past one bringing no copy up for the
+// operation — behind its configuration for a seat, failing on its own, no code
+// host — so a home that will not serve a read for a reason that lasts never
+// leaves its repository unreadable ([Router.routeGit]); a home at its share
+// keeps it, since the share is the node's and not the repository's. Every git
+// request is a signed estate request like any other, and every attempt — a
+// peer's, or this node's own git half in process — is held to its git attempt
+// and SERVED UNTIL ITS ANSWER IS DUE, a reply's margin before the attempt ends
+// (code.AnswerBy), so a busy git node is heard saying so rather than taken for
+// a gone one, and an operation is answered alike whichever node asked it
+// ([GitReadAttempt], [GitWriteAttempt]).
+//
+// AN ENGINE WRITE IS ONE PUSH WHICHEVER GIT NODE BUILDS IT ([opCodeGitWrite]):
+// its push id is derived from its caller's operation (code.WritePushID), and
+// its commit is a pure function of that operation and its parent, so the walk
+// asks it again of the next git node after one that ran nothing or went
+// silent, as an idempotent write — the next node builds the same push, and is
+// answered from its row where the silent one landed it — and two nodes that
+// both took themselves for its home build one push, which the repository's
+// committer lands once. Its attempt on one git node is the sum of every wait
+// its stages make at their whole budgets ([GitWriteAttempt], 82 s), which the
+// git node fits the write into — answering busy, before its upload, a write
+// whose proposal would no longer fit — so the attempt is the router's own
+// whatever deadline its caller gives ([Router.budgetFor]): a turn's minutes
+// waited out on a wedged home would leave its runner-up never asked.
 //
 // [Router.Home] names that home itself — the node a repository's reads are
 // asked of, and the one its maintenance falls to on a fleet of alike nodes:

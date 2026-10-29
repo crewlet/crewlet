@@ -150,19 +150,21 @@ type native struct {
 	changeWriter *code.ChangeWriter
 
 	// codeHost is this node's git surface (internal/code/host) — its cache,
-	// its git pool, the hook relay — built only where the company that
-	// started this runtime set `code.native` AND this node has the git role
-	// ([Engine.hostsGit]), nil otherwise. Read per request through
-	// [Engine.CodeHost], never captured.
+	// its git pool, the hook relay, and the engine writes it builds — built
+	// only where the company that started this runtime set `code.native` AND
+	// this node has the git role ([Engine.hostsGit]), nil otherwise. Read per
+	// request through [Engine.CodeHost], and as the writing half of this
+	// node's git half through [Engine.localGit] ([gitHalf]), never captured.
 	codeHost *host.Server
 
 	// gitReads is this node's server-side reads of a repository by object id
 	// (internal/code/query), built beside codeHost over the same cache and
 	// pool and nil where it is: what the estate's router and server ask of
-	// this node as a repository's home git node, through [Engine.localGit],
-	// per request. It holds no goroutine, and the code host's stop stops it
-	// first, cutting its reads in flight before the cache they read
-	// ([native.stopCodeHost]).
+	// this node as a repository's home git node — the reading half of its git
+	// half, codeHost's engine writes the other ([gitHalf]) — through
+	// [Engine.localGit], per request. It holds no goroutine, and the code
+	// host's stop stops it first, cutting its reads in flight before the
+	// cache they read ([native.stopCodeHost]).
 	gitReads *query.Server
 
 	// gitCache is the cache codeHost serves from, built and stopped with it

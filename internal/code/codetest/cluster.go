@@ -63,6 +63,21 @@ type Cluster interface {
 	// the repository's home git node first, the member's own git half at its
 	// place in the order (ADR-0059).
 	GitReadThrough(ctx context.Context, node string, q code.GitQuery) (code.GitAnswer, error)
+	// GitWriteThrough is an engine write asked through member node's own
+	// router, as a seat's or a person's tool on that member asks it — of the
+	// repository's home git node first, the member's own git half at its
+	// place in the order, and of the next with the same write where one ran
+	// nothing or went silent (code.git_write).
+	GitWriteThrough(ctx context.Context, node string, w code.EngineWrite) (code.EngineWriteResult, error)
+	// Revoke is a revision of the company that takes seat out of the chart,
+	// applied by every member but behind — which FAILED to apply it: it keeps
+	// the chart that still holds the seat, and is CONFIRMED BEHIND the
+	// company's configuration (shed), as every reader of a node's posture on
+	// it reads it — its estate service (estate.Backend.Current), its committer
+	// (code.CommitterOptions.Current) and its git node's reads and engine
+	// writes. restore is the fleet back on the fixture chart with every member
+	// current, which a case runs before it returns.
+	Revoke(t testing.TB, seat, behind string) (restore func())
 	// Settle is the cluster as a case finds it: every member running —
 	// one that is not is an error naming it — each one's applier level with
 	// the code log, and every router's memory of a member that refused or
@@ -184,6 +199,9 @@ func fleetCases() []fleetCase {
 		{"F30_ACompactionAnsweredLateIsCollapsed", aCompactionAnsweredLateIsCollapsed},
 		{"F31_AChangeOpenSurvivesItsCommitter", aChangeOpenSurvivesItsCommitter},
 		{"F39_AConversationSurvivesItsWriter", aConversationSurvivesItsWriter},
+		{"F39_EveryMemberRoutesAnEngineWriteToTheHome", everyMemberRoutesAnEngineWriteToTheHome},
+		{"F40_AnEngineWriteWhoseHomeDiesAfterAppendIsOnePush", anEngineWriteWhoseHomeDiesAfterAppendIsOnePush},
+		{"F41_ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds", aRevokedSeatIsRefusedOnceTheLaggingCommitterSheds},
 		{"LY8_ALargeNodePublishesForEveryNode", aLargeNodePublishesForEveryNode},
 		{"LY9_TwoMaintainersLandOnePublication", twoMaintainersLandOnePublication},
 	}

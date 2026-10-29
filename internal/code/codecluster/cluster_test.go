@@ -57,13 +57,25 @@ const members = 3
 // THE ADMISSION BUDGET is the read attempt's: no case asks it.
 //
 // THE GIT READ ATTEMPT is production's (estate.GitReadAttempt): no case wedges
-// a git node, and a member that is killed or stopped costs a git read no wait
-// at all — nothing serves its subjects, and the broker's ask ends at once.
+// a git node for a read, and a member that is killed or stopped costs a git
+// read no wait at all — nothing serves its subjects, and the broker's ask ends
+// at once.
+//
+// THE GIT WRITE ATTEMPT is production's (estate.GitWriteAttempt) too, though
+// it is what F40's home — killed after its write's proposal, its answer never
+// sent — costs before the runner-up is asked, on each backend: a git node
+// uploads a write's bundle only while the upload's allowance and the
+// proposal's own attempt are still left (code.WriteUploadAllowance and
+// code.MinProposeAttempt, 63 s together, internal/code/host's deadline rule),
+// so an attempt short of production's by its sync and build budgets would
+// answer a write that synced or built slowly on a loaded runner busy — a case
+// failing for the suite's timing rather than the code host's.
 var clusterTiming = estate.Timing{
-	ReadAttempt:    2 * time.Second,
-	WriteAttempt:   statelog.ReadBudget + code.CommitBudget + code.ReplyMargin + 12*time.Second,
-	AdmissionAsk:   2 * time.Second,
-	GitReadAttempt: estate.GitReadAttempt,
+	ReadAttempt:     2 * time.Second,
+	WriteAttempt:    statelog.ReadBudget + code.CommitBudget + code.ReplyMargin + 12*time.Second,
+	AdmissionAsk:    2 * time.Second,
+	GitReadAttempt:  estate.GitReadAttempt,
+	GitWriteAttempt: estate.GitWriteAttempt,
 }
 
 // clusterEnvelopes are every member's estate envelopes ([estate.Envelopes]):
@@ -119,6 +131,10 @@ type cluster struct {
 
 	// skew is every router's clock's distance from the wall clock (Settle).
 	skew atomic.Int64
+
+	// revoked is the revision of the chart a case runs the fleet under
+	// (Revoke), nil for the fixture chart with every member current.
+	revoked atomic.Pointer[revocation]
 
 	mu          sync.Mutex
 	activations int
@@ -204,7 +220,8 @@ func startClusterOf(t testing.TB, backend string, broker js.Config) *cluster {
 		m.q = c.brokers.Client(t, m.i)
 		m.objects = c.objectsOver(t, m.q)
 		m.data = codetest.StartDataNode(t, codetest.DataOptions{ID: m.id, Queue: m.q,
-			Dir: filepath.Join(m.dir, "data"), Faults: c.faults, LogBytes: codeLogBytes})
+			Dir: filepath.Join(m.dir, "data"), Faults: c.faults, LogBytes: codeLogBytes,
+			SeatRules: m.seatRules, Current: m.current})
 		m.route(t)
 		m.running = true
 	}
@@ -213,7 +230,7 @@ func startClusterOf(t testing.TB, backend string, broker js.Config) *cluster {
 			ID: m.id, Dir: filepath.Join(m.dir, "git"), Estate: memberEstate{m}, Reads: m.read,
 			Compactions: m.compact, Maintainers: memberMaintainers{m},
 			Objects: m.backend, Faults: c.faults, Credentials: c.creds, Audit: c.record,
-			MaxTransfers: transfers,
+			MaxTransfers: transfers, Roster: m.roster, Current: m.current,
 		})
 		// UNDER THE MEMBER'S LOCK, since its serving registration — made
 		// before its git node — reads it from the broker's goroutines
@@ -316,10 +333,10 @@ func (m *member) gitNode() *codetest.GitNode {
 }
 
 // memberGit is the member's git half as its router and its serving
-// registration ask for it (estate.LocalGit): its git node's query server, read
-// again at every request — the git node is started after the registration,
-// and a restart builds a new query server — and counted, so a case can tell
-// which member answered a read (member.gitAnswered).
+// registration ask for it (estate.LocalGit): its git node's query server and
+// host, read again at every request — the git node is started after the
+// registration, and a restart builds new ones — its reads counted, so a case
+// can tell which member answered a read (member.gitAnswered).
 type memberGit struct{ m *member }
 
 func (g memberGit) Git() (estate.GitServer, bool) {
@@ -334,7 +351,7 @@ func (g memberGit) Git() (estate.GitServer, bool) {
 	return countedGit{m: g.m, inner: s}, true
 }
 
-// countedGit is a member's query server, counting every read it answers.
+// countedGit is a member's git half, counting every read it answers.
 type countedGit struct {
 	m     *member
 	inner estate.GitServer
@@ -346,6 +363,13 @@ func (c countedGit) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, 
 		c.m.gitAnswered.Add(1)
 	}
 	return a, err
+}
+
+// Write is the member's engine write, as its git node's host builds it: which
+// member built a write is its push row's (code.PushRow.Node), so nothing is
+// counted here.
+func (c countedGit) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+	return c.inner.Write(ctx, w)
 }
 
 // read is a read of the code host through the member's router, as its API's
@@ -429,9 +453,12 @@ func (e memberEstate) PushOutcome(ctx context.Context, q code.OutcomeQuery) (cod
 
 // memberCopy is the member's own copy of the estate as its router and its
 // serving half ask it: the code half its data node serves (code.Served, the
-// adapter the engine hands the router), its applier's wait, and whether the
-// copy answers — the state log's own judgement of its health. A held applier
-// makes a LAGGING copy, asked last, never a wrong one.
+// adapter the engine hands the router), its applier's wait, whether the copy
+// answers — the state log's own judgement of its health — and whether the
+// member serves the company's configuration (member.current). A held applier
+// makes a LAGGING copy, asked last, never a wrong one; a member a case left
+// behind a revision (Revoke) is a node behind the configuration, asked last
+// and judging no grant.
 type memberCopy struct{ m *member }
 
 func (c memberCopy) For(context.Context, string) (estate.Backend, bool) {
@@ -447,7 +474,47 @@ func (c memberCopy) For(context.Context, string) (estate.Backend, bool) {
 			ok, _ := h.Answers()
 			return ok
 		},
+		Current: c.m.current,
 	}, true
+}
+
+// revocation is a revision of the chart a case runs the fleet under
+// (cluster.Revoke): seat taken out of the chart of every member that applied
+// it, which is every member but behind.
+type revocation struct{ seat, behind string }
+
+// roster is the chart the member judges a seat's grant by — its git node's
+// reads and engine writes, and its committer's decide: the fixture chart, less
+// the seat a revision revoked where the member applied that revision.
+func (m *member) roster() code.Roster {
+	if r := m.c.revoked.Load(); r != nil && r.behind != m.id {
+		return codetest.FixtureRosterWithout(r.seat)
+	}
+	return codetest.FixtureRoster()
+}
+
+// seatRules is the member's chart on the company's clock, as its committer
+// judges a seat's push by them.
+func (m *member) seatRules() (code.SeatRules, bool) {
+	return code.SeatRules{Roster: m.roster(), Zone: time.UTC}, true
+}
+
+// current is whether the member serves the company's configuration, as every
+// reader of a node's posture on it reads it — false for the member a case left
+// behind a revision (Revoke).
+func (m *member) current() bool {
+	r := m.c.revoked.Load()
+	return r == nil || r.behind != m.id
+}
+
+// Revoke takes seat out of every member's chart but behind's, and leaves behind
+// confirmed behind the company's configuration (codetest.Cluster). restore is
+// the fixture chart, every member current, and may be run more than once.
+func (c *cluster) Revoke(t testing.TB, seat, behind string) (restore func()) {
+	t.Helper()
+	c.member(t, behind)
+	c.revoked.Store(&revocation{seat: seat, behind: behind})
+	return func() { c.revoked.Store(nil) }
 }
 
 // placement is what every router routes by: the members whose PRESENCE is
@@ -659,27 +726,14 @@ func (c *cluster) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer,
 	return m.router.Load().Code().GitRead(ctx, q)
 }
 
-// Write is an engine write asked of the members' code hosts, the repository's
-// home first as its own router answers it (codetest.Fleet).
+// Write is an engine write through the first running member's router
+// (codetest.Fleet).
 func (c *cluster) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
-	var home, rest []codetest.Node
-	for _, m := range c.members {
-		if !m.isRunning() {
-			continue
-		}
-		n := m.git.Node()
-		if n == nil {
-			continue
-		}
-		if r := m.router.Load(); r != nil {
-			if id, err := r.Home(w.RepoID); err == nil && id == m.id {
-				home = append(home, n)
-				continue
-			}
-		}
-		rest = append(rest, n)
+	m, err := c.first()
+	if err != nil {
+		return code.EngineWriteResult{}, err
 	}
-	return codetest.WriteThrough(ctx, w, append(home, rest...), len(home) > 0)
+	return m.router.Load().Code().GitWrite(ctx, w)
 }
 
 // GitReadThrough is a read of a repository by object id through member node's
@@ -691,6 +745,19 @@ func (c *cluster) GitReadThrough(ctx context.Context, node string, q code.GitQue
 		}
 	}
 	return code.GitAnswer{}, fmt.Errorf("codecluster: no running member called %q", node)
+}
+
+// GitWriteThrough is an engine write through member node's own router
+// (codetest.Cluster).
+func (c *cluster) GitWriteThrough(ctx context.Context, node string, w code.EngineWrite) (code.EngineWriteResult,
+	error) {
+
+	for _, m := range c.members {
+		if m.id == node && m.isRunning() {
+			return m.router.Load().Code().GitWrite(ctx, w)
+		}
+	}
+	return code.EngineWriteResult{}, fmt.Errorf("codecluster: no running member called %q", node)
 }
 
 // ChangeThrough is a write of a change's lifecycle asked through member node's

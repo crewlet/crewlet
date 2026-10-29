@@ -13,14 +13,15 @@ import (
 // finds the repositories a compaction, a publication or an expunge may be due
 // in by — each naming the CODE domain, so the code copy's own verdict — never
 // the tracker's — decides whether a node answers it (ADR-0049), and its floor
-// is on the code log — and a read of a repository's CONTENT by object id,
-// which names no domain's copy and is asked of the repository's home GIT node
-// ([GitCopy], ADR-0059). A push, a compaction, an expunge record and a
-// change's write are keyed on their repository's data nodes: see the package
-// doc's "A push is asked of its repository's committer". An operation that
-// JUDGES A GRANT from the serving node's chart — a read a seat asks, and a
-// seat's write of a change — says so ([op.judgesGrant]), and a node behind the
-// company's configuration answers none of it.
+// is on the code log — and a read of a repository's CONTENT by object id and
+// an engine write built beside it, which name no domain's copy and are asked
+// of the repository's home GIT node ([GitCopy], ADR-0059). A push, a
+// compaction, an expunge record and a change's write are keyed on their
+// repository's data nodes: see the package doc's "A push is asked of its
+// repository's committer". An operation that JUDGES A GRANT from the serving
+// node's chart — a read a seat asks, and a seat's write of a change — says so
+// ([op.judgesGrant]), and a node behind the company's configuration answers
+// none of it.
 
 // CodeServer is the code half a data node serves, declared here by its
 // consumer with exactly the methods the operations below call. [code.Served]
@@ -318,3 +319,47 @@ var opCodeGitRead = define("code.git_read", opRead, GitCopy, false,
 		q.Home = home
 		return q
 	}).answeredOn(laneGitReads)
+
+// opCodeGitWrite is one ENGINE WRITE — a commit of files, a revert, a
+// cherry-pick, a branch created or deleted, which a seat or a person asks of
+// a repository through a tool and the engine builds beside a copy of it
+// (ADR-0062) — asked of the repository's HOME git node first, then its
+// runner-up (ADR-0059): the home's copy is the one the repository's reads keep
+// warm, so a write is built where its objects already are. Each attempt is
+// stamped with whether the node asked is the walk's effective home
+// (code.EngineWrite.Home), the one node a walk lets fill a copy, as a read's
+// is; on a lane of its own ([laneGitWrites]); held to [GitWriteAttempt].
+//
+// IDEMPOTENT BY ITS PUSH ID (code.WritePushID of the write's operation): a
+// home that went silent may have landed it, and the runner-up asked the same
+// write builds the same push — the same commit, byte for byte — and is
+// answered from the row the silent node's landing wrote, or, racing it,
+// collapses into that push at the repository's committer. So it is an
+// [opIdempotentWrite], asked of the next git node after one that went silent
+// as after one that ran nothing. A git node that RAN NOTHING about this node's
+// own state — its code host stopping, or holding no epoch or no seat to sign
+// the commit by (code.ErrNotServing) — is declined ([ranNothing]) and asked
+// last for it for [suspectFor]; one that could not build it inside its budget
+// for a reason about itself (code.ErrGitUnready) is moved on from without
+// demotion ([gitUnready]). Every other answer, a refusal of the change or of
+// the push among them, is the write's. The git node judges a seat's grant
+// itself, and answers a seat `behind_config` where it is behind its
+// configuration, so the operation declares no grant here, as a read declares
+// none.
+//
+// THE CODE DOMAIN'S RECORD FORMAT IS UNTOUCHED: nothing here rides the code
+// log — what a write leaves is a push, whose proposal and row are the domain's
+// own — so this operation takes no versionedFields row; the envelope evolves
+// as every operation's does, additive only.
+var opCodeGitWrite = define("code.git_write", opIdempotentWrite, GitCopy, false,
+	func(ctx context.Context, b Backend, _ *Actor, w code.EngineWrite) (code.EngineWriteResult, error) {
+		if b.Git == nil {
+			return code.EngineWriteResult{}, errNoHalf
+		}
+		res, err := b.Git.Write(ctx, w)
+		return res, gitUnready(ranNothing(err))
+	}).keyedOnGit(func(w code.EngineWrite) string { return w.RepoID },
+	func(w code.EngineWrite, home bool) code.EngineWrite {
+		w.Home = home
+		return w
+	}).answeredOn(laneGitWrites)

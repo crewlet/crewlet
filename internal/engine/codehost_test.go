@@ -397,19 +397,23 @@ func TestAGitNodeAnswersTheFleetsCodeStatus(t *testing.T) {
 	}
 }
 
-// A GIT READ IS SERVED ONCE AN APPLY BUILDS THE CODE HOST, with no restart
+// THE GIT HALF IS SERVED ONCE AN APPLY BUILDS THE CODE HOST, with no restart
 // (M3-O17). A git node booted with no company has built no code host, so a
-// read of a repository by object id through its own router is unserved, the
-// node saying it runs none; the first apply that sets code.native builds the
-// code host and the git reads beside it, and the next read — of the commit the
-// founder pushed through that host — is answered by this node's own git half.
-// The router and the estate server ask for that half per request: either one
-// built before the runtime existed, and holding what it found then, would
-// answer "no code host" until the node restarted.
+// read of a repository by object id and an engine write through its own router
+// are each unserved, the node saying it runs none; the first apply that sets
+// code.native builds the code host and the git reads beside it, and the next
+// read — of the commit the founder pushed through that host — is answered by
+// this node's own git half, and so is the founder's next write, built and
+// landed by the code host and read back at the commit it made. The router and
+// the estate server ask for that half per request: either one built before
+// the runtime existed, and holding what it found then, would answer "no code
+// host" until the node restarted.
 //
-// Mutation: resolve the git half once, when the router is built — the read
-// after the apply is still unserved, red.
-func TestAGitReadIsServedOnceAnApplyBuildsTheCodeHost(t *testing.T) {
+// Mutations: resolve the git half once, when the router is built — the read
+// after the apply is still unserved, red; answer the half's writes with
+// nothing built (a stub where the code host's Write is) — the write after the
+// apply is not applied, red.
+func TestTheGitHalfIsServedOnceAnApplyBuildsTheCodeHost(t *testing.T) {
 	t.Parallel()
 	gittest.RequireNode(t)
 	b := gitNodeBootstrap(t, nil)
@@ -425,6 +429,18 @@ func TestAGitReadIsServedOnceAnApplyBuildsTheCodeHost(t *testing.T) {
 	var unserved *estate.ErrUnserved
 	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "runs no code host") {
 		t.Fatalf("a git read on a git node with no company = %v, want it unserved, the node running no "+
+			"code host", err)
+	}
+	guide := "# the guide\n"
+	write := func(repo, head string) code.EngineWrite {
+		return code.EngineWrite{Kind: code.WriteCommitFiles, RepoID: repo, Principal: founder,
+			OpID: statelog.NewOpID(time.Now(), ""), Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
+			Ref: "refs/heads/main", ExpectedHead: head, Message: "a guide, written through a tool",
+			Files: []code.FileOp{{Op: code.FileOpPut, Path: "docs/guide.md", Content: &guide}}}
+	}
+	_, err = engine.GitWriteForTest(t.Context(), e, write(read.RepoID, read.Tree.Rev))
+	if !errors.As(err, &unserved) || !strings.Contains(unserved.Detail, "runs no code host") {
+		t.Fatalf("an engine write on a git node with no company = %v, want it unserved, the node running no "+
 			"code host", err)
 	}
 
@@ -455,6 +471,17 @@ func TestAGitReadIsServedOnceAnApplyBuildsTheCodeHost(t *testing.T) {
 	}) {
 		t.Fatalf("a git read once the apply built the code host = (%+v, %v), want web's root listing "+
 			"README.md, answered by this node", a.Tree, err)
+	}
+
+	wrote, err := engine.GitWriteForTest(t.Context(), e, write(repo.Repo.ID, commit))
+	if err != nil || wrote.Outcome != statelog.OutcomeApplied || wrote.Refusal != "" || wrote.Commit == "" {
+		t.Fatalf("the founder's engine write once the apply built the code host = (%+v, %v), want it applied, "+
+			"built by this node's code host", wrote, err)
+	}
+	read.Tree.Rev = wrote.Commit
+	if a, err = engine.GitReadForTest(t.Context(), e, read); err != nil || a.Tree == nil ||
+		!slices.ContainsFunc(a.Tree.Entries, func(entry code.TreeEntry) bool { return entry.Path == "docs" }) {
+		t.Fatalf("a git read of the write's commit = (%+v, %v), want web's root listing docs", a.Tree, err)
 	}
 }
 

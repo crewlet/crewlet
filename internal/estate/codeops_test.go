@@ -416,6 +416,7 @@ type codeAnswers struct {
 	changed   code.ChangeResult
 	lifecycle code.LifecycleResult
 	conversed code.ConversationResult
+	wrote     code.EngineWriteResult
 }
 
 func (d *codeDesk) For(context.Context, string) (Backend, bool) { return Backend{Code: d}, true }
@@ -498,8 +499,9 @@ func (d *codeDesk) Lifecycle(_ context.Context, r code.LifecycleRequest) (code.L
 	return held.lifecycle, err
 }
 
-// deskGit is a desk as a git node's git half: what it reads by object id is
-// recorded and answered as the desk's code half is, the desk's err included.
+// deskGit is a desk as a git node's git half: what it reads by object id and
+// every engine write it is asked are recorded and answered as the desk's code
+// half is, the desk's err included.
 type deskGit struct{ d *codeDesk }
 
 func (g deskGit) Git() (GitServer, bool) { return g, true }
@@ -507,6 +509,11 @@ func (g deskGit) Git() (GitServer, bool) { return g, true }
 func (g deskGit) Read(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
 	held, err := g.d.took(q)
 	return held.git, err
+}
+
+func (g deskGit) Write(_ context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+	held, err := g.d.took(w)
+	return held.wrote, err
 }
 
 // serveDesk serves d as data-d, the one data node — and the one git node — the
@@ -899,6 +906,72 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		t.Errorf("git read asked %+v, want %+v", got, stamped)
 	}
 
+	// AN ENGINE WRITE asked of the git node, every field of it and of its
+	// answer: a seat's commit of every kind of file operation onto a new
+	// branch from a start commit, and a cherry-pick of a commit onto the head
+	// it read — the principal with the run that made it, the operation, the
+	// floor, the message — and an answer carrying its outcome, its command,
+	// its commit, its push and position, a refusal of the change with its
+	// sentence and every conflict's stages. As for a read, the walk stamps
+	// its attempt itself, home where it is asked of its one git node first.
+	content, target := "hello\n", "docs/guide.md"
+	seatRun := code.Principal{Kind: code.PrincipalAgent, Seat: "dev", Run: code.RunProvenance{
+		TurnID: "019a0c2e-0000-7000-8000-0000000000d2", WorkBackend: "native", WorkKey: "ENG-412",
+		Model: "fixture-model"}}
+	d.mu.Lock()
+	d.wrote = code.EngineWriteResult{Outcome: statelog.OutcomePending,
+		Command: code.Command{Ref: "refs/heads/seats/dev/fix", Old: code.ZeroOID,
+			New: "8888888888888888888888888888888888888888", Result: code.ResultNG, Reason: code.RefusalStale,
+			Detail: "refs/heads/seats/dev/fix is at 6666666"},
+		Commit: "8888888888888888888888888888888888888888", PushID: "019a0c2e-0000-7000-8000-0000000000f2",
+		Position: at, Refusal: code.WriteConflict, Detail: "a.go does not apply cleanly",
+		Conflicts: []code.Conflict{{Path: "a.go", Kind: "CONFLICT (contents)",
+			Base: "9999999999999999999999999999999999999999", Ours: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Theirs: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Marked: "<<<<<<< ours\n", Truncated: true}},
+		ConflictsOmitted: 3}
+	d.mu.Unlock()
+	for name, w := range map[string]code.EngineWrite{
+		"a commit onto a new branch": {Kind: code.WriteCommitFiles, RepoID: ref.ID, Principal: seatRun,
+			OpID: "019a0c2e-0000-7000-8000-0000000000f1", Fresh: statelog.FloorAt(statelog.ReadSession, at),
+			Ref: "refs/heads/seats/dev/fix", Base: "6666666666666666666666666666666666666666",
+			Message: "fix the flaky upload", Files: []code.FileOp{
+				{Op: code.FileOpPut, Path: "a.go", Content: &content, Mode: code.ModeExecutable},
+				{Op: code.FileOpPut, Path: "b.go", BlobOID: "7777777777777777777777777777777777777777"},
+				{Op: code.FileOpPut, Path: "guide", Content: &target, Mode: code.ModeLink},
+				{Op: code.FileOpEdit, Path: "c.go", Old: "beta", New: "BETA"},
+				{Op: code.FileOpDelete, Path: "d.go"},
+				{Op: code.FileOpMove, Path: "e.go", To: "f.go"},
+				{Op: code.FileOpMode, Path: "g.sh", Mode: code.ModeFile},
+			}},
+		"a cherry-pick onto a head": {Kind: code.WriteCherryPick, RepoID: ref.ID, Principal: seatRun,
+			OpID: "019a0c2e-0000-7000-8000-0000000000f3", Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
+			Ref: "refs/heads/seats/dev/fix", ExpectedHead: "6666666666666666666666666666666666666666",
+			Commit: "7777777777777777777777777777777777777777", Message: "pick the fix"},
+	} {
+		if got, err := seam.GitWrite(ctx, w); err != nil || !reflect.DeepEqual(got, d.wrote) {
+			t.Errorf("git write %s = (%+v, %v), want %+v", name, got, err, d.wrote)
+		}
+		stamped := w
+		stamped.Home = true
+		if got := d.last(); !reflect.DeepEqual(got, stamped) {
+			t.Errorf("git write %s asked %+v, want %+v", name, got, stamped)
+		}
+	}
+	// AND A WRITE'S REFUSAL KEEPS ITS SENTINEL: an object the repository
+	// does not hold is the write's answer, whichever node is asked.
+	d.mu.Lock()
+	d.err = fmt.Errorf("commit 7777777: %w", code.ErrObjectNotFound)
+	d.mu.Unlock()
+	if _, err := seam.GitWrite(ctx, code.EngineWrite{Kind: code.WriteCreateBranch, RepoID: ref.ID,
+		Principal: seatRun, OpID: "019a0c2e-0000-7000-8000-0000000000f4",
+		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}, Ref: "refs/heads/seats/dev/new",
+		Commit: "7777777777777777777777777777777777777777"}); !errors.Is(err, code.ErrObjectNotFound) {
+		t.Errorf("a served object-not-found crossed as %v", err)
+	}
+	d.mu.Lock()
+	d.err = nil
+	d.mu.Unlock()
+
 	// A LIFECYCLE REQUEST of every kind's fields, and its answer whole: a
 	// create's whole settings, a settings CHANGE and a protection's — the
 	// changes the deciding node resolves — a delete's reason, and a hold's
@@ -980,7 +1053,13 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 // node's session holds the positions of its OWN writes, which its next read of
 // the repository must see on whichever node answers it; a read's position is
 // somebody else's writes, and observing it would hold every later stale read
-// this node routes behind the newest linearizable read anybody on it made.
+// this node routes behind the newest linearizable read anybody on it made. So
+// do the code host's other writes — a compaction, an expunge record, a
+// change's write, a lifecycle request, a write of a change's conversation and
+// an engine write — each only where it landed a record.
+//
+// Mutation: raise the floor on every engine write's answer — a refused one
+// floors its repository at a position somebody else's rows hold, red.
 func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -1219,6 +1298,49 @@ func TestAProposalRaisesTheFloorAndAReadDoesNot(t *testing.T) {
 		if got := f.client.Code().FloorOf("repo-changed"); got != changed {
 			t.Fatalf("after a conversation's write answered %+v its repository's floor is %v, want %v — a "+
 				"conversation moves no git content", tc.answer, got, changed)
+		}
+	}
+
+	// AND AN ENGINE WRITE THIS NODE ASKED raises them to its push's record
+	// where it APPLIED or is PENDING — answered from the row an earlier ask of
+	// it landed among them, since that push is this one — and never for a
+	// refusal of the change or of the push, nor for an outcome unknown, none
+	// of which is a record this node's next read must see: the floor of the
+	// repository it wrote and of no other.
+	const written = "019a0c2e-0000-7000-8000-0000000000e9"
+	applied := statelog.Position{Stream: codeStream, Generation: 1, Seq: 98}
+	pending := statelog.Position{Stream: codeStream, Generation: 1, Seq: 99}
+	for _, tc := range []struct {
+		answer code.EngineWriteResult
+		// want is the session's floor after it, and repo the written
+		// repository's own.
+		want, repo statelog.Position
+	}{
+		{code.EngineWriteResult{Refusal: code.WriteConflict, Detail: "a.go does not apply cleanly"}, conversed,
+			statelog.Position{}},
+		{code.EngineWriteResult{Command: code.Command{Ref: "refs/heads/main", Result: code.ResultNG,
+			Reason: code.RefusalStale}, Position: past}, conversed, statelog.Position{}},
+		{code.EngineWriteResult{Outcome: statelog.OutcomeUnknown, Position: past}, conversed,
+			statelog.Position{}},
+		{code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Position: applied}, applied, applied},
+		{code.EngineWriteResult{Outcome: statelog.OutcomePending, Position: pending}, pending, pending},
+	} {
+		d.mu.Lock()
+		d.wrote = tc.answer
+		d.mu.Unlock()
+		if _, err := f.client.Code().GitWrite(t.Context(), writeOf(written)); err != nil {
+			t.Fatalf("git write: %v", err)
+		}
+		if got := f.client.Session().Floors([]string{codeStream}); !slices.Equal(got,
+			[]statelog.Position{tc.want}) {
+			t.Fatalf("after an engine write answered %+v the code floor is %v, want %v", tc.answer, got, tc.want)
+		}
+		if got := f.client.Code().FloorOf(written); got != tc.repo {
+			t.Fatalf("after an engine write answered %+v its repository's floor is %v, want %v", tc.answer, got,
+				tc.repo)
+		}
+		if got := f.client.Code().FloorOf("repo-lived"); got != lived {
+			t.Fatalf("an engine write to another repository moved repo-lived's floor to %v", got)
 		}
 	}
 }

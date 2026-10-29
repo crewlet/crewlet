@@ -29,6 +29,14 @@ func GitReadForTest(ctx context.Context, e *Engine, q code.GitQuery) (code.GitAn
 	return e.router.Code().GitRead(ctx, q)
 }
 
+// GitWriteForTest is an engine write through e's own estate router — the
+// repository's home git node first, this node at its place — for a test
+// outside the package that drives the git write's walk through a running
+// engine.
+func GitWriteForTest(ctx context.Context, e *Engine, w code.EngineWrite) (code.EngineWriteResult, error) {
+	return e.router.Code().GitWrite(ctx, w)
+}
+
 // CodeReadingForTest is the code half of e's alarm reading now
 // ([Engine.codeReading]) — its committer's, its git cache's and its
 // compactor's, read the way every evaluation reads them — for a case outside

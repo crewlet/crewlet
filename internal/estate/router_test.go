@@ -959,10 +959,11 @@ func TestARouterRefusesAZeroTiming(t *testing.T) {
 		t.Fatalf("a router refused the timing every node runs: %v", err)
 	}
 	unset := map[string]func(*Timing, time.Duration){
-		"ReadAttempt":    func(tm *Timing, d time.Duration) { tm.ReadAttempt = d },
-		"WriteAttempt":   func(tm *Timing, d time.Duration) { tm.WriteAttempt = d },
-		"AdmissionAsk":   func(tm *Timing, d time.Duration) { tm.AdmissionAsk = d },
-		"GitReadAttempt": func(tm *Timing, d time.Duration) { tm.GitReadAttempt = d },
+		"ReadAttempt":     func(tm *Timing, d time.Duration) { tm.ReadAttempt = d },
+		"WriteAttempt":    func(tm *Timing, d time.Duration) { tm.WriteAttempt = d },
+		"AdmissionAsk":    func(tm *Timing, d time.Duration) { tm.AdmissionAsk = d },
+		"GitReadAttempt":  func(tm *Timing, d time.Duration) { tm.GitReadAttempt = d },
+		"GitWriteAttempt": func(tm *Timing, d time.Duration) { tm.GitWriteAttempt = d },
 	}
 	// EVERY FIELD, so a field added to Timing and to nothing here fails
 	// rather than going unchecked.

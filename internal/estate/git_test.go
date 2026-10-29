@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -48,6 +49,56 @@ type fakeGit struct {
 	// its share, where its answer fell due (code.AnswerDue), and the
 	// context's own error where its caller went away.
 	share *code.GitShare
+
+	// written is every engine write it was asked, stamped home or not, with
+	// what its context had left of its deadline as it began; and ranNothing,
+	// where set, is what it refuses every write with about itself — the
+	// code host stopping, or holding no epoch to sign by — having run
+	// nothing (code.ErrNotServing). A write is otherwise answered as a read
+	// is: unready where the node is told to be, not_held where it holds no
+	// copy and is not the walk's home, and else applied, the node's name its
+	// commit.
+	written    []askedWrite
+	ranNothing error
+}
+
+// askedWrite is one engine write a fakeGit was asked, and what its context had
+// left of its deadline as it began (noDeadline where it had none).
+type askedWrite struct {
+	w    code.EngineWrite
+	left time.Duration
+}
+
+func (g *fakeGit) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+	left := noDeadline
+	if deadline, ok := ctx.Deadline(); ok {
+		left = time.Until(deadline)
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.written = append(g.written, askedWrite{w: w, left: left})
+	switch {
+	case g.ranNothing != nil:
+		return code.EngineWriteResult{}, g.ranNothing
+	case g.unready != "" && (!g.seatsOnly || w.Principal.Kind == code.PrincipalAgent):
+		return code.EngineWriteResult{}, &code.ErrGitUnready{Reason: g.unready,
+			Detail: fmt.Sprintf("%s is %s for repository %s", g.name, g.unready, w.RepoID)}
+	case g.held != nil && !g.held[w.RepoID] && !w.Home:
+		return code.EngineWriteResult{}, &code.ErrGitUnready{Reason: code.UnreadyNotHeld,
+			Detail: fmt.Sprintf("%s holds no copy of repository %s", g.name, w.RepoID)}
+	}
+	if g.held != nil {
+		g.held[w.RepoID] = true
+	}
+	return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: g.name, PushID: code.WritePushID(w.OpID),
+		Command: code.Command{Ref: w.Ref, Old: w.ExpectedHead, Result: code.ResultOK}}, nil
+}
+
+// writes is every engine write the half was asked, in order.
+func (g *fakeGit) writes() []askedWrite {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.written)
 }
 
 // noDeadline is what a fakeGit records of a read asked under a context with
@@ -182,17 +233,51 @@ func asks(halves map[string]*fakeGit) map[string]int {
 	return out
 }
 
+// writeOf is a person's commit of one file onto repo's main, as a tool asks
+// one: under an operation of its own, valid by the one rule every party to a
+// write holds it to (code.EngineWrite.Validate).
+func writeOf(repo string) code.EngineWrite {
+	text := "one\n"
+	return code.EngineWrite{Kind: code.WriteCommitFiles, RepoID: repo,
+		Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
+		OpID:      statelog.NewOpID(time.Now(), ""), Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
+		Ref: "refs/heads/main", ExpectedHead: "1111111111111111111111111111111111111111", Message: "one",
+		Files: []code.FileOp{{Op: code.FileOpPut, Path: "README.md", Content: &text}}}
+}
+
+// seatWriteOf is a seat's commit onto its own branch of repo: one a node behind
+// the company's configuration judges no grant for, naming the turn that made
+// it.
+func seatWriteOf(repo string) code.EngineWrite {
+	w := writeOf(repo)
+	w.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: "dev",
+		Run: code.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d"}}
+	w.Ref, w.ExpectedHead, w.Base = "refs/heads/seats/dev/a", "", "1111111111111111111111111111111111111111"
+	return w
+}
+
+// writesAsked is how many engine writes each half has been asked, by node.
+func writesAsked(halves map[string]*fakeGit) map[string]int {
+	out := map[string]int{}
+	for name, g := range halves {
+		out[name] = len(g.writes())
+	}
+	return out
+}
+
 // A GIT OPERATION IS ASKED OF ITS REPOSITORY'S HOME (ADR-0059): for each of a
 // thousand repositories, the first git node asked — and the one that answers,
 // every node answering — is the first of rendezvous.Order(repository, every
 // live git node), from a node that holds nothing and from a git node whose own
-// half answers in process. Never the node that answered last (a keyed order
+// half answers in process, for a read by object id and for an engine write
+// alike: the home's copy is the one a repository's reads keep warm, and a
+// write is built beside it. Never the node that answered last (a keyed order
 // has no sticky node) and never the asking git node out of its turn: asked
 // first wherever it is not the home, it would warm a copy of every repository
-// its seats read.
+// its seats read or wrote.
 //
 // Mutation: order by the asking node's own id rather than the repository's —
-// most reads answered by a node that is not their home, red.
+// most reads and writes answered by a node that is not their home, red.
 func TestAGitOperationIsAskedOfItsRepositorysHome(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -225,6 +310,27 @@ func TestAGitOperationIsAskedOfItsRepositorysHome(t *testing.T) {
 			}
 			if q := halves[home].reads()[after[home]-1]; !q.Home {
 				t.Fatalf("%s: the home %s was asked %s's read not stamped home", name, home, repo)
+			}
+
+			before = writesAsked(halves)
+			w, err := r.Code().GitWrite(t.Context(), writeOf(repo))
+			if err != nil || w.Commit != home {
+				t.Fatalf("%s: the write to %s = (%s, %v), want it built by its home %s", name, repo, w.Commit,
+					err, home)
+			}
+			after = writesAsked(halves)
+			for _, n := range holders {
+				want := before[n]
+				if n == home {
+					want++
+				}
+				if after[n] != want {
+					t.Fatalf("%s: writing %s asked %s %d times, want only its home %s asked, once", name,
+						repo, n, after[n]-before[n], home)
+				}
+			}
+			if asked := halves[home].writes()[after[home]-1]; !asked.w.Home {
+				t.Fatalf("%s: the home %s was asked %s's write not stamped home", name, home, repo)
 			}
 		}
 	}
@@ -1509,5 +1615,288 @@ func TestARouterNeedsAGitPlacement(t *testing.T) {
 	if _, err := r.Work().Tasks(t.Context(), tracker.Query{}, time.Now()); !errors.As(err, &unserved) ||
 		unserved.Git || !strings.Contains(err.Error(), "no data node serves") {
 		t.Errorf("a tracker read with no data node = %v, want it unserved, naming the data nodes", err)
+	}
+}
+
+// AN ENGINE WRITE THAT RAN NOTHING MOVES ON WITH THE SAME WRITE (ADR-0059,
+// ADR-0062). A write is idempotent by its push id, derived from its
+// operation, so wherever its home ran none of it the walk asks the runner-up
+// the very write the home was asked — the same operation, the same push:
+//
+//   - THE HOME RAN NOTHING about itself — its code host stopping, no epoch to
+//     sign by (code.ErrNotServing): the runner-up is asked the write byte for
+//     byte, stamped home too, since a node that runs nothing brings no copy
+//     up and the fill passes; and the home is asked writes LAST for thirty
+//     seconds, so the next write of a repository it is home to is the
+//     runner-up's, never a refusal the home gives again;
+//   - THE HOME WENT SILENT — gone, or wedged with the write perhaps landed:
+//     the runner-up is asked the same write — the push whose row it answers
+//     from where the silent node landed it — unstamped, since a silent node
+//     may be filling the copy it was asked to; and the home is asked last;
+//   - THE HOME IS AT ITS SHARE, busy and holding its copy: the runner-up is
+//     asked the same write unstamped, and the home is not demoted — the next
+//     write asks it first again.
+//
+// Mutations: answer code.ErrNotServing as the write's answer (opCodeGitWrite
+// without ranNothing) — the walk ends on the home's refusal, red; answer an
+// unready home's code.ErrGitUnready as the answer (without gitUnready) — red;
+// declare the write a once-write — a silent home's write ends
+// ErrOutcomeUnknown, red.
+func TestAnEngineWriteThatRanNothingMovesOnWithTheSameWrite(t *testing.T) {
+	t.Parallel()
+	holders := []string{"git-a", "git-b", "git-c"}
+	for _, tc := range []struct {
+		name string
+		// fail has the home run none of a write; mend ends it.
+		fail, mend func(f *fleet, home *fakeGit, node *fakeNode)
+		// stamped is whether the runner-up is asked the write stamped home,
+		// and demoted whether the next write is the runner-up's.
+		stamped, demoted bool
+	}{
+		{
+			name: "ran nothing",
+			fail: func(_ *fleet, home *fakeGit, _ *fakeNode) {
+				home.set(func(g *fakeGit) {
+					g.ranNothing = fmt.Errorf("%w: %s's code host is stopping", code.ErrNotServing, g.name)
+				})
+			},
+			mend:    func(_ *fleet, home *fakeGit, _ *fakeNode) { home.set(func(g *fakeGit) { g.ranNothing = nil }) },
+			stamped: true, demoted: true,
+		},
+		{
+			name:    "went silent",
+			fail:    func(_ *fleet, _ *fakeGit, node *fakeNode) { node.set(func(n *fakeNode) { n.silent = true }) },
+			mend:    func(_ *fleet, _ *fakeGit, node *fakeNode) { node.set(func(n *fakeNode) { n.silent = false }) },
+			demoted: true,
+		},
+		{
+			name: "is at its share",
+			fail: func(_ *fleet, home *fakeGit, _ *fakeNode) {
+				home.set(func(g *fakeGit) { g.unready = code.UnreadyShare })
+			},
+			mend: func(_ *fleet, home *fakeGit, _ *fakeNode) { home.set(func(g *fakeGit) { g.unready = "" }) },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFleet(t)
+			halves := f.gitNodes(t, holders)
+			repo := repoID(31)
+			order := rendezvous.Order(repo, holders)
+			tc.fail(f, halves[order[0]], f.nodes[order[0]])
+
+			w := writeOf(repo)
+			res, err := f.client.Code().GitWrite(t.Context(), w)
+			if err != nil || res.Commit != order[1] || res.PushID != code.WritePushID(w.OpID) {
+				t.Fatalf("a write whose home %s = (%+v, %v), want the runner-up %s's answer under the write's own "+
+					"push", tc.name, res, err, order[1])
+			}
+			asked := halves[order[1]].writes()
+			if len(asked) != 1 {
+				t.Fatalf("the runner-up was asked %d writes, want the one its home ran nothing of", len(asked))
+			}
+			sent := w
+			sent.Home = tc.stamped
+			if !reflect.DeepEqual(asked[0].w, sent) {
+				t.Errorf("the runner-up was asked %+v, want the very write its home was asked — the same operation, "+
+					"the same push — stamped home %t: %+v", asked[0].w, tc.stamped, sent)
+			}
+			if got := halves[order[2]].writes(); len(got) != 0 {
+				t.Errorf("the third node was asked %d writes, want none: the runner-up answered", len(got))
+			}
+
+			tc.mend(f, halves[order[0]], f.nodes[order[0]])
+			want := order[0]
+			if tc.demoted {
+				want = order[1]
+			}
+			if next, err := f.client.Code().GitWrite(t.Context(), writeOf(repo)); err != nil || next.Commit != want {
+				t.Errorf("the next write, its home having %s = (%+v, %v), want it built by %s", tc.name, next, err,
+					want)
+			}
+		})
+	}
+}
+
+// AN ENGINE WRITE THE ONE RULE REFUSES IS ASKED OF NO GIT NODE: the router that
+// carries a write holds it to code.EngineWrite.Validate, as the tool that asks
+// it and the git node that builds it do, so a malformed write — a branch git
+// refuses, a seat's write naming no turn — is code.ErrInvalid at once, naming
+// the field, and costs no git node a round trip, a sync or a slot of its lane.
+//
+// Mutation: carry the write unvalidated — the git node is asked it and builds
+// it, red.
+func TestAnEngineWriteTheOneRuleRefusesIsAskedOfNoNode(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	halves := f.gitNodes(t, []string{"git-a", "git-b"})
+	badRef := writeOf(repoID(4))
+	badRef.Ref = "refs/heads/a..b"
+	noTurn := seatWriteOf(repoID(4))
+	noTurn.Principal.Run = code.RunProvenance{}
+	for name, w := range map[string]code.EngineWrite{
+		"a branch git refuses":          badRef,
+		"a seat's write naming no turn": noTurn,
+	} {
+		if _, err := f.client.Code().GitWrite(t.Context(), w); !errors.Is(err, code.ErrInvalid) {
+			t.Errorf("%s = %v, want code.ErrInvalid before any git node is asked", name, err)
+		}
+	}
+	if got := writesAsked(halves); got["git-a"] != 0 || got["git-b"] != 0 {
+		t.Errorf("a write the one rule refuses was asked of the git nodes: %v", got)
+	}
+}
+
+// A GIT WRITE IS NEVER ANSWERED ON ANOTHER LANE: a git node answers an engine
+// write on its git writes' lane alone, and a read by object id on the reads'
+// lane alone — each asked on another answered unserved, naming the lane it is
+// answered on, nothing run — so a write's sync, build, upload and proposal
+// never hold a slot a seat's read of any repository on the node, a push's
+// proposal or a fetch's resolve is answered through. On its own lane it runs.
+func TestAGitWriteIsNeverAnsweredOnAnotherLane(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	half := f.gitNodes(t, []string{"git-a"})["git-a"]
+	write, err := json.Marshal(writeOf(repoID(1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	read, err := json.Marshal(treeOf(repoID(1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		op      string
+		args    json.RawMessage
+		subject string
+		want    string
+	}{
+		{opCodeGitWrite.spec.name, write, Subject("git-a"), "the git-writes lane"},
+		{opCodeGitWrite.spec.name, write, ProposalSubject("git-a"), "the git-writes lane"},
+		{opCodeGitWrite.spec.name, write, laneGitReads.subject("git-a"), "the git-writes lane"},
+		{opCodeGitRead.spec.name, read, laneGitWrites.subject("git-a"), "the git lane"},
+	} {
+		rep := askSignedOn(t, f.start(t), tc.subject, request{Op: tc.op, Args: tc.args, From: "agent-9"})
+		if rep.Unserved != unservedNoBackend || !strings.Contains(rep.Detail, tc.want) {
+			t.Errorf("%s asked on %s answered %+v, want it unserved naming %s", tc.op, tc.subject, rep, tc.want)
+		}
+	}
+	if len(half.writes()) != 0 || len(half.reads()) != 0 {
+		t.Errorf("an operation asked on another lane ran: %d writes, %d reads", len(half.writes()),
+			len(half.reads()))
+	}
+	rep := askSignedOn(t, f.start(t), laneGitWrites.subject("git-a"),
+		request{Op: opCodeGitWrite.spec.name, Args: write, From: "agent-9"})
+	if rep.Unserved != "" || rep.Err != nil || len(half.writes()) != 1 {
+		t.Errorf("a write asked on its own lane answered %+v and ran %d times, want it built once", rep,
+			len(half.writes()))
+	}
+}
+
+// PRODUCTION'S GIT WRITE ATTEMPT HOLDS AN ENGINE WRITE'S WAITS at their whole
+// budgets — a unit of the node's seat git-work share, three reads at the read
+// budget (the sync to the caller's floor, the read of whether a moved head is
+// the write's own push, the one sync at the log's head every refusal is judged
+// again at), the build's own git, the bundle's upload at the pace floor, the
+// proposal's own attempt (a floor wait, a commit budget and the reply's
+// margin) and the answer's trip back: 2 + 6 + 10 + 30 + 33 + 1, eighty-two
+// seconds — and it is the attempt a router gives an engine write on a git
+// node, never a data write's sixty seconds, which a write's waits at their
+// budgets outlast. A router whose git write attempt cannot hold the proposal
+// the write makes after the reply's margin is refused naming the field, and
+// one a nanosecond longer is taken. Every term is spelled from its own
+// constant, so a term raised without the attempt fails here rather than as a
+// healthy home heard silent.
+func TestProductionsGitWriteAttemptHoldsAWritesWaits(t *testing.T) {
+	t.Parallel()
+	proposal := statelog.ReadBudget + code.CommitBudget + code.ReplyMargin
+	waits := code.GitShareWait + 3*statelog.ReadBudget + code.WriteBuildDeadline + objstore.MiBPace + proposal +
+		code.ReplyMargin
+	if got := Production().GitWriteAttempt; got != waits || waits != 82*time.Second {
+		t.Errorf("production's git write attempt is %v, want the %v an engine write's waits take at their whole "+
+			"budgets with the reply's margin (82s)", got, waits)
+	}
+	r := newFleet(t).client
+	if got := r.wholeAttempt(opCodeGitWrite.spec); got != Production().GitWriteAttempt {
+		t.Errorf("a router gives an engine write %v, want its git write attempt %v", got,
+			Production().GitWriteAttempt)
+	}
+	if got := r.wholeAttempt(opCodeChange.spec); got != Production().WriteAttempt {
+		t.Errorf("a router gives a write on a data node %v, want its write attempt %v", got,
+			Production().WriteAttempt)
+	}
+	build := func(attempt time.Duration) error {
+		timing := Production()
+		timing.GitWriteAttempt = attempt
+		_, err := NewRouter(RouterOptions{Self: "agent-1", Queue: &recordingAsker{}, Placement: &fakePlacement{},
+			Git: &fakePlacement{}, Session: NewSession(), Timing: timing, Envelopes: fleetEnvelopes})
+		return err
+	}
+	bound := proposal + code.ReplyMargin
+	if err := build(bound); err == nil || !strings.Contains(err.Error(), "Timing.GitWriteAttempt") ||
+		!strings.Contains(err.Error(), "must hold the proposal it makes") {
+		t.Errorf("a router whose git write attempt is the proposal's own attempt and the reply's margin (%v) "+
+			"answered %v, want a refusal naming Timing.GitWriteAttempt: the git node would answer every write "+
+			"busy before its upload", bound, err)
+	}
+	for _, attempt := range []time.Duration{bound + time.Nanosecond, Production().GitWriteAttempt} {
+		if err := build(attempt); err != nil {
+			t.Errorf("a router whose git write attempt is %v, over the %v a write's proposal needs, answered %v",
+				attempt, bound, err)
+		}
+	}
+}
+
+// A GIT WRITE IS HELD TO ITS OWN ATTEMPT, WHATEVER ITS CALLER ALLOWS. Its git
+// node fits every stage of it — the sync, the build, the upload and the
+// proposal — into the router's git write attempt, so the router gives it that
+// attempt and no more, even under a caller's deadline minutes away (a
+// turn's): a node silent through it is wedged, and the walk's runner-up builds
+// the same push. Given the caller's deadline instead, as a write on a data
+// node is, a wedged home held a seat's tool call until its turn gave up, and
+// the runner-up was never asked. So the git half is served with the attempt
+// less the reply's margin — asked of a peer and asked in process alike — under
+// no deadline of the caller's and under a longer one; and a caller's SHORTER
+// deadline stays its own.
+//
+// Mutation: give a git write its caller's deadline, as a data node's write has
+// (budgetFor) — the write under a five-minute caller is served with nearly
+// five minutes, red.
+func TestAGitWriteIsHeldToItsOwnAttempt(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	half := f.gitNodes(t, []string{"git-a"})["git-a"]
+	served := Production().GitWriteAttempt - code.ReplyMargin
+	for name, r := range map[string]*Router{
+		"asked of the git node by another": f.client,
+		"asked in process by the git node": f.gitRouter(t, "git-a", gitHalf{node: half}),
+	} {
+		for _, tc := range []struct {
+			// caller is the caller's own deadline, zero for none, and want
+			// what the git half is served with.
+			caller, want time.Duration
+		}{
+			{0, served},
+			{5 * time.Minute, served},
+			{20 * time.Second, 20*time.Second - code.ReplyMargin},
+		} {
+			ctx, cancel := t.Context(), context.CancelFunc(func() {})
+			if tc.caller > 0 {
+				ctx, cancel = context.WithTimeout(ctx, tc.caller)
+			}
+			_, err := r.Code().GitWrite(ctx, writeOf(repoID(9)))
+			cancel()
+			if err != nil {
+				t.Fatalf("%s, its caller's deadline %v: %v", name, tc.caller, err)
+			}
+			writes := half.writes()
+			// A SECOND'S SLACK below for the walk's own work before the half
+			// is asked; none above, which no clock gives.
+			if left := writes[len(writes)-1].left; left == noDeadline || left > tc.want ||
+				left < tc.want-time.Second {
+				t.Errorf("%s, its caller's deadline %v: the git half was served with %v left, want %v", name,
+					tc.caller, left, tc.want)
+			}
+		}
 	}
 }

@@ -64,6 +64,38 @@ func (fixtureRoster) Within(unit, ancestor string) bool {
 	return strings.EqualFold(unit, FixtureUnit) && strings.EqualFold(ancestor, FixtureUnit)
 }
 
+// FixtureRosterWithout is the fixture chart with seat taken out of it: the
+// chart a revision that revoked the seat leaves (Cluster.Revoke).
+func FixtureRosterWithout(seat string) code.Roster { return revokedRoster{seat: seat} }
+
+// revokedRoster is the fixture chart without one seat — the unit it led, if
+// it led one, then led by nobody.
+type revokedRoster struct {
+	fixtureRoster
+	seat string
+}
+
+func (r revokedRoster) Seat(handle string) (code.RosterSeat, bool) {
+	if handle == r.seat {
+		return code.RosterSeat{}, false
+	}
+	return r.fixtureRoster.Seat(handle)
+}
+
+func (r revokedRoster) Lead(unit string) string {
+	if lead := r.fixtureRoster.Lead(unit); lead != r.seat {
+		return lead
+	}
+	return ""
+}
+
+func (r revokedRoster) Leads(unit string) []string {
+	if lead := r.Lead(unit); lead != "" {
+		return []string{lead}
+	}
+	return nil
+}
+
 // FixtureSeatRules is the fixture chart and the company's clock as a data
 // node's committer judges a seat's push by them (code.CommitterOptions), and
 // its change writer a seat's write of a change's conversation and every

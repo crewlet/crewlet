@@ -61,14 +61,23 @@
 // signing its commits) unless a case names its own: the unit ENG — owner of
 // every case's repository — led by `lead`, with `alice` full_access, `bob`
 // read_only and the human seat `pat`, whose person holds a token like every
-// person's. Fleet.Write asks a write of the git nodes' code hosts IN PROCESS,
-// the repository's home first and stamped so, the next asked only where one
-// refuses about itself — the walk a keyed write takes (WriteThrough). The cases
-// (F32–F38, ADR-0062) hold what a person's clone then reads of the commit — its
-// author, its committer, its dates, its tree — and what the push row says of
-// who built it, that one write asked again is one push, that a conflict and a
-// refusal store nothing, and that a git node killed at every point of a write's
-// path leaves one push or none.
+// person's. Fleet.Write asks a write THROUGH THE FLEET'S ROUTING, as
+// Fleet.GitRead asks a read: the production estate router asking the git
+// nodes — each serving its git writes' lane, its git half its query server
+// and its host together (GitNode.Git) — the repository's home first, stamped
+// so by the walk, and the next git node the same write where one ran nothing
+// or went silent (code.git_write); and Cluster.GitWriteThrough asks one
+// through a member's own router. The cases (F32–F38, ADR-0062) hold what a
+// person's clone then reads of the commit — its author, its committer, its
+// dates, its tree — and what the push row says of who built it, that one
+// write asked again is one push, that a conflict and a refusal store nothing,
+// and that a git node killed at every point of a write's path leaves one push
+// or none; F39–F41 (RunFleet) that a write asked through every member is
+// built by the repository's home, that a home killed after its write's append
+// leaves the write applied as one push — the walk's runner-up answering it
+// from the push's row — and that a seat a revision revoked is refused,
+// nothing landing, where the repository's committer is confirmed behind that
+// revision (Cluster.Revoke), while a person's push lands beside it.
 //
 // # Crashes are held past the node's death
 //

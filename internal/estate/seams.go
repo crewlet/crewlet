@@ -835,20 +835,23 @@ func (u Usage) RepoReaders(ctx context.Context, q usage.RepoReadsQuery, cursor s
 // repository's committer, a write of a change's conversation to the change
 // writer beside it, and the reads the host's admission, a cache's sync and the
 // REST routes make — each answered by a data node whose copy of the code log
-// serves, this one where it does. Its consumers declare what they call of it.
+// serves, this one where it does — and a repository's read by object id and its
+// engine write, each asked of the repository's home git node ([GitCopy]). Its
+// consumers declare what they call of it.
 //
 // ONLY THIS NODE'S OWN WRITES RAISE ITS FLOOR: a proposal that landed — a
-// push's, a compaction's, an expunge record's or a change's — a push this node
-// proposed found landed, and a write of a change's conversation that landed. A
-// read's position is somebody else's writes, and observing it would hold every
-// later read this node routes — a `stale` one included — behind the newest
-// linearizable read anybody on the node made, which is the tracker's and the
-// knowledge base's rule too. Each such proposal raises two floors: the
-// session's, on the whole code log, which every operation this node routes to
-// a data node carries; and the floor of the REPOSITORY it wrote
-// ([CodeSeam.FloorOf]), which a read of that repository's content by object id
-// carries to its git node — and a read of any other repository does not. A
-// conversation's write moves no git content, and raises the session's alone.
+// push's, a compaction's, an expunge record's or a change's — a push this
+// node proposed found landed, a write of a change's conversation that landed,
+// and an engine write this node asked that landed. A read's position is
+// somebody else's writes, and observing it would hold every later read this
+// node routes — a `stale` one included — behind the newest linearizable read
+// anybody on the node made, which is the tracker's and the knowledge base's
+// rule too. Each such write raises two floors: the session's, on the whole
+// code log, which every operation this node routes to a data node carries;
+// and the floor of the REPOSITORY it wrote ([CodeSeam.FloorOf]), which a read
+// of that repository's content by object id carries to its git node — and a
+// read of any other repository does not. A conversation's write moves no git
+// content, and raises the session's alone.
 type CodeSeam struct{ r *Router }
 
 // Code answers the code host.
@@ -981,6 +984,34 @@ func (c CodeSeam) ResolveRef(ctx context.Context, q code.RefQuery) (code.RefAnsw
 // supplies where the reader's own writes must be in the copy it reads.
 func (c CodeSeam) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
 	return call(ctx, c.r, opCodeGitRead, nil, q)
+}
+
+// GitWrite asks the repository's home git node to build one engine write and
+// land it as a push (ADR-0062), and its runner-up with the same write — the
+// same push — where the home ran nothing or went silent (ADR-0059). Its floor
+// is the write's own (code.EngineWrite.Fresh), as a read's is.
+//
+// THE ROUTER THAT CARRIES A WRITE HOLDS IT TO THE ONE RULE every party to it
+// does (code.EngineWrite.Validate): one it refuses is code.ErrInvalid, naming
+// the field, before any git node is asked — never a round trip, a sync and a
+// slot of a git node's lane for an answer every node would give alike.
+//
+// It raises this node's floors past the push's record where the write APPLIED
+// or is PENDING — this node's own write, which its next read of the
+// repository must see on whichever node answers, as a push it proposed does —
+// a write answered from the row an earlier ask of it landed included, since
+// that push is this one. Never for a refusal, of the change or of the push,
+// which landed nothing, nor for an outcome UNKNOWN, whose record may not
+// exist.
+func (c CodeSeam) GitWrite(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+	if err := w.Validate(); err != nil {
+		return code.EngineWriteResult{}, err
+	}
+	out, err := call(ctx, c.r, opCodeGitWrite, nil, w)
+	if out.Refusal == "" && (out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending) {
+		c.wrote(w.RepoID, out.Position)
+	}
+	return out, err
 }
 
 // FloorOf is this node's floor on repository repoID — the furthest of its own

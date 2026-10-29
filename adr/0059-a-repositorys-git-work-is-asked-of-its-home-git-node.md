@@ -2,15 +2,16 @@
 
 - **Status:** accepted
 - **Authority:** `internal/estate`
-- **Enforced-by:** `internal/estate.TestAGitOperationIsAskedOfItsRepositorysHome`, `internal/estate.TestAGitNodeThatIsSyncingSendsTheAskerToTheRunnerUp`, `internal/estate.TestOnlyTheEffectiveHomeIsAskedToFill`, `internal/estate.TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp`, `internal/estate.TestTheFillMovesOnlyPastANodeBringingNoCopyUp`, `internal/code.TestAReasonPassesTheFillOnlyWhereNoCopyIsComing`, `internal/code/query.TestOnlyAFailureOfTheNodesOwnLetsAnotherNodeFill`, `internal/estate.TestAGitNodeAtItsShareIsHeardInsideItsAskersAttempt`, `internal/estate.TestAGitReadInProcessIsHeldToTheAttemptARemoteOneIs`, `internal/code/query.TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens`, `internal/code/query.TestAReadsOwnGitHasOneBudgetItsProcessesShare`, `internal/estate.TestANodeWithNoCodeHostRunsNoGitRead`, `internal/estate.TestEveryOperationNamesTheCopyItReads`, `internal/code/query.TestANodeThatHoldsNoCopyFillsOnlyAsHome`, `internal/code/cache.TestACacheHoldsACopyOnlyOnceItHasOneOrIsFillingOne`, `internal/code/codecluster.TestEveryMemberRoutesAGitReadToOneHome`, `internal/engine.TestAGitReadIsServedOnceAnApplyBuildsTheCodeHost`, `internal/rendezvous.TestNoPackageOrdersByAHashOfItsOwn`
+- **Enforced-by:** `internal/estate.TestAGitOperationIsAskedOfItsRepositorysHome`, `internal/estate.TestAGitNodeThatIsSyncingSendsTheAskerToTheRunnerUp`, `internal/estate.TestOnlyTheEffectiveHomeIsAskedToFill`, `internal/estate.TestAHomeThatJudgesNoSeatHandsTheFillToItsRunnerUp`, `internal/estate.TestTheFillMovesOnlyPastANodeBringingNoCopyUp`, `internal/code.TestAReasonPassesTheFillOnlyWhereNoCopyIsComing`, `internal/code/query.TestOnlyAFailureOfTheNodesOwnLetsAnotherNodeFill`, `internal/estate.TestAGitNodeAtItsShareIsHeardInsideItsAskersAttempt`, `internal/estate.TestAGitReadInProcessIsHeldToTheAttemptARemoteOneIs`, `internal/code/query.TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens`, `internal/code/query.TestAReadsOwnGitHasOneBudgetItsProcessesShare`, `internal/estate.TestANodeWithNoCodeHostRunsNoGitRead`, `internal/estate.TestEveryOperationNamesTheCopyItReads`, `internal/code/query.TestANodeThatHoldsNoCopyFillsOnlyAsHome`, `internal/code/cache.TestACacheHoldsACopyOnlyOnceItHasOneOrIsFillingOne`, `internal/code/codecluster.TestEveryMemberRoutesAGitReadToOneHome`, `internal/engine.TestTheGitHalfIsServedOnceAnApplyBuildsTheCodeHost`, `internal/rendezvous.TestNoPackageOrdersByAHashOfItsOwn`, `internal/estate.TestAnEngineWriteThatRanNothingMovesOnWithTheSameWrite`, `internal/estate.TestAGitWriteIsHeldToItsOwnAttempt`, `internal/estate.TestProductionsGitWriteAttemptHoldsAWritesWaits`, and the code host fleet suite's `EveryMemberRoutesAnEngineWriteToTheHome`
 - **Measured:** `BenchmarkCodeRead` (`internal/code/query`), once over a 32 MB history of 14 080 commits under a 10 000-file tree on git 2.56.0: every kind a warm home answers in 3–231 ms, more than an order of magnitude inside the 10 s of git run time a read is given, and a node holding no copy, asked as the home, syncs the repository whole and answers in 118 ms from the in-process store (`memobj`), 604 ms from the S3 fake answering every request 100 ms late and 1.1 s at 200 ms (no real bucket) — so the 17 s attempt a router gives a git read is a sum of whole budgets (the share's wait, two read budgets, the read's own git and the reply's margin), never a figure a healthy home approaches; the read lane's queue and the short checks of what a read names are left out of it, and come out of the attempt
 - **Cost-when-tried:** not tried here: before this record no seat read a repository server-side at all. The cost it avoids is the one the cold sync measures — 1.4 s for a repository of two hundred pushes and 13.4–13.8 s for one of two thousand against an object store answering every request 100 ms late — paid on whichever git node a read landed on, and on every one of them over time
 - **Tag-status:** unreleased
 
 ## The decision
 
-An operation on a repository's git OBJECTS — a server-side read by object id today, in the estate's
-`code.git_read` — is answered by a node with the `git` role from its own cache, never by a data node's copy.
+An operation on a repository's git OBJECTS — a server-side read by object id, in the estate's `code.git_read`,
+and an engine write built beside a copy of them (ADR-0062), in its `code.git_write` — is answered by a node with
+the `git` role from its own cache, never by a data node's copy.
 The estate's router asks it of the GIT nodes (`RouterOptions.Git`, every live node with the role) in
 `rendezvous.Order(repository id, every live git node)`: the repository's HOME first, then its runner-up, with
 the demotions every keyed order has — a node that ran nothing for it (`no_backend`: its code host not built)
@@ -49,6 +50,16 @@ node asked it. The read's own git has ONE budget of run time, shared by every pr
 read whose own git ran the whole of it is too large to answer, and a read the answer's due instant cut
 short is unready, since a node with the time would have answered it.
 
+An ENGINE WRITE is asked again as a read is — of the next git node after one that ran nothing or went silent —
+because it is idempotent by its push id, derived from its caller's operation: the next node builds the same push,
+the same commit byte for byte, and is answered from the push's row where the silent node landed it, and two nodes
+that each took themselves for its home build one push, which the repository's committer lands once. It is answered
+on a lane of its own, apart from the reads, since it holds its slot through its upload, its proposal and the wait
+for its row. Its attempt on one git node is the sum of its stages' waits at their whole budgets, which the git node
+fits the write into — answering busy, before its upload, a write whose proposal would no longer fit — so the
+attempt is the router's own whatever deadline the write's caller gives: a turn's minutes waited out on a wedged
+home would leave its runner-up never asked.
+
 ## Why the obvious alternative is wrong
 
 Any data node, as every other operation is asked: seats run on nodes without the git role, and a read asked
@@ -69,10 +80,11 @@ floor and no lag gate.
 
 ## What this does not decide
 
-Who compacts a repository, engine-built writes, git nodes that hold no data, and whether a load balancer
-hashes `/git/` by repository — recommended for a cache's locality, never required for correctness. Nor who
-may read: the git node that answers judges the asker's grant from its own chart
-([ADR-0058](0058-a-repository-grant-is-derived-from-the-chart.md)).
+Who compacts a repository, what an engine-built write builds and how it lands
+([ADR-0062](0062-an-engine-built-commit-is-the-acting-principals-and-lands-as-a-push.md)), git nodes that hold
+no data, and whether a load balancer hashes `/git/` by repository — recommended for a cache's locality, never
+required for correctness. Nor who may read or write: the git node that answers judges the asker's grant from
+its own chart ([ADR-0058](0058-a-repository-grant-is-derived-from-the-chart.md)).
 
 ## Amendment — who compacts and publishes
 

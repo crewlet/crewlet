@@ -56,8 +56,9 @@ func ProposalSubject(nodeID string) string { return laneProposals.subject(nodeID
 // ([proposalAnswers]), and a lane answers only the operations declared on it
 // ([op.answeredOn]). A git node's reads of a repository by object id wait
 // too — on a sync of the node's copy and a git process of up to
-// [GitReadAttempt] — so they have a third lane, registered only where the
-// node serves git ([gitLanes]).
+// [GitReadAttempt] — so they have a third lane, and its engine writes, which
+// wait on far more again ([GitWriteAttempt]), a fourth: both registered only
+// where the node serves git ([gitLanes]).
 type lane string
 
 const (
@@ -74,6 +75,19 @@ const (
 	// the node's subject with one more token, as the proposals' lane is —
 	// and only on a node that serves git ([ServerOptions.Git]).
 	laneGitReads lane = "git"
+
+	// laneGitWrites answers a repository's ENGINE WRITES alone
+	// ([opCodeGitWrite]) — on the node's subject with one more token — and,
+	// as the reads' lane, only on a node that serves git. Apart from the
+	// reads, because a write holds its answer slot through every wait it
+	// makes — the sync of its copy, its build, its bundle's upload, its
+	// proposal and the wait for its push's row, up to [GitWriteAttempt] —
+	// where a read holds one through a sync and a git process: the
+	// proposals' lesson again, a slot held through a wait is one every
+	// other request of its registration waits behind, so a burst of writes
+	// on the reads' lane would hold the slots every seat's read of every
+	// repository on the node is answered through.
+	laneGitWrites lane = "git-writes"
 )
 
 // lanes is every registration EVERY serving node makes, the shared one first.
@@ -83,11 +97,14 @@ var lanes = []lane{laneShared, laneProposals}
 // ([ServerOptions.Git]), and no other node: a node without the git role has no
 // git half, and a lane it answered only `no_backend` on would still cost each
 // of its slots a goroutine for nothing a git walk could not learn from the
-// presence view. A git node registers it from boot, before its code host is
+// presence view. A git node registers them from boot, before its code host is
 // built, so its askers hear `no_backend` rather than the silence of an
 // unregistered subject, which they would read as a node gone and suspect for
-// every operation.
-var gitLanes = []lane{laneGitReads}
+// every operation — and registers both or neither ([Serve]'s EVERY LANE OR
+// NONE): a git node answering its reads and no write would be heard as gone by
+// every write's walk, no answerer on its subject, and so asked last for every
+// operation and reported to both placements while it served.
+var gitLanes = []lane{laneGitReads, laneGitWrites}
 
 // subject is the subject node answers this lane on.
 func (l lane) subject(node string) string {
@@ -106,6 +123,16 @@ func (l lane) subject(node string) string {
 // node's own seats' in-process reads too — a lane bound would hold only the
 // remote askers, and a narrower one would only leave reads waiting unseen in
 // the broker's buffer where the share answers them `share` at once.
+//
+// The git writes' lane is as wide, for the same reason and one more: what a
+// write holds its slot through is mostly a WAIT — its upload, its proposal,
+// its push's row — that runs no git process at all, while its build takes a
+// unit of that same share (code.SeatWorkWrite) and gives it back before it
+// lands. So the share, never the lane, bounds the git a node's writes run,
+// and a full lane holds what its writes carry: a payload of at most
+// code.MaxCommitPayloadBytes each, sixty-four mebibytes in all, and a staged
+// pack of at most code.MaxWritePackBytes each on the cache's volume. This
+// node's own seats' writes are asked in process, bounded by their turns.
 func (l lane) answers() int {
 	if l == laneProposals {
 		return proposalAnswers

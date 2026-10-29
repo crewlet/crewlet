@@ -15,16 +15,19 @@ import (
 
 // A REPOSITORY'S GIT WORK IS ASKED OF ITS HOME GIT NODE (ADR-0059).
 //
-// An operation on a repository's git objects — a server-side read by object id
-// today — is answered by a node with the `git` role from its own cache, never
-// by a data node's copy. Asked of whichever node the ordinary walk picked, a
-// seat on a node without the git role would have every git node warm every
-// repository it ever read, a cold sync paid per node per repository; so it is
-// asked of the GIT nodes in rendezvous.Order(repository, every live git node)
-// — the repository's HOME first, its runner-up next — the order every node
-// computes alike from the same set, so the reads of one repository meet on one
-// cache. The home is a PREFERENCE, never ownership: no lease and no epoch, and
-// two nodes that both believe they are home answer the same immutable read.
+// An operation on a repository's git objects — a server-side read by object
+// id, and an engine write built beside a copy of them (ADR-0062) — is answered
+// by a node with the `git` role from its own cache, never by a data node's
+// copy. Asked of whichever node the ordinary walk picked, a seat on a node
+// without the git role would have every git node warm every repository it ever
+// read or wrote, a cold sync paid per node per repository; so it is asked of
+// the GIT nodes in rendezvous.Order(repository, every live git node) — the
+// repository's HOME first, its runner-up next — the order every node computes
+// alike from the same set, so the reads and the writes of one repository meet
+// on one cache. The home is a PREFERENCE, never ownership: no lease and no
+// epoch, and two nodes that both believe they are home answer the same
+// immutable read alike, and build the same write as the same push, which the
+// repository's committer lands once.
 
 // GitCopy is the copy a GIT operation names ([op.keyedOnGit]): no domain's
 // rows on the serving node, but its git half — its cache, synced through the
@@ -49,8 +52,10 @@ type LocalGit interface {
 }
 
 // GitServer is the git half a git node serves, declared here by its consumer
-// with exactly the methods the git operations call. internal/code/query's
-// *Server satisfies it.
+// with exactly the methods the git operations call: its reads by object id,
+// which internal/code/query's *Server answers, and its engine writes, which
+// internal/code/host's *Server builds and lands. The engine hands the router
+// the two together, over one cache, one git pool and one seat git-work share.
 type GitServer interface {
 	// Read answers one read by object id. ctx ENDS WHEN THE ANSWER IS DUE —
 	// a reply's margin before its asker stops listening, remote or in
@@ -59,6 +64,16 @@ type GitServer interface {
 	// ([code.AnswerDue]), never ctx's own error, which the walk would take
 	// for the repository's answer.
 	Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
+
+	// Write builds one engine write over this node's copy and lands it as a
+	// push (ADR-0062). ctx ends when the answer is due, as a read's does: a
+	// write that ctx ends before its landing ran nothing and answers
+	// code.ErrGitUnready while the asker still listens, so the walk asks the
+	// next git node, which builds the same push; one ended inside its
+	// landing answers what the landing came to, its outcome read from the
+	// push's row — never ctx's own error, which the walk would take for the
+	// write's answer.
+	Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error)
 }
 
 // GitPlacement is who serves GIT as the router reads it ([RouterOptions.Git]):
@@ -138,17 +153,64 @@ type GitListing struct {
 // TestProductionsGitReadAttemptHoldsAGitReadsWaits holds it.
 const GitReadAttempt = code.GitShareWait + 2*statelog.ReadBudget + gitproc.ReadDeadline + code.ReplyMargin
 
-// errGitUnready is a git half that could not answer a read inside its budget
-// for a reason about THE NODE (code.ErrGitUnready: its copy still syncing, its
-// share full, no chart or no configuration to judge a seat by, a failure of
-// its own, or no copy held and no fill asked of it): it ran nothing about the
-// repository's content, and another git node may answer. The server and the
-// router's own in-process run answer it `behind` — `behind_config` for that
-// reason, the node's posture — with the reason beside it ([reply.Unready]),
-// which the walk moves on from WITHOUT demoting the node — a node syncing a
-// repository is the right node to ask a moment later — and reads to know
-// whether the one node it lets fill a copy is still that one.
-var errGitUnready = errors.New("estate: this git node cannot answer the read now")
+// GitWriteAttempt bounds one engine write's wait on one git node:
+// [Production]'s [Timing.GitWriteAttempt].
+//
+// EIGHTY-TWO SECONDS: the git node's waits for one write at their WHOLE
+// budgets, a sum of budgets as every attempt here is, never of p99s —
+//
+//	code.GitShareWait             2 s  a free unit of the node's seat git-work
+//	                                   share, which the build holds
+//	+ 3 × statelog.ReadBudget     6 s  three different waits, at most one
+//	                                   each: the copy's sync to the caller's
+//	                                   floor, the read of whether a head that
+//	                                   moved is the write's own push, and the
+//	                                   one sync at the log's head every
+//	                                   refusal is judged again at
+//	+ code.WriteBuildDeadline    10 s  the build's own git: the run time
+//	                                   every process of it shares
+//	+ code.WriteUploadAllowance  30 s  the bundle's upload, a mebibyte at the
+//	                                   pace floor (objstore.MiBPace)
+//	+ minWriteAttempt            33 s  the proposal's own attempt, which the
+//	                                   committer answers busy with any less
+//	                                   (code.MinProposeAttempt)
+//	+ code.ReplyMargin            1 s  the answer's trip back
+//
+// THE GIT NODE FITS EVERY STAGE INTO IT. It is served under a context that
+// ends a reply's margin before the attempt does (code.AnswerBy), and uploads a
+// write's bundle only while the upload's allowance and the proposal's attempt
+// are both still left — answering busy, nothing uploaded, where they are not
+// (internal/code/host's deadline rule) — so a write's median bundle of a few
+// kilobytes is never uploaded late, and a large one on a bucket at the floor
+// is refused before its upload rather than landed after its asker gave up.
+// So a healthy git node always answers inside the attempt, and only a WEDGED
+// one costs it whole: a node that is GONE costs none, nothing serving its
+// subject, and the broker's ask ends at once. The walk then asks the runner-up
+// the same write, which lands the same push, or is answered from the row the
+// wedged node's landing wrote ([opCodeGitWrite]).
+//
+// AND IT HOLDS WHATEVER THE CALLER ALLOWS ([Router.budgetFor]), unlike a
+// write on a data node: a turn's deadline minutes away, waited out whole on a
+// wedged home, would leave the runner-up never asked.
+//
+// PROVISIONAL (M3-decisions M3-O43): BenchmarkEngineWrite (internal/code/host)
+// reports each term's p99 beside its budget and re-derives any term it
+// contradicts, the sum following by its formula — never set by a figure
+// itself. TestProductionsGitWriteAttemptHoldsAWritesWaits holds the sum.
+const GitWriteAttempt = code.GitShareWait + 3*statelog.ReadBudget + code.WriteBuildDeadline +
+	code.WriteUploadAllowance + minWriteAttempt + code.ReplyMargin
+
+// errGitUnready is a git half that could not answer a read or build a write
+// inside its budget for a reason about THE NODE (code.ErrGitUnready: its copy
+// still syncing, its share full, no chart or no configuration to judge a seat
+// by, a failure of its own, or no copy held and no fill asked of it): it ran
+// nothing about the repository's content, and another git node may answer.
+// The server and the router's own in-process run answer it `behind` —
+// `behind_config` for that reason, the node's posture — with the reason beside
+// it ([reply.Unready]), which the walk moves on from WITHOUT demoting the node
+// — a node syncing a repository is the right node to ask a moment later — and
+// reads to know whether the one node it lets fill a copy is still that one.
+var errGitUnready = errors.New("estate: this git node cannot answer now")
 
 // unreadyGit is a git half's code.ErrGitUnready as the walk reads it: errGitUnready,
 // its cause kept for the walk's account.
@@ -159,8 +221,9 @@ func (u unreadyGit) Unwrap() []error { return []error{errGitUnready, u.cause} }
 
 // gitUnready is a git half's error as the walk reads it: code.ErrGitUnready
 // becomes [errGitUnready], and every other error is the answer — a refusal
-// about the read or the repository (code.ErrNotPermitted, code.ErrObjectNotFound,
-// code.ErrRepoNotFound, …), which every git node would give alike.
+// about the read, the write or the repository (code.ErrNotPermitted,
+// code.ErrObjectNotFound, code.ErrInvalid, …), which every git node would give
+// alike.
 func gitUnready(err error) error {
 	var unready *code.ErrGitUnready
 	if errors.As(err, &unready) {
@@ -209,22 +272,23 @@ func passesFill(rep reply) bool {
 	return false
 }
 
-// routeGit runs one GIT operation ([op.keyedOnGit]): the git nodes in the
-// repository's rendezvous order, the ONE node the walk lets FILL a copy asked
-// with its arguments stamped home ([exchange.home]) and every other node with
-// them stamped not.
+// routeGit runs one GIT operation ([op.keyedOnGit]) — a read by object id or
+// an engine write: the git nodes in the repository's rendezvous order, the ONE
+// node the walk lets FILL a copy asked with its arguments stamped home
+// ([exchange.home]) and every other node with them stamped not.
 //
 // THE FILL STARTS AT THE WALK'S EFFECTIVE HOME — its first node once the
 // demotions are applied — AND MOVES ON ONLY PAST A NODE BRINGING NO COPY UP
-// for the read: one that ran nothing for the operation at all, and one whose
-// git half said why in a reason that passes — behind its configuration, which
+// for the operation: one that ran nothing for it at all, and one whose git
+// half said why in a reason that passes — behind its configuration, which
 // judges no seat for as long as its apply fails, or a failure of its own
 // (code.UnreadyReason.PassesFill, [passesFill]). Kept on the first node, a
 // home that could not serve the read for a reason that lasts left the
 // repository unreadable through the walk: every other node holding no copy
 // answers a read not stamped home `not_held`, so a seat's read of a
 // repository its stuck home alone held was answered by nobody for as long as
-// the home stayed stuck. And never moved past a node that may be FILLING —
+// the home stayed stuck — and a seat's write likewise unbuilt. And never moved
+// past a node that may be FILLING —
 // syncing, its chart moments away, a reason this build does not know, a node
 // gone silent — so one walk still starts one download at a time, and a home's
 // death costs the fleet one fill rather than one a git node; nor past one at
@@ -240,9 +304,16 @@ func passesFill(rep reply) bool {
 // floor and no lag gate applies to a git operation ([GitCopy]), so the walk
 // never consults [Router.remembersBehind] and never hands a node to
 // [Router.lastResort]. A git node behind the company's configuration is no
-// worse a git node: its git half answers a seat's read `behind_config` itself
-// (code.UnreadyBehindConfig), which the walk reads as it reads any node that
-// ran nothing — move on, no demotion, the fill passed on.
+// worse a git node: its git half answers a seat's read or write
+// `behind_config` itself (code.UnreadyBehindConfig), which the walk reads as
+// it reads any node that ran nothing — move on, no demotion, the fill passed
+// on.
+//
+// A WRITE IS ASKED AGAIN AS A READ IS — of the next node after one that ran
+// nothing and after one that went silent — because it is an
+// [opIdempotentWrite] keyed by its push id ([opCodeGitWrite]): the next node
+// builds the same push, and is answered from its row where a silent node
+// landed it.
 //
 // Nothing answering is [ErrUnserved], as every walk.
 func (r *Router) routeGit(ctx context.Context, spec *opSpec, actor *Actor, x exchange) (any, error) {
@@ -588,17 +659,17 @@ func (r *Router) Listed() (bool, error) {
 // is the answer; otherwise the walk says why not and moves on — as a remote
 // git node's `no_backend` and `behind` are read, with nothing remembered,
 // since asking this node's own half again costs no round trip — and passes
-// says whether no copy serving the read is coming here, so the walk lets the
-// next node fill in this one's place ([passesFill]'s rule).
+// says whether no copy serving the operation is coming here, so the walk lets
+// the next node fill in this one's place ([passesFill]'s rule).
 //
 // HELD TO THE ATTEMPT A REMOTE ASKER GIVES IT: budget, the walk's attempt on
 // one node ([Router.budgetFor]), served until a reply's margin before it as
-// the server's git arm serves a remote read ([code.AnswerBy]). Run under the
+// the server's git arm serves a remote one ([code.AnswerBy]). Run under the
 // caller's own context instead, the home's own seats' reads waited out a busy
 // read lane or a slow sync for as long as their caller allowed, and ran their
 // git for as long, while every other node's seats were answered unready at the
-// attempt's end: what a read is answered must not depend on which node asked
-// it.
+// attempt's end: what a read or a write is answered must not depend on which
+// node asked it.
 func (r *Router) runLocalGit(ctx context.Context, spec *opSpec, x exchange, g GitServer, budget time.Duration,
 	w *walk) (value any, final, passes bool, err error) {
 
@@ -624,20 +695,22 @@ func (r *Router) runLocalGit(ctx context.Context, spec *opSpec, x exchange, g Gi
 // applies to [GitCopy]. A node whose code host is not built answers
 // `no_backend`, never silence, which its asker would read as a node gone; a
 // half not ready answers `behind`, naming why and carrying its reason
-// ([reply.Unready]) — `behind_config` for a seat's read on a node behind the
-// company's configuration, the node's posture as every operation says it.
+// ([reply.Unready]) — `behind_config` for a seat's read or write on a node
+// behind the company's configuration, the node's posture as every operation
+// says it.
 //
 // SERVED UNTIL ITS ANSWER IS DUE, a reply's margin before the request's
-// deadline ([code.AnswerBy]), and no later: every wait the read makes — its
-// copy's sync, its unit of the share, the read lane's queue for each process,
-// each process — takes that one context, so a busy node's `behind` reaches its
-// asker while it still listens. Served to the deadline itself and merely
-// marked with the margin (statelog.WithReplyMargin, which only statelog's own
-// waits read, and nothing on this path does), a read waiting on its share or
-// a slot ran to the deadline, and its asker — its attempt spent and nothing
-// heard — took a busy node for a gone one: asked it last for every operation
-// for suspectFor, told both placements, and sent every repository it is home
-// to to a runner-up that downloaded a copy of each.
+// deadline ([code.AnswerBy]), and no later: every wait a read or a write makes
+// — its copy's sync, its unit of the share, the read lane's queue for each
+// process, each process, a write's upload and its proposal — takes that one
+// context, so a busy node's `behind` reaches its asker while it still
+// listens. Served to the deadline itself and merely marked with the margin
+// (statelog.WithReplyMargin, which only statelog's own waits read, and
+// nothing on this path does), a read waiting on its share or a slot ran to
+// the deadline, and its asker — its attempt spent and nothing heard — took a
+// busy node for a gone one: asked it last for every operation for suspectFor,
+// told both placements, and sent every repository it is home to to a
+// runner-up that downloaded a copy of each.
 func (s server) answerGit(ctx context.Context, spec *opSpec, req request, out reply) []byte {
 	ctx, cancel := code.AnswerBy(ctx, req.Deadline)
 	defer cancel()

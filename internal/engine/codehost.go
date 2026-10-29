@@ -414,6 +414,27 @@ func (e *Engine) codeFleet() (int, int, error) {
 	return len(git), len(data), nil
 }
 
+// gitHalf is this node's git half as the estate's router and server ask for it
+// ([estate.GitServer], through [engineGit]): a repository's reads by object id
+// answered by the query server, and its engine writes built and landed by the
+// code host — two servers [Engine.buildCodeHost] builds together, over one
+// cache, one git pool and one seat git-work share, and stops together
+// ([native.stopCodeHost]).
+type gitHalf struct {
+	reads  *query.Server
+	writes *host.Server
+}
+
+// Read is the query server's read by object id.
+func (g gitHalf) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	return g.reads.Read(ctx, q)
+}
+
+// Write is the code host's engine write (ADR-0062).
+func (g gitHalf) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
+	return g.writes.Write(ctx, w)
+}
+
 // codeHostParts is what [Engine.buildCodeHost] built: the host, the git reads
 // beside it over the same cache and pool, the cache they serve from — which
 // the host stops with itself, and which the engine holds only to READ, for
@@ -817,6 +838,11 @@ func (e *Engine) stopCodeHost(ctx context.Context) { e.native.Load().stopCodeHos
 // stop refuses every read after it, cuts the reads in flight — each answered
 // unready, about this node, so its walk asks the next git node — and waits
 // for them, before the host and the cache they read stop ([query.Server.Stop]).
+// A peer's ENGINE WRITE, answered on the git writes' lane, needs no step of its
+// own: the host counts it among its requests, so the host's stop refuses
+// every write after it, cuts the writes in flight — one cut before its
+// landing ran nothing, and is answered not serving, about this node, so its
+// walk asks the next git node the same push — and waits for them.
 // All four share the one budget, and a second caller waits for the first.
 func (n *native) stopCodeHost(ctx context.Context) {
 	if n == nil || n.codeHost == nil {

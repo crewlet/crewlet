@@ -149,11 +149,13 @@ type Fleet interface {
 	// engine serves one — in the repository's rendezvous order, its home
 	// first (ADR-0059), and stamping the walk's first attempt home itself.
 	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
-	// Write is an engine write (ADR-0062) asked of the fleet's git nodes'
-	// code hosts in the repository's home order, its home first and stamped
-	// so (code.EngineWrite.Home), the next asked only where one answers a
-	// refusal about itself — the walk a keyed write takes — each host asked
-	// in process: no estate lane carries a write in this release.
+	// Write is an engine write (ADR-0062) through the fleet's routing, as a
+	// seat's or a person's tool asks one: the production estate router
+	// asking the git nodes — each serving its git writes' lane on the
+	// broker, as the engine serves one — in the repository's rendezvous
+	// order, its home first (ADR-0059), the walk stamping its first attempt
+	// home itself (code.EngineWrite.Home) and asking the next git node the
+	// same write where one ran nothing or went silent (code.git_write).
 	Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error)
 }
 
@@ -360,13 +362,13 @@ var soloEnvelopes = func() *estate.Envelopes {
 const soloRouter = "solo-router"
 
 // route makes every git node answer the fleet on the running broker as the
-// engine's serveEstate makes a git node answer — its estate service, its git
-// lane over its own git half (GitNode.Git) among its lanes — and builds the
-// router [SoloFleet.GitRead] asks through, holding nothing of its own. Every
-// git node holds the estate in this release, and a solo fleet's git nodes
-// reach its one data node's copy in process, so each serves that copy
-// (soloCopy). A Kill takes every registration with the broker; a Restart
-// routes again over the new one.
+// engine's serveEstate makes a git node answer — its estate service, its two
+// git lanes over its own git half (GitNode.Git) among its lanes — and builds
+// the router [SoloFleet.GitRead] and [SoloFleet.Write] ask through, holding
+// nothing of its own. Every git node holds the estate in this release, and a
+// solo fleet's git nodes reach its one data node's copy in process, so each
+// serves that copy (soloCopy). A Kill takes every registration with the
+// broker; a Restart routes again over the new one.
 func (f *SoloFleet) route(t testing.TB) {
 	t.Helper()
 	q := f.broker()
@@ -454,52 +456,14 @@ func (f *SoloFleet) compact(ctx context.Context, p code.CompactionProposal) (cod
 // chart's pat, whose engine writes are a person's.
 func DefaultPeople() []string { return []string{"ceo", "dev", FixturePat} }
 
-// Write is an engine write through the fleet's git nodes (Fleet), in the home
-// order their own routers answer.
+// Write is an engine write through the fleet's routing (Fleet): the router
+// [SoloFleet.GitRead] asks through, holding nothing of its own.
 func (f *SoloFleet) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
-	order := make([]Node, 0, len(f.git))
-	var rest []Node
-	for i, g := range f.git {
-		n := g.Node()
-		if n == nil {
-			continue
-		}
-		// The node's own router, as a keyed walk orders it (estate.Router.Home);
-		// none while the fleet is killed, and a node whose router cannot tell
-		// is no home.
-		home := false
-		if r := f.routers[i].Load(); r != nil {
-			id, err := r.Home(w.RepoID)
-			home = err == nil && id == g.o.ID
-		}
-		if home {
-			order = append(order, n)
-		} else {
-			rest = append(rest, n)
-		}
+	r := f.router.Load()
+	if r == nil {
+		return code.EngineWriteResult{}, errors.New("codetest: the solo fleet routes nothing while it is killed")
 	}
-	return WriteThrough(ctx, w, append(order, rest...), len(order) > 0)
-}
-
-// WriteThrough asks w of nodes' code hosts in order — the first stamped home
-// where home says it is the repository's — answering the first answer that is
-// not a refusal about the node itself (code.ErrGitUnready, code.ErrNotServing),
-// as a keyed walk does; the last such refusal where every node gave one.
-func WriteThrough(ctx context.Context, w code.EngineWrite, nodes []Node, home bool) (code.EngineWriteResult,
-	error) {
-
-	err := errors.New("codetest: no git node runs to write through")
-	for i, n := range nodes {
-		attempt := w
-		attempt.Home = home && i == 0
-		var res code.EngineWriteResult
-		res, err = n.Host().Write(ctx, attempt)
-		var unready *code.ErrGitUnready
-		if !errors.As(err, &unready) && !errors.Is(err, code.ErrNotServing) {
-			return res, err
-		}
-	}
-	return code.EngineWriteResult{}, err
+	return r.Code().GitWrite(ctx, w)
 }
 
 // GitRead is a read of a repository by object id through the fleet's routing
@@ -571,7 +535,8 @@ type SoloFleet struct {
 	git  []*GitNode
 
 	// router is the running broker's router, holding nothing of its own,
-	// which [SoloFleet.GitRead] asks through (route); nil while killed.
+	// which [SoloFleet.GitRead] and [SoloFleet.Write] ask through (route);
+	// nil while killed.
 	router atomic.Pointer[estate.Router]
 	// routers is each git node's own router, which its compactor asks
 	// whether it is a repository's maintainer (soloMaintainers); nil while
