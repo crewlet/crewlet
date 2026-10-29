@@ -192,6 +192,18 @@ A company can use all three: the cell is the entry's, so two entries on the same
 
 **A run remembers its cell.** The placement is written onto the run's durable row *before the box exists*, and reconnect, teardown and the pause reaper all read it from there. It is not re-derived: the turn that collects a run may be a different process on a different node, days later, with the company configuration applied again in between — and reconnecting to a remote box through the local backend does not error usefully, it reports a box that has vanished, so a job that is still running would be abandoned as gone. An entry that names no cell is given the company's default at launch, so every row names one.
 
+### Whether a cell is ready
+
+Each node probes the cells `providers.sandbox` declares and publishes the answer on its heartbeat, so the Models page can say, per node, which cells can start a box now and disable the rest with the reason:
+
+| Cell | Ready when |
+|---|---|
+| `direct` | the engine host runs the local backend (Linux or macOS) and the box root under `local.state_dir` is writable |
+| `container` | `local.image` is set, the runtime (`docker` or `podman`, per `local.runtime`) is on the engine's `PATH`, and its daemon answers `version --format '{{.Server.Version}}'` within 5 s |
+| `e2b` | `e2b.api_key` resolves on this node, and one authenticated read of the API (`GET /v2/sandboxes?limit=1`) answers within 5 s |
+
+A cell the company does not declare reads `unconfigured`, never not ready. A cell that is not ready carries its fix, for example "Install Docker or Podman on this node and restart the engine: PATH is read at start". The probe runs at boot, at every apply and every five minutes; it never makes a box. The `direct` cell is not probed for host confinement: an executor's direct box is not confined, so a host without bubblewrap or Landlock still runs it.
+
 ### Sandbox backends
 
 The provider layer is pluggable behind the `sandbox.Provider` interface (`internal/sandbox/protocol.go`). Two backends run code, and one stands in for them:
