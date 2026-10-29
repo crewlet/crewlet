@@ -977,3 +977,14 @@ export function listed(parts: readonly string[]): string {
   if (parts.length < 3) return parts.join(" and ");
   return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1) ?? ""}`;
 }
+
+const USD = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+
+/**
+ * A spend in US dollars, as the engine prices it: "$18.42". In en-US rather
+ * than the browser's locale, for the reason [listed] is: the words around it
+ * are English, and "18,42 US$" inside an English sentence reads as a typo.
+ */
+export function fmtUsd(n: number): string {
+  return USD.format(n);
+}

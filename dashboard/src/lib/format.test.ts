@@ -14,6 +14,7 @@ import { describe, expect, test } from "vitest";
 // unnoticed: it goes green on whatever is written, not on what is correct.
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  fmtUsd,
   listed,
   fmtSetting,
   asSentence,
@@ -472,4 +473,10 @@ test('a list keeps the comma before its last item, so an item carrying its own "
   expect(listed(["coding", "reviewing and evaluations", "task delegations and routines"])).toBe(
     "coding, reviewing and evaluations, and task delegations and routines",
   );
+});
+
+test("a spend reads in dollars and cents, in the English the words around it are in", () => {
+  expect(fmtUsd(18.4234)).toBe("$18.42");
+  expect(fmtUsd(0)).toBe("$0.00");
+  expect(fmtUsd(1234.5)).toBe("$1,234.50");
 });
