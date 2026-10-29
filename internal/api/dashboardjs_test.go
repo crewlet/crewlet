@@ -1367,9 +1367,10 @@ const (
 	// a /config failure by whether the engine answered, its sentence shared
 	// by every screen that writes the company; and the Models fixes from the
 	// owner's review: a removal on its entry's own tag, Review's list of who
-	// changes model, an edit keeping its seats) took it to 4763.9 KiB.
-	// 4764 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 668<<10
+	// changes model, an edit keeping its seats; and an answer read as the
+	// engine's only where it carries the engine's mark) took it to
+	// 4765.6 KiB. 4766 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 670<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

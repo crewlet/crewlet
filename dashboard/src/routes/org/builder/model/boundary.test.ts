@@ -19,7 +19,7 @@
  *   nothing but the contract, held below) or
  *   `~/protocol/configAnswer.ts` (the ONE reading of a `/config` refusal,
  *   which imports nothing but types and `engineAnswer.ts`, itself importing
- *   nothing, both held below); the rest of `~/protocol`
+ *   nothing but the contract's mark of an engine answer, both held below); the rest of `~/protocol`
  *   is imported for TYPES only, because its runtime half is the socket and
  *   `fetch`;
  * - no module names a browser or time global.
@@ -122,15 +122,23 @@ describe("the builder core", () => {
     // what is behind it imports nothing at runtime: the day it reached for
     // `rest.ts` the model would be one import away from the network.
     // One step further, and no more: the rule of whose answer an answer is,
-    // which `rest.ts` reads too, imports nothing at all.
+    // which `rest.ts` reads too, imports nothing but the contract (the
+    // engine's mark), whose modules import nothing at runtime.
     const answer = modules().find(({ path }) => path === "protocol/configAnswer.ts");
     expect(answer, "protocol/configAnswer.ts is gone").toBeDefined();
     const runtime = imports(answer!.text).filter(({ typeOnly }) => !typeOnly);
     expect(runtime.map(({ spec }) => spec)).toEqual(["./engineAnswer.ts"]);
     const engine = modules().find(({ path }) => path === "protocol/engineAnswer.ts");
     expect(engine, "protocol/engineAnswer.ts is gone").toBeDefined();
-    expect(imports(engine!.text)).toEqual([]);
-    for (const { text } of [answer!, engine!]) {
+    expect(
+      imports(engine!.text)
+        .filter(({ typeOnly }) => !typeOnly)
+        .map(({ spec }) => spec),
+    ).toEqual(["../contract/engine.ts"]);
+    const mark = modules().find(({ path }) => path === "contract/engine.ts");
+    expect(mark, "contract/engine.ts is gone").toBeDefined();
+    expect(imports(mark!.text)).toEqual([]);
+    for (const { text } of [answer!, engine!, mark!]) {
       const body = code(text);
       const reached = FORBIDDEN_GLOBALS.filter(([, pattern]) => pattern.test(body)).map(
         ([label]) => label,

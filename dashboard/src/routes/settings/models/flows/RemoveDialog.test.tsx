@@ -223,6 +223,9 @@ const UNSETTLED = [
   [0, false, "the engine did not answer within 30 seconds", "The engine did not answer."],
   [504, false, "a 504 came back without the engine's JSON", "The engine did not answer."],
   [500, true, "store: disk full", "The engine failed: store: disk full."],
+  // A PROXY'S 403 OR 413, as the classifier reads one without the engine's mark.
+  [403, false, "blocked by policy", "The engine did not answer."],
+  [413, false, "blocked by policy", "The engine did not answer."],
 ] as const;
 
 test.each(UNSETTLED)(

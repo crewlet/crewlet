@@ -29,7 +29,14 @@
  */
 
 import { classifyConfigRefusal, type ConfigAnswer, type ConfigRefusal } from "./configAnswer.ts";
-import { isAbort, rest, RestError, type QueryValue, type RestResponse } from "./rest.ts";
+import {
+  isAbort,
+  pathSegment,
+  rest,
+  RestError,
+  type QueryValue,
+  type RestResponse,
+} from "./rest.ts";
 import type { CompanyDocument, ConfigWarning, Derived } from "./types.ts";
 
 /**
@@ -38,11 +45,14 @@ import type { CompanyDocument, ConfigWarning, Derived } from "./types.ts";
  */
 export async function answerOf(call: Promise<RestResponse>): Promise<ConfigAnswer> {
   try {
+    // A SUCCESS IS ITS CALLER'S TO READ ([classifyConfigRefusal] reads only
+    // refusals), so whose answer it is is not recorded on it.
     const { status, body, etag } = await call;
     return { status, body, etag };
   } catch (err) {
     if (isAbort(err)) throw err;
-    if (err instanceof RestError) return { status: err.status, body: err.body, etag: null };
+    if (err instanceof RestError)
+      return { status: err.status, body: err.body, etag: null, fromEngine: err.marked };
     return {
       status: 0,
       body: {
@@ -89,7 +99,7 @@ export const configTransport = {
     answerOf(rest.request("GET", "/config", signal ? { signal } : {})),
   /** `GET /config/revisions/{id}`. */
   revision: (id: string, signal: AbortSignal): Promise<ConfigAnswer> =>
-    answerOf(rest.request("GET", `/config/revisions/${encodeURIComponent(id)}`, { signal })),
+    answerOf(rest.request("GET", `/config/revisions/${pathSegment(id)}`, { signal })),
 };
 
 /** The active document, or why there is none to read. */
@@ -232,7 +242,7 @@ export async function getEntity(
   signal: AbortSignal,
 ): Promise<EntityRead> {
   const answer = await answerOf(
-    rest.request("GET", `/config/${kind}/${encodeURIComponent(id)}`, { signal }),
+    rest.request("GET", `/config/${kind}/${pathSegment(id)}`, { signal }),
   );
   if (answer.status === 200 && isRecord(answer.body) && answer.etag) {
     return { kind: "entity", entity: answer.body, etag: answer.etag };
@@ -273,7 +283,7 @@ export async function dryRunEntity(
 ): Promise<ConfigWriteOutcome> {
   return outcomeOf(
     await answerOf(
-      rest.request("PUT", `/config/${kind}/${encodeURIComponent(id)}`, {
+      rest.request("PUT", `/config/${kind}/${pathSegment(id)}`, {
         query: { dry_run: "true" },
         headers: { "If-Match": etag },
         body: entity,
@@ -298,7 +308,7 @@ export async function putEntity(
 ): Promise<ConfigWriteOutcome> {
   return outcomeOf(
     await answerOf(
-      rest.request("PUT", `/config/${kind}/${encodeURIComponent(id)}`, {
+      rest.request("PUT", `/config/${kind}/${pathSegment(id)}`, {
         headers: { "If-Match": etag },
         body: { ...entity, _summary: summary },
         signal,
@@ -334,7 +344,7 @@ export async function dryRunCreate(
 ): Promise<ConfigWriteOutcome> {
   return outcomeOf(
     await answerOf(
-      rest.request("PUT", `/config/${kind}/${encodeURIComponent(id)}`, {
+      rest.request("PUT", `/config/${kind}/${pathSegment(id)}`, {
         query: { dry_run: "true" },
         headers: CREATE_ONLY,
         body: entity,
@@ -354,7 +364,7 @@ export async function createEntity(
 ): Promise<ConfigWriteOutcome> {
   return outcomeOf(
     await answerOf(
-      rest.request("PUT", `/config/${kind}/${encodeURIComponent(id)}`, {
+      rest.request("PUT", `/config/${kind}/${pathSegment(id)}`, {
         headers: CREATE_ONLY,
         body: { ...entity, _summary: summary },
         signal,

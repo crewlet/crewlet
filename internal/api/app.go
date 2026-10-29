@@ -1091,9 +1091,20 @@ func bindDispatcher(d *auth.Dispatcher, h http.Handler) error {
 //
 // ONE WRAPPING for the full surface and the boot surface api.port and
 // api.public serve before it ([Boot]), so a request a node refuses while it
-// starts carries the headers the same request carries once it serves.
+// starts carries the headers the same request carries once it serves. Among
+// them [httpjson.EngineHeader], set first, so every answer says it is the
+// engine's, a refusal no handler thought about included.
 func servedOn(bootstrap *config.Bootstrap, public bool, h http.Handler) http.Handler {
-	return pagepolicy.Apply(authz.CanonicalPath(h), servedOverHTTPS(bootstrap, public))
+	return pagepolicy.Apply(markedAsEngine(authz.CanonicalPath(h)), servedOverHTTPS(bootstrap, public))
+}
+
+// markedAsEngine sets [httpjson.EngineHeader] on the answer before anything
+// beneath it writes one: a header set after the status line is dropped.
+func markedAsEngine(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(httpjson.EngineHeader, httpjson.EngineHeaderValue)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // partition serves the requests on one side of [auth.Public] and answers every

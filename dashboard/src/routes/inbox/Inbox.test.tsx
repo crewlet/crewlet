@@ -27,6 +27,7 @@ import { healthFrame } from "~/test/health.ts";
 import { installScreen } from "~/testing.tsx";
 import { withDerived } from "~/test/org.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -178,7 +179,7 @@ beforeEach(() => {
       if ("refused" in answer) {
         return new Response(JSON.stringify(answer.body), {
           status: answer.refused,
-          headers: { "Content-Type": "application/json" },
+          headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
         });
       }
       return new Response(

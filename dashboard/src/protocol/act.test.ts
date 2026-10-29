@@ -13,6 +13,7 @@ import { act, newActOpID } from "./act.ts";
 import { UNCONFIRMED_SENTENCE } from "./writeOutcome.ts";
 import { SessionFloors } from "./session.ts";
 import { currentSessionNeed, sessionRestored, setStepUpConfirmer } from "./signin.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -40,7 +41,7 @@ function stub(respond: (call: Call) => Promise<Response>): Call[] {
 const json = (payload: unknown, status: number) =>
   new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
   });
 
 const APPLIED = {
@@ -277,7 +278,7 @@ describe("what a change came to", () => {
       async () =>
         new Response(JSON.stringify({ error: "unavailable", tool: "set_pins", detail: "sealed" }), {
           status: 503,
-          headers: { "Content-Type": "application/json", "Retry-After": "2" },
+          headers: { ...ENGINE_HEADERS, "Content-Type": "application/json", "Retry-After": "2" },
         }),
     );
     const result = await act("set_pins", {}, { floors: new SessionFloors() });

@@ -311,11 +311,20 @@ another method. Both carry a `detail` naming the method and the path, where the
 router's own answer was a line of plain text no client could branch on.
 
 The CLI and the dashboard rely on it. A non-2xx answer with no code was written
-by something **in front of** the node — most often a reverse proxy's read
-timeout — and says nothing about what the node did, so a write that meets one
+by something **in front of** the node (most often a reverse proxy's read
+timeout) and says nothing about what the node did, so a write that meets one
 is reported as *unknown*, with the operation id to finish it under, rather than
-as refused. An answer with a code is the node's own, and a refusal from the
-node means nothing was done.
+as refused. A refusal from the node means nothing was done.
+
+**Every answer the node's API writes carries `X-Crewlet-Engine: 1`**: a route's
+answer, every refusal, the router's own `404` and `405`, the canonical-path
+refusal and the `503 starting` of a node still starting. A body alone cannot
+say whose answer it is, since a proxy can answer JSON with an `error` field of
+its own; this header is set by nothing in front of the node. The dashboard
+reads an answer as the node's only when it carries both the header and a code,
+so a proxy's `403` or `413` is a write whose outcome is unknown, never a
+refusal asking for a grant or a smaller document. The CLI reads the code. A
+proxy in front of the node must pass the header through unchanged.
 
 ---
 

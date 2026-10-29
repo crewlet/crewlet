@@ -20,6 +20,7 @@ import {
   savePatch,
 } from "./configWrite.ts";
 import type { ConfigWarning } from "./types.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -40,7 +41,7 @@ function stub(respond: (url: string, init: RequestInit) => Promise<Response>) {
 const json = (payload: unknown, status: number, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json", ...headers },
   });
 
 // A REFUSAL IS AN ANSWER. The scheduler and the save classify the status and
@@ -220,7 +221,8 @@ describe("the warnings a change introduces", () => {
 describe("one reading of a /config refusal", () => {
   test.each([
     [401, { error: "invalid_token" }, { kind: "guarded", code: "invalid_token" }],
-    [403, {}, { kind: "guarded", code: "" }],
+    // NO CODE, SO NOT THE ENGINE'S: something in front of it answered.
+    [403, {}, { kind: "unsettled", answered: false, status: 403, detail: "" }],
     [403, { error: "step_up_required" }, { kind: "guarded", code: "step_up_required" }],
     // A MANAGED DOCUMENT ACCEPTED THE CREDENTIAL, so it is not `guarded`:
     // the remedy is where the company is written, not a grant to ask for.
@@ -296,6 +298,22 @@ describe("one reading of a /config refusal", () => {
     expect(classifyConfigRefusal({ status: 503, body: { error: "unavailable" } }).kind).toBe(
       "unsettled",
     );
+  });
+
+  // A PROXY'S REFUSAL IS NO REFUSAL OF THE ENGINE'S, however it is spelled: a
+  // 403 or a 413 in the engine's own envelope, without the engine's mark, is an
+  // answer that says nothing about what the engine did. Read as the engine's,
+  // its 403 asked a person for a grant and its 413 for a smaller document.
+  test.each([403, 413])("a proxy's %i in the engine's shape, unmarked, is unsettled", (status) => {
+    const body = { error: "unauthorized", detail: "blocked by policy" };
+    expect(classifyConfigRefusal({ status, body, fromEngine: false })).toEqual({
+      kind: "unsettled",
+      answered: false,
+      status,
+      detail: "blocked by policy",
+    });
+    // The same answer, marked, is the engine's own refusal.
+    expect(classifyConfigRefusal({ status, body, fromEngine: true }).kind).not.toBe("unsettled");
   });
 
   // "DID NOT ANSWER" ONLY WHERE THE ENGINE'S ANSWER NEVER ARRIVED. The owner

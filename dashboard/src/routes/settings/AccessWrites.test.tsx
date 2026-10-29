@@ -33,6 +33,7 @@ import { healthFrame } from "~/test/health.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { pick } from "~/testing.tsx";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -121,7 +122,7 @@ interface Sent {
 function json(status: number, payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
   });
 }
 

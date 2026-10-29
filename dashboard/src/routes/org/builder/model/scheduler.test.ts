@@ -158,7 +158,16 @@ describe("classifyCheck", () => {
       ],
       [
         { status: 403, body: {} },
-        { status: "guarded", code: "" },
+        { status: "unchecked", why: "unanswered", answerStatus: 403, detail: "" },
+      ],
+      [
+        // A PROXY'S 403 in the engine's shape, without the engine's mark: no grant of anybody's.
+        { status: 403, body: { error: "unauthorized" }, fromEngine: false },
+        { status: "unchecked", why: "unanswered", answerStatus: 403, detail: "unauthorized" },
+      ],
+      [
+        { status: 413, body: { error: "body_too_large" }, fromEngine: false },
+        { status: "unchecked", why: "unanswered", answerStatus: 413, detail: "body_too_large" },
       ],
       [
         { status: 503, body: { error: "draining", detail: "restarting" } },

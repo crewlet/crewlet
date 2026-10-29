@@ -120,3 +120,50 @@ test("every removal request states the entry's tag, and the removal goes through
   for (const removal of removals) expect(removal.ifMatch).toBe(ENTRY_TAG);
   expect(onDone).toHaveBeenCalled();
 });
+
+/**
+ * A PROXY'S 403 OR 413 IS NO REFUSAL OF THE ENGINE'S. The removal itself met
+ * by one, in the engine's own envelope but without its mark, may have landed
+ * behind it, so the dialog says nobody knows rather than "Not removed".
+ */
+test.each([403, 413])(
+  "a removal a proxy answers %i says nobody knows whether it landed",
+  async (status) => {
+    const calls = engine();
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit = {}) => {
+      const parsed = new URL(String(url));
+      if ((init.method ?? "GET") === "DELETE" && parsed.searchParams.get("dry_run") !== "true") {
+        return new Response(JSON.stringify({ error: "forbidden", detail: "blocked by policy" }), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return real(url, init);
+    });
+    const data = modelsData({
+      entries: [apiKeyEntry({ key: "sonnet" }), apiKeyEntry({ key: "default", agent: "codex" })],
+      doc: modelsDoc({}),
+      seats: [seat("backend-engineer", "Backend Engineer")],
+      assistant: { enabled: false, key: null },
+    });
+    const onDone = vi.fn();
+    render(
+      <Router>
+        <RemoveDialog model={data.models[0]!} data={data} onClose={() => {}} onDone={onDone} />
+      </Router>,
+    );
+    await screen.findByText("Ready to remove");
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "sonnet" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Remove model" }));
+    });
+    expect(screen.queryByText("Not removed")).toBeNull();
+    const title = await screen.findByText("Not known whether it was removed");
+    expect(title.closest(".crewlet-callout")?.textContent).toContain(
+      "The engine did not answer. sonnet may or may not have been removed.",
+    );
+    expect(onDone).not.toHaveBeenCalled();
+    expect(calls.length).toBeGreaterThan(0);
+  },
+);

@@ -47,7 +47,7 @@ import {
 } from "../draft.ts";
 import type { WizardStep } from "../../parts.tsx";
 import { webToolsWords } from "./LimitsStep.tsx";
-import { summaryOf, useChanges } from "./UseItFor.tsx";
+import { seatChangesOf, summaryOf } from "./UseItFor.tsx";
 
 /** Where the engine's check of the change stands. */
 export type ReviewCheck =
@@ -181,7 +181,7 @@ export function Review({
     [before, after, draft, data.seats, editing],
   );
   const orphans = orphansOf(data, draft);
-  const changes = useChanges(data, draft.key, served, draft.uses);
+  const changes = seatChangesOf(data, draft.key, served, draft.uses);
   const stored = (what: string) =>
     keptCredential ? (
       `${what}, the stored one`
