@@ -3032,6 +3032,15 @@ carries `check_note` instead: the sentence saying when the vendor proves it. A
 webhook signing secret is the usual case, since the vendor never presents it
 and only signs its deliveries with it.
 
+`check_with`, on a `checkable` field only, names the other fields of the same
+list that one check of it is made with, for a vendor that accepts or refuses
+several values together. A form offers a single Test control after that
+field, enabled once it and every field named holds a value, and sends them in
+one request. A credential named there is not `checkable` on its own, and its
+`check_note` says where it is tested. Datadog is the one surface that uses it
+today: `app_key` carries `"check_with": ["site", "api_key"]`. Absent, a field
+is checked on its own.
+
 ### Supplying them
 
 ```bash
@@ -3138,8 +3147,8 @@ because it spends a credential at a vendor on a person's hand.
 ```bash
 curl -X POST https://engine.example.com/setup/integrations/datadog/verify \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"field": "api_key", "value": "<the typed key>",
-       "values": {"site": "datadoghq.eu", "app_key": "${DATADOG_APP_KEY}"}}'
+  -d '{"field": "app_key", "value": "<the typed key>",
+       "values": {"site": "datadoghq.eu", "api_key": "${DATADOG_API_KEY}"}}'
 ```
 
 | Field | Meaning |
@@ -3162,7 +3171,7 @@ never repeats the value that was checked.
 
 | `outcome` | Meaning |
 |---|---|
-| `works` | The vendor accepted it, and `detail` says who or what it authenticates as where the vendor says: "Works. Datadog accepted it for the FairSplit organization in datadoghq.eu." |
+| `works` | The vendor accepted it, and `detail` says who or what it authenticates as where the vendor says: "Works. Both keys are valid for the FairSplit organization in datadoghq.eu, and can read users, roles and webhooks." |
 | `refused` | The vendor answered and refused it: a 401 or 403, Slack's `invalid_auth`, or a credential that authenticates without what the integration needs (a Mattermost account that is not a system administrator, a GitLab token without its scope, an Atlassian key created with scopes, a Slack user token where a bot token belongs). The vendor's own reason is repeated where it is short |
 | `unreachable` | The vendor gave no answer about the credential: no connection, ten seconds without an answer, a `429` or `5xx`, or an answer that is not the vendor's API (often a wrong address). The detail says nothing was stored |
 | `unchecked` | The field cannot be checked ahead without acting on it, and `detail` is its `check_note` |
@@ -3173,7 +3182,7 @@ What each surface checks, and with what:
 |---|---|---|---|
 | `atlassian` | `api_key`, against `org_id` | one page of the organization's service accounts, which a scoped key is refused | |
 | `confluence` | `token`, with `email` on Cloud | `GET /rest/api/user/current` | `webhook_token` (Cloud), `webhook_secret` (Data Center) |
-| `datadog` | `api_key` and `app_key`, checked together in `site` | `GET /api/v1/org` | `webhook_token` |
+| `datadog` | `app_key`, checked with `api_key` in `site` (`check_with`); `api_key` alone answers its `check_note` | in stages, stopping at the first refusal so the detail names the key or permission that failed: `GET /api/v1/validate` (the API key alone), `GET /api/v1/org` (both keys), then one row of `/api/v2/users` and `/api/v2/roles` and a read of the configured webhook (absent is fine). See [Testing the keys](../integrations/datadog.md#testing-the-keys-before-you-save-them) | `webhook_token` |
 | `github` | `token`, at `url` for Enterprise Server | `GET /user` | `webhook_secret` |
 | `gitlab` | `admin_token` (needs `api`) and `token` (needs `read_api`), at `url` | `GET /user`, then the token's own scopes and expiry where the instance describes them | `signing_secret` |
 | `jira` | `token`, with `email` on Cloud | `GET /myself` | `webhook_secret` |
