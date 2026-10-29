@@ -242,80 +242,160 @@ func linesOf(group string, size, lineBytes int) string {
 	return b.String()
 }
 
-// How many reads of each text one measurement takes, in turn, keeping the
-// fastest of each, and how many measurements a comparison may take before it
-// fails.
+// How many samples of each text one measurement takes, in turn, keeping the
+// fastest of each, after one sample of each to warm up; how many measurements
+// a comparison may take before it fails; the least a sample may cost for a
+// comparison to judge it; and the most reads one sample may take to reach it.
 const (
 	interleavedReads = 5
 	measureRounds    = 3
+	judgeFloor       = 5 * time.Millisecond
+	maxReps          = 1 << 12
 )
 
+// timer is what a comparison measures a text by: the time reps reads of it
+// take. [withinFactor] reads the wall clock; the self-test hands [judge] one
+// that answers by arithmetic, so what the comparison decides is tested with
+// no scheduler in it.
+type timer func(text string, reps int) time.Duration
+
 // withinFactor reports whether reading long costs at most factor times what
-// reading short does, with the two costs of the last measurement taken.
-//
-// EACH MEASUREMENT IS THE FASTEST OF [interleavedReads] READS OF EACH, taken
-// in turn, so a runner busy for a moment slows both or neither. AND A
-// COMPARISON THAT FAILS IS MEASURED AGAIN, up to [measureRounds] times, and
-// fails only if every measurement does. A burst of load from the other
-// packages beside this one under the race detector can outlast every read of
-// one measurement (the live view's 32 KiB read 264ms against 4ms in CI, with
-// nothing quadratic in it), but it does not recur on every measurement; the
-// regressions these tests guard cost six to eighty times the factor on every
-// one, so a real regression still fails.
+// reading short does, with the cost of one read of each, as the last
+// measurement took them. See [judge].
 func withinFactor(read func(string), short, long string, factor int) (bool, time.Duration, time.Duration) {
-	timed := func(text string) time.Duration {
+	return judge(func(text string, reps int) time.Duration {
 		start := time.Now()
-		read(text)
+		for range reps {
+			read(text)
+		}
 		return time.Since(start)
+	}, short, long, factor)
+}
+
+// judge is [withinFactor] over timed.
+//
+// EVERY SAMPLE IS AT LEAST [judgeFloor] LONG. A sample is reps reads of a
+// text, reps grown, doubling, until the short text's sample reaches twice the
+// floor (and again, should a measurement's fastest still fall under it), and
+// the long text's taken at the same reps, so the ratio is the
+// reads' own. The noise a loaded runner adds to a sample is a preemption's
+// overshoot, milliseconds whatever the sample, so on a sample of two it is
+// most of it: a 2ms read measured 5.73ms under the race detector in CI. And a
+// read that costs a millisecond without the race detector, as most here do,
+// is no smaller a ratio for being read several times. A text that cannot
+// reach the floor in [maxReps] reads fails as too cheap to judge: a ratio of
+// two reads that cost nothing passes any factor, which asserts nothing.
+//
+// EACH MEASUREMENT IS THE FASTEST OF [interleavedReads] SAMPLES OF EACH, taken
+// in turn after one warm-up sample of each, so a runner busy for a moment
+// slows both or neither. AND A COMPARISON THAT FAILS IS MEASURED AGAIN, up to
+// [measureRounds] times, and fails only if every measurement does: a burst of
+// load from the packages beside this one can outlast every sample of one
+// measurement (the live view's 32 KiB read 264ms against 4ms in CI, with
+// nothing quadratic in it), but not of every one. That only ever turns a
+// failure into a pass, so the regressions these tests guard have to fail by
+// far more than the factor on every measurement, as they do (six to eighty
+// times it).
+func judge(timed timer, short, long string, factor int) (bool, time.Duration, time.Duration) {
+	// TWICE THE FLOOR, so that the fastest of a measurement's samples, which
+	// can come in under the one that calibrated, still clears it.
+	reps := 1
+	for reps < maxReps && timed(short, reps) < 2*judgeFloor {
+		reps *= 2
 	}
+	timed(short, reps)
+	timed(long, reps)
 	var shortCost, longCost time.Duration
-	for range measureRounds {
+	for round := 0; round < measureRounds; {
 		shortCost, longCost = time.Duration(1<<62), time.Duration(1<<62)
 		for range interleavedReads {
-			shortCost, longCost = min(shortCost, timed(short)), min(longCost, timed(long))
+			shortCost, longCost = min(shortCost, timed(short, reps)), min(longCost, timed(long, reps))
+		}
+		if shortCost < judgeFloor {
+			if reps >= maxReps {
+				return false, shortCost / time.Duration(reps), longCost / time.Duration(reps)
+			}
+			// UNDER THE FLOOR STILL: read more, and measure again,
+			// which is no round of the comparison's.
+			reps *= 2
+			continue
 		}
 		if longCost <= time.Duration(factor)*shortCost {
-			return true, shortCost, longCost
+			return true, shortCost / time.Duration(reps), longCost / time.Duration(reps)
 		}
+		round++
 	}
-	return false, shortCost, longCost
+	return false, shortCost / time.Duration(reps), longCost / time.Duration(reps)
 }
 
-// THE COMPARISON STILL FAILS A STEADY REGRESSION, measured again or not: a
-// read whose cost grows with the square of its text costs sixty-four times as
-// much for eight times the bytes on every measurement, and a linear one eight.
-// Mutation: report a pass after any round, or never measure again, and one of
-// the two cases here fails.
+// WHAT THE COMPARISON DECIDES, with no clock in it: a [timer] that answers by
+// arithmetic, so the rounds, the calibration, the floor and the factor are
+// held exactly, on any runner, in no time.
 //
-// EVERY READ SLEEPS WELL ABOVE THE TIMER'S SLACK. A sleep is a floor, never a
-// duration: on a loaded runner under the race detector a 320µs sleep measured
-// 1.09ms, which put the square case's short read at three times its cost and
-// let a 21ms long read pass a factor of 24 it should have failed by 2.7 times.
-// At this unit the square case's short read is 2ms, so even 2ms of slack on
-// every short read leaves the long one past the factor; the linear case's
-// short read is 25ms, which no slack moves eight times.
+// It used to spin the CPU for each read, and that is the flake it fixed and
+// the flake that followed it: a spin's noise is a preemption's overshoot,
+// added, milliseconds on a sample of two, so a square cost whose short read
+// was 2ms passed against a factor its long read should have failed by 2.7
+// times, and one checked again with every short read three times as slow had
+// a real margin of 1.33 times, not four. The comparison over the wall clock
+// is held by the four tests above, each a regression's mutation away from
+// failing.
+//
+// Mutation: drop the calibration, the floor, the re-measure or its failing
+// only when every round does, and a case here fails.
 func TestWithinFactorFailsWhatEveryMeasurementSays(t *testing.T) {
 	t.Parallel()
-	const unit = 125 * time.Microsecond
-	small, large := strings.Repeat("x", 4), strings.Repeat("x", 32)
-	square := func(text string) { spin(time.Duration(len(text)*len(text)) * unit) }
-	if ok, s, l := withinFactor(square, small, large, 3*8); ok {
+	const factor = 64
+	small, large := strings.Repeat("x", 4), strings.Repeat("x", 64)
+	// costs is a timer whose read of a text costs cost(len(text)), the
+	// same every time: a sample of reps reads, reps times it.
+	costs := func(cost func(n int) time.Duration) timer {
+		return func(text string, reps int) time.Duration { return time.Duration(reps) * cost(len(text)) }
+	}
+	square := costs(func(n int) time.Duration { return time.Duration(n*n) * time.Millisecond })
+	if ok, s, l := judge(square, small, large, factor); ok {
 		t.Errorf("a square cost passed: %v against %v", l, s)
 	}
-	linear := func(text string) { spin(time.Duration(len(text)) * 50 * unit) }
-	if ok, s, l := withinFactor(linear, small, large, 3*8); !ok {
+	linear := costs(func(n int) time.Duration { return time.Duration(n) * time.Millisecond })
+	if ok, s, l := judge(linear, small, large, factor); !ok {
 		t.Errorf("a linear cost failed: %v against %v", l, s)
 	}
-}
-
-// spin holds the CPU for d, as a read whose cost is d does.
-//
-// NOT time.Sleep, whose floor is the timer's resolution rather than d: on a
-// virtual machine that is about a millisecond, so the square case's 320µs
-// short read measured 1.1ms, its ratio fell to nineteen against a factor of
-// twenty-four, and a quadratic cost passed on every run. A spin costs what it
-// is asked to, at any resolution, which is the property the case is about.
-func spin(d time.Duration) {
-	for start := time.Now(); time.Since(start) < d; {
+	// A READ FAR BELOW THE FLOOR, a microsecond a byte (4µs and 64µs), is
+	// read enough times to reach it, and judged: linear passes, square fails.
+	cheapLinear := costs(func(n int) time.Duration { return time.Duration(n) * time.Microsecond })
+	if ok, s, l := judge(cheapLinear, small, large, factor); !ok {
+		t.Errorf("a cheap linear cost failed: %v against %v", l, s)
+	}
+	cheapSquare := costs(func(n int) time.Duration { return time.Duration(n*n) * time.Microsecond })
+	if ok, s, l := judge(cheapSquare, small, large, factor); ok {
+		t.Errorf("a cheap square cost passed: %v against %v", l, s)
+	}
+	// A READ NO NUMBER OF READS BRINGS TO THE FLOOR fails, whatever its
+	// ratio: one that costs nothing.
+	if ok, s, l := judge(costs(func(int) time.Duration { return 0 }), small, large, factor); ok {
+		t.Errorf("a read that costs nothing passed: %v against %v", l, s)
+	}
+	// A BURST OUTLASTS TWO MEASUREMENTS of a linear cost, every long sample
+	// ten times as slow, and the third passes it; the same burst on every
+	// measurement fails it.
+	bursts := func(slowSamples int) timer {
+		longSamples := 0
+		return func(text string, reps int) time.Duration {
+			cost := linear(text, reps)
+			if text == large {
+				if longSamples < slowSamples {
+					cost *= 10
+				}
+				longSamples++
+			}
+			return cost
+		}
+	}
+	samples := 1 + interleavedReads
+	if ok, s, l := judge(bursts(1+2*interleavedReads), small, large, factor); !ok {
+		t.Errorf("a linear cost slowed for two measurements failed: %v against %v", l, s)
+	}
+	if ok, s, l := judge(bursts(1+measureRounds*samples), small, large, factor); ok {
+		t.Errorf("a linear cost slowed on every measurement passed: %v against %v", l, s)
 	}
 }
