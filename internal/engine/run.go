@@ -308,6 +308,10 @@ type Engine struct {
 	// keeps it ([runnerProbe]), published on the heartbeat.
 	runners runnerProbe
 
+	// hostLogins is what each model entry's CLI says of its login on this
+	// node's disk, and the loop that keeps it ([hostLogins]).
+	hostLogins hostLogins
+
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
 	// [Engine.Apply].
@@ -2014,6 +2018,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// WHERE THIS NODE CAN START A BOX, probed now and kept: what the
 	// heartbeat tells the Models page.
 	e.startRunnerProbe(ctx)
+	e.startHostLogins(ctx)
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx); err != nil {
@@ -2648,6 +2653,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// client that is closing would lift a hold on nothing.
 	e.stopSeatPauses()
 	e.stopRunnerProbe()
+	e.stopHostLogins()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing
 	// it while a seat was still finishing a turn would tell a coordinator
@@ -3307,6 +3313,7 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 	status := coord.NodeStatus{
 		StartedAt: e.startedAt, AdminPosture: e.adminPosture,
 		MCP: e.mcpStatus(ctx), Runners: e.runnerStatus(),
+		Models: e.modelStatus(ctx),
 	}
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()

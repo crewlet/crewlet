@@ -142,6 +142,9 @@ func (e *Engine) installEpoch(ctx context.Context, c *Company) {
 	// A REVISION CAN DECLARE OR DROP A CELL, or point the e2b key at another
 	// variable: probe again rather than publish the last revision's answer.
 	e.kickRunnerProbe()
+	// AND EACH LOGIN, for the same reason: an entry may have started or
+	// stopped signing in with one.
+	e.kickHostLogins()
 }
 
 // stampActivation records on c the instant the fleet activated the revision it
