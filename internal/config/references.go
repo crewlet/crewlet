@@ -13,13 +13,15 @@ const (
 	// JobExecutor is a seat's `llm`: its executor's chain, and the chain
 	// every satellite that names none falls back to.
 	JobExecutor ProviderJob = "executor"
-	// JobReview, JobSubagent, JobAuxiliary and JobJudge are a seat's
-	// satellites, written flat (`llm_review`) or inside the `llm` mapping
-	// (`llm.review`).
-	JobReview    ProviderJob = "review"
-	JobSubagent  ProviderJob = "subagent"
+	// JobReview is a seat's reviewer chain, written flat (`llm_review`) or
+	// inside the `llm` mapping (`llm.review`), as every satellite is.
+	JobReview ProviderJob = "review"
+	// JobSubagent is a seat's delegated workers' chain.
+	JobSubagent ProviderJob = "subagent"
+	// JobAuxiliary is a seat's side passes' chain (memory, summaries).
 	JobAuxiliary ProviderJob = "auxiliary"
-	JobJudge     ProviderJob = "judge"
+	// JobJudge is a seat's onboarding judge's chain.
+	JobJudge ProviderJob = "judge"
 	// JobAssistant is `assistant.llm`, the Dashboard Assistant's chain.
 	JobAssistant ProviderJob = "assistant"
 	// JobDeepWork is `assistant.deep_work.llm`.

@@ -508,7 +508,7 @@ func (p *Provider) AdoptHostLogin(ctx context.Context, home string) ([]string, e
 	// THE EPOCH FIRST, before the write it counts ([Workspace.bumpLoginEpoch]):
 	// one that cannot be moved writes nothing, since a login of record that
 	// landed with no epoch behind it reads as no operator's write at all.
-	if err := p.ws.bumpLoginEpoch(); err != nil {
+	if err = p.ws.bumpLoginEpoch(); err != nil {
 		return nil, err
 	}
 	// THE HOST'S LOGIN, WHOLE, AS ONE WRITE: every file it holds, and none of
@@ -1150,12 +1150,12 @@ func (p *Provider) stageBundle(blob string) (map[string][]byte, LoginInstall, er
 	staged := make(map[string][]byte, len(allowed))
 	tr := tar.NewReader(bytes.NewReader(decompressed))
 	for {
-		header, err := tr.Next()
-		if errors.Is(err, io.EOF) {
+		header, nextErr := tr.Next()
+		if errors.Is(nextErr, io.EOF) {
 			break
 		}
-		if err != nil {
-			return nil, LoginInstall{}, fmt.Errorf("cliagent: reading the credential bundle: %w", err)
+		if nextErr != nil {
+			return nil, LoginInstall{}, fmt.Errorf("cliagent: reading the credential bundle: %w", nextErr)
 		}
 		if header.Typeflag != tar.TypeReg {
 			return nil, LoginInstall{}, fmt.Errorf("cliagent: the credential bundle holds %q, which is not a "+
@@ -1166,9 +1166,9 @@ func (p *Provider) stageBundle(blob string) (map[string][]byte, LoginInstall, er
 			return nil, LoginInstall{}, fmt.Errorf("cliagent: the credential bundle holds %q, which is not a "+
 				"%q credential file", header.Name, p.agent)
 		}
-		data, err := io.ReadAll(io.LimitReader(tr, maxBundle+1))
-		if err != nil {
-			return nil, LoginInstall{}, fmt.Errorf("cliagent: reading %q from the bundle: %w", name, err)
+		data, readErr := io.ReadAll(io.LimitReader(tr, maxBundle+1))
+		if readErr != nil {
+			return nil, LoginInstall{}, fmt.Errorf("cliagent: reading %q from the bundle: %w", name, readErr)
 		}
 		if len(data) > maxBundle {
 			return nil, LoginInstall{}, fmt.Errorf("cliagent: %q in the credential bundle is larger than %d bytes",

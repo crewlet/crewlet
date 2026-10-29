@@ -357,10 +357,10 @@ func (p *Provider) runDeviceLogin(
 	case runCtx.Err() != nil:
 		return cause
 	case waitErr != nil && !reading.sent:
-		return fmt.Errorf("cliagent: %s exited without printing a device code (%v); %s",
+		return fmt.Errorf("cliagent: %s exited without printing a device code (%w); %s",
 			command, waitErr, reading.said())
 	case waitErr != nil:
-		return fmt.Errorf("cliagent: %s did not finish the sign-in (%v); %s", command, waitErr, reading.said())
+		return fmt.Errorf("cliagent: %s did not finish the sign-in (%w); %s", command, waitErr, reading.said())
 	case !reading.sent:
 		// Exit 0 with no code relayed: whatever it did, nobody was shown a
 		// code to approve, so it is not this flow's approval.
