@@ -20,11 +20,11 @@ import (
 // not hold, a guard refusing it before the route ran) used to leave nothing in
 // the engine's log, so an operator asking why a save "did nothing" had the
 // dashboard's sentence and no record of it. Each now logs
-// `config_write_refused`: the route as mounted, the method, the status, the
+// `config_write_refused`: the route's pattern, the method, the status, the
 // problem's code, who asked, the revision they wrote against and the request
 // id.
 //
-// NEVER WHAT WAS WRITTEN. The route is the mounted PATTERN
+// NEVER WHAT WAS WRITTEN. The route is the PATTERN the request was served on
 // (`PUT /secrets/{name}`), never the path, which would carry a secret's name;
 // the problem is the envelope's code, read off the answer, never its body or
 // its detail, which can quote a document; and nothing of the request's body
@@ -35,8 +35,8 @@ import (
 // refuses routinely. A warning is for something an operator should act on
 // unprompted; this is the record they look for when somebody asks.
 
-// refusalMux is the mux a guarded surface mounts on, wrapping each write
-// route so that a 4xx answer logs to log. It forwards the policy each route
+// refusalMux is the mux a guarded surface mounts on, wrapping each route so
+// that a write it answers with a 4xx logs to log. It forwards the policy each route
 // is mounted with ([authz.PolicyMux]) to the mux beneath, and every guard's
 // refusal passes through it, since the wrap is outside the route's [authz.Router].
 type refusalMux struct {
@@ -51,15 +51,21 @@ func (m refusalMux) MountedWith(pattern string, p authz.Policy) {
 	}
 }
 
-// Handle mounts h, wrapped when pattern is a write.
+// Handle mounts h wrapped, whatever its pattern: a surface may mount a
+// prefix with no method (configapi mounts `/config` and `/config/` over a
+// sub-mux of its own), so whether a request is a write is decided when it
+// arrives, by its method, never by the pattern it was mounted on.
 func (m refusalMux) Handle(pattern string, h http.Handler) {
-	method, _, _ := strings.Cut(pattern, " ")
+	m.Mux.Handle(pattern, m.logRefusals(pattern, h))
+}
+
+// isWrite reports whether method writes.
+func isWrite(method string) bool {
 	switch method {
 	case http.MethodPut, http.MethodPost, http.MethodPatch, http.MethodDelete:
-		m.Mux.Handle(pattern, m.logRefusals(pattern, h))
-	default:
-		m.Mux.Handle(pattern, h)
+		return true
 	}
+	return false
 }
 
 // requestIDHeader names the request: the caller's or a proxy's where it sent
@@ -69,6 +75,10 @@ const requestIDHeader = "X-Request-Id"
 
 func (m refusalMux) logRefusals(pattern string, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isWrite(r.Method) {
+			h.ServeHTTP(w, r)
+			return
+		}
 		id := requestID(r.Header.Get(requestIDHeader))
 		w.Header().Set(requestIDHeader, id)
 		watched := &refusalWatcher{ResponseWriter: w}
@@ -82,11 +92,23 @@ func (m refusalMux) logRefusals(pattern string, h http.Handler) http.Handler {
 		_ = json.Unmarshal(watched.head.Bytes(), &envelope)
 		by := auth.AttributionOf(r.Context())
 		m.log.InfoContext(r.Context(), "config_write_refused",
-			"route", pattern, "method", r.Method, "status", watched.status, "code", envelope.Error,
+			"route", routeOf(r, pattern), "method", r.Method, "status", watched.status, "code", envelope.Error,
 			"by", by.Name, "kind", string(by.Kind), "operator", by.OperatorID,
 			"base_revision", strings.Trim(strings.TrimSpace(r.Header.Get("If-Match")), `"`),
 			"dry_run", r.URL.Query().Get("dry_run") == "true", "request_id", id)
 	})
+}
+
+// routeOf is the pattern r was served on: the innermost mux's, which a
+// [http.ServeMux] beneath the mount sets on this same request as it routes
+// it (configapi's sub-mux names `PUT /config/{kind}/{id}` where the mount
+// says only `/config/`), and the mount's own where nothing beneath set one.
+// Both are patterns, never a path.
+func routeOf(r *http.Request, mounted string) string {
+	if r.Pattern != "" {
+		return r.Pattern
+	}
+	return mounted
 }
 
 // requestID is the request's id: sent, where it is one printable token of at

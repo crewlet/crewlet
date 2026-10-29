@@ -1363,8 +1363,9 @@ and `operator`.
 A write to the config, the secrets or a model that is refused with a `4xx`
 (a stale `If-Match`, a validation problem, a missing step-up, a grant the
 caller does not hold) logs one `config_write_refused` at INFO, on the
-`api.config`, `api.secrets` or `api.llm` logger: `route` (the mounted pattern,
-such as `PUT /secrets/{name}`, never the path, which would name the secret),
+`api.config`, `api.secrets` or `api.llm` logger: `route` (the pattern the
+request was served on, such as `PUT /secrets/{name}` or
+`DELETE /config/llm-providers/{id}`, never the path, which would name it),
 `method`, `status`, `code` (the problem's code from the answer's `error`),
 `by`, `kind`, `operator`, `base_revision` (the `If-Match` written against),
 `dry_run` and `request_id`. It never carries a value, a secret's name or the
