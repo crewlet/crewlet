@@ -304,6 +304,10 @@ type Engine struct {
 	// and the inbox holds it took because of them. See seatpause.go.
 	pauses seatPauses
 
+	// runners is this node's executor-cell readiness and the loop that
+	// keeps it ([runnerProbe]), published on the heartbeat.
+	runners runnerProbe
+
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
 	// [Engine.Apply].
@@ -2007,6 +2011,9 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// handed meets a node that already knows. Bounded: past its budget the
 	// watch keeps trying and the screening defers until it answers.
 	e.startSeatPauses(ctx)
+	// WHERE THIS NODE CAN START A BOX, probed now and kept: what the
+	// heartbeat tells the Models page.
+	e.startRunnerProbe(ctx)
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx); err != nil {
@@ -2640,6 +2647,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	// And the pause watch, for the same reason: a resume landing on a
 	// client that is closing would lift a hold on nothing.
 	e.stopSeatPauses()
+	e.stopRunnerProbe()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing
 	// it while a seat was still finishing a turn would tell a coordinator
@@ -3298,7 +3306,7 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 	// under a lock and never from a child.
 	status := coord.NodeStatus{
 		StartedAt: e.startedAt, AdminPosture: e.adminPosture,
-		MCP: e.mcpStatus(ctx),
+		MCP: e.mcpStatus(ctx), Runners: e.runnerStatus(),
 	}
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()
