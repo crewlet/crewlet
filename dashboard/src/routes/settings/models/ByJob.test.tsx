@@ -237,6 +237,22 @@ test("a member reads every value, in the picker's type, with no picker", () => {
   expect(document.body.textContent).toContain("Sign-in refused");
 });
 
+/**
+ * EVERY HEAD HAS A NAME, as a screen reader and a phone's card read it. The
+ * source gate trusts a column whose label is the name of a word; this reads
+ * what that name holds once drawn, for every category and the seat column.
+ */
+test("every column head on By job has a name to read", () => {
+  mount();
+  const heads = screen.getAllByRole("columnheader");
+  expect(heads.length).toBe(CATEGORY_ORDER.length + 1);
+  expect(screen.getAllByRole("columnheader", { name: /\S/ })).toHaveLength(heads.length);
+  for (const category of CATEGORY_ORDER)
+    expect(
+      screen.getByRole("columnheader", { name: new RegExp(CATEGORY_WORDS[category].label) }),
+    ).toBeTruthy();
+});
+
 test("each category's column head is named once", () => {
   mount();
   for (const category of CATEGORY_ORDER) {
