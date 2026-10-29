@@ -1045,7 +1045,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		return s.settle(ctx, l, resource, value, opts, protocol, true)
 	}
 	if sibling {
-		// EVERY ROUND MET THIS OWNER'S OWN CLAIM STILL MINTING: the
+		// THE LAST ROUND MET THIS OWNER'S OWN CLAIM STILL MINTING: the
 		// unknown arm, named for what it is (see coord.ErrClaimInFlight).
 		return nil, "", fmt.Errorf("%w (%s, by %s)", coord.ErrClaimInFlight, resource, opts.Owner)
 	}

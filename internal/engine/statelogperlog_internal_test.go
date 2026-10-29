@@ -251,7 +251,8 @@ func runsLogs(s *stateLog, running ...*runningLog) *stateLog {
 }
 
 // claimHeld claims a duty as a running node's own scheduler would and reports
-// why it is not held, nil once it is.
+// why it is not held, nil once it is. Shared with dutyclaim_internal_test.go,
+// which pins it.
 //
 // THE RUNNING NODE CLAIMS THE SAME LEASE, under the same owner, on its own
 // duty loop, and a claim is three steps: win the record, mint the fencing
