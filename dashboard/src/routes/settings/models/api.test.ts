@@ -73,9 +73,14 @@ describe("every model route", () => {
         expect(segment, path).not.toContain("/");
         expect(decodeURIComponent(segment), path).toBe(name);
       }
-      // A NAME OF DOTS ALONE is the route above whatever the escaping: never sent.
+      // A NAME OF DOTS ALONE is the route above whatever the escaping: never
+      // sent, and refused as a rejection, never a throw from the call itself.
       sent.length = 0;
-      await expect(async () => route.call("..")).rejects.toThrow(RangeError);
+      let refused: Promise<unknown> | undefined;
+      expect(() => {
+        refused = route.call("..");
+      }, route.prefix).not.toThrow();
+      await expect(refused).rejects.toThrow(RangeError);
       expect(sent, route.prefix).toEqual([]);
     }
   });

@@ -1,8 +1,14 @@
 /**
- * A signal that aborts when the component that asked for it unmounts: what a
- * request a person started from a dialog or a card is tied to, so an answer
- * that lands after they left neither changes what is gone nor acts for it (a
- * toast, a navigation, a parent's `onDone`).
+ * A signal that aborts when the component that asked for it unmounts: what
+ * the screen's own side of a request checks, so an answer that lands after
+ * the person left neither changes what is gone nor acts for it (a toast, a
+ * navigation, a parent's `onDone`).
+ *
+ * TWO USES, NEVER MIXED UP. A read or a check the screen may abandon takes
+ * this signal, and stops when the screen goes. A WRITE THAT HAS STARTED DOES
+ * NOT: it runs to its answer, since stopped part way it can leave half a
+ * change (a sealed secret no document names, a removal nobody knows the end
+ * of). The screen reads `.aborted` before it acts on that answer instead.
  *
  * A GETTER, NOT A SIGNAL. The controller is made when the component mounts
  * and aborted when it unmounts, and React may unmount and mount a component

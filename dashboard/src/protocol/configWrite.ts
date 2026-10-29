@@ -85,8 +85,8 @@ export const configTransport = {
       }),
     ),
   /** `GET /config`. Its entity tag names the active revision. */
-  current: (signal: AbortSignal): Promise<ConfigAnswer> =>
-    answerOf(rest.request("GET", "/config", { signal })),
+  current: (signal?: AbortSignal): Promise<ConfigAnswer> =>
+    answerOf(rest.request("GET", "/config", signal ? { signal } : {})),
   /** `GET /config/revisions/{id}`. */
   revision: (id: string, signal: AbortSignal): Promise<ConfigAnswer> =>
     answerOf(rest.request("GET", `/config/revisions/${encodeURIComponent(id)}`, { signal })),
@@ -124,7 +124,7 @@ export type ConfigWriteOutcome =
   | ConfigRefusal;
 
 /** Read the active company document and the tag naming its revision. */
-export async function getConfig(signal: AbortSignal): Promise<ConfigRead> {
+export async function getConfig(signal?: AbortSignal): Promise<ConfigRead> {
   const answer = await configTransport.current(signal);
   if (answer.status === 200 && isRecord(answer.body) && answer.etag) {
     return {

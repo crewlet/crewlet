@@ -160,21 +160,22 @@ test("the removal waits for the typed name, then states the revision it read and
   expect(window.location.hash).toContain("settings/models");
 });
 
-test("a removal that answers after the dialog closed neither toasts nor moves the page", async () => {
+test("a removal that has started finishes after the dialog closed, and moves nothing on screen", async () => {
   const onDone = open(true);
   await screen.findByRole("list", { name: "Where sonnet is named" });
   await settle();
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "sonnet" } });
   let answer!: (value: unknown) => void;
-  let sent: AbortSignal | null = null;
-  removeModel.mockImplementationOnce((_k, _r, _o, signal: AbortSignal) => {
+  let sent: unknown = "unset";
+  removeModel.mockImplementationOnce((_k, _r, _o, signal?: AbortSignal) => {
     sent = signal;
     return new Promise((resolve) => (answer = resolve));
   });
   fireEvent.click(screen.getByRole("button", { name: "Remove model" }));
   window.location.hash = "#/somewhere-else";
   view.unmount();
-  expect(sent!.aborted).toBe(true);
+  // NO SIGNAL: closing the dialog cannot stop a removal part way.
+  expect(sent).toBeUndefined();
   await act(async () =>
     answer({
       outcome: { kind: "saved", revisionId: "rev-2", epoch: 3, warnings: [], derived: null },
