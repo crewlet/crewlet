@@ -14,10 +14,10 @@ import {
   type ModelAlarmKind,
   type ModelCheckName,
   type ModelHealth,
+  type ModelDeviceStatus,
   type ModelLimitWindow,
   type ModelSignInRoute,
 } from "~/contract/models.ts";
-import type { ModelDeviceStatus } from "~/protocol/models.ts";
 import { listed } from "~/lib/format.ts";
 import { categoryFields, type JobCategory } from "~/lib/modelUses.ts";
 
