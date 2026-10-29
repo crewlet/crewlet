@@ -615,13 +615,18 @@ test("a Codex model on a ChatGPT sign-in is created, then handed to the device s
   expect(written.providers.llm["codex-review"].auth).toEqual({ mode: "subscription" });
 });
 
-test("Review names the fallback the write drops, and says the test call has not run", async () => {
+/**
+ * THE MODEL A JOB RAN ON FIRST IS NEVER CALLED A FALLBACK. Quality Lead's
+ * reviewing runs on default, with sonnet behind it; giving it to sonnet moves
+ * it off default, which the change list says, and drops no fallback at all.
+ */
+test("Review lists a job's first model as the change, never as a fallback, and says the test call has not run", async () => {
   show({ editing: "sonnet", target: { step: "assign", add: [{ job: "reviews", seat: "qa" }] } });
   press("Review changes");
   await screen.findByText("The engine accepts this change");
-  expect(
-    screen.getByText("Quality Lead's reviewing also named default as a fallback; this removes it."),
-  ).toBeTruthy();
+  const moves = screen.getByRole("list", { name: "Seats that change model" });
+  expect(moves.textContent).toContain("Quality Lead, reviewing and delegations: default → sonnet");
+  expect(screen.queryByText(/as a fallback/)).toBeNull();
   expect(screen.getByText("Not run")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Run test call" })).toBeTruthy();
   await act(async () => {});
