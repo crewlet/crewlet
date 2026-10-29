@@ -24,6 +24,7 @@ export type { RoomListener } from "./socket.ts";
 export { retryAfterMs } from "./retry.ts";
 export { api } from "./api.ts";
 export {
+  pathSegment,
   rest,
   RestError,
   REQUEST_TIMEOUT_MS,
