@@ -202,6 +202,12 @@ archived repository is not warned about: it takes no push at all, so nothing
 can move or delete its branch until it is unarchived, and the revision that
 unarchives it brings the warning back.
 
+A declared repository's rules change only with its declaration. Those of a
+repository a tool made change one pattern at a time through a lifecycle
+request, where a seat may add a rule or tighten one and only a person removes
+or loosens one, a rule's [merge gate](#merge-gates) included ([Repositories
+made by tools](#repositories-made-by-tools)).
+
 ### Merge gates
 
 A rule over branches can also say what a **merge** into them needs: its
@@ -407,7 +413,23 @@ though it maintains one a person gave it: a seat's own repositories are its
 scratch repositories, which `code.scratch.max_per_seat` caps and an idle
 expiry deletes, while a project owned by a seat never expires and counts only
 against the 10 000 every project in the company shares — so only a person
-makes one. Everything else is refused
+makes one. **A protection binds every seat, its unit's lead included**: a
+seat that maintains a repository may add a [protection
+rule](#protection-rules) to it or tighten one — `direct_push` from `persons`
+to `none`, `allow_force` or `allow_delete` turned off — and never remove one
+or loosen one, which is a person's. Removing a pattern's rule, letting
+`persons` push where the rule said `none`, or turning `allow_force` or
+`allow_delete` on is refused `not_permitted` to a seat whatever its grant,
+its sentence naming what the change would open; a change that tightens one
+control and opens another is refused for the one it opens. A rule's [merge
+gate](#merge-gates) is weighed whole: a seat may add one to a rule that has
+none, and removing a gate, or altering any of its fields, is a person's — a
+seat's request that sends the rule's gate back as it stands alters nothing of
+it. The change is weighed against the rule the repository holds for that
+pattern when the request is decided, so two requests cannot loosen a rule
+between them. Otherwise a lead steered by what it read could lift `main`'s
+protection and then force it: the protections would bind every seat but the
+one with the most reach. Everything else is refused
 `not_permitted`, with the reason, and nothing is written. Every request reads
 the chart, so a node [behind the company's
 configuration](#who-may-read-and-push) decides none of them and the next data

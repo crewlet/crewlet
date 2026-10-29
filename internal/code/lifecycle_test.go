@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -398,6 +399,126 @@ func TestAProtectRequestIsRefusedARuleNoRecordMayCarry(t *testing.T) {
 	}
 	n.lands(lcProtect(lcPerson, id, "refs/tags/v*", &code.Protection{DirectPush: code.DirectPersons}))
 	n.lands(lcProtect(lcPerson, id, "refs/heads/main", &code.Protection{DirectPush: code.DirectPersons, Gate: &gate}))
+}
+
+// A PROTECTION BINDS EVERY SEAT, ITS UNIT'S LEAD INCLUDED (ADR-0058): a seat
+// that maintains a repository may add a protection rule or tighten one, and
+// never remove one or loosen one, whatever its grant — that is a person's. Each
+// control is judged against the rule the repository's rows hold for the
+// pattern, inside the decide: direct_push made to admit more (none → persons),
+// allow_force or allow_delete turned on, the rule's merge gate removed or
+// altered, and the rule removed are each refused not_permitted with the
+// sentence naming what the change opens, and nothing is written; a change that
+// tightens one control and opens another is refused for the one it opens, and
+// only that one is named. A pattern no rule holds loosens nothing, so the lead
+// adds a rule, and removing one nobody holds is answered from the row; a gate
+// added to a rule that had none only holds merges to more, so the lead adds
+// one, and sends it back as it stands beside a tightening. A person's same
+// requests land.
+//
+// Mutations: drop the protect branch of lifecycleRefusal — the lead's removal
+// lands, red; drop allow_delete's clause from loosenings — the lead turns it
+// on, red; take persons rather than none for the value that admits nobody in
+// direct_push's clause — the lead's tightening to none is refused, red; drop
+// the gate's removal arm — the lead removes stable's gate, red.
+func TestAnAgentCannotLoosenAProtection(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	cto := agent("cto")
+	const main, release, stable = "refs/heads/main", "refs/heads/release/*", "refs/heads/stable"
+	rule := func(direct code.DirectPush, force, del bool) *code.Protection {
+		return &code.Protection{DirectPush: direct, AllowForce: force, AllowDelete: del}
+	}
+	gated := func(direct code.DirectPush, gate code.MergeGate) *code.Protection {
+		return &code.Protection{DirectPush: direct, Gate: &gate}
+	}
+	gate, lowered := aGate(), aGate()
+	lowered.MergeBy = code.MergeByWriters
+	id := n.made(lcPerson, "guarded", unitOwned("eng"))
+
+	// ADDED, then TIGHTENED control by control, by the unit's lead at
+	// full_access: each lands.
+	n.lands(lcProtect(cto, id, main, rule(code.DirectPersons, true, true)))
+	n.lands(lcProtect(cto, id, main, rule(code.DirectNone, true, true)))
+	n.lands(lcProtect(cto, id, main, rule(code.DirectNone, false, true)))
+	got := n.lands(lcProtect(cto, id, main, rule(code.DirectNone, false, false)))
+	if want := []code.Protection{{Pattern: main, DirectPush: code.DirectNone}}; !slices.EqualFunc(
+		got.Repo.Protections, want, code.Protection.Equal) {
+		t.Fatalf("added and tightened by the lead, the rules read %+v, want %+v", got.Repo.Protections, want)
+	}
+	n.lands(lcProtect(cto, id, release, rule(code.DirectPersons, true, false)))
+	// A MERGE GATE ADDED where the rule had none, and then sent back as it
+	// stands beside a tightening of direct_push: each lands.
+	n.lands(lcProtect(cto, id, stable, rule(code.DirectPersons, false, false)))
+	n.lands(lcProtect(cto, id, stable, gated(code.DirectPersons, gate)))
+	got = n.lands(lcProtect(cto, id, stable, gated(code.DirectNone, gate)))
+	if want := (code.Protection{Pattern: stable, DirectPush: code.DirectNone, Gate: &gate}); !slices.ContainsFunc(
+		got.Repo.Protections, want.Equal) {
+		t.Fatalf("gated and tightened by the lead, the rules read %+v, want %+v among them", got.Repo.Protections,
+			want)
+	}
+
+	// LOOSENED by the lead: each refused, the sentence naming the pattern and
+	// what the change opens — and nothing written.
+	end := n.end()
+	for _, tc := range []struct {
+		pattern string
+		rule    *code.Protection
+		opens   string
+		// keeps is what the change tightens or leaves, never named.
+		keeps []string
+	}{
+		{main, nil, "removes its rule", nil},
+		{main, rule(code.DirectPersons, false, false), "makes direct_push persons where it was none", nil},
+		{main, rule(code.DirectNone, true, false), "turns allow_force on", nil},
+		{main, rule(code.DirectNone, false, true), "turns allow_delete on", nil},
+		// TIGHTENS direct_push and allow_force, and OPENS allow_delete.
+		{release, rule(code.DirectNone, false, true), "turns allow_delete on", []string{"direct_push", "allow_force"}},
+		// THE GATE, removed and altered.
+		{stable, rule(code.DirectNone, false, false), "removes its merge gate", []string{"direct_push"}},
+		{stable, gated(code.DirectNone, lowered), "alters its merge gate", []string{"direct_push"}},
+	} {
+		res := n.life(lcProtect(cto, id, tc.pattern, tc.rule))
+		switch {
+		case res.Refusal != code.LifecycleNotPermitted:
+			t.Errorf("the lead's change of %s that %s: %+v, want not_permitted", tc.pattern, tc.opens, res)
+			continue
+		case !strings.Contains(res.Detail, "only a person may remove or loosen the protection on "+tc.pattern) ||
+			!strings.Contains(res.Detail, tc.opens):
+			t.Errorf("the lead's change of %s refused %q, want the sentence naming the pattern and that it %s",
+				tc.pattern, res.Detail, tc.opens)
+		case !errors.Is(res.Err(), code.ErrNotPermitted):
+			t.Errorf("the lead's change of %s as an error is %v, want ErrNotPermitted", tc.pattern, res.Err())
+		}
+		for _, kept := range tc.keeps {
+			if strings.Contains(res.Detail, kept) {
+				t.Errorf("the lead's change of %s names %s, which it tightens: %q", tc.pattern, kept, res.Detail)
+			}
+		}
+	}
+	if got := n.end(); got != end {
+		t.Fatalf("the lead's refused loosenings wrote %d records", got-end)
+	}
+	// REMOVING A RULE NOBODY HOLDS loosens nothing: answered from the row.
+	if res := n.life(lcProtect(cto, id, "refs/heads/nothing", nil)); res.Refusal != "" ||
+		res.Outcome != statelog.OutcomeApplied || !res.Position.IsZero() {
+		t.Errorf("the lead's removal of a rule nobody holds: %+v, want it answered from the row", res)
+	}
+
+	// A PERSON LOOSENS: the same requests land.
+	n.lands(lcProtect(lcPerson, id, main, rule(code.DirectPersons, false, false)))
+	n.lands(lcProtect(lcPerson, id, main, rule(code.DirectPersons, true, false)))
+	n.lands(lcProtect(lcPerson, id, main, rule(code.DirectPersons, true, true)))
+	n.lands(lcProtect(lcPerson, id, release, rule(code.DirectNone, false, true)))
+	n.lands(lcProtect(lcPerson, id, stable, gated(code.DirectNone, lowered)))
+	n.lands(lcProtect(lcPerson, id, stable, rule(code.DirectNone, false, false)))
+	got = n.lands(lcProtect(lcPerson, id, main, nil))
+	if want := []code.Protection{{Pattern: release, DirectPush: code.DirectNone, AllowDelete: true},
+		{Pattern: stable, DirectPush: code.DirectNone}}; !slices.EqualFunc(got.Repo.Protections, want,
+		code.Protection.Equal) {
+		t.Fatalf("loosened by a person, the rules read %+v, want %+v", got.Repo.Protections, want)
+	}
 }
 
 // A RENAME REDIRECTS ITS OLD NAME UNTIL ITS RELEASE: the old name answers the

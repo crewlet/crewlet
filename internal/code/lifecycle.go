@@ -41,9 +41,11 @@ import (
 // the unit's effective lead at full_access, its own scratch repositories at
 // full_access — and never leaves a project owned by a seat: its own
 // repositories are its scratch repositories, which a cap and an idle expiry
-// bound, and only a person makes a project a seat's. A node behind the
-// company's configuration decides none of it ([StoreOptions.Current]): every
-// kind reads the chart, a person's included.
+// bound, and only a person makes a project a seat's. And a protection binds
+// every seat, its unit's lead included: a seat adds a rule or tightens one,
+// and never removes or loosens one, which is a person's ([loosenings]). A
+// node behind the company's configuration decides none of it
+// ([StoreOptions.Current]): every kind reads the chart, a person's included.
 
 // LifecycleKind is what a lifecycle request asks.
 type LifecycleKind string
@@ -66,7 +68,9 @@ const (
 	LifecycleDelete LifecycleKind = "delete"
 	// LifecycleRestore brings a deleted one back as it was.
 	LifecycleRestore LifecycleKind = "restore"
-	// LifecycleProtect sets or removes the protection of one pattern.
+	// LifecycleProtect sets or removes the protection of one pattern: a
+	// seat may add a rule or tighten one, and only a person removes or
+	// loosens one ([loosenings]).
 	LifecycleProtect LifecycleKind = "protect"
 	// LifecycleHold is a live turn's hold on a scratch repository idle
 	// [HoldRecordAfter] or more ([Hold]) — no tool's: the one seam a turn's
@@ -585,7 +589,15 @@ func pathOwnersAdded(req LifecycleRequest) []PathOwner {
 //     though GrantOf gives an owning seat maintain on what it owns — because a
 //     seat's own repositories are its scratch repositories, capped and
 //     expiring, and a seat-owned project is neither: only a person makes one
-//     ([seatProjectRefusal]).
+//     ([seatProjectRefusal]);
+//   - and A PROTECTION BINDS EVERY SEAT, its unit's lead included: whatever
+//     its grant, a seat adds a protection rule or tightens one and never
+//     removes or loosens one ([loosenings]), judged against the rule repo —
+//     the row this decide's snapshot read — holds for the pattern, so two
+//     requests cannot loosen a rule between them. With maintain alone
+//     deciding, a lead steered by what it read could lift main's protection
+//     and then force it: the protections would bind every seat but the one
+//     with the most reach. Only a person loosens one.
 //
 // A NAME OF THE OTHER KIND'S FORM is refused for every actor, a person's
 // included: renamed to <handle>.<slug>, a project would read as that seat's
@@ -651,6 +663,15 @@ func lifecycleRefusal(req LifecycleRequest, repo, next RepoRef, roster Roster) (
 	}
 	if g := GrantOf(actor, repo, roster); g.Access < AccessMaintain {
 		return true, maintainRefusal(g, string(req.Kind)+" "+repo.Name)
+	}
+	// A PROTECTION BINDS EVERY SEAT: maintain lets a seat add a rule or
+	// tighten one, and loosening one is a person's.
+	if req.Kind == LifecycleProtect {
+		if opens := loosenings(repo.Protections, *req.Protect); len(opens) > 0 {
+			return true, fmt.Sprintf("only a person may remove or loosen the protection on %s, and this "+
+				"change %s; a seat, its unit's lead included, may add a rule or tighten one",
+				req.Protect.Pattern, strings.Join(opens, " and "))
+		}
 	}
 	// AS THE CHANGE LEAVES IT TOO: a seat cannot hand a repository to an
 	// owner, or narrow it to a visibility, under which it would not maintain
@@ -1258,6 +1279,69 @@ func protected(rules []Protection, change ProtectChange) []Protection {
 	}
 	slices.SortFunc(out, func(a, b Protection) int { return strings.Compare(a.Pattern, b.Pattern) })
 	return out
+}
+
+// loosenings is every way change LOOSENS the protection rules hold for its
+// pattern — lets through a push, or a merge, that rule refuses — each as the
+// phrase a refusal names it by; nil where the change loosens nothing.
+//
+// A PATTERN NO RULE HOLDS loosens nothing, whatever the change: every rule
+// that matches a ref holds ([ProtectionRefusal]), so a rule added only
+// refuses more, and removing one nobody holds changes nothing. A rule REMOVED
+// loosens, since every rule refuses at least a seat's direct push. A rule
+// CHANGED loosens by each CONTROL — each field but its pattern — that the
+// change opens, judged control by control, so one that tightens a control and
+// opens another loosens by the one it opens:
+//
+//   - direct_push loosens unless it stays as it was or becomes none, which
+//     admits nobody. FAIL CLOSED: a value this build does not know, on either
+//     side, is judged a loosening, since nothing here says whom it admits. A
+//     request never carries one this far ([LifecycleRequest.Validate] refuses
+//     it, whoever asks), so what this guards is a rule the rows hold, which a
+//     seat may tighten to none and never move elsewhere.
+//   - allow_force and allow_delete loosen when they are turned on.
+//   - the merge gate ([MergeGate]) is ONE control here, judged whole: added
+//     where the rule had none, it only holds a merge to more, and removed, it
+//     loosens. ALTERED, it loosens too — FAIL CLOSED, as an unknown
+//     direct_push does: whether an altered gate holds a merge to more or to
+//     less is a judgement of its fields one by one, and none of them is
+//     weighed here, so a seat adds a gate and a person alters or removes one.
+//     Compared by value ([MergeGate.Equal], which reads every field), never by
+//     pointer: two reads of one gate are two pointers, and a request carrying
+//     the rule's gate as it stands alters nothing of it.
+//
+// A field a later milestone adds to [Protection] is a control too, judged
+// here the same way: TestEveryProtectionControlIsJudged holds this function
+// to the struct's own fields and to every pair of direct_push values, so a
+// control or a value nobody judged cannot arrive unseen.
+func loosenings(rules []Protection, change ProtectChange) []string {
+	i := slices.IndexFunc(rules, func(p Protection) bool { return p.Pattern == change.Pattern })
+	switch {
+	case i < 0:
+		return nil
+	case change.Rule == nil:
+		return []string{"removes its rule"}
+	}
+	from, to := rules[i], *change.Rule
+	var opens []string
+	if to.DirectPush != from.DirectPush && to.DirectPush != DirectNone {
+		opens = append(opens, fmt.Sprintf("makes direct_push %s where it was %s", to.DirectPush,
+			from.DirectPush))
+	}
+	if to.AllowForce && !from.AllowForce {
+		opens = append(opens, "turns allow_force on")
+	}
+	if to.AllowDelete && !from.AllowDelete {
+		opens = append(opens, "turns allow_delete on")
+	}
+	switch {
+	case from.Gate == nil:
+	case to.Gate == nil:
+		opens = append(opens, "removes its merge gate")
+	case !from.Gate.Equal(*to.Gate):
+		opens = append(opens, "alters its merge gate (a seat may add a gate, never alter one)")
+	}
+	return opens
 }
 
 // lifecycleAnswer is a lifecycle request's answer from its publish: the

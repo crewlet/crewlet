@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/code`
-- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/code/query.TestAGitNodeBehindItsConfigurationServesNoSeat`, `internal/code.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/code.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/code/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`, `internal/agent/builtin.TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo`, `internal/code.TestTheDecideRefusesWhatTheGrantRefuses`, `internal/code.TestASeatOutsideTheUnitFillsAtMostHalfARepository`, `internal/code.TestACommitterBehindTheConfigurationDecidesNoSeatsPush`, and the code host fleet suite's `ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds`
+- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/code/query.TestAGitNodeBehindItsConfigurationServesNoSeat`, `internal/code.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/code.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/code/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`, `internal/agent/builtin.TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo`, `internal/code.TestTheDecideRefusesWhatTheGrantRefuses`, `internal/code.TestASeatOutsideTheUnitFillsAtMostHalfARepository`, `internal/code.TestACommitterBehindTheConfigurationDecidesNoSeatsPush`, `internal/code.TestAnAgentCannotLoosenAProtection`, `internal/code.TestEveryProtectionControlIsJudged`, and the code host fleet suite's `ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds`
 - **Measured:** nothing a figure decides: the grant is a pure function of the chart and the repository row
 - **Cost-when-tried:** not tried here. The alternative — access rows per repository — was rejected on paper: a list of who may push is a second chart that drifts from the first the day a seat moves units
 - **Tag-status:** unreleased
@@ -35,6 +35,16 @@ is a seat), a git node answers it unready and a committer hands a seat's push to
 push consult no chart and are answered there as before. The window in which a stale chart can still judge is the
 control plane's confirmation of the lag: about a minute after an activation at worst.
 
+A protection binds every seat, a unit's lead included: removing or loosening one is a person's. A seat whose grant
+maintains a repository a tool made may add a protection rule to it or tighten one; a seat's request that removes
+the rule a pattern holds, or opens any control of it — `direct_push` made to admit more (`none` → `persons`),
+`allow_force` or `allow_delete` turned on, its merge gate removed or loosened, and every control a later field of
+the rule adds — is refused `not_permitted` whatever its grant (`code.loosenings`, which weighs a gate whole, so a
+seat adds a gate to a rule that has none and any alteration of one is taken as a loosening), judged against the
+rule the repository's rows hold for the pattern inside the lifecycle decide's one snapshot, so two requests cannot
+loosen a rule between them. A person's request is unaffected, and a repository `code.repos` declares takes no
+tool's request at all.
+
 A seat's read made inside a turn somebody woke is decided AGAIN for whoever woke it — the requester ceiling
 (`authz.DecideWithin`) on a repository's grant. The tool's own row is asked for the requester first, so a turn a
 stranger woke, or a person who may not act in the company now, reads nothing, and a person, who maintains
@@ -52,7 +62,9 @@ grants a view of the deployment that the ceiling does not bound.
 Access lists per repository duplicate the chart and drift from it; GitHub's tier as the only vocabulary made the
 native host's one per-seat setting a GitHub field. `visibility` narrows SEATS only: a person and a credential acting
 as no seat read every repository, because a CI token that could not read a unit repository breaks its builds
-and a Tier A token is the deployment's own credential.
+and a Tier A token is the deployment's own credential. And maintain alone deciding who changes a protection would
+bind every seat but the one with the most reach: a lead seat steered by what it read could lift `main`'s
+protection and then force it.
 
 ## What this does not decide
 
