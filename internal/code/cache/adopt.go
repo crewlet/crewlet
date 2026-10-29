@@ -106,11 +106,14 @@ type staging struct {
 // object no row names, fetchable by id from this node alone until the next
 // full round swept it.
 //
-// EVERY PACK ADOPTED IS LIVE, linked into objects/pack: a push's and a
-// compaction's output are, by the records that add them (code.PackPush,
-// code.PackCompact). A pack an expunge's begin leaves dropping is no
+// EVERY PACK ADOPTED IS LIVE, linked into objects/pack: a push's, a
+// compaction's output, an expunge's kept pack and its rescue are, by the
+// records that add them (code.PackPush, code.PackCompact, code.PackExpunge,
+// code.PackRescue). A pack an expunge's begin leaves dropping is no
 // adoption's — linked here it would be one a push could rely on — and enters
-// the copy's dropping view by a round's install, as its row places it.
+// the copy's dropping view by a round's install, as its row places it. A
+// rescue byte for byte one of the dropping packs it was cut from moves that
+// checksum's files out of the view as its row moves its place (liveAdopted).
 //
 // Each of packs is its row's: its checksum must be one of the scratch's
 // packs', and each section's size that pack's file's (a .rev missing
@@ -502,6 +505,28 @@ func linkBundle(link func(oldname, newname string) error, stem, packDir, checksu
 	return true, nil
 }
 
+// liveAdopted records st's pack as a live row of inc, the adoption's; e.mu is
+// held. Where the live set placed its checksum in the DROPPING VIEW before —
+// only rows an expunge's begin left dropping named it: a rescue byte for byte
+// the dropping pack it was cut from, which a commit's rescue of a dropping
+// pack a ref reaches whole is — the pack is placed live now, and its files in
+// the view are LEAVING, by the next round's swap, as a delta's move of a pack
+// out of the view leaves them (applyDelta): no later delta moves its place,
+// since the adoption already has, so left unnoted they would stay in the view
+// beside their live copy until a full round swept them.
+func liveAdopted(inc *incarnation, st *staging) {
+	cs := st.pack.GitChecksum
+	was := placeOf(inc, cs)
+	setLive(inc, st.pack.PackID, liveOf(st.pack, code.PackLive))
+	if was != placeDropping || placeOf(inc, cs) != placeLive {
+		return
+	}
+	if inc.leaving == nil {
+		inc.leaving = map[leaveKey]Event{}
+	}
+	inc.leaving[leaveKey{placeDropping, cs}] = EventPackRetired
+}
+
 // placeStagings installs stagings into inc — the write lock held, inc pinned
 // — and drops them, whatever the outcome: each pack's files linked into
 // objects/pack (unless the incarnation holds one of them already) and
@@ -527,7 +552,7 @@ func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) (
 	// out by this id, before any delta has served it).
 	held := func(st *staging) {
 		e.mu.Lock()
-		setLive(inc, st.pack.PackID, liveOf(st.pack, code.PackLive))
+		liveAdopted(inc, st)
 		e.mu.Unlock()
 	}
 	outcomes := make([]adoptOutcome, len(stagings))
@@ -586,7 +611,7 @@ func (c *Cache) placeStagings(e *entry, inc *incarnation, stagings []*staging) (
 	e.mu.Lock()
 	for _, i := range linked {
 		st := stagings[i]
-		setLive(inc, st.pack.PackID, liveOf(st.pack, code.PackLive))
+		liveAdopted(inc, st)
 		inc.packs++
 		inc.objects += st.pack.Objects
 		c.setSize(inc, inc.diskBytes+st.pack.Size)

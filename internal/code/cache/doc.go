@@ -1133,6 +1133,13 @@
 // installed chain, which may name a commit taken out; the index and the
 // published layers stay, neither covering nor naming the view.
 //
+// A RESCUE BYTE FOR BYTE ONE OF THE DROPPING PACKS it was cut from — the
+// rescue of a dropping pack a ref reaches whole — names that checksum live,
+// so its files only MOVE out of the view, a retirement keeping every object:
+// by a delta's move on every node, and on the maintainer that built it by
+// the adoption (adopt.go's liveAdopted), which places it live before the
+// commit's delta reads the row that moves it, so no delta finds it moved.
+//
 // # The installed chain
 //
 // A repository's MAINTAINER, one git node, writes its multi-pack-index as a

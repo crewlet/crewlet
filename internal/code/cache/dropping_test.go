@@ -382,6 +382,54 @@ func copyFile(t testing.TB, from, to string) {
 	}
 }
 
+// AN ADOPTION OF A DROPPING PACK'S CHECKSUM MOVES ITS FILES OUT OF THE VIEW:
+// an expunge's rescue byte for byte the dropping pack it was cut from — the
+// rescue of a dropping pack a ref reaches whole — adopted by the maintainer
+// that built it, places that checksum live where the view held it; the
+// copy's next round takes the view's files out with its swap, as a delta's
+// move of a pack out of the view does, so the copy holds what a fresh cache
+// builds at the same position: the pack in objects/pack, and no view.
+//
+// Mutation: record the adopted row live without noting the view's files as
+// leaving (liveAdopted), and they stay in the view after the commit's round.
+func TestAnAdoptionOfADroppingPacksChecksumMovesItsFilesOut(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	base, first := w.push(t, repo, "refs/heads/main", nil)
+	gone, second := w.push(t, repo, "refs/heads/gone", nil)
+	w.client.Run(t, w.repos[repo].work, "reset", "--hard", base)
+	_, third := w.push(t, repo, "refs/heads/main", nil)
+	w.log.write(repo, nil, map[string]string{"refs/heads/gone": ""})
+	c := w.open(t)
+	_, dropping := w.expungeBegin(t, repo, []string{gone}, first, second, third)
+	s := w.sync(t, c, repo)
+	if got := droppingFiles(t, s.Dir); !slices.Equal(got, rowFiles(dropping)) {
+		t.Fatalf("the premise: after the begin the view holds %v, want the dropping pack's", got)
+	}
+	sc, err := c.NewScratch(t.Context(), s, uuid.Must(uuid.NewV7()).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.Remove()
+	for _, name := range rowFiles(dropping) {
+		copyFile(t, filepath.Join(s.Dir, gitproc.DroppingDir, "pack", name), filepath.Join(sc.Dir, "objects", "pack", name))
+	}
+	rescue := dropping
+	rescue.PackID = uuid.Must(uuid.NewV7()).String()
+	w.log.expungeCommit(repo, rescue)
+	if err := c.Adopt(t.Context(), repo, sc, rescue.Ref()); err != nil {
+		t.Fatalf("adopting the rescue: %v", err)
+	}
+	after := w.sync(t, c, repo)
+	if got := droppingFiles(t, after.Dir); len(got) != 0 {
+		t.Errorf("after the commit's round the view holds %v, which the rescue's live row moved out of it", got)
+	}
+	if got, want := imageOf(t, after.Dir), w.rebuilt(t, repo); got != want {
+		t.Errorf("after the commit's round, the image:\n%s\nwant a fresh cache's:\n%s", got, want)
+	}
+}
+
 // ONLY SERVING READS NAME THE DROPPING VIEW (M6-D3): every git process under
 // internal/code that names a copy's dropping view (gitproc.Cmd.Dropping) is
 // a read — a subcommand of gitReaders — that SERVES the copy, a row of
