@@ -18,8 +18,9 @@ import (
 // If-Match, a validation problem, a missing step-up, a grant the caller does
 // not hold, a guard refusing it before the route ran) used to leave nothing in
 // the engine's log, so an operator asking why a save "did nothing" had the
-// dashboard's sentence and no record of it. Each now logs
-// `config_write_refused`: the route's pattern, the method, the status, the
+// dashboard's sentence and no record of it. Each now logs `write_refused`
+// (not a config write's alone: a model's check, retry and host sign-in are
+// POSTs on the same surfaces): the route's pattern, the method, the status, the
 // problem's code, who asked, the revision they wrote against and the request
 // id.
 //
@@ -90,7 +91,7 @@ func (m refusalMux) logRefusals(pattern string, h http.Handler) http.Handler {
 		}
 		_ = json.Unmarshal(watched.head.Bytes(), &envelope)
 		by := auth.AttributionOf(r.Context())
-		m.log.InfoContext(r.Context(), "config_write_refused",
+		m.log.InfoContext(r.Context(), "write_refused",
 			"route", routeOf(r, pattern), "method", r.Method, "status", watched.status, "code", envelope.Error,
 			"by", by.Name, "kind", string(by.Kind), "operator", by.OperatorID,
 			"base_revision", baseRevision(r.Header.Get("If-Match")),

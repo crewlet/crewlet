@@ -64,7 +64,7 @@ func TestAStaleCompanyWriteLogsOneLineThroughTheApp(t *testing.T) {
 			var lines []map[string]any
 			for _, raw := range strings.Split(strings.TrimSpace(logged), "\n") {
 				var line map[string]any
-				if json.Unmarshal([]byte(raw), &line) == nil && line["msg"] == "config_write_refused" {
+				if json.Unmarshal([]byte(raw), &line) == nil && line["msg"] == "write_refused" {
 					lines = append(lines, line)
 				}
 			}

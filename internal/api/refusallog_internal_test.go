@@ -17,7 +17,7 @@ import (
 
 // A REFUSED WRITE LOGS ONE LINE, AND NOTHING IT CARRIED.
 //
-// A write the route refuses logs exactly one `config_write_refused`, with the
+// A write the route refuses logs exactly one `write_refused`, with the
 // mounted route (never the path, which names the secret), the method, the
 // status, the envelope's code, the revision written against and the request
 // id the answer carries; the value written, the secret's name and the
@@ -68,7 +68,7 @@ func TestARefusedWriteLogsOneLineAndNothingItCarried(t *testing.T) {
 		t.Fatal(err)
 	}
 	for key, want := range map[string]any{
-		"msg": "config_write_refused", "level": "INFO", "route": "PUT /secrets/{name}", "method": "PUT",
+		"msg": "write_refused", "level": "INFO", "route": "PUT /secrets/{name}", "method": "PUT",
 		"status": float64(http.StatusConflict), "code": "revision_advanced", "base_revision": "rev-41",
 		"request_id": "req-7f3a", "dry_run": false,
 	} {

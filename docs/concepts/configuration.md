@@ -1360,10 +1360,11 @@ Every write this surface logs — `config_revision_written`, `secret_written`,
 `backup_taken`, `retention_gate` and the rest — carries the same pair as `by`
 and `operator`.
 
-A write to the config, the secrets or a model that is refused with a `4xx`
-(a stale `If-Match`, a validation problem, a missing step-up, a grant the
-caller does not hold) logs one `config_write_refused` at INFO, on the
-`api.config`, `api.secrets` or `api.llm` logger: `route` (the pattern the
+A write to the config, the secrets or a model (a model's check, retry and
+sign-in on its host included, which are writes without being config) that is
+refused with a `4xx` (a stale `If-Match`, a validation problem, a missing
+step-up, a grant the caller does not hold) logs one `write_refused` at INFO,
+on the `api.config`, `api.secrets` or `api.llm` logger: `route` (the pattern the
 request was served on, such as `PUT /secrets/{name}` or
 `DELETE /config/llm-providers/{id}`, never the path, which would name it),
 `method`, `status`, `code` (the problem's code from the answer's `error`),
