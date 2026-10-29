@@ -12,6 +12,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { pageSnapshot, resetPageContextForTest, setFramePage } from "~/app/assistant/context.ts";
 import { Router } from "~/app/router.tsx";
 import type { CompanyDocument } from "~/protocol/types.ts";
 import {
@@ -199,6 +200,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetPageContextForTest();
   vi.clearAllMocks();
   location.hash = "";
 });
@@ -413,6 +415,34 @@ test("the seats an alarm moves arrive added at Use it for, and only those", () =
   expect(box(/^Product Manager: Coding on /).checked).toBe(true);
   expect(box(/^Quality Lead: Routines and evaluations on /).checked).toBe(true);
   expect(box(/^Quality Lead: Coding on /).checked).toBe(false);
+});
+
+/**
+ * A PASTED KEY NEVER LEAVES THE PAGE, read where it would leave: the page
+ * context the Dashboard Assistant is sent, whole, as text. The field list's
+ * own test proves today's fields; this one fails if any later field reads
+ * the credential, or the secret it is stored under, however indirectly.
+ */
+test("a key typed into the wizard never reaches what the assistant is sent", async () => {
+  const SENTINEL = "sk-test-SENTINEL";
+  setFramePage({
+    screen: "models",
+    title: "Settings › Models",
+    path: ["settings", "models"],
+    params: {},
+    query: {},
+  });
+  show();
+  fireEvent.change(screen.getByRole("textbox", { name: /Name/ }), { target: { value: "probe" } });
+  press("Continue");
+  fireEvent.change(keyField(), { target: { value: SENTINEL } });
+  // THE SNAPSHOT IS THE LIVE DRAFT: it names the model typed a step ago, so an
+  // absent sentinel means the key was left out, not that nothing was read.
+  await waitFor(() => expect(pageSnapshot()?.context.draft?.step).toBe("signin"));
+  const sent = JSON.stringify(pageSnapshot());
+  expect(sent).toContain("probe");
+  expect(sent).not.toContain("SENTINEL");
+  expect(sent).not.toContain("ANTHROPIC_API_KEY_PROBE");
 });
 
 test("focus starts on the step's heading, and Cancel gives it back to what opened the wizard", async () => {
