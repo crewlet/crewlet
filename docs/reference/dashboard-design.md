@@ -7706,7 +7706,7 @@ saying the opposite.
 
 Settings is what the ENGINE runs, and nothing the company decides. It is the
 one workspace that draws its sections as a **column** beside the screen rather
-than as tabs in the page bar, in four groups: **Runtime** (Models & keys, MCP
+than as tabs in the page bar, in four groups: **Runtime** (Models, MCP
 Tools, Secrets and Limits: what a turn runs on and the caps it is held to),
 **Spend** (Token spend and Expensive tasks: the readings, never the
 ceilings; the row is not called Spend, since without Worklet it is the
@@ -7728,17 +7728,19 @@ section takes the screen's width. At 1024 the column beside it left a 489px
 section, whose tables drew their columns 46px wide. A section closed to the reader draws a lock naming what it
 lacks and **is never hidden**: a section that vanished for a reader without
 its access is one they cannot know exists. Closed is one rule, `sectionOpen`:
-Token spend's readings are open to everybody, Expensive tasks is
-Worklet's, and every other Settings section is admin's. It is the same rule
+Token spend's readings and Models are open to everybody (each model's
+condition is what tells a member why a seat waits; every action on it stays
+an admin's), Expensive tasks is Worklet's, and every other Settings section is
+admin's. It is the same rule
 the sidebar locks a row by (a row only when nothing in its workspace is open,
 so Settings never, since Spend always is) and the frame draws a section's
 refusal by. A section that reads a service the company does not run is not
 drawn at all, by the sidebar's rule: Expensive tasks, where the company does
-not run Worklet. The landing page, Models & keys (`#/settings/models`, where
+not run Worklet. The landing page, Models (`#/settings/models`, where
 the sidebar's Settings row goes), is one of the column's sections, so its
-trail reads **Settings › Models & keys** rather than "Settings" alone. **On a
+trail reads **Settings › Models** rather than "Settings" alone. **On a
 phone the column folds to one row naming the section** the reader is on,
-"Section · Models & keys", the word said and not only spoken, since a
+"Section · Models", the word said and not only spoken, since a
 section's name alone read as the page's title rather than as a control
 holding the others. It opens the list and folds again once a section is
 picked, the one the reader is already on included: stacked whole above the
@@ -7747,7 +7749,7 @@ fold. So a LINK to a section arrives folded, the section it named starting
 right under the picker. But the Settings row's own address names no section
 anybody chose, so **arriving there opens the list**, every group in it:
 folded, a phone reader saw one row naming the first section and never learned
-what else Settings holds. A pick that lands on that address (Models & keys)
+what else Settings holds. A pick that lands on that address (Models)
 folds it like any other. **Beside a
 section the column stays put**: it is the scroller's height rather than the
 section's, so it sticks while the section scrolls, its hairline runs the height

@@ -3861,6 +3861,38 @@ through the [model routes](../reference/api-endpoints.md#llm-models-settings--mo
 each its own verb and each recorded in the Audit log as a `model_acted` row,
 refused ones included.
 
+**Two lenses and a page per model.** *Models* lists every model with its
+condition, how it signs in and what it is used for, under the model alarms;
+*By job* is every seat as a row, with the model it runs for each kind of work
+and the Assistant's model above it. A model's own page has its sign-in, its
+sit-out, its last test, its usage over seven days and every place that runs on
+it. Every member opens the page; every change on it is an admin's.
+
+**Adding and editing a model is one wizard**, which writes the model and every
+use it is given as one revision: the name and the coding CLI (both fixed once
+the model exists), how it signs in, the model, where its coding runs (only for
+a CLI with a runner), what it is used for, its limits, a test call, and a review
+of exactly what changes. *Use it for* offers the work a person tells apart
+rather than the engine's five fields, and each choice writes every field it
+covers:
+
+| Use it for | Writes |
+|---|---|
+| Coding | the seat's `llm` |
+| Reviewing and evaluations | `llm_review` and `llm_judge` |
+| Task delegations and routines | `llm_subagent` and `llm_auxiliary` |
+| Everything | the seat's `llm`, clearing the four satellites, so every job resolves to it |
+| Assistant | `assistant.llm`, company-wide, with no seats; the model must deny web tools |
+
+Each field is written as one model, never a chain: a fallback the field named
+before is dropped, and the review names every one it drops. Taking a model off
+a job removes it from the field, and a field left empty is deleted, so the job
+resolves as an unset one does (the review shows where it lands). A category
+whose jobs have a fixed deadline ([Auxiliary work and latency](#auxiliary-work-and-latency))
+notes when the model chosen is not a fast one, and never refuses it. A model the
+assistant already runs on keeps it until another model is chosen for the
+assistant.
+
 **Status comes from every node's heartbeat.** Each node publishes, per model,
 how it signs in there, whether it sits out a vendor's limit and until when,
 when it last answered and last failed, the seats parked on it and, for a model
