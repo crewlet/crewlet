@@ -136,7 +136,7 @@ import {
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN, WORKLET } from "~/lib/access.ts";
-import { runAsk } from "~/lib/runs.ts";
+import { RunQuestionLine } from "~/components/RunQuestion.tsx";
 import { canManagePeople, SeatHolding, useHumanSeats } from "~/components/people.tsx";
 import type { HumanSeat } from "~/contract/identity.ts";
 import type { RestResult } from "~/lib/useRest.ts";
@@ -706,7 +706,8 @@ function Notices({
           icon={<CircleQuestionMarkGlyph size="md" />}
           action={<AnswerRunButton run={sandbox} seat={seat.name} />}
         >
-          A coding run is waiting on a question: {runAsk(sandbox).title || "(no question recorded)"}
+          A coding run is waiting on a question:{" "}
+          <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
         </Callout>
       )}
     </div>

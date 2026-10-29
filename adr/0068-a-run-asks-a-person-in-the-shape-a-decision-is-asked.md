@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/decision`
-- **Enforced-by:** `internal/agent/builtin.TestARunsAskIsRecordedAsADecisionOnItsJob`, `internal/agent/builtin.TestEveryFaultOfARunsAskIsNamedAtOnce`, `internal/agent/builtin.TestARunIsToldWhatBecameOfItsAsk`, `internal/agent/builtin.TestAnAskThatDidNotLandIsSaidToTheRun`, `internal/api/queries.TestARunsAnsweredQuestionIsAnAnsweredDecision`, `internal/agent/runner.TestASubmissionBeforeTheRunAskedIsNotReplayed`, `internal/agent/builtin.TestAnswerRunDeliversAChoiceOfTheQuestionsOwnOptions`, `internal/sandbox.TestAnAskIsRefusedWithEveryFaultAtOnce`, `internal/sandbox.TestAnAskIsRedactedInEveryTextItCarries`, `internal/sandbox.TestAnAnswerNamesTheOptionItChoseAsTheRunAskedIt`, `internal/sandbox.TestAnAnswerByTurnRecordsTheOptionItChose`, `internal/sandbox.TestAnAnswerByTurnChoosingWhatWasNotOfferedIsSpentUnrecorded`, `internal/sandbox.TestARunEndedAtItsDeadlineIsNotParkedOnItsQuestion`, `internal/sandbox.TestPendingStoreContract`, `internal/engine.TestARunsAskEndsItLikeItsSubmission`, `internal/engine.TestTheAskBriefNamesWhomTheParkCanResolve`, `internal/api/queries.TestAParkedQuestionReachesItsAudience`, `internal/e2e.TestARunsStructuredQuestionIsAnsweredWithAChoiceAndResumes`, `internal/decision.TestADecisionIsValidatedField`
+- **Enforced-by:** `internal/agent/builtin.TestARunsAskIsRecordedAsADecisionOnItsJob`, `internal/agent/builtin.TestEveryFaultOfARunsAskIsNamedAtOnce`, `internal/agent/builtin.TestARunIsToldWhatBecameOfItsAsk`, `internal/agent/builtin.TestAnAskThatDidNotLandIsSaidToTheRun`, `internal/api/queries.TestARunsAnsweredQuestionIsAnAnsweredDecision`, `internal/agent/runner.TestASubmissionBeforeTheAnswerIsNotReplayed`, `internal/agent/builtin.TestAJobThatAskedCannotSubmit`, `internal/engine.TestAResumeIsCutWhereTheAnswerCutTheRound`, `internal/agent/builtin.TestAnAnswerIsToTheQuestionItsPersonRead`, `internal/agent/builtin.TestARunsAskIsRefusedInItsOwnNamesInOnePass`, `internal/sandbox.TestAnAskWhoseRowWentMidWriteIsNotRecorded`, `internal/sandbox.TestALongRunsLogKeepsTheCallsThatEndedIt`, `internal/api/queries.TestARunsAnsweredQuestionReachesWhoMayReadTheRunAndThePerson`, `internal/agent/builtin.TestAnswerRunDeliversAChoiceOfTheQuestionsOwnOptions`, `internal/sandbox.TestAnAskIsRefusedWithEveryFaultAtOnce`, `internal/sandbox.TestAnAskIsRedactedInEveryTextItCarries`, `internal/sandbox.TestAnAnswerNamesTheOptionItChoseAsTheRunAskedIt`, `internal/sandbox.TestAnAnswerByTurnRecordsTheOptionItChose`, `internal/sandbox.TestAnAnswerByTurnChoosingWhatWasNotOfferedIsSpentUnrecorded`, `internal/sandbox.TestARunEndedAtItsDeadlineIsNotParkedOnItsQuestion`, `internal/sandbox.TestPendingStoreContract`, `internal/engine.TestARunsAskEndsItLikeItsSubmission`, `internal/engine.TestTheAskBriefNamesWhomTheParkCanResolve`, `internal/api/queries.TestAParkedQuestionReachesItsAudience`, `internal/e2e.TestARunsStructuredQuestionIsAnsweredWithAChoiceAndResumes`, `internal/decision.TestADecisionIsValidatedField`
 - **Cost-when-tried:** a run that could not go on without a person ran one shell command, `crewlet-ask "<question>" --to <audience> --branch <branch>`, whose one free-text argument carried everything: the options, the recommendation and the context arrived as a paragraph ("Options: (A) [recommended] keep EXPECTED_DIFFERENCES ... (B) ... (C) Something else ... Which option?"), and the Inbox drew it as a heading repeating its first sentence over the whole text quoted verbatim, with nothing to press. The engine bounded and condensed the text after the run had ended, when the run could no longer fix it, and a question too long for that was not asked at all.
 - **Tag-status:** unreleased
 
@@ -27,9 +27,12 @@ knowledge base a work item's decision is checked against.
    question per job. The collection parks the run on what the row holds, never
    on anything read out of the box; a run ended at its turn's cap is not
    parked.
-3. **Answered with a choice by id or in words** (`answer_run{turn_id, choice,
-   answer}`), the choice checked against the question it answers, and read by
-   the run as the option it wrote: `Chosen option: <label> (<id>).`
+3. **Answered with a choice by id or in words** (`answer_run{turn_id,
+   launch_id, choice, answer}`), naming the question the person read (the job
+   that asked it, refused `stale_version` once the run has moved on to
+   another), the choice checked against that question, and read by the run as
+   the option it wrote: `Chosen option: <label> (<id>).` A choice it does not
+   offer is recorded as its own outcome, `unoffered`.
 4. **Its answer outlives the run.** The record of the answer
    (`sandbox_run_answered`) carries the question, its decision, the choice and
    the person's words, and a person's answered decisions read it back beside a
@@ -38,6 +41,11 @@ knowledge base a work item's decision is checked against.
    never a silent stop.
 5. **No `inform`.** A run's answer resumes the run itself, so there is no
    answered turn of the seat's the engine could hold to a promise.
+6. **A job that asked takes no submission.** Once its question is on its row,
+   the bridge refuses the job's `submit_work`, telling its CLI to end its turn;
+   and the collection that closes the round replays only a submission made
+   after the answer that carried it on, at the place the row recorded when the
+   continuing job opened, never by searching the log for the last ask.
 
 ## Why the obvious alternatives are wrong
 

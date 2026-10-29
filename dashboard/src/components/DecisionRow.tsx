@@ -52,7 +52,7 @@ import { relTime } from "~/lib/format.ts";
 import type { AgentRow, BudgetWindow, SandboxRun, WorkAskRow } from "~/protocol/index.ts";
 import { itemAddress, itemPath, type ItemRef } from "~/lib/work.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
-import { runAsk } from "~/lib/runs.ts";
+import { RunQuestionLine } from "./RunQuestion.tsx";
 
 /**
  * Where Home's "Review" and "Open inbox" take a reader: the Inbox, whose list
@@ -481,12 +481,20 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
   const who = seatOf(index, run.agent_handle);
   const item = run.work_item ?? null;
   const since = run.paused_at || run.updated_at;
-  const { title } = runAsk(run);
+  const question = (run.question ?? "").trim();
   const sub = joined([
     item ? <Key key="k" item={item} /> : "",
-    // THE QUESTION'S TITLE, never the whole of it: the pane and the answer
-    // dialog read its context.
-    title ? `“${title}”` : questionWithheld(run) ? QUESTION_WITHHELD : "",
+    // THE QUESTION, never its context: the pane and the answer dialog read
+    // that.
+    question ? (
+      <>
+        “<RunQuestionLine question={question} />”
+      </>
+    ) : questionWithheld(run) ? (
+      QUESTION_WITHHELD
+    ) : (
+      ""
+    ),
     audienceOf(run, index),
     relTime(since, now),
   ]);

@@ -566,7 +566,8 @@ func TestARunsStructuredQuestionIsAnsweredWithAChoiceAndResumes(t *testing.T) {
 	}
 
 	status, raw := bearer(t, n.node, http.MethodPost, "/operator/act/"+builtin.AnswerRunTool,
-		map[string]any{"args": map[string]any{"turn_id": parked.TurnID, "choice": "main"}},
+		map[string]any{"args": map[string]any{"turn_id": parked.TurnID,
+			"launch_id": parked.LaunchID, "choice": "main"}},
 		map[string]string{opkey.Header: uuid.Must(uuid.NewV7()).String()})
 	if status != http.StatusOK {
 		t.Fatalf("POST /operator/act/%s answered %d: %s", builtin.AnswerRunTool, status, raw)

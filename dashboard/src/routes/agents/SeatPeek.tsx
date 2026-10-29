@@ -94,7 +94,7 @@ import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { WORKLET, accessNames } from "~/lib/access.ts";
-import { runAsk } from "~/lib/runs.ts";
+import { RunQuestionLine } from "~/components/RunQuestion.tsx";
 import {
   canManagePeople,
   SEAT_GESTURE_WORDS,
@@ -329,7 +329,8 @@ function SeatPeekBody({
         // THE ONE THING A READER CAN ACT ON from here: a run parked on a
         // question holds the seat until somebody answers it.
         <Callout variant="warning">
-          A coding run is waiting on a question: {runAsk(sandbox).title || "(no question recorded)"}
+          A coding run is waiting on a question:{" "}
+          <RunQuestionLine question={sandbox.question} empty="(no question recorded)" />
         </Callout>
       )}
 

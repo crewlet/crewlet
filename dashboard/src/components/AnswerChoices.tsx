@@ -47,6 +47,7 @@ export function AnswerChoices<T extends ActionTool>({
   options,
   recommended,
   pending,
+  blocked,
   onChoose,
   onSomethingElse,
 }: {
@@ -57,6 +58,8 @@ export function AnswerChoices<T extends ActionTool>({
   recommended?: string | undefined;
   /** The option being sent, while the write is in flight. */
   pending: string | null;
+  /** Why no option can be sent yet, where the caller knows of a reason. */
+  blocked?: string | undefined;
   /** An option was pressed, and the write can take it. */
   onChoose: (choice: string) => void;
   /** "Something else" was pressed: the caller opens its field. */
@@ -69,9 +72,9 @@ export function AnswerChoices<T extends ActionTool>({
         options={choiceOptions(options)}
         recommended={recommended}
         pending={pending}
-        disabledReason={write.access.can ? undefined : write.access.reason}
+        disabledReason={write.access.can ? blocked : write.access.reason}
         onChoose={(choice) => {
-          if (pressable(write)) onChoose(choice);
+          if (pressable(write, blocked)) onChoose(choice);
         }}
       />
       <WriteButton

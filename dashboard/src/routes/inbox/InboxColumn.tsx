@@ -60,7 +60,7 @@ import {
 } from "./model.ts";
 import { TaskLink } from "./TaskLink.tsx";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
-import { runAsk, runAskTexts } from "~/lib/runs.ts";
+import { runAskTexts } from "~/lib/runs.ts";
 
 /** A row dealt with here: how ("Answered"), and the answer that was given. */
 export interface Settled {
@@ -279,8 +279,9 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
           return { text: askQuestion(row.subject.ask) };
         case "run":
           return {
+            // THE QUESTION WHOLE: the row's own clamp cuts a long one.
             text:
-              runAsk(row.subject.run).title ||
+              (row.subject.run.question ?? "").trim() ||
               (questionWithheld(row.subject.run) ? QUESTION_WITHHELD : "Parked on a question"),
           };
         case "seat":
@@ -408,7 +409,7 @@ function rowTexts(row: InboxRow): string[] | undefined {
   if (row.kind === "answered") return answeredTexts(row.answered);
   if (row.kind !== "decision") return undefined;
   if (row.subject.kind === "ask") return askTexts(row.subject.ask);
-  return row.subject.kind === "run" ? runAskTexts(runAsk(row.subject.run)) : undefined;
+  return row.subject.kind === "run" ? runAskTexts(row.subject.run) : undefined;
 }
 
 /** The answer this visit gave, in the words an answered row says it with. */
@@ -418,10 +419,18 @@ function givenWords(answer: AskAnswer): AnswerWords {
         who: "You",
         verb: "chose",
         said: answer.label,
+        note: "",
         kind: "choice",
         recommended: answer.recommended,
       }
-    : { who: "You", verb: "replied", said: answer.text, kind: "reply", recommended: false };
+    : {
+        who: "You",
+        verb: "replied",
+        said: answer.text,
+        note: "",
+        kind: "reply",
+        recommended: false,
+      };
 }
 
 /**
@@ -437,13 +446,22 @@ function shortSaid(text: string): string {
   return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), SAID_MAX / 2)).trimEnd()}…`;
 }
 
-/** "You chose **Hold release**", "Maya Ops replied **“Hold it a week.”**". */
+/**
+ * "You chose **Hold release**", "Maya Ops replied **“Hold it a week.”**",
+ * "You chose **Hold release** and wrote **“Tell support first.”**".
+ */
 function AnswerLine({ words }: { words: AnswerWords }) {
   if (words.kind === "resolved") return <>{`${words.who} ${words.verb}`}</>;
   return (
     <>
       {`${words.who} ${words.verb} `}
       <strong>{words.kind === "reply" ? `“${shortSaid(words.said)}”` : words.said}</strong>
+      {words.note && (
+        <>
+          {" and wrote "}
+          <strong>{`“${shortSaid(words.note)}”`}</strong>
+        </>
+      )}
     </>
   );
 }

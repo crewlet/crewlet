@@ -63,6 +63,14 @@ func AnsweredAlready(handle string) Refusal {
 		"so your answer was not used.", handle)}
 }
 
+// QuestionChanged is an answer to a coding run's question given against a
+// question the run no longer asks: it moved on to another since the person
+// read it, which is the one they need to see before they answer.
+func QuestionChanged() Refusal {
+	return Refusal{person: "The question changed since you read it, so your answer " +
+		"was not sent. Reload to see the question it asks now."}
+}
+
 // NoQuestionForChoice is a choice made where no open question is addressed to
 // the person making it.
 func NoQuestionForChoice() Refusal {

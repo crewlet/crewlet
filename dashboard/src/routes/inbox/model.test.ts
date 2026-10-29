@@ -447,6 +447,7 @@ describe("what was answered", () => {
       who: "You",
       verb: "chose",
       said: "Hold release",
+      note: "",
       kind: "choice",
       recommended: true,
     });
@@ -463,6 +464,29 @@ describe("what was answered", () => {
       answer: { by: "cto", at: "2026-09-30T11:00:00Z", body: "", resolved: true },
     });
     expect(answerWords(resolved, "jane", index).kind).toBe("resolved");
+  });
+
+  // A CHOICE WITH WORDS OF ITS OWN KEEPS THEM: the record's body is the
+  // person's words where they wrote any beside the option, and the option's
+  // label only where they did not. Read as the label alone, the words were
+  // dropped from the row and the pane.
+  //
+  // Mutation: drop `note`, or fill it with the label, and this fails.
+  test("a choice keeps the words written beside it", () => {
+    const withWords = answered({
+      answer: {
+        by: "jane",
+        at: "2026-09-30T11:00:00Z",
+        choice: "hold",
+        body: "Tell support before Thursday.",
+      },
+    });
+    expect(answerWords(withWords, "jane", index)).toMatchObject({
+      verb: "chose",
+      said: "Hold release",
+      note: "Tell support before Thursday.",
+      kind: "choice",
+    });
   });
 
   test("how far the asker has got: acted from the tracker, the rest from its seat now", () => {
@@ -544,6 +568,7 @@ describe("what was answered", () => {
       who: "You",
       verb: "chose",
       said: "Target main",
+      note: "",
       kind: "choice",
       recommended: true,
     });

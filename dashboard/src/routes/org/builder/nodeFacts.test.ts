@@ -298,6 +298,7 @@ describe("live state", () => {
     task: "Fix",
     status: "running",
     started_at: "2026-09-13T00:00:00Z",
+    question_context: "",
   };
 
   test("a seat is working while a turn runs or a coding run waits, and not while idle", () => {
