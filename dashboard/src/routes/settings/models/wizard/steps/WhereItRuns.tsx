@@ -145,6 +145,8 @@ export function WhereItRuns({
     <div className="models-stack">
       <ChoiceCards
         label="Where coding runs happen"
+        minCardWidth="sm"
+        density="compact"
         options={options}
         value={chosen}
         onChange={(v) => onChange(v === answer.default_run_in ? "" : (v as RunnerCellName))}

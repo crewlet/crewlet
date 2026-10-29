@@ -77,6 +77,8 @@ export function CliStep({
       </FormField>
       <ChoiceCards
         label="Coding CLI"
+        minCardWidth="sm"
+        density="compact"
         value={draft.agent}
         onChange={(v) => onAgent(v as Agent)}
         options={agents.map((a) => {
