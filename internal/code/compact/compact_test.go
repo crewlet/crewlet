@@ -452,15 +452,30 @@ func (l *listed) showPacks(n int64) {
 // recordingStore is a compactor's object store with every put recorded — its
 // size and the key it minted — and held by hold, where hold is set, before it
 // reaches the store; a put answered by refuse, where that is set, never
-// reaches it.
+// reaches it; and every Stat counted.
 type recordingStore struct {
 	*objstore.Store
 	mu     sync.Mutex
 	puts   []objstore.Object
 	sizes  []int64
+	stats  int
 	hold   func(ctx context.Context) error
 	refuse func() error
 	usage  func() (objstore.Usage, bool, error)
+}
+
+func (r *recordingStore) Stat(ctx context.Context, k objstore.Key) (objstore.Info, error) {
+	r.mu.Lock()
+	r.stats++
+	r.mu.Unlock()
+	return r.Store.Stat(ctx, k)
+}
+
+// statted is how many Stats the store was asked.
+func (r *recordingStore) statted() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stats
 }
 
 func (r *recordingStore) Put(ctx context.Context, rd io.Reader, limit int64, m objstore.PutMeta) (objstore.Object,

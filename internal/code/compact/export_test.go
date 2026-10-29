@@ -110,6 +110,12 @@ func GeometricSplit(weights []int64, factor int64) int { return geometricSplit(w
 // CapOf is the pack bytes c's next plan of repoID is capped at.
 func CapOf(c *Compactor, repoID string) int64 { return c.capFor(repoID) }
 
+// HeldBase is how many of rows[:base], from the root, c's object store still
+// holds every part of, or the store's error (Compactor.heldBase).
+func HeldBase(ctx context.Context, c *Compactor, rows []code.LayerRow, base int) (int, error) {
+	return c.heldBase(ctx, rows, base)
+}
+
 // RememberNotDue has c remember cand as a plan found not due at the version the
 // listing names and at its repository's cap now — what a pass over a
 // repository that is not due leaves behind — so BenchmarkCompact's poll arms

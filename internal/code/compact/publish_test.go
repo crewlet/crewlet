@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -294,6 +295,235 @@ func TestAPublicationIsNeverBuiltOverABaseTheStoreLost(t *testing.T) {
 	}
 	if n := l.count("code_publication_base_lost", `"level":"WARN"`); n != 1 {
 		t.Errorf("code_publication_base_lost logged %d times, want once:\n%s", n, l)
+	}
+}
+
+// busyToPublish is a publication's admission the maintenance lane has no slot
+// for, as the cache answers it.
+func busyToPublish(cache.Synced, int64, int64, code.Limits) (*cache.Admission, error) {
+	return nil, fmt.Errorf("cache: publish %s: %w: a case's lane held", codetest.RepoName, gitproc.ErrBusy)
+}
+
+// A PUBLICATION REFUSED ITS ADMISSION ASKS THE STORE NOTHING: the base a layer
+// is written over is held to the object store's copy once its build is
+// admitted, never before — so an attempt the node refuses busy, a moment's
+// state asked again at the next pass, or for memory, never remembered and
+// asked again at every pass, costs no request, where it cost one a part of
+// the base at every attempt. Admitted, the publication asks for every part
+// of its base, and lands.
+//
+// Mutation: hold the base to the store before the admission, and each refused
+// attempt asks for the root's part.
+func TestAPublicationRefusedItsAdmissionAsksTheStoreNothing(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t)
+	x.pushN(10, 4<<10)
+	rs := &recordingStore{Store: x.store}
+	cc := countedOver(x.node().Cache())
+	c, _, _ := x.compactorOf(func(o *compact.Options) { o.Cache, o.Objects = cc, rs })
+	if out, err := publishWhileBusy(t, c, x.publicationCandidate()); out != compact.OutcomeApplied {
+		t.Fatalf("the root's publication: %s, %v; want applied", out, err)
+	}
+	root := x.awaitInstalled(1).Rows[0].Layer
+	// A TAIL OF ONE PUSH, too small to absorb the root: its layer is written
+	// over the root, whose parts the publication asks the store for.
+	x.push(4 << 10)
+	for _, refused := range []struct {
+		name  string
+		admit func(cache.Synced, int64, int64, code.Limits) (*cache.Admission, error)
+		want  compact.Outcome
+	}{
+		{"busy", busyToPublish, compact.OutcomeBusy},
+		{"memory", noMemoryToPublish, compact.OutcomeRefused},
+	} {
+		cc.answerPublications(refused.admit)
+		before := rs.statted()
+		if out, err := c.Publish(t.Context(), x.publicationCandidate()); out != refused.want {
+			t.Errorf("a publication refused for %s: %s, %v; want %s", refused.name, out, err, refused.want)
+		}
+		if n := rs.statted() - before; n != 0 {
+			t.Errorf("a publication refused for %s asked the store %d times, want none", refused.name, n)
+		}
+	}
+	cc.answerPublications(nil)
+	before := rs.statted()
+	if out, err := publishWhileBusy(t, c, x.publicationCandidate()); out != compact.OutcomeApplied {
+		t.Fatalf("the publication once admitted: %s, %v; want applied", out, err)
+	}
+	if n := rs.statted() - before; n < len(root.Parts) {
+		t.Errorf("the admitted publication asked the store %d times, want every one of the root's %d parts", n,
+			len(root.Parts))
+	}
+}
+
+// statStore is a publication's object store that answers Stat alone — every
+// part held at its size, but those named lost, missized or unread — each
+// answer held until release is closed, counting how many asks are in flight
+// at once.
+type statStore struct {
+	compact.Uploader
+	release                   chan struct{}
+	sizes                     map[objstore.Key]int64
+	lost, missized, unread    map[objstore.Key]bool
+	mu                        sync.Mutex
+	asked, inFlight, mostOnce int
+}
+
+// errStoreSilent is a store that could not say whether it holds a part.
+var errStoreSilent = errors.New("the store did not answer")
+
+func (s *statStore) Stat(ctx context.Context, k objstore.Key) (objstore.Info, error) {
+	s.mu.Lock()
+	s.asked++
+	s.inFlight++
+	s.mostOnce = max(s.mostOnce, s.inFlight)
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.inFlight--
+		s.mu.Unlock()
+	}()
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return objstore.Info{}, context.Cause(ctx)
+	}
+	switch {
+	case s.unread[k]:
+		return objstore.Info{}, errStoreSilent
+	case s.lost[k]:
+		return objstore.Info{}, fmt.Errorf("stat %s: %w", k, objstore.ErrNotFound)
+	case s.missized[k]:
+		return objstore.Info{Size: s.sizes[k] + 1}, nil
+	}
+	return objstore.Info{Size: s.sizes[k]}, nil
+}
+
+// counts is how many asks were made, are in flight now, and were at the most.
+func (s *statStore) counts() (asked, inFlight, most int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.asked, s.inFlight, s.mostOnce
+}
+
+// noCache and noEstate stand in for seams a case never reaches.
+type (
+	noCache  struct{ compact.Cache }
+	noEstate struct{ compact.Estate }
+)
+
+// baseOf is a chain of layers of parts each, every part a fresh key of its
+// own size, root first.
+func baseOf(layers, parts int) ([]code.LayerRow, map[objstore.Key]int64) {
+	rows := make([]code.LayerRow, layers)
+	sizes := map[objstore.Key]int64{}
+	for i := range rows {
+		rows[i].Layer.LayerID = fmt.Sprintf("%040x", i+1)
+		for j := range parts {
+			k, n := objstore.KeyAt(time.Now()), int64(1000*i+j+1)
+			rows[i].Layer.Parts = append(rows[i].Layer.Parts, code.LayerPart{Object: k, Size: n})
+			sizes[k] = n
+		}
+	}
+	return rows, sizes
+}
+
+// THE BASE'S PARTS ARE ASKED AT ONCE, and answered as a walk of them in chain
+// order would answer: on S3 every request waits a first byte, so asked one
+// after another a large repository's base cost a request's wait a part, up to
+// 512 of them. Asked at once, cache.FetchConcurrency are in flight together —
+// never more — and the answer is the walk's: the layer of the first part, in
+// chain order, the store lacks or holds at another size, or the store's
+// error where a part before it could not be read.
+//
+// Mutations: ask the parts one at a time, and no second ask is ever in flight;
+// lift the bound, and every part is asked at once; answer the first part
+// found rather than the first in order, and a lost part above an unread one
+// answers its layer.
+func TestTheBaseIsAskedOfTheStoreAtOnce(t *testing.T) {
+	t.Parallel()
+	newCompactor := func(t *testing.T, s *statStore) *compact.Compactor {
+		t.Helper()
+		c, err := compact.New(compact.Options{Cache: noCache{}, Objects: s, Estate: noEstate{},
+			Maintainers: maintainers{}, NodeID: "git-1", Limits: code.DefaultLimits})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Stop(context.Background()) })
+		return c
+	}
+	t.Run("at once, bounded", func(t *testing.T) {
+		t.Parallel()
+		rows, sizes := baseOf(3, 8)
+		s := &statStore{release: make(chan struct{}), sizes: sizes}
+		c := newCompactor(t, s)
+		type answer struct {
+			held int
+			err  error
+		}
+		done := make(chan answer, 1)
+		go func() {
+			held, err := compact.HeldBase(t.Context(), c, rows, len(rows))
+			done <- answer{held, err}
+		}()
+		for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+			if _, inFlight, _ := s.counts(); inFlight == cache.FetchConcurrency {
+				break
+			}
+			if time.Now().After(deadline) {
+				close(s.release)
+				_, _, most := s.counts()
+				t.Fatalf("the base's parts were asked %d at a time at the most, want %d at once", most,
+					cache.FetchConcurrency)
+			}
+		}
+		close(s.release)
+		got := <-done
+		if got.err != nil || got.held != len(rows) {
+			t.Errorf("a base the store holds whole: %d, %v; want %d", got.held, got.err, len(rows))
+		}
+		if asked, _, most := s.counts(); asked != 3*8 || most != cache.FetchConcurrency {
+			t.Errorf("the store was asked %d times, %d at once at the most; want each of the 24 parts once, %d "+
+				"at once", asked, most, cache.FetchConcurrency)
+		}
+	})
+	for _, k := range []struct {
+		name                   string
+		lost, missized, unread [][2]int // layer, part
+		want                   int
+		wantErr                bool
+	}{
+		{name: "whole", want: 3},
+		{name: "a part lost", lost: [][2]int{{1, 2}}, want: 1},
+		{name: "a part of another size", missized: [][2]int{{2, 0}}, want: 2},
+		{name: "a lost part below an unread one", lost: [][2]int{{1, 0}}, unread: [][2]int{{2, 1}}, want: 1},
+		{name: "an unread part below a lost one", unread: [][2]int{{0, 3}}, lost: [][2]int{{1, 0}}, wantErr: true},
+		{name: "an unread part before a lost one of its layer", unread: [][2]int{{1, 0}}, lost: [][2]int{{1, 1}},
+			wantErr: true},
+	} {
+		t.Run(k.name, func(t *testing.T) {
+			t.Parallel()
+			rows, sizes := baseOf(3, 4)
+			s := &statStore{release: make(chan struct{}), sizes: sizes, lost: map[objstore.Key]bool{},
+				missized: map[objstore.Key]bool{}, unread: map[objstore.Key]bool{}}
+			close(s.release)
+			for _, at := range k.lost {
+				s.lost[rows[at[0]].Layer.Parts[at[1]].Object] = true
+			}
+			for _, at := range k.missized {
+				s.missized[rows[at[0]].Layer.Parts[at[1]].Object] = true
+			}
+			for _, at := range k.unread {
+				s.unread[rows[at[0]].Layer.Parts[at[1]].Object] = true
+			}
+			held, err := compact.HeldBase(t.Context(), newCompactor(t, s), rows, len(rows))
+			switch {
+			case k.wantErr && !errors.Is(err, errStoreSilent):
+				t.Errorf("held %d, %v; want the store's error", held, err)
+			case !k.wantErr && (err != nil || held != k.want):
+				t.Errorf("held %d, %v; want %d", held, err, k.want)
+			}
+		})
 	}
 }
 

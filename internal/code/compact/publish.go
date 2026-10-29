@@ -11,7 +11,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -453,7 +456,12 @@ var (
 //     charge the node's memory cannot hold is refused `memory` and NEVER
 //     remembered — the budget is read again at every pass, and the next pass
 //     asks whether this node is still the maintainer, which is how a larger
-//     node takes the repository over (M3-decisions M3-O26).
+//     node takes the repository over (M3-decisions M3-O26). Once admitted —
+//     never before, so a refused attempt asks the store nothing — the base
+//     the layer is written over is held to the object store's copy, its parts
+//     asked at once, and a base the store lost is replaced with every layer
+//     above it, that plan's charge held in the same slot in place of the
+//     first's ([Compactor.admitOverItsBase]).
 //  4. BUILD in a scratch of its own whose chain files name EXACTLY the layers
 //     it is written over (cache.Cache.NewLayerScratch): the repack where the
 //     plan has one — built over a store of exactly its inputs, as a
@@ -512,55 +520,14 @@ func (c *Compactor) publish(ctx context.Context, cand code.PublicationCandidate,
 	chain, live := c.o.Cache.Chain(s), c.o.Cache.Packs(s)
 	cap := c.capFor(cand.ID)
 	p, verdict := planLayer(chain, live, cap, c.bounds, 0)
-	if verdict == layerDue && p.base > 0 {
-		// NEVER BUILT OVER A BASE THE STORE LOST: this node installed its
-		// own layers from the files it wrote, so its copy holds a layer the
-		// store may no longer hold — and a layer written over it would be one
-		// no node that fetches its chain can install either.
-		held, err := c.heldBase(ctx, chain.Rows, p.base)
-		if err != nil {
-			return c.publicationFailed(cand, "store", err)
-		}
-		if held < p.base {
-			c.log.Warn("code_publication_base_lost", "repo", cand.Name, "layer", chain.Rows[held].Layer.LayerID,
-				"detail", "the object store no longer holds every part of a layer this node holds; it is "+
-					"replaced, with every layer above it")
-			chain = lostFrom(chain, held)
-			p, verdict = planLayer(chain, live, cap, c.bounds, 0)
-		}
-	}
-	switch verdict {
-	case layerWaiting:
-		c.log.Debug("code_publication_waiting", "repo", cand.Name,
-			"detail", "a layer of the chain is still at this node's installer; the next pass plans again")
-		return OutcomeWaiting, nil
-	case layerNothing:
-		c.rememberNothing(cand)
-		return OutcomeNotDue, nil
-	case layerTooLarge:
-		c.rememberNothing(cand)
-		c.publishRefusal(reasonLayerTooLarge)
-		c.log.Warn("code_publication_refused", "repo", cand.Name, "refusal", reasonLayerTooLarge,
-			"objects", p.objects, "estimate", layerEstimate(p.objects),
-			"most", code.MaxLayerParts*code.LayerPartBytes)
-		return OutcomeRefused, errLayerTooLarge
+	if out, refusal := c.buildable(cand, p, verdict); out != "" {
+		return out, refusal
 	}
 	c.reserve(cand.ID, p)
 	limits := c.o.Limits()
-	adm, err := c.o.Cache.AdmitPublication(s, p.objects, p.repack.objects(), limits)
-	switch {
-	case errors.Is(err, gitproc.ErrBusy):
-		c.log.Debug("code_publication_busy", "repo", cand.Name, "error", err)
-		return OutcomeBusy, err
-	case errors.Is(err, cache.ErrNoMemory):
-		// NEVER REMEMBERED (M3-decisions M3-O26): the node's budget is read
-		// again at every pass, and the next pass asks whether this node is
-		// still the maintainer — how a larger git node takes the repository
-		// over. The cache logged it once for the incarnation.
-		c.publishRefusal(reasonMemory)
-		return OutcomeRefused, err
-	case err != nil:
-		return c.publicationFailed(cand, "admit", err)
+	adm, chain, p, out, err := c.admitOverItsBase(ctx, cand, s, chain, live, p, cap, limits)
+	if adm == nil {
+		return out, err
 	}
 	defer adm.Release()
 
@@ -577,26 +544,136 @@ func (c *Compactor) publish(ctx context.Context, cand code.PublicationCandidate,
 	defer b.sc.Remove()
 	adm.Release()
 
-	if out, err := c.uploadLayer(ctx, cand, &b); err != nil {
+	if out, err = c.uploadLayer(ctx, cand, &b); err != nil {
 		return out, err
 	}
-	if err := c.fault(ctx, codefault.PublishAfterUpload, 0); err != nil {
+	if err = c.fault(ctx, codefault.PublishAfterUpload, 0); err != nil {
 		return c.publicationFailed(cand, "propose", err)
 	}
 	res, err := c.o.Estate.Compact(ctx, b.proposal)
 	if err != nil {
 		return c.publicationFailed(cand, "propose", err)
 	}
-	if err := c.fault(ctx, codefault.PublishAfterPropose, 0); err != nil {
+	if err = c.fault(ctx, codefault.PublishAfterPropose, 0); err != nil {
 		return c.publicationFailed(cand, "adopt", err)
 	}
 	return c.publicationAnswered(ctx, cand, b, res, began)
 }
 
+// buildable answers a plan that builds nothing — a layer still at this node's
+// installer, `waiting` and planned again at the next pass; nothing to publish,
+// remembered at the listing's version; a layer too large, refused and
+// remembered — and "" for a layer to build.
+func (c *Compactor) buildable(cand code.PublicationCandidate, p layerPlan, verdict layerVerdict) (Outcome, error) {
+	switch verdict {
+	case layerWaiting:
+		c.log.Debug("code_publication_waiting", "repo", cand.Name,
+			"detail", "a layer of the chain is still at this node's installer; the next pass plans again")
+		return OutcomeWaiting, nil
+	case layerNothing:
+		c.rememberNothing(cand)
+		return OutcomeNotDue, nil
+	case layerTooLarge:
+		c.rememberNothing(cand)
+		c.publishRefusal(reasonLayerTooLarge)
+		c.log.Warn("code_publication_refused", "repo", cand.Name, "refusal", reasonLayerTooLarge,
+			"objects", p.objects, "estimate", layerEstimate(p.objects),
+			"most", code.MaxLayerParts*code.LayerPartBytes)
+		return OutcomeRefused, errLayerTooLarge
+	}
+	return "", nil
+}
+
+// admitOverItsBase admits a publication of p to the maintenance lane
+// (cache.Cache.AdmitPublication, charged at the largest of its steps'; a
+// refusal is [Compactor.admissionRefused]'s) and then holds the base it is
+// written over to the object store's copy ([Compactor.heldBase]), answering
+// the admission, and the chain and the plan the build runs over — or a nil
+// admission, and what became of the publication.
+//
+// NEVER BUILT OVER A BASE THE STORE LOST: this node installed its own layers
+// from the files it wrote, so its copy holds a layer the store may no longer
+// hold — and a layer written over it would be one no node that fetches its
+// chain can install either. Such a base is replaced with every layer above it:
+// the plan is made again over the layers below the loss ([lostFrom]), held to
+// what a plan builds again, reserved, and its charge held in the admission's
+// own slot in place of the first's (cache.Admission.RechargePublication) — a
+// larger layer, or a repack its gathered packs now need, may pass the first
+// plan's charge, and a release and a second admission would wake the
+// maintainer between them, which could take the slot and leave the repair
+// busy at every pass a busy node gives it.
+//
+// THE STORE IS ASKED ONCE THE ADMISSION IS GRANTED: an attempt refused busy (a
+// moment's state, asked again at the next pass) or for memory (never
+// remembered, asked again at every pass) asks it nothing, where it asked for
+// every part of the base at every attempt before. The admission is the
+// node's, in memory; the questions hold its slot for about one first byte.
+func (c *Compactor) admitOverItsBase(ctx context.Context, cand code.PublicationCandidate, s cache.Synced,
+	chain cache.Chain, live []code.PackRow, p layerPlan, cap int64, limits code.Limits) (*cache.Admission,
+	cache.Chain, layerPlan, Outcome, error) {
+
+	adm, err := c.o.Cache.AdmitPublication(s, p.objects, p.repack.objects(), limits)
+	if err != nil {
+		out, refusal := c.admissionRefused(cand, err)
+		return nil, chain, p, out, refusal
+	}
+	if p.base == 0 {
+		return adm, chain, p, "", nil
+	}
+	held, err := c.heldBase(ctx, chain.Rows, p.base)
+	if err != nil {
+		adm.Release()
+		out, failed := c.publicationFailed(cand, "store", err)
+		return nil, chain, p, out, failed
+	}
+	if held == p.base {
+		return adm, chain, p, "", nil
+	}
+	c.log.Warn("code_publication_base_lost", "repo", cand.Name, "layer", chain.Rows[held].Layer.LayerID,
+		"detail", "the object store no longer holds every part of a layer this node holds; it is replaced, "+
+			"with every layer above it")
+	chain = lostFrom(chain, held)
+	p, verdict := planLayer(chain, live, cap, c.bounds, 0)
+	if out, refusal := c.buildable(cand, p, verdict); out != "" {
+		adm.Release()
+		return nil, chain, p, out, refusal
+	}
+	// The layers it replaces besides are published ones: their packs, which
+	// the reservation gains, are none a compaction's plan merges.
+	c.reserve(cand.ID, p)
+	if err = adm.RechargePublication(s, p.objects, p.repack.objects(), limits); err != nil {
+		adm.Release()
+		out, refusal := c.admissionRefused(cand, err)
+		return nil, chain, p, out, refusal
+	}
+	return adm, chain, p, "", nil
+}
+
+// admissionRefused is what a publication whose admission — or the charge of
+// its plan made again (cache.Admission.RechargePublication) — the node refused
+// with err becomes: busy, the next poll's; a charge the node's memory cannot
+// hold, refused `memory`; and anything else failed.
+func (c *Compactor) admissionRefused(cand code.PublicationCandidate, err error) (Outcome, error) {
+	switch {
+	case errors.Is(err, gitproc.ErrBusy):
+		c.log.Debug("code_publication_busy", "repo", cand.Name, "error", err)
+		return OutcomeBusy, err
+	case errors.Is(err, cache.ErrNoMemory):
+		// NEVER REMEMBERED (M3-decisions M3-O26): the node's budget is read
+		// again at every pass, and the next pass asks whether this node is
+		// still the maintainer — how a larger git node takes the repository
+		// over. The cache logged it once for the incarnation.
+		c.publishRefusal(reasonMemory)
+		return OutcomeRefused, err
+	}
+	return c.publicationFailed(cand, "admit", err)
+}
+
 // heldBase is how many of rows[:base], from the root, the object store still
 // holds every part of — base where it holds them all — or the store's error
-// where it could not be read: one Stat a part, the first part the store lacks
-// or holds at another size ending the walk.
+// where it could not be read: the answer a walk of the parts in chain order
+// gives, the first part the store lacks or holds at another size ending it at
+// that part's layer, and the first it could not read failing it.
 //
 // WHY THE MAINTAINER ASKS: every other git node fetches a layer's parts and
 // refuses one the store lost (`missing`), but the maintainer installs its own
@@ -605,27 +682,81 @@ func (c *Compactor) publish(ctx context.Context, cand code.PublicationCandidate,
 // a bucket's own deletion — and its own copy alone would never say so. Built
 // over it, a new layer is one no node fetching the chain can install either,
 // so a publication is held to the store's copy of its base before anything is
-// built: a handful of requests a publication, against a build that walks the
-// repository's whole history. A part whose bytes the store changed in place
-// is no size of another, and is found by the nodes that fetch it (`corrupt`),
-// whose repair waits for this node's own copy to meet it.
+// built. A part whose bytes the store changed in place is no size of another,
+// and is found by the nodes that fetch it (`corrupt`), whose repair waits for
+// this node's own copy to meet it.
+//
+// THE PARTS ARE ASKED AT ONCE, cache.FetchConcurrency at a time — the width a
+// sync already holds against the same store. On S3, the production store,
+// every request waits a first byte of 20 to 100 ms: asked one after another,
+// a large repository's chain of ten to twenty layers, its root several parts
+// of a gibibyte, cost 0.3 to 2 s an attempt, and the most a base may hold —
+// code.MaxPublishedLayers layers of code.MaxLayerParts parts, 512 — up to 50 s,
+// a large share of a small repository's whole publication and of a pass cut at
+// PublishPoll. At once, it costs about one first byte for every sixteen parts.
+// The answer is the walk's: every part up to the first that is not held or not
+// read is asked to the end, and none past it is begun once that one is known.
 func (c *Compactor) heldBase(ctx context.Context, rows []code.LayerRow, base int) (int, error) {
+	type part struct {
+		layer int
+		part  code.LayerPart
+	}
+	var parts []part
 	for i, row := range rows[:base] {
-		for _, part := range row.Layer.Parts {
-			info, err := c.o.Objects.Stat(ctx, part.Object)
-			switch {
-			case errors.Is(err, objstore.ErrNotFound):
-				return i, nil
-			case err != nil:
-				return 0, fmt.Errorf("compact: read whether the store holds part %s of layer %s: %w", part.Object,
-					row.Layer.LayerID, err)
-			case info.Size != part.Size:
-				return i, nil
+		for _, p := range row.Layer.Parts {
+			parts = append(parts, part{layer: i, part: p})
+		}
+	}
+	// answers[k] is part k's: nil where the store holds it at its size,
+	// errPartLost where it does not, and the store's error where it could
+	// not say; first is the first part, in chain order, not answered nil.
+	answers := make([]error, len(parts))
+	var first atomic.Int64
+	first.Store(int64(len(parts)))
+	var g errgroup.Group
+	g.SetLimit(cache.FetchConcurrency)
+	for k, pt := range parts {
+		if int64(k) > first.Load() {
+			break
+		}
+		g.Go(func() error {
+			if int64(k) > first.Load() {
+				return nil
 			}
+			info, err := c.o.Objects.Stat(ctx, pt.part.Object)
+			switch {
+			case errors.Is(err, objstore.ErrNotFound), err == nil && info.Size != pt.part.Size:
+				answers[k] = errPartLost
+			case err != nil:
+				answers[k] = fmt.Errorf("compact: read whether the store holds part %s of layer %s: %w",
+					pt.part.Object, rows[pt.layer].Layer.LayerID, err)
+			default:
+				return nil
+			}
+			for at := first.Load(); int64(k) < at; at = first.Load() {
+				if first.CompareAndSwap(at, int64(k)) {
+					break
+				}
+			}
+			return nil
+		})
+	}
+	_ = g.Wait() // every Go answers nil: each part's answer is in answers.
+	for k, answer := range answers {
+		switch {
+		case answer == nil:
+		case errors.Is(answer, errPartLost):
+			return parts[k].layer, nil
+		default:
+			return 0, answer
 		}
 	}
 	return base, nil
 }
+
+// errPartLost is a part of a layer the object store no longer holds as its
+// row names it: nothing under its key, or something of another size.
+var errPartLost = errors.New("compact: the object store no longer holds the part")
 
 // lostFrom is chain as this node must plan over it once the store lost a part
 // of its layer at index i: installed below it alone, and that layer refused

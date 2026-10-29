@@ -693,8 +693,24 @@ func (f *maintFlight) admitLocked(mem int64, most int, allowance int64, held res
 	if runs >= most {
 		return noSlot
 	}
+	if v := f.fitsLocked(mem, allowance, held); v != admitted {
+		return v
+	}
+	f.runs = append(f.runs, mem)
+	return admitted
+}
+
+// fitsLocked is admit's memory rule — pastBudget where mem is past the budget
+// alone, heldBack where it does not fit beside everything in flight and held,
+// admitted where it does — and nothing of its slots; f.mu is held. ONE RULE
+// for a run admitted and a run's charge moved (recharge).
+func (f *maintFlight) fitsLocked(mem int64, allowance int64, held reservation) verdict {
 	if mem > f.budget {
 		return pastBudget
+	}
+	runs := len(f.runs)
+	if held.on {
+		runs++
 	}
 	sum, largest := mem+held.memory, max(mem, held.memory)
 	for _, r := range f.runs {
@@ -704,7 +720,33 @@ func (f *maintFlight) admitLocked(mem int64, most int, allowance int64, held res
 	if sum+f.others > f.budget || (runs > 0 && sum-largest > allowance) {
 		return heldBack
 	}
-	f.runs = append(f.runs, mem)
+	return admitted
+}
+
+// recharge holds the run in flight at *mem to next instead, keeping its
+// place among the runs and the slot it holds: at once where next is no
+// larger, and otherwise where admit's memory rule (fitsLocked) holds next
+// beside everything else in flight — the run's own charge out of it — and the
+// room the latest pass kept standing; *mem is next once it is in flight, and
+// on a refusal the run keeps its charge. notDue answers a run no longer in
+// flight. NO SLOT IS COUNTED: the run holds its own, which a charge moving
+// changes nothing of.
+func (f *maintFlight) recharge(mem *int64, next int64, allowance int64) verdict {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := slices.Index(f.runs, *mem)
+	if i < 0 {
+		return notDue
+	}
+	f.runs = slices.Delete(f.runs, i, i+1)
+	if next > *mem {
+		if v := f.fitsLocked(next, allowance, f.standing); v != admitted {
+			f.runs = append(f.runs, *mem)
+			return v
+		}
+	}
+	f.runs = append(f.runs, next)
+	*mem = next
 	return admitted
 }
 

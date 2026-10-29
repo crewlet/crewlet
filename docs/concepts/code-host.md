@@ -2713,11 +2713,15 @@ layer the maintainer's own installer has not placed yet waits for it.
 chain files name exactly the layers the new one is written over — on git
 2.56.0 the same write with layers above its base still named took 196–200
 seconds, against 1.03 with its base alone — never in the copy, and never over
-a base the object store no longer holds: the maintainer asks the store for
-every part of the base first, and replaces a base the store lost, with every
-layer above it. It writes the multi-pack-index layer with its bitmap, then the
-commit-graph layer with every changed-path filter, in one slot of the node's
-maintenance lane and against its background budget at the largest of its
+a base the object store no longer holds: once the build is admitted, and
+never before, so an attempt the node turns away asks the store nothing, the
+maintainer asks the store for every part of the base, sixteen at a time —
+about one first byte of S3's for every sixteen parts, where one after another
+a large repository's chain of layers cost a second or two at every attempt —
+and replaces a base the store lost, with every layer above it. It writes the
+multi-pack-index layer with its bitmap, then the commit-graph layer with every
+changed-path filter, in one slot of the node's maintenance lane and against
+its background budget at the largest of its
 steps' charges ([Memory](#the-cache-on-a-git-node)), and gives both back once
 its last git process has ended, before the uploads. A tail holding no commit
 gives git nothing to bitmap, and a layer without a bitmap would switch off

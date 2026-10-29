@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
@@ -24,7 +25,9 @@ import (
 // lets them go, once its last git process has ended: the uploads, the
 // proposal and the adoption that follow run no git, and holding the lane
 // through an upload the store paces, hours for the largest, would idle the
-// node's maintenance for every other repository.
+// node's maintenance for every other repository. A publication that plans
+// again over the same copy moves its charge in the slot it holds
+// ([Admission.RechargePublication]), held to the same memory rule.
 
 // Admission is one piece of background work's admission to this node's
 // maintenance lane — a compaction's build ([Cache.AdmitCompaction]) or a
@@ -37,9 +40,13 @@ import (
 type Admission struct {
 	c    *Cache
 	slot *gitproc.Reserved
+	// step is what the work was admitted for, and mem its charge — the one
+	// [Admission.RechargePublication] may move, under the flight's lock.
+	step backgroundStep
 	mem  int64
-	// once makes Release idempotent.
-	once sync.Once
+	// once makes Release idempotent, and released says it ran.
+	once     sync.Once
+	released atomic.Bool
 }
 
 // backgroundStep is what an [Admission] is admitted for: the step of an
@@ -163,11 +170,7 @@ func (c *Cache) AdmitPublication(s Synced, layerObjects, repackObjects int64, li
 			layerObjects, repackObjects)
 	}
 	adm, err := c.admitBackground(s, stepPublishWork, func(objects int64) int64 {
-		mem := max(publishCharge(objects), chargeOver(layerObjects, GraphLayerBytesPerObject, objects))
-		if repackObjects > 0 {
-			mem = max(mem, chargeOver(repackObjects, CompactBytesPerObject, objects)+CompactWindowBytes(limits))
-		}
-		return mem
+		return publicationCharge(objects, layerObjects, repackObjects, limits)
 	})
 	if err == nil {
 		s.entry.mu.Lock()
@@ -175,6 +178,76 @@ func (c *Cache) AdmitPublication(s Synced, layerObjects, repackObjects int64, li
 		s.entry.mu.Unlock()
 	}
 	return adm, err
+}
+
+// publicationCharge is what a publication over a repository of objects
+// objects holds — a layer over layerObjects, after a repack of repackObjects
+// (0 for none): the largest of its steps' charges ([Cache.AdmitPublication]).
+func publicationCharge(objects, layerObjects, repackObjects int64, limits code.Limits) int64 {
+	mem := max(publishCharge(objects), chargeOver(layerObjects, GraphLayerBytesPerObject, objects))
+	if repackObjects > 0 {
+		mem = max(mem, chargeOver(repackObjects, CompactBytesPerObject, objects)+CompactWindowBytes(limits))
+	}
+	return mem
+}
+
+// RechargePublication holds a publication's admission to the charge of a
+// plan its holder made again over the same copy s pins — a layer over
+// layerObjects objects, after a repack of repackObjects — in place of the
+// charge it was admitted at, KEEPING ITS SLOT: at once where the new charge
+// is no larger, and otherwise as [Cache.AdmitPublication] would admit it
+// beside everything else in flight, its own old charge out of the count and
+// the room the latest pass kept standing in it. On a refusal the admission
+// keeps its old charge, the caller's to release: gitproc.ErrBusy where what
+// is in flight leaves the new one no room, and ErrNoMemory — logged and
+// counted as a publication's refusal is — where the budget cannot hold it
+// alone. ErrInvalid answers an admission of a compaction, one released, and
+// a Synced this cache did not hand out.
+//
+// WHY NOT RELEASE AND ADMIT AGAIN: a release wakes the maintainer, which may
+// take the very slot the publication gave back before its second admission
+// asks for one — and the publication answers busy, its maintainer asking the
+// store for its base again at the next pass, as long as the node stays busy.
+// The holder that plans again is the publication whose base the object store
+// lost a part of (internal/code/compact), and its new plan replaces more
+// layers: a larger layer, or a repack the packs it gathers now need, may pass
+// the first plan's charge.
+func (a *Admission) RechargePublication(s Synced, layerObjects, repackObjects int64, limits code.Limits) error {
+	c := a.c
+	switch {
+	case a.step.bit != stepPublish:
+		return fmt.Errorf("%w: a %s admission holds no publication's charge", ErrInvalid, a.step.what)
+	case a.released.Load():
+		return fmt.Errorf("%w: a publication's admission released before its charge moved", ErrInvalid)
+	case layerObjects < 1 || repackObjects < 0:
+		return fmt.Errorf("%w: a publication of a layer over %d objects after a repack of %d", ErrInvalid,
+			layerObjects, repackObjects)
+	}
+	if err := c.handedOut(s, "a publication's charge"); err != nil {
+		return err
+	}
+	label := cmp.Or(s.Repo.Name, s.entry.id)
+	s.entry.mu.Lock()
+	objects := s.inc.objects
+	s.entry.mu.Unlock()
+	mem := publicationCharge(objects, layerObjects, repackObjects, limits)
+	switch c.maint.recharge(&a.mem, mem, c.maintMemory) {
+	case admitted:
+		s.entry.mu.Lock()
+		s.inc.publishRefused = 0
+		s.entry.mu.Unlock()
+		return nil
+	case pastBudget:
+		c.backgroundRefused(s, stepPublishWork, mem)
+		return fmt.Errorf("cache: publish %s: %w: it needs about %d bytes, and this node can give its background "+
+			"work %d of its memory", label, ErrNoMemory, mem, c.maint.budgetNow())
+	case notDue:
+		return fmt.Errorf("%w: the publication of %s holds no charge in flight", ErrInvalid, label)
+	default:
+		return fmt.Errorf("cache: publish %s: %w: the maintenance this node is running, and the room it keeps for "+
+			"a repository it held back, leave work of about %d bytes no room; it is asked again at the next poll",
+			label, gitproc.ErrBusy, mem)
+	}
 }
 
 // admitBackground admits step's work on s's repository, charged at what
@@ -238,7 +311,7 @@ func (c *Cache) admitBackground(s Synced, step backgroundStep, charge func(objec
 	lane := c.git.Slots(gitproc.ClassMaintenance)
 	switch c.maint.admitStanding(mem, maintenanceRuns(lane), c.maintMemory) {
 	case admitted:
-		return &Admission{c: c, slot: slot, mem: mem}, nil
+		return &Admission{c: c, slot: slot, step: step, mem: mem}, nil
 	case pastBudget:
 		// The budget was lowered between the two reads: as definite as a
 		// charge past it at the first.
@@ -297,6 +370,7 @@ func (a *Admission) GitVersion() gitproc.Version { return a.slot.Version() }
 // up at once.
 func (a *Admission) Release() {
 	a.once.Do(func() {
+		a.released.Store(true)
 		a.slot.Release()
 		a.c.maint.done(a.mem)
 		a.c.kickMaintainer()

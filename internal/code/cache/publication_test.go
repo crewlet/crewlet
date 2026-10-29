@@ -82,6 +82,65 @@ func TestAPublicationIsChargedByItsLargestStep(t *testing.T) {
 	}
 }
 
+// A PUBLICATION'S CHARGE MOVES IN ITS OWN SLOT: a publication that plans
+// again over the copy its admission pins — its maintainer replacing a base the
+// object store lost, with a larger layer or a repack its packs now need —
+// holds the new plan's charge in place of the first's, keeping its slot: as
+// the node's budget allows it in that place, refused ErrNoMemory past the
+// budget with its old charge kept, and its release gives back whatever it
+// holds then. A compaction's admission, or a released one, holds no
+// publication's charge.
+//
+// Mutation: count the old charge beside the new, and a charge the budget holds
+// in its place is refused.
+func TestAPublicationsChargeMovesInItsOwnSlot(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, onMemory)
+	repo := w.repo(t, 1)
+	objects := objectsOf(w.pushN(t, repo, 3))
+	c := w.open(t)
+	s := w.sync(t, c, repo)
+	defer s.Release()
+	limits := code.Limits{MaxBlobBytes: 1 << 20}
+	repack := 100 * objects
+	large := repack*cache.CompactBytesPerObject + objects*gitproc.TransferBytesPerObject +
+		cache.CompactWindowBytes(limits)
+	cache.SetMaintenanceBudget(c, large)
+	adm, err := c.AdmitPublication(s, 1, 0, limits)
+	if err != nil {
+		t.Fatalf("a publication of a layer over one object = %v, want it admitted", err)
+	}
+	if err := adm.RechargePublication(s, 1, repack, limits); err != nil {
+		t.Errorf("the charge of a plan with a repack, %d bytes on a budget of as many, = %v; want it held in "+
+			"the same slot", large, err)
+	}
+	if err := adm.RechargePublication(s, 1, 2*repack, limits); !errors.Is(err, cache.ErrNoMemory) {
+		t.Errorf("a charge past the budget = %v, want ErrNoMemory", err)
+	}
+	if err := adm.RechargePublication(s, 1, 0, limits); err != nil {
+		t.Errorf("a smaller charge = %v, want it held at once", err)
+	}
+	adm.Release()
+	if err := adm.RechargePublication(s, 1, 0, limits); !errors.Is(err, cache.ErrInvalid) {
+		t.Errorf("a released admission's charge moved = %v, want ErrInvalid", err)
+	}
+	again, err := c.AdmitPublication(s, 1, repack, limits)
+	if err != nil {
+		t.Errorf("a publication at the whole budget once the first was released = %v, want it admitted: the "+
+			"release gives back what it held", err)
+	} else {
+		again.Release()
+	}
+	compaction, err := c.AdmitCompaction(s, objects, limits)
+	if err != nil {
+		t.Fatalf("a compaction of the repository = %v, want it admitted", err)
+	}
+	defer compaction.Release()
+	if err := compaction.RechargePublication(s, 1, 0, limits); !errors.Is(err, cache.ErrInvalid) {
+		t.Errorf("a compaction's admission charged as a publication = %v, want ErrInvalid", err)
+	}
+}
+
 // A PUBLICATION PAST THE BUDGET IS REFUSED ONCE AND RAISES THE ALARM: a
 // publication's charge alone past what the node gives its background work
 // answers ErrNoMemory — logged code_cache_maintenance_refused with step
