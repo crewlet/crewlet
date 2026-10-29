@@ -12,8 +12,9 @@ import (
 )
 
 // VALIDATE READS A CHECKS FILE as the code host does — code.ParseChecks, the
-// one grammar — told apart by its lone `checks:` from either config tier, or
-// named with -tier checks: a valid file summarises its checks, and a broken
+// one grammar — told apart from either config tier by a `checks:` beside no
+// key of either tier (detectTier), or named with -tier checks: a valid file
+// summarises its checks, and a broken
 // one reports every fault located at its field and line in the payload a
 // config document's refusal has, and fails the run in both output modes.
 //

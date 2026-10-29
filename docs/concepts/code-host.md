@@ -1491,8 +1491,12 @@ on every change instead of the few it meant. So the file is refused for:
 
 Every fault is reported, not the first, each at its field and its line, in the
 shape a config document's are: `crewlet validate .crewlet/checks.yaml` reads
-the file as the code host does, told apart from either config tier by its lone
-`checks:` ([`crewlet validate`](../reference/cli.md#crewlet-validate)):
+the file as the code host does. It tells the file apart from either config
+tier by a `checks:` beside no key of either tier, whatever else the file
+carries — so a typo'd key beside `checks:` is refused at its own line by the
+file's strict reading, rather than reported as a document no tier could be
+told from — or reads it as one under `-tier checks`
+([`crewlet validate`](../reference/cli.md#crewlet-validate)):
 
 ```
 .crewlet/checks.yaml: 2 checks (unit, api-shape)
