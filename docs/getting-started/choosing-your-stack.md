@@ -288,8 +288,10 @@ repositories natively and keep others on a vendor.
 
 Today it is a place for **people** to keep their code: they clone, fetch and
 push over HTTPS with their own API token ([Hosting Code](../guides/code.md)),
-and every push is recorded as the person who made it. Agents do not push to
-it yet, and there are no merge requests, reviews or checks — read
+and every push is recorded as the person who made it. Agents change it only
+through their code tools — a small commit, a revert or a pick, a branch, each
+built by the engine and recorded as the seat's push — and run no git of their
+own against it yet, and there are no merge requests, reviews or checks — read
 [What it does not do yet](../concepts/code-host.md#what-it-does-not-do-yet)
 before choosing it as an engineering team's only host. A company that hosts
 code on it takes the [S3 object store](../concepts/object-store.md#an-s3-bucket--s3)

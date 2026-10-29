@@ -3061,16 +3061,19 @@ even when it is the last data node left to ask, because the revision it failed
 to apply may be the one that revoked the seat's grant, so the read is answered
 by a current node or by nobody; a person's read it answers as before, asked
 last. In this release a seat reads a repository through its code tools
-([Server-side reads](#server-side-reads)) and pushes to none
+([Server-side reads](#server-side-reads)) and pushes only through them, each
+change one push the code host builds for it ([Engine-built
+commits](#engine-built-commits)) — never from a git client of its own yet
 ([What it does not do yet](#what-it-does-not-do-yet)).
 
 ### A seat's push
 
 A seat's push is decided by its repository's [committer](#the-committer), as
 a person's is, and held to four rules a person's is not — each judged from
-the chart and the calendar of the data node that decides it. Nothing in this
-release pushes as a seat yet ([What it does not do yet](#what-it-does-not-do-yet));
-these are the rules the committer holds one to.
+the chart and the calendar of the data node that decides it. In this release
+a seat pushes only through its code tools, each change a push the code host
+builds for it ([Engine-built commits](#engine-built-commits)); these are the
+rules the committer holds every such push to.
 
 - **Its grant, at the decide.** Every command is judged against the seat's
   grant (the table above) before anything about its ref is read, and one the
@@ -4362,8 +4365,9 @@ first), and lands as a **push**: the same landing a person's `git push` takes
 from its pack on, held to the same rules, one record on the code log, and
 answered applied only from that record's applied row. Every node asks a write
 of the repository's home git node first ([Which git node builds a
-write](#which-git-node-builds-a-write)); nothing in this release asks for one
-yet ([What it does not do yet](#what-it-does-not-do-yet)).
+write](#which-git-node-builds-a-write)); a seat's code tools and a person's
+assistant's ask for one, each call one write ([The company's
+code](../guides/tools-and-mcp.md#the-companys-code)).
 
 | Kind | What it does |
 |---|---|

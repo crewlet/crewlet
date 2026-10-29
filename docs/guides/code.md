@@ -397,13 +397,19 @@ Nothing runs a check yet in this release: the file is defined and validated
 
 ## What your seats read
 
-Nothing to set up: once the company hosts code, every seat holds the nine
-[code tools](tools-and-mcp.md#the-companys-code) and reads the repositories
-with them, on the server — a file's lines, a directory, what changed between
-two commits, how two commits relate, whether a fix reached a branch and which
-push put it there, a path's history and who last changed each line of a file —
-with no clone and no token. A seat holds no git credential in this release and
-pushes nothing.
+Nothing to set up: once the company hosts code, every seat holds the
+nineteen [code tools](tools-and-mcp.md#the-companys-code) and reads the
+repositories with nine of them, on the server — a file's lines, a directory,
+what changed between two commits, how two commits relate, whether a fix
+reached a branch and which push put it there, a path's history and who last
+changed each line of a file — with no clone and no token. A seat holds no git
+credential in this release: it changes the repositories through the other
+ten — a small change committed to a branch, a commit reverted or picked, a
+branch created or deleted, each built on the server and landed as one push in
+its name ([Engine-built commits](../concepts/code-host.md#engine-built-commits)),
+and a scratch repository of its own made for an experiment
+([Repositories made by tools](../concepts/code-host.md#repositories-made-by-tools))
+— each held to the grant below.
 
 What each seat may read is its grant, from the chart: its
 [`role.code.access`](../getting-started/configuration.md#role-fields-summary) caps it, and a
