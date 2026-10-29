@@ -56,10 +56,15 @@ const (
 	// git a read's kind runs (internal/code/query), and a merge preview's
 	// merge (internal/code/home), a read of two commits by their ids too.
 	SeatWorkRead SeatWork = "read"
-	// SeatWorkWrite is an engine write's git (internal/code/host): its
-	// lookups and its build, from the check of what it names to its pack
-	// indexed — never its landing's upload, proposal or wait for its row,
-	// which hold no read-lane slot.
+	// SeatWorkWrite is an engine write's BUILD (internal/code/host): its git
+	// from its read of what the change touches — the parent commit, the
+	// directories it rewrites, the files an edit rewrites, a pick's two
+	// commits — to its pack indexed. Never the check before the build, of
+	// where the write's branch is and of what the objects and paths it names
+	// are, which waits in the read lane's own queue as a read's check of what
+	// it names does; never its landing's upload, proposal or wait for its row,
+	// which hold no read-lane slot; and a branch created or deleted builds
+	// nothing and takes no unit.
 	SeatWorkWrite SeatWork = "write"
 )
 
