@@ -340,7 +340,11 @@ var codeLogUnwritten = map[code.OpKind]struct {
 // it. A company whose pushes open changes appends all three beside them — a
 // revision's facts once a revision, up to code.MaxTouchedBytes of touched
 // paths each; its mergeability once a revision and again at every recheck its
-// target's moving asks, up to code.MaxConflictBytes of conflicted paths each;
+// target's moving asks, up to code.MaxConflictBytes of conflicted paths each,
+// and again, naming no path, at every refresh of the readiness it stores
+// (code.Mergeability.Refresh) — at most once a pass of its home and once a
+// move of what that readiness was judged at: a review, an ask for one, an
+// answer to findings, a revision's facts or a write of the change's own row;
 // and a landing once a change — and reads them in its code log's
 // crewlet.statelog.log.bytes_per_day, which counts every record the log takes.
 var codeLogRiders = map[code.OpKind]struct {
@@ -357,7 +361,9 @@ var codeLogRiders = map[code.OpKind]struct {
 	code.OpMergeability: {on: code.OpChangeOpen, makers: changeMakers, how: "whether a change's head " +
 		"revision merges into its target's tip is read by its repository's home git node and recorded " +
 		"through the estate's code.conversation, once a revision of a live change and again at every " +
-		"recheck its target's moving asks — a push to the target's rate for each live change behind it"},
+		"recheck its target's moving asks — a push to the target's rate for each live change behind it — " +
+		"and the readiness it stores is recorded again, merging nothing, once its home's pass finds a " +
+		"review, an ask, an answer to findings, a revision's facts or a write of the change's row moved it"},
 	// A CHECK'S CLAIM, ITS ENDING AND ITS SWEEP are all about an attempt only
 	// a check_queued record makes — no priced op's payload makes one, so they
 	// name no maker — and come at its rate: two claims' records and an ending
