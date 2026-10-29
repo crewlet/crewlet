@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -253,6 +254,23 @@ func TestARemovalRefusesARepointTheCompanyCannotRun(t *testing.T) {
 	if code != http.StatusUnprocessableEntity {
 		t.Fatalf("a repoint answering nothing = %d %v", code, body)
 	}
+	if problems, _ := body["problems"].([]any); len(problems) != 1 {
+		t.Errorf("problems = %v, want the one repoint answering nothing", problems)
+	} else if segs, _ := json.Marshal(problems[0].(map[string]any)["segments"]); string(segs) !=
+		`["repoint",2,"at"]` {
+		t.Errorf("the repoint answering nothing is at %s, want the row in the body", segs)
+	}
+
+	// A FIELD MOVED ONTO THE ENTRY THIS WRITE REMOVES is refused at the field.
+	code, body = removeModel(t, s, "codex-review", "?dry_run=true", `{"repoint": [
+		{"at": {"seat": "qa", "job": "review"}, "to": "codex-review"},
+		{"at": {"seat": "backend", "job": "subagent"}, "to": null}]}`, nil)
+	problems, _ := body["problems"].([]any)
+	if code != http.StatusUnprocessableEntity || len(problems) != 1 ||
+		problems[0].(map[string]any)["kind"] != "invalid" ||
+		!strings.Contains(problems[0].(map[string]any)["message"].(string), "the entry this write removes") {
+		t.Errorf("a repoint onto the removed entry = %d %v, want 422 at the field", code, body)
+	}
 
 	// CODEX CANNOT RUN AN EXECUTOR: the whole document is validated.
 	code, body = removeModel(t, s, "sonnet", "?dry_run=true", `{"repoint": [
@@ -298,5 +316,142 @@ func TestARemovalIsAWriteLikeAnyOther(t *testing.T) {
 	if code, got := removeModel(t, s, "codex-review", "", body,
 		map[string]string{"If-Match": tag, "X-Summary": "remove codex-review"}); code != http.StatusCreated {
 		t.Errorf("with the entry's own tag = %d %v", code, got)
+	}
+}
+
+// A REMOVAL TAKES ITS SUMMARY IN THE BODY, as every config write does.
+//
+// The assistant's proposed change carries its history line as `_summary` in
+// the body, the one channel its request digest binds, and sends no headers of
+// its own: a removal that read only X-Summary refused that key as an unknown
+// field, so the assistant could never remove a model.
+func TestARemovalTakesItsSummaryInTheBody(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, removalDoc)
+	body := `{"_summary": "remove codex-review", "repoint": [
+		{"at": {"seat": "qa", "job": "review"}, "to": null},
+		{"at": {"seat": "backend", "job": "subagent"}, "to": null}]}`
+	if code, got := removeModel(t, s, "codex-review", "?dry_run=true", body, nil); code != http.StatusOK ||
+		got["valid"] != true {
+		t.Fatalf("a dry run with _summary = %d %v", code, got)
+	}
+	code, applied := removeModel(t, s, "codex-review", "", body, nil)
+	if code != http.StatusCreated {
+		t.Fatalf("a removal summarised in its body = %d %v, want 201", code, applied)
+	}
+	active, _, err := s.active(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.ID != applied["revision_id"] || active.Summary != "remove codex-review" {
+		t.Errorf("the revision is %s summarised %q, want the body's summary", active.ID, active.Summary)
+	}
+}
+
+// A REMOVAL THAT ANSWERS ONE REFERENCE TWICE IS REFUSED.
+//
+// Two repoints at one field would move it to whichever came last, a choice
+// the caller never saw made.
+func TestARemovalRefusesAFieldAnsweredTwice(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, removalDoc)
+	body := `{"repoint": [
+		{"at": {"seat": "qa", "job": "review"}, "to": "sonnet"},
+		{"at": {"seat": "backend", "job": "subagent"}, "to": null},
+		{"at": {"seat": "qa", "job": "review"}, "to": null}]}`
+	code, got := removeModel(t, s, "codex-review", "", body,
+		map[string]string{"X-Summary": "remove codex-review"})
+	if code != http.StatusBadRequest || got["error"] != "invalid_body" ||
+		!strings.Contains(got["detail"].(string), "repoint[2].at names the same field as repoint[0]") {
+		t.Fatalf("a field answered twice = %d %v, want 400 invalid_body naming both", code, got)
+	}
+	if _, ok := activeCompany(t, s).Providers.LLM["codex-review"]; !ok {
+		t.Error("a refused removal removed the entry")
+	}
+}
+
+// A JOB THAT FOLLOWS ITS SEAT'S EXECUTOR MOVES WITH THE EXECUTOR'S REPOINT,
+// AND NO WARNING SAYS IT MOVED ON ITS OWN.
+//
+// qa runs on sonnet, and every job qa names no model for runs on qa's
+// executor chain: repointing the executor moves them, as the caller wrote.
+// `resolution_moved` is for a job no field decided, which the company's
+// fallback ran.
+func TestARemovalDoesNotWarnAboutAJobThatFollowsItsExecutor(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, removalDoc)
+	code, body := removeModel(t, s, "sonnet", "?dry_run=true", `{"repoint": [
+		{"at": {"seat": "qa", "job": "executor"}, "to": "aux"},
+		{"at": {"seat": "backend", "job": "executor"}, "to": "aux"},
+		{"at": {"assistant": "deep_work"}, "to": null}]}`, nil)
+	if code != http.StatusOK {
+		t.Fatalf("dry run = %d %v", code, body)
+	}
+	warnings, _ := body["warnings"].([]any)
+	for _, w := range warnings {
+		if row, _ := w.(map[string]any); row["kind"] == configapi.WarningResolutionMoved {
+			t.Errorf("a job following its repointed executor is warned about: %v", row)
+		}
+	}
+}
+
+// REMOVING THE LAST MODEL SAYS THE JOB HAS NONE, never that it "runs on
+// nothing".
+func TestARemovalOfTheLastModelSaysTheJobHasNone(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, `
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    only:
+      model: sonnet
+roles:
+  - name: PM
+    handle: pm
+`)
+	code, body := removeModel(t, s, "only", "?dry_run=true", "", nil)
+	if code != http.StatusOK {
+		t.Fatalf("dry run = %d %v", code, body)
+	}
+	warnings, _ := body["warnings"].([]any)
+	said := 0
+	for _, w := range warnings {
+		row, _ := w.(map[string]any)
+		if row["kind"] != configapi.WarningResolutionMoved {
+			continue
+		}
+		said++
+		if row["to"] != "" || !strings.HasPrefix(row["message"].(string), "pm's ") ||
+			!strings.HasSuffix(row["message"].(string), "will have no model to run on: the company configures none") {
+			t.Errorf("the last model's removal says %v", row)
+		}
+	}
+	if said == 0 {
+		t.Errorf("warnings = %v, want each of pm's jobs said to have no model", warnings)
+	}
+}
+
+// A REMOVAL IS A CONFIG WRITE, mounted as one: `config.write` (admin, a recent
+// proof), checked by `?dry_run=true` and summarised. A removal mounted under
+// a weaker verb would let any reader of the configuration delete a model and
+// every field naming it.
+func TestARemovalIsMountedAsAConfigWrite(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	mux := &policyRecorder{ServeMux: http.NewServeMux(), policies: map[string]authz.Policy{}}
+	if err := s.service().Routes(mux); err != nil {
+		t.Fatal(err)
+	}
+	policy, ok := mux.policies["DELETE /config/"+configapi.EntityLLMProviders+"/{id}"]
+	if !ok {
+		t.Fatal("the removal route is not mounted")
+	}
+	if policy.Action != authz.ActionConfigWrite || !policy.DryRun || !policy.Summary {
+		t.Errorf("the removal is mounted with %+v, want config.write, checked and summarised", policy)
 	}
 }

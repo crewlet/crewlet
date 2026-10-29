@@ -40,12 +40,14 @@ import (
 // The record goes with its entry: the apply that removes an entry deletes it
 // ([Engine.clearRemovedModelRetries]).
 
-// modelRetryProbeBudget bounds the one call "retry now" makes before it writes
+// ModelRetryProbeBudget bounds the one call "retry now" makes before it writes
 // the record: SIXTY SECONDS, past a coding CLI's cold start and a one-word
 // answer (3 to 10 s measured), and short enough that a person waiting on the
 // button is told within a minute. A vendor that has not answered by then has
-// not shown the limit is over.
-const modelRetryProbeBudget = 60 * time.Second
+// not shown the limit is over. EXPORTED because the Models screen waits on a
+// retry by it (contract/models.ts MODEL_RETRY_BUDGET_SECONDS): it is the one
+// bound a retry is held to, and the page's wait is checked against it.
+const ModelRetryProbeBudget = 60 * time.Second
 
 // modelRetryRewatchBase and modelRetryRewatchCeiling pace a lost watch's
 // re-watch, as the seat pauses' do.
@@ -199,7 +201,7 @@ func (e *Engine) cliEntry(key string) (*cliagent.Provider, bool) {
 // [coord.RetryClear] writes the record at once and makes no call.
 // [coord.RetryProbe] first asks whether any live node sits the entry out
 // ([ErrNotSittingOut] if none does) and makes ONE probe call within
-// [modelRetryProbeBudget], charged as a provider probe to the company: the
+// [ModelRetryProbeBudget], charged as a provider probe to the company: the
 // record is written only if the call answered, and every node, this one
 // included, clears through it. A probe refused for a limit writes nothing and
 // answers the fresh window ([RetryResult.Still]), which this node's plan
@@ -306,7 +308,7 @@ func (e *Engine) probeEntry(ctx context.Context, key string, provider llm.Provid
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, modelRetryProbeBudget)
+	ctx, cancel := context.WithTimeout(ctx, ModelRetryProbeBudget)
 	defer cancel()
 	_, err = probe.Complete(ctx, providerProbe)
 	return err

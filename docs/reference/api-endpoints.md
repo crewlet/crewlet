@@ -2154,7 +2154,9 @@ identity (a seat's handle and the job the field points at a model, or the
 assistant's chat or deep work), never by a list index. `config.write` (admin,
 a recent proof); `?dry_run=true` checks it and stores nothing, `If-Match` takes
 the entry's own `ETag` from its `GET` (optional, as on the entity `PUT`), and
-`X-Summary` is required unless it is a dry run.
+a summary is required unless it is a dry run: the `X-Summary` header or a
+`_summary` key in the body, the header winning when both are sent, as on every
+config write.
 
 ```json
 {
@@ -2170,9 +2172,11 @@ the entry's own `ETag` from its `GET` (optional, as on the entity `PUT`), and
 
 - `job` is `executor`, `review`, `subagent`, `auxiliary` or `judge`. A seat
   that writes one job twice (`llm_review` and `llm.review`) has both fields
-  answered by its one `repoint`.
+  answered by its one `repoint`. Each `at` is answered once: a body naming one
+  twice is `400 invalid_body`, naming both rows.
 - **`to: <key>`** replaces the entry in that field's chain where it stood,
-  each key once. **`to: null`** removes it; a chain left empty clears the field,
+  each key once; `to` naming the entry being removed is refused at the field
+  (`kind: "invalid"`). **`to: null`** removes it; a chain left empty clears the field,
   so the job resolves as an unset one does. `{"assistant": "deep_work"}` with
   `null` removes the `assistant.deep_work` block.
 - The entry leaves `providers.llm` and `providers.llm_order`.
@@ -2188,7 +2192,8 @@ answers nothing, is `422 validation_error` with one problem per reference
 (`kind: "conflict"`, its `segments` the written field, its `seat`, and a message
 such as "qa's reviewing work still names codex-review: repoint it or leave it
 unset in the same write") and `references`, every written reference as
-`{at, segments, chain}`. A dry run with an empty body is how a page draws the
+`{at, segments, chain}`. A `repoint` that answers nothing is located at its own
+row, `segments: ["repoint", i, "at"]` (`kind: "unknown_value"`). A dry run with an empty body is how a page draws the
 list.
 
 **A move nobody wrote is a warning.** A seat's job that names no model runs on
@@ -2198,11 +2203,14 @@ Each such move is a warning of kind `resolution_moved` with the seat (`seat`),
 the job (`ref`), the model it ran on (`from`), the one it will (`to`) and a
 sentence ("pm's memory and summaries will run on aux"), in the dry run and in the
 write's answer. Resolution is the engine's own, so the warning says exactly
-where the work lands.
+where the work lands. A job the seat names no model for but whose executor
+names one runs on that executor's chain, and moves with the executor's
+`repoint`, so it is not warned about. Removing the company's last model leaves
+`to` empty, and the sentence says the job will have no model to run on.
 
 Answers: a dry run `200 {valid, base_revision_id, warnings, derived}`, a write
 `201 {revision_id, epoch, warnings, derived}`. Refusals: `404 no_such_entity`,
-`409 revision_advanced`, `409 config_managed` (a managed document),
+`409 revision_advanced`, `403 config_managed` (a managed document),
 `412 version_moved` (the entry changed since its `ETag`), `422 validation_error`
 and `400 summary_required`.
 
@@ -2244,8 +2252,8 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator. The longest answer is some 384 KiB — the largest value a write admits, in the characters JSON spells longest — which is what a client reading it must be prepared to take |
 | `POST` | `/secrets/reveal` | **Break-glass, for several names at once.** The body is `{"names": ["GITLAB_TOKEN_SWE", …]}` — at most 64 names, each an environment-variable name — and the answer is `{"values": {"<name>": "<value>"}, "missing": ["<name>"]}`: every name asked that is held, with its decrypted value (an empty one included), and every name nothing holds. Nothing beside the names asked is opened. `Cache-Control: no-store`, logged by every name asked against the authenticated operator, and decided on the reveal's own row before the body is read. It is what a [CLI run resolving a company document through a running node](cli.md#where-a-command-reads-the-companys-values) reads: having listed the names with `GET /secrets`, it asks for the variables its command reads that the node lists — and, with a `-secret-store` sink, the planned seats' tokens it reads back — in requests of at most 64, never one reveal per name. `400 invalid_body` for no names, more than 64, a field it does not read or a body that is not JSON; `400 invalid_name` for a name no `${VAR}` reference can hold; `400 invalid_query` for any query parameter; `403 reserved_name` for the engine's own key. The longest answer is about 24 MiB — 64 values of the largest size a write admits, each in the characters JSON spells longest — which is what a client reading it must be prepared to take |
-| `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB — the size every store holds a value to, a direct write with the engine stopped included, which is what every reveal is sized from — and it is the only thing the request supplies; a longer body is `413 body_too_large`. The author is the caller the guard resolved and the `source` is this route's own, `api`, whoever calls it — never anything the request names; the answer carries `updated_by`, `updated_by_kind`, `operator_id` and `source` as the row records them, which is the only confirmation a client that could not choose them gets. `400 invalid_name` when the name is not an environment-variable name; `400 invalid_query` when the request carries any query parameter (`?source=` included), with a `detail` naming each and a `hint` saying where the provenance comes from instead — checked after the name and before the body is read. The answer also carries `read_by`, the paths of the active revision that read the name (an empty list when none does), and `reload`, what the [re-activation](#a-secret-write-re-activates-the-revision-that-reads-it) did |
-| `PUT` | `/secrets` | Store or rotate **several** values as one write. The body is `{"values": {"NAME": "value", …}}`, at most 64 names, each held to the name grammar and the 64 KiB value bound; any fault refuses the whole body, `400 invalid_body` with `invalid` mapping each bad name to its reason, and nothing is stored. `403 reserved_name` for the engine's own key, `400 invalid_query` for any query parameter. Every value is sealed and the active revision is re-activated **once** when it reads any of them. With `"defer_reload": true` the values are sealed and nothing is re-activated: `reload` is `{"deferred": true}`, saying the values are **not active yet**, and `read_by` says what a later re-activation will reach. It is for a writer that seals values one at a time, each durable the moment it exists, and re-activates once with its last write, as a provisioning run through a node does. Nothing that runs reads a deferred value until a re-activation: a writer that dies before its last write leaves its values sealed and inactive until the next one (its next run, or `POST /config/reload`). `200 {"names": [...], "bytes": {"NAME": n}, "read_by": {"NAME": [paths]}, "reload": {...}\|null}`. A seal that fails part way answers `500 internal_error` with `sealed` (the names stored before it) and the `reload` those were given |
+| `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB — the size every store holds a value to, a direct write with the engine stopped included, which is what every reveal is sized from — and it is the only thing the request supplies; a longer body is `413 body_too_large`. The author is the caller the guard resolved and the `source` is this route's own, `api`, whoever calls it — never anything the request names; the answer carries `updated_by`, `updated_by_kind`, `operator_id` and `source` as the row records them, which is the only confirmation a client that could not choose them gets. `400 invalid_name` when the name is not an environment-variable name; `400 invalid_query` when the request carries any query parameter but one `defer_reload=true|false` (`?source=` included), with a `detail` naming each and a `hint` saying where the provenance comes from instead — checked after the name and before the body is read. `?defer_reload=true` seals the value and re-activates nothing, as the batch's `defer_reload` does (`reload` is `{"deferred": true}`, and it asks `secrets.write` alone): it is for a value the JSON batch cannot carry, one that is not UTF-8, sealed first so that the batch after it re-activates once for both. The answer also carries `read_by`, the paths of the active revision that read the name (an empty list when none does), and `reload`, what the [re-activation](#a-secret-write-re-activates-the-revision-that-reads-it) did |
+| `PUT` | `/secrets` | Store or rotate **several** values as one write. The body is `{"values": {"NAME": "value", …}}`, at most 64 names, each held to the name grammar and the 64 KiB value bound; any fault refuses the whole body, `400 invalid_body` with `invalid` mapping each bad name to its reason, and nothing is stored. `403 reserved_name` for the engine's own key, `400 invalid_query` for any query parameter. Every value is sealed and the active revision is re-activated **once** when it reads any of them. With `"defer_reload": true` the values are sealed and nothing is re-activated: `reload` is `{"deferred": true}`, saying the values are **not active yet**, and `read_by` says what a later re-activation will reach. A deferred batch asks `secrets.write` alone, never `config.write`, since it changes nothing the company runs: `config.write` is asked of the re-activation that follows (`POST /config/reload`). It is for a writer that seals values one at a time, each durable the moment it exists, and re-activates once with its last write, as a provisioning run through a node does. Nothing that runs reads a deferred value until a re-activation: a writer that dies before its re-activation leaves its values sealed and inactive until the company is next re-activated, by anyone (`POST /config/reload`, or any apply). `200 {"names": [...], "bytes": {"NAME": n}, "read_by": {"NAME": [paths]}, "reload": {...}\|null}`. A seal that fails part way answers `500 internal_error` with `sealed` (the names stored before it) and the `reload` those were given |
 | `DELETE` | `/secrets/{name}` | Remove one value. `200` either way, with `{"removed": true\|false, "read_by": [paths], "reload": {...}\|null}`: a removal of a name the active revision reads re-activates it, so whatever read it falls back or signs out now |
 | `POST` | `/secrets/rekey` | Re-seal every record not already under this node's `secrets.active_key_id` — the engine's own keys included — and every person's sealed values in the identity estate, one record per person, answering the names of yours it moved, `engine_keys_moved`, a count of the engine's, and `identity` — `{"people": n, "values": n}`, or `null` on a node that runs no identity estate. An outstanding invitation's address is not moved (only a re-issue could carry it again) and is counted by the listing instead. A person whose record nobody could confirm, or whose value would not open, is `500 rekey_incomplete` carrying what did move — run it again, which moves only what is still under an old key. `?key_id=` is refused with `409` when it names a different key |
 
@@ -2346,7 +2354,7 @@ each. Every answer that depends on the node names it (`node`).
 | `GET` | `/llm/runners` | `admin` | Whether each executor cell (`direct`, `container`, `e2b`) can start a box on each node (query `llm_runners`) |
 | `GET` | `/llm/models?agent=claude-code\|codex\|opencode[&provider=…]` | `admin` | The models a model step suggests (query `llm_models`) |
 | `GET` | `/llm/device-sign-ins/{id}` | `admin` | One device sign-in while its record lingers (query `llm_device_sign_in`) |
-| `PUT` | `/llm/providers/{key}/credential` | `secrets.write`, and `config.write` when it re-activates | Test candidate credential values with the model's own CLI, and store them only if they sign it in; `?dry_run=true` tests and stores nothing |
+| `PUT` | `/llm/providers/{key}/credential` | `secrets.write`, and `config.write` with a draft `entity` or when it re-activates | Test candidate credential values with the model's own CLI, and store them only if they sign it in; `?dry_run=true` tests and stores nothing |
 | `POST` | `/llm/providers/{key}/check` | `models.check`; with a draft `entity`, also `config.write` and `secrets.write` | The doctor over the API, on this node |
 | `POST` | `/llm/providers/{key}/retry` | `models.retry` | Probe a sitting-out model once, or clear its sit-out on every node |
 | `POST` | `/llm/providers/{key}/host-login/check` | `models.check` | Read a CLI login's status on this node now |
@@ -2365,11 +2373,19 @@ store as an apply would, so a check or a credential test of one asks
 proof, and never the assistant's. A credential test's `dry_run=true` is asked at
 the write's own proof, not a check's: it runs the CLI and spends tokens.
 
-**Every call is audited**, refused ones included, as one `model_acted` in the
-runtime audit (`actor`, `actor_kind`, `operator_id`, `action`, `provider_key`,
-the secret `names` a credential call touched and never a value, `dry_run`,
-`outcome` and `refusal`, and the `revision_id` a credential's re-activation
-activated). The node is the envelope's.
+**Every call is audited**, refused ones included (by the route, or by the
+guard before it: a member's `403 unauthorized`, a stale proof's
+`step_up_required`), as one `model_acted` in the runtime audit (`actor`,
+`actor_kind`, `operator_id`, `action`, `provider_key`, the secret `names` a
+credential call touched and never a value, `dry_run`, `outcome` and `refusal`,
+and the `revision_id` a credential's re-activation activated). The node is the
+envelope's. `action` is `check`, `retry`, `clear`, `credential`,
+`host_login_check`, `device_sign_in` (a start) or `device_sign_in_cancel`. How
+a device sign-in **ended** is a row of its own, `device_sign_in_ended`, with
+`status` (`approved`, `failed`, `expired` or `cancelled`), published by the node
+that ran the session, or by the sweep that fails one whose node is gone, and
+attributed to whoever started it; an approved session whose login could not be
+stored or carried to the fleet is `outcome: "failed"`.
 
 #### `GET /llm/entries`
 
@@ -2479,13 +2495,16 @@ provider the catalogue does not list.
    that changes how it signs in, validated by splicing it into a copy of the
    active document as the entity route's dry run does (`422 validation_error`
    with problems under `providers.llm.<key>`). `404 not_found` for an absent key
-   with no `entity`; `409 config_managed` for a draft on a managed document.
+   with no `entity`; `403 config_managed` for a draft on a managed document.
 2. Every name must be a variable the entry reads (`422 validation_error` at
    `["values", NAME]`), and a value of the wrong kind by its vendor's prefix (an
    API key in a token's slot, or the reverse) is refused there too, before any
    call.
 3. `If-None-Match: *` refuses a name already stored: `412 already_exists` with
-   `names`, so a create never overwrites a secret another model reads.
+   `names`, so a create never overwrites a secret another model reads. It is
+   decided again at the seal, in one step of the store's: a name another write
+   stored while this one was tested is the same `412`, with `sealed` naming
+   what this write stored before it, and nothing is re-activated.
 4. When the write will re-activate the company, `config.write` is asked before
    anything is tested or sealed.
 5. The candidate values are handed to the model's own CLI, in an isolated home,
@@ -2495,12 +2514,17 @@ provider the catalogue does not list.
    `502 credential_untested`; a CLI that cannot run (no binary) is
    `422 validation_error` at `providers.llm.<key>.agent` with the doctor's
    remedy. A `429` passes: it proves the credential authenticated, and the
-   answer's `limited` says so.
+   answer's `limited` says so, `{"until", "resets_at", "window", "said"}`, with
+   `until` null, since a test sits nothing out, and `resets_at` the vendor's
+   reset when it named one.
 6. With `dry_run=true` the answer is `200 {"ok": true, "verified", "hints",
    "check", "limited"}` and nothing is stored.
 7. Each value is sealed (source `models`), and the revision that reads any of
    them is [re-activated](#a-secret-write-re-activates-the-revision-that-reads-it)
-   once, held to `If-Match` when the caller sent one.
+   once, held to `If-Match` when the caller sent one. From here the write
+   finishes even when the caller disconnects. A seal that fails part way is
+   `500 internal_error` with `sealed`, the names stored before it, and
+   re-activates nothing; send the values again.
 
 ```json
 {"verified": "Answered a one-turn Claude Code run in 3.4 s with only this value.",

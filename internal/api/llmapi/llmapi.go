@@ -190,6 +190,10 @@ type Secrets interface {
 	Describe(ctx context.Context, name string) (secrets.Record, bool, error)
 	Set(ctx context.Context, name, value string, by secrets.Author, source secrets.Source,
 		now time.Time) error
+	// Create seals a value only where none is stored, in one step of the
+	// store's, and reports whether it did: a create-only write's seal.
+	Create(ctx context.Context, name, value string, by secrets.Author, source secrets.Source,
+		now time.Time) (bool, error)
 }
 
 // Leases is the fleet's lease table, for this node's own report: which
@@ -214,6 +218,10 @@ type Options struct {
 	Node string
 	// Now is injectable so a test can pin a row's timestamp.
 	Now func() time.Time
+	// Guard decides each route's policy and every in-handler admission;
+	// nil is the request context's caller with no org chart, which is what
+	// the engine serves. A test records what was asked through it.
+	Guard authz.Guard
 }
 
 // Service is the model routes.
@@ -248,18 +256,27 @@ func New(opts Options) (*Service, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	guard := opts.Guard
+	if guard == nil {
+		guard = authz.ContextGuard(authz.NoChart{})
+	}
 	return &Service{engine: opts.Engine, config: opts.Config, secrets: opts.Secrets,
-		leases: opts.Leases, audit: opts.Audit, node: opts.Node, now: now,
-		guard: authz.ContextGuard(authz.NoChart{})}, nil
+		leases: opts.Leases, audit: opts.Audit, node: opts.Node, now: now, guard: guard}, nil
 }
 
 // Routes registers the surface on the API's mux, every route through
 // [authz.Router] with the verb it is decided by.
 func (s *Service) Routes(mux authz.Mux) error {
-	router := authz.NewRouter(mux, s.guard)
 	var failures []error
-	mount := func(pattern string, p authz.Policy, h http.HandlerFunc) {
-		if err := router.Handle(pattern, p, h); err != nil {
+	// A ROUTER PER ROUTE, each rendering its refusal through the audit: a
+	// call the guard turns away (a member's 403, a stale proof's
+	// step_up_required) never reaches the handler, and was the one call on
+	// a model left out of the trail. The router owns the decision and its
+	// wording; the hook only records what it wrote.
+	mount := func(pattern string, p authz.Policy, action types.ModelAction,
+		h func(http.ResponseWriter, *http.Request, *types.ModelActed)) {
+		router := authz.NewRouter(mux, s.guard).Refusing(s.refusedAudited(action))
+		if err := router.Handle(pattern, p, s.audited(action, h)); err != nil {
 			failures = append(failures, err)
 		}
 	}
@@ -269,20 +286,17 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// NOT declared [authz.Policy.Checked], which would decide it at the
 	// read's proof: `dry_run=true` here asks the write's own proof.
 	mount("PUT /llm/providers/{key}/credential",
-		authz.Policy{Action: authz.ActionSecretWrite},
-		s.audited(types.ModelCredential, s.credential))
+		authz.Policy{Action: authz.ActionSecretWrite}, types.ModelCredential, s.credential)
 	mount("POST /llm/providers/{key}/check", authz.Policy{Action: authz.ActionModelsCheck},
-		s.audited(types.ModelCheck, s.check))
+		types.ModelCheck, s.check)
 	mount("POST /llm/providers/{key}/retry", authz.Policy{Action: authz.ActionModelsRetry},
-		s.audited(types.ModelRetry, s.retry))
+		types.ModelRetry, s.retry)
 	mount("POST /llm/providers/{key}/host-login/check",
-		authz.Policy{Action: authz.ActionModelsCheck},
-		s.audited(types.ModelHostLoginCheck, s.hostLogin))
+		authz.Policy{Action: authz.ActionModelsCheck}, types.ModelHostLoginCheck, s.hostLogin)
 	mount("POST /llm/providers/{key}/device-sign-in",
-		authz.Policy{Action: authz.ActionSecretWrite},
-		s.audited(types.ModelDeviceSignIn, s.startDevice))
+		authz.Policy{Action: authz.ActionSecretWrite}, types.ModelDeviceSignIn, s.startDevice)
 	mount("DELETE /llm/device-sign-ins/{id}", authz.Policy{Action: authz.ActionSecretWrite},
-		s.audited(types.ModelDeviceSignIn, s.cancelDevice))
+		types.ModelDeviceSignInCancel, s.cancelDevice)
 	return errors.Join(failures...)
 }
 
@@ -388,6 +402,21 @@ func (s *Service) audited(action types.ModelAction, h func(http.ResponseWriter, 
 		h(watched, r, rec)
 		rec.Outcome, rec.Refusal = watched.outcome()
 		operator.Audit(r.Context(), s.audit, types.NewModelActed(*rec))
+	}
+}
+
+// refusedAudited renders a refusal the guard made before the handler ran, in
+// the router's own envelope, and records it as action's `model_acted`:
+// refused for a 403, failed for a node that could not decide.
+func (s *Service) refusedAudited(action types.ModelAction) authz.Refusal {
+	return func(w http.ResponseWriter, r *http.Request, p authz.Policy, d authz.Decision) {
+		by := actor(r)
+		rec := types.ModelActed{ActorName: by.Name, ActorKind: string(by.Kind),
+			OperatorID: by.OperatorID, Action: action, ProviderKey: r.PathValue("key")}
+		watched := &watcher{ResponseWriter: w}
+		authz.EnvelopeRefusal(watched, r, p, d)
+		rec.Outcome, rec.Refusal = watched.outcome()
+		operator.Audit(r.Context(), s.audit, types.NewModelActed(rec))
 	}
 }
 

@@ -254,6 +254,11 @@ type Options struct {
 
 	// Now is injectable so a test can pin a row's timestamp.
 	Now func() time.Time
+
+	// Guard decides each route's policy and every in-handler admission;
+	// nil is the request context's caller with no org chart, which is what
+	// the engine serves. A test refuses one action through it.
+	Guard authz.Guard
 }
 
 // Reactivator is the config surface as a secret write needs it: which paths
@@ -301,6 +306,10 @@ func New(opts Options) (*Service, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	guard := opts.Guard
+	if guard == nil {
+		guard = authz.ContextGuard(authz.NoChart{})
+	}
 	return &Service{
 		store:     fleetsecrets.New(opts.Fleet, opts.Cipher),
 		config:    opts.Config,
@@ -308,7 +317,7 @@ func New(opts Options) (*Service, error) {
 		assistant: opts.Assistant,
 		keyID:     opts.ActiveKeyID,
 		now:       now,
-		guard:     authz.ContextGuard(authz.NoChart{}),
+		guard:     guard,
 	}, nil
 }
 
@@ -611,11 +620,8 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if !noQuery(w, r, "PUT /secrets/{name}",
-		"who stored a value is the credential this request authenticated "+
-			"with (updated_by, updated_by_kind, operator_id), and its source "+
-			"is this route's own, "+string(secrets.SourceAPI)+"; send the "+
-			"value as the body and nothing in the query") {
+	deferred, ok := deferQuery(w, r)
+	if !ok {
 		return
 	}
 	// THE SHARED READER, not a copy of it. This route answered
@@ -627,7 +633,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		httpjson.Refuse(w, err)
 		return
 	}
-	written, ok := s.write(w, r, map[string]string{name: string(body)}, true)
+	written, ok := s.write(w, r, map[string]string{name: string(body)}, !deferred)
 	if !ok {
 		return
 	}
@@ -860,6 +866,37 @@ func (s *Service) reactivate(ctx context.Context, names []string, readBy map[str
 			"epoch", applied.Epoch, "by", by.Name, "operator", by.OperatorID)
 	}
 	return outcome
+}
+
+// deferQuery reads PUT /secrets/{name}'s one query parameter, `defer_reload`:
+// exactly `true` or `false`, given once, or absent for false. Anything else is
+// refused, as every other parameter is.
+//
+// THE BATCH'S `defer_reload` FOR A VALUE THE BATCH CANNOT CARRY. The batch is
+// JSON, and a value that is not UTF-8 (a binary key file a Kubernetes Secret
+// holds) has no JSON spelling: it travels only as this route's raw body. A
+// writer syncing such a value beside text ones seals it here deferred, then
+// sends the rest as one batch whose single re-activation covers both, rather
+// than paying a re-activation per binary value.
+func deferQuery(w http.ResponseWriter, r *http.Request) (deferred, ok bool) {
+	const hint = "who stored a value is the credential this request authenticated " +
+		"with (updated_by, updated_by_kind, operator_id), and its source is this " +
+		"route's own, " + string(secrets.SourceAPI) + "; send the value as the body, " +
+		"and in the query only defer_reload=true to seal it without re-activating"
+	query := r.URL.Query()
+	values, given := query["defer_reload"]
+	if !given {
+		return false, noQuery(w, r, "PUT /secrets/{name}", hint)
+	}
+	if len(query) > 1 || len(values) != 1 || (values[0] != "true" && values[0] != "false") {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery, map[string]string{
+			"detail": "PUT /secrets/{name} takes defer_reload=true or defer_reload=false, " +
+				"once, and no other parameter",
+			"hint": hint,
+		})
+		return false, false
+	}
+	return values[0] == "true", true
 }
 
 // noQuery refuses a request to a route that takes no query string, naming its

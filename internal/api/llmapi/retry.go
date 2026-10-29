@@ -10,10 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// RetryBudget is the longest a probe may take: the provider park's own probe
-// request, one short call, which answers in seconds on a vendor that is up.
-const RetryBudget = 60 * time.Second
-
 // retryRequest is the body `POST /llm/providers/{key}/retry` reads.
 type retryRequest struct {
 	Mode coord.ModelRetryMode `json:"mode"`

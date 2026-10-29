@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/secretsapi`
-- **Enforced-by:** `internal/api/secretsapi.TestAWriteOfAReadSecretReactivates`, `internal/api/secretsapi.TestABatchIsOneActivation`, `internal/api/secretsapi.TestAReloadFailureStillAnswers200WithTheSealedValue`, `internal/api/secretsapi.TestABatchIsRefusedWholeNamingEveryFault`, `internal/api/configapi.TestReadsAnswersThePathsReadingEachName`, `cmd/crewlet.TestSettingSeveralSecretsIsOneActivation`, `internal/api/secretsapi.TestADeferredBatchSealsAndReactivatesNothing`, `cmd/crewlet.TestAProvisioningRunThroughANodeReactivatesOnce`
+- **Enforced-by:** `internal/api/secretsapi.TestAWriteOfAReadSecretReactivates`, `internal/api/secretsapi.TestABatchIsOneActivation`, `internal/api/secretsapi.TestAReloadFailureStillAnswers200WithTheSealedValue`, `internal/api/secretsapi.TestABatchIsRefusedWholeNamingEveryFault`, `internal/api/configapi.TestReadsAnswersThePathsReadingEachName`, `cmd/crewlet.TestSettingSeveralSecretsIsOneActivation`, `internal/api/secretsapi.TestADeferredBatchSealsAndReactivatesNothing`, `cmd/crewlet.TestAProvisioningRunThroughANodeReactivatesOnce`, `cmd/crewlet.TestARunThatDiesBeforeItsFlushLeavesItsValuesSealedAndInactive`, `cmd/crewlet.TestAFailedFlushRevokesNothing`
 - **Cost-when-tried:** `PUT /secrets/{name}` sealed the value and stopped. A `${VAR}` is resolved when a provider or a transport is built, from a snapshot an apply takes, so every running model and integration went on signing in with the old credential until something re-activated the company, and nothing a person used did: the dashboard's secret dialog told the operator "Running seats pick it up after a re-activation or restart" and no screen ever re-activated. A rotation of four credentials one model reads, written one request each, would have moved the fleet through four epochs, three of them running a mix of the old and the new values.
 - **Tag-status:** unreleased
 
@@ -33,7 +33,13 @@ revision reads a name it wrote**, synchronously, in the same request:
    end.** `"defer_reload": true` seals and re-activates nothing; a provisioning run through a node seals each
    minted credential that way, the moment it exists (a token live at the vendor
    and recorded nowhere cannot be revoked), and its flush re-activates once for
-   every value it sealed.
+   every value it sealed. The flush is a re-activation alone
+   (`POST /config/reload`), never a second seal, so a value somebody rotated
+   while the run went on is not written back over. A re-activation that fails
+   never rolls the run back: the values are sealed and the accounts are good,
+   so the run says the reload left to make. A run that dies before its flush
+   leaves its values sealed and inactive until the company is next
+   re-activated, by anyone.
 
 ## Why the obvious alternatives are wrong
 

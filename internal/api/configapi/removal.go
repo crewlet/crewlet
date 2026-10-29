@@ -142,35 +142,53 @@ func addressOf(ref config.ProviderReference) RemovalAt {
 
 // readRemoval reads a removal's body strictly; an empty body is a removal
 // with no repoint, which a dry run of an entry with dependants answers with
-// the list of them.
-func readRemoval(text []byte) (RemovalRequest, error) {
-	var req RemovalRequest
+// the list of them. It answers the body's `_summary` beside the removal, and
+// refuses a field named twice.
+func readRemoval(text []byte) (RemovalRequest, string, error) {
+	var body struct {
+		RemovalRequest
+		// Summary is the body's `_summary`, the channel a caller with no
+		// headers of its own (the assistant's proposed change) states the
+		// history line in, as every other config write takes it.
+		Summary string `json:"_summary"`
+	}
 	if len(bytes.TrimSpace(text)) == 0 {
-		return req, nil
+		return RemovalRequest{}, "", nil
 	}
 	decoder := json.NewDecoder(bytes.NewReader(text))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&req); err != nil {
-		return RemovalRequest{}, fmt.Errorf("the body is not {\"repoint\": [...], "+
+	if err := decoder.Decode(&body); err != nil {
+		return RemovalRequest{}, "", fmt.Errorf("the body is not {\"repoint\": [...], "+
 			"\"assistant_off\": false}: %w", err)
+	}
+	req, summary := body.RemovalRequest, strings.TrimSpace(body.Summary)
+	// ONE ANSWER PER REFERENCE: a field named twice would move to whichever
+	// came last, a choice the caller never saw made.
+	first := map[RemovalAt]int{}
+	for i, r := range req.Repoint {
+		if j, seen := first[r.At]; seen {
+			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at names the same field as "+
+				"repoint[%d]: answer each reference once", i, j)
+		}
+		first[r.At] = i
 	}
 	for i, r := range req.Repoint {
 		seat := r.At.Seat != "" || r.At.Job != ""
 		switch {
 		case seat && r.At.Assistant != "":
-			return RemovalRequest{}, fmt.Errorf("repoint[%d].at names a seat and the "+
+			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at names a seat and the "+
 				"assistant: address one", i)
 		case seat && (r.At.Seat == "" || !config.ProviderJob(r.At.Job).Valid() ||
 			config.ProviderJob(r.At.Job) == config.JobAssistant ||
 			config.ProviderJob(r.At.Job) == config.JobDeepWork):
-			return RemovalRequest{}, fmt.Errorf("repoint[%d].at needs a seat and its job, "+
+			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at needs a seat and its job, "+
 				"one of executor, review, subagent, auxiliary or judge", i)
 		case !seat && r.At.Assistant != AssistantChat && r.At.Assistant != AssistantDeepWork:
-			return RemovalRequest{}, fmt.Errorf("repoint[%d].at needs {seat, job} or "+
+			return RemovalRequest{}, "", fmt.Errorf("repoint[%d].at needs {seat, job} or "+
 				"{assistant: chat | deep_work}", i)
 		}
 	}
-	return req, nil
+	return req, summary, nil
 }
 
 // removalDraft removes the entry id and repoints every reference to it, as one
@@ -242,9 +260,12 @@ func repoint(c *config.Company, id string, req RemovalRequest) error {
 		}
 		rewrite(c, ref, id, to)
 	}
-	for _, r := range req.Repoint {
+	for i, r := range req.Repoint {
 		if !answered[r.At] {
-			problems = append(problems, config.Problem{Path: "repoint", Segments: config.Path{"repoint"},
+			// AT THE REPOINT ITSELF, by its index in the body, so a page
+			// marks the row that answers nothing rather than the whole list.
+			path := config.Path{"repoint", i, "at"}
+			problems = append(problems, config.Problem{Path: path.String(), Segments: path,
 				Kind: "unknown_value", Seat: r.At.Seat,
 				Message: fmt.Sprintf("%s names no field of %s: nothing there to repoint", describeAt(r.At), id)})
 		}
@@ -384,20 +405,27 @@ func resolutionMoves(id string) func(next, prior *config.Company) []config.Warni
 				if written[RemovalAt{Seat: seat, Job: string(pj.job)}] {
 					continue
 				}
-				from, _ := phase.ResolveWithSource(role.Seat(), pj.phase, before)
+				from, source := phase.ResolveWithSource(role.Seat(), pj.phase, before)
 				to, _ := phase.ResolveWithSource(moved, pj.phase, after)
 				if slices.Equal(from, to) || !slices.Contains(from, id) {
 					continue
 				}
-				head := "nothing"
+				if source == phase.SourceSeat || source == phase.SourceExecutor {
+					// THE SEAT CHOSE IT, in a field the write answers: a job
+					// that runs on its seat's executor chain moves with the
+					// executor's repoint, a move the caller wrote.
+					continue
+				}
+				head, message := "", fmt.Sprintf("%s's %s will have no model to run on: "+
+					"the company configures none", seat, jobWords[pj.job])
 				if len(to) > 0 {
 					head = to[0]
+					message = fmt.Sprintf("%s's %s will run on %s", seat, jobWords[pj.job], head)
 				}
 				out = append(out, config.Warning{
 					Kind: WarningResolutionMoved, Ref: string(pj.job), Seat: seat,
 					Path: path.String(), Segments: path,
-					From: from[0], To: head,
-					Message: fmt.Sprintf("%s's %s will run on %s", seat, jobWords[pj.job], head),
+					From: from[0], To: head, Message: message,
 				})
 			}
 		}
@@ -423,8 +451,7 @@ func (s *Service) deleteEntity(kind string) http.HandlerFunc {
 			refuseBody(w, err)
 			return
 		}
-		summary := strings.TrimSpace(r.Header.Get("X-Summary"))
-		req, err := readRemoval(body)
+		req, summary, err := readRemoval(body)
 		if err != nil {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
 				"detail": err.Error(),
@@ -433,6 +460,11 @@ func (s *Service) deleteEntity(kind string) http.HandlerFunc {
 					"(null to leave it unset)",
 			})
 			return
+		}
+		if header := strings.TrimSpace(r.Header.Get("X-Summary")); header != "" {
+			// THE HEADER WINS, as [takeSummary] has it on every route that
+			// reads a document.
+			summary = header
 		}
 		expected, create, ok := entityPrecondition(w, r)
 		if !ok {
@@ -543,7 +575,8 @@ func (s *Service) removeEntity(w http.ResponseWriter, r *http.Request, e removal
 		return true, nil
 	}
 	if !requireSummary(w, e.summary, "a removal needs an audit summary in the "+
-		"X-Summary header: name the model removed and where its work moves") {
+		"X-Summary header or the body's `_summary`: name the model removed and where "+
+		"its work moves") {
 		return true, nil
 	}
 	applied, err := s.commit(ctx, prepared, e.summary)

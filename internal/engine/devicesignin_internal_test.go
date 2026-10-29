@@ -11,7 +11,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -234,5 +236,69 @@ func TestALapsedSessionBlocksNoNewOne(t *testing.T) {
 	}
 	if _, err := two.CancelDeviceSignIn(t.Context(), started.ID, person); err != nil {
 		t.Fatalf("CancelDeviceSignIn: %v", err)
+	}
+}
+
+// endsAudited is every device sign-in end q carries, as `model_acted`.
+func endsAudited(q *queuememory.Queue) []types.ModelActed {
+	var out []types.ModelActed
+	for _, ev := range q.History() {
+		if row, ok := ev.Data.(*types.ModelActed); ok && row.Action == types.ModelDeviceSignInEnded {
+			out = append(out, *row)
+		}
+	}
+	return out
+}
+
+// HOW A DEVICE SIGN-IN ENDED IS IN THE AUDIT TRAIL, as the person's who
+// started it.
+//
+// The route that started it answered with a pending code; whether a login was
+// stored is decided minutes later on the node running the CLI, and no route
+// call marks it. The node that ran the session publishes its end, and a
+// session whose node died is published by the sweep that fails it.
+//
+// Mutation: publish nothing from endDeviceSignIn, or from the sweep, and
+// this fails.
+func TestADeviceSignInsEndIsAudited(t *testing.T) {
+	t.Parallel()
+	fleet, leases := coordmemory.NewFleet(), coordmemory.New()
+	login := &fakeDeviceLogin{finish: make(chan error, 1)}
+	one := signInNode(t, fleet, leases, "node-1", login)
+	q := queuememory.New()
+	if err := q.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.Background()) })
+	one.backends.Queue = q
+
+	started, err := one.StartDeviceSignIn(t.Context(), "codex-review", person)
+	if err != nil {
+		t.Fatalf("StartDeviceSignIn: %v", err)
+	}
+	login.finish <- cliagent.ErrDeviceCodeExpired
+	statusOn(t, one, started.ID, coord.DeviceExpired)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(endsAudited(q)) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	ends := endsAudited(q)
+	if len(ends) != 1 || ends[0].Status != "expired" || ends[0].ProviderKey != "codex-review" ||
+		ends[0].ActorName != person.Name || ends[0].OperatorID != person.OperatorID {
+		t.Fatalf("the expiry is audited as %+v, want one row of jane-doe's session", ends)
+	}
+
+	// A SESSION WHOSE NODE IS GONE is audited by the sweep that fails it.
+	orphan := coord.DeviceSignIn{ID: uuid.New(), Entry: "other", Node: "node-gone",
+		Status: coord.DevicePending, StartedAt: time.Now(), ExpiresAt: time.Now().Add(15 * time.Minute),
+		By: person.Name, ByKind: person.Kind}
+	if _, _, err := fleet.CreateDeviceSignIn(t.Context(), orphan); err != nil {
+		t.Fatal(err)
+	}
+	one.sweepDeviceSignIns(t.Context())
+	ends = endsAudited(q)
+	if len(ends) != 2 || ends[1].Status != "failed" || ends[1].Outcome != types.AuditFailed ||
+		ends[1].ProviderKey != "other" {
+		t.Errorf("the orphan's end is audited as %+v", ends)
 	}
 }

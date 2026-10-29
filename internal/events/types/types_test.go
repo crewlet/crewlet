@@ -334,7 +334,7 @@ var wireTags = map[string][]string{
 	"operator_acted":            {"actor", "actor_kind", "assistant", "conversation_id", "failed", "operator_id", "outcome", "position", "refusal", "request_id", "tool", "transport"},
 	"backup_requested":          {"actor", "actor_kind", "dir", "failed", "operator_id", "outcome", "streams"},
 	"model_acted": {"action", "actor", "actor_kind", "dry_run", "failed", "names",
-		"operator_id", "outcome", "provider_key", "refusal", "revision_id"},
+		"operator_id", "outcome", "provider_key", "refusal", "revision_id", "status"},
 	"config_revision_applied":         {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                   {"agent_id", "description", "role", "schedule", "task_id", "timeout_seconds"},
 	"scheduled_task_fired":            {"schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},

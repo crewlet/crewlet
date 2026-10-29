@@ -65,6 +65,27 @@ func TestARuntimeAuditRecordIsItsAuthors(t *testing.T) {
 			Action: ModelRetry, ProviderKey: "default", Outcome: AuditApplied}),
 		actor:   "token:ops",
 		summary: "token:ops retried model default",
+	}, {
+		name: "a device sign-in cancelled, said apart from its start",
+		payload: NewModelActed(ModelActed{ActorName: "jane-founder", ActorKind: "human",
+			Action: ModelDeviceSignInCancel, ProviderKey: "codex", Outcome: AuditApplied}),
+		actor:   "jane-founder",
+		summary: "jane-founder cancelled the device sign-in for model codex",
+	}, {
+		name: "a device sign-in that expired, as what became of the person's",
+		payload: NewModelActed(ModelActed{ActorName: "jane-founder", ActorKind: "human",
+			Action: ModelDeviceSignInEnded, ProviderKey: "codex", Status: "expired",
+			Outcome: AuditApplied}),
+		actor:   "jane-founder",
+		summary: "jane-founder's device sign-in for model codex expired before it was approved",
+	}, {
+		name: "a device sign-in approved whose login was not stored",
+		payload: NewModelActed(ModelActed{ActorName: "jane-founder", ActorKind: "human",
+			Action: ModelDeviceSignInEnded, ProviderKey: "codex", Status: "approved",
+			Outcome: AuditFailed}),
+		actor: "jane-founder",
+		summary: "jane-founder's device sign-in for model codex was approved, and its login " +
+			"was not stored everywhere",
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

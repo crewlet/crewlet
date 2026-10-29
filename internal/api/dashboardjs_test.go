@@ -1358,7 +1358,12 @@ const (
 	// cards and setup wizard, took it to 4758.3 KiB: the Settings chunk the
 	// first load does not fetch grew from 192 KiB to 303 KiB, and the first
 	// load is 350.1 KiB. 4759 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 663<<10
+	// The device sign-in statuses held to the engine's set, with uilet
+	// 0.76.1, kept it within 4759 KiB. The secret dialogs reading whether the
+	// company switched to a write (`reload`), and saying so when it did not
+	// rather than closing on the 200 (#457), took it to 4760.1 KiB. 4761 KiB,
+	// which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 665<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

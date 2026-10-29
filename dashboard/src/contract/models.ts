@@ -171,7 +171,8 @@ export type RunnerCellName = "direct" | "container" | "e2b";
  * seconds: a test runs the CLI for real (up to three runs), a credential's test
  * one isolated run, a retry one probe. The dashboard waits a little past each
  * rather than abandoning a request the engine is still answering. Held against
- * `llmapi.CheckBudget`, `CredentialBudget` and `RetryBudget` by
+ * `llmapi.CheckBudget` and `CredentialBudget`, and the engine's own bound on a
+ * retry's probe, `engine.ModelRetryProbeBudget`, by
  * `internal/api/llmapi.TestTheModelsScreenWaitsAsLongAsTheEngineWorks`.
  */
 export const MODEL_CHECK_BUDGET_SECONDS = 180;
