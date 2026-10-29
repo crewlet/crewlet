@@ -42,12 +42,12 @@ var ReproducibleTables = []string{
 	"code_changes", "code_change_authors", "code_revisions", "code_change_bodies",
 
 	// A change's conversation — who is asked to review it, its comments, who
-	// takes part, its reviews and their findings, and its counters — written
-	// by the records on the CHANGE's own subject, which no record on the
-	// repository's writes, and removed with the repository's changes, each
-	// change's before its row.
+	// takes part, its reviews and their findings, its counters, and the facts
+	// its repository's home recorded of its revisions — written by the records
+	// on the CHANGE's own subject, which no record on the repository's writes,
+	// and removed with the repository's changes, each change's before its row.
 	"code_reviewers", "code_comments", "code_participants", "code_conversations",
-	"code_reviews", "code_findings", "code_finding_texts",
+	"code_reviews", "code_findings", "code_finding_texts", "code_revision_facts",
 
 	// A repository's published chain and the objects its layers are stored
 	// in — written by the compaction records that carry a layer, each

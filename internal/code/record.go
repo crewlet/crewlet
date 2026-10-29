@@ -323,15 +323,28 @@ const (
 	// finding_resolve", Since: 2, Path: []string{"op"}, Equals:
 	// string(OpFindingResolve)}, with the same companions. It is no gate.
 	OpFindingResolve OpKind = "finding_resolve"
+
+	// OpRevise records one revision's facts on its change — what its head is
+	// against its target's tip, as the repository's home git node read them,
+	// and the path owners whose globs its touched paths match, with the
+	// reviews that asks ([Revise]) — on the change's own subject, written by
+	// the repository's committing data node for the home, which asks it and
+	// publishes nothing itself.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// revise", Since: 2, Path: []string{"op"}, Equals: string(OpRevise)},
+	// with the same companions. It is no gate.
+	OpRevise OpKind = "revise"
 )
 
-// OpKinds are the twenty-eight, in the order they are documented.
+// OpKinds are the thirty-two, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
 	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpRename, OpReleaseName, OpHold,
 	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen,
-	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve,
+	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise,
 }
 
 // ChangeOps are the six ops of a change's LIFECYCLE, in [OpKinds]' order:
@@ -344,9 +357,10 @@ func ChangeOps() []OpKind {
 // ConversationOps are the ops of a change's CONVERSATION, in [OpKinds]' order:
 // what a [ConversationWrite] may be, each a record of its own on the change's
 // subject ([KindChange]), written by the repository's committing data node
-// ([ChangeWriter]).
+// ([ChangeWriter]) — a revision's facts, which the repository's home git node
+// asks, among them.
 func ConversationOps() []OpKind {
-	return []OpKind{OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve}
+	return []OpKind{OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise}
 }
 
 // Valid reports whether an op off the wire is one this build knows.

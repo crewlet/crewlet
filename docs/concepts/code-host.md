@@ -196,8 +196,9 @@ A repository's **path owners** say who owns which part of its tree: each a
 unit — whose [effective lead](organization-model.md#lead-inheritance) a review
 is asked of — or a seat, and the globs of the paths it owns. What a path owner
 is for is **review routing**: a change whose revision touches an owner's paths
-asks it for a review — once changes are reviewed, which they are not yet
-([What it does not do yet](#what-it-does-not-do-yet)). It **grants nothing**. A seat named a path owner reads
+asks it for a review once the revision's facts are recorded ([Recorded on the
+change](#recorded-on-the-change)) — which nothing records yet ([What it does
+not do yet](#what-it-does-not-do-yet)). It **grants nothing**. A seat named a path owner reads
 and pushes the repository by its [grant](#who-may-read-and-push) exactly as it
 did before — owning `deploy/**` lets no seat push there that could not, and a
 `visibility: unit` repository still shuts out a seat outside its unit,
@@ -1034,8 +1035,10 @@ answer that holds every record the code log had committed when it was asked.
 - **One change**, by its number on its repository — `web!42` — with its row
   (title, state, branches, head and revision, version, owner, the work item it
   carries, when it was opened, closed or merged and how), its description and
-  its authors, beside its revisions, newest first; a later page carries its
-  revisions alone, after the revision the page before it ended at. A number
+  its authors, beside its revisions, newest first, each with the facts its
+  home recorded of it, where it has ([Recorded on the
+  change](#recorded-on-the-change)); a later page carries its revisions
+  alone, after the revision the page before it ended at. A number
   the repository does not hold is "no such change", naming it (`web!43`).
 
 **A listing reads the one index its filters lead with** — a reviewer's
@@ -1104,12 +1107,13 @@ behind their batches and contend with every push to the repository.
 | Table | A row for | What it holds |
 |---|---|---|
 | `code_conversations` | each change that has been discussed | Its counters — its comments, its reviews, its open findings, its standing blockers and how many reviewers' standing verdict asks for changes — what its comments, reviews and findings weigh, and the version and position of its last record |
-| `code_reviewers` | each reviewer it has asked | A seat, or a person by the human seat they hold; whether the ask stands or was withdrawn — a withdrawn ask is kept, so the change says who was once asked — who asked, and the note they asked with, at most 1 KiB |
+| `code_reviewers` | each reviewer it has asked | A seat, or a person by the human seat they hold; why — asked by name, or as a [path owner](#recorded-on-the-change) a revision's facts asked — whether the ask stands or was withdrawn — a withdrawn ask is kept, so the change says who was once asked — who asked, nobody for a path owner, and the note they asked with, at most 1 KiB |
 | `code_participants` | everybody who takes part in it | Each reviewer asked or reviewing and each author of a comment, by handle and kind, and a reviewer's **standing verdict**: the latest of their reviews that approves or asks for changes, and the revision it judged |
 | `code_comments` | each comment | Its thread, its parent or the finding it replies to, who said it — a seat, or a person with the credential they used — the line it points at, whether its thread is resolved and by whom, the turn that said it, and its body, at most 32 KiB |
 | `code_reviews` | each review | The revision it judged, who reviewed — a seat, or a person with the credential they used — its verdict, how many findings it raised, the turn and the model that reviewed, and its summary, at most 4 KiB |
 | `code_findings` | each finding | The review and the revision that raised it, its raiser, where it points — a file, a side of the revision's diff, its lines, the commit and the blob they were read in — its severity and category, its state, and its last answer: the note, who gave it, the commit it names |
 | `code_finding_texts` | each finding | Its title (one line, at most 200 bytes), its body (at most 4 KiB) and the lines it suggests in place of the ones it points at (at most 16 KiB) — a row of its own, so the finding's state is rewritten without its text |
+| `code_revision_facts` | each revision its home read | What the revision is against its target, and the path owners it asked ([Recorded on the change](#recorded-on-the-change)) |
 
 ### Reading a conversation
 
@@ -3272,6 +3276,67 @@ patch, 170 ms for 16 MiB, 621 ms for 64 MiB and 2.3 s for 249 MiB — some
 114 MB of patch a second, so a diff at the bound is identified in under a
 quarter of the read's ten seconds, and a node four times as loaded still
 takes its id.
+
+### Recorded on the change
+
+A revision's facts are read ONCE, by the repository's [home](#the-home-git-node),
+and recorded on the change, where every later reader finds them: an approval
+carried from one revision to the next on an equal `patch_id`, an interdiff
+kept to the files two revisions touch, the change's readiness. The record is
+a **revise**, a write of the change's [conversation](#reviews-and-findings):
+the home asks it of the repository's committing data node, whose change writer
+decides it in one snapshot and publishes it on the change's own subject, as it
+does a review — a git node never publishes one — and it names no asker, being
+the engine's own.
+
+| Table | A row for | What it holds |
+|---|---|---|
+| `code_revision_facts` | each revision of a change its home read | The target branch, the tip read and the position of the record that moved the branch there; the base, the `patch_id` or that none was taken, and the files touched or that it touches all; the git node that recorded them; and its path-owner match — the digest of the owners matched against, those matched and those asked no review of, with why |
+
+- **Facts are of the change's head revision against its target now.** A
+  revise is decided only while they still are: facts of a revision a push has
+  moved past, of a head the change no longer has, against a branch the change
+  no longer merges into, or no later than the facts held of that revision
+  against that branch — the same tip read twice, by a home that ran again or
+  two nodes each taking itself for the home — are refused `superseded`,
+  recorded nowhere, for the home's next pass. Facts of a later tip of the
+  same branch replace the row, and so do the facts of a retargeted change's
+  new branch: one row a revision.
+- **A head its target holds has no facts.** Whatever moved the target there
+  merged the change, so there is nothing of it left to measure or review; the
+  home records the merge itself, and a revise naming its head as its own base
+  is refused before anything is read.
+- **Path owners are asked from the touched paths.** Each
+  [path owner](#path-owners) one of whose globs matches a touched path — every
+  owner, where the revision touches all — is asked to review the change: a
+  unit of its effective lead, a seat of itself, the ask's reason `path_owner`
+  and naming no asker. The HOME matches the globs, up to 64 owners' 32 globs
+  each against up to 1 000 paths, which no decide pays on every round it may
+  take, and sends the digest of the owners it matched against; the decide
+  computes the digest of the owners its own snapshot holds, and facts matched
+  against owners changed since are refused `superseded`, for the home to
+  match again.
+- **An owner who cannot review is skipped, and the facts say why**: a seat
+  whose grant is below `review` (`below_review`), an author of the change
+  (`author`), a unit nobody leads (`no_lead`), an owner the chart holds no seat
+  of (`no_seat`), and an owner past the 32 reviewers a change asks at once
+  (`too_many_reviewers`). An owner whose ask the change holds already —
+  standing, or withdrawn by somebody's word on the change — is left as it is.
+  A path owner grants nothing: whether its review counts is its grant's, as
+  any reviewer's.
+- **The facts say whom else they concern.** A revision's first facts name
+  the reviewers whose standing verdict asks for changes on an earlier
+  revision, to look again; and a change's first facts, where nobody who may
+  review it is asked, name the lead of the repository's owner — its unit's
+  effective lead, or the lead of the unit an owning seat sits in — so a change
+  nobody is asked to review still reaches somebody. Each is stamped on the
+  record by the writer from its snapshot and its chart, so every data node
+  applies it alike, judging nothing again.
+
+A write of facts that is refused appends nothing: `superseded` is the home's
+alone, answered to no person and no seat, and a closed or merged change takes
+no facts (`change_closed`, `change_merged`). `crewlet.code.conversation.writes`
+counts them under `op` `revise`, beside the conversation's other writes.
 
 ### Where lines are in another revision
 

@@ -183,6 +183,21 @@
 // reviews or its findings — the detail on its revisions' first page counting
 // it.
 //
+// A REVISION'S FACTS ARE ON THE CHANGE'S SUBJECT TOO (revise.go): what the
+// repository's home git node read of the change's head revision against its
+// target — its base, its patch-id, the files it touches — and the path owners
+// whose globs those files match, MATCHED ON THE HOME ([MatchOwners]) beside
+// the digest of the owners matched against ([OwnersDigest]), is a [Revise]
+// the change writer decides as the home's own write, naming no asker:
+// recorded only of the head revision against the current target, past the
+// facts held of it there, and only where the snapshot's owners digest the
+// same — [ConversationRefusalSuperseded] otherwise, recorded nowhere — and a
+// head its target holds is no facts at all. The writer resolves the matched
+// owners on its chart, asks those who may review (code_reviewers, reason
+// [ReviewerPathOwner]), skips the rest by [SkipReason], and stamps whom else
+// the facts concern, so the apply judges nothing again; code_revision_facts
+// keeps one row a revision, and a change read's revisions carry it.
+//
 // # Group commit
 //
 // Because every push to a repository contends on its one subject, a

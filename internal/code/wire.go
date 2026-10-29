@@ -1145,13 +1145,13 @@ type ChangeResult struct {
 // ConversationWrite is one write of a change's conversation as its asker hands
 // it to the repository's committing data node ([ChangeWriter.Converse]):
 // EXACTLY ONE of the records it may be — an ask for review, a comment, a
-// thread's resolution, a review and an answer to findings, each its op's
-// payload ([ConversationOps]) — decided as a record of its own on the change's
-// subject, beside who asks and the floor they read at. Its OpID is the
-// record's operation id, its Seen the publish's session floor. What no asker
-// sends — who wrote it, a reviewer's kind, a comment's id and thread, a
-// review's id and its findings' — the writer stamps into the record from its
-// asker, the chart and its snapshot.
+// thread's resolution, a review, an answer to findings and a revision's facts,
+// each its op's payload ([ConversationOps]) — decided as a record of its own
+// on the change's subject, beside who asks and the floor they read at. Its
+// OpID is the record's operation id, its Seen the publish's session floor.
+// What no asker sends — who wrote it, a reviewer's kind, a comment's id and
+// thread, a review's id and its findings' — the writer stamps into the record
+// from its asker, the chart and its snapshot.
 type ConversationWrite struct {
 	// OpID is the record's operation id, minted once by whoever asks — an
 	// operation id this engine accepts (statelog.CheckCallerOpID) — so the
@@ -1161,8 +1161,9 @@ type ConversationWrite struct {
 	// from it ([CommentID]).
 	OpID string `json:"op_id"`
 	// Asker is who asks: a person through a credential bound to their human
-	// seat, or a seat by its handle; a token bound to nobody writes nothing.
-	// A SEAT'S IS JUDGED FROM THE CHART of the deciding node's epoch
+	// seat, or a seat by its handle; a token bound to nobody writes nothing,
+	// and a revision's facts, the repository's home git node's own, name
+	// none. A SEAT'S IS JUDGED FROM THE CHART of the deciding node's epoch
 	// ([ChangeWriterOptions.SeatRules]), and so is every reviewer an ask
 	// names, whoever asks ([ConversationWrite.JudgesChart]): a node that holds
 	// no chart, or one confirmed behind the company's configuration, decides
@@ -1181,6 +1182,9 @@ type ConversationWrite struct {
 	ThreadResolve  *ThreadResolve   `json:"thread_resolve,omitempty"`
 	Review         *Review          `json:"review,omitempty"`
 	FindingResolve *FindingResolve  `json:"finding_resolve,omitempty"`
+	// Revise is a revision's facts, which the repository's home git node
+	// asks with NO Asker: the engine's own write ([Revise]).
+	Revise *Revise `json:"revise,omitempty"`
 }
 
 // ConversationResult is what became of one write of a change's conversation.
@@ -1457,7 +1461,9 @@ type ChangeAuthor struct {
 // RevisionRow is one revision of a change (code_revisions): a move of its
 // source branch's head while it was live — the new head, who moved it and
 // the push that did, empty for a revision an open or a reopen made — where
-// its record landed and the record's broker instant.
+// its record landed and the record's broker instant, and the facts the
+// repository's home git node recorded of it, nil for a revision it has
+// recorded none of yet.
 type RevisionRow struct {
 	N          int64             `json:"n"`
 	Head       string            `json:"head"`
@@ -1466,6 +1472,32 @@ type RevisionRow struct {
 	PushID     string            `json:"push_id,omitempty"`
 	Position   statelog.Position `json:"position"`
 	At         time.Time         `json:"at"`
+	Facts      *RevisionFactsRow `json:"facts,omitempty"`
+}
+
+// RevisionFactsRow is a revision's facts as the change's home recorded them
+// (code_revision_facts, [Revise]): the target branch and the tip they were
+// read against with the position that moved it there, the base the change is
+// measured from, the id of the change it makes — or that none was taken — the
+// files it touches or that it touches all, the git node that recorded them, the
+// path-owner match — the digest of the owners matched against, those matched
+// and those asked no review of — and the record that wrote them. A revision
+// whose head its target holds has none: its change is merged, and its home
+// lands it.
+type RevisionFactsRow struct {
+	TargetRef       string            `json:"target_ref"`
+	TargetOID       string            `json:"target_oid"`
+	TargetPosition  statelog.Position `json:"target_position"`
+	BaseOID         string            `json:"base_oid,omitempty"`
+	PatchID         string            `json:"patch_id,omitempty"`
+	PatchIDOmitted  bool              `json:"patch_id_omitted,omitempty"`
+	Touched         []string          `json:"touched"`
+	TouchesAll      bool              `json:"touches_all,omitempty"`
+	Node            string            `json:"node"`
+	OwnersDigest    string            `json:"owners_digest"`
+	RequestedOwners []Owner           `json:"requested_owners,omitempty"`
+	SkippedOwners   []SkippedOwner    `json:"skipped_owners,omitempty"`
+	Position        statelog.Position `json:"position"`
 }
 
 // THE READS BY OBJECT ID: what a git node answers about a repository's content

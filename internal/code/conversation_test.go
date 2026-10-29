@@ -951,14 +951,39 @@ func (n *node) seedReviews(changeID string, reviews, findings int, width int64) 
 	}
 }
 
+// seedFacts writes the facts of a change's first revisions straight into a
+// node's estate, each row's touched paths of the width given, and adds what
+// they weigh to the change's conversation row, which seedConversation made: a
+// home's facts of a long-lived change a purge has to clear.
+func (n *node) seedFacts(changeID string, revisions int, width int64) {
+	n.t.Helper()
+	ctx := n.t.Context()
+	if err := n.db.Tx(ctx, func(tx *sql.Tx) error {
+		if _, err := store.InsertRows(ctx, tx, n.db.Caps().MaxVariables, `INSERT INTO code_revision_facts
+			(change_id, n, target_ref, target_oid, target_position, touched_count, node, owners_digest, bytes,
+			position, touched) VALUES `, `(?, ?, 'refs/heads/main', '', 1, 1, 'node-a', '', ?, 1, ?)`, ``,
+			revisions, func(i int) []any {
+				return []any{changeID, i + 1, width, strings.Repeat("p", int(min(width, 1<<10)))}
+			}); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE code_conversations SET text_bytes = text_bytes + ? WHERE change_id = ?`,
+			int64(revisions)*width, changeID)
+		return err
+	}); err != nil {
+		n.t.Fatalf("seed %s's facts: %v", changeID, err)
+	}
+}
+
 // conversationRows is every row of the conversations of the changes ids names
-// this node holds, the conversations' own included.
+// this node holds, the conversations' own included, and their revisions'
+// facts.
 func (n *node) conversationRows(ids []string) int {
 	n.t.Helper()
 	list := `["` + strings.Join(ids, `","`) + `"]`
 	total := 0
 	for _, table := range []string{"code_reviewers", "code_participants", "code_comments", "code_conversations",
-		"code_reviews", "code_findings", "code_finding_texts"} {
+		"code_reviews", "code_findings", "code_finding_texts", "code_revision_facts"} {
 		total += n.count(`SELECT COUNT(*) FROM `+table+` WHERE change_id IN (SELECT value FROM json_each(?))`,
 			list)
 	}
@@ -968,13 +993,14 @@ func (n *node) conversationRows(ids []string) int {
 // A PURGE REMOVES A CHANGE'S CONVERSATION with the change, every part within
 // PurgePartRows and the conversation before its change's row: a change whose
 // conversation does not fit a part is cut — its narrow rows first, its
-// findings among them, then its comments, its findings' texts and its
-// reviews — and a later part takes it whole; nothing of a neighbour's goes.
+// findings among them, then its comments, its findings' texts, its reviews
+// and its revisions' facts — and a later part takes it whole; nothing of a
+// neighbour's goes.
 //
-// Mutation: leave a conversation table out of the walk's count, and a part
-// deletes past PurgePartRows; out of the final purge, and its rows outlive
-// their repository; delete the changes before their conversations, and the
-// conversations are orphaned.
+// Mutation: leave a conversation table out of the walk's count — the facts'
+// among them — and a part deletes past PurgePartRows; out of the final purge,
+// and its rows outlive their repository; delete the changes before their
+// conversations, and the conversations are orphaned.
 func TestAPurgeRemovesAChangesConversation(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -992,6 +1018,7 @@ func TestAPurgeRemovesAChangesConversation(t *testing.T) {
 		}
 		n.seedConversation(id, change, 3, 4, comments, 64)
 		n.seedReviews(change, 2, 3, 64)
+		n.seedFacts(change, 2, 64)
 	}
 	neighbours := n.seedChanges(other, changesOf(2, changeShape{revisions: 1, authors: 1}))
 	for _, change := range neighbours {

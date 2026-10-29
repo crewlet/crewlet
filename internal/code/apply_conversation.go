@@ -51,6 +51,8 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 		repoID, changeID = p.RepoID, p.ChangeID
 	case FindingResolve:
 		repoID, changeID = p.RepoID, p.ChangeID
+	case Revise:
+		repoID, changeID = p.RepoID, p.ChangeID
 	default:
 		return 0, fmt.Errorf("code: %s is not an op this build applies to a change (the record at %s)",
 			at.record.Op, at.position)
@@ -92,6 +94,8 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 		rows, counts, err = applyReview(ctx, tx, at, p)
 	case FindingResolve:
 		rows, counts, err = applyFindingResolve(ctx, tx, at, p)
+	case Revise:
+		rows, counts, err = applyRevise(ctx, tx, at, p)
 	}
 	if err != nil || rows == 0 {
 		return 0, err

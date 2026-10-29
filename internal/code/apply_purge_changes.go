@@ -18,19 +18,19 @@ type purgedChange struct {
 	id              string
 	bodyBytes, text int64
 	// revisions, authors, reviewers, participants and findings are the
-	// narrow rows a cut takes first, in this order; comments, findingTexts
-	// and reviews the wide ones it takes after them, by bytes as well as
-	// rows; body and conversation the rows that go only with their change,
-	// whole.
+	// narrow rows a cut takes first, in this order; comments, findingTexts,
+	// reviews and facts the wide ones it takes after them, by bytes as well
+	// as rows; body and conversation the rows that go only with their
+	// change, whole.
 	revisions, authors, reviewers, participants, findings int
-	comments, findingTexts, reviews                       int
+	comments, findingTexts, reviews, facts                int
 	body, conversation                                    int
 }
 
 // rows is every row of c a part deletes taking it whole, its own included.
 func (c purgedChange) rows() int {
 	return c.revisions + c.authors + c.reviewers + c.participants + c.findings + c.comments + c.findingTexts +
-		c.reviews + c.body + c.conversation + 1
+		c.reviews + c.facts + c.body + c.conversation + 1
 }
 
 // wideCut is a cut change's wide rows as [purgeCutWide] takes them, one table
@@ -111,7 +111,7 @@ func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int, we
 	for weighed < PurgePartBytes && rows.Next() {
 		var c purgedChange
 		if err := rows.Scan(&c.id, &c.bodyBytes, &c.text, &c.revisions, &c.authors, &c.reviewers,
-			&c.participants, &c.findings, &c.comments, &c.findingTexts, &c.reviews, &c.body,
+			&c.participants, &c.findings, &c.comments, &c.findingTexts, &c.reviews, &c.facts, &c.body,
 			&c.conversation); err != nil {
 			_ = rows.Close()
 			return 0, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
@@ -147,7 +147,8 @@ func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int, we
 		}
 		for _, stmt := range []string{purgeChangeRevisionsSQL, purgeChangeAuthorsSQL, purgeChangeReviewersSQL,
 			purgeChangeParticipantsSQL, purgeChangeFindingsSQL, purgeChangeCommentsSQL, purgeChangeFindingTextsSQL,
-			purgeChangeReviewsSQL, purgeChangeBodiesSQL, purgeChangeConversationsSQL, purgeChangeRowsSQL} {
+			purgeChangeReviewsSQL, purgeChangeFactsSQL, purgeChangeBodiesSQL, purgeChangeConversationsSQL,
+			purgeChangeRowsSQL} {
 			res, err := tx.ExecContext(ctx, stmt, list)
 			if err != nil {
 				return 0, fmt.Errorf("code: purge %s's changes: %w", repoID, err)
@@ -179,7 +180,8 @@ func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int, we
 	}
 	// ITS WIDE ROWS, every one's text counted in its conversation's
 	// text_bytes: its comments, oldest thread first, its findings' texts by
-	// finding, then its reviews in the order given.
+	// finding, its reviews in the order given, then its revisions' facts,
+	// oldest revision first.
 	wide := wideCut{left: left, weighed: weighed}
 	if wide, err = purgeCutWide(ctx, tx, purgeCutCommentWidthsSQL, purgeCutCommentsSQL, cut.id,
 		wide); err != nil {
@@ -192,6 +194,9 @@ func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int, we
 	if wide, err = purgeCutWide(ctx, tx, purgeCutReviewWidthsSQL, purgeCutReviewsSQL, cut.id,
 		wide); err != nil {
 		return 0, fmt.Errorf("code: purge change %s's reviews of %s: %w", cut.id, repoID, err)
+	}
+	if wide, err = purgeCutWide(ctx, tx, purgeCutFactWidthsSQL, purgeCutFactsSQL, cut.id, wide); err != nil {
+		return 0, fmt.Errorf("code: purge change %s's revisions' facts of %s: %w", cut.id, repoID, err)
 	}
 	deleted += wide.deleted
 	if wide.freed > 0 {
@@ -280,6 +285,7 @@ const (
 		(SELECT COUNT(*) FROM (SELECT 1 FROM code_comments WHERE change_id = c.id LIMIT ?2)),
 		(SELECT COUNT(*) FROM (SELECT 1 FROM code_finding_texts WHERE change_id = c.id LIMIT ?2)),
 		(SELECT COUNT(*) FROM (SELECT 1 FROM code_reviews WHERE change_id = c.id LIMIT ?2)),
+		(SELECT COUNT(*) FROM (SELECT 1 FROM code_revision_facts WHERE change_id = c.id LIMIT ?2)),
 		(SELECT COUNT(*) FROM code_change_bodies WHERE change_id = c.id),
 		(SELECT COUNT(*) FROM code_conversations WHERE change_id = c.id)
 		FROM code_changes AS c INDEXED BY ` + changesNumberKey + ` WHERE c.repo_id = ?1
@@ -311,6 +317,9 @@ const (
 	purgeChangeReviewsSQL = `DELETE FROM code_reviews WHERE rowid IN (SELECT v.rowid
 		FROM json_each(?) AS j CROSS JOIN code_reviews AS v
 		WHERE v.change_id = CAST(j.value AS TEXT))`
+	purgeChangeFactsSQL = `DELETE FROM code_revision_facts WHERE rowid IN (SELECT t.rowid
+		FROM json_each(?) AS j CROSS JOIN code_revision_facts AS t
+		WHERE t.change_id = CAST(j.value AS TEXT))`
 	purgeChangeBodiesSQL = `DELETE FROM code_change_bodies WHERE rowid IN (SELECT b.rowid
 		FROM json_each(?) AS j CROSS JOIN code_change_bodies AS b
 		WHERE b.change_id = CAST(j.value AS TEXT))`
@@ -336,7 +345,7 @@ const (
 	// The cut change's wide rows, each table's widths read as far as the cut
 	// takes and the delete of the first n of the same order: its comments,
 	// oldest thread first; its findings' texts by finding; its reviews in the
-	// order given.
+	// order given; its revisions' facts, oldest revision first.
 	purgeCutCommentWidthsSQL = `SELECT body_bytes FROM code_comments WHERE change_id = ?
 		ORDER BY thread_id, position LIMIT ?`
 	purgeCutCommentsSQL = `DELETE FROM code_comments WHERE rowid IN (SELECT rowid
@@ -349,6 +358,10 @@ const (
 		ORDER BY position LIMIT ?`
 	purgeCutReviewsSQL = `DELETE FROM code_reviews WHERE rowid IN (SELECT rowid
 		FROM code_reviews WHERE change_id = ? ORDER BY position LIMIT ?)`
+	purgeCutFactWidthsSQL = `SELECT bytes FROM code_revision_facts WHERE change_id = ?
+		ORDER BY n LIMIT ?`
+	purgeCutFactsSQL = `DELETE FROM code_revision_facts WHERE rowid IN (SELECT rowid
+		FROM code_revision_facts WHERE change_id = ? ORDER BY n LIMIT ?)`
 	unweighConversationSQL = `UPDATE code_conversations SET text_bytes = text_bytes - ? WHERE change_id = ?`
 	// The final purge's, unbounded because the decide forms it only once its
 	// bounded count found at most PurgePartRows rows left, and what the
@@ -378,6 +391,9 @@ const (
 	purgeAllReviewsSQL = `DELETE FROM code_reviews WHERE rowid IN (SELECT v.rowid
 		FROM code_changes AS c INDEXED BY ` + changesNumberKey + ` CROSS JOIN code_reviews AS v
 		WHERE c.repo_id = ? AND v.change_id = c.id)`
+	purgeAllFactsSQL = `DELETE FROM code_revision_facts WHERE rowid IN (SELECT t.rowid
+		FROM code_changes AS c INDEXED BY ` + changesNumberKey + ` CROSS JOIN code_revision_facts AS t
+		WHERE c.repo_id = ? AND t.change_id = c.id)`
 	purgeAllBodiesSQL = `DELETE FROM code_change_bodies WHERE rowid IN (SELECT b.rowid
 		FROM code_changes AS c INDEXED BY ` + changesNumberKey + ` CROSS JOIN code_change_bodies AS b
 		WHERE c.repo_id = ? AND b.change_id = c.id)`

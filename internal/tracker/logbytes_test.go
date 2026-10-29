@@ -297,6 +297,14 @@ var codeLogUnwritten = map[code.OpKind]struct {
 		"through the estate's code.conversation"},
 	code.OpFindingResolve: {payload: reflect.TypeFor[code.FindingResolve](), how: "findings are " +
 		"answered or dismissed by code_resolve_finding, through the estate's code.conversation"},
+	// A REVISION'S FACTS, recorded by the change writer for the repository's
+	// home git node, are appended by no node while no home reads them: the
+	// home's change work is their writer, through the estate's
+	// code.conversation, once for each revision of a live change and once
+	// more for each retarget.
+	code.OpRevise: {payload: reflect.TypeFor[code.Revise](), how: "a revision's facts are read by its " +
+		"repository's home git node and recorded through the estate's code.conversation, once a revision " +
+		"of a live change and once more a retarget"},
 }
 
 // codeLogUnwrittenShapes is every SHAPE of record of an op the day classifies
@@ -459,7 +467,8 @@ var codeLogKinds = map[code.ObjectKind]string{
 	code.KindCompany:    "the activation fence (codeLogNegligible)",
 	code.KindTrimmed:    "the trim's sweep of the anchors (codeLogNegligible)",
 	code.KindChange: "a change's conversation — its asks for review, its comments, its threads' " +
-		"resolutions, its reviews and the answers to their findings — on the change (codeLogUnwritten)",
+		"resolutions, its reviews and the answers to their findings — and its revisions' facts, on the " +
+		"change (codeLogUnwritten)",
 }
 
 // The reference company's chart, as a seat's tools hold it. Its work is filed

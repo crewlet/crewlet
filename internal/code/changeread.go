@@ -3,6 +3,7 @@ package code
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -455,11 +456,17 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 			kind     string
 			position int64
 			at       int64
+			facts    factsScan
 		)
-		if scanErr := rows.Scan(&rev.N, &rev.Head, &rev.Pusher, &kind, &rev.PushID, &position, &at); scanErr != nil {
+		if scanErr := rows.Scan(append([]any{&rev.N, &rev.Head, &rev.Pusher, &kind, &rev.PushID, &position, &at},
+			facts.targets()...)...); scanErr != nil {
 			return fmt.Errorf("code: read the revisions of %s: %w", ChangeRef(repo.ref.Name, row.number), scanErr)
 		}
 		rev.PusherKind, rev.Position, rev.At = PartyKind(kind), unpacked(position), store.DecodeTime(at)
+		if rev.Facts, err = facts.row(); err != nil {
+			return fmt.Errorf("code: read revision %d of %s's facts: %w", rev.N, ChangeRef(repo.ref.Name,
+				row.number), err)
+		}
 		out.Revisions = append(out.Revisions, rev)
 		if pg.add(rev.encodedBytes()) {
 			out.Next = strconv.FormatInt(rev.N, 10)
@@ -525,6 +532,48 @@ func (r changeRow) wire() ChangeRow {
 		out.MergedAt = store.DecodeTime(r.mergedAt.Int64)
 	}
 	return out
+}
+
+// factsScan is one revision's facts as a read joining the revisions to them
+// scans them ([revisionFactsColumns]): every column nullable, since a revision
+// the home has recorded no facts of joins none.
+type factsScan struct {
+	n                                               sql.NullInt64
+	targetRef, targetOID, base, patch, node, digest sql.NullString
+	owners, skipped, touched                        sql.NullString
+	targetPosition, position                        sql.NullInt64
+	omitted, touchesAll                             sql.NullBool
+}
+
+// targets is where a scan of [revisionFactsColumns] writes, in their order.
+func (s *factsScan) targets() []any {
+	return []any{&s.n, &s.targetRef, &s.targetOID, &s.targetPosition, &s.base, &s.patch, &s.omitted,
+		&s.touchesAll, &s.node, &s.digest, &s.position, &s.owners, &s.skipped, &s.touched}
+}
+
+// row is the facts as a read serves them, and nil for a revision of none.
+func (s *factsScan) row() (*RevisionFactsRow, error) {
+	if !s.n.Valid {
+		return nil, nil
+	}
+	f := &RevisionFactsRow{TargetRef: s.targetRef.String, TargetOID: s.targetOID.String,
+		TargetPosition: unpacked(s.targetPosition.Int64), BaseOID: s.base.String, PatchID: s.patch.String,
+		PatchIDOmitted: s.omitted.Bool, Touched: []string{}, TouchesAll: s.touchesAll.Bool, Node: s.node.String,
+		OwnersDigest: s.digest.String, Position: unpacked(s.position.Int64)}
+	if s.touched.String != "" {
+		f.Touched = strings.Split(s.touched.String, "\x00")
+	}
+	if s.owners.String != "" {
+		if err := json.Unmarshal([]byte(s.owners.String), &f.RequestedOwners); err != nil {
+			return nil, fmt.Errorf("its matched owners: %w", err)
+		}
+	}
+	if s.skipped.String != "" {
+		if err := json.Unmarshal([]byte(s.skipped.String), &f.SkippedOwners); err != nil {
+			return nil, fmt.Errorf("its skipped owners: %w", err)
+		}
+	}
+	return f, nil
 }
 
 // validateChanges is [ReadQuery.validate] for a `changes` listing: it names a
@@ -646,10 +695,21 @@ const (
 		WHERE repo_id = ? AND number = ?`
 	changeAuthorsSQL = `SELECT author, author_kind, first_revision, position FROM code_change_authors
 		WHERE change_id = ? ORDER BY author`
-	revisionsSQL = `SELECT n, head_oid, pusher, pusher_kind, push_id, position, at FROM code_revisions
-		WHERE change_id = ? ORDER BY n DESC LIMIT ?`
-	revisionsAfterSQL = `SELECT n, head_oid, pusher, pusher_kind, push_id, position, at FROM code_revisions
-		WHERE change_id = ? AND n < ? ORDER BY n DESC LIMIT ?`
+	// A PAGE OF REVISIONS WITH THE FACTS RECORDED OF EACH, each revision's by
+	// the facts' key beside its own — a revision of none reads a NULL key —
+	// newest first in the revisions' key's order.
+	revisionsSQL = `SELECT r.n, r.head_oid, r.pusher, r.pusher_kind, r.push_id, r.position, r.at, ` +
+		revisionFactsColumns + ` FROM code_revisions AS r LEFT JOIN code_revision_facts AS f
+			ON f.change_id = r.change_id AND f.n = r.n
+		WHERE r.change_id = ? ORDER BY r.n DESC LIMIT ?`
+	revisionsAfterSQL = `SELECT r.n, r.head_oid, r.pusher, r.pusher_kind, r.push_id, r.position, r.at, ` +
+		revisionFactsColumns + ` FROM code_revisions AS r LEFT JOIN code_revision_facts AS f
+			ON f.change_id = r.change_id AND f.n = r.n
+		WHERE r.change_id = ? AND r.n < ? ORDER BY r.n DESC LIMIT ?`
+	// revisionFactsColumns is every column of a revision's facts a read
+	// serves, in [factsScan]'s order.
+	revisionFactsColumns = `f.n, f.target_ref, f.target_oid, f.target_position, f.base_oid, f.patch_id,
+		f.patch_id_omitted, f.touches_all, f.node, f.owners_digest, f.position, f.owners, f.skipped, f.touched`
 	listedReposSQL = `SELECT id, name, status, owner_kind, owner, visibility FROM code_repos
 		WHERE id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
 )

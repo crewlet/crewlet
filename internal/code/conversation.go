@@ -29,8 +29,10 @@ import (
 // change's row, its body, its authors and its revisions; the change's keep its
 // reviewers (code_reviewers), its comments (code_comments), who takes part in
 // it and each reviewer's standing verdict (code_participants), its reviews
-// (code_reviews), their findings (code_findings, code_finding_texts) and its
-// counters (code_conversations). Only a repository's purge removes them,
+// (code_reviews), their findings (code_findings, code_finding_texts), its
+// counters (code_conversations) and the facts the repository's home git node
+// recorded of its revisions (code_revision_facts, [Revise]). Only a
+// repository's purge removes them,
 // behind the deletion gate that drops every record about a purged repository
 // ([Applier.Gated] reads a change record's repository off its payload).
 //
@@ -115,6 +117,13 @@ const (
 	// reviewer more than [MaxStandingFindings] standing findings on the
 	// change.
 	ConversationRefusalTooManyFindings ConversationRefusal = "too_many_findings"
+	// ConversationRefusalSuperseded is a revision's facts ([Revise]) the
+	// change no longer takes: of a revision or a head it has moved from,
+	// against a branch it no longer merges into, no later than the facts it
+	// holds of that revision against that branch, or matched against path
+	// owners the repository has changed since. The home's own refusal, which
+	// no principal is ever answered: its next pass reads the rows again.
+	ConversationRefusalSuperseded ConversationRefusal = "superseded"
 
 	// ConversationRefusalBusy is a write the change's writer did not reach in
 	// time — its asker's attempt run short behind the change's other writes,
@@ -135,8 +144,8 @@ func ConversationRefusals() []ConversationRefusal {
 		ConversationRefusalNotPermitted, ConversationRefusalNoReviewer, ConversationRefusalTooManyReviewers,
 		ConversationRefusalUnknownRevision, ConversationRefusalChangeClosed, ConversationRefusalChangeMerged,
 		ConversationRefusalThreadGone, ConversationRefusalNotAuthor, ConversationRefusalNotRaiser,
-		ConversationRefusalFindingGone, ConversationRefusalTooManyFindings, ConversationRefusalBusy,
-		ConversationRefusalNotApplied, ConversationRefusalUnavailable,
+		ConversationRefusalFindingGone, ConversationRefusalTooManyFindings, ConversationRefusalSuperseded,
+		ConversationRefusalBusy, ConversationRefusalNotApplied, ConversationRefusalUnavailable,
 	}
 }
 
@@ -164,11 +173,23 @@ func (s ReviewerState) Valid() bool { return slices.Contains(ReviewerStates(), s
 // ReviewerReason is why a reviewer was asked (code_reviewers.reason).
 type ReviewerReason string
 
-// ReviewerAsked is a reviewer somebody asked by name — a request for review.
-const ReviewerAsked ReviewerReason = "requested"
+const (
+	// ReviewerAsked is a reviewer somebody asked by name — a request for
+	// review.
+	ReviewerAsked ReviewerReason = "requested"
+	// ReviewerPathOwner is a reviewer a revision's facts asked ([Revise]):
+	// the seat a path owner whose globs the revision touches resolves to — a
+	// unit's effective lead, or the seat itself. No principal asked, so its
+	// row names no asker.
+	//
+	// BASE FORMAT, under the condition [KindChange] states: a value only a
+	// revise's apply writes, from the record's own op, so a build that knows
+	// the op knows the value.
+	ReviewerPathOwner ReviewerReason = "path_owner"
+)
 
 // ReviewerReasons is the closed set.
-func ReviewerReasons() []ReviewerReason { return []ReviewerReason{ReviewerAsked} }
+func ReviewerReasons() []ReviewerReason { return []ReviewerReason{ReviewerAsked, ReviewerPathOwner} }
 
 // Valid reports a reason this build knows.
 func (r ReviewerReason) Valid() bool { return slices.Contains(ReviewerReasons(), r) }

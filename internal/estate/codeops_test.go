@@ -785,6 +785,18 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			By: seat, Findings: []code.FindingResolution{{FindingID: "019a0c2e-0000-7000-8000-0000000000e4",
 				Resolution: code.FindingResolved, Note: "backs off now",
 				Commit: "7777777777777777777777777777777777777777"}}}},
+		"a revision's facts": {Revise: &code.Revise{RepoID: ref.ID, ChangeID: item.ChangeID, N: 3,
+			HeadOID: "9999999999999999999999999999999999999999", TargetRef: "refs/heads/main",
+			TargetOID: "7777777777777777777777777777777777777777", TargetPosition: at,
+			BaseOID: "6666666666666666666666666666666666666666", PatchID: "5555555555555555555555555555555555555555",
+			PatchIDOmitted: true, Touched: []string{"upload/retry.go"}, TouchesAll: true, Node: "node-b",
+			RequestedOwners: []code.Owner{{Kind: code.OwnerUnit, Ref: "Platform"}},
+			OwnersDigest:    "4444444444444444444444444444444444444444444444444444444444444444",
+			Asked:           []code.Reviewer{{Handle: "plat-lead", Kind: code.PartyAgent}},
+			SkippedOwners: []code.SkippedOwner{{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "reader"},
+				Handle: "reader", Why: code.SkipBelowReview}},
+			ReReview:     []code.Reviewer{{Handle: "cto", Kind: code.PartyAgent}},
+			LeadFallback: &code.Reviewer{Handle: "cto", Kind: code.PartyAgent}}},
 	} {
 		w.OpID, w.Asker, w.Seen = "019a0c2e-0000-7000-8000-0000000000e0.code_comment_on_change", seat, at
 		d.mu.Lock()

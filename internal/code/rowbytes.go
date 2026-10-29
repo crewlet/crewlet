@@ -491,7 +491,76 @@ func (r RevisionRow) encodedBytes() int {
 	if r.PushID != "" {
 		n += field("push_id", stringBytes(r.PushID), false)
 	}
-	return n + field("position", positionBytes(r.Position), false) + field("at", timeBytes(r.At), false)
+	n += field("position", positionBytes(r.Position), false) + field("at", timeBytes(r.At), false)
+	if r.Facts != nil {
+		n += field("facts", r.Facts.encodedBytes(), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the facts' JSON encoding.
+func (f RevisionFactsRow) encodedBytes() int {
+	n := 2 + field("target_ref", stringBytes(f.TargetRef), true) +
+		field("target_oid", stringBytes(f.TargetOID), false) +
+		field("target_position", positionBytes(f.TargetPosition), false)
+	if f.BaseOID != "" {
+		n += field("base_oid", stringBytes(f.BaseOID), false)
+	}
+	if f.PatchID != "" {
+		n += field("patch_id", stringBytes(f.PatchID), false)
+	}
+	if f.PatchIDOmitted {
+		n += field("patch_id_omitted", trueBytes, false)
+	}
+	n += field("touched", nullableStringsBytes(f.Touched), false)
+	if f.TouchesAll {
+		n += field("touches_all", trueBytes, false)
+	}
+	n += field("node", stringBytes(f.Node), false) + field("owners_digest", stringBytes(f.OwnersDigest), false)
+	if len(f.RequestedOwners) > 0 {
+		owners := 2
+		for i, o := range f.RequestedOwners {
+			if i > 0 {
+				owners++
+			}
+			owners += o.encodedBytes()
+		}
+		n += field("requested_owners", owners, false)
+	}
+	if len(f.SkippedOwners) > 0 {
+		skipped := 2
+		for i, s := range f.SkippedOwners {
+			if i > 0 {
+				skipped++
+			}
+			skipped += s.encodedBytes()
+		}
+		n += field("skipped_owners", skipped, false)
+	}
+	return n + field("position", positionBytes(f.Position), false)
+}
+
+// encodedBytes is the length of the owner's JSON encoding.
+func (o Owner) encodedBytes() int {
+	return 2 + field("kind", stringBytes(string(o.Kind)), true) + field("ref", stringBytes(o.Ref), false)
+}
+
+// encodedBytes is the length of the skipped owner's JSON encoding.
+func (s SkippedOwner) encodedBytes() int {
+	n := 2 + field("owner", s.Owner.encodedBytes(), true)
+	if s.Handle != "" {
+		n += field("handle", stringBytes(s.Handle), false)
+	}
+	return n + field("why", stringBytes(string(s.Why)), false)
+}
+
+// nullableStringsBytes is the length of a list of strings a field carries with
+// no omitempty: a nil list is JSON's null.
+func nullableStringsBytes(ss []string) int {
+	if ss == nil {
+		return len("null")
+	}
+	return stringsBytes(ss)
 }
 
 // encodedBytes is the length of the reviewer's JSON encoding.

@@ -1542,6 +1542,9 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 			Request: []code.Reviewer{{Handle: "dev"}}}}, true},
 		{opCodeConversation.spec, code.ConversationWrite{Asker: person, Reviewers: &code.ReviewerRequest{
 			Withdraw: []string{"dev"}}}, false},
+		// A REVISION'S FACTS, the home's own write naming no asker, whose
+		// path owners the chart resolves and judges.
+		{opCodeConversation.spec, code.ConversationWrite{Revise: &code.Revise{}}, true},
 	} {
 		if tc.spec.judges == nil {
 			t.Errorf("%s declares no grant", tc.spec.name)
