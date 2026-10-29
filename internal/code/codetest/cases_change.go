@@ -121,7 +121,7 @@ func commentOf(repoID, changeID, parent, body string) code.ConversationWrite {
 // whose decide reads the thread's root, lands through another member; and the
 // dead writer, back, applies the records every member does.
 func aConversationSurvivesItsWriter(t *testing.T, c Cluster) {
-	rc := newRepoCase(t, c, "fleet-f32")
+	rc := newRepoCase(t, c, "fleet-f39")
 	writer := rc.committer()
 	r := rc.other(writer)
 	p := NewPerson(t, c, "ceo")
