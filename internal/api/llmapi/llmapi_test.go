@@ -218,6 +218,14 @@ type rig struct {
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
+	return newRigAs(t, iam.Principal{ID: uuid.NewSHA1(auth.TokenNamespace, []byte("ops")),
+		Login: iam.TokenLogin("ops"), Kind: iam.KindMachine, Stage: iam.StageActive,
+		Grants: iam.AllGrants, ReauthAt: time.Now().Add(time.Hour)})
+}
+
+// newRigAs is [newRig] served as caller.
+func newRigAs(t *testing.T, caller iam.Principal) *rig {
+	t.Helper()
 	doc, err := config.ParseCompany([]byte(company))
 	if err != nil {
 		t.Fatal(err)
@@ -237,9 +245,6 @@ func newRig(t *testing.T) *rig {
 	if err := svc.Routes(mux); err != nil {
 		t.Fatal(err)
 	}
-	caller := iam.Principal{ID: uuid.NewSHA1(auth.TokenNamespace, []byte("ops")),
-		Login: iam.TokenLogin("ops"), Kind: iam.KindMachine, Stage: iam.StageActive,
-		Grants: iam.AllGrants, ReauthAt: time.Now().Add(time.Hour)}
 	r.h = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		mux.ServeHTTP(w, req.WithContext(iam.WithPrincipal(req.Context(), caller)))
 	})
@@ -576,5 +581,70 @@ func TestEveryModelRouteTakesItsVerb(t *testing.T) {
 	}
 	if len(mux.policies) != len(want) {
 		t.Errorf("mounted %d routes, want %d", len(mux.policies), len(want))
+	}
+}
+
+// draftBody is a check of a draft entry: a model the company does not run yet.
+const draftBody = `{"smoke": false, "entity": {"agent": "claude-code", "model": "opus",
+	"auth": {"mode": "api-key", "api_key": "${ANTHROPIC_API_KEY_SONNET}"}}}`
+
+// A DRAFT IS RUN ONLY BY WHO MAY WRITE WHAT IT STANDS FOR.
+//
+// A draft chooses its CLI, its binary, its overrides and its env, and resolves
+// its ${VAR}s through the secret store, so checking one runs what a config
+// write could make the company run with the company's credentials. It is asked
+// as `config.write` and `secrets.write`: a person whose proof is stale is told
+// to step up, and the assistant, which never takes `secrets.write`, is refused.
+// A check of the entry the company already runs stays `models.check`'s.
+func TestADraftIsCheckedOnlyByWhoMayWriteIt(t *testing.T) {
+	t.Parallel()
+	person := func(proved time.Duration) iam.Principal {
+		return iam.Principal{ID: uuid.New(), Login: "jane.doe", Kind: iam.KindPerson,
+			Stage: iam.StageActive, Grants: iam.AllGrants, ReauthAt: time.Now().Add(-proved).Add(time.Hour)}
+	}
+	assistant := person(time.Minute)
+	assistant.Via, assistant.AssistScope = iam.AssistName(uuid.New()), iam.AssistScopeExec
+
+	for _, tc := range []struct {
+		name   string
+		caller iam.Principal
+		error  string
+	}{
+		{"a stale proof", person(2 * time.Hour), "step_up_required"},
+		{"the assistant", assistant, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRigAs(t, tc.caller)
+			code, body := r.do(t, http.MethodPost, "/llm/providers/opus/check", draftBody, nil)
+			if code != http.StatusForbidden || (tc.error != "" && body["error"] != tc.error) {
+				t.Errorf("a draft check = %d %v, want 403 %s", code, body, tc.error)
+			}
+			code, body = r.do(t, http.MethodPut, "/llm/providers/opus/credential?dry_run=true",
+				`{"values": {"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-a-candidate-key-0000"},
+				"entity": {"agent": "claude-code", "model": "opus",
+				"auth": {"mode": "api-key", "api_key": "${ANTHROPIC_API_KEY_SONNET}"}}}`, nil)
+			if code != http.StatusForbidden {
+				t.Errorf("a draft credential test = %d %v, want 403", code, body)
+			}
+			if len(r.engine.checks) != 0 {
+				t.Errorf("a refused draft was run: %+v", r.engine.checks)
+			}
+		})
+	}
+
+	// THE ENTRY THE COMPANY RUNS stays models.check's, for the same stale
+	// proof and for the assistant on approval.
+	for _, caller := range []iam.Principal{person(2 * time.Hour), assistant} {
+		r := newRigAs(t, caller)
+		if code, body := r.do(t, http.MethodPost, "/llm/providers/default/check", `{"smoke": false}`, nil); code != http.StatusOK {
+			t.Errorf("a saved entry's check as %s = %d %v, want 200", caller.Login, code, body)
+		}
+	}
+	// AND A FRESH ADMIN RUNS A DRAFT.
+	r := newRig(t)
+	if code, body := r.do(t, http.MethodPost, "/llm/providers/opus/check", draftBody, nil); code != http.StatusOK ||
+		len(r.engine.checks) != 1 || r.engine.checks[0].draft == nil {
+		t.Errorf("a fresh admin's draft check = %d %v", code, body)
 	}
 }
