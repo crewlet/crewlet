@@ -681,20 +681,20 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 					"Reference it as ${%s}.\n", tokenVar)
 			return nil
 		}
-		target, err := storeLLMSecret(ctx, req.companySecrets, tokenVar, token)
+		target, written, err := storeLLMSecret(ctx, req.companySecrets, tokenVar, token)
 		if err != nil {
 			return err
 		}
-		// WHEN A RUNNING FLEET READS IT, said with where it went: the
-		// engine resolves the token from the snapshot it builds at each
-		// apply, so a token written through a node signs nothing in until
-		// one ([secretTarget.writtenNote]). And that the name is the one
-		// the entry reads with no reference, since one is not needed.
+		// WHEN A RUNNING FLEET READS IT, said with where it went: a node
+		// re-activates the revision that reads the token, and a store
+		// reached directly is read at the next start or apply
+		// ([secretTarget.writtenNote]). And that the name is the one the
+		// entry reads with no reference, since one is not needed.
 		fmt.Fprintf(stdout,
 			"Stored the headless token as %s in %s.\n%s\n"+
 				"It is read under that name by convention; to name it in the "+
 				"company document instead:\n\n%s",
-			tokenVar, target.where, target.writtenNote(), authReference(key, "token", tokenVar))
+			tokenVar, target.where, target.writtenNote(written), authReference(key, "token", tokenVar))
 		return nil
 
 	case req.username != "":
@@ -910,7 +910,7 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 			secrets.MaxValueBytes>>10, key, key, key, key)
 	}
 	name := cliprofile.BundleVarName(key)
-	target, err := storeLLMSecret(ctx, companySecrets, name, bundle)
+	target, written, err := storeLLMSecret(ctx, companySecrets, name, bundle)
 	if err != nil {
 		return err
 	}
@@ -928,7 +928,7 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 			"credentials directory holding no login, or over one installed before this\n"+
 			"one, since the newest login wins. It is read under that name by\n"+
 			"convention; to name it in the company document instead:\n\n%s",
-		name, target.where, target.writtenNote(), authReference(key, "credential_bundle", name))
+		name, target.where, target.writtenNote(written), authReference(key, "credential_bundle", name))
 	return nil
 }
 
@@ -946,21 +946,22 @@ func authReference(key, field, name string) string {
 // store it went to, which says where that is, said after every write for the
 // reason [secretTarget.where] gives, and who reads it when
 // ([secretTarget.writtenNote]).
-func storeLLMSecret(ctx context.Context, companySecrets *companyStore, name, value string) (*secretTarget, error) {
+func storeLLMSecret(ctx context.Context, companySecrets *companyStore, name, value string) (*secretTarget, storedSecret, error) {
 	target, err := companySecrets.route(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
+		return nil, storedSecret{}, fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
 	}
 	if target == nil {
-		return nil, fmt.Errorf("cannot save %s: there is no Tier A file at %s naming "+
+		return nil, storedSecret{}, fmt.Errorf("cannot save %s: there is no Tier A file at %s naming "+
 			"this node's store and keyring. Point -config at it, or pass -api URL "+
 			"naming a running node", name, companySecrets.bootstrapPath)
 	}
-	if _, err := target.Set(ctx, name, value, hostAuthor(), secrets.SourceLLMLogin,
-		time.Now().UTC()); err != nil {
-		return nil, fmt.Errorf("writing %s: %w", name, err)
+	written, err := target.Set(ctx, name, value, hostAuthor(), secrets.SourceLLMLogin,
+		time.Now().UTC())
+	if err != nil {
+		return nil, storedSecret{}, fmt.Errorf("writing %s: %w", name, err)
 	}
-	return target, nil
+	return target, written, nil
 }
 
 // importLLM restores an exported credential bundle onto this host.

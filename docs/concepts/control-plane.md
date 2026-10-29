@@ -267,6 +267,8 @@ The gate stops there rather than being folded into every worker duty, and that i
 
 A config revision and the *values* its `${VAR}` references resolve to are two different things, and re-activating an unchanged revision is the documented gesture for picking up a rotated credential. The payload is byte-identical, so an apply that compared payloads would rebuild nothing on exactly the operation an operator performs to make it rebuild: the LLM providers would keep the revoked key, the trackers their old token, and every shared MCP child the credential it captured at spawn.
 
+**A rotation is one write.** A write through a running node's `/secrets` of a name the active revision reads makes the re-activation itself, in the same request, and answers the revision and epoch it produced; a batch of values (`PUT /secrets`) makes one ([Secret Store](secret-store.md#a-write-through-a-node-re-activates-what-reads-it), ADR-0070). `POST /config/reload` is left for a value written any other way, and for a write whose own re-activation answered an error.
+
 **Nothing compares the payload.** No step between the operator's gesture and the rebuild looks at a revision's bytes, so there is nothing for a rotation to slip through. The property falls out of the control plane's shape instead:
 
 - The pointer's **KV sequence is the epoch**, and the store assigns a new one on every write. Re-activating a revision therefore mints a new epoch even though the value written is byte-identical.

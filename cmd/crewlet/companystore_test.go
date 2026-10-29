@@ -1142,3 +1142,25 @@ func installedSlackApps(t *testing.T, company string, handles ...string) string 
 	}
 	return company
 }
+
+// A -secret-store RUN THROUGH A RUNNING NODE HAS NOTHING LEFT TO DO, AND ONE
+// WITH THE ENGINE STOPPED STILL DOES.
+//
+// The node's `/secrets` route re-activates the revision that reads each value
+// it stores (ADR-0070), so a run through it that said "re-activate the current
+// revision" sent an operator to move the fleet onto one more epoch for
+// nothing. With the engine stopped no node re-activated anything, and a peer
+// running on the same store reads the values only at its next apply.
+func TestASecretStoreRunsNextStepFollowsTheRouteItWrote(t *testing.T) {
+	t.Parallel()
+	node := newRevealNode(t, map[string]string{})
+	through, _ := secretStoreSink(t, tokenEnviron(cliFixtureToken), "-api", node.server.URL)
+	if step := through.NextStep(); !strings.Contains(step, "node re-activated") ||
+		strings.Contains(step, "/config/reload") {
+		t.Errorf("through a node the next step is %q", step)
+	}
+	stopped, _ := secretStoreSink(t, noEnviron, "-config", bootstrapWithKeyring(t, "k1"))
+	if step := stopped.NextStep(); !strings.Contains(step, "POST /config/reload") {
+		t.Errorf("with the engine stopped the next step is %q", step)
+	}
+}

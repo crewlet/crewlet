@@ -370,7 +370,9 @@ written to the fleet's store, reached through this node's broker on /var/lib/cre
 This node's engine reads it when it starts; a node already running on the same store reads it at its next configuration apply, and POST /config/reload to it re-activates the current revision now.
 ```
 
-or `the external broker at <host:port>` in place of the node's own. Through a running node the second line names that node instead, and the third says the running fleet reads the value at its next configuration apply.
+or `the external broker at <host:port>` in place of the node's own. Through a running node the second line names that node instead, and the third says what the node's [re-activation](#a-write-through-a-node-re-activates-what-reads-it) did: the revision and epoch the running fleet reads the value at, that nothing the running company reads names it, or why it was not re-activated and that `POST /config/reload` does it once that is fixed.
+
+Several values are stored as **one** write with `crewlet secrets set NAME NAME...`, which reads one `NAME=value` line per name from stdin (never from arguments, which land in shell history) and refuses the whole set if a name it was given is missing, repeated or joined by one it was not. Through a running node it is one `PUT /secrets`, so a rotation of every credential one model reads lands as one activation.
 
 Every other command that touches the store — each command that reads the company document, a provisioner's `-secret-store` sink, `crewlet llm login` and `export` — decides its way in the same way, **once per run**, and everything the run reads and writes goes there: its values, what its sink records and reads back, what it stores ([CLI reference](../reference/cli.md#where-a-command-reads-the-companys-values)).
 
@@ -455,6 +457,7 @@ for that than an encrypted store the engine reads back itself.
 | `crewlet run` boot (every node role) | Reads the whole store before resolving any Tier B `${VAR}` |
 | A config revision activates (`PUT /config`, `crewlet config import`) | Every node re-reads the **fleet's** store as it converges on the new activation epoch — engine and API halves alike |
 | A provisioning pass seals a credential | The node that ran it refreshes its snapshot **and re-activates the current revision**, so every node rebuilds against the minted value — coalesced into one apply per 15 seconds (below) |
+| A write through a running node's `/secrets` (the dashboard, `crewlet secrets set`, crewlet-operator, a model's credential route) of a name the active revision reads | That node **re-activates the current revision** in the same request, once per write however many values it carried ([below](#a-write-through-a-node-re-activates-what-reads-it)) |
 | Otherwise | The running process keeps its snapshot |
 
 **A pass that mints a credential does the re-activation itself**, and the row above is the whole of why. Sealing makes a value *resolvable*; it does not touch anything that already resolved the old one, and everything a company actually routes through — seat identities, parsers, transports, provider clients, MCP children — was built at the last apply. So the provisioning pass performs the same gesture an operator would: it re-activates the current revision unchanged. Before it did, a pass could create an agent's Jira account, seal its token, report the integration ready, and leave the running engine routing every issue for that agent to a project lead, for ever. A node with **no config surface** (a worker-only one) seals and logs the outstanding rebuild instead, naming `POST /config/reload`.
@@ -487,7 +490,20 @@ The re-activations are **coalesced**: the first in a quiet period runs at once, 
 > a crash, a `kill -9` and an OOM all free them, and there is no stale lock to
 > clear by hand.
 
-So `crewlet secrets set` takes effect fleet-wide at the next config activation or restart — the CLI says so after each write, naming `POST /config/reload`. Re-activating the *current* revision is a valid way to ask a running engine to pick up a rotated credential, and on a running fleet the reload is that gesture; the apply re-reads the store before it builds anything precisely so that gesture works, and the pointer's own KV sequence is the epoch — the store assigns a new one on every write — precisely so a re-activation still moves what every node is watching (see [Control Plane](control-plane.md)).
+#### A write through a node re-activates what reads it
+
+A value sealed and left there changes nothing that is running, so every write through a running node's `/secrets` re-activates the current revision when it reads a name the write stored or removed ([ADR-0070](../../adr/0070-a-secret-write-re-activates-the-revision-that-reads-it.md)):
+
+1. The node asks which paths of the active revision read each name, from the same index [`GET /config/references`](../reference/api-endpoints.md#config--live-config-management-auth-gated) answers, counting the variables an entry reads without naming them.
+2. When any does, it asks `config.write` of the caller **before** sealing anything, on top of `secrets.write`. Both are an administrator's with a recent proof, so nobody who could write a secret before is refused now.
+3. It seals, then re-activates the active revision once, **synchronously**, and answers `read_by` (the paths) and `reload` (`{"revision_id", "epoch"}`) in the same response, so the page or the command that made the write shows the epoch the running fleet reads it at.
+4. **The answer stays 200 whatever the re-activation did.** The value is already sealed, so a re-activation that lost a race with another configuration write, found the company unrunnable or went unanswered is said in `reload.error` and `reload.detail`, and `POST /config/reload` re-activates once that is fixed. A name nothing reads answers `"reload": null` and moves nothing.
+
+A provisioning run through a running node seals each credential the moment it mints it, with the re-activation deferred (`"defer_reload": true`), and its end re-activates once for every value it sealed, retrying a moment's failure (a node failing over, the coordination store electing a leader); a run that dies before its end leaves its values sealed and inactive until the next re-activation, its next run's or `POST /config/reload`.
+
+`PUT /secrets` takes up to 64 values at once and re-activates **once** for all of them, which is how a rotation of every credential one model or integration reads avoids moving the fleet through an epoch per value, each running a mix of the old and the new ones. `crewlet secrets set NAME NAME...` and crewlet-operator's secret sync use it.
+
+Written with this node's engine stopped, the store is reached directly and nothing is re-activated: this node's engine reads the value when it starts, and a node already running on the same store (an external broker's fleet) reads it at its next configuration apply, which `POST /config/reload` to it brings forward; the CLI says so after each such write. Re-activating the *current* revision is how a running engine picks up a rotated credential: the apply re-reads the store before it builds anything precisely so that gesture works, and the pointer's own KV sequence is the epoch (the store assigns a new one on every write) precisely so a re-activation still moves what every node is watching (see [Control Plane](control-plane.md)).
 
 **What "picks up" means.** A rotated value is not useful until the things that *captured* it are rebuilt — an MCP child baked the resolved value into its spawn environment, an LLM provider holds it inside a constructed client, a transport holds it in a header. So re-activating an unchanged revision has to rebuild them, even though its payload is byte-identical.
 
@@ -551,8 +567,8 @@ node cannot do is start with no keyring at all: every node needs one — see
 
 | | Where credentials live | Rotation | New node starts |
 |---|---|---|---|
-| **One node** | Store (env as the fallback) | `crewlet secrets set`, then re-activate | From the env, then the store overlays it |
-| **A fleet** | Store (env as the fallback) | `crewlet secrets set` through any running node, then re-activate | From the env, then the same store every peer reads |
+| **One node** | Store (env as the fallback) | `crewlet secrets set`, which re-activates through a running engine | From the env, then the store overlays it |
+| **A fleet** | Store (env as the fallback) | `crewlet secrets set` through any running node, which re-activates | From the env, then the same store every peer reads |
 
 **The two columns are the same, and that is the point.** A credential is company-wide state, so it lives where the company config lives: one sealed copy on the coordination KV, written through any running node's authenticated API — or by the command itself, with the engine stopped on a solo node or on an external broker — and read by all of them.
 
@@ -600,11 +616,13 @@ stream to its end now leaves the environment as it started.
 before the engine starts; the engine itself reads `${VAR}` from this store and
 then from the process environment, and from nowhere else. `-secret-store` is
 the one that needs no file and no restart: the values land in the fleet's
-store, and [`POST /config/reload`](../reference/api-endpoints.md#post-configreload-after-a-secret-changes)
+store, and a run through a running node has nothing left to do, since the
+node re-activates the revision that reads the values once, at the end of the run. Recorded
+with this node's engine stopped, [`POST /config/reload`](../reference/api-endpoints.md#post-configreload-after-a-secret-changes)
 to a node that is up makes a running fleet re-read them, as a run that
 recorded something says — on its `Next:` line for GitLab, Mattermost and
 Slack, and in the note naming the minted secret for GitHub, Jira and
-Confluence. Recorded with this node's engine stopped, they are in the store the
+Confluence. They are also in the store this node's
 engine reads when it starts
 ([where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values)).
 [`crewlet config activate`](../reference/cli.md#crewlet-config-activate) opens

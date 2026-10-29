@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
@@ -126,22 +127,62 @@ func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 // too, with a 413 that names a body rather than a value, after the whole of it
 // had crossed the network.
 func (c *secretsClient) Set(ctx context.Context, name, value string, _ secrets.Author,
-	_ secrets.Source, _ time.Time) (secrets.Author, error) {
+	_ secrets.Source, _ time.Time) (storedSecret, error) {
 
 	if err := secrets.CheckValue(value); err != nil {
-		return secrets.Author{}, err
+		return storedSecret{}, err
 	}
 	var body struct {
-		UpdatedBy     string `json:"updated_by"`
-		UpdatedByKind string `json:"updated_by_kind"`
-		OperatorID    string `json:"operator_id"`
+		UpdatedBy     string              `json:"updated_by"`
+		UpdatedByKind string              `json:"updated_by_kind"`
+		OperatorID    string              `json:"operator_id"`
+		ReadBy        []string            `json:"read_by"`
+		Reload        *configapi.Reloaded `json:"reload"`
 	}
 	if err := c.call(ctx, http.MethodPut, "/secrets/"+url.PathEscape(name),
 		[]byte(value), &body); err != nil {
-		return secrets.Author{}, err
+		return storedSecret{}, err
 	}
-	return secrets.Author{Name: body.UpdatedBy, Kind: body.UpdatedByKind,
-		OperatorID: body.OperatorID}, nil
+	return storedSecret{
+		Author: secrets.Author{Name: body.UpdatedBy, Kind: body.UpdatedByKind,
+			OperatorID: body.OperatorID},
+		ReadBy: map[string][]string{name: body.ReadBy}, Reload: body.Reload,
+	}, nil
+}
+
+// SetMany stores several values through `PUT /secrets`, which seals them all
+// and re-activates the revision that reads any of them once (ADR-0070). The
+// node stamps the author, as on [secretsClient.Set], and its answer for a
+// batch names none, since it is the caller's own credential.
+func (c *secretsClient) SetMany(ctx context.Context, values map[string]string, _ secrets.Author,
+	_ secrets.Source, _ time.Time, deferReload bool) (storedSecret, error) {
+
+	if len(values) > secretsapi.MaxRevealNames {
+		return storedSecret{}, fmt.Errorf("%d values, and one write stores at most %d",
+			len(values), secretsapi.MaxRevealNames)
+	}
+	for name, value := range values {
+		if err := secrets.CheckValue(value); err != nil {
+			return storedSecret{}, fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	body := map[string]any{"values": values}
+	if deferReload {
+		body["defer_reload"] = true
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return storedSecret{}, err
+	}
+	var answer struct {
+		ReadBy map[string][]string `json:"read_by"`
+		Reload *configapi.Reloaded `json:"reload"`
+	}
+	if err := c.callWithin(ctx, http.MethodPut, "/secrets", "application/json", raw, &answer,
+		maxRowAnswerBytes, "no answer about one write is this long"); err != nil {
+		return storedSecret{}, err
+	}
+	return storedSecret{ReadBy: answer.ReadBy, Reload: answer.Reload}, nil
 }
 
 // Get reads one value back. Break-glass, and the node logs it by name.

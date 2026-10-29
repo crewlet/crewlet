@@ -212,7 +212,7 @@ func wireAPI(
 	}
 	secretSurface, err := secretsapi.New(secretsapi.Options{
 		Fleet: backends.Fleet, Cipher: cipher, ActiveKeyID: boot.Secrets.ActiveKeyID,
-		Identity: keyring,
+		Identity: keyring, Config: configSurface,
 	})
 	if err != nil {
 		return fail("secret surface", err)

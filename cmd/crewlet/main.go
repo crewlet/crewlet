@@ -2101,6 +2101,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// AND THE IDENTITY ESTATE'S HALF of a rotation, which only a
 		// record can move, and the assistant's, which a rotation waits out.
 		Identity: keyring, Assistant: assistantValues,
+		// AND THE CONFIG SURFACE, so a write of a value the company reads
+		// re-activates the revision that reads it (ADR-0070), through the
+		// same Reload `POST /config/reload` performs.
+		Config: configSurface,
 	})
 	if err != nil {
 		return nil, err
