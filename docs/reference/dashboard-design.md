@@ -8375,9 +8375,11 @@ and what it stops, grouping the models one credential or one plan holds, its
 vendor's sentence behind **Details**, and offering the one gesture that fixes
 it. A limit that holds seats also offers **Use a different model for these
 seats**: a menu of the models that answer now (never one on the limited plan,
-and for coding only a CLI that runs it) and **Add a model**, each opening the
-wizard on *Use it for* with every seat's category on the limited models added
-(`?add=`), for Review to show before anything is written. Then a row per model: its CLI's mark, key and model; its status (one word
+and for coding only a CLI that runs it), or a line saying none can, and **Add a
+model**, each opening the wizard on *Use it for* with every seat's category on
+the limited models added (`?add=`), for Review to show before anything is
+written. The address only preselects: a seat the company no longer has, or
+coding on a CLI that runs none, is dropped. Then a row per model: its CLI's mark, key and model; its status (one word
 from the engine's reading, and when it changes); how it signs in and the secret
 it reads; what it is used for, by category; when it last answered; and its
 menu. **By job** is every agent seat as a row with the model it runs for each
