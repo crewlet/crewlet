@@ -70,7 +70,10 @@
 // maintenance slots and memory through the cache's admissions, which bound
 // them. Each runs ONE BUILD AT A TIME and a pass
 // works through every due repository it maintains in its listing's order
-// until the next tick would begin. A repository a plan found NOT DUE
+// until the next tick would begin; a publication that did not land holds its
+// repository back by the duty cycle from when its build began
+// ([Compactor.paced]), so a repository whose publication keeps failing never
+// heads every pass of the loop. A repository a plan found NOT DUE
 // (nothing to merge, nothing to publish) is remembered at its row's version —
 // and a compaction's at its byte cap — so an idle repository costs its
 // maintainer's pass a map lookup, never a sync, and every other git node's —

@@ -307,7 +307,8 @@ their objects without a bitmap. A publication is due once that tail holds
 second of walk at the slowest a walk is held to, and about 21 MiB of a clone's
 memory — whichever comes first, and the maintainer publishes a repository at
 most every 10 minutes or every ten times its last publication's build,
-whichever is longer. A maintainer publishes one repository at a time, so it
+whichever is longer — counting a build that failed as well, from when it
+began. A maintainer publishes one repository at a time, so it
 keeps up with about ten large repositories at that duty cycle; past that, each
 waits for the others and its tail grows meanwhile, the signal to give a second
 git node the memory for them — the repositories then spread over both, each in

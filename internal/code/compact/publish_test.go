@@ -659,6 +659,127 @@ func TestAPublicationTheNodeCannotHoldIsPublishedWhenTheNodeGrows(t *testing.T) 
 	}
 }
 
+// failingOnce fails the first hit of its point, running then before it
+// answers — a build that ran on while a case's clock moved — and passes every
+// other hit.
+type failingOnce struct {
+	point codefault.Point
+	then  func()
+	mu    sync.Mutex
+	fired bool
+}
+
+// errBuildFailed is a case's build that failed.
+var errBuildFailed = errors.New("the case's build failed")
+
+func (f *failingOnce) Hit(_ context.Context, p codefault.Point, _ int64) error {
+	if p != f.point {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fired {
+		return nil
+	}
+	f.fired = true
+	if f.then != nil {
+		f.then()
+	}
+	return errBuildFailed
+}
+
+// didFire reports whether the point has failed its hit.
+func (f *failingOnce) didFire() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fired
+}
+
+// publicationListed reports whether the publication due listing names the
+// repository called name: whether it holds a pack no published layer covers.
+func (x *fixture) publicationListed(name string) bool {
+	x.t.Helper()
+	a, err := x.fleet.Data().Served().Read(x.c.Ctx, code.ReadQuery{Kind: code.ReadPublicationDue,
+		Fresh: codetest.Linearizable})
+	if err != nil {
+		x.t.Fatalf("the publication due listing: %v", err)
+	}
+	return slices.ContainsFunc(a.Publish, func(cand code.PublicationCandidate) bool { return cand.Name == name })
+}
+
+// A PUBLICATION THAT DID NOT LAND IS PACED BY ITS BUILD: a build that fails
+// moves no row, and the due listing is least recently published first, so the
+// repository it failed for heads every pass's listing — and where its build
+// ran past the pass's minute, as the largest repositories' builds do, the next
+// pass began at once with it again, rebuilding that one repository back to
+// back while every other the node maintains waited. Held to the duty cycle
+// from when its build began — PublishMinInterval, or PublishDutyCycle times
+// that build, whichever is longer — the repository whose build failed after
+// two minutes is not attempted at the next pass, which publishes another due
+// repository; it is still held ten minutes on, its build's tenfold not yet
+// passed; and once that has passed it is published.
+//
+// Mutations: skip no repository for a build that did not land, and the next
+// pass builds the failed one again; pace it by PublishMinInterval alone, and
+// it is built again before its build's tenfold has passed.
+func TestAPublicationThatDidNotLandIsPacedByItsBuild(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t)
+	x.pushN(2, 4<<10)
+	x.fleet.Declare(t, code.Declared{Name: "other", Settings: codetest.Settings()})
+	var (
+		mu  sync.Mutex
+		now = time.Now().Add(compact.PublishDebounce)
+	)
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		now = now.Add(d)
+	}
+	// THE BUILD FAILS once it has run past the pass's minute: the clock moves
+	// two of them while it builds.
+	const took = 2 * compact.PublishPoll
+	fails := &failingOnce{point: codefault.PublishAfterBuild, then: func() { advance(took) }}
+	c, rec, _ := x.compactorOf(func(o *compact.Options) { o.Faults, o.Now = fails, clock })
+	if report := publicationPassWhileBusy(t, c, rec); report.Failed != 1 || !fails.didFire() {
+		t.Fatalf("the pass over %s, whose build fails, reported %+v; want it failed", codetest.RepoName, report)
+	}
+
+	// ANOTHER REPOSITORY DUE, listed beside the one whose build failed.
+	other := x.p.Init()
+	x.p.Commit(other, map[string]string{"README.md": "other\n"}, "other")
+	if res := x.p.Push(t.Context(), other, x.node().URL()+"/git/other", "main"); res.Err != nil {
+		t.Fatalf("the push to other: %s", res)
+	}
+	mu.Lock()
+	// Settled by the compactor's clock, however long the case has taken.
+	if settled := time.Now().Add(compact.PublishDebounce); now.Before(settled) {
+		now = settled
+	}
+	mu.Unlock()
+	if report := publicationPassWhileBusy(t, c, rec); report.Published != 1 || report.Failed != 0 ||
+		x.publicationListed("other") || !x.publicationListed(codetest.RepoName) {
+		t.Errorf("the pass after the failed build reported %+v; want other published and %s, its build "+
+			"failed, not attempted", report, codetest.RepoName)
+	}
+	advance(compact.PublishMinInterval)
+	if report := publicationPassWhileBusy(t, c, rec); report.Published != 0 || report.Failed != 0 {
+		t.Errorf("a pass %v after the failed build began reported %+v; want nothing built, the build's pace "+
+			"being %d times its %v", took+compact.PublishMinInterval, report, compact.PublishDutyCycle, took)
+	}
+	advance(compact.PublishDutyCycle*took - compact.PublishMinInterval)
+	if report := publicationPassWhileBusy(t, c, rec); report.Published != 1 ||
+		x.publicationListed(codetest.RepoName) {
+		t.Errorf("the pass once the failed build's pace passed reported %+v; want %s published", report,
+			codetest.RepoName)
+	}
+}
+
 // A PASS PUBLISHES ONLY WHAT ITS NODE MAINTAINS, asked by the publication's
 // own charge: a node that is not a repository's maintainer syncs nothing of
 // it, and the question is asked by cache.Cache.PublishCharge of the listing's
@@ -1097,6 +1218,11 @@ func TestAStoredPublicationReleasesItsOwnHold(t *testing.T) {
 	}
 	rs.set(func(r *recordingStore) { r.refuse = nil })
 	setRoom(first)
+	// The refused build's own pace passed (Compactor.paced): a build the
+	// store refused for room waits for the room and its pace alike.
+	mu.Lock()
+	now = now.Add(compact.PublishMinInterval)
+	mu.Unlock()
 	if report := publicationPassWhileBusy(t, c, rec); report.Published != 1 {
 		t.Fatalf("the pass once the store had room for the first layer reported %+v, want it published", report)
 	}

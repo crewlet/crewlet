@@ -2688,7 +2688,12 @@ maintains whose tail is due:
   pauses.
 - **Paced**: 10 minutes since the last publication, or ten times that
   publication's build where that is longer, so a repository's publications
-  take at most a tenth of the time of the node that runs them.
+  take at most a tenth of the time of the node that runs them. A build that
+  did not land — it failed, it was refused, or its record is not known to
+  have applied — paces its repository the same way from when it began, so a
+  repository whose publication keeps failing costs its maintainer at most a
+  tenth of its time too, and the loop goes on to the next repository rather
+  than build that one again at the head of every pass.
 
 **The plan is git's own.** A new layer covers every live pack the layers
 beneath it do not: git writes a bitmap only over packs closed over what their
@@ -2767,9 +2772,10 @@ where it was the placement's swap that failed.
 every git node, the maintainer's own among them, so the maintainer's next
 publication pass finds the refusal in its own copy whether or not anything was
 pushed since, and publishes again over the layers it holds sound: the refused
-layer and every one above it are replaced, at most once every 10 minutes. An
-idle repository whose layer the store lost is repaired by the first git node
-to be its maintainer, or at its next push.
+layer and every one above it are replaced, at most once every 10 minutes, and
+a repair that does not land paces its repository as any publication's build
+does. An idle repository whose layer the store lost is repaired by the first
+git node to be its maintainer, or at its next push.
 
 **After a restore.** A backup carries no layer: a layer is derived, and the
 backup neither copies nor asks after it ([Live, retired and derived

@@ -80,7 +80,10 @@ const (
 	// PublishDutyCycle holds a repository's publications to at most a tenth
 	// of the time of the node that runs them: the next waits this many times
 	// the last one's build, where that is longer than PublishMinInterval —
-	// cache.MidxDutyCycle's reason. KEPT.
+	// cache.MidxDutyCycle's reason. KEPT. EVERY BUILD this node begins is
+	// held to it, the ones that do not land as well as the ones that do
+	// ([Compactor.paced]): a build's time is spent whatever its record
+	// becomes.
 	PublishDutyCycle = 10
 )
 
@@ -166,12 +169,13 @@ type PublishReport struct {
 //  4. Every repository in that order, until the next tick would begin: one a
 //     plan found nothing to publish in at its version is skipped unless it is
 //     damaged; one held back for a full store is skipped until the room is
-//     there; a REPAIR is due at once, paced by PublishMinInterval since its
-//     last publication and since this node last built one of it; any other
-//     is held to [Due] — each judged by its row, and by when this node first
-//     listed its tail, before anything is synced; one this node does not
-//     maintain is skipped; and every other is PUBLISHED ([Compactor.Publish]),
-//     one at a time.
+//     there; one whose last build here did not land waits out that build's
+//     pace ([Compactor.paced]); a REPAIR is due at once, paced by
+//     PublishMinInterval since its last publication; any other is held to
+//     [Due] — each judged by its row, and by when this node first listed its
+//     tail, before anything is synced; one this node does not maintain is
+//     skipped; and every other is PUBLISHED ([Compactor.Publish]), one at a
+//     time.
 //
 // A listing that fails is the pass's error. The pass is logged
 // code_publication_pass, at DEBUG unless it published, refused or failed
@@ -219,6 +223,7 @@ func (c *Compactor) PublishPass(ctx context.Context) (PublishReport, error) {
 		switch {
 		case !repair && c.nothingAt(cand),
 			c.isHeld(publicationLoop, cand.ID) && !released[cand.ID],
+			c.paced(cand.ID, now),
 			repair && !c.repairDue(cand, now),
 			!repair && !Due(cand, tails[cand.ID], now),
 			!maintained[cand.ID]:
@@ -295,9 +300,10 @@ func (c *Compactor) listPublications(ctx context.Context) ([]code.PublicationCan
 
 // forgetPublications drops the publication loop's memories of a repository the
 // pass no longer names — a plan that found nothing to publish, a hold for a
-// full store, the last build of one — so each is bounded by the repositories
-// with a tail or a refused layer: one whose tail a publication covered, or
-// that was deleted, is planned from its rows if it comes back.
+// full store, the pace of a build that did not land — so each is bounded by
+// the repositories with a tail or a refused layer: one whose tail a
+// publication covered, or that was deleted, is planned from its rows if it
+// comes back.
 func (c *Compactor) forgetPublications(named []code.PublicationCandidate) {
 	in := make(map[string]bool, len(named))
 	for _, cand := range named {
@@ -365,18 +371,46 @@ func (c *Compactor) rememberNothing(cand code.PublicationCandidate) {
 }
 
 // repairDue reports whether a REPAIR of cand may be built at now: at most one
-// a PublishMinInterval, since the repository's last publication and since
-// this node last built one of it — so a store that keeps losing what is
-// published costs a repository one publication a PublishMinInterval, never
-// one a pass.
+// a PublishMinInterval since the repository's last publication — so a store
+// that keeps losing what is published costs a repository one publication a
+// PublishMinInterval, never one a pass. A repair this node built that did not
+// land is held back by that build's pace, as every build is
+// ([Compactor.paced]).
 func (c *Compactor) repairDue(cand code.PublicationCandidate, now time.Time) bool {
+	return cand.PublishedAt.IsZero() || now.Sub(cand.PublishedAt) >= PublishMinInterval
+}
+
+// paced reports whether this node's last build of a publication of repoID —
+// one that did not land: it failed, was refused, or its record is not known
+// applied — holds the repository back at now: until PublishMinInterval, or
+// PublishDutyCycle times that build's length, whichever is longer, has passed
+// since it began. The duty cycle [Due] holds a repository's publications to
+// by its row, which only a record that applies moves.
+//
+// EVERY BUILD THIS NODE BEGINS IS PACED: a build that did not land moves no
+// row, and the due listing is least recently published first, so without this
+// the repository it failed for was the first candidate of every pass — and
+// where its build ran past PublishPoll, as the largest repositories' builds
+// do, the pass ended after it and the ticker's buffered tick began the next at
+// once, rebuilding that one repository back to back for as long as it failed:
+// every other repository the node maintains never published again, each tail
+// past PublishTailObjects served unbitmapped, and a maintenance slot and up to
+// the publication's whole charge spent on builds that failed. Paced, a
+// repository whose publication keeps failing costs its maintainer at most a
+// tenth of its time, and the pass goes on to the next.
+//
+// A NODE-LOCAL PACE, NEVER A MEMORY AT THE VERSION: a refusal for memory is
+// no build (its admission refused it before any began) and is still never
+// remembered (M3-decisions M3-O26), and a full store's hold stays its own
+// ([Compactor.releaseHeld]) — a build the store refused for room waits for
+// both, the room and its pace, so a reservation whose room comes and goes
+// around a build's estimate never has the repository rebuilt at every pass.
+// A restart forgets it, costing one build more.
+func (c *Compactor) paced(repoID string, now time.Time) bool {
 	c.mu.Lock()
-	last := c.built[cand.ID]
+	last, ok := c.built[repoID]
 	c.mu.Unlock()
-	if !cand.PublishedAt.IsZero() && now.Sub(cand.PublishedAt) < PublishMinInterval {
-		return false
-	}
-	return last.IsZero() || now.Sub(last) >= PublishMinInterval
+	return ok && now.Sub(last.began) < max(PublishMinInterval, PublishDutyCycle*last.took)
 }
 
 // errLayerTooLarge and errNoBitmap are publications this node refuses before
@@ -441,6 +475,11 @@ var (
 //     committer decided: applied adopts the outputs and the layer into this
 //     node's cache by link — so the node that built them downloads none —
 //     and forgets the repository's memory.
+//
+// EVERY BUILD IT BEGINS IS PACED until one lands: its start and its length
+// are kept, and the publication pass holds the repository back by them
+// whatever became of the build ([Compactor.paced]) — the duty cycle a landed
+// publication's row holds it to.
 func (c *Compactor) Publish(ctx context.Context, cand code.PublicationCandidate) (Outcome, error) {
 	c.publishing.Lock()
 	defer c.publishing.Unlock()
@@ -524,11 +563,14 @@ func (c *Compactor) publish(ctx context.Context, cand code.PublicationCandidate,
 		return c.publicationFailed(cand, "admit", err)
 	}
 	defer adm.Release()
-	c.mu.Lock()
-	c.built[cand.ID] = c.now()
-	c.mu.Unlock()
 
+	// THE BUILD IS PACED UNTIL IT LANDS ([Compactor.paced]): marked here,
+	// whatever becomes of it, and forgotten once its record applies.
+	start := c.now()
 	b, out, err := c.buildLayer(ctx, cand, s, adm, chain, live, p, cap, limits)
+	c.mu.Lock()
+	c.built[cand.ID] = lastBuild{began: start, took: c.now().Sub(start)}
+	c.mu.Unlock()
 	if err != nil {
 		return out, err
 	}
@@ -993,8 +1035,10 @@ func (c *Compactor) publicationAnswered(ctx context.Context, cand code.Publicati
 			c.log.Warn("code_publication_adopt_failed", "repo", cand.Name, "publication", cid, "layer",
 				layer.LayerID, "error", err)
 		}
+		// LANDED: the row its record wrote paces the next build ([Due]).
 		c.mu.Lock()
 		delete(c.nothing, cand.ID)
+		delete(c.built, cand.ID)
 		c.mu.Unlock()
 		c.log.Info("code_publication_applied", "repo", cand.Name, "publication", cid, "layer", layer.LayerID,
 			"base", layer.BaseID, "replaces", len(layer.Replaces), "repacked", len(b.proposal.Compaction.Retire),

@@ -287,9 +287,12 @@ type Compactor struct {
 	// nothing is every repository a publication's plan found nothing to
 	// publish in — or a layer too large — at the version the listing named.
 	nothing map[string]statelog.Position
-	// built is when this node last began building a publication of each
-	// repository: what a REPAIR is paced by ([Compactor.repairDue]).
-	built map[string]time.Time
+	// built is this node's last build of a publication of each repository
+	// that has not LANDED — failed, refused, or its record not known applied
+	// — when it began and how long it ran: what holds the repository back
+	// ([Compactor.paced]). A build whose record applied leaves nothing here:
+	// the row its record wrote paces the next one ([Due]).
+	built map[string]lastBuild
 	// tails is when this node's publication loop first listed each
 	// repository's current tail: what [Due]'s ceiling runs from
 	// ([Compactor.sightTails]).
@@ -322,6 +325,15 @@ type Compactor struct {
 type memo struct {
 	version statelog.Position
 	cap     int64
+}
+
+// lastBuild is a build of a publication this node began that has not landed:
+// when it began — its admission — and how long its git work took, the time
+// it held its maintenance slot, which is what the duty cycle counts
+// ([PublishDutyCycle]).
+type lastBuild struct {
+	began time.Time
+	took  time.Duration
 }
 
 // behindRepo is one repository at the pack bound this node maintains.
@@ -364,7 +376,7 @@ func New(o Options) (*Compactor, error) {
 	}
 	c := &Compactor{o: o, log: o.Logger, now: o.Now, bounds: production, runBuild: runInSlot,
 		compactions: map[string]bool{}, publications: map[string]map[string]bool{}, notDue: map[string]memo{},
-		nothing: map[string]statelog.Position{}, built: map[string]time.Time{}, tails: map[string]time.Time{},
+		nothing: map[string]statelog.Position{}, built: map[string]lastBuild{}, tails: map[string]time.Time{},
 		caps: map[string]int64{}, done: make(chan struct{})}
 	for i := range c.held {
 		c.held[i].repos = map[string]int64{}
