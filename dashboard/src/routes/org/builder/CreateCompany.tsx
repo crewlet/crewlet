@@ -25,17 +25,18 @@
  * to exist first, so the next steps after a successful create open that page
  * in edit rather than this form asking for one of the three in passing.
  *
- * WHAT A CREATE CANNOT DO. The dashboard writes no model provider (that is
- * `providers.llm`, which no screen adds), so the next steps after a successful
- * create name it too and give the terminal steps for the one step that has no
- * screen at all (`contract/providersteps.ts`) — unless another system manages
- * the document, which is where its model is added then
- * ([managedModelSentence]).
+ * WHAT A CREATE CANNOT DO. A create writes no model provider (that is
+ * `providers.llm`, which Settings › Models adds, signed in and tested), so the
+ * next steps after a successful create send the reader there, with the
+ * terminal steps beside it for a reader at the node's host
+ * (`contract/providersteps.ts`), unless another system manages the document,
+ * which is where its model is added then ([managedModelSentence]).
  */
 
 import { useState } from "react";
 import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts";
 import { href } from "~/app/router.tsx";
+import { MODELS_PATH } from "~/app/routes.ts";
 import { ConfigField } from "~/components/ConfigField.tsx";
 import {
   DraftRefusal,
@@ -59,6 +60,7 @@ import {
   Card,
   Checkbox,
   CodeBlock,
+  Disclosure,
   InlineCode,
   SegmentedControl,
 } from "@crewlethq/ui";
@@ -393,9 +395,9 @@ export function managedModelSentence(managedBy: readonly string[]): string {
 /**
  * What is left to do once the company exists: write the principles every
  * agent reads, connect the tools it works in, and give it a model provider,
- * which no dashboard screen adds. The company
- * this card follows is in the store and in no file, which is where the steps
- * start (`contract/providersteps.ts` says why each one is the one it is). On a
+ * on Settings › Models or from a terminal. The company this card follows is
+ * in the store and in no file, which is where the terminal steps start
+ * (`contract/providersteps.ts` says why each one is the one it is). On a
  * document another system manages, `managedBy` names it, and the card says the
  * model is added there instead ([managedModelSentence]).
  */
@@ -444,12 +446,26 @@ export function NextSteps({
           {managedBy === null ? (
             <>
               <span className="t-caption">
-                Agents can’t work until one is added. Every model runs through a coding CLI, signed
-                in on the node’s host. These steps write the company you just created to a file, add
-                Claude Code to it, sign it in with <InlineCode>crewlet llm login</InlineCode> and
-                import the file:
+                Agents can’t work until one is added. Every model runs through a coding CLI: Models
+                adds one, signs it in and tests it.
               </span>
-              <CodeBlock plain wrap code={PROVIDER_STEPS} />
+              <div className="row">
+                <ButtonLink
+                  variant="secondary"
+                  size="small"
+                  href={href(MODELS_PATH, { flow: "add" })}
+                >
+                  Add a model
+                </ButtonLink>
+              </div>
+              <Disclosure title="Or from a terminal" size="compact" headingLevel="none">
+                <span className="t-caption">
+                  These steps write the company you just created to a file, add Claude Code to it,
+                  sign it in with <InlineCode>crewlet llm login</InlineCode> on the node’s host and
+                  import the file:
+                </span>
+                <CodeBlock plain wrap code={PROVIDER_STEPS} />
+              </Disclosure>
             </>
           ) : (
             <span className="t-caption">

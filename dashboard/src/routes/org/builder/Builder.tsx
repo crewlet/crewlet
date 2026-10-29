@@ -75,7 +75,7 @@ import {
   configGuardedReason,
   useManagedConfig,
 } from "~/lib/useWriteAccess.ts";
-import { PRINCIPLES_PATH } from "~/app/routes.ts";
+import { MODELS_PATH, PRINCIPLES_PATH } from "~/app/routes.ts";
 import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
 import { principlesEditQuery } from "~/routes/settings/principles/edit/address.ts";
 import { useMayWriteCharter } from "~/routes/settings/principles/edit/access.ts";
@@ -2003,8 +2003,11 @@ function BuilderScreen({
           <Callout variant="warning" icon={<CpuGlyph />}>
             {documentManagedBy === null ? (
               <>
-                No model provider is set, so agents can’t work. One is added from a terminal on the
-                node’s host, starting from the company the store holds:
+                No model provider is set, so agents can’t work. Add one under{" "}
+                <a className="t-link" href={href(MODELS_PATH, { flow: "add" })}>
+                  Settings, Models
+                </a>
+                , or from a terminal on the node’s host, starting from the company the store holds:
                 <Disclosure title="The steps" size="compact" headingLevel="none">
                   <CodeBlock plain wrap code={PROVIDER_STEPS} />
                 </Disclosure>

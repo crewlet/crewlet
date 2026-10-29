@@ -162,6 +162,9 @@ export const ORG_EDIT_PATH: readonly string[] = ["company", "org", "edit"];
  */
 export const PRINCIPLES_PATH: readonly string[] = ["company", "principles"];
 
+/** Settings › Models, where a model is added, signed in and tested: the page a screen sends a reader to give the company a model. */
+export const MODELS_PATH: readonly string[] = ["settings", "models"];
+
 /**
  * Where a new artifact of a kind is made: each kind has its own page
  * (`routes/artifacts/new/`), because writing a doc, laying out a deck and

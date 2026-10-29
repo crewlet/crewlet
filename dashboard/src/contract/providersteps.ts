@@ -1,9 +1,9 @@
 /**
  * The terminal steps that give a company its first model, as the builder
- * shows them: on the card after a create, and under the caution a company
- * with no `providers.llm` raises. No dashboard screen adds a model, and every
- * model runs through a coding CLI that is signed in on the node's host, so
- * this is the one part of starting a company the dashboard hands back.
+ * shows them beside Settings › Models: on the card after a create, and under
+ * the caution a company with no `providers.llm` raises. Models adds a model
+ * from the dashboard; these are the same thing done at the node's host, for a
+ * reader who works there.
  *
  * THEY START FROM THE STORE, because that is where a company the builder made
  * is: `PUT /config` wrote it, and no file holds it. `crewlet llm` reads the
