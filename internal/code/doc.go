@@ -1167,8 +1167,9 @@
 // its rows leave — every row of MaxRecordRows touched, as the build before's
 // shape of 1 965 deletions counted twice did in 67 ms in the same run (96–105
 // ms on the Xeon); 73 ms with the widest expired push rows waiting as well,
-// the longest shape a record the committer forms has, under half of
-// statelog.ApplyTxTimeBudget; and 79 ms for a record whose deletions are
+// the longest shape of a record that moves no live change (one that moves
+// the most is longer: below), under half of statelog.ApplyTxTimeBudget; and
+// 79 ms for a record whose deletions are
 // REMOVALS — three pushes of [MaxCommandsPerPush] deletions at a repository
 // already holding [MaxTombstonesPerRepo] fresh tombstones, which writes the
 // 3 000 objects they left as drops beside removing their refs — a record no
@@ -1221,6 +1222,26 @@
 // statelog.ApplyTxTimeBudget — and the slowest without it, 150 ms, as much:
 // on that machine the history arms' spread is the machine's, not the
 // index's.
+//
+// THE CHANGES A RECORD MOVES (the changes and group+changes arms, each
+// decided over its rows before it is applied, so each is a record the
+// committer forms; one bounded run, -benchtime 5x and one count, on two
+// E-cores of a Core Ultra 7 265U under other sessions' load — a load average
+// of about 4–7 — interleaved with the build before it, two rounds): 172–189
+// ms for the most live changes one record moves — a push of
+// [MaxCommandsPerPush] fast-forwards of changes' sources by their author and
+// one deleting the sources of the 232 more its rows leave, 1 232 changes
+// written back beside a thousand revisions, the refs and the deletions'
+// drops — the longest shape a record the committer forms has, at seven
+// tenths to three quarters of statelog.ApplyTxTimeBudget; and 19–26 ms for a
+// group of
+// [MaxPushesPerRecord] pushes each moving one change's head, where the same
+// group moving none took 10–18 ms. The build before wrote each change with an
+// UPDATE of its own: 276–334 ms for the first, past the budget, and 28–36 ms
+// for the second. What the batch leaves is the driver's: every value a
+// statement binds is a call into the engine of its own, and a change is
+// written back whole — its upsert's VALUES carry every NOT NULL column — so
+// the book reads every column of every change the record moves.
 //
 // A PURGE RECORD (BenchmarkApplyAPurgePart): 56–60 ms for a part of
 // [PurgePartRows] push rows of a kilobyte; 81–88 ms for a part over the

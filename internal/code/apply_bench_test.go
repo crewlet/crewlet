@@ -124,6 +124,104 @@ func (e *estate) seedChangeRows(id string, changes, revisions, authors, body int
 	}
 }
 
+// seedLiveChanges writes n live changes of a repository at one revision each,
+// as seedChangeRows does, and what a live change stands on: its source branch
+// (liveSource), live at the change's head (liveHead) and counted, as a push's
+// apply counts a branch; and the operator every pushEntry and benchProposal
+// names ("op") as one of its authors, as a bot that pushed the changes it now
+// pushes again is — so a push moving one costs its record the change's row and
+// its revision, and no author: the most changes one record can move.
+func (e *estate) seedLiveChanges(id string, n int) {
+	e.t.Helper()
+	e.seedChangeRows(id, n, 1, 0, 0)
+	e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
+		INSERT INTO code_refs (repo_id, ref, target, position, at)
+		SELECT ?, printf('refs/heads/change-%06d', i), printf('%040d', i), 1, 0 FROM k`, n, id)
+	e.exec(`UPDATE code_repos SET refs = refs + ?, branches = branches + ? WHERE id = ?`, n, n, id)
+	e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
+		INSERT INTO code_change_authors (change_id, author, author_kind, first_revision, position)
+		SELECT printf('%s-change-%06d', ?, i), 'op', 'person', 1, 1 FROM k`, n, id)
+}
+
+// liveSource is the source branch of the i-th change seedLiveChanges seeds,
+// counted from 0, and liveHead its head, the commit that branch is at.
+func liveSource(i int) string { return fmt.Sprintf("refs/heads/change-%06d", i) }
+func liveHead(i int) string   { return fmt.Sprintf("%040d", i) }
+
+// rebasingChanges is the shape of the record that moves the most live
+// changes: heads, a push of MaxCommandsPerPush fast-forwards of changes'
+// sources by a pusher already their author — a ref, and the change's row and
+// its revision, each — and closes, a push deleting the sources of as many
+// more changes as the record's rows leave beside it — a ref, the sweep's room
+// for its tombstone and the object it left ([commandRows]), and the change's
+// row, each. Counted as the push decide counts a record's rows, which
+// [estate.decidedRecord] holds the shape to.
+func rebasingChanges() (heads, closes int) {
+	heads = MaxCommandsPerPush
+	moving := PushEntry{Pack: &PackRef{}, Commands: make([]Command, heads)}
+	for c := range moving.Commands {
+		moving.Commands[c] = move(liveSource(c), liveHead(c), oid(fmt.Sprint("rebased", c)))
+	}
+	rows := entryRows(moving) + 2*heads
+	deleting := PushEntry{Pack: &PackRef{}}
+	for {
+		deleting.Commands = append(deleting.Commands, move(liveSource(heads+closes), liveHead(heads+closes),
+			ZeroOID))
+		if recordRows(rows+entryRows(deleting)+len(deleting.Commands)) > MaxRecordRows {
+			return heads, closes
+		}
+		closes++
+	}
+}
+
+// decidedRecord is the record the push decide forms over e's rows of repo
+// from pushes — each proposed as its commands, undecided, with a pack minted
+// at the decide's instant — failing b unless it admits every one whole into
+// one record within MaxRecordRows, as a committer appends it: so a record a
+// benchmark applies is one a committer forms, its change rows counted by the
+// decide that holds the record to its bound ([estate.admitted]'s rule, for a
+// push). It answers the record's entries and those change rows ([changeBook]).
+func (e *estate) decidedRecord(b *testing.B, repo string, pushes []PushEntry) ([]PushEntry, int) {
+	b.Helper()
+	batch := make([]Proposal, len(pushes))
+	for i, p := range pushes {
+		cmds := make([]Command, len(p.Commands))
+		for c, cmd := range p.Commands {
+			cmds[c] = Command{Ref: cmd.Ref, Old: cmd.Old, New: cmd.New, Forced: cmd.Forced}
+		}
+		batch[i] = withPack(Proposal{PushID: p.PushID, RepoID: repo, Principal: p.Principal, Via: p.Via,
+			Node: p.Node, Commands: cmds, ReceivedAt: p.ReceivedAt}, p.Pack.Size, applyClock)
+	}
+	var (
+		entries    []PushEntry
+		answers    []decided
+		changeRows int
+	)
+	ctx := context.Background()
+	if err := e.db.Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		entries, answers, changeRows, _, err = decideBatch(ctx, tx, repo, batch, DefaultLimits(),
+			DefaultDeletedRetention, SeatRules{}, applyClock, &verdicts{})
+		return err
+	}); err != nil {
+		b.Fatalf("decide the record: %v", err)
+	}
+	for i, a := range answers {
+		if !a.inRecord || slices.ContainsFunc(a.commands, func(c Command) bool { return c.Result != ResultOK }) {
+			b.Fatalf("push %d of %d is not in the record whole (carried %t, refused %q: %s)", i, len(batch),
+				a.carried, a.refused, a.detail)
+		}
+	}
+	rows := changeRows
+	for _, entry := range entries {
+		rows += entryRows(entry)
+	}
+	if recordRows(rows) > MaxRecordRows {
+		b.Fatalf("the decide formed a record of %d rows, past MaxRecordRows (%d)", recordRows(rows), MaxRecordRows)
+	}
+	return entries, changeRows
+}
+
 // changeRowsOf is every row of a repository's changes seedChangeRows wrote
 // that the estate still holds, revisions, authors and bodies found by their
 // ids.
@@ -233,7 +331,7 @@ func fullest(tb testing.TB, prefix string, i int, command func(p, c int) Command
 //     tombstones and as many ref drops and sweeps the 1 374 its rows leave:
 //     the most rows a record can both write and delete;
 //   - deletions+history: that, with the widest expired push rows waiting too
-//     — the longest shape a record the committer forms has;
+//     — the longest shape of a record that moves no live change;
 //   - removal: three pushes of MaxCommandsPerPush ref deletions at a
 //     repository already holding MaxTombstonesPerRepo fresh tombstones, so
 //     the record writes its deletions as removals and the objects they left
@@ -246,7 +344,22 @@ func fullest(tb testing.TB, prefix string, i int, command func(p, c int) Command
 //   - forced: one push of MaxCommandsPerPush forced updates at a repository
 //     holding MaxRecordRows ref drops past their grace, so the record writes
 //     a thousand refs and as many drops and forgets the 1 997 its rows leave
-//     — the most drops a record both writes and forgets.
+//     — the most drops a record both writes and forgets;
+//   - changes: the most live changes one record moves — a push moving the
+//     heads of MaxCommandsPerPush of them by a pusher already their author,
+//     which costs each change its row and its revision beside its ref, then
+//     one deleting the sources of as many more as the record's rows leave,
+//     which closes them (rebasingChanges) — 1 232 changes, each row
+//     rewritten, the bulk rebase a bot's force-push of every change it
+//     rebased makes;
+//   - group+changes: MaxPushesPerRecord pushes of one command each, each
+//     moving the head of a live change of its own — group commit, where
+//     every push is a change's next revision.
+//
+// The two change arms are DECIDED over the rows before they are applied
+// ([estate.decidedRecord]), since what a record writes about changes is what
+// the repository holds: so each is a record the committer forms, its change
+// rows counted by the decide that holds it to MaxRecordRows.
 //
 // Each is held against statelog.ApplyTxTimeBudget (250 ms), which a record
 // is checked against only at its boundary; doc.go's measured section records
@@ -302,6 +415,35 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 		}
 		return entries
 	}
+	// A RECORD'S WORTH OF LIVE CHANGES, rebasingChanges' shape, and every
+	// change it moves seeded live; and a group of pushes each moving one.
+	heads, closes := rebasingChanges()
+	rebasing := func(i int) []PushEntry {
+		moves := make([]Command, heads)
+		for c := range moves {
+			moves[c] = move(liveSource(c), liveHead(c), oid(fmt.Sprint("rebased", c)))
+		}
+		deletions := make([]Command, closes)
+		for c := range deletions {
+			deletions[c] = move(liveSource(heads+c), liveHead(heads+c), ZeroOID)
+		}
+		return []PushEntry{pushEntry(fmt.Sprint("rebase-", i, "-heads"), moves...),
+			pushEntry(fmt.Sprint("rebase-", i, "-closes"), deletions...)}
+	}
+	revising := func(i int) []PushEntry {
+		var entries []PushEntry
+		for p := range MaxPushesPerRecord {
+			entries = append(entries, pushEntry(fmt.Sprint("revise-", i, "-", p),
+				move(liveSource(p), liveHead(p), oid(fmt.Sprint("revised", p)))))
+		}
+		return entries
+	}
+	liveAt := func(changes int) func(e *estate, repo string) {
+		return func(e *estate, repo string) {
+			e.seed(repo, 0, 10_000, 0)
+			e.seedLiveChanges(repo, changes)
+		}
+	}
 	expired := time.Unix(0, 0)
 	// THE ROWS EACH SHAPE MUST TOUCH, from the entries themselves: a ref,
 	// a pack and a push row an entry, and the counters.
@@ -322,33 +464,48 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 		seed    func(e *estate, repo string)
 		history bool
 		rows    int
+		// decide is a shape decided over the rows before it is applied
+		// ([estate.decidedRecord]), whose rows are its entries' and the
+		// change rows the decide counted; revised and closed are the
+		// changes its record must leave at their second revision and
+		// closed.
+		decide          bool
+		revised, closed int
 	}{
-		{"maximal", maximal, nil, false, written(maximal(0))},
-		{"maximal+history", maximal, nil, true, written(maximal(0))},
-		{"group", group, nil, false, 2 * MaxPushesPerRecord},
-		{"one", one, nil, false, 3},
-		{"sweep", one, func(e *estate, repo string) { e.seedTombstones(repo, MaxRecordRows, expired) },
-			false, MaxRecordRows},
+		{name: "maximal", entries: maximal, rows: written(maximal(0))},
+		{name: "maximal+history", entries: maximal, history: true, rows: written(maximal(0))},
+		{name: "group", entries: group, rows: 2 * MaxPushesPerRecord},
+		{name: "one", entries: one, rows: 3},
+		{name: "sweep", entries: one, seed: func(e *estate, repo string) {
+			e.seedTombstones(repo, MaxRecordRows, expired)
+		}, rows: MaxRecordRows},
 		// EVERY ROW OF THE BUDGET TOUCHED: the deletions' tombstones and
 		// their record's own rows, and the sweep taking what they leave.
-		{"deletions", deleting, deletionsAt, false, MaxRecordRows},
-		{"deletions+history", deleting, deletionsAt, true, MaxRecordRows},
+		{name: "deletions", entries: deleting, seed: deletionsAt, rows: MaxRecordRows},
+		{name: "deletions+history", entries: deleting, seed: deletionsAt, history: true, rows: MaxRecordRows},
 		// A RECORD THAT REMOVES: every ref it deletes at a repository already
 		// holding MaxTombstonesPerRepo fresh tombstones, which no sweep can
 		// take, so its 3 000 deletions are removals rather than rows — each
 		// still writing the object it left.
-		{"removal", removing, func(e *estate, repo string) {
+		{name: "removal", entries: removing, seed: func(e *estate, repo string) {
 			e.seed(repo, 0, 3*MaxCommandsPerPush, 0)
 			e.seedTombstones(repo, MaxTombstonesPerRepo, applyClock.Add(-time.Hour))
-		}, false, 3 * (1 + 2*MaxCommandsPerPush + 1)},
+		}, rows: 3 * (1 + 2*MaxCommandsPerPush + 1)},
 		// EVERY ROW OF THE BUDGET TOUCHED BY THE DROPS: the record's own rows
 		// and the expiry forgetting what they leave.
-		{"expiry", one, func(e *estate, repo string) { e.seedDrops(repo, 1, expired, MaxRecordRows) },
-			false, MaxRecordRows},
-		{"forced", forcing, func(e *estate, repo string) {
+		{name: "expiry", entries: one, seed: func(e *estate, repo string) {
+			e.seedDrops(repo, 1, expired, MaxRecordRows)
+		}, rows: MaxRecordRows},
+		{name: "forced", entries: forcing, seed: func(e *estate, repo string) {
 			e.seed(repo, 0, MaxCommandsPerPush, 0)
 			e.seedDrops(repo, 1, expired, MaxRecordRows)
-		}, false, MaxRecordRows},
+		}, rows: MaxRecordRows},
+		// EVERY CHANGE ROW A RECORD CAN REWRITE: the heads and the closes
+		// of rebasingChanges, and a group of revisions.
+		{name: "changes", entries: rebasing, seed: liveAt(heads + closes), decide: true, revised: heads,
+			closed: closes},
+		{name: "group+changes", entries: revising, seed: liveAt(MaxPushesPerRecord), decide: true,
+			revised: MaxPushesPerRecord},
 	} {
 		removal := shape.name == "removal"
 		b.Run(shape.name, func(b *testing.B) {
@@ -368,7 +525,20 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 				} else {
 					e.seed(repo, 0, 10_000, 0)
 				}
-				e.applyTimed(b, a, pushOf(b, repo, shape.entries(i)...), shape.rows)
+				entries, rows := shape.entries(i), shape.rows
+				if shape.decide {
+					var changeRows int
+					entries, changeRows = e.decidedRecord(b, repo, entries)
+					rows = written(entries) + changeRows
+				}
+				e.applyTimed(b, a, pushOf(b, repo, entries...), rows)
+				// THE CHANGES IT NAMES, each moved as its command says.
+				if shape.decide && (e.num(`SELECT COUNT(*) FROM code_changes WHERE repo_id = ? AND revision = 2
+					AND state = 'open'`, repo) != int64(shape.revised) || e.num(`SELECT COUNT(*) FROM code_changes
+					WHERE repo_id = ? AND state = 'closed'`, repo) != int64(shape.closed)) {
+					b.Fatalf("the %s shape's record did not move its %d changes' heads and close %d", shape.name,
+						shape.revised, shape.closed)
+				}
 				// THE SHAPE IT NAMES: every deletion a removal, the count held.
 				if removal && (e.num(`SELECT COUNT(*) FROM code_refs WHERE repo_id = ? AND target = ''`,
 					repo) != MaxTombstonesPerRepo || e.num(`SELECT refs FROM code_repos WHERE id = ?`, repo) != 0) {
