@@ -34,6 +34,12 @@ export function Models({ id }: { id?: string }) {
   const [view, setView] = useParam("view", "", "section");
   const flow = useFlow(id);
   const open: OnFlow = (next, key, at) => {
+    // A HOST SIGN-IN CHANGES NOTHING in the model, so it never opens the
+    // wizard: off the model's page it goes to that page's sign-in card.
+    if (next === "edit" && at?.focus === "host-login" && !id && key) {
+      nav.to(["settings", "models", key], { focus: "host-login" });
+      return;
+    }
     if (next === "edit") {
       const target = key ?? id;
       if (target) flow.wizard(target, at ?? { step: "cli" });

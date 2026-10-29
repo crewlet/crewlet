@@ -114,6 +114,32 @@ export function memberEntry(e: ModelEntry): MemberModelEntry {
   };
 }
 
+/**
+ * A model signed in with a stored API key, named for its key
+ * (`ANTHROPIC_API_KEY_<KEY>`) and stored on a known date by a known person,
+ * for the suites that read a credential's name and age.
+ */
+export function apiKeyEntry(over: Partial<ModelEntry> & { key: string }): ModelEntry {
+  return modelEntry({
+    model: "sonnet",
+    sign_in: signIn({
+      route: "api-key",
+      mode: "api-key",
+      variable: `ANTHROPIC_API_KEY_${over.key.toUpperCase()}`,
+      hint: "sk-ant-...wxyz",
+      stored_at: "2026-10-01T10:00:00Z",
+      stored_by: "founder",
+    }),
+    last_success: "2026-10-29T09:00:00Z",
+    ...over,
+  });
+}
+
+/** A seat as the org index draws it, for a suite that names its own seats. */
+export function seat(handle: string, name: string): Seat {
+  return { key: handle, handle, name, kind: "agent", avatar: null } as unknown as Seat;
+}
+
 /** A company document holding `llm`'s entries as written, for the reading an admin joins. */
 export function modelsDoc(llm: Record<string, Record<string, unknown>>): CompanyDocument {
   return { name: "Acme", providers: { llm } } as CompanyDocument;
@@ -129,12 +155,16 @@ export function modelsData({
   admin = true,
   doc = null,
   assistant,
+  seats = MODELS_SEATS,
+  reload = () => {},
 }: {
   entries: ModelEntry[];
   alarms?: ModelAlarm[];
   admin?: boolean;
   doc?: CompanyDocument | null;
   assistant?: { enabled: boolean; key: string | null };
+  seats?: Seat[];
+  reload?: () => void;
 }): ModelsData {
   const answer: ModelEntriesAnswer = admin
     ? {
@@ -157,13 +187,13 @@ export function modelsData({
     admin,
     doc: admin ? doc : null,
     models,
-    seats: MODELS_SEATS,
+    seats,
     alarms: admin ? alarms : [],
     nodes: answer.nodes,
     node: answer.node,
     assistant: assistant ?? { enabled: runsAssistant !== null, key: runsAssistant },
     loading: false,
     error: null,
-    reload: () => {},
+    reload,
   };
 }
