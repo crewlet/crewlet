@@ -78,7 +78,7 @@ type ShareLane struct{ l *lane }
 // NewShareLane is a share lane of slots on a node of cores read slots, on the
 // clock now: charged as New charges a lane of that shape (occupancyRate).
 func NewShareLane(cores, slots int, now func() time.Time) *ShareLane {
-	book := newShareBook(now, occupancyRate(int64(cores), int64(slots)), nil)
+	book := newShareBook(now, slots, occupancyRate(int64(cores), int64(slots)), nil)
 	return &ShareLane{l: newShareLane(int64(slots), book)}
 }
 

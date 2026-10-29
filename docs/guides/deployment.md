@@ -1078,6 +1078,7 @@ api:
 | `/webhooks/*` — every vendor delivery, the Slack OAuth landing, the GitHub App return | `api.public` only |
 | `/otlp/{token}/v1/{signal}` — sandbox telemetry | `api.public` only |
 | `/mcp/{token}` — the agent-mode tool bridge | `api.public` only |
+| `/box/git/*` — a coding box's git, on a node whose roles name `git` | `api.public` only |
 | everything else: `/health`, `/ready`, `/dashboard` and its assets, the sign-in routes under `/auth`, every REST read, `/ws/stream`, `/config`, `/secrets`, `/setup`, `/iam/*`, `/operator/*`, `/backup`, `/fleet/*`, `/work/*` | `api.port` only |
 
 `api.port` answers a public route with `404 no_route` and a hint naming
@@ -1088,18 +1089,22 @@ a path nothing serves: the same `404`, the same generic hint, nothing that says
 an admin port exists behind it. It requires no credential and decides
 before the guard runs, so `/config` there is that same `404` whatever
 credential is sent. The split
-is the engine's own, from one list (the `/webhooks/`, `/otlp/` and `/mcp/`
-prefixes, the routes that authenticate by a provider signature or a signed
-per-run token rather than by a person's or a token's credential), so there is
-no allow-list to keep in step with the routes a release adds.
+is the engine's own, from one list (the `/webhooks/`, `/otlp/`, `/mcp/` and
+`/box/git/` prefixes, the routes that authenticate by a provider signature or a
+signed per-run token rather than by a person's or a token's credential), so
+there is no allow-list to keep in step with the routes a release adds.
 
 **Why the sandbox endpoints are public.** A remote sandbox (E2B's cloud) runs
 on somebody else's network and reaches only what you publish; it calls
-`/otlp/{token}` and `/mcp/{token}` with the signed per-run token in the path and
-never holds a credential of anybody's. Leaving them on `api.port` would force that
-port public for every company running remote sandboxes. Point
-`CREWLET_SANDBOX_OTEL_RECEIVER_URL` and `CREWLET_MCP_BRIDGE_URL` at the public
-address.
+`/otlp/{token}` and `/mcp/{token}` with the signed per-run token in the path,
+and a coding box reaches the code host's `/box/git/*` with its run's token as
+git's Basic password, never holding a credential of anybody's. Leaving them on
+`api.port` would force that port public for every company running remote
+sandboxes. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` and
+`CREWLET_MCP_BRIDGE_URL` at the public address. `/box/git/*` is mounted only on
+a node whose roles name `git`, so on a fleet the balancer in front of the
+public listener routes it to the git nodes, as it routes a person's `/git/` on
+`api.port` (see [Code Host → Coding boxes](../concepts/code-host.md#coding-boxes)).
 
 **Why the probes are not.** `/health` describes the node — its version, its
 seats, its posture — for whoever runs it, and an orchestrator or a load balancer

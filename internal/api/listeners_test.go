@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -31,9 +32,9 @@ import (
 // socket nobody published.
 
 // publicRoutes are the routes outside parties call, one of each family: a
-// vendor delivery, both vendor app landings, the sandbox telemetry edge and the
-// sandbox tool bridge. Each is mounted on [listenerApp], so reaching its
-// handler is any answer but the mux's own 404.
+// vendor delivery, both vendor app landings, the sandbox telemetry edge, the
+// sandbox tool bridge and a coding box's three git routes. Each is mounted on
+// [listenerApp], so reaching its handler is any answer but the mux's own 404.
 var publicRoutes = []struct{ method, path string }{
 	{http.MethodPost, "/webhooks/github"},
 	{http.MethodPost, "/webhooks/slack/ceo"},
@@ -41,6 +42,9 @@ var publicRoutes = []struct{ method, path string }{
 	{http.MethodGet, "/webhooks/github-app?code=c&state=s"},
 	{http.MethodPost, "/otlp/not-a-token/v1/traces"},
 	{http.MethodPost, mcpbridge.PathPrefix + "not-a-token"},
+	{http.MethodGet, auth.BoxGitPrefix + "web.git/info/refs?service=git-upload-pack"},
+	{http.MethodPost, auth.BoxGitPrefix + "web.git/git-upload-pack"},
+	{http.MethodPost, auth.BoxGitPrefix + "web.git/git-receive-pack"},
 }
 
 // adminRoutes are the routes that stay on api.port: the probes, the dashboard
@@ -142,6 +146,9 @@ var publishedRoutes = []string{
 	"GET /webhooks/github-app",
 	"POST " + auth.OTLPPrefix + "{token}/v1/{signal}",
 	mcpbridge.PathPrefix + "{token}",
+	host.PatternBoxInfoRefs,
+	host.PatternBoxUploadPack,
+	host.PatternBoxReceivePack,
 }
 
 // wildcard is one segment of a mux pattern that matches more than itself.

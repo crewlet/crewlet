@@ -72,19 +72,21 @@ func decayed(charge float64, d time.Duration) float64 {
 // near reports a and b equal to within tol.
 func near(a, b, tol float64) bool { return math.Abs(a-b) <= tol }
 
-// A CONTENDED LANE IS SHARED BY CLASS, by weight: with persons and a machine
-// both always waiting, persons take two thirds of what the lane spends — four
-// to the machine's two — however many principals each class has (eight
-// persons, one machine credential).
+// A CONTENDED LANE IS SHARED BY CLASS, by weight: with persons, a machine and
+// a coding box all always waiting, persons take four sevenths of what the lane
+// spends, the machine two and the box one — however many principals each
+// class has (eight persons, one machine credential, one run) — and the box's
+// cap of half the lane, which its seventh never reaches, takes nothing from
+// that.
 //
 // Mutation: next hands the slot to the lane's oldest waiter (FIFO), and the
-// nine principals take turns — persons eight ninths — red.
+// ten principals take turns — persons four fifths — red.
 func TestAContendedTransferLaneSharesByClass(t *testing.T) {
 	t.Parallel()
 	clk := newFakeClock()
 	lane := gitproc.NewShareLane(1, 4, clk.now)
 	machine := machineShare("ci")
-	principals := []gitproc.Share{machine}
+	principals := []gitproc.Share{machine, runShare("box")}
 	for i := range 8 {
 		principals = append(principals, personShare(fmt.Sprintf("person%d", i)))
 	}
@@ -104,7 +106,7 @@ func TestAContendedTransferLaneSharesByClass(t *testing.T) {
 		queued[s] = lane.Arrive(s)
 	}
 	charged := map[gitproc.ShareClass]float64{}
-	for settled := 0; settled < 600; {
+	for settled := 0; settled < 700; {
 		// Each run holds its slot a second (four steps), a quarter of a
 		// core-second of occupancy, and spends a whole core-second of CPU:
 		// charged one core-second each.
@@ -125,15 +127,115 @@ func TestAContendedTransferLaneSharesByClass(t *testing.T) {
 			}
 		}
 		if granted != 1 {
-			t.Fatalf("a settle with nine principals waiting granted %d of them, want one", granted)
+			t.Fatalf("a settle with ten principals waiting granted %d of them, want one", granted)
 		}
 	}
-	ratio := charged[gitproc.SharePerson] / charged[gitproc.ShareMachine]
-	want := float64(gitproc.SharePerson.Weight()) / float64(gitproc.ShareMachine.Weight())
-	if math.Abs(ratio-want)/want > 0.05 {
-		t.Errorf("persons were charged %v core-seconds and the machine %v: %.3f to one, want %v to one within 5%%",
-			charged[gitproc.SharePerson], charged[gitproc.ShareMachine], ratio, want)
+	for _, pair := range [][2]gitproc.ShareClass{
+		{gitproc.SharePerson, gitproc.ShareMachine},
+		{gitproc.ShareMachine, gitproc.ShareRun},
+	} {
+		ratio := charged[pair[0]] / charged[pair[1]]
+		want := float64(pair[0].Weight()) / float64(pair[1].Weight())
+		if math.Abs(ratio-want)/want > 0.05 {
+			t.Errorf("%s was charged %v core-seconds and %s %v: %.3f to one, want %v to one within 5%%",
+				pair[0], charged[pair[0]], pair[1], charged[pair[1]], ratio, want)
+		}
 	}
+}
+
+// BOXES HOLD AT MOST HALF THE TRANSFER LANE, the one class the share does not
+// let fill it: on a lane of eight, sixty-four coding boxes' arrivals never run
+// more than four at once, however many settle and arrive; a person arriving
+// while the boxes hold their four takes a free slot at once, though boxes
+// wait; and a machine with the boxes at their cap is granted the next slot a
+// person releases, ahead of every box that waits — while the release of a box
+// hands its slot to the next box. A slot is never free while a waiter that may
+// take it waits.
+//
+// Mutation: Cap answering the whole lane for the run class — eight boxes run
+// and the person waits — red.
+func TestBoxesHoldAtMostHalfTheTransferLane(t *testing.T) {
+	t.Parallel()
+	const size = 8
+	clk := newFakeClock()
+	lane := gitproc.NewShareLane(2, size, clk.now)
+	if got := gitproc.ShareRun.Cap(size); got != size/2 {
+		t.Fatalf("the run class's cap of a lane of %d is %d, want %d", size, got, size/2)
+	}
+	var boxes []*gitproc.Turn
+	for i := range 64 {
+		boxes = append(boxes, lane.Arrive(runShare(fmt.Sprintf("launch-%02d", i))))
+	}
+	running := func() int {
+		n := 0
+		for _, b := range boxes {
+			if b != nil && b.Granted() {
+				n++
+			}
+		}
+		return n
+	}
+	if n := running(); n != size/2 {
+		t.Fatalf("64 boxes arrived at a lane of %d and %d run, want %d", size, n, size/2)
+	}
+	if held, waiting := lane.Counts(); held != size/2 || waiting != 60 {
+		t.Fatalf("the lane holds %d and queues %d, want %d held and 60 boxes waiting", held, waiting, size/2)
+	}
+
+	// A PERSON TAKES A FREE SLOT AT ONCE beside the waiting boxes, as many as
+	// the lane has free.
+	var persons []*gitproc.Turn
+	for i := range size / 2 {
+		p := lane.Arrive(personShare(fmt.Sprintf("person%d", i)))
+		if !p.Granted() {
+			t.Fatalf("person %d arrived with %d slots free and the boxes at their cap, and waits", i,
+				size/2-i)
+		}
+		persons = append(persons, p)
+	}
+	// A MACHINE, with every slot held, waits — and is granted the next
+	// release of a person's slot ahead of all sixty boxes.
+	machine := lane.Arrive(machineShare("ci"))
+	if machine.Granted() {
+		t.Fatal("a machine arrived at a full lane and was granted at once")
+	}
+	clk.advance(time.Second)
+	persons[0].Settle(0)
+	if !machine.Granted() {
+		t.Fatal("a person's release with the boxes at their cap went to no machine waiting")
+	}
+	if n := running(); n != size/2 {
+		t.Fatalf("a person's release left %d boxes running, want the %d at the cap", n, size/2)
+	}
+	// A PERSON'S RELEASE WITH ONLY BOXES WAITING frees its slot: none of
+	// them may take it.
+	persons[1].Settle(0)
+	if n := running(); n != size/2 {
+		t.Fatalf("a person's release with only capped boxes waiting started a box: %d run", n)
+	}
+	if held, _ := lane.Counts(); held != size-1 {
+		t.Fatalf("the lane holds %d after a release no waiter could take, want %d", held, size-1)
+	}
+	// A BOX'S RELEASE hands its slot to the next box, and the free slot stays
+	// free: the class is back at its cap.
+	for i, b := range boxes {
+		if b.Granted() {
+			b.Settle(0)
+			boxes[i] = nil
+			break
+		}
+	}
+	if n := running(); n != size/2 {
+		t.Fatalf("a box's release left %d boxes running, want its slot handed to the next (%d)", n, size/2)
+	}
+	if held, _ := lane.Counts(); held != size-1 {
+		t.Fatalf("the lane holds %d after a box's slot went to a box, want %d", held, size-1)
+	}
+}
+
+// runShare is a coding box's share, under its launch.
+func runShare(launch string) gitproc.Share {
+	return gitproc.Share{Class: gitproc.ShareRun, Principal: launch}
 }
 
 // A CLASS ALONE TAKES THE WHOLE LANE: the share is work-conserving, so one
@@ -488,51 +590,83 @@ func TestAChargeDecaysOverTheWindow(t *testing.T) {
 	}
 }
 
-// THE INVARIANT HOLDS UNDER THE SHARE: whichever waiter a release picks, no
-// slot is free while a run waits, a release hands its slot straight to a
-// waiter, and every arrival, settle and leave is accounted for — over 10 000
-// random steps of both classes and a dozen principals, and again with waits
-// whose contexts end, on goroutines.
+// THE INVARIANT HOLDS UNDER THE SHARE, its capped class included: whichever
+// waiter a release picks, no slot is free while a waiter that MAY take it
+// waits — a coding box at its class's cap of half the lane may not — a
+// release hands its slot straight to such a waiter where there is one and to
+// the lane where there is none, an arrival never takes a slot ahead of one,
+// the boxes never hold more than their cap, and every arrival, settle and
+// leave is accounted for — over 10 000 random steps of all three classes and
+// eighteen principals, and again with waits whose contexts end, on
+// goroutines.
 func TestTheInvariantHoldsUnderTheShare(t *testing.T) {
 	t.Parallel()
 	t.Run("steps", func(t *testing.T) {
 		t.Parallel()
-		const size = 3
+		const size = 5
+		limit := gitproc.ShareRun.Cap(size)
 		clk := newFakeClock()
 		lane := gitproc.NewShareLane(1, size, clk.now)
 		rng := rand.New(rand.NewPCG(1, 2))
 		var principals []gitproc.Share
 		for i := range 6 {
-			principals = append(principals, machineShare(fmt.Sprintf("m%d", i)), personShare(fmt.Sprintf("p%d", i)))
+			principals = append(principals, machineShare(fmt.Sprintf("m%d", i)), personShare(fmt.Sprintf("p%d", i)),
+				runShare(fmt.Sprintf("r%d", i)))
 		}
-		var granted, waiting []*gitproc.Turn
+		type turn struct {
+			*gitproc.Turn
+			class gitproc.ShareClass
+		}
+		var granted, waiting []turn
+		boxes := func() int {
+			n := 0
+			for _, g := range granted {
+				if g.class == gitproc.ShareRun {
+					n++
+				}
+			}
+			return n
+		}
+		// mayTake reports a waiter of class c that may take a free slot now.
+		mayTake := func(c gitproc.ShareClass) bool { return c != gitproc.ShareRun || boxes() < limit }
+		eligible := func() bool { return slices.ContainsFunc(waiting, func(w turn) bool { return mayTake(w.class) }) }
 		for step := range 10_000 {
 			clk.advance(time.Duration(rng.IntN(2000)) * time.Millisecond)
 			switch op := rng.IntN(10); {
 			case op < 5:
-				turn := lane.Arrive(principals[rng.IntN(len(principals))])
-				if turn.Granted() {
-					if len(waiting) > 0 {
-						t.Fatalf("step %d: an arrival took a slot ahead of %d waiting", step, len(waiting))
+				s := principals[rng.IntN(len(principals))]
+				before := boxes()
+				arrived := turn{lane.Arrive(s), s.Class}
+				if arrived.Granted() {
+					if eligible() {
+						t.Fatalf("step %d: an arrival took a slot ahead of a waiter that may take one", step)
 					}
-					granted = append(granted, turn)
+					if s.Class == gitproc.ShareRun && before >= limit {
+						t.Fatalf("step %d: a box took a slot with %d boxes running, its class's cap", step, before)
+					}
+					granted = append(granted, arrived)
 				} else {
-					waiting = append(waiting, turn)
+					waiting = append(waiting, arrived)
 				}
 			case op < 8 && len(granted) > 0:
 				i := rng.IntN(len(granted))
 				granted[i].Settle(time.Duration(rng.IntN(3000)) * time.Millisecond)
 				granted = slices.Delete(granted, i, i+1)
+				want := 0
+				if eligible() {
+					want = 1
+				}
 				before := len(waiting)
-				waiting = slices.DeleteFunc(waiting, func(w *gitproc.Turn) bool {
+				waiting = slices.DeleteFunc(waiting, func(w turn) bool {
 					if w.Granted() {
 						granted = append(granted, w)
 						return true
 					}
 					return false
 				})
-				if handed := before - len(waiting); handed != min(before, 1) {
-					t.Fatalf("step %d: a settle with %d waiting granted %d of them", step, before, handed)
+				if handed := before - len(waiting); handed != want {
+					t.Fatalf("step %d: a settle with %d waiting granted %d of them, want %d", step, before, handed,
+						want)
 				}
 			case len(waiting) > 0:
 				i := rng.IntN(len(waiting))
@@ -544,8 +678,11 @@ func TestTheInvariantHoldsUnderTheShare(t *testing.T) {
 				t.Fatalf("step %d: the lane holds %d and queues %d, the case %d and %d", step, held, queued,
 					len(granted), len(waiting))
 			}
-			if queued > 0 && held != size {
-				t.Fatalf("step %d: %d waiting with %d of %d slots held", step, queued, held, size)
+			if held < size && eligible() {
+				t.Fatalf("step %d: %d of %d slots held while a waiter that may take one waits", step, held, size)
+			}
+			if n := boxes(); n > limit {
+				t.Fatalf("step %d: %d boxes hold a slot, past their class's cap of %d", step, n, limit)
 			}
 		}
 	})
@@ -556,8 +693,11 @@ func TestTheInvariantHoldsUnderTheShare(t *testing.T) {
 		for i := range 200 {
 			wg.Go(func() {
 				s := machineShare(fmt.Sprintf("m%d", i%7))
-				if i%3 == 0 {
+				switch i % 3 {
+				case 0:
 					s = personShare(fmt.Sprintf("p%d", i%5))
+				case 1:
+					s = runShare(fmt.Sprintf("r%d", i%4))
 				}
 				ctx, cancel := context.WithTimeout(t.Context(), time.Duration(i%4)*time.Millisecond)
 				defer cancel()

@@ -24,10 +24,13 @@ import (
 // AN OBJECT ID HAS NO LEVEL: a fetch names ids that mean the same bytes on
 // every node, so it takes whatever the cache holds — unless the cache lacks a
 // want, which means the client's refs came from a node further ahead, and
-// then ONE linearizable sync runs before it is served. An `ls-refs` names refs
-// and is linearizable, as every answer naming a ref is; a fetch names none,
-// since the host offers no want-ref (cache.ServeConfig).
-func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
+// then ONE linearizable sync runs before it is served — a coding box's too,
+// a rare barrier the box's floor cannot spare. An `ls-refs` names refs and is
+// read at the request's refs level, as every answer naming a ref is
+// (admission.refs): linearizable for a person, the run's session for a box,
+// whose floor it raises before its first byte (raiseFloor); a fetch names
+// none, since the host offers no want-ref (cache.ServeConfig).
+func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, admit admitter) {
 	start := s.now()
 	if r.Header.Get("Content-Type") != UploadPackRequestType {
 		auth.GitText(w, http.StatusUnsupportedMediaType,
@@ -39,7 +42,7 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer end()
-	adm, ok := s.admit(ctx, w, r, auth.GitFetch)
+	adm, ok := admit(ctx, w, r, auth.GitFetch)
 	if !ok {
 		return
 	}
@@ -56,7 +59,7 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("Content-Encoding") != "" {
 		declared = -1 // the length on the wire, not of what it decodes to
 	}
-	body, err := s.readRequest(ctx, decoded, declared, adm.operatorID, s.boundOf(adm))
+	body, err := s.readRequest(ctx, decoded, declared, adm.spool, s.boundOf(adm))
 	if err != nil {
 		s.requestRefused(w, r, adm, err)
 		return
@@ -69,11 +72,11 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 		s.syncFailed(w, r, adm.name, err)
 		return
 	}
-	level := statelog.ReadStale
-	if n.linearizable() {
-		level = statelog.ReadLinearizable
+	fresh := statelog.Freshness{Level: statelog.ReadStale}
+	if n.namesRefs() {
+		fresh = adm.refs()
 	}
-	synced, err := s.o.Cache.Sync(ctx, adm.repo.ID, statelog.Freshness{Level: level})
+	synced, err := s.o.Cache.Sync(ctx, adm.repo.ID, fresh)
 	if err != nil {
 		s.syncFailed(w, r, adm.name, err)
 		return
@@ -81,7 +84,7 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 	// Whatever synced holds when the handler returns: it is replaced below,
 	// and only ever by a Synced a sync or a rebuild handed out.
 	defer func() { synced.Release() }()
-	if level == statelog.ReadStale && n.wants && (!v2 || n.command == commandFetch) {
+	if !n.namesRefs() && n.wants && (!v2 || n.command == commandFetch) {
 		// cat-file IN THE INCARNATION, so a damaged one is rebuilt here
 		// (repairing) and asked again — the wants are read from the request
 		// afresh.
@@ -140,6 +143,15 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request) {
 	// that already holds its id loses nothing before then — while no push
 	// may build on it (cache's doc, "The dropping view").
 	err = s.repairing(ctx, r, adm.name, &synced, inIncarnation, out.Started, func(in cache.Synced) error {
+		// A BOX IS SHOWN NOTHING ITS RUN'S FLOOR DOES NOT HOLD: an `ls-refs`
+		// raises the floor to the copy it is served from before its first
+		// byte (raiseFloor), so the box never reads a branch older on another
+		// node than it read here.
+		if n.namesRefs() {
+			if rerr := s.raiseFloor(ctx, adm, in.Position); rerr != nil {
+				return rerr
+			}
+		}
 		out.again()
 		_, gerr := s.runGit(ctx, gitproc.Cmd{
 			Dir: in.Dir, Dropping: in.Dropping, Repairer: in.Repairer,
@@ -190,7 +202,7 @@ func (s *Server) fetched(ctx context.Context, adm admission, out *sink) {
 	}
 	p := adm.principal()
 	s.o.Fetched(ctx, types.CodeFetched{RepoID: adm.repo.ID, RepoName: adm.name,
-		PrincipalKind: types.CodeReaderKind(p.Kind), Principal: p.OperatorID, Seat: p.Seat,
+		PrincipalKind: types.CodeReaderKind(p.Kind), Principal: p.Actor(), Seat: p.Seat,
 		Via: types.FetchedViaGit, Reads: 1, Bytes: out.Sent()})
 }
 
@@ -275,11 +287,13 @@ func (s *Server) requestRefused(w http.ResponseWriter, r *http.Request, adm admi
 // spoolRefused answers a fetch whose turn at the spool allowance ended
 // unserved — its wait expired, or it was refused a place to wait — 503 with
 // BusyRetryAfter, saying what held it back, and logged with the credential
-// that sent it: git does not retry a lazy fetch, so this is a checkout that
-// failed, and the line is how an operator finds the token behind it.
+// that sent it and the spool credential it waited as: git does not retry a
+// lazy fetch, so this is a checkout that failed, and the line is how an
+// operator finds the token behind it — or, keyed `runs` with no operator id,
+// that coding boxes held their share.
 func (s *Server) spoolRefused(w http.ResponseWriter, r *http.Request, adm admission, e *spoolUnserved) {
 	s.log.Warn("code_fetch_spool_unserved", "repo", adm.name, "path", r.URL.Path, "operator_id", adm.operatorID,
-		"reason", e.reason, "error", e)
+		"spool", adm.spool, "reason", e.reason, "error", e)
 	retry(w, BusyRetryAfter)
 	auth.GitText(w, http.StatusServiceUnavailable, "this node's room for large fetch requests is in use: "+
 		sentence(e.detail)+"; retry in "+seconds(BusyRetryAfter)+", or against another node")

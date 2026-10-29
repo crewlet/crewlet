@@ -117,10 +117,12 @@ const lapse = time.Hour
 type cluster struct {
 	// life is the test that started the cluster: every member, however
 	// often a case restarts it, stops with it.
-	life      testing.TB
-	brokers   *jetstreamtest.Cluster
-	members   []*member
-	creds     *codetest.Credentials
+	life    testing.TB
+	brokers *jetstreamtest.Cluster
+	members []*member
+	creds   *codetest.Credentials
+	// runs is the cluster's one run store, every member's git node's.
+	runs      *codetest.FixtureRuns
 	faults    *codefault.Script
 	placement *placement
 	// shared is the S3 bucket every member reads and writes, or nil on the
@@ -193,6 +195,7 @@ func startClusterOf(t testing.TB, backend string, broker js.Config) *cluster {
 	t.Helper()
 	c := &cluster{life: t, faults: &codefault.Script{}, placement: &placement{},
 		creds: codetest.NewCredentials(codetest.DefaultPeople()),
+		runs:  codetest.NewFixtureRuns(codetest.NewBoxTokens(t)),
 		// AN HOUR AGO, so an activation a case mints — a second apart, in
 		// order — is never in the future.
 		base: time.Now().UTC().Add(-time.Hour).Truncate(time.Second)}
@@ -229,7 +232,7 @@ func startClusterOf(t testing.TB, backend string, broker js.Config) *cluster {
 		g := codetest.StartGitNode(t, codetest.GitOptions{
 			ID: m.id, Dir: filepath.Join(m.dir, "git"), Estate: memberEstate{m}, Reads: m.read,
 			Compactions: m.compact, Maintainers: memberMaintainers{m},
-			Objects: m.backend, Faults: c.faults, Credentials: c.creds, Audit: c.record,
+			Objects: m.backend, Faults: c.faults, Credentials: c.creds, Runs: c.runs, Audit: c.record,
 			MaxTransfers: transfers, Roster: m.roster, Current: m.current,
 		})
 		// UNDER THE MEMBER'S LOCK, since its serving registration — made
@@ -923,6 +926,10 @@ func (c *cluster) splitOf(repoID string) ([]string, bool) {
 }
 
 func (c *cluster) Token(_ testing.TB, person string) string { return c.creds.Token(person) }
+
+// Runs is the cluster's coding runs' rows, which every member's git node
+// admits a coding box by.
+func (c *cluster) Runs() *codetest.FixtureRuns { return c.runs }
 
 // ClientGit is the PATH's git, held to the client floor: a fleet's persons run
 // what the one-node suite's do outside its floors' arm.

@@ -12,8 +12,9 @@ import (
 )
 
 // AN UPLOAD-PACK REQUEST, READ FOR THREE FACTS: which level the answer needs
-// (an `ls-refs` names refs, so it is linearizable; a fetch by object id is
-// not), which objects it wants (so a node that lacks one syncs once before
+// (an `ls-refs` names refs, so it is read at the request's refs level —
+// linearizable for a person, a box's run's session; a fetch by object id
+// names none), which objects it wants (so a node that lacks one syncs once before
 // it answers), and whether it offers any object the client already has — a
 // fetch that offers none is sent each want's whole history, which the
 // repository's heat counts as a clone (cache.Use.Clones). A fetch never names
@@ -65,9 +66,11 @@ func (n negotiation) clone() bool {
 	return n.recorded() == commandFetch && n.wants && !n.haves
 }
 
-// linearizable reports whether the answer names a ref, and so must be read
-// through the code log's barrier: an `ls-refs`.
-func (n negotiation) linearizable() bool {
+// namesRefs reports whether the answer names a ref, and so is read at the
+// request's refs level (admission.refs) — through the code log's barrier for
+// a person, at a box's run's session — rather than from whatever the cache
+// holds: an `ls-refs`.
+func (n negotiation) namesRefs() bool {
 	return n.v2 && n.command == commandLsRefs
 }
 

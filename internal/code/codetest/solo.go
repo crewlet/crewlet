@@ -101,6 +101,10 @@ type Fleet interface {
 	// Token is a token bound to the human seat person; "" is one bound to
 	// nobody.
 	Token(t testing.TB, person string) string
+	// Runs is the fleet's coding runs' rows — the one store every git
+	// node's host admits a coding box by (NewBox) — which a case launches,
+	// ends and relaunches runs on.
+	Runs() *FixtureRuns
 	// ClientGit is the git every person a case makes runs ([NewPerson]): the
 	// PATH's, held to the client floor, unless the fleet names another (the
 	// floors' arm names the client floor's own build).
@@ -302,6 +306,7 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 		o.ClientGit = gittest.Require(t)
 	}
 	f := &SoloFleet{o: o, dir: t.TempDir(), creds: NewCredentials(o.People), life: t,
+		runs: NewFixtureRuns(NewBoxTokens(t)),
 		// AN HOUR AGO, so an activation a case mints — a second apart, in
 		// order — is never in the future: a deletion is dated by its
 		// activation, and the purge judges its age on the wall clock.
@@ -337,7 +342,7 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 			ID: id, Dir: filepath.Join(f.dir, id, "git"), Estate: seam, Reads: reads,
 			Compactions: compactions, Maintainers: soloMaintainers{f: f, i: i},
 			Objects: func() objstore.Backend { return objects }, Limits: o.Limits, Timing: o.Timing,
-			Faults: o.Faults, Credentials: f.creds, Audit: f.record, Fetched: f.recordFetched,
+			Faults: o.Faults, Credentials: f.creds, Runs: f.runs, Audit: f.record, Fetched: f.recordFetched,
 			MaxTransfers: o.MaxTransfers, MaxProcesses: o.MaxProcesses, CacheMaxBytes: o.CacheMaxBytes,
 			GitPath: o.GitPath, Logger: o.Logger, Roster: o.Roster, Current: o.Current, QueryPool: o.QueryPool,
 		}))
@@ -526,7 +531,9 @@ type SoloFleet struct {
 	o     SoloOptions
 	dir   string
 	creds *Credentials
-	base  time.Time
+	// runs is the fleet's one run store, every git node's host's.
+	runs *FixtureRuns
+	base time.Time
 	// life is the test that started the fleet: what its git nodes' estate
 	// services are registered under, however often a case restarts it.
 	life testing.TB
@@ -609,6 +616,9 @@ func (f *SoloFleet) Nodes() []Node {
 // Token is a token bound to the human seat person, "" one bound to nobody
 // (Fleet).
 func (f *SoloFleet) Token(_ testing.TB, person string) string { return f.creds.Token(person) }
+
+// Runs is the fleet's coding runs' rows (Fleet).
+func (f *SoloFleet) Runs() *FixtureRuns { return f.runs }
 
 // ClientGit is the git every person a case makes on the fleet runs (Fleet).
 func (f *SoloFleet) ClientGit() string { return f.o.ClientGit }

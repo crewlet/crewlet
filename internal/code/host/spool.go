@@ -199,8 +199,25 @@ func (e *spoolUnserved) Unwrap() error { return errSpoolFull }
 var errPastClaim = errors.New("host: the request's body is longer than its client declared")
 
 // tokenPerRunner is what a request its own credential held back is told to
-// do about it.
+// do about it — a person's or a token's ([ownRemedy]).
 const tokenPerRunner = "give each CI runner a token of its own"
+
+// boxesShareOne is what a CODING BOX'S request its credential held back is
+// told instead: every box on a node is the one spool credential [boxSpool],
+// so no token of its own would help, and what is left to a box is to wait
+// for the boxes' fetches ahead of it, or ask for less at once.
+const boxesShareOne = "every coding box on this node shares one credential's room: retry once the boxes' " +
+	"fetches ahead of this one end, or fetch fewer objects at once"
+
+// ownRemedy is what a request credential held back by its own credential's
+// requests is told to do about it: [boxesShareOne] for the boxes' one
+// credential, [tokenPerRunner] for any other.
+func ownRemedy(credential string) string {
+	if credential == boxSpool {
+		return boxesShareOne
+	}
+	return tokenPerRunner
+}
 
 // spoolSizes are a spool allowance's bounds (SpoolSizesFor in production).
 type spoolSizes struct {
@@ -457,7 +474,7 @@ func (a *spools) placeLocked(w *spoolWaiter) error {
 	switch {
 	case a.placed[c] >= a.placesPerCredential:
 		return &spoolUnserved{reason: spoolRefused, detail: fmt.Sprintf("this credential already has %d "+
-			"fetches waiting to spool, as many as one credential's may; %s", a.placed[c], tokenPerRunner)}
+			"fetches waiting to spool, as many as one credential's may; %s", a.placed[c], ownRemedy(c))}
 	case a.inPlaces >= a.places:
 		return &spoolUnserved{reason: spoolRefused, detail: fmt.Sprintf("%d fetches already wait to spool, "+
 			"as many as this node keeps waiting", a.inPlaces)}
@@ -565,18 +582,18 @@ func (a *spools) behindLocked(w *spoolWaiter) string {
 	switch {
 	case a.bytes[c]+w.need > a.share:
 		return fmt.Sprintf("behind this credential's own spooled requests (they hold %d of the %d bytes "+
-			"one credential's may); %s", a.bytes[c], a.share, tokenPerRunner)
+			"one credential's may); %s", a.bytes[c], a.share, ownRemedy(c))
 	case credentialRoom < w.need:
 		n, left := a.olderLocked(w, c)
 		return fmt.Sprintf("behind this credential's own requests still arriving (%d of its fetches, which "+
-			"may yet need %d of the %d bytes one credential's may); %s", n, left, a.share, tokenPerRunner)
+			"may yet need %d of the %d bytes one credential's may); %s", n, left, a.share, ownRemedy(c))
 	}
 	for _, o := range a.queue {
 		if o == w {
 			break
 		}
 		if o.credential == c {
-			return "behind this credential's own requests waiting before it; " + tokenPerRunner
+			return "behind this credential's own requests waiting before it; " + ownRemedy(c)
 		}
 	}
 	if nodeRoom < w.need {

@@ -207,11 +207,13 @@ func TestNothingIsRefusedForDrainingBeforeADrain(t *testing.T) {
 // A push is refused at every request of it, its advertisement included,
 // because the GET is where git prints a refusal's reason — on the POST it
 // prints only `RPC failed; HTTP 503`. Every refusal is in git's own form,
-// text/plain, since git prints the API's JSON as nothing at all.
+// text/plain, since git prints the API's JSON as nothing at all. A coding
+// box's git, classified as a person's, is drained by the same rules.
 func TestADrainingNodeFinishesAFetchAndBeginsNoGitWork(t *testing.T) {
 	t.Parallel()
 	continues := []struct{ method, path string }{
 		{http.MethodPost, "/git/r.git/git-upload-pack"},
+		{http.MethodPost, "/box/git/r.git/git-upload-pack"},
 	}
 	begins := []struct{ method, path string }{
 		// A fetch's advertisement, however it asks.
@@ -221,6 +223,9 @@ func TestADrainingNodeFinishesAFetchAndBeginsNoGitWork(t *testing.T) {
 		// Every request of a push.
 		{http.MethodGet, "/git/r.git/info/refs?service=git-receive-pack"},
 		{http.MethodPost, "/git/r.git/git-receive-pack"},
+		// A coding box's advertisement and push.
+		{http.MethodGet, "/box/git/r.git/info/refs?service=git-upload-pack"},
+		{http.MethodPost, "/box/git/r.git/git-receive-pack"},
 	}
 	for _, draining := range []bool{true, false} {
 		a := drainingApp(t, draining)

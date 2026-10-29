@@ -26,7 +26,7 @@ type Person struct {
 // nobody), on the git the fleet's persons run (Fleet.ClientGit).
 func NewPerson(t testing.TB, f Fleet, who string) *Person {
 	t.Helper()
-	return personWith(t, f.ClientGit(), f.Token(t, who))
+	return clientWith(t, f.ClientGit(), "crewlet", f.Token(t, who))
 }
 
 // PersonWithToken is a person's git presenting token, on the PATH's git held
@@ -34,16 +34,17 @@ func NewPerson(t testing.TB, f Fleet, who string) *Person {
 // package's, an engine's own.
 func PersonWithToken(t testing.TB, token string) *Person {
 	t.Helper()
-	return personWith(t, gittest.Require(t), token)
+	return clientWith(t, gittest.Require(t), "crewlet", token)
 }
 
-// personWith is a person's git: the git at git, presenting token.
-func personWith(t testing.TB, git, token string) *Person {
+// clientWith is a git client — a person's, or a coding box's (NewBox) — the
+// git at git, presenting user and token.
+func clientWith(t testing.TB, git, user, token string) *Person {
 	t.Helper()
 	// A SHELL FUNCTION, as a person writes one: git runs a helper whose
 	// value starts with `!` through the shell, with get, store or erase as
 	// its argument, and reads only what `get` prints.
-	helper := "!f() { test \"$1\" = get || exit 0; echo username=crewlet; echo password=" + token + "; }; f"
+	helper := "!f() { test \"$1\" = get || exit 0; echo username=" + user + "; echo password=" + token + "; }; f"
 	return &Person{t: t, token: token, git: gittest.NewClientWith(t, git).Env(
 		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=credential.helper", "GIT_CONFIG_VALUE_0="+helper,
 		"GIT_TERMINAL_PROMPT=0")}

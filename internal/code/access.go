@@ -16,7 +16,8 @@ import (
 // from the repository's row and the epoch's chart, through ONE function
 // ([GrantOf]) that every judge of it calls: the code host's admission, the
 // push decide (its rule 2b, decide.go, the authority, from the DECIDING node's
-// chart) and the read tools — and in a later part a box's admission.
+// chart) and the read tools — and a coding box's admission, which holds the
+// seat's grant to its run's ([Grant.Within]).
 //
 // A PERSON — an operator credential bound to a human seat — maintains every
 // repository, and a token bound to nobody reads every one: ADR-0055's rules,
@@ -202,7 +203,48 @@ type Grant struct {
 	// names no identifier, because [Grant.RefRule] answers it as a command's
 	// refusal ([Grant.refused] says why that bounds it).
 	none string
+
+	// limit is the grant of the CODING RUN whose box asks ([Grant.Within]),
+	// which the principal's own is held to, and limited whether one does: a
+	// grant no run holds is unlimited, the zero value.
+	limit   Access
+	limited bool
 }
+
+// Within is g held to a coding run's grant — what the run's run_sandbox call
+// was given of the repository, read or write: its box does no more than BOTH
+// the run's grant and the seat's own allow. Access no higher than run outside
+// the seat's own namespace; and, where run is below write, no command at all,
+// the seat's own namespace included, since that row needs only the seat's tier
+// and its relation, which a box given the repository to read must not borrow.
+// Within(AccessMaintain) is g.
+//
+// The decide never reads it: a run's grant is coordination state, judged at
+// the code host's box admission alone, while the seat's grant is judged at the
+// host and again by the decide (rule 2b).
+func (g Grant) Within(run Access) Grant {
+	if run >= AccessMaintain {
+		return g
+	}
+	g.limit, g.limited = run, true
+	return g
+}
+
+// effective is what the grant lets its holder do outside its own namespace:
+// Access, held to a run's grant where one limits it.
+func (g Grant) effective() Access {
+	if g.limited {
+		return min(g.Access, g.limit)
+	}
+	return g.Access
+}
+
+// RunReadDetail is the sentence every command of a coding box whose run was
+// given the repository to read is refused with — which the code host's box
+// admission refuses at the push's advertisement first, in words naming the
+// repository.
+const RunReadDetail = "this coding box's run was given this repository to read: a push needs access: " +
+	"write in its run_sandbox call"
 
 // GrantOf is p's standing on repo, read from r.
 //
@@ -330,21 +372,25 @@ func relation(s RosterSeat, repo RepoRef, r Roster) Access {
 }
 
 // MayRead reports whether the principal reads the repository at all.
-func (g Grant) MayRead() bool { return g.Access >= AccessRead }
+func (g Grant) MayRead() bool { return g.effective() >= AccessRead }
 
 // MayPush reports whether any command at all could pass [Grant.RefRule]: a
 // principal at write or above, or a full_access seat that reads the repository
-// (its own namespace). The code host refuses a push that may not at its
-// advertisement, before the client sends a byte of pack.
+// (its own namespace) — and in either case not a coding box whose run was
+// given the repository to read ([Grant.Within]). The code host refuses a push
+// that may not at its advertisement, before the client sends a byte of pack.
 func (g Grant) MayPush() bool {
-	return g.Access >= AccessWrite || g.ownsNamespace()
+	if g.limited && g.limit < AccessWrite {
+		return false
+	}
+	return g.effective() >= AccessWrite || g.ownsNamespace()
 }
 
 // PushRefusal is the sentence a principal that may push nothing here
 // ([Grant.MayPush] false) is refused with before any command is read — at
 // its advertisement — and "" for one that may push something. A token bound
 // to nobody is told [UnboundDetail], the sentence every one of its commands
-// would be refused with.
+// would be refused with, and a box whose run reads [RunReadDetail].
 func (g Grant) PushRefusal() string {
 	switch {
 	case g.MayPush():
@@ -353,6 +399,8 @@ func (g Grant) PushRefusal() string {
 		return g.none
 	case g.Principal.Kind == PrincipalOperator:
 		return UnboundDetail
+	case g.limited && g.limit < AccessWrite:
+		return RunReadDetail
 	}
 	return g.refused("pushing", AccessWrite.String(), g.wouldPass(AccessWrite))
 }
@@ -386,6 +434,8 @@ func (g Grant) ReadRefusal() string {
 	why := g.none
 	switch {
 	case why != "":
+	case g.limited && g.limit < AccessRead && g.Access >= AccessRead:
+		why = "the coding run its box acts for was given no access to it"
 	case g.Principal.Kind == PrincipalAgent && g.Relation == AccessNone:
 		// THE ROW'S OWN VISIBILITY, never the word unit spelled here: one
 		// this build does not know is read as unit, and the sentence says
@@ -484,7 +534,10 @@ const UnboundDetail = "this token is not bound to a person: a person pushes with
 // never reaches RefRule from a caller that asks [StatelessRefusal] first, as
 // every caller does — it answers it all the same, so a caller that skipped the
 // stateless check still lands nothing the engine reserves. M2's protection
-// rules are judged after it, by their own code.
+// rules are judged after it, by their own code. A coding box's grant
+// ([Grant.Within]) is held to its run's: every row refused where the run was
+// given the repository to read, and every row outside the seat's own
+// namespace held to what the run was given.
 //
 // THE SENTENCE NAMES NO REF: git prints the ref beside the reason, and a
 // receiver carries the sentence into a proposal, whose every Detail is bounded.
@@ -498,6 +551,8 @@ func (g Grant) RefRule(c Command) (Refusal, string) {
 		return RefusalNotPermitted, g.none
 	case g.Principal.Kind == PrincipalOperator && g.Access < AccessMaintain:
 		return RefusalNotPermitted, UnboundDetail
+	case g.limited && g.limit < AccessWrite:
+		return RefusalNotPermitted, RunReadDetail
 	}
 	if owner, ok := seatNamespaceRef(c.Ref); ok && g.Principal.Kind == PrincipalAgent &&
 		owner == g.Principal.Seat {
@@ -508,8 +563,14 @@ func (g Grant) RefRule(c Command) (Refusal, string) {
 			"a read relation and the full_access tier", false)
 	}
 	action, need := commandNeeds(c)
-	if g.Access >= need {
+	switch {
+	case g.effective() >= need:
 		return "", ""
+	case g.Access >= need:
+		// THE RUN'S GRANT, not the seat's, is what stands in the way: the
+		// seat may, and its box may not.
+		return RefusalNotPermitted, fmt.Sprintf("this coding box holds %s on this repository, as its run "+
+			"was given it; %s needs %s, which its seat holds and its box does not", g.effective(), action, need)
 	}
 	return RefusalNotPermitted, g.refused(action, need.String(), g.wouldPass(need))
 }

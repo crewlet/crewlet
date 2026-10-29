@@ -97,6 +97,15 @@ type landing struct {
 	// Judged are the commands already asked of Synced.Repo's protections, as
 	// they stand; nil is none asked, so land asks every one.
 	Judged map[judgedKey]bool
+	// ForcedGrant is the builder's grant judged again on a command the force
+	// check found FORCED (code.Grant.RefRule) — the relay judged every update
+	// as a fast-forward, since whether one is forced is this landing's
+	// verdict — and nil for a builder whose principal's grant the decide
+	// alone holds it to. The relay's is its admission's grant: a coding
+	// box's is held to its run's (code.Grant.Within), which the decide never
+	// reads, so a run given a repository to write would otherwise land a
+	// force-push its seat may make and its run may not.
+	ForcedGrant func(code.Command) (code.Refusal, string)
 	// Progress is told each long step as it starts — the relay's keepalive
 	// names it — and nil is nobody listening.
 	Progress func(step string)
@@ -148,7 +157,8 @@ func unchecked(err error) error {
 //     the handler refused on the same row — and for any other builder it is
 //     what keeps a bundle from being stored for a repository that takes none.
 //  2. FORCE AND STALE: one merge-base a branch update (forceChecks), then the
-//     stateless rules, then the protections of what Forced can change
+//     stateless rules, the builder's grant on a command found forced
+//     (ForcedGrant), then the protections of what Forced can change
 //     (protectAfterForce) — the rules PARSED HERE, from Synced.Repo, so no
 //     builder can judge a push against rules other than its own synced row's.
 //  3. BLOBS, over the push's own pack (largestBlob) — only while anything is
@@ -231,6 +241,12 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		c.Forced = forced[i]
 		if r := code.StatelessRefusal(*c); r != "" {
 			refuse(i, r, "")
+			continue
+		}
+		if c.Forced && l.ForcedGrant != nil {
+			if r, words := l.ForcedGrant(*c); r != "" {
+				refuse(i, r, words)
+			}
 		}
 	}
 	protectAfterForce(cmds, rules, l.Principal.Kind, l.Judged)

@@ -884,6 +884,7 @@ func TestTheClassifierWalkFindsAGitLiteral(t *testing.T) {
 	}{
 		{"a literal", `package x; var _ = "git-receive-pack"`, true},
 		{"a route", `package x; var _ = "/git/{repo}/git-upload-pack"`, true},
+		{"a coding box's route", `package x; var _ = "/box/git/{repo}/git-receive-pack"`, true},
 		{"a raw literal", "package x; var _ = `git-receive-pack`", true},
 		{"an escaped literal", `package x; var _ = "git-receive-p\x61ck"`, true},
 		{"an octal escape", `package x; var _ = "git-upload-p\141ck"`, true},

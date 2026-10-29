@@ -3,15 +3,19 @@
 //
 // # Why a token in the path at all
 //
-// Two edges of this engine are reachable by something running INSIDE a
-// sandbox: the OTLP receiver a coding agent exports telemetry to, and the MCP
-// bridge it calls the seat's tools through. Neither can be given the API's own
-// token — that credential reads the whole company, and handing it to a box
-// running generated code is the failure the sandbox exists to prevent. So what
+// Three edges of this engine are reachable by something running INSIDE a
+// sandbox: the OTLP receiver a coding agent exports telemetry to, the MCP
+// bridge it calls the seat's tools through, and the code host a coding box
+// fetches and pushes its run's repositories at (internal/code/host's
+// BoxTokens, under /box/git/). None can be given the API's own token — that
+// credential reads the whole company, and handing it to a box running
+// generated code is the failure the sandbox exists to prevent. So what
 // authenticates a request there is a credential that is worth nothing outside
-// one run and expires with it, and it rides in the path because the clients
-// are a vendor's OTLP exporter and a vendor's MCP client: neither takes an
-// arbitrary header the engine chooses.
+// one run and expires with it, and it rides in the path because the first two
+// clients are a vendor's OTLP exporter and a vendor's MCP client: neither
+// takes an arbitrary header the engine chooses. git takes none either, and
+// presents a credential only as a Basic password its credential helper
+// answers, which is where the box's rides.
 //
 // # Signed and self-describing, not a key into a map
 //

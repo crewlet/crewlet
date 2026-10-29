@@ -44,10 +44,11 @@ declaring a repository and pushing to it are the steps of the
 
 This is the product's current shape, not a configuration choice:
 
-- **Only people use git.** A person clones, fetches and pushes over HTTPS
+- **Only people use git yet.** A person clones, fetches and pushes over HTTPS
   with their own API token ([Persons and their
-  tokens](#persons-and-their-tokens)); a seat as a git user does not exist
-  yet, so agents do not push. A seat READS the company's repositories, on
+  tokens](#persons-and-their-tokens)). A seat's coding box is admitted to git
+  with its run's own credential ([Coding boxes](#coding-boxes)), but no launch
+  gives a run a repository yet, so no box clones or pushes. A seat READS the company's repositories, on
   the server, through its code tools ([Server-side reads](#server-side-reads)),
   under the rule a person's push is judged by too ([Who may read and
   push](#who-may-read-and-push)). A git node can build a seat's or a
@@ -2741,6 +2742,116 @@ repository, binding a token and the first push.
 
 ---
 
+## Coding boxes
+
+A seat's [coding run](code-sandbox.md) reaches the code host from its box at
+`/box/git/<name>.git`, served by every node whose roles name `git` — on the
+[public listener](../reference/api-endpoints.md#which-listener-serves-what)
+where one is set, beside the box's other two edges, the tool bridge
+(`/mcp/{token}`) and the telemetry receiver (`/otlp/{token}`), and on
+`api.port` otherwise. It holds no person's credential and must never hold one:
+it presents its **run's own**, git's Basic user name `run` and, as the
+password, a per-run token signed under the fleet's keyring in a key domain of
+its own (`crewlet.git.v1`), naming the run's turn and its current launch. Any
+node can verify one another node minted, and a keyring rotation in flight
+keeps them working ([Secret store](secret-store.md#rotating-the-keyring-with-nothing-in-flight-lost)).
+
+**The token is a backstop, the run's row the authority.** A token is valid
+seven days (`host.RunTokenTTL`), longer than any job a person would leave
+running, since a coding job has no wall-clock limit and an expiry would fail
+its only durable output, its last push. What admits a box is its run's row on
+the fleet's coordination store, read on every request: a run that ended, was
+reaped or launched again — a second `run_sandbox` call of the same turn — is
+refused the moment its row says so, whatever its token's expiry.
+
+**What a box may do is what its run was given, held to what its seat may do.**
+A run is given each repository by name, to `read` or to `write`; the seat's
+own grant comes from the chart, judged by this node's current one ([Who may
+read and push](#who-may-read-and-push)); a box does no more than both allow. A
+run given a repository to read pushes nothing, not even under its seat's own
+namespace. A run given it to write creates and fast-forwards branches where its
+seat may, and never forces or deletes outside its seat's namespace — which
+needs maintain — whatever its seat holds. The seat's grant is judged again by
+the push's decide (rule 2b); the run's only here, since the decide reads no
+run row.
+
+**The admission**, in this order, each refusal in the one line git prints:
+
+| Step | Refused | Answer |
+|---|---|---|
+| The credential | none presented (git's first request never carries one), a user name other than `run`, a token this fleet did not sign — forged, expired, or under a key this node's `secrets.keys` does not hold | `401`, a challenge whose sentence names the run's token, never an API token |
+| The run | its row cannot be read | `503` with `Retry-After`: the credential was good, and nothing about it is known to be wrong |
+| | no such run, a launch the row has replaced, a run whose job has left its box | `403` |
+| The run's grant, by the name it was given | a repository the run was not given | `403 not_granted` — before anything of the code log is read, so a box guessing names costs the log nothing |
+| | a push of a repository it was given to read | `403 read_only` |
+| The stop, for a push | a seat a person stopped (below) | `403`, naming who stopped it; `503` on a node that has not yet read the pauses |
+| The repository | not found, deleted or purging, or archived for a push, as a person's request is — decided through the code log's barrier, never on the box's own read. A name a rename left redirecting is not refused: the box is served the repository under its new name, a push included, since the box's remote is the name its launch gave it | as a person's |
+| | a name renamed away from the repository the run was given and since taken by another | `403 not_granted` — call `run_sandbox` again |
+| The seat's grant | this node holds no chart yet, or is confirmed behind the company's configuration | `503` (`no_chart`, `behind_config`): the configuration it failed to apply may be the one that revoked the seat; the box retries, and `/ready` already drains this node |
+| | a fetch of a repository the seat reads nothing of — a `visibility: unit` one outside its unit | `403 not_permitted` |
+
+A refusal before a token this fleet signed is logged at debug
+(`code_box_challenged`): `/box/git/` is a public route, and a line anybody who
+can reach the listener prints at will is a log flood. Every refusal after one
+is logged `code_box_refused`, and a `503` `code_box_unavailable`, each with its
+reason, the run's turn and launch, the seat and the repository — never the
+token.
+
+**A box reads at its run's session.** A person's reads of refs go through the
+code log's barrier; a box's are read at its run's **floor** — a position on the
+code log at or past everything its box has been shown and has pushed — with no
+barrier, so a fleet of boxes adds nothing to the log's barrier budget. Every
+answer that names refs — a protocol v0 advertisement, an `ls-refs`, a push's
+advertisement — raises the run's floor to the copy it is served from before
+its first byte, and an applied push raises it to the push's row before `ok`
+is written. That is what keeps a box consistent across nodes: git builds a
+push's thin pack against the refs that push's own advertisement named, and a
+balancer may send the advertisement to one node and the push to another; raised
+at the advertisement, the floor makes the second node's copy reach every base
+the pack deltas against, where it would otherwise fail with git's `missing
+necessary objects`. The raises at an `ls-refs` and a v0 advertisement mean a
+box never sees a branch go back between two nodes, and a box reads its own push
+through any node at once. A v2 clone takes at most one raise, a push at most
+two; a raise the run store refuses answers `503`, and the box retries. A
+fetch whose wants the node's copy lacks, and one past its repository's
+request bound, each read through the barrier once — rare, as a person's do.
+
+**Its transfers are its run's.** Every box's git is charged to the `run` class
+of the [fair share](#fair-share), keyed by its launch, and boxes together hold
+at most **half** the transfer lane, so a burst of coding runs cloning — or a
+box reading a gigabyte slowly — never leaves a person's push waiting for a
+slot. Every box is one **spool credential**, `runs`: boxes together hold at
+most one credential's share of the node's room for large fetch requests, and a
+person's spooled fetch never waits behind them.
+
+**A stopped seat pushes nothing.** A person's pause with `stop_running` is the
+emergency stop, and a detached coding run is not fenced by it — it outlives its
+turn by design — so its box's push is refused, at the advertisement and at the
+push itself, naming who stopped the seat, until the seat is resumed
+([Pausing a seat](agent-runtime.md#pausing-a-seat)). Its fetches are served: a
+read changes nothing, and a box winding down may need one. A pause without
+`stop_running` stops new work only, so a running job's pushes land. A push
+admitted before the pause landed and decided after it lands, as a push of a run
+that ended between its admission and its decide does.
+
+**Neither transport takes the other's credential.** On `/box/git/` the guard
+reads no credential at all — a person's token presented as a bearer, a
+signed-in browser's cookie and an API token as the Basic password each admit
+nothing, and the challenge names the run's token — and on `/git/` a run's
+token is the guard's `401`, as any credential it does not know is.
+
+**What is recorded.** A box's push is no `operator_acted` event — no person
+acted — and its push row is its record: the seat as an agent, the run that
+made it (its turn, its launch, its work item, its model and its coding agent),
+received over git. A refused one is its `code_box_refused` or `code_push` line.
+A box's fetch of a `visibility: unit` repository is recorded under its seat
+([Who read it](#who-read-it)). A push the decide refuses after its bundle was
+stored — `push_quota` among the reasons — leaves that bundle named by no row,
+and the object collector removes it after its grace: the relay checks no quota
+first.
+
+---
+
 ## Who may read and push
 
 What a principal may do to a repository is **derived, never stored**: there is
@@ -4190,9 +4301,12 @@ slot is held, the node hands the next one released by **share**:
 |---|---|---|---|
 | A person, through any credential of theirs — their own machine token, a session — or a Tier A token or service account the identity directory binds to a human seat nobody else holds | `person` | 4 | the human seat, by its handle: a person's laptop, scripts and browser are one |
 | A credential bound to no seat — a Tier A token (`token:<id>`) or a service account's machine token (`pat:<id>`) | `machine` | 2 | the credential: each of a service account's tokens is one, so a token per CI runner is a turn per runner |
+| A [coding box](#coding-boxes), with its run's credential | `run` | 1 | the run's launch: each job is a turn of its own, and a relaunch starts a fresh one |
 
 The released slot goes to the class furthest below its weighted share of what
-the lane has spent lately — with both waiting, people take two thirds — and
+the lane has spent lately — with persons and machines waiting, people take two
+thirds, and with boxes waiting too, four sevenths to the machines' two and the
+boxes' one — and
 within that class to the principal that has spent least, the oldest request
 first on a tie. A pipeline that pushes acts as the human seat the directory
 binds it to — one nobody else holds — so it is a `person`, but one principal
@@ -4213,11 +4327,23 @@ principal has spent fades over **a minute** (a burst still counts while it
 lasts, and a twentieth of it is left three minutes on), so a person's clone
 this morning does not slow their fetch now.
 
-The share decides only **who goes next**. A slot is never left free while
-anybody waits, so a class alone — a CI system on a quiet node — has every
-slot, and nobody waits longer than **ten seconds** for one, whatever order it
-is granted in: a request still waiting then is answered `503` with
-`Retry-After`, as it always was. Inside that bound the order is not arrival
+The share decides only **who goes next**. A slot is never left free while a
+person or a machine credential waits, so either class alone — a CI system on
+a quiet node — has every slot, and nobody waits longer than **ten seconds** for
+one, whatever order it is granted in: a request still waiting then is answered
+`503` with `Retry-After`, as it always was. **Coding boxes are the one
+exception: together they hold at most half the lane**, even with the other
+half free, and a box waiting at that bound is granted the first release that
+leaves the boxes under it. The share orders only who is granted next, so a
+class that holds every slot with transfers its clients pace keeps them as long
+as its clients read — a burst of coding-run launches is a clone a repository
+each, minutes apiece on a large one, and a box reading slowly holds its slot at
+the paced floor of thirty seconds a mebibyte — and every person's push or
+clone would wait out its ten seconds behind them and be refused. A box is
+generated code, so the lane cannot count on its manners: half is the bound the
+engine already holds seat work to on a git node's read lane, and the other
+half is what persons and machines share. Persons and machines keep the whole
+lane when no box waits. Inside that bound the order is not arrival
 order. With both classes waiting, people get about two thirds of what the
 lane spends and credentials acting as nobody about one third, so a person's
 clone does wait behind CI's when people have spent more than twice what the
@@ -4230,8 +4356,10 @@ decides who waits.
 
 `crewlet.code.git.share_wait` is how long transfers waited for their slot, by
 class: `machine` climbing while `person` stays flat is the share doing its job
-— CI waiting behind CI — and both climbing is a lane too narrow for its
-traffic (more memory and `git.max_transfers`, or more git nodes).
+— CI waiting behind CI — `run` climbing alone is boxes waiting behind each
+other at their half, and `person` and `machine` both climbing is a lane too
+narrow for its traffic (more memory and `git.max_transfers`, or more git
+nodes).
 `crewlet.code.git.share` is what each class has spent lately, as the next
 grant reads it ([Metrics](../reference/metrics.md)).
 
@@ -4398,12 +4526,16 @@ line says and push the branch's next commit with `-o change`.
 | `code_scratch_expired` | `INFO` | A scratch repository idle past `code.scratch.idle_days` (`idle_since`) and held by no live turn was deleted, restorable for `code.deleted_retention_days`. |
 | `code_scratch_expiry_skipped` | `WARN` | The live turns' holds on a page of idle scratch repositories could not be read — the run store, the seat leases, or a seat holder that did not answer within two seconds (`error`, naming which) — so this pass expired none; the next pass asks again ([A scratch repository's idle expiry](#a-scratch-repositorys-idle-expiry)). |
 | `code_retention_duty_declined`, `code_retention_duty_resumed` | `WARN` or `DEBUG`, `INFO` or `DEBUG` | This node does not take the duty, and gives it back if it holds it (`code_retention_duty_given_back`). It logs a `_declined` line each time the reason it declines for changes, at that reason's level — so a decline that keeps its reason is one line however many ticks it lasts — and one `_resumed` line when it stops declining, `INFO` if any reason of that decline warned and `DEBUG` otherwise. `WARN` where the reason is a fault: its copy of the code log is out of service (`domain`), or it does not serve the revision the fleet is on (`reason`: `behind`, with this node's `applied_epoch` and the `fleet_epoch`, once the lag is confirmed — its apply of the revision failed, or it has been behind for longer than the 45 seconds of propagation; or `unknown`, with the `error` that kept it from telling, as when the activation pointer could not be read). `DEBUG`, and asked again a reconcile interval (15 seconds) later rather than a tick, while it is no fault: `reason` `propagating` (with the `fleet_epoch`, and the `applied_epoch` once its reconciler has read the pointer) on a node still applying the fleet's revision or still starting — every restart's first turn runs before its reconciler is built — and `not_activated` while the fleet has activated no revision yet, which a fresh deployment meets for the seconds before its first activation. A node that fails one activation and then applies the fleet's next logs four lines: `propagating` at `DEBUG` while it applies the first, `behind` at `WARN` once its failure confirms the lag, `propagating` at `DEBUG` when the next activation arrives, and `_resumed` at `INFO` once it serves that one. |
-| `code_push` | `INFO` | One push this node received, whatever became of it: the repository, the push's id, the credential it came through (`operator_id`) and the human seat its principal holds (`seat`, empty for a credential bound to none), the `outcome` (`applied`, `pending`, `unknown`, `refused`, `failed`) and any `refusal`, how many commands and how many went through, the bundle's bytes, the position its record landed at and how long it took. |
+| `code_push` | `INFO` | One push this node received, whatever became of it: the repository, the push's id, the credential it came through (`operator_id`) and the human seat its principal holds (`seat`, empty for a credential bound to none) — for a [coding box](#coding-boxes)'s, no credential, the seat whose run it is, and the run's `turn_id` and `launch_id` — the `outcome` (`applied`, `pending`, `unknown`, `refused`, `failed`) and any `refusal`, how many commands and how many went through, the bundle's bytes, the position its record landed at and how long it took. |
+| `code_box_challenged` | `DEBUG` | A [coding box](#coding-boxes)'s request presented no credential this fleet signed — none (`reason`: `none`), a user name other than `run` (`user`), or a token that does not verify (`token`) — and was challenged `401`. Debug, because the route is public and anybody who reaches it can produce one. |
+| `code_box_refused`, `code_box_unavailable` | `INFO`, `WARN` | A coding box's signed token was refused `403` (`reason`: `run_unknown`, `run_superseded`, `run_ended`, `not_granted`, `read_only`, `seat_stopped`, `not_permitted`), or answered `503` because this node could not judge it (`run_unread`, `pauses_unread`, `no_chart`, `behind_config`, `floor_unraised`): with the run's `turn_id` and `launch_id`, the `seat` and the `repo`, never the token. |
+| `code_box_floor_unraised` | `WARN` | A coding box's push applied, and its run's floor could not be raised to the push's row in the run store: the push was answered `ok` all the same, and what the box may read behind is its own push, whose objects it holds. |
+| `code_box_floor_unreadable` | `WARN` | Under the component `engine`: a coding run's row names a code-log floor this build cannot read, or one on another log, so its box reads through the barrier until its next answer raises the row to a readable one. |
 | `code_write` | `INFO` | One [engine-built commit](#engine-built-commits) this node was asked for, whatever became of it: the repository, the write's `kind`, who wrote it (`principal_kind`; the `seat` it is the commit's author for — a person's human seat, or the agent's own — with the credential a person came through, `operator_id`, or the turn behind a seat's, `turn_id`), the `push_id` it lands under, the `outcome` (`applied`, `pending`, `unknown` from its push's row; `refused`; `unready`, this node could not answer and another git node is asked; `failed`), any `refusal` of the change or of its push, and how long it spent in `sync_ms`, `build_ms`, `land_ms` and `total_ms`. No `operator_acted` is recorded for it: a person's tool call is one already, and a seat's write is its push row. |
 | `code_write_outcome_unread` | `WARN` | An engine write found its branch at another head and could not learn, from the code log, whether that head is its own push landed by an earlier ask; it was answered `busy` — make the same call again — rather than `stale`. |
 | `code_commit_failed` | `WARN` | A repository's [committer](#the-committer) could not answer a record it published: the code log failed the write for a reason that is no refusal of it, or the record applied and the rows it wrote could not be read back. By `kind`: `push`, a batch of pushes, each answered with the `error`; or `compaction`, a git node's merge of the repository's packs, which the node that built it plans again. With the `repo` and the record's `op_id`. |
 | `code_commit_busy` | `WARN` | Proposals to a `repo` (its id) that this node's [committer](#the-committer) refused `busy` in one `minute`, written once the minute has closed — at the committer's next refusal or the node's next alarm evaluation, ten seconds at most: how many were `refused`, and how many of them at the repository's own `queue`, at the `node`'s whole bound, too `late` for their asker, and after every compare-and-set round (`contended`). One line a repository a minute, never one a refusal. The first two raise the [`code_commit_busy`](../reference/alarms.md) alarm; the last two raise nothing. |
-| `code_fetch_spool_unserved` | `WARN` | A fetch large enough to spool — a partial clone's lazy fetch, which git does not retry — was answered 503 without being served: its wait for its turn at the node's room for large requests reached 55 s (`reason`: `expired`), or it had to wait and found the node's waiting room full, or its credential's quarter of it (`reason`: `refused`). The `operator_id` is the token that sent it, and the `error` says what held it back; its credential's own requests holding it back means several CI runners share the token. git itself prints only `error: RPC failed; HTTP 503`, so this line is where the reason is. |
+| `code_fetch_spool_unserved` | `WARN` | A fetch large enough to spool — a partial clone's lazy fetch, which git does not retry — was answered 503 without being served: its wait for its turn at the node's room for large requests reached 55 s (`reason`: `expired`), or it had to wait and found the node's waiting room full, or its credential's quarter of it (`reason`: `refused`). The `operator_id` is the token that sent it, `spool` the credential it waited as — `runs` for every coding box, which share one — and the `error` says what held it back; its credential's own requests holding it back means several CI runners share the token, or, for `runs`, that boxes held their share. git itself prints only `error: RPC failed; HTTP 503`, so this line is where the reason is. |
 | `code_fetch_retried`, `code_push_retried` | `INFO` | git found this node's cache damaged during a fetch's or a push's request — a fetch's in an advertisement, in the node's check of which of the fetch's wants the copy lacks, or in the fetch's own git, before its pack began — read from the formats of git's own reports, never their words, which repeat the request's (`error` quotes git's words) — or the node would not run git in it for its shape (`reason`: `corrupt`, `derived`, `missing`, `shape` — a push's only ever `shape`, since its git runs beside the cache rather than in it); the cache was repaired — a shape or a damaged derived file (`derived`: a multi-pack-index, a commit-graph) in place, damage to its packs or objects in place first, one download a damaged pack, and by a rebuild only when that found nothing — or, for a request whose git began before the node last wrote a repair into the copy, left as it stands; and git run again over the same request. |
 | `code_git_refused` | `ERROR` | The node refused its own call serving a request because the call is wrong — a git configuration key or variable outside what the node allows, a call without a deadline, a malformed command, output captured that the call should have streamed, the cache handed an argument it never takes, a read asked at a level no reader serves — or because its git should never have started; answered 500 with no `Retry-After`. A bug in the build the node runs: report the line. |
 | `code_fetch_failed`, `code_push_failed` | `WARN` | git failed serving a request on this node — `code_push_failed` a push's (its advertisement, its receive-pack, a process its sync ran), `code_fetch_failed` a fetch's — by itself or ended by the node (`reason`: `deadline`, `stall`, or its `input` or `output` failing here, beside the pool's own `code_git_killed`), before its first byte (the client was told why, a push with its `push_id`) or after it (git's own words ended the answer, or, for a process the node ended, the connection was cut); or the request failed on the node itself before git answered (`reason`: `node` — its disk refusing a write into the repository's copy, or anything else the engine did not name; the `error` says what), answered 503. |

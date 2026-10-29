@@ -170,12 +170,17 @@ func threadsValue(n int64) string {
 // And because the TRANSFER lane chooses WHICH waiter a released slot goes to
 // (share.go), which no semaphore lets a caller decide.
 //
-// INVARIANT: a waiter is queued only while every slot is held. release hands a
-// slot straight to a waiter rather than freeing it, and an arrival queues only
-// when none is free — so no slot is ever free while somebody waits, and a
-// newcomer can never take a slot ahead of the queue. The READ and MAINTENANCE
-// lanes hand it to the oldest waiter; the TRANSFER lane to the waiter its
-// share book names, and keeps the invariant all the same.
+// INVARIANT: a waiter is queued only while every slot is held — or, in the
+// TRANSFER lane, while its class holds as many slots as its cap allows
+// ([ShareClass.Cap]: a coding box's class holds at most half the lane), so
+// no slot is ever free while a waiter that MAY take it waits. release hands a
+// slot straight to such a waiter rather than freeing it, and an arrival
+// queues only when no slot is free or its class is at its cap — so a newcomer
+// can never take a slot ahead of a waiter that could have taken it. The READ
+// and MAINTENANCE lanes hand it to the oldest waiter; the TRANSFER lane to the
+// waiter its share book names among those that may take it, and frees it
+// where none may: a box waiter at its class's cap is granted at the first
+// release that leaves its class under it.
 type lane struct {
 	class Class
 	size  int64
@@ -207,7 +212,8 @@ func newLane(class Class, size int64) *lane {
 	return &lane{class: class, size: size}
 }
 
-// newShareLane is a lane of size slots granted by book (share.go).
+// newShareLane is a lane of size slots granted by book (share.go), which caps
+// each class of a lane of that width.
 func newShareLane(size int64, book *shareBook) *lane {
 	return &lane{class: ClassTransfer, size: size, book: book}
 }
@@ -245,7 +251,10 @@ func (l *lane) acquire(ctx context.Context, s Share) (*run, error) {
 
 // arrive is one acquire's arrival, under l.mu: a free slot at once when
 // nobody waits — whatever the arrival's share, so a lane never holds a slot
-// free while it could be used — or a waiter queued for one.
+// free while it could be used — or a waiter queued for one. In the transfer
+// lane a free slot is taken whoever waits, by the invariant (a free slot
+// there means every waiter's class is at its cap), unless the arrival's own
+// class is at its cap, when it queues behind its class.
 func (l *lane) arrive(s Share) (*run, *waiter) {
 	var now time.Time
 	if l.book != nil {
@@ -253,7 +262,7 @@ func (l *lane) arrive(s Share) (*run, *waiter) {
 		l.book.sweep(now)
 		defer l.book.report(now)
 	}
-	if l.held < l.size && l.waiting == 0 {
+	if l.held < l.size && l.mayTake(s) {
 		l.held++
 		if l.book == nil {
 			return nil, nil
@@ -268,6 +277,17 @@ func (l *lane) arrive(s Share) (*run, *waiter) {
 		l.book.enqueue(w, s, now)
 	}
 	return nil, w
+}
+
+// mayTake reports whether an arrival of s may take a slot that is free, under
+// l.mu: in an arrival-order lane only while nobody waits — whoever waits came
+// first — and in the transfer lane while s's class is under its cap, since
+// there a free slot is one no waiter may take (the invariant).
+func (l *lane) mayTake(s Share) bool {
+	if l.book == nil {
+		return l.waiting == 0
+	}
+	return l.book.mayStart(s.Class)
 }
 
 // leave takes a waiter that was never granted out of its queue, under l.mu.
@@ -295,8 +315,10 @@ func (l *lane) tryAcquire() bool {
 }
 
 // release returns a slot — and, in a share lane, settles r given the CPU its
-// process tree spent: straight to the next waiter if there is one, so the
-// invariant holds, else to the lane.
+// process tree spent: straight to the next waiter that may take it if there
+// is one, so the invariant holds, else to the lane. The settle comes first, so
+// a box's release leaves its own class under its cap and its own class's
+// waiters among those that may take the slot.
 func (l *lane) release(r *run, cpu time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -313,8 +335,11 @@ func (l *lane) release(r *run, cpu time.Duration) {
 	var w *waiter
 	if l.book == nil {
 		w, _ = l.waiters.Remove(l.waiters.Front()).(*waiter)
-	} else {
-		w = l.book.grant(now)
+	} else if w = l.book.grant(now); w == nil {
+		// EVERY WAITER IS A CLASS AT ITS CAP: the slot is the lane's,
+		// free, for whoever arrives that may take it.
+		l.held--
+		return
 	}
 	l.waiting--
 	w.granted = true
@@ -347,7 +372,10 @@ func (l *lane) repay(k int64) (out int64) {
 
 // free is the slots neither held nor lent, and none while a run waits: a
 // waiter is queued only while every slot is held (the invariant), so a slot
-// that reads free then is one a release is handing straight to it.
+// that reads free then is one a release is handing straight to it. In the
+// transfer lane a slot can be free while coding boxes at their class's cap
+// wait, and reads none all the same: whether a run could take it turns on the
+// run's class, which this reading is not told.
 func (l *lane) free() int64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()

@@ -18,19 +18,23 @@ import (
 )
 
 // GET /git/{repo}/info/refs — THE ADVERTISEMENT every git exchange opens with:
-// a fetch's refs from upload-pack, or a push's from receive-pack.
+// a fetch's refs from upload-pack, or a push's from receive-pack. A coding
+// box's (/box/git/) is the same answer, admitted by admitBox.
 //
-// EVERY ANSWER THAT NAMES A REF IS LINEARIZABLE: a v0 advertisement and a
-// push's are read through the code log's barrier, so a node in a minority
-// answers 503 rather than an old head. A v2 capability advertisement names no
-// ref and takes whatever the cache holds. And everything that can be refused
-// without objects is refused HERE — a token bound to nobody, an archived or a
-// deleted repository — in the one form git prints at this step, `fatal:
-// remote error: <sentence>`; a push that ends here never POSTs, so it is
-// audited here — refused, or failed however its advertisement failed — and
-// one whose advertisement was served is not, since its POST is the push's
+// EVERY ANSWER THAT NAMES A REF IS READ AT THE REQUEST'S REFS LEVEL
+// (admission.refs): a person's v0 advertisement and push advertisement are
+// LINEARIZABLE, read through the code log's barrier, so a node in a minority
+// answers 503 rather than an old head; a box's are its run's SESSION, and
+// raise the run's floor to what they show before their first byte
+// (raiseFloor). A v2 capability advertisement names no ref and takes whatever
+// the cache holds. And everything that can be refused without objects is
+// refused HERE — a token bound to nobody, a box whose run may not push, an
+// archived or a deleted repository — in the one form git prints at this step,
+// `fatal: remote error: <sentence>`; a push that ends here never POSTs, so it
+// is recorded here — refused, or failed however its advertisement failed —
+// and one whose advertisement was served is not, since its POST is the push's
 // end (pushAudit).
-func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
+func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request, admit admitter) {
 	start := s.now()
 	svc, dumb, ok := serviceFor(r)
 	switch {
@@ -53,7 +57,7 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 	if push {
 		op = auth.GitPush
 	}
-	adm, ok := s.admit(ctx, w, r, op)
+	adm, ok := admit(ctx, w, r, op)
 	if !ok {
 		return
 	}
@@ -69,11 +73,11 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	level := statelog.ReadLinearizable
+	fresh, namesRefs := adm.refs(), true
 	if !push && protocolVersion(r.Header.Get("Git-Protocol")) == 2 {
-		level = statelog.ReadStale
+		fresh, namesRefs = statelog.Freshness{Level: statelog.ReadStale}, false
 	}
-	synced, err := s.o.Cache.Sync(ctx, adm.repo.ID, statelog.Freshness{Level: level})
+	synced, err := s.o.Cache.Sync(ctx, adm.repo.ID, fresh)
 	if err != nil {
 		s.syncFailed(w, r, adm.name, err)
 		return
@@ -104,6 +108,15 @@ func (s *Server) infoRefs(w http.ResponseWriter, r *http.Request) {
 	// IN THE INCARNATION, so a damaged one is rebuilt under this request
 	// (repairing).
 	err = s.repairing(ctx, r, adm.name, &synced, inIncarnation, out.Started, func(in cache.Synced) error {
+		// A BOX IS SHOWN NOTHING ITS RUN'S FLOOR DOES NOT HOLD: a v0
+		// advertisement names refs, so the floor is raised to the copy it
+		// is served from before its first byte (raiseFloor) — a rebuilt one
+		// included.
+		if namesRefs {
+			if rerr := s.raiseFloor(ctx, adm, in.Position); rerr != nil {
+				return rerr
+			}
+		}
 		// THROUGH THE DROPPING VIEW (Synced.Dropping), as the fetch after it
 		// runs: a serving process's, never a receiving one's.
 		_, gerr := s.runGit(ctx, gitproc.Cmd{
@@ -145,6 +158,13 @@ func (s *Server) advertisePush(ctx context.Context, w http.ResponseWriter, r *ht
 
 	out.prefix = serviceLine(receivePackService)
 	err := s.repairing(ctx, r, adm.name, synced, asAlternate, out.Started, func(in cache.Synced) error {
+		// THE PUSH'S OWN ADVERTISEMENT NAMES THE BASES its thin pack deltas
+		// against, so a box's run's floor is raised to it before its first
+		// byte: the push's POST, which a balancer may send to another node,
+		// then syncs at least that far (raiseFloor).
+		if rerr := s.raiseFloor(ctx, adm, in.Position); rerr != nil {
+			return rerr
+		}
 		view, err := s.o.Cache.AdvertiseView(ctx, in)
 		if err != nil {
 			return err
@@ -202,8 +222,10 @@ func exitedByItself(err error) bool {
 
 // refusedAtAdvertisement answers the refusals an advertisement makes from a
 // repository row — a deleted or purging repository for either service, and
-// for a push a principal whose grant lets it push nothing (a token bound to
-// nobody: code.Grant.MayPush) or an archived repository — and records a push
+// for a push a principal whose grant as its admission judged it
+// (admission.grant) lets it push nothing — a token bound to nobody, or a box
+// whose run was given the repository to read or whose seat pushes nothing
+// there: code.Grant.MayPush — or an archived repository — and records a push
 // that ends here through its request's record (a fetch's is nil, and records
 // nothing). It reports whether it answered.
 func (s *Server) refusedAtAdvertisement(w http.ResponseWriter, svc string, push bool, adm admission,
@@ -216,8 +238,8 @@ func (s *Server) refusedAtAdvertisement(w http.ResponseWriter, svc string, push 
 	switch {
 	case gone(repo.Status):
 		words, refusal = s.goneSentence(repo), AuditRefusal(code.RefusalRepoDeleted)
-	case push && !adm.grant(repo).MayPush():
-		words, refusal = adm.grant(repo).PushRefusal(), grantRefusal(adm.principal())
+	case push && !adm.grant.MayPush():
+		words, refusal = adm.grant.PushRefusal(), grantRefusal(adm.principal())
 	case push && repo.Status == code.RepoStatusArchived:
 		words, refusal = code.ArchivedDetail(repo.Name, repo.ManagedBy), AuditRefusal(code.RefusalRepoArchived)
 	default:

@@ -1715,14 +1715,19 @@ func Catalogue() []Instrument {
 				"theirs, or a Tier A token or service account the identity " +
 				"directory binds to a human seat nobody else holds; " +
 				"`machine`: a credential acting as nobody, a Tier A token or a " +
-				"service account's machine token bound to no seat). " +
+				"service account's machine token bound to no seat; `run`: a " +
+				"coding box's git, with its run's credential on `/box/git/`). " +
 				"When every slot is held a released one goes to the class " +
 				"furthest below its weighted share of what the lane spent " +
-				"lately (person 4 : machine 2), so `machine` climbing while " +
-				"`person` stays flat is the share doing its job — CI waiting " +
-				"behind CI, not people behind CI — and both climbing is a lane " +
-				"too narrow for its traffic: more memory and a wider " +
-				"`git.max_transfers`, or more git nodes.",
+				"lately (person 4 : machine 2 : run 1), so `machine` climbing " +
+				"while `person` stays flat is the share doing its job — CI " +
+				"waiting behind CI, not people behind CI — and `person` and " +
+				"`machine` both climbing is a lane too narrow for its traffic: " +
+				"more memory and a wider " +
+				"`git.max_transfers`, or more git nodes. Coding boxes together " +
+				"hold at most half the lane, so `run` climbing alone is boxes " +
+				"waiting behind each other at that bound, never a person " +
+				"behind a box.",
 		},
 		{
 			Name: CodeGitShare, Kind: KindGauge, Unit: UnitSeconds,
@@ -1738,8 +1743,10 @@ func Catalogue() []Instrument {
 				"by. Set at each " +
 				"admission and release, so a lane idle since holds its last " +
 				"reading. One class's reading far above its weight's share of " +
-				"the total while the other's waits are short is a class alone " +
-				"on the lane, which runs it at full width.",
+				"the total while the others' waits are short is a class alone " +
+				"on the lane, which runs it at full width — `person` and " +
+				"`machine` alike, while `run`, a coding box's, holds at most " +
+				"half of it.",
 		},
 		{
 			Name: CodeSeatworkHeld, Kind: KindGauge, Unit: UnitCount,

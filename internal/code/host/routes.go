@@ -1,7 +1,10 @@
 package host
 
 import (
+	"context"
 	"net/http"
+
+	"github.com/crewlet/crewlet/internal/api/auth"
 )
 
 // The route patterns the API mounts and the suite's mux — ONE spelling, so the
@@ -15,6 +18,15 @@ const (
 	PatternUploadPack = "POST /git/{repo}" + UploadPackSuffix
 	// PatternReceivePack is a push's RPC.
 	PatternReceivePack = "POST /git/{repo}" + ReceivePackSuffix
+)
+
+// A CODING BOX'S THREE ROUTES: the same three entry points under
+// auth.BoxGitPrefix, behind the box's admission (boxadmit.go) rather than a
+// person's.
+const (
+	PatternBoxInfoRefs    = "GET /box/git/{repo}/info/refs"
+	PatternBoxUploadPack  = "POST /box/git/{repo}" + UploadPackSuffix
+	PatternBoxReceivePack = "POST /box/git/{repo}" + ReceivePackSuffix
 )
 
 // What a client that speaks the protocol itself, rather than through git,
@@ -33,11 +45,29 @@ const (
 	ReceivePackRequestType = "application/x-git-receive-pack-request"
 )
 
+// admitter is how an entry point admits its request: admit for a person's,
+// admitBox for a coding box's. Everything after it reads the admission alone.
+type admitter func(ctx context.Context, w http.ResponseWriter, r *http.Request, op auth.GitOp) (admission, bool)
+
 // InfoRefs answers a repository's advertisement, a fetch's or a push's.
-func (s *Server) InfoRefs() http.Handler { return http.HandlerFunc(s.infoRefs) }
+func (s *Server) InfoRefs() http.Handler { return s.route(s.infoRefs, s.admit) }
 
 // UploadPack answers a fetch's RPC.
-func (s *Server) UploadPack() http.Handler { return http.HandlerFunc(s.uploadPack) }
+func (s *Server) UploadPack() http.Handler { return s.route(s.uploadPack, s.admit) }
 
 // ReceivePack answers a push's RPC.
-func (s *Server) ReceivePack() http.Handler { return http.HandlerFunc(s.receivePack) }
+func (s *Server) ReceivePack() http.Handler { return s.route(s.receivePack, s.admit) }
+
+// BoxInfoRefs answers a coding box's advertisement, a fetch's or a push's.
+func (s *Server) BoxInfoRefs() http.Handler { return s.route(s.infoRefs, s.admitBox) }
+
+// BoxUploadPack answers a coding box's fetch RPC.
+func (s *Server) BoxUploadPack() http.Handler { return s.route(s.uploadPack, s.admitBox) }
+
+// BoxReceivePack answers a coding box's push RPC.
+func (s *Server) BoxReceivePack() http.Handler { return s.route(s.receivePack, s.admitBox) }
+
+// route is entry, admitting its requests with admit.
+func (s *Server) route(entry func(http.ResponseWriter, *http.Request, admitter), admit admitter) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { entry(w, r, admit) })
+}

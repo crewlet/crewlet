@@ -197,7 +197,7 @@ crewlet secrets rekey                            # after a keyring rotation: eve
 A deployment has one keyring, and everything that has to be authenticated
 across a fleet derives from it. It **seals** the company config and the secret
 store's rows — and a sealed company document is an authenticated one, so a
-node refuses one its peers published unsealed. It **signs** the two per-run tokens a sandbox carries. And it
+node refuses one its peers published unsealed. It **signs** the three per-run tokens a sandbox carries — its telemetry's, its tool bridge's and a coding box's git credential. And it
 **signs every record on every state log** — the tracker's, the knowledge
 base's, and any domain a later build registers.
 
@@ -217,10 +217,11 @@ whatever it was written to precede.
 
 ### Rotating the keyring, with nothing in flight lost
 
-The keyring seals the company's secrets and also signs the two **per-run
-tokens** a sandbox carries — the OTLP receiver's and the MCP bridge's — and
-every **session cookie** a signed-in browser holds. The tokens travel in a URL
-path, are minted on the node that starts a run and verified on whichever node
+The keyring seals the company's secrets and also signs the three **per-run
+tokens** a sandbox carries — the OTLP receiver's, the MCP bridge's and a coding
+box's git credential — and every **session cookie** a signed-in browser holds.
+The tokens travel in a URL path or, for the box's git, as git's Basic password,
+are minted on the node that starts a run and verified on whichever node
 the box can reach, and a detached coding run holds one for as long as the run
 lasts, which outlives a rollout. A cookie is the same shape of problem with a
 longer life and a person on the other end of it.
@@ -269,6 +270,15 @@ That makes the rotation a runbook with no window in it:
    elapsed since step 3, *and* `crewlet secrets rekey -dry-run`, through a
    running node, reports no outstanding invitation under it — each is redeemed
    or lapses within a week of being issued.
+   **The longest token lifetime is the longest of the per-run tokens'**, each
+   its own: a coding box's git credential lives `host.RunTokenTTL`, seven days
+   — dropped sooner, every running box's pushes and fetches are refused, so the
+   drop waits at least that long after step 3; the tool bridge's at most four
+   hours (`mcpbridge.DefaultTTL`); the OTLP receiver's twice the run's box
+   timeout plus its pause allowance (`pause_ttl_seconds`), which no setting
+   bounds, so a deployment with a long pause allowance waits that out instead;
+   and an artifact view ticket's at most an hour and ten minutes. Wait out
+   whichever is longest in your configuration.
    From that moment a token, a record or a cookie signed under it is refused,
    which is the point. Dropping it while a log still holds such records leaves
    those records unappliable on a node replaying from the floor, which reports

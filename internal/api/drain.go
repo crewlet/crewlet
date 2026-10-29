@@ -76,7 +76,9 @@ const DrainRetryAfter = 30 * time.Second
 //     on the POST it does not — it prints only `RPC failed; HTTP 503`. Which
 //     is which is [auth.GitAccess]'s answer, the one classifier the guard and
 //     the code host ask too, so a drain can never take for a fetch a request
-//     the host would serve as a push.
+//     the host would serve as a push. A coding box's git, under
+//     [auth.BoxGitPrefix], is classified as a person's and drained by these
+//     same two rules.
 //   - Every other read is SERVED: the probes, the dashboard, the REST reads and
 //     the live socket. A read starts nothing, and it is how an operator watches
 //     the drain.

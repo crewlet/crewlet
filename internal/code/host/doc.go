@@ -1,7 +1,7 @@
-// Package host is SMART HTTP FOR PERSONS: the code host's git surface, the
-// one landing every push takes from its pack to an applied row, the hook
-// relay that hands git's ref updates to it, the engine writes it builds and
-// lands the same way, and the wait that keeps an `ok` honest.
+// Package host is SMART HTTP FOR PERSONS AND CODING BOXES: the code host's git
+// surface, the one landing every push takes from its pack to an applied row,
+// the hook relay that hands git's ref updates to it, the engine writes it
+// builds and lands the same way, and the wait that keeps an `ok` honest.
 //
 // # A push is committed by a record, and git is told so only from its row
 //
@@ -127,11 +127,11 @@
 // receive-pack process is given (gitproc.ReceivePackDeadline), never by
 // anything the engine can flag.
 //
-// # Every answer that names a ref is linearizable; an object id has no level
+// # Every answer that names a ref is read at its request's level; an object id has no level
 //
-// A v0 advertisement, a v2 `ls-refs` and a push's advertisement read the code
-// log through a barrier, so a node in a minority answers 503 rather than an
-// old head. A v2 capability advertisement names no ref and an object fetch
+// A person's v0 advertisement, v2 `ls-refs` and push advertisement read the
+// code log through a barrier, so a node in a minority answers 503 rather than
+// an old head; a coding box's are read at its run's session (below). A v2 capability advertisement names no ref and an object fetch
 // names ids that mean the same bytes everywhere, so both take whatever the
 // cache holds — and a fetch whose wants this node lacks takes ONE linearizable
 // sync (the client's refs came from a node further ahead) before it is
@@ -293,6 +293,30 @@
 // read for it, since its remedy is a binding in the identity directory rather
 // than a grant.
 //
+// # A coding box is admitted by its run
+//
+// A seat's coding box is git's other client, under /box/git/ on the public
+// listener beside its other two edges, with its RUN'S credential: git's Basic
+// user name BoxUser and a per-run token (BoxTokens, key domain BoxKeyDomain)
+// as the password, which the API's guard never reads. admitBox (boxadmit.go)
+// admits it by the run's ROW, read on every request (Runs, the engine's
+// adapter over the fleet's pending store) — the token is a backstop of
+// RunTokenTTL, the row the authority — three-valued, so a store that cannot be
+// read is 503 and never a 401; matches the repository by the NAME the run was
+// given before the code log is read, so a box guessing names costs the log no
+// barrier; refuses a push of a seat a person stopped (Runs.Stopped: a detached
+// run is not fenced by a pause); and holds the seat's own grant, judged by
+// this node's current chart, to the run's (code.Grant.Within), judging none on
+// a node with no chart or one behind the configuration. Its reads of refs are
+// at the run's SESSION (admission.refs): every answer naming refs raises the
+// run's floor to its copy before its first byte, and an applied push raises it
+// to its row before `ok` (raiseFloor), because git builds a push's thin pack
+// against the refs its own advertisement named and a balancer may send the two
+// requests to two nodes. Everything after admission reads the admission alone
+// — its grant, its freshness, its principal and its share — and never asks
+// which admitter ran (TestNothingAfterAdmissionAsksWhichAdmitterRan); a box's
+// push is no operator_acted, its push row naming its run.
+//
 // # Every transfer is charged to the credential that asked for it
 //
 // The same admission says whose TRANSFER every git process of the request is
@@ -303,10 +327,13 @@
 // service account the identity directory binds to a seat nobody else holds —
 // and a credential acting as nobody is a MACHINE, by the credential's name
 // (`token:<id>`, a service account's `pat:<id>`), never by the account behind
-// it, so a token per CI runner is a turn per runner. When the node's transfer
-// slots are all held, gitproc's fair share hands a released one to the class
-// furthest below its weighted share of what the lane has spent lately (a
-// person 4, a machine 2), then to the principal that spent least, each run
+// it, so a token per CI runner is a turn per runner. A coding box is a RUN, by
+// its launch, and the run class holds at most half the lane (gitproc's
+// ShareClass.Cap), the one class the share does not let fill it. When the
+// node's transfer slots are all held, gitproc's fair share hands a released
+// one to the class furthest below its weighted share of what the lane has
+// spent lately (a person 4, a machine 2, a box 1), then to the principal that
+// spent least, each run
 // charged the greater of its CPU and the slot-time it held: so a CI
 // credential's storm of clones or lazy fetches waits behind every credential
 // of its class that asked less, and a person's clone takes the next slot

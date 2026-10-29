@@ -252,13 +252,17 @@ var classified = map[string]struct {
 		"a write landed under a bound a revision then lowered leaves the same rows"},
 	"host.Options.DeletedRetention": {seamValue, "the instant a repo_deleted refusal names"},
 	"host.Options.Roster": {seamGrant, "the chart a seat's engine write is judged by on the git " +
-		"node that builds it"},
+		"node that builds it, and a coding box's seat by the git node it dials"},
 	"host.Options.Signer": {seamValue, "the epoch's names an engine-built commit carries: a seat's " +
 		"role name and address and the identity domain — a revision renaming a seat just after " +
 		"the write leaves the same commit"},
 	"host.Options.Share": {seamNone, "the node's seat git-work share of its read lane"},
 	"host.Options.Current": {seamGate, "whether this node serves the company's configuration: a " +
-		"seat's write behind it is answered unready, behind_config, and built nowhere here"},
+		"seat's write behind it is answered unready, behind_config, and built nowhere here, and a " +
+		"coding box answered 503 behind_config"},
+	"host.Options.Boxes": {seamNone, "a coding box's run tokens, the keyring's, and its run's rows, " +
+		"coordination state; neither is an epoch's value — the box's grant reaches the epoch only " +
+		"through Roster"},
 	"host.Options.NodeID":  {seamNone, "this node's name, which a proposal and a refusal name"},
 	"host.Options.Timing":  {seamNone, "the host's scaled waits"},
 	"host.Options.Faults":  {seamNone, "the suite's fault script, nil in production"},

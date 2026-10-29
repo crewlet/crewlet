@@ -31,6 +31,83 @@ type Estate interface {
 	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
 }
 
+// Boxes is what admits a coding box (boxadmit.go): the tokens it verifies and
+// the run rows its grants come from.
+type Boxes struct {
+	Tokens *BoxTokens
+	Runs   Runs
+}
+
+// Runs is the coding runs' rows as a box's admission reads them — the sandbox
+// pending store on the fleet's coordination store, which every node reaches
+// (the engine's adapter). Declared here, by its consumer.
+type Runs interface {
+	// Run is the row of the run whose turn is turnID, as it stands: found
+	// false for none; an error is the store unreachable — UNKNOWN, never
+	// "no run".
+	Run(ctx context.Context, turnID string) (BoxRun, bool, error)
+	// RaiseFloor raises the run's code-log floor to at least pos, and only
+	// while ref is still the row's current launch: a lower pos, a
+	// superseded launch or an ended run is no write and no error. An error
+	// is the store unreachable or a lost race past its retries.
+	RaiseFloor(ctx context.Context, ref BoxRunRef, pos statelog.Position) error
+	// Stopped is who STOPPED seat — the person whose pause of it asked its
+	// running work to stop (coord.SeatPause.StopRunning), "" for a seat not
+	// paused or paused without it — as this node's pause watch holds it. An
+	// error is a node that has not yet read the pauses: UNKNOWN, never "not
+	// stopped".
+	Stopped(ctx context.Context, seat string) (by string, err error)
+}
+
+// BoxRun is one coding run as the host judges a box by it.
+type BoxRun struct {
+	// Ref is the row's turn id and its CURRENT launch.
+	Ref BoxRunRef
+	// Live is a row whose job is in its box: launching or running, and no
+	// ending decided.
+	Live bool
+	// Status is the row's status, for a refusal's sentence.
+	Status string
+	// Seat is the handle of the seat whose run it is.
+	Seat string
+	// Repos are the repositories the run was given.
+	Repos []BoxGrant
+	// Floor is the run's SESSION on the code log: a position at or past
+	// everything its box has been shown and has pushed. Zero for none,
+	// which a box reads past LINEARIZABLE.
+	Floor statelog.Position
+	// Provenance is what the run's pushes are stamped with: TurnID the
+	// row's turn, RunID its launch, WorkBackend and WorkKey its work item,
+	// Model its launch's model, CodingAgent its coding agent — as the row
+	// holds them: the host fits each to the code domain's bound where it
+	// stamps a push (admission.principal).
+	Provenance code.RunProvenance
+}
+
+// BoxGrant is one repository a run was given.
+type BoxGrant struct {
+	RepoID string
+	// Name is the repository's name at launch: what the box's clone URL
+	// carries, and what its request is matched by.
+	Name string
+	// Access is code.AccessRead or code.AccessWrite: what the run's
+	// run_sandbox call asked for it, the seat's own grant capping it.
+	Access code.Access
+	// Branch is the run's branch, refs/heads/…, for the brief and the log.
+	Branch string
+}
+
+// grantNamed is the grant of the repository the run was given under name, and
+// whether it was given one.
+func (r BoxRun) grantNamed(name string) (BoxGrant, bool) {
+	for _, g := range r.Repos {
+		if g.Name == name {
+			return g, true
+		}
+	}
+	return BoxGrant{}, false
+}
+
 // Timing is every duration the host waits on that a test must be able to
 // scale (jsprovision.Timing's idiom): Production is the value the engine
 // passes, and a field left zero is refused by name.
@@ -134,10 +211,11 @@ type Options struct {
 	// DeletedRetention is the CURRENT epoch's code.deleted_retention_days —
 	// what a deleted repository's refusal names its purge by.
 	DeletedRetention func() time.Duration
-	// Roster is the chart an engine write's grant is judged by (write.go):
-	// the serving node's CURRENT epoch's, read per write — the query
-	// server's own. A nil answer is a node with no chart yet, which builds no
-	// seat's write (code.UnreadyNoChart).
+	// Roster is the chart a seat's grant is judged by — an engine write's
+	// (write.go) and a coding box's (boxadmit.go): the serving node's
+	// CURRENT epoch's, read per request — the query server's own. A nil
+	// answer is a node with no chart yet, which builds no seat's write
+	// (code.UnreadyNoChart) and admits no box.
 	Roster func() code.Roster
 	// Signer names an engine-built commit's author and committer from the
 	// serving node's epoch (write.go's Signer).
@@ -147,9 +225,15 @@ type Options struct {
 	// given back before its landing.
 	Share *code.GitShare
 	// Current reports whether this node serves the company's configuration:
-	// false on a node confirmed behind it, which builds no SEAT's write from
-	// the chart the fleet replaced (code.UnreadyBehindConfig). nil is current.
+	// false on a node confirmed behind it, which builds no SEAT's write and
+	// admits no coding box from the chart the fleet replaced
+	// (code.UnreadyBehindConfig). nil is current.
 	Current func() bool
+	// Boxes admits a coding box to /box/git/: the run tokens it verifies and
+	// the run rows its grants and floor are read from. Both halves required,
+	// as every field the host needs: a git node serves boxes whatever its
+	// company runs, since a box's run may have been launched by any node.
+	Boxes Boxes
 	// NodeID is this node, which a proposal names as the one that received
 	// the push.
 	NodeID string
@@ -245,6 +329,8 @@ func New(o Options) (*Server, error) {
 	need(o.Roster == nil, "Roster")
 	need(o.Signer == nil, "Signer")
 	need(o.Share == nil, "Share")
+	need(o.Boxes.Tokens == nil, "Boxes.Tokens")
+	need(o.Boxes.Runs == nil, "Boxes.Runs")
 	need(strings.TrimSpace(o.NodeID) == "", "NodeID")
 	need(o.Timing.PendingGrace <= 0, "Timing.PendingGrace")
 	need(o.Timing.PendingFirst <= 0, "Timing.PendingFirst")

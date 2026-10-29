@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/code"
 	codecompact "github.com/crewlet/crewlet/internal/code/compact"
+	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/code/readaudit"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
@@ -454,6 +455,13 @@ type Engine struct {
 	// MCP. Nil where no bridge URL is configured, which is every
 	// deployment that runs no agent mode.
 	bridge *mcpbridge.Bridge
+
+	// boxTokens mints and verifies a coding box's git credential: built on
+	// EVERY node, whatever its roles, for the receiver's and the bridge's
+	// reason — the node that launches a run mints and whichever git node
+	// its box dials verifies, so each derives its key from the fleet's
+	// keyring. The code host admits boxes by it ([host.Options.Boxes]).
+	boxTokens *host.BoxTokens
 
 	// reflector is the learning write side: one dispatcher for the life of
 	// the process, whose org and workers an apply swaps. On the ENGINE
@@ -1238,6 +1246,17 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 			return nil, fmt.Errorf("engine: tool bridge: %w", err)
 		}
 	}
+	// A CODING BOX'S GIT CREDENTIAL, the third per-run token beside the
+	// receiver's and the bridge's, from the same keyring under a domain of
+	// its own, and built HERE for their reason: the node that launches a run
+	// mints it and whichever git node its box dials verifies it. Built on
+	// every node whatever its roles — a seats node mints, a git node
+	// verifies, one node is often both — and refused with the boot, since
+	// the keyring check above leaves only a broken keyring to refuse it.
+	boxTokens, err := host.NewBoxTokens(tokenMaterial(opts.Bootstrap), nil)
+	if err != nil {
+		return nil, fmt.Errorf("engine: box tokens: %w", err)
+	}
 
 	// THE MODE AND THE INCARNATION, resolved once. An unset mode is
 	// normal, which is what every caller that does not know about
@@ -1333,6 +1352,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		usageEvery:          opts.usageEvery,
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
+		boxTokens:           boxTokens,
 		metrics:             opts.Metrics,
 		objectives:          newObjectives(opts.Metrics),
 		mode:                mode,

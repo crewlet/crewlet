@@ -25,6 +25,21 @@ const (
 	CodePrefix = "/code/"
 )
 
+// BoxGitPrefix is where a CODING BOX reaches the code host with its run's
+// credential: HTTP Basic, the user name host.BoxUser (`run`), the run's token
+// as the password.
+//
+// A PUBLIC prefix ([publicPrefixes]), unlike [GitPrefix]: a box holds no
+// person's or deployment's credential and is reached from wherever its
+// sandbox runs, so it is served on api.public when one is set — beside /mcp/
+// and /otlp/, the box's other two edges — and EXEMPT from the guard, the run's
+// token being the credential and the code host's box admission the check. It
+// does not begin with [GitPrefix], so no reader of where a PERSON'S git starts
+// takes a box's request for one: neither transport admits the other's
+// credential. [GitAccess] classifies a request under either prefix alike — one
+// classifier, every doubt a push.
+const BoxGitPrefix = "/box/git/"
+
 // GitRepoPath is the path a person's git reaches one repository at, below the
 // listener's base: [GitPrefix], the name, then `.git`. THE ONE SPELLING, for
 // the CLI's git configuration and the clone URL a code tool answers alike, so
@@ -37,14 +52,14 @@ func GitRepoPath(name string) string {
 type GitOp string
 
 const (
-	// GitNone is a request that is not under [GitPrefix].
+	// GitNone is a request under neither [GitPrefix] nor [BoxGitPrefix].
 	GitNone GitOp = ""
 	// GitFetch reads: the upload-pack advertisement (GET or HEAD info/refs
 	// asking for git-upload-pack, or for no service at all) and the
 	// upload-pack RPC (POST git-upload-pack).
 	GitFetch GitOp = "fetch"
 	// GitPush is the receive-pack advertisement and RPC, and EVERY OTHER
-	// request under [GitPrefix].
+	// request under [GitPrefix] or [BoxGitPrefix].
 	GitPush GitOp = "push"
 )
 
@@ -78,11 +93,15 @@ const serviceKey = "service"
 // after asking GitAccess what the request is, which is why that gate allows a
 // reading in internal/code/host and in no other place.
 //
+// A CODING BOX'S REQUEST IS CLASSIFIED AS A PERSON'S: a path under
+// [BoxGitPrefix] answers exactly what the same path under [GitPrefix] does, so
+// the drain gate and the code host read one answer for both transports.
+//
 // EVERY DOUBT IS A PUSH, the more restrictive answer — refused while draining,
 // a person required — because a fetch misread as a push costs a retry and a
 // push misread as a fetch costs the guarantee:
 //
-//   - any path under [GitPrefix] that is not one of the two fetch shapes,
+//   - any path under either prefix that is not one of the two fetch shapes,
 //     which the mux then answers 404 (an unknown path, a dumb-protocol file, a
 //     POST to info/refs, a path whose repository segment holds a slash);
 //   - an advertisement asking for any service but git-upload-pack;
@@ -139,11 +158,14 @@ func GitAdvertisement(r *http.Request) bool {
 }
 
 // gitTail is what follows the repository segment of r's path — "" when
-// nothing does — and whether that path is under [GitPrefix] at all. The
-// repository segment ends at the first slash, so the tail of a path whose
-// repository name held one is no git route's.
+// nothing does — and whether that path is under [GitPrefix] or [BoxGitPrefix]
+// at all. The repository segment ends at the first slash, so the tail of a
+// path whose repository name held one is no git route's.
 func gitTail(r *http.Request) (tail string, under bool) {
 	rest, under := strings.CutPrefix(r.URL.Path, GitPrefix)
+	if !under {
+		rest, under = strings.CutPrefix(r.URL.Path, BoxGitPrefix)
+	}
 	if !under {
 		return "", false
 	}
@@ -151,9 +173,9 @@ func gitTail(r *http.Request) (tail string, under bool) {
 	return tail, true
 }
 
-// advertises reports whether a request under [GitPrefix] whose path ends in
-// tail is an advertisement: git asks for info/refs with a GET, and a HEAD of it
-// is the same question without the body. A POST to it is nothing git sends.
+// advertises reports whether a git request whose path ends in tail is an
+// advertisement: git asks for info/refs with a GET, and a HEAD of it is the
+// same question without the body. A POST to it is nothing git sends.
 func advertises(r *http.Request, tail string) bool {
 	return tail == "info/refs" && (r.Method == http.MethodGet || r.Method == http.MethodHead)
 }
@@ -206,15 +228,26 @@ func oneLine(sentence string, strict bool) string {
 	return strings.ReplaceAll(line, "\n", " ")
 }
 
-// GitChallenge is the 401 a git route answers: a Basic challenge, then
-// [GitText].
+// GitChallenge is the 401 a PERSON'S git route answers: a Basic challenge,
+// then [GitText] with the sentence that names the credential a person
+// presents — [GitChallengeSaying] with it.
 //
 // git asks its credential helper — or the person at the terminal — for a
 // credential only after a challenge, so a git route's first request carries
 // none by design, and a 401 without one ends the clone with nothing asked.
-func GitChallenge(w http.ResponseWriter) {
+func GitChallenge(w http.ResponseWriter) { GitChallengeSaying(w, gitAuthSentence) }
+
+// GitChallengeSaying is a git route's 401 in the words of its own credential:
+// the same Basic challenge as [GitChallenge], then [GitText] of sentence.
+//
+// A SENTENCE OF ITS OWN because the person's names an API token — the one
+// credential a coding box must never hold — so a box answered in a person's
+// words, its helper having answered nothing, would be sent looking for one.
+// The code host's box admission answers each of its 401s through this with
+// what a box presents instead: its run's token.
+func GitChallengeSaying(w http.ResponseWriter, sentence string) {
 	w.Header().Set("WWW-Authenticate", gitRealm)
-	GitText(w, http.StatusUnauthorized, gitAuthSentence)
+	GitText(w, http.StatusUnauthorized, sentence)
 }
 
 // GitUnavailable is a git route's 503: [GitText] with a Retry-After of

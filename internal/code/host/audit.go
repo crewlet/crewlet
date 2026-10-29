@@ -14,14 +14,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// EVERY PUSH IS ONE RECORD ON THE NODE THAT RECEIVED IT — operator_acted,
-// transport git, the caller as every record names them (iam.ActorFor: the
-// author — the seat for a person — its kind, and the credential as the
-// operator id) — whatever became of it: a refused push writes no row in the code
-// domain, so this record is the only one that says it happened, and where. A
-// fetch is a proven read and is not audited here; a fetch of a `visibility:
-// unit` repository that sent its contents is recorded as a READ instead
-// (code_fetched, fetch.go), which the usage domain counts.
+// EVERY PERSON'S PUSH IS ONE RECORD ON THE NODE THAT RECEIVED IT —
+// operator_acted, transport git, the caller as every record names them
+// (iam.ActorFor: the author — the seat for a person — its kind, and the
+// credential as the operator id) — whatever became of it: a refused push writes
+// no row in the code domain, so this record is the only one that says it
+// happened, and where. A CODING BOX'S PUSH is no operator's act and publishes
+// none: what it landed is its push row, which names its run, and what was
+// refused its code_push and code_box_refused lines. A fetch is a proven read
+// and is not audited here; a fetch of a `visibility: unit` repository that sent
+// its contents is recorded as a READ instead (code_fetched, fetch.go), which
+// the usage domain counts — a box's under its seat.
 //
 // EVERY PUSH THE NODE ADMITS, HOWEVER ITS REQUEST ENDS (pushAudit): the record
 // is the REQUEST'S, settled once by whichever way the request ends, never
@@ -174,20 +177,31 @@ func (s *Server) audit(ctx context.Context, adm admission, rec pushRecord) {
 	if rec.outcome == types.AuditRefused {
 		refusal = string(rec.refusal)
 	}
-	// THE PUBLISH OUTLIVES THE REQUEST: a client that hung up is still a
-	// push that happened.
-	s.o.Audit(context.WithoutCancel(ctx), types.NewOperatorActed(types.OperatorActed{
-		ActorName: adm.actor.Name, ActorKind: string(adm.actor.Kind), OperatorID: adm.operatorID,
-		Transport: types.TransportGit, Tool: AuditTool, RequestID: rec.pushID, Repo: adm.name,
-		Outcome: rec.outcome, Position: position, Refusal: refusal,
-	}))
+	// A PERSON'S PUSH IS AN OPERATOR'S ACT (ADR-0024): its operator_acted
+	// record, published here. A CODING BOX'S IS NONE — no person acted, and
+	// its push IS its record, the push row naming its run
+	// (code.RunProvenance.RunID) — so it is counted, logged and timed below
+	// like every push, and published as nobody's act.
+	if adm.box == nil {
+		// THE PUBLISH OUTLIVES THE REQUEST: a client that hung up is still
+		// a push that happened.
+		s.o.Audit(context.WithoutCancel(ctx), types.NewOperatorActed(types.OperatorActed{
+			ActorName: adm.actor.Name, ActorKind: string(adm.actor.Kind), OperatorID: adm.operatorID,
+			Transport: types.TransportGit, Tool: AuditTool, RequestID: rec.pushID, Repo: adm.name,
+			Outcome: rec.outcome, Position: position, Refusal: refusal,
+		}))
+	}
 	var took time.Duration
 	if !rec.started.IsZero() {
 		took = s.now().Sub(rec.started)
 	}
-	attrs := []any{"repo", adm.name, "push_id", rec.pushID, "operator_id", adm.operatorID,
-		"seat", adm.seat, "outcome", string(rec.outcome), "refusal", refusal, "commands", rec.commands,
+	p := adm.principal()
+	attrs := []any{"repo", adm.name, "push_id", rec.pushID, "operator_id", p.OperatorID,
+		"seat", p.Seat, "outcome", string(rec.outcome), "refusal", refusal, "commands", rec.commands,
 		"ok", rec.ok, "bytes", rec.bytes, "position", position, "took", took}
+	if p.Run.RunID != "" {
+		attrs = append(attrs, "turn_id", p.Run.TurnID, "launch_id", p.Run.RunID)
+	}
 	if rec.git != "" {
 		attrs = append(attrs, "git", rec.git)
 	}

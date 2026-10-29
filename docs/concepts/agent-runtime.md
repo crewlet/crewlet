@@ -468,6 +468,12 @@ stateDiagram-v2
   `stopped` rather than `failed`, and `agent_turn_stopped` names who stopped it.
   A detached [coding run](code-sandbox.md) is not fenced — it outlives its turn
   by design — but the turn that resumes it is, and ends there with the run.
+  What the stop does refuse it is every **write**: its box's pushes to the
+  code host are refused, naming who stopped the seat, until the seat is
+  resumed (see [Coding boxes](code-host.md#coding-boxes)). The run itself runs
+  on, and its box may still fetch: a read changes nothing. A pause without
+  `stop_running` stops new work only, so a running job's pushes land, as a
+  turn in flight finishes.
 - **Answers wait too.** An answer to a parked coding run, by chat or by turn,
   is held behind the pause like the seat's other mail: resuming a run is work.
   A chat reply already recorded as a run's answer before the pause waits the
@@ -497,7 +503,7 @@ turn](turn-engine.md#steering-a-running-turn).
 
 SIGINT / SIGTERM trigger a **drain with the probes up**, designed so a restart picks up cleanly without a half-finished turn: the node stops taking new work, lets the turns already running finish, hands its seats back, and only then closes its HTTP listener and its backends. The engine owns the process signals exclusively. Nothing else in the process may install a handler, the embedded API server included.
 
-**The listener stays up for the whole drain, and the door is a refusal rather than a closed port.** An orchestrator watches a node precisely while it drains, so `GET /health` keeps answering `200` with `status: "shutting_down"`, and `GET /ready` answers `503` with `reason: "draining"`. Traffic moves elsewhere, and nothing kills the node in the middle of the turns the drain exists to finish. What the drain must not do is keep making work for itself, so from its first moment every route that would start new work answers `503` with `{"error": "draining"}` and a `Retry-After`: the webhook edge, the `/config`, `/secrets` and `/setup` writes, the operator's writes, `POST /operator/mcp`, backups, a new git fetch and every request of a git push (those two in git's `text/plain` form, which git prints). Reads keep being served, the dashboard included, and so do the sandbox bridge (`/mcp/{token}`) and the telemetry edge (`/otlp/{token}`), because those carry the tool calls and spans of coding runs that started before the drain and would only be broken by a refusal — and so does a git fetch already begun, whose next request would otherwise break it half done. See [During a drain](../reference/api-endpoints.md#during-a-drain) for the exact rule.
+**The listener stays up for the whole drain, and the door is a refusal rather than a closed port.** An orchestrator watches a node precisely while it drains, so `GET /health` keeps answering `200` with `status: "shutting_down"`, and `GET /ready` answers `503` with `reason: "draining"`. Traffic moves elsewhere, and nothing kills the node in the middle of the turns the drain exists to finish. What the drain must not do is keep making work for itself, so from its first moment every route that would start new work answers `503` with `{"error": "draining"}` and a `Retry-After`: the webhook edge, the `/config`, `/secrets` and `/setup` writes, the operator's writes, `POST /operator/mcp`, backups, a new git fetch and every request of a git push (those two in git's `text/plain` form, which git prints), a coding box's included. Reads keep being served, the dashboard included, and so do the sandbox bridge (`/mcp/{token}`) and the telemetry edge (`/otlp/{token}`), because those carry the tool calls and spans of coding runs that started before the drain and would only be broken by a refusal — and so does a git fetch already begun, a coding box's under `/box/git/` included, whose next request would otherwise break it half done. See [During a drain](../reference/api-endpoints.md#during-a-drain) for the exact rule.
 
 ```mermaid
 flowchart TD

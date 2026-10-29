@@ -117,9 +117,12 @@ func served(what string) http.Handler {
 	})
 }
 
-func (fakeGitRoutes) InfoRefs() http.Handler    { return served("info/refs") }
-func (fakeGitRoutes) UploadPack() http.Handler  { return served("upload-pack") }
-func (fakeGitRoutes) ReceivePack() http.Handler { return served("receive-pack") }
+func (fakeGitRoutes) InfoRefs() http.Handler       { return served("info/refs") }
+func (fakeGitRoutes) UploadPack() http.Handler     { return served("upload-pack") }
+func (fakeGitRoutes) ReceivePack() http.Handler    { return served("receive-pack") }
+func (fakeGitRoutes) BoxInfoRefs() http.Handler    { return served("box-info/refs") }
+func (fakeGitRoutes) BoxUploadPack() http.Handler  { return served("box-upload-pack") }
+func (fakeGitRoutes) BoxReceivePack() http.Handler { return served("box-receive-pack") }
 
 func (f fakeGitRoutes) StartVerify(ctx context.Context, name string, repair bool, floor statelog.Position) (
 	host.Verification, error) {
@@ -218,15 +221,59 @@ var gitRequests = []struct{ method, path string }{
 	{http.MethodPost, "/git/web.git/git-receive-pack"},
 }
 
+// boxRequests is one request of each coding box's git route, as git sends
+// them, and what fakeGitRoutes' handler of each answers.
+var boxRequests = []struct{ method, path, served string }{
+	{http.MethodGet, "/box/git/web.git/info/refs?service=git-upload-pack", "served box-info/refs"},
+	{http.MethodPost, "/box/git/web.git/git-upload-pack", "served box-upload-pack"},
+	{http.MethodPost, "/box/git/web.git/git-receive-pack", "served box-receive-pack"},
+}
+
+// A BOX ROUTE IS ADMITTED BY ITS RUN, NOT THE GUARD: a coding box's three
+// routes are mounted on the route table itself, as /mcp/ and /otlp/ are, and
+// published on the public listener, where each request — with no credential,
+// or with git's Basic carrying a run's token the guard never reads — reaches
+// the code host, whose box admission is the check; never the guard's 401, nor
+// the refusal of a router that decides on the request's iam principal, which
+// a box's request never has. On api.port, beside a public listener, it is the
+// partition's 404.
+//
+// Mutation: mount the box routes through the authz.Router the person's git
+// routes take (ActionCodeGit) — every anonymous box request refused by the
+// router — red.
+func TestABoxRouteIsAdmittedByItsRunNotTheGuard(t *testing.T) {
+	t.Parallel()
+	a := listenerApp(t, true, false)
+	for _, req := range boxRequests {
+		for _, credential := range []string{"", "Basic " + basicAuth("run", "x")} {
+			r := httptest.NewRequest(req.method, req.path, nil)
+			if credential != "" {
+				r.Header.Set("Authorization", credential)
+			}
+			rec := httptest.NewRecorder()
+			a.Public().ServeHTTP(rec, r)
+			if rec.Code != http.StatusOK || rec.Body.String() != req.served {
+				t.Errorf("%s %s with %q answered %d %q on the public listener, want the code host's own answer",
+					req.method, req.path, credential, rec.Code, rec.Body.String())
+			}
+		}
+		if rec := ask(t, a, req.method, req.path, false); !absent(t, rec) {
+			t.Errorf("%s %s answered %d %q on api.port beside a public listener, want the partition's 404",
+				req.method, req.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 // GIT IS SERVED WHERE A NODE'S ROLES NAME IT, AND READ EVERYWHERE. A node whose
 // Tier A lists its roles without `git` keeps no cache and runs no git, so its
-// git routes — and the verify of a cache it does not have — are not mounted at
-// all: the mux's own `no_route`, as a route this node's configuration does not
-// enable has always answered. The code reads are a data node's rows or the
-// estate router's, served on every node. An undeclared node has every role.
+// git routes — a person's and a coding box's alike — and the verify of a cache
+// it does not have are not mounted at all: the mux's own `no_route`, as a route
+// this node's configuration does not enable has always answered. The code
+// reads are a data node's rows or the estate router's, served on every node.
+// An undeclared node has every role.
 //
-// Mutation: mount the git routes on every API node, and the first half goes
-// red.
+// Mutations: mount the git routes on every API node, and the first half goes
+// red; mount the box routes on every node, and their rows go red.
 func TestGitRoutesAreMountedOnlyOnAGitNode(t *testing.T) {
 	t.Parallel()
 	surface := fixedCode{git: fakeGitRoutes{}, reads: &fakeCodeReads{}}
@@ -242,8 +289,12 @@ func TestGitRoutesAreMountedOnlyOnAGitNode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			a := codeApp(t, tc.roles, surface)
-			for _, req := range append(gitRequests[:len(gitRequests):len(gitRequests)],
-				struct{ method, path string }{http.MethodPost, "/code/repos/web/verify"}) {
+			requests := append(gitRequests[:len(gitRequests):len(gitRequests)],
+				struct{ method, path string }{http.MethodPost, "/code/repos/web/verify"})
+			for _, box := range boxRequests {
+				requests = append(requests, struct{ method, path string }{box.method, box.path})
+			}
+			for _, req := range requests {
 				rec := ask(t, a, req.method, req.path, true)
 				if mounted := !absent(t, rec); mounted != tc.git {
 					t.Errorf("%s %s answered %d %q: mounted %v, want %v", req.method, req.path,

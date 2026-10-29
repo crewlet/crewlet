@@ -43,19 +43,38 @@ import (
 //
 // # What it keeps of a FIFO lane, and what it does not
 //
-// It never leaves a slot free while anybody waits (WORK-CONSERVING: an
-// arrival that finds a free slot and nobody waiting takes it whatever its
-// class, so one class alone runs the lane at its full width), and it keeps a
-// FIFO lane's BOUND: no waiter waits longer than SlotWait, whichever order it
-// is granted in, so the share decides only who is answered first inside it.
-// It does not keep a FIFO lane's ORDER, and so not every wait is as short as
-// arrival order would make it: a person's clone waits behind a machine's
-// while people have spent more than twice what the machines have lately, and
-// the principal that spent most in its class goes last — while others who
-// spent less keep arriving it can be passed over at every release, wait out
-// SlotWait and be answered busy where arrival order would have handed it the
-// next slot. That is the share doing what it is for: holding back the
-// credential whose burst it is.
+// It never leaves a slot free while anybody who MAY take it waits
+// (WORK-CONSERVING for persons and machines: an arrival of either class that
+// finds a free slot takes it whatever waits, so one class alone runs the lane
+// at its full width), and it keeps a FIFO lane's BOUND: no waiter waits longer
+// than SlotWait, whichever order it is granted in, so the share decides only
+// who is answered first inside it. It does not keep a FIFO lane's ORDER, and
+// so not every wait is as short as arrival order would make it: a person's
+// clone waits behind a machine's while people have spent more than twice what
+// the machines have lately, and the principal that spent most in its class
+// goes last — while others who spent less keep arriving it can be passed over
+// at every release, wait out SlotWait and be answered busy where arrival order
+// would have handed it the next slot. That is the share doing what it is for:
+// holding back the credential whose burst it is.
+//
+// # The one class that is not work-conserving: a coding box's
+//
+// A coding box's git ([ShareRun]) HOLDS at most half the lane
+// ([ShareClass.Cap]), even with the other half free. The share orders only who
+// is granted NEXT, so a class that holds every slot with client-paced
+// transfers keeps it for as long as its clients read: a burst of coding-run
+// launches is a clone a repository each, minutes apiece on a large one, and a
+// box reading slowly holds its slot at objstore.MiBPace's floor — thirty
+// seconds a mebibyte, a gigabyte in eight and a half hours — so with every
+// slot a box's, a person's push or clone (receive-pack and both
+// advertisements run in this lane too) waits out SlotWait and is answered
+// busy. A box is generated code, so the lane cannot count on its manners: half
+// is the bound the engine already holds seat git work to on the read lane
+// (code.ShareOf), and the other half is what every person and machine shares.
+// Persons and machines keep the whole lane when no box is waiting: the cap
+// binds the run class alone. So the lane's INVARIANT is that no slot is free
+// while a waiter that may take it waits — a box waiter at its class's cap may
+// not, and is granted at the first release that leaves its class under it.
 
 // ShareClass is whose turn a TRANSFER waits for when the transfer lane is
 // full: a named string with a closed set, so a value a newer build passes is
@@ -74,43 +93,69 @@ const (
 	// mirror, a deploy script — which stands for many jobs behind one
 	// credential and waits in a pipeline nobody watches second by second.
 	ShareMachine ShareClass = "machine"
+
+	// ShareRun is a coding box: the git a seat's detached coding run makes
+	// with its run's credential, behind no person at all — generated code,
+	// whose turn waits behind every person's and machine's and whose class
+	// holds at most half the lane ([ShareClass.Cap]).
+	ShareRun ShareClass = "run"
 )
 
 // ShareClasses is every class, in the order the scheduler reads them and a
 // message lists them; a fresh slice each call, so no caller can change what
 // [ShareClass.Valid] accepts.
-func ShareClasses() []ShareClass { return []ShareClass{SharePerson, ShareMachine} }
+func ShareClasses() []ShareClass { return []ShareClass{SharePerson, ShareMachine, ShareRun} }
 
 // Valid reports whether c is one of [ShareClasses].
 func (c ShareClass) Valid() bool { return c.Weight() > 0 }
 
 // Weight is the class's share of a CONTENDED transfer lane, measured in what
-// its runs spend: a person 4, a machine 2; 0 for a class that is none.
+// its runs spend: a person 4, a machine 2, a coding box 1; 0 for a class that
+// is none.
 //
 // A JUDGMENT CALL, and a product one rather than a measurement — a person
 // waits at a terminal, a machine credential stands for a pipeline nobody
-// watches second by second: with both classes waiting, persons take two
-// thirds of what the lane spends (TestAContendedTransferLaneSharesByClass),
-// and while people have spent less lately than twice what the machines have
-// — as when one person clones beside sixty-four of one CI token's clones —
-// a person's clone is granted the first slot released rather than the
-// sixty-fifth: BenchmarkTransferShare measures its wait for a slot at 60 ms
-// at the p99 there, one release's turn, against 1.46 s in arrival order (one
-// count of twenty clones). A RATIO, never a cap: the share is
-// work-conserving, so a machine alone takes the whole lane (its
-// machine-alone arm runs as many clones a second as arrival order's) — a flat
-// per-credential cap would throttle the CI system that checks out through
-// one token on an idle node. A constant of the class rather than an
-// option, because two git nodes weighing the classes differently would make
-// which node a balancer picked decide who waits.
+// watches second by second, and a box is a seat's detached run that nobody
+// watches at all: with every class waiting, persons take four sevenths of what
+// the lane spends, machines two and boxes one
+// (TestAContendedTransferLaneSharesByClass), and while people have spent less
+// lately than twice what the machines have — as when one person clones
+// beside sixty-four of one CI token's clones — a person's clone is granted
+// the first slot released rather than the sixty-fifth: BenchmarkTransferShare
+// measures its wait for a slot at 60 ms at the p99 there, one release's turn,
+// against 1.46 s in arrival order (one count of twenty clones). A RATIO, never
+// a cap, for persons and machines: the share is work-conserving for them, so a
+// machine alone takes the whole lane (its machine-alone arm runs as many
+// clones a second as arrival order's) — a flat per-credential cap would
+// throttle the CI system that checks out through one token on an idle node.
+// The box class's cap is a bound of its own ([ShareClass.Cap]), never a
+// weight. A constant of the class rather than an option, because two git
+// nodes weighing the classes differently would make which node a balancer
+// picked decide who waits.
 func (c ShareClass) Weight() int {
 	switch c {
 	case SharePerson:
 		return 4
 	case ShareMachine:
 		return 2
+	case ShareRun:
+		return 1
 	}
 	return 0
+}
+
+// Cap is the most of a lane of slots slots the class's runs may HOLD at once:
+// the whole lane for a person and a machine, and half of it, at least one, for
+// a coding box — code.ShareOf's arithmetic, the half the engine holds seat git
+// work to on the read lane, spelled again here because neither package
+// imports the other (internal/code/host's TestTheRunCapIsTheSeatShare holds
+// the two equal). Why the box class alone is capped is the package doc's "The
+// one class that is not work-conserving".
+func (c ShareClass) Cap(slots int) int {
+	if c == ShareRun {
+		return max(1, slots/2)
+	}
+	return slots
 }
 
 // Share is whose transfer a Cmd is.
@@ -120,7 +165,8 @@ type Share struct {
 	// seat they hold, so one person's laptop, scripts and sign-ins are one
 	// principal; for a machine the credential's NAME (`token:<id>`,
 	// `pat:<id>`), so a service account with a token per CI runner is a
-	// principal per runner.
+	// principal per runner; for a coding box its run's LAUNCH id, so each
+	// job is a turn of its own and a relaunch starts a fresh one.
 	Principal string
 }
 
@@ -128,9 +174,10 @@ type Share struct {
 //
 // 255: just under four times the longest name an identity is given today —
 // a seat handle and a Tier A token's login both stop at internal/iam's
-// MaxLogin (64), and a machine token's name is `pat:` and a uuid — so the
-// bound refuses nothing a configuration or the identity directory admits,
-// and leaves a grammar room to widen without this package following it.
+// MaxLogin (64), a machine token's name is `pat:` and a uuid, and a coding
+// run's launch id a uuid — so the bound refuses nothing a configuration or
+// the identity directory admits, and leaves a grammar room to widen without
+// this package following it.
 const maxSharePrincipal = 255
 
 // Valid reports a known class and a principal of 1..[maxSharePrincipal]
@@ -275,6 +322,7 @@ type run struct {
 type shareBook struct {
 	now       func() time.Time
 	occupancy float64 // what a held slot is charged a second (occupancyRate)
+	slots     int     // the lane's width, which each class's cap is of (ShareClass.Cap)
 	byKey     map[Share]*account
 	classes   map[ShareClass]*classBook
 	swept     time.Time // the last forgetting pass
@@ -282,12 +330,12 @@ type shareBook struct {
 	metrics   *metrics.Recorder
 }
 
-// newShareBook is an empty book on the clock now, charging a held slot
-// occupancy core-seconds a second (occupancyRate of the lane's shape) and
-// reporting each class's standing into rec (nil: nowhere).
-func newShareBook(now func() time.Time, occupancy float64, rec *metrics.Recorder) *shareBook {
+// newShareBook is an empty book for a lane of slots slots on the clock now,
+// charging a held slot occupancy core-seconds a second (occupancyRate of the
+// lane's shape) and reporting each class's standing into rec (nil: nowhere).
+func newShareBook(now func() time.Time, slots int, occupancy float64, rec *metrics.Recorder) *shareBook {
 	b := &shareBook{
-		now: now, occupancy: occupancy,
+		now: now, occupancy: occupancy, slots: slots,
 		byKey: map[Share]*account{}, classes: map[ShareClass]*classBook{}, metrics: rec,
 	}
 	for _, c := range ShareClasses() {
@@ -362,8 +410,17 @@ func (b *shareBook) leave(w *waiter, t time.Time) {
 	b.forgetIdle(w.acct, t)
 }
 
+// mayStart reports whether a run of class c may take a free slot now: whether
+// the class holds fewer than its cap ([ShareClass.Cap]) — every class but a
+// coding box's always does.
+func (b *shareBook) mayStart(c ShareClass) bool {
+	return b.classes[c].running < c.Cap(b.slots)
+}
+
 // grant hands a released slot to WHO GOES NEXT at t (next) and starts its run
-// on that waiter's account.
+// on that waiter's account — or answers nil, granting nothing, where every
+// waiter is of a class at its cap: the slot is then the lane's, free, and the
+// waiters keep waiting for a release that leaves their class under it.
 //
 // THE WAITER IS NEVER LEFT IDLE IN BETWEEN: its account holds no run and no
 // other waiter at the instant it is taken out of its queue, and an account
@@ -376,17 +433,21 @@ func (b *shareBook) leave(w *waiter, t time.Time) {
 // give two).
 func (b *shareBook) grant(t time.Time) *waiter {
 	w := b.next(t)
+	if w == nil {
+		return nil
+	}
 	b.unqueue(w)
 	w.run = b.start(w.acct, t)
 	return w
 }
 
-// next is WHO GOES NEXT at t: among the classes holding a waiter, the one
-// with the least standing over its weight, the class whose oldest waiter is
-// older on a tie; within it the principal with the least standing, the older
-// head waiter on a tie; that principal's oldest waiter, still queued.
-// O(principals waiting): bounded by the requests in flight, and measured by
-// BenchmarkTransferGrant. The caller holds a waiter queued.
+// next is WHO GOES NEXT at t: among the classes holding a waiter that may
+// start (mayStart: under its cap), the one with the least standing over its
+// weight, the class whose oldest waiter is older on a tie; within it the
+// principal with the least standing, the older head waiter on a tie; that
+// principal's oldest waiter, still queued — nil where no class holding a
+// waiter may start. O(principals waiting): bounded by the requests in flight,
+// and measured by BenchmarkTransferGrant.
 func (b *shareBook) next(t time.Time) *waiter {
 	var (
 		pick     *classBook
@@ -395,7 +456,7 @@ func (b *shareBook) next(t time.Time) *waiter {
 	)
 	for _, cls := range ShareClasses() {
 		c := b.classes[cls]
-		if len(c.waiting) == 0 {
+		if len(c.waiting) == 0 || !b.mayStart(cls) {
 			continue
 		}
 		s := c.value(t, b.occupancy) / float64(cls.Weight())
@@ -413,6 +474,9 @@ func (b *shareBook) next(t time.Time) *waiter {
 				pick, pickHead = c, h
 			}
 		}
+	}
+	if pick == nil {
+		return nil
 	}
 	var (
 		who   *account

@@ -520,12 +520,14 @@ func TestARefusalSaysTheSameForEverySeat(t *testing.T) {
 // full_access tier, everything else by its access against what the command
 // needs. Every refusal is not_permitted, names no ref (git prints it beside),
 // fits what a receiver may carry into a proposal, and offers a remedy RefRule
-// itself would admit. MayPush says whether any command could pass.
+// itself would admit. MayPush says whether any command could pass. A coding
+// box's grant is held to its run's (Within) at every tier and relation.
 //
 // Mutations: RefRule permitting a read-level create → the read rows red; the
 // namespace row ignoring the tier → its review and read_only rows red; a
 // remedy offering the namespace to a seat that does not own one → the remedy
-// check red.
+// check red; Within returning the seat's grant → every row of a run given
+// read red.
 func TestRefRuleTable(t *testing.T) {
 	t.Parallel()
 	bound := code.GrantOf(code.Principal{Kind: code.PrincipalOperator, OperatorID: "tok", Seat: "founder"},
@@ -597,6 +599,72 @@ func TestRefRuleTable(t *testing.T) {
 			if (g.PushRefusal() == "") != g.MayPush() {
 				t.Errorf("tier %s, relation %s: PushRefusal %q beside MayPush %v", tier, relation,
 					g.PushRefusal(), g.MayPush())
+			}
+		}
+	}
+
+	// A CODING BOX'S GRANT IS HELD TO ITS RUN'S (Within): a run given the
+	// repository to read refuses every row, its seat's own namespace's
+	// included; one given it to write holds every row outside the namespace
+	// to write, whatever the seat maintains; and maintain is the seat's grant
+	// unchanged. What the seat READS is never narrowed by a run that was
+	// given the repository at all.
+	for _, tier := range tiers {
+		for _, relation := range code.Accesses() {
+			seat := grantFor(tier, relation)
+			if seat.Within(code.AccessMaintain) != seat {
+				t.Errorf("tier %s, relation %s: Within(maintain) changed the seat's grant", tier, relation)
+			}
+			for _, run := range []code.Access{code.AccessRead, code.AccessWrite} {
+				g := seat.Within(run)
+				passed := false
+				for name, c := range commands {
+					reason, words := g.RefRule(c)
+					var want bool
+					switch n := need(c); {
+					case n < 0, run < code.AccessWrite:
+						want = false
+					case strings.HasPrefix(c.Ref, code.SeatNamespace("ana")):
+						want = relation >= code.AccessRead && tier == code.TierFullAccess
+					default:
+						want = min(seat.Access, run) >= n
+					}
+					if (reason == "") != want {
+						t.Errorf("tier %s, relation %s, a run given %s, %s: %q %q, want permitted %v", tier,
+							relation, run, name, reason, words, want)
+						continue
+					}
+					if want {
+						passed = true
+						continue
+					}
+					switch {
+					case reason != code.RefusalNotPermitted || words == "":
+						t.Errorf("tier %s, relation %s, a run given %s, %s: refused %q %q", tier, relation, run,
+							name, reason, words)
+					case need(c) >= 0 && strings.Contains(words, c.Ref):
+						t.Errorf("tier %s, relation %s, a run given %s, %s: the sentence names the ref: %q", tier,
+							relation, run, name, words)
+					case len(words) > code.MaxDetailBytes:
+						t.Errorf("tier %s, relation %s, a run given %s, %s: %d bytes, past the %d a receiver "+
+							"carries", tier, relation, run, name, len(words), code.MaxDetailBytes)
+					case need(c) >= 0 && run < code.AccessWrite && words != code.RunReadDetail:
+						t.Errorf("tier %s, relation %s, a run given read, %s: %q, want the run's sentence",
+							tier, relation, name, words)
+					}
+				}
+				if passed != g.MayPush() {
+					t.Errorf("tier %s, relation %s, a run given %s: some command passes = %v, MayPush = %v",
+						tier, relation, run, passed, g.MayPush())
+				}
+				if (g.PushRefusal() == "") != g.MayPush() {
+					t.Errorf("tier %s, relation %s, a run given %s: PushRefusal %q beside MayPush %v", tier,
+						relation, run, g.PushRefusal(), g.MayPush())
+				}
+				if g.MayRead() != seat.MayRead() {
+					t.Errorf("tier %s, relation %s, a run given %s: MayRead %v, the seat's %v", tier, relation,
+						run, g.MayRead(), seat.MayRead())
+				}
 			}
 		}
 	}

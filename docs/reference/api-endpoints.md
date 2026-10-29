@@ -29,6 +29,7 @@ operator credential — move to that listener and are served nowhere else:
 | `/webhooks/*` | Vendors (deliveries) and a person's browser returning from a vendor's app flow (`/webhooks/slack-oauth`, `/webhooks/github-app`) | `api.port` | `api.public` only |
 | `/otlp/{token}/v1/{signal}` | A sandbox exporting a coding run's telemetry | `api.port` | `api.public` only |
 | `/mcp/{token}` | A sandbox calling its seat's tools (agent mode) | `api.port` | `api.public` only |
+| `/box/git/*` | A coding box's git, with its run's own token as git's Basic password ([Coding boxes](../concepts/code-host.md#coding-boxes)); mounted where `git` is among the node's roles | `api.port` | `api.public` only |
 | `/git/*`, `/code/*` | A person's git client, with their own token; the CLI | `api.port` | `api.port` only — never published, since the credential is a person's own token ([The code host](#the-code-host-git-and-code)) |
 | Everything else — `/health`, `/ready`, `/`, `/dashboard`, `/favicon.ico`, `/static/*`, `/auth/*`, `/iam/*`, `/ws/stream`, `/query/*`, every REST read, `/config`, `/secrets`, `/setup`, `/operator/*`, `/backup`, the `/work/*` and `/fleet/*` gestures | People, the dashboard, the CLI, orchestrators | `api.port` | `api.port` only |
 
@@ -263,9 +264,9 @@ A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP
 | `GET /ready` | `503`, `reason: "draining"` | Readiness: takes the node out of rotation so traffic moves to a peer. |
 | Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
 | `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. |
-| A git fetch already begun: `POST /git/{repo}/git-upload-pack` | Served, and finished before the listener closes | The upload `POST` continues a fetch whose advertisement was answered before the drain — on this node or a peer, since git keeps no state between an exchange's requests — and refusing it would break the fetch half done. It is the one request under `/git/` a draining node serves, and like the sandbox edges above it continues work already under way. |
-| A new git fetch: `GET`/`HEAD /git/{repo}/info/refs` asking for `git-upload-pack` (or no service) | `503`, `text/plain` | The advertisement is where every fetch begins, and a fetch is not a read that starts nothing: it runs git's upload-pack on this node, after syncing the repository from the object store, which is new work the shutdown would have to wait out. Refused at its first request, a clone fails at once and is retried against a peer, rather than cut part way and begun again from nothing. |
-| A git push: `GET`/`HEAD /git/{repo}/info/refs` asking for any other service, `POST /git/{repo}/git-receive-pack`, and every other path under `/git/` | `503`, `text/plain` | Every request of a push is refused, its advertisement included, because the `GET` is where git prints the reason (`remote: this node is draining …`); on the `POST` it prints only `RPC failed; HTTP 503`. In git's own form rather than the JSON below, which git prints as nothing. |
+| A git fetch already begun: `POST /git/{repo}/git-upload-pack` | Served, and finished before the listener closes | The upload `POST` continues a fetch whose advertisement was answered before the drain — on this node or a peer, since git keeps no state between an exchange's requests — and refusing it would break the fetch half done. It is the one request under `/git/` a draining node serves, and like the sandbox edges above it continues work already under way. A coding box's `POST /box/git/{repo}/git-upload-pack` is the same request, and served the same. |
+| A new git fetch: `GET`/`HEAD /git/{repo}/info/refs` asking for `git-upload-pack` (or no service) | `503`, `text/plain` | The advertisement is where every fetch begins, and a fetch is not a read that starts nothing: it runs git's upload-pack on this node, after syncing the repository from the object store, which is new work the shutdown would have to wait out. Refused at its first request, a clone fails at once and is retried against a peer, rather than cut part way and begun again from nothing. A coding box's under `/box/git/` is the same. |
+| A git push: `GET`/`HEAD /git/{repo}/info/refs` asking for any other service, `POST /git/{repo}/git-receive-pack`, and every other path under `/git/` | `503`, `text/plain` | Every request of a push is refused, its advertisement included, because the `GET` is where git prints the reason (`remote: this node is draining …`); on the `POST` it prints only `RPC failed; HTTP 503`. In git's own form rather than the JSON below, which git prints as nothing. A coding box's push under `/box/git/` is refused the same. |
 | Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
 | Every other write: `/config`, `/secrets`, `/setup`, `/backup`, the `/work/*` writes, `POST /operator/mcp`, `POST /operator/act/{tool}` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
 
@@ -433,6 +434,9 @@ every other route.
 | `GET` `HEAD` | `/git/{repo}/info/refs` | A git client's advertisement of a repository the engine hosts, on a node whose roles name `git`. git's protocol, a person's credential as the Basic password; a push only with one that resolves to a person. **Always needs a credential**, never on `api.public` (see [The code host](#the-code-host-git-and-code)) |
 | `POST` | `/git/{repo}/git-upload-pack` | A clone's or a fetch's request (same) |
 | `POST` | `/git/{repo}/git-receive-pack` | A push (same) |
+| `GET` `HEAD` | `/box/git/{repo}/info/refs` | A **coding box's** advertisement of a repository its run was given, on a node whose roles name `git`. git's protocol, the user name `run` and the run's own token as the Basic password; admitted by the run's row, never a person's credential, and published on `api.public` beside the box's other two edges (see [Coding boxes](../concepts/code-host.md#coding-boxes)) |
+| `POST` | `/box/git/{repo}/git-upload-pack` | A coding box's clone or fetch (same) |
+| `POST` | `/box/git/{repo}/git-receive-pack` | A coding box's push (same) |
 | `GET` | `/code/repos` | The repositories the engine hosts, a page at a time, at the caller's freshness. **Always needs a credential** (see [The code reads](#the-code-reads)) |
 | `GET` | `/code/repos/{name}` | One repository in detail (same) |
 | `GET` | `/code/repos/{name}/pushes` | One repository's push history, newest first in the order the pushes landed, each push naming who made it — a person by their credential and seat, a seat by its handle and the turn behind its push — and how its pack was built (same) |
@@ -460,7 +464,7 @@ every other route.
 > cookie, and any other client sets the header. **No route reads a credential
 > off its URL**, the socket included: a `?token=…` authenticates nobody,
 > because a URL lands in proxy logs and browser history. Never guarded: `/health`, `/ready`, `/webhooks/*`,
-> `/otlp/*`, `/mcp/*`, the dashboard shell (`/`, `/dashboard`, `/favicon.ico`,
+> `/otlp/*`, `/mcp/*`, `/box/git/*`, the dashboard shell (`/`, `/dashboard`, `/favicon.ico`,
 > `/static/*`), and `/auth/config`, `/auth/login`, `/auth/logout`,
 > `/auth/invite/*` and `/auth/reset/*` — a login cannot require a login. That is an **exact list and not a `/auth/` prefix**: the same surface
 > ends sessions and enrols second factors, and a prefix would put those behind
@@ -527,7 +531,7 @@ every other route.
 > whatever credential it carries — or none. The match is `api.external_url`'s
 > own origin plus every `api.auth.allowed_origins` entry. Reads are never
 > refused for theirs, and neither are the server-to-server edges (`/webhooks/*`,
-> `/otlp/*`, `/mcp/*`), which a server reaches with a credential of its own.
+> `/otlp/*`, `/mcp/*`, `/box/git/*`), which a server reaches with a credential of its own.
 > The sign-in routes are judged like every other write although no credential
 > guards them — `POST /auth/login`, `/auth/invite/{id}` and `/auth/reset/{id}`
 > — because a sign-in posted from somebody else's
@@ -5238,7 +5242,7 @@ pause, and what waited is delivered first. See
 
 | Tool | Arguments |
 |---|---|
-| `pause_seat` | `handle` — the agent seat; `reason` — one line, at most 500 characters, optional; `stop_running` — also end the turn the seat is on at its next round. A stopped turn is not run again. |
+| `pause_seat` | `handle` — the agent seat; `reason` — one line, at most 500 characters, optional; `stop_running` — also end the turn the seat is on at its next round, and refuse every push a detached coding run of the seat makes from its box until the seat is resumed. A stopped turn is not run again. |
 | `resume_seat` | `handle` |
 
 **Who may**: the seat's holder, whoever leads it, or `admin` — never every reader, since everybody signed in holds a credential.

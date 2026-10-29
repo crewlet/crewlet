@@ -43,6 +43,11 @@ type session struct {
 	pushID     string
 	principal  code.Principal
 	receivedAt time.Time
+	// adm is the push's admission: its grant, judged again on a command the
+	// landing finds forced (landing.ForcedGrant), and — for a coding box —
+	// the run whose floor an applied push raises before `ok` is written
+	// (raiseFloor).
+	adm admission
 	// preRefused is what the receive handler refused before receive-pack
 	// ran, by ref.
 	preRefused map[string]answered
@@ -196,7 +201,8 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 	ld, err := s.land(ctx, landing{
 		Synced: sess.synced, Scratch: sess.scratch, Commands: cmds, Atomic: features.atomic,
 		PushOptions: options, Principal: sess.principal, Via: code.ViaGit, PushID: sess.pushID,
-		ReceivedAt: sess.receivedAt, Judged: sess.judged, Progress: sess.step,
+		ReceivedAt: sess.receivedAt, Judged: sess.judged, ForcedGrant: sess.adm.grant.RefRule,
+		Progress: sess.step,
 	})
 	if err != nil {
 		cause := err
@@ -208,6 +214,17 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 	}
 	stop()
 	sess.conclude(ld.Result)
+	// A CODING BOX'S APPLIED PUSH RAISES ITS RUN'S FLOOR to the push's row
+	// before `ok` is written, so whatever node the box reads next holds what
+	// it pushed. A raise that fails answers `ok` all the same: the push is
+	// durable, and what the box may then read behind is its own push, whose
+	// objects it holds.
+	if ld.Result.outcome == types.AuditApplied {
+		if rerr := s.raiseFloor(ctx, sess.adm, ld.Result.position); rerr != nil {
+			s.log.Warn("code_box_floor_unraised", "repo", sess.synced.Repo.Name, "push_id", sess.pushID,
+				"position", ld.Result.position.String(), "error", rerr)
+		}
+	}
 	if err := s.fault(ctx, codefault.HostHookClose, 0); err != nil {
 		// THE CONNECTION DROPS BEFORE THE REPORT: git fails the push with
 		// the hook's death, whatever the record did.

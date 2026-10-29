@@ -41,6 +41,16 @@ import (
 // route, and on no other, that token may arrive as a Basic credential's
 // password, because a git client presents one no other way.
 //
+// /box/git/ is: a coding box's routes, the code host's third prefix, are
+// published beside the box's other two edges and admitted by the run, never
+// by an operator token. The same three handlers serve them behind the code
+// host's box admission, which reads the run's token from git's Basic password
+// and the run's row on every request ([auth.BoxGitPrefix]); mounted on the
+// route table itself, like /mcp/ and /otlp/, never through the
+// [authz.Router] the person's routes take, since a box's request reaches the
+// handler anonymous to the guard and a router would refuse it before its
+// admission ran.
+//
 // THE CODE HOST'S ROWS ARE QUESTIONS, not routes of this file: `code_repos`,
 // `code_repo` and `code_pushes`, registered in internal/api/queries and served
 // on their /code/ paths through the named routes (rest.go), so a person, the
@@ -71,10 +81,15 @@ import (
 // which of four it is ([codeUnserved]).
 
 // GitRoutes is the code host as the API mounts it; *host.Server satisfies it.
+// The Box handlers are the same three entry points behind a coding box's
+// admission rather than a person's.
 type GitRoutes interface {
 	InfoRefs() http.Handler
 	UploadPack() http.Handler
 	ReceivePack() http.Handler
+	BoxInfoRefs() http.Handler
+	BoxUploadPack() http.Handler
+	BoxReceivePack() http.Handler
 	StartVerify(ctx context.Context, name string, repair bool, floor statelog.Position) (host.Verification, error)
 	Verification(name string, id uuid.UUID) (host.Verification, bool)
 	AwaitVerification(ctx context.Context, name string, id uuid.UUID) (host.Verification, bool)
@@ -279,6 +294,19 @@ func servesGit(b *config.Bootstrap) bool {
 // A GIT ROUTE'S REFUSAL IS IN GIT'S FORM ([gitRefusal]): git prints one line
 // of text and nothing of the JSON envelope a REST route answers.
 //
+// A CODING BOX'S THREE ROUTES are mounted on the route table ITSELF, beside
+// the person's, as /mcp/ and /otlp/ are — never through a router. A router
+// decides every route it mounts on the request's iam principal
+// ([authz.ContextGuard]), and a box's request reaches the handler anonymous:
+// the guard never resolves a run's token, which is no credential of its, so
+// behind a router every box request would be refused before the code host's
+// box admission — the run's token, its row and the seat's grant, read on every
+// request — ever ran. They are served through [App.gitRoute] like the
+// person's, so a node whose code host is not serving answers a box in the
+// same words it answers a person, and mounted where the person's are, on a
+// node whose roles name git; the table keeps their patterns, so the listener
+// walk publishes them ([auth.BoxGitPrefix] is public).
+//
 // The git patterns are the host's own constants, so the path a handler reads
 // its repository from is the path it was mounted at, and this file spells no
 // git path a classifier gate would have to allow.
@@ -298,6 +326,9 @@ func (a *App) mountCode(mux authz.Mux) error {
 	mount(git, host.PatternInfoRefs, transport, a.gitRoute(GitRoutes.InfoRefs))
 	mount(git, host.PatternUploadPack, transport, a.gitRoute(GitRoutes.UploadPack))
 	mount(git, host.PatternReceivePack, transport, a.gitRoute(GitRoutes.ReceivePack))
+	mux.Handle(host.PatternBoxInfoRefs, a.gitRoute(GitRoutes.BoxInfoRefs))
+	mux.Handle(host.PatternBoxUploadPack, a.gitRoute(GitRoutes.BoxUploadPack))
+	mux.Handle(host.PatternBoxReceivePack, a.gitRoute(GitRoutes.BoxReceivePack))
 	// A WRITE TO THE DRAIN GATE, refused while draining like every POST: a
 	// check is new work on the node, a repair a write into its copy. Only
 	// where git is served: it checks THIS node's cache, which a node without

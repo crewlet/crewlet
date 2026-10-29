@@ -870,8 +870,9 @@ func New(opts Options) (*App, error) {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
 	}
 	// The engine's own git host and its reads: git on a node with the git
-	// role, the reads on every node, each on the verb it is decided by and
-	// failing the boot where a policy is missing. See code.go.
+	// role — a person's routes each on the verb it is decided by, failing
+	// the boot where a policy is missing, and a coding box's on the table
+	// itself, admitted by its run — and the reads on every node. See code.go.
 	if err := a.mountCode(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the code host's routes: %w", err)
 	}
@@ -899,7 +900,9 @@ func New(opts Options) (*App, error) {
 	// The SANDBOX TELEMETRY edge, exempt by the same prefix rule and for
 	// the same reason: the exporter inside a box holds no API token, and
 	// giving it one would hand a sandbox the credential that reads the
-	// whole company. Its per-run token is in the path instead.
+	// whole company. Its per-run token is in the path instead. So is the
+	// tool bridge's; and a coding box's git, the third edge, is mounted with
+	// the code host's routes above, its run's token its Basic password.
 	a.mountOTLP(mux, opts.OtelReceiver)
 	mountBridge(mux, opts.Bridge)
 	// The config surface, every route on a grant, reads included:

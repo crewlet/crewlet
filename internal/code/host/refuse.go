@@ -35,13 +35,24 @@ func (s *Server) syncFailed(w http.ResponseWriter, r *http.Request, name string,
 		return
 	}
 	var (
-		missing *cache.ErrPackMissing
-		corrupt *cache.ErrCorruptPack
-		exit    *gitproc.ExitError
+		missing  *cache.ErrPackMissing
+		corrupt  *cache.ErrCorruptPack
+		exit     *gitproc.ExitError
+		unraised *floorUnraised
 	)
 	switch {
 	case errors.Is(err, code.ErrRepoNotFound):
 		auth.GitText(w, http.StatusNotFound, notFoundSentence(name))
+	case errors.As(err, &unraised):
+		// A BOX'S RUN STORE, NEVER THE CODE LOG: the answer it was about to
+		// be shown is refused rather than shown past its run's floor
+		// (raiseFloor), and the box retries — here or on another node.
+		s.log.Warn("code_box_unavailable", append([]any{"reason", "floor_unraised", "turn_id",
+			unraised.ref.TurnID, "launch_id", unraised.ref.LaunchID, "repo", name, "path", r.URL.Path,
+			"error", unraised.err}, attrs...)...)
+		retry(w, UnavailableRetryAfter)
+		auth.GitText(w, http.StatusServiceUnavailable, sentence(unraised.Error())+"; retry in "+
+			seconds(UnavailableRetryAfter))
 	case errors.As(err, &missing):
 		// WARN, as the cache's line of the same name for the sync that found
 		// it: objects_missing is the alarm, raised by the collector's audit.

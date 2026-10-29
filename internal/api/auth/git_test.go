@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -22,56 +23,19 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
+// gitAccessCase is one request and the class GitAccess answers it.
+type gitAccessCase struct {
+	method, target string
+	want           auth.GitOp
+}
+
 // THE ONE CLASSIFIER, ROUTE BY ROUTE. Every request git's smart HTTP protocol
 // makes, and the shapes around it that must not be taken for one: a fetch is
 // what may be served while a node drains and by a token bound to nobody, so
 // every row that answers fetch is a row a mistake here would open to a push.
 func TestGitAccessClassifiesEveryGitRoute(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		method, target string
-		want           auth.GitOp
-	}{
-		// The advertisement, asked for each service.
-		{http.MethodGet, "/git/r.git/info/refs?service=git-upload-pack", auth.GitFetch},
-		{http.MethodGet, "/git/r.git/info/refs?service=git-receive-pack", auth.GitPush},
-		// No service is the dumb protocol's request: a read, which the host
-		// answers by refusing it.
-		{http.MethodGet, "/git/r.git/info/refs", auth.GitFetch},
-		{http.MethodHead, "/git/r.git/info/refs?service=git-upload-pack", auth.GitFetch},
-		{http.MethodHead, "/git/r.git/info/refs?service=git-receive-pack", auth.GitPush},
-		// The two RPCs.
-		{http.MethodPost, "/git/r.git/git-upload-pack", auth.GitFetch},
-		{http.MethodPost, "/git/r.git/git-receive-pack", auth.GitPush},
-		// Everything else under the prefix is a push: the more restrictive
-		// answer, and the mux then answers it 404.
-		{http.MethodGet, "/git/r.git/HEAD", auth.GitPush},
-		{http.MethodGet, "/git/r.git", auth.GitPush},
-		{http.MethodGet, "/git/", auth.GitPush},
-		{http.MethodGet, "/git/r.git/objects/info/packs", auth.GitPush},
-		{http.MethodGet, "/git/r.git/git-upload-pack", auth.GitPush},
-		{http.MethodPost, "/git/r.git/info/refs?service=git-upload-pack", auth.GitPush},
-		{http.MethodGet, "/git/r.git/info/refs?service=git-upload-archive", auth.GitPush},
-		{http.MethodGet, "/git/r.git/info/refs?service=", auth.GitFetch},
-		// A service another reader could take for receive-pack is a push:
-		// two values, in either order, and a query that does not parse —
-		// url.Values drops the pair it cannot read, which would leave the
-		// first reading "no service" and another reading what it kept.
-		{http.MethodGet, "/git/r.git/info/refs?service=git-upload-pack&service=git-receive-pack", auth.GitPush},
-		{http.MethodGet, "/git/r.git/info/refs?service=git-receive-pack&service=git-upload-pack", auth.GitPush},
-		{http.MethodGet, "/git/r.git/info/refs?service=git-receive-pack;x=1", auth.GitPush},
-		{http.MethodGet, "/git/r.git/info/refs?service=git-upload-pack&x=%zz", auth.GitPush},
-		// A path that only resembles the RPC's: the repository segment
-		// ends at the first slash, so its tail is not the upload RPC.
-		{http.MethodPost, "/git/a/b/git-upload-pack", auth.GitPush},
-		{http.MethodPost, "/git/r.git//git-upload-pack", auth.GitPush},
-		// Not a git route at all.
-		{http.MethodGet, "/github/x", auth.GitNone},
-		{http.MethodGet, "/gitx", auth.GitNone},
-		{http.MethodGet, "/git", auth.GitNone},
-		{http.MethodGet, "/code/repos", auth.GitNone},
-		{http.MethodPost, "/webhooks/github", auth.GitNone},
-	} {
+	for _, tc := range gitAccessCases {
 		r := httptest.NewRequest(tc.method, tc.target, nil)
 		if got := auth.GitAccess(r); got != tc.want {
 			t.Errorf("%s %s = %q, want %q", tc.method, tc.target, got, tc.want)
@@ -84,6 +48,125 @@ func TestGitAccessClassifiesEveryGitRoute(t *testing.T) {
 		if op.Valid() {
 			t.Errorf("%q is valid, and the set is closed", op)
 		}
+	}
+}
+
+// gitAccessCases are TestGitAccessClassifiesEveryGitRoute's rows, every git
+// row's path under the person's prefix.
+var gitAccessCases = []gitAccessCase{
+	// The advertisement, asked for each service.
+	{http.MethodGet, "/git/r.git/info/refs?service=git-upload-pack", auth.GitFetch},
+	{http.MethodGet, "/git/r.git/info/refs?service=git-receive-pack", auth.GitPush},
+	// No service is the dumb protocol's request: a read, which the host
+	// answers by refusing it.
+	{http.MethodGet, "/git/r.git/info/refs", auth.GitFetch},
+	{http.MethodHead, "/git/r.git/info/refs?service=git-upload-pack", auth.GitFetch},
+	{http.MethodHead, "/git/r.git/info/refs?service=git-receive-pack", auth.GitPush},
+	// The two RPCs.
+	{http.MethodPost, "/git/r.git/git-upload-pack", auth.GitFetch},
+	{http.MethodPost, "/git/r.git/git-receive-pack", auth.GitPush},
+	// Everything else under the prefix is a push: the more restrictive
+	// answer, and the mux then answers it 404.
+	{http.MethodGet, "/git/r.git/HEAD", auth.GitPush},
+	{http.MethodGet, "/git/r.git", auth.GitPush},
+	{http.MethodGet, "/git/", auth.GitPush},
+	{http.MethodGet, "/git/r.git/objects/info/packs", auth.GitPush},
+	{http.MethodGet, "/git/r.git/git-upload-pack", auth.GitPush},
+	{http.MethodPost, "/git/r.git/info/refs?service=git-upload-pack", auth.GitPush},
+	{http.MethodGet, "/git/r.git/info/refs?service=git-upload-archive", auth.GitPush},
+	{http.MethodGet, "/git/r.git/info/refs?service=", auth.GitFetch},
+	// A service another reader could take for receive-pack is a push:
+	// two values, in either order, and a query that does not parse —
+	// url.Values drops the pair it cannot read, which would leave the
+	// first reading "no service" and another reading what it kept.
+	{http.MethodGet, "/git/r.git/info/refs?service=git-upload-pack&service=git-receive-pack", auth.GitPush},
+	{http.MethodGet, "/git/r.git/info/refs?service=git-receive-pack&service=git-upload-pack", auth.GitPush},
+	{http.MethodGet, "/git/r.git/info/refs?service=git-receive-pack;x=1", auth.GitPush},
+	{http.MethodGet, "/git/r.git/info/refs?service=git-upload-pack&x=%zz", auth.GitPush},
+	// A path that only resembles the RPC's: the repository segment
+	// ends at the first slash, so its tail is not the upload RPC.
+	{http.MethodPost, "/git/a/b/git-upload-pack", auth.GitPush},
+	{http.MethodPost, "/git/r.git//git-upload-pack", auth.GitPush},
+	// Not a git route at all.
+	{http.MethodGet, "/github/x", auth.GitNone},
+	{http.MethodGet, "/gitx", auth.GitNone},
+	{http.MethodGet, "/git", auth.GitNone},
+	{http.MethodGet, "/code/repos", auth.GitNone},
+	{http.MethodPost, "/webhooks/github", auth.GitNone},
+	{http.MethodGet, "/box/gitx", auth.GitNone},
+	{http.MethodGet, "/box/", auth.GitNone},
+}
+
+// A BOX ROUTE IS CLASSIFIED AS A PERSON'S IS: every git row above, its path
+// under the coding box's prefix, answers what it answers under the person's —
+// its class and whether it opens an exchange — so the drain gate and the code
+// host read one answer for both transports, and a box's request is never a
+// fetch where a person's would be a push.
+//
+// Mutation: gitTail reading the person's prefix only — every box row answers
+// GitNone — red.
+func TestABoxRouteIsClassifiedAsAPersonsIs(t *testing.T) {
+	t.Parallel()
+	for _, tc := range gitAccessCases {
+		rest, ok := strings.CutPrefix(tc.target, auth.GitPrefix)
+		if !ok {
+			continue
+		}
+		person := httptest.NewRequest(tc.method, tc.target, nil)
+		box := httptest.NewRequest(tc.method, auth.BoxGitPrefix+rest, nil)
+		if got, want := auth.GitAccess(box), auth.GitAccess(person); got != want {
+			t.Errorf("%s %s = %q, want %q as under %s", tc.method, box.URL, got, want, auth.GitPrefix)
+		}
+		if got, want := auth.GitAdvertisement(box), auth.GitAdvertisement(person); got != want {
+			t.Errorf("%s %s: advertisement = %v, want %v as under %s", tc.method, box.URL, got, want,
+				auth.GitPrefix)
+		}
+	}
+}
+
+// BASIC IS A PERSON'S CREDENTIAL ONLY: a coding box's Basic password is its
+// run's token, which the code host's box admission reads — handed to the
+// guard it would be one more credential this guard looked at — so a box route
+// presents none, while the same credential on a person's git route is the
+// token it carries.
+//
+// Mutation: Credential reading Basic wherever GitAccess classifies a git
+// request — the box route presents its password — red.
+func TestBasicIsAPersonsCredentialOnly(t *testing.T) {
+	t.Parallel()
+	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
+	for _, tc := range []struct {
+		target, want string
+	}{
+		{"/box/git/web.git/info/refs?service=git-upload-pack", ""},
+		{"/box/git/web.git/git-receive-pack", ""},
+		{"/git/web.git/info/refs?service=git-upload-pack", "x"},
+	} {
+		r := httptest.NewRequest(http.MethodGet, tc.target, nil)
+		r.Header.Set("Authorization", basic("run", "x"))
+		if got := g.Credential(r); got != tc.want {
+			t.Errorf("%s with Basic run:x presents %q to the guard, want %q", tc.target, got, tc.want)
+		}
+	}
+}
+
+// THE BOX PREFIX IS PUBLIC AND UNGUARDED: a coding box holds no person's
+// credential and is reached from wherever its sandbox runs, so /box/git/ is
+// served on the public listener beside the box's other two edges and exempt
+// from the guard, its run's token the credential and the code host's box
+// admission the check — while a person's /git/ is neither.
+func TestTheBoxPrefixIsPublicAndUnguarded(t *testing.T) {
+	t.Parallel()
+	path := auth.BoxGitPrefix + "web.git/info/refs"
+	if !auth.Public(path) || !auth.Unguarded(path) {
+		t.Errorf("%s: public %v, unguarded %v, want both", path, auth.Public(path), auth.Unguarded(path))
+	}
+	if !slices.Contains(auth.PublicPrefixes(), auth.BoxGitPrefix) {
+		t.Errorf("the public prefixes %v do not list %s", auth.PublicPrefixes(), auth.BoxGitPrefix)
+	}
+	person := auth.GitPrefix + "web.git/info/refs"
+	if auth.Public(person) || auth.Unguarded(person) {
+		t.Errorf("%s: public %v, unguarded %v, want neither", person, auth.Public(person), auth.Unguarded(person))
 	}
 }
 

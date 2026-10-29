@@ -19,13 +19,13 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // POST /git/{repo}/git-receive-pack — A PUSH, the handler's half of the
 // receive pipeline (steps 0–7, and 9 the answer): its command section read and
 // what can be refused without objects refused, the cache synced through the
-// barrier, the push's scratch made, and receive-pack run there — never in the
+// barrier (a coding box's at its run's session), the push's scratch made, and
+// receive-pack run there — never in the
 // cache — with the one hook that relays every ref update to the session
 // (session.go), which hands them to the one landing every push takes
 // (land.go, step 8) and reports what landed.
@@ -74,7 +74,7 @@ const refusedNote = "refused before anything was stored"
 const pushCertificateSentence = "this push carries a push certificate (a signed push), which this engine " +
 	"never advertises and does not take: push without --signed"
 
-func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
+func (s *Server) receivePack(w http.ResponseWriter, r *http.Request, admit admitter) {
 	start := s.now()
 	if r.Header.Get("Content-Type") != ReceivePackRequestType {
 		auth.GitText(w, http.StatusUnsupportedMediaType,
@@ -86,7 +86,7 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer end()
-	adm, ok := s.admit(ctx, w, r, auth.GitPush)
+	adm, ok := admit(ctx, w, r, auth.GitPush)
 	if !ok {
 		return
 	}
@@ -181,10 +181,12 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 	// stateless rules, which come first: a reserved ref is reserved_ref to
 	// everybody, never a question of who asks. An update is judged here as a
 	// fast-forward, since whether it is forced is the landing's verdict, after
-	// the sync — which no principal this host admits can tell apart: a person
-	// maintains and passes both rows, and a token bound to nobody passes
-	// neither.
-	grant := adm.grant(adm.repo)
+	// the sync — which no PERSON or token can tell apart: a person maintains
+	// and passes both rows, and a token bound to nobody passes neither. A
+	// coding box's seat can — a seat holding write updates and may not force
+	// — and its forced update is refused by the decide's grant rule (2b) on
+	// the landing's verdict, as an engine write's is.
+	grant := adm.grant
 	if !grant.MayPush() {
 		refuseAll(grantRefusal(adm.principal()), refuseWith(sec.Commands,
 			func(c parsedCommand) (code.Refusal, string) {
@@ -223,10 +225,13 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3 THE SYNC, through the barrier: a cache at or past the advertisement
-	// holds every base a thin pack deltas against, and its row is what the
-	// status and the protections are judged on — never the stale resolve.
-	synced, err := s.o.Cache.Sync(ctx, adm.repo.ID, statelog.Freshness{Level: statelog.ReadLinearizable})
+	// 3 THE SYNC, at the request's refs level (admission.refs): through the
+	// barrier for a person, and for a coding box at its run's session — its
+	// floor, which its own advertisement raised to what it showed. Either way
+	// a cache at or past the advertisement holds every base a thin pack
+	// deltas against, and its row is what the status and the protections are
+	// judged on — never the stale resolve.
+	synced, err := s.o.Cache.Sync(ctx, adm.repo.ID, adm.refs())
 	if err != nil {
 		s.syncFailed(w, r, adm.name, err)
 		return
@@ -403,7 +408,7 @@ func (s *Server) receiveOver(ctx context.Context, w http.ResponseWriter, r *http
 	defer cancel()
 	sess := newSession(work, cancel)
 	sess.synced, sess.scratch, sess.pushID = synced, scratch, pushID
-	sess.principal = adm.principal()
+	sess.principal, sess.adm = adm.principal(), adm
 	sess.receivedAt, sess.preRefused, sess.judged = s.now(), pre, judged
 	s.relay.open(sess)
 

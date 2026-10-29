@@ -162,6 +162,15 @@ type GitOptions struct {
 	Faults *codefault.Script
 	// Credentials are who the node's guard admits, and the seat each is.
 	Credentials *Credentials
+	// Runs is the fleet's coding runs' rows, which the node's host admits a
+	// coding box by — ONE store for every git node of a fleet, as every node
+	// reads the one pending store on the fleet's coordination store; nil is
+	// one of the node's own (NewFixtureRuns).
+	Runs host.Runs
+	// BoxTokens verifies a box's run token, over the fleet's keyring; nil is
+	// one of the node's own over it (NewBoxTokens), as every node builds its
+	// own.
+	BoxTokens *host.BoxTokens
 	// Audit is handed every push record the host publishes; nil keeps none.
 	Audit func(context.Context, types.OperatorActed)
 	// Fetched is handed every read of a `visibility: unit` repository the
@@ -310,6 +319,12 @@ func StartGitNode(t testing.TB, o GitOptions) *GitNode {
 	if path := gittest.RequireNode(t); o.GitPath == "" {
 		o.GitPath = path
 	}
+	if o.BoxTokens == nil {
+		o.BoxTokens = NewBoxTokens(t)
+	}
+	if o.Runs == nil {
+		o.Runs = NewFixtureRuns(o.BoxTokens)
+	}
 	g := &GitNode{o: o, life: t}
 	t.Cleanup(g.teardown)
 	g.cur = g.start(t)
@@ -377,6 +392,7 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 		Audit: audit, Fetched: fetched, Limits: limits,
 		DeletedRetention: func() time.Duration { return deletedRetention },
 		Roster:           roster, Signer: signer, Share: n.share, Current: g.o.Current,
+		Boxes:  host.Boxes{Tokens: g.o.BoxTokens, Runs: g.o.Runs},
 		NodeID: n.id, Timing: g.o.Timing, Faults: g.o.Faults, Metrics: n.metrics, Logger: g.o.Logger,
 	}); err != nil {
 		t.Fatalf("codetest: build %s's host: %v", n.id, err)
@@ -402,10 +418,18 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 		NodeID: n.id, Limits: limits, Faults: g.o.Faults, Metrics: n.metrics, Logger: g.o.Logger}); err != nil {
 		t.Fatalf("codetest: build %s's compactor: %v", n.id, err)
 	}
+	// A PERSON'S THREE ROUTES AND A CODING BOX'S THREE, on one mux behind the
+	// API's real guard, as a git node serves them: the host's own handlers
+	// — never the API's mount, which internal/api's own tests hold — so a
+	// box meets the guard exactly as it does in production, its route
+	// unguarded and its run's token no credential of the guard's.
 	mux := http.NewServeMux()
 	mux.Handle(host.PatternInfoRefs, n.host.InfoRefs())
 	mux.Handle(host.PatternUploadPack, n.host.UploadPack())
 	mux.Handle(host.PatternReceivePack, n.host.ReceivePack())
+	mux.Handle(host.PatternBoxInfoRefs, n.host.BoxInfoRefs())
+	mux.Handle(host.PatternBoxUploadPack, n.host.BoxUploadPack())
+	mux.Handle(host.PatternBoxReceivePack, n.host.BoxReceivePack())
 	n.srv = httptest.NewUnstartedServer(g.o.Credentials.guard().Middleware(mux))
 	n.srv.Config.ErrorLog = log.New(serverLog{t: g.life}, "", 0)
 	n.srv.Start()
