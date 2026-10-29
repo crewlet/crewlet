@@ -389,3 +389,33 @@ func TestAnEnvSignInIsOneSignInPerPlaceItReaches(t *testing.T) {
 		t.Error("two entries in one Bedrock region read as two sign-ins")
 	}
 }
+
+// A WINDOW ANOTHER PROVIDER MET IS HELD AS THE PLAN'S OWN, NEVER SHORTER. A
+// probe built with a record of its own hands back the window it met: held
+// plan-wide or for its model alone, a later one moves the plan's window on,
+// an earlier one leaves it, and neither steps the backoff.
+//
+// Mutation: take the window whatever it is, or hold a scoped window
+// plan-wide, and this fails.
+func TestAHeldWindowNeverShortensThePlans(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	pl := newPlan()
+	pl.Hold(SitOut{Until: now.Add(time.Hour), Since: now, Window: llm.LimitSession, Said: "session limit"})
+	pl.Hold(SitOut{Until: now.Add(time.Minute), Since: now.Add(time.Second), Window: llm.LimitSession, Said: "earlier"})
+	pl.Hold(SitOut{Until: now.Add(3 * time.Hour), Since: now, Window: llm.LimitModel, Model: "opus", Said: "opus limit"})
+	state := pl.State(now)
+	if len(state.SittingOut) != 2 {
+		t.Fatalf("sitting out = %+v, want the plan-wide window and opus's", state.SittingOut)
+	}
+	wide, scoped := state.SittingOut[0], state.SittingOut[1]
+	if wide.Model != "" || !wide.Until.Equal(now.Add(time.Hour)) || wide.Said != "session limit" {
+		t.Errorf("plan-wide window = %+v, want the hour-long session window an earlier one did not shorten", wide)
+	}
+	if scoped.Model != "opus" || !scoped.Until.Equal(now.Add(3*time.Hour)) {
+		t.Errorf("scoped window = %+v, want opus's alone", scoped)
+	}
+	if pl.wide.unnamed != 0 {
+		t.Errorf("a held window stepped the backoff to %d", pl.wide.unnamed)
+	}
+}

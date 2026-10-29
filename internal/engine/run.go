@@ -328,6 +328,10 @@ type Engine struct {
 	// home ([Engine.CheckModel]); empty is the process's temporary directory.
 	checkHomes string
 
+	// modelInputs is the last good read of the model alarms' fleet-wide
+	// inputs ([Engine.modelsReading]).
+	modelInputs modelInputs
+
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
 	// [Engine.Apply].
