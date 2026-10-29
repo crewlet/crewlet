@@ -329,16 +329,19 @@ var codeLogUnwritten = map[code.OpKind]struct {
 // make the object prices the records about it beside them.
 //
 // A CHANGE IS THE OBJECT TODAY: the home git node's change work (internal/code/
-// home) records a revision's facts and lands a change, both only about a LIVE
-// change, which a change_open — or a reopen of a change one opened — makes,
-// and so does a push whose options ask for one (PushEntry.Change). No file this
-// build is made from writes the first, and the push term was measured on a
-// coding box's push, which opens none: codeLogFields leaves pushes.change out
-// of it, the reference company having no figure for how many of its pushes
-// open a change, so its day holds no live change and neither rider appends a
-// record in it. A company whose pushes open changes appends both beside them —
-// a revision's facts once a revision, up to code.MaxTouchedBytes of touched
-// paths each, and a landing once a change — and reads them in its code log's
+// home) records a revision's facts, records whether a change merges into its
+// target and lands a change, all only about a LIVE change, which a change_open
+// — or a reopen of a change one opened — makes, and so does a push whose
+// options ask for one (PushEntry.Change). No file this build is made from
+// writes the first, and the push term was measured on a coding box's push,
+// which opens none: codeLogFields leaves pushes.change out of it, the
+// reference company having no figure for how many of its pushes open a
+// change, so its day holds no live change and no rider appends a record in
+// it. A company whose pushes open changes appends all three beside them — a
+// revision's facts once a revision, up to code.MaxTouchedBytes of touched
+// paths each; its mergeability once a revision and again at every recheck its
+// target's moving asks, up to code.MaxConflictBytes of conflicted paths each;
+// and a landing once a change — and reads them in its code log's
 // crewlet.statelog.log.bytes_per_day, which counts every record the log takes.
 var codeLogRiders = map[code.OpKind]struct {
 	on     code.OpKind
@@ -351,6 +354,10 @@ var codeLogRiders = map[code.OpKind]struct {
 	code.OpChangeLanded: {on: code.OpChangeOpen, makers: changeMakers, how: "a change whose target came to " +
 		"hold its head is landed by its repository's home git node through the estate's code.change, once " +
 		"a change at the most"},
+	code.OpMergeability: {on: code.OpChangeOpen, makers: changeMakers, how: "whether a change's head " +
+		"revision merges into its target's tip is read by its repository's home git node and recorded " +
+		"through the estate's code.conversation, once a revision of a live change and again at every " +
+		"recheck its target's moving asks — a push to the target's rate for each live change behind it"},
 	// A CHECK'S CLAIM, ITS ENDING AND ITS SWEEP are all about an attempt only
 	// a check_queued record makes — no priced op's payload makes one, so they
 	// name no maker — and come at its rate: two claims' records and an ending
@@ -541,7 +548,7 @@ var codeLogKinds = map[code.ObjectKind]string{
 	code.KindTrimmed:    "the trim's sweep of the anchors (codeLogNegligible)",
 	code.KindChange: "a change's conversation — its asks for review, its comments, its threads' " +
 		"resolutions, its reviews and the answers to their findings — on the change (codeLogUnwritten), " +
-		"and its revisions' facts, which ride the change's making (codeLogRiders)",
+		"and its revisions' facts and its mergeability, which ride the change's making (codeLogRiders)",
 	code.KindChecks: "a repository's checks: an attempt queued (codeLogUnwritten), and its claim, its " +
 		"ending and the sweep of an idle repository's past the history, which ride its queueing " +
 		"(codeLogRiders)",
