@@ -712,6 +712,7 @@ func equipForCodeWith(t *testing.T, e *Engine, pending sandbox.PendingStore, det
 		t.Fatalf("NewManager: %v", err)
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Audience: noAudience{},
 		Queue:    e.backends.Queue, Pending: pending, Manager: manager,
 		// THE ENGINE'S OWN, because these cases are about what the

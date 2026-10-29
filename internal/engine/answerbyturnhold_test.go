@@ -51,6 +51,7 @@ func TestAnAnswerByTurnHeldBehindItsRunsNextJobDoesNotAnswerItsNextQuestion(t *t
 	}
 	resumer := &relaunchingResumer{manager: manager, store: store}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Audience: noAudience{}, Queue: q, Pending: store, Manager: manager,
 		Resume: resumer, Hold: inboxHold{q: q}, After: (&handCranked{}).after,
 	})

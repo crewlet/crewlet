@@ -965,7 +965,9 @@ func (c CodeSeam) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.Pu
 	return out, err
 }
 
-// Read answers a person's or a surface's read of the code host.
+// Read answers a read of the code host: a person's or a surface's, and the
+// engine's own that no principal makes — a cache's `introduced` backfill, a
+// compactor's `compaction_due` listing, a collected coding run's `run_pushes`.
 func (c CodeSeam) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	return call(ctx, c.r, opCodeRead, nil, q)
 }

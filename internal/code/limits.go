@@ -128,13 +128,15 @@ const GitReadsShare = 10
 // five-seat company's code log alarmed past 1 300 git reads a day, which one
 // CI polling ten repositories a minute exceeds tenfold. A SEAT's reads of the
 // code log — the refs a call names resolved (the estate's code.resolve_ref,
-// one a call however many it names) and a read by object id's one re-sync at
-// the head, when its home's copy lacks an id it names (code.git_read) — are
-// the seats' term instead, which the census gives
-// every log whole, so this term does not count them. At the 1 GiB floor and the
-// default seven days it is 87 154 a day — about 60 a minute fleet-wide: that
-// CI, thirty developers fetching every three minutes and 3 000 pushes a day,
-// three times over.
+// one a call however many it names), a read by object id's one re-sync at
+// the head, when its home's copy lacks an id it names (code.git_read), and
+// the read of what its coding run pushed when the engine collects the run
+// (code.read's run_pushes, one a collected run given a repository to push
+// to, its later pages at session) — are the seats' term instead, which the
+// census gives every log whole, so this term does not count them. At the 1 GiB
+// floor and the default seven days it is 87 154 a day — about 60 a minute
+// fleet-wide: that CI, thirty developers fetching every three minutes and
+// 3 000 pushes a day, three times over.
 //
 // IT FOLLOWS THE CEILING THE STREAM HOLDS, which the caller reads off the
 // broker: the one every node reads alike, and the one a resize moves. Never

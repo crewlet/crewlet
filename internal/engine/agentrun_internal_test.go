@@ -432,6 +432,7 @@ func launchRig(t *testing.T, c *Company, bridge *mcpbridge.Bridge) (*Engine, *sa
 	// The engine's own resumer, as buildSandboxRuntime hands it over: the
 	// coordinator refuses to be built without one.
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Audience: noAudience{},
 		Queue:    q, Pending: pending, Manager: manager, Resume: &resumer{engine: e},
 	})

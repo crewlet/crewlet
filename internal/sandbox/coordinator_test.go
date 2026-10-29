@@ -277,6 +277,8 @@ type coordRig struct {
 	resumer     *resumeSpy
 	accountant  *ledgerSpy
 	audience    *audienceSpy
+	// pushes is what the coordinator reads a collected run's pushes from.
+	pushes *pushSpy
 
 	mu      sync.Mutex
 	stopped []string
@@ -322,8 +324,10 @@ func newCoordRig(t *testing.T) *coordRig {
 		resumer:    &resumeSpy{},
 		accountant: &ledgerSpy{},
 		audience:   &audienceSpy{},
+		pushes:     &pushSpy{},
 	}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   rig.pushes,
 		Audience: rig.audience,
 		Queue:    base.queue, Pending: base.pending, Manager: base.manager,
 		Resume: rig.resumer, Account: rig.accountant,
@@ -1529,6 +1533,7 @@ func TestASettleSomebodyElseEndedReportsNoStop(t *testing.T) {
 	rig.launch("t1")
 	var stopped []string
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: endedFirst{rig.pending},
@@ -1636,6 +1641,7 @@ func TestASettleSomebodyElseEndedIsNotAnnouncedTwice(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: endedFirst{rig.pending}, Manager: rig.manager, Resume: rig.resumer,
@@ -1921,6 +1927,7 @@ func TestAnAnswerDoesNotClaimTheJobThatReplacedTheAsker(t *testing.T) {
 	rig.suspend("t1")
 
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue,
@@ -1978,6 +1985,7 @@ func TestAQuestionThatCouldNotBeRecordedIsAskedAgain(t *testing.T) {
 	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
 
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: &parkFails{PendingStore: rig.pending, left: 1},
@@ -2050,6 +2058,7 @@ func TestAQuestionIsAskedBeforeTheRunIsParked(t *testing.T) {
 
 			spy := &statusAtAsk{recorder: rig.queue, rig: rig}
 			coordinator, err := NewCoordinator(CoordinatorOptions{
+				Pushes:   &pushSpy{},
 				Lease:    leased(rigLease),
 				Audience: &audienceSpy{},
 				Queue:    spy, Pending: rig.pending, Manager: rig.manager,
@@ -2125,6 +2134,7 @@ func (r relaunchThenBreak) Resume(ctx context.Context, req ResumeRequest) error 
 func (r *coordRig) withResumer(t *testing.T, resume Resumer) *Coordinator {
 	t.Helper()
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   r.pushes,
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    r.queue, Pending: r.pending, Manager: r.manager,
@@ -2274,6 +2284,7 @@ func TestADrainThatBreaksAResumeStillHandsTheClaimBack(t *testing.T) {
 	delivery, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: honoursCancel{rig.pending}, Manager: rig.manager,
@@ -2434,6 +2445,7 @@ func TestARetryOnAnotherNodeChargesTheRunOnce(t *testing.T) {
 	// charging the same fleet counter.
 	successor := &ledgerSpy{}
 	next, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: rig.pending, Manager: rig.manager,
@@ -2475,6 +2487,7 @@ func TestAChargeIsRecordedByTheWriteThatHandsTheClaimBack(t *testing.T) {
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
 	resumer := &resumeSpy{err: fmt.Errorf("%w: the seat moved", ErrResumeUnavailable)}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: onlyTheClaim{rig.pending}, Manager: rig.manager,
@@ -3718,6 +3731,7 @@ func TestAnUnreadableAnswerLookupFallsThroughToNormalHandling(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: brokenStore{}, Manager: rig.manager, Resume: rig.resumer,
@@ -3890,7 +3904,7 @@ func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 	if err == nil {
 		t.Fatal("a coordinator with no queue, store, manager or resumer was accepted")
 	}
-	for _, field := range []string{"Queue", "Pending", "Manager", "Resume", "Audience"} {
+	for _, field := range []string{"Queue", "Pending", "Manager", "Resume", "Audience", "Pushes"} {
 		if !strings.Contains(err.Error(), "CoordinatorOptions."+field) {
 			t.Errorf("the refusal does not name CoordinatorOptions.%s: %v", field, err)
 		}
@@ -3898,10 +3912,20 @@ func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
 
 	rig := newCoordRig(t)
 	if _, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: rig.pending, Manager: rig.manager,
 	}); err == nil || !strings.Contains(err.Error(), "CoordinatorOptions.Resume") {
 		t.Fatalf("a coordinator with no resumer = %v, want it refused naming Resume", err)
+	}
+	// AND ONE THAT CANNOT READ WHAT A RUN PUSHED: it would hand every run
+	// given a repository back saying nothing of its pushes, which the
+	// executor reads as none.
+	if _, err := NewCoordinator(CoordinatorOptions{
+		Audience: &audienceSpy{}, Resume: &resumeSpy{},
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+	}); err == nil || !strings.Contains(err.Error(), "CoordinatorOptions.Pushes") {
+		t.Fatalf("a coordinator with no reader of a run's pushes = %v, want it refused naming Pushes", err)
 	}
 }
 
@@ -4234,6 +4258,7 @@ func TestARunsBoxIsReclaimedBeforeItsRecordIsDeleted(t *testing.T) {
 	run := rig.launch("t1")
 	witness := &finishWitness{PendingStore: rig.pending, provider: rig.provider, box: run.SandboxID}
 	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Pushes:   &pushSpy{},
 		Lease:    leased(rigLease),
 		Audience: &audienceSpy{},
 		Queue:    rig.queue, Pending: witness, Manager: rig.manager, Resume: rig.resumer,

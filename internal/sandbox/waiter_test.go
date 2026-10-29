@@ -145,6 +145,22 @@ func (r *waiterRig) launching(turnID string) PendingRun {
 // at until something re-stamps it.
 func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
 	r.t.Helper()
+	return r.launchingWith(turnID, lease, nil)
+}
+
+// launchWith is [waiterRig.launch] of a run the case edits before it is
+// written — given repositories on the code host, say, as a launch writes them.
+func (r *waiterRig) launchWith(turnID string, edit func(*PendingRun)) PendingRun {
+	r.t.Helper()
+	r.launchingWith(turnID, rigLease, edit)
+	r.suspend(turnID)
+	return r.get(turnID)
+}
+
+// launchingWith is [waiterRig.launchingUnder] of a run edit changes before it is
+// written; nil changes nothing.
+func (r *waiterRig) launchingWith(turnID string, lease Fence, edit func(*PendingRun)) PendingRun {
+	r.t.Helper()
 	ctx := r.t.Context()
 	box, err := r.provider.Create(ctx, Spec{})
 	if err != nil {
@@ -167,6 +183,9 @@ func (r *waiterRig) launchingUnder(turnID string, lease Fence) PendingRun {
 		// The model the launch pointed its agent at, which the run's own
 		// phase record is filed under.
 		Launch: LaunchRecord{Model: "claude-sonnet-5"},
+	}
+	if edit != nil {
+		edit(&run)
 	}
 	if _, err := r.pending.BeginLaunch(ctx, run, lease); err != nil {
 		r.t.Fatalf("BeginLaunch: %v", err)

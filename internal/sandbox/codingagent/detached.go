@@ -315,7 +315,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	// FINAL BEFORE THE CONFIG IS WRITTEN, which is where a CLI writes the
 	// system text from.
-	req.System = finalSystem(req.System, paths)
+	req.System = finalSystem(req.System, paths, req.ReportedRepos)
 	configPath, err := r.cli.WriteConfig(ctx, box, req, paths)
 	if err != nil {
 		return sandbox.RunHandle{}, err
@@ -372,14 +372,16 @@ func wrapperScript(inner string, out Output, paths Paths) string {
 }
 
 // finalSystem appends the report instruction, addressed at THIS box, to the
-// run's standing instructions.
+// run's standing instructions — saying which of its pushes the engine reports
+// for it (native, the repositories on the engine's own code host it may push
+// to).
 //
 // Composed here rather than at the launch because the findings path is a
 // property of the box the run lands in, which the caller does not know when it
 // builds the request. On the system side, because it is not part of the task:
 // it is how every run ends, whatever it was asked.
-func finalSystem(system string, paths Paths) string {
-	findings := strings.TrimSpace(FindingsInstruction(paths.Findings()))
+func finalSystem(system string, paths Paths, native []string) string {
+	findings := strings.TrimSpace(FindingsInstruction(paths.Findings(), native))
 	if system = strings.TrimSpace(system); system == "" {
 		return findings
 	}

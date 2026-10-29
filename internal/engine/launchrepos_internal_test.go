@@ -247,6 +247,7 @@ func newReposRig(t *testing.T, doc, base string) *reposRig {
 	}
 	e := &Engine{backends: &Backends{Queue: q}, boxTokens: tokens, boxGitURL: base}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Audience: noAudience{}, Queue: q, Pending: pending, Manager: manager, Resume: &resumer{engine: e},
 	})
 	if err != nil {

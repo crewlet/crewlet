@@ -224,25 +224,67 @@ func TestACollectionPrefersANamedRefWhereverItIs(t *testing.T) {
 // nothing.
 func TestTheReportInstructionsExamplesAreReadAsTheirRefs(t *testing.T) {
 	t.Parallel()
-	instruction := codingagent.FindingsInstruction("/tmp/findings.md")
-	var lines, want []string
-	for i, span := range strings.Split(instruction, "`") {
-		ref, ok := strings.CutPrefix(span, "Delivered: ")
-		if i%2 == 0 || !ok || strings.HasPrefix(ref, "<") {
-			continue
+	// With and without the native half, whose own words about the line must
+	// read as no example of one.
+	for _, native := range [][]string{nil, {"web", "api"}} {
+		instruction := codingagent.FindingsInstruction("/tmp/findings.md", native)
+		var lines, want []string
+		for i, span := range strings.Split(instruction, "`") {
+			ref, ok := strings.CutPrefix(span, "Delivered: ")
+			if i%2 == 0 || !ok || strings.HasPrefix(ref, "<") {
+				continue
+			}
+			lines = append(lines, span)
+			want = append(want, ref)
 		}
-		lines = append(lines, span)
-		want = append(want, ref)
-	}
-	if len(want) < 2 {
-		t.Fatalf("the instruction shows %d examples of a Delivered line, want a branch and a URL:\n%s",
-			len(want), instruction)
-	}
-	refs := refsThroughEveryPath(t, strings.Join(lines, "\n"))
-	for path, got := range refs {
-		if !slices.Equal(got, want) {
-			t.Errorf("%s: the instruction's examples read as %q, want %q", path, got, want)
+		if len(want) != 2 {
+			t.Fatalf("native %q: the instruction shows %d examples of a Delivered line, want a branch and "+
+				"a URL:\n%s", native, len(want), instruction)
 		}
+		refs := refsThroughEveryPath(t, strings.Join(lines, "\n"))
+		for path, got := range refs {
+			if !slices.Equal(got, want) {
+				t.Errorf("native %q, %s: the instruction's examples read as %q, want %q", native, path, got,
+					want)
+			}
+		}
+	}
+}
+
+// WHAT THE ENGINE REPORTS FOR A RUN, THE RUN IS TOLD: its pushes to the
+// repositories it was given on the engine's own code host are read from the
+// push record and handed to the executor, so the report is asked for lines
+// only for what it delivered elsewhere — a line for each such push is the
+// same delivery said twice, once by the record and once by the box. A run
+// given none of them is told nothing of it.
+func TestTheFindingsInstructionSaysWhatIsReported(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		native []string
+		names  string
+	}{
+		{[]string{"web"}, "Your pushes to web on this company's code host"},
+		{[]string{"web", "api"}, "Your pushes to web and api on this company's code host"},
+		{[]string{"web", "api", "docs"}, "Your pushes to web, api and docs on this company's code host"},
+	} {
+		instruction := codingagent.FindingsInstruction("/tmp/findings.md", tc.native)
+		if !strings.Contains(instruction, tc.names+" are recorded and reported for you: write a "+
+			"`Delivered:` line only for what you delivered somewhere else.") {
+			t.Errorf("native %q: the instruction does not say the pushes are reported:\n%s", tc.native,
+				instruction)
+		}
+	}
+	if none := codingagent.FindingsInstruction("/tmp/findings.md", nil); strings.Contains(none, "code host") {
+		t.Errorf("a run given no repository on the code host is told of its pushes there:\n%s", none)
+	}
+
+	// AND A RUNNER PUTS IT IN THE TEXT ITS BOX IS GIVEN, from the run's own
+	// request. Mutation: finalSystem passing no repositories — red.
+	_, system, _ := systemOfRun(t, codingagent.NewClaudeCode(), sandbox.RunRequest{
+		Brief: "fix the flake", ReportedRepos: []string{"web", "api"},
+	})
+	if !strings.Contains(system, "Your pushes to web and api on this company's code host are recorded") {
+		t.Errorf("the run's standing instructions do not say its pushes are reported:\n%s", system)
 	}
 }
 

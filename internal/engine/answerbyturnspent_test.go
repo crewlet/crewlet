@@ -118,6 +118,7 @@ func (w *spentWorld) holder(t *testing.T, lease sandbox.Fence, resume sandbox.Re
 		NoteDeferred: func(string) {},
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Audience: noAudience{}, Queue: w.board, Pending: w.store, Manager: w.manager,
 		Resume: resume, After: h.retries.after, Spent: h.dispatcher.SpendAnswer,
 		Lease: func(string) (sandbox.Fence, bool) { return lease, true },

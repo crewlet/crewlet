@@ -3238,6 +3238,13 @@ token is the guard's `401`, as any credential it does not know is.
 acted — and its push row is its record: the seat as an agent, the run that
 made it (its turn, its launch, its work item, its model and its coding agent),
 received over git. A refused one is its `code_box_refused` or `code_push` line.
+Those rows are also how the seat learns what its run delivered here: when the
+run is collected, the engine reads the pushes made under its launch to the
+repositories it was given — one linearizable read a run, its later pages at
+`session` at the first one's position, scanning those repositories' pushes
+since the launch rather than an index every data node would keep for every
+box push — and hands the seat each ref as it ended
+([Code Sandbox → What a run pushed is reported for it](code-sandbox.md#what-a-run-pushed-is-reported-for-it)).
 A box's fetch of a `visibility: unit` repository is recorded under its seat
 ([Who read it](#who-read-it)). A push the decide refuses after its bundle was
 stored — `push_quota` among the reasons — leaves that bundle named by no row,

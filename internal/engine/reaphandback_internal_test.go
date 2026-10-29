@@ -103,6 +103,7 @@ func TestTheEngineRevivesAClaimThatDiedBeforeItsTurn(t *testing.T) {
 	retries := &capturedRetries{}
 	resumer := &resumeSpy{}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Audience: noAudience{}, Queue: e.backends.Queue, Pending: rt.pending,
 		Manager: rt.coordinator.Manager(), Resume: resumer,
 		Hold: seatHold{engine: e}, Admit: e.mayResumeAnswer, After: retries.after,

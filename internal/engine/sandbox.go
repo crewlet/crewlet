@@ -680,20 +680,70 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 			sandbox.ErrResumeUnavailable, req.Run.AgentHandle)
 	}
 	return r.engine.resumeTurn(ctx, resumeInput{
-		Company:       company,
-		Run:           req.Run,
-		State:         state,
-		Turn:          resumedTurn(req.Run, seat, company.Org, r.engine.rowHolds(req.Run)),
-		Answer:        req.Answer,
-		Success:       req.Success,
-		Trigger:       req.Trigger,
-		DeliveredRefs: req.DeliveredRefs,
-		RefsElided:    req.DeliveredRefsElided,
-		InputTokens:   req.InputTokens,
-		OutputTokens:  req.OutputTokens,
-		Begin:         req.Begin,
-		Engine:        req.Engine,
+		Company:      company,
+		Run:          req.Run,
+		State:        state,
+		Turn:         resumedTurn(req.Run, seat, company.Org, r.engine.rowHolds(req.Run)),
+		Answer:       req.Answer,
+		Success:      req.Success,
+		Trigger:      req.Trigger,
+		Account:      accountOf(req),
+		InputTokens:  req.InputTokens,
+		OutputTokens: req.OutputTokens,
+		Begin:        req.Begin,
+		Engine:       req.Engine,
 	})
+}
+
+// runAccount is what a resume carries of the collected run's delivery: the
+// refs its report named and what its push record says it pushed — the
+// resumed executor's phase record lists both ([runRecordOf]). Zero when a
+// person's answer resumed a parked clarification: nothing was collected. The
+// run's cost is on its own `sandbox` phase record instead — see
+// [sandbox.ResumeRequest.DeliveredRefs].
+type runAccount struct {
+	// DeliveredRefs are what the run reported, and RefsElided how many more
+	// than it lists — see [sandbox.ResumeRequest.DeliveredRefsElided].
+	DeliveredRefs []string
+	RefsElided    int
+	// Pushed, PushedElided and PushedUnread are what the run's push record
+	// says it moved on the code host, as the record carries them — see
+	// [sandbox.ResumeRequest.Pushed].
+	Pushed       []types.PushedRefRecord
+	PushedElided int
+	PushedUnread string
+}
+
+// accountOf is req's account of the run it collected.
+func accountOf(req sandbox.ResumeRequest) runAccount {
+	return runAccount{
+		DeliveredRefs: req.DeliveredRefs, RefsElided: req.DeliveredRefsElided,
+		Pushed: sandbox.PushedRecords(req.Pushed), PushedElided: req.PushedElided,
+		PushedUnread: req.PushedUnread,
+	}
+}
+
+// runRecordOf is the record the resumed executor's phase carries of the run
+// it collected: which box did the work — off the run's own row, because this
+// process may not be the one that launched it, and it is the only thing that
+// can say a phase ran in a sandbox rather than in this process's own tool
+// loop — and its account of what it delivered.
+//
+// ONE FUNCTION FROM THE ROW AND THE ACCOUNT TO THE RECORD, so a field the
+// account gains reaches the record or fails a test here
+// (TestAResumedRecordCarriesTheRunsWholeAccount) rather than a reader of the
+// dashboard.
+func runRecordOf(run sandbox.PendingRun, account runAccount) runner.RunRecord {
+	return runner.RunRecord{
+		CodingAgent:   run.CodingAgent,
+		SandboxID:     run.SandboxID,
+		LaunchID:      run.LaunchID,
+		DeliveredRefs: account.DeliveredRefs,
+		RefsElided:    account.RefsElided,
+		Pushed:        account.Pushed,
+		PushedElided:  account.PushedElided,
+		PushedUnread:  account.PushedUnread,
+	}
 }
 
 // resumedTurn is the turn a parked run is re-entered as.
@@ -772,15 +822,9 @@ type resumeInput struct {
 	Success bool
 	Trigger *events.Event
 
-	// DeliveredRefs are what the collected run reported, for the resumed
-	// phase's own event. Empty when a person's answer resumed a parked
-	// clarification: nothing was collected. The run's cost is on its own
-	// `sandbox` phase record — see [sandbox.ResumeRequest.DeliveredRefs].
-	DeliveredRefs []string
-
-	// RefsElided is how many more the run reported than DeliveredRefs
-	// lists — see [sandbox.ResumeRequest.DeliveredRefsElided].
-	RefsElided int
+	// Account is what the collected run delivered, for the resumed phase's
+	// own event — see [runAccount].
+	Account runAccount
 
 	// InputTokens and OutputTokens are the resumed job's tokens, which this
 	// segment's charge to the turn's work item includes — see
@@ -980,17 +1024,9 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			// is mid-task.
 			Resume: &runner.Resume{
 				State: in.State, Answer: in.Answer,
-				// WHICH BOX DID THE WORK. Off the run's own row, because
-				// this process may not be the one that launched it — and
-				// it is the only thing that can say a phase ran in a
-				// sandbox rather than in this process's own tool loop.
-				Run: runner.RunRecord{
-					CodingAgent:   in.Run.CodingAgent,
-					SandboxID:     in.Run.SandboxID,
-					LaunchID:      in.Run.LaunchID,
-					DeliveredRefs: in.DeliveredRefs,
-					RefsElided:    in.RefsElided,
-				},
+				// WHICH BOX DID THE WORK, and what it delivered — see
+				// [runRecordOf].
+				Run: runRecordOf(in.Run, in.Account),
 				// THE RUN'S OWN TOOL CALLS, off its durable row. An
 				// agent-mode executor called them over the bridge, possibly
 				// in another process, so this list is the only record of
@@ -1965,6 +2001,9 @@ func (e *Engine) buildSandboxRuntime(manager *sandbox.Manager) (*sandboxRuntime,
 		// A report, a failure or a question past what the run's record
 		// carries is condensed by the seat's auxiliary model rather than cut.
 		Condense: runCondenser{engine: e},
+		// What a run given repositories pushed to the code host is read from
+		// its push rows when it is collected — see runpushes.go.
+		Pushes: e.codeRunPushes(),
 		// The per-run tool bridge dies with the run — see
 		// [sandbox.CoordinatorOptions.Ended]. Idempotent, and reached
 		// from every settle path, so a run that failed before it ever

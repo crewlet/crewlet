@@ -56,7 +56,8 @@ func TestALaunchIsStampedWithTheLeaseItsSeatIsHeldUnder(t *testing.T) {
 	// AND A LAUNCH THAT FAILS ENDS ITS ROW UNDER IT, rather than unfenced.
 	fenced := &finishFences{PendingStore: rig.pending}
 	c, err := NewCoordinator(CoordinatorOptions{
-		Queue: rig.queue, Pending: fenced, Manager: rig.manager,
+		Pushes: &pushSpy{},
+		Queue:  rig.queue, Pending: fenced, Manager: rig.manager,
 		Resume: &resumeSpy{}, Audience: &audienceSpy{},
 		Lease: leased(rigLease),
 	})
@@ -595,7 +596,8 @@ func launchWithoutBrief() LaunchRequest {
 func (r *waiterRig) launchVia(ctx context.Context, m *Manager, req LaunchRequest) (LaunchResult, error) {
 	r.t.Helper()
 	c, err := NewCoordinator(CoordinatorOptions{
-		Queue: r.queue, Pending: r.pending, Manager: m,
+		Pushes: &pushSpy{},
+		Queue:  r.queue, Pending: r.pending, Manager: m,
 		Resume: &resumeSpy{}, Audience: &audienceSpy{},
 		Lease: leased(rigLease),
 	})

@@ -108,7 +108,7 @@ func TestADeliveredRefIsRedactedBeforeItIsRecorded(t *testing.T) {
 	rec := runPhase(PendingRun{}, LaunchRecord{}, got, time.Now())
 	for where, refs := range map[string][]string{
 		"the result": got.DeliveredRefs, "the record": rec.DeliveredRefs,
-		"the resumed text": {resumeText(got)},
+		"the resumed text": {resumeText(PendingRun{}, got)},
 	} {
 		if strings.Contains(strings.Join(refs, " "), secret) {
 			t.Errorf("a credential survived in %s: %q", where, refs)
@@ -150,7 +150,7 @@ func TestDeliveredRefsAreDedupedAndBoundedWithTheRestCounted(t *testing.T) {
 			len(got.DeliveredRefs), got.DeliveredRefsElided)
 	}
 
-	text := resumeText(got)
+	text := resumeText(PendingRun{}, got)
 	if !strings.Contains(text, fmt.Sprintf("(and %d more its report names", got.DeliveredRefsElided)) {
 		t.Errorf("the resumed executor is not told the list is short: %.300q", text)
 	}
@@ -174,12 +174,14 @@ func TestTheResumedExecutorIsToldOfRefsTheRecordListsNoneOf(t *testing.T) {
 		t.Fatalf("listed %d and counted %d more; want none listed and the one ref counted",
 			len(got.DeliveredRefs), got.DeliveredRefsElided)
 	}
-	if text := resumeText(got); !strings.Contains(text, "Delivered: 1 ref(s) its report names, not listed here") {
+	text := resumeText(PendingRun{}, got)
+	if !strings.Contains(text, "Delivered: 1 ref(s) its report names, not listed here") {
 		t.Errorf("the resumed executor is not told of the ref it is not shown: %q", text)
 	}
 
 	// A run that named no ref is told of none.
-	if text := resumeText(Result{Success: true, Text: "Outcome: succeeded"}); strings.Contains(text, "Delivered:") {
+	text = resumeText(PendingRun{}, Result{Success: true, Text: "Outcome: succeeded"})
+	if strings.Contains(text, "Delivered:") {
 		t.Errorf("a run that named no ref is told of one: %q", text)
 	}
 }
@@ -224,7 +226,7 @@ func TestADeliveredRefThatIsNotUTF8IsCountedNeverListed(t *testing.T) {
 
 	// And the resumed executor is told the list is short, not handed a ref
 	// nobody delivered.
-	if text := resumeText(got); !utf8.ValidString(text) ||
+	if text := resumeText(PendingRun{}, got); !utf8.ValidString(text) ||
 		!strings.Contains(text, "Delivered: wip/t1, https://h/a/b/pull/1\uFFFD (and 3 more its report names") {
 		t.Errorf("the resumed executor reads %q", text)
 	}
@@ -233,7 +235,7 @@ func TestADeliveredRefThatIsNotUTF8IsCountedNeverListed(t *testing.T) {
 	// it delivered one.
 	alone := (&Coordinator{}).fitResult(t.Context(), PendingRun{},
 		Result{Success: true, DeliveredRefs: []string{"https://h/a/b/pull/1\xff"}})
-	if text := resumeText(alone); len(alone.DeliveredRefs) != 0 || alone.DeliveredRefsElided != 1 ||
+	if text := resumeText(PendingRun{}, alone); len(alone.DeliveredRefs) != 0 || alone.DeliveredRefsElided != 1 ||
 		!strings.Contains(text, "Delivered: 1 ref(s) its report names, not listed here") {
 		t.Errorf("a run whose only ref is not UTF-8: listed %q, counted %d, the executor reads %q",
 			alone.DeliveredRefs, alone.DeliveredRefsElided, text)
@@ -263,12 +265,26 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 		refs = append(refs, fmt.Sprintf("https://github.com/acme/api/pull/%d?x=%s", i, strings.Repeat("<", 400)))
 	}
 	question := strings.Repeat("\x01\n", MaxQuestionBytes)
+	// THE PUSH RECORD AT ITS WORST, which is one of two: every ref the record
+	// can list is a name of `<` — each six bytes on the wire — beside its two
+	// whole object ids, the refs the run's own lines leave nothing of; or the
+	// record unread, the reason for it past the bound an error is held to.
+	pushed := make([]PushedRef, MaxPushedRefs)
+	for i := range pushed {
+		pushed[i] = PushedRef{Repo: "web", Ref: fmt.Sprintf("refs/heads/%d/%s", i, strings.Repeat("<", 230)),
+			Old: strings.Repeat("1", 40), New: strings.Repeat("2", 40), Pushes: 1 << 30}
+	}
+	unread := strings.Repeat("<", 1<<20)
 	c := &Coordinator{condense: &fakeCondenser{answer: func(RunPart, string, int) (string, error) {
 		return "", errors.New("no model")
 	}}}
 	for name, result := range map[string]Result{
 		"a failed run":    {Text: twice, Error: failure, Transcript: twice, DeliveredRefs: refs},
 		"a run that asks": {Text: twice, Transcript: twice, DeliveredRefs: refs, NeedsInput: true, Question: question},
+		"a run that pushed": {Text: twice, Error: failure, Transcript: twice, Pushed: pushed,
+			PushedElided: 1 << 30},
+		"a run whose pushes are unknown": {Text: twice, Error: failure, Transcript: twice,
+			DeliveredRefs: refs, PushedUnread: unread},
 	} {
 		fitted := c.fitResult(t.Context(), PendingRun{}, result)
 		raw, err := json.Marshal(runPhase(PendingRun{}, LaunchRecord{}, fitted, time.Now()))

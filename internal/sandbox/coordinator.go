@@ -148,6 +148,14 @@ type ResumeRequest struct {
 	// phase's record to say so too.
 	DeliveredRefsElided int
 
+	// Pushed, PushedElided and PushedUnread are what the push record says
+	// the run moved on the engine's own code host ([Result.Pushed]), for the
+	// resumed phase's record beside the refs above. Empty, like them, when a
+	// person's answer resumes a parked clarification: no run was collected.
+	Pushed       []PushedRef
+	PushedElided int
+	PushedUnread string
+
 	// InputTokens and OutputTokens are what the job this resume collected
 	// cost, for the resumed segment's charge to the turn's work item
 	// (ADR-0022): that segment is the job's, so it pays for it.
@@ -421,6 +429,15 @@ type CoordinatorOptions struct {
 	// it left out.
 	Condense Condenser
 
+	// Pushes reads what a collected run pushed to the engine's own code host
+	// ([RunPushes]). Required, for the reason Resume is: a coordinator built
+	// without it would hand every run given a repository back to its
+	// executor saying nothing of its pushes — the silence the executor reads
+	// as "nothing pushed". On a node that serves no code host it answers an
+	// error, which the collection SAYS ([Result.PushedUnread]); and it is
+	// asked only for a run that may push there ([Pushable]).
+	Pushes RunPushes
+
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
 }
@@ -469,9 +486,11 @@ type Coordinator struct {
 	// audience is [CoordinatorOptions.Audience].
 	audience AudienceResolver
 	condense Condenser
-	ended    func(runID string)
-	stopped  func(ctx context.Context, handle, turnID string)
-	now      func() time.Time
+	// pushes is [CoordinatorOptions.Pushes].
+	pushes  RunPushes
+	ended   func(runID string)
+	stopped func(ctx context.Context, handle, turnID string)
+	now     func() time.Time
 
 	// mu guards runs, the two seat-level answers the inbox screening reads
 	// on every delivery, and attempts beside them.
@@ -583,6 +602,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		{"Manager", opts.Manager == nil},
 		{"Resume", opts.Resume == nil},
 		{"Audience", opts.Audience == nil},
+		{"Pushes", opts.Pushes == nil},
 	} {
 		if field.absent {
 			missing = append(missing, "CoordinatorOptions."+field.name)
@@ -590,14 +610,15 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("sandbox: a coordinator needs %s: a detached run is "+
-			"published, recorded, reconnected to, resumed and put to its "+
-			"answerers through them",
+			"published, recorded, reconnected to, resumed, put to its "+
+			"answerers and told what it pushed through them",
 			strings.Join(missing, ", "))
 	}
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
 		resume: opts.Resume, account: opts.Account, audience: opts.Audience,
 		condense:  opts.Condense,
+		pushes:    opts.Pushes,
 		ended:     opts.Ended,
 		stopped:   opts.Stopped,
 		now:       opts.Now,
@@ -941,8 +962,9 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	// survives the handoffs which reset it. Every
 	// disposition that returns an error is the retry, and every one that
 	// does not is an ending.
-	_, err = c.resumeAndSettle(ctx, run, resumeText(result), result.Success, trigger, runOutcome{
+	_, err = c.resumeAndSettle(ctx, run, resumeText(run, result), result.Success, trigger, runOutcome{
 		DeliveredRefs: result.DeliveredRefs, DeliveredRefsElided: result.DeliveredRefsElided,
+		Pushed: result.Pushed, PushedElided: result.PushedElided, PushedUnread: result.PushedUnread,
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
 		Engine: run.Launch.Bridged.Plus(EngineSpend{Aux: result.Condensed}),
 	})
@@ -1044,8 +1066,13 @@ type runOutcome struct {
 	// DeliveredRefsElided is how many more the run reported than its
 	// record lists — see [Result.DeliveredRefsElided].
 	DeliveredRefsElided int
-	InputTokens         int
-	OutputTokens        int
+	// Pushed, PushedElided and PushedUnread are what the push record says
+	// the run moved — see [Result.Pushed].
+	Pushed       []PushedRef
+	PushedElided int
+	PushedUnread string
+	InputTokens  int
+	OutputTokens int
 	// Engine is what the engine spent on the job between segments — see
 	// [ResumeRequest.Engine].
 	Engine EngineSpend
@@ -1081,6 +1108,9 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 			"detail", "the coding run reported a negative token count or cost; it "+
 				"is read as nothing spent rather than subtracted from the seat's budget")
 	}
+	if result, err = c.readPushes(ctx, run, result); err != nil {
+		return Result{}, err
+	}
 	// HELD TO THE RECORD'S BOUND here, where every collected result enters,
 	// so the phase record, the park and the resumed executor carry one text.
 	result = c.fitResult(ctx, run, result)
@@ -1096,6 +1126,51 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 		log.WarnContext(ctx, "sandbox_pause_record_failed", "turn_id", run.TurnID, "error", err.Error(),
 			"detail", "the pause instant was not recorded; a run that parks on a question is "+
 				"expired from its park instead, and one that resumes settles its own box")
+	}
+	return result, nil
+}
+
+// readPushes sets what a collected run pushed to the engine's own code host on
+// its result, from the push record ([RunPushes]) — for a run given a
+// repository there to push to, and for no other: a run given only repositories
+// to read pushed none, which its grants say without a read.
+//
+// THE THREE FIELDS ARE THE COORDINATOR'S, cleared before anything is read: a
+// runner that set them would be handing the executor its own account of the
+// pushes under the record's name.
+//
+// A RECORD THAT CANNOT BE READ DOES NOT FAIL THE COLLECTION. The run's own
+// result is the main thing collected, and a collection retried until the code
+// host answers would hold a finished run's seat — and its box — for as long as
+// the code host is down; the read's failure is SAID instead
+// ([Result.PushedUnread]), which the executor is told is not "none". A retry
+// after a failed resume collects again and so reads again: the text a resume
+// carries is never older than its own collection.
+//
+// EXCEPT A READ THIS NODE ITSELF CANCELLED, which is the collection
+// interrupted ([Coordinator.collectFailed]): a drain or a moving seat says
+// nothing about the record, and said it would leave the run's phase record —
+// published once — calling its pushes unknown for good.
+func (c *Coordinator) readPushes(ctx context.Context, run PendingRun, result Result) (Result, error) {
+	result.Pushed, result.PushedElided, result.PushedUnread = nil, 0, ""
+	if len(Pushable(run.Repos)) == 0 {
+		return result, nil
+	}
+	pushed, more, err := c.pushes.Pushed(ctx, run)
+	switch {
+	case err != nil && errors.Is(ctx.Err(), context.Canceled):
+		return Result{}, fmt.Errorf("sandbox: reading what run %s pushed: %w", run.TurnID, err)
+	case err != nil:
+		// Redacted and bounded where every collected result is
+		// ([Coordinator.fitResult]): the reason rides the run's phase record
+		// and the resumed executor's text.
+		result.PushedUnread = err.Error()
+		log.WarnContext(ctx, "sandbox_pushes_unread", "turn_id", run.TurnID, "launch_id", run.LaunchID,
+			"error", err.Error(),
+			"detail", "what the run pushed to the code host could not be read; the run resumes "+
+				"saying its pushes are unknown, never that it pushed nothing")
+	default:
+		result.Pushed, result.PushedElided = pushed, more
 	}
 	return result, nil
 }
@@ -1249,7 +1324,14 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		// How many more it reported than the record lists, said rather
 		// than dropped — see [Result.DeliveredRefsElided].
 		DeliveredRefsElided: result.DeliveredRefsElided,
-		ConversationKey:     run.ConversationKey,
+		// AND WHAT ITS PUSH RECORD SAYS IT PUSHED, on the run's own record
+		// as its own lines are: a run that parks on a question is resumed by
+		// an answer, which collects nothing, so the pushes of the job that
+		// asked are on this record or on none — see [Result.Pushed].
+		PushedRefs:       PushedRecords(result.Pushed),
+		PushedRefsElided: result.PushedElided,
+		PushedRefsUnread: result.PushedUnread,
+		ConversationKey:  run.ConversationKey,
 	}
 	rec.StartedAt = facts.StartedAt.UTC()
 	if took := collected.Sub(facts.StartedAt); took > 0 {
@@ -1963,6 +2045,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	if err := c.resume.Resume(ctx, ResumeRequest{
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
 		DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
+		Pushed: outcome.Pushed, PushedElided: outcome.PushedElided, PushedUnread: outcome.PushedUnread,
 		InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
 		Engine: outcome.Engine, Begin: begin,
 	}); err != nil {
@@ -3647,10 +3730,15 @@ func fenceOf(run PendingRun) Fence {
 // resumeText is the run_sandbox reply spliced into the resumed Execute loop.
 //
 // It carries the coding agent's findings — reported text plus delivered refs,
+// and what the push record says the run pushed to the engine's own code host,
 // or the error — framed so the executor CONTINUES the task rather than redoing
 // it. Secret-redacted, because it becomes a tool message published as a phase
 // record.
-func resumeText(result Result) string {
+//
+// IT TAKES THE RUN, because whether it says the run pushed "nothing" turns on
+// what the run was given ([pushedText]) — its repositories are the row's,
+// never the result's.
+func resumeText(run PendingRun, result Result) string {
 	status := "did NOT fully succeed"
 	if result.Success {
 		status = "succeeded"
@@ -3676,6 +3764,9 @@ func resumeText(result Result) string {
 		// below names what it did.
 		lines = append(lines, fmt.Sprintf("Delivered: %d ref(s) its report names, not listed here",
 			result.DeliveredRefsElided))
+	}
+	if pushed := pushedText(run, result); pushed != "" {
+		lines = append(lines, pushed)
 	}
 	switch {
 	case result.Text != "":
@@ -3706,6 +3797,9 @@ func resumeText(result Result) string {
 // torn down the moment it blocked under a zero TTL — so the next call
 // provisions a fresh one: git is the durable state, and the brief has to say
 // so or the coding agent starts by looking for a working tree that is gone.
+// A run given repositories on the engine's own code host is told the call
+// that gives them back — each on the branch it pushed to ([recloneText]) —
+// since a fresh box holds only what a call gives it.
 //
 // BY names who answered where the route knows it — an answer by turn carries
 // the person, while a chat reply's sender is already in the conversation the
@@ -3725,13 +3819,34 @@ func answerText(run PendingRun, answer, by string) string {
 	if run.Branch != "" {
 		lines = append(lines, "\nWork-in-progress is on git branch: "+run.Branch)
 	}
-	if run.SandboxID != "" {
+	switch {
+	case run.SandboxID != "":
 		lines = append(lines, "\nThe sandbox is still up with that work-in-progress. Continue the "+
 			"task: call run_sandbox again with a brief that incorporates this "+
 			"answer so the coding agent finishes the work (it reuses the same "+
 			"checkout). When it's done, report the outcome to the requester on "+
 			"the channel this came from.")
-	} else {
+	case len(run.Repos) > 0:
+		// THE RUN'S OWN REPOSITORIES, each on the branch it worked on: the
+		// fresh box is given them by the call, and cloned there each holds
+		// what the run pushed. The ask's branch keeps its own clause where
+		// it is not one of them — a repository on another host, or another
+		// branch it pushed its work to.
+		tells := "re-read the code there"
+		if run.Branch != "" && !slices.ContainsFunc(run.Repos, func(r RunRepo) bool { return r.Branch == run.Branch }) {
+			tells = "also check out the existing branch `" + run.Branch + "` it pushed its " +
+				"work-in-progress to, re-read the code"
+		}
+		lines = append(lines, "\nThat sandbox has since been reclaimed, so the next run starts on "+
+			"a FRESH machine — the earlier working tree and the coding agent's "+
+			"memory of it are gone, but what it pushed is on its branches. "+
+			"Continue the task: call run_sandbox again with `repos` set to "+
+			recloneText(run.Repos)+" — each repository cloned on the branch this "+
+			"run worked on, so its pushed work is there — and a brief that tells "+
+			"it to "+tells+" and finish the work with this answer incorporated. "+
+			"When it's done, report the outcome to the requester on the channel "+
+			"this came from.")
+	default:
 		branch := "check out the work-in-progress branch it pushed earlier"
 		if run.Branch != "" {
 			branch = "check out the existing branch `" + run.Branch + "`"

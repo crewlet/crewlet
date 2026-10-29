@@ -268,6 +268,15 @@ type RunRecord struct {
 	// which the coordinator bounds — said on the record rather than dropped.
 	RefsElided int
 
+	// Pushed is what the run's push record says it moved on the engine's own
+	// code host, PushedElided how many more refs that record names than
+	// Pushed lists, and PushedUnread why it could not be read — the
+	// engine's account beside the run's own refs above
+	// ([types.AgentPhaseCompleted.PushedRefs]).
+	Pushed       []types.PushedRefRecord
+	PushedElided int
+	PushedUnread string
+
 	// LaunchID is the job this resume collected — the pending-run row's
 	// [sandbox.PendingRun.LaunchID] when the claim took it. A turn can launch
 	// more than once, so it is what tells one collected run's record from

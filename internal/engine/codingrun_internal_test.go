@@ -46,6 +46,7 @@ func codeWorkRig(t *testing.T, c *Company) (*Engine, map[string]*sandbox.FakeRun
 	pending := sandbox.NewCoordStore(coordmemory.NewFleet())
 	e := &Engine{backends: &Backends{Queue: q}}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Audience: noAudience{},
 		Queue:    q, Pending: pending, Manager: manager, Resume: &resumer{engine: e},
 	})

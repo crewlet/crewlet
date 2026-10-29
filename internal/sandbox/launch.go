@@ -420,6 +420,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Limits:     Limits{MaxTurns: req.Spec.MaxTurns},
 		Model:      req.Model,
 		MCPServers: req.MCPServers,
+		// THE REPOSITORIES WHOSE PUSHES ARE REPORTED FOR THE RUN, which its
+		// report is told not to name again ([RunRequest.ReportedRepos]).
+		ReportedRepos: repoNames(Pushable(req.Spec.Repos)),
 	})
 	if err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())

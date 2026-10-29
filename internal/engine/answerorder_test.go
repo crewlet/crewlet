@@ -268,6 +268,7 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 	resumer := &answerResumer{store: store}
 	clock := &handCranked{}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Audience: noAudience{}, Queue: q, Pending: store, Manager: manager,
 		Resume: resumer, Hold: inboxHold{q: q}, After: clock.after,
 		// THE SEAT HELD UNDER THE LEASE IT IS RECOVERED WITH BELOW, as a

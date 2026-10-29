@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -30,14 +31,21 @@ import (
 //
 // THE WHOLE RECORD FITS, and this is its arithmetic. The record's variable
 // text is the report, the failure detail and the transcript (each at most
-// this), the question in its notes ([MaxQuestionBytes]) and the delivered
-// refs ([MaxDeliveredRefBytes]); everything else on it is identifiers and
-// counts, a few KiB. JSON can grow text six-fold — a control byte becomes
-// \u00XX, `<`, `>` and `&` become \u003c and its kin, an invalid byte becomes
-// \ufffd — so the worst case is (3 × 256 + 16 + 16) KiB × 6, about 4.7 MiB,
-// with the ceiling's other 3 MiB to spare. A field added to the record that
-// carries text a box wrote needs its own bound and a line here, or this
-// promise is no longer one.
+// this), the question in its notes ([MaxQuestionBytes]), the delivered refs
+// and the refs the run's push record names, together ([MaxDeliveredRefBytes],
+// a pushed ref counted by the line it renders to), and the reason that record
+// could not be read where it could not
+// ([github.com/crewlet/crewlet/internal/events.MaxDiagnosticBytes]);
+// everything else on it is identifiers and counts, a few KiB — and, beside
+// each pushed ref's names, its two whole object ids and its keys, about 140
+// bytes for each of at most [MaxPushedRefs], which a record carries only where
+// the reason is absent and which come to less than the reason's own worst.
+// JSON can grow text six-fold — a control byte becomes \u00XX, `<`, `>` and
+// `&` become \u003c and its kin, an invalid byte becomes \ufffd — so the worst
+// case is (3 × 256 + 16 + 16 + 64) KiB × 6, about 5.1 MiB, with the ceiling's
+// other 2.9 MiB to spare. A field added to the record that carries text a box
+// wrote needs its own bound and a line here, or this promise is no longer
+// one.
 //
 // WHAT HAPPENS PAST IT DEPENDS ON WHO READS THE PIECE. The report and the
 // failure detail are what the resumed executor acts on — what to tell the
@@ -331,7 +339,8 @@ type Condenser interface {
 // [runPhase]). Bounded in a runner, a runner that forgot the bound would
 // publish an unbounded transcript, and the record carrying the run's only
 // spend would be refused whole. And THE BRANCH a question was asked with, for
-// the run's row rather than its record ([fitBranch]).
+// the run's row rather than its record ([fitBranch]); and THE REFS, the run's
+// own and those its push record names, to one budget ([boundPushed]).
 func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Result) Result {
 	// THIS COLLECTION'S OWN, counted from nothing: the field is the
 	// coordinator's, and a runner that set it would be charging the turn
@@ -349,6 +358,17 @@ func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Resu
 	result.Transcript, result.TranscriptElidedLines, result.TranscriptElidedBytes =
 		boundTranscript(result.Transcript)
 	result.DeliveredRefs, result.DeliveredRefsElided = boundRefs(result.DeliveredRefs)
+	// ONE BUDGET FOR THE RUN'S REFS: what the push record says it pushed
+	// has what its own lines leave of it ([boundPushed]).
+	left := MaxDeliveredRefBytes
+	for _, ref := range result.DeliveredRefs {
+		left -= len(ref)
+	}
+	result.Pushed, result.PushedElided = boundPushed(result.Pushed, result.PushedElided, left)
+	// AND WHY THE PUSH RECORD WAS UNREAD, an error built from whatever the
+	// code host's answer said: redacted, and held to the one bound an
+	// error a record carries has.
+	result.PushedUnread = events.ClipDiagnostic(redact.Secrets(result.PushedUnread))
 	return result
 }
 

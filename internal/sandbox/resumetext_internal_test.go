@@ -11,7 +11,7 @@ import (
 // succeed" with the reason dropped whenever a report existed.
 func TestTheResumedExecutorIsToldWhyARunDidNotSucceed(t *testing.T) {
 	t.Parallel()
-	failed := resumeText(Result{
+	failed := resumeText(PendingRun{}, Result{
 		Text:  "Outcome: partial — the migration is written, the tests were not run",
 		Error: "the coding agent exited with status 137",
 	})
@@ -22,19 +22,19 @@ func TestTheResumedExecutorIsToldWhyARunDidNotSucceed(t *testing.T) {
 	}
 
 	// Said once: a reason that IS the report is not repeated as its own why.
-	same := resumeText(Result{Text: "ran out of turns", Error: "ran out of turns"})
+	same := resumeText(PendingRun{}, Result{Text: "ran out of turns", Error: "ran out of turns"})
 	if strings.Count(same, "ran out of turns") != 1 {
 		t.Errorf("a reason equal to the report was repeated:\n%s", same)
 	}
 
 	// A success carries no why, whatever an earlier stage left in Error.
-	ok := resumeText(Result{Success: true, Text: "Outcome: succeeded", Error: "a warning"})
+	ok := resumeText(PendingRun{}, Result{Success: true, Text: "Outcome: succeeded", Error: "a warning"})
 	if strings.Contains(ok, "Why it did not succeed") {
 		t.Errorf("a successful run was given a reason it failed:\n%s", ok)
 	}
 
 	// And a run with no report says its error, as it always did.
-	bare := resumeText(Result{Error: "the coding agent produced no output"})
+	bare := resumeText(PendingRun{}, Result{Error: "the coding agent produced no output"})
 	if !strings.Contains(bare, "Error: the coding agent produced no output") {
 		t.Errorf("a run with only an error reads:\n%s", bare)
 	}

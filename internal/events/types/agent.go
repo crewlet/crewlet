@@ -811,6 +811,21 @@ type AgentPhaseCompleted struct {
 	// JSON, which would replace its bytes and list another ref in its place.
 	// Zero on a record that lists them all.
 	DeliveredRefsElided int `json:"delivered_refs_elided,omitempty"`
+	// PushedRefs are the refs a coding run moved on the engine's own code
+	// host, as its push record says — the code host's rows written under the
+	// run's launch, read when the run was collected, one entry per ref with
+	// the old value of its first push and the new value of its last — on the
+	// `sandbox` record and the resumed executor's, as DeliveredRefs are. The
+	// engine's account where DeliveredRefs are the run's own: a box writes
+	// its report as it likes, and nothing in the box writes these.
+	// PushedRefsElided is how many more the record names than are listed,
+	// held with the run's own refs to one bound; PushedRefsUnread is why the
+	// record could not be read, which makes an empty PushedRefs unknown
+	// rather than "nothing pushed". All three absent on a run given no
+	// repository it could push to.
+	PushedRefs       []PushedRefRecord `json:"pushed_refs,omitempty"`
+	PushedRefsElided int               `json:"pushed_refs_elided,omitempty"`
+	PushedRefsUnread string            `json:"pushed_refs_unread,omitempty"`
 	// ActivityTranscript is a coding run's own account of what it did —
 	// what it said, its tool calls and what they ran, or its stderr where
 	// the CLI streams nothing better — on the PhaseSandbox record only.
@@ -851,6 +866,19 @@ type AgentPhaseCompleted struct {
 
 // EventType is the "agent_phase_completed" wire type.
 func (AgentPhaseCompleted) EventType() string { return "agent_phase_completed" }
+
+// PushedRefRecord is one ref a coding run moved on the engine's own code host,
+// as [AgentPhaseCompleted.PushedRefs] lists it: the repository by the name the
+// run was given it under, the ref, the old value of the run's first push of it
+// and the new value of its last — the zero object id where the run created it
+// or deleted it — and how many of the run's pushes moved it.
+type PushedRefRecord struct {
+	Repo   string `json:"repo"`
+	Ref    string `json:"ref"`
+	Old    string `json:"old"`
+	New    string `json:"new"`
+	Pushes int    `json:"pushes"`
+}
 
 // Role is the seat the phase ran for — including for a judge or auxiliary
 // phase, which is nested work done on that seat's behalf.

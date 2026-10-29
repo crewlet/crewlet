@@ -75,6 +75,15 @@
 // on the row and on every announcement of what became of the answer, never as a
 // seat beside an actor.
 //
+// WHAT A RUN PUSHED TO THE ENGINE'S OWN CODE HOST is the push record's
+// account, never the run's: a collection of a run given a repository there to
+// push to reads the rows the code host wrote under its launch ([RunPushes],
+// [Result.Pushed]) and hands the executor what each ref became, and the run is
+// told its report need not name them. A record that cannot be read is SAID to
+// be unknown rather than retried — a collection held until the code host
+// answers holds a finished run's seat for as long as the host is down — and
+// never left out, since silence reads as "nothing pushed".
+//
 // See docs/concepts/code-sandbox.md.
 package sandbox
 
@@ -460,6 +469,23 @@ type Result struct {
 	// by the coordinator.
 	DeliveredRefsElided int
 
+	// Pushed are the refs the run moved on the engine's own code host, read
+	// from the push rows the code host wrote under its launch ([RunPushes]):
+	// each repository the run was given to push to in turn, its refs in the
+	// order the run first pushed them, held with the run's own refs to
+	// [MaxDeliveredRefBytes] ([boundPushed]). PushedElided is how many more
+	// the push record names than Pushed lists. PushedUnread is why the
+	// record could not be read — set, the run's pushes are UNKNOWN, and an
+	// empty Pushed beside it never means "none".
+	//
+	// The ENGINE'S account of the run's delivery there, which the run's own
+	// `Delivered:` lines are not: a box writes those as it likes. Set by the
+	// coordinator, never by a runner — whatever a runner put here is
+	// replaced at the collection, which reads the record itself.
+	Pushed       []PushedRef
+	PushedElided int
+	PushedUnread string
+
 	Error string
 
 	// Transcript is the agent's activity log — what it said, each tool it
@@ -789,6 +815,14 @@ type RunRequest struct {
 	// and an allowlist the engine could not enforce would be a claim rather
 	// than a control.
 	MCPServers map[string]MCPServer
+
+	// ReportedRepos are the repositories on the engine's own code host this
+	// run may push to ([Pushable]), by the names it was given them under.
+	// What it pushes there the engine reads from the push record and reports
+	// for it ([Result.Pushed]), so a runner tells its agent to write a
+	// `Delivered:` line only for what it delivered somewhere else: a line
+	// for a push the record already names is the same delivery said twice.
+	ReportedRepos []string
 }
 
 // Run is the inline shape: start, wait, collect.

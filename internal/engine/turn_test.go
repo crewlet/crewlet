@@ -2712,6 +2712,7 @@ func unreadableAnswerLookup(t *testing.T, awaiting bool) *sandbox.Coordinator {
 		t.Fatalf("NewManager: %v", err)
 	}
 	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Pushes:   noPushes{},
 		Audience: noAudience{},
 		Queue:    discardPublisher{}, Pending: blindLookupStore{PendingStore: store, blind: blind}, Manager: manager,
 		// A RESUMER THAT PANICS, because these cases never reach one:
@@ -2796,6 +2797,14 @@ type noAudience struct{}
 
 func (noAudience) ResolveAudience(sandbox.PendingRun, string) sandbox.Audience {
 	return sandbox.Audience{}
+}
+
+// noPushes reads every run as having pushed nothing: these coordinators run no
+// repository on the code host (runpushes_internal_test.go reads the record).
+type noPushes struct{}
+
+func (noPushes) Pushed(context.Context, sandbox.PendingRun) ([]sandbox.PushedRef, int, error) {
+	return nil, 0, nil
 }
 
 // answerGiven is an operator's answer by turn, as it arrives on a seat's inbox.

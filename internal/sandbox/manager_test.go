@@ -120,8 +120,9 @@ func TestAReloadKeepsTheBoxesAlreadyOnADroppedCellReachable(t *testing.T) {
 		DefaultPlacement: Direct,
 	})
 	coordinator, err := NewCoordinator(CoordinatorOptions{
-		Lease: leased(rigLease),
-		Queue: &recorder{}, Pending: NewCoordStore(memory.NewFleet()),
+		Pushes: &pushSpy{},
+		Lease:  leased(rigLease),
+		Queue:  &recorder{}, Pending: NewCoordStore(memory.NewFleet()),
 		Manager: both, Resume: resumeNothing{}, Audience: &audienceSpy{},
 	})
 	if err != nil {
