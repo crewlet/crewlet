@@ -76,12 +76,11 @@ export interface ModelWaiting {
   since: string;
 }
 
+/** A model's calls and tokens over its window. The dashboard draws tokens and never money (dashboard-design rule 19), so no price field is read. */
 export interface ModelUsage {
   days: number;
   calls: number;
   total_tokens: number;
-  cost_usd: number;
-  priced_calls: number;
 }
 
 /**

@@ -37,16 +37,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { usePageMenu } from "~/app/Shell.tsx";
 import { DEFAULT_CLI_MAX_CONCURRENT, DEFAULT_CLI_TIMEOUT_SECONDS } from "~/contract/models.ts";
-import {
-  fmtClock,
-  fmtCount,
-  fmtDate,
-  fmtExact,
-  fmtUsd,
-  listed,
-  plural,
-  relTime,
-} from "~/lib/format.ts";
+import { fmtClock, fmtCount, fmtDate, fmtExact, listed, plural, relTime } from "~/lib/format.ts";
 import {
   CATEGORY_JOBS,
   CATEGORY_ORDER,
@@ -540,7 +531,6 @@ function TestCard({ model, open }: { model: ModelView; open: Open }) {
 
 function UsageCard({ model }: { model: ModelView }) {
   const usage = model.admin!.usage;
-  const unpriced = usage.calls - usage.priced_calls;
   return (
     <Card padding="none">
       <Card.Header icon={<ChartColumnGlyph size="sm" />}>
@@ -557,12 +547,6 @@ function UsageCard({ model }: { model: ModelView }) {
             items={[
               ["Calls", fmtExact(usage.calls)],
               ["Tokens", fmtCount(usage.total_tokens)],
-              [
-                "Cost",
-                usage.priced_calls === 0
-                  ? "Not priced"
-                  : `${fmtUsd(usage.cost_usd)}${unpriced > 0 ? `, ${plural(unpriced, "call")} not priced` : ""}`,
-              ],
             ]}
           />
         )}

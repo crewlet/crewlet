@@ -3,8 +3,8 @@
  * figures, what is wrong with them (the engine's alarms), then every model
  * with its condition, its sign-in and who runs on it.
  *
- * A member reads the same list without the sign-in, the spend or the actions
- * (`llm_entries`' member reading names no credential and no cost), so the one
+ * A member reads the same list without the sign-in, the tokens or the actions
+ * (`llm_entries`' member reading names no credential and no usage), so the one
  * page answers "why is my seat waiting" for everybody.
  *
  * STATUS IS HEALTH ALONE (design QA M14). Whether a model is in use is Used
@@ -35,7 +35,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtUsd, listed, plural } from "~/lib/format.ts";
+import { fmtCount, listed, plural } from "~/lib/format.ts";
 import { CATEGORY_JOBS, CATEGORY_ORDER, SEAT_JOBS, everythingSeats } from "~/lib/modelUses.ts";
 import type { Seat } from "~/lib/seats.ts";
 import { Alarms } from "./Alarms.tsx";
@@ -44,8 +44,6 @@ import type { ModelsData, ModelView } from "./data.ts";
 import { JobGlyph, type Job } from "./JobGlyph.tsx";
 import { EntryMenu, HealthLine, SignInLine, type OnFlow } from "./parts.tsx";
 import { ASSISTANT_USE, CATEGORY_WORDS, EVERYTHING } from "./words.ts";
-
-/** A spend in dollars, to the cent: the figure an invoice shows. */
 
 /** One use of a model in Used by: the job, its words, and the seats on it. */
 interface UseLine {
@@ -205,15 +203,9 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
   const usage = models.reduce(
     (sum, m) => {
       const u = m.admin?.usage;
-      return u
-        ? {
-            cost: sum.cost + u.cost_usd,
-            calls: sum.calls + u.calls,
-            priced: sum.priced + u.priced_calls,
-          }
-        : sum;
+      return u ? { tokens: sum.tokens + u.total_tokens, calls: sum.calls + u.calls } : sum;
     },
-    { cost: 0, calls: 0, priced: 0 },
+    { tokens: 0, calls: 0 },
   );
   const add = () => onFlow("add");
   const open = (key: string) => nav.to(["settings", "models", key]);
@@ -283,14 +275,10 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
             {admin ? (
               <StatCard
                 icon={<CoinsGlyph size="xs" />}
-                label="Spend, 7 days"
-                value={fmtUsd(usage.cost)}
+                label="Tokens, 7 days"
+                value={fmtCount(usage.tokens)}
                 sub={
-                  usage.calls === 0
-                    ? "no calls in 7 days"
-                    : usage.priced === usage.calls
-                      ? `${plural(usage.calls, "call")}, every one priced`
-                      : `priced calls only; ${plural(usage.calls - usage.priced, "call")} on a subscription`
+                  usage.calls === 0 ? "no calls in 7 days" : `over ${plural(usage.calls, "call")}`
                 }
               />
             ) : null}
