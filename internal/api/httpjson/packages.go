@@ -32,7 +32,7 @@ var goPackages = map[string]bool{
 	"eventfan": true, "eventfantest": true, "events": true, "execstate": true,
 	"extension": true, "externaltest": true, "fleetsecrets": true, "flock": true,
 	"foldername": true, "github": true, "gitlab": true, "gitproc": true,
-	"gitref": true, "gittest": true, "host": true, "hostbox": true,
+	"gitref": true, "gittest": true, "home": true, "host": true, "hostbox": true,
 	"httpjson": true, "httpx": true, "httpxtest": true, "iam": true,
 	"iamapi": true, "iamdomain": true, "inbox": true, "integration": true,
 	"integrationtest": true, "jetstream": true, "jetstreamtest": true,
