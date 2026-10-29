@@ -557,6 +557,8 @@ func holdingCall(name string) (map[string]any, bool) {
 		builtin.CodeDiffTool:      {"repo": repo, "base": mainOID, "head": featureOID},
 		builtin.CodeCompareTool:   {"repo": repo, "base": mainOID, "head": featureOID},
 		builtin.CodeLandedInTool:  {"repo": repo, "commit": featureOID, "target": "main"},
+		builtin.CodeLogTool:       {"repo": repo, "rev": mainOID, "path": "README.md"},
+		builtin.CodeBlameTool:     {"repo": repo, "rev": mainOID, "path": "README.md"},
 		builtin.CodeCommitFilesTool: {"repo": repo, "branch": "fix", "expected_head": mainOID,
 			"message": "m", "files": []any{map[string]any{"op": "delete", "path": "a"}}},
 		builtin.CodeRevertTool: {"repo": repo, "branch": "fix", "expected_head": mainOID,
