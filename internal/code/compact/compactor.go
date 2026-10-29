@@ -91,8 +91,9 @@ type Uploader interface {
 // and its published chain as the copy holds it for the plans, the charge a
 // publication is placed by, the repositories whose copy holds a layer this
 // node refused, each build's admission to the maintenance lane, the scratch it
-// writes into — a merge's leaning on a store of exactly the packs it merges,
-// linked from the incarnation, and a layer's linking the incarnation, either
+// writes into — a merge's, a compaction's or a publication's repack, leaning
+// on a store of exactly the packs it merges, linked from the incarnation, and
+// a layer's linking the incarnation and gathering its repack's outputs, either
 // way pinning it — and the adoption of what it built once its rows have
 // applied.
 type Cache interface {

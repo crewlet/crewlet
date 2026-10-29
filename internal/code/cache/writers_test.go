@@ -452,9 +452,10 @@ var cacheWriters = []writerRow{
 			"HEAD, config and alternates, a view's packed-refs linked from its incarnation, and a merge's store " +
 			"of exactly the packs it merges, their files linked from its incarnation; a publication's scratch " +
 			"(NewLayerScratch): its directories, HEAD and config, its incarnation's packed-refs, every pack file " +
-			"and the base layers' files HARD-LINKED — the same inodes, written by nothing here — and the two " +
-			"chain files naming exactly that base; and a request's spool (Spool), created there and unlinked " +
-			"at once, so it is no file of the cache's", nil},
+			"and the base layers' files HARD-LINKED — the same inodes, written by nothing here — the two chain " +
+			"files naming exactly that base, and its repack's outputs linked in from the merge's scratch they " +
+			"were built in (Gather); and a request's spool (Spool), created there and unlinked at once, so it " +
+			"is no file of the cache's", nil},
 	{"internal/code/cache/adopt.go", kindOS,
 		"the receiving node's own pack, once its row has applied: linked into tmp/ and from there into " +
 			"objects/pack, and its staging names removed; and a maintainer's own published layer, once its " +
@@ -497,9 +498,10 @@ var cacheWriters = []writerRow{
 	{"internal/code/compact/build.go", kindGit + " pack-objects",
 		"a compaction's build: ONE `pack-objects --stdin-packs` in the compaction's own SCRATCH " +
 			"(cache.NewMergeScratch), its inputs read through the scratch's one alternate — a store of exactly " +
-			"them, linked from the incarnation — and a publication's repack, in the publication's scratch of " +
-			"links (cache.NewLayerScratch); its outputs written into the scratch alone, never an incarnation, " +
-			"entering the cache only by Adopt, once their rows have applied", nil},
+			"them, linked from the incarnation — and a publication's repack, the same, in a merge's scratch of its " +
+			"own, its outputs then gathered into the publication's scratch of links (cache.Scratch.Gather); the " +
+			"outputs written into the scratch alone, never an incarnation, entering the cache only by Adopt, " +
+			"once their rows have applied", nil},
 	{"internal/code/compact/compactor.go", kindRuntime,
 		"runInSlot hands the build's one pack-objects Cmd — build.go's literal — to the admission's reserved " +
 			"slot (cache.Admission.Run), unchanged: a function value, so a suite can stand in a builder", nil},

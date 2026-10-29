@@ -70,14 +70,13 @@ type output struct {
 }
 
 // pack runs ONE pack-objects over p's inputs in the admission's reserved slot,
-// in the scratch sc — a compaction's, every input read through the scratch's
-// one alternate, a store holding EXACTLY the inputs, hard links of the packs
-// of the incarnation the plan was made over (cache.Cache.NewMergeScratch), so
-// the scratch holds no input; or a publication's, which holds links of the
-// incarnation's packs and names no alternate — so the build writes into
-// nothing but the scratch — cut at cut, and answers the checksums it printed,
-// one an output, in the order it wrote them: the order their ids are derived
-// in.
+// in the scratch sc — a merge's, a compaction's or a publication's repack —
+// every input read through the scratch's one alternate, a store holding
+// EXACTLY the inputs, hard links of the packs of the incarnation the plan was
+// made over (cache.Cache.NewMergeScratch), so the scratch holds no input and
+// the build writes into nothing but the scratch — cut at cut, and answers the
+// checksums it printed, one an output, in the order it wrote them: the order
+// their ids are derived in.
 //
 // NO EXCLUDED PACK: the inputs are listed and nothing is excluded with a `^`
 // line, so every object an input holds is in the outputs — an object it shares
@@ -85,10 +84,11 @@ type output struct {
 // because two compactions decided from different snapshots may each retire the
 // pack the other relied on (ADR-0060).
 //
-// AND NOTHING BUT THE INPUTS IN REACH, in a compaction's scratch: to fill in
-// the name hash its delta search sorts by, `--stdin-packs` walks from every
-// commit its inputs hold through every tree and blob it can reach, and only an
-// excluded pack stops it — so over the whole incarnation a roll of a few small
+// AND NOTHING BUT THE INPUTS IN REACH, for a compaction and a publication's
+// repack alike: to fill in the name hash its delta search sorts by,
+// `--stdin-packs` walks from every commit its inputs hold through every tree
+// and blob it can reach, and only an excluded pack stops it — so over the
+// whole incarnation, or a publication's scratch of links, a roll of a few small
 // packs walked the repository's history, its cost and its memory following
 // the history while its charge and its deadline follow the roll (measured at
 // review, about 3.5 µs an object of a 400 032-object history on the node pin,
@@ -140,29 +140,20 @@ func (c *Compactor) pack(ctx context.Context, adm *cache.Admission, sc *cache.Sc
 }
 
 // lay lays out every output the build printed, in the order it printed them,
-// under the compaction cid's derived ids: each output's sections' sizes from
-// its files and its object count from its index (code.LayBundle). The scratch
-// must hold exactly the packs the build printed beside before — the packs it
-// held before the build, none for a compaction's, the incarnation's links for
-// a publication's — so a pack it printed and did not write, one it wrote and
-// did not print, or one it printed that was there before, is a build no row
-// could describe.
-func lay(sc *cache.Scratch, cid string, printed []string, before map[string]bool) ([]output, error) {
+// under the compaction cid's derived ids — a compaction's, or the publication's
+// whose repack it is: each output's sections' sizes from its files and its
+// object count from its index (code.LayBundle). The scratch — a merge's, which
+// holds no pack of its own before its build — must hold exactly the packs the
+// build printed: a pack it printed and did not write, or one it wrote and did
+// not print, is a build no row could describe.
+func lay(sc *cache.Scratch, cid string, printed []string) ([]output, error) {
 	held, err := sc.Packs()
 	if err != nil {
 		return nil, err
 	}
-	var wrote []string
-	for _, p := range held {
-		if !before[p.Checksum] {
-			wrote = append(wrote, p.Checksum)
-		}
-	}
-	for _, cs := range printed {
-		if before[cs] {
-			return nil, fmt.Errorf("compact: pack-objects printed pack-%s, which the scratch held before the "+
-				"build: an output byte for byte one of the packs it read", cs)
-		}
+	wrote := make([]string, len(held))
+	for i, p := range held {
+		wrote[i] = p.Checksum
 	}
 	if want := slices.Sorted(slices.Values(printed)); !slices.Equal(want, wrote) {
 		return nil, fmt.Errorf("compact: pack-objects printed %v and wrote %v", printed, wrote)

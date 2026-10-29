@@ -234,7 +234,7 @@ func (c *Compactor) build(ctx context.Context, repoID string, s cache.Synced, ad
 	if err == nil {
 		// The scratch held no pack before the build: its inputs are read
 		// through its alternate.
-		outs, err = lay(sc, cid, printed, nil)
+		outs, err = lay(sc, cid, printed)
 	}
 	if err != nil {
 		sc.Remove()

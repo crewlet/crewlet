@@ -2299,7 +2299,9 @@ above it hold at least half its objects, and regardless while the chain would
 pass 32 layers — so the chain stays logarithmic in the history and each object
 is written into a new layer a logarithmic number of times over its life. Where
 more than 8 of the new layer's packs are not full, they are repacked first, as
-a merge is, under its caps. A layer whose files would pass 16 parts of 1 GiB
+a merge is, under its caps — over exactly those packs, in a scratch of their
+own, so the repack's cost follows what it merges and never the history beside
+it ([Compaction](#compaction)). A layer whose files would pass 16 parts of 1 GiB
 is refused before it is built (`layer_too_large`), and a plan that meets a
 layer the maintainer's own installer has not placed yet waits for it.
 

@@ -1,8 +1,10 @@
 package compact_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -439,6 +442,115 @@ func TestAPublicationUploadsItsPartsAndOutputsAtOnce(t *testing.T) {
 	}
 	if puts, _ := rs.stored(); len(puts) < 2 {
 		t.Errorf("the publication stored %d objects, want its layer's part and its output", len(puts))
+	}
+}
+
+// A PUBLICATION'S REPACK READS EXACTLY ITS INPUTS, THROUGH ITS ALTERNATE, as a
+// compaction's build does: it runs in a merge's scratch of its own, which
+// holds no pack before its pack-objects runs and whose one alternate is a
+// store holding exactly the packs the repack is handed — each one's .pack,
+// .idx and .rev the copy's own files, linked — and nothing else: never the
+// pack the base layer covers, here a push of two hundred files beside the
+// nine small packs the repack merges. Never in the layer's scratch, which
+// links every pack of the copy, so that there `--stdin-packs`, filling in its
+// name hashes, walked from the inputs' commits down the whole history. The
+// repack's outputs are gathered into the layer's scratch, the layer is
+// written over them, and the publication lands.
+//
+// Mutation: build the repack in the layer's scratch (Compactor.repack's
+// pack-objects run in sc, as it was), and the build's scratch holds every
+// pack of the copy and names no alternate.
+func TestAPublicationsRepackReadsExactlyItsInputs(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t)
+	// THE BASE: one push of two hundred files, published alone — the layer
+	// the next publication is written over, whose pack its repack never
+	// reads.
+	history := make([]int, 200)
+	for i := range history {
+		history[i] = 64
+	}
+	x.push(history...)
+	c, _, _ := x.compactorOf(nil)
+	if out, err := publishWhileBusy(t, c, x.publicationCandidate()); out != compact.OutcomeApplied {
+		t.Fatalf("the first publication: %s, %v; want applied", out, err)
+	}
+	base := x.rows().Packs
+	if len(base) != 1 {
+		t.Fatalf("the premise: the base layer covers %d packs, want the one push", len(base))
+	}
+	// NINE PACKS NOT FULL above it, one more than a layer may hold before its
+	// publication repacks them.
+	x.pushN(compact.LayerRepackPacks+1, 4<<10)
+	cand := x.publicationCandidate()
+	s, err := x.node().Cache().Sync(x.c.Ctx, cand.ID, statelog.FloorAt(statelog.ReadSession, cand.Version))
+	if err != nil {
+		t.Fatalf("sync the maintainer's copy: %v", err)
+	}
+	copyDir := s.Dir
+	s.Release()
+
+	var (
+		mu     sync.Mutex
+		builds int
+	)
+	compact.BuildWith(c, func(ctx context.Context, adm *cache.Admission, cmd gitproc.Cmd) (gitproc.Result, error) {
+		mu.Lock()
+		builds++
+		mu.Unlock()
+		listed, err := io.ReadAll(cmd.Stdin)
+		if err != nil {
+			return gitproc.Result{}, err
+		}
+		cmd.Stdin = bytes.NewReader(listed)
+		var want []string
+		for line := range strings.Lines(string(listed)) {
+			cs := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(line), "pack-"), ".pack")
+			for _, ext := range []string{".idx", ".pack", ".rev"} {
+				want = append(want, "pack-"+cs+ext)
+			}
+		}
+		slices.Sort(want)
+		if got := filesIn(t, filepath.Join(cmd.Dir, "objects", "pack")); len(got) > 0 {
+			t.Errorf("the repack's scratch holds %v before its build, want nothing: it runs in a merge's scratch "+
+				"of its own, never in the layer's scratch of links", got)
+		}
+		if slices.Contains(want, "pack-"+base[0].GitChecksum+".pack") {
+			t.Errorf("the repack was handed the base layer's pack: %s", listed)
+		}
+		if cmd.Alternate == "" || strings.HasPrefix(cmd.Alternate, copyDir) || strings.HasPrefix(copyDir, cmd.Alternate) {
+			t.Errorf("the repack's alternate is %q, no store of its inputs: its walk for name hashes would run the "+
+				"repository's history", cmd.Alternate)
+			return compact.RunInSlot(ctx, adm, cmd)
+		}
+		if got := filesIn(t, filepath.Join(cmd.Alternate, "objects", "pack")); !slices.Equal(got, want) {
+			t.Errorf("the repack's alternate holds %v, want exactly the files of the packs it is handed %v", got,
+				want)
+		}
+		for _, name := range want {
+			linked, err := os.Stat(filepath.Join(cmd.Alternate, "objects", "pack", name))
+			if err != nil {
+				continue
+			}
+			if was, err := os.Stat(filepath.Join(copyDir, "objects", "pack", name)); err != nil ||
+				!os.SameFile(linked, was) {
+				t.Errorf("the repack's alternate's %s is not the copy's own file (%v)", name, err)
+			}
+		}
+		return compact.RunInSlot(ctx, adm, cmd)
+	})
+	before := x.rows()
+	if out, err := publishWhileBusy(t, c, cand); out != compact.OutcomeApplied {
+		t.Fatalf("the publication over nine packs not full: %s, %v; want applied", out, err)
+	}
+	mu.Lock()
+	ran := builds
+	mu.Unlock()
+	if ran != 1 {
+		t.Errorf("the publication ran %d repacks, want one", ran)
+	}
+	if outs := outputs(before, x.rows()); len(outs) != 1 {
+		t.Errorf("the repack wrote %d outputs, want the nine packs merged into one: %+v", len(outs), outs)
 	}
 }
 

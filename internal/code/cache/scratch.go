@@ -39,7 +39,8 @@ import (
 // view naming the refs it was made with.
 //
 // A MERGE'S REPOSITORIES. A merge of a repository's packs — a compaction's
-// build (internal/code/compact) — writes its outputs into a scratch too, and
+// build, or a publication's repack (internal/code/compact) — writes its
+// outputs into a scratch too, and
 // that scratch leans NOT on the incarnation but on an OBJECT STORE HOLDING
 // EXACTLY THE PACKS IT MERGES (NewMergeScratch): a repository of its own under
 // scratch/, merge.<repository>.<id>.git, whose objects/pack holds each merged
@@ -89,7 +90,8 @@ import (
 // soleNames).
 
 // Scratch is a repository a push's receive-pack runs in (NewScratch), or a
-// merge's pack-objects writes its outputs into (NewMergeScratch), or an
+// merge's pack-objects — a compaction's, or a publication's repack — writes
+// its outputs into (NewMergeScratch), or an
 // advertisement view (AdvertiseView), or a publication writes its layer in
 // (NewLayerScratch). It pins the incarnation it leans on — directly, or
 // through the store a merge's links of it make — until Remove: its alternate
@@ -139,7 +141,9 @@ func (c *Cache) NewScratch(ctx context.Context, s Synced, id string) (*Scratch, 
 }
 
 // NewMergeScratch makes the repository a MERGE's pack-objects writes its
-// outputs into — a compaction's build (internal/code/compact) — shaped as
+// outputs into — a compaction's build, or a publication's repack
+// (internal/code/compact), whose outputs are then gathered into its layer's
+// scratch ([Scratch.Gather]) — shaped as
 // NewScratch's, but leaning on a STORE OF EXACTLY THE PACKS IT MERGES rather
 // than on s's incarnation: packs names each by its git checksum, every one a
 // pack live in the incarnation s pins, and its .pack, .idx and .rev are
@@ -508,6 +512,36 @@ func linkPacks(from, store string, packs []string) error {
 			rel := filepath.Join("objects", "pack", "pack-"+cs+ext)
 			if err := os.Link(filepath.Join(from, rel), filepath.Join(store, rel)); err != nil {
 				return fmt.Errorf("linking a merged pack's %s into its store: %w", ext, err)
+			}
+		}
+	}
+	return nil
+}
+
+// Gather links into s, a publication's scratch of links ([Cache.NewLayerScratch]),
+// the packs from wrote — its repack's outputs, built in a merge's scratch of
+// their own ([Cache.NewMergeScratch]) — by their git checksums: each one's
+// .pack, .rev and .idx, the .idx LAST (bundleOrder), hard-linked into s's
+// objects/pack, the very inodes from holds. So s's multi-pack-index can name
+// them, a multi-pack-index naming only packs of its own directory, and the
+// adoption of what s built finds them there; from can be removed at once.
+//
+// THE REPACK IS NEVER BUILT IN s: s links every pack of the copy, so
+// `pack-objects --stdin-packs` there, filling in its name hashes, walks from
+// the inputs' commits down the repository's whole history (A MERGE'S
+// REPOSITORIES, above) — what a merge's store of exactly its inputs exists to
+// end. Both scratches are of one repository of this cache; a pack s already
+// holds, or one from does not, is an error, the files linked before it left
+// in s, which its Remove takes.
+func (s *Scratch) Gather(from *Scratch, packs []string) error {
+	if from == nil || from.c != s.c || from.e != s.e {
+		return fmt.Errorf("%w: %s gathers packs only from a scratch of its own repository", ErrInvalid, s.Dir)
+	}
+	for _, cs := range packs {
+		for _, ext := range bundleOrder {
+			rel := filepath.Join("objects", "pack", "pack-"+cs+ext)
+			if err := os.Link(filepath.Join(from.Dir, rel), filepath.Join(s.Dir, rel)); err != nil {
+				return fmt.Errorf("cache: gathering pack-%s%s into %s: %w", cs, ext, s.Dir, err)
 			}
 		}
 	}
