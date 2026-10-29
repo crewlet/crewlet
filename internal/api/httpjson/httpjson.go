@@ -1741,6 +1741,24 @@ func Refuse(w http.ResponseWriter, err error) {
 	Fail(w, http.StatusBadRequest, CodeUnreadableBody)
 }
 
+// EngineHeader is the header every answer the engine's API writes carries,
+// with the value [EngineHeaderValue], set once around everything a socket
+// serves (`api.servedOn`): a route's answer, a refusal, the mux's own 404
+// and 405, the canonical-path refusal and the boot surface's `503 starting`
+// alike.
+//
+// IT SAYS WHOSE ANSWER AN ANSWER IS. A client reads an answer the engine wrote
+// as what the engine did, and one it did not write as saying nothing about
+// it: a proxy's 504 page, a gateway's 403, a cache's 413. The error envelope
+// alone could not tell them apart, since anything in front of the engine can
+// answer JSON with an `error` field; a header no proxy sets can. The
+// dashboard requires it (dashboard/src/contract/engine.ts, held to these two
+// values by `TestTheDashboardKnowsTheEnginesOwnAnswers`).
+const EngineHeader = "X-Crewlet-Engine"
+
+// EngineHeaderValue is [EngineHeader]'s one value.
+const EngineHeaderValue = "1"
+
 // NoActiveRevisionRetry is the Retry-After a `503 no_active_revision` carries:
 // the control plane's reconcile poll, because a node that has not been handed
 // a company takes the active revision on its next one, so a client told to

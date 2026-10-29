@@ -190,6 +190,10 @@ var contract = []Entry{
 	{"GATE_REQUEST_TIMEOUT_MS", ReadScalar,
 		"internal/api.TestTheDashboardWaitsAsLongAsTheEngineSaysAClientShould"},
 
+	// engine.ts
+	{"ENGINE_HEADER", ReadScalar, "internal/api.TestTheDashboardKnowsTheEnginesOwnAnswers"},
+	{"ENGINE_HEADER_VALUE", ReadScalar, "internal/api.TestTheDashboardKnowsTheEnginesOwnAnswers"},
+
 	// retry.ts
 	{"UNAVAILABLE_RETRY_MS", ReadScalar, "internal/api.TestTheDashboardRetriesOnTheEnginesOwnHints"},
 	{"RETRY_AFTER_MAX_MS", ReadScalar, "internal/api.TestTheDashboardRetriesOnTheEnginesOwnHints"},
