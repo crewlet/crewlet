@@ -32,6 +32,7 @@
 
 import type { ConfigAnswer } from "~/protocol/configAnswer.ts";
 import type { CompanyDocument } from "~/protocol/index.ts";
+import { pathSegment } from "~/lib/segment.ts";
 import { buildPatch, type IndexedDocument } from "./document.ts";
 
 /** Whether the builder edits the active company or creates the first one. */
@@ -60,7 +61,7 @@ export interface ConfigRequest {
 
 /** Where one unit is read and written: `/config/units/{key}`. */
 export function unitPath(key: string): string {
-  return `/config/units/${encodeURIComponent(key)}`;
+  return `/config/units/${pathSegment(key)}`;
 }
 
 /**
