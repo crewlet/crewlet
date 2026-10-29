@@ -623,9 +623,14 @@
 // are the rows naming the run among each of its repositories' pushes above
 // its launch: the same index's range, each row looked up to test its run —
 // no index of the run's own, which would cost every box push an entry on
-// every data node for the history's 181 days to serve one read a run, where
-// the scan reads a week of a repository taking 70 pushes a minute, 705 600
-// rows, in 0.53 s (BenchmarkRunPushes, on two E-cores). Every
+// every data node for the history's 181 days to serve one read a run — and
+// a page held to what it READS, the pushes it looks up and what their rows
+// weigh as the index says before any is touched, rather than to the few it
+// answers: so the scan reads a week of a repository taking 70 pushes a
+// minute, 705 600 rows, in 0.49 s and 71 pages of at most 10 ms, and an
+// hour there with 200 pushes of 403 KB beside the run's in 19 pages of at
+// most 4.3 ms, where one page had read all of their 80 MB
+// (BenchmarkRunPushes, one run of each arm on two E-cores). Every
 // reader of the index's first shape — the listing, the history horizon, a
 // purge part and its count — reads the reordered one, so it is one index,
 // not two.

@@ -81,16 +81,18 @@ func TestAPushRowNamesTheRunThatMadeIt(t *testing.T) {
 // repository's in log order, its position and then its push id, and the
 // repositories in the query's order — never another run's, a person's, a
 // repository's it was not given, or one from at or below the run's launch;
-// across pages of two, none repeated and none skipped — a page spanning two
-// repositories, and a page boundary inside a record of two of the run's
-// pushes — every later page at session at the first's position. Log order is
-// the broker's instant's reverse here — each record stamped a second BEFORE
-// the one ahead of it, as a stream leader's change can stamp — so an order by
-// the instant answers every repository's pushes backwards.
+// across pages of three pushes READ — the run's and everybody else's its
+// repositories took — none repeated and none skipped: pages spanning two
+// repositories, a page ending on a push that is not the run's, and a page
+// boundary inside a record of two of the run's pushes; every later page at
+// session at the first's position. Log order is the broker's instant's
+// reverse here — each record stamped a second BEFORE the one ahead of it, as
+// a stream leader's change can stamp — so an order by the instant answers
+// every repository's pushes backwards.
 //
-// Mutations: order runPushesFirstSQL and runPushesAfterSQL by `at, push_id`
+// Mutations: order runWindowFirstSQL and runWindowAfterSQL by `at, push_id`
 // rather than `position, push_id` — the pushes of each repository come back
-// newest first, red; key a later page by its position alone (runPushesAfterSQL
+// newest first, red; key a later page by its position alone (runWindowAfterSQL
 // testing `position > ?`) — the second push of the record the boundary cuts
 // is skipped.
 func TestARunsPushesAreReadInLogOrder(t *testing.T) {
@@ -124,7 +126,7 @@ func TestARunsPushesAreReadInLogOrder(t *testing.T) {
 	n.push(web, boxPush("a-web-3", "swe", runA, ref("web-3")))
 	last := n.push(api, boxPush("a-api-2", "swe", runA, ref("api-2"))).Position
 
-	q := code.ReadQuery{Kind: code.ReadRunPushes, Limit: 2,
+	q := code.ReadQuery{Kind: code.ReadRunPushes, Limit: 3,
 		RunPushes: &code.RunPushesQuery{Run: runA, Repos: []string{web, api, docs}, After: launch},
 		Fresh:     statelog.FloorAt(statelog.ReadSession, last)}
 	var (
@@ -136,8 +138,8 @@ func TestARunsPushesAreReadInLogOrder(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Read(run_pushes) page %d: %v", pages+1, err)
 		}
-		if len(answer.Pushes) > 2 {
-			t.Fatalf("page %d holds %d pushes, past its limit of 2", pages+1, len(answer.Pushes))
+		if len(answer.Pushes) > 3 {
+			t.Fatalf("page %d holds %d pushes, past its limit of 3 read", pages+1, len(answer.Pushes))
 		}
 		for _, p := range answer.Pushes {
 			if p.Run.RunID != runA || p.Run.CodingAgent != "claude-code" {
@@ -152,8 +154,10 @@ func TestARunsPushesAreReadInLogOrder(t *testing.T) {
 		q.Fresh = statelog.FloorAt(statelog.ReadSession, answer.Position)
 	}
 	// Within one record a repository's pushes are in push id order. Pages of
-	// two: [web-1 web-2] [web-3 api-1] [api-2 docs-1] [docs-2] — the third
-	// page's boundary inside the docs record.
+	// three read, the run's kept: [web-1 person-web web-2] [web-3 | api-1
+	// b-api-1] [b-api-2 api-2 | docs-1] [docs-2] — the second page ending on
+	// the other run's push of the api record, the third page's boundary
+	// inside the docs record.
 	want := []string{"a-web-1", "a-web-2", "a-web-3", "a-api-1", "a-api-2", "a-docs-1", "a-docs-2"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("the run's pushes read %v, want %v: its repositories in the query's order, each one's "+
@@ -161,7 +165,104 @@ func TestARunsPushesAreReadInLogOrder(t *testing.T) {
 			"launch", got, want)
 	}
 	if pages+1 != 4 {
-		t.Fatalf("the read took %d pages of two, want 4: the case needs its boundaries where it says", pages+1)
+		t.Fatalf("the read took %d pages of three, want 4: the case needs its boundaries where it says",
+			pages+1)
+	}
+}
+
+// A PAGE OF A RUN'S PUSHES IS HELD TO WHAT IT READS, NOT TO WHAT IT ANSWERS:
+// between the run's launch and its one push, its repository took six pushes of
+// other people's, and a page reads no more of them than its row limit — and
+// no more than its bytes, each push weighed by what its row holds — answering
+// none of the run's and a cursor after the last push it read, from which the
+// next page reads on, until the run's push is answered once. Read whole, a
+// page that held only to what it kept would read every other push to find the
+// run's, however many and however wide.
+//
+// Mutations: leave the pushes a page reads uncounted (runPushesOf adding a
+// span's pushes and weight to nothing) — the first page ends with no cursor,
+// short of the run's push, red; set the cursor of a page whose reads are full
+// only where it kept a push — the same, red. That the span behind a page looks
+// up no row past its bytes is held by
+// TestARunsWindowReachesNoRowPastItsPagesBytes, which the answer cannot show.
+func TestAPageOfARunsPushesIsHeldToWhatItReads(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	id := seededRepo(t, n, "app")
+	launch := n.waiter.Committed()
+	var others []string
+	for k := range 6 {
+		push := fmt.Sprintf("p-other-%d", k)
+		person := entry(push, set(fmt.Sprintf("refs/heads/topic-%d", k), code.ZeroOID, oidOf(push)))
+		n.push(id, person)
+		others = append(others, push)
+	}
+	n.push(id, boxPush("a-run", "swe", runA, set("refs/heads/seats/swe/eng-42", code.ZeroOID, oidOf("run"))))
+	last := n.push(id, entry("p-after", set("refs/heads/later", code.ZeroOID, oidOf("after")))).Position
+	// THE WEIGHT a page counts a push it reads by: its row's row_bytes, the
+	// same for every other push here, each one command on a ref named alike.
+	var weight int
+	if err := n.db.Reader().Read(t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(t.Context(), `SELECT row_bytes FROM code_pushes WHERE push_id = ?`,
+			others[0]).Scan(&weight)
+	}); err != nil {
+		t.Fatalf("read a push's weight: %v", err)
+	}
+
+	read := func(t *testing.T, limit int) (pages [][]string, cursors []string) {
+		t.Helper()
+		q := code.ReadQuery{Kind: code.ReadRunPushes, Limit: limit,
+			RunPushes: &code.RunPushesQuery{Run: runA, Repos: []string{id}, After: launch},
+			Fresh:     statelog.FloorAt(statelog.ReadSession, last)}
+		for len(pages) < 20 {
+			answer, err := n.reader.Read(t.Context(), q)
+			if err != nil {
+				t.Fatalf("Read(run_pushes) page %d: %v", len(pages)+1, err)
+			}
+			var page []string
+			for _, p := range answer.Pushes {
+				page = append(page, p.PushID)
+			}
+			pages = append(pages, page)
+			if answer.Next == "" {
+				return pages, cursors
+			}
+			// The cursor names the last push the page read, by its id.
+			cursors = append(cursors, answer.Next[strings.LastIndex(answer.Next, "/")+1:])
+			q.Cursor = answer.Next
+			q.Fresh = statelog.FloorAt(statelog.ReadSession, answer.Position)
+		}
+		t.Fatalf("the read took more than 20 pages: %v", pages)
+		return nil, nil
+	}
+	for name, tc := range map[string]struct {
+		limit, bytes int
+		// first is the push the first page's cursor must name: the last
+		// it read.
+		first string
+	}{
+		// TWO PUSHES A PAGE by its row limit, its bytes far off.
+		"the rows a page reads": {limit: 2, bytes: code.MaxPageBytes, first: others[1]},
+		// THREE PUSHES' WEIGHT A PAGE, its row limit far off: the third
+		// push takes it to its bytes, and no fourth is read.
+		"what the rows weigh": {bytes: 3 * weight, first: others[2]},
+	} {
+		t.Run(name, func(t *testing.T) {
+			code.SetPageLimits(n.reader, code.MaxSnapshotItems, tc.bytes)
+			pages, cursors := read(t, tc.limit)
+			if len(pages[0]) != 0 || len(cursors) == 0 || cursors[0] != tc.first {
+				t.Fatalf("the first page answered %v and read through %v, want none of the run's and a cursor "+
+					"after %s: a page reads no more than its bound of the pushes before the run's", pages[0],
+					cursors, tc.first)
+			}
+			var answered []string
+			for _, page := range pages {
+				answered = append(answered, page...)
+			}
+			if !slices.Equal(answered, []string{"a-run"}) {
+				t.Fatalf("the pages answered %v, want the run's one push once: %v", answered, pages)
+			}
+		})
 	}
 }
 
@@ -169,8 +270,8 @@ func TestARunsPushesAreReadInLogOrder(t *testing.T) {
 // and no seat it reads for — one there would be judged by nothing — and names
 // its run by its launch's UUID, one to MaxRunRepos of the run's repositories
 // by id, each once, and the position the run was launched at on the code log;
-// nothing else a listing names, a limit of a history page's, and a level of
-// its own. A read naming a run is refused on every other kind. A cursor it
+// nothing else a listing names, a limit of the pushes a page reads, at most
+// MaxSnapshotItems, and a level of its own. A read naming a run is refused on every other kind. A cursor it
 // never issued is refused, and a repository holding no rows — purged since —
 // answers none of the run's pushes.
 //
@@ -232,7 +333,7 @@ func TestOnlyTheEngineReadsARunsPushes(t *testing.T) {
 			RunPushes: run(func(*code.RunPushesQuery) {})}, "prefix"},
 		"a range beside it": {code.ReadQuery{Introduced: &code.IntroducedQuery{RepoID: id},
 			RunPushes: run(func(*code.RunPushesQuery) {})}, "introduced"},
-		"a limit past a page": {code.ReadQuery{Limit: code.MaxPushesPerPage + 1,
+		"a limit past a page": {code.ReadQuery{Limit: code.MaxSnapshotItems + 1,
 			RunPushes: run(func(*code.RunPushesQuery) {})}, "limit"},
 		"a read in brief": {code.ReadQuery{Brief: true,
 			RunPushes: run(func(*code.RunPushesQuery) {})}, "brief"},

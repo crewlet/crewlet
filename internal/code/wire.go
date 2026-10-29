@@ -552,10 +552,14 @@ type IntroducedQuery struct {
 // THE READ SCANS INSTEAD OF SEEKING AN INDEX OF ITS OWN: each repository's
 // pushes above After, over code_pushes_repo_idx in log order, keeping the
 // run's own — every push made to the run's repositories DURING the run, read
-// once, when the engine collects it. An index on the run would hold an entry
-// for every box push on every data node for the history's 181 days to serve
-// that one read a run (replicated 0070 says what it would cost);
-// BenchmarkRunPushes measures what the scan costs instead.
+// once, when the engine collects it, in pages each held to what it READS: at
+// most the query's limit of those pushes and MaxPageBytes of what their rows
+// weigh, as the index says before a row is touched, so a long run or a wide
+// push beside it costs the read more pages and never one page more than
+// that. An index on the run would hold an entry for every box push on every
+// data node for the history's 181 days to serve that one read a run
+// (replicated 0070 says what it would cost); BenchmarkRunPushes measures what
+// the scan costs instead.
 type RunPushesQuery struct {
 	Run   string            `json:"run"`
 	Repos []string          `json:"repos"`
@@ -667,7 +671,9 @@ const (
 	// ([RunProvenance.RunID]) among those of the repositories the run was
 	// given, above the position it was launched at ([RunPushesQuery]). The
 	// engine's own read, which no principal makes, as `introduced` is: the
-	// engine reads it when it collects the run, for the seat that launched it.
+	// engine reads it when it collects the run, for the seat that launched it,
+	// every page to the last — a page held to the pushes it READ may answer
+	// none of the run's and a cursor past them.
 	ReadRunPushes ReadKind = "run_pushes"
 	// ReadRefs is one repository's live refs under a prefix, by name; its
 	// first page carries the repository in detail too.
@@ -878,13 +884,16 @@ type ReadQuery struct {
 	// kind and refused on every other.
 	MinPacks int    `json:"min_packs,omitempty"`
 	Cursor   string `json:"cursor,omitempty"`
-	// Limit is repos 1..500 (0 = 100), pushes and run_pushes 1..200 (0 =
-	// 50), refs 1..1 000 (0 = 200), changes 1..200 (0 = 50) — the rows a
-	// page READS, whatever its filters keep of them — a change's revisions
-	// and its reviewers 1..1 000 (0 = 200), its comments, its reviews and its
-	// findings 1..200 (0 = 50), and introduced 1..MaxSnapshotItems (0 = the
-	// most); a page of a duty listing — `compaction_due`, `publication_due`,
-	// `expunge_due` — is MaxSnapshotItems and names none.
+	// Limit is repos 1..500 (0 = 100), pushes 1..200 (0 = 50), refs
+	// 1..1 000 (0 = 200), changes 1..200 (0 = 50) — the rows a page READS,
+	// whatever its filters keep of them — a change's revisions and its
+	// reviewers 1..1 000 (0 = 200), its comments, its reviews and its
+	// findings 1..200 (0 = 50), and the engine's own two reads of pushes in
+	// log order, introduced and run_pushes, 1..MaxSnapshotItems (0 = the
+	// most) — run_pushes' the pushes of its run's repositories a page READS,
+	// whatever few of them name the run; a page of a duty listing —
+	// `compaction_due`, `publication_due`, `expunge_due` — is MaxSnapshotItems
+	// and names none.
 	Limit int                `json:"limit,omitempty"`
 	Fresh statelog.Freshness `json:"fresh"`
 }

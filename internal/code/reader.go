@@ -1622,7 +1622,8 @@ func (q ReadQuery) validateIntroduced() error {
 // once — and the position the run was launched at on the code log, never
 // zero: a read from the log's start would scan its repositories' whole
 // history for pushes no run made before its launch. Nothing else a listing
-// names, and a limit of a history page's.
+// names, and a limit of the pushes a page reads, at most MaxSnapshotItems as
+// an `introduced` read's ([Reader.runPushes] says why).
 func (q ReadQuery) validateRunPushes() error {
 	in := q.RunPushes
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
@@ -1650,9 +1651,9 @@ func (q ReadQuery) validateRunPushes() error {
 		return refused("run_pushes.after", in.After.Valid().Error())
 	case q.Limit < 0:
 		return refused("limit", strconv.Itoa(q.Limit))
-	case q.Limit > MaxPushesPerPage:
-		return refused("limit", fmt.Sprintf("%d is past the %d one page of %s carries", q.Limit,
-			MaxPushesPerPage, q.Kind))
+	case q.Limit > MaxSnapshotItems:
+		return refused("limit", fmt.Sprintf("%d is past the %d pushes one page of %s reads", q.Limit,
+			MaxSnapshotItems, q.Kind))
 	}
 	for _, f := range []struct {
 		field string
@@ -2215,33 +2216,68 @@ func (r *Reader) introduced(ctx context.Context, tx *sql.Tx, q ReadQuery, cp sta
 // runPushes serves one page of a coding run's pushes ([ReadRunPushes]): each
 // repository the query names, in its order, and its pushes above the run's
 // launch position in LOG ORDER — the position, then the push id, since group
-// commit lands up to 64 pushes at one position — keeping the rows that name
-// the run; keyset after the last push served, `<repository index>/<packed
-// position>/<push id>`. A page ends at its row limit or once its rows reach
-// MaxPageBytes, as the history's does, and a repository's pushes running out
-// moves the page on to the next repository's.
+// commit lands up to 64 pushes at one position — answering the rows that name
+// the run; keyset after the last push the page READ, `<repository
+// index>/<packed position>/<push id>`, whether or not that push was the run's.
+// A repository's pushes running out moves the page on to the next
+// repository's.
 //
 // NOT HELD TO A GRANT: the engine reads its own run's record for the seat that
 // launched the run, and the run was given only repositories that seat could
 // read at its launch. A repository with no rows — purged since the run pushed
 // to it — answers no push of the run's, which is what the rows say of it.
 //
-// WHAT A PAGE READS IS EVERY PUSH MADE TO A REPOSITORY DURING THE RUN, each a
-// lookup of its row to test the run it names: code_pushes_repo_idx carries
-// no run (replicated 0070 says why), so a page reads up to the pushes the
-// run's repositories took between its launch and its last push to fill
-// itself. A PAGE IS BOUNDED BY WHAT IT KEEPS, NEVER BY WHAT IT SCANS, because
-// the scan is cheap at the large model's busiest repository, 70 pushes a
-// minute (BenchmarkRunPushes, one run of each arm on two E-cores of a Core
-// Ultra 7 265U): an hour's run reads its 4 200 rows in 4.2 ms, and a week's
-// its 705 600 in 41 pages and 0.53 s in all — which one page costs where
-// the run pushed once in that week — under statelog.ReadBudget, the bound
-// past which a page would end at a count of rows scanned; a quiet
-// repository's hour is 0.8 ms.
+// A PAGE IS HELD TO WHAT IT READS, NOT ONLY TO WHAT IT ANSWERS. The run's
+// pushes are a few among every push its repositories took while it ran —
+// other seats', people's, other runs' — and code_pushes_repo_idx carries no
+// run (replicated 0070 says why), so finding them reads each of those rows to
+// test the run it names: its whole record, the overflow pages of a wide one
+// included. Held only to what it answered, a page read every push between
+// one of the run's and the next, however many and however wide — a week of
+// the large model's busiest repository in one page where the run pushed once
+// in it, and 80 MB where 200 pushes of 400 KB stood between two of the run's,
+// with nothing about a run bounding its length. So a page READS at most its
+// row limit of its repositories' pushes — MaxSnapshotItems unless the query
+// asks fewer, an engine read's, as [Reader.introduced]'s, because what bounds
+// its cost is its bytes — and stops once those WEIGH MaxPageBytes, each by
+// the row_bytes the index carries beside its key, so a row past the page's
+// bytes is never looked up at all: always one, so a page always advances, and
+// so at most one row past the bound ([pushesWithin]'s rule, the history
+// horizon's and a purge part's). What it answers is held to MaxPageBytes
+// apart, each push it keeps by what it sends. A page that reads its bound
+// ends there whether or not it kept a push — none, and a cursor, which the
+// engine reads on past — so no request costs more than a page's reads,
+// whatever the run's length and whoever else pushed beside it.
+//
+// THE WINDOW IS WEIGHED WHERE IT LIES ([runSpanOf]): what the pushes the page
+// has rows left for weigh, summed by one aggregate of the index's widths, and
+// the last one's place read off the same range — both covering seeks, which
+// look up no row and hand Go none — and only where they weigh more than the
+// page's bytes left are their weights walked, to the one that fills it. Then
+// the run's own rows in exactly that window: one ranged seek of the same
+// index, each row it reaches looked up to test the run. Weighing every push
+// in Go instead, each handed across the driver with its place and its weight,
+// made a week's read five times as long (2.5 s).
+//
+// MEASURED (BenchmarkRunPushes, one run of each arm on two E-cores of a Core
+// Ultra 7 265U): an hour of a run in the large model's busiest repository, 70
+// pushes a minute, reads its 4 200 pushes in one page of 4.0 ms; a week of it,
+// 705 600 pushes, in 71 pages of at most 9.9 ms, 0.49 s in all — where, held
+// only to what it answered, one page had read the whole week wherever the run
+// pushed once in it; that hour with 200 of the others' pushes at 403 KB, 80 MB
+// of rows, in 19 pages of at most 4.3 ms; MaxRunRepos such repositories' hour,
+// 33 600 pushes, in 4 pages of at most 7.8 ms; and a quiet repository's hour in
+// 0.8 ms. Every page is under a tenth of statelog.ReadBudget and the week's
+// read under twice it — the rule the benchmark decides by — so a page's row
+// bound stays an engine read's MaxSnapshotItems.
 func (r *Reader) runPushes(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
 	in := q.RunPushes
 	after := in.After.Packed()
-	start, position, pushID := 0, after, ""
+	// A PAGE READS AFTER A PLACE: its cursor's push, or — on the first page
+	// of a repository — (after+1, ""), the place before every push at a
+	// position past the launch, since positions are whole numbers and no
+	// push's id is empty; so one statement of each kind serves both.
+	start, position, pushID := 0, after+1, ""
 	if q.Cursor != "" {
 		var keyed bool
 		if start, position, pushID, keyed = cutRunPushCursor(q.Cursor); !keyed || start >= len(in.Repos) ||
@@ -2249,33 +2285,37 @@ func (r *Reader) runPushes(ctx context.Context, tx *sql.Tx, q ReadQuery, out *Re
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
 	}
-	pg := page{maxRows: limitOr(q.Limit, defaultPushLimit), maxB: r.pageBytes}
+	reads := page{maxRows: min(limitOr(q.Limit, r.pageRows), r.pageRows), maxB: r.pageBytes}
+	sent := 0
 	for i := start; i < len(in.Repos); i++ {
-		full, err := r.runPushesOf(ctx, tx, i, in, position, pushID, &pg, out)
+		full, err := r.runPushesOf(ctx, tx, i, in, position, pushID, &reads, &sent, out)
 		if err != nil || full {
 			return err
 		}
-		position, pushID = after, ""
+		position, pushID = after+1, ""
 	}
 	return nil
 }
 
-// runPushesOf adds to out the run's pushes to its i-th repository after
-// (position, pushID) — above position where pushID is "" — until pg is full,
-// which it reports, setting out.Next to the last push it added.
+// runPushesOf reads the pushes of the run's i-th repository after the place
+// (position, pushID), as many as reads still takes, adds those naming the run
+// to out — what they send counted in sent — and reports whether the page is
+// full, setting out.Next to the last push it READ: the one that filled its
+// reads, or the run's push that filled what it sends.
 func (r *Reader) runPushesOf(ctx context.Context, tx *sql.Tx, i int, in *RunPushesQuery, position int64,
-	pushID string, pg *page, out *ReadAnswer) (bool, error) {
+	pushID string, reads *page, sent *int, out *ReadAnswer) (bool, error) {
 
-	repo, limit := in.Repos[i], pg.left()
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if pushID == "" {
-		rows, err = tx.QueryContext(ctx, runPushesFirstSQL, repo, in.Run, position, limit)
-	} else {
-		rows, err = tx.QueryContext(ctx, runPushesAfterSQL, repo, in.Run, position, position, pushID, limit)
+	repo := in.Repos[i]
+	span, err := runSpanOf(ctx, tx, repo, position, pushID, *reads)
+	if err != nil {
+		return false, fmt.Errorf("code: weigh the pushes to %s a page of run %s's may read: %w", repo, in.Run,
+			err)
 	}
+	if span.pushes == 0 {
+		return false, nil
+	}
+	rows, err := tx.QueryContext(ctx, runPushesInSQL, repo, in.Run, position, pushID, span.lastPosition,
+		span.lastID)
 	if err != nil {
 		return false, fmt.Errorf("code: read run %s's pushes to %s: %w", in.Run, repo, err)
 	}
@@ -2286,19 +2326,91 @@ func (r *Reader) runPushesOf(ctx context.Context, tx *sql.Tx, i int, in *RunPush
 			return false, fmt.Errorf("code: read run %s's pushes to %s: %w", in.Run, repo, err)
 		}
 		out.Pushes = append(out.Pushes, row)
-		if pg.add(row.encodedBytes(commands)) {
-			out.Next = runPushCursor(i, row.Position, row.PushID)
-			return true, rows.Err()
+		if *sent += row.encodedBytes(commands); *sent >= reads.maxB {
+			out.Next = runPushCursor(i, row.Position.Packed(), row.PushID)
+			return true, nil
 		}
 	}
-	return false, rows.Err()
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("code: read run %s's pushes to %s: %w", in.Run, repo, err)
+	}
+	reads.rows += span.pushes
+	reads.bytes += span.weight
+	if reads.full() {
+		out.Next = runPushCursor(i, span.lastPosition, span.lastID)
+		return true, nil
+	}
+	return false, nil
+}
+
+// runSpan is how far a page reads one repository's pushes: how many, what
+// their rows weigh, and the last one's place in log order.
+type runSpan struct {
+	pushes, weight int
+	lastPosition   int64
+	lastID         string
+}
+
+// runSpanOf is the span of a repository's pushes after the place (position,
+// pushID) that a page may still read, what it has read so far counted in
+// reads, from code_pushes_repo_idx alone: as many as it has rows left, and
+// none past the first whose weight fills its bytes (reads is the page's copy,
+// so weighing moves nothing the page counts).
+func runSpanOf(ctx context.Context, tx *sql.Tx, repo string, position int64, pushID string,
+	reads page) (runSpan, error) {
+
+	var span runSpan
+	if err := tx.QueryRowContext(ctx, runWeighSQL, repo, position, pushID, reads.left()).Scan(&span.pushes,
+		&span.weight); err != nil {
+		return runSpan{}, err
+	}
+	if span.pushes == 0 {
+		return span, nil
+	}
+	if reads.bytes+span.weight >= reads.maxB {
+		// THEY WEIGH MORE THAN THE PAGE'S BYTES LEFT: their weights, in log
+		// order, to the one that fills it.
+		var err error
+		if span.pushes, span.weight, err = runWeights(ctx, tx, repo, position, pushID, reads); err != nil {
+			return runSpan{}, err
+		}
+	}
+	err := tx.QueryRowContext(ctx, runLastSQL, repo, position, pushID, span.pushes-1).Scan(&span.lastPosition,
+		&span.lastID)
+	return span, err
+}
+
+// runWeights walks the weights of a repository's pushes after the place
+// (position, pushID) in log order, counting each into reads — the page's copy
+// — and answers how many it walked and what they weigh: up to the push that
+// fills the page, or as many as it has rows left.
+func runWeights(ctx context.Context, tx *sql.Tx, repo string, position int64, pushID string,
+	reads page) (pushes, weight int, err error) {
+
+	rows, err := tx.QueryContext(ctx, runWeightsSQL, repo, position, pushID, reads.left())
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var w int
+		if err := rows.Scan(&w); err != nil {
+			return 0, 0, err
+		}
+		pushes, weight = pushes+1, weight+w
+		if reads.add(w) {
+			break
+		}
+	}
+	return pushes, weight, rows.Err()
 }
 
 // runPushCursor is "<repository index>/<packed position>/<push id>": a push's
-// place among a run's pushes — the repository of the run's query it was made
-// to, then its place in that repository's log order, its [logCursor].
-func runPushCursor(repo int, position statelog.Position, pushID string) string {
-	return strconv.Itoa(repo) + "/" + logCursor(position.Packed(), pushID)
+// place among the pushes a run's read pages through — the repository of the
+// run's query it was made to, then its place in that repository's log order,
+// its [logCursor].
+func runPushCursor(repo int, position int64, pushID string) string {
+	return strconv.Itoa(repo) + "/" + logCursor(position, pushID)
 }
 
 // cutRunPushCursor reads a [runPushCursor].
@@ -3047,15 +3159,27 @@ const (
 	pushesBelowSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
 		AND position < ? ORDER BY position DESC, push_id DESC LIMIT ?`
 	// A CODING RUN'S PUSHES TO ONE REPOSITORY, over code_pushes_repo_idx in
-	// log order: those above the run's launch position (?3) first, and after
-	// a cursor (?3 and ?4 its position, ?5 its push id) with the >= beside
-	// the OR that keeps the range seek — keeping the rows that name the run
-	// (?2), which the index does not carry, so each row the seek reaches is
-	// looked up to test it (runPushes).
-	runPushesFirstSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ? AND run_id = ?
-		AND position > ? ORDER BY position, push_id LIMIT ?`
-	runPushesAfterSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ? AND run_id = ?
-		AND position >= ? AND (position > ? OR push_id > ?) ORDER BY position, push_id LIMIT ?`
+	// log order, each after a PLACE — ?2 a position and ?3 a push id, the >=
+	// beside the OR keeping the range seek (runPushes says what the place of
+	// a repository's first page is). The WINDOW a page may read, weighed:
+	// the next ?4 pushes' count and what their rows weigh (runWeighSQL), the
+	// weights one by one where those fill the page (runWeightsSQL), and the
+	// place of the window's last push, ?4 pushes past its first
+	// (runLastSQL) — all of it in the index, so each is a covering seek that
+	// looks up no row. Then the RUN'S OWN in exactly that window
+	// (runPushesInSQL): after the place ?3, ?4 and up to its last push ?5, ?6
+	// inclusive, each row the seek reaches looked up to test the run (?2),
+	// which the index does not carry.
+	runWeighSQL = `SELECT COUNT(*), COALESCE(SUM(row_bytes), 0) FROM (SELECT row_bytes FROM code_pushes
+		WHERE repo_id = ?1 AND position >= ?2 AND (position > ?2 OR push_id > ?3)
+		ORDER BY position, push_id LIMIT ?4)`
+	runWeightsSQL = `SELECT row_bytes FROM code_pushes WHERE repo_id = ?1 AND position >= ?2
+		AND (position > ?2 OR push_id > ?3) ORDER BY position, push_id LIMIT ?4`
+	runLastSQL = `SELECT position, push_id FROM code_pushes WHERE repo_id = ?1 AND position >= ?2
+		AND (position > ?2 OR push_id > ?3) ORDER BY position, push_id LIMIT 1 OFFSET ?4`
+	runPushesInSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?1 AND run_id = ?2
+		AND position >= ?3 AND (position > ?3 OR push_id > ?4) AND position <= ?5
+		AND (position < ?5 OR push_id <= ?6) ORDER BY position, push_id`
 	// THE RETENTION PASS'S TWO PHASES, each on its own partial index, the
 	// predicate repeated verbatim, and keyset on (deleted_at, id): the >=
 	// beside the OR is what keeps the index's range seek, which a bare OR of

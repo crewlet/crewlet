@@ -417,12 +417,20 @@ func registeredStatements() map[string]statement {
 		"forget seat days": {forgetSeatDaysSQL, []any{`["seat-1","seat-2"]`},
 			[]string{"SCAN json_each AS j", seatDaysKey + " (seat=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		// A CODING RUN'S PUSHES TO ONE REPOSITORY, above its launch in log
-		// order: the repository's pushes by position, each row tested for
-		// the run — which no index carries (replicated 0070) — never a sort.
-		"run pushes first": {runPushesFirstSQL, []any{"repo-1", "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", 10, 50},
-			[]string{"code_pushes_repo_idx (repo_id=? AND position>?)"}},
-		"run pushes after": {runPushesAfterSQL, []any{"repo-1", "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", 10, 10, "p", 50},
-			[]string{"code_pushes_repo_idx (repo_id=? AND position>=?)"}},
+		// order: the window a page may read, weighed from the index alone —
+		// its count and weight, its weights one by one, its last push's
+		// place, each a COVERING seek, so weighing a wide row never reads it
+		// — and then the run's own in exactly that window, the same index's
+		// range with every row it reaches tested for the run, which no index
+		// carries (replicated 0070); never a sort.
+		"run weigh": {runWeighSQL, []any{"repo-1", 11, "", 50},
+			[]string{"COVERING INDEX code_pushes_repo_idx (repo_id=? AND position>=?)"}},
+		"run weights": {runWeightsSQL, []any{"repo-1", 11, "", 50},
+			[]string{"COVERING INDEX code_pushes_repo_idx (repo_id=? AND position>=?)"}},
+		"run last": {runLastSQL, []any{"repo-1", 11, "", 49},
+			[]string{"COVERING INDEX code_pushes_repo_idx (repo_id=? AND position>=?)"}},
+		"run pushes in": {runPushesInSQL, []any{"repo-1", "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", 11, "", 20, "q"},
+			[]string{"code_pushes_repo_idx (repo_id=? AND position>=? AND position<=?)"}},
 		"pushes named": {pushesNamedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
 		// THE LIFECYCLE'S DECIDES AND APPLIES, each one row by its key — a
 		// name's claim with its redirect, a repository's row, the count a

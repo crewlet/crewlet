@@ -21,14 +21,25 @@ import (
 // hour's run in a quiet repository that takes a push every ten minutes. What
 // it costs is the scan: the read has no index of its own (replicated 0070), so
 // it reads every push the repository took during the run, a lookup of each
-// row's page to test the run it names, and `rows/op` is how many. Each row is a
-// push of one command and three introduced commits, about 400 bytes, as an
+// row to test the run it names, and `rows/op` is how many. Each row is a push
+// of one command and three introduced commits, about 400 bytes, as an
 // ordinary push row is; the repositories' pushes below the run's launch are
-// what its seek steps over. WHAT IT DECIDES: the hour's read must come in under
-// a tenth of a second and the week's under twice statelog.ReadBudget — the
-// week's whole scan is what one page costs where the run pushed once in that
-// week — or a page ends at a count of rows scanned rather than kept; runPushes
-// states the figures and what they decided.
+// what its seek steps over. And beside them, the two shapes a page's bound
+// is for:
+//
+//   - run=hour/repo=wide: the busy repository's hour with 200 of the other
+//     pushes WIDE — one branch beside 999 refused refs at MaxRefNameBytes,
+//     403 KB of commands as stored, scanIntroduced's widest — so its pages end at
+//     their bytes, each read held to MaxPageBytes and one row;
+//   - run=hour/repos=8: MaxRunRepos repositories each taking 70 pushes a
+//     minute, the run pushing to each every five minutes — the most
+//     repositories a run is given.
+//
+// `max-page-ms` is the slowest page of the read: what one request costs the
+// node that serves it. WHAT IT DECIDES: every page must come in under a tenth
+// of statelog.ReadBudget, wide rows included, and the week's whole read under
+// twice statelog.ReadBudget, or the page's row bound — MaxSnapshotItems, an
+// engine read's — is set lower; runPushes states the figures.
 func BenchmarkRunPushes(b *testing.B) {
 	quiet(b)
 	ctx := context.Background()
@@ -43,11 +54,14 @@ func BenchmarkRunPushes(b *testing.B) {
 		// ten minutes, and quietHour an hour of them.
 		quietPushes = 7 * 24 * 6
 		quietHour   = 6
+		// wideEvery is how many of the wide repository's hour of pushes
+		// there are to one wide push: 200 of its 4 200, none the run's.
+		wideEvery = 21
 	)
 	weekRun, hourRun, quietRun := "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", "7d2e1f0a-9b8c-4d7e-a6f5-e4d3c2b1a090",
 		"5b4a3c2d-1e0f-4a9b-8c7d-6e5f4a3b2c1d"
 	e := openApplyEstate(b)
-	e.apply(create(b, "busy", "busy"), create(b, "quiet", "quiet"))
+	e.apply(create(b, "busy", "busy"), create(b, "quiet", "quiet"), create(b, "wide", "wide"))
 	commands := `[{"ref":"refs/heads/seats/swe/eng-42","old":"` + strings.Repeat("a", 40) + `","new":"` +
 		strings.Repeat("b", 40) + `","result":"ok"}]`
 	introduced := strings.Repeat("c", 40) + " " + strings.Repeat("d", 40) + " " + strings.Repeat("e", 40)
@@ -70,34 +84,79 @@ func BenchmarkRunPushes(b *testing.B) {
 			CASE WHEN i > ?1 - ?2 AND i % 2 = 0 THEN 'claude-code' ELSE '' END,
 			?4, ?5, 3, i, ?6 FROM k`,
 		quietPushes, quietHour, quietRun, commands, introduced, len(commands)+len(introduced))
+	// THE WIDE REPOSITORY'S HOUR, the busy one's last hour again — the hour's
+	// run every `every` pushes, half way along — with every wideEvery-th
+	// other push wide: positions 1 mod 21, which are 1 mod 7 and so never
+	// the run's, at 0 mod 7.
+	wideCmds := []Command{{Ref: "refs/heads/topic", Old: ZeroOID, New: strings.Repeat("f", 40),
+		Result: ResultOK}}
+	long := strings.Repeat("x", MaxRefNameBytes-len("refs/heads/")-len("-000"))
+	for c := range MaxCommandsPerPush - 1 {
+		wideCmds = append(wideCmds, Command{Ref: fmt.Sprintf("refs/heads/%s-%03d", long, c), Old: ZeroOID,
+			New: strings.Repeat("f", 40), Result: ResultNG, Reason: RefusalNotPermitted})
+	}
+	wide, err := json.Marshal(wideCmds)
+	if err != nil {
+		b.Fatal(err)
+	}
+	e.exec(`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < ?1)
+		INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, actor_seat, via, turn_id,
+			run_id, coding_agent, commands, introduced, introduced_count, received_at, row_bytes)
+		SELECT printf('wide-%07d', i), 'wide', i, i, 'swe', 'agent', 'swe', 'git', 'turn',
+			CASE WHEN i % ?2 = ?2 / 2 THEN ?3 ELSE '' END,
+			CASE WHEN i % ?2 = ?2 / 2 THEN 'claude-code' ELSE '' END,
+			CASE WHEN i % ?4 = 1 THEN ?5 ELSE ?6 END, ?7, 3, i,
+			CASE WHEN i % ?4 = 1 THEN ?8 ELSE ?9 END FROM k`,
+		hour, every, hourRun, wideEvery, string(wide), commands, introduced, len(wide)+len(introduced),
+		len(commands)+len(introduced))
+	// MaxRunRepos REPOSITORIES, each an hour of the busy one's pushes, the
+	// hour's run pushing to each every `every` pushes, half way along.
+	repos := make([]string, MaxRunRepos)
+	for k := range repos {
+		repos[k] = fmt.Sprintf("many-%d", k)
+		e.apply(create(b, repos[k], repos[k]))
+		e.exec(`WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < ?1)
+			INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, actor_seat, via, turn_id,
+				run_id, coding_agent, commands, introduced, introduced_count, received_at, row_bytes)
+			SELECT printf('%s-%07d', ?2, i), ?2, i, i, 'swe', 'agent', 'swe', 'git', 'turn',
+				CASE WHEN i % ?3 = ?3 / 2 THEN ?4 ELSE '' END,
+				CASE WHEN i % ?3 = ?3 / 2 THEN 'claude-code' ELSE '' END,
+				?5, ?6, 3, i, ?7 FROM k`,
+			hour, repos[k], every, hourRun, commands, introduced, len(commands)+len(introduced))
+	}
 
 	r := &Reader{pageRows: MaxSnapshotItems, pageBytes: MaxPageBytes}
 	for _, arm := range []struct {
 		name   string
-		repo   string
+		repos  []string
 		run    string
 		launch int64
 		// rows is what the read scans — every push above the launch — and
 		// pushes what it answers.
 		rows, pushes int
 	}{
-		{"run=hour/repo=busy", "busy", hourRun, week - hour, hour, hour / every},
-		{"run=week/repo=busy", "busy", weekRun, 0, week, week / every},
-		{"run=hour/repo=quiet", "quiet", quietRun, quietPushes - quietHour, quietHour, quietHour / 2},
+		{"run=hour/repo=busy", []string{"busy"}, hourRun, week - hour, hour, hour / every},
+		{"run=week/repo=busy", []string{"busy"}, weekRun, 0, week, week / every},
+		{"run=hour/repo=quiet", []string{"quiet"}, quietRun, quietPushes - quietHour, quietHour, quietHour / 2},
+		{"run=hour/repo=wide", []string{"wide"}, hourRun, 0, hour, hour / every},
+		{"run=hour/repos=8", repos, hourRun, 0, MaxRunRepos * hour, MaxRunRepos * hour / every},
 	} {
 		b.Run(arm.name, func(b *testing.B) {
 			var pushes, pages int
+			var slowest time.Duration
 			for range b.N {
-				pushes, pages = 0, 0
+				pushes, pages, slowest = 0, 0, 0
 				q := ReadQuery{Kind: ReadRunPushes, RunPushes: &RunPushesQuery{Run: arm.run,
-					Repos: []string{arm.repo}, After: unpacked(arm.launch)}}
+					Repos: arm.repos, After: unpacked(arm.launch)}}
 				for {
 					var out ReadAnswer
+					began := time.Now()
 					if err := e.db.Reader().Read(ctx, func(tx *sql.Tx) error {
 						return r.runPushes(ctx, tx, q, &out)
 					}); err != nil {
 						b.Fatal(err)
 					}
+					slowest = max(slowest, time.Since(began))
 					pushes, pages = pushes+len(out.Pushes), pages+1
 					if out.Next == "" {
 						break
@@ -111,6 +170,7 @@ func BenchmarkRunPushes(b *testing.B) {
 			b.ReportMetric(float64(arm.rows), "rows/op")
 			b.ReportMetric(float64(pushes), "pushes/op")
 			b.ReportMetric(float64(pages), "pages/op")
+			b.ReportMetric(float64(slowest.Microseconds())/1e3, "max-page-ms")
 		})
 	}
 }

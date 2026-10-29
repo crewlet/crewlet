@@ -21,11 +21,12 @@
 -- NO INDEX OF ITS OWN. The engine reads a run's pushes once, when it collects
 -- the run (the code.read kind run_pushes): each repository the run was given,
 -- its pushes above the run's launch position over code_pushes_repo_idx, which
--- replicated 0056 orders by position, keeping the run's own. An index on
--- run_id would hold an entry of two UUIDs and a position, about a hundred
--- bytes, for every box push on every data node for the 181 days the history
--- keeps it — about 4.5 GB at 250 000 box pushes a day — to serve that one
--- read a run.
+-- replicated 0056 orders by position, keeping the run's own — in pages each
+-- held to what it reads, weighed by the row_bytes that index carries before
+-- any row is looked up (code's runPushes). An index on run_id would hold an
+-- entry of two UUIDs and a position, about a hundred bytes, for every box push
+-- on every data node for the 181 days the history keeps it — about 4.5 GB at
+-- 250 000 box pushes a day — to serve that one read a run.
 --
 -- Class: code_pushes stays reproducible: both columns are written only by the
 -- push apply, from the record's principal (Principal.Run), so a replay from
