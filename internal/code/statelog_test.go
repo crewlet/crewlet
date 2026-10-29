@@ -41,6 +41,9 @@ func TestTheCodeDomainPassesTheStateLogSuite(t *testing.T) {
 			Rows:          code.NewRows,
 			Write:         suiteWrite,
 			EncodeTrimmed: code.EncodeTrimmed,
+			// AND OF ITS READ INDEX'S BARRIER, which the engine registers
+			// for this log: certified to write no row.
+			EncodeBarrier: code.EncodeBarrier,
 			EncodeGate:    encodeSuiteGate,
 		}
 	})

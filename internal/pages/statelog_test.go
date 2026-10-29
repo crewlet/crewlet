@@ -48,6 +48,9 @@ func TestThePagesDomainIsACertifiedDomain(t *testing.T) {
 			Write:  suiteWrite,
 			// THE PRODUCTION ENCODER the engine hands the trim.
 			EncodeTrimmed: pages.EncodeTrimmed,
+			// AND OF ITS READ INDEX'S BARRIER, which the engine registers
+			// for this log: certified to write no row.
+			EncodeBarrier: pages.EncodeBarrier,
 			// THE GATE RECORD, which this domain had an applier, a fence
 			// and a table for and no writer — so the trim never learned an
 			// evicted node had left this log.

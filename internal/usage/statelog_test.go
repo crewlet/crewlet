@@ -39,6 +39,9 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 				string(usage.KindPerson), string(usage.KindRepoRead)},
 			Rows:  usage.NewRows,
 			Write: suiteWrite,
+			// NO READ INDEX: the engine registers no barrier for the
+			// usage log, which grants no linearizable read.
+			NoBarrier: true,
 		}
 	})
 }

@@ -22,7 +22,9 @@
 // and the reserve every other write is held to — the anchors a trimmed record
 // removes below the trim floor and the zero fence a write to one of their
 // subjects then has to pass, because a log whose anchors nothing removes grows
-// a row for every subject it ever wrote (ADR-0050) — and the domain that gates
+// a row for every subject it ever wrote (ADR-0050) — the read index's barrier,
+// which must change no row, because a linearizable read is released on it
+// before its transaction commits — and the domain that gates
 // seat admission, which must replay strictly, because a compacted domain's gap
 // is a coverage number that would otherwise withhold every seat claim on a
 // node. Whether a domain's copy is JUDGED is not a declaration and has no case
@@ -147,6 +149,16 @@ type Candidate struct {
 	// and so writes anchors ([statelog.WritesAnchors]); nil otherwise. See
 	// [TrimmedAnchorsGoAndAZeroWriteIsFenced].
 	EncodeTrimmed func(statelog.Envelope) ([]byte, error)
+
+	// EncodeBarrier is the domain's own encoder of its read index's barrier
+	// — the production function the engine hands [statelog.NewReadIndex],
+	// never a fixture — for a domain whose log serves linearizable reads;
+	// NoBarrier says the log has no read index, and so no barrier. EXACTLY
+	// ONE of the two is stated, as the engine's register states it, so a
+	// candidate that names neither is refused rather than passed unasked.
+	// See [ABarrierWritesNoRow].
+	EncodeBarrier func(statelog.Envelope) ([]byte, error)
+	NoBarrier     bool
 }
 
 // spec is the domain's own stream, which every case runs the candidate on.
@@ -169,6 +181,7 @@ func Run(t *testing.T, new Factory) {
 	t.Run("evictions", func(t *testing.T) { runEvictions(t, new) })
 	t.Run("node gates", func(t *testing.T) { runNodeGates(t, new) })
 	t.Run("trimmed anchors", func(t *testing.T) { runTrimmed(t, new) })
+	t.Run("barrier", func(t *testing.T) { runBarrier(t, new) })
 }
 
 // openEstate brings up a replicated estate with the framework's tables and

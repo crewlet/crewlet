@@ -41,12 +41,14 @@ func TestTheCompactedControlPasses(t *testing.T) {
 }
 
 // compacted is the control under the compacted protocol: no arbitration, so no
-// anchor and no trimmed record.
+// anchor and no trimmed record — and, like the engine's compacted logs, no
+// read index, so no barrier.
 func compacted() statelogtest.Candidate {
 	c := control()
 	c.Domain = compactedControl{}
 	c.Rows = rowsOver(c.Domain)
 	c.EncodeTrimmed = nil
+	c.EncodeBarrier, c.NoBarrier = nil, true
 	return c
 }
 
@@ -93,6 +95,7 @@ func control() statelogtest.Candidate {
 		Write:         controlWrite(func(s statelog.Stamp) statelog.Stamp { return s }),
 		EncodeGate:    encodeControlGate,
 		EncodeTrimmed: encodeControlTrimmed,
+		EncodeBarrier: encodeControlBarrier,
 		Migrate: func(ctx context.Context, db store.ReplicatedHandle) error {
 			return db.Tx(ctx, func(tx *sql.Tx) error {
 				_, err := tx.ExecContext(ctx, controlDDL)
@@ -241,6 +244,15 @@ func encodeControlTrimmed(env statelog.Envelope) ([]byte, error) {
 	}
 	if env.OpID != "" {
 		return nil, fmt.Errorf("control: a trimmed record carries no op id")
+	}
+	return json.Marshal(env)
+}
+
+// encodeControlBarrier is the control's encoder of its read index's barrier:
+// the framework's envelope, as the trimmed record is.
+func encodeControlBarrier(env statelog.Envelope) ([]byte, error) {
+	if env.Kind != statelog.BarrierKind {
+		return nil, fmt.Errorf("control: a %q envelope is not a barrier", env.Kind)
 	}
 	return json.Marshal(env)
 }
@@ -400,6 +412,9 @@ func (controlApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record
 		return applyControlGate(ctx, tx, rec, false)
 	case statelog.TrimmedKind:
 		// THE FRAMEWORK REMOVES THE ANCHORS; the control writes nothing.
+		return 0, nil
+	case statelog.BarrierKind:
+		// A BARRIER WRITES NO ROW: its reads are served before it commits.
 		return 0, nil
 	}
 	return applyWidget(ctx, tx, rec)
@@ -1274,6 +1289,72 @@ func (widgetsForAll) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		return applyControlGate(ctx, tx, rec, false)
 	}
 	return applyWidget(ctx, tx, rec)
+}
+
+// THE SUITE CATCHES A BARRIER THAT WRITES A ROW, and a candidate that never says
+// whether its log has one.
+func TestTheSuiteCatchesABarrierThatWritesARow(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		candidate func() statelogtest.Candidate
+		names     string
+	}{
+		"a candidate that states neither a barrier nor none": {
+			candidate: func() statelogtest.Candidate {
+				c := control()
+				c.EncodeBarrier = nil
+				return c
+			},
+			names: "does not say its log has no barrier",
+		},
+		"a candidate that states both": {
+			candidate: func() statelogtest.Candidate {
+				c := control()
+				c.NoBarrier = true
+				return c
+			},
+			names: "state one",
+		},
+		"an applier that writes a row for it": {
+			candidate: func() statelogtest.Candidate {
+				c := control()
+				c.Applier = widgetsForAll{}
+				return c
+			},
+			names: "changed rows for a barrier",
+		},
+		"an applier with no case for it": {
+			candidate: func() statelogtest.Candidate {
+				c := control()
+				c.Applier = noBarrierCase{}
+				return c
+			},
+			names: "did not apply its barrier",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := statelogtest.ABarrierWritesNoRow(t,
+				func(*testing.T) statelogtest.Candidate { return tc.candidate() })
+			if err == nil {
+				t.Fatalf("the suite passed %s", name)
+			}
+			if !strings.Contains(err.Error(), tc.names) {
+				t.Errorf("the suite objected, but to something else: %v", err)
+			}
+		})
+	}
+}
+
+// noBarrierCase faults on a barrier, as a domain's exhaustive switch does on a
+// kind it has no case for.
+type noBarrierCase struct{ controlApplier }
+
+func (noBarrierCase) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, opts statelog.ApplyOptions) (int, error) {
+	if rec.Kind == statelog.BarrierKind {
+		return 0, fmt.Errorf("control: no case for a %q record", rec.Kind)
+	}
+	return controlApplier{}.Apply(ctx, tx, rec, opts)
 }
 
 // noTrimmedCase faults on the trimmed record, as a domain's exhaustive switch

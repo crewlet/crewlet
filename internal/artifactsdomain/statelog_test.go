@@ -44,6 +44,9 @@ func TestTheArtifactsDomainIsACertifiedDomain(t *testing.T) {
 			EncodeGate: encodeSuiteGate,
 			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0050).
 			EncodeTrimmed: artifactsdomain.EncodeTrimmed,
+			// AND OF ITS READ INDEX'S BARRIER, which the engine registers
+			// for this log: certified to write no row.
+			EncodeBarrier: artifactsdomain.EncodeBarrier,
 		}
 	})
 }

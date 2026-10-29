@@ -75,6 +75,16 @@ func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Recor
 		return 0, fmt.Errorf("the probe applier at sequence %d: database is locked",
 			rec.Position.Seq)
 	}
+	if rec.Kind == statelog.BarrierKind {
+		// A BARRIER WRITES NO ROW, as every domain's applier is certified to
+		// keep it (statelogtest.ABarrierWritesNoRow): the loop serves the
+		// reads waiting on it before its transaction commits.
+		a.mu.Lock()
+		a.applied = append(a.applied, rec.Position)
+		a.epochs = append(a.epochs, opts.Epoch)
+		a.mu.Unlock()
+		return 0, nil
+	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO probe_rows (position, kind, stored_at) VALUES (?, ?, ?)
 		 ON CONFLICT (position) DO NOTHING`,
