@@ -314,14 +314,14 @@
 // whatever deadline its caller gives ([Router.budgetFor]): a turn's minutes
 // waited out on a wedged home would leave its runner-up never asked.
 //
-// [Router.Home] names that home itself — the node a repository's reads are
-// asked of, and the one its maintenance falls to on a fleet of alike nodes:
-// the first node of the same rendezvous order with NO demotion — one function
-// builds both, so on a quiet fleet a repository's reads and its own git work
-// meet on one git node — and UNKNOWN, never a guess, where who serves git
-// cannot be read. A home that went quiet is still the home; work two nodes of
-// a split presence view both do is work its repository's committer takes
-// once.
+// [Router.Home] names that home itself — the node a repository's reads and
+// engine writes are asked of, and the one its maintenance falls to on a fleet
+// of alike nodes: the first node of the same rendezvous order with NO demotion
+// — one function builds both, so on a quiet fleet a repository's reads, its
+// engine writes and its own git work meet on one git node — and UNKNOWN,
+// never a guess, where who serves git cannot be read. A home that went quiet
+// is still the home; work two nodes of a split presence view both do is work
+// its repository's committer takes once.
 //
 // [Router.Maintainer] names the git node a repository's MAINTENANCE — the
 // compaction of its packs, the publication of its layers — is placed on, which

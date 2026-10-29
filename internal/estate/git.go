@@ -433,9 +433,9 @@ var ErrNoGitNode = errors.New("estate: no live git node")
 // every live git node — this one among them where its git half is built — WITH
 // NO DEMOTION. It is the first node of the git walk's own order
 // ([Router.keyed], one function for both) before the router's memory reorders
-// it, so on a quiet fleet the node a repository's git reads are asked of first
-// and the node its own git work falls to are one node, and every node computes
-// the same one from the same set.
+// it, so on a quiet fleet the node a repository's git reads and engine writes
+// are asked of first and the node its own git work falls to are one node, and
+// every node computes the same one from the same set.
 //
 // NO DEMOTION, because work that is the home's own is not a read the walk
 // routes around a slow node: a home that went quiet, or declined a read, is

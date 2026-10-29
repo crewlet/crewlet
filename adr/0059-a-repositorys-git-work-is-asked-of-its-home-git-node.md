@@ -93,4 +93,4 @@ decides what this record left open: a repository's packs are compacted, and its
 layers published, by its MAINTAINER — the first git node of this same
 rendezvous order whose advertised background budget holds the publication, and
 the home where none does. On a fleet of alike nodes it is the home. The home
-stays the node a repository's reads are asked of first.
+stays the node a repository's reads and engine writes are asked of first.

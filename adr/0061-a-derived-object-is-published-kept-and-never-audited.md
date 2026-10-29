@@ -100,7 +100,8 @@ publishes a replacement.
 [ADR-0059](0059-a-repositorys-git-work-is-asked-of-its-home-git-node.md): who
 compacts a repository and publishes its layers is its MAINTAINER, the first git
 node of the same rendezvous order whose advertised background budget holds the
-publication — the home on a fleet of alike nodes. Reads stay with the home.
+publication — the home on a fleet of alike nodes. Reads and engine writes stay
+with the home.
 
 [ADR-0060](0060-a-compaction-merges-packs-without-judging-reachability.md): a
 repository's small packs are merged by its maintainer, which also raises
