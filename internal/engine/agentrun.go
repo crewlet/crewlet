@@ -304,8 +304,11 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		MCPServers:  servers,
 		Model:       run.model,
 		ProviderKey: member.Key,
-		System:      req.System,
-		Brief:       req.Brief,
+		// THE SIGN-IN THE JOB'S CLI IS HANDED, on the job's record: what
+		// its collection compares the entry's against ([Engine.signInReplaced]).
+		SignInID: string(agent.SignInID()),
+		System:   req.System,
+		Brief:    req.Brief,
 		// HOW TO WAIT ON A PERSON, with the names the chart gives this
 		// seat, from the pinned epoch (see [askBrief]). Without it the run
 		// holds `ask_and_wait` and nothing tells it when to park on it.

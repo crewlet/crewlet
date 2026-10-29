@@ -881,6 +881,11 @@ type resumeInput struct {
 	// Lost is the loss a lost job's round is carried on from — see
 	// [sandbox.ResumeRequest.Lost].
 	Lost *sandbox.LostRun
+
+	// Rotated is set by the resume itself, never by the collection: the
+	// run ended refused on a sign-in replaced while it ran, so the turn
+	// carries its round on once with the new one ([Engine.signInReplaced]).
+	Rotated *runner.Rotated
 }
 
 // resumeTurn re-enters a suspended turn.
@@ -990,6 +995,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// vendor's spent plan sits its entry out here, on the node whose launch
 	// the turn's next run is — see [Engine.noteRunEnded].
 	e.noteRunEnded(ctx, company, in.Run, in.Ended)
+	in.Rotated = e.signInReplaced(ctx, company, in)
 	// A COMPLETION'S MODELS ARE ASKED HERE, its job collected and charged and
 	// its box asleep, and before anything of its turn runs: a limit its
 	// review's chain already knows refuses it, which the coordinator holds on
@@ -1376,6 +1382,9 @@ func runnerResume(in resumeInput, steered []steer.Read) *runner.Resume {
 		// host, which carries its round on ([runner.Lost]).
 		Asked: runnerAsked(in.Asked),
 		Lost:  runnerLost(in.Lost),
+		// A REFUSAL ON A REPLACED SIGN-IN CARRIES THE ROUND ON, once. See
+		// [Engine.signInReplaced].
+		Rotated: in.Rotated,
 		// AND EVERY NOTE THE TURN HAS READ, off the record every read is
 		// written on: the briefs', the run's own and earlier reviews'.
 		Steered: steered,
@@ -3632,4 +3641,52 @@ func underlay(env, defaults map[string]string) map[string]string {
 		}
 	}
 	return env
+}
+
+// signInReplaced decides whether a collected run is carried on because a
+// credential was replaced while it ran (M8 of the Models design), answering the
+// carried round or nil.
+//
+// A process's environment cannot change, and the coding CLIs re-read no file
+// for a token, so a job running when its entry's credential was rotated keeps
+// the old one until it ends; where the vendor revoked the old one, the job
+// ends refused while the entry already signs in with the new one. Every LAUNCH
+// builds its env from the current epoch's entry, so the next segment carries
+// the new credential: the round is relaunched once, in the job's box,
+// continuing its session, rather than failed for a reason it no longer has.
+//
+// ALL OF IT MUST HOLD: a completion (a person's answer and a lost job carry
+// their rounds on already); a job that is not itself such a relaunch (once per
+// round, so a credential that keeps failing fails the turn); a sign-in
+// recorded at its launch; an ending its entry's CLI classifies as an auth
+// failure; and an entry whose sign-in now differs from the one recorded. A
+// refusal on the very sign-in the entry still uses is an ordinary refusal.
+func (e *Engine) signInReplaced(ctx context.Context, c *Company, in resumeInput) *runner.Rotated {
+	run := in.Run
+	if in.Asked != nil || in.Lost != nil || run.Launch.FollowUp == sandbox.FollowUpSignInReplaced ||
+		run.Launch.SignInID == "" || c == nil || c.Models == nil {
+		return nil
+	}
+	provider, ok := c.Models.Provider(run.Launch.ProviderKey)
+	if !ok {
+		return nil
+	}
+	agent, isCLI := provider.(*cliagent.Provider)
+	if !isCLI {
+		return nil
+	}
+	kind, classified := agent.EndedKind(cliagent.RunEnd{Answer: in.Ended.Text, Error: in.Ended.Error,
+		Failed: !in.Ended.Success, Event: in.Ended.Event, At: in.Ended.At})
+	if !classified || kind != llm.KindAuth {
+		return nil
+	}
+	current := agent.SignInID()
+	if current == "" || string(current) == run.Launch.SignInID {
+		return nil
+	}
+	log.InfoContext(ctx, "run_relaunched_signed_in", "turn_id", run.TurnID, "seat", run.AgentHandle,
+		"provider_key", run.Launch.ProviderKey, "launch_id", run.LaunchID,
+		"detail", "the run was refused on a sign-in that was replaced while it ran; its round "+
+			"is carried on once, in its box, on the entry's new sign-in")
+	return &runner.Rotated{SessionID: run.SessionID, BoxKept: run.SandboxID != ""}
 }
