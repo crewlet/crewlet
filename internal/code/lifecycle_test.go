@@ -354,6 +354,52 @@ func TestAProtectionChangeIsResolvedInsideTheDecide(t *testing.T) {
 	}
 }
 
+// A PROTECT REQUEST IS REFUSED A RULE NO RECORD MAY CARRY at its own
+// validation, naming the field its caller sent — a direct_push this build does
+// not know, unset among them, allow_force or a merge gate on a tag, and a gate
+// a record may not carry — for whoever asks and before any decide judges who
+// may: a person, the unit's lead and a member that may not protect the
+// repository are all told the one thing, and nothing is written. A rule a
+// record may carry passes, a branch rule's gate included.
+//
+// Mutation: drop the rule's check from the request's validation — the
+// decide's settings refuse it naming protections[0], and the member is
+// answered not_permitted, red.
+func TestAProtectRequestIsRefusedARuleNoRecordMayCarry(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	id := n.made(lcPerson, "ruled", unitOwned("eng"))
+	end := n.end()
+	gate, unknownMerger := aGate(), aGate()
+	unknownMerger.MergeBy = "everyone"
+	for _, tc := range []struct {
+		pattern string
+		rule    code.Protection
+		field   string
+	}{
+		{"refs/heads/main", code.Protection{}, "protect.rule.direct_push"},
+		{"refs/heads/main", code.Protection{DirectPush: "maintainers"}, "protect.rule.direct_push"},
+		{"refs/tags/v*", code.Protection{DirectPush: code.DirectPersons, AllowForce: true}, "protect.rule.allow_force"},
+		{"refs/tags/v*", code.Protection{DirectPush: code.DirectPersons, Gate: &gate}, "protect.rule.gate"},
+		{"refs/heads/main", code.Protection{DirectPush: code.DirectPersons, Gate: &unknownMerger},
+			"protect.rule.gate.merge_by"},
+	} {
+		for _, actor := range []code.Principal{lcPerson, agent("cto"), agent("dev")} {
+			_, err := n.store.Lifecycle(t.Context(), lcProtect(actor, id, tc.pattern, &tc.rule))
+			if !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), tc.field+":") {
+				t.Errorf("%s protecting %s with %+v = %v, want ErrInvalid naming %s", cmp.Or(actor.Seat,
+					actor.OperatorID), tc.pattern, tc.rule, err, tc.field)
+			}
+		}
+	}
+	if got := n.end(); got != end {
+		t.Fatalf("the refused rules wrote %d records", got-end)
+	}
+	n.lands(lcProtect(lcPerson, id, "refs/tags/v*", &code.Protection{DirectPush: code.DirectPersons}))
+	n.lands(lcProtect(lcPerson, id, "refs/heads/main", &code.Protection{DirectPush: code.DirectPersons, Gate: &gate}))
+}
+
 // A RENAME REDIRECTS ITS OLD NAME UNTIL ITS RELEASE: the old name answers the
 // repository under its new name, the new name answers it as itself, nothing
 // else may take the old name while it redirects, and renaming back takes it

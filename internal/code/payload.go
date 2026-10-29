@@ -416,6 +416,39 @@ type Protection struct {
 	Gate *MergeGate `json:"gate,omitempty"`
 }
 
+// invalid is why p is no rule a record may carry, or "", naming the field: a
+// protection pattern, a direct_push this build knows, no allow_force and no
+// merge gate on a tag pattern, since a tag never moves, and a gate a record
+// may carry ([MergeGate]'s own rules, named below gate). THE ONE RULE for a
+// rule alone, read by [RepoSettings.Validate] for every rule a record carries
+// and by a protect request's own validation for the one it sends
+// ([LifecycleRequest.Validate]); a rule's place among the others — sorted by
+// pattern, each once — is the list's to judge.
+func (p Protection) invalid() string {
+	switch {
+	case !gitref.ValidPattern(p.Pattern):
+		return fmt.Sprintf("pattern: %q is not a protection pattern", p.Pattern)
+	case !p.DirectPush.Valid():
+		return fmt.Sprintf("direct_push: %q is not one of %v", p.DirectPush, DirectPushes())
+	case p.AllowForce && strings.HasPrefix(p.Pattern, "refs/tags/"):
+		return fmt.Sprintf("allow_force: a tag never moves, so allow_force has nothing to allow on %s",
+			p.Pattern)
+	case p.Gate != nil && strings.HasPrefix(p.Pattern, "refs/tags/"):
+		return fmt.Sprintf("gate: a tag never moves, so no merge reaches %s and a merge gate has nothing "+
+			"to hold", p.Pattern)
+	case p.Gate == nil:
+		return ""
+	}
+	switch field, why := p.Gate.invalid(); {
+	case why == "":
+		return ""
+	case field == "":
+		return "gate: " + why
+	default:
+		return "gate." + field + ": " + why
+	}
+}
+
 // RepoSettings is everything about a repository its manager decides, carried
 // whole by every record that sets it.
 type RepoSettings struct {
@@ -516,33 +549,13 @@ func (s RepoSettings) Validate() error {
 			len(s.Protections), MaxProtectionsPerRepo)
 	}
 	for i, p := range s.Protections {
-		switch {
-		case !gitref.ValidPattern(p.Pattern):
-			return fmt.Errorf("%w: protections[%d].pattern: %q is not a protection pattern",
-				ErrInvalid, i, p.Pattern)
-		case !p.DirectPush.Valid():
-			return fmt.Errorf("%w: protections[%d].direct_push: %q is not one of %v",
-				ErrInvalid, i, p.DirectPush, DirectPushes())
-		case p.AllowForce && strings.HasPrefix(p.Pattern, "refs/tags/"):
-			return fmt.Errorf("%w: protections[%d].allow_force: a tag never moves, so "+
-				"allow_force has nothing to allow on %s", ErrInvalid, i, p.Pattern)
-		case p.Gate != nil && strings.HasPrefix(p.Pattern, "refs/tags/"):
-			return fmt.Errorf("%w: protections[%d].gate: a tag never moves, so no merge reaches %s "+
-				"and a merge gate has nothing to hold", ErrInvalid, i, p.Pattern)
-		case i > 0 && s.Protections[i-1].Pattern >= p.Pattern:
+		if why := p.invalid(); why != "" {
+			return fmt.Errorf("%w: protections[%d].%s", ErrInvalid, i, why)
+		}
+		if i > 0 && s.Protections[i-1].Pattern >= p.Pattern {
 			return fmt.Errorf("%w: protections[%d].pattern: %q is not after %q — the "+
 				"rules are sorted by pattern and unique, so one declaration forms one "+
 				"record on every node", ErrInvalid, i, p.Pattern, s.Protections[i-1].Pattern)
-		}
-		if p.Gate == nil {
-			continue
-		}
-		switch field, why := p.Gate.invalid(); {
-		case why == "":
-		case field == "":
-			return fmt.Errorf("%w: protections[%d].gate: %s", ErrInvalid, i, why)
-		default:
-			return fmt.Errorf("%w: protections[%d].gate.%s: %s", ErrInvalid, i, field, why)
 		}
 	}
 	if why := pathOwnersInvalid(s.PathOwners); why != "" {

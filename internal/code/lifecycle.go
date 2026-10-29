@@ -363,8 +363,8 @@ func RepoIDOf(opID string) (string, bool) {
 // field): a kind this build knows, with exactly that kind's fields; an op id a
 // caller may bring ([statelog.CheckCallerOpID]); an actor that is a seat or a
 // bound person, carrying no run; and each field within its rules — a create's
-// settings a tool's, of the kind its name says, a hold's turn bounded and its
-// read named.
+// settings a tool's, of the kind its name says, a protect request's rule one a
+// record may carry, a hold's turn bounded and its read named.
 func (r LifecycleRequest) Validate() error {
 	if why := r.invalid(); why != "" {
 		return fmt.Errorf("%w: %s", ErrInvalid, why)
@@ -442,6 +442,19 @@ func (r LifecycleRequest) invalid() string {
 		case r.Protect.Rule != nil && r.Protect.Rule.Pattern != "" && r.Protect.Rule.Pattern != r.Protect.Pattern:
 			return fmt.Sprintf("protect.rule.pattern: %q is not the change's pattern %q",
 				r.Protect.Rule.Pattern, r.Protect.Pattern)
+		}
+		// THE RULE IS HELD HERE TO WHAT A RECORD MAY CARRY, before any
+		// decide: left to the settings a decide forms, a rule no record may
+		// carry was refused naming its index among the repository's stored
+		// rules rather than the field its caller sent, and only once the
+		// request had been judged — a seat that may not protect the
+		// repository was told so of a request no node could decide.
+		if r.Protect.Rule != nil {
+			rule := *r.Protect.Rule
+			rule.Pattern = r.Protect.Pattern
+			if why := rule.invalid(); why != "" {
+				return "protect.rule." + why
+			}
 		}
 	case LifecycleDelete:
 		switch {
