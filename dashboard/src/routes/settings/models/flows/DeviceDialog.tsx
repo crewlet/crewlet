@@ -28,7 +28,7 @@ import {
   useToast,
 } from "@crewlethq/ui";
 import type { QueryErrorCode } from "~/contract/errors.ts";
-import type { ModelDeviceStatus } from "~/protocol/models.ts";
+import { DEVICE_SIGN_IN_ENDED, type ModelDeviceStatus } from "~/contract/models.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { ModelDevice } from "~/protocol/models.ts";
@@ -43,9 +43,9 @@ import { DEVICE } from "../words.ts";
  */
 export const DEVICE_POLL_MS = 3_000;
 
-/** The states a session ends in; every other one is still moving. */
-const ENDED: readonly ModelDeviceStatus[] = ["approved", "failed", "expired", "cancelled"];
-export const deviceEnded = (status: ModelDeviceStatus) => ENDED.includes(status);
+/** Whether a session has ended, by the engine's own set; every other status is still moving. */
+export const deviceEnded = (status: ModelDeviceStatus) =>
+  (DEVICE_SIGN_IN_ENDED as readonly ModelDeviceStatus[]).includes(status);
 
 /**
  * The host a sign-in address points at, for the button that opens it, or

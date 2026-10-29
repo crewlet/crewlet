@@ -95,6 +95,27 @@ export type ModelAlarmKind =
   | "llm_limit_waiting";
 
 /**
+ * Where a device sign-in is (`coord.DeviceSignInStatus`): the dialog's status
+ * line and its tone are keyed on it. Held against `coord.DeviceSignInStatuses`
+ * by `internal/coord.TestTheModelsScreenNamesEveryDeviceSignInStatus`, so a
+ * status the engine adds is never one the dialog has no words for.
+ */
+export type ModelDeviceStatus =
+  "starting" | "pending" | "cancel_requested" | "approved" | "failed" | "expired" | "cancelled";
+
+/**
+ * The device sign-in statuses a session ends in (`DeviceSignInStatus.Ended`):
+ * nothing changes the record again, so the dialog stops polling and offers to
+ * start again. Held to the engine's by the same gate.
+ */
+export const DEVICE_SIGN_IN_ENDED = [
+  "approved",
+  "failed",
+  "expired",
+  "cancelled",
+] as const satisfies readonly ModelDeviceStatus[];
+
+/**
  * How a model's CLI signs in as one node resolves it (`cliagent.SignInRoute`).
  * Held against `cliagent.SignInRoutes` by
  * `internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns`.
