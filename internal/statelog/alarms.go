@@ -347,6 +347,7 @@ const (
 	KindCodeMaintenanceRefused Kind = "code_maintenance_refused"
 	KindCodeCompactionBehind   Kind = "code_compaction_behind"
 	KindCodeCommitBusy         Kind = "code_commit_busy"
+	KindCodeChecksBacklog      Kind = "code_checks_backlog"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -708,6 +709,27 @@ type Reading struct {
 	CodeCommitBusyRepo   string
 	CodeCommitBusyOfRepo int
 	CodeCommitBusyNode   int
+
+	// CodeChecksBacklog is how many queued attempts of checks have waited for
+	// a runner longer than their OWN timeout — each held to the
+	// timeout_seconds of the definition it was queued under, the time its
+	// author gave the check to run — among the oldest queued attempts this
+	// node's rows hold (internal/code's Reader.ChecksBacklog, at most
+	// code.BacklogScan of them, oldest queued first);
+	// CodeChecksBacklogOldest is the longest wait among them and
+	// CodeChecksBacklogCheck that attempt, by its repository's name, its
+	// commit, its check and its attempt.
+	//
+	// MEASURED FROM THE ROWS by every data node, never by a runner: a fleet
+	// whose every git node is gone runs no check at all, and is the case the
+	// alarm must not miss. EACH ATTEMPT WAS JUDGED AT ITS OWN TIMEOUT, which
+	// this framework does not import, so the alarm borrows it (ADR-0015) and
+	// fires at any count. All zero on a node holding no code log's rows — no
+	// data role — and on one whose queued attempts are all within their
+	// time.
+	CodeChecksBacklog       int
+	CodeChecksBacklogOldest time.Duration
+	CodeChecksBacklogCheck  string
 }
 
 // Alarm is one condition currently true on this node.
@@ -1548,6 +1570,40 @@ var table = []rule{
 			"(`late`) and after every compare-and-set round (`contended`); the " +
 			"last two raise no alarm, and the `reason` attribute of " +
 			"`crewlet.code.commit.busy` counts all four. See " +
+			"docs/concepts/code-host.md.",
+	},
+	{
+		// THE THRESHOLD IS EACH QUEUED CHECK'S OWN TIMEOUT (ADR-0015): a
+		// check's definition says how long it may run, which is how long its
+		// author expects its result to take, so an attempt that waited that
+		// long for a runner before it even began is one its change waits on
+		// past anything its checks file planned for. One threshold of the
+		// table's would fire on every long check's ordinary queue and never
+		// on a one-minute lint stuck for an hour. This framework imports no
+		// code-host package, so the reader judges each attempt at its own
+		// timeout and the rule fires at any count. Raised by every data node
+		// from its rows, never by a runner: a fleet with no live git node
+		// runs no check, and still raises it.
+		kind: KindCodeChecksBacklog,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d queued check attempt(s) have waited for a runner longer than their "+
+					"own timeout — the longest, %s, for %s",
+					r.CodeChecksBacklog, r.CodeChecksBacklogCheck, spoken(r.CodeChecksBacklogOldest)),
+				r.CodeChecksBacklog > 0
+		},
+		remedy: "A queued attempt waits for a git node that runs checks to " +
+			"claim it, so the backlog is no git node claiming — the fleet's git " +
+			"nodes gone, stopped or failing their checks' boxes — or every cell " +
+			"a check may run in busy: a git node's own container cells, as many " +
+			"as its cores allow, and the remote cells, as many at once and for " +
+			"as long a day as the company allows. Read the git nodes' logs and " +
+			"`crewlet.code.checks.claims`: claims refused `claimed` are nodes " +
+			"racing for the same attempts, which is no backlog. Against the " +
+			"rate attempts end (`crewlet.code.checks.finished`) the queue's " +
+			"wait is capacity: more git nodes, or more cells allowed to run at " +
+			"once. Nothing is lost while it waits: a change whose required " +
+			"check waits cannot merge until it runs, and an attempt cancelled " +
+			"meanwhile — its head moved on — leaves the queue. See " +
 			"docs/concepts/code-host.md.",
 	},
 }

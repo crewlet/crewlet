@@ -1572,6 +1572,14 @@ it ended and where it ran. It is kept out of the activity feed: every push of
 every change ends each check its file defines, faster than a person reads a
 feed, and an attempt's ending is read where it is asked.
 
+A queued attempt that waits for a runner longer than its **own**
+`timeout_seconds` raises `code_checks_backlog` ([alarms](../reference/alarms.md))
+— each attempt judged at the time its author gave its check to run, never at
+one threshold for every check, so a long check's ordinary queue raises
+nothing and a one-minute lint stuck for an hour does. Every data node measures
+it from the rows, the oldest queued first, so it stands even where no git node
+runs checks at all.
+
 The writer counts what it decided on three instruments: the attempts it
 queued (`crewlet.code.checks.queued`, by purpose), the endings the rows kept
 (`crewlet.code.checks.finished`, by state and placement) and every claim's

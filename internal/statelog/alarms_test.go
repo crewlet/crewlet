@@ -209,6 +209,13 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			"3 proposal(s) were refused busy in the last 15m because this node's committer could not hold " +
 				"them — 2 for web alone, 1 at the node's whole bound",
 		},
+		"queued checks past their own timeouts": {
+			statelog.KindCodeChecksBacklog,
+			statelog.Reading{CodeChecksBacklog: 2, CodeChecksBacklogOldest: 2 * time.Hour,
+				CodeChecksBacklogCheck: "web@111111111111: unit (attempt 1)"},
+			"2 queued check attempt(s) have waited for a runner longer than their own timeout — the " +
+				"longest, web@111111111111: unit (attempt 1), for 2h",
+		},
 		"a service objective burning its budget": {
 			statelog.KindObjectiveBurn,
 			statelog.Reading{ObjectiveBurns: burning(objectives.ArtifactReady, 90, 10)},

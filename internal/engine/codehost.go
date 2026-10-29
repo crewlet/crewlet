@@ -564,6 +564,19 @@ func (e *Engine) codeReading(ctx context.Context, now time.Time, out *statelog.R
 	if n == nil {
 		return
 	}
+	if n.codeReader != nil {
+		// THE QUEUED CHECKS' BACKLOG, from this node's own rows on every node
+		// that holds them, whether or not any git node runs checks: a fleet
+		// whose every runner is gone is the backlog the alarm exists for.
+		backlog, err := n.codeReader.ChecksBacklog(ctx, now)
+		if err != nil {
+			log.WarnContext(ctx, "code_checks_backlog_unread", "error", err.Error(),
+				"detail", "this evaluation raises no code_checks_backlog; the next reads the rows again")
+		}
+		out.CodeChecksBacklog = backlog.Behind
+		out.CodeChecksBacklogOldest = backlog.Oldest
+		out.CodeChecksBacklogCheck = backlog.Check
+	}
 	if n.committer != nil {
 		busy := n.committer.AlarmReading(now)
 		out.CodeCommitBusy = busy.Refused

@@ -9,6 +9,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitref"
@@ -525,6 +526,82 @@ func (r *Reader) dueCheckWork(ctx context.Context, tx *sql.Tx, q ReadQuery, out 
 	return rows.Err()
 }
 
+// BacklogScan is the most queued attempts one reading of the checks' backlog
+// walks: 1 024, oldest queued first — the oldest are the ones past their
+// timeouts first, and a backlog of more is one the reading already counts in
+// the thousand it read; a reading every AlarmInterval on every data node is a
+// thousand point reads of rows at most, each its timeout beside the index.
+const BacklogScan = 1024
+
+// ChecksBacklog is what a node's alarm reads of the queued checks
+// ([Reader.ChecksBacklog]): how many of the oldest queued attempts have waited
+// longer than their own timeout, the longest wait among them, and that
+// attempt, named for an operator.
+type ChecksBacklog struct {
+	Behind int
+	Oldest time.Duration
+	Check  string
+}
+
+// ChecksBacklog reads the queued attempts this node's rows hold, oldest
+// queued first and at most [BacklogScan] of them, and counts each that has
+// waited longer than its OWN timeout — the timeout_seconds of the definition
+// it was queued under — by now: the threshold of the code_checks_backlog
+// alarm is every check's own (ADR-0015), never one of the alarm's. An attempt
+// queued with no definition — one a person's CI reports, which no runner of
+// the engine claims — is never behind. A STALE read of this node's rows, as
+// every alarm's reading is: the alarm says what this node holds.
+func (r *Reader) ChecksBacklog(ctx context.Context, now time.Time) (ChecksBacklog, error) {
+	query := statelog.Freshness{Level: statelog.ReadStale}.Query(
+		statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+	var out ChecksBacklog
+	_, err := r.log.Read(ctx, query, func(tx *sql.Tx) error {
+		out = ChecksBacklog{}
+		rows, err := tx.QueryContext(ctx, checksBacklogSQL, math.MinInt64, BacklogScan)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		var oldest CheckKey
+		for rows.Next() {
+			var (
+				key               CheckKey
+				queuedAt, timeout int64
+			)
+			if err := rows.Scan(&key.RepoID, &key.OID, &key.Name, &key.Attempt, &queuedAt, &timeout); err != nil {
+				return err
+			}
+			waited := now.Sub(store.DecodeTime(queuedAt))
+			if timeout <= 0 || waited <= time.Duration(timeout)*time.Second {
+				continue
+			}
+			out.Behind++
+			if waited > out.Oldest {
+				out.Oldest, oldest = waited, key
+			}
+		}
+		if err := rows.Err(); err != nil || out.Behind == 0 {
+			return err
+		}
+		name := oldest.RepoID
+		switch err := tx.QueryRowContext(ctx, repoNameSQL, oldest.RepoID).Scan(&name); {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return err
+		}
+		commit := oldest.OID
+		if len(commit) > 12 {
+			commit = commit[:12]
+		}
+		out.Check = fmt.Sprintf("%s@%s: %s (attempt %d)", name, commit, oldest.Name, oldest.Attempt)
+		return nil
+	})
+	if err != nil {
+		return ChecksBacklog{}, fmt.Errorf("code: read the queued checks' backlog: %w", err)
+	}
+	return out, nil
+}
+
 // THE CURSORS, each a row's place in its listing's order, "/"-separated — no
 // part of one holds a "/": a commit is hex, a check's name is
 // [config.ValidCodeCheckName]'s alphabet, a repository's id a UUID and an
@@ -649,6 +726,13 @@ const (
 			AND (finished_at < ?2 OR repo_id < ?3 OR (repo_id = ?3 AND (commit_oid < ?4
 				OR (commit_oid = ?4 AND (name < ?5 OR (name = ?5 AND attempt < ?6))))))
 		ORDER BY finished_at DESC, repo_id DESC, commit_oid DESC, name DESC, attempt DESC LIMIT ?7`
+	// THE BACKLOG'S WALK: the queued attempts oldest first, the queued state
+	// repeated as code_checks_queued_idx is partial on it and the >= what
+	// keeps its range seek, each with its timeout read beside the index.
+	checksBacklogSQL = `SELECT repo_id, commit_oid, name, attempt, queued_at, timeout_seconds
+		FROM code_checks INDEXED BY code_checks_queued_idx
+		WHERE state = 'queued' AND queued_at >= ?1
+		ORDER BY queued_at, repo_id, commit_oid, name, attempt LIMIT ?2`
 	// THE HOME'S LISTING, changes_due's two statements with the facts' test
 	// replaced by the checks': a head with no attempt at its commit, one seek
 	// of code_checks' key.

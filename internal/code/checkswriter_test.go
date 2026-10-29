@@ -534,3 +534,45 @@ func TestARepositorysChecksAreReadByEveryShape(t *testing.T) {
 		t.Fatalf("a seat the grant shuts out read the window (%v, %v), want none of web's", window.Checks, err)
 	}
 }
+
+// THE BACKLOG COUNTS EACH QUEUED CHECK AT ITS OWN TIMEOUT: of three attempts
+// queued at one instant — a check given a minute to run, one given ten, and
+// one given a minute that a runner has claimed since — the reading two
+// minutes on counts the first alone, naming it by its repository's name: the
+// second is inside its own time, and the third is running, queued no more.
+// Thirty seconds on, none is behind.
+//
+// Mutation: judge every attempt at one threshold — any one — and the first
+// two, queued together, are counted together or not at all — red.
+func TestTheBacklogCountsEachCheckAtItsOwnTimeout(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo := changeRepo(t, n, "web")
+	w, _, _, _ := checksWriterOn(t, n)
+	for _, c := range []struct {
+		name    string
+		timeout int
+	}{{"lint", 60}, {"unit", 600}, {"vet", 60}} {
+		req := queueing(code.CheckKey{RepoID: repo, OID: oidOf("B"), Name: c.name, Attempt: 1}, code.QueueDispatch)
+		req.Queued.Def = &code.CheckDef{Name: c.name, Run: "make " + c.name, TimeoutSeconds: c.timeout}
+		res, err := w.Publish(t.Context(), req)
+		requireChecked(t, "the attempt of "+c.name, res, err)
+	}
+	res, err := w.Publish(t.Context(), claiming(code.CheckKey{RepoID: repo, OID: oidOf("B"), Name: "vet", Attempt: 1},
+		"git-a", ""))
+	requireChecked(t, "vet's claim", res, err)
+
+	got, err := n.reader.ChecksBacklog(t.Context(), harnessAt.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("the backlog: %v", err)
+	}
+	want := "web@" + oidOf("B")[:12] + ": lint (attempt 1)"
+	if got.Behind != 1 || got.Check != want || got.Oldest != 2*time.Minute {
+		t.Fatalf("two minutes on the backlog is %+v, want lint's one attempt, 2m past its queueing, as %q", got,
+			want)
+	}
+	if got, err := n.reader.ChecksBacklog(t.Context(), harnessAt.Add(30*time.Second)); err != nil ||
+		got != (code.ChecksBacklog{}) {
+		t.Fatalf("thirty seconds on the backlog is (%+v, %v), want none behind", got, err)
+	}
+}

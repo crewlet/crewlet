@@ -189,6 +189,13 @@ var alarmMeaning = map[Kind]string{
 		"alone, whichever node received the pushes, and only for a backlog: a " +
 		"proposal its asker could no longer wait for, or one that lost every " +
 		"compare-and-set round, is counted and logged and raises nothing.",
+	KindCodeChecksBacklog: "Queued attempts of checks have waited for a runner " +
+		"longer than their own timeout — each judged at the timeout_seconds of " +
+		"the definition it was queued under, the time its author gave the check " +
+		"to run — so a change whose head they check waits on them past anything " +
+		"its checks file planned for. Measured from the code log's rows by every " +
+		"data node, the oldest queued first, so it stands even where no git node " +
+		"runs checks at all.",
 }
 
 const alarmHeader = `# Alarms

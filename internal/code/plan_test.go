@@ -842,6 +842,7 @@ func registeredStatements() map[string]statement {
 		"due check repositories": {dueCheckReposSQL, []any{"", MaxSnapshotItems},
 			[]string{"code_changes_open_idx (repo_id>?)", "COVERING INDEX " + checksKey + " (repo_id=? AND commit_oid=?)",
 				refsKey + " (repo_id=? AND ref=?)", repoKey + " (id=?)"}},
+		"checks backlog": {checksBacklogSQL, []any{0, BacklogScan}, []string{"code_checks_queued_idx (queued_at>=?)"}},
 		"due check heads": {dueCheckChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",
 				"COVERING INDEX " + checksKey + " (repo_id=? AND commit_oid=?)"}},
@@ -1003,16 +1004,11 @@ func claimedReads() map[string]statement {
 		"code_repos_expunge_due_idx": {`SELECT id, name FROM code_repos INDEXED BY code_repos_expunge_due_idx
 			WHERE status IN ('active', 'archived') AND expunged_at <= ? ORDER BY expunged_at, id LIMIT ?`,
 			[]any{2, MaxSnapshotItems}, []string{"code_repos_expunge_due_idx (expunged_at<=?)"}},
-		// THE CHECKS' INDEXES THEIR LATER READERS SEEK (replicated 0075): a
-		// runner's claim walk, oldest queued first from where its last page
-		// ended, the queued state repeated as the index is partial on it; and
-		// the home's sweep of a repository's running checks by runner, the
-		// running state repeated likewise. A change's checks are read by
-		// checksread.go's `checks` listing, registered above.
-		"code_checks_queued_idx": {`SELECT repo_id, commit_oid, name, attempt FROM code_checks
-			INDEXED BY code_checks_queued_idx WHERE state = 'queued' AND queued_at >= ?
-			ORDER BY queued_at, repo_id, commit_oid, name, attempt LIMIT ?`,
-			[]any{0, 1024}, []string{"code_checks_queued_idx (queued_at>=?)"}},
+		// THE CHECKS' INDEX ITS LATER READER SEEKS (replicated 0075): the
+		// home's sweep of a repository's running checks by runner, the running
+		// state repeated as the index is partial on it. A change's checks are
+		// read by checksread.go's `checks` listing, and the queued ones by the
+		// backlog's walk, both registered above.
 		"code_checks_running_idx": {`SELECT commit_oid, name, attempt, runner_node FROM code_checks
 			INDEXED BY code_checks_running_idx WHERE repo_id = ? AND state = 'running'`,
 			[]any{"repo-1"}, []string{"code_checks_running_idx (repo_id=?)"}},

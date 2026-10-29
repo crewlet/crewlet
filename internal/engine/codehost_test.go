@@ -909,3 +909,103 @@ func serveWeb(t *testing.T, b *config.Bootstrap, e *engine.Engine) string {
 	t.Cleanup(srv.Close)
 	return srv.URL + "/git/web.git"
 }
+
+// THE BACKLOG ALARM BORROWS EACH CHECK'S OWN TIMEOUT, through the wiring a
+// running node has: two attempts queued on a data node at the same instant,
+// two minutes ago — one of a check given a minute to run, one given ten — and
+// the node's reading counts the first alone, naming it, so
+// code_checks_backlog stands on the node at its next evaluation. The node runs
+// no git, so no runner ever claims either: the backlog is measured from the
+// rows by the data node, which is how a fleet with no live runner still
+// raises it.
+//
+// Mutation: judge every attempt at one threshold of the rule's own — any one
+// — and the two attempts, queued together, are counted together or not at
+// all — red.
+func TestTheBacklogAlarmBorrowsEachChecksTimeout(t *testing.T) {
+	t.Parallel()
+	b := gitNodeBootstrap(t, []string{"data", "ingress", "seats", "workers"})
+	e, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: b, Company: parsedCompany(t, gitCompany),
+		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.WithoutCancel(t.Context())) })
+	if _, hosts := e.CodeHost(); hosts {
+		t.Fatal("the premise: a node without the git role runs no check, so nothing here claims one")
+	}
+	seam, ok := engine.OperatorCode(e)
+	if !ok {
+		t.Fatal("the node serves no code operations")
+	}
+	var web string
+	waitFor(t, "the declared repository to exist", func() bool {
+		answer, err := seam.Read(t.Context(), code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator,
+			OperatorID: "op-1", Seat: "founder"}, Kind: code.ReadRepos,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}})
+		if err != nil {
+			return false
+		}
+		for _, r := range answer.Repos {
+			if r.Name == "web" {
+				web = r.ID
+			}
+		}
+		return web != ""
+	})
+	queued := time.Now().UTC().Add(-2 * time.Minute)
+	for _, c := range []struct {
+		name    string
+		timeout int
+	}{{"lint", 60}, {"unit", 600}} {
+		res, err := seam.Checks(t.Context(), code.ChecksRequest{
+			OpID: statelog.NewOpID(time.Now(), "code_check_dispatch"),
+			Queued: &code.CheckQueued{CheckKey: code.CheckKey{RepoID: web,
+				OID: "1111111111111111111111111111111111111111", Name: c.name, Attempt: 1},
+				Purpose: code.PurposeTip, Target: "refs/heads/main",
+				Def:    &code.CheckDef{Name: c.name, Run: "make " + c.name, TimeoutSeconds: c.timeout},
+				Reason: code.QueueDispatch, QueuedAt: queued}})
+		if err != nil || res.Outcome != statelog.OutcomeApplied {
+			t.Fatalf("queue %s: (%+v, %v), want applied", c.name, res, err)
+		}
+	}
+	const lint = "web@111111111111: lint (attempt 1)"
+	reading := engine.CodeReadingForTest(t.Context(), e)
+	if reading.CodeChecksBacklog != 1 || reading.CodeChecksBacklogCheck != lint ||
+		reading.CodeChecksBacklogOldest < 2*time.Minute {
+		t.Fatalf("the node's reading is %d behind, the longest %q for %s; want lint's one attempt, past its "+
+			"minute, and not unit's, inside its ten", reading.CodeChecksBacklog, reading.CodeChecksBacklogCheck,
+			reading.CodeChecksBacklogOldest)
+	}
+
+	// AND THE ALARM, at the node's next evaluation of its reading. The rest
+	// is room for a loaded machine.
+	deadline := time.Now().Add(statelog.AlarmInterval + time.Minute)
+	for {
+		kinds, _ := e.Alarms()
+		if slices.Contains(kinds, statelog.KindCodeChecksBacklog) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the node's alarms are %v with a check queued past its own timeout, want %s", kinds,
+				statelog.KindCodeChecksBacklog)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	report, ok := e.RetentionReport(t.Context())
+	if !ok {
+		t.Fatal("a node evaluating alarms has no retention report")
+	}
+	var detail string
+	for _, a := range report.Alarms {
+		if a.Kind == statelog.KindCodeChecksBacklog {
+			detail = a.Detail
+		}
+	}
+	if !strings.Contains(detail, "1 queued check attempt(s)") || !strings.Contains(detail, lint) {
+		t.Errorf("the report's %s says %q, want lint's attempt alone named", statelog.KindCodeChecksBacklog,
+			detail)
+	}
+}
