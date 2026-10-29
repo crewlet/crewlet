@@ -179,16 +179,26 @@ const (
 	// CheckHorizonRows is the most check rows one record's horizon removes:
 	// an eighth of MaxRecordRows, so a record's own rows and its horizon's —
 	// each check row with its log's, two rows at most — stay a quarter of
-	// what one record may touch.
+	// what one record may touch. ITS ROWS, NOT ITS TIME, BIND IT: measured,
+	// the widest ending removing this many narrow rows and their logs holds
+	// the write lane 14 ms, against 4.8 ms with nothing to remove
+	// (BenchmarkApplyACheckRecord, doc.go's measured section) — a sixth of the
+	// third of statelog.ApplyTxTimeBudget a purge part is sized to, where the
+	// push rows' horizon had to be cut to HorizonDeletesPerRecord because its
+	// rows are the domain's widest.
 	CheckHorizonRows = MaxRecordRows / 8
 
 	// CheckHorizonBytes is the most bytes of check rows one record's horizon
 	// removes — each row weighed by its row_bytes, the first whatever it
 	// weighs: MaxRecordBytes, at least what one record adds, since a check
 	// record writes one row of at most its own bytes; so the history's
-	// removal keeps pace with its growth in bytes as in rows, and a horizon
-	// of the widest rows (a failed run's, some 100 KiB) frees about a
-	// mebibyte of overflow pages, a few milliseconds of the write lane.
+	// removal keeps pace with its growth in bytes as in rows. The widest rows
+	// are some 290 KB — a definition of escaped text, some 200 KB, beside a
+	// failed run's summary, tail, failures and link — so a horizon of them
+	// removes four, a mebibyte of overflow pages: measured, 2 ms beside the
+	// ending's own 4.8, the five secondary indexes a check row carries
+	// included (BenchmarkApplyACheckRecord), about the 2.4 ms a megabyte the
+	// push rows' deletion measured.
 	CheckHorizonBytes = MaxRecordBytes
 )
 

@@ -3,6 +3,7 @@ package code
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -719,6 +720,176 @@ func BenchmarkApplyARetireSweep(b *testing.B) {
 				e.applyTimed(b, a, sweepOf(b, repo, retiredBy), rows+1)
 				if left := e.num(`SELECT COUNT(*) FROM code_packs_retired WHERE repo_id = ?`, repo); left != 0 {
 					b.Fatalf("the sweep left %d of %s's %d retired rows", left, repo, rows)
+				}
+			}
+		})
+	}
+}
+
+// widestCheck is the widest queued attempt and the widest ending of it a
+// writer forms, key's: every field at its bound, of text JSON escapes to six
+// bytes a character, as TestTheLargestCheckRecordsFitARecord builds them — so
+// the row they join to is the widest a check row can be, its definition
+// stored as the record carries it and its failures as JSON beside its
+// summary, tail and link.
+func widestCheck(tb testing.TB, key CheckKey, at time.Time) (CheckQueued, CheckFinished) {
+	tb.Helper()
+	wide := func(n int) string { return strings.Repeat("&", n) }
+	// A REPORT'S PATH AT ITS BOUND: sixteen components of the 255 bytes a
+	// file name takes, under MaxTreePathBytes whole.
+	report := func(lead string) string { return lead + strings.Repeat("/"+wide(254), 15) + "/x" }
+	def := CheckDef{Name: key.Name, Run: wide(MaxCheckRunBytes),
+		TimeoutSeconds: int(CheckTimeoutCeiling / time.Second),
+		Report:         CheckReport{JUnit: report(wide(254)), SARIF: report("s" + wide(253))}, RunIn: CellE2B}
+	for i := range MaxCheckPaths {
+		head := fmt.Sprintf("%02d/", i)
+		def.Paths = append(def.Paths, head+wide(128-len(head)))
+	}
+	for i := range coneList.max {
+		def.Checkout.Cone = append(def.Checkout.Cone, fmt.Sprintf("%02d", i)+wide(253))
+	}
+	for i := range MaxCheckEnv {
+		def.Env = append(def.Env, fmt.Sprintf("V%02d_", i)+strings.Repeat("A", MaxCheckEnvNameBytes-4))
+	}
+	queued := CheckQueued{CheckKey: key, Purpose: PurposeTip, Target: "refs/heads/main", Reason: QueueDispatch,
+		Def: &def, QueuedAt: at}
+	var failures []CheckFailure
+	for i := 0; ; i++ {
+		f := CheckFailure{Path: "p", Line: i, TestID: "t", Message: wide(100)}
+		encoded, err := json.Marshal(append(failures, f))
+		if err != nil {
+			tb.Fatal(err)
+		}
+		if len(failures) == MaxCheckFailures || len(encoded) > MaxCheckFailureBytes {
+			break
+		}
+		failures = append(failures, f)
+	}
+	exit := 1
+	ended := CheckFinished{CheckKey: key, State: CheckStateFailed, Reason: CheckReasonExit, ExitCode: &exit,
+		DurationMs: 1 << 40, Summary: wide(CheckSummaryBytes), Tail: wide(CheckTailBytes), Failures: failures,
+		FailuresOmitted: 1 << 30, Log: logOf(key.Name + "-log"),
+		URL: "https://ci.example.com/" + wide(MaxCheckURLBytes-len("https://ci.example.com/")), FinishedAt: at}
+	for _, p := range []interface{ Validate() error }{queued, ended} {
+		if err := p.Validate(); err != nil {
+			tb.Fatalf("the widest check record is not one a writer forms: %v", err)
+		}
+	}
+	return queued, ended
+}
+
+// seedPastTheHorizon writes one more failed check row of a repository than an
+// ending's horizon removes (CheckHorizonRows), each ended at the instant at,
+// each with its log and few bytes of its own — what a repository running a
+// narrow check on every push holds.
+func (e *estate) seedPastTheHorizon(repo string, at time.Time) {
+	e.t.Helper()
+	n := CheckHorizonRows + 1
+	ended := store.EncodeTime(at)
+	e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
+		INSERT INTO code_checks (repo_id, commit_oid, name, attempt, state, purpose, change_id,
+			revision, candidate_id, entry_id, target_ref, base_oid, defs_oid, required, run_in, timeout_seconds,
+			reason, runner_node, placement, box_handle, borrowed, reporter, queued_at, started_at, finished_at,
+			duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, url,
+			summary, def, failures, tail)
+		SELECT ?, printf('%040d', i), 'unit', 1, 'failed', 'tip', '', 0, '', '', 'refs/heads/main', '', '', 0,
+			'container', 600, 'exit', 'node-a', 'container', 'box', 0, '', ?, ?, ?, 1000, 1, 0, 1, 2, 76, '',
+			'1 test failed', '{"name":"unit","run":"make test","timeout_seconds":600}', '', '--- FAIL' FROM k`,
+		n, repo, ended, ended, ended)
+	e.exec(`INSERT INTO code_check_logs (repo_id, commit_oid, name, attempt, object, hash, size)
+		SELECT repo_id, commit_oid, name, attempt, 'logs/' || commit_oid, 'sha256:' || commit_oid, 4096
+		FROM code_checks WHERE repo_id = ?`, repo)
+}
+
+// BenchmarkApplyACheckRecord is a record on a repository's checks subject
+// APPLIED AND COMMITTED — the time it holds the replicated estate's one write
+// lane, on every data node — into a repository of its own each iteration, its
+// attempt's earlier records applied and its old rows seeded outside the timer.
+// Every data node applies every one of these records, four an attempt (queued,
+// claimed, its box named, ended), and every ending runs its repository's
+// horizon:
+//
+//   - claim: a runner's check_started of the widest queued attempt — a join
+//     reading the row whole and writing it back;
+//   - ending: the widest ending a writer forms (a failed run's, every field at
+//     its bound, with its log) of a claimed attempt, nothing of its
+//     repository past the history — an ending's own cost;
+//   - ending+narrow: that, with CheckHorizonRows+1 narrow rows past the
+//     history, each with its log, so its horizon removes CheckHorizonRows of
+//     them and their logs: the most rows an ending's apply touches;
+//   - ending+wide: that, with rows of the widest a check row can be past the
+//     history, each with its log, so its horizon removes them until their
+//     bytes reach CheckHorizonBytes — about a mebibyte of overflow pages, which
+//     a check row carries five secondary indexes beside.
+//
+// Each is held against statelog.ApplyTxTimeBudget (250 ms), which cannot
+// split a record; doc.go's measured section records the figures, and
+// CheckHorizonRows' and CheckHorizonBytes' docs reason from them.
+func BenchmarkApplyACheckRecord(b *testing.B) {
+	quiet(b)
+	old := applyClock.Add(-CheckHistory - time.Hour)
+	// width is what a row of the widest attempt weighs, and through how many
+	// of them a horizon's bytes reach CheckHorizonBytes.
+	probe := CheckKey{RepoID: checkRepo, OID: oid("probe"), Name: "probe", Attempt: 1}
+	pq, pf := widestCheck(b, probe, applyClock)
+	pe, err := finishedPart(pf, applyContext{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	width := checkRow{queue: *queuedPart(pq, applyContext{}).queue, ending: *pe.ending}.rowBytes()
+	through := int((CheckHorizonBytes + width - 1) / width)
+	for _, arm := range []struct {
+		name  string
+		claim bool
+		// past seeds the repository's rows past the history, and answers
+		// how many the timed ending's horizon removes.
+		past func(b *testing.B, e *estate, repo string) int
+	}{
+		{"claim", true, func(*testing.B, *estate, string) int { return 0 }},
+		{"ending", false, func(*testing.B, *estate, string) int { return 0 }},
+		{"ending+narrow", false, func(_ *testing.B, e *estate, repo string) int {
+			e.seedPastTheHorizon(repo, old)
+			return CheckHorizonRows
+		}},
+		{"ending+wide", false, func(b *testing.B, e *estate, repo string) int {
+			subject, scope := ChecksSubject(repo), Scope{ChecksPath(repo)}
+			for i := range through + 1 {
+				key := CheckKey{RepoID: repo, OID: oid(fmt.Sprint("old", i)), Name: "wide", Attempt: 1}
+				q, f := widestCheck(b, key, old)
+				e.apply(rec(b, subject, OpCheckQueued, scope, q).at(old),
+					rec(b, subject, OpCheckFinished, scope, f).at(old))
+			}
+			return through
+		}},
+	} {
+		b.Run(arm.name, func(b *testing.B) {
+			e := openApplyEstate(b)
+			a := NewApplier()
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.StopTimer()
+			for i := range b.N {
+				repo := fmt.Sprintf("0190f3c4-0000-7000-8000-%012d", i)
+				e.apply(create(b, repo, fmt.Sprintf("r%06d", i)))
+				removed := arm.past(b, e, repo)
+				held := e.num(`SELECT COUNT(*) FROM code_checks WHERE repo_id = ?`, repo)
+				key := CheckKey{RepoID: repo, OID: oid("checked"), Name: "unit", Attempt: 1}
+				queued, ended := widestCheck(b, key, applyClock)
+				subject, scope := ChecksSubject(repo), Scope{ChecksPath(repo)}
+				e.apply(rec(b, subject, OpCheckQueued, scope, queued))
+				claim := rec(b, subject, OpCheckStarted, scope, CheckStarted{CheckKey: key, Runner: "node-a",
+					Placement: PlacementContainer, StartedAt: applyClock})
+				if arm.claim {
+					e.applyTimed(b, a, claim, 1)
+					continue
+				}
+				e.apply(claim)
+				// ITS ROW, ITS LOG, AND EACH ROW ITS HORIZON REMOVES WITH ITS
+				// LOG.
+				e.applyTimed(b, a, rec(b, subject, OpCheckFinished, scope, ended), 2+2*removed)
+				if left := e.num(`SELECT COUNT(*) FROM code_checks WHERE repo_id = ?`, repo); left != held+1-int64(removed) {
+					b.Fatalf("the ending left %d of the repository's %d rows and its own, want its horizon to "+
+						"remove %d", left, held, removed)
 				}
 			}
 		})

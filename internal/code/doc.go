@@ -1314,6 +1314,22 @@
 // written back whole — its upsert's VALUES carry every NOT NULL column — so
 // the book reads every column of every change the record moves.
 //
+// A CHECK RECORD (BenchmarkApplyACheckRecord, the record applied and
+// committed; one bounded run, -benchtime 5x and one count, on two E-cores of
+// a Core Ultra 7 265U under other sessions' load), every one of which every
+// data node applies, four an attempt: 2.1 ms for a claim of the widest queued
+// attempt — its row read whole and written back, a definition of some 200 KB
+// of escaped text among it; 4.8 ms for the widest ending a writer forms, with
+// its log and nothing of its repository past the history; 14 ms for that
+// ending removing [CheckHorizonRows] narrow rows and their logs, the most
+// rows an ending's apply touches (1 002); and 6.9 ms for one removing four
+// rows of the widest a check row can be (some 290 KB each) and their logs,
+// the first past [CheckHorizonBytes] — a mebibyte of overflow pages and the
+// entries of the five secondary indexes a row carries, some 2 ms, the push
+// rows' 2.4 ms a megabyte. Every shape is under a tenth of
+// statelog.ApplyTxTimeBudget: the horizon is bounded by its rows' share of a
+// record, never by its time (CheckHorizonRows).
+//
 // A PURGE RECORD (BenchmarkApplyAPurgePart): 56–60 ms for a part of
 // [PurgePartRows] push rows of a kilobyte; 81–88 ms for a part over the
 // widest push rows, which [PurgePartBytes] stops at seventy-three (34 MB) —
