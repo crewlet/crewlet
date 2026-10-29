@@ -299,17 +299,31 @@ func withinFactor(read func(string), short, long string, factor int) (bool, time
 func judge(timed timer, short, long string, factor int) (bool, time.Duration, time.Duration) {
 	// TWICE THE FLOOR, so that the fastest of a measurement's samples, which
 	// can come in under the one that calibrated, still clears it.
-	reps := 1
-	for reps < maxReps && timed(short, reps) < 2*judgeFloor {
+	reps, calibrated := 1, timed(short, 1)
+	for reps < maxReps && calibrated < 2*judgeFloor {
 		reps *= 2
+		calibrated = timed(short, reps)
 	}
-	timed(short, reps)
-	timed(long, reps)
+	// ONE READ OF EACH TO WARM UP, never a sample: at the calibrated
+	// count, a regression's long text is the costliest thing here.
+	timed(short, 1)
+	timed(long, 1)
 	var shortCost, longCost time.Duration
 	for round := 0; round < measureRounds; {
 		shortCost, longCost = time.Duration(1<<62), time.Duration(1<<62)
 		for range interleavedReads {
-			shortCost, longCost = min(shortCost, timed(short, reps)), min(longCost, timed(long, reps))
+			shortCost = min(shortCost, timed(short, reps))
+			sample := timed(long, reps)
+			longCost = min(longCost, sample)
+			if sample > time.Duration(factor)*calibrated {
+				// FAILED OUTRIGHT, on one sample: a long sample past
+				// the factor times the calibrated short one fails the
+				// round whatever the others say, and calibration
+				// multiplies a regression's cost too, so its other
+				// samples could outlast the test's own deadline and
+				// report a timeout in place of the assertion.
+				break
+			}
 		}
 		if shortCost < judgeFloor {
 			if reps >= maxReps {
@@ -318,6 +332,7 @@ func judge(timed timer, short, long string, factor int) (bool, time.Duration, ti
 			// UNDER THE FLOOR STILL: read more, and measure again,
 			// which is no round of the comparison's.
 			reps *= 2
+			calibrated = timed(short, reps)
 			continue
 		}
 		if longCost <= time.Duration(factor)*shortCost {
@@ -341,8 +356,9 @@ func judge(timed timer, short, long string, factor int) (bool, time.Duration, ti
 // is held by the four tests above, each a regression's mutation away from
 // failing.
 //
-// Mutation: drop the calibration, the floor, the re-measure or its failing
-// only when every round does, and a case here fails.
+// Mutation: drop the calibration, the floor, the re-measure, its failing only
+// when every round does, or a round's stop at a long sample past the factor,
+// and a case here fails.
 func TestWithinFactorFailsWhatEveryMeasurementSays(t *testing.T) {
 	t.Parallel()
 	const factor = 64
@@ -391,11 +407,29 @@ func TestWithinFactorFailsWhatEveryMeasurementSays(t *testing.T) {
 			return cost
 		}
 	}
-	samples := 1 + interleavedReads
-	if ok, s, l := judge(bursts(1+2*interleavedReads), small, large, factor); !ok {
+	// The warm-up read, then one long sample a slowed measurement takes
+	// before its stop: ten times the linear cost is past the factor.
+	if ok, s, l := judge(bursts(1+2), small, large, factor); !ok {
 		t.Errorf("a linear cost slowed for two measurements failed: %v against %v", l, s)
 	}
-	if ok, s, l := judge(bursts(1+measureRounds*samples), small, large, factor); ok {
+	if ok, s, l := judge(bursts(1+measureRounds), small, large, factor); ok {
 		t.Errorf("a linear cost slowed on every measurement passed: %v against %v", l, s)
+	}
+	// AN EXPENSIVE SQUARE STOPS AT ITS FIRST LONG SAMPLE OF EACH ROUND,
+	// which is past the factor on its own: a regression's long text is
+	// read once to warm up and once a round, never for every sample.
+	longReads := 0
+	counted := func(text string, reps int) time.Duration {
+		if text == large {
+			longReads++
+		}
+		return square(text, reps)
+	}
+	if ok, s, l := judge(counted, small, large, factor); ok {
+		t.Errorf("an expensive square cost passed: %v against %v", l, s)
+	}
+	if want := 1 + measureRounds; longReads != want {
+		t.Errorf("an expensive square's long text was timed %d times, want the warm-up and once a round, %d",
+			longReads, want)
 	}
 }
