@@ -49,6 +49,14 @@ func TestAnEnvSignInIsTheEntrysOnlySignIn(t *testing.T) {
 			says: `the "codex" profile names no variable that does (sign_in_env)`,
 		},
 		{
+			// A bundle is a login, and env seeds none anywhere.
+			name: "a credential bundle under env mode",
+			lines: []string{"agent: claude-code", `auth: {mode: env, credential_bundle: "${BUNDLE}"}`,
+				"env: {CLAUDE_CODE_USE_BEDROCK: \"1\"}"},
+			path: "providers.llm.sub.auth.credential_bundle", kind: ErrConflict,
+			says: "a credential bundle reaches nothing",
+		},
+		{
 			name: "a token under env mode",
 			lines: []string{"agent: claude-code", `auth: {mode: env, token: "${TOK}"}`,
 				"env: {CLAUDE_CODE_USE_BEDROCK: \"1\"}"},

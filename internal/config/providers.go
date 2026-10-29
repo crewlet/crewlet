@@ -1184,6 +1184,14 @@ func (l *LLMProvider) validateEnvSignIn(path Path, profile cliprofile.Profile, m
 		}
 		return p.err()
 	}
+	if l.Auth.CredentialBundle != "" {
+		// A bundle is a login, and an env entry seeds none, on this host or in
+		// a box: one named here would be stored, restored and never read.
+		p.add(at(path, "auth.credential_bundle"), ErrConflict,
+			"auth.mode env signs the %q CLI in with the entry's env alone and seeds no "+
+				"login, so a credential bundle reaches nothing. Drop auth.credential_bundle, "+
+				"or set auth.mode: subscription to sign in with that login", agent)
+	}
 	switch {
 	case len(profile.SignInEnv) > 0:
 		if len(profile.SignsInWithEnv(l.Env)) == 0 {

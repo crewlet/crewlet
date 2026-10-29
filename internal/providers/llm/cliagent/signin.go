@@ -123,7 +123,15 @@ func (p *Provider) signInFrom(login map[string][]byte, loginErr error) signIn {
 			s.unresolved = append(s.unresolved, name)
 			continue
 		}
-		s.sources = append(s.sources, signInSource{state: "environment", line: "env sets " + name})
+		// ONE WORD PER MODE: under auth.mode env the entry's env is the
+		// sign-in whatever CLI reads it, so it reads env as Claude Code's
+		// does; under any other mode it is the provider key the CLI reads
+		// from its environment.
+		state := "environment"
+		if p.auth.Mode == AuthEnv {
+			state = "env"
+		}
+		s.sources = append(s.sources, signInSource{state: state, line: "env sets " + name})
 	}
 	return s
 }

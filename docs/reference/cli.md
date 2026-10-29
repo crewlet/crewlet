@@ -2659,9 +2659,9 @@ whose engine is stopped, where `-api` names a running member.
 restore the entry's configured bundle first, as the engine does:
 `credentials` (files a login wrote), `token` (a headless token), `api key`
 (under `auth.mode: api-key`), `inherited token` or `inherited key` (forwarded
-by `auth.mode: inherit-env`), `env` (a cloud provider's switch or a gateway's
-token in the entry's `env`, under `auth.mode: env`), `environment` (a key in the
-entry's `env`), or `none`,
+by `auth.mode: inherit-env`), `env` (the entry's `env` under `auth.mode: env`: a
+cloud provider's switch, a gateway's token, or a provider's key), `environment`
+(a provider's key in the entry's `env` under any other mode), or `none`,
 and `unknown` where nothing else signs the entry in and its credential
 directory holds a [login write that cannot be
 finished](../concepts/llm-backends.md#a-login-of-several-files-is-written-whole),
