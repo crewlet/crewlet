@@ -16,7 +16,7 @@
  */
 
 import { answerOf, outcomeOf, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
-import { isAbort, rest, RestError } from "~/protocol/rest.ts";
+import { isAbort, rest, RestError, type RestResponse } from "~/protocol/rest.ts";
 import type { CompanyDocument } from "~/protocol/types.ts";
 import {
   MODEL_CHECK_BUDGET_SECONDS,
@@ -50,27 +50,17 @@ export type ModelAnswer<T> =
       body: Record<string, unknown>;
     };
 
-const path = (key: string, rest_: string) => `/llm/providers/${encodeURIComponent(key)}/${rest_}`;
+/** A model's route, its key encoded. */
+const key_ = (key: string) => encodeURIComponent(key);
 
-async function call<T>(
-  method: "PUT" | "POST" | "DELETE",
-  url: string,
-  options: {
-    body?: unknown;
-    headers?: Record<string, string>;
-    query?: Record<string, string>;
-    signal?: AbortSignal;
-    timeoutMs?: number;
-  } = {},
-): Promise<ModelAnswer<T>> {
+/**
+ * One model route's answer as a value: its body, or the engine's refusal.
+ * Each route names its own path at its call (a literal under `/llm`, which
+ * the dev server's proxy gate reads there); this settles what came back.
+ */
+async function settle<T>(request: Promise<RestResponse>): Promise<ModelAnswer<T>> {
   try {
-    const answer = await rest.request(method, url, {
-      ...(options.body === undefined ? {} : { body: options.body }),
-      ...(options.headers ? { headers: options.headers } : {}),
-      ...(options.query ? { query: options.query } : {}),
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
-    });
+    const answer = await request;
     return { kind: "ok", status: answer.status, value: answer.body as T };
   } catch (err) {
     if (isAbort(err)) throw err;
@@ -121,13 +111,15 @@ export function testCredential(
   request: CredentialRequest,
   signal?: AbortSignal,
 ): Promise<ModelAnswer<CredentialCheck>> {
-  return call("PUT", path(key, "credential"), {
-    body: { values: request.values, ...(request.entity ? { entity: request.entity } : {}) },
-    headers: request.createOnly ? { "If-None-Match": "*" } : {},
-    query: { dry_run: "true" },
-    timeoutMs: waitFor(MODEL_CREDENTIAL_BUDGET_SECONDS),
-    ...(signal ? { signal } : {}),
-  });
+  return settle(
+    rest.request("PUT", `/llm/providers/${key_(key)}/credential`, {
+      body: { values: request.values, ...(request.entity ? { entity: request.entity } : {}) },
+      headers: request.createOnly ? { "If-None-Match": "*" } : {},
+      query: { dry_run: "true" },
+      timeoutMs: waitFor(MODEL_CREDENTIAL_BUDGET_SECONDS),
+      ...(signal ? { signal } : {}),
+    }),
+  );
 }
 
 /**
@@ -141,12 +133,14 @@ export function storeCredential(
   etag: string,
   signal?: AbortSignal,
 ): Promise<ModelAnswer<CredentialStored>> {
-  return call("PUT", path(key, "credential"), {
-    body: { values: request.values, ...(request.entity ? { entity: request.entity } : {}) },
-    headers: { "If-Match": etag, ...(request.createOnly ? { "If-None-Match": "*" } : {}) },
-    timeoutMs: waitFor(MODEL_CREDENTIAL_BUDGET_SECONDS),
-    ...(signal ? { signal } : {}),
-  });
+  return settle(
+    rest.request("PUT", `/llm/providers/${key_(key)}/credential`, {
+      body: { values: request.values, ...(request.entity ? { entity: request.entity } : {}) },
+      headers: { "If-Match": etag, ...(request.createOnly ? { "If-None-Match": "*" } : {}) },
+      timeoutMs: waitFor(MODEL_CREDENTIAL_BUDGET_SECONDS),
+      ...(signal ? { signal } : {}),
+    }),
+  );
 }
 
 /** `POST /llm/providers/{key}/check`: the model's test, with a real call when `smoke`. */
@@ -155,11 +149,13 @@ export function checkModel(
   options: { smoke: boolean; entity?: Record<string, unknown> },
   signal?: AbortSignal,
 ): Promise<ModelAnswer<CheckAnswer>> {
-  return call("POST", path(key, "check"), {
-    body: { smoke: options.smoke, ...(options.entity ? { entity: options.entity } : {}) },
-    timeoutMs: waitFor(MODEL_CHECK_BUDGET_SECONDS),
-    ...(signal ? { signal } : {}),
-  });
+  return settle(
+    rest.request("POST", `/llm/providers/${key_(key)}/check`, {
+      body: { smoke: options.smoke, ...(options.entity ? { entity: options.entity } : {}) },
+      timeoutMs: waitFor(MODEL_CHECK_BUDGET_SECONDS),
+      ...(signal ? { signal } : {}),
+    }),
+  );
 }
 
 /**
@@ -171,11 +167,13 @@ export function retryModel(
   mode: "probe" | "clear",
   signal?: AbortSignal,
 ): Promise<ModelAnswer<RetryAnswer>> {
-  return call("POST", path(key, "retry"), {
-    body: { mode },
-    timeoutMs: waitFor(MODEL_RETRY_BUDGET_SECONDS),
-    ...(signal ? { signal } : {}),
-  });
+  return settle(
+    rest.request("POST", `/llm/providers/${key_(key)}/retry`, {
+      body: { mode },
+      timeoutMs: waitFor(MODEL_RETRY_BUDGET_SECONDS),
+      ...(signal ? { signal } : {}),
+    }),
+  );
 }
 
 /** `POST /llm/providers/{key}/host-login/check`: the CLI's own login on the answering node. */
@@ -183,10 +181,12 @@ export function checkHostLogin(
   key: string,
   signal?: AbortSignal,
 ): Promise<ModelAnswer<HostLoginAnswer>> {
-  return call("POST", path(key, "host-login/check"), {
-    body: {},
-    ...(signal ? { signal } : {}),
-  });
+  return settle(
+    rest.request("POST", `/llm/providers/${key_(key)}/host-login/check`, {
+      body: {},
+      ...(signal ? { signal } : {}),
+    }),
+  );
 }
 
 /** `POST /llm/providers/{key}/device-sign-in`: a device-code sign-in started (201). */
@@ -194,10 +194,12 @@ export function startDeviceSignIn(
   key: string,
   signal?: AbortSignal,
 ): Promise<ModelAnswer<ModelDevice>> {
-  return call("POST", path(key, "device-sign-in"), {
-    body: {},
-    ...(signal ? { signal } : {}),
-  });
+  return settle(
+    rest.request("POST", `/llm/providers/${key_(key)}/device-sign-in`, {
+      body: {},
+      ...(signal ? { signal } : {}),
+    }),
+  );
 }
 
 /** `DELETE /llm/device-sign-ins/{id}`: the sign-in cancelled. */
@@ -205,9 +207,11 @@ export function cancelDeviceSignIn(
   id: string,
   signal?: AbortSignal,
 ): Promise<ModelAnswer<ModelDevice>> {
-  return call("DELETE", `/llm/device-sign-ins/${encodeURIComponent(id)}`, {
-    ...(signal ? { signal } : {}),
-  });
+  return settle(
+    rest.request("DELETE", `/llm/device-sign-ins/${key_(id)}`, {
+      ...(signal ? { signal } : {}),
+    }),
+  );
 }
 
 /** What removing a model does with each place that names it. */
