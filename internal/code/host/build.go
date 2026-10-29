@@ -43,28 +43,35 @@ import (
 // that name exists — measured on 2.56.0, `refs/heads/foo` answered the commit
 // of a branch NAMED refs/heads/foo while refs/heads/foo itself did not
 // exist, which would refuse a create as stale for good; and ONE `cat-file
-// --batch-check -Z` of the objects it names and, for a commit_files, of every
-// path an operation names and every directory above one at the parent.
+// --batch-check -Z` of the objects it names by id, each one lookup.
 //
 // THEN THE BUILD, under ONE unit of the share and ONE budget of git run time
 // (code.WriteBuildDeadline) that its processes share, each given what the ones
 // before it left and charged what it ran — never its wait for a slot, which
 // is the node's load and no fact about the change. A commit_files reads, in
-// the copy, ONE batch (`cat-file --batch -Z`) of the parent commit — its
-// committer's date — every directory the change touches, staged as git
-// stores it, and every file an edit rewrites, streamed through its edit into
-// a staged file; then, in its scratch: ONE `hash-object -w` of every new
-// file, ONE `mktree -z --batch` a LEVEL of the touched directories, deepest
-// first — a parent names its children's new ids, which only the level below's
-// mktree answers — passing every entry the change does not touch through as
-// git reads it (treeEntry.canon); and ONE `commit-tree`. A revert or a
-// cherry-pick reads its two commits in ONE batch, runs ONE `merge-tree
-// --write-tree -z` — whose cost follows the trees' DIFFERENCES, since it skips
-// every subtree the three sides share — and commits the same way. Every kind
-// that commits then packs: ONE `pack-objects` of the objects the build wrote,
-// self-contained, into a staged file, and ONE `index-pack --strict` of it into
-// the scratch, the relay's own check of every object a push stores
-// (receive.fsckObjects).
+// the copy, ONE `cat-file --batch-check -Z` of what every path an operation
+// names and every directory above one is at the parent (building.paths) —
+// the BUILD'S, never the check's: git walks each from the root, one tree a
+// directory, so it costs the square of a path's depth, which is no short
+// read's (1 000 paths 64 deep that the parent holds took 19 s of git; its doc
+// has the figures), and under the build its run is charged to the budget,
+// refused too_large past it, rather than run out as a short read's bound and
+// taken for a failing node, which sends the same write to the next. Then,
+// the change planned on it (planFiles), ONE batch (`cat-file --batch -Z`) of
+// the parent commit — its committer's date — every directory the change
+// touches, staged as git stores it, and every file an edit rewrites, streamed
+// through its edit into a staged file; then, in its scratch: ONE `hash-object
+// -w` of every new file, ONE `mktree -z --batch` a LEVEL of the touched
+// directories, deepest first — a parent names its children's new ids, which
+// only the level below's mktree answers — passing every entry the change does
+// not touch through as git reads it (treeEntry.canon); and ONE `commit-tree`.
+// A revert or a cherry-pick reads its two commits in ONE batch, runs ONE
+// `merge-tree --write-tree -z` — whose cost follows the trees' DIFFERENCES,
+// since it skips every subtree the three sides share — and commits the same
+// way. Every kind that commits then packs: ONE `pack-objects` of the objects
+// the build wrote, self-contained, into a staged file, and ONE `index-pack
+// --strict` of it into the scratch, the relay's own check of every object a
+// push stores (receive.fsckObjects).
 //
 // WHAT A STEP WRITES IT WRITES IN THE SCRATCH (cache.NewScratch, the write's
 // alone): its objects, loose, and what the build stages under write/. An
@@ -116,9 +123,8 @@ func (o object) what() string {
 }
 
 // judgement is what a write's check read of the copy: where the branch is, the
-// commit the write's commit sits on, an object the write names that the copy
-// lacks, and — for a commit_files — what each path it names and each
-// directory above one is at that commit.
+// commit the write's commit sits on, and an object the write names that the
+// copy lacks.
 type judgement struct {
 	// head is the branch's commit, "" where the branch does not exist.
 	head string
@@ -128,24 +134,21 @@ type judgement struct {
 	// absent is an object the write names that the copy does not hold, ""
 	// where it holds every one.
 	absent string
-	// paths is a commit_files' every named path and every directory above
-	// one, at parent: a path it does not hold is a zero object.
-	paths map[string]object
 }
 
 // check is the write's check of the copy: where its branch is, then — for a
-// write onto the head it expects — what every object it names is, and every
-// path a commit_files names. A head that is not the one the caller read is a
-// stale verdict; an object of the wrong type is code.ErrInvalid naming its
-// field; an object the copy lacks is judgement.absent, looked for again at
-// the log's head.
+// write onto the head it expects — what every object it names by id is. A
+// head that is not the one the caller read is a stale verdict; an object of
+// the wrong type is code.ErrInvalid naming its field; an object the copy
+// lacks is judgement.absent, looked for again at the log's head. What the
+// paths a commit_files names are is its build's to read (building.paths).
 func (wr *writing) check(ctx context.Context) (judgement, writeVerdict, error) {
 	w := wr.w
 	head, err := wr.head(ctx)
 	if err != nil {
 		return judgement{}, writeVerdict{}, err
 	}
-	j := judgement{head: head, parent: w.ExpectedHead, paths: map[string]object{}}
+	j := judgement{head: head, parent: w.ExpectedHead}
 	if j.parent == "" {
 		j.parent = w.Base
 	}
@@ -166,18 +169,10 @@ func (wr *writing) check(ctx context.Context) (judgement, writeVerdict, error) {
 		name(f.BlobOID, "blob", fmt.Sprintf("files[%d].blob_oid", i))
 	}
 	ids := slices.Sorted(maps.Keys(want))
-	var paths []string
-	if w.Kind == code.WriteCommitFiles && j.parent != "" {
-		paths = namedPaths(w.Files)
-	}
-	names := slices.Clone(ids)
-	for _, p := range paths {
-		names = append(names, j.parent+":"+p)
-	}
-	if len(names) == 0 {
+	if len(ids) == 0 {
 		return j, writeVerdict{}, nil
 	}
-	got, err := wr.lookup(ctx, names)
+	got, err := wr.lookup(ctx, lookups{ids: ids}, "check of what the write names", gitproc.ReadDeadline)
 	if err != nil {
 		return judgement{}, writeVerdict{}, err
 	}
@@ -191,9 +186,6 @@ func (wr *writing) check(ctx context.Context) (judgement, writeVerdict, error) {
 			return judgement{}, writeVerdict{}, fmt.Errorf("%w: %s: %s is a %s, not a %s", code.ErrInvalid, n.field, id,
 				o.kind, n.kind)
 		}
-	}
-	for i, p := range paths {
-		j.paths[p] = got[len(ids)+i]
 	}
 	return j, writeVerdict{}, nil
 }
@@ -233,46 +225,124 @@ func (wr *writing) head(ctx context.Context) (string, error) {
 	return head, nil
 }
 
-// lookup is ONE `cat-file --batch-check -Z` of names in the copy — NUL-ended
-// both ways, so a path is one record whatever it holds — and is what each
-// name is, in order: a zero object for a name the copy holds nothing under.
-func (wr *writing) lookup(ctx context.Context, names []string) ([]object, error) {
-	var stdin bytes.Buffer
-	for _, n := range names {
-		stdin.WriteString(n)
-		stdin.WriteByte(0)
-	}
-	out := make([]object, 0, len(names))
+// lookup is ONE `cat-file --batch-check -Z` in the copy of what q asks —
+// NUL-ended both ways, so a path is one record whatever it holds — within
+// deadline, and is what each ask names, in order: a zero object for one the
+// copy holds nothing under. what names the read in a failure's sentence.
+func (wr *writing) lookup(ctx context.Context, q lookups, what string, deadline time.Duration) ([]object, error) {
+	n := q.len()
+	out := make([]object, 0, n)
 	recs := newRecords(func(rec []byte) error {
 		i := len(out)
-		if i >= len(names) {
-			return fmt.Errorf("host: cat-file answered %d records for %d names", i+1, len(names))
+		if i >= n {
+			return fmt.Errorf("host: cat-file answered %d records for %d names", i+1, n)
 		}
-		if string(rec) == names[i]+" missing" {
+		if q.missing(i, rec) {
 			out = append(out, object{})
 			return nil
 		}
 		o, ok := parseLookup(rec)
 		if !ok {
-			return fmt.Errorf("host: cat-file answered %q for %q, which is no object", rec, names[i])
+			return fmt.Errorf("host: cat-file answered %q for %q, which is no object", rec, q.name(i))
 		}
 		out = append(out, o)
 		return nil
 	})
 	res, err := wr.s.runGit(ctx, gitproc.Cmd{
 		Dir: wr.synced.Dir, Args: []string{"cat-file", lookupFormat, "-Z"}, Config: wr.s.o.Cache.ServeConfig(),
-		Stdin: &stdin, Stdout: recs, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
+		Stdin: q.reader(), Stdout: recs, Class: gitproc.ClassRead, Deadline: deadline,
 	})
 	if err == nil {
 		err = recs.close()
 	}
-	if err := wr.failed(ctx, "check of what the write names", res, err); err != nil {
+	if err := wr.failed(ctx, what, res, err); err != nil {
 		return nil, err
 	}
-	if len(out) != len(names) {
-		return nil, fmt.Errorf("host: cat-file answered %d records for %d names", len(out), len(names))
+	if len(out) != n {
+		return nil, fmt.Errorf("host: cat-file answered %d records for %d names", len(out), n)
 	}
 	return out, nil
+}
+
+// lookups is what one `cat-file --batch-check -Z` is asked, in order: whole
+// object ids, then paths at one commit, each spelled `<commit>:<path>` as
+// git reads it. NEVER SPELLED OUT AHEAD: every directory above a path is a
+// path asked, so a write's asks spelled out are its paths' every prefix — some
+// 133 KB for one 4 KiB path of 64 components, 34 MB for a mebibyte of such
+// paths — and they are fed to git as it reads (reader) and matched against
+// its answers in place (missing), never held as a list and again as the
+// input it makes.
+type lookups struct {
+	ids   []string
+	at    string
+	paths []string
+}
+
+// len is how many asks there are.
+func (q lookups) len() int { return len(q.ids) + len(q.paths) }
+
+// appendAsk appends ask i as git reads it, with no end.
+func (q lookups) appendAsk(b []byte, i int) []byte {
+	if i < len(q.ids) {
+		return append(b, q.ids[i]...)
+	}
+	b = append(b, q.at...)
+	b = append(b, ':')
+	return append(b, q.paths[i-len(q.ids)]...)
+}
+
+// name is ask i spelled out: for a failure's sentence alone.
+func (q lookups) name(i int) string { return string(q.appendAsk(nil, i)) }
+
+// missingSuffix ends git's answer that an ask names nothing: `<ask> missing`.
+const missingSuffix = " missing"
+
+// missing reports rec as git's answer that ask i names nothing in the copy.
+func (q lookups) missing(i int, rec []byte) bool {
+	rest, ok := bytes.CutSuffix(rec, []byte(missingSuffix))
+	if !ok {
+		return false
+	}
+	if i < len(q.ids) {
+		return string(rest) == q.ids[i]
+	}
+	p := q.paths[i-len(q.ids)]
+	at, colon := len(q.at), len(q.at)+1
+	return len(rest) == colon+len(p) && string(rest[:at]) == q.at && rest[at] == ':' && string(rest[colon:]) == p
+}
+
+// reader is every ask NUL-ended, made as git reads it.
+func (q lookups) reader() io.Reader { return &lookupsReader{q: q} }
+
+// lookupsReader is a Cmd.Stdin that spells each ask only as git reads for more,
+// holding one ask at a time: every Read returns at once (gitproc's Stdin
+// contract), and the asks are fixed before the run, never what git answers.
+type lookupsReader struct {
+	q       lookups
+	next    int    // the next ask to spell
+	spelled []byte // the ask being fed, and its NUL
+	pending []byte // what of it is not yet fed
+}
+
+func (r *lookupsReader) Read(p []byte) (int, error) {
+	n := 0
+	for n < len(p) {
+		if len(r.pending) == 0 {
+			if r.next == r.q.len() {
+				break
+			}
+			r.spelled = append(r.q.appendAsk(r.spelled[:0], r.next), 0)
+			r.pending = r.spelled
+			r.next++
+		}
+		c := copy(p[n:], r.pending)
+		n += c
+		r.pending = r.pending[c:]
+	}
+	if n == 0 && len(p) > 0 {
+		return 0, io.EOF
+	}
+	return n, nil
 }
 
 // parseLookup reads one record of lookupFormat: `<id> <type> <size> <mode>`,
@@ -309,11 +379,12 @@ func parseLookup(rec []byte) (object, bool) {
 
 // namedPaths is every path a commit_files names — each operation's path, a
 // move's destination — and every directory above one, the root left out:
-// sorted, each once.
+// sorted, each once. A path's walk up ends at the first it has already seen,
+// whose every directory above is seen too, so each is visited once.
 func namedPaths(files []code.FileOp) []string {
 	seen := map[string]bool{}
 	add := func(p string) {
-		for ; p != "." && p != ""; p = path.Dir(p) {
+		for ; p != "." && p != "" && !seen[p]; p = path.Dir(p) {
 			seen[p] = true
 		}
 	}
@@ -452,13 +523,17 @@ func (b *building) create(kind string) (*os.File, error) {
 		hostbox.FileMode)
 }
 
-// commitFiles is a commit_files' build: the change planned on the parent's
-// paths, its edits and touched directories read and staged, its new files
-// written and hashed, its directories written a level at a time, and its
-// commit.
+// commitFiles is a commit_files' build: what its paths are at the parent read,
+// the change planned on them, its edits and touched directories read and
+// staged, its new files written and hashed, its directories written a level
+// at a time, and its commit.
 func (b *building) commitFiles(ctx context.Context, j judgement) (string, code.EngineWriteResult, bool, error) {
 	wr := b.wr
-	p, refusal, detail := planFiles(wr.w.Files, j)
+	paths, err := b.paths(ctx, j.parent)
+	if err != nil {
+		return "", code.EngineWriteResult{}, true, err
+	}
+	p, refusal, detail := planFiles(wr.w.Files, j.parent, paths)
 	if refusal != "" {
 		return "", wr.changeRefused(refusal, detail), true, nil
 	}
@@ -492,6 +567,45 @@ func (b *building) commitFiles(ctx context.Context, j judgement) (string, code.E
 	}
 	commit, err := b.commit(ctx, root, j.parent, parent.committed, message)
 	return commit, code.EngineWriteResult{}, false, err
+}
+
+// paths is the build's first read: what every path a commit_files names and
+// every directory above one is at parent (namedPaths), by path — ONE
+// `cat-file --batch-check -Z` in the copy, given what is left of the build's
+// budget and charged what it ran, as every process of the build is. None for
+// a root commit, whose parent holds nothing. A path the parent does not hold
+// is absent from the answer.
+//
+// IT IS THE BUILD'S, never the check's before it: git walks each path it is
+// asked from the root, a tree a directory, so a path n components deep costs
+// some n(n+1)/2 tree reads with its directories — 1 000 paths the parent
+// holds, each with every directory above it, took 1.8 s of git 16 deep,
+// 5.6 s 32 deep and 19 s 64 deep (git 2.56.0 on two E-cores of an Intel Core
+// Ultra 7 265U), where the same 1 000 paths alone took 0.18, 0.29 and 0.53 s.
+// A short read's bound run out is a node failing, which sends the same write
+// to the next git node to run out the same; a build's run out is the
+// change's, too_large, and while it runs it holds its unit of the node's seat
+// git-work share like the rest of the build.
+func (b *building) paths(ctx context.Context, parent string) (map[string]object, error) {
+	if parent == "" {
+		return nil, nil
+	}
+	named := namedPaths(b.wr.w.Files)
+	left, err := b.wr.budget()
+	if err != nil {
+		return nil, err
+	}
+	got, err := b.wr.lookup(ctx, lookups{at: parent, paths: named}, "read of the paths the change names", left)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]object, len(named))
+	for i, p := range named {
+		if got[i].present() {
+			out[p] = got[i]
+		}
+	}
+	return out, nil
 }
 
 // contents is the build's ONE read of the copy's contents (`cat-file --batch
@@ -677,18 +791,14 @@ func (b *building) hash(ctx context.Context, p *plan) error {
 
 // trees writes every touched directory, deepest first, one level at a time,
 // and answers the root's new id: a directory left empty is dropped from its
-// parent, and an empty root is the empty tree, written like any.
+// parent, and an empty root is the empty tree, written like any. The levels
+// are laid out in ONE pass over the directories (plan.levels), never one pass
+// a level.
 func (b *building) trees(ctx context.Context, p *plan) (string, error) {
 	ids := map[string]string{} // a directory's new id, "" where it is left empty
-	order := p.order()
-	for depth := p.depth; depth >= 0; depth-- {
-		var level []string
-		for _, d := range order {
-			if dirDepth(d) == depth {
-				level = append(level, d)
-			}
-		}
-		if err := b.level(ctx, p, level, ids); err != nil {
+	levels := p.levels()
+	for depth := len(levels) - 1; depth >= 0; depth-- {
+		if err := b.level(ctx, p, levels[depth], ids); err != nil {
 			return "", err
 		}
 	}

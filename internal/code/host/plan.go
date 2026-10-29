@@ -5,16 +5,15 @@ import (
 	"maps"
 	"path"
 	"slices"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/code"
 )
 
-// A COMMIT_FILES' CHANGE IS PLANNED BEFORE A BYTE IS READ (planFiles): its
-// operations judged against what the parent holds at every path they name and
-// every directory above one — the check's one batch — and laid out by
-// directory, so the build reads exactly the directories the change touches and
-// writes exactly those again.
+// A COMMIT_FILES' CHANGE IS PLANNED BEFORE ITS DIRECTORIES ARE READ (planFiles):
+// its operations judged against what the parent holds at every path they name
+// and every directory above one — the build's first read (building.paths) —
+// and laid out by directory, so the build reads exactly the directories the
+// change touches and writes exactly those again.
 //
 // THE TREE AS THE CALL LEAVES IT is what is judged, so one call may remove a
 // path and make another beneath it — delete `a` and put `a/b` is one change,
@@ -25,23 +24,42 @@ import (
 // would undo the other: a path beneath one the call makes a file, keeps a file
 // or moves an entry to, and an edit, a mode, a delete or a move out of a path
 // beneath one the call removes.
+//
+// EVERY DIRECTORY IS JUDGED ONCE, from its parent's judgement (ancestry):
+// whether the call removes it or a path above it, the nearest path the call
+// names at or above it, and the file above it a path the call makes would
+// need to be a directory. Every rule above asks those of a path's directory,
+// and a rule that walked the directory's ancestors again at every ask made a
+// plan's work grow with the CUBE of its paths' depth — every directory of a
+// path asking again of every one above it, each ask hashing a prefix as long
+// as its own: one put 2 047 components deep, which a 4 KiB path holds, took
+// 5.3 s of a core before a byte of git ran. So the plan's work is a few map
+// operations a path it names and a directory above one, each hashing the
+// directory's own path once, whatever the depth.
 
 // plan is a commit_files' change laid out by directory.
 type plan struct {
 	// dirs is every directory the change rewrites, by path, "" the root:
 	// each one holding a path an operation names, and every one above it.
 	dirs map[string]*dirChange
-	// depth is the deepest directory's (dirDepth).
+	// depth is the deepest directory's (dirChange.depth).
 	depth int
 	// edits are the files an edit rewrites, and puts the files a put writes
 	// from its text, each in its operation's order.
 	edits []*planEdit
 	puts  []*planPut
+	// judged is how many directories the plan judged (ancestry.judged): one
+	// for each directory above a path the call names, however many ask —
+	// TestAPlanJudgesEachDirectoryOnce's window onto the plan's work.
+	judged int
 }
 
 // dirChange is one directory the change rewrites.
 type dirChange struct {
 	path string
+	// depth is the directory's: 0 for the root, 1 for a child of it — its
+	// parent's and one, never counted again from its path.
+	depth int
 	// base names the directory's entries at the parent — the parent's root
 	// tree, or the directory's tree id — and is "" where the directory is
 	// new: the parent holds none there, or the change removes what it held.
@@ -94,6 +112,17 @@ type planPut struct {
 // order is every directory the change rewrites, sorted.
 func (p *plan) order() []string { return slices.Sorted(maps.Keys(p.dirs)) }
 
+// levels is every directory the change rewrites by its depth, the root's
+// first, each level sorted: ONE pass over them, never one a level.
+func (p *plan) levels() [][]string {
+	out := make([][]string, p.depth+1)
+	for _, d := range p.order() {
+		depth := p.dirs[d].depth
+		out[depth] = append(out[depth], d)
+	}
+	return out
+}
+
 // newBlobs is every file the build writes anew, puts then edits.
 func (p *plan) newBlobs() []*newBlob {
 	out := make([]*newBlob, 0, len(p.puts)+len(p.edits))
@@ -116,13 +145,67 @@ const (
 	pathKept
 )
 
-// planFiles judges files on j's paths and lays them out, or answers the
-// change's refusal and its sentence.
-func planFiles(files []code.FileOp, j judgement) (*plan, code.WriteRefusal, string) {
-	at := func(p string) object { return j.paths[p] }
+// ancestry is what the plan knows of every directory above a path the call
+// names, each JUDGED ONCE, from its parent's judgement, and asked of as often
+// as a rule needs it.
+type ancestry struct {
+	role  map[string]int
+	at    func(string) object
+	facts map[string]dirFacts
+	// judged counts the directories judged, each once.
+	judged int
+}
+
+// dirFacts is what one directory is to the call.
+type dirFacts struct {
+	// gone: the call removes the directory or a path above it, so whatever
+	// the parent holds there is not the change's to keep.
+	gone bool
+	// named is the nearest path the call names at or above the directory,
+	// "" for none.
+	named string
+	// blocker is the deepest path at or above the directory, beneath named,
+	// that the parent holds as something other than a directory and that no
+	// removal above clears — where a path the call makes beneath it would
+	// need a directory — "" for none.
+	blocker string
+}
+
+// of is what directory d is to the call, "" the root, which is nothing.
+func (a *ancestry) of(d string) dirFacts {
+	if d == "" {
+		return dirFacts{}
+	}
+	if f, ok := a.facts[d]; ok {
+		return f
+	}
+	up := a.of(parentDir(d))
+	a.judged++
+	f := up
+	if r, isNamed := a.role[d]; isNamed {
+		// A NAMED DIRECTORY ENDS THE SEARCH for a blocker: what it is is
+		// its operation's to judge, and so is everything above it.
+		f.named, f.blocker = d, ""
+		f.gone = f.gone || r == pathRemoved
+	} else if o := a.at(d); o.present() && o.kind != "tree" && !up.gone {
+		f.blocker = d
+	}
+	a.facts[d] = f
+	return f
+}
+
+// above is what the directory holding path p is to the call: what p's place is.
+func (a *ancestry) above(p string) dirFacts { return a.of(parentDir(p)) }
+
+// planFiles judges files against what the parent commit holds at each path
+// they name and each directory above one (paths, by path: a path the parent
+// does not hold is absent, and a root commit, parent "", holds nothing) and
+// lays them out, or answers the change's refusal and its sentence.
+func planFiles(files []code.FileOp, parent string, paths map[string]object) (*plan, code.WriteRefusal, string) {
+	at := func(p string) object { return paths[p] }
 	where := "in a commit with no parent"
-	if j.parent != "" {
-		where = "at " + shortID(j.parent)
+	if parent != "" {
+		where = "at " + shortID(parent)
 	}
 	role := map[string]int{}
 	by := map[string]int{} // the operation naming each path
@@ -139,24 +222,16 @@ func planFiles(files []code.FileOp, j judgement) (*plan, code.WriteRefusal, stri
 		}
 		by[f.Path] = i
 	}
-	removedAbove := func(p string) bool {
-		for d := path.Dir(p); d != "."; d = path.Dir(d) {
-			if role[d] == pathRemoved {
-				return true
-			}
-		}
-		return false
-	}
+	a := &ancestry{role: role, at: at, facts: map[string]dirFacts{}}
 	named := slices.Sorted(maps.Keys(role))
 
-	// 1. NESTING: beneath a path the call removes, only a path it makes.
+	// 1. NESTING: beneath a path the call removes, only a path it makes. The
+	// nearest named path above each is the one judged: where a further one
+	// conflicts and the nearest does not, the nearest — removed, beneath it —
+	// conflicts with that further one itself, and sorts before.
 	for _, p := range named {
-		for d := path.Dir(p); d != "."; d = path.Dir(d) {
-			r, isNamed := role[d]
-			if !isNamed || (r == pathRemoved && role[p] == pathMade) {
-				continue
-			}
-			return nil, code.WritePathConflict, nested(files, by[d], d, by[p], p, r)
+		if d := a.above(p).named; d != "" && (role[d] != pathRemoved || role[p] != pathMade) {
+			return nil, code.WritePathConflict, nested(files, by[d], d, by[p], p, role[d])
 		}
 	}
 
@@ -179,13 +254,13 @@ func planFiles(files []code.FileOp, j judgement) (*plan, code.WriteRefusal, stri
 					i, f.Path, where)
 			}
 		case code.FileOpPut:
-			if o.kind == "tree" && !removedAbove(f.Path) {
+			if o.kind == "tree" && !a.above(f.Path).gone {
 				return nil, code.WritePathConflict, fmt.Sprintf("files[%d]: %s is a directory %s, and a put makes "+
 					"a file: remove the directory in a write of its own first", i, f.Path, where)
 			}
 		}
 		if f.Op == code.FileOpMove {
-			if t := at(f.To); t.present() && !removedAbove(f.To) {
+			if t := at(f.To); t.present() && !a.above(f.To).gone {
 				return nil, code.WritePathConflict, fmt.Sprintf("files[%d]: %s already exists %s, and a move "+
 					"overwrites nothing (git mv's rule): remove it in a write of its own first", i, f.To, where)
 			}
@@ -198,15 +273,10 @@ func planFiles(files []code.FileOp, j judgement) (*plan, code.WriteRefusal, stri
 		if role[p] != pathMade {
 			continue
 		}
-		for d := path.Dir(p); d != "."; d = path.Dir(d) {
-			if _, isNamed := role[d]; isNamed {
-				break
-			}
-			if o := at(d); o.present() && o.kind != "tree" && !removedAbove(d) {
-				return nil, code.WritePathConflict, fmt.Sprintf("files[%d]: %s is beneath %s, which is %s %s, not "+
-					"a directory: delete or move %s in this write to make a directory there", by[p], p, d, o.what(),
-					where, d)
-			}
+		if d := a.above(p).blocker; d != "" {
+			return nil, code.WritePathConflict, fmt.Sprintf("files[%d]: %s is beneath %s, which is %s %s, not "+
+				"a directory: delete or move %s in this write to make a directory there", by[p], p, d, at(d).what(),
+				where, d)
 		}
 	}
 
@@ -220,19 +290,21 @@ func planFiles(files []code.FileOp, j judgement) (*plan, code.WriteRefusal, stri
 		dc := &dirChange{path: d, drop: map[string]bool{}, set: map[string]setEntry{}, sub: map[string]bool{}}
 		switch {
 		case d == "":
-			if j.parent != "" {
-				dc.base = j.parent + "^{tree}"
+			if parent != "" {
+				dc.base = parent + "^{tree}"
 			}
-		case role[d] != pathRemoved && !removedAbove(d):
+		case !a.of(d).gone:
 			if o := at(d); o.kind == "tree" {
 				dc.base = o.id
 			}
 		}
-		p.dirs[d] = dc
-		p.depth = max(p.depth, dirDepth(d))
 		if d != "" {
-			dir(parentDir(d)).sub[path.Base(d)] = true
+			up := dir(parentDir(d))
+			up.sub[path.Base(d)] = true
+			dc.depth = up.depth + 1
 		}
+		p.dirs[d] = dc
+		p.depth = max(p.depth, dc.depth)
 		return dc
 	}
 	entry := func(fp string) (*dirChange, string) { return dir(parentDir(fp)), path.Base(fp) }
@@ -243,7 +315,7 @@ func planFiles(files []code.FileOp, j judgement) (*plan, code.WriteRefusal, stri
 			mode := f.Mode
 			if mode == "" {
 				mode = code.ModeFile
-				if o := at(f.Path); o.file() && !removedAbove(f.Path) {
+				if o := at(f.Path); o.file() && !a.above(f.Path).gone {
 					mode = o.mode
 				}
 			}
@@ -274,6 +346,7 @@ func planFiles(files []code.FileOp, j judgement) (*plan, code.WriteRefusal, stri
 			dt.set[to] = setEntry{mode: src.mode, id: src.id}
 		}
 	}
+	p.judged = a.judged
 	return p, "", ""
 }
 
@@ -294,14 +367,6 @@ func nested(files []code.FileOp, oi int, outer string, ii int, inner string, r i
 	}
 	return fmt.Sprintf("files[%d] makes %s a file, and files[%d] names %s beneath it: a file holds no paths", oi,
 		outer, ii, inner)
-}
-
-// dirDepth is a directory's depth: 0 for the root, 1 for a child of it.
-func dirDepth(d string) int {
-	if d == "" {
-		return 0
-	}
-	return strings.Count(d, "/") + 1
 }
 
 // parentDir is the directory holding p, "" for the root.

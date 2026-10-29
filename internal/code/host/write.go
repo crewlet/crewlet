@@ -129,8 +129,8 @@ var errWritesStopping = errors.New("host: the code host is stopping")
 //     (code.GrantOf on this node's chart) and the protections of the one
 //     command the write makes are judged on the synced row; then the copy is
 //     checked (build.go's check): where the branch is, by its exact name, and
-//     what the objects the write names are and — for a commit_files — what
-//     every path it names and every directory above one is at its parent.
+//     what the objects the write names by id are — short reads, each one
+//     lookup.
 //  5. A head that is not the one the caller read is first looked up as this
 //     write's own push (Estate.PushOutcome): FOUND, the write already landed
 //     and is answered from its row, nothing built.
@@ -139,9 +139,11 @@ var errWritesStopping = errors.New("host: the code host is stopping")
 //  7. The build (build.go), in the write's scratch (cache.NewScratch, named
 //     the push id), under ONE unit of the node's seat git-work share, given
 //     back before the landing, within ONE budget of git run time,
-//     code.WriteBuildDeadline: a refusal of the change, a conflict or nothing
-//     to change is answered here, nothing stored. Then
-//     codefault.WriteAfterBuild.
+//     code.WriteBuildDeadline — a commit_files' read of what every path it
+//     names and every directory above one is at its parent among it, whose
+//     cost grows with the square of a path's depth (building.paths): a
+//     refusal of the change, a conflict or nothing to change is answered
+//     here, nothing stored. Then codefault.WriteAfterBuild.
 //  8. THE DEADLINE RULE: a caller whose deadline cannot hold the bundle's
 //     upload (code.UploadDeadline, at most code.WriteUploadAllowance) and the
 //     proposal after it (code.MinProposeAttempt) is answered busy with

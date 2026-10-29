@@ -1991,14 +1991,15 @@ func Catalogue() []Instrument {
 			Attributes: []string{"kind", "stage"},
 			Shows: "How long each engine write took on this node, by `kind` " +
 				"and `stage`: `sync`, bringing the copy to the caller's floor " +
-				"and judging the write on it, the check of what it names among " +
-				"it; `build`, its git — the lookups of what it changes, its " +
-				"objects, its commit and its pack, under a unit of the seat " +
-				"git-work share; `land`, the landing every push takes — the " +
-				"upload, the proposal and the wait for its row; and `total`. " +
-				"A `build` tail near ten seconds is changes too wide for an " +
-				"engine write, answered too_large; a `land` tail is the code " +
-				"log's, as a push's is.",
+				"and judging the write on it, the check of where its branch is " +
+				"and of the objects it names among it; `build`, its git — the " +
+				"read of what each path it names and each directory above one " +
+				"is, the lookups of what it changes, its objects, its commit and " +
+				"its pack, under a unit of the seat git-work share; `land`, the " +
+				"landing every push takes — the upload, the proposal and the " +
+				"wait for its row; and `total`. A `build` tail near ten seconds " +
+				"is changes too wide or too deep for an engine write, answered " +
+				"too_large; a `land` tail is the code log's, as a push's is.",
 		},
 		// ---- authentication -------------------------------------------
 		{

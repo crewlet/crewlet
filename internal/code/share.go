@@ -37,10 +37,13 @@ import (
 // would refuse every other seat's read on a node whose share is one — and a
 // read's short check of the objects it names waits in the read lane's own
 // queue like any short read. A write is held to the same rule: its check of
-// what it names is a short read like any, and its unit is held around its
-// build alone — given back before its landing's upload, its proposal and its
-// wait for its row, which hold no read-lane slot. What the share bounds is the
-// long processes, which are what a person's push waits behind.
+// where its branch is and of the objects it names by id is a short read like
+// any, and its unit is held around its build alone — which reads what every
+// path it names and every directory above one is, a read whose cost grows
+// with the square of a path's depth and so is no short read — given back
+// before its landing's upload, its proposal and its wait for its row, which
+// hold no read-lane slot. What the share bounds is the long processes, which
+// are what a person's push waits behind.
 //
 // PAST [GitShareWait] the work is answered [ErrGitUnready]{[UnreadyShare]} —
 // never queued for longer, and never refused as the asker's fault — so the
@@ -57,14 +60,15 @@ const (
 	// merge (internal/code/home), a read of two commits by their ids too.
 	SeatWorkRead SeatWork = "read"
 	// SeatWorkWrite is an engine write's BUILD (internal/code/host): its git
-	// from its read of what the change touches — the parent commit, the
+	// from its read of what every path the change names and every directory
+	// above one is, and of what it touches — the parent commit, the
 	// directories it rewrites, the files an edit rewrites, a pick's two
 	// commits — to its pack indexed. Never the check before the build, of
-	// where the write's branch is and of what the objects and paths it names
-	// are, which waits in the read lane's own queue as a read's check of what
-	// it names does; never its landing's upload, proposal or wait for its row,
-	// which hold no read-lane slot; and a branch created or deleted builds
-	// nothing and takes no unit.
+	// where the write's branch is and of what the objects it names by id
+	// are, a short read in the read lane's own queue as a read's check of
+	// what it names is; never its landing's upload, proposal or wait for its
+	// row, which hold no read-lane slot; and a branch created or deleted
+	// builds nothing and takes no unit.
 	SeatWorkWrite SeatWork = "write"
 )
 

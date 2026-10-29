@@ -470,6 +470,49 @@ func TestAWritesBuildHoldsTheShareAndItsLandingNone(t *testing.T) {
 	}
 }
 
+// A WRITE READS WHAT ITS PATHS ARE IN ITS BUILD: a commit_files onto the head
+// it read, naming no object by id, asks git nothing before its build but where
+// its branch is, and its first cat-file — what every path it names and every
+// directory above one is at that head, each asked whole as `<head>:<path>` —
+// runs holding the build's unit of the seat share and charged to the build's
+// budget of git. git walks each of those paths from the root, so their cost
+// grows with the square of a path's depth, which no short check outside the
+// share may run up.
+//
+// Mutation: read the paths in the check, before the build takes its unit —
+// the read runs with no unit held, red.
+func TestAWriteReadsItsPathsInItsBuild(t *testing.T) {
+	t.Parallel()
+	c := newWriteCase(t, codetest.SoloOptions{}, map[string]string{"docs/a/b.md": "one\n"})
+	share := c.Fleet.Nodes()[0].Share()
+	inputs := host.RecordGitInputs(c.server())
+	reading, release := host.HoldGit(c.server(), "cat-file")
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.write(files(c.repo, pat(), "refs/heads/main", c.head, "", text("docs/a/c.md", "c\n")))
+		done <- err
+	}()
+	reachedFirst(t, reading, done)
+	if n := share.Held(); n != 1 {
+		t.Errorf("the read of what the write's paths are holds %d units of the seat share, want the build's one", n)
+	}
+	release()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	var asked []string
+	for _, in := range inputs() {
+		if in.Args[0] == "cat-file" {
+			asked = append(asked, strings.Join(in.Args, " ")+"\x00"+string(in.Stdin))
+		}
+	}
+	want := "cat-file --batch-check=%(objectname) %(objecttype) %(objectsize) %(objectmode) -Z\x00" +
+		c.head + ":docs\x00" + c.head + ":docs/a\x00" + c.head + ":docs/a/c.md\x00"
+	if len(asked) == 0 || asked[0] != want {
+		t.Errorf("the write's first cat-file asked %q, want what its paths are at its head, %q", asked, want)
+	}
+}
+
 // A WRITE'S BUILD IS ONE READ'S DEADLINE: its git — every process of it,
 // together — is given gitproc.ReadDeadline of run time, code.WriteBuildDeadline,
 // which this package's constant names apart since code imports no git; and a

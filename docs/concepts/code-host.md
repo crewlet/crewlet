@@ -4786,10 +4786,10 @@ history its caller never saw, and one that creates a branch needs it absent.
    writer's [grant](#who-may-read-and-push), the [protections](#protection-rules)
    — a seat's write to a ref `direct_push: persons` protects is refused
    `protected_direct`, as its push would be ([A seat's push](#a-seats-push)) —
-   where the branch is, by its exact name, and what every object and path the
-   write names is. A head that is not the one the caller read is first looked
-   up as **this write's own push**, landed by an earlier ask of it, and found,
-   it is the answer. Every refusal is judged once more at the code log's head
+   where the branch is, by its exact name, and what every object the write
+   names by its id is. A head that is not the one the caller read is first
+   looked up as **this write's own push**, landed by an earlier ask of it, and
+   found, it is the answer. Every refusal is judged once more at the code log's head
    before it is answered, so a copy that has not yet read a protection's
    removal refuses nothing a current one would let through. A seat's write on
    a node [confirmed behind the company's
@@ -4799,18 +4799,25 @@ history its caller never saw, and one that creates a branch needs it absent.
 2. **Built beside the copy, over what it touches.** In a scratch repository
    whose one alternate is the copy — never in the copy, which stays a function
    of the rows — by git's own plumbing over exactly the directories the change
-   touches: one read of those directories and the files an edit rewrites, one
-   `hash-object` of the new files, one `mktree` a level of directories,
-   deepest first, every entry the change does not touch passed through as it
-   stands, and one `commit-tree`; a revert or a cherry-pick runs one
-   `merge-tree --write-tree`, whose cost follows the trees' differences. Never
-   an index of the whole tree or a checkout, so what a commit costs follows
-   the entries of the directories it touches, never the files the repository
-   holds: a commit beside sibling directories of ten thousand files asks git
-   exactly what one beside directories of ten does. The build takes a
+   touches: one read of what every path the write names and every directory
+   above one is, one read of those directories and the files an edit
+   rewrites, one `hash-object` of the new files, one `mktree` a level of
+   directories, deepest first, every entry the change does not touch passed
+   through as it stands, and one `commit-tree`; a revert or a cherry-pick runs
+   one `merge-tree --write-tree`, whose cost follows the trees' differences.
+   Never an index of the whole tree or a checkout, so what a commit costs
+   follows the entries of the directories it touches, never the files the
+   repository holds: a commit beside sibling directories of ten thousand files
+   asks git exactly what one beside directories of ten does. The build takes a
    unit of the node's [seat git-work share](#server-side-reads), given back
    before it lands, and one budget of ten seconds of git run time that every
-   process of it shares.
+   process of it shares. The read of what the named paths are is the build's,
+   never a quick check before it: git walks each path from the root, a
+   directory at a time, so its cost grows with the square of a path's depth —
+   a thousand paths sixty-four deep, each with every directory above it, took
+   19 s of git on two E-cores of an Intel Core Ultra 7 265U — and a write too
+   wide or too deep for the budget is refused `too_large`, never taken for a
+   git node that failed and asked of the next.
 3. **Checked as a push is.** The new objects are packed into one
    self-contained pack, indexed by `git index-pack --strict` — the check
    receive-pack runs on every person's push (`receive.fsckObjects`) — so a
