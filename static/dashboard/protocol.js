@@ -2892,7 +2892,11 @@ var ACTIONS = {
 		scope: "person"
 	},
 	answer_run: {
-		args: ["turn_id", "answer"],
+		args: [
+			"turn_id",
+			"choice",
+			"answer"
+		],
 		domain: null,
 		refreshes: ["sandbox_runs", "decisions"],
 		scope: "person"

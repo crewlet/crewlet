@@ -18,15 +18,17 @@ import { useMemo, useState } from "react";
 import {
   Button,
   Checkbox,
-  ChoiceButtons,
   ChoiceList,
   Combobox,
   Composer,
   FormField,
   Input,
   Modal,
+  Prose,
+  ReadingPaneReasoning,
   Select,
   Stack,
+  Text,
   Textarea,
   type ComboboxOption,
   type SelectOption,
@@ -47,6 +49,7 @@ import {
 import { RefusalNote, WriteButton, pressable } from "./WriteButton.tsx";
 import { QueryState } from "./common.tsx";
 import { useAct } from "~/lib/useAct.ts";
+import { AnswerChoices } from "./AnswerChoices.tsx";
 import { useMessageSeatAccess } from "~/lib/useWriteAccess.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
@@ -58,7 +61,10 @@ import { STEER_NOTE_MAX_RUNES } from "~/contract/steer.ts";
 import { steerReadsSentence } from "~/lib/steer.ts";
 import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
 import { textBudget } from "~/lib/format.ts";
-import { renderTokens } from "~/lib/markdown.ts";
+import { CHECKED_WORDS, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
+import { RUNS_POLL_MS, runAsk, runAskTexts } from "~/lib/runs.ts";
+import { TokenScope } from "./InlineToken.tsx";
+import type { SandboxRun } from "~/protocol/index.ts";
 import { useServicesRun } from "~/lib/services.ts";
 
 /**
@@ -625,10 +631,12 @@ function SaveViewDialog({
  * How an ask was answered, for the line that replaces its controls.
  *
  * `recommended` is set on a choice that was the asker's own recommendation,
- * which the line says beside it.
+ * which the line says beside it, and `id` names the option, which the options
+ * drawn under an answer mark as chosen.
  */
 export type AskAnswer =
-  { kind: "choice"; label: string; recommended: boolean } | { kind: "reply"; text: string };
+  | { kind: "choice"; id: string; label: string; recommended: boolean }
+  | { kind: "reply"; text: string };
 
 /** The value the "Something else" choice carries in the list of options. */
 const OTHER = "\u0000other";
@@ -666,7 +674,8 @@ const DECISION_REPLY_MAX = 2000;
  * TWO LAYOUTS OF ONE ANSWER. `line` is the one above, for a list where an ask
  * is one row among others. `buttons` is for a screen where the question is
  * the whole of what is open (the Inbox's pane): every option is a button that
- * sends it with one press, the recommended one first and filled, and
+ * sends it with one press (`AnswerChoices`, which a coding run's options are
+ * drawn with too), the recommended one first and filled, and
  * "Something else" opens the field in their place. An ask with no options is
  * answered in that field from the start. Either way the answer goes through
  * this one write, so the rules above hold for both.
@@ -733,7 +742,12 @@ export function AnswerAsk({
     if (!result || (result.kind !== "applied" && result.kind !== "pending")) return;
     onAnswered(
       option
-        ? { kind: "choice", label: option.label, recommended: option.id === recommended }
+        ? {
+            kind: "choice",
+            id: option.id,
+            label: option.label,
+            recommended: option.id === recommended,
+          }
         : { kind: "reply", text: body },
     );
   };
@@ -822,45 +836,20 @@ export function AnswerAsk({
       );
     }
     return (
-      <Stack gap={2}>
-        <ChoiceButtons
-          label="Answers"
-          // AN OPTION IS A BUTTON: its colours and references are drawn with
-          // their marks and never as links, which would steal the press.
-          options={options.map((o) => ({
-            value: o.id,
-            // PART OF THE ASK'S MESSAGE where a `TokenScope` names one.
-            label: renderTokens(o.label, `option-${o.id}`, "text", true),
-            detail:
-              o.detail === undefined
-                ? undefined
-                : renderTokens(o.detail, `detail-${o.id}`, "text", true),
-          }))}
-          recommended={recommended}
-          pending={write.busy ? chosen : null}
-          disabledReason={write.access.can ? undefined : write.access.reason}
-          onChoose={(choice) => {
-            if (!pressable(write)) return;
-            setChosen(choice);
-            void send(choice);
-          }}
-        />
-        <WriteButton
-          write={write}
-          size="small"
-          variant="ghost"
-          pressing={false}
-          showRefusal={false}
-          blocked={write.busy ? "Your answer to this ask is being sent" : undefined}
-          onPress={() => {
-            setChosen(OTHER);
-            onOpenChange(true);
-          }}
-        >
-          Something else
-        </WriteButton>
-        <RefusalNote write={write} />
-      </Stack>
+      <AnswerChoices
+        write={write}
+        options={options}
+        recommended={recommended}
+        pending={write.busy ? chosen : null}
+        onChoose={(choice) => {
+          setChosen(choice);
+          void send(choice);
+        }}
+        onSomethingElse={() => {
+          setChosen(OTHER);
+          onOpenChange(true);
+        }}
+      />
     );
   }
 
@@ -941,7 +930,7 @@ export function AnswerAsk({
 }
 
 /**
- * Answer a coding run that stopped to ask a person something, by its turn —
+ * Answer a coding run that stopped to ask a person something, by its turn,
  * which reaches a run whatever woke the turn that launched it, chat thread or
  * none.
  *
@@ -950,15 +939,13 @@ export function AnswerAsk({
  * says once it has.
  */
 export function AnswerRunButton({
-  turnId,
+  run,
   seat,
-  question,
 }: {
-  turnId: string;
+  /** The parked run: its turn, which the answer names, and what it asked. */
+  run: AnsweredRun;
   /** Whose run it is, by name, for the dialog's title. */
   seat: string;
-  /** What the run asked, quoted above the answer. */
-  question: string;
 }) {
   const write = useAct("answer_run");
   const [open, setOpen] = useState(false);
@@ -976,9 +963,8 @@ export function AnswerRunButton({
       </WriteButton>
       {open && (
         <AnswerRunDialog
-          turnId={turnId}
+          run={run}
           seat={seat}
-          question={question}
           write={write}
           onClose={() => {
             write.dismiss();
@@ -990,30 +976,58 @@ export function AnswerRunButton({
   );
 }
 
+/**
+ * What the answer dialog is handed of a parked run: a durable row, or a live
+ * entry, which carries the question alone.
+ */
+type AnsweredRun = Pick<SandboxRun, "turn_id" | "question" | "question_context" | "decision">;
+
+/**
+ * The run's question as the Inbox reads it (`runAsk`): its title, its context
+ * as Markdown, the run's recommendation, and, for a run that asked to choose,
+ * its options as the buttons an ask's are (`AnswerChoices`), each answering
+ * with one press. "Something else", and an open question from the start,
+ * answers in words.
+ *
+ * READ OFF THE RUN'S DURABLE ROW where the dialog has it: the live projection
+ * a seat's page draws from carries the question's title alone, never its
+ * context or options, and an answer chosen without them would be an answer
+ * to a question the reader never saw whole.
+ */
 function AnswerRunDialog({
-  turnId,
+  run,
   seat,
-  question,
   write,
   onClose,
 }: {
-  turnId: string;
+  run: AnsweredRun;
   seat: string;
-  question: string;
   write: ReturnType<typeof useAct<"answer_run">>;
   onClose: () => void;
 }) {
+  const runs = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
+  const ask = runAsk(runs.data?.runs.find((r) => r.turn_id === run.turn_id) ?? run);
+  const decision = ask.decision;
+  const options = decision?.options ?? [];
+  const recommended = options.find((o) => o.id === decision?.recommended);
+  // "SOMETHING ELSE" OPENED THE FIELD in the options' place; a question with
+  // no options is answered in it from the start.
+  const [open, setOpen] = useState(false);
+  const inWords = options.length === 0 || open;
+  const [chosen, setChosen] = useState<string | null>(null);
   const [answer, setAnswer] = useState("");
   const blocked = answer.trim() ? undefined : "Write the answer first.";
-  const submit = async () => {
-    // THE BUTTON'S OWN GATE, for the dialog's submit.
-    if (!pressable(write, blocked)) return;
-    const text = answer.trim();
+  const send = async (args: { choice: string } | { answer: string }) => {
     const result = await write.run(
-      { turn_id: turnId, answer: text },
+      { turn_id: run.turn_id, ...args },
       { done: `Sent your answer to ${seat}'s coding run` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
+  };
+  const submit = () => {
+    // THE BUTTON'S OWN GATE, for the dialog's submit.
+    if (!pressable(write, blocked)) return;
+    void send({ answer: answer.trim() });
   };
   return (
     <Modal
@@ -1022,41 +1036,83 @@ function AnswerRunDialog({
       title={`Answer ${seat}'s coding run`}
       icon={<CornerDownLeftGlyph />}
       onClose={onClose}
-      onSubmit={() => void submit()}
+      onSubmit={inWords ? submit : undefined}
       closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={write.busy}>
             Cancel
           </Button>
-          <WriteButton
-            write={write}
-            variant="primary"
-            showRefusal={false}
-            onPress={() => void submit()}
-            blocked={blocked}
-          >
-            Send answer
-          </WriteButton>
+          {inWords && (
+            <WriteButton
+              write={write}
+              variant="primary"
+              showRefusal={false}
+              onPress={submit}
+              blocked={blocked}
+            >
+              Send answer
+            </WriteButton>
+          )}
         </>
       }
     >
-      <div className="col gap-3">
-        {question && <blockquote className="answer-run-question">{question}</blockquote>}
-        <FormField
-          label="Your answer"
-          htmlFor="answer-run-text"
-          helper="The run resumes with your answer."
-        >
-          <Textarea
-            id="answer-run-text"
-            rows={5}
-            value={answer}
-            onChange={(event) => setAnswer(event.target.value)}
-          />
-        </FormField>
-        <RefusalNote write={write} />
-      </div>
+      <TokenScope texts={runAskTexts(ask)}>
+        <div className="col gap-3">
+          {ask.title && (
+            <Text as="p" variant="heading">
+              {renderTokens(ask.title, "question", "text", true)}
+            </Text>
+          )}
+          {ask.context && (
+            <Prose as="div" measure="none" className="prose md">
+              {renderMarkdown(ask.context, { ...CHECKED_WORDS, scoped: true })}
+            </Prose>
+          )}
+          {recommended && decision?.rationale && (
+            <ReadingPaneReasoning
+              title={
+                <>
+                  {`${seat} recommends `}
+                  <strong>{renderTokens(recommended.label, "recommended", "text", true)}</strong>
+                </>
+              }
+            >
+              <p>{renderTokens(decision.rationale, "reasoning", "checked", true)}</p>
+            </ReadingPaneReasoning>
+          )}
+          {inWords ? (
+            <>
+              <FormField
+                label="Your answer"
+                htmlFor="answer-run-text"
+                helper="The run resumes with your answer."
+              >
+                <Textarea
+                  id="answer-run-text"
+                  rows={5}
+                  value={answer}
+                  autoFocus={open}
+                  onChange={(event) => setAnswer(event.target.value)}
+                />
+              </FormField>
+              <RefusalNote write={write} />
+            </>
+          ) : (
+            <AnswerChoices
+              write={write}
+              options={options}
+              recommended={decision?.recommended}
+              pending={write.busy ? chosen : null}
+              onChoose={(choice) => {
+                setChosen(choice);
+                void send({ choice });
+              }}
+              onSomethingElse={() => setOpen(true)}
+            />
+          )}
+        </div>
+      </TokenScope>
     </Modal>
   );
 }

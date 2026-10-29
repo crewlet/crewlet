@@ -11,8 +11,9 @@
  *    a free-text ask a Reply that sends words (`{answers, body}`), with the
  *    line saying what the answer sets off: the asker is woken with it, and
  *    posts it to the channel it promised where the ask carries an `inform`;
- *  - a CODING RUN parked on a question: whose, the question quoted, and how
- *    long its box is still held; answered by its turn (`answer_run`);
+ *  - a CODING RUN parked on a question: whose, the question's title quoted,
+ *    and how long its box is still held; answered by its turn (`answer_run`),
+ *    with one of its options where it asked to choose;
  *  - a SEAT the engine STOPPED for its token budget: which window is spent,
  *    the item it was on, and the two ways out — raise the ceiling, or hand
  *    the item to somebody else.
@@ -51,6 +52,7 @@ import { relTime } from "~/lib/format.ts";
 import type { AgentRow, BudgetWindow, SandboxRun, WorkAskRow } from "~/protocol/index.ts";
 import { itemAddress, itemPath, type ItemRef } from "~/lib/work.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
+import { runAsk } from "~/lib/runs.ts";
 
 /**
  * Where Home's "Review" and "Open inbox" take a reader: the Inbox, whose list
@@ -479,9 +481,12 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
   const who = seatOf(index, run.agent_handle);
   const item = run.work_item ?? null;
   const since = run.paused_at || run.updated_at;
+  const { title } = runAsk(run);
   const sub = joined([
     item ? <Key key="k" item={item} /> : "",
-    run.question ? `“${run.question}”` : questionWithheld(run) ? QUESTION_WITHHELD : "",
+    // THE QUESTION'S TITLE, never the whole of it: the pane and the answer
+    // dialog read its context.
+    title ? `“${title}”` : questionWithheld(run) ? QUESTION_WITHHELD : "",
     audienceOf(run, index),
     relTime(since, now),
   ]);
@@ -492,9 +497,7 @@ function RunRow({ run, index, now }: { run: SandboxRun; index: OrgIndex; now: nu
       title={`${who.name}’s coding run is parked on a question`}
       sub={sub}
       line={holdLine(run, now)}
-      actions={
-        <AnswerRunButton turnId={run.turn_id} seat={who.name} question={run.question ?? ""} />
-      }
+      actions={<AnswerRunButton run={run} seat={who.name} />}
     />
   );
 }

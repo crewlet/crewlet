@@ -171,7 +171,7 @@ const FIXTURES: Readonly<Record<keyof typeof writes, { props: object; name: RegE
     name: /^Accept$/,
   },
   AnswerRunButton: {
-    props: { turnId: "run-1", seat: "Frontend SWE", question: "Drop the fallback?" },
+    props: { run: { turn_id: "run-1", question: "Drop the fallback?" }, seat: "Frontend SWE" },
     name: /^Answer$/,
   },
   SaveViewButton: {

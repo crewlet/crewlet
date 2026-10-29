@@ -12,7 +12,11 @@ import { answerFate, type GivenAnswer } from "./answerFate.ts";
  * ignore `declined_answers`, and the person is never told to answer again.
  */
 test("an answer's fate is the run record's, not the press's", () => {
-  const given: GivenAnswer = { text: "use main", launchId: "q1", answerId: "a1" };
+  const given: GivenAnswer = {
+    answer: { kind: "reply", text: "use main" },
+    launchId: "q1",
+    answerId: "a1",
+  };
   const run = (over: Record<string, unknown>) => ({
     status: "awaiting_clarification" as const,
     launch_id: "q1",

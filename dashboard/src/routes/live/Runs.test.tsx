@@ -367,6 +367,45 @@ test("a parked run's page answers it by its turn", async () => {
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
+// AN OLDER BUILD'S QUESTION IS READ, NOT QUOTED. Its free-text question ran
+// to paragraphs, and the banner and the answer dialog drew every word of it
+// in one block. The banner carries its first sentence; the dialog adds the
+// rest as Markdown, never as a quote.
+//
+// Mutation: draw `run.question` whole in the banner, or quote it in the
+// dialog, and this fails.
+test("a parked run's long question heads the banner and reads as Markdown in its dialog", async () => {
+  const { posted } = mountPage({
+    sandbox_runs: {
+      runs: [
+        run({
+          status: "awaiting_clarification",
+          question: "Which retry ceiling? The API allows **five**.\n\nThe client used three.",
+          audience_handles: ["jane"],
+        }),
+      ],
+    },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  const banner = document.querySelector(".run-awaiting") as HTMLElement;
+  expect(banner.querySelector("strong")?.textContent).toBe("Which retry ceiling?");
+  expect(banner.textContent).not.toContain("The client used three.");
+  fireEvent.click(within(banner).getByRole("button", { name: "Answer" }));
+  const dialog = await screen.findByRole("dialog");
+  await settle();
+  expect(dialog.querySelector("blockquote")).toBeNull();
+  expect(dialog.textContent?.split("Which retry ceiling?")).toHaveLength(2);
+  expect(dialog.querySelector(".prose strong")?.textContent).toBe("five");
+  expect(dialog.querySelector(".prose")?.textContent).toContain("The client used three.");
+  fireEvent.change(within(dialog).getByLabelText("Your answer"), {
+    target: { value: "Three." },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Send answer" }));
+  await settle();
+  expect(posted).toEqual([{ tool: "answer_run", args: { turn_id: "turn-1", answer: "Three." } }]);
+});
+
 // A RUNNING JOB'S OUTPUT IS ASKED OF ITS OWNER, by the job the row holds.
 //
 // Mutation: ask without `launch_id`, and the engine refuses every read.

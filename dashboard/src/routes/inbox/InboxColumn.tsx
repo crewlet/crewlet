@@ -39,9 +39,10 @@ import { TokenScope } from "~/components/InlineToken.tsx";
 import { renderTokens } from "~/lib/markdown.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { ItemRef } from "~/lib/work.ts";
-import type { WorkAskRow } from "~/protocol/index.ts";
 import {
   answerWords,
+  answeredQuestion,
+  answeredTexts,
   askQuestion,
   askTexts,
   budgetLine,
@@ -59,6 +60,7 @@ import {
 } from "./model.ts";
 import { TaskLink } from "./TaskLink.tsx";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
+import { runAsk, runAskTexts } from "~/lib/runs.ts";
 
 /** A row dealt with here: how ("Answered"), and the answer that was given. */
 export interface Settled {
@@ -278,7 +280,7 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
         case "run":
           return {
             text:
-              firstLine(row.subject.run.question ?? "") ||
+              runAsk(row.subject.run).title ||
               (questionWithheld(row.subject.run) ? QUESTION_WITHHELD : "Parked on a question"),
           };
         case "seat":
@@ -288,7 +290,7 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
     case "condition":
       return { text: row.item.title };
     case "answered":
-      return { text: askQuestion(row.answered.ask) };
+      return { text: answeredQuestion(row.answered) };
     case "notice": {
       const said = noticeText(row.notice, index);
       return said
@@ -355,7 +357,7 @@ const InboxItem = memo(function InboxItem({
   const unread = row.kind === "notice" && !row.notice.read && !row.notice.snoozed;
   // WHAT WAS SAID: the answer this visit gave, or the one the engine recorded.
   const said = answered ?? (settled?.answer ? givenWords(settled.answer) : null);
-  const ask = rowAsk(row);
+  const texts = rowTexts(row);
   const drawn = (
     <Row
       title={rowName(row, who)}
@@ -393,15 +395,20 @@ const InboxItem = memo(function InboxItem({
       {renderTokens(words.text, "words", "text", true)}
     </Row>
   );
-  // A ROW'S WORDS ARE ITS ASK'S: a bare `#11` in its question is placed by
-  // what the ask's context names, as in the reading pane.
-  return ask ? <TokenScope texts={askTexts(ask)}>{drawn}</TokenScope> : drawn;
+  // A ROW'S WORDS ARE ITS QUESTION'S: a bare `#11` in it is placed by what
+  // the question's context names, as in the reading pane.
+  return texts ? <TokenScope texts={texts}>{drawn}</TokenScope> : drawn;
 });
 
-/** The ask a row is about, open or answered, or undefined for any other row. */
-function rowAsk(row: InboxRow): WorkAskRow | undefined {
-  if (row.kind === "decision") return row.subject.kind === "ask" ? row.subject.ask : undefined;
-  return row.kind === "answered" ? row.answered.ask : undefined;
+/**
+ * Every text of the question a row is about, open or answered, an ask's or a
+ * coding run's, or undefined for a row that is not a question.
+ */
+function rowTexts(row: InboxRow): string[] | undefined {
+  if (row.kind === "answered") return answeredTexts(row.answered);
+  if (row.kind !== "decision") return undefined;
+  if (row.subject.kind === "ask") return askTexts(row.subject.ask);
+  return row.subject.kind === "run" ? runAskTexts(runAsk(row.subject.run)) : undefined;
 }
 
 /** The answer this visit gave, in the words an answered row says it with. */
@@ -465,7 +472,8 @@ export function titleOf(
 
 /** The title a row carries for its own task, where it carries one. */
 export function taskTitleOf(row: InboxRow): string | undefined {
-  if (row.kind === "answered") return row.answered.ask.title;
+  // A RUN'S QUESTION CARRIES NO TITLE for its task, which the screen reads.
+  if (row.kind === "answered") return "run" in row.answered ? undefined : row.answered.ask.title;
   return row.kind === "decision" && row.subject.kind === "ask" ? row.subject.ask.title : undefined;
 }
 

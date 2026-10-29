@@ -8,10 +8,11 @@ import { describe, expect, test } from "vitest";
 
 import {
   answerWords,
+  answeredQuestion,
+  answeredRows,
   askContext,
   askQuestion,
   earlierOf,
-  firstSentence,
   followThrough,
   inboxQuiet,
   inboxResources,
@@ -20,8 +21,10 @@ import {
   nextAfter,
   noticeNote,
   noticeTitle,
+  pairAnswered,
   readThrough,
   rowItem,
+  rowKey,
   rowName,
   rowWho,
   snoozePresets,
@@ -30,7 +33,8 @@ import {
 import type { DecisionSubject } from "~/lib/decisions.ts";
 import type {
   AgentRow,
-  AnsweredDecision,
+  AnsweredRun,
+  AnsweredWorkAsk,
   SandboxRun,
   WorkAskRow,
   WorkInboxNotice,
@@ -174,11 +178,6 @@ describe("what an ask says", () => {
     } as unknown as WorkAskRow;
     expect(askQuestion(words)).toBe("Should we ship Friday?");
     expect(askContext(words)).toBe("The webinar moved.");
-  });
-
-  test("a heading is the first sentence of a longer text", () => {
-    expect(firstSentence("May I delete it? It holds the fixtures.")).toBe("May I delete it?");
-    expect(firstSentence("v1.2 ships today")).toBe("v1.2 ships today");
   });
 });
 
@@ -425,9 +424,9 @@ describe("what was answered", () => {
     },
     open: false,
   };
-  const answered = (extra: Partial<AnsweredDecision> = {}): AnsweredDecision => ({
+  const answered = (extra: Partial<AnsweredWorkAsk> = {}): AnsweredWorkAsk => ({
     at: "2026-09-30T11:00:00Z",
-    ask: ask as AnsweredDecision["ask"],
+    ask: ask as AnsweredWorkAsk["ask"],
     answer: { by: "jane", at: "2026-09-30T11:00:00Z", choice: "hold", body: "Hold release" },
     ...extra,
   });
@@ -501,5 +500,92 @@ describe("what was answered", () => {
     });
     // A PERSON WHO ASKED has no seat state to read.
     expect(followThrough(answered(), undefined)).toBeNull();
+  });
+
+  // A CODING RUN'S QUESTION, ANSWERED, IS ONE OF THE SAME ROWS: who asked is
+  // the run's seat, its task the one the run was on, and the answer reads as
+  // an ask's does. Mutation: read `ask` off a run's item, and every case
+  // here throws.
+  const ranAsk = (extra: Partial<AnsweredRun["run"]> = {}): AnsweredRun => ({
+    at: "2026-09-30T11:00:00Z",
+    run: {
+      turn_id: "turn-7",
+      launch_id: "q1",
+      agent_handle: "cto",
+      question: "Which branch should the fix target?",
+      question_context: "The release branch is frozen.",
+      decision: {
+        question: "Which branch should the fix target?",
+        options: [
+          { id: "main", label: "Target main" },
+          { id: "release", label: "Target the release branch" },
+        ],
+        recommended: "main",
+        role: "approver",
+      },
+      asked_at: "2026-09-30T10:55:00Z",
+      work_item: { backend: "native", id: "t-12", key: "LEAD-12", project: "LEAD" },
+      ...extra,
+    },
+    answer: { by: "jane", at: "2026-09-30T11:00:00Z", choice: "main", body: "Target main" },
+  });
+
+  test("a coding run's answered question is a row of its own, as an ask's is", () => {
+    const [row] = answeredRows({ handle: "jane", items: [ranAsk()] });
+    // KEYED BY ITS TURN AND THE LAUNCH THAT ASKED: a turn's run asks again.
+    expect(row!.key).toBe("run:turn-7:q1");
+    expect(rowWho(row!, index)?.name).toBe("CTO");
+    expect(rowKey(row!)).toBe("LEAD-12");
+    // A TURN'S TASK IS ADDRESSED BY ITS ID.
+    expect(itemAddress(rowItem(row!)!)).toBe("t-12");
+    expect(inboxSelection(row!)).toEqual({ kind: "run", id: "turn-7", noun: "decision" });
+    expect(answeredQuestion(ranAsk())).toBe("Which branch should the fix target?");
+    expect(answerWords(ranAsk(), "jane", index)).toEqual({
+      who: "You",
+      verb: "chose",
+      said: "Target main",
+      kind: "choice",
+      recommended: true,
+    });
+    const inWords = { ...ranAsk(), answer: { by: "jane", at: "x", body: "Neither, hold it." } };
+    expect(answerWords(inWords, "jane", index)).toMatchObject({
+      verb: "replied",
+      said: "Neither, hold it.",
+      kind: "reply",
+    });
+  });
+
+  // ONE QUESTION, ONE ROW. A run's open row is keyed by its turn alone and its
+  // answered row by the launch as well, so the two are paired by the question
+  // they share, never by key. Mutation: pair by key, and the run is listed in
+  // both groups.
+  test("a question is in Needs you or under Answered, never both", () => {
+    const parked = (launch: string): InboxRow => ({
+      kind: "decision",
+      key: "run:turn-7",
+      at: "2026-09-30T10:55:00Z",
+      subject: {
+        kind: "run",
+        at: "2026-09-30T10:55:00Z",
+        run: { turn_id: "turn-7", launch_id: launch } as unknown as SandboxRun,
+      },
+      notices: [],
+    });
+    const answeredRow = answeredRows({ handle: "jane", items: [ranAsk()] });
+    // ANSWERED ELSEWHERE: the open row the slower read still lists leaves.
+    expect(pairAnswered([parked("q1")], answeredRow, new Set())).toEqual({
+      needs: [],
+      answered: answeredRow,
+    });
+    // ANSWERED HERE: the row stays in Needs you, and Answered does not list it.
+    expect(pairAnswered([parked("q1")], answeredRow, new Set(["run:turn-7"]))).toEqual({
+      needs: [parked("q1")],
+      answered: [],
+    });
+    // THE RUN ASKED AGAIN: its new question still waits.
+    expect(pairAnswered([parked("q2")], answeredRow, new Set())).toEqual({
+      needs: [parked("q2")],
+      answered: answeredRow,
+    });
   });
 });

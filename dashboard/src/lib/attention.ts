@@ -37,6 +37,7 @@ import {
   type NameOf,
 } from "./seats.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "./access.ts";
+import { runAsk } from "./runs.ts";
 import { fmtDateTime } from "./format.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 
@@ -514,7 +515,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
  */
 function waitingDetail(run: SandboxRun, now: number): string {
   const asked =
-    run.question ||
+    runAsk(run).title ||
     (questionWithheld(run)
       ? `${QUESTION_WITHHELD}.`
       : "A coding run needs your answer to continue.");

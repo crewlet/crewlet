@@ -1337,8 +1337,12 @@ const (
 	// Confluence page rebuilt from its space and id, and uilet 0.75.2's
 	// unclipped marks) took it to 4632.7 KiB, again in the lazy chunks that
 	// render Markdown, the first load 348.8 KiB. 4633 KiB, which still
-	// refuses a doubled baseline.
-	treeBudget = 4<<20 + 537<<10
+	// refuses a doubled baseline. A coding run's question asked and answered
+	// as a decision (the run's ask drawn with the decision components, its
+	// options read back with the chosen one marked, and its answered history
+	// in the Inbox's Answered group), all in lazy chunks, took it to
+	// 4637.3 KiB. 4638 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 542<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -8413,14 +8413,6 @@ a.work-cal-chip {
   white-space: pre-wrap;
 }
 
-.answer-run-question {
-  margin: 0;
-  padding: var(--spacing-2) var(--spacing-3);
-  border-inline-start: 2px solid var(--color-border-strong);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-}
-
 /* A NARROW LIST STACKS the buttons under the words, which keep the whole
    width. KEYED ON THE LIST, not the page: the same row sits in Home's half-
    width card and in the Inbox's list column beside its pane, and a page

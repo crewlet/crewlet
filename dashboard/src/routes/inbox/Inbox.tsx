@@ -31,7 +31,8 @@
  * what fills it without Worklet still arrives: the seats stopped on a
  * spent budget and the engine's conditions (the agents and budget pushes) and
  * the coding runs parked on a question (`decisions`, which answers them
- * whatever runs the tracker).
+ * whatever runs the tracker). So does Answered, for the runs' questions the
+ * person answered (`answered_decisions`, which lists those on every company).
  *
  * # What is done is shown, then the next item opens
  *
@@ -44,11 +45,14 @@
  * # What was answered before stays to be looked back at
  *
  * The asks put to the reader and closed in the last week
- * (`answered_decisions`, by them or by somebody else) are a closed, counted
- * Answered group after Updates. Opened, its rows step with `j` and `k` like
- * any other; a row answered on this visit is in Needs you instead, never
- * twice. An answered ask opens in the pane with who answered it and what the
- * asker has done with it since.
+ * (`answered_decisions`, by them or by somebody else), and the coding runs'
+ * questions they answered in it, are a closed, counted Answered group after
+ * Updates. Opened, its rows step with `j` and `k` like any other; a question
+ * answered on this visit is in Needs you instead, never twice, and one the
+ * engine already lists as answered is not in Needs you as well. An answered
+ * question opens in the same pane whichever asked it, with who answered it;
+ * an ask's adds what the asker has done with it since, and a run's the
+ * options it offered with the chosen one marked.
  *
  * # Every mark is a gesture, made as you
  *
@@ -98,6 +102,7 @@ import {
   inboxRows,
   nextAfter,
   noticeRows,
+  pairAnswered,
   readThrough,
   rowItem,
   rowKey,
@@ -210,10 +215,11 @@ export function Inbox() {
     enabled: bound,
     pollMs: INBOX_POLL_MS,
   });
-  // WHAT WAS ANSWERED LATELY, Worklet's like the asks themselves: elsewhere
-  // the engine keeps none to list.
+  // WHAT WAS ANSWERED LATELY, asked whatever runs the tracker: the asks are
+  // Worklet's, but a coding run's question is answered here on every company,
+  // and the engine lists those it took beside the asks.
   const answeredRead = useQuery("answered_decisions", undefined, {
-    enabled: notices,
+    enabled: bound,
     pollMs: INBOX_POLL_MS,
   });
   const [answeredOpen, setAnsweredOpen] = useState(false);
@@ -246,12 +252,11 @@ export function Inbox() {
   const needsNow = useStableList(rows.needs, rowKeyOf);
   const updates = useStableList(rows.updates, rowKeyOf);
   const [settled, setSettled] = useState<ReadonlyMap<string, Settled>>(new Map());
-  const needs = useMemo(() => keepSettled(needsNow, settled), [needsNow, settled]);
-  // ANSWERED BEFORE THIS VISIT: a row answered here is in Needs you, never
-  // in both places.
-  const answered = useMemo(
-    () => answeredRows(answeredRead.data).filter((r) => !settled.has(r.key)),
-    [answeredRead.data, settled],
+  // ANSWERED BEFORE THIS VISIT: a question answered here is in Needs you,
+  // and one answered before it is under Answered, never in both places.
+  const { needs, answered } = useMemo(
+    () => pairAnswered(keepSettled(needsNow, settled), answeredRows(answeredRead.data), settled),
+    [needsNow, settled, answeredRead.data],
   );
   const snoozedRows = snoozedOpen && snoozed.notices ? noticeRows(snoozed.notices) : null;
   const earlierRows =

@@ -15,7 +15,7 @@
 import { expect, test } from "vitest";
 
 import { lineOf, modules, parse, stringValue, walk, type Node } from "../test/source.ts";
-import { RUNS_POLL_MS } from "./runs.ts";
+import { RUNS_POLL_MS, runAsk } from "./runs.ts";
 
 test("every reader of sandbox_runs polls on RUNS_POLL_MS", () => {
   const off: string[] = [];
@@ -49,4 +49,36 @@ test("every reader of sandbox_runs polls on RUNS_POLL_MS", () => {
   // NOT VACUOUS: the board, a run's page and rail, and the attention queue.
   expect(sites).toBeGreaterThanOrEqual(4);
   expect(RUNS_POLL_MS).toBe(20_000);
+});
+
+// A RUN'S QUESTION IS A TITLE AND ITS CONTEXT. A structured one carries both;
+// an older build's free text is split at its first sentence, so neither the
+// title nor the context repeats the other.
+//
+// Mutation: split a question that came with its context, or keep the first
+// sentence in a free-text question's context, and this fails.
+test("a run's question is its title and its context, split once for an older build", () => {
+  expect(
+    runAsk({
+      question: "Keep the cache? It is warm.",
+      question_context: "**Cold** start costs 4s.",
+    }),
+  ).toEqual({
+    title: "Keep the cache? It is warm.",
+    context: "**Cold** start costs 4s.",
+    decision: undefined,
+  });
+  expect(runAsk({ question: "\n  Keep the cache? It is warm.\n\nCold start costs 4s.\n" })).toEqual(
+    {
+      title: "Keep the cache?",
+      context: "It is warm.\n\nCold start costs 4s.",
+      decision: undefined,
+    },
+  );
+  expect(runAsk({ question: "Keep the cache?" })).toEqual({
+    title: "Keep the cache?",
+    context: "",
+    decision: undefined,
+  });
+  expect(runAsk({})).toEqual({ title: "", context: "", decision: undefined });
 });

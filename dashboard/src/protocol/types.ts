@@ -795,13 +795,23 @@ export interface SandboxRun {
   /** Which configured cell the run's box is in: direct, container or e2b. */
   placement: string;
   /**
-   * THE RUN'S BODY — `task_description`, `question`, `reply` and
-   * `bridge_calls` — is the launching seat's trail: sent to an admin and the
-   * seat's lead, and the `question` also to the people it is put to. Absent
-   * for everybody else, who are told so by [body_withheld].
+   * THE RUN'S BODY (`task_description`, `question`, `question_context`,
+   * `decision`, `reply` and `bridge_calls`) is the launching seat's trail:
+   * sent to an admin and the seat's lead, and the question with its context
+   * and decision also to the people it is put to. Absent for everybody else,
+   * who are told so by [body_withheld].
    */
   task_description?: string;
+  /** The question, as one sentence: the title of what the run asks. A row from
+   *  an older build may carry the whole free-text question here instead. */
   question?: string;
+  /** What the question says beside its title, as Markdown (body). Absent when
+   *  the run gave none. */
+  question_context?: string;
+  /** The options the run asks a person to choose between, in a work item's
+   *  ask's shape, never with an `inform` (body). Absent on an open question,
+   *  which is answered in words. */
+  decision?: WorkDecision;
   /** What reached the waiting party, where something did — body. */
   reply?: string;
   audience: string;
@@ -5234,8 +5244,9 @@ export interface WorkAskFollowUp {
   comment_id?: string;
 }
 
-/** One ask put to a person and closed lately. */
-export interface AnsweredDecision {
+/** One ask on a work item put to a person and closed lately
+ *  (`worklet.AnsweredAsk`). */
+export interface AnsweredWorkAsk {
   /** When it closed: `answer.at`. */
   at: string;
   ask: WorkAskRow;
@@ -5245,12 +5256,50 @@ export interface AnsweredDecision {
   followed_up?: WorkAskFollowUp;
 }
 
+/** A coding run's question as the record of its answer states it
+ *  (`queries.RunAsked`), asked in a work item's ask's shape (ADR-0068). */
+export interface AnsweredRunAsk {
+  turn_id: string;
+  /** The launch that asked: a turn's run asks again under a new one. */
+  launch_id: string;
+  /** The seat whose coding run asked. */
+  agent_handle: string;
+  /** The question, as one sentence. */
+  question: string;
+  /** What the question says beside its title, as Markdown. Absent when the
+   *  run gave none. */
+  question_context?: string;
+  /** The options the run asked a person to choose between. Absent on an open
+   *  question, which was answered in words. */
+  decision?: WorkDecision;
+  asked_at: string;
+  /** The task the run was on, where it was on one. */
+  work_item?: WorkItemRef;
+}
+
+/** One coding run's question a person answered lately and the run took
+ *  (`queries.AnsweredRunAsk`). A run's question has no thread, so it carries
+ *  no `followed_up`, and `answer.by` is always the person it is listed for. */
+export interface AnsweredRun {
+  /** When it was answered: `answer.at`. */
+  at: string;
+  run: AnsweredRunAsk;
+  /** `body` is the person's words, or the chosen option's label where nothing
+   *  else was written, as a work item's answer is. */
+  answer: WorkAskAnswer;
+}
+
+/** One question put to a person and closed lately: a work item's ask, or a
+ *  coding run's question, which is the one that carries `run`. */
+export type AnsweredDecision = AnsweredWorkAsk | AnsweredRun;
+
 /** `answered_decisions`: the asks put to a person and closed in the last
- *  week, newest closing first, at most 50. */
+ *  week and the coding runs' questions they answered in it, newest closing
+ *  first, together at most 50. */
 export interface AnsweredDecisionsAnswer {
   handle: string;
   items: AnsweredDecision[];
-  /** The start of the window; absent where the company keeps no tracker. */
+  /** The start of the window. */
   since?: string;
   /** The window held more than the page. */
   truncated?: boolean;

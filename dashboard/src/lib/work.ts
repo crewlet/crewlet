@@ -42,6 +42,7 @@ import type {
   WorkActivityRecord,
   WorkChange,
   WorkChecklistRow,
+  WorkDecision,
   WorkFieldDef,
   WorkFieldValue,
   WorkGroup,
@@ -3179,4 +3180,14 @@ export function targetLabel(day: string): string {
     month: "short",
     year: "numeric",
   });
+}
+
+/**
+ * What a decision says beside its question, as the texts a reader reads with
+ * it: the asker's reasoning, then each option's label and detail. ONE COPY
+ * for a work item's ask and a coding run's, whose `TokenScope` both read it.
+ */
+export function decisionTexts(decision: WorkDecision | undefined): string[] {
+  if (!decision) return [];
+  return [decision.rationale ?? "", ...decision.options.flatMap((o) => [o.label, o.detail ?? ""])];
 }
