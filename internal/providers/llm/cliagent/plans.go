@@ -221,6 +221,31 @@ func (pl *Plan) Clear(before time.Time) bool {
 	return cleared
 }
 
+// Hold sits the sign-in out for out, a window another provider on the same
+// sign-in met: one built with a record of its own, such as a probe that must
+// reach the vendor whatever this plan's window is. A plan-wide window (Model
+// "") holds every model, a scoped one its model alone. Like a report this
+// plan heard itself, it never SHORTENS a window in force, and it does not step
+// the backoff: the provider that met it stepped its own.
+func (pl *Plan) Hold(out SitOut) {
+	pl.mu.Lock()
+	defer pl.mu.Unlock()
+	b := &pl.wide
+	if out.Model != "" {
+		if pl.scoped[out.Model] == nil {
+			pl.scoped[out.Model] = &bench{}
+		}
+		b = pl.scoped[out.Model]
+	}
+	if !out.Until.After(b.until) {
+		return
+	}
+	b.until, b.said, b.resetsAt, b.since, b.window = out.Until, out.Said, out.ResetsAt, out.Since, out.Window
+	if !b.window.Valid() {
+		b.window = llm.LimitUnknown
+	}
+}
+
 // holdsWindow reports whether any window is in force at now.
 func (pl *Plan) holdsWindow(now time.Time) bool {
 	pl.mu.Lock()

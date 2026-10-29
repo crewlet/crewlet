@@ -202,8 +202,9 @@ func (e *Engine) cliEntry(key string) (*cliagent.Provider, bool) {
 // [modelRetryProbeBudget], charged as a provider probe to the company: the
 // record is written only if the call answered, and every node, this one
 // included, clears through it. A probe refused for a limit writes nothing and
-// answers the fresh window ([RetryResult.Still]); one that failed otherwise
-// writes nothing either ([RetryResult.Failed]).
+// answers the fresh window ([RetryResult.Still]), which this node's plan
+// holds from then on; one that failed otherwise writes nothing either
+// ([RetryResult.Failed]).
 //
 // THE PROBE NEVER TOUCHES THE ENTRY'S WINDOW. It is made through a sibling of
 // the entry built on the same sign-in and state directory with a record of its
@@ -239,7 +240,17 @@ func (e *Engine) RetryModel(ctx context.Context, key string, mode coord.ModelRet
 		}
 		if err := e.probeEntry(ctx, key, sibling); err != nil {
 			if _, limited := chain.Limited(err); limited {
-				out.Still = sitOutFor(sibling.Plan().State(e.now()), agent.ModelArgument())
+				// THE VENDOR'S FRESH WORD IS THE ENTRY'S: the sibling's
+				// record is its own, so the window it met is held on
+				// the entry's plan too, never shortening one in force.
+				// Left on the sibling, this node went on sitting out
+				// the old window and tried the entry again at its end,
+				// into a limit the probe had already met.
+				now := e.now()
+				for _, window := range sibling.Plan().State(now).SittingOut {
+					agent.Plan().Hold(window)
+				}
+				out.Still = sitOutFor(agent.Plan().State(now), agent.ModelArgument())
 				return out, nil
 			}
 			out.Failed = err.Error()

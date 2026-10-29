@@ -338,12 +338,12 @@ func snapshot(t *testing.T, dir string) map[string]string {
 // A DRAFT WITH A BUNDLE OF ITS OWN LEAVES THE LIVE ENTRY'S DISK ALONE. A draft
 // on the live entry's state directory, naming a bundle with a newer login, is
 // checked in a home of its own holding that bundle and nothing of the live
-// login: a smoke call whose CLI refreshes its token writes that home, the live
-// directory is byte-identical after, and the throwaway home is gone.
+// login: its smoke call never runs on the live login, the live directory is
+// byte-identical after, and the throwaway home is gone.
 //
 // Mutation: build the draft on its own state directory, and its bundle
-// replaces the login every seat on the entry signs in with, or its refresh is
-// carried over it.
+// replaces the login every seat on the entry signs in with, or the call it
+// makes there rotates the live login under the entry.
 func TestADraftCheckLeavesTheLiveEntrysDiskAlone(t *testing.T) {
 	t.Parallel()
 	missing := map[string]any{"binary": filepath.Join(t.TempDir(), "no-cli-here")}
@@ -355,12 +355,12 @@ func TestADraftCheckLeavesTheLiveEntrysDiskAlone(t *testing.T) {
 		}
 	}
 	spec := config.LLMProvider{Agent: "claude-code", Model: "opus", StateDir: stateDir,
-		Overrides: map[string]any{"binary": refreshingCLI(t, root)}}
+		Overrides: map[string]any{"binary": rotatingCLI(t, root, "r0")}}
 	live, err := BuildCLIAgent("plan", spec, config.NewResolver(config.MapSource{}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := adoptLogin(t.Context(), t, live, ".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"live"}}`); err != nil {
+	if err := adoptLogin(t.Context(), t, live, ".claude/.credentials.json", `{"claudeAiOauth":{"refreshToken":"r0"}}`); err != nil {
 		t.Fatalf("the live login: %v", err)
 	}
 	newer, err := BuildCLIAgent("plan", config.LLMProvider{Agent: "claude-code", Model: "opus",
@@ -368,7 +368,7 @@ func TestADraftCheckLeavesTheLiveEntrysDiskAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := adoptLogin(t.Context(), t, newer, ".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"newer"}}`); err != nil {
+	if err := adoptLogin(t.Context(), t, newer, ".claude/.credentials.json", `{"claudeAiOauth":{"refreshToken":"newer"}}`); err != nil {
 		t.Fatalf("the newer login: %v", err)
 	}
 	blob, err := newer.ExportBundle(t.Context())
@@ -404,19 +404,30 @@ func TestADraftCheckLeavesTheLiveEntrysDiskAlone(t *testing.T) {
 	}
 }
 
-// refreshingCLI is a claude-code CLI that answers --version and, on any other
-// run, refreshes its login (writes "refreshed" over its credentials file) and
-// fails: a token refresh during a call. It writes only under root, never the
-// credentials of the host it runs on.
-func refreshingCLI(t *testing.T, root string) string {
+// rotatingCLI is a claude-code CLI on a vendor that rotates its refresh
+// token: every run that signs in with the token the vendor holds (root/vendor)
+// is handed a new one, written over its credentials file, and the old one is
+// retired; a run on any other token is refused and noted in root/refused. It
+// answers --version, fails every other run after signing in, and reads and
+// writes only under root, never the credentials of the host it runs on.
+func rotatingCLI(t *testing.T, root, first string) string {
 	t.Helper()
-	cli := filepath.Join(t.TempDir(), "refreshing-claude")
+	if err := os.WriteFile(filepath.Join(root, "vendor"), []byte(first), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cli := filepath.Join(t.TempDir(), "rotating-claude")
 	script := "#!/bin/sh\n" +
 		"case \"$1\" in --version) echo '2.1.310 (Claude Code)'; exit 0;; esac\n" +
-		"case \"$CLAUDE_CONFIG_DIR\" in " + root + "/*)\n" +
-		"  mkdir -p \"$CLAUDE_CONFIG_DIR\"\n" +
-		"  printf '%s' '{\"claudeAiOauth\":{\"accessToken\":\"refreshed\"}}' > \"$CLAUDE_CONFIG_DIR/.credentials.json\";;\n" +
-		"esac\n" +
+		"case \"$CLAUDE_CONFIG_DIR\" in " + root + "/*) ;; *) exit 1;; esac\n" +
+		"creds=\"$CLAUDE_CONFIG_DIR/.credentials.json\"\n" +
+		"token=$(sed -n 's/.*\"refreshToken\":\"\\([^\"]*\\)\".*/\\1/p' \"$creds\" 2>/dev/null)\n" +
+		"if [ -z \"$token\" ] || [ \"$token\" != \"$(cat " + root + "/vendor)\" ]; then\n" +
+		"  echo \"$token\" >> " + root + "/refused\n" +
+		"  echo 'OAuth token has expired. Please run /login'; exit 1\n" +
+		"fi\n" +
+		"next=\"${token}x\"\n" +
+		"printf '%s' \"$next\" > " + root + "/vendor\n" +
+		"printf '{\"claudeAiOauth\":{\"refreshToken\":\"%s\"}}' \"$next\" > \"$creds\"\n" +
 		"exit 1\n"
 	if err := os.WriteFile(cli, []byte(script), 0o700); err != nil { //nolint:gosec // the test's own stub
 		t.Fatal(err)
@@ -424,15 +435,16 @@ func refreshingCLI(t *testing.T, root string) string {
 	return cli
 }
 
-// A DRAFT CHECK ON THE LIVE LOGIN CARRIES A REFRESH BACK. A draft that names no
+// A DRAFT CHECK ON THE LIVE LOGIN LEAVES IT SIGNED IN. A draft that names no
 // bundle of its own signs in with the login the active entry keeps, and its
-// smoke call checks that login out as a seat does: a CLI that refreshes its
-// token during the check writes the shared directory, so the vendor's rotated
-// refresh token is the one every seat signs in with next.
+// smoke call checks that login out as a seat does: on a vendor that rotates
+// its refresh token and retires the old one, the token the CLI was handed
+// during the check reaches the shared directory, so the live entry still
+// signs in after it.
 //
 // Mutation: run the draft in a throwaway home seeded with a copy of the live
-// login, and the refresh is removed with the home while the live directory
-// keeps the token the vendor has just retired.
+// login, and the rotated token is removed with the home while the live
+// directory keeps the one the vendor retired: the live entry is refused.
 func TestADraftCheckCarriesARefreshedLoginBack(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -442,14 +454,13 @@ func TestADraftCheckCarriesARefreshedLoginBack(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cli := refreshingCLI(t, root)
 	spec := config.LLMProvider{Agent: "claude-code", Model: "opus", StateDir: stateDir,
-		Overrides: map[string]any{"binary": cli}}
+		Overrides: map[string]any{"binary": rotatingCLI(t, root, "r0")}}
 	live, err := BuildCLIAgent("plan", spec, config.NewResolver(config.MapSource{}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := adoptLogin(t.Context(), t, live, ".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"live"}}`); err != nil {
+	if err := adoptLogin(t.Context(), t, live, ".claude/.credentials.json", `{"claudeAiOauth":{"refreshToken":"r0"}}`); err != nil {
 		t.Fatalf("the live login: %v", err)
 	}
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "plan", Provider: live}})
@@ -465,13 +476,16 @@ func TestADraftCheckCarriesARefreshedLoginBack(t *testing.T) {
 	if _, err := e.CheckModel(t.Context(), "plan", &draft, nil, true); err != nil {
 		t.Fatalf("CheckModel(draft): %v", err)
 	}
-	got, err := os.ReadFile(filepath.Join(live.Workspace().CredentialsDir(), ".credentials.json"))
-	if err != nil {
-		t.Fatalf("the live login after the draft's check: %v", err)
+	if vendor, _ := os.ReadFile(filepath.Join(root, "vendor")); string(vendor) == "r0" {
+		t.Fatal("the premise: the draft's check signed in, and the vendor rotated its token")
 	}
-	if !strings.Contains(string(got), `"refreshed"`) {
-		t.Errorf("the login the CLI refreshed during the draft's check never reached the live "+
-			"directory, which still holds %s", got)
+	if _, err := e.CheckModel(t.Context(), "plan", nil, nil, true); err != nil {
+		t.Fatalf("CheckModel(live): %v", err)
+	}
+	if refused, err := os.ReadFile(filepath.Join(root, "refused")); err == nil {
+		got, _ := os.ReadFile(filepath.Join(live.Workspace().CredentialsDir(), ".credentials.json"))
+		t.Errorf("after the draft's check the vendor refused the live entry's token %q: the live "+
+			"directory holds %s", strings.TrimSpace(string(refused)), got)
 	}
 	if left, _ := os.ReadDir(homes); len(left) != 0 {
 		t.Errorf("the draft's check left its home behind: %v", left)
@@ -518,6 +532,43 @@ func TestAFailedRetryNowLeavesThisNodesSitOut(t *testing.T) {
 	}
 	if planOf(t, c).SittingOut() == nil {
 		t.Error("a probe that did not answer cleared this node's sit-out")
+	}
+}
+
+// A "RETRY NOW" THAT MEETS THE LIMIT AGAIN SITS THIS NODE OUT ON THE FRESH
+// WINDOW. The probe's sibling keeps a record of its own, so the window it met
+// is held on the entry's plan as well: this node does not try the entry again
+// at the old window's end, into a limit the probe already met.
+//
+// Mutation: answer the sibling's window without holding it on the entry's
+// plan, and this node's sit-out still reads from the old report.
+func TestARetryNowThatMeetsTheLimitHoldsItsWindow(t *testing.T) {
+	t.Parallel()
+	// The probe meets a window naming a reset hours ahead, so it holds
+	// longer than the one this node sits out from a minute ago.
+	resets := time.Now().UTC().Add(3 * time.Hour).Format("3pm")
+	cli := filepath.Join(t.TempDir(), "limited-claude")
+	script := "#!/bin/sh\n" +
+		"case \"$1\" in --version) echo '2.1.310 (Claude Code)'; exit 0;; esac\n" +
+		"echo 'Usage limit reached · resets " + resets + "'\n" +
+		"exit 1\n"
+	if err := os.WriteFile(cli, []byte(script), 0o700); err != nil { //nolint:gosec // the test's own stub
+		t.Fatal(err)
+	}
+	fleet := coordmemory.NewFleet()
+	e, c := retryNode(t, fleet)
+	spec := c.Config.Providers.LLM["plan"]
+	spec.Overrides = map[string]any{"binary": cli}
+	c.Config.Providers.LLM["plan"] = spec
+	reported := time.Now().Add(-time.Minute)
+	spend(t, c, reported)
+	res, err := e.RetryModel(t.Context(), "plan", coord.RetryProbe, person)
+	if err != nil || res.Still == nil {
+		t.Fatalf("RetryModel(probe) on a CLI still limited = %+v, %v; want the window it met", res, err)
+	}
+	held, sitting := planOf(t, c).SitOut()
+	if !sitting || !held.Since.After(reported) {
+		t.Errorf("this node sits out %+v, want the window the probe met after %v", held, reported)
 	}
 }
 
