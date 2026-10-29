@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, test } from "vitest";
+import { LINEAR_BOUND, growth } from "../test/growth.ts";
 import { overlapsAny, writtenOutSpans } from "./writtenOut.ts";
 
 describe("overlapsAny", () => {
@@ -24,38 +25,22 @@ describe("overlapsAny", () => {
   });
 
   // ONE SEARCH PER TOKEN, not one walk of every span: a run of many paths and
-  // many keys or numbers asked each token of every path. Held by GROWTH, as
-  // the token cost cases are (`inlineTokens.test.ts`): four times the tokens
-  // against four times the spans must take well under the sixteen times a
-  // walk takes, here under eight, timed as the median of five samples after
-  // a warm-up, each sample enough calls to take 10 ms.
+  // many keys or numbers asked each token of every path. Held by GROWTH,
+  // timed with room to spare as the token cost cases are (`test/growth.ts`):
+  // thirty-two times the tokens against thirty-two times the spans must take
+  // under 181 times as long. A search takes about forty-seven (thirty-two,
+  // times the log of the spans), a walk about a thousand.
   //
-  // Mutation: answer with `spans.some(...)` and the ratio is about sixteen.
-  test("four times the tokens against four times the spans takes well under sixteen times as long", () => {
-    const run = (n: number) => {
+  // Mutation: answer with `spans.some(...)` and the growth is about 1,024.
+  test("thirty-two times the tokens against thirty-two times the spans takes well under 1,024 times as long", () => {
+    const ratio = growth((n) => {
       const spans = Array.from({ length: n }, (_, i) => [i * 4, i * 4 + 2] as const);
       return () => {
-        let hits = 0;
-        for (let i = 0; i < n; i++) if (overlapsAny(spans, i * 4 + 2, i * 4 + 3)) hits++;
-        return hits;
+        for (let i = 0; i < n; i++)
+          if (overlapsAny(spans, i * 4 + 2, i * 4 + 3)) throw new Error("overlap");
       };
-    };
-    const time = (f: () => number, calls: number) => {
-      const start = performance.now();
-      for (let i = 0; i < calls; i++) expect(f()).toBe(0);
-      return performance.now() - start;
-    };
-    const median = (xs: number[]) => xs.sort((x, y) => x - y)[Math.floor(xs.length / 2)]!;
-    const small = run(5_000);
-    const large = run(20_000);
-    time(small, 1);
-    time(large, 1);
-    // EACH SAMPLE ENOUGH CALLS TO TAKE 10 ms, so a timer's grain decides nothing.
-    let calls = 1;
-    while (calls < 256 && time(small, calls) < 10) calls *= 2;
-    const ratio =
-      median(Array.from({ length: 5 }, () => time(large, calls))) /
-      median(Array.from({ length: 5 }, () => time(small, calls)));
-    expect(ratio).toBeLessThan(8);
+    }, 1_000);
+    expect(ratio, "the larger run took no longer, so this measured nothing").toBeGreaterThan(4);
+    expect(ratio).toBeLessThan(LINEAR_BOUND);
   });
 });
