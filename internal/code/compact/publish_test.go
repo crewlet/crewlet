@@ -730,22 +730,53 @@ func TestACompactionLeavesEveryPublishedPackAlone(t *testing.T) {
 	}
 }
 
-// A REPOSITORY IS NEVER COMPACTED AND PUBLISHED AT ONCE on one node: each
-// would retire packs the other planned over, so a compaction asked while a
-// publication of its repository is building answers busy, having synced
-// nothing — and is planned again at the next pass.
+// compactBesideSlots is c's compaction of cand, asked again only while the
+// maintenance lane has no slot or room for it (gitproc.ErrBusy: the node's
+// maintainer holds the slot a compaction may take for a moment at a time) —
+// never while the compactor itself answers it busy, which is what a case
+// about the compactor's own claims judges — for a minute at the most.
+func compactBesideSlots(t testing.TB, c *compact.Compactor, cand code.CompactionCandidate) (compact.Outcome, error) {
+	t.Helper()
+	deadline := time.Now().Add(time.Minute)
+	for {
+		out, err := c.Compact(t.Context(), cand)
+		if out != compact.OutcomeBusy || !errors.Is(err, gitproc.ErrBusy) || time.Now().After(deadline) {
+			return out, err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A COMPACTION MERGES BESIDE A PUBLICATION, NEVER ITS PACKS: a publication of
+// a large repository runs for minutes, and a busy repository gains packs at up
+// to three hundred a minute, so a repository whose merges waited for its own
+// publication would pass code.MaxPacksPerRepo and have its pushes refused until
+// the publication answered. A compaction asked while a publication of its
+// repository is in flight on the same node — held here once its layer and its
+// repack's output are stored, nothing proposed — merges the roll pushed since
+// the publication's plan, and never a pack that plan covers, the repack's
+// inputs among them; and both records apply: the layer covers the repack's
+// output, and the merge's output stands outside it, a pack pushed after the
+// plan the layer need not name.
 //
-// Mutation: let both build at once, and the compaction syncs and builds
-// beside the publication.
-func TestARepositoryIsNeverCompactedAndPublishedAtOnce(t *testing.T) {
+// Mutations: refuse a compaction while a publication of its repository is in
+// flight at all, and it answers busy; plan it over the publication's packs as
+// well, and it merges the repack's inputs, so the publication is refused
+// stale.
+func TestACompactionMergesBesideAPublicationNeverItsPacks(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
-	x.pushN(code.CompactMinMerge, 4<<10)
+	// THE PUBLICATION'S TAIL: nine packs not full, one more than a layer
+	// gathers before its publication repacks them.
+	x.pushN(compact.LayerRepackPacks+1, 4<<10)
+	planned := map[string]bool{}
+	for _, p := range x.rows().Packs {
+		planned[p.PackID] = true
+	}
 	faults := &codefault.Script{}
 	held, reached := make(chan struct{}), make(chan struct{})
-	faults.Arm(codefault.PublishAfterBuild, codefault.Action{Once: true, Block: held, Reached: reached})
-	cc := countedOver(x.node().Cache())
-	c, _, _ := x.compactorOf(func(o *compact.Options) { o.Cache, o.Faults = cc, faults })
+	faults.Arm(codefault.PublishAfterUpload, codefault.Action{Once: true, Block: held, Reached: reached})
+	c, _, _ := x.compactorOf(func(o *compact.Options) { o.Faults = faults })
 	done := make(chan compact.Outcome, 1)
 	go func() {
 		out, _ := publishWhileBusy(t, c, x.publicationCandidate())
@@ -754,21 +785,151 @@ func TestARepositoryIsNeverCompactedAndPublishedAtOnce(t *testing.T) {
 	select {
 	case <-reached:
 	case out := <-done:
-		t.Fatalf("the publication ended %s before its build did", out)
+		t.Fatalf("the publication ended %s before its proposal", out)
 	case <-time.After(time.Minute):
-		t.Fatal("the publication built nothing in a minute")
+		t.Fatal("the publication stored nothing in a minute")
 	}
-	syncs, _ := cc.counts()
-	if out, err := c.Compact(t.Context(), x.candidate()); out != compact.OutcomeBusy {
-		t.Errorf("a compaction while its repository's publication builds: %s, %v; want busy", out, err)
+
+	// A ROLL PUSHED SINCE THE PUBLICATION'S PLAN, merged while it is held.
+	x.pushN(code.CompactMinMerge, 4<<10)
+	before := x.rows()
+	if out, err := compactBesideSlots(t, c, x.candidate()); out != compact.OutcomeApplied {
+		close(held)
+		<-done
+		t.Fatalf("a compaction while its repository's publication is in flight: %s, %v; want applied", out, err)
 	}
-	if again, _ := cc.counts(); again != syncs {
-		t.Errorf("the compaction refused busy synced the repository anyway")
+	// WHAT IT RETIRED: every live row before it that the rows no longer hold.
+	retired := outputs(x.rows(), before)
+	for _, p := range retired {
+		if planned[p.PackID] {
+			t.Errorf("the compaction merged pack %s, which the publication in flight planned over", p.PackID)
+		}
+	}
+	if len(retired) != code.CompactMinMerge {
+		t.Errorf("the compaction merged %d packs, want the %d pushed since the publication's plan", len(retired),
+			code.CompactMinMerge)
 	}
 	close(held)
 	if out := <-done; out != compact.OutcomeApplied {
-		t.Errorf("the publication once let go: %s, want applied", out)
+		t.Fatalf("the publication once let go, the compaction beside it applied: %s, want applied", out)
 	}
+	ch := x.awaitInstalled(1)
+	var tail []string
+	for _, p := range x.rows().Packs {
+		if !slices.Contains(ch.Rows[0].Layer.Packs, p.GitChecksum) {
+			tail = append(tail, p.GitChecksum)
+		}
+	}
+	if len(ch.Rows[0].Layer.Packs) != 1 || len(tail) != 1 {
+		t.Errorf("the layer covers %v and %v stands outside it, want the publication's repack output under the "+
+			"layer and the compaction's output outside it", ch.Rows[0].Layer.Packs, tail)
+	}
+}
+
+// heldSync is a cache whose next sync, once armed, is held — entered closed,
+// then waiting for release — before it reaches the cache: a build stopped
+// before its plan.
+type heldSync struct {
+	*counted
+	mu      sync.Mutex
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (h *heldSync) Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error) {
+	h.mu.Lock()
+	entered, release := h.entered, h.release
+	h.entered, h.release = nil, nil
+	h.mu.Unlock()
+	if entered != nil {
+		close(entered)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return cache.Synced{}, context.Cause(ctx)
+		}
+	}
+	return h.counted.Sync(ctx, repoID, fresh)
+}
+
+// A COMPACTION AND A PUBLICATION OF ONE REPOSITORY NEVER PLAN OVER EACH OTHER
+// on one node: a compaction asked while a publication of its repository has
+// not planned yet — held here at its sync — answers busy having synced
+// nothing, since it could merge packs the layer is about to name; and a
+// publication asked while a compaction of its repository is running — held
+// here once its output is stored — answers busy having synced nothing, since
+// its plan would cover the merge's inputs. Each lands once the other is past
+// that point.
+//
+// Mutations: let a compaction claim the repository while its publication has
+// no reservation, and it syncs; let a publication claim it beside a running
+// compaction, and it syncs.
+func TestACompactionAndAPublicationOfOneRepositoryNeverPlanOverEachOther(t *testing.T) {
+	t.Parallel()
+	t.Run("a compaction while the publication plans", func(t *testing.T) {
+		t.Parallel()
+		x := newFixture(t)
+		x.pushN(code.CompactMinMerge, 4<<10)
+		entered, release := make(chan struct{}), make(chan struct{})
+		h := &heldSync{counted: countedOver(x.node().Cache()), entered: entered, release: release}
+		c, _, _ := x.compactorOf(func(o *compact.Options) { o.Cache = h })
+		done := make(chan compact.Outcome, 1)
+		go func() {
+			out, _ := publishWhileBusy(t, c, x.publicationCandidate())
+			done <- out
+		}()
+		select {
+		case <-entered:
+		case <-time.After(time.Minute):
+			t.Fatal("the publication reached no sync in a minute")
+		}
+		if out, err := c.Compact(t.Context(), x.candidate()); out != compact.OutcomeBusy {
+			t.Errorf("a compaction while its repository's publication has not planned: %s, %v; want busy", out, err)
+		}
+		if syncs, _ := h.counts(); syncs != 0 {
+			t.Errorf("the compaction refused busy synced the repository %d times, want none", syncs)
+		}
+		close(release)
+		if out := <-done; out != compact.OutcomeApplied {
+			t.Errorf("the publication once let go: %s, want applied", out)
+		}
+	})
+	t.Run("a publication while the compaction runs", func(t *testing.T) {
+		t.Parallel()
+		x := newFixture(t)
+		x.pushN(code.CompactMinMerge, 4<<10)
+		faults := &codefault.Script{}
+		held, reached := make(chan struct{}), make(chan struct{})
+		faults.Arm(codefault.CompactAfterUpload, codefault.Action{Once: true, Block: held, Reached: reached})
+		cc := countedOver(x.node().Cache())
+		c, _, _ := x.compactorOf(func(o *compact.Options) { o.Cache, o.Faults = cc, faults })
+		done := make(chan compact.Outcome, 1)
+		go func() {
+			out, _ := compactWhileBusy(t, c, x.candidate())
+			done <- out
+		}()
+		select {
+		case <-reached:
+		case out := <-done:
+			t.Fatalf("the compaction ended %s before its proposal", out)
+		case <-time.After(time.Minute):
+			t.Fatal("the compaction stored nothing in a minute")
+		}
+		syncs, _ := cc.counts()
+		if out, err := c.Publish(t.Context(), x.publicationCandidate()); out != compact.OutcomeBusy {
+			t.Errorf("a publication while a compaction of its repository runs: %s, %v; want busy", out, err)
+		}
+		if again, _ := cc.counts(); again != syncs {
+			t.Errorf("the publication refused busy synced the repository anyway")
+		}
+		close(held)
+		if out := <-done; out != compact.OutcomeApplied {
+			t.Fatalf("the compaction once let go: %s, want applied", out)
+		}
+		if out, err := publishWhileBusy(t, c, x.publicationCandidate()); out != compact.OutcomeApplied {
+			t.Errorf("the publication once the compaction landed: %s, %v; want applied", out, err)
+		}
+	})
 }
 
 // A FULL STORE HOLDS BOTH LOOPS UNTIL IT HAS ROOM, never as a blip to retry:

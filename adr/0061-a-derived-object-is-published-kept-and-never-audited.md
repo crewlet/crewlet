@@ -22,8 +22,10 @@ repository's rendezvous order whose advertised background budget holds the
 publication — the bitmap over the whole history — and the home where none
 does (`internal/estate`'s `Router.Maintainer`). On a fleet of alike nodes it
 is the home. It also compacts the repository, so the two writers of its packs
-run on one node, and never at once there. A publication is a compaction record
-carrying the layer, decided by the repository's committer:
+run on one node, where a merge never takes a pack a publication in flight there
+planned over — and merges the packs pushed since beside it, which its layer
+neither names nor needs. A publication is a compaction record carrying the
+layer, decided by the repository's committer:
 
 - a layer covers EVERY live pack its base does not, as of its plan — git writes
   a bitmap only over packs closed over what their commits reach;

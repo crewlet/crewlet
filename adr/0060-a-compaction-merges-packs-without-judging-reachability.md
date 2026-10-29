@@ -85,7 +85,8 @@ node of its order
 ([ADR-0059](0059-a-repositorys-git-work-is-asked-of-its-home-git-node.md))
 whose advertised background budget holds its publication, the home on a fleet
 of alike nodes — so the repository's two writers of packs, compaction and
-publication, run on one node, never at once there; and the maintainer raises
+publication, run on one node, where a merge never takes a pack a publication in
+flight there planned over; and the maintainer raises
 `code_compaction_behind`. It adds a fourth rule: **a pack a published layer
 names is never a compaction's input**, unless the compaction is the
 publication that replaces that layer, since a node's chain loads only over

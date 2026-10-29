@@ -115,18 +115,23 @@ func (p planned) size() int64 {
 	return n
 }
 
-// plan plans one compaction of a repository whose live rows are live and whose
-// published chain names the pack checksums in published, its roll capped at
-// byteCap pack bytes, held to b — PURE in those, with no clock, so the memo
-// of a plan found not due ([memo]) is keyed by every input it reads that
-// moves: the repository's version (which moves with its live set, and with
-// its chain, which only a record on its subject moves) and its cap; b is the
-// compactor's for its life. The steps:
+// plan plans one compaction of a repository whose live rows are live, leaving
+// out the pack checksums in leftOut — every one its published chain names, and
+// every one a publication of it in flight on this node reserved — its roll
+// capped at byteCap pack bytes, held to b — PURE in those, with no clock, so
+// the memo of a plan found not due ([memo]) is keyed by every input it reads
+// that moves: the repository's version (which moves with its live set, and
+// with its chain, which only a record on its subject moves) and its cap; b is
+// the compactor's for its life; and a reservation, which goes with its
+// publication whether or not the version moves, is in no plan the memo keeps
+// ([Compactor.compact]). The steps:
 //
 //   - every pack a PUBLISHED LAYER names is left out: a node's chain loads
 //     only over every pack it names, so the decide refuses a compaction
 //     retiring one stale (its rule 2), and a published repository's packs are
-//     merged by its publications' repacks instead (layerplan.go);
+//     merged by its publications' repacks instead (layerplan.go); and so is
+//     every pack a PUBLICATION IN FLIGHT here planned over, which its layer
+//     will name ([Compactor.claimCompaction]);
 //   - every FULL pack is left out (code.PackRow.FullAt at b's cut — one
 //     predicate with the decide's): a full pack is never merged again, so
 //     what a later published layer names stays valid until an expunge;
@@ -148,11 +153,11 @@ func (p planned) size() int64 {
 //
 // A plan whose capped roll holds fewer than two packs is not due: one pack is
 // nothing to merge.
-func plan(live []code.PackRow, published map[string]bool, byteCap int64, b bounds) planned {
+func plan(live []code.PackRow, leftOut map[string]bool, byteCap int64, b bounds) planned {
 	files := map[string]*pack{}
 	var order []*pack
 	for _, row := range live {
-		if published[row.GitChecksum] || row.FullAt(b.cut) {
+		if leftOut[row.GitChecksum] || row.FullAt(b.cut) {
 			continue
 		}
 		p := files[row.GitChecksum]
@@ -190,7 +195,7 @@ func plan(live []code.PackRow, published map[string]bool, byteCap int64, b bound
 }
 
 // publishedPacks is every pack checksum a layer of rows names: what a
-// compaction's plan leaves out.
+// compaction's plan leaves out beside a publication's reservation.
 func publishedPacks(rows []code.LayerRow) map[string]bool {
 	out := map[string]bool{}
 	for _, row := range rows {

@@ -404,7 +404,16 @@ var (
 //  2. PLAN ([planLayer]) over the copy's chain (cache.Cache.Chain) and its
 //     live packs: nothing to publish is remembered at the listing's version,
 //     a layer still at the installer answers `waiting` and is planned again
-//     at the next pass, and a layer too large is refused and remembered.
+//     at the next pass, and a layer too large is refused and remembered. A
+//     layer to build RESERVES every pack it covers ([Compactor.reserve]):
+//     from then on a compaction of the repository runs beside it and merges
+//     only the packs pushed since, which the layer neither names nor needs —
+//     so a publication of minutes never holds back the merges that keep its
+//     own repository under the pack bound. Until then, its sync and its
+//     plan, a compaction of the repository answers busy; and a publication
+//     asked while a compaction of its repository is running answers busy
+//     itself, since its plan would cover that merge's inputs
+//     ([Compactor.claimPublication]).
 //  3. ADMIT the build to the maintenance lane (cache.Cache.AdmitPublication),
 //     charged at the largest of its steps': busy is the next poll's, and a
 //     charge the node's memory cannot hold is refused `memory` and NEVER
@@ -439,13 +448,13 @@ func (c *Compactor) Publish(ctx context.Context, cand code.PublicationCandidate)
 	defer cancel(nil)
 	defer context.AfterFunc(c.life, func() { cancel(context.Cause(c.life)) })()
 	began := c.now()
-	if !c.claim(cand.ID) {
+	if !c.claimPublication(cand.ID) {
 		c.log.Debug("code_publication_busy", "repo", cand.Name,
 			"detail", "a compaction of the repository is running on this node")
 		c.countedPublication(OutcomeBusy, began)
 		return OutcomeBusy, errClaimed
 	}
-	defer c.unclaim(cand.ID)
+	defer c.unclaimPublication(cand.ID)
 	out, err := c.publish(ctx, cand, began)
 	c.countedPublication(out, began)
 	return out, err
@@ -497,6 +506,7 @@ func (c *Compactor) publish(ctx context.Context, cand code.PublicationCandidate,
 			"most", code.MaxLayerParts*code.LayerPartBytes)
 		return OutcomeRefused, errLayerTooLarge
 	}
+	c.reserve(cand.ID, p)
 	limits := c.o.Limits()
 	adm, err := c.o.Cache.AdmitPublication(s, p.objects, p.repack.objects(), limits)
 	switch {
@@ -616,6 +626,9 @@ func (c *Compactor) buildLayer(ctx context.Context, cand code.PublicationCandida
 		// switches off every bitmap beneath it: absorbed into one more
 		// layer, the layer holds that layer's commits.
 		if more, _ := planLayer(chain, live, cap, c.bounds, 1); more.base < p.base {
+			// The layer absorbed is a published one: its packs, which the
+			// reservation gains, are none a compaction's plan merges.
+			c.reserve(cand.ID, more)
 			b, out, err = c.buildLayerChecked(ctx, cand, s, adm, chain, more, cap, limits)
 		}
 	}

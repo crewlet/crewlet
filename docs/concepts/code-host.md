@@ -896,9 +896,17 @@ a node that is draining has left the listing, and every repository it
 maintained is placed among the rest.
 
 Both of a maintainer's loops ask by the publication's charge, so the two
-writers of a repository's packs run on one node, and that node never merges
-and publishes one repository at once: each would retire packs the other
-planned over, and one would be refused `stale` after a whole build. Nothing
+writers of a repository's packs run on one node, and there a merge never takes
+a pack a publication of the repository in flight has planned over. Once the
+publication has planned, it reserves every pack its layer will name, the packs
+it repacks among them, and the repository's merges go on beside it with the
+packs pushed since — which the layer neither names nor needs, so both land, in
+either order — rather than wait out a build of minutes while a busy repository
+climbs to its pack bound. Only while the publication syncs and plans, seconds,
+does a merge of its repository wait; and a publication asked while a merge of
+its repository is running waits for it, since it would cover that merge's
+packs: either way round, one of the two would otherwise be refused `stale`
+after its whole build. Nothing
 leases a repository to its maintainer: two nodes whose presence views disagree
 for a moment may both build, and the committer refuses the second `stale`.
 Each pass judges every repository it lists against one reading of the
@@ -2663,9 +2671,10 @@ the rest.
 A repository's [maintainer](#who-maintains-a-repository) publishes in a loop
 of its own beside its merges, so a publication of a large repository — minutes
 of its build — never holds back a merge that keeps a busy repository under the
-pack bound. Once a minute it lists the repositories holding a pack no layer
-covers, least recently published first, and publishes each it maintains whose
-tail is due:
+pack bound, the repository it is publishing included: its merges take the
+packs pushed since its plan. Once a minute it lists the repositories holding a
+pack no layer covers, least recently published first, and publishes each it
+maintains whose tail is due:
 
 - **Worth a layer**: the repository was never published, or its tail holds 64
   packs, or a sixteenth of its objects, or 90 909 objects — a second of walk

@@ -32,10 +32,13 @@ var (
 // Throughout, cand.ID is the REPOSITORY and the compaction's own id is minted
 // at its build — two ids of two things, never one name for both.
 //
-// NEVER BESIDE A PUBLICATION OF THE SAME REPOSITORY on this node: each would
-// retire packs the other planned over, so one would be refused stale after a
-// whole build. A repository whose publication is running answers busy, and is
-// planned again at the next pass ([Compactor.claim]).
+// BESIDE A PUBLICATION OF THE SAME REPOSITORY on this node, NEVER OVER ITS
+// PACKS: the plan leaves out every pack the publication in flight reserved —
+// every pack its layer will name, its repack's inputs among them — and merges
+// the packs pushed since, which the layer neither names nor needs, so both
+// records apply ([Compactor.claimCompaction]). Only while that publication has
+// not planned yet, its sync and its plan, does a compaction answer busy, to be
+// planned again at the next pass.
 //
 //  1. SYNC at session, floored at the repository's version the listing read:
 //     never linearizable, because a barrier a compaction would cost the code
@@ -47,11 +50,14 @@ var (
 //  2. PLAN ([plan]) over the incarnation's live packs less every pack a
 //     published layer of its chain names — a published pack is never a
 //     compaction's input (the decide's rule 2), since a node's chain loads
-//     only over every pack it names — capped at the repository's cap
+//     only over every pack it names — and less every pack a publication in
+//     flight here reserved, capped at the repository's cap
 //     ([Compactor.capFor]) and then at [InputByteCap] of the cut the inputs
 //     take ([bounds.cutFor]). Not due is remembered at the listing's version
 //     and the cap, never an admission's refusal: a publication, the one thing
-//     that moves the chain, moves the version too.
+//     that moves the chain, moves the version too. A plan made beside a
+//     reservation is never remembered: the reservation goes with its
+//     publication, which may land nothing and leave the version where it was.
 //  3. ADMIT the build to the maintenance lane ([cache.Cache.AdmitCompaction]):
 //     busy is the next poll's; a charge the node's memory cannot hold is
 //     refused `memory` and never remembered, since the budget is read again
@@ -89,20 +95,24 @@ func (c *Compactor) Compact(ctx context.Context, cand code.CompactionCandidate) 
 	defer cancel(nil)
 	defer context.AfterFunc(c.life, func() { cancel(context.Cause(c.life)) })()
 	began := c.now()
-	if !c.claim(cand.ID) {
+	reserved, ok := c.claimCompaction(cand.ID)
+	if !ok {
 		c.log.Debug("code_compaction_busy", "repo", cand.Name,
-			"detail", "a publication of the repository is running on this node")
+			"detail", "a publication of the repository on this node has not planned yet")
 		c.counted(OutcomeBusy, began)
 		return OutcomeBusy, errClaimed
 	}
-	defer c.unclaim(cand.ID)
-	out, err := c.compact(ctx, cand, began)
+	defer c.unclaimCompaction(cand.ID)
+	out, err := c.compact(ctx, cand, reserved, began)
 	c.counted(out, began)
 	return out, err
 }
 
-// compact is [Compactor.Compact]'s body.
-func (c *Compactor) compact(ctx context.Context, cand code.CompactionCandidate, began time.Time) (Outcome, error) {
+// compact is [Compactor.Compact]'s body, beside the publication of the
+// repository in flight here that reserved the packs in reserved, if one is.
+func (c *Compactor) compact(ctx context.Context, cand code.CompactionCandidate, reserved map[string]bool,
+	began time.Time) (Outcome, error) {
+
 	s, err := c.o.Cache.Sync(ctx, cand.ID, statelog.FloorAt(statelog.ReadSession, cand.Version))
 	if err != nil {
 		return c.failed(cand, "sync", err)
@@ -110,9 +120,15 @@ func (c *Compactor) compact(ctx context.Context, cand code.CompactionCandidate, 
 	defer s.Release()
 
 	cap := c.capFor(cand.ID)
-	p := plan(c.o.Cache.Packs(s), publishedPacks(c.o.Cache.Chain(s).Rows), cap, c.bounds)
+	leftOut := publishedPacks(c.o.Cache.Chain(s).Rows)
+	for cs := range reserved {
+		leftOut[cs] = true
+	}
+	p := plan(c.o.Cache.Packs(s), leftOut, cap, c.bounds)
 	if !p.due {
-		c.remember(cand, cap)
+		if len(reserved) == 0 {
+			c.remember(cand, cap)
+		}
 		return OutcomeNotDue, nil
 	}
 	cut := c.bounds.cutFor(p)

@@ -43,9 +43,17 @@
 // nodes it is the home, and on a fleet with one large git node every
 // repository only that node can publish is maintained there. Both loops ask by
 // the same charge, so the two writers of a repository's packs run on ONE node,
-// and on that node a repository is never compacted and published at once
-// ([Compactor.claim]): each would retire packs the other planned over, and one
-// would be refused stale after a whole build. There is no lease and no epoch:
+// and on that node a compaction NEVER MERGES A PACK A PUBLICATION IN FLIGHT
+// PLANNED OVER ([Compactor.claimCompaction]): once a publication has planned,
+// it reserves every pack its layer will name, its repack's inputs among them,
+// and a compaction of the repository merges beside it the packs pushed since,
+// which the layer neither names nor needs (the decide's rules 2, 6c and 6d),
+// so both records apply in either order. Until the publication has planned —
+// its sync and its plan, seconds — a compaction of its repository answers
+// busy, and a publication asked while a compaction of its repository runs
+// answers busy itself, since its plan would cover that merge's inputs: either
+// way round, one of the two would otherwise be refused stale after its whole
+// build. There is no lease and no epoch:
 // two nodes whose presence views disagree for a moment may both build, and the
 // committer refuses the second `stale`, one wasted build. Each pass judges
 // every listed repository it must against ONE LISTING of who serves git and
@@ -56,9 +64,11 @@
 // node to be listed before their first pass ([Compactor.awaitListed]). TWO
 // LOOPS, because a publication of a large repository takes minutes and a hot
 // repository gains packs at up to three hundred a minute: behind a publication
-// in one loop, it would reach code.MaxPacksPerRepo and refuse pushes. They
-// share the node's maintenance slots and memory through the cache's
-// admissions, which bound them. Each runs ONE BUILD AT A TIME and a pass
+// in one loop, it would reach code.MaxPacksPerRepo and refuse pushes — and the
+// same holds for the repository being published, whose merges therefore run
+// beside its publication rather than wait for it. They share the node's
+// maintenance slots and memory through the cache's admissions, which bound
+// them. Each runs ONE BUILD AT A TIME and a pass
 // works through every due repository it maintains in its listing's order
 // until the next tick would begin. A repository a plan found NOT DUE
 // (nothing to merge, nothing to publish) is remembered at its row's version —

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -52,7 +53,8 @@ type Estate interface {
 //
 // BOTH LOOPS ASK BY THE PUBLICATION'S CHARGE (cache.Cache.PublishCharge), so a
 // repository's compactions and its publications — the two writers of its
-// packs — run on ONE node, and each never retires what the other planned over.
+// packs — run on ONE node, where a compaction never merges a pack a
+// publication in flight planned over ([Compactor.claimCompaction]).
 //
 // Listed is whether this node is among the git nodes the placement lists —
 // the only nodes a maintainer is chosen from (internal/estate's
@@ -139,10 +141,11 @@ type Options struct {
 // ErrOptions is an Options value New refuses, wrapped naming every field.
 var ErrOptions = errors.New("compact: refused options")
 
-// errClaimed is a compaction or a publication of a repository whose other
-// build is running on this node ([Compactor.claim]): busy, and planned again
-// at the next pass.
-var errClaimed = errors.New("compact: the repository's other build is running on this node")
+// errClaimed is a compaction of a repository whose publication on this node
+// has not planned yet, or a publication of one whose compaction is running on
+// this node ([Compactor.claimCompaction], [Compactor.claimPublication]): busy,
+// and planned again at the next pass.
+var errClaimed = errors.New("compact: the repository's other build on this node leaves this one no plan yet")
 
 // Outcome is what became of one compaction or publication this node planned
 // ([Compactor.Compact], [Compactor.Publish]).
@@ -171,8 +174,9 @@ const (
 	// plans again from the rows.
 	OutcomeStale Outcome = "stale"
 	// OutcomeBusy: no maintenance slot or memory room free now, the
-	// repository's other build running on this node, or its committer busy:
-	// a moment's state, due again at the next poll.
+	// repository's other build on this node leaving this one no plan yet (a
+	// publication still planning, a compaction running), or its committer
+	// busy: a moment's state, due again at the next poll.
 	OutcomeBusy Outcome = "busy"
 	// OutcomeRefused: refused for a reason that holds until something
 	// changes — the node's memory, an object store with no room, a layer too
@@ -246,8 +250,9 @@ type holds struct {
 // repository's small packs ([Compactor.Poll]), and PUBLICATION, which writes
 // its next published layer ([Compactor.PublishPass]) — so a publication of a
 // large repository, minutes of its build, never delays a compaction that keeps
-// a hot repository under the pack bound. Each runs one build at a time, and a
-// repository is never compacted and published at once on one node.
+// a hot repository under the pack bound, that repository's own included. Each
+// runs one build at a time, and a compaction never merges a pack a
+// publication of its repository in flight on this node planned over.
 type Compactor struct {
 	o   Options
 	log *slog.Logger
@@ -269,9 +274,13 @@ type Compactor struct {
 
 	// mu guards the memories, the claims and the reading below.
 	mu sync.Mutex
-	// working is every repository a compaction or a publication of this node
-	// is building ([Compactor.claim]).
-	working map[string]bool
+	// compactions is every repository a compaction of this node is building,
+	// and publications every repository a publication of this node is
+	// building, with every pack its plan covers by git checksum — its
+	// RESERVATION, which a compaction of the repository leaves out — nil
+	// until it has planned ([Compactor.claimCompaction]).
+	compactions  map[string]bool
+	publications map[string]map[string]bool
 	// notDue is every repository a compaction's plan found not due, at the
 	// version and cap it was planned at ([memo]).
 	notDue map[string]memo
@@ -308,7 +317,8 @@ type Compactor struct {
 
 // memo is a plan found not due: the repository's version and its cap — every
 // input the plan read but the live set and the chain, which move only with the
-// version.
+// version. A plan made beside a publication's reservation is never one
+// ([Compactor.compact]).
 type memo struct {
 	version statelog.Position
 	cap     int64
@@ -353,9 +363,9 @@ func New(o Options) (*Compactor, error) {
 		return nil, fmt.Errorf("%w: %s missing", ErrOptions, strings.Join(missing, ", "))
 	}
 	c := &Compactor{o: o, log: o.Logger, now: o.Now, bounds: production, runBuild: runInSlot,
-		working: map[string]bool{}, notDue: map[string]memo{}, nothing: map[string]statelog.Position{},
-		built: map[string]time.Time{}, tails: map[string]time.Time{}, caps: map[string]int64{},
-		done: make(chan struct{})}
+		compactions: map[string]bool{}, publications: map[string]map[string]bool{}, notDue: map[string]memo{},
+		nothing: map[string]statelog.Position{}, built: map[string]time.Time{}, tails: map[string]time.Time{},
+		caps: map[string]int64{}, done: make(chan struct{})}
 	for i := range c.held {
 		c.held[i].repos = map[string]int64{}
 	}
@@ -483,26 +493,91 @@ func (c *Compactor) Stop(ctx context.Context) {
 	}
 }
 
-// claim reports whether this node may build repoID now — no compaction or
-// publication of it running here — and takes it until [Compactor.unclaim]: a
-// repository is never compacted and published at once on one node, since each
-// would retire packs the other planned over and one would be refused stale
-// after a whole build.
-func (c *Compactor) claim(repoID string) bool {
+// claimCompaction reports whether this node may compact repoID now, and takes
+// the repository's compaction until [Compactor.unclaimCompaction], answering
+// the RESERVATION of a publication of it building on this node: every pack
+// that publication's layer will name, its repack's inputs among them, by git
+// checksum — what the compaction's plan leaves out beside the packs a
+// published layer names ([plan]) — and nil where none is building.
+//
+// BESIDE A PUBLICATION, NEVER OVER ITS PACKS. A publication of a large
+// repository runs for minutes of its build, and a hot repository gains packs at
+// up to three hundred a minute (the doc's busy repository), so a repository
+// whose compactions waited for its publication would pass code.MaxPacksPerRepo
+// and have every push carrying a pack refused compaction_behind until the
+// publication answered. Nothing the committer decides needs more than the
+// reservation: a pack pushed after the publication's plan was live at no
+// position the plan read, so the layer need not name it (decide rule 6d) and
+// does not, and a merge of such packs retires nothing the layer names (rules
+// 2 and 6c) — so the two records apply in either order.
+//
+// REFUSED WHILE THE PUBLICATION HAS NOT PLANNED — its sync and its plan,
+// seconds — since a compaction planned then could merge packs the layer is
+// about to name, and one of the two would be refused stale: the publication
+// after a whole build, or the merge. A later plan of the same publication (a
+// base the store lost, a tail git could not bitmap) adds to the reservation
+// only packs a layer of the chain names, which the compaction's plan leaves
+// out already, so the reservation handed here holds for its whole length.
+func (c *Compactor) claimCompaction(repoID string) (reserved map[string]bool, ok bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.working[repoID] {
+	held, publishing := c.publications[repoID]
+	if c.compactions[repoID] || (publishing && held == nil) {
+		return nil, false
+	}
+	c.compactions[repoID] = true
+	return maps.Clone(held), true
+}
+
+// unclaimCompaction gives repoID's compaction back.
+func (c *Compactor) unclaimCompaction(repoID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.compactions, repoID)
+}
+
+// claimPublication reports whether this node may publish repoID now — no
+// compaction of it building here — and takes the repository's publication,
+// its reservation unset until [Compactor.reserve], until
+// [Compactor.unclaimPublication].
+//
+// A PUBLICATION WAITS FOR A RUNNING COMPACTION: its plan would cover the
+// merge's inputs, live as of it, so whichever record landed second would be
+// refused stale — the publication's after its whole build. A merge is bounded
+// by what it merges, seconds at a busy repository's rate, so the next pass
+// finds it done.
+func (c *Compactor) claimPublication(repoID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, publishing := c.publications[repoID]; publishing || c.compactions[repoID] {
 		return false
 	}
-	c.working[repoID] = true
+	c.publications[repoID] = nil
 	return true
 }
 
-// unclaim gives repoID back.
-func (c *Compactor) unclaim(repoID string) {
+// reserve adds every pack p covers — its members, its repack's inputs among
+// them — to the reservation of the publication of repoID this node is
+// building: from its first plan on, a compaction of the repository is
+// admitted beside it and leaves those packs out ([Compactor.claimCompaction]).
+func (c *Compactor) reserve(repoID string, p layerPlan) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.working, repoID)
+	reserved := c.publications[repoID]
+	if reserved == nil {
+		reserved = make(map[string]bool, len(p.members))
+		c.publications[repoID] = reserved
+	}
+	for _, m := range p.members {
+		reserved[m.checksum] = true
+	}
+}
+
+// unclaimPublication gives repoID's publication back, with its reservation.
+func (c *Compactor) unclaimPublication(repoID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.publications, repoID)
 }
 
 // AlarmReading fills the reading's compaction half from the last pass: how
