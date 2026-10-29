@@ -1060,6 +1060,10 @@ type codeRepoRow struct {
 	// Protections are its rules as a push is held to them, as its row
 	// answers them: never a rule's merge gate, which code_get_repo answers.
 	Protections []code.PushRule `json:"protections,omitempty"`
+	// ProtectionsLeftOut is set, in place of Protections, on the one row of
+	// a listing whose rules alone are past an answer: how many there are and
+	// which tool pages them.
+	ProtectionsLeftOut string `json:"protections_left_out,omitempty"`
 }
 
 func repoRowOf(s code.RepoSummary) codeRepoRow {
@@ -1119,29 +1123,28 @@ func (t *codeListRepos) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	read := newForeignRead(turn, c.asker.Seat)
 	k, rendered, err := read.fit(len(rows), page)
+	if err == nil && k == 0 && len(rows) > 0 {
+		// A REPOSITORY WHOSE RULES ALONE ARE PAST ONE ANSWER is listed without
+		// them, saying so, and the page ends at it. Answered as a refusal with
+		// no `next`, as it once was, it ended the listing there for every
+		// seat, and every repository after it by name was listed by none.
+		rows[0].ProtectionsLeftOut = fmt.Sprintf("its %d protection rules are past one answer beside it: "+
+			"%s pages them", len(rows[0].Protections), CodeGetRepoTool)
+		rows[0].Protections = nil
+		k, rendered, err = read.fit(1, page)
+	}
 	switch {
 	case err != nil:
 		return labelFault(ctx, t.Name(), err), nil
 	case k == 0 && len(rows) > 0:
-		return failed(fmt.Sprintf("%s: repository %q alone is past one answer — its protection rules "+
-			"are that long — so it is not listed whole on any page. %s", t.Name(), rows[0].Name,
-			longRulesRemedy(answer.Repos[0].ManagedBy))), nil
+		// A ROW WITHOUT ITS RULES is a name, an owner, a description and a
+		// default branch at their bounds, about ten kilobytes, so this is a
+		// bound broken, never a repository.
+		return faulted(ctx, t.Name(), fmt.Errorf("builtin: repository %s's row without its rules is past one "+
+			"tool answer", rows[0].Name), fmt.Sprintf("%s could not fit repository %q in one answer: %s.",
+			t.Name(), rows[0].Name, faultSaid)), nil
 	}
 	return compactAnswer(rendered, "Ask for fewer with `limit`.")
-}
-
-// longRulesRemedy is where a repository's protection rules are read once they
-// are past one tool answer — sixty-four rules, each with a merge gate of up to
-// code.MaxGateBytes, can be: a declared repository's in the company's
-// configuration, and those of one a tool made, which no configuration holds,
-// in its detail over the API, which no tool answer bounds — a person's read.
-func longRulesRemedy(m code.ManagedBy) string {
-	if m == code.ManagedConfig {
-		return "Read its rules in the company's configuration (code.repos)."
-	}
-	return "Its rules were set through " + CodeProtectBranchTool + ", and no configuration holds them: a " +
-		"person reads them whole in the repository's detail (GET /code/repos/{name}), and only a person " +
-		"shortens them."
 }
 
 // ---- code_get_repo ------------------------------------------------------ //
@@ -1154,12 +1157,13 @@ func (t *codeGetRepo) Name() string { return CodeGetRepoTool }
 
 func (t *codeGetRepo) Description() string {
 	return fmt.Sprintf("One repository in detail — its protection rules, each with the merge gate it "+
-		"holds a merge to, its size, how many branches "+
-		"and tags it has, your access, its last push and, asked by a person or a token, the URL to "+
-		"clone it from (a seat reads a repository through these tools) — and a page of its branches "+
-		"with the commit each points at, %d a page: `branches_prefix` narrows them to a namespace "+
-		"(`seats/<handle>/`, `release/`), and `branches_next` comes back as `branches_cursor` for "+
-		"the next page, which answers the branches alone.", codeBranchesPage)
+		"holds a merge to, its size, how many branches and tags it has, your access, its last push and, "+
+		"asked by a person or a token, the URL to clone it from (a seat reads a repository through these "+
+		"tools) — and a page of its branches with the commit each points at, %d a page: "+
+		"`branches_prefix` narrows them to a namespace (`seats/<handle>/`, `release/`), and "+
+		"`branches_next` comes back as `branches_cursor` for the next page, which answers the branches "+
+		"alone. Rules too many for one answer end at `protections_next`, which comes back as "+
+		"`protections_cursor` for the rest of them, alone.", codeBranchesPage)
 }
 
 func (t *codeGetRepo) Parameters() map[string]any {
@@ -1175,6 +1179,10 @@ func (t *codeGetRepo) Parameters() map[string]any {
 			"branches_cursor": map[string]any{
 				"type":        "string",
 				"description": "The `branches_next` of the previous page, with the same `branches_prefix`.",
+			},
+			"protections_cursor": map[string]any{
+				"type":        "string",
+				"description": "The `protections_next` of the previous answer, never beside `branches_cursor`.",
 			},
 		},
 		"required": []string{"repo"},
@@ -1211,11 +1219,24 @@ type codeRepoAnswer struct {
 	CloneURL string          `json:"clone_url,omitempty"`
 	// Protections are its rules WHOLE, each with the merge gate it holds a
 	// merge to: what its detail's row answers of each rule beside the gates
-	// the read asked for (code.ReadQuery.Gates), on the detail's page alone.
-	Protections  []code.Protection `json:"protections,omitempty"`
-	Branches     []codeBranch      `json:"branches"`
-	BranchesNext string            `json:"branches_next,omitempty"`
-	Position     statelog.Position `json:"position"`
+	// the read asked for (code.ReadQuery.Gates), on the detail's page alone,
+	// in pattern order — those that fit, and ProtectionsNext the pattern of
+	// the last answered where more follow it ([codeRepoRules]).
+	Protections     []code.Protection `json:"protections,omitempty"`
+	ProtectionsNext string            `json:"protections_next,omitempty"`
+	Branches        []codeBranch      `json:"branches"`
+	BranchesNext    string            `json:"branches_next,omitempty"`
+	Position        statelog.Position `json:"position"`
+}
+
+// codeRepoRules is code_get_repo's answer to a `protections_cursor`: the
+// repository's rules after it, whole and in pattern order, those that fit one
+// answer, and ProtectionsNext where more follow.
+type codeRepoRules struct {
+	Repo            string            `json:"repo"`
+	Protections     []code.Protection `json:"protections"`
+	ProtectionsNext string            `json:"protections_next,omitempty"`
+	Position        statelog.Position `json:"position"`
 }
 
 // wholeRules is a repository's rules with their merge gates: the rules its
@@ -1254,6 +1275,13 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	q := code.ReadQuery{Kind: code.ReadRefs, Limit: codeBranchesPage,
 		Cursor: strings.TrimSpace(argString(args, "branches_cursor"))}
+	if after := strings.TrimSpace(argString(args, "protections_cursor")); after != "" {
+		if q.Cursor != "" {
+			return failed(fmt.Sprintf("%s: `protections_cursor` and `branches_cursor` continue two lists — "+
+				"pass one of them.", t.Name())), nil
+		}
+		return t.rulesAfter(ctx, turn, c, name, after)
+	}
 	// A NAMESPACE UNDER refs/heads/, however the model spells it — with or
 	// without the root, with or without the closing slash the listing's
 	// prefix ends in.
@@ -1286,6 +1314,7 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		answer = &read
 	}
 	out := codeRepoAnswer{Repo: repo.Name, Position: answer.Position}
+	var rules []code.Protection
 	if d := answer.Repo; d != nil {
 		if r := t.deps.sameRepo(turn, t.Name(), c.asker, repo, d.RepoRef); r != nil {
 			return *r, nil
@@ -1296,7 +1325,7 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// THE RULES ONCE, WHOLE: beside the detail rather than in its row,
 		// which would answer each rule's push half a second time.
 		out.Detail.Protections = nil
-		out.Protections = wholeRules(d.Protections, d.Gates)
+		rules = wholeRules(d.Protections, d.Gates)
 		if c.asker.Kind == code.PrincipalOperator && t.deps.CloneURL != nil {
 			out.CloneURL = t.deps.CloneURL(repo.Name)
 		}
@@ -1305,32 +1334,109 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	for i, ref := range answer.Refs {
 		branches[i] = codeBranch{Name: strings.TrimPrefix(ref.Ref, branchRoot), OID: ref.OID}
 	}
-	// BRANCHES CUT WHOLE-ROW AT THE ANSWER, as a repository listing is: the
-	// refs listing is keyset by the ref, so the next page begins after the
-	// last branch kept.
-	page := func(k int) any {
+	// RULES AND BRANCHES CUT WHOLE AT THE ANSWER, each where its own list
+	// continues: the rules are in pattern order, so the rest of them begin
+	// after the last rule kept, and the refs listing is keyset by the ref, so
+	// the next page of branches begins after the last branch kept.
+	page := func(kr, kb int) codeRepoAnswer {
 		paged := out
-		paged.Branches, paged.BranchesNext = branches[:k], answer.Next
-		if k > 0 && k < len(branches) {
-			paged.BranchesNext = answer.Refs[k-1].Ref
+		paged.Protections = rules[:kr]
+		if kr > 0 && kr < len(rules) {
+			paged.ProtectionsNext = rules[kr-1].Pattern
+		}
+		paged.Branches, paged.BranchesNext = branches[:kb], answer.Next
+		if kb > 0 && kb < len(branches) {
+			paged.BranchesNext = answer.Refs[kb-1].Ref
 		}
 		return paged
 	}
+	// THE RULES FIRST, leaving room for one branch, and then the branches in
+	// what the rules leave: at the domain's bounds a repository's rules are
+	// half a mebibyte with their gates, far past one answer, and cut at the
+	// answer with no room kept, a repository that wide would answer no branch
+	// on its first page. A rule at its widest — its pattern and its gate, ten
+	// kilobytes — and a branch at its widest beside the detail at its widest
+	// fit one answer with room to spare, so each list makes progress on every
+	// page (TestEveryRepositoryAtTheDomainsBoundsIsAnswered).
 	read := newForeignRead(turn, c.asker.Seat)
-	k, rendered, err := read.fit(len(branches), page)
+	oneBranch := min(1, len(branches))
+	kr, _, err := read.fit(len(rules), func(k int) any { return page(k, oneBranch) })
+	if err != nil {
+		return labelFault(ctx, t.Name(), err), nil
+	}
+	kb, rendered, err := read.fit(len(branches), func(k int) any { return page(kr, k) })
 	switch {
 	case err != nil:
 		return labelFault(ctx, t.Name(), err), nil
-	case k == 0 && (len(branches) > 0 || len(rendered) > ToolAnswerBytes):
-		// THE DETAIL ALONE PAST ONE ANSWER, branches or none: no prefix
-		// narrows what the rules weigh, so the refusal names where they are
-		// read rather than an argument that cannot help.
-		return failed(fmt.Sprintf("%s: repository %q's detail leaves no room in one answer for even "+
-			"one branch — its protection rules are that long. Its branches are read a page at a "+
-			"time once you pass the `branches_next` of a page. %s", t.Name(), repo.Name,
-			longRulesRemedy(repo.ManagedBy))), nil
+	case kr == 0 && len(rules) > 0, kb == 0 && len(branches) > 0:
+		return faulted(ctx, t.Name(), fmt.Errorf("builtin: repository %s's detail leaves no room in one tool "+
+			"answer for one rule and one branch", repo.Name), fmt.Sprintf("%s could not fit repository %q's "+
+			"detail in one answer: %s.", t.Name(), repo.Name, faultSaid)), nil
 	}
 	return compactAnswer(rendered, "Narrow the branches with `branches_prefix`.")
+}
+
+// rulesAfter is code_get_repo's answer to a `protections_cursor`: the
+// repository's rules whose patterns sort after after, whole and in pattern
+// order, cut whole-rule at the answer — keyset by pattern, so the rest of the
+// rules follow a rule removed meanwhile, and a rule added before the cursor is
+// answered by a first page.
+//
+// READ AS THE FIRST PAGE IS: a refs listing's first page carries the
+// repository's detail and, asked, its rules' gates — of one ref here, which
+// this answer does not present — so a turn's first call naming the
+// repository is its resolution too ([CodeDeps.repoRead]), and every later one
+// reads by the kind this tool reads, never a second resolution of its own.
+func (t *codeGetRepo) rulesAfter(ctx context.Context, turn *turnctx.Turn, c codeCaller, name,
+	after string) (tools.Result, error) {
+
+	q := code.ReadQuery{Kind: code.ReadRefs, Limit: 1, Gates: true}
+	repo, resolved, refusal := t.deps.repoRead(ctx, turn, t.Name(), c, name, &q)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	answer := resolved
+	if answer == nil {
+		q.Repo, q.Fresh = repo.Name, seatRead
+		read, err := t.deps.read(ctx, c, q)
+		if err != nil {
+			return t.deps.failed(ctx, turn, t.Name(), c.asker, repo, err), nil
+		}
+		answer = &read
+	}
+	d := answer.Repo
+	if d == nil {
+		return faulted(ctx, t.Name(), fmt.Errorf("builtin: the code host answered repository %s's read with "+
+			"no detail", repo.Name), fmt.Sprintf("%s could not read repository %q: %s.", t.Name(), repo.Name,
+			faultSaid)), nil
+	}
+	if r := t.deps.sameRepo(turn, t.Name(), c.asker, repo, d.RepoRef); r != nil {
+		return *r, nil
+	}
+	rules := wholeRules(d.Protections, d.Gates)
+	if i := slices.IndexFunc(rules, func(p code.Protection) bool { return p.Pattern > after }); i >= 0 {
+		rules = rules[i:]
+	} else {
+		rules = rules[len(rules):]
+	}
+	page := func(k int) any {
+		out := codeRepoRules{Repo: repo.Name, Protections: rules[:k], Position: answer.Position}
+		if k > 0 && k < len(rules) {
+			out.ProtectionsNext = rules[k-1].Pattern
+		}
+		return out
+	}
+	read := newForeignRead(turn, c.asker.Seat)
+	k, rendered, err := read.fit(len(rules), page)
+	switch {
+	case err != nil:
+		return labelFault(ctx, t.Name(), err), nil
+	case k == 0 && len(rules) > 0:
+		return faulted(ctx, t.Name(), fmt.Errorf("builtin: repository %s's rule %s alone is past one tool answer",
+			repo.Name, rules[0].Pattern), fmt.Sprintf("%s could not fit a rule of repository %q in one answer: "+
+			"%s.", t.Name(), repo.Name, faultSaid)), nil
+	}
+	return compactAnswer(rendered, "Pass the `protections_next` it answers as `protections_cursor`.")
 }
 
 // ---- code_resolve ------------------------------------------------------- //

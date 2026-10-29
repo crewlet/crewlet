@@ -146,9 +146,16 @@ func (h *codeHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 	out := code.ReadAnswer{Position: h.at, Level: q.Fresh.Level}
 	switch q.Kind {
 	case code.ReadRepos:
-		out.Repos = h.listing
-		if out.Repos == nil {
-			out.Repos = []code.RepoSummary{h.detail.RepoSummary}
+		listing := h.listing
+		if listing == nil {
+			listing = []code.RepoSummary{h.detail.RepoSummary}
+		}
+		// KEYSET BY NAME, as the reader's listing is: the rows after the
+		// cursor.
+		for _, s := range listing {
+			if s.Name > q.Cursor {
+				out.Repos = append(out.Repos, s)
+			}
 		}
 		return out, nil
 	case code.ReadRepo, code.ReadRefs:
@@ -1494,54 +1501,178 @@ func TestAListingIsCutWholeRowAtTheAnswer(t *testing.T) {
 	}
 }
 
-// A REPOSITORY WHOSE RULES ARE PAST ONE ANSWER NAMES WHERE THEY ARE READ:
-// sixty-four rules whose patterns are at gitref's longest, each byte one JSON
-// writes as six, outweigh one tool answer as a push is held to them — with no
-// merge gate, which no listing row carries — so such a repository is listed
-// whole on no page and its detail leaves no room for a branch; and the
-// refusal says where its rules are read instead: a declared repository's in
-// the company's configuration, and those of one a tool made, which no
-// configuration holds, in its detail over the API. Its detail alone past one
-// answer is refused so whether it has branches or none, since no branch
-// prefix narrows what its rules weigh.
-//
-// Mutation: name the company's configuration whatever made the repository —
-// the tool-made repository's refusals name code.repos, red.
-func TestARepositoryWhoseRulesArePastOneAnswerNamesWhereTheyAreRead(t *testing.T) {
-	t.Parallel()
-	rules := make([]code.PushRule, code.MaxProtectionsPerRepo)
-	for i := range rules {
-		head := fmt.Sprintf("refs/heads/%02d", i)
-		rules[i] = code.PushRule{Pattern: head + strings.Repeat("&", gitref.MaxRefNameBytes-len(head)),
-			DirectPush: code.DirectPersons}
+// widestGate is a merge gate as wide as a record may carry one: within a few
+// bytes of code.MaxGateBytes of JSON, its required checks at their count and
+// length and its human paths spelled in a byte JSON writes as six.
+func widestGate(t *testing.T) code.MergeGate {
+	t.Helper()
+	g := code.MergeGate{MergeBy: code.MergeByPersons, Approvals: code.ApprovalsOne,
+		Landing:      code.Landing{Policy: code.LandingPostLand, Depth: code.MaxQueueDepth, Batch: code.MaxQueueBatch},
+		DeleteSource: code.DeleteSeats, OwnersApprove: true, AutoRevert: true, AgentsEditChecks: true}
+	for i := range code.MaxRequiredChecks {
+		g.Checks = append(g.Checks, fmt.Sprintf("%02d", i)+strings.Repeat("x", 62))
 	}
-	for _, tc := range []struct {
-		managed     code.ManagedBy
-		says, never string
-	}{
-		{code.ManagedConfig, "company's configuration (code.repos)", "GET /code/repos/{name}"},
-		{code.ManagedTools, "GET /code/repos/{name}", "code.repos"},
-	} {
-		for _, branches := range []bool{true, false} {
-			host := newCodeHost()
-			host.detail.ManagedBy, host.detail.Protections = tc.managed, rules
-			if !branches {
-				host.refs = map[string]string{}
-			}
-			reg := codeRegistry(t, codeDeps(host))
-			asked := map[string]map[string]any{builtin.CodeGetRepoTool: {"repo": "site"}}
-			if branches {
-				asked[builtin.CodeListReposTool] = map[string]any{}
-			}
-			for tool, args := range asked {
-				got := refusedCode(t, reg, codeTurn(t), tool, args)
-				if !strings.Contains(got.Output, tc.says) || strings.Contains(got.Output, tc.never) {
-					t.Errorf("%s of a %s repository, branches %v, refused %q, want it to say %q and never %q",
-						tool, tc.managed, branches, got.Output, tc.says, tc.never)
-				}
+	weigh := func() int {
+		raw, err := json.Marshal(g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(raw)
+	}
+	// WHAT A HUMAN PATH WEIGHS BESIDE ITS GLOB'S BYTES: `,"human_paths":[`,
+	// `{"glob":"`, its two digits and `"}]` for the first, at most thirty
+	// bytes, and less for every later one.
+	const frame = 30
+	for len(g.HumanPaths) < code.MaxHumanPaths {
+		room := code.MaxGateBytes - weigh() - frame
+		if room < 6 {
+			break
+		}
+		amps := min(room/6, gitref.MaxPathGlobBytes-2)
+		g.HumanPaths = append(g.HumanPaths, code.HumanPath{
+			Glob: fmt.Sprintf("%02d", len(g.HumanPaths)) + strings.Repeat("&", amps)})
+	}
+	if n := weigh(); n > code.MaxGateBytes || n < code.MaxGateBytes-64 {
+		t.Fatalf("the widest gate weighs %d bytes, want just short of %d", n, code.MaxGateBytes)
+	}
+	return g
+}
+
+// EVERY REPOSITORY AT THE DOMAIN'S BOUNDS IS ANSWERED BY THE TOOLS. A
+// repository may carry code.MaxProtectionsPerRepo rules, each a pattern at
+// gitref's longest — every byte one JSON writes as six — with a merge gate of
+// code.MaxGateBytes: half a mebibyte, eight tool answers. code_list_repos
+// lists such a repository without its rules, saying where they are read, and
+// lists every repository after it; code_get_repo answers its detail, a page of
+// its branches and as many of its rules as fit, and the rest of the rules a
+// page at a time through protections_next, every rule once, in order and with
+// its gate — each answer within ToolAnswerBytes, and each making progress on
+// its list.
+//
+// Mutations: refuse a row whose rules alone are past an answer, with no
+// `next`, as code_list_repos did — zed is listed by nobody, red; drop
+// protections_next — the rules past the first answer are answered by nobody,
+// red; cut the first page's rules with no room kept for a branch — it answers
+// no branch, red.
+func TestEveryRepositoryAtTheDomainsBoundsIsAnswered(t *testing.T) {
+	t.Parallel()
+	wide := func(n int) string { return strings.Repeat("&", n) }
+	gate := widestGate(t)
+	host := newCodeHost()
+	d := siteDetail()
+	d.Description = wide(code.MaxDescriptionBytes)
+	for i := range code.MaxProtectionsPerRepo {
+		head := fmt.Sprintf("refs/heads/%02d", i)
+		rule := code.PushRule{Pattern: head + wide(gitref.MaxRefNameBytes-len(head)), AllowForce: true,
+			AllowDelete: true, DirectPush: code.DirectPersons}
+		d.Protections = append(d.Protections, rule)
+		d.Gates = append(d.Gates, code.RuleGate{Pattern: rule.Pattern, Gate: gate})
+	}
+	host.detail = d
+	for i := range 100 {
+		host.refs[fmt.Sprintf("refs/heads/%03d", i)+wide(gitref.MaxBranchBytes-3)] = mainOID
+	}
+	wideRow := d.RepoSummary
+	wideRow.Name = "big"
+	alpha, zed := siteDetail().RepoSummary, siteDetail().RepoSummary
+	alpha.Name, zed.Name = "alpha", "zed"
+	host.listing = []code.RepoSummary{alpha, wideRow, zed}
+	reg := codeRegistry(t, codeDeps(host))
+	turn := codeTurn(t)
+
+	// THE LISTING, page after page: every repository once, big's rules left
+	// out and said so.
+	var listed []string
+	for cursor, pages := "", 0; ; pages++ {
+		if pages > 3 {
+			t.Fatalf("the listing took more than %d pages: %v", pages, listed)
+		}
+		got, _ := callCode(t, reg, turn, builtin.CodeListReposTool, map[string]any{"cursor": cursor, "limit": 100})
+		if len(got.Output) > builtin.ToolAnswerBytes {
+			t.Fatalf("a listing page is %d bytes, past one answer", len(got.Output))
+		}
+		var page struct {
+			Repos []struct {
+				Name               string            `json:"name"`
+				Protections        []json.RawMessage `json:"protections"`
+				ProtectionsLeftOut string            `json:"protections_left_out"`
+			} `json:"repos"`
+			Next string `json:"next"`
+		}
+		if err := json.Unmarshal([]byte(got.Output), &page); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range page.Repos {
+			listed = append(listed, r.Name)
+			if r.Name == "big" && (r.Protections != nil || !strings.Contains(r.ProtectionsLeftOut,
+				builtin.CodeGetRepoTool)) {
+				t.Errorf("big is listed with %d rules and %q, want its rules left out and where they are "+
+					"read said", len(r.Protections), r.ProtectionsLeftOut)
 			}
 		}
+		if page.Next == "" {
+			break
+		}
+		cursor = page.Next
 	}
+	if want := []string{"alpha", "big", "zed"}; !slices.Equal(listed, want) {
+		t.Errorf("the listing answered %v, want %v", listed, want)
+	}
+
+	// THE DETAIL: its first page, then its rules a page at a time.
+	type rulesPage struct {
+		Protections     []code.Protection `json:"protections"`
+		ProtectionsNext string            `json:"protections_next"`
+		Branches        []json.RawMessage `json:"branches"`
+	}
+	answered := func(args map[string]any) rulesPage {
+		t.Helper()
+		got, _ := callCode(t, reg, turn, builtin.CodeGetRepoTool, args)
+		if len(got.Output) > builtin.ToolAnswerBytes {
+			t.Fatalf("code_get_repo %v answered %d bytes, past one answer", args, len(got.Output))
+		}
+		var page rulesPage
+		if err := json.Unmarshal([]byte(got.Output), &page); err != nil {
+			t.Fatal(err)
+		}
+		return page
+	}
+	first := answered(map[string]any{"repo": "site"})
+	switch {
+	case len(first.Branches) == 0:
+		t.Fatal("code_get_repo's first page answers no branch")
+	case len(first.Protections) == 0 || len(first.Protections) == len(d.Protections):
+		t.Fatalf("code_get_repo's first page answers %d of %d rules, want those that fit and the rest after",
+			len(first.Protections), len(d.Protections))
+	}
+	if reads, _, _ := host.asked(); len(reads) == 0 || !reads[len(reads)-1].Gates {
+		t.Error("code_get_repo's first page did not ask for the rules' merge gates")
+	}
+	rules, next := first.Protections, first.ProtectionsNext
+	for pages := 0; next != ""; pages++ {
+		if pages > len(d.Protections) {
+			t.Fatalf("the rules took more than %d pages", pages)
+		}
+		page := answered(map[string]any{"repo": "site", "protections_cursor": next})
+		if len(page.Protections) == 0 || page.Branches != nil {
+			t.Fatalf("a page of rules after %s answered %d rules and %d branches, want rules alone",
+				next, len(page.Protections), len(page.Branches))
+		}
+		rules, next = append(rules, page.Protections...), page.ProtectionsNext
+	}
+	if len(rules) != len(d.Protections) {
+		t.Fatalf("the pages answered %d rules, want every one of the %d", len(rules), len(d.Protections))
+	}
+	for i, r := range rules {
+		if r.PushRule != d.Protections[i] || r.Gate == nil || !r.Gate.Equal(gate) {
+			t.Fatalf("rule %d answered as %s with a gate %v, want %s with its gate", i, r.Pattern, r.Gate != nil,
+				d.Protections[i].Pattern)
+		}
+	}
+
+	// ONE CURSOR AT A TIME: the two continue two lists.
+	refusedCode(t, reg, turn, builtin.CodeGetRepoTool, map[string]any{"repo": "site",
+		"protections_cursor": first.ProtectionsNext, "branches_cursor": "refs/heads/000"})
 }
 
 // ---- the fences ---------------------------------------------------------- //
