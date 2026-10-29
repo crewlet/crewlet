@@ -70,10 +70,10 @@ const TransferShare = CoreMemory / TransfersPerProcess
 // repository holds more, by TransferBytesPerObject an object: that is no
 // figure a lane can be sized by, since a lane does not know which repository
 // each slot will serve, so whoever knows the repository charges it (the
-// cache's background work keeps room for one beside every process it starts
-// over a repository: each whole-repository step, the node's tip commit-graph
-// beside the tail it covers, and a compaction's build beside the packs it
-// merges).
+// cache's background work keeps room for one beside each whole-repository
+// step and beside the node's tip commit-graph over its tail; a compaction's
+// build keeps room for a transfer of the packs it merges alone, since a home
+// that refused a large repository's every merge would refuse its pushes).
 //
 // The window's term is pack.windowMemory, which caps the window's entries
 // and not the process around them: a pack-objects whose delta search meets

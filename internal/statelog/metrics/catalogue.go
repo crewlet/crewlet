@@ -1143,7 +1143,8 @@ func Catalogue() []Instrument {
 				"and `step`. `memory`: the step's charge — its own figure an " +
 				"object of what it walks, and 240 more an object of the " +
 				"repository for room beside it for a clone of the repository " +
-				"— is more than this node can give its background work, which " +
+				"(of the packs merged, for `compact`) — is more than this node " +
+				"can give its background work, which " +
 				"is its memory (its cgroup's limit where one is set) less what " +
 				"it keeps for its git lanes, the store, the broker and the " +
 				"engine. `bitmap` (1000 bytes an object of the repository): " +
@@ -1155,9 +1156,10 @@ func Catalogue() []Instrument {
 				"packs pushed since the repository's last publication): a copy " +
 				"serving from a published chain walks those packs' commits by " +
 				"date. Slower, never wrong. `compact` (500 bytes an object of " +
-				"the packs merged, beside the clone's room — 240 bytes an " +
-				"object of the whole repository — and six times " +
-				"max_blob_bytes for the build's delta search): the " +
+				"the packs merged, beside a transfer's room of them — 240 " +
+				"bytes an object merged, never of the whole repository, whose " +
+				"size alone would refuse every merge of a large one — and six " +
+				"times max_blob_bytes for the build's delta search): the " +
 				"repository's home cannot merge its small packs, " +
 				"so its pack count grows with its pushes until a git node with " +
 				"more memory is its home or this one is given more — and at " +

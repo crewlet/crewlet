@@ -96,24 +96,32 @@ type Compacting struct {
 //   - ErrStopped, and ErrInvalid for a Synced this cache did not hand out or
 //     a negative count.
 //
-// The charge is chargeOver(inputs, CompactBytesPerObject, the repository's
-// objects) — the merged packs' objects, with room beside them for one transfer
-// of the WHOLE repository, as every background step is charged — and
-// CompactWindowBytes(limits), the build's delta window, which no count of
-// objects charges. The build's own memory follows what it merges, while the
-// clone it shares the node with is of the repository, however few packs the
-// build merges: a compaction runs on the repository's home, the git node its
-// clones and fetches are asked of, every minute that pushes keep its packs due
-// — a busy repository is one that is read — and charged by its inputs alone, a
-// home merging the floor's sixteen small pushes into a repository of three
-// million objects would keep a few kilobytes of a clone's 720 MB, the room
-// every other step over that repository keeps. The repository's objects are the
-// incarnation s pins, read under its entry's lock: the count its rounds keep
-// (incarnation.objects), as every maintainer step's charge reads it. A node
-// whose budget cannot hold the build and that room together is refused the
-// build (ErrNoMemory): it is too small to serve a clone of the repository
-// beside its own background work, and while that lasts the home's alarm names
-// the repository its pushes are refused for (code_compaction_behind).
+// The charge is chargeOver(inputs, CompactBytesPerObject, inputs) — the
+// merged packs' objects at the build's own figure, and room beside them for
+// one transfer of as many objects — and CompactWindowBytes(limits), the
+// build's delta window, which no count of objects charges. ALL OF IT FOLLOWS
+// THE MERGE, NEVER THE REPOSITORY, where every step of the maintainer's keeps
+// room for a clone of its WHOLE repository (memory.go): the build is the one
+// background step whose refusal is not "slower". The home alone merges a
+// repository's packs, a refusal for memory is asked again and refused again at
+// every poll, and once the repository holds code.MaxPacksPerRepo live packs
+// every push carrying one is refused compaction_behind — so a charge that grew
+// with the repository would refuse every merge of one past a size, the floor's
+// sixteen small pushes included, and its pushes with them, for as long as the
+// node's memory stays as it is. The whole repository's clone room does exactly
+// that: at gitproc.TransferBytesPerObject an object beside the window, a
+// 16 GiB node of four cores — 9 GiB of background budget — refuses every merge
+// of a repository past some 39 million objects, about 13 GB of a source
+// repository's packs and under the 20 GiB code.limits.repo_max_bytes default,
+// and a node of 2 GiB a core (1 GiB on four) every merge past some 3.2
+// million. What the room guards against is the build and a walking clone of
+// the same repository overrunning the node at once — a coincidence that costs
+// the git process the kernel kills, where the refusal costs the repository its
+// pushes — and a clone of a repository a little past those sizes overruns the
+// budget alone, the build running or not. A node whose budget cannot hold the
+// build's own charge is refused it (ErrNoMemory), and while that lasts the
+// home's alarm names the repository its pushes are refused for
+// (code_compaction_behind).
 //
 // ITS PIN, ITS SLOT AND ITS RELEASE are a check's (Cache.AdmitVerify): a slot
 // held from the admission to the build's last process, so the build and the
@@ -138,10 +146,7 @@ func (c *Cache) AdmitCompaction(s Synced, inputs int64, limits code.Limits) (*Co
 		return nil, err
 	}
 	label := cmp.Or(s.Repo.Name, s.entry.id)
-	s.entry.mu.Lock()
-	objects := s.inc.objects
-	s.entry.mu.Unlock()
-	mem := chargeOver(inputs, CompactBytesPerObject, objects) + CompactWindowBytes(limits)
+	mem := chargeOver(inputs, CompactBytesPerObject, inputs) + CompactWindowBytes(limits)
 	if budget := c.maint.budgetNow(); mem > budget {
 		c.compactionRefused(s, mem)
 		return nil, fmt.Errorf("cache: compact %s: %w: its build needs about %d bytes, and this node can give "+

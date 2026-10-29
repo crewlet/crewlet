@@ -490,8 +490,8 @@ const FsckBytesPerObject = 192
 // CompactBytesPerObject is the memory a compaction's build — one
 // `pack-objects --stdin-packs` over the packs it merges (internal/code/compact)
 // — holds for every object of those packs, charged at its admission
-// (Cache.AdmitCompaction) beside room for one transfer of the WHOLE
-// repository (memory.go's chargeOver) and the build's delta window
+// (Cache.AdmitCompaction) beside room for one transfer of as many objects
+// (memory.go's chargeOver, over the inputs alone) and the build's delta window
 // (CompactWindowBytes).
 //
 // 500 BYTES, MEASURED (internal/code/compact's BenchmarkCompact, its
@@ -510,10 +510,10 @@ const FsckBytesPerObject = 192
 // objects into the objects: a merge of more objects is charged more than it
 // holds, never less, and a merge of a few is charged CompactWindowBytes
 // beside them, far more than any fixed part. Charged by the inputs' objects
-// alone, never the repository's: a compaction merges the small packs, so its
-// own figure follows what it merges — while the clone it shares the node
-// with is of the whole repository, whose room beside it is charged by the
-// repository's objects.
+// alone, never the repository's, and so is the transfer's room beside them: a
+// compaction merges the small packs, so its charge follows what it merges,
+// and a charge that grew with the repository would refuse a large
+// repository's every merge, and with them its pushes (Cache.AdmitCompaction).
 const CompactBytesPerObject = 500
 
 // CompactWindowBytes is the delta search a compaction's build is charged

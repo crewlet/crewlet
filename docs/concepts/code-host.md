@@ -626,10 +626,13 @@ merge of a few small pushes into a large repository cost time and memory in
 proportion to that history. It runs in the node's maintenance lane: at the
 background indexing's own limit, never the slot kept for
 `crewlet code verify`, with its memory charged against the node's background
-budget beside the indexing's (500 bytes an object merged, room for a clone of
-the whole repository however few packs it merges, and six times
+budget beside the indexing's (500 bytes an object merged, 240 more an object
+merged for a transfer's room beside them, and six times
 `code.limits.max_blob_bytes` for its delta search, as a build was measured to
-hold). It cuts its outputs at 1 GiB. **The outputs hold every object of the
+hold). It follows the merge and never the repository, where every other step
+keeps room for a clone of the whole repository: a home that refused a large
+repository's every merge would refuse its pushes too, once its packs reached
+the bound. It cuts its outputs at 1 GiB. **The outputs hold every object of the
 packs merged** — an object a pack outside the merge also holds included —
 because a merge judges no
 reachability: no push decided against the packs it replaces can land a ref
@@ -1404,7 +1407,8 @@ that walks less than the whole history, the commits the chain lacks, so it is
 charged by the tail rather than the repository: 1 700 bytes an object of the
 tail, from 40 MiB over 5 000 new commits on git 2.56.0. A
 [compaction](#compaction)'s build walks no history, only the packs it merges,
-and is charged by them: 500 bytes an object merged, and six times
+and is charged by them: 500 bytes an object merged, 240 more an object merged
+for a transfer's room beside them, and six times
 `code.limits.max_blob_bytes` for its delta search. A git node reads its
 memory — the least of the machine's and any cgroup limit set on its
 container — and keeps 224 MiB of it for every
@@ -1417,7 +1421,13 @@ left is the budget of its background work, and every step of it — the
 bitmap, the index without one (a cold cache's included), the commit-graph, the
 tip, a connectivity check, a compaction's build — is held to the budget
 together with everything in flight, each charged its own figure an object of
-what it walks and room beside it for one clone of the whole repository. A
+what it walks and room beside it for one clone of the whole repository — but
+the build, whose room is a transfer of the packs it merges: any other step
+refused costs speed, while a build refused leaves the repository's packs to
+gather until its pushes are refused, so a room that grew with the repository
+would refuse every merge, and in time every push, of any repository whose
+clone the node's budget cannot hold beside the build — on either node worked
+through below, repositories under the 20 GiB one may hold. A
 step whose charge alone is past the budget never runs on the node, and the
 repository is served without it: a bitmap refused leaves the repository
 indexed without one — its pushes keep joining an index, so lookups stay fast,

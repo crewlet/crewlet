@@ -274,9 +274,11 @@ served — without one, so each of its clones walks its history — and raises
 50 to 100 GB of history is past what a git node is sized for. A repository's
 home also MERGES its packs ([Compaction](code-host.md#compaction)): the build
 is held to the same background budget — about 500 bytes an object it merges,
-room beside them for a clone of the whole repository and six times
-`code.limits.max_blob_bytes` for its delta search, as measured — and refused
-where the budget cannot hold it (`code_cache_compaction_refused`), while its
+240 more an object merged for a transfer's room beside them and six times
+`code.limits.max_blob_bytes` for its delta search, as measured: by what it
+merges, never by the repository's size, which would refuse a large
+repository's every merge and with them its pushes — and refused where the
+budget cannot hold it (`code_cache_compaction_refused`), while its
 outputs go up at once, holding up to sixteen 8 MiB first parts, 128 MiB, on
 an `s3` store, out of what the node keeps back for serving and the store.
 

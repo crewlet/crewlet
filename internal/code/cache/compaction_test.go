@@ -186,21 +186,24 @@ func TestACompactionPastTheBudgetIsRefusedOnce(t *testing.T) {
 	adm.Release()
 }
 
-// A COMPACTION KEEPS ROOM FOR A CLONE OF ITS WHOLE REPOSITORY: its build is
-// charged CompactBytesPerObject an object of the packs it merges — its own
-// memory follows them — and, beside it, room for one transfer of the WHOLE
-// repository, gitproc.TransferBytesPerObject an object its live packs hold, as
-// every background step keeps (chargeOver), and its delta window: the clone it
-// shares the node with is of the repository however few packs the build
-// merges, and a merge of a large repository's few small packs charged by those
-// packs alone is admitted beside a clone the budget kept no room for. A budget
-// a byte short of that refuses it ErrNoMemory, naming the charge, and that
+// A COMPACTION'S CHARGE FOLLOWS ITS MERGE, NEVER ITS REPOSITORY: its build is
+// charged CompactBytesPerObject an object of the packs it merges, room beside
+// them for a transfer of as many — gitproc.TransferBytesPerObject an object
+// MERGED, never an object of the repository — and its delta window, so a merge
+// of a large repository's few small packs is admitted on a budget that holds no
+// clone of the repository. The home alone merges a repository's packs, and a
+// charge that grew with the repository would refuse its every merge for as
+// long as the node's memory stays as it is, and once its live packs reached
+// code.MaxPacksPerRepo its every push carrying one. A budget a byte short of
+// the merge's own charge refuses it ErrNoMemory, naming that charge, and that
 // budget admits it.
 //
-// Mutation: charge the clone's room by the objects merged
-// (chargeOver(inputs, CompactBytesPerObject, inputs)), and a merge of one
-// object fits a budget that holds no clone of its repository beside it.
-func TestACompactionKeepsRoomForACloneOfItsWholeRepository(t *testing.T) {
+// Mutation: keep room for a clone of the whole repository
+// (chargeOver(inputs, CompactBytesPerObject, the incarnation's objects)), and
+// the refusal a byte short of the merge's own charge names the charge of the
+// repository's clone room instead, and a budget of the merge's own charge
+// refuses it too.
+func TestACompactionsChargeFollowsItsMergeNotItsRepository(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
 	repo := w.repo(t, 1)
@@ -212,12 +215,13 @@ func TestACompactionKeepsRoomForACloneOfItsWholeRepository(t *testing.T) {
 	c := w.open(t)
 	s := w.sync(t, c, repo)
 	const inputs = 1
-	if objects <= inputs {
-		t.Fatalf("the repository holds %d objects, want more than the %d a merge of it takes", objects, inputs)
-	}
 	limits := code.Limits{MaxBlobBytes: 1}
-	charge := inputs*cache.CompactBytesPerObject + objects*gitproc.TransferBytesPerObject +
-		cache.CompactWindowBytes(limits)
+	charge := inputs*(cache.CompactBytesPerObject+gitproc.TransferBytesPerObject) + cache.CompactWindowBytes(limits)
+	if clone := objects * gitproc.TransferBytesPerObject; clone <= charge {
+		t.Fatalf("a clone of the repository's %d objects keeps %d bytes of room, no more than the merge's own "+
+			"charge, %d: the case needs a repository whose clone a budget of that charge cannot hold", objects,
+			clone, charge)
+	}
 	cache.SetMaintenanceBudget(c, charge-1)
 	if adm, err := c.AdmitCompaction(s, inputs, limits); !errors.Is(err, cache.ErrNoMemory) ||
 		!strings.Contains(err.Error(), fmt.Sprintf("needs about %d bytes", charge)) {
@@ -225,8 +229,8 @@ func TestACompactionKeepsRoomForACloneOfItsWholeRepository(t *testing.T) {
 			adm.Release()
 		}
 		t.Fatalf("a merge of %d object of a repository of %d on a budget of %d = %v, want ErrNoMemory at a "+
-			"charge of %d: %d bytes an object merged, %d an object of the WHOLE repository for a clone's room "+
-			"beside it, and its window", inputs, objects, charge-1, err, charge, cache.CompactBytesPerObject,
+			"charge of %d: %d bytes an object merged, %d more an object merged for a transfer's room beside it, "+
+			"and its window", inputs, objects, charge-1, err, charge, cache.CompactBytesPerObject,
 			gitproc.TransferBytesPerObject)
 	}
 	cache.SetMaintenanceBudget(c, charge)
@@ -242,7 +246,9 @@ func TestACompactionKeepsRoomForACloneOfItsWholeRepository(t *testing.T) {
 			return
 		}
 		if !errors.Is(err, gitproc.ErrBusy) || time.Now().After(deadline) {
-			t.Fatalf("the same merge on a budget of exactly its charge, %d = %v, want it admitted", charge, err)
+			t.Fatalf("a merge of %d object of a repository of %d on a budget of exactly its own charge, %d — "+
+				"short of the %d bytes a clone of the repository holds — = %v, want it admitted", inputs, objects,
+				charge, objects*gitproc.TransferBytesPerObject, err)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

@@ -24,7 +24,8 @@ import (
 // repository beside it that every step keeps; and a compaction's build, which
 // the cache admits to a slot of the maintenance lane (compaction.go), in
 // proportion to the packs it merges (CompactBytesPerObject), charged so with
-// the same room beside it and its delta window (CompactWindowBytes). Each
+// room beside it for a transfer of as many objects — of them, never of the
+// whole repository, below — and its delta window (CompactWindowBytes). Each
 // write's figure is its declaration's own (derived.go, Write.BytesPerObject),
 // which the plan and a refusal's line read from the declaration, never beside
 // it; the check and the build are no writes and keep their own. The largest
@@ -59,26 +60,32 @@ import (
 // WHAT IT ADMITS is every step whose CHARGE fits the budget alone, together
 // with everything in flight (maintFlight): a step's own figure an object of
 // what it covers, and room beside it for one transfer of the whole repository
-// (gitproc.TransferBytesPerObject an object). The transfer lane's reserve is
+// (gitproc.TransferBytesPerObject an object) — a compaction's build's of what
+// it merges alone, below. The transfer lane's reserve is
 // sized for repositories of about a hundred thousand objects, since no lane
 // knows which repository a slot will serve; a run is over one of the
 // largest, and a clone of it — a walk of its whole history where it has no
 // bitmap — holds a third of what the bitmap does, gigabytes over the largest.
 // So the budget keeps room for one such clone beside each run, and holds no
 // more: what bounds the transfers themselves is the transfer lane, which
-// knows no repository (gitproc). The two steps whose own figure is not their
-// whole repository's — the node's tip, over the tail, and a compaction's
-// build, over the packs it merges — keep the same room for a clone of the
-// WHOLE repository beside them (chargeOver): the clone they share the node
-// with is of the repository, and a compaction runs on the repository's home,
-// which its clones are asked of, whenever its pushes keep it due.
+// knows no repository (gitproc). The node's tip, whose own figure is the
+// tail's, keeps the same room for a clone of the WHOLE repository beside it
+// (chargeOver): the clone it shares the node with is of the repository. A
+// compaction's build keeps room for a transfer of the packs it merges and no
+// more, because it is the one step whose refusal is not "slower": the home
+// alone merges a repository's packs, and a repository whose merges its home
+// refuses gathers packs until every push carrying one is refused — so its
+// charge follows the merge, never the repository (compaction.go says what the
+// whole repository's room would refuse).
 //
 // WHAT IT REFUSES is a step whose charge alone is past the budget, which never
 // starts on this node, and the repository is served without it — slower,
-// never wrong. A bitmap refused is not the end of the index: the maintainer
-// writes the index WITHOUT a bitmap in its place (a merge of the packs'
-// indexes, a tenth of the bitmap's memory or less), so pushed packs go on
-// joining an index rather than piling up outside every one — and leaves a
+// never wrong; but for a compaction's build, whose refusal leaves the
+// repository's packs to gather toward that bound for as long as it lasts
+// (code_compaction_behind). A bitmap refused is not the end of the index: the
+// maintainer writes the index WITHOUT a bitmap in its place (a merge of the
+// packs' indexes, a tenth of the bitmap's memory or less), so pushed packs go
+// on joining an index rather than piling up outside every one — and leaves a
 // bitmap it wrote before standing until MidxRoundPacks packs gather outside
 // it (maintain.go says why). Each step refused is logged and counted once an
 // incarnation (code_cache_maintenance_refused,
@@ -97,17 +104,20 @@ import (
 // "served without a bitmap" would be false of it, and the gauge says it.
 
 // chargeOver is what a git process the cache starts or admits is charged at,
-// over stepObjects objects of a repository of repoObjects: its own perObject
-// bytes an object of what it covers, and room beside it for one transfer of
-// the WHOLE repository at gitproc.TransferBytesPerObject. Every step but two
-// covers the whole repository (stepObjects is repoObjects); the node's tip
-// commit-graph covers the tail alone (maintain.go), and a compaction's build
-// the packs it merges (compaction.go), so the own memory of each follows what
-// it covers, while the clone it shares the node with is of the repository —
-// charged by the tail or the merged packs alone, a large repository's tip or
-// merge would be admitted beside a clone the budget kept no room for.
-func chargeOver(stepObjects, perObject, repoObjects int64) int64 {
-	return stepObjects*perObject + repoObjects*gitproc.TransferBytesPerObject
+// over stepObjects objects with room kept for a transfer of roomObjects: its
+// own perObject bytes an object of what it covers, and room beside it for one
+// transfer of roomObjects at gitproc.TransferBytesPerObject. Every step of the
+// maintainer's but one covers the whole repository, and keeps room for a
+// clone of it (stepObjects and roomObjects are both the repository's); the
+// node's tip commit-graph covers the tail alone (maintain.go), so its own
+// memory follows the tail, while the clone it shares the node with is of the
+// repository — charged by the tail alone, a large repository's tip would be
+// admitted beside a clone the budget kept no room for. A compaction's build
+// (compaction.go) keeps room for a transfer of the packs it merges alone
+// (roomObjects is its inputs): refused for a room that grew with the
+// repository, it would cost the repository its pushes, never just speed.
+func chargeOver(stepObjects, perObject, roomObjects int64) int64 {
+	return stepObjects*perObject + roomObjects*gitproc.TransferBytesPerObject
 }
 
 // perBackedCore is share for each core of cores that memory backs at

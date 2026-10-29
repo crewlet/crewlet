@@ -68,11 +68,12 @@ var (
 	// not repair. The host answers it 503.
 	ErrRebuildRefused = errors.New("cache: a rebuild would not end the failure")
 
-	// ErrNoMemory is a whole-repository git process a caller asked for —
-	// Verify's connectivity check, a person's, or a compaction's build
-	// (Cache.AdmitCompaction) — whose charge alone is more than this node can
-	// give its background work: the node's memory, less what it keeps for its
-	// git lanes, the store, the broker and the engine (memory.go). Definite
+	// ErrNoMemory is a git process a caller asked for — Verify's
+	// connectivity check of a whole repository, a person's, or a compaction's
+	// build over the packs it merges (Cache.AdmitCompaction) — whose charge
+	// alone is more than this node can give its background work: the node's
+	// memory, less what it keeps for its git lanes, the store, the broker and
+	// the engine (memory.go). Definite
 	// for this node AT THIS MEMORY: a node with more memory can run it, and so
 	// can this one once its memory is raised in place, which the budget reads
 	// again at every maintainer pass — so a caller asks again later rather
