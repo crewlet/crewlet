@@ -552,5 +552,9 @@
 // cause on four logs as one problem; and each log's onset and clearing is
 // still its own pair of log lines ([Tracker]), since a log joining a kind that
 // is already up, and one leaving it, are things an operator has to be told
-// started and ended.
+// started and ended. The model kinds are the same move over MODEL ENTRIES
+// ([PerEntryKinds], [Alarm.Entries]): a credential coming due, a refused
+// sign-in or a limit is one entry's, evaluated from fleet-wide inputs every
+// data node gathers alike, at thresholds the owner fixed rather than ones
+// borrowed from another decision.
 package statelog
