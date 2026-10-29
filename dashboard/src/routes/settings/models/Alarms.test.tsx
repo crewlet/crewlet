@@ -308,6 +308,24 @@ test("a model's own limit holds that model alone, so its plan's other models are
   ]);
 });
 
+test("with no model that can answer, the move says so above Add a model, never an empty list", () => {
+  const data = company();
+  data.models.find((m) => m.key === "opus")!.entry.health = "rejected";
+  const onFlow = mount(data);
+  const limit = callouts().find((c) => c.title.includes("limit"))!;
+  fireEvent.click(
+    within(limit.el).getByRole("button", { name: "Use a different model for these seats" }),
+  );
+  const none = screen.getByRole("menuitem", { name: "No other model can answer right now" });
+  expect(none.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(none);
+  expect(onFlow).not.toHaveBeenCalled();
+  expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
+    "No other model can answer right now",
+    "Add a model",
+  ]);
+});
+
 test("a limit that holds no seat offers no move", () => {
   const data = company();
   data.models.find((m) => m.key === "default")!.uses = data.models.find(
@@ -334,7 +352,9 @@ test("an alarm whose engine names no model is drawn in the engine's words, with 
 
 test("a member's reading carries no alarm, and the page draws none", () => {
   const data = company();
-  mount({ ...data, admin: false, alarms: [] });
+  // EVEN WITH ALARMS IN HAND, a member is shown none and no gesture: the
+  // engine sends a member none, and the page does not rely on that alone.
+  mount({ ...data, admin: false });
   expect(callouts()).toHaveLength(0);
   expect(screen.queryByRole("region", { name: "Model alarms" })).toBeNull();
 });

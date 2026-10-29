@@ -189,7 +189,11 @@ function openingDraft(
   editing: ModelView | undefined,
   target: WizardAt | undefined,
 ) {
-  return withAdded(editing ? draftOf(editing) : newDraft(data), target?.add ?? []);
+  return withAdded(
+    editing ? draftOf(editing) : newDraft(data),
+    target?.add ?? [],
+    new Set(data.seats.map((s) => s.handle)),
+  );
 }
 
 /** A new model's draft: a variable no other model reads, and for the company's first model, everything. */
@@ -213,13 +217,20 @@ function newDraft(data: ModelsData): Draft {
  * The draft with the uses an action asked for added (a seat's job picked on
  * By job, the seats moved off a limit, the assistant), for Use it for to show
  * checked and Review to save.
+ *
+ * THE ADDRESS ONLY PRESELECTS, and only what the company has now: a seat it
+ * no longer has (a link kept from before a seat was removed, or typed by
+ * hand) is dropped without a word, and so is coding on a CLI that runs none.
+ * The person still sees every use on Use it for, and Review before a write.
  */
-function withAdded(d: Draft, add: readonly WizardAdd[]): Draft {
-  if (add.length === 0) return d;
+function withAdded(d: Draft, add: readonly WizardAdd[], seats: ReadonlySet<string>): Draft {
   let uses = d.uses;
-  for (const a of add)
-    uses = "seat" in a ? withCategory(uses, a.seat, a.job, true) : { ...uses, assistant: true };
-  return { ...d, uses, intent: intentOf(uses) };
+  for (const a of add) {
+    if (!("seat" in a)) uses = { ...uses, assistant: true };
+    else if (seats.has(a.seat) && (a.job !== "coding" || canExecute(d)))
+      uses = withCategory(uses, a.seat, a.job, true);
+  }
+  return uses === d.uses ? d : { ...d, uses, intent: intentOf(uses) };
 }
 
 export function ModelWizard({

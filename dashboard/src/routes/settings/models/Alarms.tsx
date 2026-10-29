@@ -398,6 +398,7 @@ const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
  * The menu that moves a limit's seats: each model that can take them opens
  * its wizard at Use it for with them added, and adding a model starts with
  * them added too. Review shows each seat it moves before anything is written.
+ * With no model to move to, the menu says so above Add a model.
  */
 function MoveMenu({ move, onFlow }: { move: AlarmMove; onFlow: OnFlow }) {
   const label = "Use a different model for these seats";
@@ -409,13 +410,23 @@ function MoveMenu({ move, onFlow }: { move: AlarmMove; onFlow: OnFlow }) {
       triggerVariant="secondary"
       align="end"
       items={[
-        ...move.to.map((m) => ({
-          key: m.key,
-          label: m.key,
-          description: m.model,
-          onSelect: () => onFlow("edit", m.key, { step: "assign", add: move.add }),
-        })),
-        ...(move.to.length > 0 ? [{ kind: "separator" as const, key: "sep" }] : []),
+        ...(move.to.length > 0
+          ? move.to.map((m) => ({
+              key: m.key,
+              label: m.key,
+              description: m.model,
+              onSelect: () => onFlow("edit", m.key, { step: "assign", add: move.add }),
+            }))
+          : // NOTHING TO MOVE TO is said, not an empty list: the way out left is adding one.
+            [
+              {
+                key: "none",
+                label: "No other model can answer right now",
+                disabled: true,
+                onSelect: () => {},
+              },
+            ]),
+        { kind: "separator" as const, key: "sep" },
         {
           key: "add",
           label: "Add a model",

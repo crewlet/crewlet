@@ -418,6 +418,68 @@ test("the seats an alarm moves arrive added at Use it for, and only those", () =
 });
 
 /**
+ * THE ADDRESS ONLY PRESELECTS, and only a seat the company has now: a stale or
+ * hand-typed seat is dropped without a word, so a link kept from before a seat
+ * was removed opens the wizard as if it had never named it.
+ */
+test("a seat the company no longer has, named in the address, is not preselected", () => {
+  const radio = (name: RegExp) => screen.getByRole("radio", { name }) as HTMLInputElement;
+  show({
+    editing: "sonnet",
+    target: { step: "assign", add: [{ job: "coding", seat: "removed-seat" }] },
+  });
+  expect(heading()).toBe("Use it for");
+  expect(radio(/^Not yet/).checked).toBe(true);
+  cleanup();
+  show({
+    editing: "sonnet",
+    target: {
+      step: "assign",
+      add: [
+        { job: "coding", seat: "removed-seat" },
+        { job: "coding", seat: "pm" },
+      ],
+    },
+  });
+  expect(radio(/^Coding/).checked).toBe(true);
+  // ONE SEAT, the one the company has: the stale one added nothing beside it.
+  const chips = within(screen.getByRole("group", { name: "Seats that use this model" }));
+  expect(chips.getAllByRole("button", { pressed: true }).map((b) => b.textContent)).toEqual([
+    "Product Manager",
+  ]);
+});
+
+test("coding named in the address is not preselected on a CLI that runs no coding", () => {
+  const d = data();
+  d.models.push(
+    ...modelsData({
+      entries: [modelEntry({ key: "codex-review", agent: "codex", model: "gpt-6.1" })],
+    }).models,
+  );
+  const editing = d.models.find((m) => m.key === "codex-review")!;
+  render(
+    <Router>
+      <ModelWizard
+        data={d}
+        editing={editing}
+        target={{
+          step: "assign",
+          add: [
+            { job: "coding", seat: "pm" },
+            { job: "routines", seat: "pm" },
+          ],
+        }}
+        onClose={() => {}}
+        onDevice={() => {}}
+      />
+    </Router>,
+  );
+  expect(heading()).toBe("Use it for");
+  const radio = (name: RegExp) => screen.getByRole("radio", { name }) as HTMLInputElement;
+  expect(radio(/^Routines and evaluations/).checked).toBe(true);
+});
+
+/**
  * A PASTED KEY NEVER LEAVES THE PAGE, read where it would leave: the page
  * context the Dashboard Assistant is sent, whole, as text. The field list's
  * own test proves today's fields; this one fails if any later field reads
