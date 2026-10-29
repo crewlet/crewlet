@@ -11,25 +11,42 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
-// classifyAuthEvents finds the CLI's own structured report of a refused
-// sign-in ([cliprofile.AuthEvent]) in a run the CLI reported failed.
+// classifyEvents finds the CLI's own structured report of how the run ended:
+// a limit ([cliprofile.LimitEvent]) or, in a run the CLI reported failed, a
+// refused sign-in ([cliprofile.AuthEvent]). Read before every sentinel,
+// because a status code survives the rewording that silently retires one.
 //
-// ONLY IN A FAILED RUN. Claude Code retries a 401 and says so in a `system`
-// `api_retry` event before it gives up, and a CLI that refreshes its token on
-// a 401 can retry and then answer. A run that answered was signed in, whatever
-// its stream said on the way, so its answer is not thrown away as a refusal.
+// THE LAST REPORT WINS. A stream is the run's history, and its last word is
+// how the run ended: Claude Code retries a 401 in `api_retry` events, and a
+// run whose token was refreshed and that then met a spent plan ended on the
+// plan. Read in a fixed order, auth first, it read as a refused sign-in and set
+// a verdict on every entry on the account while the limit sat nothing out.
+//
+// ONLY IN A FAILED RUN FOR A REFUSAL. A run that answered was signed in,
+// whatever its stream said on the way.
 //
 // Every line is decoded and none is searched as text, for the reason
 // [classifyFailureEvents] gives: a model writes inside an event's strings,
 // never the fields the match reads.
-func classifyAuthEvents(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
-	if !out.failed || len(p.AuthEvents) == 0 {
+func classifyEvents(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
+	if len(p.LimitEvents) == 0 && (len(p.AuthEvents) == 0 || !out.failed) {
 		return markerHit{}, false
 	}
+	var (
+		last  markerHit
+		found bool
+	)
 	for line := range strings.SplitSeq(out.stdout, "\n") {
 		line = strings.TrimSpace(line)
 		doc, ok := decodeObject(line)
 		if !ok {
+			continue
+		}
+		if hit, matched := limitEventHit(p, doc, line, out); matched {
+			last, found = hit, true
+			continue
+		}
+		if !out.failed {
 			continue
 		}
 		for _, event := range p.AuthEvents {
@@ -37,13 +54,14 @@ func classifyAuthEvents(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
 				continue
 			}
 			said := line
-			if text, found := textAt(doc, event.SaidPath); found {
+			if text, ok := textAt(doc, event.SaidPath); ok {
 				said = text
 			}
-			return markerHit{Kind: llm.KindAuth, Said: said, Source: sourceEvent}, true
+			last, found = markerHit{Kind: llm.KindAuth, Said: said, Source: sourceEvent}, true
+			break
 		}
 	}
-	return markerHit{}, false
+	return last, found
 }
 
 // dateLimit completes a limit the run reported with when it lifts and which

@@ -939,36 +939,22 @@ func classifyFailureEvents(p cliprofile.Profile, stdout string) (markerHit, bool
 	return markerHit{}, false
 }
 
-// classifyLimitEvents finds the CLI's own structured limit report on stdout
-// ([cliprofile.LimitEvent]): a decoded event that meets every condition of one
-// of the profile's limit events. The vendor's sentence is the string at the
-// event's said path, or the whole line where it names none, and the reset is
-// read from that sentence as of the run's end, in its zone.
-//
-// Every line is decoded and none is searched as text, for the reason
-// [classifyFailureEvents] gives: the model writes inside an event's strings,
-// never the fields the match reads.
-func classifyLimitEvents(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
-	if len(p.LimitEvents) == 0 {
-		return markerHit{}, false
-	}
-	for line := range strings.SplitSeq(out.stdout, "\n") {
-		line = strings.TrimSpace(line)
-		doc, ok := decodeObject(line)
-		if !ok {
+// limitEventHit is one decoded stdout event read as the CLI's own structured
+// limit report ([cliprofile.LimitEvent]), when it meets every condition of
+// one: the vendor's sentence is the string at the event's said path, or the
+// whole line where it names none, and the reset is read from that sentence as
+// of the run's end, in its zone. [classifyEvents] walks the stream.
+func limitEventHit(p cliprofile.Profile, doc map[string]any, line string, out cliOutput) (markerHit, bool) {
+	for _, event := range p.LimitEvents {
+		if !matches(doc, event.Match) {
 			continue
 		}
-		for _, event := range p.LimitEvents {
-			if !matches(doc, event.Match) {
-				continue
-			}
-			said := line
-			if text, found := textAt(doc, event.SaidPath); found {
-				said = text
-			}
-			return markerHit{Kind: llm.KindRateLimit, Reset: resetAt(said, event.Reset, out.at, out.zone),
-				Said: said, Source: sourceEvent}, true
+		said := line
+		if text, found := textAt(doc, event.SaidPath); found {
+			said = text
 		}
+		return markerHit{Kind: llm.KindRateLimit, Reset: resetAt(said, event.Reset, out.at, out.zone),
+			Said: said, Source: sourceEvent}, true
 	}
 	return markerHit{}, false
 }

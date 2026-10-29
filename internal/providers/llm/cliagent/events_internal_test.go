@@ -287,3 +287,67 @@ func TestTheSignInRouteIsTheListsFirstRoute(t *testing.T) {
 		}
 	}
 }
+
+// A BOX IS SEEDED WITH A LOGIN ONLY FOR AN ENTRY THAT SIGNS IN WITH ONE (B1). A
+// call on this host under api-key or env runs in a key home no login is seeded
+// into; a local box on the same entry was still mapped the plan's credential
+// files, so a Bedrock or gateway run carried the company's plan login beside
+// its own sign-in.
+//
+// Mutation: drop the signsInWithKey guard from SandboxCredentials, and the
+// api-key and env entries are mapped the login.
+func TestABoxIsSeededWithALoginOnlyWhereTheEntrySignsInWithOne(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	for _, tc := range []struct {
+		mode  AuthMode
+		env   map[string]string
+		login bool
+	}{
+		{mode: AuthSubscription, login: true},
+		{mode: AuthAPIKey},
+		{mode: AuthEnv, env: map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1"}},
+		{mode: AuthInheritEnv, login: true},
+	} {
+		dir := t.TempDir()
+		t.Cleanup(func() { forgetWorkspace(dir) })
+		auth := Auth{Mode: tc.mode}
+		if tc.mode == AuthAPIKey {
+			auth.APIKey = "sk-ant-api03-not-real"
+		}
+		p, err := New(Config{Key: "e", Agent: "claude-code", Model: "sonnet", StateDir: dir,
+			Timeout: time.Minute, Env: tc.env, Auth: auth})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := len(p.SandboxCredentials()) > 0; got != tc.login {
+			t.Errorf("%s: a box is mapped the login = %v, want %v", tc.mode, got, tc.login)
+		}
+	}
+}
+
+// A RUN'S LAST WORD DECIDES HOW IT ENDED, AND AN ANSWER IS NEVER A REFUSAL. A
+// token Claude Code retried on a 401 and then refreshed can go on to meet a
+// spent plan: the run ended on the plan. And a clean answer that opens with
+// "Failed to authenticate" is the model writing about someone's error, not the
+// vendor refusing this sign-in, which would set a verdict on every entry on it.
+//
+// Mutation: read auth events before limit events, and the retried run reads as
+// a refusal; match auth markers in a clean answer, and the answer is thrown
+// away as one.
+func TestARunsLastWordDecidesAndAnAnswerIsNeverARefusal(t *testing.T) {
+	t.Parallel()
+	p := claudeCode(t)
+	const spent = `{"type":"result","subtype":"success","is_error":true,"api_error_status":429,` +
+		`"result":"You've hit your session limit · resets 4:30pm (America/Vancouver)"}`
+	retried := strings.Join([]string{tokenRetry, tokenRetry, spent}, "\n")
+	if hit, ok := classifyMarkers(p, cliOutput{stdout: retried, failed: true, at: reportedAt}); !ok ||
+		hit.Kind != llm.KindRateLimit {
+		t.Errorf("a run retried on a 401 that ended on a spent plan classified %+v, %v; want a limit", hit, ok)
+	}
+	answer := "Failed to authenticate is what the deploy log says; the fix is to rotate the key."
+	stdout := `{"type":"result","subtype":"success","is_error":false,"result":"` + answer + `"}`
+	if hit, ok := classifyMarkers(p, cliOutput{said: answer, stdout: stdout, at: reportedAt}); ok {
+		t.Errorf("a clean answer opening with an auth sentinel classified as %+v", hit)
+	}
+}

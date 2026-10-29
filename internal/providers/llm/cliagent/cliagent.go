@@ -1009,18 +1009,21 @@ func (p *Provider) completion(
 // The events scope reads the CLI's own failure events and nothing else, and
 // the stderr scope stderr alone — see [cliprofile.MarkerScope].
 //
-// # Auth first, then the limit, then dated
+// # Structured reports first, then the words, then dated
 //
-// A refused sign-in reported in the CLI's own fields ([classifyAuthEvents])
-// is read before everything else: a CLI that names a 401 has said what
-// failed, whatever its prose says after. A limit, once recognised, is then
-// dated and named ([dateLimit]): the reset and the window from the CLI's own
-// structured event where it wrote one, else from the vendor's sentence.
+// The CLI's own structured reports of a limit and of a refused sign-in are
+// read before any sentinel ([classifyEvents]), and THE RUN'S LAST WORD
+// DECIDES among them: a refused token retried and then met by a spent plan
+// ended on the plan, and reads as a limit. A refused sign-in is never read
+// from a run that answered, by event or by sentinel. A limit, once
+// recognised, is dated and named ([dateLimit]): the reset and the window from
+// the CLI's own structured event where it wrote one, else from the vendor's
+// sentence.
 func classifyMarkers(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
-	if hit, ok := classifyAuthEvents(p, out); ok {
-		return hit, true
+	hit, ok := classifyEvents(p, out)
+	if !ok {
+		hit, ok = classifyReport(p, out)
 	}
-	hit, ok := classifyReport(p, out)
 	if ok && hit.Kind == llm.KindRateLimit {
 		hit = dateLimit(p, hit, out)
 	}
@@ -1030,11 +1033,6 @@ func classifyMarkers(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
 // classifyReport is [classifyMarkers]' recognition of a limit or a login in
 // the CLI's structured limit report and its words.
 func classifyReport(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
-	// THE CLI'S OWN STRUCTURED REPORT FIRST, whatever the scope: a status
-	// code survives the rewording that silently retires a sentinel.
-	if hit, ok := classifyLimitEvents(p, out); ok {
-		return hit, true
-	}
 	var haystacks []haystack
 	switch p.EffectiveMarkerScope() {
 	case cliprofile.MarkerScopeEvents:
@@ -1067,6 +1065,15 @@ func classifyReport(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
 	}
 	for _, marker := range p.AuthMarkers {
 		for _, hay := range haystacks {
+			if hay.anchored {
+				// NOT FROM A RUN THAT ANSWERED. A refused sign-in is a
+				// failure the CLI reports as one, and a clean answer that
+				// opens with "Failed to authenticate" is the model's
+				// account of somebody else's error; read as the vendor's,
+				// it took the answer and set a verdict on every entry on
+				// the sign-in.
+				continue
+			}
 			if idx, found := hay.find(marker.Sentinel); found {
 				return markerHit{Kind: llm.KindAuth, Said: lineAt(hay.text, idx), Source: hay.source}, true
 			}
