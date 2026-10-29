@@ -287,7 +287,20 @@ function collapse(role: Doc): void {
   else if (keys.length === 1 && keys[0] === "default") role.llm = llm.default;
 }
 
-/** A fallback member a write takes out of a seat's field, for the review to name. */
+/**
+ * The FALLBACKS a write of `key` into a field takes out of it: every member
+ * after the first, other than `key`. The first is the job's model today, and
+ * its replacement is a change of who uses a model, which the review lists as
+ * one ("default-host → default"); naming it here as well called a model the
+ * seat ran on first "a fallback".
+ */
+function fallbacksOf(value: unknown, key: string): string[] {
+  return keysOf(value)
+    .slice(1)
+    .filter((k) => k !== key);
+}
+
+/** The fallbacks a write takes out of a seat's field, for the review to name. */
 export interface Dropped {
   seat: string;
   job: SeatJob;
@@ -306,7 +319,8 @@ export interface UsesWrite {
  * - A seat job newly on the model writes `key` as the job's one model in its
  *   flat field (the mapping's `default` for the executor of a seat that writes
  *   a mapping), and clears the mapping's own key for it, which the flat field
- *   would shadow. Whatever the field named before is dropped and returned.
+ *   would shadow. The fallbacks the field named are dropped and returned
+ *   ([fallbacksOf]); the model it ran on first is the change itself.
  * - A seat on EVERY job writes `llm: key` as a scalar and deletes every
  *   satellite, in the flat fields and the mapping alike, so every job resolves
  *   to `llm` (the shorthand the turn engine documents).
@@ -330,7 +344,7 @@ export function applyUses(doc: CompanyDocument, key: string, was: Uses, next: Us
         continue;
       for (const job of SEAT_JOBS) {
         const at = writtenAt(role, job);
-        const keys = at ? keysOf(read(role, at)).filter((k) => k !== key) : [];
+        const keys = at ? fallbacksOf(read(role, at), key) : [];
         if (keys.length > 0) dropped.push({ seat, job, keys });
       }
       for (const job of SATELLITES) delete role[SEAT_JOB_FIELDS[job]];
@@ -342,7 +356,7 @@ export function applyUses(doc: CompanyDocument, key: string, was: Uses, next: Us
       const had = was.jobs[job].includes(seat);
       if (on && !had) {
         const at = writtenAt(role, job);
-        const keys = at ? keysOf(read(role, at)).filter((k) => k !== key) : [];
+        const keys = at ? fallbacksOf(read(role, at), key) : [];
         if (keys.length > 0) dropped.push({ seat, job, keys });
         if (job === "executor") {
           if (isRecord(role.llm)) role.llm.default = key;

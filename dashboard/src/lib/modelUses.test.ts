@@ -127,8 +127,9 @@ describe("applyUses", () => {
     expect(flat.llm_judge).toBe("big");
     expect(flat.llm_review).toBeUndefined();
     expect(flat.llm).toBe("old");
-    // THE CHAIN IT REPLACED is named for the review.
-    expect(dropped).toEqual([{ seat: "flat", job: "judge", keys: ["fast", "old"] }]);
+    // THE FALLBACKS IT DROPPED are named for the review; `fast`, the model the
+    // job ran on first, is the change itself, which the review lists apart.
+    expect(dropped).toEqual([{ seat: "flat", job: "judge", keys: ["old"] }]);
   });
 
   it("clears the mapping's own key, which the flat field would shadow", () => {
@@ -143,7 +144,7 @@ describe("applyUses", () => {
     expect(mapped.llm_subagent).toBe("big");
     // The mapping held only its default once review left it, so it is stored as the scalar.
     expect(mapped.llm).toBe("old");
-    expect(dropped).toContainEqual({ seat: "mapped", job: "review", keys: ["old", "fast"] });
+    expect(dropped).toContainEqual({ seat: "mapped", job: "review", keys: ["fast"] });
   });
 
   it("writes Everything as one scalar llm and clears every satellite", () => {
