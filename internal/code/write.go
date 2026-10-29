@@ -109,8 +109,10 @@ type EngineWrite struct {
 	Kind   EngineWriteKind `json:"kind"`
 	RepoID string          `json:"repo_id"`
 	// Principal is who writes: a seat with the run that made the write
-	// (RunProvenance, its turn at least), or a person through a credential
-	// bound to their human seat. A token bound to nobody writes nothing.
+	// (RunProvenance, its turn at least, and never a coding run: a write is a
+	// tool call's, and a coding run's box pushes through git), or a person
+	// through a credential bound to their human seat. A token bound to nobody
+	// writes nothing.
 	Principal Principal `json:"principal"`
 	// OpID is the caller's operation — a turn's derived step, a keyed
 	// request's (the act route's Idempotency-Key, carried as
@@ -383,6 +385,14 @@ func (w EngineWrite) Validate() error {
 	case w.Principal.Kind == PrincipalAgent && w.Principal.Run.IsZero():
 		return fmt.Errorf("%w: principal.run: a seat's write names the run that made it — its turn at least, "+
 			"stamped by the engine from the call", ErrInvalid)
+	case w.Principal.Run.RunID != "":
+		// A WRITE IS A TOOL CALL'S, whose run is the turn that called it —
+		// a coding run's box pushes through git — and the push it lands as
+		// is engine-built, which Proposal.Validate refuses naming a coding
+		// run. Refused here, by the rule every party holds a write to,
+		// rather than by the landing after a git node has built it.
+		return fmt.Errorf("%w: principal.run.run_id: a write the engine builds is a tool call's, whose run "+
+			"is its turn: it names no coding run", ErrInvalid)
 	case w.Principal.Kind == PrincipalOperator && w.Principal.Seat == "":
 		return fmt.Errorf("%w: principal.seat: a write is a person's, through a credential bound to their human "+
 			"seat — a token bound to nobody writes nothing", ErrInvalid)
