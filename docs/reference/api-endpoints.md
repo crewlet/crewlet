@@ -2347,7 +2347,7 @@ each. Every answer that depends on the node names it (`node`).
 | `GET` | `/llm/models?agent=claude-code\|codex\|opencode[&provider=…]` | `admin` | The models a model step suggests (query `llm_models`) |
 | `GET` | `/llm/device-sign-ins/{id}` | `admin` | One device sign-in while its record lingers (query `llm_device_sign_in`) |
 | `PUT` | `/llm/providers/{key}/credential` | `secrets.write`, and `config.write` when it re-activates | Test candidate credential values with the model's own CLI, and store them only if they sign it in; `?dry_run=true` tests and stores nothing |
-| `POST` | `/llm/providers/{key}/check` | `models.check` | The doctor over the API, on this node |
+| `POST` | `/llm/providers/{key}/check` | `models.check`; with a draft `entity`, also `config.write` and `secrets.write` | The doctor over the API, on this node |
 | `POST` | `/llm/providers/{key}/retry` | `models.retry` | Probe a sitting-out model once, or clear its sit-out on every node |
 | `POST` | `/llm/providers/{key}/host-login/check` | `models.check` | Read a CLI login's status on this node now |
 | `POST` | `/llm/providers/{key}/device-sign-in` | `secrets.write` | Start a Codex device-code sign-in |
@@ -2357,6 +2357,13 @@ each. Every answer that depends on the node names it (`node`).
 the Dashboard Assistant's only on the person's approval: they change runtime
 state, never config or a credential. `secrets.write` asks a recent proof and is
 never the assistant's, since a credential's value travels in the body.
+
+**A draft is decided as the writes it stands for.** A draft entry chooses its
+CLI, its overrides and its env, and resolves its `${VAR}`s through the secret
+store as an apply would, so a check or a credential test of one asks
+`config.write` and `secrets.write` too: an administrator's, with a recent
+proof, and never the assistant's. A credential test's `dry_run=true` is asked at
+the write's own proof, not a check's: it runs the CLI and spends tokens.
 
 **Every call is audited**, refused ones included, as one `model_acted` in the
 runtime audit (`actor`, `actor_kind`, `operator_id`, `action`, `provider_key`,

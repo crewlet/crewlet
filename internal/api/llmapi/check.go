@@ -39,6 +39,11 @@ func (s *Service) check(w http.ResponseWriter, r *http.Request, _ *types.ModelAc
 	}
 	var draft *config.LLMProvider
 	if len(req.Entity) > 0 && string(req.Entity) != "null" {
+		// A DRAFT IS DECIDED AS THE WRITE IT STANDS FOR ([mayRunDraft]),
+		// before it is read any further.
+		if !mayRunDraft(w, r, s.guard) {
+			return
+		}
 		// A DRAFT RESOLVES ITS ${VAR}s THROUGH THE STORE, as an apply would:
 		// it is checked as the company would run it once written.
 		next, err := s.config.CheckEntity(r.Context(), configapi.EntityLLMProviders, key,

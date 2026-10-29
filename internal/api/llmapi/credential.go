@@ -132,6 +132,9 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 	}
 	draft := active
 	if len(req.Entity) > 0 && string(req.Entity) != "null" {
+		if !mayRunDraft(w, r, s.guard) {
+			return
+		}
 		next, err := s.config.CheckEntity(ctx, configapi.EntityLLMProviders, key, req.Entity,
 			active == nil, by)
 		if !refuseDraft(w, err) {

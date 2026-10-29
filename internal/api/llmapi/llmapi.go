@@ -15,7 +15,9 @@
 //     write will re-activate the company;
 //   - `POST .../check` and `POST .../host-login/check` are `models.check`,
 //     and `POST .../retry` is `models.retry` (admin at any recency, the
-//     assistant on approval): runtime state, no config or credential;
+//     assistant on approval): runtime state, no config or credential. A
+//     check, or a credential test, of a DRAFT entry asks `config.write` and
+//     `secrets.write` on top ([mayRunDraft]): a draft runs what a write would;
 //   - `POST .../device-sign-in` and `DELETE /llm/device-sign-ins/{id}` are
 //     `secrets.write`: a sign-in mints a login.
 //
@@ -261,10 +263,13 @@ func (s *Service) Routes(mux authz.Mux) error {
 			failures = append(failures, err)
 		}
 	}
-	// A CREDENTIAL'S TEST IS ITS WRITE'S DRY RUN, declared so a caller
-	// reads it off the route ([authz.Policy.Checked]).
+	// A CREDENTIAL'S TEST IS NOT A CHECK in ADR-0055's sense, though it
+	// reads `dry_run`: it runs the entry's CLI with the candidate and sends
+	// it to the vendor, which changes something and spends tokens. So it is
+	// NOT declared [authz.Policy.Checked], which would decide it at the
+	// read's proof: `dry_run=true` here asks the write's own proof.
 	mount("PUT /llm/providers/{key}/credential",
-		authz.Policy{Action: authz.ActionSecretWrite}.Checked(),
+		authz.Policy{Action: authz.ActionSecretWrite},
 		s.audited(types.ModelCredential, s.credential))
 	mount("POST /llm/providers/{key}/check", authz.Policy{Action: authz.ActionModelsCheck},
 		s.audited(types.ModelCheck, s.check))
@@ -337,6 +342,23 @@ func (s *Service) activeEntry(w http.ResponseWriter, r *http.Request, key string
 		return company, &found, true
 	}
 	return company, nil, true
+}
+
+// mayRunDraft decides a request that runs a DRAFT entry, answering the
+// refusal itself; it reports whether the request may go on.
+//
+// A DRAFT IS AS POWERFUL AS THE WRITES IT STANDS FOR. Its CLI, binary,
+// overrides and env are the caller's to choose, and its ${VAR}s resolve
+// through the fleet's secret store as an apply's would, so running one is
+// running whatever a config write could make the company run, with any
+// stored credential handed to it. So it asks `config.write` and
+// `secrets.write` of the guard, both admin's with a recent proof, and the
+// second never the assistant's. A check of an entry the company already runs
+// asks only its route's `models.check`: what it runs is what the company's
+// own writes decided.
+func mayRunDraft(w http.ResponseWriter, r *http.Request, guard authz.Guard) bool {
+	return authz.Admit(w, r, guard, authz.Policy{Action: authz.ActionConfigWrite}) &&
+		authz.Admit(w, r, guard, authz.Policy{Action: authz.ActionSecretWrite})
 }
 
 // notFound answers a key the active company does not configure.
