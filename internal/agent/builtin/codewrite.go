@@ -643,7 +643,7 @@ func (t *codeRepoWrite) Parameters() map[string]any {
 			"description": "refs/heads/<glob> or refs/tags/<glob>; `*` within a name, `**` across them."}
 		props["direct_push"] = map[string]any{"type": "string",
 			"enum":        []string{string(code.DirectPersons), string(code.DirectNone)},
-			"description": "A person's alone, or nobody's; anyone who may write when left out."}
+			"description": "A person's alone (also when left out), or nobody's."}
 		props["allow_force"] = map[string]any{"type": "boolean"}
 		props["allow_delete"] = map[string]any{"type": "boolean"}
 		props["remove"] = map[string]any{"type": "boolean"}
@@ -736,7 +736,15 @@ func (t *codeRepoWrite) request(args map[string]any) (code.LifecycleRequest, *to
 	}
 	change := code.ProtectChange{Pattern: pattern}
 	if !argBool(args, "remove") {
-		change.Rule = &code.Protection{Pattern: pattern, DirectPush: code.DirectPush(argString(args, "direct_push")),
+		// A DIRECT_PUSH LEFT OUT IS PERSONS, as code.repos reads an unset
+		// one: every rule holds at least a seat's direct push, so no value
+		// of it means "anyone who may write" — what a ref no rule matches
+		// already means — and a rule carrying none is one no record may
+		// carry, refused by the request's own validation. Like allow_force
+		// and allow_delete left out, it is the rule's least: the call sets
+		// the pattern's whole rule.
+		direct := cmp.Or(strings.TrimSpace(argString(args, "direct_push")), string(code.DirectPersons))
+		change.Rule = &code.Protection{Pattern: pattern, DirectPush: code.DirectPush(direct),
 			AllowForce: argBool(args, "allow_force"), AllowDelete: argBool(args, "allow_delete")}
 	}
 	return code.LifecycleRequest{Kind: code.LifecycleProtect, Protect: &change}, nil

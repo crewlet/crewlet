@@ -359,6 +359,49 @@ func TestARerunOfACodeWriteIsTheSamePush(t *testing.T) {
 	}
 }
 
+// A PROTECTION WITH NO DIRECT_PUSH IS A PERSONS RULE, as code.repos reads an
+// unset one: the call sets the pattern's whole rule, and every rule a record
+// may carry holds at least a seat's direct push, so a rule the call leaves
+// without one is sent as persons — never as a value the request's own
+// validation refuses (protect.rule.direct_push), which would refuse every
+// such call. A value the call states is sent as stated, and one the domain
+// does not know is refused as the call's own mistake, with nothing sent.
+//
+// Mutation: drop the default → the call left without direct_push is refused,
+// red.
+func TestAProtectionWithNoDirectPushIsAPersonsRule(t *testing.T) {
+	t.Parallel()
+	writer := &codeWrites{}
+	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
+	turn := writerTurn(t)
+	for _, c := range []struct {
+		direct any
+		want   code.DirectPush
+	}{{nil, code.DirectPersons}, {"none", code.DirectNone}, {"persons", code.DirectPersons}} {
+		args := map[string]any{"repo": "site", "pattern": "refs/heads/main"}
+		if c.direct != nil {
+			args["direct_push"] = c.direct
+		}
+		got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, args)
+		if got.Failed {
+			t.Fatalf("a protection with direct_push %v answered %q", c.direct, got.Output)
+		}
+		_, lifecycles := writer.asked()
+		sent := lifecycles[len(lifecycles)-1].Protect
+		if sent == nil || sent.Rule == nil || sent.Rule.DirectPush != c.want {
+			t.Errorf("a protection with direct_push %v sent %+v, want direct_push %s", c.direct, sent, c.want)
+		}
+	}
+	_, before := writer.asked()
+	got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool,
+		map[string]any{"repo": "site", "pattern": "refs/heads/main", "direct_push": "everyone"})
+	if _, after := writer.asked(); !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
+		len(after) != len(before) {
+		t.Errorf("a direct_push the domain does not know answered %q as %s, with %d requests sent", got.Output,
+			tools.RefusalOf(got), len(after)-len(before))
+	}
+}
+
 // A TOKEN BOUND TO NOBODY WRITES NOTHING: refused before anything is read or
 // routed, in the sentence the code host gives every such push.
 //
