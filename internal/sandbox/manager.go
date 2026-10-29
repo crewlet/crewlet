@@ -456,7 +456,9 @@ func (m *Manager) discard(ctx context.Context, box Sandbox) {
 // Used when a follow-up run_sandbox call in a resumed Execute loop reuses the
 // same box and checkout: Connect auto-resumes a paused box. No re-Install and
 // no setup re-apply — the box already carries the ask shim, the work dir, and
-// the launch's provisioning.
+// the launch's provisioning. The engine's clone steps are the launch's to
+// give it ([LaunchRequest.Clone]): a repository this job was granted and the
+// box does not hold yet is not provisioning the box already carries.
 func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID, codingAgent string) (Sandbox, Runner, error) {
 	runner, err := m.RunnerFor(codingAgent)
 	if err != nil {

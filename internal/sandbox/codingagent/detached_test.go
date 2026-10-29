@@ -115,6 +115,31 @@ func TestStartLaunchesDetachedAndWritesBothMarkers(t *testing.T) {
 	}
 }
 
+// THE JOB STARTS WHERE THE BOX'S SETUP RAN: in no directory of its own, which
+// every backend reads as the one default its setup commands run in too, so a
+// repository a clone step checked out at ./<name> is at ./<name> to the agent
+// (sandbox.TestSetupAndTheRunShareAWorkingDirectory holds the backend's half).
+//
+// Mutation: start the job in the box's home — red.
+func TestTheJobStartsWhereTheSetupRan(t *testing.T) {
+	t.Parallel()
+	for _, runner := range []*codingagent.Runner{codingagent.NewClaudeCode(), codingagent.NewOpenCode()} {
+		b := box(t, runner)
+		if _, err := runner.Start(t.Context(), b, sandbox.RunRequest{Brief: "fix the flake"}); err != nil {
+			t.Fatalf("%s: Start: %v", runner.Name(), err)
+		}
+		var jobs []sandbox.FakeExec
+		for _, e := range b.Execs() {
+			if e.Background {
+				jobs = append(jobs, e)
+			}
+		}
+		if len(jobs) != 1 || jobs[0].Cwd != "" {
+			t.Errorf("%s started %+v, want one job, in the box's default directory", runner.Name(), jobs)
+		}
+	}
+}
+
 // The brief's `crewlet-ask` instruction only resolves if the shim directory is
 // on the agent's PATH.
 func TestTheShimDirectoryIsOnTheAgentsPath(t *testing.T) {

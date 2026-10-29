@@ -197,6 +197,32 @@ type LaunchRequest struct {
 	// would not carry.
 	CodeHolds []string
 
+	// Clone are the engine's own steps giving the box the repositories it is
+	// granted on the engine's code host ([Spec.Repos]): [GitVersionStep],
+	// then a [CloneRecipe] for each. Applied after Setup on a fresh box, and
+	// ALONE on a reused one — where each step's own guard skips a repository
+	// already checked out — so a second run_sandbox call in one turn is given
+	// a repository the first did not name, and keeps the first's checkout and
+	// the work in it. Kept apart from Setup, which is the operator's and is
+	// never applied twice to one box.
+	Clone []SetupStep
+
+	// CodeFloor is the run's first code floor — the furthest position its
+	// repositories were resolved at, as statelog.Position's token — written on
+	// the row with Spec.Repos ([PendingRun.CodeFloor]). Set exactly when
+	// Spec.Repos is.
+	CodeFloor string
+
+	// RunEnv is the engine's environment for THIS LAUNCH: what a box needs
+	// that is minted for the job itself, such as its access to the engine's
+	// own code host. Asked ONCE, AFTER the store has minted the launch id the
+	// job's credentials name and before any box exists, because a credential
+	// minted before the store names the job could only name a job the row
+	// does not hold. Its variables win over every other source of the run
+	// environment for the names they set, and an error abandons the launch
+	// like every failure past the row. Nil adds nothing.
+	RunEnv func(launchID string) (map[string]string, error)
+
 	// Now is the clock. Nil takes time.Now.
 	Now func() time.Time
 }
@@ -257,6 +283,12 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if strings.TrimSpace(req.Brief) == "" {
 		return LaunchResult{}, fmt.Errorf("sandbox: a launch needs a brief")
 	}
+	// THE GRANTS ARE HELD TO THEIR GRAMMAR BEFORE THE ROW IS WRITTEN: the row
+	// is what a box's request to the code host is admitted against, so a
+	// repository it could not carry, or one it names twice, is never on it.
+	if err := checkRepos(req); err != nil {
+		return LaunchResult{}, err
+	}
 	// THE SEAT'S LEASE, which the row is stamped with and every write below
 	// carries — see [CoordinatorOptions.Lease]. A seat this node does not
 	// hold launches nothing: the turn asking is one its lease no longer
@@ -303,6 +335,11 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// any box exists: once the turn parks, the row is the only place
 		// the expiry can read it from.
 		CodeHolds: req.CodeHolds,
+		// THE JOB'S GRANTS AND ITS FIRST FLOOR, on the row before any box
+		// exists for the same reason: a box's first request to the code
+		// host is admitted against the row, and it can come before this
+		// launch returns.
+		Repos: req.Spec.Repos, CodeFloor: req.CodeFloor,
 		CreatedAt: now(),
 	}, fence)
 	if err != nil {
@@ -318,7 +355,22 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		req.Opened(opened.LaunchID)
 	}
 
-	box, runner, reused, err := acquire(ctx, m, req)
+	// THE LAUNCH'S OWN ENVIRONMENT, now that the store has named the job
+	// its credentials are minted for ([LaunchRequest.RunEnv]). It is what
+	// the box is made with, what its setup and clone steps run with — the
+	// clones need the job's credential — and, with the run's telemetry, what
+	// the coding agent runs with; and it lives in this frame alone: the spec
+	// is never persisted, and a resume hours later launches anew with
+	// credentials of its own.
+	env, err := launchEnv(req, opened.LaunchID)
+	if err != nil {
+		c.abandon(ctx, m, req, fence, "")
+		return LaunchResult{}, fmt.Errorf("sandbox: the run's environment: %w", err)
+	}
+	launched := req
+	launched.Spec.Env = env
+
+	box, runner, reused, err := acquire(ctx, m, launched)
 	if err != nil {
 		// The row is open and this launch is over. Every failure past this
 		// point closes it: a run left LAUNCHING is polled by nothing and
@@ -326,6 +378,20 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// box until the seat happens to move to another node.
 		c.abandon(ctx, m, req, fence, "")
 		return LaunchResult{}, err
+	}
+	// A REUSED BOX IS GIVEN WHAT IT LACKS: its own provisioning survives with
+	// its disk state, but this job's repositories may not all be there, so
+	// the clone steps run on it alone, each skipping a repository already
+	// checked out. One that fails is this launch's failure, as a failed step
+	// on a fresh box is: a brief promising a checkout the box does not hold
+	// must never reach a run.
+	if reused && len(req.Clone) > 0 {
+		if err := ApplySetup(ctx, box, req.Clone, env); err != nil {
+			log.ErrorContext(ctx, "sandbox_setup_failed", "sandbox_id", box.ID(), "reused", true,
+				"error", err.Error())
+			c.abandon(ctx, m, req, fence, box.ID())
+			return LaunchResult{}, err
+		}
 	}
 
 	// Attached before the job starts, for the reason above.
@@ -340,7 +406,11 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	handle, err := runner.Start(ctx, box, RunRequest{
 		System: buildSystem(req),
 		Brief:  buildBrief(req),
-		Env:    withTelemetry(m, req),
+		// THE TELEMETRY ENDPOINT IS MINTED HERE, at the job's start, as it
+		// always was rather than with the launch's environment above: its
+		// token lives a fixed span from its minting ([otelTokenTTL]), and
+		// whatever the box's provisioning took would come off the job's own.
+		Env: withTelemetry(m, launched),
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
@@ -426,6 +496,11 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 // than re-cloning. A reattach that fails falls through to a fresh box rather
 // than failing the launch — the box is gone, which is exactly the case the
 // pushed branch exists for.
+//
+// A fresh box is given the operator's setup and then the engine's clone
+// steps, in that order, so a clone can rely on whatever the setup installed
+// (a proxy, a CA bundle in the box's git configuration). A reused box is
+// given its clone steps by the launch itself, which reclaims it if one fails.
 func acquire(ctx context.Context, m *Manager, req LaunchRequest) (Sandbox, Runner, bool, error) {
 	if req.ReuseBox != "" {
 		box, runner, err := m.Reconnect(ctx, req.Spec.Placement, req.ReuseBox, req.Spec.CodingAgent)
@@ -435,11 +510,68 @@ func acquire(ctx context.Context, m *Manager, req LaunchRequest) (Sandbox, Runne
 		log.WarnContext(ctx, "sandbox_reuse_failed",
 			"turn_id", req.Turn.TurnID, "sandbox_id", req.ReuseBox, "error", err.Error())
 	}
-	box, runner, err := m.Acquire(ctx, req.Spec, req.Setup)
+	box, runner, err := m.Acquire(ctx, req.Spec, append(slices.Clone(req.Setup), req.Clone...))
 	if err != nil {
 		return nil, nil, false, err
 	}
 	return box, runner, false, nil
+}
+
+// checkRepos refuses a launch whose repositories its row could not carry:
+// more than [MaxRunRepos], one that is not a [RunRepo] ([RunRepo.Validate]),
+// one named twice — by its name or by its id, since either would give one
+// repository two grants and one checkout directory two clones — or a floor
+// that does not go with them, set exactly when repositories are.
+func checkRepos(req LaunchRequest) error {
+	repos := req.Spec.Repos
+	if len(repos) > MaxRunRepos {
+		return fmt.Errorf("sandbox: a run is given at most %d repositories, not %d", MaxRunRepos, len(repos))
+	}
+	names := make(map[string]bool, len(repos))
+	ids := make(map[string]bool, len(repos))
+	for _, r := range repos {
+		if err := r.Validate(); err != nil {
+			return err
+		}
+		if names[r.Repo] || ids[r.RepoID] {
+			return fmt.Errorf("sandbox: repository %s is given twice: one run works on one branch of a "+
+				"repository", r.Repo)
+		}
+		names[r.Repo], ids[r.RepoID] = true, true
+	}
+	switch {
+	case len(repos) > 0 && req.CodeFloor == "":
+		return fmt.Errorf("sandbox: a run given repositories needs the code floor they were resolved at")
+	case len(repos) == 0 && req.CodeFloor != "":
+		return fmt.Errorf("sandbox: a run given no repositories has no code floor")
+	}
+	return nil
+}
+
+// launchEnv is the environment of THIS LAUNCH's box: the spec's run
+// environment, and then the engine's own variables for the job
+// ([LaunchRequest.RunEnv]), which win over every other source for the names
+// they set — an operator's value for one of those would break what the engine
+// minted it for, and configuration refuses the names where an operator writes
+// the run environment. The box is made with it and every setup and clone step
+// runs with it; the coding agent runs with it and the run's telemetry
+// ([withTelemetry]).
+//
+// A COPY, never the spec's own map, which the caller's [Spec] goes on holding:
+// what a box, its setup or its runner does with the map it is handed never
+// reaches the configuration the next launch is built from.
+func launchEnv(req LaunchRequest, launchID string) (map[string]string, error) {
+	var added map[string]string
+	if req.RunEnv != nil {
+		var err error
+		if added, err = req.RunEnv(launchID); err != nil {
+			return nil, err
+		}
+	}
+	out := make(map[string]string, len(req.Spec.Env)+len(added))
+	maps.Copy(out, req.Spec.Env)
+	maps.Copy(out, added)
+	return out, nil
 }
 
 // abandon closes out a launch that could not finish: the box is reclaimed, then
@@ -573,6 +705,11 @@ func buildBrief(req LaunchRequest) string {
 // THE RUN'S OWN TEXT FIRST, the framing after it: for an agent-mode executor
 // that text is who the model is and what it answers for, and the box and the
 // ask shim are details of where it is working.
+//
+// The environment lists the operator's steps and then the engine's clone
+// steps ([LaunchRequest.Clone]), in the order a fresh box was given them, on a
+// reused box too: the checkouts are there either way, and the run is told
+// where each is and how it pushes.
 func buildSystem(req LaunchRequest) string {
 	names := slices.Collect(maps.Keys(req.MCPServers))
 	own := strings.TrimSpace(req.System)
@@ -581,7 +718,7 @@ func buildSystem(req LaunchRequest) string {
 	}
 	parts := []string{
 		own,
-		strings.TrimSpace(EnvironmentBrief(req.Setup, names)),
+		strings.TrimSpace(EnvironmentBrief(append(slices.Clone(req.Setup), req.Clone...), names)),
 		strings.TrimSpace(req.Ask),
 	}
 	return strings.Join(slices.DeleteFunc(parts, func(p string) bool { return p == "" }), "\n\n")
@@ -607,10 +744,16 @@ const agentRunNote = "You are running inside a command-line coding tool as one s
 
 // withTelemetry adds the run's OTel environment to the spec's.
 //
-// MERGED HERE rather than in the spec, because the endpoint carries a token
-// scoped to THIS run and minted with a TTL: putting it in the spec would have
-// it persisted with the pending row and re-used by a resume hours later,
-// against a token that expired while the run was parked.
+// MERGED PER LAUNCH, never into the configuration a spec is built from,
+// because the endpoint carries a token scoped to THIS run and minted with a
+// TTL. The spec itself is not persisted — the row keeps what a resume needs,
+// and a resume hours later launches anew — so the launch environment
+// ([launchEnv]) is per-launch for the reason its tokens are, and a resume is
+// never handed a token that expired while the run was parked. And it is
+// merged at the job's START, after the box is provisioned, never with the
+// rest of the launch's environment before it: the token's span runs from its
+// minting, so one minted before the setup steps would spend on them what the
+// job's own export needs, and no setup step reads it.
 //
 // THE OPERATOR'S OWN VALUES WIN. role.sandbox.env is where an operator
 // declares what a box gets, and a deployment that points its coding agents at

@@ -324,6 +324,13 @@ func (c *Client) Env(kv ...string) *Client {
 	return &Client{git: c.git, home: c.home, env: slices.Concat(c.env, kv), opts: c.opts}
 }
 
+// Environ is c's whole environment, as every git it runs is handed it: for a
+// case that runs something other than git under it — a hook, a box's setup
+// step — whose own git must read no configuration of the machine either. Its
+// PATH is the test's; a case that means a particular git puts that git's
+// directory before it.
+func (c *Client) Environ() []string { return slices.Clone(c.env) }
+
 // ModuleCheckout is c trusting the checkout this module's tests were compiled
 // from, and that checkout's top level — for a test whose SUBJECT is this
 // repository (what its attributes make of a path), never for a fixture, which

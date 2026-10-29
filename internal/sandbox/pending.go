@@ -866,6 +866,36 @@ type PendingRun struct {
 	// Bounded by [MaxCodeHolds].
 	CodeHolds []string `json:"code_holds,omitempty"`
 
+	// Repos are the run's grants on the engine's own code host: the
+	// repositories its launch resolved ([Spec.Repos]), written by
+	// [PendingStore.BeginLaunch] and REPLACED by every relaunch — a job's
+	// repositories are that job's, and the previous job's grant is not the
+	// next one's. What a box's request to the code host is admitted against
+	// for as long as the job runs: the row, never the box, says what it may
+	// clone and push.
+	Repos []RunRepo `json:"repos,omitempty"`
+
+	// CodeFloor is the run's SESSION on the code log: a position everything
+	// its box has been shown and has pushed is at or below, so a read served
+	// at it never shows the box a branch older than one it already saw — as
+	// statelog.Position's token (`<stream>@<generation>:<sequence>`).
+	//
+	// CARRIED, NEVER READ HERE, for ExecuteState's reason: this package
+	// holds no log and imports nothing that reads one, and the floor is the
+	// same kind of value as the conversation it carries without decoding.
+	// Written by the launch — the furthest position its resolution of the
+	// repositories read — and raised only through
+	// [PendingStore.RaiseCodeFloor]; empty for a run given no repositories.
+	CodeFloor string `json:"code_floor,omitempty"`
+
+	// CodeLaunch is the code floor the launch wrote, NEVER RAISED: every
+	// push the run's box makes applies above it, so what the run pushed is
+	// read from its repositories' pushes above this position rather than
+	// through an index of the code log's own that every box push would pay
+	// for on every data node. Written by [PendingStore.BeginLaunch] beside
+	// CodeFloor, on a create and on every relaunch, from the same value.
+	CodeLaunch string `json:"code_launch,omitempty"`
+
 	// Charged is whether this launch's collected tokens are on the fleet's
 	// token counter.
 	//
@@ -1064,6 +1094,12 @@ type PendingStore interface {
 	// row holds and what it is handed, each key once in the order first
 	// taken — refused [ErrCodeHoldsFull] past [MaxCodeHolds], so no launch
 	// drops a hold an earlier job's turn depends on.
+	//
+	// THE JOB'S GRANTS ARE ITS OWN, so a create and a reset alike write the
+	// run's [PendingRun.Repos] and [PendingRun.CodeFloor] as handed, and
+	// [PendingRun.CodeLaunch] from that same floor whatever the caller put
+	// there: a relaunch's repositories replace the previous job's, and its
+	// launch floor is the one its own resolution read.
 	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
@@ -1278,6 +1314,24 @@ type PendingStore interface {
 	// turn named, true whoever holds the seat now, and a turn whose lease
 	// moved writes nothing else here.
 	AddCodeHolds(ctx context.Context, turnID string, keys []string) (bool, error)
+
+	// RaiseCodeFloor raises a run's [PendingRun.CodeFloor], and only while
+	// the row holds launch: raise is handed the floor as it stands (its
+	// token, "" for none) and answers the next, or false for no write.
+	// Reports whether this call wrote. A row that is gone, whose ending is
+	// decided, or that holds another launch is no write and no error — the
+	// job whose box was shown something is over, and its floor with it.
+	//
+	// THE STORE NEVER COMPARES POSITIONS — it reads no log — so raise is
+	// the caller's judgement of which floor is higher, asked against the row
+	// as the write reads it: the read-decide-write every flip takes runs it
+	// again on every lost race, so two raises racing land the higher, and
+	// neither overwrites what the coordinator wrote meanwhile. An answer of
+	// no floor at all writes nothing: a floor is raised, never cleared.
+	// Unfenced, like a hold: what a box was shown is true whoever holds the
+	// seat.
+	RaiseCodeFloor(ctx context.Context, turnID, launchID string,
+		raise func(current string) (next string, ok bool)) (bool, error)
 
 	// ListRuns returns EVERY run the store holds, whatever its status — a
 	// status a newer build added included — oldest first, raising rather

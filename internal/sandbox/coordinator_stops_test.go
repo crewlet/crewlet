@@ -803,6 +803,15 @@ func (s *refusingStore) AddCodeHolds(ctx context.Context, turnID string, keys []
 	return s.inner.AddCodeHolds(ctx, turnID, keys)
 }
 
+func (s *refusingStore) RaiseCodeFloor(ctx context.Context, turnID, launchID string,
+	raise func(current string) (string, bool),
+) (bool, error) {
+	if s.called("RaiseCodeFloor") {
+		return false, errRefusedCall
+	}
+	return s.inner.RaiseCodeFloor(ctx, turnID, launchID, raise)
+}
+
 func (s *refusingStore) ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error) {
 	if s.called("ListActiveForSeat") {
 		return nil, errRefusedCall

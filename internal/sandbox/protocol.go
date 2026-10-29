@@ -84,8 +84,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
+	"slices"
 	"strconv"
+	"strings"
+	"unicode/utf8"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/logging"
 )
@@ -147,10 +154,13 @@ type Limits struct {
 
 // Spec is what it takes to mint and drive one box.
 //
-// The REPO IS NOT HERE. Which repository to work in is task context the executor
-// puts in the brief, and the coding agent clones it with the token the config
-// injects — a spec field for it would make one repo per role a structural fact
-// when it is a per-turn one.
+// AN EXTERNAL HOST'S REPOSITORY IS NOT HERE. Which repository on GitHub or
+// GitLab to work in is task context the executor puts in the brief, and the
+// coding agent clones it with the token the config injects — a spec field for
+// it would make one repository per role a structural fact when it is a
+// per-turn one. A repository on the engine's OWN code host is here
+// ([Spec.Repos]), because naming one is a GRANT: the run row carries it and
+// the box's credential is judged by it, which a brief cannot be.
 //
 // There are deliberately NO CPU, MEMORY OR DISK FIELDS, and no TEMPLATE either.
 // A remote box's resources are a property of its template, fixed when the
@@ -193,7 +203,10 @@ type Spec struct {
 	// Env is the run environment: LLM credentials, the generic agent
 	// identity (CREWLET_AGENT_*), the setup steps' env, and role.sandbox.env
 	// — which is where an operator DECLARES an external token. The engine
-	// never names a tool-specific variable itself.
+	// never names a tool-specific variable itself. A launch hands the box a
+	// COPY with what it minted for the job added ([LaunchRequest.RunEnv]):
+	// what the box is made with and every setup step runs with, the run's
+	// telemetry added at the job's start.
 	Env map[string]string
 
 	// CredentialFiles is a subscription-CLI login: a path relative to the
@@ -208,6 +221,167 @@ type Spec struct {
 	// else's VM is a materially larger trust step than the scoped headless
 	// token the run env already exports.
 	CredentialFiles map[string]string
+
+	// Repos are the repositories on the engine's own code host this run is
+	// given, each resolved at launch ([RunRepo]), at most [MaxRunRepos]. Empty
+	// for a run that clones nothing of the engine's own — a repository on
+	// another host is still named in the brief and reached with the
+	// credentials the seat's configuration declares. [Coordinator.Launch]
+	// writes them on the run's row ([PendingRun.Repos]), which is what the
+	// box's credential is judged against for as long as the job runs.
+	Repos []RunRepo
+}
+
+// MaxRunRepos is the most repositories one coding run is given: each costs a
+// clone before the coding agent starts, inside the setup budget
+// ([DefaultSetupTimeout] a step), and a run that needs more is a task that
+// should be split.
+const MaxRunRepos = 8
+
+// MaxConePaths is the most directories one repository's cone names
+// ([RunRepo.Paths]). A cone is a few top-level directories of a monorepo:
+// sixty-four is past any build's declared reach, and it is one of the two
+// figures that keep the clone step one argument a shell can be given (see
+// [MaxConePathBytes]).
+const MaxConePaths = 64
+
+// MaxConePathBytes is the longest directory a cone names: 255 bytes, the bound
+// a ref has (gitref.MaxRefNameBytes) and a single file name has on every
+// filesystem git runs on (NAME_MAX). A cone names a directory a few
+// components below a repository's root, which a person or a model types out;
+// none comes near it.
+//
+// THE BOUND KEEPS THE CLONE STEP WHOLE. A box runs each setup command as ONE
+// argument of a shell (`sh -c`, `bash -l -c` through E2B's envd), and Linux
+// refuses an argument past 128 KiB (MAX_ARG_STRLEN) before the shell starts,
+// with a failure that names nothing the run asked for. [MaxConePaths] of
+// these, quoted at their worst — a path of nothing but single quotes is four
+// times its length once quoted ([ShellQuote]), and each takes its two quotes
+// and a space — come to at most 64 × 1 023 = 65 472 bytes of the step, and the
+// rest of it (the names, the commands and the commit-trailer hook it writes)
+// to a few KiB more; TestTheWorstCloneStepIsOneShellArgument builds that step
+// and holds it under the limit. It bounds what a run's grants add to its row
+// too, which every node's completion poll reads whole: at most [MaxRunRepos] ×
+// 64 × 255 bytes of paths, about 128 KiB before the JSON on the row escapes
+// them.
+const MaxConePathBytes = 255
+
+// RepoAccess is what a run may do with a repository it was given. A named
+// string with Valid, so a newer build's value off the row is a value rather
+// than a panic.
+type RepoAccess string
+
+const (
+	// RepoRead is fetch and clone.
+	RepoRead RepoAccess = "read"
+	// RepoWrite is those and push — whatever the seat's own grant allows,
+	// which every push is decided against again.
+	RepoWrite RepoAccess = "write"
+)
+
+// RepoAccesses is every [RepoAccess] this build knows.
+func RepoAccesses() []RepoAccess { return []RepoAccess{RepoRead, RepoWrite} }
+
+// Valid reports whether a is one of [RepoAccesses].
+func (a RepoAccess) Valid() bool { return slices.Contains(RepoAccesses(), a) }
+
+// RunRepo is one repository a run is given, RESOLVED AT LAUNCH: the
+// repository's id beside the name it had then, so a rename mid-run cannot move
+// the grant; the commit the run starts from; the branch it works on; and the
+// cone it checks out.
+//
+// The json tags are a WIRE FORMAT: the run's row carries these
+// ([PendingRun.Repos]), and a node of another build reads them.
+type RunRepo struct {
+	// Repo is the repository's name at launch: the directory the box is
+	// given it in, and the name its URL carries.
+	Repo string `json:"repo"`
+	// RepoID is the repository's id, canonical: what the grant names.
+	RepoID string `json:"repo_id"`
+	// Base is the whole id of the commit the run starts from, "" for an
+	// empty repository.
+	Base string `json:"base"`
+	// Branch is the branch the run works on, its ref refs/heads/<branch>.
+	Branch string `json:"branch"`
+	// Access is what the run may do with the repository.
+	Access RepoAccess `json:"access"`
+	// Paths are the directories checked out (a sparse cone), at most
+	// [MaxConePaths]; empty is the whole tree.
+	Paths []string `json:"paths,omitempty"`
+}
+
+// Validate holds a RunRepo to its grammar: a repository name of either form
+// (gitref.ValidRepoName), a canonical repository id, a base that is "" or a
+// whole commit id, a branch name git and the code host both take
+// (gitref.ValidBranch), a valid access, and at most [MaxConePaths] cone paths,
+// each a clean directory inside the repository (conePathProblem says what
+// that holds a path to).
+//
+// ONE GRAMMAR for every reader: the launch that resolves a run's repositories
+// refuses a request with it, the clone step is written only for a RunRepo it
+// passes ([CloneRecipe]), so nothing a box is told to run carries a value no
+// RunRepo can.
+func (r RunRepo) Validate() error {
+	switch {
+	case !gitref.ValidRepoName(r.Repo):
+		return fmt.Errorf("sandbox: %q is not a repository name", r.Repo)
+	case !canonicalID(r.RepoID):
+		return fmt.Errorf("sandbox: repository %s: its id %q is not a UUID in canonical form", r.Repo, r.RepoID)
+	case r.Base != "" && (!gitref.ValidOID(r.Base) || r.Base == gitref.ZeroOID):
+		return fmt.Errorf("sandbox: repository %s: its base %q is not a whole commit id", r.Repo, r.Base)
+	case !gitref.ValidBranch(r.Branch):
+		return fmt.Errorf("sandbox: repository %s: %q is not a branch name git accepts", r.Repo, r.Branch)
+	case !r.Access.Valid():
+		return fmt.Errorf("sandbox: repository %s: access %q is neither %q nor %q", r.Repo, r.Access,
+			RepoRead, RepoWrite)
+	case len(r.Paths) > MaxConePaths:
+		return fmt.Errorf("sandbox: repository %s: a cone names at most %d directories, not %d", r.Repo,
+			MaxConePaths, len(r.Paths))
+	}
+	for i, p := range r.Paths {
+		if why := conePathProblem(p); why != "" {
+			return fmt.Errorf("sandbox: repository %s: paths[%d] %q %s", r.Repo, i, p, why)
+		}
+	}
+	return nil
+}
+
+// conePathProblem is why p cannot be a directory of a repository's cone — ""
+// when it can be one. A cone path is relative to the repository's root and
+// already clean: no leading or trailing slash and no empty, "." or ".."
+// component, so one directory has one spelling and none reaches outside the
+// repository; valid UTF-8, because it crosses JSON on the run's row, which
+// replaces an invalid byte, so two paths would arrive as one; no control
+// character, since NUL, a newline and a carriage return each break the
+// line-based file git keeps a cone in and none of the others is ever meant;
+// no space at either end, which git trims from a cone's directory before it
+// writes one (sparse-checkout's strbuf_trim), so " src" would check out src;
+// and at most [MaxConePathBytes].
+func conePathProblem(p string) string {
+	switch {
+	case p == "":
+		return "is empty"
+	case len(p) > MaxConePathBytes:
+		return fmt.Sprintf("is %d bytes, past the %d a cone's directory may have", len(p), MaxConePathBytes)
+	case !utf8.ValidString(p):
+		return "is not valid UTF-8"
+	case strings.ContainsFunc(p, func(r rune) bool { return r < 0x20 || r == 0x7f }):
+		return "holds a control character"
+	case strings.HasPrefix(p, " ") || strings.HasSuffix(p, " "):
+		return "begins or ends with a space, which git trims from a cone's directory, so it would check out " +
+			"another one"
+	case path.Clean(p) != p || p == "." || p == ".." || strings.HasPrefix(p, "/") || strings.HasPrefix(p, "../"):
+		return "is not a clean path inside the repository: no leading or trailing slash, and no empty, " +
+			"\".\" or \"..\" component"
+	}
+	return ""
+}
+
+// canonicalID reports whether s is a UUID other than the nil one, spelled as
+// uuid.UUID.String spells it — the one spelling a row compares byte for byte.
+func canonicalID(s string) bool {
+	id, err := uuid.Parse(s)
+	return err == nil && id != uuid.Nil && id.String() == s
 }
 
 // RunHandle points at a detached job.

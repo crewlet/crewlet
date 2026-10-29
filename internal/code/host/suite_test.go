@@ -84,6 +84,13 @@ func TestTheGitFloorsPassTheSuite(t *testing.T) {
 			return memobj.New()
 		}))
 	})
+	// THE BOX HALF: a coding box's git is a client's, held to the client
+	// floor (internal/sandbox's GitVersionStep), and the steps that give a
+	// box its repositories run on the floor's own build against a git node
+	// on the node floor's.
+	t.Run("box recipes", func(t *testing.T) {
+		boxRecipes(t, floors, floors.ClientGit)
+	})
 }
 
 // sameSeries reports whether v is of floor's major.minor, at or above it.

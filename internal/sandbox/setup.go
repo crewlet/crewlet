@@ -34,14 +34,20 @@ const DefaultSetupTimeout = 10 * time.Minute
 // provisioning is an ordered list of these — one unit each contributing files,
 // commands, env, and a paragraph of brief.
 //
-// Steps come ENTIRELY from company config, applied in order: providers.sandbox
-// .setup for every sandbox role, then role.sandbox.setup extras. THE ENGINE
-// SHIPS NONE OF ITS OWN — git auth included. What stays engine-side is only
-// what static config cannot know, expressed generically: the run env carries
-// the LLM credentials and the agent's identity as CREWLET_AGENT_HANDLE /
-// CREWLET_AGENT_EMAIL, never a tool-specific variable. External tokens are
-// declared in role.sandbox.env, and setup commands execute WITH the run env,
-// so a recipe maps the generic facts into tool shape itself.
+// A launch's steps come from company config, applied in order:
+// providers.sandbox.setup for every sandbox role, then role.sandbox.setup
+// extras. FOR ANY OTHER HOST THE ENGINE SHIPS NONE OF ITS OWN — git auth
+// included. What stays engine-side is only what static config cannot know,
+// expressed generically: the run env carries the LLM credentials and the
+// agent's identity as CREWLET_AGENT_HANDLE / CREWLET_AGENT_EMAIL, never a
+// tool-specific variable. External tokens are declared in role.sandbox.env,
+// and setup commands execute WITH the run env, so a recipe maps the generic
+// facts into tool shape itself.
+//
+// The one exception is the engine's OWN code host, whose repositories a run
+// is granted rather than told about: the steps that give a box those are the
+// engine's ([GitVersionStep], [CloneRecipe]), carried apart from the
+// operator's ([LaunchRequest.Clone]) and applied after them.
 type SetupStep struct {
 	// Name is a short identifier, used in logs and setup-failure errors.
 	Name string `yaml:"name" json:"name"`
@@ -133,8 +139,9 @@ func (e *SetupError) Error() string {
 	return msg
 }
 
-// ApplySetup applies every step to a fresh box: write files, run commands, in
-// order.
+// ApplySetup applies every step to a box: write files, run commands, in order —
+// a fresh box's whole provisioning, or the clone steps a reused one is given
+// ([LaunchRequest.Clone]), each of which skips a repository already there.
 //
 // env is the run env the coding agent will get — commands run WITH it so a
 // recipe can reference the engine's identity facts and its own configured

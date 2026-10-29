@@ -18,7 +18,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -144,6 +147,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AParkedJobsCondensationIsKeptForItsAnswer", testAParkedJobsCondensationIsKeptForItsAnswer},
 		{"BeginLaunchUnionsCodeHolds", testBeginLaunchUnionsCodeHolds},
 		{"AddCodeHoldsAddsToALiveRowOnly", testAddCodeHoldsAddsToALiveRowOnly},
+		{"RaiseCodeFloorRaisesTheCurrentLaunchOnly", testRaiseCodeFloorRaisesTheCurrentLaunchOnly},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -159,6 +163,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem",
 			testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem},
 		{"ListRunsListsEveryStatus", testListRunsListsEveryStatus},
+		{"ARunRowCarriesItsRepositoriesAndFloor", testARunRowCarriesItsRepositoriesAndFloor},
 	}
 	for _, tc := range raw {
 		t.Run(tc.name, func(t *testing.T) {
@@ -3789,5 +3794,211 @@ func testListRunsListsEveryStatus(t *testing.T, s sandbox.PendingStore, runs coo
 	if !slices.Contains(ids, "t1") || !slices.Contains(ids, "t2") {
 		t.Fatalf("ListRuns listed %v, want both runs — the one whose status this build does not "+
 			"know among them", ids)
+	}
+}
+
+// runRepo is a repository a run is given, valid by [sandbox.RunRepo.Validate].
+func runRepo(name, id string) sandbox.RunRepo {
+	return sandbox.RunRepo{
+		Repo: name, RepoID: id, Base: "0123456789abcdef0123456789abcdef01234567",
+		Branch: "seats/swe/ENG-7", Access: sandbox.RepoWrite, Paths: []string{"src"},
+	}
+}
+
+// The ids of the repositories the cases give a run.
+const (
+	webID = "0190d8f0-0000-7000-8000-00000000000a"
+	apiID = "0190d8f0-0000-7000-8000-00000000000b"
+)
+
+// futureGrant is a key no build has declared: the stand-in for whatever a newer
+// build adds beside a run's grants next.
+const futureGrant = "code_scope"
+
+// A RUN'S ROW CARRIES ITS GRANTS AND ITS CODE FLOOR, the launch's own: a create
+// writes the repositories and the floor it is handed, and the launch floor from
+// that same floor whatever the caller put there; a relaunch REPLACES all three
+// — the previous job's repositories are not this job's — where the turn's
+// holds are unioned. And every write a build makes to the row hands back a key
+// of a newer build's beside them, so a fleet mid-upgrade loses neither.
+//
+// Mutation: keep the previous job's repositories on a reset — the relaunch
+// reads the first job's grant, red; take the launch floor from the caller —
+// the create reads the caller's, red.
+func testARunRowCarriesItsRepositoriesAndFloor(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
+	ctx := t.Context()
+	first := run("t1")
+	first.Repos = []sandbox.RunRepo{runRepo("web", webID)}
+	first.CodeFloor = "code@1:40"
+	first.CodeLaunch = "code@1:1"
+	mustBeginLaunch(t, s, first)
+	got := mustGet(t, s, "t1")
+	if !reflect.DeepEqual(got.Repos, first.Repos) || got.CodeFloor != "code@1:40" || got.CodeLaunch != "code@1:40" {
+		t.Fatalf("a create carries repos %+v, floor %q and launch floor %q; want the run's repositories, "+
+			"code@1:40 and the launch floor equal to it", got.Repos, got.CodeFloor, got.CodeLaunch)
+	}
+
+	// A KEY A NEWER BUILD WROTE beside the grants, put on the stored row as
+	// that build would have: every write below must hand it back.
+	record, found, err := runs.SandboxRun(ctx, "t1")
+	if err != nil || !found {
+		t.Fatalf("read the raw row: found=%v err=%v", found, err)
+	}
+	fields := map[string]json.RawMessage{}
+	if err = json.Unmarshal(record.Value, &fields); err != nil {
+		t.Fatal(err)
+	}
+	fields[futureGrant] = json.RawMessage(`{"web":["src/**"]}`)
+	body, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := runs.UpdateSandboxRun(ctx, "t1", body, record.Version); err != nil || !ok {
+		t.Fatalf("write the newer build's key: ok=%v err=%v", ok, err)
+	}
+	kept := func(step string) {
+		t.Helper()
+		record, found, err := runs.SandboxRun(ctx, "t1")
+		if err != nil || !found {
+			t.Fatalf("%s: read the raw row: found=%v err=%v", step, found, err)
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(record.Value, &raw); err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+		if string(raw[futureGrant]) != `{"web":["src/**"]}` {
+			t.Errorf("%s dropped a key this build does not know: %s = %s", step, futureGrant, raw[futureGrant])
+		}
+	}
+
+	launch := mustGet(t, s, "t1").LaunchID
+	raised, err := s.RaiseCodeFloor(ctx, "t1", launch, func(string) (string, bool) { return "code@1:41", true })
+	if err != nil || !raised {
+		t.Fatalf("raise: %v, %v", raised, err)
+	}
+	kept("the raise")
+	if got := mustGet(t, s, "t1"); got.CodeFloor != "code@1:41" || got.CodeLaunch != "code@1:40" {
+		t.Fatalf("after a raise the floor is %q and the launch floor %q; want code@1:41 and code@1:40, "+
+			"the launch floor never raised", got.CodeFloor, got.CodeLaunch)
+	}
+
+	second := run("t1")
+	second.Repos = []sandbox.RunRepo{runRepo("api", apiID)}
+	second.CodeFloor = "code@1:90"
+	second.CodeHolds = []string{"repo-a"}
+	if _, err := s.BeginLaunch(ctx, second, sandbox.Fence{}); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	kept("the relaunch")
+	got = mustGet(t, s, "t1")
+	if !reflect.DeepEqual(got.Repos, second.Repos) || got.CodeFloor != "code@1:90" || got.CodeLaunch != "code@1:90" {
+		t.Fatalf("a relaunch carries repos %+v, floor %q and launch floor %q; want the second job's "+
+			"repositories alone and code@1:90 for both floors", got.Repos, got.CodeFloor, got.CodeLaunch)
+	}
+
+	// A RELAUNCH GIVEN NO REPOSITORIES has none: a job's grants are its own.
+	if _, err := s.BeginLaunch(ctx, run("t1"), sandbox.Fence{}); err != nil {
+		t.Fatalf("relaunch with no repositories: %v", err)
+	}
+	if got := mustGet(t, s, "t1"); len(got.Repos) != 0 || got.CodeFloor != "" || got.CodeLaunch != "" {
+		t.Fatalf("a relaunch given no repositories carries %+v, floor %q, launch floor %q; want none",
+			got.Repos, got.CodeFloor, got.CodeLaunch)
+	}
+	kept("the relaunch with no repositories")
+}
+
+// higherFloor is a raise to want, judged as the code host's caller judges one:
+// written only when want is past the floor as the row holds it — here, by the
+// sequence after the colon of a test's `code@1:<n>` tokens.
+func higherFloor(want string) func(string) (string, bool) {
+	seq := func(token string) int {
+		_, n, _ := strings.Cut(token, ":")
+		v, err := strconv.Atoi(n)
+		if err != nil {
+			return -1
+		}
+		return v
+	}
+	return func(current string) (string, bool) {
+		if seq(want) <= seq(current) {
+			return "", false
+		}
+		return want, true
+	}
+}
+
+// A FLOOR IS RAISED ON THE LAUNCH THAT HOLDS THE ROW, AND ONLY UPWARD. The raise
+// is the caller's judgement of which floor is higher, asked against the row as
+// the write reads it, so a lower floor writes nothing and two raises racing
+// land the higher whichever lands first; a raise naming a job the row no longer
+// holds, a row whose ending is decided and a row that is gone are each no write
+// and no error — the box that was shown something is over.
+//
+// Mutation: write without the launch check — the superseded job's raise moves
+// the relaunched job's floor, red.
+func testRaiseCodeFloorRaisesTheCurrentLaunchOnly(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	if ok, err := s.RaiseCodeFloor(ctx, "nobody", "launch-1", higherFloor("code@1:5")); err != nil || ok {
+		t.Fatalf("a raise on no row = %v, %v, want false and no error", ok, err)
+	}
+	r := run("t1")
+	r.Repos, r.CodeFloor = []sandbox.RunRepo{runRepo("web", webID)}, "code@1:10"
+	first := mustLaunched(t, s, r)
+	if _, err := s.RaiseCodeFloor(ctx, "t1", "", higherFloor("code@1:11")); err == nil {
+		t.Fatal("a raise naming no launch was taken")
+	}
+	if ok, err := s.RaiseCodeFloor(ctx, "t1", first, higherFloor("code@1:9")); err != nil || ok {
+		t.Fatalf("a raise below the floor = %v, %v, want no write", ok, err)
+	}
+	if ok, err := s.RaiseCodeFloor(ctx, "t1", first, higherFloor("code@1:10")); err != nil || ok {
+		t.Fatalf("a raise to the floor itself = %v, %v, want no write", ok, err)
+	}
+	if got := mustGet(t, s, "t1").CodeFloor; got != "code@1:10" {
+		t.Fatalf("the floor is %q after raises that were not higher, want code@1:10", got)
+	}
+
+	// TWO RAISES RACING LAND THE HIGHER, whichever the store takes first.
+	for round := range 8 {
+		low, high := 20+4*round, 22+4*round
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for _, to := range []int{high, low} {
+			wg.Go(func() {
+				<-start
+				if _, err := s.RaiseCodeFloor(ctx, "t1", first, higherFloor(fmt.Sprintf("code@1:%d", to))); err != nil {
+					t.Errorf("racing raise to %d: %v", to, err)
+				}
+			})
+		}
+		close(start)
+		wg.Wait()
+		if got, want := mustGet(t, s, "t1").CodeFloor, fmt.Sprintf("code@1:%d", high); got != want {
+			t.Fatalf("round %d: two raises racing left the floor at %q, want %q, the higher", round, got, want)
+		}
+	}
+
+	// A RAISE OF A JOB THE ROW NO LONGER HOLDS is no write: the relaunch's
+	// floor is the relaunch's.
+	relaunched := run("t1")
+	relaunched.Repos, relaunched.CodeFloor = []sandbox.RunRepo{runRepo("web", webID)}, "code@1:200"
+	second := mustBeginLaunch(t, s, relaunched)
+	if ok, err := s.RaiseCodeFloor(ctx, "t1", first, higherFloor("code@1:900")); err != nil || ok {
+		t.Fatalf("a superseded job's raise = %v, %v, want no write and no error", ok, err)
+	}
+	if got := mustGet(t, s, "t1").CodeFloor; got != "code@1:200" {
+		t.Fatalf("a superseded job's raise left the floor at %q, want the relaunch's code@1:200", got)
+	}
+	if ok, err := s.RaiseCodeFloor(ctx, "t1", second, higherFloor("code@1:201")); err != nil || !ok {
+		t.Fatalf("the current job's raise = %v, %v, want it written", ok, err)
+	}
+
+	// A RUN WHOSE ENDING IS DECIDED takes no raise, and says so without an
+	// error: the ending's own steps are the only writes it takes.
+	decide(t, s, "t1", everyJob(sandbox.Fence{}, sandbox.Active))
+	if ok, err := s.RaiseCodeFloor(ctx, "t1", second, higherFloor("code@1:300")); err != nil || ok {
+		t.Fatalf("a raise on a run whose ending is decided = %v, %v, want false and no error", ok, err)
+	}
+	if got := mustGet(t, s, "t1").CodeFloor; got != "code@1:201" {
+		t.Fatalf("a run whose ending is decided has floor %q, want code@1:201", got)
 	}
 }

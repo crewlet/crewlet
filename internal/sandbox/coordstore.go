@@ -116,6 +116,10 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// start, its iteration, whether its phase was published — is not this
 	// one's. Only the model is the caller's.
 	run.Launch = LaunchRecord{StartedAt: now, Model: run.Launch.Model}
+	// THE JOB'S LAUNCH FLOOR IS THE FLOOR IT OPENS AT, never the caller's to
+	// set apart: what the run pushed is read above it, so one written from
+	// anything else would hide a push or count another job's.
+	run.CodeLaunch = run.CodeFloor
 	// THE TURN'S CODE HOLDS, each once and within the row's bound: a create
 	// writes them as handed, a reset unions them ([CoordStore.resetLaunch]).
 	holds, fits := unionHolds(nil, run.CodeHolds)
@@ -190,6 +194,13 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		existing.Status = StatusLaunching
 		existing.LaunchID = run.LaunchID
 		existing.Launch = run.Launch
+		// THE JOB'S GRANTS AND FLOORS ARE ITS OWN, replaced rather than kept:
+		// the previous job's repositories are not this job's, and a box of
+		// the previous job that is still pushing is refused by the launch id
+		// it was minted for. Unlike the holds above, which the turn may still
+		// depend on whichever job named them.
+		existing.Repos = run.Repos
+		existing.CodeFloor, existing.CodeLaunch = run.CodeFloor, run.CodeLaunch
 		if fence.Fenced() {
 			existing.Owner, existing.OwnerEpoch = fence.Owner, fence.Epoch
 		}
@@ -284,6 +295,31 @@ func (s *CoordStore) AddCodeHolds(ctx context.Context, turnID string, keys []str
 		return false, fmt.Errorf("sandbox: hold %d keys on run %s: %w", len(keys), turnID, ErrCodeHoldsFull)
 	}
 	return wrote || already, nil
+}
+
+// RaiseCodeFloor raises a live run's code floor while the row holds launch.
+// See the contract on [PendingStore].
+func (s *CoordStore) RaiseCodeFloor(ctx context.Context, turnID, launchID string,
+	raise func(current string) (string, bool),
+) (bool, error) {
+	if launchID == "" {
+		return false, fmt.Errorf("sandbox: a floor raise on run %s names no launch", turnID)
+	}
+	_, wrote, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.LaunchID != launchID {
+			return false
+		}
+		next, ok := raise(run.CodeFloor)
+		if !ok || next == "" || next == run.CodeFloor {
+			return false
+		}
+		run.CodeFloor = next
+		return true
+	})
+	if err != nil {
+		return false, fmt.Errorf("sandbox: raise the code floor of run %s: %w", turnID, err)
+	}
+	return wrote, nil
 }
 
 // Get returns one run by turn id.

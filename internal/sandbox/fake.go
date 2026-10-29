@@ -39,6 +39,9 @@ type FakeSandbox struct {
 	closed       bool
 	commands     []string
 	background   []string
+	// execs is every command the box was asked to run, foreground and
+	// detached, with the environment it was given: see [FakeSandbox.Execs].
+	execs []FakeExec
 	// readCap is the whole-read cap a suite gave the box, zero for
 	// [MaxFileBytes]: see [FakeSandbox.CapReads].
 	readCap int
@@ -95,9 +98,21 @@ func (s *FakeSandbox) ID() string { return s.id }
 // nothing on disk backs.
 func (s *FakeSandbox) Home() string { return s.home }
 
+// FakeExec is one command a [FakeSandbox] was asked to run, and the
+// environment and directory it was given.
+type FakeExec struct {
+	Command    string
+	Env        map[string]string
+	Cwd        string
+	Background bool
+}
+
 // Exec records the command and returns whatever the test queued for it,
 // or an empty success.
 func (s *FakeSandbox) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error) {
+	s.mu.Lock()
+	s.execs = append(s.execs, FakeExec{Command: cmd, Env: maps.Clone(opts.Env), Cwd: opts.Cwd})
+	s.mu.Unlock()
 	if s.ExecFunc != nil {
 		return s.ExecFunc(ctx, cmd, opts)
 	}
@@ -113,7 +128,19 @@ func (s *FakeSandbox) StartBackground(ctx context.Context, cmd string, opts Exec
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.background = append(s.background, cmd)
+	s.execs = append(s.execs, FakeExec{Command: cmd, Env: maps.Clone(opts.Env), Cwd: opts.Cwd, Background: true})
 	return strconv.Itoa(len(s.background)), nil
+}
+
+// Execs is every command the box was asked to run — foreground, a scripted
+// [FakeSandbox.ExecFunc]'s included, and detached — in order, each with the
+// environment and directory it was given: what a case about a run's
+// environment reaching its box reads, since nothing else of a fake box keeps
+// one.
+func (s *FakeSandbox) Execs() []FakeExec {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.execs)
 }
 
 // JobRunning answers through [FakeSandbox.Exec], the way a remote box does,
