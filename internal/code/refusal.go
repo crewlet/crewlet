@@ -16,7 +16,7 @@ import (
 type Refusal string
 
 // The codes. The first seventeen may be RECORDED on a command ([Refusal.Recorded]);
-// the last ten are answers ABOUT a push, never part of one.
+// the last eleven are answers ABOUT a push, never part of one.
 const (
 	// RefusalStale is a ref that is not where the client thought.
 	RefusalStale Refusal = "stale"
@@ -163,6 +163,24 @@ const (
 	// never carried by the estate router, so it is no field of the code
 	// domain's records and takes no versionedFields row.
 	RefusalStoreFull Refusal = "store_full"
+	// RefusalForgedCommitter is a CODING BOX'S push whose pack holds a commit
+	// committed as the engine — `engine@<code.identity_domain>`, the address
+	// only the host's own writes carry (ADR-0062), in whatever case it is
+	// written — that the repository does not already hold, or more such
+	// commits than one push is checked for: refused whole by the node that
+	// received it before any byte of its bundle was uploaded, so nothing was
+	// stored and nothing proposed. A box runs code nobody vouches for, and a
+	// commit it stored under the engine's name would read as the host's own
+	// write in every clone's history; a person's push and an import may carry
+	// the engine's commits as git carries any commit — a branch pushed back
+	// from a clone, an export imported again.
+	//
+	// AN ANSWER ABOUT A PUSH, decided by the node that received it before
+	// any proposal, as store_full is: never recorded on a command
+	// ([Refusal.Recorded]) and never carried by the estate router, so it is
+	// no field of the code domain's records and takes no versionedFields
+	// row.
+	RefusalForgedCommitter Refusal = "forged_committer"
 	// RefusalNotApplied is a push durable on the log and applied nowhere.
 	RefusalNotApplied Refusal = "not_applied"
 	// RefusalUnknown is a push whose outcome could not be established.
@@ -180,7 +198,8 @@ func Refusals() []Refusal {
 		RefusalRepoArchived, RefusalRepoDeleted, RefusalRepoSize, RefusalRepoRefs, RefusalRefConflict,
 		RefusalUploadExpired, RefusalAtomic, RefusalBlobTooLarge, RefusalPackTooLarge,
 		RefusalBusy, RefusalCompactionBehind, RefusalPushQuota, RefusalExpunging, RefusalTooManyChanges,
-		RefusalUnavailable, RefusalStoreFull, RefusalNotApplied, RefusalUnknown, RefusalPending,
+		RefusalUnavailable, RefusalStoreFull, RefusalForgedCommitter, RefusalNotApplied, RefusalUnknown,
+		RefusalPending,
 	}
 }
 
@@ -188,12 +207,13 @@ func Refusals() []Refusal {
 func (r Refusal) Valid() bool { return slices.Contains(Refusals(), r) }
 
 // Recorded reports a code that may appear on a recorded command: every one but
-// the ten that are answers ABOUT a push — whether it could be committed at
+// the eleven that are answers ABOUT a push — whether it could be committed at
 // all — rather than a verdict on one of its commands.
 func (r Refusal) Recorded() bool {
 	switch r {
 	case RefusalBusy, RefusalCompactionBehind, RefusalPushQuota, RefusalExpunging, RefusalTooManyChanges,
-		RefusalUnavailable, RefusalStoreFull, RefusalNotApplied, RefusalUnknown, RefusalPending:
+		RefusalUnavailable, RefusalStoreFull, RefusalForgedCommitter, RefusalNotApplied, RefusalUnknown,
+		RefusalPending:
 		return false
 	}
 	return r.Valid()
@@ -237,6 +257,9 @@ var sentences = map[Refusal]string{
 	RefusalUnknown:     "the push's outcome is unknown; fetch, then run git push again",
 	RefusalPending:     "the push is durable and unresolved here; run git push again (a push that landed reports up to date)",
 	RefusalStoreFull:   "the object store has no room for the push, and nothing was stored; it lands only once an operator makes room",
+	RefusalForgedCommitter: "a commit the push sends is committed as the code host's engine, which only the " +
+		"host's own writes are, and a coding box sends none the repository does not already hold; nothing " +
+		"was stored",
 }
 
 // Sentence is the code's fixed sentence, or the code itself for one this build

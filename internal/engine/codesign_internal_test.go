@@ -40,12 +40,15 @@ roles:
 // environment, which a retry on another git node need not share, so the
 // variable set here changes nothing — while a valid address is the author's
 // own. A role name git would cut falls back to the handle. The committer is
-// the engine at the identity domain, its default seats.invalid; a seat the
+// the engine at the identity domain, its default seats.invalid — and the
+// address a coding box's pack may hold no new commit of (Committer) is that
+// same committer, read off the same epoch; a seat the
 // chart does not hold, and a node holding no epoch, sign nothing, about this
-// node.
+// node, and a node holding no epoch names no committer either.
 //
-// Mutation: read the role's ResolvedEmail — the referenced seat signs with the
-// variable's value, red.
+// Mutations: read the role's ResolvedEmail — the referenced seat signs with
+// the variable's value, red; Committer spelled from the default domain — the
+// example.org row names seats.invalid, red.
 func TestTheSignerFallsBackToTheIdentityDomain(t *testing.T) {
 	t.Setenv("JANE_EMAIL", "jane@example.com")
 	for _, tc := range []struct {
@@ -92,9 +95,16 @@ func TestTheSignerFallsBackToTheIdentityDomain(t *testing.T) {
 			code.ErrNotServing) {
 			t.Errorf("a seat the chart lacks signs: %v, want ErrNotServing", err)
 		}
+		if got, err := s.Committer(); err != nil || got != "engine@"+tc.want {
+			t.Errorf("the committer a box's push is held to is %q (%v), want engine@%s, the one every "+
+				"commit is signed by", got, err, tc.want)
+		}
 	}
 	if _, err := (codeSigner{e: &Engine{}}).Sign(code.Principal{Kind: code.PrincipalAgent, Seat: "plain"}); !errors.Is(
 		err, code.ErrNotServing) {
 		t.Errorf("a node with no epoch signs: %v, want ErrNotServing", err)
+	}
+	if _, err := (codeSigner{e: &Engine{}}).Committer(); !errors.Is(err, code.ErrNotServing) {
+		t.Errorf("a node with no epoch names the engine's committer: %v, want ErrNotServing", err)
 	}
 }

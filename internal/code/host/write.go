@@ -44,12 +44,21 @@ import (
 // `Crewlet <engine@<code.identity_domain>>`, a CONVENTION that marks the
 // commits the host built in a cooperating client's history and authenticates
 // nothing: any client can write it, and only the push row (`via engine`, its
-// principal) says who built a commit (ADR-0062).
+// principal) says who built a commit (ADR-0062). A coding box's push whose
+// pack holds a commit naming it that the repository does not already hold is
+// refused (forged_committer, landing.EngineCommitter); a person's may carry
+// one.
 type Signer interface {
 	// Sign is the signature of a commit p makes. An error is a node that
 	// cannot sign — it holds no epoch, or its chart holds no seat p names —
 	// and the write runs nothing.
 	Sign(p code.Principal) (Signature, error)
+	// Committer is the address Sign names every commit's committer by on
+	// the serving epoch, `engine@<code.identity_domain>` — what a coding
+	// box's pack may hold no commit of that the repository does not already
+	// hold (forged_committer). An error is a node that holds no epoch, which
+	// judges no box's push.
+	Committer() (string, error)
 }
 
 // Signature is an engine-built commit's names and addresses, each one git

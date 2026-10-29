@@ -32,7 +32,9 @@ import (
 //     a CONVENTION that marks the commits the host built in a cooperating
 //     client's history, never an authentication — any git client can write
 //     it, and only the push row's `via engine` and its principal say who
-//     built a commit.
+//     built a commit. A coding box's pack may hold no commit under it that
+//     the repository does not already hold (Committer, the same address,
+//     spelled once: engineCommitter).
 //
 // A node with no epoch, or whose chart holds no such seat, signs nothing:
 // code.ErrNotServing, about this node, so the write runs nothing here and the
@@ -48,6 +50,11 @@ const (
 // maxIdentityEmailBytes is the most an address a commit names may be: RFC
 // 5321's 254 bytes, past which no mail system takes it.
 const maxIdentityEmailBytes = 254
+
+// engineCommitter is the address the engine commits as on the identity
+// domain domain: the ONE spelling of it, which every commit Sign names and
+// every box push Committer holds carry alike.
+func engineCommitter(domain string) string { return codeCommitterLocal + "@" + domain }
 
 func (s codeSigner) Sign(p code.Principal) (host.Signature, error) {
 	c := s.e.Company()
@@ -70,7 +77,22 @@ func (s codeSigner) Sign(p code.Principal) (host.Signature, error) {
 		email = p.Seat + "@" + domain
 	}
 	return host.Signature{AuthorName: name, AuthorEmail: email, CommitterName: codeCommitterName,
-		CommitterEmail: codeCommitterLocal + "@" + domain}, nil
+		CommitterEmail: engineCommitter(domain)}, nil
+}
+
+// Committer is the address Sign names every commit's committer by, off the
+// CURRENT epoch as Sign reads it — so a revision that moves the identity
+// domain holds a box's push to the new address from its activation on, and a
+// commit the engine built under the old one, which a box brings back, is no
+// longer matched (the repository holds it in any case). A node with no epoch
+// names none: code.ErrNotServing.
+func (s codeSigner) Committer() (string, error) {
+	c := s.e.Company()
+	if c == nil || c.Config == nil {
+		return "", fmt.Errorf("%w: this node holds no configuration to name the engine's committer by",
+			code.ErrNotServing)
+	}
+	return engineCommitter(codeInForceAt(c).IdentityDomainResolved()), nil
 }
 
 // identityEmail reports an address a commit may name as it is written: one

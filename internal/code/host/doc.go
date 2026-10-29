@@ -34,7 +34,8 @@
 // the bound, so that a retry whose own sync finds the bound uploads nothing
 // while the committer's decide stays the authority — a push whose sync found
 // the repository below a bound its committer finds reached is refused there,
-// its bundle stored and named by no row; the bundle
+// its bundle stored and named by no row; a coding box's pack held to the
+// engine's committer (below), before any byte of it is uploaded; the bundle
 // uploaded and sealed while the commits it introduces are listed, and the
 // proposal held to every rule its committer will hold it to; the proposal
 // itself, through the estate router; the outcome, `ok` only from the push's
@@ -316,6 +317,23 @@
 // — its grant, its freshness, its principal and its share — and never asks
 // which admitter ran (TestNothingAfterAdmissionAsksWhichAdmitterRan); a box's
 // push is no operator_acted, its push row naming its run.
+//
+// A BOX COMMITS NOTHING AS THE ENGINE. The engine's committer,
+// `engine@<code.identity_domain>` (Signer.Committer), marks the commits the
+// host built and authenticates nothing, and a box runs code nobody vouches
+// for: so a box's push whose PACK holds a commit committed as it — compared
+// folding case — that the repository does not already hold is refused
+// forged_committer whole (landing.EngineCommitter, the admission's
+// engineCommitter), before any byte of the pack is uploaded, so nothing is
+// stored or proposed. The pack, not the commits its updates introduce: it is
+// stored whole, with the objects of an update refused beside one that lands
+// and any a client sent that no ref reaches, each the repository's once it
+// lands (committedAs). A person's push is never read for its committers, and
+// may carry the engine's commits as git carries any. A commit the repository
+// already holds is no forgery — the engine's own commits on a branch deleted
+// since a box checked it out — so each is asked of the copy the scratch leans
+// on in one cat-file (forged), and a push may bring back maxEngineCommits of
+// them, a longer history in parts.
 //
 // # Every transfer is charged to the credential that asked for it
 //

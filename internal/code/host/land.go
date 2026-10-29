@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -20,8 +21,9 @@ import (
 
 // ONE LANDING, WHOEVER BUILT THE PUSH: everything the engine decides about a
 // push after its pack exists in a scratch — the repository's status, the force
-// and stale checks, the blob scan, --atomic, the size, the bundle stored and
-// sealed while the commits it introduces are listed, the proposal, the wait
+// and stale checks, the blob scan, --atomic, the size, a coding box's pack held
+// to the engine's committer, the bundle stored and sealed while the commits it
+// introduces are listed, the proposal, the wait
 // for its row and the adoption — in ONE function, land. It has two callers:
 // the relay, which reads git's commands off the hook and hands them over, and
 // an engine write (write.go), a push the engine builds itself rather than one
@@ -106,6 +108,16 @@ type landing struct {
 	// reads, so a run given a repository to write would otherwise land a
 	// force-push its seat may make and its run may not.
 	ForcedGrant func(code.Command) (code.Refusal, string)
+	// EngineCommitter is the address the engine commits as
+	// (Signer.Committer) for a push whose pack may hold no commit committed
+	// as it that the repository does not already hold — a CODING BOX'S,
+	// whose git runs code nobody vouches for — and "" for every other: a
+	// person's push may carry the engine's commits as git carries any (a
+	// branch pushed back from a clone, an export imported again), and an
+	// engine write's commits are committed as it by right. Set, the pack's
+	// commits are read for it before a byte of the pack is uploaded (land's
+	// step 8), so a push refused forged_committer has stored nothing.
+	EngineCommitter string
 	// Progress is told each long step as it starts — the relay's keepalive
 	// names it — and nil is nobody listening.
 	Progress func(step string)
@@ -170,15 +182,19 @@ func unchecked(err error) error {
 //  7. THE PACK BOUND: a push carrying a pack into a repository at
 //     code.MaxPacksPerRepo live packs is refused compaction_behind before its
 //     upload (behind) — on its synced row, read once more before it refuses.
-//  8. THE BUNDLE AND THE LISTING TOGETHER (introduceAndStore): the bundle
+//  8. THE ENGINE'S COMMITTER, for a coding box's push (EngineCommitter): a
+//     pack holding a commit committed as the engine that the repository does
+//     not already hold is refused forged_committer whole, before its upload
+//     (forged).
+//  9. THE BUNDLE AND THE LISTING TOGETHER (introduceAndStore): the bundle
 //     stored and sealed while the commits the push introduces are listed,
 //     and the proposal held to every rule its committer will hold it to —
 //     the change the push's options ask for made ready for it first
 //     (readyChange), never a refusal of the push.
-//  9. THE PROPOSAL, to the repository's committer through the estate router.
-//  10. THE OUTCOME, `ok` only from the push's applied row (decided,
+//  10. THE PROPOSAL, to the repository's committer through the estate router.
+//  11. THE OUTCOME, `ok` only from the push's applied row (decided,
 //     awaitPending).
-//  11. THE ADOPTION: the pack linked into this node's cache once its row has
+//  12. THE ADOPTION: the pack linked into this node's cache once its row has
 //     applied, so the node that took the push does not download it back —
 //     unless a round that read its row had already begun that pack's GET, or
 //     a link fails (code_pack_adopt_failed; its next sync downloads it). Its
@@ -265,7 +281,11 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	if err != nil {
 		return landed{}, unchecked(err)
 	}
-	var ref *code.PackRef
+	var (
+		ref *code.PackRef
+		// idx is the pack's index, whose ids the scans of the pack read.
+		idx string
+	)
 	if hasPack {
 		// The push's ONE stored object, laid out from its scratch's three
 		// files. A missing .rev fails the landing: a landing's scratch holds
@@ -273,12 +293,12 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		if ref, err = code.LayBundle(l.PushID, packPath, checksum); err != nil {
 			return landed{}, unchecked(err)
 		}
+		idx = strings.TrimSuffix(packPath, ".pack") + ".idx"
 		if s.o.Metrics != nil {
 			s.o.Metrics.ObserveValue(metrics.CodePushBytes, float64(ref.Size), nil)
 		}
 	}
 	if ref != nil && undecided(cmds) {
-		idx := strings.TrimSuffix(packPath, ".pack") + ".idx"
 		oid, size, found, berr := s.largestBlob(ctx, l.Scratch, idx, ref.PackBytes(), limits.MaxBlobBytes)
 		if berr != nil {
 			return landed{}, unchecked(berr)
@@ -338,7 +358,27 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		}
 	}
 
-	// 8 THE BUNDLE AND THE LISTING TOGETHER: the commits every update still
+	// 8 THE ENGINE'S COMMITTER, for a coding box's push, before a byte is
+	// uploaded: a pack holding a commit committed as the engine that the
+	// repository does not already hold is refused whole — the pusher's to
+	// rewrite, refused as the size is, never the receiver's bug — and stores
+	// nothing, whatever its commands came to: the pack is stored whole or not
+	// at all, so a commit of it that only a refused update reaches, or that
+	// none does, would be the repository's as surely as one a landed update
+	// reaches.
+	if ref != nil && l.EngineCommitter != "" {
+		detail, refused, ferr := s.forged(ctx, &l, idx, ref.PackBytes())
+		if ferr != nil {
+			return landed{}, unchecked(ferr)
+		}
+		if refused {
+			cmds = refuseRest(cmds, code.RefusalForgedCommitter, detail)
+			result.outcome, result.refusal = types.AuditRefused, AuditRefusal(code.RefusalForgedCommitter)
+			return done(landed{Commands: cmds, Result: result}), nil
+		}
+	}
+
+	// 9 THE BUNDLE AND THE LISTING TOGETHER: the commits every update still
 	// standing introduces, and the bundle stored before anything names it —
 	// the proposal held to every rule its committer will hold it to once the
 	// listing answers, before the upload completes. Every ref is proposed in
@@ -411,7 +451,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		}
 	}
 
-	// 9 THE PROPOSAL, to the repository's committer, under the caller's
+	// 10 THE PROPOSAL, to the repository's committer, under the caller's
 	// context: cancellation and no deadline of its own — each data node gets
 	// the router's write attempt.
 	l.Progress("committing the push")
@@ -420,7 +460,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		return landed{}, unchecked(err)
 	}
 
-	// 10 THE OUTCOME, from the push's own row.
+	// 11 THE OUTCOME, from the push's own row.
 	v := s.decided(ctx, &l, proposed, change != nil, res, perr)
 	result.outcome, result.refusal, result.position = v.outcome, v.refusal, v.position
 	for _, c := range v.commands {
@@ -433,7 +473,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	}
 	out := done(landed{Commands: withRefs(v.commands, named), Result: result})
 
-	// 11 THE ADOPTION, once the row has applied: a pack linked in before
+	// 12 THE ADOPTION, once the row has applied: a pack linked in before
 	// it would be an object no row names (cache.Cache.Adopt).
 	if v.applied && ref != nil && result.ok > 0 {
 		if err := s.fault(ctx, codefault.HostBeforeAdopt, 0); err != nil {
@@ -546,8 +586,12 @@ func (s *Server) behind(ctx context.Context, l *landing) (string, bool) {
 // validate is the proposal's own check, asked as soon as what it carries is
 // known — once the listing has answered, or before the upload starts when
 // there is nothing to list — over the pack as it stands unstored: a proposal
-// it refuses ends the upload, and err is an *invalidProposal, so no bundle is
-// stored for a push no committer could take.
+// it refuses ends the upload where it is still running, and err is an
+// *invalidProposal. An upload that ENDED before the listing answered has
+// stored its bundle all the same, so a push no committer could take may leave
+// one, named by no row, which the collector removes after its grace as it
+// does a refused push's. A refusal that must store nothing is decided before
+// this step, never here (land's steps 6 to 8).
 func (s *Server) introduceAndStore(ctx context.Context, l *landing, news []string, packPath string,
 	ref *code.PackRef, validate func([]string, int, *code.PackRef) error) (introduced []string, count int,
 	stored, err error) {
@@ -627,6 +671,68 @@ type invalidProposal struct{ err error }
 
 func (e *invalidProposal) Error() string { return e.err.Error() }
 func (e *invalidProposal) Unwrap() error { return e.err }
+
+// forged is land's step 8 for a coding box's push: the sentence its every
+// command still standing is refused forged_committer with, and refused true,
+// where the push's pack (idx, its index) holds a commit committed as the
+// engine (l.EngineCommitter, committedAs) that the repository does not
+// already hold — the first such, by the pack's index order — or more such
+// commits than one push is checked for (maxEngineCommits); refused false for a
+// pack whose every such commit the repository holds, and for one holding none,
+// which asks the repository nothing.
+//
+// ALREADY HELD IS NO FORGERY. A box's push may carry the engine's own commits
+// back: a seat branch deleted since the box checked it out — by the seat's
+// own tool, by a person, by the branch's expiry — leaves its commits in the
+// repository, since nothing removes an object a ref stopped reaching and a
+// compaction keeps what no ref reaches (ADR-0060), and git sends a commit no
+// ref the box was shown reaches. Refused, the host's own write would be
+// answered as a forgery of it. So every commit committed as the engine is
+// asked whether the REPOSITORY holds it — ONE `cat-file --batch-check` of them
+// all in the copy the push's scratch leans on (cache.Cache.Missing over
+// l.Synced), never in the scratch, whose own objects are the push's — and
+// only one it lacks is refused. The copy is read through its dropping view, so
+// a commit an expunge is dropping, which the repository still serves, is
+// held; and damage the check meets is its failure, never an answer that a
+// commit is absent. What it holds, it holds by a landed push or an engine
+// write, never by a box's pack this step refused — so a box cannot make a
+// commit held by a push of its own first.
+func (s *Server) forged(ctx context.Context, l *landing, idx string, packBytes int64) (detail string,
+	refused bool, err error) {
+
+	found, pastBound, err := s.committedAs(ctx, l.Scratch, idx, packBytes, l.EngineCommitter)
+	if err != nil || len(found) == 0 {
+		return "", false, err
+	}
+	ids := func(yield func(string, error) bool) {
+		for _, id := range found {
+			if !yield(id, nil) {
+				return
+			}
+		}
+	}
+	missing, err := s.o.Cache.Missing(ctx, l.Synced, ids, int64(len(found))*(gitref.OIDHexLen+1))
+	switch {
+	case err != nil:
+		return "", false, fmt.Errorf("host: ask whether the repository holds the commits committed as the "+
+			"engine: %w", err)
+	case missing != "":
+		return forgedDetail(missing, l.EngineCommitter), true, nil
+	case pastBound:
+		return fmt.Sprintf("this push carries more than %d commits committed as the code host's engine (%s), "+
+			"more than one push is checked for: push the history in parts, each landing before the next",
+			maxEngineCommits, l.EngineCommitter), true, nil
+	}
+	return "", false, nil
+}
+
+// forgedDetail is the sentence of a push refused forged_committer for commit
+// oid, committed as committer, the engine's address: what the commit claims,
+// and the two ways to make the change that land.
+func forgedDetail(oid, committer string) string {
+	return fmt.Sprintf("%s is committed as the code host's engine (%s), which only the host's own writes are: "+
+		"cherry-pick it, which rewrites the committer, or make the change with a code_* tool", short(oid), committer)
+}
 
 // undecided reports whether any command is still to be decided.
 func undecided(cmds []code.Command) bool {

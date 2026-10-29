@@ -224,6 +224,10 @@ var (
 	ListingDeadline = listingDeadline
 )
 
+// MaxEngineCommits is the most commits committed as the engine one coding
+// box's pack may hold for the repository to be asked about.
+const MaxEngineCommits = maxEngineCommits
+
 // HookWalks is what a push of cmds — each {old, new, ref} — may spend walking
 // a repository of objects live objects beside its hook budget.
 func HookWalks(cmds [][3]string, objects int64) time.Duration {

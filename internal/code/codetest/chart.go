@@ -129,6 +129,10 @@ func (FixtureSigner) Sign(p code.Principal) (host.Signature, error) {
 		CommitterName: FixtureCommitterName, CommitterEmail: FixtureCommitterEmail}, nil
 }
 
+// Committer is the address the fixture signer commits as — the one a coding
+// box's pack may hold no new commit of.
+func (FixtureSigner) Committer() (string, error) { return FixtureCommitterEmail, nil }
+
 // FixtureAuthorEmail is the address the fixture signer names a seat's commit
 // by.
 func FixtureAuthorEmail(seat string) string { return seat + "@" + config.DefaultCodeIdentityDomain }

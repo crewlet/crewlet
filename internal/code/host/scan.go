@@ -12,10 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// THE RECEIVE PIPELINE'S THREE SCANS of a push, each one git process in the
-// push's scratch, in sequence — never one pool process piped into another, which
+// THE RECEIVE PIPELINE'S THREE SCANS of a push — and a coding box's fourth,
+// its pack's committers (committedAs) — each one git process in the push's
+// scratch, in sequence — never one pool process piped into another, which
 // would hold two slots of one lane at once and queue against itself.
 //
 // EVERY COMMIT WALK GOES BY GENERATION. A walk git makes newest first BY DATE
@@ -199,6 +201,76 @@ func (s *Server) largestBlob(ctx context.Context, sc *cache.Scratch, idxPath str
 		return "", 0, false, fmt.Errorf("host: scan the push's blobs: %w", err)
 	}
 	return "", 0, false, nil
+}
+
+// committedAs is the commits the push's own pack holds whose committer's
+// address is committer — the first maxEngineCommits of them, in the order the
+// pack's index lists them — and whether it holds more (pastBound).
+//
+// THE PACK, NEVER WHAT ITS UPDATES INTRODUCE. What a push stores is its pack,
+// whole, and a pack carries more than the commits its updates still standing
+// introduce: the objects of an update the landing refused — a force its run
+// may not make, sent beside an update it may — and any object a client sent
+// that no ref reaches, which receive-pack's fsck admits. Once the push lands,
+// each is in the repository, held, and a later push naming it introduces
+// nothing the repository lacks. So it is every commit of the pack whose
+// committer is read, never the listing's (introduced).
+//
+// ONE `rev-list --no-walk=unsorted --stdin` over the pack's ids, streamed from
+// its index as the blob scan's are, printing each commit's id and committer
+// (`--no-commit-header --format=%H%x00%ce`, git 2.33, under every git node's
+// floor). rev-list walks no history here: handed without --objects, a tree or
+// a blob is passed over once its header says what it is, and a tag is peeled
+// to the commit it names, which the pack or the repository holds. `%ce` is the
+// address as the commit wrote it, never `%cE`, which a .mailmap would rewrite,
+// and the match FOLDS CASE over the whole address (bytes.EqualFold): a reader
+// takes Engine@Seats.Invalid for the engine, and refusing more than the exact
+// spelling admits no forgery. Past maxEngineCommits matches the scan ENDS —
+// the push is refused whatever the rest are (forged) — so what one push makes
+// the engine hold and the repository be asked is the bound's, never what a
+// box sent. The rest is the pack's own cost: rev-list keeps an entry for every
+// object the pack holds, and every commit's text until it is printed, as
+// receive-pack's index-pack kept one an object for the same pack, and it is
+// bounded by the blob scan's deadline.
+func (s *Server) committedAs(ctx context.Context, sc *cache.Scratch, idxPath string, packBytes int64,
+	committer string) (found []string, pastBound bool, err error) {
+
+	_, ids, err := idxOIDs(idxPath)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = ids.Close() }()
+	judged := []byte(committer)
+	lines := gitproc.NewLines(func(line []byte) error {
+		id, address, ok := bytes.Cut(line, []byte{0})
+		if !ok || !gitref.ValidOID(id) {
+			return fmt.Errorf("host: rev-list printed %q, which is no commit and its committer", line)
+		}
+		if !bytes.EqualFold(address, judged) {
+			return nil
+		}
+		if len(found) == maxEngineCommits {
+			pastBound = true
+			return errFound
+		}
+		found = append(found, string(id))
+		return nil
+	})
+	_, err = s.runGit(ctx, gitproc.Cmd{
+		Dir: sc.Dir, Alternate: sc.Alternate,
+		Args:  []string{"rev-list", "--no-walk=unsorted", "--stdin", "--no-commit-header", "--format=%H%x00%ce"},
+		Stdin: ids, Stdout: lines, Class: gitproc.ClassRead, Deadline: gitproc.PackWorkDeadline(packBytes),
+	})
+	if err == nil {
+		err = lines.Close()
+	}
+	switch {
+	case errors.Is(err, errFound):
+		return found, true, nil
+	case err != nil:
+		return nil, false, fmt.Errorf("host: read the committers of the push's commits: %w", err)
+	}
+	return found, false, nil
 }
 
 // pathOf is the path a blob of the push is reached by — the first `rev-list

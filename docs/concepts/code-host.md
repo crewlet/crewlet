@@ -2945,6 +2945,29 @@ slot. Every box is one **spool credential**, `runs`: boxes together hold at
 most one credential's share of the node's room for large fetch requests, and a
 person's spooled fetch never waits behind them.
 
+**A box commits nothing as the engine.** The engine's committer,
+`Crewlet <engine@<code.identity_domain>>`
+([who a commit names](#who-a-commit-names)), marks the commits the host built,
+and a box's git can write it into any commit it makes. So a box's push whose
+pack holds a commit committed as the engine — the address compared in any
+case, `Engine@Seats.Invalid` too — is refused `forged_committer` on every ref
+it sends, naming the commit, and nothing of it is uploaded: the receiving node
+reads the committer of every commit in a box's pack before the pack's upload
+begins. Every commit in the pack, not only those the updates that land
+reach: a pack is stored whole, so a commit sent with an update the host
+refuses — a push to a branch that takes a person's push alone — or one no
+update reaches would be in the repository all the same. A commit the
+repository already holds is no forgery — a box's old checkout pushing back a
+branch deleted since, the engine's own tool commits on it — so each commit
+committed as the engine is looked up in the node's copy of the repository,
+and only one the copy lacks is refused. One push may bring back up to 1 000
+of them; a longer history is refused with the remedy of pushing it in parts,
+since a part that landed is reached by a ref and the box's git does not send
+it again. A refused push stores and proposes nothing, and its `code_push` line
+names the refusal. A person's push and an import are never read for their
+committers: an export imported again carries the engine's commits as git
+carries any.
+
 **A stopped seat pushes nothing.** A person's pause with `stop_running` is the
 emergency stop, and a detached coding run is not fenced by it — it outlives its
 turn by design — so its box's push is refused, at the advertisement and at the
@@ -4184,6 +4207,10 @@ judges it for good, as it does every push whose own sync found the repository
 below the bound: one it refuses, because pushes that landed since took the
 repository there, has uploaded its pack, which no row names and the
 [object collector](object-store.md#collection-and-audit) deletes a day later.
+A [coding box](#coding-boxes)'s push whose pack holds a commit committed as the
+engine, which the repository does not already hold, is refused
+`forged_committer` before anything is uploaded too: the committers of a box's
+pack are read before its upload begins, never beside it.
 Only a push that passes every check is uploaded, as **one** object: its pack
 with the indexes the receiving git wrote.
 
@@ -4454,7 +4481,10 @@ history its caller never saw, and one that creates a branch needs it absent.
   a cooperating client's history, the commits the code host built, and
   authenticates nothing: any git client can write the same committer into a
   commit it pushes. Who built a commit is the push row's — `via engine`, its
-  principal and, for a seat, the turn that made it.
+  principal and, for a seat, the turn that made it. A [coding
+  box](#coding-boxes)'s push carrying a commit under it that the repository
+  does not already hold is refused (`forged_committer`), while a person's or
+  an import's may carry one.
 - **Its author date is the instant the writer acted** — the instant the
   write's operation was minted, to the second — and its committer date is
   that instant, or its parent's committer date where the parent is dated
@@ -4730,6 +4760,7 @@ words, since git does not read the header.
 | One ref of an `--atomic` push refused | the refused ref's reason, and `(atomic: …)` on every other | Fix the refused ref; nothing of the push landed. |
 | A blob over the limit | `(blob_too_large: blob <id> (<path>) is <size>, past code.limits.max_blob_bytes …)` | Remove it from the history you push. |
 | A push that would store more than one push may — the pack it sends completed against the repository, with its index | `(pack_too_large: the push stores <size>, past the <size> one push may store; push fewer commits at once, or without thin packs (git push --no-thin))` | Push fewer commits at once, or with `git push --no-thin`. Nothing was uploaded. |
+| A [coding box](#coding-boxes)'s push whose pack holds a commit committed as the engine — `engine@<code.identity_domain>`, in any case — that the repository does not already hold, whether or not an update that lands reaches it | `(forged_committer: <id> is committed as the code host's engine (engine@<domain>), which only the host's own writes are: cherry-pick it, which rewrites the committer, or make the change with a code_* tool)`; or, for a pack holding more than 1 000 such commits, `(forged_committer: this push carries more than 1000 commits committed as the code host's engine (engine@<domain>), more than one push is checked for: push the history in parts, each landing before the next)` | Commit the change as the box: a cherry-pick, an amend or a rebase writes the box's own identity as the committer. Or make the change through a `code_*` tool, which the engine commits itself. Nothing of the push was stored: drop the commit from every ref the push sends, a refused one included. A history of the engine's commits the repository already holds — a branch deleted since the box checked it out — lands, up to 1 000 of them a push: push a longer one in parts. A person's push is never refused for its committers. |
 | A new ref past the most live refs a repository holds | `(repo_refs: <repo> holds <n> live refs, the most one repository may)`; for a seat outside the owning unit, past the half it may fill ([A seat's push](#a-seats-push)), `(repo_refs: <repo> holds <n> live refs, and a seat outside unit <owner>, which owns it, creates refs there only while <repo> holds fewer than 50000: half of the 100000 one repository may, the other half kept for its owners)` — or `a seat other than <owner>, which owns it,` for a repository a seat owns | Delete the refs nobody needs, in the same push as the new ones or before it: a deletion stops counting at once, even against the push that makes it, and the refs a repository deleted never refuse a push. A seat outside the owning unit deletes its own branches it no longer needs; the other half of the refs is the owners'. |
 | A new ref beside a live ref of the directory it would make — `feature/x` beside the branch `feature`, or `feature` beside `feature/x` ([a ref and a directory of refs](#a-ref-and-a-directory-of-refs)) | `(ref_conflict: refs/heads/feature is in the way: a ref is never also a directory of refs, so a clone holding one could not fetch the other; delete it first, or choose another name)` | Delete the ref in the way in the same push (`git push origin :feature HEAD:feature/x`), or choose another name. A clone holding the old ref fetches the change with `git fetch --prune`. |
 | A pack that would take the repository past its size | `(repo_size: <repo> would hold <size> of packs, past <limit> (code.limits.repo_max_bytes))`; for a seat outside the owning unit, past the half it may fill ([A seat's push](#a-seats-push)), `(repo_size: <repo> would hold <size> of packs, past <half>: a seat outside unit <owner>, which owns it, fills at most half of code.limits.repo_max_bytes (<limit>), the other half kept for its owners)` | Raise `code.limits.repo_max_bytes`, or push less. What a repository holds is its packs as they were pushed ([Limits](#limits)). Nothing landed. A seat outside the owning unit is held to half of the limit whatever it is raised to: the other half is the owners'. |

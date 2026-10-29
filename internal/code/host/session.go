@@ -198,11 +198,21 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 			cmds[i].Result, cmds[i].Reason, cmds[i].Detail = code.ResultNG, a.Reason, a.Detail
 		}
 	}
+	// A CODING BOX COMMITS NOTHING AS THE ENGINE that the repository does not
+	// already hold: the address is read off the epoch now, as the engine's
+	// own writes are signed, so a revision that moves the identity domain
+	// holds a box to the new one from its activation.
+	committer, err := sess.adm.engineCommitter(s.o.Signer)
+	if err != nil {
+		unchecked("the engine could not name the committer its own commits carry, which a coding box's "+
+			"push is checked against", err)
+		return
+	}
 	ld, err := s.land(ctx, landing{
 		Synced: sess.synced, Scratch: sess.scratch, Commands: cmds, Atomic: features.atomic,
 		PushOptions: options, Principal: sess.principal, Via: code.ViaGit, PushID: sess.pushID,
 		ReceivedAt: sess.receivedAt, Judged: sess.judged, ForcedGrant: sess.adm.grant.RefRule,
-		Progress: sess.step,
+		EngineCommitter: committer, Progress: sess.step,
 	})
 	if err != nil {
 		cause := err

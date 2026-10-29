@@ -1,8 +1,10 @@
 package host_test
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -21,8 +23,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -826,6 +830,227 @@ func TestABoxPushOnAnItemWithALongKeyLands(t *testing.T) {
 		row.Run.TurnID != ref.TurnID {
 		t.Errorf("the run was stamped %+v, want the key fitted to %q and its ids whole", row.Run,
 			code.FitProvenance(long))
+	}
+}
+
+// A BOX CANNOT PUSH THE ENGINE'S COMMITTER: a coding box's push whose pack
+// holds a commit committed as the engine — the fixture signer's
+// engine@seats.invalid, written as the engine writes it or in any other case,
+// since a reader takes either for the engine — that the repository does not
+// already hold is refused forged_committer, naming the commit, on the ref it
+// sends. Its pack is read before its upload begins, so nothing reaches the
+// object store, nothing is proposed and no ref moves; and its one record — its
+// code_push line, since a box's push is no operator_acted — names the refusal
+// and the run. The control: a person's push of the same commit lands, as a
+// branch pushed back from a clone or an export imported again does.
+//
+// Mutations: drop the committer's check — the box's push lands, red; compare
+// the address byte for byte — the mixed-case row lands, red; upload the
+// bundle before the check — the upload is reached, red.
+func TestABoxCannotPushTheEnginesCommitter(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, committer string }{
+		{"as the engine writes it", codetest.FixtureCommitterEmail},
+		{"in another case", "Engine@Seats.INVALID"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var lines logs
+			e := &recording{}
+			c, _ := boxCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: e.wrap},
+				Logger: lines.logger()})
+			ref, box := c.LaunchBox(codetest.FixtureAlice, code.AccessWrite)
+			clone := box.Clone(c.BoxURL(0))
+			forged := box.Git().Env("GIT_COMMITTER_NAME="+codetest.FixtureCommitterName,
+				"GIT_COMMITTER_EMAIL="+tc.committer).Commit(t, clone, map[string]string{"a.txt": "a\n"},
+				"committed as the engine")
+			branch := code.SeatNamespace(codetest.FixtureAlice) + "work"
+			stored, proposed := len(objects(t, c)), len(e.seen("propose"))
+			uploads := c.Fleet.Faults().Hits(codefault.HostUpload)
+
+			res := box.Push(c.Ctx, clone, c.BoxURL(0), "HEAD:"+branch)
+			want := "(forged_committer: " + forged[:7] + " is committed as the code host's engine (" +
+				codetest.FixtureCommitterEmail + ")"
+			if reason, rejected := res.Rejected(branch); !rejected || !strings.Contains(reason, want) {
+				t.Fatalf("a box's push of a commit committed as %s: %s\nwant %s rejected %s…", tc.committer, res,
+					branch, want)
+			}
+			if n := c.Fleet.Faults().Hits(codefault.HostUpload) - uploads; n != 0 {
+				t.Errorf("the refused push reached its upload %d times: its refusal followed the store", n)
+			}
+			if n := len(objects(t, c)) - stored; n != 0 {
+				t.Errorf("the refused push stored %d objects", n)
+			}
+			if n := len(e.seen("propose")) - proposed; n != 0 {
+				t.Errorf("the refused push was proposed %d times", n)
+			}
+			if at, moved := c.Rows().Refs[branch]; moved {
+				t.Errorf("%s moved to %s, and its only push was refused", branch, at)
+			}
+			if n := lines.count("code_push", `"outcome":"refused"`, `"refusal":"forged_committer"`,
+				`"launch_id":"`+ref.LaunchID+`"`); n != 1 {
+				t.Errorf("the refused push's code_push line, naming forged_committer and its run, was logged %d "+
+					"times, want once:\n%s", n, strings.Join(lines.lines("code_push"), "\n"))
+			}
+
+			// THE CONTROL: a person's push of the same commit lands.
+			person := codetest.NewPerson(t, c.Fleet, "ceo")
+			landed := person.Push(c.Ctx, clone, c.URL(0), "HEAD:refs/heads/imported")
+			if !landed.OK("refs/heads/imported") {
+				t.Errorf("a person's push of the commit the box was refused: %s", landed)
+			}
+		})
+	}
+}
+
+// A BOX STORES NO COMMIT AS THE ENGINE BESIDE A REFUSED UPDATE: what a box's
+// push is judged by is its PACK, never only the commits its updates still
+// standing introduce. A box sends an ordinary commit to its own branch beside
+// a commit committed as the engine sent to main, which takes a person's push
+// alone: main is refused protected_direct, and its commit is in the pack all
+// the same — stored with the branch, the repository would hold it, and a later
+// push naming it would bring back a commit "the repository already holds". So
+// the whole push is refused forged_committer, storing and proposing nothing;
+// and the commit, still nobody's, is refused again when the box sends it on
+// its own.
+//
+// Mutation: judge the commits the standing updates introduce (the listing,
+// as first specified) rather than the pack — the branch lands with the
+// engine's commit in its bundle, and the second push lands that commit, red.
+func TestABoxStoresNoCommitAsTheEngineBesideARefusedUpdate(t *testing.T) {
+	t.Parallel()
+	e := &recording{}
+	c, _ := boxCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: e.wrap}})
+	_, box := c.LaunchBox(codetest.FixtureAlice, code.AccessWrite)
+	clone := box.Clone(c.BoxURL(0))
+	forged := box.Git().Env("GIT_COMMITTER_NAME="+codetest.FixtureCommitterName,
+		"GIT_COMMITTER_EMAIL="+codetest.FixtureCommitterEmail).Commit(t, clone,
+		map[string]string{"forged.txt": "f\n"}, "committed as the engine")
+	box.Git().Run(t, clone, "checkout", "--quiet", "-B", "work", "origin/main")
+	ordinary := box.Git().Commit(t, clone, map[string]string{"work.txt": "w\n"}, "an ordinary commit")
+	branch := code.SeatNamespace(codetest.FixtureAlice) + "work"
+	stored, proposed := len(objects(t, c)), len(e.seen("propose"))
+
+	res := box.Push(c.Ctx, clone, c.BoxURL(0), ordinary+":"+branch, forged+":refs/heads/main")
+	if why, refused := res.Rejected("refs/heads/main"); !refused || !strings.Contains(why, "protected_direct") {
+		t.Fatalf("a box's push of main, which takes a person's push alone: %s", res)
+	}
+	want := "(forged_committer: " + forged[:7] + " is committed as the code host's engine"
+	if why, refused := res.Rejected(branch); !refused || !strings.Contains(why, want) {
+		t.Fatalf("a box's branch sent beside a refused update whose commit is the engine's: %s\nwant %s "+
+			"rejected %s…", res, branch, want)
+	}
+	if n := len(objects(t, c)) - stored; n != 0 {
+		t.Errorf("the refused push stored %d objects", n)
+	}
+	if n := len(e.seen("propose")) - proposed; n != 0 {
+		t.Errorf("the refused push was proposed %d times", n)
+	}
+
+	// THE COMMIT IS STILL NOBODY'S: sent on its own, it is refused again.
+	again := code.SeatNamespace(codetest.FixtureAlice) + "again"
+	res = box.Push(c.Ctx, clone, c.BoxURL(0), forged+":"+again)
+	if why, refused := res.Rejected(again); !refused || !strings.Contains(why, want) {
+		t.Errorf("the box's push of the engine's commit on its own: %s\nwant %s rejected %s…", res, again, want)
+	}
+	for _, ref := range []string{branch, again} {
+		if at, moved := c.Rows().Refs[ref]; moved {
+			t.Errorf("%s moved to %s, and every push of it was refused", ref, at)
+		}
+	}
+}
+
+// A BOX MAY PUSH BACK AN ENGINE COMMIT THE REPOSITORY HOLDS: a seat branch
+// whose one commit the engine built for a tool write is deleted — here by the
+// seat's own tool, as alike by its expiry or a person's push — and a box of a
+// run launched since pushes the branch back from a checkout made before the
+// deletion. The commit is committed as the engine and no ref reaches it, so
+// the box's git sends it and the push introduces it, as its row says; but
+// the repository holds it, the host's own write it accepted once, so the
+// push lands.
+//
+// Mutation: skip the held check, refusing every commit committed as the
+// engine — the push is refused forged_committer, red.
+func TestABoxMayPushBackAnEngineCommitTheRepositoryHolds(t *testing.T) {
+	t.Parallel()
+	c := newWriteCase(t, codetest.SoloOptions{}, map[string]string{"README.md": "one\n"})
+	branch := code.SeatNamespace(codetest.FixtureAlice) + "work"
+	written := c.land(files(c.repo, alice(), branch, "", c.head, text("tool.md", "written by a tool\n")))
+	_, before := c.LaunchBox(codetest.FixtureAlice, code.AccessWrite)
+	checkout := before.Clone(c.BoxURL(0))
+	c.land(code.EngineWrite{Kind: code.WriteDeleteBranch, RepoID: c.repo, Principal: alice(), OpID: opNow(),
+		Fresh: linear, Ref: branch, ExpectedHead: written.Commit})
+	_, after := c.LaunchBox(codetest.FixtureAlice, code.AccessWrite)
+
+	res := after.Push(c.Ctx, checkout, c.BoxURL(0), written.Commit+":"+branch)
+	if !res.OK(branch) {
+		t.Fatalf("a box pushing back %s at the engine's commit the repository holds: %s", branch, res)
+	}
+	if got := c.Rows().Refs[branch]; got != written.Commit {
+		t.Errorf("%s is at %q, want the engine's commit %s pushed back", branch, got, written.Commit)
+	}
+	if row := boxRow(t, c.Case, branch); !slices.Contains(row.Introduced, written.Commit) {
+		t.Errorf("the push back introduced %v, not the engine's commit %s: the case never reached the "+
+			"check it holds", row.Introduced, written.Commit)
+	}
+}
+
+// A BOX BRINGS BACK A BOUNDED HISTORY OF THE ENGINE'S COMMITS A PUSH: a pack
+// holding more commits committed as the engine than one push is asked about
+// (host.MaxEngineCommits) is refused forged_committer even where the
+// repository holds every one — past the bound the host asks about none — and
+// told to push the history in parts; and the parts land, since once a part
+// has landed a ref reaches it, and the box's git sends only the rest. Here
+// the history is a person's, which a person may push as git carries it, and
+// its branch deleted since.
+//
+// Mutation: answer a push past the bound by its first MaxEngineCommits alone
+// — the whole history lands at once, red.
+func TestABoxBringsBackABoundedHistoryOfTheEnginesCommitsAPush(t *testing.T) {
+	t.Parallel()
+	c, head := boxCase(t, codetest.SoloOptions{})
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Clone(c.URL(0))
+	n := host.MaxEngineCommits + 1
+	gittest.FastImport(t, p.Git(), work, func(w *bufio.Writer) error {
+		for i := range n {
+			body := fmt.Sprintf("%d\n", i)
+			if _, err := fmt.Fprintf(w, "commit refs/heads/old\ncommitter %s <%s> 1767225600 +0000\n"+
+				"data %d\n%s\n", codetest.FixtureCommitterName, codetest.FixtureCommitterEmail, len(body)+1,
+				body); err != nil {
+				return err
+			}
+			if i == 0 {
+				if _, err := fmt.Fprintf(w, "from %s\n", head); err != nil {
+					return err
+				}
+			}
+			if _, err := fmt.Fprintf(w, "M 100644 inline n.txt\ndata %d\n%s\n", len(body), body); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	tip := strings.TrimSpace(p.Git().Run(t, work, "rev-parse", "refs/heads/old"))
+	c.MustPush(p, work, "refs/heads/old")
+	c.MustPush(p, work, ":refs/heads/old")
+	_, box := c.LaunchBox(codetest.FixtureAlice, code.AccessWrite)
+	branch := code.SeatNamespace(codetest.FixtureAlice) + "work"
+
+	res := box.Push(c.Ctx, work, c.BoxURL(0), tip+":"+branch)
+	want := fmt.Sprintf("(forged_committer: this push carries more than %d commits committed as the code "+
+		"host's engine (%s)", host.MaxEngineCommits, codetest.FixtureCommitterEmail)
+	if reason, rejected := res.Rejected(branch); !rejected || !strings.Contains(reason, want) {
+		t.Fatalf("a box bringing back %d of the engine's commits at once: %s\nwant %s rejected %s…", n, res,
+			branch, want)
+	}
+	for _, part := range []string{tip + "~" + fmt.Sprint(n/2), tip} {
+		if pushed := box.Push(c.Ctx, work, c.BoxURL(0), part+":"+branch); !pushed.OK(branch) {
+			t.Fatalf("a box bringing the history back in parts, %s: %s", part, pushed)
+		}
+	}
+	if got := c.Rows().Refs[branch]; got != tip {
+		t.Errorf("%s is at %q, want the history's tip %s", branch, got, tip)
 	}
 }
 

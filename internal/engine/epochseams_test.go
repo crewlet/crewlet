@@ -265,7 +265,9 @@ var classified = map[string]struct {
 		"node that builds it, and a coding box's seat by the git node it dials"},
 	"host.Options.Signer": {seamValue, "the epoch's names an engine-built commit carries: a seat's " +
 		"role name and address and the identity domain — a revision renaming a seat just after " +
-		"the write leaves the same commit"},
+		"the write leaves the same commit — and the engine's committer a coding box's pack may " +
+		"hold no new commit of, which a box judged against the domain a revision just replaced " +
+		"shares with a box that pushed just before it"},
 	"host.Options.Share": {seamNone, "the node's seat git-work share of its read lane"},
 	"host.Options.Current": {seamGate, "whether this node serves the company's configuration: a " +
 		"seat's write behind it is answered unready, behind_config, and built nowhere here, and a " +

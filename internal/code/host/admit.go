@@ -20,9 +20,9 @@ import (
 // ADMISSION: who is asking, as whom, and of which repository — every git
 // request's first step. A PERSON is admitted by admit, here; a CODING BOX by
 // admitBox (boxadmit.go). Nothing after admission asks which of the two ran
-// but through the admission's own fields and its four accessors — principal,
-// share, refs and boxFloor — and a box's nil check where its pushes raise the
-// run's floor and are left out of the operator audit
+// but through the admission's own fields and its five accessors — principal,
+// share, refs, boxFloor and engineCommitter — and a box's nil check where its
+// pushes raise the run's floor and are left out of the operator audit
 // (TestNothingAfterAdmissionAsksWhichAdmitterRan).
 
 // admission is a request admitted to a repository.
@@ -255,6 +255,22 @@ func (a admission) boxFloor() (BoxRunRef, statelog.Position, bool) {
 		return BoxRunRef{}, statelog.Position{}, false
 	}
 	return a.box.Ref, a.box.Floor, true
+}
+
+// engineCommitter is the address a commit in this request's pack may be
+// committed as only where the repository already holds it
+// (landing.EngineCommitter): for a CODING BOX the engine's own, as s names it
+// off the serving epoch (Signer.Committer), and "" for a person, whose push
+// may carry the engine's commits as git carries any. A box runs code nobody
+// vouches for, and the committer is what a cooperating client's history
+// marks the host's own writes by (ADR-0062), so a box's push claiming it is
+// refused forged_committer. An error is a node holding no epoch, which judges
+// no box's push.
+func (a admission) engineCommitter(s Signer) (string, error) {
+	if a.box == nil {
+		return "", nil
+	}
+	return s.Committer()
 }
 
 // share is whose transfer the admitted request is (gitproc.Cmd.Share), what

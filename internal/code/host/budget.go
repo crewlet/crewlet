@@ -75,6 +75,27 @@ const (
 	// costs no push the engine would have taken.
 	MaxCommandSectionBytes = 1 << 20
 
+	// maxEngineCommits is the most commits committed as the engine
+	// (landing.EngineCommitter) one coding box's pack may hold for the host to
+	// ask the repository about (forged): a thousand. A box's git commits under
+	// the identity it was given, and every amend, rebase and cherry-pick
+	// rewrites the committer to it, so a commit its pack holds under the
+	// engine's name is either a forgery or one of the engine's own writes the
+	// box brings back — a seat branch the repository lost its ref to
+	// (deleted, or expired) that the box's old checkout still holds, one
+	// commit a tool write. A thousand is a seat's whole pushing for some
+	// thirty-three days at the reference company's thirty a day
+	// (config.DefaultCodePushesPerSeatDay's reckoning), every push of it a
+	// tool write on that one branch. They are asked in ONE cat-file whether
+	// the repository holds them (cache.Cache.Missing, some 14 ms a thousand
+	// ids by gitproc's measured section) and kept by the scan until then
+	// (committedAs), forty hex digits each, so the bound is what one push may
+	// make the node keep and ask, never what a box sends: the scan ends at the
+	// first such commit past it, and the push is refused forged_committer with
+	// its remedy — push the history back in parts, since a part once landed is
+	// reached by a ref, and the box's git sends the next part without it.
+	maxEngineCommits = 1_000
+
 	// HookDialTimeout is how long the hook gives the engine's socket to
 	// accept: the engine is a process on the same host, and a socket that
 	// has not accepted in five seconds belongs to an engine that is gone.
