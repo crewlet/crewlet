@@ -11,7 +11,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { pageSnapshot, resetPageContextForTest, setFramePage } from "~/app/assistant/context.ts";
 import { Router } from "~/app/router.tsx";
 import type { CompanyDocument } from "~/protocol/types.ts";
@@ -20,6 +20,7 @@ import {
   modelEntry,
   modelsData,
   runs,
+  seat,
   signIn,
 } from "~/routes/settings/models/fixtures.ts";
 import type { ModelsData } from "../data.ts";
@@ -312,6 +313,194 @@ test("a save left between its two writes still makes both, and moves nothing on 
   const written = vi.mocked(api.writeDocument).mock.calls.at(-1)!;
   expect(written[2]).toBeUndefined();
   expect(location.hash).toBe("#/somewhere-else");
+});
+
+/**
+ * GOPHRASE'S SPLIT SURVIVES AN EDIT OF ONE SIDE. `default` codes for the
+ * engineers and QA; `default-host`, its coding on the engine's host, for the
+ * PM and the designer. Editing `default` for its key moved the PM and the
+ * designer onto it, because a choice on Use it for reset its seats to every
+ * seat. An edit keeps the seats the model serves, and Review lists every seat
+ * that changes model, first.
+ */
+const SPLIT_DOC = {
+  name: "GoPhrase",
+  providers: {
+    llm: {
+      default: { agent: "claude-code", model: "opus", auth: { mode: "api-key" } },
+      "default-host": {
+        agent: "claude-code",
+        model: "opus",
+        run_in: "direct",
+        auth: { mode: "api-key" },
+      },
+    },
+  },
+  roles: [
+    { name: "Backend Engineer", handle: "backend-engineer", llm: "default" },
+    { name: "Quality Lead", handle: "qa", llm: "default" },
+    { name: "Product Manager", handle: "pm", llm: "default-host" },
+    { name: "Designer", handle: "designer", llm: "default-host" },
+  ],
+} as unknown as CompanyDocument;
+
+function splitData(): ModelsData {
+  const key = signIn({ route: "api-key", mode: "api-key", variable: "ANTHROPIC_API_KEY" });
+  return modelsData({
+    doc: SPLIT_DOC,
+    entries: [
+      modelEntry({
+        key: "default",
+        model: "opus",
+        sign_in: key,
+        used_by: [...runs("backend-engineer", ...EVERY_JOB), ...runs("qa", ...EVERY_JOB)],
+      }),
+      modelEntry({
+        key: "default-host",
+        model: "opus",
+        sign_in: key,
+        used_by: [...runs("pm", ...EVERY_JOB), ...runs("designer", ...EVERY_JOB)],
+      }),
+    ],
+    seats: [
+      seat("backend-engineer", "Backend Engineer"),
+      seat("qa", "Quality Lead"),
+      seat("pm", "Product Manager"),
+      seat("designer", "Designer"),
+    ],
+  });
+}
+
+test.each([
+  ["a key replaced and nothing else", false],
+  ["a key replaced and Coding chosen on Use it for", true],
+])("GoPhrase's coding split survives an edit of default: %s", async (_, chooseCoding) => {
+  vi.mocked(getConfig).mockImplementation(async () => {
+    calls.push("read");
+    return { kind: "document", document: structuredClone(SPLIT_DOC), etag: '"rev-1"' };
+  });
+  const d = splitData();
+  render(
+    <Router>
+      <ModelWizard
+        data={d}
+        editing={d.models.find((m) => m.key === "default")!}
+        target={{ step: "signin", focus: "credential" }}
+        onClose={() => {}}
+        onDevice={() => {}}
+      />
+    </Router>,
+  );
+  fireEvent.change(keyField(), { target: { value: "sk-ant-api03-rotated" } });
+  for (const step of ["Model", "Where it runs", "Use it for"]) {
+    press("Continue");
+    expect(heading()).toBe(step);
+  }
+  if (chooseCoding) fireEvent.click(screen.getByRole("radio", { name: /^Coding/ }));
+  for (const step of ["Limits", "Test call", "Review"]) {
+    press("Continue");
+    expect(heading()).toBe(step);
+  }
+  await screen.findByText("The engine accepts this change");
+  // NO SEAT MOVES ONTO default: the PM and the designer stay where they are.
+  const moves = screen.queryByRole("list", { name: "Seats that change model" });
+  const listed = moves ? (moves.textContent ?? "") : "";
+  expect(listed).not.toMatch(/Product Manager|Designer/);
+  if (!chooseCoding) expect(screen.getByText("No seat changes model.")).toBeTruthy();
+  press("Save changes");
+  await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
+  const written = vi.mocked(api.writeDocument).mock.calls.at(-1)![0] as unknown as {
+    roles: { handle: string; llm: unknown }[];
+  };
+  const llmOf = (h: string) => written.roles.find((r) => r.handle === h)?.llm;
+  expect(llmOf("pm")).toBe("default-host");
+  expect(llmOf("designer")).toBe("default-host");
+  expect(llmOf("backend-engineer")).toBe("default");
+  expect(llmOf("qa")).toBe("default");
+});
+
+test("Review lists each seat an edit moves, by name, from where and to where, before the rest", async () => {
+  const d = splitData();
+  render(
+    <Router>
+      <ModelWizard
+        data={d}
+        editing={d.models.find((m) => m.key === "default")!}
+        target={{ step: "assign", add: [{ job: "coding", seat: "pm" }] }}
+        onClose={() => {}}
+        onDevice={() => {}}
+      />
+    </Router>,
+  );
+  press("Review changes");
+  const moves = await screen.findByRole("list", { name: "Seats that change model" });
+  expect(moves.textContent).toContain("Product Manager, coding: default-host → default");
+  expect(moves.textContent).not.toMatch(/Designer|Backend Engineer|Quality Lead/);
+  // FIRST, above the model's own summary.
+  const head = document.querySelector(".models-review-head")!;
+  expect(moves.compareDocumentPosition(head) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await act(async () => {});
+});
+
+/**
+ * "DID NOT ANSWER" ONLY WHERE THE ENGINE'S ANSWER NEVER ARRIVED, and "may
+ * have been stored" only for the save: a check is a read and dry runs, which
+ * store nothing whoever answered.
+ */
+describe.each([
+  [0, false, "the engine did not answer within 30 seconds", "The engine did not answer."],
+  [504, false, "a 504 came back without the engine's JSON", "The engine did not answer."],
+  [500, true, "store: disk full", "The engine failed: store: disk full."],
+] as const)("an answer of status %i (by the engine: %s)", (status, answered, detail, said) => {
+  const unsettled = { kind: "unsettled", answered, status, detail } as const;
+  const openReview = async () => {
+    const d = splitData();
+    render(
+      <Router>
+        <ModelWizard
+          data={d}
+          editing={d.models.find((m) => m.key === "default")!}
+          target={{ step: "assign", add: [{ job: "coding", seat: "pm" }] }}
+          onClose={() => {}}
+          onDevice={() => {}}
+        />
+      </Router>,
+    );
+    press("Review changes");
+  };
+  const blocked = async () => {
+    const title = await screen.findByText("This cannot be saved from here yet");
+    return title.closest(".crewlet-callout")?.textContent?.replace(title.textContent ?? "", "");
+  };
+
+  test("at the check says what happened, and that nothing was stored", async () => {
+    vi.mocked(api.writeDocument).mockImplementation(async () => unsettled);
+    await openReview();
+    expect(await blocked()).toBe(`${said} Nothing was stored. Check the change again.`);
+  });
+
+  test("at the save says what happened, and that it may have been stored", async () => {
+    vi.mocked(api.writeDocument).mockImplementation(async (_doc, options) =>
+      options.dryRun
+        ? { kind: "valid", baseRevisionId: "rev-1", warnings: [], derived: null }
+        : unsettled,
+    );
+    await openReview();
+    await screen.findByText("The engine accepts this change");
+    press("Save changes");
+    expect(await blocked()).toBe(
+      `${said} The change may or may not have been stored. Reopen the model before trying again.`,
+    );
+  });
+});
+
+test("a place the company never set up says so in plain words, never the configuration's own sentence", () => {
+  show({ editing: "default", target: { step: "runs" } });
+  expect(heading()).toBe("Where it runs");
+  expect(document.body.textContent).toContain(
+    "E2B isn't set up for this company. Add it under providers.sandbox to use it.",
+  );
+  expect(document.body.textContent).not.toMatch(/declares no|E2B key not set/);
 });
 
 test("a refused key is said at the key, and the Method step is where it is fixed", async () => {

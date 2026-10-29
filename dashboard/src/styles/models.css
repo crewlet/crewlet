@@ -154,6 +154,15 @@
   gap: var(--spacing-3);
 }
 
+/* Review's list of the seats that change model, one change to a line. */
+.models-changes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding-inline-start: var(--spacing-4);
+}
+
 /* Who uses it: the seat chips, the summary lines, the per-phase grid. */
 .models-who__seats {
   display: flex;
