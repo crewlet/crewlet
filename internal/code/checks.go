@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
@@ -332,7 +333,7 @@ type CheckKey struct {
 	RepoID string `json:"repo_id"`
 	// OID is the commit checked, in 40 hex digits.
 	OID string `json:"oid"`
-	// Name is the check's name in its file ([ValidCheckName]).
+	// Name is the check's name in its file ([config.ValidCodeCheckName]).
 	Name string `json:"name"`
 	// Attempt counts from 1.
 	Attempt int `json:"attempt"`
@@ -345,7 +346,7 @@ func (k CheckKey) validate() error {
 		return checkField("repo_id", "%q is not a UUID in its canonical lowercase spelling", k.RepoID)
 	case !gitref.ValidOID(k.OID) || k.OID == ZeroOID:
 		return checkField("oid", "%q is not a commit's whole id", k.OID)
-	case !ValidCheckName(k.Name):
+	case !config.ValidCodeCheckName(k.Name):
 		return checkField("name", "%q is not a check name", k.Name)
 	case k.Attempt < 1 || k.Attempt > MaxCheckAttempts:
 		return checkField("attempt", "%d is not an attempt: 1 to %d (code.MaxCheckAttempts)", k.Attempt,

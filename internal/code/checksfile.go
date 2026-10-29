@@ -111,10 +111,11 @@ const (
 	// list is at most 4 KiB.
 	MaxCheckEnvNameBytes = 128
 
-	// MaxCheckNameBytes is the longest check name ([ValidCheckName]): 64
-	// bytes, a CI job name's length. A name is a key in every check row and
-	// a component of the token a check's box fetches with.
-	MaxCheckNameBytes = 64
+	// MaxCheckNameBytes is config.CodeMaxCheckNameBytes: the longest check
+	// name ([config.ValidCodeCheckName]), 64 bytes, a CI job name's length. A
+	// name is a key in every check row and a component of the token a check's
+	// box fetches with.
+	MaxCheckNameBytes = config.CodeMaxCheckNameBytes
 )
 
 // CheckCell is the kind of box a check runs in.
@@ -173,7 +174,8 @@ type CheckCheckout struct {
 // of a check carries it, so the definition a run was queued under is the one
 // it runs under, whatever the file says by the time its box starts.
 type CheckDef struct {
-	// Name is the check's name in its file ([ValidCheckName]), unique there.
+	// Name is the check's name in its file ([config.ValidCodeCheckName]),
+	// unique there.
 	Name string `json:"name"`
 	// Run is the command, handed to `sh -c` whole.
 	Run string `json:"run"`
@@ -213,25 +215,6 @@ func (d CheckDef) Validate() error {
 // file lists them, each name once.
 type ChecksFile struct {
 	Checks []CheckDef `json:"checks"`
-}
-
-// ValidCheckName reports a check name: a lower-case letter or digit, then up
-// to 63 lower-case letters, digits, dots, underscores and hyphens — a name a
-// row keys on, a URL carries unescaped, and the token a check's box fetches
-// with joins by a `~` no name holds.
-func ValidCheckName(name string) bool {
-	if name == "" || len(name) > MaxCheckNameBytes {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		switch c := name[i]; {
-		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
-		case i > 0 && (c == '.' || c == '_' || c == '-'):
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // validEnvName reports a variable name a shell takes: a letter or an
@@ -288,7 +271,7 @@ func (e *ChecksFileError) Is(target error) bool { return target == ErrInvalid }
 // mapping holding `checks:` — a list of at most [MaxChecksPerFile] checks,
 // `checks: []` for none — each a mapping of these keys and no other:
 //
-//	name             required; a check name (ValidCheckName), unique in the file
+//	name             required; a check name (config.ValidCodeCheckName), once
 //	run              required; the command, at most MaxCheckRunBytes
 //	timeout_seconds  required; a whole number, 1 to CheckTimeoutCeiling
 //	paths            a list of at most MaxCheckPaths path globs (gitref)
@@ -734,7 +717,7 @@ func defFaults(d CheckDef) []defFault {
 	add := func(path config.Path, kind error, detail string, args ...any) {
 		out = append(out, defFault{path: path, kind: kind, detail: fmt.Sprintf(detail, args...)})
 	}
-	if !ValidCheckName(d.Name) {
+	if !config.ValidCodeCheckName(d.Name) {
 		add(config.Path{"name"}, config.ErrUnknownValue, "%q is not a check name: a lower-case letter or "+
 			"digit, then up to %d lower-case letters, digits, dots, underscores and hyphens", d.Name,
 			MaxCheckNameBytes-1)

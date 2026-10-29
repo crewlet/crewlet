@@ -301,6 +301,35 @@ func TestAGateIsHeldToItsForm(t *testing.T) {
 	}
 }
 
+// A GATE REQUIRES EXACTLY THE NAMES A CHECKS FILE GIVES: one rule names a
+// check wherever a name is written (config.ValidCodeCheckName) — a check's own
+// in a repository's .crewlet/checks.yaml and the checks a protection rule
+// requires — so a rule can never require a check no repository can define,
+// which would keep its gate shut for good, and every check a file defines a
+// rule can require.
+//
+// Mutation: hold the checks file to a rule of its own that takes an upper-case
+// letter, or the gate to one that takes a `~`, and the names they part on go
+// red.
+func TestAGateRequiresExactlyTheNamesAChecksFileGives(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{
+		"unit", "a", "0", "go1.27-race_x", "unit.", strings.Repeat("a", code.MaxCheckNameBytes),
+		"", "Unit", ".unit", "-unit", "_unit", "unit tests", "unit/fast", "unit~1", "unit:fast", "ünit",
+		strings.Repeat("a", code.MaxCheckNameBytes+1),
+	} {
+		file := fmt.Sprintf("checks:\n  - name: %q\n    run: make\n    timeout_seconds: 60\n", name)
+		_, fileErr := code.ParseChecks([]byte(file))
+		gate := aGate()
+		gate.Checks = []string{name}
+		gateErr := gatedSettings(gate).Validate()
+		if (fileErr == nil) != (gateErr == nil) {
+			t.Errorf("%q: a checks file defining it is refused with %v, and a gate requiring it with %v", name,
+				fileErr, gateErr)
+		}
+	}
+}
+
 // widestGate is a gate as wide as a record may carry one, a few bytes short of
 // MaxGateBytes at most: every check at its longest name, then human paths of
 // the globs JSON spells longest (each & six bytes) with both classes, as many

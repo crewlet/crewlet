@@ -230,7 +230,7 @@ protect:
 | `approvals` | `none` | `one`: a merge waits for one counted approval |
 | `approvals_unless` | none | The path classes — `whitespace_only`, `comment_only` — that exempt a change from those approvals: one whose every touched path is of a class listed waits for none |
 | `human_paths` | none | At most 32 globs, in the [path owners'](#path-owners) grammar: a change touching a path one matches waits for a **person's** approval, whatever else approved it — unless every path that glob matched is of a class its `unless` lists |
-| `checks` | none | At most 32 checks a merge waits for, by name: a lowercase letter or digit, then up to 63 more of them, `.`, `_` and `-` |
+| `checks` | none | At most 32 checks a merge waits for, each by the name a repository's [checks file](#the-checks-file) gives it: a lowercase letter or digit, then up to 63 more of them, `.`, `_` and `-` — one rule for both, so a rule never requires a check no repository can define |
 | `landing` | `pre_land`, `depth: 4`, `batch: 4` | `policy`: `pre_land` tests each change merged on the branch before it lands, and `post_land` lands changes ahead of their checks and checks the branch's newest tip; `depth`: how many candidates the queue tests at once, 1 to 8; `batch`: how many waiting changes one candidate takes, 1 to 8 |
 | `owners_approve` | off | A change waits for one counted approval from somebody eligible for every [path owner](#path-owners)'s glob it touches |
 | `delete_source` | `seats`: a merge deletes a source branch in a seat's own namespace, in the record that merges it | `none`: it keeps every source branch |

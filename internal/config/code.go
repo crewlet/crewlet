@@ -130,7 +130,8 @@ const (
 
 	// CodeMaxCheckNameBytes is the longest name a check takes: sixty-four
 	// bytes of [ValidCodeCheckName]'s alphabet, a CI job's name rather than a
-	// sentence.
+	// sentence — and a key in every check row and a component of the token a
+	// check's box fetches with, each of which carries it whole.
 	CodeMaxCheckNameBytes = 64
 
 	// CodeMaxDescriptionBytes bounds a repository description: one
@@ -432,14 +433,20 @@ func validDomainName(s string) bool {
 // ValidCodeCheckName reports a name a check may have: a lowercase letter or a
 // digit, then up to sixty-three more of them, `.`, `_` and `-` —
 // ^[a-z0-9][a-z0-9._-]{0,63}$, at most [CodeMaxCheckNameBytes]. THE ONE RULE a
-// check is named by, read wherever a name is written: a protection rule's
-// required checks here and in the code domain's record of a merge gate, so a
-// rule cannot require a check no repository can define — a gate that
-// requirement would keep shut for good.
+// check is named by, read wherever a name is written: a check's own name in
+// a repository's `.crewlet/checks.yaml` and on every row of its attempts (the
+// code domain's checks file and check records), and a protection rule's
+// required checks here and in the code domain's record of a merge gate. One
+// rule, never a copy in each, so a rule cannot require a check no repository
+// can define — a gate that requirement would keep shut for good — and every
+// check a file defines a rule can require. It lives here, not in the domain,
+// because config's own rules read it and config cannot import the domain.
 //
 // LOWERCASE AND NO SPACE because a name is matched exactly wherever it is
 // read and is typed on command lines: two spellings of one name would be two
-// checks, and a name with a space one a shell splits.
+// checks, and a name with a space one a shell splits. And nothing a URL
+// escapes or a `~`, since a name rides a route unescaped and the token a
+// check's box fetches with joins its parts by a `~` no name holds.
 func ValidCodeCheckName(name string) bool {
 	if name == "" || len(name) > CodeMaxCheckNameBytes {
 		return false

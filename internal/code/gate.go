@@ -167,9 +167,9 @@ type MergeGate struct {
 	// approval, whatever else approved it: at most [MaxHumanPaths], sorted by
 	// glob and each glob once.
 	HumanPaths []HumanPath `json:"human_paths,omitempty"`
-	// Checks are the checks a merge waits for, by name
-	// ([config.ValidCodeCheckName]): at most [MaxRequiredChecks], sorted and
-	// each once.
+	// Checks are the checks a merge waits for, by the name a checks file
+	// gives each ([config.ValidCodeCheckName], the one rule both read): at
+	// most [MaxRequiredChecks], sorted and each once.
 	Checks []string `json:"checks,omitempty"`
 	// Landing is how the target's queue lands a change.
 	Landing Landing `json:"landing"`
@@ -319,7 +319,7 @@ func (g MergeGate) invalid() (field, why string) {
 		switch {
 		case !config.ValidCodeCheckName(name):
 			return fmt.Sprintf("checks[%d]", k), fmt.Sprintf("%q is not a check's name: a lowercase letter "+
-				"or digit, then up to %d more of them, '.', '_' and '-'", name, config.CodeMaxCheckNameBytes-1)
+				"or digit, then up to %d more of them, '.', '_' and '-'", name, MaxCheckNameBytes-1)
 		case k > 0 && g.Checks[k-1] >= name:
 			return fmt.Sprintf("checks[%d]", k), fmt.Sprintf("%q is not after %q — a gate's checks are "+
 				"sorted and each named once", name, g.Checks[k-1])
