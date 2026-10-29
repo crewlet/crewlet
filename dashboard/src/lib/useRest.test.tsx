@@ -40,7 +40,7 @@ function scripted<T>() {
 
 /** A refusal, with the `Retry-After` it carried in whole seconds, or none. */
 const refused = (status: number, retryAfter: number | null = null) =>
-  new RestError(status, { error: "refused" }, retryAfter);
+  new RestError(status, { error: "refused" }, retryAfter, true);
 
 describe("an answer belongs to the read that asked for it", () => {
   test("a superseded read's answer is dropped and its request aborted", async () => {

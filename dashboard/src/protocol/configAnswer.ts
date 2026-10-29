@@ -28,11 +28,11 @@ export interface ConfigAnswer {
   /**
    * Whether the answer carried the engine's mark ([markedByEngine]): false
    * for one something in front of the engine wrote, whatever its body says.
-   * `answerOf` records it for every answer it reads; an answer a caller builds
-   * itself (a fixture, a scripted engine) names its own origin, and leaving
-   * it out reads as the engine's.
+   * REQUIRED, so no answer is built without saying whose it is: `answerOf`
+   * records what the response said, and a fixture says `true` for the engine
+   * it plays.
    */
-  readonly fromEngine?: boolean;
+  readonly fromEngine: boolean;
 }
 
 /** Why the engine holds a revision the write was not built on. */
@@ -177,7 +177,7 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
   // did, so it is no refusal of the engine's to read by status: read as one,
   // a proxy's 403 asked a person for a grant and its 413 for a smaller draft,
   // for a write that may have landed.
-  if (!answeredByEngine(answer.status, code, answer.fromEngine ?? true)) {
+  if (!answeredByEngine(answer.status, code, answer.fromEngine)) {
     return {
       kind: "unsettled",
       answered: false,

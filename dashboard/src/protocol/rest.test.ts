@@ -162,7 +162,7 @@ describe("the whole answer", () => {
   test("status, body and the entity-tag verbatim", async () => {
     stub(() => json({ name: "Acme" }, 200, { ETag: '"01JREV"' }));
     const answer = await rest.request("GET", "/config");
-    expect(answer).toEqual({ status: 200, body: { name: "Acme" }, etag: '"01JREV"' });
+    expect(answer).toEqual({ status: 200, body: { name: "Acme" }, etag: '"01JREV"', marked: true });
   });
 
   test("a success status other than 200 is reported, not flattened", async () => {
@@ -179,7 +179,7 @@ describe("the whole answer", () => {
     const answer = await rest.request("GET", "/config", {
       headers: { "If-None-Match": '"01JREV"' },
     });
-    expect(answer).toEqual({ status: 304, body: null, etag: '"01JREV"' });
+    expect(answer).toEqual({ status: 304, body: null, etag: '"01JREV"', marked: false });
     expect((sent[0]!.init.headers as Record<string, string>)["If-None-Match"]).toBe('"01JREV"');
   });
 
@@ -218,7 +218,7 @@ describe("a text answer", () => {
       query: { format: "yaml" },
       read: "text",
     });
-    expect(answer).toEqual({ status: 200, body: "name: Acme\n", etag: '"01JREV"' });
+    expect(answer).toEqual({ status: 200, body: "name: Acme\n", etag: '"01JREV"', marked: false });
   });
 
   test("a refusal is still read as the engine's JSON", async () => {

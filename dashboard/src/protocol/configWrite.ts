@@ -45,10 +45,8 @@ import type { CompanyDocument, ConfigWarning, Derived } from "./types.ts";
  */
 export async function answerOf(call: Promise<RestResponse>): Promise<ConfigAnswer> {
   try {
-    // A SUCCESS IS ITS CALLER'S TO READ ([classifyConfigRefusal] reads only
-    // refusals), so whose answer it is is not recorded on it.
-    const { status, body, etag } = await call;
-    return { status, body, etag };
+    const { status, body, etag, marked } = await call;
+    return { status, body, etag, fromEngine: marked };
   } catch (err) {
     if (isAbort(err)) throw err;
     if (err instanceof RestError)
@@ -60,6 +58,7 @@ export async function answerOf(call: Promise<RestResponse>): Promise<ConfigAnswe
         detail: err instanceof Error ? err.message : "The engine could not be reached.",
       },
       etag: null,
+      fromEngine: false,
     };
   }
 }
