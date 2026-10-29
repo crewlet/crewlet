@@ -1114,6 +1114,16 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					"here reaches the CLI depends on auth.mode and on whether the secret "+
 					"store or the engine's environment holds a token of its own. Give "+
 					"the token as auth.token", name)
+		case cliprofile.ZoneVariable:
+			// The engine pins the zone of every CLI it starts, and reads a
+			// reset the CLI names with no zone in it; a value here would be
+			// replaced without a word, or, honoured, would have the engine
+			// read the CLI's reset in the wrong zone.
+			p.add(entry(at(path, "env"), name), ErrConflict,
+				"%s is the zone the engine hands every CLI it starts (its own TZ, else "+
+					"UTC), and reads the CLI's limit resets in; it is not set per entry. "+
+					"Drop it, and set TZ in the engine's own environment to move every "+
+					"CLI's zone", name)
 		case profile.APIKeyEnv:
 			p.add(entry(at(path, "env"), name), ErrConflict,
 				"%s is this CLI's key variable, which auth owns: whether a value "+
@@ -1183,6 +1193,14 @@ func (l *LLMProvider) validateEnvSignIn(path Path, profile cliprofile.Profile, m
 					"auth.mode: env, so the entry's env is its one sign-in", name, agent, mode)
 		}
 		return p.err()
+	}
+	if l.Auth.CredentialBundle != "" {
+		// A bundle is a login, and an env entry seeds none, on this host or in
+		// a box: one named here would be stored, restored and never read.
+		p.add(at(path, "auth.credential_bundle"), ErrConflict,
+			"auth.mode env signs the %q CLI in with the entry's env alone and seeds no "+
+				"login, so a credential bundle reaches nothing. Drop auth.credential_bundle, "+
+				"or set auth.mode: subscription to sign in with that login", agent)
 	}
 	switch {
 	case len(profile.SignInEnv) > 0:

@@ -127,8 +127,9 @@ type Plan struct {
 	ready readiness
 	// lastAnswer is when a call on the sign-in last answered.
 	lastAnswer time.Time
-	// lastFailure is the last call that failed for a reason worth naming
-	// to a person: a refused sign-in or a limit.
+	// lastFailure is the last call that set the readiness verdict: a
+	// refused sign-in, or a CLI that could not be started
+	// ([Provider.remember]). A limit is the sit-out's, not this.
 	lastFailure *Failure
 }
 
@@ -141,7 +142,8 @@ func newPlan() *Plan { return &Plan{scoped: map[string]*bench{}} }
 // own log line.
 const MaxSaid = 240
 
-// Failure is a call on a sign-in that failed for a reason a person acts on.
+// Failure is a call on a sign-in that set its readiness verdict: a refused
+// sign-in, or a CLI that could not be started.
 type Failure struct {
 	Kind llm.ErrorKind
 	At   time.Time

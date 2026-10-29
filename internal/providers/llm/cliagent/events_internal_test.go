@@ -266,15 +266,25 @@ func TestTheSignInRouteIsTheListsFirstRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	hermesDir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(hermesDir) })
+	hermes, err := New(Config{Key: "or", Agent: "hermes", Model: "openrouter/anthropic/claude-sonnet-5",
+		StateDir: hermesDir, Timeout: time.Minute, Env: map[string]string{"OPENROUTER_API_KEY": "sk-or-x"},
+		Auth: Auth{Mode: AuthEnv}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, tc := range map[string]struct {
 		p       *Provider
 		route   SignInRoute
 		resolve bool
 		login   bool
 	}{
-		"a key":    {p: shipped(t, "claude-code", "sonnet"), route: "api-key", resolve: true},
-		"the env":  {p: env, route: "env", resolve: true},
-		"no login": {p: onPlans(t, nil, "sub", "sonnet", Auth{Mode: AuthSubscription}, ""), route: "none", login: true},
+		"a key":   {p: shipped(t, "claude-code", "sonnet"), route: "api-key", resolve: true},
+		"the env": {p: env, route: "env", resolve: true},
+		// One word per mode, whichever CLI reads the env.
+		"a provider key under env": {p: hermes, route: RouteEnv, resolve: true},
+		"no login":                 {p: onPlans(t, nil, "sub", "sonnet", Auth{Mode: AuthSubscription}, ""), route: "none", login: true},
 		"a token": {p: onPlans(t, nil, "tok", "sonnet", Auth{Mode: AuthSubscription, Token: "sk-ant-oat01-x"}, ""),
 			route: "token", resolve: true},
 	} {

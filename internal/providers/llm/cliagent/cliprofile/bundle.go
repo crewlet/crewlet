@@ -28,6 +28,13 @@ const BundleManifest = "crewlet-bundle.json"
 // record, and the record a login file.
 const LoginInstallFile = ".crewlet-login"
 
+// ZoneVariable is the variable the engine hands every CLI, on its host and in
+// a box, to name the zone it runs in (internal/providers/llm/cliagent, env.go):
+// the engine's own TZ, else UTC. The engine reads a reset the CLI names with
+// no zone of its own in that zone, so an entry may not set it (config refuses
+// it in providers.llm.<key>.env).
+const ZoneVariable = "TZ"
+
 // BundleVarName is the conventional secret name a providers.llm entry's
 // exported credential bundle lives under: CREWLET_LLM_CLI_<KEY>_CREDENTIALS.
 //
