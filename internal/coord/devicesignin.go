@@ -3,6 +3,7 @@ package coord
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,15 +68,16 @@ const (
 	DeviceCancelled DeviceSignInStatus = "cancelled"
 )
 
-// Valid reports whether the status is one this build names.
-func (s DeviceSignInStatus) Valid() bool {
-	switch s {
-	case DeviceStarting, DevicePending, DeviceCancelRequested,
-		DeviceApproved, DeviceFailed, DeviceExpired, DeviceCancelled:
-		return true
-	}
-	return false
+// DeviceSignInStatuses is every status this build names, in a session's order:
+// the closed set [DeviceSignInStatus.Valid] reads, and the one a client's
+// copy of the words is held to.
+var DeviceSignInStatuses = []DeviceSignInStatus{
+	DeviceStarting, DevicePending, DeviceCancelRequested,
+	DeviceApproved, DeviceFailed, DeviceExpired, DeviceCancelled,
 }
+
+// Valid reports whether the status is one this build names.
+func (s DeviceSignInStatus) Valid() bool { return slices.Contains(DeviceSignInStatuses, s) }
 
 // Ended reports whether the session is over: its process is gone and nothing
 // will change the record again.

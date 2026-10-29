@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 )
@@ -197,11 +198,22 @@ func (e *Engine) cliEntry(key string) (*cliagent.Provider, bool) {
 //
 // [coord.RetryClear] writes the record at once and makes no call.
 // [coord.RetryProbe] first asks whether any live node sits the entry out
-// ([ErrNotSittingOut] if none does), clears this node's windows and makes ONE
-// probe call within [modelRetryProbeBudget], charged as a provider probe to
-// the company: the record is written only if the call answered. A probe
-// refused for a limit writes nothing, and the fresh report sits the entry out
-// again ([RetryResult.Still]).
+// ([ErrNotSittingOut] if none does) and makes ONE probe call within
+// [modelRetryProbeBudget], charged as a provider probe to the company: the
+// record is written only if the call answered, and every node, this one
+// included, clears through it. A probe refused for a limit writes nothing and
+// answers the fresh window ([RetryResult.Still]), which this node's plan
+// holds from then on; one that failed otherwise writes nothing either
+// ([RetryResult.Failed]).
+//
+// THE PROBE NEVER TOUCHES THE ENTRY'S WINDOW. It is made through a sibling of
+// the entry built on the same sign-in and state directory with a record of its
+// own, so it reaches the vendor however the entry's window stands, and a
+// probe that does not answer leaves that window exactly as it was. Clearing
+// the window first and probing the entry itself left this node's sit-out
+// cleared on a probe that failed for any other reason, with no record written
+// to say anybody had cleared it, so this node alone sent seats into a limit
+// every other node still sat out.
 //
 // [ErrNoModel] for an entry the active revision does not have.
 func (e *Engine) RetryModel(ctx context.Context, key string, mode coord.ModelRetryMode, by iam.Actor) (RetryResult, error) {
@@ -222,10 +234,23 @@ func (e *Engine) RetryModel(ctx context.Context, key string, mode coord.ModelRet
 		if !sitting {
 			return RetryResult{}, fmt.Errorf("%w: %q", ErrNotSittingOut, key)
 		}
-		agent.Plan().Clear(at)
-		if err := e.probeEntry(ctx, key); err != nil {
+		sibling, err := e.probeSibling(key)
+		if err != nil {
+			return RetryResult{}, err
+		}
+		if err := e.probeEntry(ctx, key, sibling); err != nil {
 			if _, limited := chain.Limited(err); limited {
-				out.Still = sitOutFor(agent.Plan().State(e.now()), agent.ModelArgument())
+				// THE VENDOR'S FRESH WORD IS THE ENTRY'S: the sibling's
+				// record is its own, so the window it met is held on
+				// the entry's plan too, never shortening one in force.
+				// Left on the sibling, this node went on sitting out
+				// the old window and tried the entry again at its end,
+				// into a limit the probe had already met.
+				now := e.now()
+				for _, window := range sibling.Plan().State(now).SittingOut {
+					agent.Plan().Hold(window)
+				}
+				out.Still = sitOutFor(agent.Plan().State(now), agent.ModelArgument())
 				return out, nil
 			}
 			out.Failed = err.Error()
@@ -244,16 +269,28 @@ func (e *Engine) RetryModel(ctx context.Context, key string, mode coord.ModelRet
 	return out, nil
 }
 
-// probeEntry makes one call on one entry, as the provider park's probe makes
-// it, charged as a provider probe to the company rather than a seat: a person
-// asked for it, not a seat's work.
-func (e *Engine) probeEntry(ctx context.Context, key string) error {
+// probeSibling is the entry under key as the active revision builds it, on
+// the same sign-in and state directory, with a record of its own rather than
+// the node's: what its one call meets is the vendor's word, never the entry's
+// window.
+func (e *Engine) probeSibling(key string) (*cliagent.Provider, error) {
+	c := e.Company()
+	if c == nil || c.Config == nil {
+		return nil, fmt.Errorf("%w: %q", ErrNoModel, key)
+	}
+	spec, ok := c.Config.Providers.LLM[key]
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrNoModel, key)
+	}
+	return BuildCLIAgent(key, spec, e.resolver(), nil)
+}
+
+// probeEntry makes one call on provider, the entry under key, as the provider
+// park's probe makes it, charged as a provider probe to the company rather
+// than a seat: a person asked for it, not a seat's work.
+func (e *Engine) probeEntry(ctx context.Context, key string, provider llm.Provider) error {
 	c := e.Company()
 	if c == nil || c.Models == nil {
-		return fmt.Errorf("%w: %q", ErrNoModel, key)
-	}
-	provider, ok := c.Models.Provider(key)
-	if !ok {
 		return fmt.Errorf("%w: %q", ErrNoModel, key)
 	}
 	members := []chain.Member{{Key: key, Provider: provider}}
@@ -330,6 +367,9 @@ func (e *Engine) clearRemovedModelRetries(ctx context.Context, next *Company) {
 		return
 	}
 	if _, err := e.fleetCompany(ctx, next); err != nil {
+		log.DebugContext(ctx, "model_retries_not_swept", "reason", err.Error(),
+			"detail", "a removed model's retry is cleared by the company the fleet is pointed "+
+				"at; this one is not it yet")
 		return
 	}
 	retries, err := e.backends.Fleet.ListModelRetries(ctx)
