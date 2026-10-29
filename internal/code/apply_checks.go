@@ -59,10 +59,7 @@ func (a *Applier) applyChecks(ctx context.Context, tx *sql.Tx, at applyContext) 
 	case CheckQueued:
 		return joinCheck(ctx, tx, at, p.CheckKey, queuedPart(p, at))
 	case CheckStarted:
-		return joinCheck(ctx, tx, at, p.CheckKey, checkPart{run: &checkRun{
-			runner: p.Runner, placement: string(p.Placement), box: p.Box, borrowed: p.Borrowed,
-			startedAt: store.EncodeTime(p.StartedAt),
-		}})
+		return joinCheck(ctx, tx, at, p.CheckKey, startedPart(p))
 	case CheckFinished:
 		return applyCheckFinished(ctx, tx, at, p)
 	case ChecksSweep:
@@ -158,6 +155,18 @@ func queuedPart(q CheckQueued, at applyContext) checkPart {
 			finishedAt: part.queue.queuedAt, position: at.packed}
 	}
 	return part
+}
+
+// startedPart is a started attempt's part: its run. A function of its own, as
+// each record's part is, so the record is a typed parameter wherever its fields
+// are converted — inline, a type switch's variable handed to a conversion is
+// a value the code cache's writers gate cannot type, and refuses
+// (TestNothingButSyncWritesACache).
+func startedPart(s CheckStarted) checkPart {
+	return checkPart{run: &checkRun{
+		runner: s.Runner, placement: string(s.Placement), box: s.Box, borrowed: s.Borrowed,
+		startedAt: store.EncodeTime(s.StartedAt),
+	}}
 }
 
 // finishedPart is an ending's part.
