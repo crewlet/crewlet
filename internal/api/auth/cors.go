@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -41,6 +42,12 @@ var (
 		http.MethodPut, http.MethodPatch, http.MethodDelete,
 	}
 	corsHeaders = []string{"Authorization", "Content-Type"}
+	// corsExposed is every header a cross-origin client reads that a browser
+	// hides by default (only a short safelist is readable cross-origin): the
+	// engine's mark, without which every answer reads as something in front
+	// of the engine, the entity tag a config write sends back as If-Match,
+	// and the wait a 429 or a 503 says to keep.
+	corsExposed = []string{httpjson.EngineHeader, "ETag", "Retry-After"}
 )
 
 // CORS is the set of browser origins this API answers cross-origin.
@@ -122,6 +129,7 @@ func (c *CORS) Middleware(next http.Handler) http.Handler {
 		// the one value it matches the response against.
 		if canonical := Origin(origin); canonical != "" && slices.Contains(c.allowed, canonical) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Expose-Headers", strings.Join(corsExposed, ", "))
 			if preflight {
 				w.Header().Set("Access-Control-Allow-Methods",
 					strings.Join(corsMethods, ", "))

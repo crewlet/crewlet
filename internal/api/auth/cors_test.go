@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -51,6 +52,15 @@ func TestAPermittedOriginIsAllowed(t *testing.T) {
 	}
 	if !reached {
 		t.Error("the request never reached the API")
+	}
+	// WHAT A CROSS-ORIGIN DASHBOARD READS, exposed: a browser hides every
+	// header outside a short safelist, and without the engine's mark every
+	// answer reads as something in front of the engine.
+	exposed := rec.Header().Get("Access-Control-Expose-Headers")
+	for _, want := range []string{httpjson.EngineHeader, "ETag", "Retry-After"} {
+		if !strings.Contains(exposed, want) {
+			t.Errorf("Access-Control-Expose-Headers = %q, missing %s", exposed, want)
+		}
 	}
 }
 
