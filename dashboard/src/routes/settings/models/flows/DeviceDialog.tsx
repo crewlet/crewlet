@@ -28,7 +28,9 @@ import {
   useToast,
 } from "@crewlethq/ui";
 import type { ModelDeviceStatus } from "~/protocol/models.ts";
+import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { isAbort } from "~/protocol/rest.ts";
 import type { ModelDevice } from "~/protocol/models.ts";
 import { cancelDeviceSignIn, startDeviceSignIn } from "../api.ts";
 import type { ModelView } from "../data.ts";
@@ -45,14 +47,24 @@ export const DEVICE_POLL_MS = 3_000;
 const ENDED: readonly ModelDeviceStatus[] = ["approved", "failed", "expired", "cancelled"];
 export const deviceEnded = (status: ModelDeviceStatus) => ENDED.includes(status);
 
-/** The host a sign-in address points at, for the button that opens it. */
+/**
+ * The host a sign-in address points at, for the button that opens it, or
+ * null where it is not an https address. The address is the engine's, read
+ * off the CLI's output, and the page opens it in a new tab: only a secure
+ * one is offered, so a CLI's output can never hand a person a plain-http or
+ * script address to follow.
+ */
 function hostOf(url: string): string | null {
   try {
-    return new URL(url).host;
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" ? parsed.host : null;
   } catch {
     return null;
   }
 }
+
+/** What went wrong, by what the person was doing: each has its own title and its own way on. */
+type Problem = { kind: "start" | "cancel"; sentence: string };
 
 export function DeviceDialog({
   model,
@@ -68,18 +80,19 @@ export function DeviceDialog({
   const [session, setSession] = useState<ModelDevice | null>(
     running && !deviceEnded(running.status) ? running : null,
   );
-  const [error, setError] = useState<string | null>(null);
+  const [problem, setProblem] = useState<Problem | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [cancelling, setCancelling] = useState(false);
   const approved = useRef(false);
   const openRef = useRef<HTMLAnchorElement>(null);
+  const lifetime = useLifetimeSignal();
   const key = model.key;
 
   // START, unless the reading already follows a session for this model.
   useEffect(() => {
     if (session) return;
     const abort = new AbortController();
-    setError(null);
+    setProblem(null);
     startDeviceSignIn(key, abort.signal).then(
       (answer) => {
         // AN ANSWER THAT LANDS AFTER THE DIALOG LEFT is not this dialog's to show.
@@ -87,7 +100,7 @@ export function DeviceDialog({
         if (answer.kind === "ok") setSession(answer.value);
         else if (answer.code === "sign_in_in_progress" && isDevice(answer.body.running))
           setSession(answer.body.running);
-        else setError(answer.sentence);
+        else setProblem({ kind: "start", sentence: answer.sentence });
       },
       () => {
         // Only this dialog's own abort rejects.
@@ -107,6 +120,11 @@ export function DeviceDialog({
   useEffect(() => {
     if (polled.data && polled.data.id === session?.id) setSession(polled.data);
   }, [polled.data, session?.id]);
+  // A SESSION THE ENGINE NO LONGER ANSWERS FOR (gone, or no longer this
+  // reader's to see) is said, with the way on, rather than drawn as waiting
+  // for an approval that can never be read back.
+  const lost =
+    live && polled.error ? polled.detail || "The engine no longer answers for it." : null;
 
   useEffect(() => {
     if (session?.status !== "approved" || approved.current) return;
@@ -134,11 +152,20 @@ export function DeviceDialog({
       onClose();
       return;
     }
+    // TIED TO THE DIALOG: an answer that lands after it closed acts for nothing.
+    const signal = lifetime();
     setCancelling(true);
-    const answer = await cancelDeviceSignIn(session.id).catch(() => null);
+    let answer: Awaited<ReturnType<typeof cancelDeviceSignIn>>;
+    try {
+      answer = await cancelDeviceSignIn(session.id, signal);
+    } catch (err) {
+      if (isAbort(err)) return;
+      throw err;
+    }
+    if (signal.aborted) return;
     setCancelling(false);
-    if (answer && answer.kind === "refused") {
-      setError(answer.sentence);
+    if (answer.kind === "refused") {
+      setProblem({ kind: "cancel", sentence: answer.sentence });
       return;
     }
     onDone();
@@ -148,6 +175,7 @@ export function DeviceDialog({
   function again() {
     approved.current = false;
     focused.current = false;
+    setProblem(null);
     setSession(null);
     setAttempt((n) => n + 1);
   }
@@ -172,7 +200,7 @@ export function DeviceDialog({
           </Button>
         ) : (
           <>
-            {ended ? (
+            {ended || problem?.kind === "start" || lost ? (
               <Button variant="primary" onClick={again}>
                 Start again
               </Button>
@@ -184,9 +212,9 @@ export function DeviceDialog({
         )
       }
     >
-      {error ? (
+      {problem?.kind === "start" ? (
         <Callout variant="danger" title="The sign-in could not start" live="polite">
-          {error}
+          {problem.sentence}
         </Callout>
       ) : !session ? (
         <div className="models-waiting" role="status">
@@ -211,6 +239,16 @@ export function DeviceDialog({
         </Callout>
       ) : (
         <div className="models-device">
+          {problem?.kind === "cancel" ? (
+            <Callout variant="danger" title="The sign-in could not be cancelled" live="polite">
+              {problem.sentence} It is still running, and still signs the model in if approved.
+            </Callout>
+          ) : null}
+          {lost ? (
+            <Callout variant="danger" title="This sign-in can no longer be followed" live="polite">
+              {lost} Start again for a new code.
+            </Callout>
+          ) : null}
           <ol className="models-steps">
             <li>
               <Text as="p" variant="body">
@@ -227,6 +265,10 @@ export function DeviceDialog({
                 >
                   Open {host}
                 </ButtonLink>
+              ) : session.url ? (
+                <Text as="p" variant="caption" tone="secondary">
+                  The sign-in address is not a secure (https) address, so it is not offered.
+                </Text>
               ) : (
                 <Text as="p" variant="caption" tone="tertiary">
                   Waiting for the address.
@@ -255,13 +297,15 @@ export function DeviceDialog({
               </Text>
             </li>
           </ol>
-          <div className="models-device__status" role="status">
-            <StatusDot tone={DEVICE[session.status].tone} pulse>
-              {session.status === "pending"
-                ? "Waiting for you to approve the code"
-                : DEVICE[session.status].label}
-            </StatusDot>
-          </div>
+          {lost ? null : (
+            <div className="models-device__status" role="status">
+              <StatusDot tone={DEVICE[session.status].tone} pulse>
+                {session.status === "pending"
+                  ? "Waiting for you to approve the code"
+                  : DEVICE[session.status].label}
+              </StatusDot>
+            </div>
+          )}
           <Text as="p" variant="caption" tone="secondary" className="models-device__note">
             Device sign-in has to be turned on in your ChatGPT security settings first. Signing in
             with a ChatGPT plan uses its included usage; an OpenAI API key is billed per token
