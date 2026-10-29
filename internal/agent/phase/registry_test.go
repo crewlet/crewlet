@@ -307,3 +307,58 @@ func TestResolveIsTheChainATurnRunsOn(t *testing.T) {
 		t.Errorf("Resolve of no role = %v, want nil", got)
 	}
 }
+
+// RESOLUTION REPORTS WHICH LEVEL DECIDED, in turn-engine.md's order for a
+// satellite: the seat's per-phase chain, then its own `llm`, then the entry
+// keyed "default", then the first entry configured. The executor's own field
+// IS `llm`, so `llm` deciding the executor is the seat's choice; only a
+// satellite that named nothing reads as its executor's chain. A field naming
+// only keys the company lacks decided nothing, whatever it wrote.
+func TestResolveWithSourceNamesTheLevelThatDecided(t *testing.T) {
+	t.Parallel()
+	seat := &org.Role{Name: "seat", LLM: org.ProviderKeys{"alpha"},
+		LLMReview: org.ProviderKeys{"beta"}, LLMJudge: org.ProviderKeys{"typo"}}
+	for _, tc := range []struct {
+		name   string
+		role   *org.Role
+		ph     phase.Phase
+		order  []string
+		keys   []string
+		source phase.Source
+	}{
+		{"a satellite's own field", seat, phase.Review, []string{"default", "alpha", "beta"},
+			[]string{"beta"}, phase.SourceSeat},
+		{"the executor's own llm", seat, phase.Execute, []string{"default", "alpha", "beta"},
+			[]string{"alpha"}, phase.SourceSeat},
+		{"a satellite that names nothing falls to llm", seat, phase.Subagent, []string{"default", "alpha"},
+			[]string{"alpha"}, phase.SourceExecutor},
+		{"onboarding, which has no field, runs on llm", seat, phase.Onboarding, []string{"alpha"},
+			[]string{"alpha"}, phase.SourceExecutor},
+		// A per-phase field that misses does NOT fall to llm: it lands
+		// on the company's fallback, as Chain does.
+		{"a satellite naming only a missing key", seat, phase.Judge, []string{"alpha", "default"},
+			[]string{"default"}, phase.SourceDefaultEntry},
+		{"a seat naming nothing, with a default entry", &org.Role{Name: "none"}, phase.Execute,
+			[]string{"alpha", "default"}, []string{"default"}, phase.SourceDefaultEntry},
+		{"a seat naming nothing, with no default entry", &org.Role{Name: "none"}, phase.Review,
+			[]string{"gamma", "alpha"}, []string{"gamma"}, phase.SourceFirstEntry},
+		{"an executor whose llm misses", &org.Role{Name: "typo", LLM: org.ProviderKeys{"typo"}}, phase.Execute,
+			[]string{"gamma", "alpha"}, []string{"gamma"}, phase.SourceFirstEntry},
+		{"no providers", seat, phase.Execute, nil, nil, ""},
+		{"no role", nil, phase.Execute, []string{"alpha"}, nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			keys, source := phase.ResolveWithSource(tc.role, tc.ph, tc.order)
+			if !slices.Equal(keys, tc.keys) || source != tc.source {
+				t.Errorf("ResolveWithSource = %v, %q; want %v, %q", keys, source, tc.keys, tc.source)
+			}
+			if tc.source != "" && !source.Valid() {
+				t.Errorf("source %q is outside the closed set", source)
+			}
+			if got := phase.Resolve(tc.role, tc.ph, tc.order); !slices.Equal(got, keys) {
+				t.Errorf("Resolve = %v, ResolveWithSource = %v: one resolution answers both", got, keys)
+			}
+		})
+	}
+}

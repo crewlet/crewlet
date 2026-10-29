@@ -161,7 +161,7 @@ func (r *Registry) Chain(role *org.Role, ph Phase) ([]chain.Member, error) {
 	if r == nil || len(r.order) == 0 {
 		return nil, ErrNoProviders
 	}
-	keys, missing := resolve(role, ph, r.order, r.Has)
+	keys, _, missing := resolve(role, ph, r.order, r.Has)
 	if len(missing) > 0 {
 		log.Warn("phase_provider_key_unknown",
 			"role", role.Name, "phase", ph.String(),
@@ -185,24 +185,71 @@ func (r *Registry) Chain(role *org.Role, ph Phase) ([]chain.Member, error) {
 // runs on is one that is right until either rule moves. Nil for a role that is
 // nil and for a company with no providers, which has no chain to show.
 func Resolve(role *org.Role, ph Phase, order []string) []string {
+	keys, _ := ResolveWithSource(role, ph, order)
+	return keys
+}
+
+// Source is which of [Registry.Chain]'s four levels decided a phase's chain.
+type Source string
+
+const (
+	// SourceSeat is the phase's own field on the seat: `llm` for the
+	// executor, `llm_<phase>` (or the same key inside the `llm` mapping)
+	// for a satellite.
+	SourceSeat Source = "seat"
+	// SourceExecutor is a phase with no field of its own written (or none
+	// at all, onboarding's case) that fell through to the seat's `llm`, its
+	// executor's chain.
+	SourceExecutor Source = "executor"
+	// SourceDefaultEntry is the providers.llm entry keyed "default", for a
+	// seat whose fields name no configured entry.
+	SourceDefaultEntry Source = "default-entry"
+	// SourceFirstEntry is the first entry in config order, for a company
+	// with no "default" entry.
+	SourceFirstEntry Source = "first-entry"
+)
+
+// Sources is the closed set, in [Registry.Chain]'s order.
+var Sources = []Source{SourceSeat, SourceExecutor, SourceDefaultEntry, SourceFirstEntry}
+
+// Valid reports whether s is one of [Sources].
+func (s Source) Valid() bool { return slices.Contains(Sources, s) }
+
+// ResolveWithSource is [Resolve], also reporting which level decided the
+// chain: whether the seat chose this phase's model itself, through its
+// executor's chain, or not at all, so the company's fallback did.
+//
+// THE SAME RESOLUTION, rather than a second walk that classifies the answer:
+// "written" and "decided" differ exactly where it matters. A seat whose field
+// names only keys the company lacks wrote a field and decided nothing, and
+// its phase runs on the fallback; a reading that looked at the field alone
+// would credit the seat with a model it never runs on. An empty Source with a
+// nil chain, for a nil role or a company with no providers.
+func ResolveWithSource(role *org.Role, ph Phase, order []string) ([]string, Source) {
 	if role == nil || len(order) == 0 {
-		return nil
+		return nil, ""
 	}
 	known := make(map[string]bool, len(order))
 	for _, key := range order {
 		known[key] = true
 	}
-	keys, _ := resolve(role, ph, order, func(key string) bool { return known[key] })
-	return keys
+	keys, source, _ := resolve(role, ph, order, func(key string) bool { return known[key] })
+	return keys, source
 }
 
 // resolve is the four levels [Registry.Chain] documents, over keys alone:
-// the chain it lands on, never empty for a non-empty order, and every key the
-// role named that the company does not configure.
-func resolve(role *org.Role, ph Phase, order []string, has func(string) bool) (keys, missing []string) {
-	candidates := roleKeys(role, ph)
+// the chain it lands on, never empty for a non-empty order, the level that
+// decided it, and every key the role named that the company does not
+// configure.
+func resolve(role *org.Role, ph Phase, order []string, has func(string) bool) (keys []string, source Source, missing []string) {
+	candidates, source := roleKeys(role, ph), SourceSeat
 	if len(candidates) == 0 {
 		candidates = role.LLM
+		// The executor's own field IS `llm`, and so is onboarding's
+		// only chain: only a satellite that named nothing fell through.
+		if ph != Execute {
+			source = SourceExecutor
+		}
 	}
 	seen := make(map[string]bool, len(candidates))
 	for _, key := range candidates {
@@ -217,12 +264,12 @@ func resolve(role *org.Role, ph Phase, order []string, has func(string) bool) (k
 		}
 	}
 	if len(keys) > 0 {
-		return keys, missing
+		return keys, source, missing
 	}
 	if has("default") {
-		return []string{"default"}, missing
+		return []string{"default"}, SourceDefaultEntry, missing
 	}
-	return []string{order[0]}, missing
+	return []string{order[0]}, SourceFirstEntry, missing
 }
 
 // Head returns the chain's first member, for callers that want one provider
