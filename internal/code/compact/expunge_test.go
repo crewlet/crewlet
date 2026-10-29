@@ -235,6 +235,131 @@ func TestAnExpungeKeepsEveryObjectAReferenceReaches(t *testing.T) {
 	}
 }
 
+// AN EXPUNGE HOLDS ITS REPOSITORY FROM EVERY OTHER BUILD ON ITS NODE, from its
+// scan to its commit, and waits for one running: its begin retires inputs
+// chosen among every live pack and drops the published layers over them, so
+// a merge or a layer planned beside it would have one of the two refused
+// stale — the begin after its whole build. Unlike a compaction beside a
+// publication, which merges around the publication's reservation, nothing
+// builds beside an expunge, and each answers busy having synced nothing.
+//
+// Mutations: drop the expunge from claimCompaction's refusal, and the merge
+// asked while the expunge is held syncs the repository; drop the publication
+// from claimExpunge's, and the expunge asked while a publication is held does.
+func TestAnExpungeHoldsItsRepositoryFromEveryOtherBuild(t *testing.T) {
+	t.Parallel()
+	t.Run("a compaction and a publication while the expunge runs", func(t *testing.T) {
+		t.Parallel()
+		x := newFixture(t)
+		x.pushN(code.CompactMinMerge, 4<<10)
+		x.leak("feature")
+		x.purge()
+		cand := x.mustOwe()
+		script := &codefault.Script{}
+		held, reached := make(chan struct{}), make(chan struct{})
+		script.Arm(codefault.ExpungeAfterBuild, codefault.Action{Once: true, Block: held, Reached: reached})
+		cc := countedOver(x.node().Cache())
+		c, _, _ := x.compactorOf(func(o *compact.Options) { o.Cache, o.Faults = cc, script })
+		done := make(chan compact.Outcome, 1)
+		go func() {
+			out, _ := expungeWhileBusy(t, c, cand)
+			done <- out
+		}()
+		select {
+		case <-reached:
+		case out := <-done:
+			t.Fatalf("the expunge ended %s before its build was stored", out)
+		case <-time.After(time.Minute):
+			t.Fatal("the expunge built nothing in a minute")
+		}
+		syncs, _ := cc.counts()
+		if out, err := c.Compact(t.Context(), x.candidate()); out != compact.OutcomeBusy {
+			t.Errorf("a compaction while an expunge of its repository runs: %s, %v; want busy", out, err)
+		}
+		if out, err := c.Publish(t.Context(), x.publicationCandidate()); out != compact.OutcomeBusy {
+			t.Errorf("a publication while an expunge of its repository runs: %s, %v; want busy", out, err)
+		}
+		if again, _ := cc.counts(); again != syncs {
+			t.Errorf("the builds refused busy synced the repository %d times, want none", again-syncs)
+		}
+		close(held)
+		if out := <-done; out != compact.OutcomeApplied {
+			t.Fatalf("the expunge once let go: %s, want applied", out)
+		}
+		if out, err := compactWhileBusy(t, c, x.candidate()); out == compact.OutcomeBusy {
+			t.Errorf("a compaction once the expunge committed: %s, %v; want it no longer busy", out, err)
+		}
+	})
+	// Each other build is asked of its listing on the test's goroutine, and
+	// run on its own until its point holds it; once it has landed, the copy
+	// is let settle where its node does more in the background — a
+	// publication's layer, which the installer places by swapping the copy
+	// — since an expunge planned over an incarnation a swap then replaced
+	// fails its build that cycle (its scratch reads the live set the swap
+	// carried on), and is asked again at the next pass.
+	for _, other := range []struct {
+		name   string
+		point  codefault.Point
+		build  func(x *fixture, c *compact.Compactor) func() compact.Outcome
+		settle func(x *fixture)
+	}{
+		{"an expunge while a compaction runs", codefault.CompactAfterUpload,
+			func(x *fixture, c *compact.Compactor) func() compact.Outcome {
+				cand := x.candidate()
+				return func() compact.Outcome {
+					out, _ := compactWhileBusy(x.t, c, cand)
+					return out
+				}
+			}, func(*fixture) {}},
+		{"an expunge while a publication runs", codefault.PublishAfterUpload,
+			func(x *fixture, c *compact.Compactor) func() compact.Outcome {
+				cand := x.publicationCandidate()
+				return func() compact.Outcome {
+					out, _ := publishWhileBusy(x.t, c, cand)
+					return out
+				}
+			}, func(x *fixture) { x.awaitInstalled(1) }},
+	} {
+		t.Run(other.name, func(t *testing.T) {
+			t.Parallel()
+			x := newFixture(t)
+			x.pushN(code.CompactMinMerge, 4<<10)
+			x.leak("feature")
+			x.purge()
+			script := &codefault.Script{}
+			held, reached := make(chan struct{}), make(chan struct{})
+			script.Arm(other.point, codefault.Action{Once: true, Block: held, Reached: reached})
+			cc := countedOver(x.node().Cache())
+			c, _, _ := x.compactorOf(func(o *compact.Options) { o.Cache, o.Faults = cc, script })
+			run := other.build(x, c)
+			done := make(chan compact.Outcome, 1)
+			go func() { done <- run() }()
+			select {
+			case <-reached:
+			case out := <-done:
+				t.Fatalf("the build ended %s before its upload", out)
+			case <-time.After(time.Minute):
+				t.Fatal("the build stored nothing in a minute")
+			}
+			syncs, _ := cc.counts()
+			if out, err := c.Expunge(t.Context(), x.mustOwe()); out != compact.OutcomeBusy {
+				t.Errorf("%s: %s, %v; want busy", other.name, out, err)
+			}
+			if again, _ := cc.counts(); again != syncs {
+				t.Errorf("the expunge refused busy synced the repository %d times, want none", again-syncs)
+			}
+			close(held)
+			if out := <-done; out != compact.OutcomeApplied {
+				t.Fatalf("the build once let go: %s, want applied", out)
+			}
+			other.settle(x)
+			if out, err := expungeWhileBusy(t, c, x.mustOwe()); out != compact.OutcomeApplied {
+				t.Errorf("the expunge once the build landed: %s, %v; want applied", out, err)
+			}
+		})
+	}
+}
+
 // A RESCUE HOLDS WHAT A PUSH REVIVED BEFORE THE BEGIN: a push that lands
 // between the expunge's scan and its begin, checked at the epoch before it,
 // creating a ref at the commit the scan found unreachable — an engine write
