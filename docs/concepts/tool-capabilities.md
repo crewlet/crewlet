@@ -55,7 +55,7 @@ read as `Unknown`.
 
 First-party builtins declare their own annotations in code, registered
 with `tools.Registry.RegisterWith`, so the same classification works for
-them. The [code tools](../guides/tools-and-mcp.md#the-companys-code)' seven
+them. The [code tools](../guides/tools-and-mcp.md#the-companys-code)' nine
 reads, for one, are each a proven, idempotent read: a worker may be handed any
 of them, a turn that only read code delivered nothing, and the operator
 catalogue records no call to one. Their ten writes — `code_commit_files`,
@@ -74,7 +74,7 @@ else made with nothing the same tool keeps to undo it. A seat holding the
 writes is also told, in its executor prompt's `code_writes` section, the one
 choice no description can carry: a small change is committed on the server,
 and anything to build or test belongs in a checkout. The operator-only
-`code_repo_readers` beside them is a proven, idempotent read like the seven,
+`code_repo_readers` beside them is a proven, idempotent read like the nine,
 which no seat's registry ever holds: annotations say what a tool does,
 never who may call it, and who read a unit's repository is an admin's — a
 person's — question, decided by the authority table before anything is read
