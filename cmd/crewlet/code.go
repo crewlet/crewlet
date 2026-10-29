@@ -311,11 +311,13 @@ type codePushView struct {
 	ActorKind string    `json:"actor_kind"`
 	ActorSeat string    `json:"actor_seat"`
 	// Run is a seat's push's: the turn that made it and the work item it was
-	// charged to.
+	// charged to, and a coding box's run and its coding agent.
 	Run struct {
 		TurnID      string `json:"turn_id"`
 		WorkBackend string `json:"work_backend"`
 		WorkKey     string `json:"work_key"`
+		RunID       string `json:"run_id"`
+		CodingAgent string `json:"coding_agent"`
 	} `json:"run"`
 	Node     string `json:"node"`
 	Commands []struct {
@@ -358,12 +360,13 @@ type codeReadView struct {
 const (
 	// codeRowBytes is the most one row of a code read encodes to: two
 	// mebibytes, above the largest TestTheCodePagesFitOneAnswer builds — a
-	// push of code.MaxCommandsPerPush commands at the longest ref, every byte
-	// of every ref one JSON writes as six, beside code.MaxIntroduced ids, at
-	// 1 683 795 bytes (the code domain refuses a push whose record entry is
+	// push of code.MaxCommandsPerPush commands at the longest ref beside
+	// code.MaxIntroduced ids and a seat's run at its bound, each byte of a ref
+	// and of a run field but the coding run's UUID one JSON writes as six, at
+	// 1 692 620 bytes (the code domain refuses a push whose record entry is
 	// that wide, so no row reaches it), and a repository at its longest
 	// description and default branch with every rule
-	// code.MaxProtectionsPerRepo allows, all of them escaped, at 107 730.
+	// code.MaxProtectionsPerRepo allows, all of them escaped, at 107 746.
 	codeRowBytes = 2 << 20
 	// codeEnvelopeBytes is the most an answer carries beside its rows: a comma
 	// between rows — fewer than code.MaxReposPerPage, the most a page asks
@@ -625,8 +628,9 @@ type codePushLine struct {
 
 // pushLine is p as status prints it: who made it — a person's credential
 // and, where bound, the seat they hold; a seat by its handle and the turn and
-// work item behind its push — the node that took it, and what became of every
-// ref, `ok|noop|ng <ref> <old>..<new> [(reason)]` joined with `; `.
+// work item behind its push, and its coding box's run and coding agent where
+// the box pushed — the node that took it, and what became of every ref,
+// `ok|noop|ng <ref> <old>..<new> [(reason)]` joined with `; `.
 func pushLine(p codePushView) codePushLine {
 	by := p.Actor
 	switch {
@@ -635,6 +639,9 @@ func pushLine(p codePushView) codePushLine {
 		// what its push says beside the handle is what made it.
 		by = p.ActorSeat
 		var made []string
+		if p.Run.RunID != "" {
+			made = append(made, strings.TrimSpace(p.Run.CodingAgent+" run "+p.Run.RunID))
+		}
 		if p.Run.TurnID != "" {
 			made = append(made, "turn "+p.Run.TurnID)
 		}

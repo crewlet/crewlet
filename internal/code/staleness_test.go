@@ -69,6 +69,12 @@ func TestEveryCodeReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 				Introduced: &code.IntroducedQuery{RepoID: id}, Fresh: f})
 			return err
 		}},
+		{"Read(run_pushes)", func(f statelog.Freshness) error {
+			_, err := reader.Read(ctx, code.ReadQuery{Kind: code.ReadRunPushes,
+				RunPushes: &code.RunPushesQuery{Run: runA, Repos: []string{id}, After: n.waiter.Committed()},
+				Fresh:     f})
+			return err
+		}},
 		{"ResolveRef", func(f statelog.Freshness) error {
 			// ANSWERED even where the repository holds no main: the answer
 			// says so of the name, which only a read that was served can.
@@ -133,6 +139,16 @@ func TestACodeReadWaitsForTheFloorTheCallerNamed(t *testing.T) {
 			_, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadIntroduced,
 				Introduced: &code.IntroducedQuery{RepoID: id},
 				Fresh:      statelog.FloorAt(statelog.ReadSession, res.Position)})
+			return err
+		},
+		// A RUN'S LATER PAGE, at session at the position its first page was
+		// read at: a node that has not applied it is behind the run's
+		// pushes, never a node that answers fewer of them.
+		"Read(run_pushes) at session": func() error {
+			_, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadRunPushes,
+				RunPushes: &code.RunPushesQuery{Run: runA, Repos: []string{id}, After: statelog.Position{
+					Stream: res.Position.Stream, Generation: res.Position.Generation, Seq: 1}},
+				Fresh: statelog.FloorAt(statelog.ReadSession, res.Position)})
 			return err
 		},
 	} {

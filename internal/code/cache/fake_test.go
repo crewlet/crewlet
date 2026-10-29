@@ -99,23 +99,31 @@ type fakePush struct {
 	introduced []string
 }
 
-// fakePusher is who a fake log's pushes are made by but every third: a
-// person, through the token bound to them, received by git.
+// fakePusher is who one in three of a fake log's pushes are made by: a person,
+// through the token bound to them, received by git.
 var fakePusher = code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ceo", Seat: "ceo"}
 
-// pusherOf is who made a fake log's n-th push, and how: every third a seat's
-// push the engine built, its run naming its turn, its work item and its model,
-// and every other fakePusher's — so every index a case builds holds both kinds
-// of push, and a case that holds an index to the rows (indexAgainstLog)
-// compares each push's whole PushedBy, its run included.
+// pusherOf is who made a fake log's n-th push, and how: one in three a seat's
+// push the engine built, its run naming its turn, its work item and its model;
+// one in three a coding box's push git received, its run naming as well the
+// run that pushed and its coding agent; and the rest fakePusher's — so every
+// index a case builds holds every kind of push, and a case that holds an index
+// to the rows (indexAgainstLog) compares each push's whole PushedBy, its run
+// included.
 func pusherOf(n int) (code.Principal, code.PushVia) {
-	if n%3 != 0 {
-		return fakePusher, code.ViaGit
-	}
-	return code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer", Run: code.RunProvenance{
+	run := code.RunProvenance{
 		TurnID:      uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("turn-%d", n))).String(),
 		WorkBackend: "native", WorkKey: fmt.Sprintf("ENG-%d", n), Model: "claude-sonnet-4-5",
-	}}, code.ViaEngine
+	}
+	switch n % 3 {
+	case 0:
+		return code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer", Run: run}, code.ViaEngine
+	case 2:
+		run.RunID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprintf("run-%d", n))).String()
+		run.CodingAgent = "claude-code"
+		return code.Principal{Kind: code.PrincipalAgent, Seat: "swe", Run: run}, code.ViaGit
+	}
+	return fakePusher, code.ViaGit
 }
 
 // fakeRef is one ref's row; an empty oid is a tombstone.

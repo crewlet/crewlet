@@ -168,6 +168,12 @@ func (r RunProvenance) encodedBytes() int {
 	if r.Model != "" {
 		n += field("model", stringBytes(r.Model), false)
 	}
+	if r.RunID != "" {
+		n += field("run_id", stringBytes(r.RunID), false)
+	}
+	if r.CodingAgent != "" {
+		n += field("coding_agent", stringBytes(r.CodingAgent), false)
+	}
 	return n
 }
 

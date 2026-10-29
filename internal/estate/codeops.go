@@ -196,9 +196,10 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 
 // opCodeRead is a read of the code host by its kind (code.ReadKinds): the REST
 // routes' repository listing, one repository's detail and its push history,
-// which the operator's CLI reads too; a repository's refs; a listing of
-// changes — of a repository, a work item or a state — and one change by its
-// number, each held to the grant on the change's repository as a read of the
+// which the operator's CLI reads too; a coding run's pushes, which the engine
+// reads when it collects the run; a repository's refs; a listing of changes —
+// of a repository, a work item or a state — and one change by its number,
+// each held to the grant on the change's repository as a read of the
 // repository is; its pushes in log order, which a git node's index of which
 // push introduced each commit is built from; the repositories a compaction
 // may be due in, most live packs first, which a git node polls for the ones
@@ -213,9 +214,10 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // grant of the seat it reads for, which rides only beside a seat's asker
 // (code.ReadQuery.CeilingSeat), so the same declaration covers it — so a node
 // behind the company's configuration answers none of it ([op.judgesGrant]); a
-// person's or a token's consults no chart, and an `introduced` page and the
-// `compaction_due`, `publication_due` and `expunge_due` listings name no asker
-// at all, so each is answered there as a last resort.
+// person's or a token's consults no chart, and a `run_pushes` page, an
+// `introduced` page and the `compaction_due`, `publication_due` and
+// `expunge_due` listings name no asker at all, so each is answered there as a
+// last resort.
 var opCodeRead = define("code.read", opRead, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q code.ReadQuery) (code.ReadAnswer, error) {
 		if b.Code == nil {

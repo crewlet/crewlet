@@ -345,8 +345,9 @@ type PushRow struct {
 	ActorKind string `json:"actor_kind"`
 	ActorSeat string `json:"actor_seat,omitempty"`
 	// Via is how the push's pack was built, and Run, for a seat's push, the
-	// turn, the work item and the model behind it — each stamped by the
-	// engine from the call that made the push, never read from a commit.
+	// turn, the work item and the model behind it — and for a coding box's,
+	// the run that pushed and its coding agent — each stamped by the engine
+	// from the call or the run that made the push, never read from a commit.
 	Via      PushVia       `json:"via"`
 	Run      RunProvenance `json:"run,omitzero"`
 	Node     string        `json:"node,omitempty"`
@@ -532,6 +533,34 @@ type IntroducedQuery struct {
 	Descending bool              `json:"descending,omitempty"`
 }
 
+// RunPushesQuery is the coding run a `run_pushes` read lists the pushes of:
+// the run by its launch id, the id its pushes' rows name it by
+// ([RunProvenance.RunID]); the repositories its launch was given, by id — the
+// run could push nowhere else, and the read lists them in this order — and
+// the position on the code log the launch read them at, above which every
+// push the run's box made applied.
+//
+// THE READ SCANS INSTEAD OF SEEKING AN INDEX OF ITS OWN: each repository's
+// pushes above After, over code_pushes_repo_idx in log order, keeping the
+// run's own — every push made to the run's repositories DURING the run, read
+// once, when the engine collects it. An index on the run would hold an entry
+// for every box push on every data node for the history's 181 days to serve
+// that one read a run (replicated 0068 says what it would cost);
+// BenchmarkRunPushes measures what the scan costs instead.
+type RunPushesQuery struct {
+	Run   string            `json:"run"`
+	Repos []string          `json:"repos"`
+	After statelog.Position `json:"after"`
+}
+
+// MaxRunRepos is the most repositories one [RunPushesQuery] names: the most a
+// coding run is given — each costs a clone before its coding agent starts,
+// inside its setup budget, and a run that needs more is a task to split — so a
+// read of a run's pushes scans at most this many repositories' pushes above its
+// launch. The bound a run's repositories are held to where they are granted
+// may not pass it: a run given more could not be read whole.
+const MaxRunRepos = 8
+
 // RefQuery resolves refs of one repository — EVERY ONE IN ONE READ: one
 // transaction at one checkpoint, so a linearizable resolve of a comparison's
 // two sides pays one barrier and one round trip rather than one each, and
@@ -624,6 +653,13 @@ const (
 	// ReadPushes is one repository's push history, newest first in log
 	// order.
 	ReadPushes ReadKind = "pushes"
+	// ReadRunPushes is ONE CODING RUN'S PUSHES, oldest first — what its box
+	// delivered to the code host: every push row naming the run
+	// ([RunProvenance.RunID]) among those of the repositories the run was
+	// given, above the position it was launched at ([RunPushesQuery]). The
+	// engine's own read, which no principal makes, as `introduced` is: the
+	// engine reads it when it collects the run, for the seat that launched it.
+	ReadRunPushes ReadKind = "run_pushes"
 	// ReadRefs is one repository's live refs under a prefix, by name; its
 	// first page carries the repository in detail too.
 	ReadRefs ReadKind = "refs"
@@ -673,10 +709,11 @@ const (
 // kind it does not know ([ErrInvalid]) — never answers it as another — so the
 // fields only a newer kind reads ride a request that build refuses whole, and
 // take no versionedFields row: `changes` and `change` are the only kinds that
-// read [ReadQuery.Change], State, Owner and Work.
+// read [ReadQuery.Change], State, Owner and Work, and `run_pushes` the only
+// one that reads [ReadQuery.RunPushes].
 func ReadKinds() []ReadKind {
-	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRefs, ReadChanges, ReadChange, ReadIntroduced,
-		ReadCompactionDue, ReadPublicationDue, ReadExpungeDue}
+	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
+		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue}
 }
 
 // Valid reports a kind this build knows.
@@ -691,9 +728,10 @@ type ReadQuery struct {
 	// repository the asker may not read, and a read of one answers
 	// [ErrNotPermitted]. Required rather than defaulted, because a default
 	// would be a reader nobody named, and an optional asker is a hole any
-	// caller that forgot it opens. REFUSED on `introduced` and on the duty
-	// listings `compaction_due`, `publication_due` and `expunge_due`, which no
-	// principal makes: an asker there would be judged by nothing.
+	// caller that forgot it opens. REFUSED on `introduced`, on `run_pushes`
+	// and on the duty listings `compaction_due`, `publication_due` and
+	// `expunge_due`, which no principal makes: an asker there would be judged
+	// by nothing.
 	Asker Principal `json:"asker"`
 	// CeilingSeat is the handle of the seat the asking seat's turn is acting
 	// FOR — the colleague whose ask woke it — and "" for a read made for its
@@ -712,9 +750,9 @@ type ReadQuery struct {
 	// its own, which no ceiling bounds, and a seat is the one requester
 	// whose grant reads the chart — a person maintains every repository
 	// (ADR-0055) and a stranger reads none, both settled where the turn runs
-	// before any read is asked. Refused on `introduced` and on the duty
-	// listings `compaction_due`, `publication_due` and `expunge_due`, which
-	// no principal makes.
+	// before any read is asked. Refused on `introduced`, on `run_pushes` and
+	// on the duty listings `compaction_due`, `publication_due` and
+	// `expunge_due`, which no principal makes.
 	//
 	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
 	// versionedFields row — and one a build that predates it would decode
@@ -797,17 +835,23 @@ type ReadQuery struct {
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
 	Introduced *IntroducedQuery `json:"introduced,omitempty"`
+	// RunPushes is a `run_pushes` read's run: REQUIRED for that kind,
+	// refused on every other. An estate request's field and no record's, so
+	// it takes no versionedFields row: a node of a build that predates the
+	// kind refuses the read as a kind it does not know (ErrInvalid) — the
+	// run's pushes unread, never answered as none.
+	RunPushes *RunPushesQuery `json:"run_pushes,omitempty"`
 	// MinPacks is a `compaction_due` read's floor — the repositories
 	// holding at least this many live packs — REQUIRED, at least 1, for that
 	// kind and refused on every other.
 	MinPacks int    `json:"min_packs,omitempty"`
 	Cursor   string `json:"cursor,omitempty"`
-	// Limit is repos 1..500 (0 = 100), pushes 1..200 (0 = 50), refs
-	// 1..1 000 (0 = 200), changes 1..200 (0 = 50) — the rows a page READS,
-	// whatever its filters keep of them — a change's revisions 1..1 000 (0 =
-	// 200) and introduced 1..MaxSnapshotItems (0 = the most); a page of a
-	// duty listing — `compaction_due`, `publication_due`, `expunge_due` — is
-	// MaxSnapshotItems and names none.
+	// Limit is repos 1..500 (0 = 100), pushes and run_pushes 1..200 (0 =
+	// 50), refs 1..1 000 (0 = 200), changes 1..200 (0 = 50) — the rows a
+	// page READS, whatever its filters keep of them — a change's revisions
+	// 1..1 000 (0 = 200) and introduced 1..MaxSnapshotItems (0 = the most);
+	// a page of a duty listing — `compaction_due`, `publication_due`,
+	// `expunge_due` — is MaxSnapshotItems and names none.
 	Limit int                `json:"limit,omitempty"`
 	Fresh statelog.Freshness `json:"fresh"`
 }
@@ -816,8 +860,11 @@ type ReadQuery struct {
 // Change a `change` read's detail, on its first page alone; and Revisions a
 // page of that change's revisions, newest first, on every page of it.
 type ReadAnswer struct {
-	Repos      []RepoSummary          `json:"repos,omitempty"`
-	Repo       *RepoDetail            `json:"repo,omitempty"`
+	Repos []RepoSummary `json:"repos,omitempty"`
+	Repo  *RepoDetail   `json:"repo,omitempty"`
+	// Pushes is a page of a repository's history, newest first, or of one
+	// coding run's pushes, oldest first — each repository the run was given
+	// in its query's order, and each one's pushes in log order.
 	Pushes     []PushRow              `json:"pushes,omitempty"`
 	Refs       []RefRow               `json:"refs,omitempty"`
 	Changes    []ChangeSummary        `json:"changes,omitempty"`

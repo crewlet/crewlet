@@ -9,6 +9,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/org"
@@ -622,9 +624,11 @@ type Principal struct {
 	OperatorID string        `json:"operator_id,omitempty"`
 	Seat       string        `json:"seat,omitempty"`
 	// Run is what made a SEAT'S PUSH — the turn, the work item it was charged
-	// to and the model — and nothing on any other principal: an operator acts
-	// with a credential and no run, and a seat that only READS names none
-	// (a read's asker is judged by who it is, never by what it is doing).
+	// to and the model, and for a coding box's push its run and its coding
+	// agent ([RunProvenance.RunID]) — and nothing on any other principal: an
+	// operator acts with a credential and no run, and a seat that only READS
+	// names none (a read's asker is judged by who it is, never by what it is
+	// doing).
 	// THE ZERO VALUE IS "NO RUN", and a value, not a pointer: one spelling of
 	// the absence, omitted from the encoding whole, and a principal stays a
 	// value the cases and the index of pushes compare with ==.
@@ -700,14 +704,16 @@ func (p Principal) rowActor() string {
 }
 
 // RunProvenance is what made a seat's push, as the SERVER stamps it from the
-// call that made it — the tool call's turn, its work item and its model — and
+// call that made it — the tool call's turn, its work item and its model, and
+// for a coding box's push the run that pushed and its coding agent — and
 // never as a commit says it: a commit's headers and trailers are written by
 // whoever made the commit, a seat or the coding agent in its box, and the
 // engine trusts nothing it did not see itself. Every field is bounded
 // ([MaxProvenanceBytes]) and spelled as the push row stores it.
 type RunProvenance struct {
-	// TurnID is the turn that made the write (turnctx.Turn.RunID), the one
-	// field every run names.
+	// TurnID is the turn that made the write (turnctx.Turn.RunID) — for a
+	// box's push, the turn that launched its run — the one field every run
+	// names.
 	TurnID string `json:"turn_id"`
 	// WorkBackend and WorkKey are the work item the turn is charged to
 	// (ADR-0022) — its tracker and the key that tracker shows — empty for a
@@ -717,25 +723,54 @@ type RunProvenance struct {
 	// Model is the executor model of the round that called the tool, empty
 	// where the call named none.
 	Model string `json:"model,omitempty"`
+	// RunID is the CODING RUN behind a box's push — its launch, the id the
+	// engine minted when it launched the box (sandbox.PendingRun.LaunchID), a
+	// UUID in its canonical spelling — and CodingAgent the coding agent the
+	// box ran ("claude-code", "opencode"). The code host stamps both from the
+	// run's row when it admits the box: what the engine's account of a run's
+	// delivery reads its pushes by (the `run_pushes` read). BOTH OR NEITHER,
+	// and both only on a push git received from a box ([Proposal.Validate]):
+	// an engine-built write's run is the turn that called the tool, and a
+	// person acts with no run at all.
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without these fields — none of the domain is on main, so
+	// no image and no release holds them — and while that is so, every build
+	// that meets a push record reads them. Once a build without them has run,
+	// they take {Name: "RunProvenance.RunID", Since: 3, Op: "push", Path:
+	// []string{"mutation", "pushes", "principal", "run", "run_id"}} and
+	// {Name: "RunProvenance.CodingAgent", Since: 3, Op: "push", Path:
+	// []string{"mutation", "pushes", "principal", "run", "coding_agent"}} in
+	// versionedFields, with RecordVersion at 3, its line under "What each
+	// version added" and a Carrying record in the statelogtest candidate. A
+	// version of their own, after Principal.Run's 2: a record carrying them
+	// carries the turn's run too, so a reader at version 2 would apply a box's
+	// push as one no coding run made — its row without run_id and coding_agent
+	// on that node alone, which no run_pushes read of that node finds.
+	RunID       string `json:"run_id,omitempty"`
+	CodingAgent string `json:"coding_agent,omitempty"`
 }
 
 // IsZero reports a principal's run that names nothing: no run at all, the
 // spelling every principal but a seat's push carries.
 func (r RunProvenance) IsZero() bool { return r == RunProvenance{} }
 
-// MaxProvenanceBytes bounds each [RunProvenance] field: a turn id is a UUID
-// (36 bytes), a work key a tracker's or a vendor's (Jira's are under 32), a
-// model id a provider's (the longest Bedrock ARN form is about 120). 256 is
+// MaxProvenanceBytes bounds each [RunProvenance] field: a turn id and a run id
+// are UUIDs (36 bytes), a work key a tracker's or a vendor's (Jira's are under
+// 32), a model id a provider's (the longest Bedrock ARN form is about 120), a
+// coding agent a name the sandbox configuration chose ("claude-code"). 256 is
 // past every one of them, and what the bound buys is a push entry whose size is
-// known before it is measured: four fields at it are about six kibibytes of a
+// known before it is measured: six fields at it are about nine kibibytes of a
 // record's mebibyte even where JSON spells every byte in six.
 const MaxProvenanceBytes = 256
 
 // Validate refuses a run no push may carry ([ErrInvalid], naming the field):
-// one that names no turn, or a field past [MaxProvenanceBytes], not valid
-// UTF-8, or holding a control character. A stamping site passes every field it
-// copies from outside the code domain through [FitProvenance] first, so a
-// field this refuses is the engine's own bug, never a seat's.
+// one that names no turn, a run id that is not a UUID in its canonical
+// spelling, a coding run without its coding agent or an agent without its run,
+// or a field past [MaxProvenanceBytes], not valid UTF-8, or holding a control
+// character. A stamping site passes every field it copies from outside the
+// code domain through [FitProvenance] first, so a field this refuses is the
+// engine's own bug, never a seat's.
 func (r RunProvenance) Validate() error {
 	if why := r.invalid(); why != "" {
 		return fmt.Errorf("%w: run.%s", ErrInvalid, why)
@@ -744,12 +779,26 @@ func (r RunProvenance) Validate() error {
 }
 
 // invalid is why r is no run, or "" — the field named as its JSON does.
+//
+// A RUN ID IS THE LAUNCH'S UUID, CANONICAL, never a label fitted to the bound:
+// the engine minted it, and a `run_pushes` read finds the run's pushes by it
+// whole, so a run id spelled any other way would land a push no read of its
+// run ever names.
 func (r RunProvenance) invalid() string {
-	if r.TurnID == "" {
+	switch {
+	case r.TurnID == "":
 		return "turn_id: a seat's push names the turn that made it"
+	case r.RunID != "" && !canonicalUUID(r.RunID):
+		return fmt.Sprintf("run_id: %q is not a UUID in its canonical lowercase spelling — a coding run is "+
+			"named by the launch id the engine minted", r.RunID)
+	case r.RunID != "" && r.CodingAgent == "":
+		return "coding_agent: a coding run's push names the coding agent its box ran"
+	case r.RunID == "" && r.CodingAgent != "":
+		return "run_id: a coding agent's push names the coding run it pushed for"
 	}
 	for _, f := range []struct{ name, value string }{
 		{"turn_id", r.TurnID}, {"work_backend", r.WorkBackend}, {"work_key", r.WorkKey}, {"model", r.Model},
+		{"coding_agent", r.CodingAgent},
 	} {
 		switch {
 		case len(f.value) > MaxProvenanceBytes:
@@ -762,6 +811,14 @@ func (r RunProvenance) invalid() string {
 		}
 	}
 	return ""
+}
+
+// canonicalUUID reports s as a UUID in its canonical lowercase spelling — the
+// one spelling an id compared whole, as a row's key or a read's argument, is
+// found by.
+func canonicalUUID(s string) bool {
+	id, err := uuid.Parse(s)
+	return err == nil && id.String() == s
 }
 
 // Command is one ref update and what became of it.

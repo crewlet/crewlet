@@ -632,13 +632,14 @@ func TestTheBoundUnmapsTheRunLetGoLongestAgo(t *testing.T) {
 // build adds to code's closed sets is a code here — or a run could not be
 // written for a push of it, and its round's fold would leave the index a gap.
 // Each code is distinct and none is zero, and a push of each round-trips — a
-// seat's with the run behind it, each field at its bound and unlike the
-// others, so a field written under another's tag, or a length past one byte's
-// uvarint, reads back wrong.
+// seat's with the run behind it, a coding box's run and coding agent among
+// it, each field at its bound and unlike the others, so a field written under
+// another's tag, or a length past one byte's uvarint, reads back wrong.
 //
 // Mutations: drop the agent's code — a seat's push builds no run; write no
 // work key into a run (pushPayload skipping tag 5) — a seat's push reads back
-// without it.
+// without it; write no run id (pushPayload skipping tag 7) — a box's push
+// reads back as one no coding run made.
 func TestEveryPushPrincipalAndWayHasARunCode(t *testing.T) {
 	t.Parallel()
 	seen := map[uint8]bool{}
@@ -670,6 +671,8 @@ func TestEveryPushPrincipalAndWayHasARunCode(t *testing.T) {
 					WorkBackend: strings.Repeat("b", code.MaxProvenanceBytes),
 					WorkKey:     strings.Repeat("k", code.MaxProvenanceBytes),
 					Model:       strings.Repeat("m", code.MaxProvenanceBytes),
+					RunID:       "0192f00d-0000-7000-8000-00000000c0de",
+					CodingAgent: strings.Repeat("a", code.MaxProvenanceBytes),
 				}
 			}
 			payload, err := pushPayload(row)

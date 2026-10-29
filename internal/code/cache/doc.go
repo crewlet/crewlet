@@ -1327,8 +1327,9 @@
 // each commit introduced, about 190 a person's push; a seat's push holds its
 // run beside, each field its bytes and two more (its tag and its length) —
 // about 80 at a run's usual sizes, a turn id's 36 bytes, a tracker's work
-// item and a model id — by the format's arithmetic rather than a run of the
-// benchmark, whose pushes are a person's. A lookup that misses, every run
+// item and a model id, and a coding box's push about 50 more, its run id's 36
+// bytes and a coding agent's name ("claude-code") — by the format's arithmetic
+// rather than a run of the benchmark, whose pushes are a person's. A lookup that misses, every run
 // searched, over four million commits: 0.54, 3.7, 15.5 and 29.8 µs at 1, 8, 32
 // and 64 runs ([MaxProvenanceRuns] says what that decides). A cold node's
 // backfill of 30 000 pushes through a solo node — the data node's read, in

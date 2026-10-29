@@ -1183,8 +1183,8 @@ func scanPush(s scanner) (PushRow, int, error) {
 	)
 	if err := s.Scan(&row.PushID, &row.RepoID, &position, &at, &row.Actor, &row.ActorKind,
 		&row.ActorSeat, &via, &row.Run.TurnID, &row.Run.WorkBackend, &row.Run.WorkKey, &row.Run.Model,
-		&row.Node, &row.Atomic, &commands, &row.PackID, &row.PackBytes, &introduced, &row.IntroducedCount,
-		&received); err != nil {
+		&row.Run.RunID, &row.Run.CodingAgent, &row.Node, &row.Atomic, &commands, &row.PackID, &row.PackBytes,
+		&introduced, &row.IntroducedCount, &received); err != nil {
 		return PushRow{}, 0, err
 	}
 	if row.Via = PushVia(via); !row.Via.Valid() {
@@ -1333,6 +1333,18 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	case ReadPushes:
 		query = fresh.Resolved(resolver(q.Repo), true)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.pushes(ctx, tx, q, chart, &out) }
+	case ReadRunPushes:
+		// A POINT READ OF EVERY REPOSITORY THE RUN WAS GIVEN: a record this
+		// node deferred on one of them may carry a push of the run's its rows
+		// do not hold, and an answer past it would say the run delivered less
+		// than it did — so such a read refuses, and the engine asks another
+		// node, rather than answer a run's pushes with some of them missing.
+		paths := make([]string, len(q.RunPushes.Repos))
+		for i, id := range q.RunPushes.Repos {
+			paths[i] = RepoPath(id)
+		}
+		query = fresh.Query(statelog.ScopeSet{Paths: paths}, false)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.runPushes(ctx, tx, q, &out) }
 	case ReadRefs:
 		// A FIRST PAGE IS READ AS THE DETAIL IT CARRIES: a point read, which
 		// a record this node deferred on the repository refuses, as kind
@@ -1406,8 +1418,8 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 // it: a status filter outside a listing of repositories, a prefix outside a
 // refs listing, a brief or one push outside a push history, a change's number
 // outside a change read, a state, an owner or a work item outside a listing
-// of changes, a range outside an `introduced` read, a floor of live packs
-// outside a `compaction_due` read.
+// of changes, a range outside an `introduced` read, a run outside a
+// `run_pushes` read, a floor of live packs outside a `compaction_due` read.
 func (q ReadQuery) validate() error {
 	if !q.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %v", ErrInvalid, q.Kind, ReadKinds())
@@ -1415,6 +1427,8 @@ func (q ReadQuery) validate() error {
 	switch q.Kind {
 	case ReadIntroduced:
 		return q.validateIntroduced()
+	case ReadRunPushes:
+		return q.validateRunPushes()
 	case ReadCompactionDue:
 		return q.validateCompactionDue()
 	case ReadPublicationDue:
@@ -1434,6 +1448,8 @@ func (q ReadQuery) validate() error {
 	switch {
 	case q.Introduced != nil:
 		return fmt.Errorf("%w: introduced: only an introduced read names a range of pushes", ErrInvalid)
+	case q.RunPushes != nil:
+		return fmt.Errorf("%w: run_pushes: only a run_pushes read names a coding run", ErrInvalid)
 	case q.MinPacks != 0:
 		return fmt.Errorf("%w: min_packs: only a compaction_due read names a floor of live packs", ErrInvalid)
 	case q.Prefix != "" && q.Kind != ReadRefs:
@@ -1531,6 +1547,8 @@ func (q ReadQuery) validateIntroduced() error {
 		return refused("owner", "only a listing of changes is narrowed to a change's owner")
 	case q.Work != "":
 		return refused("work", "only a listing of changes is narrowed to a work item")
+	case q.RunPushes != nil:
+		return refused("run_pushes", "only a run_pushes read names a coding run")
 	case !onLog(in.After) || !onLog(in.Through) || !onLog(in.Before):
 		return refused("introduced", "every position it names is on the code log")
 	case in.Descending && in.Before.IsZero():
@@ -1546,6 +1564,74 @@ func (q ReadQuery) validateIntroduced() error {
 	case q.Limit > MaxSnapshotItems:
 		return refused("limit", fmt.Sprintf("%d is past the %d one page of %s carries", q.Limit,
 			MaxSnapshotItems, q.Kind))
+	}
+	return nil
+}
+
+// validateRunPushes is [ReadQuery.validate] for a `run_pushes` read: the
+// engine's own — the record of what a coding run delivered, read when the run
+// is collected — so it names NO asker, for an `introduced` read's reason, and
+// no seat it reads for; it names the run by the launch id its pushes' rows
+// carry, the repositories the run was given by id — one to MaxRunRepos, each
+// once — and the position the run was launched at on the code log, never
+// zero: a read from the log's start would scan its repositories' whole
+// history for pushes no run made before its launch. Nothing else a listing
+// names, and a limit of a history page's.
+func (q ReadQuery) validateRunPushes() error {
+	in := q.RunPushes
+	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	switch {
+	case q.Asker != (Principal{}):
+		return refused("asker", "a run_pushes read is the engine's own, which no principal makes")
+	case q.CeilingSeat != "":
+		return refused("ceiling_seat", "a run_pushes read is the engine's own, which no seat makes for another")
+	case in == nil:
+		return refused("run_pushes", "a run_pushes read names its coding run, the run's repositories and the "+
+			"position it was launched at")
+	case !canonicalUUID(in.Run):
+		return refused("run_pushes.run", fmt.Sprintf("%q is not a UUID in its canonical lowercase spelling — "+
+			"a coding run is read by the launch id its pushes name", in.Run))
+	case len(in.Repos) == 0 || len(in.Repos) > MaxRunRepos:
+		return refused("run_pushes.repos", fmt.Sprintf("%d repositories; a coding run is given one to %d "+
+			"(MaxRunRepos)", len(in.Repos), MaxRunRepos))
+	case in.After.IsZero():
+		return refused("run_pushes.after", "a run_pushes read names the position its run was launched at: "+
+			"nothing the run pushed applied below it")
+	case in.After.Stream != topics.CodeLogStream:
+		return refused("run_pushes.after", fmt.Sprintf("%s is a position on another log than the code log (%s)",
+			in.After, topics.CodeLogStream))
+	case in.After.Valid() != nil:
+		return refused("run_pushes.after", in.After.Valid().Error())
+	case q.Limit < 0:
+		return refused("limit", strconv.Itoa(q.Limit))
+	case q.Limit > MaxPushesPerPage:
+		return refused("limit", fmt.Sprintf("%d is past the %d one page of %s carries", q.Limit,
+			MaxPushesPerPage, q.Kind))
+	}
+	for _, f := range []struct {
+		field string
+		set   bool
+	}{
+		{"repo", q.Repo != ""}, {"status", len(q.Status) > 0}, {"prefix", q.Prefix != ""},
+		{"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0}, {"brief", q.Brief},
+		{"push", q.Push != ""}, {"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""},
+		{"work", q.Work != ""},
+	} {
+		if f.set {
+			return refused(f.field, "a run_pushes read names its repositories in its run and filters nothing")
+		}
+	}
+	seen := make(map[string]bool, len(in.Repos))
+	for i, id := range in.Repos {
+		switch {
+		case !canonicalUUID(id):
+			return refused(fmt.Sprintf("run_pushes.repos[%d]", i), fmt.Sprintf("%q is not a repository's id "+
+				"in its canonical lowercase spelling", id))
+		case seen[id]:
+			return refused(fmt.Sprintf("run_pushes.repos[%d]", i), fmt.Sprintf("%s is named twice — a run's "+
+				"repositories are read once each", id))
+		}
+		seen[id] = true
 	}
 	return nil
 }
@@ -1568,9 +1654,9 @@ func (q ReadQuery) validateCompactionDue() error {
 		set   bool
 	}{
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
-		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"limit", q.Limit != 0},
-		{"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0}, {"state", q.State != ""},
-		{"owner", q.Owner != ""}, {"work", q.Work != ""},
+		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
+		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
+		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -1600,9 +1686,9 @@ func (q ReadQuery) validatePublicationDue() error {
 		set   bool
 	}{
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
-		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0},
-		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
-		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
+		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
+		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
+		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -1628,9 +1714,9 @@ func (q ReadQuery) validateExpungeDue() error {
 		set   bool
 	}{
 		{"ceiling_seat", q.CeilingSeat != ""}, {"repo", q.Repo != ""}, {"status", len(q.Status) > 0},
-		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"min_packs", q.MinPacks != 0},
-		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
-		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
+		{"prefix", q.Prefix != ""}, {"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil},
+		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
+		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_due read lists every repository with an expunge open or a "+
@@ -1645,8 +1731,11 @@ func (q ReadQuery) validateExpungeDue() error {
 // code log, which is the position it waits for, and a floor on any other log
 // refused as the request's mistake. Where none is named, a principal's read and
 // a duty listing are read stale — the REST read path's level, and what a poll
-// of the duty listings needs — and the engine's own `introduced` is refused,
-// since whoever builds an index names the level its pages must be read at.
+// of the duty listings needs — and the engine's own `introduced` and
+// `run_pushes` are refused, since whoever builds an index names the level its
+// pages must be read at, and whoever reads what a run delivered the level its
+// "nothing" may be said at: a run's pushes read stale would answer none for a
+// push another node has already applied.
 //
 // # Why a principal's read serves `session`
 //
@@ -1662,7 +1751,7 @@ func (q ReadQuery) validateExpungeDue() error {
 // `session`, the wrong label the level exists to make impossible.
 func (q ReadQuery) freshness() (statelog.Freshness, error) {
 	fresh := q.Fresh
-	if fresh.Level == "" && q.Kind != ReadIntroduced {
+	if fresh.Level == "" && q.Kind != ReadIntroduced && q.Kind != ReadRunPushes {
 		fresh.Level = statelog.ReadStale
 	}
 	return fresh, checkFreshness(fresh)
@@ -2068,6 +2157,109 @@ func (r *Reader) introduced(ctx context.Context, tx *sql.Tx, q ReadQuery, cp sta
 		}
 	}
 	return rows.Err()
+}
+
+// runPushes serves one page of a coding run's pushes ([ReadRunPushes]): each
+// repository the query names, in its order, and its pushes above the run's
+// launch position in LOG ORDER — the position, then the push id, since group
+// commit lands up to 64 pushes at one position — keeping the rows that name
+// the run; keyset after the last push served, `<repository index>/<packed
+// position>/<push id>`. A page ends at its row limit or once its rows reach
+// MaxPageBytes, as the history's does, and a repository's pushes running out
+// moves the page on to the next repository's.
+//
+// NOT HELD TO A GRANT: the engine reads its own run's record for the seat that
+// launched the run, and the run was given only repositories that seat could
+// read at its launch. A repository with no rows — purged since the run pushed
+// to it — answers no push of the run's, which is what the rows say of it.
+//
+// WHAT A PAGE READS IS EVERY PUSH MADE TO A REPOSITORY DURING THE RUN, each a
+// lookup of its row to test the run it names: code_pushes_repo_idx carries
+// no run (replicated 0068 says why), so a page reads up to the pushes the
+// run's repositories took between its launch and its last push to fill
+// itself. A PAGE IS BOUNDED BY WHAT IT KEEPS, NEVER BY WHAT IT SCANS, because
+// the scan is cheap at the large model's busiest repository, 70 pushes a
+// minute (BenchmarkRunPushes, one run of each arm on two E-cores of a Core
+// Ultra 7 265U): an hour's run reads its 4 200 rows in 4.2 ms, and a week's
+// its 705 600 in 41 pages and 0.53 s in all — which one page costs where
+// the run pushed once in that week — under statelog.ReadBudget, the bound
+// past which a page would end at a count of rows scanned; a quiet
+// repository's hour is 0.8 ms.
+func (r *Reader) runPushes(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	in := q.RunPushes
+	after := in.After.Packed()
+	start, position, pushID := 0, after, ""
+	if q.Cursor != "" {
+		var keyed bool
+		if start, position, pushID, keyed = cutRunPushCursor(q.Cursor); !keyed || start >= len(in.Repos) ||
+			position <= after {
+			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+		}
+	}
+	pg := page{maxRows: limitOr(q.Limit, defaultPushLimit), maxB: r.pageBytes}
+	for i := start; i < len(in.Repos); i++ {
+		full, err := r.runPushesOf(ctx, tx, i, in, position, pushID, &pg, out)
+		if err != nil || full {
+			return err
+		}
+		position, pushID = after, ""
+	}
+	return nil
+}
+
+// runPushesOf adds to out the run's pushes to its i-th repository after
+// (position, pushID) — above position where pushID is "" — until pg is full,
+// which it reports, setting out.Next to the last push it added.
+func (r *Reader) runPushesOf(ctx context.Context, tx *sql.Tx, i int, in *RunPushesQuery, position int64,
+	pushID string, pg *page, out *ReadAnswer) (bool, error) {
+
+	repo, limit := in.Repos[i], pg.left()
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if pushID == "" {
+		rows, err = tx.QueryContext(ctx, runPushesFirstSQL, repo, in.Run, position, limit)
+	} else {
+		rows, err = tx.QueryContext(ctx, runPushesAfterSQL, repo, in.Run, position, position, pushID, limit)
+	}
+	if err != nil {
+		return false, fmt.Errorf("code: read run %s's pushes to %s: %w", in.Run, repo, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		row, commands, err := scanPush(rows)
+		if err != nil {
+			return false, fmt.Errorf("code: read run %s's pushes to %s: %w", in.Run, repo, err)
+		}
+		out.Pushes = append(out.Pushes, row)
+		if pg.add(row.encodedBytes(commands)) {
+			out.Next = runPushCursor(i, row.Position, row.PushID)
+			return true, rows.Err()
+		}
+	}
+	return false, rows.Err()
+}
+
+// runPushCursor is "<repository index>/<packed position>/<push id>": a push's
+// place among a run's pushes — the repository of the run's query it was made
+// to, then its place in that repository's log order, its [logCursor].
+func runPushCursor(repo int, position statelog.Position, pushID string) string {
+	return strconv.Itoa(repo) + "/" + logCursor(position.Packed(), pushID)
+}
+
+// cutRunPushCursor reads a [runPushCursor].
+func cutRunPushCursor(s string) (repo int, position int64, pushID string, ok bool) {
+	index, rest, found := strings.Cut(s, "/")
+	if !found {
+		return 0, 0, "", false
+	}
+	repo, err := strconv.Atoi(index)
+	if err != nil || repo < 0 || strconv.Itoa(repo) != index {
+		return 0, 0, "", false
+	}
+	position, pushID, ok = cutLogCursor(rest)
+	return repo, position, pushID, ok
 }
 
 // compactionDue serves one page of a `compaction_due` read: the active and
@@ -2758,8 +2950,8 @@ const (
 		AND retired_position <= ? AND (retired_position > ? OR pack_id > ? OR (pack_id = ? AND part > ?))
 		ORDER BY retired_position, pack_id, part LIMIT ?`
 	pushColumns = `push_id, repo_id, position, at, actor, actor_kind, actor_seat, via, turn_id,
-		work_backend, work_key, model, node, atomic, commands, pack_id, pack_bytes, introduced,
-		introduced_count, received_at`
+		work_backend, work_key, model, run_id, coding_agent, node, atomic, commands, pack_id, pack_bytes,
+		introduced, introduced_count, received_at`
 	pushSQL        = `SELECT ` + pushColumns + ` FROM code_pushes WHERE push_id = ?`
 	pushesFirstSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
 		ORDER BY position DESC, push_id DESC LIMIT ?`
@@ -2801,6 +2993,16 @@ const (
 		ORDER BY position, push_id LIMIT ?`
 	pushesBelowSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ?
 		AND position < ? ORDER BY position DESC, push_id DESC LIMIT ?`
+	// A CODING RUN'S PUSHES TO ONE REPOSITORY, over code_pushes_repo_idx in
+	// log order: those above the run's launch position (?3) first, and after
+	// a cursor (?3 and ?4 its position, ?5 its push id) with the >= beside
+	// the OR that keeps the range seek — keeping the rows that name the run
+	// (?2), which the index does not carry, so each row the seek reaches is
+	// looked up to test it (runPushes).
+	runPushesFirstSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ? AND run_id = ?
+		AND position > ? ORDER BY position, push_id LIMIT ?`
+	runPushesAfterSQL = `SELECT ` + pushColumns + ` FROM code_pushes WHERE repo_id = ? AND run_id = ?
+		AND position >= ? AND (position > ? OR push_id > ?) ORDER BY position, push_id LIMIT ?`
 	// THE RETENTION PASS'S TWO PHASES, each on its own partial index, the
 	// predicate repeated verbatim, and keyset on (deleted_at, id): the >=
 	// beside the OR is what keeps the index's range seek, which a bare OR of

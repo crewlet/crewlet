@@ -144,12 +144,14 @@ func suitePack(id string) *code.PackRef {
 	}
 }
 
-// suitePush is two pushes of id: a person's of its main branch with its pack,
-// received by git, and a seat's of a branch in its namespace, built by the
-// engine, whose run carries every field at its bound and which its committer
-// counted on the company day of the suite's instant — so every column a push
-// row has, and the seat's count of its day (code_seat_days), are ones the
-// suite's replays and identity claims compare.
+// suitePush is three pushes of id: a person's of its main branch with its
+// pack, received by git; a seat's of a branch in its namespace, built by the
+// engine, whose run carries every field at its bound; and the seat's coding
+// box's of another, received by git, whose run names as well the coding run
+// that pushed — its launch's UUID — and its coding agent at its bound. Its
+// committer counted both of the seat's on the company day of the suite's
+// instant — so every column a push row has, and the seat's count of its day
+// (code_seat_days), are ones the suite's replays and identity claims compare.
 func suitePush(id string) code.PushBatch {
 	bound := strings.Repeat("r", code.MaxProvenanceBytes)
 	return code.PushBatch{RepoID: id, Pushes: []code.PushEntry{{
@@ -175,6 +177,20 @@ func suitePush(id string) code.PushBatch {
 			Result: code.ResultOK,
 		}},
 		Pack:       suitePack("seat-" + id),
+		ReceivedAt: suiteAt,
+		Day:        suiteAt.Format(time.DateOnly),
+	}, {
+		PushID: "push-box-" + id,
+		Principal: code.Principal{Kind: code.PrincipalAgent, Seat: "suite-seat",
+			Run: code.RunProvenance{TurnID: bound, WorkBackend: bound, WorkKey: bound, Model: bound,
+				RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", CodingAgent: bound}},
+		Via:  code.ViaGit,
+		Node: "suite-node",
+		Commands: []code.Command{{
+			Ref: "refs/heads/seats/suite-seat/box", Old: code.ZeroOID, New: oidOf("box" + id),
+			Result: code.ResultOK,
+		}},
+		Pack:       suitePack("box-" + id),
 		ReceivedAt: suiteAt,
 		Day:        suiteAt.Format(time.DateOnly),
 	}}}

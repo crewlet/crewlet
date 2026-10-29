@@ -1239,8 +1239,11 @@ func TestANodeBehindTheConfigurationDecidesNoGrant(t *testing.T) {
 		p.Principal, p.Commands[0].Ref = asker, ref
 		return p
 	}
+	// A seat's push git receives is its coding box's, naming the run that
+	// pushed and its coding agent beside the turn that launched it.
 	seatPush := code.Principal{Kind: code.PrincipalAgent, Seat: "dev",
-		Run: code.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d"}}
+		Run: code.RunProvenance{TurnID: "019a0c2e-0000-7000-8000-00000000d00d",
+			RunID: "019a0c2e-0000-7000-8000-00000000b0c5", CodingAgent: "claude-code"}}
 	f := newFleet(t, "data-a", "data-b")
 	o := rendezvous.Order(repo, []string{"data-a", "data-b"})
 	behind, current := f.nodes[o[0]], f.nodes[o[1]]
@@ -1385,6 +1388,7 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 		{opCodeRead.spec, code.ReadQuery{Asker: seat, Kind: code.ReadRepos}, true},
 		{opCodeRead.spec, code.ReadQuery{Asker: person, Kind: code.ReadRepos}, false},
 		{opCodeRead.spec, code.ReadQuery{Kind: code.ReadIntroduced}, false},
+		{opCodeRead.spec, code.ReadQuery{Kind: code.ReadRunPushes}, false},
 		{opCodeResolveRef.spec, code.RefQuery{Asker: seat}, true},
 		{opCodeResolveRef.spec, code.RefQuery{Asker: person}, false},
 		// A SEAT'S WRITE OF A CHANGE, which its grant decides whether it may

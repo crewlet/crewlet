@@ -101,10 +101,12 @@ func TestAProposalCarriesEveryRefInItsRecordedForm(t *testing.T) {
 // refs at the longest take under half the room for every command a push may
 // carry. And for a SEAT'S push, whose principal carries the run behind it,
 // every field of the run at MaxProvenanceBytes of what JSON spells six times
-// over, the way — the longest, and a coding box's — and the company day its
-// committer stamps on the entry at its longest: the principal and the way are
-// measured as their proposer stamped them, so the room they take is room the
-// commands are not admitted to, and so is the day's, which no proposer sends.
+// over — a coding box's run id at its one spelling, a UUID's, beside its
+// coding agent at that bound — the way — the longest, and a coding box's —
+// and the company day its committer stamps on the entry at its longest: the
+// principal and the way are measured as their proposer stamped them, so the
+// room they take is room the commands are not admitted to, and so is the
+// day's, which no proposer sends.
 //
 // Mutations: measure the completed entry with the principal's run dropped
 // (completed() clearing w.Principal.Run) — the seat's push is admitted
@@ -117,6 +119,8 @@ func TestTheCommandsBoundHoldsWhateverAPushsWorkAdds(t *testing.T) {
 	costliest := strings.Repeat("&", code.MaxProvenanceBytes)
 	seat := code.Principal{Kind: code.PrincipalAgent, Seat: strings.Repeat("s", 64),
 		Run: code.RunProvenance{TurnID: costliest, WorkBackend: costliest, WorkKey: costliest, Model: costliest}}
+	box := seat
+	box.Run.RunID, box.Run.CodingAgent = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", costliest
 	for _, arm := range []struct {
 		name      string
 		principal code.Principal
@@ -129,7 +133,7 @@ func TestTheCommandsBoundHoldsWhateverAPushsWorkAdds(t *testing.T) {
 		{"a person's", code.Principal{Kind: code.PrincipalOperator, OperatorID: strings.Repeat("o", 64),
 			Seat: strings.Repeat("s", 64)}, code.ViaGit, true},
 		{"a seat's the engine built", seat, code.ViaEngine, false},
-		{"a seat's git received", seat, code.ViaGit, true},
+		{"a coding box's git received", box, code.ViaGit, true},
 	} {
 		t.Run(arm.name, func(t *testing.T) {
 			t.Parallel()
@@ -227,15 +231,24 @@ func TestTheCommandsBoundHoldsWhateverAPushsWorkAdds(t *testing.T) {
 // the engine built of one command is a proposal. So is a seat's, whichever way
 // it was built, since the decide judges a seat's grant — one naming the run
 // that made it, which the engine stamps on every seat's push: a seat's push
-// naming none is its proposer's bug, refused naming principal.run.
+// naming none is its proposer's bug, refused naming principal.run. A seat's
+// push git received is its coding box's, which names its coding run and agent
+// — one naming none is refused naming principal.run.run_id — and a push the
+// engine built is a tool call's, whose run is its turn, so one naming a coding
+// run is refused naming the same.
 //
-// Mutation: refuse every principal but an operator's again (validFields'
-// refusal the decide's grant lifts) — the seat's pushes are refused, red.
+// Mutations: refuse every principal but an operator's again (validFields'
+// refusal the decide's grant lifts) — the seat's pushes are refused, red; take
+// a seat's push git received naming no coding run — its row would be one no
+// read of the run finds, red.
 func TestAProposalNamesHowItsPackWasBuilt(t *testing.T) {
 	t.Parallel()
 	one := proposal("0190f3c4-0000-7000-8000-00000000c0de", update("refs/heads/main", code.ZeroOID, oidOf("B")))
 	two := proposal("0190f3c4-0000-7000-8000-00000000c0de", update("refs/heads/main", code.ZeroOID, oidOf("B")),
 		update("refs/heads/other", code.ZeroOID, oidOf("C")))
+	turn := code.RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001"}
+	box := code.RunProvenance{TurnID: turn.TurnID, RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+		CodingAgent: "claude-code"}
 	for _, tc := range []struct {
 		name  string
 		p     code.Proposal
@@ -259,16 +272,25 @@ func TestAProposalNamesHowItsPackWasBuilt(t *testing.T) {
 		{"a seat's push the engine built", func() code.Proposal {
 			p := one
 			p.Via = code.ViaEngine
-			p.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer",
-				Run: code.RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001"}}
+			p.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer", Run: turn}
 			return p
 		}(), ""},
-		{"a seat's push git received", func() code.Proposal {
+		{"a coding box's push git received", func() code.Proposal {
 			p := two
-			p.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer",
-				Run: code.RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001"}}
+			p.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer", Run: box}
 			return p
 		}(), ""},
+		{"a seat's push git received naming no coding run", func() code.Proposal {
+			p := two
+			p.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer", Run: turn}
+			return p
+		}(), "principal.run.run_id"},
+		{"a seat's push the engine built naming a coding run", func() code.Proposal {
+			p := one
+			p.Via = code.ViaEngine
+			p.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer", Run: box}
+			return p
+		}(), "principal.run.run_id"},
 		{"a seat's push naming no run", func() code.Proposal {
 			p := one
 			p.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer"}

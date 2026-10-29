@@ -39,7 +39,8 @@ import (
 //	         push id [16] | position i64 | at unix-µs i64 | via u8 | principal kind u8 |
 //	         fields (tag u8 | uvarint length | bytes), each only when it is not empty:
 //	         1 operator id, 2 seat, and a seat's run — 3 turn id, 4 work backend,
-//	         5 work key, 6 model; an unknown tag skipped
+//	         5 work key, 6 model, and a coding box's 7 run id, 8 coding agent;
+//	         an unknown tag skipped
 //	refs     refs × (ref key [8] | name offset u32 | name length u16 | ordinal u8 | reserved u8)
 //	                                                          sorted by (ref key, ordinal)
 //	names    name bytes            — the refs' names back to back
@@ -70,9 +71,10 @@ import (
 // the run is mapped (provenance.go), never a read call a probe.
 //
 // A PUSH'S FIELDS ARE TAGGED, so a field a later build adds — a seat's run
-// gained four — moves no version: a reader skips a tag it does not know, a
-// run this build writes is read by an older one as the push less what it
-// cannot name, and the index is a cache any build rebuilds from the rows.
+// gained four, and a coding box's two more — moves no version: a reader skips
+// a tag it does not know, a run this build writes is read by an older one as
+// the push less what it cannot name, and the index is a cache any build
+// rebuilds from the rows.
 
 // The format's fixed parts.
 const (
@@ -98,7 +100,8 @@ const (
 )
 
 // The push record's fields after its fixed part: the principal's credential
-// and seat, and a seat's run (code.RunProvenance).
+// and seat, and a seat's run (code.RunProvenance) — a coding box's naming the
+// run that pushed and its coding agent beside the turn.
 const (
 	fieldOperatorID  = 1
 	fieldSeat        = 2
@@ -106,6 +109,8 @@ const (
 	fieldWorkBackend = 4
 	fieldWorkKey     = 5
 	fieldModel       = 6
+	fieldRunID       = 7
+	fieldCodingAgent = 8
 )
 
 // The codes a push record names its way and its principal's kind by: one
@@ -421,7 +426,7 @@ func pushPayload(row code.IntroducedRow) ([]byte, error) {
 	}{
 		{fieldOperatorID, row.Principal.OperatorID}, {fieldSeat, row.Principal.Seat},
 		{fieldTurnID, run.TurnID}, {fieldWorkBackend, run.WorkBackend}, {fieldWorkKey, run.WorkKey},
-		{fieldModel, run.Model},
+		{fieldModel, run.Model}, {fieldRunID, run.RunID}, {fieldCodingAgent, run.CodingAgent},
 	}
 	size := runPushFixed
 	for _, f := range fields {
@@ -494,6 +499,10 @@ func decodePush(payload []byte) (code.PushedBy, error) {
 			p.Principal.Run.WorkKey = value
 		case fieldModel:
 			p.Principal.Run.Model = value
+		case fieldRunID:
+			p.Principal.Run.RunID = value
+		case fieldCodingAgent:
+			p.Principal.Run.CodingAgent = value
 		}
 		rest = rest[1+w+int(n):]
 	}

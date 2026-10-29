@@ -894,7 +894,7 @@ func (e *estate) widestPublication(b *testing.B, id string, chain []LayerRef, in
 //
 // Two arms by the pack — pack=yes, a push carrying objects, and pack=no, one
 // carrying none (a deletion, or a ref moved to a commit the repository
-// holds), whose row names no pack and which leaves no pack row — and three by
+// holds), whose row names no pack and which leaves no pack row — and four by
 // the push:
 //
 //   - push=typical: one command moving a ref named in 40 bytes, one
@@ -905,6 +905,10 @@ func (e *estate) widestPublication(b *testing.B, id string, chain []LayerRef, in
 //     field's usual size — a turn id (a UUID), a tracker's work item
 //     (`native`, `ENG-1234`) and a model id of a provider's usual length —
 //     so the difference from typical is what a seat's provenance costs;
+//   - push=box: the same commit pushed by the seat's coding box, received by
+//     git, its run naming as well the coding run that pushed (its launch, a
+//     UUID) and its coding agent (`claude-code`) — so the difference from
+//     agent is what a box's two fields cost;
 //   - push=widest: MaxCommandsPerPush commands on refs of MaxRefNameBytes and
 //     MaxIntroduced introduced ids — the widest row a push stores.
 //
@@ -961,6 +965,14 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 		entry.Principal, entry.Pack.Object = person, objstore.KeyAt(time.Now())
 		return entry
 	}
+	// seatRun is the run the engine stamps on the r-th push of a seat, at each
+	// field's usual size.
+	seatRun := func(r int) RunProvenance {
+		return RunProvenance{
+			TurnID:      uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprint("turn-", r))).String(),
+			WorkBackend: "native", WorkKey: "ENG-1234", Model: "claude-sonnet-4-5",
+		}
+	}
 	for _, shape := range []struct {
 		name string
 		// records is how many pushes are measured: enough that the file
@@ -969,13 +981,23 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 		records   int
 		ref       func(c int) string
 		cmds, ids int
-		// seat is whether a seat made each push, through the engine, with
-		// the run behind it; a person through git otherwise.
-		seat bool
+		// by stamps who made the r-th push, and how, on its entry: nil for
+		// a person's, through git.
+		by func(e *PushEntry, r int)
 	}{
-		{"typical", 4_000, func(int) string { return typicalRef }, 1, 1, false},
-		{"agent", 4_000, func(int) string { return typicalRef }, 1, 1, true},
-		{"widest", 100, widestRef, MaxCommandsPerPush, MaxIntroduced, false},
+		{"typical", 4_000, func(int) string { return typicalRef }, 1, 1, nil},
+		{"agent", 4_000, func(int) string { return typicalRef }, 1, 1, func(e *PushEntry, r int) {
+			e.Principal = Principal{Kind: PrincipalAgent, Seat: "docs-writer", Run: seatRun(r)}
+			e.Via = ViaEngine
+		}},
+		{"box", 4_000, func(int) string { return typicalRef }, 1, 1, func(e *PushEntry, r int) {
+			run := seatRun(r)
+			run.RunID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprint("launch-", r))).String()
+			run.CodingAgent = "claude-code"
+			e.Principal = Principal{Kind: PrincipalAgent, Seat: "docs-writer", Run: run}
+			e.Via = ViaGit
+		}},
+		{"widest", 100, widestRef, MaxCommandsPerPush, MaxIntroduced, nil},
 	} {
 		for _, pack := range []string{"no", "yes"} {
 			b.Run("push="+shape.name+"/pack="+pack, func(b *testing.B) {
@@ -1007,12 +1029,8 @@ func BenchmarkPushHistoryBytes(b *testing.B) {
 						if pack == "no" {
 							entry.Pack = nil
 						}
-						if shape.seat {
-							entry.Principal, entry.Via = Principal{Kind: PrincipalAgent, Seat: "docs-writer",
-								Run: RunProvenance{
-									TurnID:      uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprint("turn-", r))).String(),
-									WorkBackend: "native", WorkKey: "ENG-1234", Model: "claude-sonnet-4-5",
-								}}, ViaEngine
+						if shape.by != nil {
+							shape.by(&entry, r)
 						}
 						e.apply(pushOf(b, repo, entry))
 					}

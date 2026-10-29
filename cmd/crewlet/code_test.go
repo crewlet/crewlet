@@ -632,7 +632,8 @@ func TestTheCodePagesFitOneAnswer(t *testing.T) {
 	stamp := time.Date(2026, 10, 14, 23, 59, 59, 999999999, time.UTC)
 
 	// A SEAT'S RUN AT ITS BOUND beside the longest way: every field of it
-	// code.MaxProvenanceBytes of `<`, which a stamp carries as it is.
+	// code.MaxProvenanceBytes of `<`, which a stamp carries as it is — but a
+	// coding box's run id, a launch's UUID, the one spelling a run id has.
 	runField := strings.Repeat("<", code.MaxProvenanceBytes)
 	if code.FitProvenance(runField) != runField {
 		t.Fatalf("a run field of %d `<` is no longer carried as it is: build the widest run from what "+
@@ -646,8 +647,9 @@ func TestTheCodePagesFitOneAnswer(t *testing.T) {
 	}
 	push := code.PushRow{PushID: strings.Repeat("p", 36), RepoID: strings.Repeat("r", 36), Position: pos,
 		At: stamp, Actor: strings.Repeat("a", 128), ActorKind: "operator", ActorSeat: strings.Repeat("s", 64),
-		Via:  via,
-		Run:  code.RunProvenance{TurnID: runField, WorkBackend: runField, WorkKey: runField, Model: runField},
+		Via: via,
+		Run: code.RunProvenance{TurnID: runField, WorkBackend: runField, WorkKey: runField, Model: runField,
+			RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", CodingAgent: runField},
 		Node: strings.Repeat("n", 128), Atomic: true, PackID: strings.Repeat("k", 36), PackBytes: 1 << 40,
 		IntroducedCount: 1 << 30, ReceivedAt: stamp}
 	var longest code.Refusal
@@ -952,11 +954,13 @@ func TestARepositorysDetailSaysWhoChangesIt(t *testing.T) {
 // A PUSH LINE NAMES WHO MADE THE PUSH AS ITS ROW DOES: a person's credential
 // with the seat they hold beside it; a seat by its handle — the actor and the
 // seat at once, so never twice — with the turn that made the push and the work
-// item it was charged to, where the row names them; and nothing for what a row
-// does not say.
+// item it was charged to, where the row names them, and first, for its coding
+// box's push, the box's coding agent and run; and nothing for what a row does
+// not say.
 //
-// Mutation: print a seat's push as a person's (`<actor> (<seat>)`) — the
-// handle twice, and no turn.
+// Mutations: print a seat's push as a person's (`<actor> (<seat>)`) — the
+// handle twice, and no turn; leave the coding run out — the box's push reads
+// as one the seat's own turn made.
 func TestAPushLineNamesWhoMadeIt(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -971,6 +975,10 @@ func TestAPushLineNamesWhoMadeIt(t *testing.T) {
 			"docs-writer (turn 0192f00d-0000-7000-8000-000000000001, native ENG-12)"},
 		{"a seat's on no work item", `{"actor":"docs-writer","actor_kind":"agent","actor_seat":"docs-writer",` +
 			`"via":"engine","run":{"turn_id":"t-1"}}`, "docs-writer (turn t-1)"},
+		{"a coding box's", `{"actor":"swe","actor_kind":"agent","actor_seat":"swe","via":"git",` +
+			`"run":{"turn_id":"t-2","work_backend":"native","work_key":"ENG-42","model":"claude-sonnet-4-5",` +
+			`"run_id":"3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b","coding_agent":"claude-code"}}`,
+			"swe (claude-code run 3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b, turn t-2, native ENG-42)"},
 	} {
 		var p codePushView
 		if err := json.Unmarshal([]byte(tc.row), &p); err != nil {

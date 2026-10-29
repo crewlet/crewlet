@@ -110,10 +110,11 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 	// largest row a pushes page can hold — every command at the longest ref,
 	// with the longest code a recorded command carries, every introduced id
 	// it lists, the longest way and every field of a seat's run at its bound
-	// — must fit the page's bytes, or a page that has to serve it is past the
-	// reply ceiling. The longest ref and run field in ENCODED bytes: every
-	// byte after a ref's number, and every byte of a run's field, a `<`, which
-	// both may hold and JSON writes as six.
+	// — a coding box's run id a UUID, the one spelling a run id has — must
+	// fit the page's bytes, or a page that has to serve it is past the reply
+	// ceiling. The longest ref and run field in ENCODED bytes: every byte
+	// after a ref's number, and every byte of a run's field, a `<`, which both
+	// may hold and JSON writes as six.
 	longest := code.Refusal("")
 	for _, r := range code.Refusals() {
 		if r.Recorded() && len(r) > len(longest) {
@@ -132,7 +133,8 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 		Position: statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1 << 30, Seq: 1 << 50},
 		At:       time.Date(2031, 4, 2, 3, 14, 0, 999_999_000, time.UTC), Actor: strings.Repeat("a", 64),
 		ActorKind: "operator", ActorSeat: strings.Repeat("s", 64), Via: widestVia,
-		Run:  code.RunProvenance{TurnID: runField, WorkBackend: runField, WorkKey: runField, Model: runField},
+		Run: code.RunProvenance{TurnID: runField, WorkBackend: runField, WorkKey: runField, Model: runField,
+			RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", CodingAgent: runField},
 		Node: strings.Repeat("n", 64), Atomic: true, PackID: strings.Repeat("k", 36), PackBytes: code.MaxPackBytes,
 		IntroducedCount: 1 << 30, ReceivedAt: time.Date(2031, 4, 2, 3, 14, 0, 999_999_000, time.UTC),
 	}
@@ -497,9 +499,13 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 	// A SEAT'S PUSH IS COUNTED TWO ROWS MORE — its day's row and the older
 	// day it forgets (code_seat_days) — and a full batch of the smallest
 	// still fits; the bytes of the day its committer stamps are in its bound.
+	// The smallest a seat makes is one the engine built, naming its turn
+	// alone: a push git received from a seat is its coding box's, which names
+	// its coding run as well.
 	seat := minimal
 	seat.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: strings.Repeat("s", 64),
 		Run: code.RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001"}}
+	seat.Via = code.ViaEngine
 	if got, want := code.RowBound(seat), code.RowBound(minimal)+2; got != want {
 		t.Errorf("a seat's minimal push bounds %d rows, want a person's %d and its day's two", got, want)
 	}

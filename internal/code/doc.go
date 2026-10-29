@@ -534,18 +534,26 @@
 // "every push above this position" — what a git node's index of which push
 // introduced each commit is built from — could not be read by it. The
 // history listing pages newest first by position; the `introduced` read,
-// the engine's own, which names no asker and is the one kind served at
-// session, pages ascending over a range or descending below a position; and
-// a delta snapshot asked for its PUSHES PHASE serves every push applied in
-// (Since, its position], each once across its pages, so the index a git node
-// folds them into is level with its copy at every round. Those two send each
-// push CONDENSED to the refs it landed, and hold a page to the commands it
-// read as well as to the rows it sends, since a push row stores every command
-// its client sent, the refused ones too: a run of pushes that each landed one
-// ref beside hundreds refused is read in more pages, never in one that
-// decodes gigabytes of commands to send four mebibytes. Every reader of the
-// index's first shape — the listing, the history horizon, a purge part and
-// its count — reads the reordered one, so it is one index, not two.
+// the engine's own, which names no asker and states its level, pages
+// ascending over a range or descending below a position; and a delta
+// snapshot asked for its PUSHES PHASE serves every push applied in (Since,
+// its position], each once across its pages, so the index a git node folds
+// them into is level with its copy at every round. Those two send each push
+// CONDENSED to the refs it landed, and hold a page to the commands it read as
+// well as to the rows it sends, since a push row stores every command its
+// client sent, the refused ones too: a run of pushes that each landed one ref
+// beside hundreds refused is read in more pages, never in one that decodes
+// gigabytes of commands to send four mebibytes. A coding run's pushes
+// ([ReadRunPushes], the engine's own as well, read when it collects the run)
+// are the rows naming the run among each of its repositories' pushes above
+// its launch: the same index's range, each row looked up to test its run —
+// no index of the run's own, which would cost every box push an entry on
+// every data node for the history's 181 days to serve one read a run, where
+// the scan reads a week of a repository taking 70 pushes a minute, 705 600
+// rows, in 0.53 s (BenchmarkRunPushes, on two E-cores). Every
+// reader of the index's first shape — the listing, the history horizon, a
+// purge part and its count — reads the reordered one, so it is one index,
+// not two.
 //
 // A read of a repository's CONTENT is a git node's (internal/code/query), and
 // this package holds only what both ends of one import: its wire — [GitQuery]

@@ -1837,6 +1837,8 @@ func TestOnlyASeatsReadIsMadeForAnotherSeat(t *testing.T) {
 		"an expunge listing for a seat":    {CeilingSeat: "dev", Kind: code.ReadExpungeDue},
 		"an introduced page for a seat": {CeilingSeat: "dev", Kind: code.ReadIntroduced,
 			Introduced: &code.IntroducedQuery{RepoID: "id"}},
+		"a run's pushes for a seat": {CeilingSeat: "dev", Kind: code.ReadRunPushes,
+			RunPushes: &code.RunPushesQuery{Run: runA}},
 	} {
 		q.Fresh = stale
 		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrInvalid) ||

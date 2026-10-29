@@ -18,11 +18,14 @@ import (
 // its company day by the apply of the record that lands it.
 
 // seatProposal is one push to repo by seat handle of undecided commands, as
-// the engine stamps a seat's push: its run, and the way its pack was built.
+// the engine stamps a push its seat's coding box made: the run behind it —
+// the turn that launched the run, its work item, the run's launch and its
+// coding agent — received by git.
 func seatProposal(repo, handle string, cmds ...code.Command) code.Proposal {
 	p := proposal(repo, cmds...)
 	p.Principal = code.Principal{Kind: code.PrincipalAgent, Seat: handle,
-		Run: code.RunProvenance{TurnID: uuid.Must(uuid.NewV7()).String(), WorkBackend: "native", WorkKey: "ENG-7"}}
+		Run: code.RunProvenance{TurnID: uuid.Must(uuid.NewV7()).String(), WorkBackend: "native", WorkKey: "ENG-7",
+			RunID: uuid.NewString(), CodingAgent: "claude-code"}}
 	return p
 }
 

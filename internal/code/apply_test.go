@@ -829,11 +829,14 @@ func TestTheHistoryHorizonIsBoundedByWhatItsRowsWeigh(t *testing.T) {
 }
 
 // A PUSH ROW RECORDS WHAT IT WEIGHS: row_bytes is the bytes of the commands,
-// the introduced ids and, for a seat's push, the run the row stores — what
-// deleting it costs, and what the horizon and a purge part are bounded by.
+// the introduced ids and, for a seat's push, the run the row stores — a coding
+// box's run and coding agent among it — what deleting it costs, and what the
+// horizon and a purge part are bounded by.
 //
-// Mutation: weigh a row by its commands and introduced ids alone
-// (pushRowBytes dropping the run) — the seat's row weighs less than it holds.
+// Mutations: weigh a row by its commands and introduced ids alone
+// (pushRowBytes dropping the run) — the seat's row weighs less than it holds;
+// weigh it without the coding run (pushRowBytes dropping RunID) — the box's
+// does.
 func TestAPushRowRecordsWhatItWeighs(t *testing.T) {
 	t.Parallel()
 	e := openApplyEstate(t)
@@ -847,12 +850,18 @@ func TestAPushRowRecordsWhatItWeighs(t *testing.T) {
 		TurnID: "0192f00d-0000-7000-8000-000000000001", WorkBackend: "native", WorkKey: "ENG-12",
 		Model: "claude-sonnet-4-5"}}
 	seat.Via = ViaEngine
-	e.apply(pushOf(t, "repo-a", person, seat))
-	for _, id := range []string{"p1", "p2"} {
+	box := pushEntry("p3", move("refs/heads/seats/docs-writer/eng-13", ZeroOID, oid("D")))
+	box.Introduced, box.IntroducedCount = []string{oid("D")}, 1
+	box.Principal = Principal{Kind: PrincipalAgent, Seat: "docs-writer", Run: RunProvenance{
+		TurnID: "0192f00d-0000-7000-8000-000000000001", WorkBackend: "native", WorkKey: "ENG-13",
+		Model: "claude-sonnet-4-5", RunID: "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", CodingAgent: "claude-code"}}
+	e.apply(pushOf(t, "repo-a", person, seat, box))
+	for _, id := range []string{"p1", "p2", "p3"} {
 		got := e.num(`SELECT row_bytes FROM code_pushes WHERE push_id = ?`, id)
 		want := e.num(`SELECT length(CAST(commands AS BLOB)) + length(CAST(introduced AS BLOB)) +
 			length(CAST(turn_id AS BLOB)) + length(CAST(work_backend AS BLOB)) +
-			length(CAST(work_key AS BLOB)) + length(CAST(model AS BLOB))
+			length(CAST(work_key AS BLOB)) + length(CAST(model AS BLOB)) +
+			length(CAST(run_id AS BLOB)) + length(CAST(coding_agent AS BLOB))
 			FROM code_pushes WHERE push_id = ?`, id)
 		if got != want || e.str(`SELECT introduced FROM code_pushes WHERE push_id = ?`, id) == "" {
 			t.Errorf("push %s's row weighs %d bytes by row_bytes, and its commands, introduced ids and run "+
@@ -861,6 +870,9 @@ func TestAPushRowRecordsWhatItWeighs(t *testing.T) {
 	}
 	if run := e.num(`SELECT length(turn_id) FROM code_pushes WHERE push_id = 'p2'`); run == 0 {
 		t.Fatal("the seat's push row holds no turn: the case weighs no run")
+	}
+	if run := e.num(`SELECT length(run_id) FROM code_pushes WHERE push_id = 'p3'`); run == 0 {
+		t.Fatal("the box's push row holds no coding run: the case weighs none")
 	}
 }
 

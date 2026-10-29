@@ -1,0 +1,34 @@
+-- A push names the coding run that made it.
+--
+-- A coding box pushes to the code host with its run's own credential, and its
+-- push row now says which run that was: run_id, the run's LAUNCH (the id the
+-- engine minted when it launched the box, sandbox.PendingRun.LaunchID), and
+-- coding_agent, the coding agent the box ran ('claude-code', 'opencode') —
+-- code.RunProvenance.RunID and .CodingAgent, beside the turn, the work item
+-- and the model replicated 0063 added. Both are stamped by the code host from
+-- the run's row when it admits the box, never read from a commit, whose
+-- trailers the box writes. Empty on every other push: a person's has no run,
+-- and an engine-built write's run is the turn that called the tool.
+--
+-- EVERY DEFAULT IS '' because SQLite requires one for a NOT NULL column added
+-- to a table; the push apply writes both columns of every row.
+--
+-- WHAT A ROW WEIGHS GROWS WITH THE RUN: code_pushes.row_bytes counts the two
+-- beside the turn, the work item and the model — a run id is a UUID's 36
+-- bytes, a coding agent at most code.MaxProvenanceBytes — so the history's
+-- horizon and a purge part stay bounded by what deleting the row frees.
+--
+-- NO INDEX OF ITS OWN. The engine reads a run's pushes once, when it collects
+-- the run (the code.read kind run_pushes): each repository the run was given,
+-- its pushes above the run's launch position over code_pushes_repo_idx, which
+-- replicated 0056 orders by position, keeping the run's own. An index on
+-- run_id would hold an entry of two UUIDs and a position, about a hundred
+-- bytes, for every box push on every data node for the 181 days the history
+-- keeps it — about 4.5 GB at 250 000 box pushes a day — to serve that one
+-- read a run.
+--
+-- Class: code_pushes stays reproducible: both columns are written only by the
+-- push apply, from the record's principal (Principal.Run), so a replay from
+-- zero writes them again.
+ALTER TABLE code_pushes ADD COLUMN run_id       TEXT NOT NULL DEFAULT '';
+ALTER TABLE code_pushes ADD COLUMN coding_agent TEXT NOT NULL DEFAULT '';

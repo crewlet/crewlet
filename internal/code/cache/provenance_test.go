@@ -221,13 +221,15 @@ func TestADeltaFoldsItsPushesBeforeItAnswers(t *testing.T) {
 // THE INDEX NAMES THE TURN THAT PUSHED: a seat's push the engine built is
 // answered, from the index alone, on the sync that folded it, with the whole
 // run its row names — the turn, the work item's tracker and key, the model —
-// and its way; a person's push git received is answered with no run. So what
+// and its way; a coding box's push git received with its run's launch and its
+// coding agent beside them; a person's push git received with no run. So what
 // a git node says of who pushed a commit (code_landed_in, every server-side
 // read naming the push behind a commit) is all its push row says, never the
 // credential alone.
 //
-// Mutation: write no work key into a run (pushPayload skipping tag 5) — the
-// seat's push is answered without it.
+// Mutations: write no work key into a run (pushPayload skipping tag 5) — the
+// seat's push is answered without it; write no run id (skipping tag 7) — the
+// box's push is answered as one no coding run made.
 func TestTheProvenanceIndexNamesTheTurnThatPushed(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -236,7 +238,7 @@ func TestTheProvenanceIndexNamesTheTurnThatPushed(t *testing.T) {
 	c := w.open(t)
 	w.sync(t, c, repo)
 
-	var seat, person bool
+	var seat, box, person bool
 	for range 3 {
 		oid, _ := w.push(t, repo, "refs/heads/main", nil)
 		want := lastPush(t, w.log, repo).PushedBy
@@ -249,22 +251,27 @@ func TestTheProvenanceIndexNamesTheTurnThatPushed(t *testing.T) {
 		if !ok || got != want {
 			t.Errorf("the pushed commit is answered as by %+v (%t), want its row's %+v", got, ok, want)
 		}
-		switch run := want.Principal.Run; want.Principal.Kind {
-		case code.PrincipalAgent:
-			if run.TurnID == "" || run.WorkBackend == "" || run.WorkKey == "" || run.Model == "" ||
-				want.Via != code.ViaEngine {
+		switch run := want.Principal.Run; {
+		case want.Principal.Kind == code.PrincipalAgent && want.Via == code.ViaEngine:
+			if run.TurnID == "" || run.WorkBackend == "" || run.WorkKey == "" || run.Model == "" {
 				t.Fatalf("the log's seat push %+v names no whole run the engine built: the case holds none", want)
 			}
 			seat = true
-		case code.PrincipalOperator:
+		case want.Principal.Kind == code.PrincipalAgent:
+			if run.TurnID == "" || run.RunID == "" || run.CodingAgent == "" || want.Via != code.ViaGit {
+				t.Fatalf("the log's box push %+v names no coding run git received: the case holds none", want)
+			}
+			box = true
+		case want.Principal.Kind == code.PrincipalOperator:
 			if !got.Principal.Run.IsZero() {
 				t.Errorf("a person's push is answered with the run %+v", got.Principal.Run)
 			}
 			person = true
 		}
 	}
-	if !seat || !person {
-		t.Fatalf("three pushes held a seat's (%t) and a person's (%t): the case needs both", seat, person)
+	if !seat || !box || !person {
+		t.Fatalf("three pushes held a seat's (%t), a coding box's (%t) and a person's (%t): the case needs "+
+			"all three", seat, box, person)
 	}
 }
 

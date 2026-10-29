@@ -723,9 +723,14 @@ func TestARepositorysDefaultBranchIsNoReservedSeatBranch(t *testing.T) {
 
 // A PRINCIPAL NAMES ITSELF ONE WAY: an operator its credential and, where it is
 // bound, a person's handle, and no run; a seat its handle and no credential,
-// and a run only one that names its turn and holds every field within the
-// rules. A proposal takes only a bound person's, since the push decide judges
-// no seat's grant.
+// and a run only one that names its turn — and a coding box's, its run by the
+// launch's UUID in its canonical spelling together with its coding agent —
+// and holds every field within the rules. A proposal refuses a seat's push
+// naming no run, a token bound to nobody's and a principal naming no
+// credential.
+//
+// Mutation: take a run id that is not a canonical UUID (invalid() skipping
+// canonicalUUID) — the uppercase launch id is a run, red.
 func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 	t.Parallel()
 	run := code.RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001", WorkBackend: "native",
@@ -734,6 +739,12 @@ func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 		r := run
 		change(&r)
 		return r
+	}
+	boxed := func(change func(*code.RunProvenance)) code.RunProvenance {
+		return with(func(r *code.RunProvenance) {
+			r.RunID, r.CodingAgent = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b", "claude-code"
+			change(r)
+		})
 	}
 	long := strings.Repeat("k", code.MaxProvenanceBytes+1)
 	for _, tc := range []struct {
@@ -760,6 +771,29 @@ func TestAPrincipalNamesItselfOneWay(t *testing.T) {
 		})}, false},
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: with(func(r *code.RunProvenance) {
 			r.WorkBackend = "nat\xffive"
+		})}, false},
+		// A CODING BOX'S RUN: its launch's id and its coding agent, together.
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(*code.RunProvenance) {})}, true},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(r *code.RunProvenance) {
+			r.CodingAgent = strings.Repeat("a", code.MaxProvenanceBytes)
+		})}, true},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(r *code.RunProvenance) {
+			r.RunID = strings.ToUpper(r.RunID)
+		})}, false},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(r *code.RunProvenance) {
+			r.RunID = "launch-1"
+		})}, false},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(r *code.RunProvenance) {
+			r.CodingAgent = ""
+		})}, false},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(r *code.RunProvenance) {
+			r.RunID = ""
+		})}, false},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(r *code.RunProvenance) {
+			r.CodingAgent = long
+		})}, false},
+		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana", Run: boxed(func(r *code.RunProvenance) {
+			r.CodingAgent = "claude\tcode"
 		})}, false},
 		{code.Principal{Kind: code.PrincipalAgent}, false},
 		{code.Principal{Kind: code.PrincipalAgent, Seat: "ana/x"}, false},

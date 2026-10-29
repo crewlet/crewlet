@@ -886,10 +886,13 @@ repository, never by a sweep:
   pushed — a person's credential and the seat they hold, or a seat by its
   handle — how the push's pack was built (`git`, sent by a client's git, or
   `engine`, built by the engine itself), and for a seat's push the turn that
-  made it, the work item that turn was charged to and the model it ran on:
-  each stamped by the engine from the call that made the push, never read
-  from a commit, whose author, committer and trailers whoever made the commit
-  writes. A row names every ref its push named, refused ones too. A ref the
+  made it, the work item that turn was charged to and the model it ran on —
+  and for a push the seat's coding box made, the coding run that pushed and
+  the coding agent it ran, which is how the engine reads back what a run
+  delivered when it collects the run: each stamped by the engine from the
+  call or the run that made the push, never read from a commit, whose author,
+  committer and trailers whoever made the commit writes. A row names every
+  ref its push named, refused ones too. A ref the
   engine refused for being longer than 255 bytes, or for not being UTF-8, is
   kept as much of it as fits in 255 bytes beside its length and a digest of
   the whole
@@ -2668,8 +2671,10 @@ store in the process, 4.2 ms) and 1.8% of one whose pack comes from a store
 answering in 30 ms (68 ms). The index holds about 64 bytes for each commit a
 push introduced — about 190 bytes for a person's push of three commits, and
 for a seat's push the bytes of its turn id, work item and model more, about
-80 — inside the cache's budget. A lookup that misses, every run searched, is
-15.5 µs at 32 runs over four million commits, under 1% of a warm tree listing
+80, and for a push its coding box made those of its run and coding agent,
+about 50 more — inside the cache's budget. A lookup that misses, every run
+searched, is 15.5 µs at 32 runs over four million commits, under 1% of a
+warm tree listing
 (3.1 ms). The backfill reads the data node's push rows in pages of about 7 500
 pushes — the 4 MB a page answers at most — each about 115 ms of the data
 node's read and 150 ms in all, so a history of 18 million pushes, a large
