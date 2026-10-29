@@ -1493,6 +1493,59 @@ func TestAListingIsCutWholeRowAtTheAnswer(t *testing.T) {
 	}
 }
 
+// A REPOSITORY WHOSE RULES ARE PAST ONE ANSWER NAMES WHERE THEY ARE READ:
+// sixty-four rules, each with a merge gate, outweigh one tool answer, so such
+// a repository is listed whole on no page and its detail leaves no room for a
+// branch — and the refusal says where its rules are read instead: a declared
+// repository's in the company's configuration, and those of one a tool made,
+// which no configuration holds, in its detail over the API. Its detail alone
+// past one answer is refused so whether it has branches or none, since no
+// branch prefix narrows what its rules weigh.
+//
+// Mutation: name the company's configuration whatever made the repository —
+// the tool-made repository's refusals name code.repos, red.
+func TestARepositoryWhoseRulesArePastOneAnswerNamesWhereTheyAreRead(t *testing.T) {
+	t.Parallel()
+	rules := make([]code.Protection, 20)
+	for i := range rules {
+		paths := make([]code.HumanPath, code.MaxHumanPaths)
+		for k := range paths {
+			paths[k] = code.HumanPath{Glob: fmt.Sprintf("%02d/%s", k, strings.Repeat("a", 120))}
+		}
+		rules[i] = code.Protection{Pattern: fmt.Sprintf("refs/heads/r%02d", i), DirectPush: code.DirectPersons,
+			Gate: &code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone, HumanPaths: paths,
+				Landing:      code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4},
+				DeleteSource: code.DeleteSeats}}
+	}
+	for _, tc := range []struct {
+		managed     code.ManagedBy
+		says, never string
+	}{
+		{code.ManagedConfig, "company's configuration (code.repos)", "GET /code/repos/{name}"},
+		{code.ManagedTools, "GET /code/repos/{name}", "code.repos"},
+	} {
+		for _, branches := range []bool{true, false} {
+			host := newCodeHost()
+			host.detail.ManagedBy, host.detail.Protections = tc.managed, rules
+			if !branches {
+				host.refs = map[string]string{}
+			}
+			reg := codeRegistry(t, codeDeps(host))
+			asked := map[string]map[string]any{builtin.CodeGetRepoTool: {"repo": "site"}}
+			if branches {
+				asked[builtin.CodeListReposTool] = map[string]any{}
+			}
+			for tool, args := range asked {
+				got := refusedCode(t, reg, codeTurn(t), tool, args)
+				if !strings.Contains(got.Output, tc.says) || strings.Contains(got.Output, tc.never) {
+					t.Errorf("%s of a %s repository, branches %v, refused %q, want it to say %q and never %q",
+						tool, tc.managed, branches, got.Output, tc.says, tc.never)
+				}
+			}
+		}
+	}
+}
+
 // ---- the fences ---------------------------------------------------------- //
 
 // codeFenced runs one code read whose page answer builds — handed the turn's

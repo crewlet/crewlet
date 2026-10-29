@@ -1102,10 +1102,24 @@ func (t *codeListRepos) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return labelFault(ctx, t.Name(), err), nil
 	case k == 0 && len(rows) > 0:
 		return failed(fmt.Sprintf("%s: repository %q alone is past one answer — its protection rules "+
-			"are that long — so it is not listed whole on any page. Read its rules in the company's "+
-			"configuration (code.repos).", t.Name(), rows[0].Name)), nil
+			"are that long — so it is not listed whole on any page. %s", t.Name(), rows[0].Name,
+			longRulesRemedy(answer.Repos[0].ManagedBy))), nil
 	}
 	return compactAnswer(rendered, "Ask for fewer with `limit`.")
+}
+
+// longRulesRemedy is where a repository's protection rules are read once they
+// are past one tool answer — sixty-four rules, each with a merge gate of up to
+// code.MaxGateBytes, can be: a declared repository's in the company's
+// configuration, and those of one a tool made, which no configuration holds,
+// in its detail over the API, which no tool answer bounds — a person's read.
+func longRulesRemedy(m code.ManagedBy) string {
+	if m == code.ManagedConfig {
+		return "Read its rules in the company's configuration (code.repos)."
+	}
+	return "Its rules were set through " + CodeProtectBranchTool + ", and no configuration holds them: a " +
+		"person reads them whole in the repository's detail (GET /code/repos/{name}), and only a person " +
+		"shortens them."
 }
 
 // ---- code_get_repo ------------------------------------------------------ //
@@ -1253,11 +1267,14 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	switch {
 	case err != nil:
 		return labelFault(ctx, t.Name(), err), nil
-	case k == 0 && len(branches) > 0:
+	case k == 0 && (len(branches) > 0 || len(rendered) > ToolAnswerBytes):
+		// THE DETAIL ALONE PAST ONE ANSWER, branches or none: no prefix
+		// narrows what the rules weigh, so the refusal names where they are
+		// read rather than an argument that cannot help.
 		return failed(fmt.Sprintf("%s: repository %q's detail leaves no room in one answer for even "+
 			"one branch — its protection rules are that long. Its branches are read a page at a "+
-			"time once you pass the `branches_next` of a page; read its rules in the company's "+
-			"configuration (code.repos).", t.Name(), repo.Name)), nil
+			"time once you pass the `branches_next` of a page. %s", t.Name(), repo.Name,
+			longRulesRemedy(repo.ManagedBy))), nil
 	}
 	return compactAnswer(rendered, "Narrow the branches with `branches_prefix`.")
 }
