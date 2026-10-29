@@ -287,9 +287,13 @@ var codeLogPushVias = map[code.PushVia]string{
 		"the log less, naming no run and no day",
 	code.ViaGit: "received by git: a person's push, which the day prices as a seat's, since it " +
 		"takes the log less (1 380 bytes alone in its record against a seat's 1 481, " +
-		"BenchmarkPushLogBytes), and none of the reference company's 3 000 is one; and an " +
+		"BenchmarkPushLogBytes), and none of the reference company's 3 000 is one; an " +
 		"import's batches (crewlet code import), up to code.MaxCommandsPerPush refs a record, " +
-		"once a repository when a person imports it",
+		"once a repository when a person imports it; and a seat's coding box's push, the one " +
+		"seat's push git may receive (code.Proposal.Validate), naming the coding run that pushed " +
+		"and its coding agent beside the turn — a shape of push the day does not price " +
+		"(codeLogFields' run_id), which no node of this build receives: no route it serves " +
+		"admits a coding box",
 }
 
 // codeLogManagers is everything that may manage a repository
@@ -348,6 +352,12 @@ var codeLogFields = map[code.OpKind]struct {
 			"pushes.received_at", "pushes.day"},
 		absent: map[string]string{
 			"pushes.principal.operator_id": "a person's credential, and a seat acts as itself",
+			"pushes.principal.run.run_id": "the coding run behind a coding box's push, which git " +
+				"receives (codeLogPushVias' git), and the measured push is one the engine built for a " +
+				"tool, whose run is the turn that called it: code.Proposal.Validate refuses a push the " +
+				"engine built naming a coding run",
+			"pushes.principal.run.coding_agent": "the coding agent a box ran, named only beside its " +
+				"coding run (run_id's reason)",
 			"pushes.atomic": "--atomic, which a push the engine builds never carries: it moves " +
 				"one ref",
 			"pushes.commands.forced": "a forced update, and a seat's write moves its branch on " +
