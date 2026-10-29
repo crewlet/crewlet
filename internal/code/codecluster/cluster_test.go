@@ -231,7 +231,7 @@ func startClusterOf(t testing.TB, backend string, broker js.Config) *cluster {
 	for _, m := range c.members {
 		g := codetest.StartGitNode(t, codetest.GitOptions{
 			ID: m.id, Dir: filepath.Join(m.dir, "git"), Estate: memberEstate{m}, Reads: m.read,
-			Compactions: m.compact, Maintainers: memberMaintainers{m},
+			Compactions: m.compact, Expunges: m.expunge, Maintainers: memberMaintainers{m},
 			Objects: m.backend, Faults: c.faults, Credentials: c.creds, Runs: c.runs, Audit: c.record,
 			MaxTransfers: transfers, Roster: m.roster, Current: m.current,
 		})
@@ -402,6 +402,13 @@ func (m *member) compact(ctx context.Context, p code.CompactionProposal) (code.C
 	m.c.proposed[p.Compaction.RepoID] = p
 	m.c.mu.Unlock()
 	return m.router.Load().Code().Compact(ctx, p)
+}
+
+// expunge is what the member's compactor proposes an expunge's begin and
+// commit to — and a case a person's purge request: the member's own router's
+// code seam, as the engine hands its compactor.
+func (m *member) expunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+	return m.router.Load().Code().Expunge(ctx, p)
 }
 
 // memberMaintainers is which repositories the member maintains, as its

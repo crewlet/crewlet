@@ -2,6 +2,7 @@ package compact
 
 import (
 	"context"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -115,6 +116,23 @@ func CapOf(c *Compactor, repoID string) int64 { return c.capFor(repoID) }
 // holds every part of, or the store's error (Compactor.heldBase).
 func HeldBase(ctx context.Context, c *Compactor, rows []code.LayerRow, base int) (int, error) {
 	return c.heldBase(ctx, rows, base)
+}
+
+// FinishExpunge finishes the expunge open on cand's repository — its rescue
+// and its commit, from the rows — as one whose rescue keeps what a ref drop
+// left for grace would: what an expunge on its maintainer's own schedule
+// keeps, which a case drives over a purge's begin to hold the rescue's drops
+// to the grace it is handed.
+func FinishExpunge(ctx context.Context, c *Compactor, cand code.ExpungeCandidate, grace time.Duration) (Outcome,
+	error) {
+
+	c.expunging.Lock()
+	defer c.expunging.Unlock()
+	if !c.claimExpunge(cand.ID) {
+		return OutcomeBusy, errClaimed
+	}
+	defer c.unclaimExpunge(cand.ID)
+	return c.finish(ctx, cand, openExpunge{id: cand.Open, request: cand.Request, grace: grace, floor: cand.Version})
 }
 
 // RememberNotDue has c remember cand as a plan found not due at the version the

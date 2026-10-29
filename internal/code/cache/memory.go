@@ -228,31 +228,35 @@ func (c *Cache) nodeMemory() gitproc.Memory {
 
 // maintStep is a set of the maintainer's declared writes (maintWrites), bit i
 // its all[i]: what a plan takes, and what the node's memory refused an
-// incarnation — where two more steps sit past every write's bit, a
-// compaction's build ([stepCompact]) and a publication's ([stepPublish]). A
-// write's name — a line's and a count's `step` — is its write's Step, the
-// compaction's "compact" and the publication's "publish".
+// incarnation — where three more steps sit past every write's bit, a
+// compaction's build ([stepCompact]), a publication's ([stepPublish]) and an
+// expunge's ([stepExpunge]). A write's name — a line's and a count's `step` —
+// is its write's Step, the compaction's "compact", the publication's
+// "publish" and the expunge's "expunge".
 type maintStep uint16
 
-// stepCompact and stepPublish are the background work a repository's
-// maintainer runs between passes (background.go: Cache.AdmitCompaction and
-// Cache.AdmitPublication) as steps of an incarnation's memoryRefused set: the
-// two steps there that are no declared write, at the first bits past every
-// bit a write may take (maxMaintWrites), so the set an incarnation keeps of
-// what the node's memory refused it — logged and counted once an incarnation,
-// carried across a swap — holds a refused compaction and a refused
-// publication beside the maintainer's refused steps, and logs each once
-// however many polls find it again.
+// stepCompact, stepPublish and stepExpunge are the background work a
+// repository's maintainer runs between passes (background.go:
+// Cache.AdmitCompaction, Cache.AdmitPublication and Cache.AdmitExpunge) as
+// steps of an incarnation's memoryRefused set: the three steps there that are
+// no declared write, at the first bits past every bit a write may take
+// (maxMaintWrites), so the set an incarnation keeps of what the node's memory
+// refused it — logged and counted once an incarnation, carried across a swap
+// — holds a refused compaction, publication and expunge beside the
+// maintainer's refused steps, and logs each once however many polls find it
+// again.
 const (
 	stepCompact maintStep = 1 << maxMaintWrites
 	stepPublish maintStep = 1 << (maxMaintWrites + 1)
+	stepExpunge maintStep = 1 << (maxMaintWrites + 2)
 )
 
-// stepCompactName and stepPublishName are the two steps' `step`, on their
-// lines and their counts.
+// stepCompactName, stepPublishName and stepExpungeName are the three steps'
+// `step`, on their lines and their counts.
 const (
 	stepCompactName = "compact"
 	stepPublishName = "publish"
+	stepExpungeName = "expunge"
 )
 
 // memoryRefusals is what the maintainer's latest walk of the entries found

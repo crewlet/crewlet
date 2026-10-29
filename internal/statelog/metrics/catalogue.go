@@ -1055,6 +1055,54 @@ func Catalogue() []Instrument {
 				"object and 69 a commit of what it covers, so a repository's root " +
 				"layer is the one large write and every later one is its tail's.",
 		},
+		{
+			Name: CodeExpungeRuns, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Expunges this node ran as the MAINTAINER of their " +
+				"repositories — a person's purge served, or an expunge left open " +
+				"finished from its rows — each one cycle: a scan of what a ref " +
+				"reaches, a build sorting some live packs into kept and dropping " +
+				"ones, their begin, a rescue of what a push revived meanwhile and " +
+				"their commit — by `outcome`. `applied`: its commit landed, and " +
+				"what no ref reached left the repository's live packs. `pending`, " +
+				"`unknown`: a record was appended and is not yet known to have " +
+				"applied — the next pass reads the rows and finishes it. " +
+				"`not_due`: nothing was left to rewrite. `stale`: a compaction, a " +
+				"publication or a purge moved an input first, or the expunge was " +
+				"finished elsewhere. `busy`: no maintenance slot or memory room " +
+				"was free, another build of the repository was running on the " +
+				"node, its copy's objects/ still held a begin's inputs, or its " +
+				"committer was busy. `refused`: by the committer or before it " +
+				"(`code_expunge_refused` says why: this node's memory, an object " +
+				"store with no room, a build past what one record carries). " +
+				"`failed`: a sync, a build, an upload or an answer failed " +
+				"(`code_expunge_failed` names the step). Every outcome but " +
+				"`applied` is tried again at a later pass, and a purge whose " +
+				"repository holds more than one expunge rewrites at once is " +
+				"served by several `applied`.",
+		},
+		{
+			Name: CodeExpungeDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"stage"},
+			Shows: "One stage of an expunge, by `stage`: `scan`, its sync and " +
+				"its reads of what it keeps; `build`, its kept and dropping " +
+				"packs' builds — a walk of the repository's whole history from " +
+				"every tip it keeps, minutes at the largest; `upload`, every " +
+				"output's upload at once; `begin`, its begin's decide and the " +
+				"adoption of its kept packs; `rescue`, the sync past the begin " +
+				"and the rescue's build and upload; `commit`, its commit's decide. " +
+				"`build` and `rescue` climbing with the repository's history are " +
+				"the walks; `upload` alone climbing is the object store.",
+		},
+		{
+			Name: CodeExpungeDroppedBytes, Kind: KindCounter, Unit: UnitBytes,
+			Shows: "Bytes the expunges this node ran took out of their " +
+				"repositories' packs: each commit's dropping packs less the " +
+				"rescue it kept of them. The store keeps them for code's " +
+				"RetireGrace (a day) after the commit, so a reader already on one " +
+				"finishes, and the collector deletes them at its next pass after " +
+				"that.",
+		},
 		// ---- git ------------------------------------------------------
 		{
 			Name: CodeCacheAdoptions, Kind: KindCounter, Unit: UnitCount,
@@ -1398,7 +1446,12 @@ func Catalogue() []Instrument {
 				"of the repository for the layer's bitmap, beside the clone's " +
 				"room): the repository's maintainer cannot publish its next " +
 				"layer, so every pack pushed since its last publication is served " +
-				"outside every bitmap, and every one pushed after. Rising is " +
+				"outside every bitmap, and every one pushed after. `expunge` (500 " +
+				"bytes an object of the packs an expunge sorts, beside the room " +
+				"for a clone of the whole repository, whose history its build " +
+				"walks, and its delta search): a person's purge of the " +
+				"repository waits until a git node with the memory maintains it " +
+				"(`code_cache_expunge_refused` names it). Rising is " +
 				"repositories outgrowing the node; the code_maintenance_refused " +
 				"alarm stands while any bitmap or publication is refused, and " +
 				"never for a tip, whose copy is served through its chain's bitmap.",

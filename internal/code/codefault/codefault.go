@@ -1,17 +1,17 @@
 // Package codefault is THE NAMED FAULT POINTS of the code host's push, sync,
-// compaction, publication and engine write paths, and the one seam that
-// reaches them. Production passes a nil [Injector] and every call site is a
-// nil check; the suites pass a [*Script].
+// compaction, publication, engine write and expunge paths, and the one seam
+// that reaches them. Production passes a nil [Injector] and every call site is
+// a nil check; the suites pass a [*Script].
 //
 // NAMED rather than ad hoc hooks, because the code host's crash matrices walk
 // EVERY point of a path in pipeline order and kill the node there — the push
-// path's ([PushPath]) the receiving node, the compaction's ([CompactPath])
-// and the publication's ([PublishPath]) the repository's maintainer building
-// one, and an engine write's ([WritePath]) the git node building it: a step
-// with no point is a step nobody ever crashed at. So a new step of the
-// receive pipeline, of a compaction, of a publication or of an engine write,
-// that can leave state behind gets a point here, in order, or the matrix does
-// not cover it. The order is written ONCE, in this package, and a call site
+// path's ([PushPath]) the receiving node, the compaction's ([CompactPath]),
+// the publication's ([PublishPath]) and the expunge's ([ExpungePath]) the
+// repository's maintainer running one, and an engine write's ([WritePath])
+// the git node building it: a step with no point is a step nobody ever
+// crashed at. So a new step of the receive pipeline, of a compaction, of a
+// publication, of an engine write or of an expunge, that can leave state
+// behind gets a point here, in order, or the matrix does not cover it. The order is written ONCE, in this package, and a call site
 // adds a hit and never edits the list.
 //
 // A crash is a hit HELD PAST THE NODE'S DEATH ([Action.Crash]). The case
@@ -187,6 +187,23 @@ const (
 	// proposed (internal/code/host's Server.Write): the landing every push
 	// takes is next, its own points the write's from here on ([WritePath]).
 	WriteAfterBuild Point = "write.after_build"
+
+	// ExpungeAfterBuild: an expunge's build has written its kept and its
+	// dropping packs into the expunge's scratch, and nothing of them is
+	// stored or proposed (internal/code/compact).
+	ExpungeAfterBuild Point = "expunge.after_build"
+	// ExpungeAfterBegin: the expunge's begin has applied — its inputs
+	// retired, its kept packs live and its dropping packs dropping, the
+	// repository's drop epoch moved — and its rescue has not started: the
+	// expunge is open, and only its rows say what is left to do.
+	ExpungeAfterBegin Point = "expunge.after_begin"
+	// ExpungeAfterRescueUpload: every rescue pack is stored, and no row names
+	// any of them: the commit is not proposed.
+	ExpungeAfterRescueUpload Point = "expunge.after_rescue_upload"
+	// ExpungeAfterCommit: the repository's committer has answered the
+	// expunge's commit, and its rescue is not yet adopted into the building
+	// node's cache.
+	ExpungeAfterCommit Point = "expunge.after_commit"
 )
 
 // pushPath is the receive pipeline's points in the order a push reaches them.
@@ -216,6 +233,10 @@ var publishPath = []Point{PublishAfterBuild, PublishUpload, PublishAfterUpload, 
 // writePath is an engine write's OWN points: its build ended, before the
 // landing. What it meets after them is the landing's ([WritePath]).
 var writePath = []Point{WriteAfterBuild}
+
+// expungePath is an expunge's points in the order its maintainer reaches them:
+// its build, its begin applied, its rescue stored, its commit answered.
+var expungePath = []Point{ExpungeAfterBuild, ExpungeAfterBegin, ExpungeAfterRescueUpload, ExpungeAfterCommit}
 
 // landingPath is the push path's points the LANDING hits (internal/code/host's
 // land), in its order: an engine write lands as a relayed push does, so a write
@@ -248,16 +269,23 @@ func PublishPath() []Point { return slices.Clone(publishPath) }
 // adds a point to the closed set for its build alone.
 func WritePath() []Point { return slices.Concat(writePath, landingPath) }
 
+// ExpungePath is an expunge's points in the order its maintainer reaches them,
+// every one hit by internal/code/compact. A fresh copy at every call, for
+// [PushPath]'s reason: the expunge's crash matrix walks it.
+func ExpungePath() []Point { return slices.Clone(expungePath) }
+
 // Points is the closed set: every point, the push path first in pipeline
 // order, then the sync's, the compaction's and the publication's, then the
-// engine write's own. A fresh copy at every call, so no importer can rewrite
-// what [Point.Valid] accepts.
-func Points() []Point { return slices.Concat(pushPath, syncPath, compactPath, publishPath, writePath) }
+// engine write's own, then the expunge's. A fresh copy at every call, so no
+// importer can rewrite what [Point.Valid] accepts.
+func Points() []Point {
+	return slices.Concat(pushPath, syncPath, compactPath, publishPath, writePath, expungePath)
+}
 
 // Valid reports whether p is one of [Points].
 func (p Point) Valid() bool {
 	return slices.Contains(pushPath, p) || slices.Contains(syncPath, p) || slices.Contains(compactPath, p) ||
-		slices.Contains(publishPath, p) || slices.Contains(writePath, p)
+		slices.Contains(publishPath, p) || slices.Contains(writePath, p) || slices.Contains(expungePath, p)
 }
 
 // readsOffset reports whether p is hit at an offset ([Action.At]): an upload's

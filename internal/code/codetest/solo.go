@@ -345,7 +345,7 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 		}
 		f.git = append(f.git, StartGitNode(t, GitOptions{
 			ID: id, Dir: filepath.Join(f.dir, id, "git"), Estate: seam, Reads: reads,
-			Compactions: compactions, Maintainers: soloMaintainers{f: f, i: i},
+			Compactions: compactions, Expunges: f.expunge, Maintainers: soloMaintainers{f: f, i: i},
 			Objects: func() objstore.Backend { return objects }, Limits: o.Limits, Timing: o.Timing,
 			Faults: o.Faults, Credentials: f.creds, Runs: f.runs, Audit: f.record, Fetched: f.recordFetched,
 			MaxTransfers: o.MaxTransfers, MaxProcesses: o.MaxProcesses, CacheMaxBytes: o.CacheMaxBytes,
@@ -455,6 +455,18 @@ func (m soloMaintainers) Listed() (bool, error) {
 // walk in which every node it asked refused, as Propose is.
 func (f *SoloFleet) compact(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error) {
 	res, err := f.data.Served().ProposeCompaction(ctx, p)
+	if errors.Is(err, code.ErrNotServing) {
+		return res, &soloUnserved{err: err}
+	}
+	return res, err
+}
+
+// expunge is what every git node's compactor proposes an expunge's begin and
+// commit to — and a case a person's purge request: the data node's committer,
+// in process, read again at every call, a refusal about the node itself
+// answered as compact answers one.
+func (f *SoloFleet) expunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+	res, err := f.data.Served().ProposeExpunge(ctx, p)
 	if errors.Is(err, code.ErrNotServing) {
 		return res, &soloUnserved{err: err}
 	}

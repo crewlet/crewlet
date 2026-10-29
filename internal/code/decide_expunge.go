@@ -120,6 +120,52 @@ func (p ExpungeProposal) Validate() error {
 	return err
 }
 
+// ValidateUnstored is [ExpungeProposal.Validate] for a begin or a commit whose
+// outputs are laid out and not yet stored: each with no key and no digest, as
+// a build lays them out, and judged as it will be once its put has filled them
+// in — every rule Validate holds a stored proposal to, the record's bytes
+// among them, with each output standing at the widest key and digest a store
+// mints. What the maintainer that built one holds it to before a byte of it is
+// uploaded (internal/code/compact), so a builder's own bug is refused before
+// it costs the store anything. An output already stored, and a request, which
+// stores nothing, are refused: Validate is the check of those.
+func (p ExpungeProposal) ValidateUnstored() error {
+	stand := largestEntry().Pack
+	unstored := func(field string, outs []PackRef) ([]PackRef, error) {
+		filled := make([]PackRef, len(outs))
+		for i, out := range outs {
+			if !out.Object.IsZero() || out.Hash != "" {
+				return nil, fmt.Errorf("%w: %s[%d]: already stored as %s — Validate checks a stored output",
+					ErrInvalidProposal, field, i, out.Object)
+			}
+			out.Object, out.Hash = stand.Object, stand.Hash
+			filled[i] = out
+		}
+		return filled, nil
+	}
+	var err error
+	switch {
+	case p.Request != nil:
+		return fmt.Errorf("%w: a request stores nothing — Validate checks it", ErrInvalidProposal)
+	case p.Begin != nil && p.Commit == nil:
+		b := *p.Begin
+		if b.Add, err = unstored("begin.add", b.Add); err != nil {
+			return err
+		}
+		if b.Dropping, err = unstored("begin.dropping", b.Dropping); err != nil {
+			return err
+		}
+		p.Begin = &b
+	case p.Commit != nil && p.Begin == nil:
+		c := *p.Commit
+		if c.Add, err = unstored("commit.add", c.Add); err != nil {
+			return err
+		}
+		p.Commit = &c
+	}
+	return p.Validate()
+}
+
 // measure validates p and answers its queued byte charge: the payload its
 // record carries, encoded, held under [EntryRoom] — what one proposal may take
 // of a record beside the record's own overhead.
@@ -508,7 +554,7 @@ func decideBegin(ctx context.Context, tx *sql.Tx, b ExpungeBegin, repo pushRepo,
 	if err != nil {
 		return expungeDecision{}, err
 	}
-	if want := layersOver(chain, retiring); !slices.Equal(want, b.DropLayers) {
+	if want := LayersOver(chain, retiring); !slices.Equal(want, b.DropLayers) {
 		d.refusal, d.detail = RefusalStale, fmt.Sprintf("the published layers from the lowest over the "+
 			"packs it rewrites are %s and the plan drops %s: a publication moved the chain since the plan; "+
 			"the next pass plans again", layerList(want), layerList(b.DropLayers))
@@ -592,11 +638,13 @@ func decideOutputs(outputs []PackRef, now time.Time) (int64, Refusal, string) {
 	return made, "", ""
 }
 
-// layersOver is the layers of chain a begin retiring the packs whose
+// LayersOver is the layers of chain a begin retiring the packs whose
 // checksums retiring names must drop, in chain order: the chain's top from the
 // lowest layer naming one of them, and none where no layer does. The one
-// reading of a begin's rule 4, and of what its apply drops.
-func layersOver(chain []LayerRow, retiring map[string]bool) []string {
+// reading of a begin's rule 4 — exported for the maintainer that plans the
+// begin (internal/code/compact), so a plan and the decide that judges it never
+// disagree about the chain — and of what its apply drops.
+func LayersOver(chain []LayerRow, retiring map[string]bool) []string {
 	for k, row := range chain {
 		if slices.ContainsFunc(row.Layer.Packs, func(p string) bool { return retiring[p] }) {
 			out := make([]string, 0, len(chain)-k)

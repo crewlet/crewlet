@@ -917,7 +917,8 @@
 //	    crewlet/provenance.<n>      the index of pushes' runs, which no git reads
 //	    crewlet/memo/<n>/<key>      an answer of a read by object id, in cohort n, which no git reads
 //	  scratch/                      a request's own repositories: a push's scratch, a view;
-//	                                and a swap's next incarnation, staged
+//	                                a merge's, an expunge's and its rescue's, each beside
+//	                                the store it leans on; and a swap's next incarnation, staged
 //	  tmp/                          every file before its rename into place
 //	  trash/                        what is being removed, by the janitor
 //	  hooks/proc-receive            the hook every push's receive-pack runs
@@ -1063,7 +1064,11 @@
 //     view and an engine write lean on the copy's objects/ alone, their one
 //     alternate, and a compaction's build on its merge's store, links of its
 //     inputs from objects/pack, which refuses a pack only dropping rows name
-//     (mergedLive); and the pool refuses a call naming the view beside an
+//     (mergedLive); an expunge's build leans on a store of every live pack it
+//     does not sort ([Cache.StageExpunge]), and its rescue on the copy's
+//     objects/ alone, the dropping packs it sorts linked into its own
+//     objects/pack ([Cache.StageRescue]) — so `--local` packs what only the
+//     view holds; and the pool refuses a call naming the view beside an
 //     alternate — never an alternates file naming it, which git follows from
 //     every repository that names the copy as ITS alternate. And git loads
 //     the first commit-graph its object directories hold, an alternate's

@@ -454,8 +454,11 @@ var cacheWriters = []writerRow{
 			"(NewLayerScratch): its directories, HEAD and config, its incarnation's packed-refs, every pack file " +
 			"and the base layers' files HARD-LINKED — the same inodes, written by nothing here — the two chain " +
 			"files naming exactly that base, and its repack's outputs linked in from the merge's scratch they " +
-			"were built in (Gather); and a request's spool (Spool), created there and unlinked at once, so it " +
-			"is no file of the cache's", nil},
+			"were built in (Gather); an expunge's scratch and its rescue's (newRewriteScratch): their " +
+			"directories, HEAD, config and alternates, the incarnation's packed-refs and the packs they sort — " +
+			"the inputs, or the dropping view's packs — HARD-LINKED, and the expunge's store of every other live " +
+			"pack, linked the same way, all under the entry's write lock; and a request's spool (Spool), " +
+			"created there and unlinked at once, so it is no file of the cache's", nil},
 	{"internal/code/cache/adopt.go", kindOS,
 		"the receiving node's own pack, once its row has applied: linked into tmp/ and from there into " +
 			"objects/pack, and its staging names removed; and a maintainer's own published layer, once its " +
@@ -506,6 +509,16 @@ var cacheWriters = []writerRow{
 		"runInSlot hands a build's every Cmd — build.go's pack-objects literal, publish.go's multi-pack-index " +
 			"and commit-graph literals — to the admission's reserved slot (cache.Admission.Run), unchanged: a " +
 			"function value, so a suite can stand in a builder or count what a build ran", nil},
+	{"internal/code/compact/expunge.go", kindGit + " pack-objects",
+		"an expunge's builds: `pack-objects --revs --local` from the tips it keeps and `--stdin-packs` over its " +
+			"inputs less what it kept and less the rest, in the expunge's own SCRATCH, whose objects/pack holds " +
+			"links of the inputs beside a store of every other live pack (cache.StageExpunge); and its rescue's " +
+			"`--revs --local`, in a scratch holding links of the dropping packs and leaning on the incarnation " +
+			"(cache.StageRescue) — never an incarnation: the kept packs and the rescue enter the cache only by " +
+			"Adopt, the dropping packs only by a round's install, once their rows have applied", nil},
+	{"internal/code/compact/expunge.go", kindRuntime,
+		"packOut hands the expunge's pack-objects Cmds — this file's literals above — to the admission's " +
+			"reserved slot (cache.Admission.Run), unchanged, and reads back the packs they printed", nil},
 	{"internal/code/compact/publish.go", kindGit + " multi-pack-index",
 		"a publication's layer: `multi-pack-index write --incremental --bitmap --no-write-chain-file` over the " +
 			"layer's packs, in the publication's own SCRATCH of links (cache.NewLayerScratch), whose chain file " +

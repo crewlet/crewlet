@@ -145,6 +145,10 @@ type GitOptions struct {
 	// again at every call — the engine hands its compactor the router's code
 	// seam, whose Compact this is.
 	Compactions func(context.Context, code.CompactionProposal) (code.CompactResult, error)
+	// Expunges is what the node's compactor proposes an expunge's begin and
+	// commit to: the repository's committer, as Compactions — the router's
+	// code seam's Expunge, in the engine.
+	Expunges func(context.Context, code.ExpungeProposal) (code.ExpungeResult, error)
 	// Maintainers is which repositories the node maintains, as its compactor
 	// asks once a pass: the node's own router in every topology, as the
 	// engine hands its compactor the router — or a fixed answer a case hands
@@ -301,9 +305,9 @@ func StartGitNode(t testing.TB, o GitOptions) *GitNode {
 	t.Helper()
 	switch {
 	case o.ID == "" || o.Dir == "" || o.Estate == nil || o.Reads == nil || o.Compactions == nil ||
-		o.Maintainers == nil || o.Objects == nil || o.Credentials == nil:
+		o.Expunges == nil || o.Maintainers == nil || o.Objects == nil || o.Credentials == nil:
 		t.Fatalf("codetest: a git node needs an id, a directory, an estate, its reads, its compactions, "+
-			"its maintainers, its objects and its credentials (%+v)", o)
+			"its expunges, its maintainers, its objects and its credentials (%+v)", o)
 	}
 	if o.Faults == nil {
 		o.Faults = &codefault.Script{}
@@ -424,10 +428,11 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	}
 	// THE COMPACTOR, as the engine builds it after the host has started: over
 	// the node's cache and store, listing through the node's reads and
-	// proposing through its compactions.
-	if n.compactor, err = compact.New(compact.Options{Cache: n.cache, Objects: objects,
-		Estate: compactions{read: g.o.Reads, compact: g.o.Compactions}, Maintainers: g.o.Maintainers,
-		NodeID: n.id, Limits: limits, Faults: g.o.Faults, Metrics: n.metrics, Logger: g.o.Logger}); err != nil {
+	// proposing through its compactions and its expunges.
+	proposals := compactions{read: g.o.Reads, compact: g.o.Compactions, expunge: g.o.Expunges}
+	if n.compactor, err = compact.New(compact.Options{Cache: n.cache, Objects: objects, Estate: proposals,
+		Maintainers: g.o.Maintainers, NodeID: n.id, Limits: limits, Faults: g.o.Faults, Metrics: n.metrics,
+		Logger: g.o.Logger}); err != nil {
 		t.Fatalf("codetest: build %s's compactor: %v", n.id, err)
 	}
 	// A PERSON'S THREE ROUTES AND A CODING BOX'S THREE, on one mux behind the
@@ -650,11 +655,12 @@ func (g *GitNode) teardown() {
 }
 
 // compactions is a git node's code log as its compactor reaches it
-// (compact.Estate): the due listing through the node's reads, the proposal
-// through its compactions.
+// (compact.Estate): the due listings through the node's reads, the proposals
+// through its compactions and its expunges.
 type compactions struct {
 	read    func(context.Context, code.ReadQuery) (code.ReadAnswer, error)
 	compact func(context.Context, code.CompactionProposal) (code.CompactResult, error)
+	expunge func(context.Context, code.ExpungeProposal) (code.ExpungeResult, error)
 }
 
 func (c compactions) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
@@ -663,6 +669,10 @@ func (c compactions) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswe
 
 func (c compactions) Compact(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error) {
 	return c.compact(ctx, p)
+}
+
+func (c compactions) Expunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+	return c.expunge(ctx, p)
 }
 
 // serverLog is a git node's HTTP server's error log: A HANDLER THAT PANICS

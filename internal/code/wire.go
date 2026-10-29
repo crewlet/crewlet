@@ -771,6 +771,13 @@ const (
 	// maintainer polls for the expunges it owes. The engine's own read, as
 	// `compaction_due` is.
 	ReadExpungeDue ReadKind = "expunge_due"
+	// ReadExpungeTips is the objects one repository's expunge keeps beside
+	// its refs ([ReadQuery.ExpungeTips]): the object each forced or deleting
+	// command left since an instant (code_ref_drops) — what the expunge's
+	// grace keeps reachable — in the order the drops' key holds them. The
+	// engine's own read, which no principal makes: a repository's maintainer
+	// reads it at its scan and at its rescue (internal/code/compact).
+	ReadExpungeTips ReadKind = "expunge_tips"
 	// ReadChangesDue is the change work a repository's HOME git node owes
 	// ([ChangesDueQuery]): with no repository, the active repositories
 	// holding a LIVE change whose head revision has no facts or no
@@ -808,12 +815,13 @@ const (
 // kind it does not know ([ErrInvalid]) — never answers it as another — so the
 // fields only a newer kind reads ride a request that build refuses whole, and
 // take no versionedFields row: `changes` and `change` are the only kinds that
-// read [ReadQuery.Change], State, Owner and Work, and `run_pushes` the only
-// one that reads [ReadQuery.RunPushes].
+// read [ReadQuery.Change], State, Owner and Work, `run_pushes` the only one
+// that reads [ReadQuery.RunPushes], and `expunge_tips` the only one that reads
+// [ReadQuery.ExpungeTips].
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
-		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadChangesDue, ReadChecks,
-		ReadCheck, ReadChecksDue}
+		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadChangesDue,
+		ReadChecks, ReadCheck, ReadChecksDue}
 }
 
 // Valid reports a kind this build knows.
@@ -996,6 +1004,12 @@ type ReadQuery struct {
 	// predates the kinds refuses the read as a kind it does not know.
 	Checks    *CheckQuery     `json:"checks,omitempty"`
 	ChecksDue *ChecksDueQuery `json:"checks_due,omitempty"`
+	// ExpungeTips is an `expunge_tips` read's repository and instant:
+	// REQUIRED for that kind, refused on every other. An estate request's
+	// field and no record's, so it takes no versionedFields row: a node of a
+	// build that predates the kind refuses the read as a kind it does not
+	// know (ErrInvalid) — the scan unread, never answered as no tips.
+	ExpungeTips *ExpungeTipsQuery `json:"expunge_tips,omitempty"`
 	// MinPacks is a `compaction_due` read's floor — the repositories
 	// holding at least this many live packs — REQUIRED, at least 1, for that
 	// kind and refused on every other.
@@ -1011,7 +1025,8 @@ type ReadQuery struct {
 	// whatever few of them name the run; checks 1..200 (0 = 50), the rows a
 	// page READS, as a listing of changes; a page of a duty listing —
 	// `compaction_due`, `publication_due`, `expunge_due`, `changes_due`,
-	// `checks_due` — is MaxSnapshotItems and names none.
+	// `checks_due` — and of an `expunge_tips` read is MaxSnapshotItems and
+	// names none.
 	Limit int                `json:"limit,omitempty"`
 	Fresh statelog.Freshness `json:"fresh"`
 }
@@ -1054,8 +1069,12 @@ type ReadAnswer struct {
 	PathOwners []PathOwner `json:"path_owners,omitempty"`
 	// Checks is a page of a `checks` read, and Check a `check` read's one
 	// attempt whole.
-	Checks   []CheckRow         `json:"checks,omitempty"`
-	Check    *CheckDetail       `json:"check,omitempty"`
+	Checks []CheckRow   `json:"checks,omitempty"`
+	Check  *CheckDetail `json:"check,omitempty"`
+	// Tips is a page of an `expunge_tips` read: object ids, each once on the
+	// page, in the order of the drops that name them — an object a later
+	// page names again is one more drop left, which its reader keeps once.
+	Tips     []string           `json:"tips,omitempty"`
 	Next     string             `json:"next,omitempty"`
 	Position statelog.Position  `json:"position"`
 	Level    statelog.ReadLevel `json:"level"`
@@ -1064,8 +1083,10 @@ type ReadAnswer struct {
 // ExpungeCandidate is one repository an `expunge_due` read lists: the expunge
 // open on it and the purge requested of it, whichever it holds — what its
 // maintainer finishes or serves first — when it was last expunged, its live
-// packs and bytes, which a cycle's inputs are cut from, and the version its
-// row was read at.
+// packs, bytes and objects — which a cycle's inputs are cut from, and the last
+// of which places the repository's maintenance on the node that compacts and
+// publishes it too, by the publication's charge (internal/code/compact) — and
+// the version its row was read at.
 type ExpungeCandidate struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
@@ -1082,10 +1103,21 @@ type ExpungeCandidate struct {
 	Requested statelog.Position `json:"requested,omitzero"`
 	// ExpungedAt is the last commit's broker instant, zero for a repository
 	// never expunged.
-	ExpungedAt time.Time         `json:"expunged_at,omitzero"`
-	LivePacks  int64             `json:"live_packs"`
-	LiveBytes  int64             `json:"live_bytes"`
-	Version    statelog.Position `json:"version"`
+	ExpungedAt  time.Time         `json:"expunged_at,omitzero"`
+	LivePacks   int64             `json:"live_packs"`
+	LiveBytes   int64             `json:"live_bytes"`
+	LiveObjects int64             `json:"live_objects"`
+	Version     statelog.Position `json:"version"`
+}
+
+// ExpungeTipsQuery is an `expunge_tips` read's repository, by id, and the
+// instant from which the drops it lists were left: every code_ref_drops row
+// of the repository whose record's broker instant is at or after Since. An
+// expunge keeping a grace asks from its scan's instant less the grace; one
+// serving a purge, which keeps nothing a drop left, from its scan's instant.
+type ExpungeTipsQuery struct {
+	RepoID string    `json:"repo_id"`
+	Since  time.Time `json:"since"`
 }
 
 // CompactionCandidate is one repository a `compaction_due` read lists: its id

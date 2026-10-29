@@ -86,6 +86,10 @@ func TestARowsComputedSizeIsItsEncodingsLength(t *testing.T) {
 		fill(rng, reflect.ValueOf(&publishing).Elem())
 		check("publication candidate", publishing, publishing.encodedBytes())
 
+		var expunging ExpungeCandidate
+		fill(rng, reflect.ValueOf(&expunging).Elem())
+		check("expunge candidate", expunging, expunging.encodedBytes())
+
 		var due ChangeDue
 		fill(rng, reflect.ValueOf(&due).Elem())
 		check("due change", due, due.encodedBytes())

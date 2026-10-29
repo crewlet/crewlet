@@ -67,6 +67,12 @@ func (f fakeCommitter) Read(context.Context, code.ReadQuery) (code.ReadAnswer, e
 	return code.ReadAnswer{}, fmt.Errorf("%w: an interleaving's committer answers proposals alone", code.ErrInvalid)
 }
 
+// Expunge refuses: an interleaving of the published chain asks its compactor
+// for publications alone, so nothing expunges through its committer.
+func (f fakeCommitter) Expunge(context.Context, code.ExpungeProposal) (code.ExpungeResult, error) {
+	return code.ExpungeResult{}, fmt.Errorf("%w: the publication's interleavings expunge nothing", code.ErrInvalid)
+}
+
 // Compact decides p and applies it. Refused, it is stale with the rule's
 // sentence, as the code domain's decide answers a plan its rows no longer
 // hold.

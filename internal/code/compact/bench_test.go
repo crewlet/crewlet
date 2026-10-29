@@ -1326,6 +1326,10 @@ func (pagedListing) Compact(context.Context, code.CompactionProposal) (code.Comp
 	return code.CompactResult{}, errors.New("a pass over repositories none of which is due proposed a compaction")
 }
 
+func (pagedListing) Expunge(context.Context, code.ExpungeProposal) (code.ExpungeResult, error) {
+	return code.ExpungeResult{}, errors.New("a compaction's pass proposed an expunge record")
+}
+
 // unreached is a compactor's cache that a pass over repositories none of which
 // is due must never reach: every call is counted and refused.
 type unreached struct{ calls atomic.Int64 }
@@ -1338,6 +1342,11 @@ func (u *unreached) Sync(context.Context, string, statelog.Freshness) (cache.Syn
 }
 
 func (u *unreached) Packs(cache.Synced) []code.PackRow {
+	u.calls.Add(1)
+	return nil
+}
+
+func (u *unreached) DroppingPacks(cache.Synced) []code.PackRow {
 	u.calls.Add(1)
 	return nil
 }
@@ -1366,12 +1375,27 @@ func (u *unreached) AdmitPublication(cache.Synced, int64, int64, code.Limits) (*
 	return nil, errUnreached
 }
 
+func (u *unreached) AdmitExpunge(cache.Synced, int64, code.Limits) (*cache.Admission, error) {
+	u.calls.Add(1)
+	return nil, errUnreached
+}
+
 func (u *unreached) NewMergeScratch(context.Context, cache.Synced, string, []string) (*cache.Scratch, error) {
 	u.calls.Add(1)
 	return nil, errUnreached
 }
 
 func (u *unreached) NewLayerScratch(context.Context, cache.Synced, string, int) (*cache.Scratch, error) {
+	u.calls.Add(1)
+	return nil, errUnreached
+}
+
+func (u *unreached) StageExpunge(context.Context, cache.Synced, string, []string) (*cache.Scratch, error) {
+	u.calls.Add(1)
+	return nil, errUnreached
+}
+
+func (u *unreached) StageRescue(context.Context, cache.Synced, string) (*cache.Scratch, error) {
 	u.calls.Add(1)
 	return nil, errUnreached
 }

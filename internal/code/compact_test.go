@@ -775,19 +775,22 @@ func TestTheDueListingIsMostPacksFirst(t *testing.T) {
 }
 
 // A DUTY LISTING NAMES NO ASKER: the compactor's `compaction_due` read, the
-// publisher's `publication_due` read and the maintainer's `expunge_due` read
-// are the engine's own, so the domain refuses each with an asker — the one
-// place every surface a principal reads the code host through meets — answers
-// it with none, and still refuses a principal's read that names none; and each
-// takes nothing its listing does not read.
+// publisher's `publication_due` read, and the maintainer's `expunge_due` read
+// and its `expunge_tips` read of a repository's ref drops are the engine's
+// own, so the domain refuses each with an asker — the one place every surface
+// a principal reads the code host through meets — answers it with none, and
+// still refuses a principal's read that names none; and each takes nothing its
+// listing does not read.
 //
 // Mutation: accept an asker on any duty listing, and a principal's read could
-// list every repository's packs past its grant.
+// list every repository's packs past its grant — or the objects a
+// repository's history left behind.
 func TestADutyListingNamesNoAsker(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
-	n.ensure("web", suiteSettings(), t1)
+	web := n.ensure("web", suiteSettings(), t1).RepoID
 	stale := statelog.Freshness{Level: statelog.ReadStale}
+	tips := &code.ExpungeTipsQuery{RepoID: web, Since: harnessAt}
 	for name, tc := range map[string]struct {
 		q     code.ReadQuery
 		field string
@@ -812,9 +815,23 @@ func TestADutyListingNamesNoAsker(t *testing.T) {
 			Fresh: stale}, "min_packs"},
 		"an expunge listing naming a limit": {code.ReadQuery{Kind: code.ReadExpungeDue, Limit: 5,
 			Fresh: stale}, "limit"},
+		"a tips read naming an asker": {code.ReadQuery{Kind: code.ReadExpungeTips, ExpungeTips: tips,
+			Asker: asker, Fresh: stale}, "asker"},
+		"a tips read naming no repository": {code.ReadQuery{Kind: code.ReadExpungeTips, Fresh: stale},
+			"expunge_tips"},
+		"a tips read naming no instant": {code.ReadQuery{Kind: code.ReadExpungeTips,
+			ExpungeTips: &code.ExpungeTipsQuery{RepoID: web}, Fresh: stale}, "expunge_tips.since"},
+		"a tips read naming a limit": {code.ReadQuery{Kind: code.ReadExpungeTips, ExpungeTips: tips, Limit: 5,
+			Fresh: stale}, "limit"},
+		"a tips read naming a repository by name": {code.ReadQuery{Kind: code.ReadExpungeTips, ExpungeTips: tips,
+			Repo: "web", Fresh: stale}, "repo"},
+		"an expunge listing naming tips": {code.ReadQuery{Kind: code.ReadExpungeDue, ExpungeTips: tips,
+			Fresh: stale}, "expunge_tips"},
 		"a principal's listing naming no asker": {code.ReadQuery{Kind: code.ReadRepos, Fresh: stale}, "asker"},
 		"a principal's listing naming a floor": {code.ReadQuery{Kind: code.ReadRepos, Asker: asker, MinPacks: 1,
 			Fresh: stale}, "min_packs"},
+		"a principal's listing naming tips": {code.ReadQuery{Kind: code.ReadRepos, Asker: asker, ExpungeTips: tips,
+			Fresh: stale}, "expunge_tips"},
 	} {
 		if _, err := n.reader.Read(t.Context(), tc.q); !errors.Is(err, code.ErrInvalid) ||
 			!strings.Contains(err.Error(), tc.field+":") {
@@ -825,6 +842,7 @@ func TestADutyListingNamesNoAsker(t *testing.T) {
 		{Kind: code.ReadCompactionDue, MinPacks: 1, Fresh: stale},
 		{Kind: code.ReadPublicationDue, Fresh: stale},
 		{Kind: code.ReadExpungeDue, Fresh: stale},
+		{Kind: code.ReadExpungeTips, ExpungeTips: tips, Fresh: stale},
 	} {
 		if _, err := n.reader.Read(t.Context(), q); err != nil {
 			t.Fatalf("a %s listing naming no asker: %v", q.Kind, err)

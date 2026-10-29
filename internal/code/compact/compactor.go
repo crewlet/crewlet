@@ -29,15 +29,17 @@ import (
 // minute's three hundred (doc.go's Measured).
 const Poll = time.Minute
 
-// Estate is the code log as the compactor reaches it: the due listings through
-// Read, and the proposal — a compaction's, or a publication's, which is a
-// compaction carrying a layer — through Compact. The router's code seam
-// satisfies it (estate.CodeSeam), its Compact raising this node's floors past
-// the record a compaction landed in, so the next listing and the adoption's
-// sync see it on whichever data node answers them.
+// Estate is the code log as the compactor reaches it: the due listings and an
+// expunge's tips through Read; the proposal — a compaction's, or a
+// publication's, which is a compaction carrying a layer — through Compact; and
+// an expunge's begin and commit through Expunge. The router's code seam
+// satisfies it (estate.CodeSeam), its Compact and its Expunge raising this
+// node's floors past the record they landed in, so the next listing and the
+// sync after it see it on whichever data node answers them.
 type Estate interface {
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
 	Compact(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error)
+	Expunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error)
 }
 
 // Maintainers answers which of many repositories this node MAINTAINS, each
@@ -90,25 +92,31 @@ type Uploader interface {
 
 // Cache is the node's git cache as the compactor reaches it — the
 // *cache.Cache satisfies it: the repository synced and pinned, its live packs
-// and its published chain as the copy holds it for the plans, the charge a
-// publication is placed by, the repositories whose copy holds a layer this
-// node refused, each build's admission to the maintenance lane, the scratch it
-// writes into — a merge's, a compaction's or a publication's repack, leaning
-// on a store of exactly the packs it merges, linked from the incarnation, and
-// a layer's linking the incarnation and gathering its repack's outputs, either
-// way pinning it — and the adoption of what it built once its rows have
-// applied.
+// — and its dropping ones — and its published chain as the copy holds it for
+// the plans, the charge a publication is placed by, the repositories whose
+// copy holds a layer this node refused, each build's admission to the
+// maintenance lane, the scratch it writes into — a merge's, a compaction's or
+// a publication's repack, leaning on a store of exactly the packs it merges,
+// linked from the incarnation; a layer's linking the incarnation and gathering
+// its repack's outputs; an expunge's holding its inputs and leaning on a store
+// of every other live pack; a rescue's holding the dropping packs and leaning
+// on the incarnation — every one pinning it — and the adoption of what it
+// built once its rows have applied.
 type Cache interface {
 	Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error)
 	Packs(s cache.Synced) []code.PackRow
+	DroppingPacks(s cache.Synced) []code.PackRow
 	Chain(s cache.Synced) cache.Chain
 	PublishCharge(objects int64) int64
 	Damaged() []code.RepoRef
 	AdmitCompaction(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error)
 	AdmitPublication(s cache.Synced, layerObjects, repackObjects int64, limits code.Limits) (*cache.Admission,
 		error)
+	AdmitExpunge(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error)
 	NewMergeScratch(ctx context.Context, s cache.Synced, id string, packs []string) (*cache.Scratch, error)
 	NewLayerScratch(ctx context.Context, s cache.Synced, id string, base int) (*cache.Scratch, error)
+	StageExpunge(ctx context.Context, s cache.Synced, id string, inputs []string) (*cache.Scratch, error)
+	StageRescue(ctx context.Context, s cache.Synced, id string) (*cache.Scratch, error)
 	Adopt(ctx context.Context, repoID string, sc *cache.Scratch, packs ...code.PackRef) error
 	AdoptLayer(ctx context.Context, repoID string, sc *cache.Scratch, row code.LayerRef) error
 }
@@ -142,17 +150,19 @@ type Options struct {
 var ErrOptions = errors.New("compact: refused options")
 
 // errClaimed is a compaction of a repository whose publication on this node
-// has not planned yet, or a publication of one whose compaction is running on
-// this node ([Compactor.claimCompaction], [Compactor.claimPublication]): busy,
-// and planned again at the next pass.
+// has not planned yet, a publication of one whose compaction is running on
+// this node, either of them while an expunge of the repository runs here, or
+// an expunge while any build of it does ([Compactor.claimCompaction],
+// [Compactor.claimPublication], [Compactor.claimExpunge]): busy, and planned
+// again at the next pass.
 var errClaimed = errors.New("compact: the repository's other build on this node leaves this one no plan yet")
 
-// Outcome is what became of one compaction or publication this node planned
-// ([Compactor.Compact], [Compactor.Publish]).
+// Outcome is what became of one compaction, publication or expunge this node
+// planned ([Compactor.Compact], [Compactor.Publish], [Compactor.Expunge]).
 type Outcome string
 
-// The outcomes, each counted crewlet.code.compact.runs{outcome} or
-// crewlet.code.publish.runs{outcome}.
+// The outcomes, each counted crewlet.code.compact.runs{outcome},
+// crewlet.code.publish.runs{outcome} or crewlet.code.expunge.runs{outcome}.
 const (
 	// OutcomeApplied: its record applied, and its outputs replaced its
 	// inputs in the rows — and a publication's layer the top of its chain.
@@ -224,13 +234,14 @@ type PollReport struct {
 	Behind                                              []string
 }
 
-// loop is one of the compactor's two loops, by what a full store holds back of
-// it.
+// loop is one of the compactor's three loops, by what a full store holds back
+// of it.
 type loop int
 
 const (
 	compactionLoop loop = iota
 	publicationLoop
+	expungeLoop
 	loops
 )
 
@@ -246,13 +257,16 @@ type holds struct {
 }
 
 // Compactor is one git node's maintenance of the repositories it MAINTAINS:
-// two loops, each a pass every minute — COMPACTION, which merges a
-// repository's small packs ([Compactor.Poll]), and PUBLICATION, which writes
-// its next published layer ([Compactor.PublishPass]) — so a publication of a
-// large repository, minutes of its build, never delays a compaction that keeps
-// a hot repository under the pack bound, that repository's own included. Each
-// runs one build at a time, and a compaction never merges a pack a
-// publication of its repository in flight on this node planned over.
+// three loops, each a pass every minute — COMPACTION, which merges a
+// repository's small packs ([Compactor.Poll]); PUBLICATION, which writes its
+// next published layer ([Compactor.PublishPass]); and EXPUNGE, which drops what
+// no ref reaches when a person asks ([Compactor.ExpungePass]) — so a
+// publication of a large repository, minutes of its build, never delays a
+// compaction that keeps a hot repository under the pack bound, that
+// repository's own included, and neither delays a purge. Each runs one build
+// at a time; a compaction never merges a pack a publication of its repository
+// in flight on this node planned over, and an expunge rewrites a repository
+// with no other build of it on this node.
 type Compactor struct {
 	o   Options
 	log *slog.Logger
@@ -268,11 +282,12 @@ type Compactor struct {
 	// (export_test.go).
 	runBuild func(ctx context.Context, adm *cache.Admission, cmd gitproc.Cmd) (gitproc.Result, error)
 
-	// compacting and publishing are each held for one build's whole length:
-	// ONE COMPACTION AND ONE PUBLICATION AT A TIME A NODE, because each holds
-	// a maintenance slot and up to its charge of memory for its whole build,
-	// and the maintainer's own runs share that lane.
-	compacting, publishing sync.Mutex
+	// compacting, publishing and expunging are each held for one build's
+	// whole length — an expunge's from its scan to its commit: ONE
+	// COMPACTION, ONE PUBLICATION AND ONE EXPUNGE AT A TIME A NODE, because
+	// each holds a maintenance slot and up to its charge of memory for its
+	// whole build, and the maintainer's own runs share that lane.
+	compacting, publishing, expunging sync.Mutex
 
 	// mu guards the memories, the claims and the reading below.
 	mu sync.Mutex
@@ -280,9 +295,13 @@ type Compactor struct {
 	// and publications every repository a publication of this node is
 	// building, with every pack its plan covers by git checksum — its
 	// RESERVATION, which a compaction of the repository leaves out — nil
-	// until it has planned ([Compactor.claimCompaction]).
+	// until it has planned ([Compactor.claimCompaction]); expunges is every
+	// repository an expunge of this node is running, from its scan to its
+	// commit, beside which neither of the others builds
+	// ([Compactor.claimExpunge]).
 	compactions  map[string]bool
 	publications map[string]map[string]bool
+	expunges     map[string]bool
 	// notDue is every repository a compaction's plan found not due, at the
 	// version and cap it was planned at ([memo]).
 	notDue map[string]memo
@@ -305,6 +324,10 @@ type Compactor struct {
 	// publication's repack, alike — halved at each failure and floored at
 	// its two lightest inputs, kept for the compactor's life.
 	caps map[string]int64
+	// expungeCaps is the same of an expunge's builds, whose inputs a full
+	// pack may be among and whose cap is its own ([ExpungeInputByteCap]),
+	// floored at its lightest input.
+	expungeCaps map[string]int64
 	// held is what a full object store holds back of each loop.
 	held [loops]holds
 	// behind is the last compaction pass's repositories this node maintains
@@ -377,9 +400,10 @@ func New(o Options) (*Compactor, error) {
 		return nil, fmt.Errorf("%w: %s missing", ErrOptions, strings.Join(missing, ", "))
 	}
 	c := &Compactor{o: o, log: o.Logger, now: o.Now, bounds: production, runBuild: runInSlot,
-		compactions: map[string]bool{}, publications: map[string]map[string]bool{}, notDue: map[string]memo{},
-		nothing: map[string]statelog.Position{}, built: map[string]lastBuild{}, tails: map[string]time.Time{},
-		caps: map[string]int64{}, done: make(chan struct{})}
+		compactions: map[string]bool{}, publications: map[string]map[string]bool{}, expunges: map[string]bool{},
+		notDue: map[string]memo{}, nothing: map[string]statelog.Position{}, built: map[string]lastBuild{},
+		tails: map[string]time.Time{}, caps: map[string]int64{}, expungeCaps: map[string]int64{},
+		done: make(chan struct{})}
 	for i := range c.held {
 		c.held[i].repos = map[string]int64{}
 	}
@@ -398,12 +422,13 @@ func runInSlot(ctx context.Context, adm *cache.Admission, cmd gitproc.Cmd) (gitp
 	return adm.Run(ctx, cmd)
 }
 
-// Start runs both loops, each on a goroutine of its own, until
+// Start runs the three loops, each on a goroutine of its own, until
 // [Compactor.Stop]: a pass of each AT ONCE once this node is LISTED among the
 // git nodes ([Compactor.awaitListed]) — so a node that comes up beside a
 // repository at the pack bound starts merging it, and names it in its alarm
-// reading, at the first listing that can place it rather than a minute later
-// — and then one every [Poll] and every [PublishPoll]. The pass at once holds
+// reading, at the first listing that can place it rather than a minute later,
+// and one that comes up beside an expunge a crash left open finishes it —
+// and then one every [Poll], every [PublishPoll] and every [ExpungePoll]. The pass at once holds
 // only where its seams answer from the start: its listings go through Estate,
 // which this node's own copy answers through the runtime it joins, so its
 // caller starts it once that runtime is published (the engine's, with the
@@ -419,13 +444,17 @@ func (c *Compactor) Start() {
 	c.started = true
 	c.mu.Unlock()
 	var running sync.WaitGroup
-	running.Add(2)
+	running.Add(3)
 	go c.loop(&running, Poll, "code_compaction_pass_failed", func(ctx context.Context) error {
 		_, err := c.Poll(ctx)
 		return err
 	})
 	go c.loop(&running, PublishPoll, "code_publication_pass_failed", func(ctx context.Context) error {
 		_, err := c.PublishPass(ctx)
+		return err
+	})
+	go c.loop(&running, ExpungePoll, "code_expunge_pass_failed", func(ctx context.Context) error {
+		_, err := c.ExpungePass(ctx)
 		return err
 	})
 	go func() {
@@ -486,7 +515,7 @@ func (c *Compactor) awaitListed() bool {
 	}
 }
 
-// Stop ends both loops and the builds in flight — each killed, its uploads
+// Stop ends the loops and the builds in flight — each killed, its uploads
 // abandoned, its proposal cancelled: an output or a part already stored and
 // named by no row is the collector's, and a proposal its committer decided
 // lands in the rows whatever this node does — and waits for them to end,
@@ -532,11 +561,14 @@ func (c *Compactor) Stop(ctx context.Context) {
 // base the store lost, a tail git could not bitmap) adds to the reservation
 // only packs a layer of the chain names, which the compaction's plan leaves
 // out already, so the reservation handed here holds for its whole length.
+//
+// REFUSED WHILE AN EXPUNGE OF THE REPOSITORY RUNS HERE, from its scan to its
+// commit ([Compactor.claimExpunge]).
 func (c *Compactor) claimCompaction(repoID string) (reserved map[string]bool, ok bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	held, publishing := c.publications[repoID]
-	if c.compactions[repoID] || (publishing && held == nil) {
+	if c.compactions[repoID] || (publishing && held == nil) || c.expunges[repoID] {
 		return nil, false
 	}
 	c.compactions[repoID] = true
@@ -559,11 +591,12 @@ func (c *Compactor) unclaimCompaction(repoID string) {
 // merge's inputs, live as of it, so whichever record landed second would be
 // refused stale — the publication's after its whole build. A merge is bounded
 // by what it merges, seconds at a busy repository's rate, so the next pass
-// finds it done.
+// finds it done. And it waits for an expunge of the repository running here
+// ([Compactor.claimExpunge]).
 func (c *Compactor) claimPublication(repoID string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, publishing := c.publications[repoID]; publishing || c.compactions[repoID] {
+	if _, publishing := c.publications[repoID]; publishing || c.compactions[repoID] || c.expunges[repoID] {
 		return false
 	}
 	c.publications[repoID] = nil
@@ -592,6 +625,38 @@ func (c *Compactor) unclaimPublication(repoID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.publications, repoID)
+}
+
+// claimExpunge reports whether this node may expunge repoID now — no
+// compaction, publication or other expunge of it building here — and takes the
+// repository until [Compactor.unclaimExpunge], which neither of the other two
+// claims while it holds it ([Compactor.claimCompaction],
+// [Compactor.claimPublication]).
+//
+// THE WHOLE REPOSITORY, FROM ITS SCAN TO ITS COMMIT — one rewrite of a
+// repository at a time on its maintainer, never a reservation of packs as a
+// publication's is: a begin retires every input its scan chose among the live
+// packs, full and published ones included, and drops every published layer
+// over them, so a merge planned beside it could take one of its inputs, and a
+// layer planned beside it would name one or sit over a layer the begin drops
+// — either refusing the begin stale after its whole build, or itself. So a
+// repository's merges wait on this node for the length of one cycle, at the
+// rate a person asks a purge: a cycle or two a request.
+func (c *Compactor) claimExpunge(repoID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, publishing := c.publications[repoID]; publishing || c.compactions[repoID] || c.expunges[repoID] {
+		return false
+	}
+	c.expunges[repoID] = true
+	return true
+}
+
+// unclaimExpunge gives repoID's expunge back.
+func (c *Compactor) unclaimExpunge(repoID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.expunges, repoID)
 }
 
 // AlarmReading fills the reading's compaction half from the last pass: how

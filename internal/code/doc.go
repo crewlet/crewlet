@@ -1187,7 +1187,12 @@
 // live packs is decided as ever. The repository's maintainer finds the
 // expunges it owes by the [ReadExpungeDue] listing — the active and archived
 // repositories with an expunge open or a request waiting, by id, one walk of
-// code_repos_expunging_idx (replicated 0064), the engine's own read. Its
+// code_repos_expunging_idx (replicated 0064), the engine's own read — and
+// reads what a cycle keeps beside the refs by the [ReadExpungeTips] read: the
+// objects the repository's ref drops left since an instant, one covering seek
+// of code_ref_drops' key, which replicated 0061 led with the instant for it;
+// the grace an expunge keeps is the instant's distance from its scan, none for
+// a purge (internal/code/compact builds and sorts the packs). Its
 // bounds: at most [MaxExpungeInputs] inputs and [MaxExpungeOutputs] outputs a
 // begin, so its record writes at most 2 625 rows (expungeBeginRows), the
 // widest record of the domain, held to the third of

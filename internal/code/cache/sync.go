@@ -1759,7 +1759,7 @@ func applyDelta(inc *incarnation, snap snapshot) {
 		}
 	}
 	for _, p := range snap.packs {
-		setLive(inc, p.PackID, liveOf(p.Ref(), p.State))
+		setLive(inc, p.PackID, liveRow(p))
 	}
 	for _, r := range snap.retired {
 		if r.Part != "pack" {

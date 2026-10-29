@@ -715,18 +715,27 @@ func (t tailCount) covers() Covers {
 	return Covers{Packs: t.packs, Objects: t.objects, DiskBytes: t.bytes}
 }
 
-// livePack is one row of the live set as the swap and a compaction's plan
+// livePack is one row of the live set as the swap and a maintainer's plans
 // read it: the checksum its files are named by, the bundle's bytes and its two
 // indexes' — what tells its pack section, and whether the pack is FULL
 // (code.PackRow.Full), which a plan never merges ([Cache.Packs]) — the objects
-// its row counts, and whether an expunge's begin left the row dropping. A pack
-// id names one bundle for ever — a row is never rewritten — so two rows of one
-// checksum carry the same figures. The row's object key and hash are not kept:
-// nothing that reads the set fetches by them, and the set lives in every
-// incarnation the node holds.
+// its row counts, the position its content dates from as a purge reads it
+// (code.PackRow.Content), and whether an expunge's begin left the row
+// dropping. A pack id names one bundle for ever — a row is never rewritten —
+// so two rows of one checksum carry the same figures. The row's object key and
+// hash are not kept: nothing that reads the set fetches by them, and the set
+// lives in every incarnation the node holds.
 type livePack struct {
 	checksum                                string
 	size, indexBytes, reverseBytes, objects int64
+	// content is the row's code.PackRow.Content, packed — what a purge's
+	// cycle chooses its inputs by (internal/code/compact) — and 0 where the
+	// set does not know it yet: an ADOPTED pack, whose row the adopting
+	// caller names by its bundle alone (code.PackRef carries no position),
+	// until a round serves the row (setLive learns it there). Zero reads as
+	// content older than every request, so a pack whose date is not known is
+	// one a purge's cycle rewrites rather than one it passes over.
+	content int64
 	// dropping: the row is one an expunge's begin left dropping
 	// (code.PackDropping), whose files the incarnation keeps in its dropping
 	// view while no live row names the same checksum (placeOf).
@@ -736,18 +745,31 @@ type livePack struct {
 // liveOf is p, a row in state, as the live set keeps it: dropping exactly
 // where state is code.PackDropping — the one state of a row the cache keeps
 // out of objects/pack (read.go's checkPack refuses a state this build does
-// not know).
+// not know) — and its content's date unknown ([livePack.content]).
 func liveOf(p code.PackRef, state code.PackState) livePack {
 	return livePack{checksum: p.GitChecksum, size: p.Size, indexBytes: p.IndexBytes, reverseBytes: p.ReverseBytes,
 		objects: p.Objects, dropping: state == code.PackDropping}
 }
 
+// liveRow is a snapshot's row p as the live set keeps it: [liveOf], with the
+// date its content is from.
+func liveRow(p code.PackRow) livePack {
+	lp := liveOf(p.Ref(), p.State)
+	lp.content = p.Content.Packed()
+	return lp
+}
+
 // row is p, named id, as a plan reads it ([Cache.Packs]): every figure the
-// live set keeps, and nothing a snapshot's row carries beside them — its
-// object, its part, its kind, its state and its position stay zero.
+// live set keeps — its content's date zero where the set does not know it —
+// and nothing a snapshot's row carries beside them: its object, its part, its
+// kind, its state and the position it was added at stay zero.
 func (p livePack) row(id string) code.PackRow {
-	return code.PackRow{PackID: id, Size: p.size, IndexBytes: p.indexBytes, ReverseBytes: p.reverseBytes,
+	r := code.PackRow{PackID: id, Size: p.size, IndexBytes: p.indexBytes, ReverseBytes: p.reverseBytes,
 		GitChecksum: p.checksum, Objects: p.objects}
+	if p.content != 0 {
+		r.Content = pos(p.content)
+	}
+	return r
 }
 
 // checksumRows is the live set's rows naming one git checksum: how many, and
@@ -810,10 +832,17 @@ type leaveKey struct {
 
 // setLive records the row id names, whose files are p's, as a row of inc's
 // live set; e.mu is held. A row already there is left as it is — a pack
-// adopted and then served by the next delta is one row — and a pack a row
-// names again where it lies is no longer leaving from there.
+// adopted and then served by the next delta is one row — but for the date its
+// content is from, which the row it was adopted under did not say and the
+// snapshot's does ([livePack.content]): a row is never rewritten, so a date
+// once known is the row's for good, and one the set learns is never wrong.
+// A pack a row names again where it lies is no longer leaving from there.
 func setLive(inc *incarnation, id string, p livePack) {
-	if _, ok := inc.live[id]; ok {
+	if held, ok := inc.live[id]; ok {
+		if held.content == 0 && p.content != 0 {
+			held.content = p.content
+			inc.live[id] = held
+		}
 		return
 	}
 	if inc.live == nil {
@@ -917,7 +946,7 @@ func liveWhole(inc *incarnation, packs map[packKey]code.PackRow) {
 	inc.byChecksum = make(map[string]checksumRows, len(packs))
 	inc.tail, inc.droppingPacks = tailCount{}, 0
 	for _, p := range packs {
-		setLive(inc, p.PackID, liveOf(p.Ref(), p.State))
+		setLive(inc, p.PackID, liveRow(p))
 	}
 }
 

@@ -132,7 +132,7 @@ func (x *fixture) candidate() code.CompactionCandidate {
 }
 
 // served is the data node's code half as a compactor reaches it: its reads,
-// and its committer's decide of a compaction.
+// and its committer's decide of a compaction and of an expunge's records.
 type served struct{ f *codetest.SoloFleet }
 
 func (s served) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
@@ -141,6 +141,10 @@ func (s served) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, er
 
 func (s served) Compact(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error) {
 	return s.f.Data().Served().ProposeCompaction(ctx, p)
+}
+
+func (s served) Expunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+	return s.f.Data().Served().ProposeExpunge(ctx, p)
 }
 
 // maintainers answers every question of which repositories this node

@@ -118,10 +118,21 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	if got := codefault.WritePath(); !slices.Equal(got, writePoints) {
 		t.Fatalf("WritePath() = %v\nwant the order an engine write reaches them: %v", got, writePoints)
 	}
+	// An expunge's crash matrix walks ExpungePath(), its order a claim as
+	// the others are.
+	expungePoints := []codefault.Point{
+		codefault.ExpungeAfterBuild,        // kept and dropping packs written in the scratch, nothing stored
+		codefault.ExpungeAfterBegin,        // the begin applied, the rescue not started
+		codefault.ExpungeAfterRescueUpload, // every rescue pack stored, the commit not proposed
+		codefault.ExpungeAfterCommit,       // the commit answered, its rescue not adopted
+	}
+	if got := codefault.ExpungePath(); !slices.Equal(got, expungePoints) {
+		t.Fatalf("ExpungePath() = %v\nwant the order an expunge reaches them: %v", got, expungePoints)
+	}
 	if got, wantAll := codefault.Points(), slices.Concat(want, syncPoints, compactPoints, publishPoints,
-		[]codefault.Point{codefault.WriteAfterBuild}); !slices.Equal(got, wantAll) {
+		[]codefault.Point{codefault.WriteAfterBuild}, expungePoints); !slices.Equal(got, wantAll) {
 		t.Fatalf("Points() = %v\nwant the push path, then the sync's, the compaction's and the publication's, "+
-			"then the write's own: %v",
+			"then the write's own, then the expunge's: %v",
 			got, wantAll)
 	}
 
@@ -151,11 +162,14 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	publications[0] = "host.nope"
 	writes := codefault.WritePath()
 	writes[0], writes[1] = "host.nope", "host.nope"
+	expunges := codefault.ExpungePath()
+	expunges[0] = "host.nope"
 	all := codefault.Points()
 	all[0] = "host.nope"
 	if codefault.PushPath()[0] != codefault.HostAfterCommands || codefault.Points()[0] != codefault.HostAfterCommands ||
 		codefault.CompactPath()[0] != codefault.CompactAfterBuild ||
 		codefault.PublishPath()[0] != codefault.PublishAfterBuild || codefault.WritePath()[0] != codefault.WriteAfterBuild ||
+		codefault.ExpungePath()[0] != codefault.ExpungeAfterBuild ||
 		codefault.WritePath()[1] != codefault.HostUpload || codefault.PushPath()[4] != codefault.HostUpload {
 		t.Fatal("rewriting a returned list changed the next call's")
 	}

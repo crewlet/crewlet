@@ -1,5 +1,7 @@
-// Package compact keeps a repository's pack count bounded and its bitmap
-// published: the MAINTAINER's two loops (ADR-0060, ADR-0061).
+// Package compact keeps a repository's pack count bounded, its bitmap
+// published and what no ref reaches dropped when a person asks: the
+// MAINTAINER's three loops (ADR-0060, ADR-0061, and the expunge's two records
+// that internal/code decides).
 //
 // Every push stores one pack, so a busy repository's pack count grows with
 // its pushes, and every cold sync then pays a GET a pack and every request a
@@ -33,27 +35,35 @@
 //     parts (code.StoreLayer) and proposes it as one compaction carrying the
 //     layer, which every git node then installs (internal/code/cache's
 //     layers.go).
+//   - THE EXPUNGE LOOP ([Compactor.ExpungePass]): on every [ExpungePoll] it
+//     lists the repositories with an expunge open or a person's purge
+//     requested (`expunge_due`), and for each it maintains runs ONE CYCLE
+//     ([Compactor.Expunge]) — finishing an expunge left open from its rows,
+//     or serving the purge from its scan to its commit (# The expunge, below).
 //
-// # Who maintains, and why one node does both
+// # Who maintains, and why one node does all three
 //
 // The MAINTAINER is the first git node of the repository's rendezvous order
 // whose ADVERTISED background budget holds the publication's charge — the
 // bitmap over the whole history, cache.Cache.PublishCharge — and the home
 // where none can (internal/estate's Router.Maintainer): on a fleet of alike
 // nodes it is the home, and on a fleet with one large git node every
-// repository only that node can publish is maintained there. Both loops ask by
-// the same charge, so the two writers of a repository's packs run on ONE node,
-// and on that node a compaction NEVER MERGES A PACK A PUBLICATION IN FLIGHT
-// PLANNED OVER ([Compactor.claimCompaction]): once a publication has planned,
-// it reserves every pack its layer will name, its repack's inputs among them,
-// and a compaction of the repository merges beside it the packs pushed since,
-// which the layer neither names nor needs (the decide's rules 2, 6c and 6d),
-// so both records apply in either order. Until the publication has planned —
-// its sync and its plan, seconds — a compaction of its repository answers
-// busy, and a publication asked while a compaction of its repository runs
-// answers busy itself, since its plan would cover that merge's inputs: either
-// way round, one of the two would otherwise be refused stale after its whole
-// build. There is no lease and no epoch:
+// repository only that node can publish is maintained there. All three loops
+// ask by the same charge, so the three writers of a repository's packs run on
+// ONE node, and on that node a compaction NEVER MERGES A PACK A PUBLICATION IN
+// FLIGHT PLANNED OVER ([Compactor.claimCompaction]): once a publication has
+// planned, it reserves every pack its layer will name, its repack's inputs
+// among them, and a compaction of the repository merges beside it the packs
+// pushed since, which the layer neither names nor needs (the decide's rules
+// 2, 6c and 6d), so both records apply in either order. Until the publication
+// has planned — its sync and its plan, seconds — a compaction of its
+// repository answers busy, and a publication asked while a compaction of its
+// repository runs answers busy itself, since its plan would cover that
+// merge's inputs: either way round, one of the two would otherwise be refused
+// stale after its whole build. An EXPUNGE holds the whole repository from its
+// scan to its commit, and neither of the others builds beside it
+// ([Compactor.claimExpunge]): its begin retires inputs chosen among every live
+// pack and drops every layer published over them. No lease and no epoch:
 // two nodes whose presence views disagree for a moment may both build, and the
 // committer refuses the second `stale`, one wasted build. Each pass judges
 // every listed repository it must against ONE LISTING of who serves git and
@@ -222,6 +232,74 @@
 // layer (ADR-0061), so every node serves in own mode until each repository's
 // maintainer publishes again. None of this alarms: a lost layer costs a
 // publication, never data.
+//
+// # The expunge
+//
+// An EXPUNGE drops what no ref reaches, in the two records internal/code
+// decides on the repository's subject — its BEGIN, which rewrites some live
+// packs into KEPT packs (live) and DROPPING ones and moves the repository's
+// drop epoch, and its COMMIT, which retires the dropping packs and keeps a
+// RESCUE of them live — and a person asks for one with a third, a purge
+// REQUEST, which the maintainer serves. A request is what begins a cycle, and
+// its grace is none: a purge keeps no object a force-push or a deletion left
+// behind. An expunge open with no request — one keeping code.PruneGrace — is
+// finished with that grace.
+//
+// THE SCAN is the copy's refs — its packed-refs as a scratch links it, one
+// moment's with the packs the scratch holds — and the drops the grace keeps
+// (the `expunge_tips` read; none for a purge), and its INPUTS the live packs
+// whose content dates from before the request (code.PackRow.Content), every
+// row of each file together, oldest first and capped at
+// code.MaxExpungeInputs rows and [ExpungeInputByteCap] of the cut: a FULL pack
+// and a pack a published layer names among them, since what a purge drops may
+// lie in any pack, and the layers over them dropped with the begin
+// (code.LayersOver, the decide's own reading). A pack pushed after the
+// request is no input, so a purge of a busy repository rewrites what it was
+// asked about and nothing pushed since.
+//
+// THE BUILD SORTS, never judges a record: in a scratch whose OWN packs are the
+// inputs and whose one alternate is a store of every other live pack
+// (cache.Cache.StageExpunge), `pack-objects --revs --local` from every tip
+// packs what a tip reaches of the inputs and of no other pack — the KEPT
+// packs — and `pack-objects --stdin-packs` over the inputs, excluding the kept
+// packs and every pack of the store by name so its name-hash walk stops at
+// their objects, packs the rest — the DROPPING packs. Every object of the
+// inputs is in the kept, the dropping or the store's packs, so to every reader
+// the begin is a merge. A drop's object an earlier purge already took out is
+// no tip — a walk from it would refuse the build — so the drops are held to
+// what the scratch holds first, one `cat-file --batch-check`. An input set the
+// rest holds whole writes neither, and is packed again as dropping alone,
+// which a begin must name one output of. The builds are admitted at a
+// publication's repack's charge (cache.Cache.AdmitExpunge): the walk reads the
+// whole history whatever few packs it sorts, and a refused expunge is a purge
+// waiting, never a push refused.
+//
+// THE RESCUE IS VALID AT ANY POSITION AT OR AFTER THE BEGIN, which is what
+// makes a crash resumable from the rows alone. A push checked after the begin
+// relies on no dropping object — its receiver's view of the copy leaves them
+// out — and one checked before it is refused `expunging` by the drop epoch, so
+// the only refs that reach a dropping object at the rescue's sync are ones a
+// push landed between the scan and the begin, and nothing that lands later
+// adds one. So the rescue reads the refs at its own sync — in a scratch whose
+// own packs are the dropping packs and whose alternate is the copy's live
+// packs alone (cache.Cache.StageRescue) — and packs what they reach of the
+// dropping packs alone, `--not` the scan's tips where the cycle still holds
+// them, which bounds its walk to what moved since; resumed, it walks the whole
+// history. A copy whose objects/ still holds the begin's inputs would hide
+// every object the rescue must save, so a rescue over one answers busy and
+// the next pass syncs again (cache.ErrInputsLeaving). The commit's one
+// precondition is its expunge, open at its epoch, so no push starves it. Its
+// crash points are codefault.ExpungePath: a cycle stopped at any of them
+// leaves nothing, an expunge open — which the next pass, on whichever node
+// maintains the repository, finishes from the rows — or an expunge
+// committed; what it stored that no row names is the collector's.
+//
+// WHAT A PURGE LEAVES BEHIND: the commit retires the dropping packs into
+// code_packs_retired, so a reader already on one finishes, and the store
+// deletes their bytes after code.RetireGrace and the collector's grace — the
+// purge's crewlet.code.expunge.dropped_bytes. Nothing of this loop is
+// measured yet: [ExpungePoll] is the listing's, and [ExpungeInputByteCap] the
+// compaction's half of a record's outputs.
 //
 // # What it raises
 //

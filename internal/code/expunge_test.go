@@ -1,6 +1,8 @@
 package code_test
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -12,7 +14,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // AN EXPUNGE THROUGH THE WHOLE PATH: its records proposed to a committer,
@@ -393,5 +398,149 @@ func TestARepositoryMidExpungeIsListedForNoPublication(t *testing.T) {
 	requireExpunged(t, res, err)
 	if !listed() {
 		t.Fatal("once its expunge committed, the repository whose kept pack no layer covers is not listed")
+	}
+}
+
+// seedDropsLeaving writes one ref drop of repoID for each of olds straight
+// into a node's estate, all left by one record — at the packed position on the
+// code log and its broker instant at — the n-th of them dropping
+// refs/heads/dropped-<n>.
+func (n *node) seedDropsLeaving(repoID string, position int64, at time.Time, olds ...string) {
+	n.t.Helper()
+	ctx := n.t.Context()
+	if err := n.db.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := store.InsertRows(ctx, tx, n.db.Caps().MaxVariables,
+			`INSERT INTO code_ref_drops (repo_id, position, ref, old, at) VALUES `, `(?, ?, ?, ?, ?)`, ``,
+			len(olds), func(i int) []any {
+				return []any{repoID, position, fmt.Sprintf("refs/heads/dropped-%06d", i), olds[i],
+					store.EncodeTime(at)}
+			})
+		return err
+	}); err != nil {
+		n.t.Fatalf("seed %s's ref drops: %v", repoID, err)
+	}
+}
+
+// AN EXPUNGE'S TIPS ARE WHAT ITS DROPS LEFT SINCE ITS INSTANT: the
+// `expunge_tips` read answers the object of every ref drop of the repository
+// whose record's broker instant is at or after the one it names — a drop at the
+// instant itself among them, none before it and none of another repository —
+// in the order of the drops' key, each object once a page, paged by a keyset
+// that resumes after the last drop the page read, so every page's drops are
+// read once; a cursor from before the instant is refused, and a repository
+// with no row is not found.
+//
+// Mutation: seek `at > ?` and the drops left at the instant go unread; resume
+// a page after the last drop's position alone, and a page that ends inside a
+// record's drops skips the rest of them.
+func TestAnExpungesTipsAreWhatItsDropsLeftSinceItsInstant(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo := n.ensure("web", suiteSettings(), t1).RepoID
+	other := n.ensure("app", suiteSettings(), t1).RepoID
+	since := harnessAt
+	n.seedDropsLeaving(repo, 1, since.Add(-time.Second), oidOf("before"))
+	n.seedDropsLeaving(repo, 2, since, oidOf("x"), oidOf("y"), oidOf("x"))
+	n.seedDropsLeaving(repo, 3, since.Add(time.Minute), oidOf("z"), oidOf("y"))
+	n.seedDropsLeaving(other, 4, since, oidOf("theirs"))
+	read := func(id, cursor string) (code.ReadAnswer, error) {
+		return n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadExpungeTips,
+			ExpungeTips: &code.ExpungeTipsQuery{RepoID: id, Since: since}, Cursor: cursor,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}})
+	}
+	one, err := read(repo, "")
+	if err != nil {
+		t.Fatalf("the tips: %v", err)
+	}
+	if want := []string{oidOf("x"), oidOf("y"), oidOf("z")}; !slices.Equal(one.Tips, want) || one.Next != "" {
+		t.Fatalf("one page of the tips is %v (next %q), want %v whole: every drop since the instant, each "+
+			"object once", one.Tips, one.Next, want)
+	}
+
+	code.SetPageLimits(n.reader, 2, 1<<20)
+	var tips []string
+	cursor := ""
+	for page := 0; ; page++ {
+		got, err := read(repo, cursor)
+		if err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		tips = append(tips, got.Tips...)
+		if got.Next == "" {
+			break
+		}
+		cursor = got.Next
+	}
+	// Pages of two drops each: (2,x)(2,y), (2,x)(3,z), (3,y) — an object
+	// once a page, and every drop read once.
+	if want := []string{oidOf("x"), oidOf("y"), oidOf("x"), oidOf("z"), oidOf("y")}; !slices.Equal(tips, want) {
+		t.Fatalf("the tips in pages of two are %v, want %v", tips, want)
+	}
+
+	early := fmt.Sprintf("%d:2:%s:refs/heads/dropped-000000", store.EncodeTime(since.Add(-time.Hour)), oidOf("x"))
+	if _, err := read(repo, early); !errors.Is(err, code.ErrBadCursor) {
+		t.Errorf("a cursor from before the instant: %v, want ErrBadCursor", err)
+	}
+	if _, err := read(uuid.NewString(), ""); !errors.Is(err, code.ErrRepoNotFound) {
+		t.Errorf("the tips of a repository with no row: %v, want ErrRepoNotFound", err)
+	}
+}
+
+// AN EXPUNGE IS CHECKED UNSTORED AS IT WILL BE STORED: ValidateUnstored
+// answers what Validate answers once every output's put has filled in its key
+// and digest — a begin and a commit both take, a commit whose rescue's sizes
+// lay out no bundle both refuse — so the maintainer that built one holds it to
+// every rule its committer will before a byte of it is uploaded
+// (internal/code/compact). An output already stored is refused, and so is a
+// request, which stores nothing: Validate is the check of those.
+//
+// Mutation: hold the outputs to Validate as they stand — no key, no digest —
+// and the begin both take is refused unstored.
+func TestAnUnstoredExpungeIsCheckedAsItWillBeStored(t *testing.T) {
+	t.Parallel()
+	seen := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 9}
+	xid := statelog.NewOpID(time.Now(), "")
+	begin := code.ExpungeBegin{RepoID: uuid.NewString(), ExpungeID: xid, Node: "node-a", Seen: seen, DropEpoch: 1,
+		Grace: code.PruneGrace, Retire: sorted(uuid.NewString(), uuid.NewString()),
+		Add:      []code.PackRef{compactOutput(xid, 0, 3, harnessAt)},
+		Dropping: []code.PackRef{compactOutput(xid, 1, 2, harnessAt)}}
+	cid := statelog.NewOpID(time.Now(), "")
+	commit := code.ExpungeCommit{RepoID: begin.RepoID, ExpungeID: xid, CommitID: cid, Node: "node-a", Seen: seen,
+		DropEpoch: 1, Retire: []string{begin.Dropping[0].PackID},
+		Add: []code.PackRef{compactOutput(cid, 0, 1, harnessAt)}}
+	unstored := func(outs []code.PackRef) []code.PackRef {
+		out := slices.Clone(outs)
+		for i := range out {
+			out[i].Object, out[i].Hash = objstore.Key{}, ""
+		}
+		return out
+	}
+	for name, stored := range map[string]code.ExpungeProposal{
+		"a begin": {Begin: &begin}, "a commit": {Commit: &commit},
+	} {
+		if err := stored.Validate(); err != nil {
+			t.Fatalf("%s the case builds is refused stored: %v", name, err)
+		}
+		if err := stored.ValidateUnstored(); !errors.Is(err, code.ErrInvalidProposal) {
+			t.Errorf("ValidateUnstored of %s already stored: %v, want ErrInvalidProposal", name, err)
+		}
+	}
+	b := begin
+	b.Add, b.Dropping = unstored(begin.Add), unstored(begin.Dropping)
+	if err := (code.ExpungeProposal{Begin: &b}).ValidateUnstored(); err != nil {
+		t.Errorf("an unstored begin whose stored form validates: %v", err)
+	}
+	c := commit
+	c.Add = unstored(commit.Add)
+	if err := (code.ExpungeProposal{Commit: &c}).ValidateUnstored(); err != nil {
+		t.Errorf("an unstored commit whose stored form validates: %v", err)
+	}
+	c.Add[0].IndexBytes++
+	if err := (code.ExpungeProposal{Commit: &c}).ValidateUnstored(); !errors.Is(err, code.ErrInvalidProposal) {
+		t.Errorf("an unstored rescue whose sizes lay out no bundle: %v, want ErrInvalidProposal", err)
+	}
+	asked := purgeOf(begin.RepoID)
+	if err := (code.ExpungeProposal{Request: &asked}).ValidateUnstored(); !errors.Is(err, code.ErrInvalidProposal) {
+		t.Errorf("ValidateUnstored of a request: %v, want ErrInvalidProposal", err)
 	}
 }

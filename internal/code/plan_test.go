@@ -868,6 +868,12 @@ func registeredStatements() map[string]statement {
 		"due check heads": {dueCheckChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",
 				"COVERING INDEX " + checksKey + " (repo_id=? AND commit_oid=?)"}},
+		// AN EXPUNGE'S TIPS: a repository's ref drops from an instant, the
+		// key's own covering seek in its order, first and keyset.
+		"expunge tips": {expungeTipsSQL, []any{"repo-1", 100, MaxSnapshotItems},
+			[]string{"COVERING INDEX " + dropsKey + " (repo_id=? AND at>=?)"}},
+		"expunge tips after": {expungeTipsAfterSQL, []any{"repo-1", 100, 3, "refs/heads/x", "abc", MaxSnapshotItems},
+			[]string{"COVERING INDEX " + dropsKey + " (repo_id=? AND at>=?)"}},
 	}
 	return out
 }

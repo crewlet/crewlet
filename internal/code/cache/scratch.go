@@ -507,15 +507,147 @@ func writeRepo(dir string, head []byte, alternate string) error {
 // incarnation at from into the store at store: its .pack, its .rev, and its
 // .idx LAST (bundleOrder), the very inodes the incarnation holds.
 func linkPacks(from, store string, packs []string) error {
+	return linkPacksFrom(from, packRel, store, packs)
+}
+
+// linkPacksFrom hard-links every file of each of packs from the directory rel
+// of the incarnation at from — objects/pack, or its dropping view — into the
+// objects/pack of the repository at to, the .idx LAST (bundleOrder).
+func linkPacksFrom(from, rel, to string, packs []string) error {
 	for _, cs := range packs {
 		for _, ext := range bundleOrder {
-			rel := filepath.Join("objects", "pack", "pack-"+cs+ext)
-			if err := os.Link(filepath.Join(from, rel), filepath.Join(store, rel)); err != nil {
-				return fmt.Errorf("linking a merged pack's %s into its store: %w", ext, err)
+			name := "pack-" + cs + ext
+			if err := os.Link(filepath.Join(from, rel, name), filepath.Join(to, packRel, name)); err != nil {
+				return fmt.Errorf("linking pack-%s's %s from %s: %w", cs, ext, rel, err)
 			}
 		}
 	}
 	return nil
+}
+
+// A REWRITE'S REPOSITORIES (expunge.go): an expunge's build and its rescue
+// each write into a scratch of their own, scratch/<name>.git, whose OWN
+// objects/pack holds the packs whose objects the rewrite sorts — the build's
+// inputs, the rescue's dropping packs — as hard links of the incarnation's,
+// with the incarnation's packed-refs linked beside them: a hard link, so a
+// round that renames a new packed-refs in afterwards leaves the scratch the
+// refs it was made with. What the rewrite must never pack lies in its ONE
+// ALTERNATE, which `pack-objects --local` reads through and never writes: the
+// build's, a merge's store of EVERY OTHER LIVE PACK, linked the same way and
+// registered for the observer as a merge's is (mergeAt); the rescue's, the
+// incarnation's objects/ itself — its live packs alone, never its dropping
+// view, which only a serving process names (gitproc.Cmd.Dropping).
+//
+// MADE UNDER THE ENTRY'S WRITE LOCK, WHOLE: a round installs a pack's files,
+// renames its packed-refs in, and only then records the pack in its live set
+// (sync.go's apply), so a scratch that linked the refs a round had just
+// renamed in and listed the live set before the round recorded the pack would
+// lean on no file holding what those refs reach — a build that dies missing
+// an object, at every pass of a repository pushed to every second. With no
+// round between them, every object the linked refs reach is in a pack the live
+// set lists. pick reads the live set under the entry's mu — the packs the
+// scratch links and, for a build, its store's — and refuses what no rewrite
+// may sort.
+
+// rewritePick is what a rewrite's scratch links: its own packs, by checksum,
+// from where the live set places them (place), and — where the scratch leans
+// on a store rather than the incarnation (leanStore) — the store's packs, from
+// objects/pack.
+type rewritePick struct {
+	local     []string
+	place     packPlace
+	store     []string
+	leanStore bool
+}
+
+// newRewriteScratch makes scratch/<name>.git as pick says, pinning s's
+// incarnation for it — and for the store it leans on, where pick names one —
+// until Remove. A name already there is refused; a scratch that could not be
+// written whole is moved into trash/ with its store, and its pin given back.
+func (c *Cache) newRewriteScratch(ctx context.Context, s Synced, name string,
+	pick func(*incarnation) (rewritePick, error)) (*Scratch, error) {
+
+	if !c.enter() {
+		return nil, ErrStopped
+	}
+	defer c.leave()
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("cache: making %s's scratch for %s: %w", name, s.entry.id, context.Cause(ctx))
+	}
+	e, inc := s.entry, s.inc
+	if err := c.acquireWrite(ctx, e); err != nil {
+		return nil, fmt.Errorf("cache: making %s's scratch for %s: %w", name, e.id, err)
+	}
+	defer c.releaseWrite(e, writeExclusive)
+	e.mu.Lock()
+	if inc.discarded {
+		e.mu.Unlock()
+		return nil, fmt.Errorf("%w: a scratch names a Synced still held, and %s was released and removed",
+			ErrInvalid, s.Dir)
+	}
+	p, err := pick(inc)
+	if err != nil {
+		e.mu.Unlock()
+		return nil, fmt.Errorf("%w: %s's scratch for %s: %w", ErrInvalid, name, e.id, err)
+	}
+	inc.pins++
+	c.used(e, inc)
+	e.mu.Unlock()
+
+	dir := filepath.Join(c.dir, scratchDir, name+".git")
+	if err := os.Mkdir(dir, hostbox.DirMode); err != nil {
+		c.release(e, inc, noReader)
+		if errors.Is(err, fs.ErrExist) {
+			return nil, fmt.Errorf("%w: %s already exists: an id names one scratch, once", ErrInvalid, dir)
+		}
+		return nil, fmt.Errorf("cache: making %s: %w", dir, err)
+	}
+	sc := &Scratch{Dir: dir, Alternate: s.Dir, c: c, e: e, inc: inc}
+	sc.remove = sync.OnceFunc(sc.discard)
+	if p.leanStore {
+		sc.store = filepath.Join(c.dir, scratchDir, mergeStoreName(e.id, name))
+		sc.Alternate = sc.store
+		e.mu.Lock()
+		if e.merges == nil {
+			e.merges = map[string]*incarnation{}
+		}
+		e.merges[sc.store] = inc
+		e.mu.Unlock()
+	}
+	if err := sc.fillRewrite(s.Dir, p); err != nil {
+		sc.Remove()
+		return nil, fmt.Errorf("cache: making %s for %s: %w", dir, e.id, err)
+	}
+	return sc, nil
+}
+
+// fillRewrite writes a rewrite's scratch over the incarnation at from: its
+// store first, where it leans on one; then the scratch, leaning on that store
+// or on the incarnation, its packed-refs linked from the incarnation and its
+// own packs linked from where the live set places them.
+func (s *Scratch) fillRewrite(from string, p rewritePick) error {
+	head, err := os.ReadFile(filepath.Join(from, "HEAD"))
+	if err != nil {
+		return err
+	}
+	if s.store != "" {
+		if err := os.Mkdir(s.store, hostbox.DirMode); err != nil {
+			return err
+		}
+		if err := writeRepo(s.store, head, ""); err != nil {
+			return err
+		}
+		if err := linkPacks(from, s.store, p.store); err != nil {
+			return err
+		}
+	}
+	if err := writeRepo(s.Dir, head, s.Alternate); err != nil {
+		return err
+	}
+	if err := os.Link(filepath.Join(from, "packed-refs"), filepath.Join(s.Dir, "packed-refs")); err != nil {
+		return err
+	}
+	return linkPacksFrom(from, p.place.rel(), s.Dir, p.local)
 }
 
 // Gather links into s, a publication's scratch of links ([Cache.NewLayerScratch]),
@@ -580,6 +712,30 @@ func (s *Scratch) Packs() ([]ScratchPack, error) {
 		}
 		out = append(out, ScratchPack{Path: filepath.Join(packDir, "pack-"+cs+".pack"), Checksum: cs})
 	}
+	return out, nil
+}
+
+// StorePacks is every pack the store the scratch leans on holds, by checksum,
+// sorted — an expunge's rest, which its dropping build excludes by name so
+// its walk stops at their objects (internal/code/compact) — and none for a
+// scratch leaning on its incarnation or on nothing. A pack is present once its
+// .idx is, as [Scratch.Packs] reads one.
+func (s *Scratch) StorePacks() ([]string, error) {
+	if s.store == "" {
+		return nil, nil
+	}
+	packDir := filepath.Join(s.store, packRel)
+	list, err := os.ReadDir(packDir)
+	if err != nil {
+		return nil, fmt.Errorf("cache: listing %s: %w", packDir, err)
+	}
+	var out []string
+	for _, d := range list {
+		if m := packFileName().FindStringSubmatch(d.Name()); m != nil && m[2] == "idx" {
+			out = append(out, m[1])
+		}
+	}
+	slices.Sort(out)
 	return out, nil
 }
 

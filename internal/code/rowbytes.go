@@ -384,6 +384,7 @@ func (c ExpungeCandidate) encodedBytes() int {
 	}
 	return n + field("live_packs", intBytes(c.LivePacks), false) +
 		field("live_bytes", intBytes(c.LiveBytes), false) +
+		field("live_objects", intBytes(c.LiveObjects), false) +
 		field("version", positionBytes(c.Version), false)
 }
 

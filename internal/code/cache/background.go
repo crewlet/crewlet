@@ -12,26 +12,29 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE BACKGROUND WORK A REPOSITORY'S MAINTAINER ASKS OF THE CACHE. Two pieces
-// of whole-repository work run between the maintainer's passes, each on the
-// git node a repository's maintenance is placed on (internal/code/compact): a
-// COMPACTION's build, which merges the repository's small packs, and a
+// THE BACKGROUND WORK A REPOSITORY'S MAINTAINER ASKS OF THE CACHE. Three
+// pieces of whole-repository work run between the maintainer's passes, each on
+// the git node a repository's maintenance is placed on (internal/code/compact):
+// a COMPACTION's build, which merges the repository's small packs; a
 // PUBLICATION's, which writes its next published multi-pack-index layer, the
 // layer's bitmap and its commit-graph layer, repacking the non-full packs the
-// layer gathers first. Each is admitted here to a slot of the node's
-// maintenance lane and to a charge of its background budget — by ONE
-// function, [Cache.admitBackground], since two copies of the slot-and-charge
-// rule are how one of them drifts from the other — and holds both until it
-// lets them go, once its last git process has ended: the uploads, the
-// proposal and the adoption that follow run no git, and holding the lane
-// through an upload the store paces, hours for the largest, would idle the
-// node's maintenance for every other repository. A publication that plans
-// again over the same copy moves its charge in the slot it holds
-// ([Admission.RechargePublication]), held to the same memory rule.
+// layer gathers first; and an EXPUNGE's, which sorts some of its packs into
+// what a ref reaches and what nothing does, and later rescues what a push
+// revived meanwhile. Each is admitted here to a slot of the node's maintenance
+// lane and to a charge of its background budget — by ONE function,
+// [Cache.admitBackground], since copies of the slot-and-charge rule are how
+// one of them drifts from another — and holds both until it lets them go, once
+// its last git process has ended: the uploads, the proposal and the adoption
+// that follow run no git, and holding the lane through an upload the store
+// paces, hours for the largest, would idle the node's maintenance for every
+// other repository. A publication that plans again over the same copy moves
+// its charge in the slot it holds ([Admission.RechargePublication]), held to
+// the same memory rule.
 
 // Admission is one piece of background work's admission to this node's
-// maintenance lane — a compaction's build ([Cache.AdmitCompaction]) or a
-// publication's ([Cache.AdmitPublication]): a maintenance slot reserved
+// maintenance lane — a compaction's build ([Cache.AdmitCompaction]), a
+// publication's ([Cache.AdmitPublication]) or an expunge's
+// ([Cache.AdmitExpunge]): a maintenance slot reserved
 // (gitproc.Reserve) and the work's memory charged against the node's
 // background budget as a RUN of the maintainer's, both held until Release.
 // Background work is held to the maintainer's rules — never the slot the
@@ -67,13 +70,17 @@ type backgroundStep struct {
 	what string
 }
 
-// The two background steps: stepCompactWork a compaction's build, and
-// stepPublishWork a publication's.
+// The three background steps: stepCompactWork a compaction's build,
+// stepPublishWork a publication's, and stepExpungeWork an expunge's build or
+// its rescue — whose refusal a person waits on (a purge) and no alarm stands
+// for, so its line is its own.
 var (
 	stepCompactWork = backgroundStep{bit: stepCompact, name: stepCompactName,
 		line: "code_cache_compaction_refused", what: "compact"}
 	stepPublishWork = backgroundStep{bit: stepPublish, name: stepPublishName,
 		line: "code_cache_maintenance_refused", what: "publish"}
+	stepExpungeWork = backgroundStep{bit: stepExpunge, name: stepExpungeName,
+		line: "code_cache_expunge_refused", what: "expunge"}
 )
 
 // AdmitCompaction admits a compaction of s's repository, merging inputs
@@ -117,6 +124,36 @@ func (c *Cache) AdmitCompaction(s Synced, inputs int64, limits code.Limits) (*Ad
 	}
 	return c.admitBackground(s, stepCompactWork, func(int64) int64 {
 		return chargeOver(inputs, CompactBytesPerObject, inputs) + CompactWindowBytes(limits)
+	})
+}
+
+// AdmitExpunge admits one build of an expunge of s's repository — its kept
+// and dropping packs' builds over inputs objects, or its rescue's over the
+// dropping packs' — or refuses it at once, having started nothing, as
+// [Cache.admitBackground] says, charged at chargeOver(inputs,
+// CompactBytesPerObject, objects) + CompactWindowBytes(limits): a merge's own
+// figure an object of what it sorts, its delta window, and room beside them
+// for a transfer of the WHOLE repository — a publication's repack's charge.
+//
+// THE WHOLE REPOSITORY'S ROOM, NEVER A MERGE'S, because an expunge's build is
+// a walk: `pack-objects --revs` from every tip it keeps reads every commit,
+// tree and blob those reach — the repository's whole history, whichever packs
+// it sorts — as a clone without a bitmap walks it, at the transfer's figure an
+// object (gitproc.TransferBytesPerObject). And its refusal is "slower", as a
+// publication's is, never a compaction's "pushes refused": a purge waits, and
+// no push does. A node whose budget cannot hold the charge is refused it
+// (ErrNoMemory); the expunge is asked again at every pass, and a git node with
+// more memory serves it once it becomes the repository's maintainer.
+//
+// A refusal for memory is logged once an incarnation as
+// code_cache_expunge_refused and counted
+// (crewlet.code.cache.maintenance.refusals, reason memory, step expunge).
+func (c *Cache) AdmitExpunge(s Synced, inputs int64, limits code.Limits) (*Admission, error) {
+	if inputs < 0 {
+		return nil, fmt.Errorf("%w: an expunge sorts %d objects", ErrInvalid, inputs)
+	}
+	return c.admitBackground(s, stepExpungeWork, func(objects int64) int64 {
+		return chargeOver(inputs, CompactBytesPerObject, objects) + CompactWindowBytes(limits)
 	})
 }
 

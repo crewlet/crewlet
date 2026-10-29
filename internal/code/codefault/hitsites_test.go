@@ -23,8 +23,8 @@ const codefaultPath = "github.com/crewlet/crewlet/internal/code/codefault"
 // hitDirs are the directories the points are hit in: the code host's
 // pipeline, its engine write's build among it, and the suite's wrapping
 // publisher that hits the committer's — a push's — the cache, whose sync hits
-// its own, and the compactor, which hits the compaction's and the
-// publication's.
+// its own, and the compactor, which hits the compaction's, the publication's
+// and the expunge's.
 var hitDirs = []string{"internal/code/host", "internal/code/codetest", "internal/code/cache",
 	"internal/code/compact"}
 
@@ -101,7 +101,9 @@ var pointNames = map[string]codefault.Point{
 	"CompactAfterUpload": codefault.CompactAfterUpload, "CompactAfterPropose": codefault.CompactAfterPropose,
 	"PublishAfterBuild": codefault.PublishAfterBuild, "PublishUpload": codefault.PublishUpload,
 	"PublishAfterUpload": codefault.PublishAfterUpload, "PublishAfterPropose": codefault.PublishAfterPropose,
-	"WriteAfterBuild": codefault.WriteAfterBuild,
+	"WriteAfterBuild": codefault.WriteAfterBuild, "ExpungeAfterBuild": codefault.ExpungeAfterBuild,
+	"ExpungeAfterBegin": codefault.ExpungeAfterBegin, "ExpungeAfterRescueUpload": codefault.ExpungeAfterRescueUpload,
+	"ExpungeAfterCommit": codefault.ExpungeAfterCommit,
 }
 
 // byPoint is counts keyed by identifier, read as points.
@@ -125,7 +127,8 @@ func byPoint(t *testing.T, counts map[codefault.Point]int) map[codefault.Point]i
 // A fault point is ONE step, named once: F21 kills the node at every point
 // of PushPath(), C6 the maintainer at every point of CompactPath(), LY10 at
 // every point of PublishPath(), F38 the git node at every point of WritePath()
-// — the write's own and the one landing's — and a cache case holds a sync —
+// — the write's own and the one landing's — the expunge's own suite its
+// maintainer at every point of ExpungePath(), and a cache case holds a sync —
 // or crashes it — at each of the sync's, so a point hit at two sites fires at
 // whichever runs first and a point hit at none is a fault no case can make —
 // the swap's rename among them, which a case copies the disk at as a crash

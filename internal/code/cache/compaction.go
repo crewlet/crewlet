@@ -24,12 +24,15 @@ import (
 // Packs is the live rows of the incarnation s pins, as the rounds over it left
 // them, sorted by pack id: each row's id, its git checksum, its bundle's bytes
 // and its two indexes' — which tell its pack section, and whether it is FULL
-// (code.PackRow.Full) — and the objects its row counts: what a compaction's
-// plan, and a publication's, weighs a pack by. Nothing else a snapshot's row
-// carries — its object, part, kind, state and position stay zero
-// (livePack.row). Copied under the entry's lock, so a round moving the set
-// meanwhile changes nothing handed out; nil for a Synced this cache did not
-// hand out.
+// (code.PackRow.Full) — the objects its row counts: what a compaction's plan,
+// and a publication's, weighs a pack by — and the position its content dates
+// from (code.PackRow.Content), which a purge's cycle chooses its inputs by:
+// zero for a pack this node adopted whose row no round has served it since,
+// read as older than every request (livePack.content). Nothing else a
+// snapshot's row carries — its object, part, kind, state and the position it
+// was added at stay zero (livePack.row). Copied under the entry's lock, so a
+// round moving the set meanwhile changes nothing handed out; nil for a Synced
+// this cache did not hand out.
 //
 // NEVER A ROW AN EXPUNGE'S BEGIN LEFT DROPPING: no compaction takes one as an
 // input — its decide refuses it stale (code's liveInput), so a plan naming
