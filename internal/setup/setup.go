@@ -253,6 +253,19 @@ type Requirement struct {
 	// in each vendor's probe as well.
 	CheckNote string `json:"check_note,omitempty"`
 
+	// CheckWith names the other fields of the same list that a check of
+	// this credential is made with, for a vendor that proves several
+	// values in one check: Datadog's API key and application key are
+	// accepted or refused together, against the region they belong to.
+	//
+	// It is set on a [Requirement.Checkable] field only. A form offers one
+	// Test control for the group, after this field, enables it once this
+	// field and every one named here has a value, and sends them together.
+	// A credential named here is tested through this field rather than on
+	// its own, so it is not Checkable itself and its [Requirement.CheckNote]
+	// says so. Empty, the field is checked on its own, as before.
+	CheckWith []string `json:"check_with,omitempty"`
+
 	// Shape is what a minted value has to LOOK like, for the fields where
 	// the third-party app accepts one form and no other.
 	//

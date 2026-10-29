@@ -107,6 +107,22 @@ func TestJudgeRepeatsOnlyASayableReason(t *testing.T) {
 	}
 }
 
+// A PROBE CHECKING SEVERAL CREDENTIALS holds a reason against every one of
+// them, not only the field under check.
+func TestSayableHoldsAReasonAgainstEveryCredential(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ reason, want string }{
+		{"key fake-a is unknown", ""},
+		{"key fake-b is unknown", ""},
+		{strings.Repeat("word ", 60), ""},
+		{"  Forbidden\n ", "Forbidden"},
+	} {
+		if got := setup.Sayable(c.reason, "fake-a", " fake-b ", ""); got != c.want {
+			t.Errorf("Sayable(%q) = %q, want %q", c.reason, got, c.want)
+		}
+	}
+}
+
 // THE VENDOR'S OWN SHAPE NAMES ITS MESSAGE, and a JSON body naming none of the
 // keys is left out rather than shown as an object under a button.
 func TestReasonInReadsTheVendorsMessage(t *testing.T) {

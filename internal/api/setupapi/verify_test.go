@@ -112,8 +112,8 @@ const datadogDoc = `{
   "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
   "integrations": {
     "datadog": {"enabled": true, "route_to": "sre-lead", "webhook_token": "${DATADOG_WEBHOOK_TOKEN}",
-                "provisioning": {"site": "datadoghq.eu", "api_key": "${DATADOG_API_KEY}",
-                                 "app_key": "${DATADOG_APP_KEY}"}}
+                "provisioning": {"site": "datadoghq.eu", "app_key": "${DATADOG_APP_KEY}",
+                                 "api_key": "${DATADOG_API_KEY}"}}
   },
   "roles": [
     {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"},
@@ -134,7 +134,7 @@ func verifyBody(field, value string, extra string) string {
 func TestAVerifyAnswersTheProbesVerdict(t *testing.T) {
 	t.Parallel()
 	for _, want := range []setup.Verdict{
-		setup.Works("Works. Datadog accepted it for the Acme organization."),
+		setup.Works("Works. Both keys are valid for the Acme organization in datadoghq.eu, and can read users, roles and webhooks."),
 		{Outcome: setup.VerifyRefused, Detail: "Datadog refused it: Forbidden."},
 		{Outcome: setup.VerifyUnreachable, Detail: "Datadog did not answer. Nothing was stored."},
 	} {
@@ -145,7 +145,7 @@ func TestAVerifyAnswersTheProbesVerdict(t *testing.T) {
 			probe := &recordingProbe{verdict: want}
 			s.withProbe(t, integration.KindDatadog, probe.probe)
 			res := s.do(t, http.MethodPost, "/setup/integrations/datadog/verify",
-				verifyBody("api_key", "dd-api", `"values": {"app_key": "dd-app"}`), nil)
+				verifyBody("app_key", "dd-app", `"values": {"api_key": "dd-api"}`), nil)
 			if res.Code != http.StatusOK {
 				t.Fatalf("status = %d: %s", res.Code, res.Body)
 			}
@@ -166,7 +166,7 @@ func TestAVerifyWritesNothing(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	s.seedDocument(t, datadogDoc)
-	s.vault.put(t, "DATADOG_APP_KEY", "dd-app")
+	s.vault.put(t, "DATADOG_API_KEY", "dd-api")
 	probe := &recordingProbe{verdict: setup.Works("Works.")}
 	s.withProbe(t, integration.KindDatadog, probe.probe)
 
@@ -178,7 +178,7 @@ func TestAVerifyWritesNothing(t *testing.T) {
 	sealed := s.vault.snapshot()
 
 	for _, body := range []string{
-		verifyBody("api_key", "a-new-key", ""),
+		verifyBody("app_key", "a-new-key", ""),
 		verifyBody("webhook_token", "a-typed-token", ""),
 	} {
 		if res := s.do(t, http.MethodPost, "/setup/integrations/datadog/verify", body, nil); res.Code != http.StatusOK {
@@ -204,7 +204,7 @@ func TestAVerifyWritesNothing(t *testing.T) {
 	}
 	// AND THE CHECKED VALUE NEVER COMES BACK.
 	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/verify",
-		verifyBody("api_key", "a-new-key", ""), nil)
+		verifyBody("app_key", "a-new-key", ""), nil)
 	if strings.Contains(res.Body.String(), "a-new-key") {
 		t.Errorf("the answer carries the checked value: %s", res.Body)
 	}
@@ -218,18 +218,18 @@ func TestAVerifyReadsTheStoredValueOfAnUntypedField(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	s.seedDocument(t, datadogDoc)
-	s.vault.put(t, "DATADOG_APP_KEY", "stored-app-key")
-	probe := &recordingProbe{verdict: setup.Works("Works."), read: []string{"site", "app_key"}}
+	s.vault.put(t, "DATADOG_API_KEY", "stored-api-key")
+	probe := &recordingProbe{verdict: setup.Works("Works."), read: []string{"site", "api_key"}}
 	s.withProbe(t, integration.KindDatadog, probe.probe)
 
 	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/verify",
-		verifyBody("api_key", "typed-api-key", ""), nil)
+		verifyBody("app_key", "typed-app-key", ""), nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", res.Code, res.Body)
 	}
 	seen := probe.seen(t)
 	for field, want := range map[string]string{
-		"api_key": "typed-api-key", "site": "datadoghq.eu", "app_key": "stored-app-key",
+		"app_key": "typed-app-key", "site": "datadoghq.eu", "api_key": "stored-api-key",
 	} {
 		if seen.values[field] != want {
 			t.Errorf("Value(%q) = %q, want %q", field, seen.values[field], want)
@@ -239,12 +239,12 @@ func TestAVerifyReadsTheStoredValueOfAnUntypedField(t *testing.T) {
 	// AND A TYPED VALUE WINS over the stored one.
 	typed := newSurface(t)
 	typed.seedDocument(t, datadogDoc)
-	typed.vault.put(t, "DATADOG_APP_KEY", "stored-app-key")
-	again := &recordingProbe{verdict: setup.Works("Works."), read: []string{"site", "app_key"}}
+	typed.vault.put(t, "DATADOG_API_KEY", "stored-api-key")
+	again := &recordingProbe{verdict: setup.Works("Works."), read: []string{"site", "api_key"}}
 	typed.withProbe(t, integration.KindDatadog, again.probe)
 	typed.do(t, http.MethodPost, "/setup/integrations/datadog/verify",
-		verifyBody("api_key", "typed-api-key", `"values": {"site": "us5.datadoghq.com", "app_key": "typed-app"}`), nil)
-	if got := again.seen(t).values; got["site"] != "us5.datadoghq.com" || got["app_key"] != "typed-app" {
+		verifyBody("app_key", "typed-app-key", `"values": {"site": "us5.datadoghq.com", "api_key": "typed-api"}`), nil)
+	if got := again.seen(t).values; got["site"] != "us5.datadoghq.com" || got["api_key"] != "typed-api" {
 		t.Errorf("the typed values were not what was checked: %v", got)
 	}
 }
@@ -258,7 +258,7 @@ func TestAVerifyFallsBackToTheFieldsDefault(t *testing.T) {
 	probe := &recordingProbe{verdict: setup.Works("Works."), read: []string{"site"}}
 	s.withProbe(t, integration.KindDatadog, probe.probe)
 	s.do(t, http.MethodPost, "/setup/integrations/datadog/verify",
-		verifyBody("api_key", "typed", ""), nil)
+		verifyBody("app_key", "typed", ""), nil)
 	if got := probe.seen(t).values["site"]; got != "datadoghq.com" {
 		t.Errorf("site = %q, want the field's default", got)
 	}
@@ -273,20 +273,20 @@ func TestAVerifyResolvesAReferenceAndRefusesOneNamingNothing(t *testing.T) {
 	s := newSurface(t)
 	s.seed(t)
 	s.vault.put(t, "SPARE_DATADOG_KEY", "the-spare-key")
-	probe := &recordingProbe{verdict: setup.Works("Works."), read: []string{"app_key"}}
+	probe := &recordingProbe{verdict: setup.Works("Works."), read: []string{"api_key"}}
 	s.withProbe(t, integration.KindDatadog, probe.probe)
 
 	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/verify",
-		verifyBody("api_key", "${SPARE_DATADOG_KEY}", `"values": {"app_key": "  ${SPARE_DATADOG_KEY} "}`), nil)
+		verifyBody("app_key", "${SPARE_DATADOG_KEY}", `"values": {"api_key": "  ${SPARE_DATADOG_KEY} "}`), nil)
 	if res.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", res.Code, res.Body)
 	}
-	if got := probe.seen(t).values; got["api_key"] != "the-spare-key" || got["app_key"] != "the-spare-key" {
+	if got := probe.seen(t).values; got["app_key"] != "the-spare-key" || got["api_key"] != "the-spare-key" {
 		t.Errorf("the references were not resolved: %v", got)
 	}
 
 	missing := s.do(t, http.MethodPost, "/setup/integrations/datadog/verify",
-		verifyBody("api_key", "${NO_SUCH_SECRET}", ""), nil)
+		verifyBody("app_key", "${NO_SUCH_SECRET}", ""), nil)
 	if missing.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d: %s", missing.Code, missing.Body)
 	}
@@ -328,6 +328,31 @@ func TestAnUncheckableFieldAnswersItsNoteAndAsksNoVendor(t *testing.T) {
 	}
 	if seen := probe.seen(t); seen.field != "bot_token" || seen.values["bot_token"] != "xoxb-typed" {
 		t.Errorf("the probe was handed %+v", seen)
+	}
+}
+
+// DATADOG'S API KEY IS TESTED WITH THE APPLICATION KEY, so a check of it on
+// its own answers its note and asks no vendor: the form's one Test control
+// is the application key's, and a stale form asking about the API key is
+// told where the test went rather than handed a second opinion.
+func TestTheDatadogAPIKeyAnswersItsNote(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	probe := &recordingProbe{verdict: setup.Works("Works.")}
+	s.withProbe(t, integration.KindDatadog, probe.probe)
+	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/verify",
+		verifyBody("api_key", "fake-api-key", `"values": {"app_key": "fake-app-key"}`), nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", res.Code, res.Body)
+	}
+	got := decode(t, res)
+	if got["outcome"] != string(setup.VerifyUnchecked) ||
+		got["detail"] != "It is tested together with the application key." {
+		t.Errorf("answered %v", got)
+	}
+	if len(probe.calls) != 0 {
+		t.Errorf("Datadog was asked about the API key on its own: %+v", probe.calls)
 	}
 }
 
@@ -376,11 +401,11 @@ func TestAVerifyRefusesWhatItCannotCheck(t *testing.T) {
 		{"a field that is not a credential", "/setup/integrations/datadog/verify",
 			verifyBody("site", "datadoghq.eu", ""), http.StatusBadRequest, httpjson.CodeInvalidInput},
 		{"an empty value", "/setup/integrations/datadog/verify",
-			verifyBody("api_key", "  ", ""), http.StatusBadRequest, httpjson.CodeInvalidInput},
+			verifyBody("app_key", "  ", ""), http.StatusBadRequest, httpjson.CodeInvalidInput},
 		{"no field", "/setup/integrations/datadog/verify",
 			`{"value": "x"}`, http.StatusBadRequest, httpjson.CodeInvalidInput},
 		{"a form value the kind does not take", "/setup/integrations/datadog/verify",
-			verifyBody("api_key", "x", `"values": {"region": "eu"}`),
+			verifyBody("app_key", "x", `"values": {"region": "eu"}`),
 			http.StatusBadRequest, httpjson.CodeInvalidInput},
 		{"a per-seat field asked of the company", "/setup/integrations/slack/verify",
 			verifyBody("bot_token", "xoxb-1", ""), http.StatusBadRequest, httpjson.CodeInvalidInput},
@@ -388,7 +413,7 @@ func TestAVerifyRefusesWhatItCannotCheck(t *testing.T) {
 			verifyBody("bot_token", "xoxb-1", `"seat": "nobody"`), http.StatusNotFound,
 			httpjson.CodeInvalidInput},
 		{"an unknown key", "/setup/integrations/datadog/verify",
-			`{"field": "api_key", "value": "x", "store": true}`,
+			`{"field": "app_key", "value": "x", "store": true}`,
 			http.StatusBadRequest, httpjson.CodeInvalidBody},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -417,7 +442,7 @@ func TestAVerifyWithNoActiveRevisionIsRefused(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	res := s.do(t, http.MethodPost, "/setup/integrations/datadog/verify",
-		verifyBody("api_key", "x", ""), nil)
+		verifyBody("app_key", "x", ""), nil)
 	if res.Code != http.StatusConflict ||
 		decode(t, res)["error"] != string(httpjson.CodeNoActiveRevision) {
 		t.Fatalf("answered %d %s, want 409 no_active_revision", res.Code, res.Body)
@@ -438,7 +463,7 @@ func TestAProbesOwnRefusalsAreAnsweredByWhoseFaultTheyAre(t *testing.T) {
 		{"unusable input", &recordingProbe{err: setup.Unusable(
 			"Datadog checks the API key and the application key together.")},
 			http.StatusBadRequest, "Datadog checks the API key and the application key together."},
-		{"a wiring fault", &recordingProbe{err: setup.NotCheckable("Datadog", "api_key")},
+		{"a wiring fault", &recordingProbe{err: setup.NotCheckable("Datadog", "app_key")},
 			http.StatusInternalServerError, ""},
 		{"an engine fault", &recordingProbe{err: errors.New("boom")},
 			http.StatusInternalServerError, ""},
@@ -451,7 +476,7 @@ func TestAProbesOwnRefusalsAreAnsweredByWhoseFaultTheyAre(t *testing.T) {
 			s.seed(t)
 			s.withProbe(t, integration.KindDatadog, c.probe.probe)
 			res := s.do(t, http.MethodPost, "/setup/integrations/datadog/verify",
-				verifyBody("api_key", "x", ""), nil)
+				verifyBody("app_key", "x", ""), nil)
 			if res.Code != c.status {
 				t.Fatalf("status = %d, want %d: %s", res.Code, c.status, res.Body)
 			}

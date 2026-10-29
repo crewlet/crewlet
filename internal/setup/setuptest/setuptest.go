@@ -19,6 +19,9 @@
 //   - a secret field that is NOT checkable is refused as [setup.ErrNotCheckable]
 //     rather than answered, since the surface answers those itself from
 //     [setup.Requirement.CheckNote];
+//   - a field's [setup.Requirement.CheckWith] names other fields of its own
+//     list, only on a checkable field, and a credential it names is not
+//     checkable on its own, so a form draws one Test control per group;
 //   - no detail repeats the credential, and every detail is a sentence.
 //
 // A suite that agreed only with itself would certify nothing, which is why
@@ -87,6 +90,7 @@ func Cases() []Case {
 		{"an outage is unreachable, never a refusal", outagesAreUnreachable},
 		{"a vendor nothing can reach is unreachable", deadVendorIsUnreachable},
 		{"a field it cannot check is refused as one", uncheckableFieldsAreRefused},
+		{"a check made with other fields names them on a checkable field", checkWithHolds},
 	}
 }
 
@@ -205,6 +209,41 @@ func uncheckableFieldsAreRefused(t TB, v Vendor) {
 			t.Errorf("%s.%s is not checkable and the probe answered %+v, %v: the "+
 				"surface answers it from its note, so a probe answering it is a second "+
 				"opinion that can disagree", v.App, r.Field, verdict, err)
+		}
+	}
+}
+
+// checkWithHolds holds every [setup.Requirement.CheckWith] to the shape a
+// form draws one Test control from: set on a checkable field only, naming
+// other fields of the same list once each, and never a credential that has
+// a Test control of its own, which would be two controls testing one thing.
+func checkWithHolds(t TB, v Vendor) {
+	byField := map[string]setup.Requirement{}
+	for _, r := range v.Requirements {
+		byField[r.Field] = r
+	}
+	for _, r := range v.Requirements {
+		if len(r.CheckWith) == 0 {
+			continue
+		}
+		if !r.Checkable {
+			t.Errorf("%s.%s is checked with %v and is not checkable itself",
+				v.App, r.Field, r.CheckWith)
+		}
+		named := map[string]bool{}
+		for _, field := range r.CheckWith {
+			other, ok := byField[field]
+			switch {
+			case field == r.Field || named[field]:
+				t.Errorf("%s.%s names %q twice in its check", v.App, r.Field, field)
+			case !ok:
+				t.Errorf("%s.%s is checked with %q, which is not a field of its list",
+					v.App, r.Field, field)
+			case other.Checkable:
+				t.Errorf("%s.%s is checked with %s.%s, which has a Test control of "+
+					"its own", v.App, r.Field, v.App, field)
+			}
+			named[field] = true
 		}
 	}
 }
