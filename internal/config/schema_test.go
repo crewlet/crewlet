@@ -139,6 +139,7 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"GitHubProvisioning", "org_webhook", strs(ContainerWebhookModes)},
 		{"CodeProtection", "direct_push", strs(CodeDirectPushes)},
 		{"CodeRepo", "visibility", strs(CodeVisibilities)},
+		{"CodeRepo", "search", strs(CodeSearchModes)},
 		// A protection rule's merge gate, and the company's floor beside it.
 		{"CodeProtection", "merge_by", strs(CodeMergeBys)},
 		{"CodeProtection", "approvals", strs(CodeApprovalCounts)},

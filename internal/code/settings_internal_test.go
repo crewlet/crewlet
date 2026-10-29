@@ -16,7 +16,7 @@ func TestSettingsEqualReadsEveryFieldButTheActivation(t *testing.T) {
 	t.Parallel()
 	base := RepoSettings{
 		ManagedBy: ManagedConfig, Kind: RepoProject, Owner: Owner{Kind: OwnerUnit, Ref: "ENG"},
-		DefaultBranch: "main", Description: "one", Visibility: VisibilityCompany,
+		DefaultBranch: "main", Description: "one", Visibility: VisibilityCompany, Search: SearchIndexed,
 		Protections: []Protection{{Pattern: "refs/heads/main", DirectPush: DirectPersons}},
 		PathOwners:  []PathOwner{{Owner: Owner{Kind: OwnerUnit, Ref: "ENG"}, Paths: []string{"web/**"}}},
 		ConfigEpoch: 1,
@@ -29,6 +29,7 @@ func TestSettingsEqualReadsEveryFieldButTheActivation(t *testing.T) {
 		"Description":   func(s *RepoSettings) { s.Description = "two" },
 		"Archived":      func(s *RepoSettings) { s.Archived = true },
 		"Visibility":    func(s *RepoSettings) { s.Visibility = VisibilityUnit },
+		"Search":        func(s *RepoSettings) { s.Search = SearchGrep },
 		"Protections": func(s *RepoSettings) {
 			s.Protections = []Protection{{Pattern: "refs/heads/main", DirectPush: DirectNone}}
 		},

@@ -55,7 +55,7 @@ func suiteSettings() code.RepoSettings {
 	return code.RepoSettings{
 		ManagedBy: code.ManagedConfig, Kind: code.RepoProject,
 		Owner:      code.Owner{Kind: code.OwnerUnit, Ref: "ENG"},
-		Visibility: code.VisibilityCompany, DefaultBranch: "main",
+		Visibility: code.VisibilityCompany, Search: code.SearchIndexed, DefaultBranch: "main",
 		Protections: []code.Protection{
 			{Pattern: "refs/heads/main", DirectPush: code.DirectPersons},
 		},
@@ -92,7 +92,7 @@ func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.Replicate
 		OpID: statelog.NewOpID(time.Now(), "code.suite"), Actor: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"},
 		Name: "dev.suite", Create: &code.RepoSettings{ManagedBy: code.ManagedTools, Kind: code.RepoScratch,
 			Owner: code.Owner{Kind: code.OwnerSeat, Ref: "dev"}, Visibility: code.VisibilityCompany,
-			DefaultBranch: "main"}})
+			Search: code.SearchGrep, DefaultBranch: "main"}})
 	switch {
 	case err != nil:
 		return err

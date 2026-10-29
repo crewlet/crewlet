@@ -1278,6 +1278,7 @@ web — active, owned by unit:engineering, default branch main
   managed by:   code.repos
   description:  The customer-facing web app.
   visibility:   unit — only the seats the chart relates to its owner read it
+  search:       indexed — read from an index of its default branch, by a search across the company's repositories as well as one naming it
   protections:  refs/heads/main (no force, no delete), refs/heads/release/** (no direct push)
   refs:         12 branches, 30 tags; main at 3f2a91c0e4d1b5a7f8c2e9d0a1b2c3d4e5f60718
   packs:        212 live, 1.9 GiB, 1843021 objects

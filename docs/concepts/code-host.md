@@ -84,6 +84,12 @@ This is the product's current shape, not a configuration choice:
   rule decides what a push may do to a ref, and nothing else stands in front
   of one. So a rule's [merge gate](#merge-gates) is recorded and read, and
   nothing merges by it yet.
+- **Nothing searches a repository's code yet.** Every repository names how it
+  is to be searched — `search: indexed` or `grep`
+  ([Declaring repositories](#declaring-repositories)) — and the mode is
+  recorded, answered on every read of the repository and changed like any
+  other setting; no git node keeps an index or answers a search in this
+  release.
 - **Nothing drops an object a push stored.** A force-push or a deletion
   leaves the history behind it in the repository's packs, fetchable by its
   id, for as long as the repository lives. The object each such push left is
@@ -105,6 +111,7 @@ code:
     - name: nimbus-web             # the address it is cloned by
       owner: { unit: Engineering } # a unit (id or name) or a seat (handle) — exactly one
       visibility: unit             # company (unset) or unit: which seats read it
+      search: indexed              # indexed (unset) or grep: how code search reads it
       default_branch: main         # unset is main
       description: The customer-facing web app.
       protect:
@@ -136,6 +143,14 @@ code:
   seat, or `unit`, only the seats the chart relates to its owner (see
   [Visibility](#visibility)). It narrows seats and nobody else: a person reads
   every repository whatever it says. Any other value refuses the revision.
+- **`search`** — how code search reads it: `indexed` (unset), from an index of
+  its default branch, which a search across the company's repositories reads
+  as well as one naming the repository; or `grep`, with git grep over a copy,
+  and only by a search that names it. An index costs each git node keeping one
+  its disk and a build at every new tip, and a `grep` repository costs nothing
+  until somebody asks it. A repository a tool makes starts at `grep`
+  ([Repositories made by tools](#repositories-made-by-tools)). Any other value
+  refuses the revision.
 - **`default_branch`** — what a clone checks out; any branch name git would
   take but `seats` and `seats/<one name>`, which hold the seats' own
   namespaces (see [Who may read and push](#who-may-read-and-push)), and unset
@@ -472,6 +487,15 @@ redirects. Renaming back takes it back. The `code-retention` duty
 releases an old name at its window's end, one record a name, after which it
 names nothing and is free; an old name whose repository was purged meanwhile
 stays reserved until its window ends, like every other.
+
+**A tool's repository is searched with `grep`** until somebody who maintains
+it asks for an index: a create makes it `search: grep`, and a settings change
+sets its [search mode](#declaring-repositories) — a person's on any repository
+a tool made, a seat's on what it maintains. A **scratch** repository is `grep`
+for good: asked for an index, by its seat or by a person, it is refused
+`not_permitted`, since an index of a seat's experiment would be built and kept
+on the git nodes for a repository deleted once it sits idle — and a search
+that names it still reads it.
 
 **Archive, delete and restore** work as they do for a declared repository: an
 archived repository is read-only, a deleted one takes no push and keeps its

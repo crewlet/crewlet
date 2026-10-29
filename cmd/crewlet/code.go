@@ -274,6 +274,7 @@ type codeRepoView struct {
 		Ref  string `json:"ref"`
 	} `json:"owner"`
 	Visibility    string               `json:"visibility"`
+	Search        string               `json:"search"`
 	DefaultBranch string               `json:"default_branch"`
 	Description   string               `json:"description"`
 	Protections   []codeProtectionView `json:"protections"`
@@ -703,6 +704,7 @@ func renderCodeRepo(w io.Writer, r codeRepoView, pushes []codePushLine) error {
 		fmt.Fprintf(&b, "  description:  %s\n", r.Description)
 	}
 	fmt.Fprintf(&b, "  visibility:   %s\n", visibilityLine(r.Visibility))
+	fmt.Fprintf(&b, "  search:       %s\n", searchLine(r.Search))
 	fmt.Fprintf(&b, "  protections:  %s\n", protectionsLine(r.Protections))
 	refs := fmt.Sprintf("%d branches, %d tags", r.Branches, r.Tags)
 	if other := r.Refs - r.Branches - r.Tags; other > 0 {
@@ -770,6 +772,19 @@ func visibilityLine(v string) string {
 		return v + " — only the seats the chart relates to its owner read it"
 	}
 	return v
+}
+
+// searchLine is a repository's search mode as `status` prints it: what reads
+// it. A value this build does not know is printed as the node sent it.
+func searchLine(m string) string {
+	switch code.SearchMode(m) {
+	case code.SearchIndexed:
+		return m + " — read from an index of its default branch, by a search across the company's " +
+			"repositories as well as one naming it"
+	case code.SearchGrep:
+		return m + " — read with git grep, only by a search naming it"
+	}
+	return m
 }
 
 // protectionsLine is a repository's rules, each with what it forbids.

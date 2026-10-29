@@ -14,11 +14,12 @@ import (
 const RepoName = "acme"
 
 // Settings are what every case declares RepoName with: main, protected
-// `direct_push: persons`, owned by the unit ENG.
+// `direct_push: persons`, owned by the unit ENG, and indexed for search — what
+// a declaration leaving search unset is recorded with.
 func Settings() code.RepoSettings {
 	return code.RepoSettings{
 		ManagedBy: code.ManagedConfig, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "ENG"},
-		Visibility: code.VisibilityCompany, DefaultBranch: "main",
+		Visibility: code.VisibilityCompany, Search: code.SearchIndexed, DefaultBranch: "main",
 		Protections: []code.Protection{{Pattern: "refs/heads/main", DirectPush: code.DirectPersons}},
 	}
 }

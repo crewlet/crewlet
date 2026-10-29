@@ -36,7 +36,7 @@ func seatOwned(ref string) code.Owner { return code.Owner{Kind: code.OwnerSeat, 
 func lcCreate(actor code.Principal, name string, owner code.Owner) code.LifecycleRequest {
 	return code.LifecycleRequest{Kind: code.LifecycleCreate, OpID: lcOp(), Actor: actor, Name: name,
 		Create: &code.RepoSettings{ManagedBy: code.ManagedTools, Kind: code.KindOf(name), Owner: owner,
-			Visibility: code.VisibilityCompany, DefaultBranch: "main"}}
+			Visibility: code.VisibilityCompany, Search: code.SearchGrep, DefaultBranch: "main"}}
 }
 
 // lcOn is a request of kind on the repository id that carries nothing beyond
@@ -786,6 +786,78 @@ func TestARenameKeepsItsKindsForm(t *testing.T) {
 	n.lands(lcRename(dev, scratch, "dev.y"))
 }
 
+// A SCRATCH REPOSITORY REFUSES AN INDEX, whoever asks: a seat's own experiment
+// is searched with grep, so settings naming it indexed are no settings a record
+// may carry, a create asking for one is refused before it is decided, and a
+// settings change asking for one is refused not_permitted with the sentence
+// naming grep — its own seat's and a person's alike — with nothing written. A
+// PROJECT's mode is a setting like its description: a person sets it, the
+// owning unit's lead (maintain) sets it back, a member below maintain is
+// refused, and each applied change is what the row then reads.
+//
+// Mutations: drop the scratch arm of RepoSettings.Validate — the indexed
+// scratch settings validate and the create lands, red; drop the decide's
+// scratch refusal — the change is refused only by the settings' validation, as
+// ErrInvalid rather than not_permitted, red; apply the change's mode to the
+// settings no more (next.Search kept) — the project's change writes nothing,
+// red.
+func TestAScratchRepositoryRefusesAnIndex(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	dev := agent("dev")
+
+	indexed := code.RepoSettings{ManagedBy: code.ManagedTools, Kind: code.RepoScratch, Owner: seatOwned("dev"),
+		Visibility: code.VisibilityCompany, Search: code.SearchIndexed, DefaultBranch: "main"}
+	if err := indexed.Validate(); !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), "search:") {
+		t.Errorf("an indexed scratch repository's settings validate as %v, want ErrInvalid naming search", err)
+	}
+	end := n.end()
+	create := lcCreate(dev, "dev.indexed", seatOwned("dev"))
+	create.Create.Search = code.SearchIndexed
+	if _, err := n.store.Lifecycle(t.Context(), create); !errors.Is(err, code.ErrInvalid) ||
+		!strings.Contains(err.Error(), "create.search:") {
+		t.Errorf("a seat's create of its own scratch repository indexed = %v, want ErrInvalid naming "+
+			"create.search", err)
+	}
+	if got := n.end(); got != end {
+		t.Fatalf("the refused create wrote %d records", got-end)
+	}
+
+	scratch := n.made(dev, "dev.spike", seatOwned("dev"))
+	if got := n.resolved("dev.spike").Search; got != code.SearchGrep {
+		t.Fatalf("the premise: a scratch repository is created at %q, want %s", got, code.SearchGrep)
+	}
+	end = n.end()
+	for _, actor := range []code.Principal{dev, lcPerson} {
+		got := n.life(lcSettings(actor, scratch, code.RepoChange{Search: ptr(code.SearchIndexed)}))
+		if got.Refusal != code.LifecycleNotPermitted || !strings.Contains(got.Detail, "searched with grep") {
+			t.Errorf("%s asking dev.spike for an index: %+v, want not_permitted naming grep",
+				cmp.Or(actor.Seat, actor.OperatorID), got)
+		}
+	}
+	if got := n.end(); got != end {
+		t.Fatalf("the refused changes wrote %d records", got-end)
+	}
+
+	project := n.made(lcPerson, "searched", unitOwned("eng"))
+	if got := n.resolved("searched").Search; got != code.SearchGrep {
+		t.Fatalf("the premise: a project a tool made is created at %q, want %s", got, code.SearchGrep)
+	}
+	n.lands(lcSettings(lcPerson, project, code.RepoChange{Search: ptr(code.SearchIndexed)}))
+	if got := n.resolved("searched").Search; got != code.SearchIndexed {
+		t.Errorf("after a person indexed it, the project reads %q", got)
+	}
+	if got := n.life(lcSettings(dev, project, code.RepoChange{Search: ptr(code.SearchGrep)})); got.Refusal !=
+		code.LifecycleNotPermitted {
+		t.Errorf("a member below maintain changing the project's mode: %+v, want not_permitted", got)
+	}
+	n.lands(lcSettings(agent("cto"), project, code.RepoChange{Search: ptr(code.SearchGrep)}))
+	if got := n.resolved("searched").Search; got != code.SearchGrep {
+		t.Errorf("after its unit's lead set it back, the project reads %q", got)
+	}
+}
+
 // purgeNow steps a deleted repository's purge until it is done — the store's
 // clock (harnessAt) is past every deletion this harness makes.
 func (n *node) purgeNow(id string) {
@@ -913,7 +985,7 @@ func TestTheActivationFenceIgnoresAToolsRecord(t *testing.T) {
 	n.ensure("declared", described("one"), t3)
 	declared := n.mustID("declared")
 	s := code.RepoSettings{ManagedBy: code.ManagedTools, Kind: code.RepoProject, Owner: unitOwned("eng"),
-		Visibility: code.VisibilityCompany, DefaultBranch: "main", Description: "taken"}
+		Visibility: code.VisibilityCompany, Search: code.SearchGrep, DefaultBranch: "main", Description: "taken"}
 	if _, err := n.publish(code.RepoSubject(declared), code.OpSettings, code.Scope{code.RepoPath(declared)},
 		code.SettingsRecord{RepoID: declared, Settings: s}); err != nil {
 		t.Fatalf("append a tool's settings onto a declared repository: %v", err)

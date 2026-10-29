@@ -1814,7 +1814,8 @@ func applyDelta(inc *incarnation, snap snapshot) {
 // TestARoundComparesEveryFieldOfARepositorysRow holds it to as the row grows.
 // A row that changed in a field left out here is a round that writes no state
 // for it, so the state a restart reads names the row before — its visibility,
-// the objects a request is bounded by, the drop epoch a push is checked at.
+// its search mode, the objects a request is bounded by, the drop epoch a push
+// is checked at.
 // The redirect too, though a round reads its row by the repository's id, which
 // no old name answers: the state is the row as it was read, whole, rather
 // than the fields a round happens to see move today. The rules BY VALUE
@@ -1823,7 +1824,7 @@ func applyDelta(inc *incarnation, snap snapshot) {
 // would read as changed and every round would write its state again.
 func sameRepo(a, b code.RepoRef) bool {
 	return a.ID == b.ID && a.Name == b.Name && a.Status == b.Status && a.ManagedBy == b.ManagedBy &&
-		a.Kind == b.Kind && a.Owner == b.Owner && a.Visibility == b.Visibility &&
+		a.Kind == b.Kind && a.Owner == b.Owner && a.Visibility == b.Visibility && a.Search == b.Search &&
 		a.DefaultBranch == b.DefaultBranch && a.Description == b.Description &&
 		slices.EqualFunc(a.Protections, b.Protections, code.Protection.Equal) && a.DeletedAt.Equal(b.DeletedAt) &&
 		a.LastActivityAt.Equal(b.LastActivityAt) && a.Refs == b.Refs && a.LivePacks == b.LivePacks &&

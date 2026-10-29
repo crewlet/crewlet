@@ -549,6 +549,7 @@ func (r RepoRef) members() int {
 		field("owner", 2+field("kind", stringBytes(string(r.Owner.Kind)), true)+
 			field("ref", stringBytes(r.Owner.Ref), false), false) +
 		field("visibility", stringBytes(string(r.Visibility)), false) +
+		field("search", stringBytes(string(r.Search)), false) +
 		field("default_branch", stringBytes(r.DefaultBranch), false)
 	if r.Description != "" {
 		n += field("description", stringBytes(r.Description), false)

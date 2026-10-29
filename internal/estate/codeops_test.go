@@ -661,7 +661,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	ref := code.RepoRef{
 		ID: "019a0c2e-0000-7000-8000-0000000000a1", Name: "app", Status: code.RepoStatusActive,
 		ManagedBy: code.ManagedTools, Kind: code.RepoProject, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "eng"},
-		DefaultBranch: "main", Description: "the app",
+		DefaultBranch: "main", Description: "the app", Search: code.SearchGrep,
 		Protections:    []code.Protection{{Pattern: "refs/heads/main", DirectPush: code.DirectNone}},
 		LastActivityAt: created.Add(-time.Hour), Refs: 3, LivePacks: 2, LiveBytes: 9_000, LiveObjects: 1_200,
 		DropEpoch: 3, Redirect: "app-2", RedirectUntil: created.Add(24 * time.Hour), Position: at,
@@ -1246,7 +1246,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	d.lifecycle = code.LifecycleResult{Outcome: statelog.OutcomePending, Repo: ref,
 		Refusal: code.LifecycleStale, Detail: "another rename of the repository landed first", Position: at}
 	d.mu.Unlock()
-	desc, branch, vis := "the app, renamed", "trunk", code.VisibilityUnit
+	desc, branch, vis, search := "the app, renamed", "trunk", code.VisibilityUnit, code.SearchIndexed
 	owner := code.Owner{Kind: code.OwnerUnit, Ref: "plat"}
 	// A GATE CHANGE OF EVERY FIELD, a list emptied and a flag turned off
 	// among them: an empty list and a false flag are changes, which must
@@ -1260,12 +1260,12 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		"a create": {Kind: code.LifecycleCreate, OpID: op, Actor: seat, Name: "dev.app",
 			Create: &code.RepoSettings{ManagedBy: code.ManagedTools, Kind: code.RepoScratch,
 				Owner: code.Owner{Kind: code.OwnerSeat, Ref: "dev"}, DefaultBranch: "main",
-				Description: "an experiment", Visibility: code.VisibilityUnit}},
+				Description: "an experiment", Visibility: code.VisibilityUnit, Search: code.SearchGrep}},
 		"a rename": {Kind: code.LifecycleRename, OpID: op, Actor: seat, RepoID: ref.ID, Name: "app-3"},
 		"a settings change": {Kind: code.LifecycleSettings, OpID: op,
 			Actor:  code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:7", Seat: "founder"},
 			RepoID: ref.ID, Change: &code.RepoChange{Description: &desc, DefaultBranch: &branch,
-				Visibility: &vis, Owner: &owner, PathOwners: &code.PathOwnersChange{
+				Visibility: &vis, Search: &search, Owner: &owner, PathOwners: &code.PathOwnersChange{
 					Add:    []code.PathOwner{{Owner: owner, Paths: []string{"deploy/**", "web/**"}}},
 					Remove: []code.PathOwner{{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "dev"}, Paths: []string{"a"}}},
 				}}},

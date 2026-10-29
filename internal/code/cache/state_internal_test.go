@@ -100,9 +100,9 @@ func TestTheWidestStateFitsItsRead(t *testing.T) {
 		ID: "0190f3c4-0000-7000-8000-000000000001", Name: strings.Repeat("a", 63),
 		Status: code.RepoStatusArchived, ManagedBy: code.ManagedConfig, Kind: code.RepoProject,
 		Owner: code.Owner{Kind: code.OwnerUnit, Ref: wide(64)}, Visibility: code.VisibilityCompany,
-		DefaultBranch: wide(gitref.MaxRefNameBytes - len("refs/heads/")), Description: wide(code.MaxDescriptionBytes),
-		DeletedAt: time.Now(), LastActivityAt: time.Now(), Refs: most, LivePacks: most, LiveBytes: most,
-		LiveObjects: most, DropEpoch: most, Position: maxPosition,
+		Search: code.SearchIndexed, DefaultBranch: wide(gitref.MaxRefNameBytes - len("refs/heads/")),
+		Description: wide(code.MaxDescriptionBytes), DeletedAt: time.Now(), LastActivityAt: time.Now(),
+		Refs: most, LivePacks: most, LiveBytes: most, LiveObjects: most, DropEpoch: most, Position: maxPosition,
 	}
 	for i := range code.MaxProtectionsPerRepo {
 		head := fmt.Sprintf("refs/heads/%02d", i)

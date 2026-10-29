@@ -1,0 +1,31 @@
+-- A repository names how it is searched.
+--
+-- code_repos.search is how code search reads the repository (code.SearchMode):
+-- `indexed`, from an index of its default branch's tip, which a search across
+-- the company's repositories reads as well as one naming it; or `grep`, with
+-- git grep over a copy of it, and only by a search that names it. Indexed is
+-- what a declaration leaving the field unset records (code.repos[].search), a
+-- repository a tool makes starts at grep, and a scratch repository is grep for
+-- good — a seat's own experiment, which no index is kept for.
+--
+-- A SETTING LIKE EVERY OTHER: carried whole by every create, settings and
+-- restore record, written by the applier from the record, compared by the
+-- reconcile with the declaration's (code.RepoSettings.equal), so a revision
+-- that changes only a repository's mode writes one settings record.
+--
+-- THE DEFAULT IS '' — no mode at all — because SQLite requires one for a NOT
+-- NULL column added to a table, and every create, settings change and restore
+-- writes the column: a default that is a mode would hide an apply that forgot
+-- it, reading every such repository as searched that way, where '' reads back
+-- as no mode this build knows (0063's and 0068's reason).
+--
+-- ONE INDEX, partial on the repositories a search reads — the active and the
+-- archived, never one deleted or being purged — keyed by the mode and then the
+-- name: the indexed repositories in name order, a keyset page at a time, which
+-- the git nodes that keep the indexes walk to find theirs and a search across
+-- the company's repositories walks for what it reads.
+--
+-- Class: code_repos stays reproducible: the column is written only from the
+-- records the applier applies, and an index carries no rows of its own.
+ALTER TABLE code_repos ADD COLUMN search TEXT NOT NULL DEFAULT '';
+CREATE INDEX code_repos_search_idx ON code_repos (search, name) WHERE status IN ('active', 'archived');    -- the indexed repositories in name order: the indexers' and a search's listing

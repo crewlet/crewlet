@@ -229,7 +229,8 @@ func oid(s string) string {
 func settingsFor(description string, patterns ...string) RepoSettings {
 	s := RepoSettings{
 		Kind: RepoProject, ManagedBy: ManagedConfig, Owner: Owner{Kind: OwnerUnit, Ref: "ENG"},
-		Visibility: VisibilityCompany, DefaultBranch: "main", Description: description, ConfigEpoch: 1,
+		Visibility: VisibilityCompany, Search: SearchIndexed, DefaultBranch: "main", Description: description,
+		ConfigEpoch: 1,
 	}
 	for _, p := range patterns {
 		s.Protections = append(s.Protections, Protection{Pattern: p, DirectPush: DirectPersons})

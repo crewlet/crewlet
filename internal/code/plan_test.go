@@ -348,13 +348,13 @@ func registeredStatements() map[string]statement {
 		"marker":              {markerSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"purged":              {purgedSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		"repo version":        {repoVersionSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"settings":            {settingsSQL, []any{"config", "unit", "ENG", "company", "main", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"settings":            {settingsSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"clear protections":   {clearProtectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"path owners":         {pathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"path owners of":      {pathOwnersOfSQL, []any{`["repo-1","repo-2"]`}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"clear path owners":   {clearPathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"delete repo":         {deleteRepoSQL, []any{1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
-		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "main", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "indexed", "main", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"pushes applied":      {pushesAppliedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},
 		"refs named":          {refsNamedSQL, []any{"repo-1", keys}, []string{"SCAN json_each AS j", refsKey + " (repo_id=? AND ref=?)"}},
 		"push counters":       {pushCountersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
@@ -1069,6 +1069,15 @@ func claimedReads() map[string]statement {
 		"code_checks_running_idx": {`SELECT commit_oid, name, attempt, runner_node FROM code_checks
 			INDEXED BY code_checks_running_idx WHERE repo_id = ? AND state = 'running'`,
 			[]any{"repo-1"}, []string{"code_checks_running_idx (repo_id=?)"}},
+		// THE SEARCH MODE'S INDEX ITS LATER READERS SEEK (replicated 0078):
+		// the indexed repositories in name order, a keyset page at a time —
+		// the walk of a git node that keeps indexes, and of a search across
+		// the company's repositories — its partial predicate repeated
+		// verbatim. Nothing in this build reads a repository by its mode.
+		"code_repos_search_idx": {`SELECT id, name FROM code_repos INDEXED BY code_repos_search_idx
+			WHERE search = ? AND status IN ('active', 'archived') AND name > ? ORDER BY name LIMIT ?`,
+			[]any{string(SearchIndexed), "", MaxSnapshotItems},
+			[]string{"code_repos_search_idx (search=? AND name>?)"}},
 	}
 }
 

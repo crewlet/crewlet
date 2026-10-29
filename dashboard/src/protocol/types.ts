@@ -6518,6 +6518,11 @@ export interface CodeRepoSummary {
   owner: CodeOwner;
   /** Which SEATS read it: `company`, every seat, or `unit`, the owner's. A person reads every repository. */
   visibility: "company" | "unit" | (string & {});
+  /**
+   * How code search reads it: `indexed`, from an index of its default branch, or `grep`, only by a
+   * search naming it.
+   */
+  search: "indexed" | "grep" | (string & {});
   default_branch: string;
   description?: string;
   protections?: CodeProtection[];

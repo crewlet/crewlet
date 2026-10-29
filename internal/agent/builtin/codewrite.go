@@ -632,6 +632,7 @@ func (t *codeRepoWrite) Parameters() map[string]any {
 		props["description"] = map[string]any{"type": "string"}
 		props["default_branch"] = map[string]any{"type": "string"}
 		props["visibility"] = visibility
+		props["search"] = map[string]any{"type": "string", "enum": spelled(code.SearchModes())}
 		props["owner"] = owner
 		props["path_owners"] = map[string]any{"type": "object",
 			"description": "Globs given to or taken from a project's owners: {\"add\": [{\"owner\": …, " +
@@ -835,11 +836,15 @@ func createRequest(tool string, args map[string]any) (code.LifecycleRequest, *to
 			"or `<your handle>.<name>` for a scratch repository; %q is neither.", tool, clip(name)))
 		return code.LifecycleRequest{}, &r
 	}
+	// A TOOL'S REPOSITORY IS SEARCHED WITH GREP until somebody who maintains
+	// it asks for an index (code_update_repo's `search`): the code domain's
+	// default for what a tool makes, a scratch repository's for good.
 	settings := code.RepoSettings{ManagedBy: code.ManagedTools, Kind: code.KindOf(name),
 		Description:   strings.TrimSpace(argString(args, "description")),
 		DefaultBranch: cmp.Or(strings.TrimSpace(argString(args, "default_branch")), "main"),
 		Visibility: code.Visibility(cmp.Or(strings.TrimSpace(argString(args, "visibility")),
-			string(code.VisibilityCompany)))}
+			string(code.VisibilityCompany))),
+		Search: code.SearchGrep}
 	owner, given, refusal := ownerArg(tool, "owner", args)
 	if refusal != nil {
 		return code.LifecycleRequest{}, refusal
@@ -876,6 +881,10 @@ func updateRequest(tool string, args map[string]any) (code.LifecycleRequest, *to
 		visibility := code.Visibility(strings.TrimSpace(v))
 		change.Visibility = &visibility
 	}
+	if v, ok := args["search"].(string); ok {
+		search := code.SearchMode(strings.TrimSpace(v))
+		change.Search = &search
+	}
 	owner, given, refusal := ownerArg(tool, "owner", args)
 	if refusal != nil {
 		return code.LifecycleRequest{}, refusal
@@ -903,8 +912,8 @@ func updateRequest(tool string, args map[string]any) (code.LifecycleRequest, *to
 	}
 	if asked != 1 {
 		r := failed(fmt.Sprintf("%s changes ONE thing a call: its settings (any of `description`, "+
-			"`default_branch`, `visibility`, `owner`, `path_owners`), `archived`, or `rename_to` — each is a "+
-			"record of its own.", tool))
+			"`default_branch`, `visibility`, `search`, `owner`, `path_owners`), `archived`, or `rename_to` — "+
+			"each is a record of its own.", tool))
 		return code.LifecycleRequest{}, &r
 	}
 	switch {
@@ -959,6 +968,7 @@ type codeRepoState struct {
 	Status        code.RepoStatus `json:"status"`
 	Owner         code.Owner      `json:"owner"`
 	Visibility    code.Visibility `json:"visibility"`
+	Search        code.SearchMode `json:"search"`
 	DefaultBranch string          `json:"default_branch"`
 	Description   string          `json:"description,omitempty"`
 }
@@ -1011,7 +1021,8 @@ func (t *codeRepoWrite) answer(ctx context.Context, turn *turnctx.Turn, c codeCa
 		Outcome: res.Outcome, Position: res.Position, OpID: c.actor.Operation}
 	if r := res.Repo; r.ID != "" {
 		out.Repository = &codeRepoState{Name: r.Name, Kind: r.Kind, Status: r.Status, Owner: r.Owner,
-			Visibility: r.Visibility, DefaultBranch: r.DefaultBranch, Description: r.Description}
+			Visibility: r.Visibility, Search: r.Search, DefaultBranch: r.DefaultBranch,
+			Description: r.Description}
 	}
 	if req.Kind == code.LifecycleProtect && res.Outcome == statelog.OutcomeApplied {
 		for i, p := range res.Repo.Protections {

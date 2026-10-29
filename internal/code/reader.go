@@ -260,16 +260,16 @@ func namedIn(ctx context.Context, tx *sql.Tx, name string, cp statelog.Position)
 // repoViewIn reads one repository and its rules in tx, at the checkpoint cp.
 func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position) (repoView, bool, error) {
 	var (
-		v                                         repoView
-		status, managed, kind, owners, visibility string
-		deleted                                   sql.NullInt64
-		active                                    int64
+		v                                                 repoView
+		status, managed, kind, owners, visibility, search string
+		deleted                                           sql.NullInt64
+		active                                            int64
 	)
 	err := tx.QueryRowContext(ctx, repoViewSQL, id).Scan(&v.ref.ID, &v.ref.Name, &status, &managed, &kind,
-		&owners, &v.ref.Owner.Ref, &visibility, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &active,
-		&v.ref.Refs, &v.branches, &v.tags, &v.tombstones, &v.ref.LivePacks, &v.ref.LiveBytes, &v.ref.LiveObjects,
-		&v.ref.DropEpoch, &v.tombstonesThrough, &v.retiredThrough, &v.layersPosition, &v.pushes, &v.lastPushAt,
-		&v.createdAt)
+		&owners, &v.ref.Owner.Ref, &visibility, &search, &v.ref.DefaultBranch, &v.ref.Description, &deleted,
+		&active, &v.ref.Refs, &v.branches, &v.tags, &v.tombstones, &v.ref.LivePacks, &v.ref.LiveBytes,
+		&v.ref.LiveObjects, &v.ref.DropEpoch, &v.tombstonesThrough, &v.retiredThrough, &v.layersPosition, &v.pushes,
+		&v.lastPushAt, &v.createdAt)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return repoView{}, false, nil
@@ -277,7 +277,7 @@ func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position
 		return repoView{}, false, fmt.Errorf("code: read repository %s: %w", id, err)
 	}
 	v.ref.Status, v.ref.ManagedBy, v.ref.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
-	v.ref.Kind, v.ref.Visibility = RepoKind(kind), Visibility(visibility)
+	v.ref.Kind, v.ref.Visibility, v.ref.Search = RepoKind(kind), Visibility(visibility), SearchMode(search)
 	v.ref.LastActivityAt = activityAt(active)
 	if deleted.Valid {
 		v.ref.DeletedAt = store.DecodeTime(deleted.Int64)
@@ -2006,14 +2006,14 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	)
 	for rows.Next() {
 		var (
-			v                                         repoView
-			status, managed, kind, owners, visibility string
-			deleted                                   sql.NullInt64
-			active                                    int64
-			head                                      sql.NullString
+			v                                                 repoView
+			status, managed, kind, owners, visibility, search string
+			deleted                                           sql.NullInt64
+			active                                            int64
+			head                                              sql.NullString
 		)
 		if err := rows.Scan(&v.ref.ID, &v.ref.Name, &status, &managed, &kind, &owners, &v.ref.Owner.Ref,
-			&visibility, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &active, &v.ref.Refs,
+			&visibility, &search, &v.ref.DefaultBranch, &v.ref.Description, &deleted, &active, &v.ref.Refs,
 			&v.ref.LivePacks, &v.ref.LiveBytes, &v.ref.LiveObjects, &v.ref.DropEpoch, &v.pushes, &v.lastPushAt,
 			&head); err != nil {
 			_ = rows.Close()
@@ -2021,7 +2021,7 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		}
 		scanned, lastScanned = scanned+1, v.ref.Name
 		v.ref.Status, v.ref.ManagedBy, v.ref.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
-		v.ref.Kind, v.ref.Visibility = RepoKind(kind), Visibility(visibility)
+		v.ref.Kind, v.ref.Visibility, v.ref.Search = RepoKind(kind), Visibility(visibility), SearchMode(search)
 		v.ref.LastActivityAt = activityAt(active)
 		g, refused := JudgeRead(q.Asker, q.CeilingSeat, v.ref, chart)
 		if refused != nil {
@@ -3314,10 +3314,10 @@ func (r *Reader) purgedAt(ctx context.Context, id string, at statelog.Position) 
 // The reader's statements, each registered in plan_test.go so the pinned
 // driver's planner is held to the index each is written for.
 const (
-	repoViewSQL = `SELECT id, name, status, managed_by, kind, owner_kind, owner, visibility, default_branch,
-		description, deleted_at, last_activity_at, refs, branches, tags, tombstones, live_packs, live_bytes,
-		live_objects, drop_epoch, tombstones_through, retired_through, layers_position, pushes, last_push_at,
-		created_at FROM code_repos WHERE id = ?`
+	repoViewSQL = `SELECT id, name, status, managed_by, kind, owner_kind, owner, visibility, search,
+		default_branch, description, deleted_at, last_activity_at, refs, branches, tags, tombstones, live_packs,
+		live_bytes, live_objects, drop_epoch, tombstones_through, retired_through, layers_position, pushes,
+		last_push_at, created_at FROM code_repos WHERE id = ?`
 	packColumns       = `pack_id, part, object, hash, size, index_bytes, reverse_bytes, git_checksum, objects, kind, state, added_position, content_position`
 	packsFullFirstSQL = `SELECT ` + packColumns + ` FROM code_packs WHERE repo_id = ?
 		ORDER BY pack_id, part LIMIT ?`
@@ -3371,8 +3371,8 @@ const (
 		AND position <= ? AND (position < ? OR push_id < ?)
 		ORDER BY position DESC, push_id DESC LIMIT ?`
 	reposSQL = `SELECT r.id, r.name, r.status, r.managed_by, r.kind, r.owner_kind, r.owner, r.visibility,
-		r.default_branch, r.description, r.deleted_at, r.last_activity_at, r.refs, r.live_packs, r.live_bytes,
-		r.live_objects, r.drop_epoch, r.pushes, r.last_push_at, h.target
+		r.search, r.default_branch, r.description, r.deleted_at, r.last_activity_at, r.refs, r.live_packs,
+		r.live_bytes, r.live_objects, r.drop_epoch, r.pushes, r.last_push_at, h.target
 		FROM code_repos r LEFT JOIN code_refs h INDEXED BY ` + refsKey + `
 			ON h.repo_id = r.id AND h.ref = 'refs/heads/' || r.default_branch AND h.target != ''
 		WHERE r.status IN (SELECT value FROM json_each(?)) AND r.name > ?

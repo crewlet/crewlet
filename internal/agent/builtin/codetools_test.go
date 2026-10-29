@@ -55,7 +55,8 @@ func siteDetail() code.RepoDetail {
 		RepoSummary: code.RepoSummary{
 			RepoRef: code.RepoRef{ID: siteID, Name: "site", Status: code.RepoStatusActive,
 				ManagedBy: code.ManagedConfig, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "eng"},
-				Visibility: code.VisibilityCompany, DefaultBranch: "main", Refs: 2, LivePacks: 1,
+				Visibility: code.VisibilityCompany, Search: code.SearchIndexed, DefaultBranch: "main",
+				Refs: 2, LivePacks: 1,
 				LiveBytes: 4096, Position: codeAt(7)},
 			Access: "read", Head: mainOID, Pushes: 3,
 		},

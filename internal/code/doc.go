@@ -863,6 +863,21 @@
 // field ([MergeGate.LoosenedBy]): it raises a field and only a person lowers
 // one.
 //
+// # A repository names how it is searched
+//
+// A repository's [SearchMode] is a setting like its visibility, carried whole
+// by every record of its settings ([RepoSettings.Search]) and answered on its
+// row ([RepoRef.Search]): indexed, read from an index of its default branch by
+// a search across the company's repositories, or grep, read only by a search
+// naming it. Its default is applied where the settings are formed — indexed for
+// a declaration, grep for a tool's create — and a SCRATCH repository is grep
+// for good: [RepoSettings.Validate] refuses its index, and a settings change
+// asking for one is refused not_permitted naming why, a person's included. The
+// rows carry the mode in code_repos.search, beside code_repos_search_idx over
+// the active and archived repositories by mode and then name — the walk of
+// whatever lists the indexed ones. This package records the mode, serves it and
+// lets a maintainer change it; it indexes and searches nothing.
+//
 // # What this package does not do
 //
 // It runs no git and serves no HTTP. It decides and applies records, commits

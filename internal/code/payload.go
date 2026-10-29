@@ -166,6 +166,47 @@ func Visibilities() []Visibility { return []Visibility{VisibilityCompany, Visibi
 // its default (company) before the record is formed.
 func (v Visibility) Valid() bool { return slices.Contains(Visibilities(), v) }
 
+// SearchMode is how code search reads a repository: from an index of its
+// default branch's tip (indexed), which a search across the company's
+// repositories reads as well as one naming the repository, or with git grep
+// over a copy of it (grep), only when a search names it. An index costs every
+// git node that keeps one its disk and a build at each new tip, and a grep
+// costs nothing until somebody asks — so the mode is a SETTING LIKE EVERY
+// OTHER, carried whole by every create, settings and restore record
+// ([RepoSettings.Search]) and changed by whoever maintains the repository.
+//
+// EACH IS THE DEFAULT WHERE ITS SETTINGS ARE FORMED: indexed for a repository
+// code.repos declares that leaves the field unset
+// (config.CodeSearchMode.Resolved), since a project the company named is the
+// code its seats work in; grep for one a tool makes — the tool forms its create
+// so — since no index is built for a repository until somebody who maintains
+// it asks for one. A SCRATCH REPOSITORY IS ALWAYS grep ([RepoSettings.Validate]):
+// a seat makes up to code.scratch.max_per_seat of its own and each is deleted
+// once idle, so indexing them would build and keep an index on the git nodes
+// for every experiment a seat makes; a search naming one still reads it.
+//
+// This build records the mode, serves it on every repository's row and lets
+// a person or a maintaining seat change it; no node of it keeps an index or
+// answers a search.
+type SearchMode string
+
+const (
+	// SearchIndexed is read from an index of its default branch's tip.
+	SearchIndexed SearchMode = "indexed"
+	// SearchGrep is read with git grep, only by a search that names it.
+	SearchGrep SearchMode = "grep"
+)
+
+// SearchModes is the closed set: the one list a validator and the
+// configuration's own (config.CodeSearchModes, held to it by the engine's
+// TestEveryDeclaredSearchModeIsOneTheDomainRecords) are read against.
+func SearchModes() []SearchMode { return []SearchMode{SearchIndexed, SearchGrep} }
+
+// Valid reports a mode this build knows. EMPTY IS NOT ONE, for [Visibility]'s
+// reason: whoever forms a record applies its default first — the
+// configuration indexed, a tool grep.
+func (m SearchMode) Valid() bool { return slices.Contains(SearchModes(), m) }
+
 // PrincipalKind is who acts on a repository.
 type PrincipalKind string
 
@@ -483,6 +524,21 @@ type RepoSettings struct {
 	Archived      bool   `json:"archived,omitempty"`
 	// Visibility is who may read it besides persons and Tier A tokens.
 	Visibility Visibility `json:"visibility"`
+	// Search is how code search reads it ([SearchMode]): never indexed on a
+	// scratch repository.
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this field — none of the domain is on main, so
+	// no image and no release holds it — and while that is so, every build
+	// that meets a record carrying settings reads it. Once a build without it
+	// has run, each op whose payload carries settings takes {Name:
+	// "RepoSettings.Search", Since: 2, Op: <the op: create, settings,
+	// restore>, Path: []string{"mutation", "settings", "search"}} in
+	// versionedFields, with RecordVersion at 2, its line under "What each
+	// version added" and a Carrying record in the statelogtest candidate —
+	// such a build would apply settings without their mode, and the row it
+	// wrote would read as no mode on that node for ever.
+	Search SearchMode `json:"search"`
 	// Protections are sorted by Pattern and unique — the canonical order,
 	// so two nodes deciding one declaration form byte-identical records —
 	// each one's gate in its one form too ([CanonicalGate]).
@@ -540,6 +596,11 @@ func (s RepoSettings) Validate() error {
 		return fmt.Errorf("%w: owner.ref: a repository's owner names a unit or a seat", ErrInvalid)
 	case !s.Visibility.Valid():
 		return fmt.Errorf("%w: visibility: %q is not one of %v", ErrInvalid, s.Visibility, Visibilities())
+	case !s.Search.Valid():
+		return fmt.Errorf("%w: search: %q is not one of %v", ErrInvalid, s.Search, SearchModes())
+	case s.Kind == RepoScratch && s.Search == SearchIndexed:
+		return fmt.Errorf("%w: search: a scratch repository is searched with %s — it is its seat's own "+
+			"experiment, and no index is kept for one", ErrInvalid, SearchGrep)
 	case !gitref.ValidBranch(s.DefaultBranch):
 		return fmt.Errorf("%w: default_branch: %q is not a branch name", ErrInvalid, s.DefaultBranch)
 	case gitref.ReservedSeatBranch(s.DefaultBranch):
@@ -578,7 +639,7 @@ func (s RepoSettings) Validate() error {
 func (s RepoSettings) equal(o RepoSettings) bool {
 	return s.ManagedBy == o.ManagedBy && s.Kind == o.Kind && s.Owner == o.Owner &&
 		s.DefaultBranch == o.DefaultBranch && s.Description == o.Description &&
-		s.Archived == o.Archived && s.Visibility == o.Visibility &&
+		s.Archived == o.Archived && s.Visibility == o.Visibility && s.Search == o.Search &&
 		slices.EqualFunc(s.Protections, o.Protections, Protection.Equal) &&
 		slices.EqualFunc(s.PathOwners, o.PathOwners, PathOwner.equal)
 }

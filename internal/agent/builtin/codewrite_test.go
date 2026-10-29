@@ -89,7 +89,8 @@ func (c *codeWrites) Lifecycle(_ context.Context, r code.LifecycleRequest) (code
 	if r.Kind == code.LifecycleCreate {
 		id, _ := code.RepoIDOf(r.OpID)
 		repo = code.RepoRef{ID: id, Name: r.Name, Status: code.RepoStatusActive, Kind: r.Create.Kind,
-			Owner: r.Create.Owner, Visibility: r.Create.Visibility, DefaultBranch: r.Create.DefaultBranch}
+			Owner: r.Create.Owner, Visibility: r.Create.Visibility, Search: r.Create.Search,
+			DefaultBranch: r.Create.DefaultBranch}
 	}
 	return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: repo, Position: codeAt(14)}, nil
 }
@@ -401,6 +402,80 @@ func TestAProtectionWithNoDirectPushIsAPersonsRule(t *testing.T) {
 		len(after) != len(before) {
 		t.Errorf("a direct_push the domain does not know answered %q as %s, with %d requests sent", got.Output,
 			tools.RefusalOf(got), len(after)-len(before))
+	}
+}
+
+// A TOOL'S REPOSITORY STARTS AT GREP, AND ITS MODE IS ONE SETTINGS CHANGE:
+// code_create_repo forms every create — a project's and a scratch
+// repository's — searched with grep, the code domain's default for what a tool
+// makes, and code_update_repo's `search` sends a settings change naming the
+// mode and nothing else, whose answer says the mode the repository now has. A
+// mode beside another kind of change is refused as the call's own mistake,
+// with nothing sent.
+//
+// Mutations: form a create with no mode — the domain's own validation refuses
+// it and nothing is sent, red; read no `search` argument — the change is
+// refused as asking nothing, red.
+func TestAToolsRepositoryStartsAtGrepAndChangesItsSearchModeAlone(t *testing.T) {
+	t.Parallel()
+	writer := &codeWrites{life: func(r code.LifecycleRequest) (code.LifecycleResult, error) {
+		repo := siteDetail().RepoRef
+		if r.Kind == code.LifecycleCreate {
+			id, _ := code.RepoIDOf(r.OpID)
+			repo = code.RepoRef{ID: id, Name: r.Name, Status: code.RepoStatusActive, Kind: r.Create.Kind,
+				Owner: r.Create.Owner, Visibility: r.Create.Visibility, Search: r.Create.Search,
+				DefaultBranch: r.Create.DefaultBranch}
+		} else if r.Change != nil && r.Change.Search != nil {
+			repo.Search = *r.Change.Search
+		}
+		return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: repo, Position: codeAt(14)}, nil
+	}}
+	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
+	turn := writerTurn(t)
+	// call makes one call and answers it with the requests it sent.
+	call := func(tool string, args map[string]any) (tools.Result, []code.LifecycleRequest) {
+		_, before := writer.asked()
+		got := callWrite(t, everyGrant(), reg, turn, tool, args)
+		_, after := writer.asked()
+		return got, after[len(before):]
+	}
+	for _, args := range []map[string]any{
+		{"name": "lab", "owner": map[string]any{"kind": "unit", "ref": "eng"}},
+		{"name": "agent-cto.lab"},
+	} {
+		got, sent := call(builtin.CodeCreateRepoTool, args)
+		if got.Failed || len(sent) != 1 || sent[0].Create == nil || sent[0].Create.Search != code.SearchGrep {
+			t.Errorf("creating %v answered %q and sent %+v, want one create searched with grep", args["name"],
+				got.Output, sent)
+		}
+	}
+
+	got, sent := call(builtin.CodeUpdateRepoTool, map[string]any{"repo": "site", "search": "grep"})
+	if got.Failed || len(sent) != 1 {
+		t.Fatalf("setting site's search answered %q and sent %d requests, want one", got.Output, len(sent))
+	}
+	if want := (code.RepoChange{Search: new(code.SearchGrep)}); sent[0].Kind != code.LifecycleSettings ||
+		sent[0].Change == nil || !reflect.DeepEqual(*sent[0].Change, want) {
+		t.Errorf("setting site's search sent %s %+v, want a settings change naming the mode alone", sent[0].Kind,
+			sent[0].Change)
+	}
+	var answer struct {
+		Repository struct {
+			Search code.SearchMode `json:"search"`
+		} `json:"repository"`
+	}
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+		t.Fatalf("the answer %q: %v", got.Output, err)
+	}
+	if answer.Repository.Search != code.SearchGrep {
+		t.Errorf("setting site's search answered %q, want the repository's mode as it now stands", got.Output)
+	}
+
+	got, sent = call(builtin.CodeUpdateRepoTool, map[string]any{"repo": "site", "search": "indexed",
+		"archived": true})
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid || len(sent) != 0 {
+		t.Errorf("a mode beside an archive answered %q as %s, with %d requests sent", got.Output,
+			tools.RefusalOf(got), len(sent))
 	}
 }
 

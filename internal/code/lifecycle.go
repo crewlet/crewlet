@@ -61,9 +61,9 @@ const (
 	// redirecting to it for [RedirectWindow].
 	LifecycleRename LifecycleKind = "rename"
 	// LifecycleSettings changes its description, default branch, visibility,
-	// or a project's owner or path owners — taking a glob from a path owner,
-	// where a merge gate sets owners_approve, a person's alone
-	// ([gatingOwnersTaken]).
+	// search mode — a scratch repository's never to indexed — or a project's
+	// owner or path owners — taking a glob from a path owner, where a merge
+	// gate sets owners_approve, a person's alone ([gatingOwnersTaken]).
 	LifecycleSettings LifecycleKind = "settings"
 	// LifecycleArchive makes it read-only, and LifecycleUnarchive takes it
 	// back.
@@ -179,6 +179,15 @@ type RepoChange struct {
 	DefaultBranch *string `json:"default_branch,omitempty"` // a branch name (gitref.ValidBranch)
 	// Visibility is who besides persons reads it.
 	Visibility *Visibility `json:"visibility,omitempty"`
+	// Search is how code search reads it ([SearchMode]): a scratch repository
+	// is searched with grep, and asking it for an index is refused.
+	//
+	// A request is no record, so this field takes no versionedFields row: the
+	// record a settings change leads to carries the repository's settings
+	// whole, and [RepoSettings.Search] names the row those take. It crosses
+	// the estate's wire to whichever data node decides it under the code
+	// domain's stated condition, as PathOwners below does.
+	Search *SearchMode `json:"search,omitempty"`
 	// Owner is a PROJECT repository's new owner: a scratch repository stays
 	// its seat's own.
 	Owner *Owner `json:"owner,omitempty"`
@@ -197,8 +206,8 @@ type RepoChange struct {
 
 // empty reports a change that changes nothing.
 func (c RepoChange) empty() bool {
-	return c.Description == nil && c.DefaultBranch == nil && c.Visibility == nil && c.Owner == nil &&
-		c.PathOwners == nil
+	return c.Description == nil && c.DefaultBranch == nil && c.Visibility == nil && c.Search == nil &&
+		c.Owner == nil && c.PathOwners == nil
 }
 
 // PathOwnersChange is a settings request's change to who owns which of a
@@ -609,7 +618,7 @@ func settingsOf(r RepoRef, owners []PathOwner) RepoSettings {
 	return RepoSettings{
 		ManagedBy: r.ManagedBy, Kind: r.Kind, Owner: r.Owner, DefaultBranch: r.DefaultBranch,
 		Description: r.Description, Archived: r.Status == RepoStatusArchived, Visibility: r.Visibility,
-		Protections: slices.Clone(r.Protections), PathOwners: slices.Clone(owners),
+		Search: r.Search, Protections: slices.Clone(r.Protections), PathOwners: slices.Clone(owners),
 	}
 }
 
@@ -959,8 +968,8 @@ func (s *Store) lifecycleCreate(ctx context.Context, req LifecycleRequest, roste
 			// pending. A refusal answers no row: nothing was made.
 			made := RepoRef{ID: id, Name: req.Name, Status: settings.status(), ManagedBy: ManagedTools,
 				Kind: settings.Kind, Owner: settings.Owner, Visibility: settings.Visibility,
-				DefaultBranch: settings.DefaultBranch, Description: settings.Description,
-				Protections: settings.Protections, Position: cp.At}
+				Search: settings.Search, DefaultBranch: settings.DefaultBranch,
+				Description: settings.Description, Protections: settings.Protections, Position: cp.At}
 			holder, redirect, found, err := claimRowIn(ctx, tx, token)
 			switch {
 			case err != nil:
@@ -1229,6 +1238,20 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, owners []PathOwner
 		}
 		if c.Visibility != nil {
 			next.Visibility = *c.Visibility
+		}
+		if c.Search != nil {
+			// A SCRATCH REPOSITORY IS SEARCHED WITH GREP, whoever asks — a
+			// person included: an index of a seat's experiment would be built
+			// and kept on every git node holding one for a repository that is
+			// deleted once idle. Refused here, naming why, before the
+			// settings' own validation would refuse the record as invalid.
+			if v.Kind == RepoScratch && *c.Search == SearchIndexed {
+				d.refuse(LifecycleNotPermitted, "%s is a scratch repository, which is searched with %s: it is "+
+					"its seat's own experiment, and no index is kept for one — a search that names it reads it",
+					v.Name, SearchGrep)
+				return nil, "", nil
+			}
+			next.Search = *c.Search
 		}
 		if c.Owner != nil {
 			if v.Kind == RepoScratch && *c.Owner != v.Owner {

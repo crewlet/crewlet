@@ -862,6 +862,8 @@ func TestCodeStatusReadsTheNode(t *testing.T) {
 		"web — active, owned by seat:founder, default branch main\n",
 		"  description:  The customer-facing web app.\n",
 		"  visibility:   company — every seat reads it\n",
+		"  search:       indexed — read from an index of its default branch, by a search across the " +
+			"company's repositories as well as one naming it\n",
 		"  protections:  refs/heads/main (no force, no delete)\n",
 		"  refs:         2 branches, 0 tags; main at " + first + "\n",
 		"  pushes:       2 ever",

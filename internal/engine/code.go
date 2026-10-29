@@ -680,7 +680,8 @@ func retiredByOmission(l code.RepoLife) bool {
 // and the path owners in theirs ([code.CanonicalPathOwners]) — the record
 // carries one canonical order, so every node deciding one declaration forms
 // byte-identical records, and [code.RepoSettings.Validate] refuses any other —
-// and the default branch defaulted.
+// and the default branch, the visibility and the search mode defaulted, the
+// last to indexed: a repository the company declares is searched across.
 //
 // AN ERROR only for a revision validation refuses — an owner the chart does
 // not resolve: a runnable revision never reaches it, and one that does is
@@ -719,8 +720,9 @@ func declaredRepo(o *org.Index, r config.CodeRepo) (code.Declared, error) {
 	}
 	return code.Declared{Name: r.Name, Settings: code.RepoSettings{
 		ManagedBy: code.ManagedConfig, Owner: owner, Visibility: code.Visibility(r.Visibility.Resolved()),
-		DefaultBranch: r.ResolvedDefaultBranch(), Description: r.Description, Archived: r.Archived,
-		Protections: protections, PathOwners: code.CanonicalPathOwners(owners),
+		Search: code.SearchMode(r.Search.Resolved()), DefaultBranch: r.ResolvedDefaultBranch(),
+		Description: r.Description, Archived: r.Archived, Protections: protections,
+		PathOwners: code.CanonicalPathOwners(owners),
 	}}, nil
 }
 

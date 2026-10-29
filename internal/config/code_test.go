@@ -1427,6 +1427,42 @@ func TestAnUnknownVisibilityIsRefused(t *testing.T) {
 	}
 }
 
+// A SEARCH MODE THIS BUILD DOES NOT KNOW IS REFUSED at the field, naming the
+// closed set, as one problem: read as `indexed` it would have every git node
+// keeping an index build one its author did not ask for, and read as `grep` it
+// would leave a repository out of every search across the company's that its
+// author meant to be in. Unset reads as indexed — a declared repository is a
+// project the company named — and each known value as itself.
+//
+// Mutation: resolve unset to grep — the unset row reads grep, red.
+func TestAnUnknownSearchModeIsRefused(t *testing.T) {
+	t.Parallel()
+	web := "    - name: web\n      owner: {unit: Engineering}\n"
+	for _, v := range []string{"index", "Grep", "full", " indexed"} {
+		_, err := config.ParseCompany([]byte(codeRepos(web + fmt.Sprintf("      search: %q\n", v))))
+		problems := config.Problems(err)
+		if len(problems) != 1 || problems[0].Path != "code.repos[0].search" ||
+			problems[0].Kind != "unknown_value" || !strings.Contains(problems[0].Message, "indexed, grep") {
+			t.Errorf("search %q: problems = %+v, want one unknown value at code.repos[0].search naming "+
+				"indexed, grep", v, problems)
+		}
+	}
+	for written, want := range map[string]config.CodeSearchMode{
+		"":                        config.CodeSearchIndexed,
+		"      search: indexed\n": config.CodeSearchIndexed,
+		"      search: grep\n":    config.CodeSearchGrep,
+	} {
+		c, err := config.ParseCompany([]byte(codeRepos(web + written)))
+		if err != nil {
+			t.Errorf("%q: refused: %v", written, err)
+			continue
+		}
+		if got := c.Code.Repos[0].Search.Resolved(); got != want {
+			t.Errorf("%q resolves to %q, want %q", written, got, want)
+		}
+	}
+}
+
 // A `visibility: unit` REPOSITORY OWNED BY A UNIT WITH NO LEAD IS WARNED,
 // NEVER REFUSED: valid, and read by no lead's seat, because there is none — so
 // only persons and the unit's own members read it, which is rarely what

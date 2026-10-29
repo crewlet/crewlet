@@ -39,7 +39,7 @@ func TestAnUnchangedGateComparesEqual(t *testing.T) {
 	t.Parallel()
 	settings := RepoSettings{
 		ManagedBy: ManagedConfig, Kind: RepoProject, Owner: Owner{Kind: OwnerUnit, Ref: "ENG"},
-		DefaultBranch: "main", Visibility: VisibilityCompany, Protections: gatedRules(),
+		DefaultBranch: "main", Visibility: VisibilityCompany, Search: SearchIndexed, Protections: gatedRules(),
 	}
 	raw, err := json.Marshal(settings)
 	if err != nil {

@@ -487,6 +487,7 @@ type CodeRepo struct {
 	Name          string           `yaml:"name" json:"name" js:"pattern=^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" desc:"The repository's name: one label of lowercase letters, digits and hyphens, starting and ending with a letter or a digit, at most 63 — no dot, which only a seat's own scratch repository's name carries. It is the address a repository is cloned by, so renaming one here deletes it and creates another."`
 	Owner         CodeOwner        `yaml:"owner" json:"owner"`
 	Visibility    CodeVisibility   `yaml:"visibility,omitempty" json:"visibility,omitempty" js:"enum=company|unit" desc:"Who may read it besides persons: company (unset) — every seat — or unit — the owning unit's members, its leads and the owning seat."`
+	Search        CodeSearchMode   `yaml:"search,omitempty" json:"search,omitempty" js:"enum=indexed|grep" desc:"How code search reads it: indexed (unset) — from an index of its default branch, by a search across the company's repositories as well as one naming it — or grep — with git grep, and only by a search naming it."`
 	DefaultBranch string           `yaml:"default_branch,omitempty" json:"default_branch,omitempty" desc:"The branch a clone checks out; unset is main."`
 	Description   string           `yaml:"description,omitempty" json:"description,omitempty" desc:"One paragraph, at most 1024 bytes."`
 	Archived      bool             `yaml:"archived,omitempty" json:"archived,omitempty" desc:"Read-only: still fetched and cloned, and takes no push."`
@@ -554,6 +555,42 @@ func (v CodeVisibility) Resolved() CodeVisibility {
 		return CodeVisibilityCompany
 	}
 	return v
+}
+
+// CodeSearchMode is how code search reads a declared repository: from an index
+// of its default branch, or with git grep only when a search names it. UNSET IS
+// INDEXED for a repository this document declares — a project the company
+// named is the code its seats work in, so it is what a search across the
+// company's repositories reads — while a repository a tool makes starts at grep
+// (the code domain's rule, internal/code's SearchMode).
+type CodeSearchMode string
+
+const (
+	// CodeSearchIndexed reads it from an index of its default branch — what
+	// unset reads as.
+	CodeSearchIndexed CodeSearchMode = "indexed"
+	// CodeSearchGrep reads it with git grep, only by a search naming it.
+	CodeSearchGrep CodeSearchMode = "grep"
+)
+
+// CodeSearchModes is the closed set: the one list the validator and the schema
+// read. The code domain's own set is held to it in both directions by the
+// engine's TestEveryDeclaredSearchModeIsOneTheDomainRecords, because config
+// cannot import the domain that imports it.
+var CodeSearchModes = []CodeSearchMode{CodeSearchIndexed, CodeSearchGrep}
+
+// Valid reports a value this build knows. Unset is valid: it reads as indexed
+// ([CodeSearchMode.Resolved]).
+func (m CodeSearchMode) Valid() bool { return m == "" || slices.Contains(CodeSearchModes, m) }
+
+// Resolved is the value with its default applied: unset is indexed — THE ONE
+// PLACE the default is applied, read by the engine's reconcile, so a
+// declaration that says nothing is recorded as indexed on every node.
+func (m CodeSearchMode) Resolved() CodeSearchMode {
+	if m == "" {
+		return CodeSearchIndexed
+	}
+	return m
 }
 
 // CodeOwner is who owns a repository: exactly one of a unit or a seat.
@@ -1101,7 +1138,7 @@ func validateCodeRepos(path Path, repos []CodeRepo, o *org.Organization) error {
 
 // validate holds one declared repository at path, against the document's
 // chart: its name, its one owner resolving on the chart, its visibility, its
-// default branch, its description, its protection rules — at most
+// search mode, its default branch, its description, its protection rules — at most
 // [CodeMaxProtections], each naming exactly one of a branch or a tag pattern
 // in gitref's grammar, each pattern protected once, no force on a tag, and
 // each one's merge gate ([CodeProtection.validateGate]) — and its path owners
@@ -1130,6 +1167,10 @@ func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 	if !r.Visibility.Valid() {
 		p.add(at(path, "visibility"), ErrUnknownValue, "%q (want %s, or unset for %s)",
 			r.Visibility, names(CodeVisibilities), CodeVisibilityCompany)
+	}
+	if !r.Search.Valid() {
+		p.add(at(path, "search"), ErrUnknownValue, "%q (want %s, or unset for %s)",
+			r.Search, names(CodeSearchModes), CodeSearchIndexed)
 	}
 	switch {
 	case r.DefaultBranch == "":

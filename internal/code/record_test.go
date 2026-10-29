@@ -109,7 +109,7 @@ func TestRepoSettingsRefuseWhatADeclarationCannotMean(t *testing.T) {
 	// own, is settings a create may carry.
 	scratch := code.RepoSettings{ManagedBy: code.ManagedTools, Kind: code.RepoScratch,
 		Owner: code.Owner{Kind: code.OwnerSeat, Ref: "dev"}, Visibility: code.VisibilityCompany,
-		DefaultBranch: "main"}
+		Search: code.SearchGrep, DefaultBranch: "main"}
 	if err := scratch.Validate(); err != nil {
 		t.Fatalf("a scratch repository's settings are refused: %v", err)
 	}
@@ -136,6 +136,8 @@ func TestRepoSettingsRefuseWhatADeclarationCannotMean(t *testing.T) {
 		"no owner":                 func(s *code.RepoSettings) { s.Owner.Ref = " " },
 		"no visibility":            func(s *code.RepoSettings) { s.Visibility = "" },
 		"an unknown visibility":    func(s *code.RepoSettings) { s.Visibility = "team" },
+		"no search mode":           func(s *code.RepoSettings) { s.Search = "" },
+		"an unknown search mode":   func(s *code.RepoSettings) { s.Search = "fuzzy" },
 		"a default branch no ref":  func(s *code.RepoSettings) { s.DefaultBranch = "a..b" },
 		"a description too long":   func(s *code.RepoSettings) { s.Description = strings.Repeat("x", code.MaxDescriptionBytes+1) },
 		"a description not UTF-8":  func(s *code.RepoSettings) { s.Description = "\xff" },

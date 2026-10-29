@@ -1050,6 +1050,7 @@ type codeRepoRow struct {
 	Status        code.RepoStatus   `json:"status"`
 	Owner         code.Owner        `json:"owner"`
 	Visibility    code.Visibility   `json:"visibility"`
+	Search        code.SearchMode   `json:"search"`
 	Access        string            `json:"access"`
 	DefaultBranch string            `json:"default_branch"`
 	Head          string            `json:"head,omitempty"`
@@ -1061,8 +1062,8 @@ type codeRepoRow struct {
 func repoRowOf(s code.RepoSummary) codeRepoRow {
 	return codeRepoRow{
 		Name: s.Name, Description: s.Description, Status: s.Status, Owner: s.Owner,
-		Visibility: s.Visibility, Access: s.Access, DefaultBranch: s.DefaultBranch, Head: s.Head,
-		Pushes: s.Pushes, LastPushAt: s.LastPushAt, Protections: s.Protections,
+		Visibility: s.Visibility, Search: s.Search, Access: s.Access, DefaultBranch: s.DefaultBranch,
+		Head: s.Head, Pushes: s.Pushes, LastPushAt: s.LastPushAt, Protections: s.Protections,
 	}
 }
 

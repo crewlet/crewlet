@@ -112,9 +112,9 @@ func (n *node) settingsOf(name string) code.RepoSettings {
 	err := n.db.Reader().Read(n.t.Context(), func(tx *sql.Tx) error {
 		var id, status string
 		if err := tx.QueryRowContext(n.t.Context(), `
-			SELECT id, managed_by, kind, owner_kind, owner, visibility, default_branch, description, status
-			FROM code_repos WHERE name = ?`, name).Scan(&id, &s.ManagedBy, &s.Kind, &s.Owner.Kind,
-			&s.Owner.Ref, &s.Visibility, &s.DefaultBranch, &s.Description, &status); err != nil {
+			SELECT id, managed_by, kind, owner_kind, owner, visibility, search, default_branch, description,
+			status FROM code_repos WHERE name = ?`, name).Scan(&id, &s.ManagedBy, &s.Kind, &s.Owner.Kind,
+			&s.Owner.Ref, &s.Visibility, &s.Search, &s.DefaultBranch, &s.Description, &status); err != nil {
 			return err
 		}
 		s.Archived = status == string(code.RepoStatusArchived)
@@ -219,6 +219,11 @@ func TestEveryDeclaredSettingsChangeWritesOneRecord(t *testing.T) {
 		"the visibility changed": func() code.RepoSettings {
 			s := suiteSettings()
 			s.Visibility = code.VisibilityUnit
+			return s
+		}(),
+		"the search mode changed": func() code.RepoSettings {
+			s := suiteSettings()
+			s.Search = code.SearchGrep
 			return s
 		}(),
 		"path owners named": func() code.RepoSettings {

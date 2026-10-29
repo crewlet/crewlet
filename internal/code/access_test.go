@@ -775,7 +775,7 @@ func TestARepositorysDefaultBranchIsNoReservedSeatBranch(t *testing.T) {
 		s := code.RepoSettings{
 			ManagedBy: code.ManagedConfig, Kind: code.RepoProject,
 			Owner:      code.Owner{Kind: code.OwnerUnit, Ref: "ENG"},
-			Visibility: code.VisibilityCompany, DefaultBranch: branch,
+			Visibility: code.VisibilityCompany, Search: code.SearchIndexed, DefaultBranch: branch,
 		}
 		err := s.Validate()
 		switch {

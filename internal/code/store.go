@@ -782,15 +782,15 @@ func reposIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repoRow,
 	for rows.Next() {
 		var id string
 		var row repoRow
-		var status, managed, kind, owners, visibility string
+		var status, managed, kind, owners, visibility, search string
 		if err = rows.Scan(&id, &row.Name, &status, &managed, &kind, &owners, &row.Owner.Ref, &visibility,
-			&row.DefaultBranch, &row.Description, &row.ConfigEpoch, &row.PurgeParts,
+			&search, &row.DefaultBranch, &row.Description, &row.ConfigEpoch, &row.PurgeParts,
 			&row.DeletedAt); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("code: read the declared repositories: %w", err)
 		}
 		row.Status, row.ManagedBy, row.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
-		row.Kind, row.Visibility = RepoKind(kind), Visibility(visibility)
+		row.Kind, row.Visibility, row.Search = RepoKind(kind), Visibility(visibility), SearchMode(search)
 		out[id] = row
 	}
 	if err = rows.Err(); err != nil {
@@ -1131,6 +1131,7 @@ type repoRow struct {
 	Kind          RepoKind
 	Owner         Owner
 	Visibility    Visibility
+	Search        SearchMode
 	DefaultBranch string
 	Description   string
 	ConfigEpoch   int64
@@ -1149,7 +1150,7 @@ type repoRow struct {
 // settings is the row's settings, for comparison with a declaration.
 func (r repoRow) settings() RepoSettings {
 	return RepoSettings{
-		ManagedBy: r.ManagedBy, Kind: r.Kind, Owner: r.Owner, Visibility: r.Visibility,
+		ManagedBy: r.ManagedBy, Kind: r.Kind, Owner: r.Owner, Visibility: r.Visibility, Search: r.Search,
 		DefaultBranch: r.DefaultBranch, Description: r.Description, Archived: r.Status == RepoStatusArchived,
 		Protections: r.Protections, PathOwners: r.PathOwners, ConfigEpoch: r.ConfigEpoch,
 	}
@@ -1158,11 +1159,11 @@ func (r repoRow) settings() RepoSettings {
 // repoIn reads a repository's row, its rules and its path owners in tx.
 func repoIn(ctx context.Context, tx *sql.Tx, id string) (repoRow, bool, error) {
 	var (
-		row                                       repoRow
-		status, managed, kind, owners, visibility string
+		row                                               repoRow
+		status, managed, kind, owners, visibility, search string
 	)
 	err := tx.QueryRowContext(ctx, repoRowSQL, id).Scan(&row.Name, &status, &managed, &kind, &owners,
-		&row.Owner.Ref, &visibility, &row.DefaultBranch, &row.Description, &row.ConfigEpoch,
+		&row.Owner.Ref, &visibility, &search, &row.DefaultBranch, &row.Description, &row.ConfigEpoch,
 		&row.PurgeParts, &row.DeletedAt, &row.LastActivityAt, &row.Version)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -1171,7 +1172,7 @@ func repoIn(ctx context.Context, tx *sql.Tx, id string) (repoRow, bool, error) {
 		return repoRow{}, false, fmt.Errorf("code: read repository %s: %w", id, err)
 	}
 	row.Status, row.ManagedBy, row.Owner.Kind = RepoStatus(status), ManagedBy(managed), OwnerKind(owners)
-	row.Kind, row.Visibility = RepoKind(kind), Visibility(visibility)
+	row.Kind, row.Visibility, row.Search = RepoKind(kind), Visibility(visibility), SearchMode(search)
 	if row.Protections, err = protectionsIn(ctx, tx, id); err != nil {
 		return repoRow{}, false, err
 	}
@@ -1272,10 +1273,10 @@ const (
 	claimSQL  = `SELECT repo_id FROM code_names WHERE token = ?`
 	claimsSQL = `SELECT token, repo_id FROM code_names
 		WHERE token IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
-	reposRowsSQL = `SELECT id, name, status, managed_by, kind, owner_kind, owner, visibility, default_branch,
-		description, config_epoch, purge_parts, deleted_at FROM code_repos
+	reposRowsSQL = `SELECT id, name, status, managed_by, kind, owner_kind, owner, visibility, search,
+		default_branch, description, config_epoch, purge_parts, deleted_at FROM code_repos
 		WHERE id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
-	repoRowSQL = `SELECT name, status, managed_by, kind, owner_kind, owner, visibility, default_branch,
+	repoRowSQL = `SELECT name, status, managed_by, kind, owner_kind, owner, visibility, search, default_branch,
 		description, config_epoch, purge_parts, deleted_at, last_activity_at, version FROM code_repos
 		WHERE id = ?`
 	protectionsSQL = `SELECT pattern, allow_force, allow_delete, direct_push, gate FROM code_protections

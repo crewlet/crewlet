@@ -43,7 +43,9 @@ type RepoRef struct {
 	Owner Owner    `json:"owner"`
 	// Visibility is who besides persons reads it — with Owner, all a grant
 	// reads of the repository ([GrantOf]).
-	Visibility    Visibility   `json:"visibility"`
+	Visibility Visibility `json:"visibility"`
+	// Search is how code search reads it ([SearchMode]).
+	Search        SearchMode   `json:"search"`
 	DefaultBranch string       `json:"default_branch"`
 	Description   string       `json:"description,omitempty"`
 	Protections   []Protection `json:"protections,omitempty"`

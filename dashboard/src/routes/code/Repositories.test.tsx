@@ -48,6 +48,7 @@ function repo(name: string, extra: Record<string, unknown> = {}) {
     kind: "project",
     owner: { kind: "unit", ref: "engineering" },
     visibility: "company",
+    search: "indexed",
     default_branch: "main",
     refs: 3,
     live_packs: 2,

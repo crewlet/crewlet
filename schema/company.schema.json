@@ -571,6 +571,15 @@
             "null"
           ]
         },
+        "search": {
+          "description": "How code search reads it: indexed (unset) — from an index of its default branch, by a search across the company's repositories as well as one naming it — or grep — with git grep, and only by a search naming it.",
+          "enum": [
+            "indexed",
+            "grep",
+            "",
+            null
+          ]
+        },
         "visibility": {
           "description": "Who may read it besides persons: company (unset) — every seat — or unit — the owning unit's members, its leads and the owning seat.",
           "enum": [

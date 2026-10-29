@@ -499,8 +499,90 @@ func TestEveryDeclaredVisibilityIsOneTheDomainRecords(t *testing.T) {
 	}
 }
 
-// sameClosedSet holds one of a merge gate's closed sets as config declares it
-// to the code domain's: the same values, in the same order.
+// EVERY SEARCH MODE A DOCUMENT MAY DECLARE IS ONE THE CODE DOMAIN RECORDS, and
+// the other way round, in order: config cannot import the domain that imports
+// it, so the two closed sets are spelled twice and held to each other here. One
+// the domain refused would fail every reconcile of the repository; one it
+// records that no document may declare is a mode a declared repository could
+// never be put in. Unset resolves to one the domain records — the domain itself
+// takes no unset value.
+func TestEveryDeclaredSearchModeIsOneTheDomainRecords(t *testing.T) {
+	t.Parallel()
+	sameClosedSet(t, "search", config.CodeSearchModes, code.SearchModes())
+	for _, m := range config.CodeSearchModes {
+		if !code.SearchMode(m.Resolved()).Valid() {
+			t.Errorf("code.repos may declare search %q, which the code domain refuses", m)
+		}
+	}
+	if !code.SearchMode(config.CodeSearchMode("").Resolved()).Valid() {
+		t.Error("an unset search resolves to a value the code domain refuses")
+	}
+}
+
+// A DECLARED REPOSITORY IS INDEXED BY DEFAULT: a code.repos entry that says
+// nothing of search is recorded `indexed` — a project the company named is the
+// code a search across its repositories reads — and one saying `grep` is
+// recorded so, each from config's one default through the reconcile into the
+// row. A revision that changes a declared mode settles it in one settings
+// record beside its fence, one that changes nothing writes its fence alone,
+// and dropping the field puts the repository back at the default.
+//
+// Mutations: resolve an unset search to grep (config.CodeSearchMode.Resolved)
+// — web reads grep, red; compare settings without their mode
+// (code.RepoSettings.equal) — the changed mode never reaches the log, red;
+// leave the mode out of the reconcile's batch read (code's reposRowsSQL) — the
+// unchanged activation writes a settings record, red.
+func TestADeclaredRepositoryIsIndexedByDefault(t *testing.T) {
+	t.Parallel()
+	doc := func(webSearch string) string {
+		web := "    - name: web\n      owner: {unit: Engineering}\n"
+		if webSearch != "" {
+			web += "      search: " + webSearch + "\n"
+		}
+		return codeReposDoc(web+"    - name: api\n      owner: {seat: swe}\n      search: grep\n", "")
+	}
+	e := newSandboxNode(t, parseCompany(t, doc("")))
+	servesCodeReads(t, e)
+	reconciled(t, e)
+	web := mustRepo(t, e, "web")
+	if web.Search != code.SearchIndexed {
+		t.Errorf("web, declaring no search, is recorded at %q, want %s", web.Search, code.SearchIndexed)
+	}
+	if api := mustRepo(t, e, "api"); api.Search != code.SearchGrep {
+		t.Errorf("api, declared search: grep, is recorded at %q, want %s", api.Search, code.SearchGrep)
+	}
+
+	// THE MODE CHANGED: one settings record beside the fence.
+	before := codeLogEnd(t, e)
+	applyReconciled(t, e, doc("grep"))
+	if got := mustRepo(t, e, "web").Search; got != code.SearchGrep {
+		t.Errorf("after an activation declaring search: grep, web is recorded at %q", got)
+	}
+	if wrote := codeLogWrites(t, e, before); !slices.Equal(wrote,
+		[]code.Subject{code.CompanySubject(), code.RepoSubject(web.ID)}) {
+		t.Errorf("an activation changing web's search wrote %v to the code log, want its fence and one "+
+			"settings record", wrote)
+	}
+
+	// NOTHING CHANGED: the fence alone.
+	before = codeLogEnd(t, e)
+	applyReconciled(t, e, doc("grep"))
+	if wrote := codeLogWrites(t, e, before); !slices.Equal(wrote, []code.Subject{code.CompanySubject()}) {
+		t.Errorf("an activation changing nothing wrote %v to the code log, want its fence alone, %v", wrote,
+			code.CompanySubject())
+	}
+
+	// DROPPED: the default again.
+	applyReconciled(t, e, doc(""))
+	if got := mustRepo(t, e, "web").Search; got != code.SearchIndexed {
+		t.Errorf("after an activation that names no search, web is recorded at %q, want %s", got,
+			code.SearchIndexed)
+	}
+}
+
+// sameClosedSet holds one of code.repos' closed sets — a merge gate's, or the
+// search modes — as config declares it to the code domain's: the same values,
+// in the same order.
 func sameClosedSet[C, D ~string](t *testing.T, field string, declared []C, recorded []D) {
 	t.Helper()
 	d := make([]string, len(declared))
