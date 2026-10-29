@@ -7,12 +7,23 @@
  * engine's code, sentence and fields, so each flow branches on the code it
  * expects (`credential_rejected`, `already_exists`, `not_sitting_out`,
  * `sign_in_in_progress`, a removal's `references`) rather than catching. Only
- * the caller's own abort rejects. A `step_up_required` never reaches here:
- * the transport asks for the second factor and replays the request.
+ * two things reject: the caller's own abort, and a name that cannot be sent
+ * as one path segment (`pathSegment`'s RangeError, before anything is sent;
+ * no name the engine mints is one). Every route is `async`, so both arrive as
+ * a rejection, never as a throw from the call. A `step_up_required` never
+ * reaches here: the transport asks for the second factor and replays the
+ * request.
  *
  * EVERY WRITE THAT RE-ACTIVATES THE COMPANY STATES THE REVISION IT EDITED
  * (`If-Match`), so a colleague's save in between is a conflict to re-read
  * rather than an overwrite.
+ *
+ * A WRITE THAT HAS STARTED IS SENT WITHOUT A SIGNAL, and so runs to its
+ * answer (or the transport's own deadline) whatever happens to the screen:
+ * stopped part way, a save could seal a secret no document names, or a
+ * removal leave the person unsure whether it happened. The signal a write
+ * takes is for a dry run or a check the screen may abandon; what a screen does
+ * with a write's answer is what its lifetime gates (`useLifetimeSignal`).
  */
 
 import { answerOf, outcomeOf, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
@@ -103,7 +114,7 @@ export interface CredentialRequest {
 }
 
 /** `PUT /llm/providers/{key}/credential?dry_run=true`: the values tested, stored nowhere. */
-export function testCredential(
+export async function testCredential(
   key: string,
   request: CredentialRequest,
   signal?: AbortSignal,
@@ -124,7 +135,7 @@ export function testCredential(
  * they sign the model in, and the revision that reads them re-activated
  * against `etag`.
  */
-export function storeCredential(
+export async function storeCredential(
   key: string,
   request: CredentialRequest,
   etag: string,
@@ -141,7 +152,7 @@ export function storeCredential(
 }
 
 /** `POST /llm/providers/{key}/check`: the model's test, with a real call when `smoke`. */
-export function checkModel(
+export async function checkModel(
   key: string,
   options: { smoke: boolean; entity?: Record<string, unknown> },
   signal?: AbortSignal,
@@ -159,7 +170,7 @@ export function checkModel(
  * `POST /llm/providers/{key}/retry`: `probe` asks the vendor once and clears
  * the sit-out only if it answers; `clear` clears it for a plan raised outside.
  */
-export function retryModel(
+export async function retryModel(
   key: string,
   mode: "probe" | "clear",
   signal?: AbortSignal,
@@ -174,7 +185,7 @@ export function retryModel(
 }
 
 /** `POST /llm/providers/{key}/host-login/check`: the CLI's own login on the answering node. */
-export function checkHostLogin(
+export async function checkHostLogin(
   key: string,
   signal?: AbortSignal,
 ): Promise<ModelAnswer<HostLoginAnswer>> {
@@ -187,7 +198,7 @@ export function checkHostLogin(
 }
 
 /** `POST /llm/providers/{key}/device-sign-in`: a device-code sign-in started (201). */
-export function startDeviceSignIn(
+export async function startDeviceSignIn(
   key: string,
   signal?: AbortSignal,
 ): Promise<ModelAnswer<ModelDevice>> {
@@ -200,7 +211,7 @@ export function startDeviceSignIn(
 }
 
 /** `DELETE /llm/device-sign-ins/{id}`: the sign-in cancelled. */
-export function cancelDeviceSignIn(
+export async function cancelDeviceSignIn(
   id: string,
   signal?: AbortSignal,
 ): Promise<ModelAnswer<ModelDevice>> {
@@ -253,7 +264,7 @@ export async function removeModel(
   key: string,
   removal: Removal,
   options: { etag: string; summary: string; dryRun: boolean },
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ): Promise<RemovalAnswer> {
   const answer = await answerOf(
     rest.request("DELETE", `/config/llm-providers/${pathSegment(key)}`, {
@@ -263,7 +274,7 @@ export async function removeModel(
         ...(options.dryRun ? {} : { "X-Summary": options.summary }),
       },
       ...(options.dryRun ? { query: { dry_run: "true" } } : {}),
-      signal,
+      ...(signal ? { signal } : {}),
     }),
   );
   return { outcome: outcomeOf(answer), references: referencesOf(answer.body) };
@@ -277,7 +288,7 @@ export async function removeModel(
 export async function writeDocument(
   doc: CompanyDocument,
   options: { etag: string; summary: string; dryRun: boolean },
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ): Promise<ConfigWriteOutcome> {
   return outcomeOf(
     await answerOf(
@@ -288,7 +299,7 @@ export async function writeDocument(
           ...(options.dryRun ? {} : { "X-Summary": options.summary }),
         },
         ...(options.dryRun ? { query: { dry_run: "true" } } : {}),
-        signal,
+        ...(signal ? { signal } : {}),
       }),
     ),
   );

@@ -270,23 +270,47 @@ test("the credential is tested, then stored with its draft before the document t
   expect(location.hash).toContain("settings/models/sonnet-key");
 });
 
-test("a save that answers after the wizard closed neither moves the page nor goes on", async () => {
+/**
+ * A SAVE THAT HAS STARTED RUNS TO ITS END, whatever happens to the wizard:
+ * left between the credential and the document, it still reads the revision
+ * the credential re-activated and writes the document, so no sealed secret is
+ * left that no document names. Only what the wizard does with the answers is
+ * gated by its lifetime: nothing moves the page the person went on to.
+ */
+test("a save left between its two writes still makes both, and moves nothing on screen", async () => {
   show();
   await walkToReview();
-  let answer!: (value: unknown) => void;
-  let sent: AbortSignal | null = null;
-  vi.mocked(api.writeDocument).mockImplementationOnce((_doc, _options, signal) => {
-    sent = signal;
-    return new Promise((resolve) => (answer = resolve)) as never;
+  let stored!: (value: unknown) => void;
+  vi.mocked(api.storeCredential).mockImplementationOnce(() => {
+    calls.push("store");
+    return new Promise((resolve) => (stored = resolve)) as never;
   });
   press("Create model");
-  await waitFor(() => expect(sent).not.toBeNull());
+  await waitFor(() => expect(calls.at(-1)).toBe("store"));
   location.hash = "#/somewhere-else";
   cleanup();
-  expect(sent!.aborted).toBe(true);
   await act(async () =>
-    answer({ kind: "saved", revisionId: "rev-2", epoch: 2, warnings: [], derived: null }),
+    stored({
+      kind: "ok",
+      status: 200,
+      value: {
+        verified: "",
+        check: { at: "", node: "node-1", ok: true, lines: [] },
+        names: [],
+        hints: {},
+        entries: [],
+        reload: { revision_id: "rev-1b", epoch: 2 },
+        cleared: [],
+        running_runs: 0,
+        limited: null,
+      },
+    }),
   );
+  await waitFor(() => expect(calls.at(-1)).toMatch(/^write:/));
+  expect(calls.slice(-3)).toEqual(["store", "read", "write:Add model sonnet-key"]);
+  // NO SIGNAL rides a write that has started: nothing could stop it part way.
+  const written = vi.mocked(api.writeDocument).mock.calls.at(-1)!;
+  expect(written[2]).toBeUndefined();
   expect(location.hash).toBe("#/somewhere-else");
 });
 

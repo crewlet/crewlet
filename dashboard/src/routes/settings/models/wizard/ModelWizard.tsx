@@ -531,9 +531,13 @@ export function ModelWizard({
 
   async function save() {
     if (!prepared || check.kind !== "ready") return;
-    // TIED TO THE WIZARD: a save the person left mid-way sends nothing more,
-    // and an answer that lands after they left neither toasts nor moves them.
-    const signal = lifetime();
+    // THE SAVE RUNS TO ITS END ONCE STARTED, whatever happens to the wizard:
+    // its requests take no signal, since stopped between the credential and
+    // the document it would leave a sealed secret no document names. What
+    // the wizard does with each answer (its state, the toast, the move to the
+    // model's page) is what its lifetime gates: a save that answers after the
+    // person left acts for nothing on screen.
+    const screen = lifetime();
     setSaving(true);
     try {
       let { etag, next } = prepared;
@@ -543,9 +547,9 @@ export function ModelWizard({
           draft.key,
           { values, ...draftEntity, createOnly },
           etag,
-          signal,
         );
         if (stored.kind === "refused") {
+          if (screen.aborted) return;
           const refusal = credentialRefusal(stored, names);
           setEngineProblems(refusal.problems.length > 0 ? refusal.problems : []);
           setCheck(
@@ -555,16 +559,17 @@ export function ModelWizard({
           );
           return;
         }
-        setStoredFor(signature);
+        if (!screen.aborted) setStoredFor(signature);
         // A ROTATION RE-ACTIVATES THE REVISION that reads it, which moves the
         // tag: the document is read again, and written on only if nothing
         // but that re-activation happened in between.
         if (stored.value.reload) {
-          const read = await getConfig(signal);
+          const read = await getConfig();
           if (
             read.kind !== "document" ||
             JSON.stringify(read.document) !== JSON.stringify(prepared.before)
           ) {
+            if (screen.aborted) return;
             setPrepared(null);
             setCheck({
               kind: "blocked",
@@ -577,12 +582,8 @@ export function ModelWizard({
           next = nextDocument(read.document, draft, editingArg);
         }
       }
-      const outcome = await writeDocument(
-        next.doc,
-        { etag, summary: summary(), dryRun: false },
-        signal,
-      );
-      if (signal.aborted) return;
+      const outcome = await writeDocument(next.doc, { etag, summary: summary(), dryRun: false });
+      if (screen.aborted) return;
       if (outcome.kind === "saved") {
         toast.ok(original ? `Saved ${draft.key}.` : `Added ${draft.key}.`);
         data.reload();
@@ -602,10 +603,8 @@ export function ModelWizard({
         setPrepared(null);
         setCheck({ kind: "blocked", message: refusalWords(outcome) });
       }
-    } catch (err) {
-      if (!isAbort(err)) throw err;
     } finally {
-      if (!signal.aborted) setSaving(false);
+      if (!screen.aborted) setSaving(false);
     }
   }
 
