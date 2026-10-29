@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -134,10 +138,14 @@ func TestAnUnreadHoldsSourceIsAnError(t *testing.T) {
 	t.Parallel()
 	var self runningTurns
 	holder := []coord.Lease{{Resource: coord.SeatResource(uuid.New()), Owner: "node-b:boot-1"}}
-	answer := func(version int) func(context.Context, string, []byte, int) ([][]byte, error) {
-		return func(context.Context, string, []byte, int) ([][]byte, error) {
+	answer := func(version int) func(context.Context, string, []byte, func([]byte) bool) error {
+		return func(_ context.Context, _ string, _ []byte, each func([]byte) bool) error {
 			raw, err := json.Marshal(codeHoldsAnswer{Version: version, Owner: "node-b:boot-1"})
-			return [][]byte{raw}, err
+			if err != nil {
+				return err
+			}
+			each(raw)
+			return nil
 		}
 	}
 	for name, tc := range map[string]struct {
@@ -145,11 +153,11 @@ func TestAnUnreadHoldsSourceIsAnError(t *testing.T) {
 		want string
 	}{
 		"a run store that cannot be listed": {holdsReader{runs: failingRuns{}, leases: listedLeases(holder),
-			ask: answer(codeHoldsProtocol), self: &self, budget: time.Second}, "run store"},
+			askEach: answer(codeHoldsProtocol), self: &self, budget: time.Second}, "run store"},
 		"seat leases that cannot be read": {holdsReader{runs: listedRuns(nil), leases: failingLeases{},
-			ask: answer(codeHoldsProtocol), self: &self, budget: time.Second}, "seat leases"},
+			askEach: answer(codeHoldsProtocol), self: &self, budget: time.Second}, "seat leases"},
 		"a holder answering at another version": {holdsReader{runs: listedRuns(nil),
-			leases: listedLeases(holder), ask: answer(codeHoldsProtocol + 1), self: &self,
+			leases: listedLeases(holder), askEach: answer(codeHoldsProtocol + 1), self: &self,
 			budget: time.Second}, "node-b:boot-1"},
 	} {
 		if _, err := tc.r.holds(t.Context(), []string{"repo-a"}); err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -163,6 +171,116 @@ func TestAnUnreadHoldsSourceIsAnError(t *testing.T) {
 	got, err := holdsReader{runs: listedRuns(nil), self: &self}.holds(t.Context(), []string{"repo-a", "repo-z"})
 	if err != nil || !got["repo-a"] || got["repo-z"] {
 		t.Fatalf("a node with no broker read %v, %v — want its own turn's repo-a", got, err)
+	}
+}
+
+// A NODE HOLDING NO SEAT NEVER STANDS IN FOR A HOLDER. Every engine answers
+// the holds question, whatever its roles, so a node with no seat lease — a git
+// or ingress node, a data node without seats, one a fleet with fewer seats
+// than nodes left none — answers it too, and the read must wait for the
+// holders the seat leases NAME, never for as many replies as there are
+// holders: the first answers to arrive would fill that count with a non-holder's
+// and leave a holder's unread. Two nodes on one broker, both answering: node-a
+// asks and holds no seat, and its own answer reaches the reader before node-b
+// answers at all; node-b holds the only seat lease. Every read hears node-b,
+// and what node-a's stopping turn holds is believed beside it. A holder the
+// leases name that serves nothing is the only one an error names, and an ask
+// that ended before its budget claims no silence of the budget's length.
+//
+// Mutation: end the ask once it has as many replies as the leases name
+// holders — node-a's answer fills it, and every read names node-b silent, red.
+func TestANodeHoldingNoSeatNeverStandsInForAHolder(t *testing.T) {
+	t.Parallel()
+	const nodeA, nodeB = "node-a:boot-1", "node-b:boot-1"
+	broker := memory.NewBroker()
+	qa, qb := broker.Client(), broker.Client()
+	for _, q := range []*memory.Queue{qa, qb} {
+		if err := q.Start(t.Context()); err != nil {
+			t.Fatalf("start a node's queue: %v", err)
+		}
+		t.Cleanup(func() { _ = q.Stop(context.Background()) })
+	}
+	var turnsA, turnsB runningTurns
+	defer turnsA.running(turnctx.NewHolds([]string{"repo-a"}))()
+	defer turnsB.running(turnctx.NewHolds([]string{"repo-b"}))()
+
+	// NODE-A'S ANSWER FIRST, every read: node-b's answerer waits on the
+	// read's gate, which the reader's seam opens once node-a's reply has
+	// reached the reader — so a count of replies would end before node-b's.
+	var (
+		mu   sync.Mutex
+		gate chan struct{}
+	)
+	opened := func() chan struct{} {
+		mu.Lock()
+		defer mu.Unlock()
+		return gate
+	}
+	stopA, err := qa.Serve(t.Context(), topics.CodeHolds, queue.ConcurrentAnswers, answerCodeHolds(nodeA, &turnsA))
+	if err != nil {
+		t.Fatalf("serve node-a's holds: %v", err)
+	}
+	t.Cleanup(func() { _ = stopA(context.Background()) })
+	answerB := answerCodeHolds(nodeB, &turnsB)
+	stopB, err := qb.Serve(t.Context(), topics.CodeHolds, queue.ConcurrentAnswers,
+		func(ctx context.Context, raw []byte) ([]byte, error) {
+			select {
+			case <-opened():
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return answerB(ctx, raw)
+		})
+	if err != nil {
+		t.Fatalf("serve node-b's holds: %v", err)
+	}
+	t.Cleanup(func() { _ = stopB(context.Background()) })
+	askEach := func(ctx context.Context, subject string, request []byte, each func([]byte) bool) error {
+		g := opened()
+		var once sync.Once
+		return qa.AskEach(ctx, subject, request, func(reply []byte) bool {
+			more := each(reply)
+			var a codeHoldsAnswer
+			if json.Unmarshal(reply, &a) == nil && a.Owner == nodeA {
+				once.Do(func() { close(g) })
+			}
+			return more
+		})
+	}
+	read := func(leases listedLeases) (map[string]bool, error) {
+		mu.Lock()
+		gate = make(chan struct{})
+		mu.Unlock()
+		r := holdsReader{runs: listedRuns(nil), leases: leases, askEach: askEach, self: &turnsA,
+			budget: 30 * time.Second}
+		return r.holds(t.Context(), []string{"repo-a", "repo-b", "repo-z"})
+	}
+
+	onlyB := listedLeases{{Resource: coord.SeatResource(uuid.New()), Owner: nodeB}}
+	for i := range 5 {
+		got, err := read(onlyB)
+		if err != nil {
+			t.Fatalf("read %d: %v — want node-b heard, whatever answered first", i, err)
+		}
+		if !got["repo-b"] || !got["repo-a"] || got["repo-z"] || len(got) != 2 {
+			t.Fatalf("read %d held %v, want repo-b (the holder's turn) and repo-a (the asker's "+
+				"stopping turn, believed)", i, got)
+		}
+	}
+
+	// A HOLDER THAT SERVES NOTHING is named alone; the ask ended when every
+	// node serving had answered, long before its budget, and says no more.
+	_, err = read(append(onlyB, coord.Lease{Resource: coord.SeatResource(uuid.New()), Owner: "silent-node:boot-1"}))
+	switch {
+	case err == nil:
+		t.Fatal("a seat holder that never answered read as holding nothing")
+	case !strings.Contains(err.Error(), "silent-node:boot-1"):
+		t.Fatalf("the read failed with %v, want the silent holder named", err)
+	case strings.Contains(err.Error(), nodeA) || strings.Contains(err.Error(), nodeB):
+		t.Fatalf("the read failed with %v, which names a node that answered", err)
+	case strings.Contains(err.Error(), "inside"):
+		t.Fatalf("the read failed with %v, claiming a silence of its whole budget for an ask that "+
+			"ended when every node serving had answered", err)
 	}
 }
 

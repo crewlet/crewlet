@@ -51,6 +51,13 @@ import (
 // row, and the rest of its work is redone under a new turn id by the seat's
 // next holder.
 //
+// THE ASK ENDS WHEN EVERY HOLDER THE LEASES NAME HAS ANSWERED, never at a
+// count of replies: every engine answers the question, whatever its roles
+// ([Engine.armCodeHolds]), so a node holding no seat lease — a data, git or
+// ingress node without seats, a node a fleet with fewer seats than nodes left
+// none, a draining one — answers it too, and a count as long as the holders'
+// list was filled by such answers while a holder's went unread.
+//
 // NEVER ON AN UNKNOWN: a run store that cannot be listed, seat leases that
 // cannot be read, or a seat holder that does not answer inside
 // [holdsAskBudget] is an error naming what was not read, and the pass expires
@@ -191,11 +198,13 @@ func (e *Engine) rowHolds(run sandbox.PendingRun) *turnctx.Holds {
 }
 
 // armCodeHolds makes this node the answerer for its running turns' holds, on
-// every node that hosts seats and in every mode: answering is not publishing.
-// BEFORE ITS SEAT HOST CLAIMS ITS FIRST SEAT — after the node, whose
-// incarnation is what its seat leases name, and before Start runs the host —
-// so no seat holder is ever unable to answer. A node with no broker is the
-// fleet, and answers its own reader directly ([holdsReader.ask]).
+// every node — each builds a seat host, whatever its roles, so one holding no
+// seat answers too, which is why the reader waits for the holders by name —
+// and in every mode: answering is not publishing. BEFORE ITS SEAT HOST CLAIMS
+// ITS FIRST SEAT — after the node, whose incarnation is what its seat leases
+// name, and before Start runs the host — so no seat holder is ever unable to
+// answer. A node with no broker is the fleet, and answers its own reader
+// directly ([holdsReader.running]).
 func (e *Engine) armCodeHolds(ctx context.Context) error {
 	if e.backends == nil || e.backends.Queue == nil || e.node == nil {
 		return nil
@@ -260,7 +269,7 @@ func (e *Engine) holdsReader() holdsReader {
 		r.leases = e.backends.Coord
 	}
 	if e.backends.Queue != nil {
-		r.ask = e.backends.Queue.Ask
+		r.askEach = e.backends.Queue.AskEach
 	}
 	return r
 }
@@ -278,9 +287,12 @@ type holdsReader struct {
 	leases interface {
 		ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error)
 	}
-	// ask scatters a question and collects the replies (queue's Ask); nil is
-	// a node with no broker, which is the whole fleet and answers from self.
-	ask func(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
+	// askEach scatters a question and hands each reply to each as it arrives
+	// (queue's AskEach), until ctx is done or each answers false — the shape
+	// that lets the reader stop on WHO has answered rather than on how many;
+	// nil is a node with no broker, which is the whole fleet and answers from
+	// self.
+	askEach func(ctx context.Context, subject string, request []byte, each func(reply []byte) bool) error
 	// self is this process's own running turns.
 	self   *runningTurns
 	budget time.Duration
@@ -327,9 +339,18 @@ func (r holdsReader) holds(ctx context.Context, keys []string) (map[string]bool,
 }
 
 // running is the keys among keys some running turn of the fleet holds: every
-// seat holder asked, and every one required to answer inside the budget.
+// seat holder the leases name asked, and every one of them required to answer
+// inside the budget.
+//
+// THE ASK ENDS ON WHO HAS ANSWERED, NOT ON HOW MANY: it lasts until every
+// holder the leases name has, or the budget ends. Every engine answers the
+// question, a node holding no seat lease among them (the file's doc), and a
+// scatter's replies carry no sender, so an ask told to stop at as many
+// replies as there are holders stopped at the first that many answers to
+// arrive — where a node holding no seat answered first, a holder's answer was
+// never read, and the read failed naming a holder that had answered at once.
 func (r holdsReader) running(ctx context.Context, keys []string) ([]string, error) {
-	if r.ask == nil {
+	if r.askEach == nil {
 		// A NODE WITH NO BROKER IS THE FLEET: its own turns are every turn.
 		return r.self.held(keys), nil
 	}
@@ -340,11 +361,14 @@ func (r holdsReader) running(ctx context.Context, keys []string) ([]string, erro
 	if err != nil {
 		return nil, fmt.Errorf("engine: the seat leases could not be read for the running turns' holds: %w", err)
 	}
-	owners := map[string]bool{}
+	// answered is every holder the leases name, and whether it has; unheard
+	// counts the ones that have not.
+	answered := map[string]bool{}
 	for _, l := range leases {
-		owners[l.Owner] = false
+		answered[l.Owner] = false
 	}
-	if len(owners) == 0 {
+	unheard := len(answered)
+	if unheard == 0 {
 		// NO SEAT IS HELD, so no turn runs anywhere.
 		return nil, nil
 	}
@@ -354,33 +378,54 @@ func (r holdsReader) running(ctx context.Context, keys []string) ([]string, erro
 	}
 	askCtx, cancel := context.WithTimeout(ctx, r.budget)
 	defer cancel()
-	replies, err := r.ask(askCtx, topics.CodeHolds, question, len(owners))
-	if err != nil {
-		return nil, fmt.Errorf("engine: ask the seat holders for their running turns' holds: %w", err)
-	}
 	var held []string
-	for _, raw := range replies {
+	err = r.askEach(askCtx, topics.CodeHolds, question, func(raw []byte) bool {
 		var a codeHoldsAnswer
 		if err := json.Unmarshal(raw, &a); err != nil || a.Version != codeHoldsProtocol || a.Owner == "" {
 			// AN ANSWER THIS BUILD CANNOT READ names nobody it could count
-			// as answered; its holder, if the leases name it, stays silent.
-			continue
+			// as answered; its holder, if the leases name it, stays unheard.
+			return true
 		}
-		// A HOLDER THE LISTING DID NOT NAME — one that took a seat since —
-		// is believed too: what it holds can only keep a repository.
-		owners[a.Owner] = true
+		// A HOLDER THE LISTING DID NOT NAME — one that took a seat since, or
+		// a node holding none whose turns are stopping — is believed too:
+		// what it holds can only keep a repository. It ends nothing.
 		held = append(held, a.Held...)
-	}
-	var silent []string
-	for owner, answered := range owners {
-		if !answered {
-			silent = append(silent, owner)
+		if heard, named := answered[a.Owner]; named && !heard {
+			answered[a.Owner] = true
+			unheard--
 		}
+		return unheard > 0
+	})
+	if err != nil {
+		return nil, fmt.Errorf("engine: ask the seat holders for their running turns' holds: %w", err)
 	}
-	if len(silent) > 0 {
+	if unheard > 0 {
+		var silent []string
+		for owner, heard := range answered {
+			if !heard {
+				silent = append(silent, owner)
+			}
+		}
 		slices.Sort(silent)
-		return nil, fmt.Errorf("engine: the seat holders %v did not answer inside %s for their running "+
-			"turns' holds", silent, r.budget)
+		return nil, unheardHolders(ctx, askCtx, silent, r.budget)
 	}
 	return held, nil
+}
+
+// unheardHolders is the error of an ask that ended before the seat holders
+// silent answered, naming only them and saying how it ended: the pass's own
+// context done, the budget run out — the only end that is a silence of the
+// budget's length — or the transport delivering nothing more before either,
+// for which it claims no wait the read did not make.
+func unheardHolders(ctx, askCtx context.Context, silent []string, budget time.Duration) error {
+	switch {
+	case ctx.Err() != nil:
+		return fmt.Errorf("engine: the read of the running turns' holds ended before the seat holders %v "+
+			"answered: %w", silent, ctx.Err())
+	case askCtx.Err() != nil:
+		return fmt.Errorf("engine: the seat holders %v did not answer inside %s for their running turns' "+
+			"holds", silent, budget)
+	}
+	return fmt.Errorf("engine: the seat holders %v did not answer for their running turns' holds: the ask "+
+		"ended before %s with no answer from them", silent, budget)
 }
