@@ -1268,7 +1268,17 @@ func (p *Provider) SignInState(ctx context.Context) string { return p.signIn(ctx
 // state, and pushing that onto somebody else's VM is a materially larger
 // trust step than the scoped headless token the run env already exports.
 // Empty for a profile that keeps no credential file.
+//
+// NONE FOR AN ENTRY THAT SIGNS IN WITH NO LOGIN: an api-key or env entry, and
+// an inherit-env one handed a key ([Provider.signsInWithKey]). Its calls on
+// this host run in a key home no login is seeded into, so its box is seeded
+// with none either: a plan's login beside a key, or beside a cloud provider's
+// switch, is a credential handed to a run that does not sign in with it, and a
+// CLI that ranks a login over its environment would bill the plan instead.
 func (p *Provider) SandboxCredentials() map[string]string {
+	if p.signsInWithKey() {
+		return nil
+	}
 	out := map[string]string{}
 	for _, rel := range p.profile.CredentialPaths {
 		out[rel] = p.ws.sharedPath(filepath.Base(rel))
@@ -1289,9 +1299,10 @@ func (p *Provider) SandboxCredentials() map[string]string {
 // under the same rule as [Provider.SandboxCredentials] — seeded into a local
 // box from the login as it stands then, and written back from one, never
 // handed to a remote one — and is named whether or not the shared directory
-// holds it now, for the same reason.
+// holds it now, for the same reason; and never for an entry that signs in with
+// no login.
 func (p *Provider) SandboxCredentialDocument() string {
-	if p.profile.CredentialStore == nil {
+	if p.profile.CredentialStore == nil || p.signsInWithKey() {
 		return ""
 	}
 	return p.ws.documentPath()
