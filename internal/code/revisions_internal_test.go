@@ -242,15 +242,18 @@ func (s *execCounter) ExecContext(ctx context.Context, query string, args ...any
 // replicated estate's one write lane on every data node, and one record moves
 // up to some 1 300 changes, so what it writes of them — each moved change's
 // row, at its next head, merged or closed, and each revision — goes in as few
-// statements as the engine's parameters allow ([store.Chunks]), as its refs
-// do, never a statement a change: a record moving 999 changes issues the
-// statements one moving three does. And each change's row says what its move
-// did, its head and revision, a merge's state and a close's — so a batch that
-// sets less than a push moves fails here too.
+// statements as the engine's parameters allow ([store.Chunks]), a chunk of
+// each kind of write ([pushWrite]), as its refs do, never a statement a
+// change: a record moving 999 changes issues the statements one moving three
+// does. And each change's row says what its move did, its head and revision,
+// a merge's state and a close's — so a write that sets less than a push
+// moves fails here too.
 //
-// Mutation: write each moved change with its own UPDATE (writeChange), and the
-// record of 999 issues a statement a change; leave state out of
-// changesMovedSQL, and the merged and closed changes stay open.
+// Mutation: write each moved change with a statement of its own, and the
+// record of 999 issues a statement a change; leave state out of changeMerged
+// or changeStateMoved, and the merged or the closed change stays open; leave
+// head_oid out of changeHeadMoved, and no change is at its second revision's
+// head.
 func TestAPushRecordWritesTheChangesItMovesInBatches(t *testing.T) {
 	t.Parallel()
 	for _, n := range []int{3, 999} {
@@ -296,13 +299,15 @@ func TestAPushRecordWritesTheChangesItMovesInBatches(t *testing.T) {
 				}
 				return n
 			}
-			// THE MOVED CHANGES' ROWS AND THE REVISIONS: the pusher is an
-			// author of each already, and the record opens none.
-			want := chunks(n, changeColumns) +
+			// THE MOVED CHANGES' ROWS — the n-2 whose heads it moved, the one
+			// it merged and the one it closed, each kind its own write — AND
+			// THE REVISIONS: the pusher is an author of each already, and the
+			// record opens none.
+			want := chunks(n-2, changeColumns) + chunks(1, changeColumns) + chunks(1, changeColumns) +
 				chunks(n-2, "change_id, n, head_oid, pusher, pusher_kind, push_id, position, at")
 			if issued != want {
-				t.Errorf("the record's changes took %d statements, want %d: a statement a chunk of each table",
-					issued, want)
+				t.Errorf("the record's changes took %d statements, want %d: a statement a chunk of each kind "+
+					"of write and of each table", issued, want)
 			}
 			if written != counted || written != n+n-2 {
 				t.Errorf("the write answered %d rows, its book counted %d, want %d: every change and every "+

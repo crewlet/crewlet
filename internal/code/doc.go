@@ -75,6 +75,18 @@
 // it weighs, so nothing that walks the changes reads a body to learn its
 // width.
 //
+// EACH WRITE OF ITS ROW SETS WHAT IT MOVES AND NOTHING ELSE ([changeWrite]).
+// This driver rewrites a row's entry in every index whose key or partial
+// predicate holds a column a write names, whatever the value, so a write of
+// the whole row paid for nearly every index of code_changes on every write of
+// a change — and the write a change meets most, a push to its source, moves
+// its head, which is in the key of one index alone. So a head move rewrites
+// that one entry (code_changes_target_idx); a write of the state — a draft's,
+// a close, a reopen, a merge — every index the state is in; an edit of the
+// text none, and one of the work item the item's index; and
+// TestAChangeWriteRewritesOnlyTheIndexesItMoves holds each kind to the
+// indexes its program rewrites.
+//
 // The bodies, revisions and authors carry no repo_id, reached by their
 // change's key, so a purge takes a repository's changes WHOLE in number order,
 // each one's dependents — its conversation's among them — before its row, and
@@ -1359,6 +1371,19 @@
 // statement binds is a call into the engine of its own, and a change is
 // written back whole — its upsert's VALUES carry every NOT NULL column — so
 // the book reads every column of every change the record moves.
+//
+// EACH CHANGE WRITTEN BY WHAT MOVED ([changeWrite]), so a head move rewrites
+// its change's entry in code_changes_target_idx alone, where the record's one
+// write of every column a push may move rewrote five entries of every live
+// change it moved — 4 000 fewer index entries deleted and inserted again for
+// the thousand heads of the first shape. In the same bounded form, one run of
+// each build back to back under a load average of 5–8: 186 ms for the first
+// and 25 ms for the second, against 192 ms and 28 ms for the build before —
+// inside what this machine moves between two runs, since the benchmark's
+// estate is small enough to hold every index in the page cache, where an
+// entry rewritten costs a few microseconds of the engine and no read; what a
+// node pays for the entries beyond that, the index leaves a commit dirties
+// and writes, grows with the indexes, which grow with the company's changes.
 //
 // A CHECK RECORD (BenchmarkApplyACheckRecord, the record applied and
 // committed; one bounded run, -benchtime 5x and one count, on two E-cores of

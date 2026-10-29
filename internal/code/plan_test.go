@@ -581,15 +581,13 @@ func registeredStatements() map[string]statement {
 		"purge all changes": {purgeAllChangesSQL, []any{"repo-1"},
 			[]string{"COVERING INDEX " + changesNumberKey + " (repo_id=?)"}},
 		// A CHANGE'S LIFECYCLE: a change by its key — a decide's, an
-		// apply's and an answer's — and its row written back by the same
-		// key; the live change a source branch heads, by the index partial
-		// on the live states, its predicate as the index spells it; a
-		// change's body read and removed by its key; and the repository's
-		// next number and version by its own.
+		// apply's and an answer's; the live change a source branch heads, by
+		// the index partial on the live states, its predicate as the index
+		// spells it; a change's body read and removed by its key; and the
+		// repository's next number and version by its own. Its row is
+		// written back by an upsert, which reads no row to find the one it
+		// writes (changewrite_internal_test.go holds what it rewrites).
 		"change row": {changeRowSQL, []any{"repo-1-change-000001"}, []string{changeKey + " (id=?)"}},
-		"write change": {writeChangeSQL, []any{"a change", 10, "open", "refs/heads/main", oid("head-1-4"), 4,
-			"", "", "", "", nil, "", nil, "", "", 4, 3000, "repo-1-change-000002"},
-			[]string{changeKey + " (id=?)"}},
 		"live change on": {liveChangeOnSQL, []any{"repo-1", "refs/heads/f000001"},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref=?)"}},
 		// THE LIVE CHANGES A PUSH RECORD MOVES — a decide's and an apply's —
