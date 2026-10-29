@@ -105,8 +105,10 @@ const codeStatusBudget = eventfan.FleetReadBudget
 //
 // THE GIT NODES ARE THE ROSTER, read off the presence leases as every keyed
 // git walk reads them (gitNodesOf): a git node that did not answer inside the
-// budget is named in the coverage, never dropped from it, and an answer from a
-// node the roster did not list yet (one that joined since) is kept. A roster
+// budget is named in the coverage, never dropped from it, an answer from a
+// node the roster did not list (one that joined since, or one draining) is
+// kept, and the ask ends once every node the roster names has answered —
+// never at a count of replies ([askCodeStatus]). A roster
 // that could not be read leaves the coverage incomplete — nobody can say who
 // was missing — and the ask waits out its budget for whoever answers. A fleet
 // with no git node is asked nothing.
@@ -127,11 +129,44 @@ func (e *Engine) CodeStatus(ctx context.Context, repoID string) (builtin.CodeSta
 	if err != nil {
 		return builtin.CodeStatusReport{}, fmt.Errorf("engine: encode a code status question: %w", err)
 	}
-	replies, err := e.backends.Queue.Ask(ctx, topics.CodeStatus, question, len(roster))
+	replies, err := askCodeStatus(ctx, e.backends.Queue.AskEach, question, roster, rosterErr)
 	if err != nil {
 		return builtin.CodeStatusReport{}, fmt.Errorf("engine: ask the git nodes their status: %w", err)
 	}
 	return codeStatusReport(roster, rosterErr, replies), nil
+}
+
+// askCodeStatus scatters question on topics.CodeStatus through askEach (the
+// queue's AskEach) and collects the replies until every git node the roster
+// names has answered, or ctx is done; with no roster (rosterErr), until ctx
+// is done.
+//
+// THE ASK ENDS ON WHO HAS ANSWERED, NOT ON HOW MANY. Every git node's host
+// serves the question, one the roster does not hold among them — a draining
+// git node gives its presence back first and its host serves until it stops,
+// and one may have joined since the roster was read — and a scatter's replies
+// carry no sender, so an ask told to stop at as many replies as the roster
+// names ended on such a node's answer before a named one's, which the
+// coverage then called silent for the whole budget and the report went
+// without. Each reply names its node ([codeStatusAnswer]'s status).
+func askCodeStatus(ctx context.Context,
+	askEach func(ctx context.Context, subject string, request []byte, each func([]byte) bool) error,
+	question []byte, roster []string, rosterErr error,
+) ([][]byte, error) {
+	unheard := map[string]bool{}
+	for _, id := range roster {
+		unheard[id] = true
+	}
+	var replies [][]byte
+	err := askEach(ctx, topics.CodeStatus, question, func(raw []byte) bool {
+		replies = append(replies, raw)
+		var a codeStatusAnswer
+		if json.Unmarshal(raw, &a) == nil {
+			delete(unheard, a.Status.Node)
+		}
+		return rosterErr != nil || len(unheard) > 0
+	})
+	return replies, err
 }
 
 // codeStatusReport is what replies answer, against the roster of git nodes the

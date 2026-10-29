@@ -19,6 +19,9 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -242,6 +245,79 @@ func TestACodeStatusReportNamesEveryGitNodeItAsked(t *testing.T) {
 				t.Errorf("coverage complete = %v, want %v", report.Coverage.Complete, c.complete)
 			}
 		})
+	}
+}
+
+// A CODE STATUS ASK WAITS FOR EVERY GIT NODE THE ROSTER NAMES, BY NAME. Every
+// git node's host serves the question, one the roster does not hold among
+// them — a draining git node gives its presence back first and its host
+// serves until it stops — and a scatter's replies carry no sender: an ask that
+// ended at as many replies as the roster names ended on such a node's answer
+// before a named one's, and the report called that node silent for its whole
+// budget. Here git-d, draining, answers first, and git-b answers only once
+// git-d's reply has reached the asker: the ask still waits for git-b, and the
+// report is complete, git-d's status kept beside it.
+//
+// Mutation: end the ask at as many replies as the roster names nodes — git-d's
+// answer fills it, and git-b is named silent, red.
+func TestACodeStatusAskWaitsForEveryGitNodeTheRosterNames(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	asker, gitB, gitD := broker.Client(), broker.Client(), broker.Client()
+	for _, q := range []*memory.Queue{asker, gitB, gitD} {
+		if err := q.Start(t.Context()); err != nil {
+			t.Fatalf("start a node's queue: %v", err)
+		}
+		t.Cleanup(func() { _ = q.Stop(context.Background()) })
+	}
+	status := func(node string) queue.AnswerFunc {
+		return func(context.Context, []byte) ([]byte, error) {
+			return json.Marshal(codeStatusAnswer{Version: codeStatusProtocol, Status: host.CodeStatus{Node: node}})
+		}
+	}
+	gate := make(chan struct{})
+	answerB := status("git-b")
+	stopB, err := gitB.Serve(t.Context(), topics.CodeStatus, queue.ConcurrentAnswers,
+		func(ctx context.Context, raw []byte) ([]byte, error) {
+			select {
+			case <-gate:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return answerB(ctx, raw)
+		})
+	if err != nil {
+		t.Fatalf("serve git-b's status: %v", err)
+	}
+	t.Cleanup(func() { _ = stopB(context.Background()) })
+	stopD, err := gitD.Serve(t.Context(), topics.CodeStatus, queue.ConcurrentAnswers, status("git-d"))
+	if err != nil {
+		t.Fatalf("serve git-d's status: %v", err)
+	}
+	t.Cleanup(func() { _ = stopD(context.Background()) })
+
+	var once sync.Once
+	askEach := func(ctx context.Context, subject string, request []byte, each func([]byte) bool) error {
+		return asker.AskEach(ctx, subject, request, func(raw []byte) bool {
+			more := each(raw)
+			var a codeStatusAnswer
+			if json.Unmarshal(raw, &a) == nil && a.Status.Node == "git-d" {
+				once.Do(func() { close(gate) })
+			}
+			return more
+		})
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	roster := []string{"git-b"}
+	replies, err := askCodeStatus(ctx, askEach, []byte(`{}`), roster, nil)
+	if err != nil {
+		t.Fatalf("ask the git nodes: %v", err)
+	}
+	report := codeStatusReport(roster, nil, replies)
+	want := []eventfan.NodeCoverage{{ID: "git-b", Answered: true}, {ID: "git-d", Answered: true}}
+	if !report.Coverage.Complete || !slices.Equal(report.Coverage.Nodes, want) {
+		t.Fatalf("coverage %+v, want complete with %+v: git-b answered, after git-d", report.Coverage, want)
 	}
 }
 
