@@ -1828,10 +1828,12 @@ describe("what was answered", () => {
       // THE CONTEXT IS MARKDOWN.
       const lead = document.querySelector(".crewlet-reading-pane__lead");
       expect(lead?.querySelector("strong")?.textContent).toBe("frozen");
-      // THE OPTIONS AS THEY WERE OFFERED, the chosen one marked, none sendable.
+      // THE OPTIONS AS THEY WERE OFFERED, the chosen one marked, none sendable,
+      // and the recommended one still saying so: chosen, it keeps its mark.
       const answers = within(screen.getByRole("group", { name: "Answers" }));
       const chosen = answers.getByRole("button", { pressed: true });
       expect(chosen.textContent).toContain("Target main");
+      expect(chosen.textContent).toContain("Recommended");
       expect(answers.getByRole("button", { pressed: false }).textContent).toContain(
         "Target the release branch",
       );
@@ -1873,6 +1875,8 @@ describe("what was answered", () => {
       );
       const answers = within(screen.getByRole("group", { name: "Answers" }));
       expect(answers.queryByRole("button", { pressed: true })).toBeNull();
+      // WHAT WAS RECOMMENDED STILL SHOWS, though the person chose none of it.
+      expect(answers.getAllByRole("button")[0]!.textContent).toMatch(/^Target main .*Recommended$/);
     });
 
     // THE SAME QUESTION IS NEVER LISTED TWICE. The two reads are asked apart,
