@@ -1368,10 +1368,12 @@ const (
 	// by every screen that writes the company; and the Models fixes from the
 	// owner's review: a removal on its entry's own tag, Review's list of who
 	// changes model, an edit keeping its seats; an answer read as the
-	// engine's only where it carries the engine's mark; and rgb channels and
-	// trailing slashes read in linear time) took it to 4765.6 KiB. 4766 KiB,
-	// which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 670<<10
+	// engine's only where it carries the engine's mark; every path segment
+	// through one rule; rgb channels and trailing slashes read in linear
+	// time; and uilet 0.77.0, its compact cards and CheckGrid in place of the
+	// seat grid) took it to 4773.5 KiB. 4774 KiB, which still refuses a
+	// doubled baseline.
+	treeBudget = 4<<20 + 678<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -72,9 +72,10 @@ export class RestError extends Error {
   readonly retryAfterSeconds: number | null;
   /**
    * Whether the answer carried the engine's mark ([markedByEngine]): the one
-   * thing in it nothing in front of the engine writes. True for an error a
-   * caller builds itself, which names its own origin; [request] records what
-   * the response said.
+   * thing in it nothing in front of the engine writes. FALSE UNLESS SAID, so
+   * an error built anywhere that forgot to say reads as not the engine's
+   * (an outcome nobody knows), never as a refusal the engine made; [request]
+   * records what the response said.
    */
   readonly marked: boolean;
 
@@ -82,7 +83,7 @@ export class RestError extends Error {
     status: number,
     body: Record<string, unknown>,
     retryAfter: number | null = null,
-    marked = true,
+    marked = false,
   ) {
     const code = typeof body.error === "string" ? body.error : "";
     const detail = typeof body.detail === "string" ? body.detail : "";
@@ -309,21 +310,10 @@ function offline(err: unknown): RestError {
 export const REQUEST_TIMEOUT_MS = 30_000;
 
 /**
- * One path segment of a request, from a value the engine named (a model's
- * key, a sign-in's id): always exactly one segment, or no request at all.
- *
- * `encodeURIComponent` escapes `/`, `?` and `#`, which would otherwise reach
- * another route or start the query. It cannot make `.` or `..` a name: a
- * segment of dots alone is a step along the path, and the URL standard reads
- * `%2E%2E` as `..` too, so no escaping sends it as one segment. No name the
- * engine mints is one (a model's key starts with a letter or a digit), so
- * such a value is refused here, before anything is sent, rather than sent to
- * the route above.
+ * [pathSegment] is the one rule of what a path segment may be, kept beside
+ * the link builder it shares the check with (`lib/segment.ts`).
  */
-export function pathSegment(value: string): string {
-  if (/^\.*$/.test(value)) throw new RangeError(`"${value}" cannot be sent as one path segment`);
-  return encodeURIComponent(value);
-}
+export { pathSegment } from "../lib/segment.ts";
 
 /** A query-string value. `undefined` leaves the parameter out. */
 export type QueryValue = string | number | boolean | undefined;
@@ -387,6 +377,8 @@ export interface RestResponse {
    * the tag back exactly as it was given.
    */
   etag: string | null;
+  /** Whether the answer carried the engine's mark ([markedByEngine]). */
+  marked: boolean;
 }
 
 /** A deadline as a person would say it: seconds under two minutes, else
@@ -647,7 +639,12 @@ async function attempt(
   answeredAt = Date.now();
 
   if (read === "text" && response.ok) {
-    return { status: response.status, body: text, etag: response.headers.get("ETag") };
+    return {
+      status: response.status,
+      body: text,
+      etag: response.headers.get("ETag"),
+      marked: markedByEngine(response.headers),
+    };
   }
 
   let parsed: unknown = null;
@@ -691,7 +688,12 @@ async function attempt(
     noteSession(refusal);
     throw refusal;
   }
-  return { status: response.status, body: parsed, etag: response.headers.get("ETag") };
+  return {
+    status: response.status,
+    body: parsed,
+    etag: response.headers.get("ETag"),
+    marked: markedByEngine(response.headers),
+  };
 }
 
 /** The body alone, for the callers that need nothing else. */

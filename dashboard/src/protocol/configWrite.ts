@@ -45,10 +45,8 @@ import type { CompanyDocument, ConfigWarning, Derived } from "./types.ts";
  */
 export async function answerOf(call: Promise<RestResponse>): Promise<ConfigAnswer> {
   try {
-    // A SUCCESS IS ITS CALLER'S TO READ ([classifyConfigRefusal] reads only
-    // refusals), so whose answer it is is not recorded on it.
-    const { status, body, etag } = await call;
-    return { status, body, etag };
+    const { status, body, etag, marked } = await call;
+    return { status, body, etag, fromEngine: marked };
   } catch (err) {
     if (isAbort(err)) throw err;
     if (err instanceof RestError)
@@ -60,6 +58,7 @@ export async function answerOf(call: Promise<RestResponse>): Promise<ConfigAnswe
         detail: err instanceof Error ? err.message : "The engine could not be reached.",
       },
       etag: null,
+      fromEngine: false,
     };
   }
 }
@@ -242,7 +241,7 @@ export async function getEntity(
   signal: AbortSignal,
 ): Promise<EntityRead> {
   const answer = await answerOf(
-    rest.request("GET", `/config/${kind}/${pathSegment(id)}`, { signal }),
+    rest.request("GET", `/config/${pathSegment(kind)}/${pathSegment(id)}`, { signal }),
   );
   if (answer.status === 200 && isRecord(answer.body) && answer.etag) {
     return { kind: "entity", entity: answer.body, etag: answer.etag };
@@ -283,7 +282,7 @@ export async function dryRunEntity(
 ): Promise<ConfigWriteOutcome> {
   return outcomeOf(
     await answerOf(
-      rest.request("PUT", `/config/${kind}/${pathSegment(id)}`, {
+      rest.request("PUT", `/config/${pathSegment(kind)}/${pathSegment(id)}`, {
         query: { dry_run: "true" },
         headers: { "If-Match": etag },
         body: entity,
@@ -308,7 +307,7 @@ export async function putEntity(
 ): Promise<ConfigWriteOutcome> {
   return outcomeOf(
     await answerOf(
-      rest.request("PUT", `/config/${kind}/${pathSegment(id)}`, {
+      rest.request("PUT", `/config/${pathSegment(kind)}/${pathSegment(id)}`, {
         headers: { "If-Match": etag },
         body: { ...entity, _summary: summary },
         signal,
@@ -344,7 +343,7 @@ export async function dryRunCreate(
 ): Promise<ConfigWriteOutcome> {
   return outcomeOf(
     await answerOf(
-      rest.request("PUT", `/config/${kind}/${pathSegment(id)}`, {
+      rest.request("PUT", `/config/${pathSegment(kind)}/${pathSegment(id)}`, {
         query: { dry_run: "true" },
         headers: CREATE_ONLY,
         body: entity,
@@ -364,7 +363,7 @@ export async function createEntity(
 ): Promise<ConfigWriteOutcome> {
   return outcomeOf(
     await answerOf(
-      rest.request("PUT", `/config/${kind}/${pathSegment(id)}`, {
+      rest.request("PUT", `/config/${pathSegment(kind)}/${pathSegment(id)}`, {
         headers: CREATE_ONLY,
         body: { ...entity, _summary: summary },
         signal,

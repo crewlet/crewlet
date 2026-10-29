@@ -34,10 +34,10 @@ func largeHierarchy(seats int) map[string]any {
 // answering is a client whose node answers every request with status and raw.
 func answering(t *testing.T, status int, raw []byte) *configClient {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
 		_, _ = w.Write(raw)
-	}))
+	})))
 	t.Cleanup(server.Close)
 	return &configClient{base: server.URL, http: httpx.Client(apiTimeout), answerCap: maxConfigResponseBytes}
 }
@@ -281,10 +281,10 @@ func TestAConfigClientReadsSixteenDocumentsOfAnswer(t *testing.T) {
 func TestAConfigClientWithNoCapSendsNothing(t *testing.T) {
 	t.Parallel()
 	var sent atomic.Bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		sent.Store(true)
 		_, _ = w.Write([]byte(`{"revision_id":"r-1","epoch":3}`))
-	}))
+	})))
 	t.Cleanup(server.Close)
 	client := &configClient{base: server.URL, http: httpx.Client(apiTimeout)}
 	if _, _, err := client.Import(t.Context(), []byte("name: Acme\n"), "import"); err == nil ||

@@ -1347,9 +1347,14 @@ too and the default allow-list is empty.
 Preflights are answered **before** the auth guard, and deliberately: a browser
 sends the `OPTIONS` itself with no `Authorization` header, so answering it
 behind the guard would be a `401` on every cross-origin write and the real
-request would never be sent. Only `Authorization` and `Content-Type` are
-permitted as request headers, and a preflight is cacheable for ten minutes —
-short enough that removing an origin takes effect within one.
+request would never be sent. The request headers permitted are a closed set,
+never an echo of what the browser asks for: `Authorization` and
+`Content-Type`, and the ones a write reads, `If-Match`, `If-None-Match`,
+`Idempotency-Key`, `X-Summary` and `X-Request-Id`. A permitted origin reads
+`X-Crewlet-Engine`, `ETag`, `Retry-After` and `X-Request-Id` off an answer
+(`Access-Control-Expose-Headers`); an origin the list does not name is
+answered with none of these. A preflight is cacheable for ten minutes, short
+enough that removing an origin takes effect within one.
 
 The auth middleware compares tokens in constant time (`crypto/subtle`).
 A credential presented and refused logs `api_auth_failed` at WARNING (never

@@ -761,6 +761,51 @@ function remedyOf(raw) {
 	};
 }
 //#endregion
+//#region src/lib/segment.ts
+/**
+* What one segment of a URL path may be: the ONE rule, for the requests this
+* dashboard sends and the links it draws.
+*
+* `encodeURIComponent` escapes `/`, `?` and `#`, which would otherwise reach
+* another route or start the query. It cannot make `.` or `..` a name: a
+* segment of dots alone is a step along the path, and the URL standard reads
+* `%2E%2E` as `..` too, so no escaping sends it as one segment. Such a value
+* names no segment at all, and is refused here:
+*
+*  - [linkSegment] answers null for it, so a link built from text somebody
+*    wrote (an agent's comment, a page title) is drawn as text rather than as
+*    an address that goes to the route above;
+*  - [pathSegment] throws for it, so a request is refused before anything is
+*    sent rather than sent to the route above. It is [linkSegment] and a
+*    throw, so the two can never disagree on what is safe.
+*
+* PURE AND IMPORTING NOTHING, so the transport (`protocol/rest.ts`, which
+* re-exports [pathSegment]), the org builder's pure model and the artifact
+* runtime (built alone) all read this one copy. The only module that calls
+* `encodeURIComponent` itself; a gate holds every other to it
+* (`protocol/rest.test.ts`).
+*
+* NOT FOR THE DASHBOARD'S OWN ROUTES: a fragment is never resolved as a path,
+* so `#/worklet/..` is the route for an item named `..`, and the router
+* escapes its segments with [fragmentSegment].
+*/
+/** One path segment of a link, or null for a value that cannot be one (empty, or dots alone). */
+function linkSegment(value) {
+	if (/^\.*$/.test(value)) return null;
+	return encodeURIComponent(value);
+}
+/**
+* One path segment of a request, from a value the engine named (a model's
+* key, a seat's handle): always exactly one segment, or no request at all.
+* No name the engine mints is empty or dots alone, so such a value is a
+* defect upstream, and refused before anything is sent.
+*/
+function pathSegment(value) {
+	const segment = linkSegment(value);
+	if (segment === null) throw new RangeError(`"${value}" cannot be sent as one path segment`);
+	return segment;
+}
+//#endregion
 //#region src/protocol/rest.ts
 /**
 * The dashboard's one REST transport: every write, and the guarded reads the
@@ -830,12 +875,13 @@ var RestError = class extends Error {
 	retryAfterSeconds;
 	/**
 	* Whether the answer carried the engine's mark ([markedByEngine]): the one
-	* thing in it nothing in front of the engine writes. True for an error a
-	* caller builds itself, which names its own origin; [request] records what
-	* the response said.
+	* thing in it nothing in front of the engine writes. FALSE UNLESS SAID, so
+	* an error built anywhere that forgot to say reads as not the engine's
+	* (an outcome nobody knows), never as a refusal the engine made; [request]
+	* records what the response said.
 	*/
 	marked;
-	constructor(status, body, retryAfter = null, marked = true) {
+	constructor(status, body, retryAfter = null, marked = false) {
 		const code = typeof body.error === "string" ? body.error : "";
 		const detail = typeof body.detail === "string" ? body.detail : "";
 		super(detail || code || `HTTP ${status}`);
@@ -1032,22 +1078,6 @@ function offline(err) {
 * finish it with.
 */
 var REQUEST_TIMEOUT_MS = 3e4;
-/**
-* One path segment of a request, from a value the engine named (a model's
-* key, a sign-in's id): always exactly one segment, or no request at all.
-*
-* `encodeURIComponent` escapes `/`, `?` and `#`, which would otherwise reach
-* another route or start the query. It cannot make `.` or `..` a name: a
-* segment of dots alone is a step along the path, and the URL standard reads
-* `%2E%2E` as `..` too, so no escaping sends it as one segment. No name the
-* engine mints is one (a model's key starts with a letter or a digit), so
-* such a value is refused here, before anything is sent, rather than sent to
-* the route above.
-*/
-function pathSegment(value) {
-	if (/^\.*$/.test(value)) throw new RangeError(`"${value}" cannot be sent as one path segment`);
-	return encodeURIComponent(value);
-}
 /** A deadline as a person would say it: seconds under two minutes, else
 *  minutes. */
 function waitWords(ms) {
@@ -1233,7 +1263,8 @@ async function attempt(method, path, options) {
 	if (read === "text" && response.ok) return {
 		status: response.status,
 		body: text,
-		etag: response.headers.get("ETag")
+		etag: response.headers.get("ETag"),
+		marked: markedByEngine(response.headers)
 	};
 	let parsed = null;
 	if (text !== "") try {
@@ -1253,7 +1284,8 @@ async function attempt(method, path, options) {
 	return {
 		status: response.status,
 		body: parsed,
-		etag: response.headers.get("ETag")
+		etag: response.headers.get("ETag"),
+		marked: markedByEngine(response.headers)
 	};
 }
 /** The body alone, for the callers that need nothing else. */

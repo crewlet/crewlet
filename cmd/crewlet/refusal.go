@@ -92,6 +92,20 @@ func withRefusalDetail(msg, detail, hint string) string {
 	return msg
 }
 
+// ownBody is an answer's body where the engine wrote it, and nil where it did
+// not: an answer without the engine's mark ([httpjson.Marked]) was written by
+// something in front of the node, whatever its body says, so none of its
+// fields is read as the engine's. A proxy can answer JSON with an `error`
+// field; read as the engine's, its 409 was a lost race and its 401 a token
+// the node refused. What it said is still rendered, through [foreignAnswer],
+// from the raw body.
+func ownBody(h http.Header, raw []byte) []byte {
+	if !httpjson.Marked(h) {
+		return nil
+	}
+	return raw
+}
+
 // foreignAnswer is what an answer that is NOT the engine's JSON said — a
 // proxy's page, a gateway's plain-text error — for an error a person reads.
 //

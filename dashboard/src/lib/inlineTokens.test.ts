@@ -276,6 +276,9 @@ describe("what an address is", () => {
       "https://acme.atlassian.net/wiki/spaces/~me/pages/2",
     );
     expect(canonical("https://acme.atlassian.net/wiki/spaces/D/pages/abc/T", wiki)).toBeNull();
+    // DOTS ALONE ARE NO SEGMENT: a URL parser keeps `...`, and rebuilt as a
+    // path it is a name no space has, so the page is drawn as words.
+    expect(canonical("https://acme.atlassian.net/wiki/spaces/.../pages/2/T", wiki)).toBeNull();
   });
 
   test("a segment that decodes to a slash, or that no code host allows, labels nothing", () => {
@@ -509,7 +512,11 @@ describe("cost", () => {
     expect(ratio).toBeLessThan(LINEAR_BOUND);
   };
 
-  test.each<[string, (n: number) => string]>([
+  // EACH CASE'S BASE RUN IS 1,000 characters, or more where a regression's
+  // linear term would hide its quadratic one at that size. Looking every
+  // reference up again for each commit read 121 to 137 at 1,000, under the
+  // bound, and 471 to 780 at 8,000, while the linear pass reads 34 there.
+  test.each<[string, (n: number) => string, number?]>([
     ["an address closed by brackets", (n) => `https://x.test/${")".repeat(n)}`],
     ["a word of brackets and a letter", (n) => `${")".repeat(n)}a`],
     ["slashes", (n) => `${"a/".repeat(n / 2)}b`],
@@ -518,16 +525,16 @@ describe("cost", () => {
     ["keys between slashes", (n) => "GP-1/".repeat(n / 5)],
     ["handles", (n) => "@a".repeat(n / 2)],
     ["the word commit", (n) => "commit ".repeat(n / 7)],
-    ["commits after references", (n) => "a/b#1 commit abcdef1 ".repeat(n / 21)],
+    ["commits after references", (n) => "a/b#1 commit abcdef1 ".repeat(n / 21), 8_000],
     ["bound numbers", (n) => "#1 in a/b ".repeat(n / 10)],
     ["repositories before a number", (n) => "a/b PR ".repeat(n / 7)],
     ["repositories and numbers", (n) => "a/b #1 ".repeat(n / 7)],
-  ])("%s read in linear time", (_, text) => {
+  ])("%s read in linear time", (_, text, n = 1_000) => {
     holdsLinear(
-      growth((n) => {
-        const run = text(n);
+      growth((size) => {
+        const run = text(size);
         return () => inlineTokens(run, OWNERS);
-      }, 1_000),
+      }, n),
     );
   });
 

@@ -647,15 +647,15 @@ test("the seats an alarm moves arrive added at Use it for, and only those", () =
   const box = (name: RegExp) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
   show({ editing: "sonnet", target: { step: "assign", add } });
   expect(heading()).toBe("Use it for");
-  expect(box(/^Product Manager: Coding on sonnet$/).checked).toBe(true);
-  expect(box(/^Quality Lead: Routines and evaluations on sonnet$/).checked).toBe(true);
-  expect(box(/^Product Manager: Reviewing and delegations on sonnet$/).checked).toBe(false);
-  expect(box(/^Backend Engineer: Coding on sonnet$/).checked).toBe(false);
+  expect(box(/^Product Manager Coding$/).checked).toBe(true);
+  expect(box(/^Quality Lead Routines and evaluations$/).checked).toBe(true);
+  expect(box(/^Product Manager Reviewing and delegations$/).checked).toBe(false);
+  expect(box(/^Backend Engineer Coding$/).checked).toBe(false);
   cleanup();
   show({ target: { step: "assign", add } });
-  expect(box(/^Product Manager: Coding on /).checked).toBe(true);
-  expect(box(/^Quality Lead: Routines and evaluations on /).checked).toBe(true);
-  expect(box(/^Quality Lead: Coding on /).checked).toBe(false);
+  expect(box(/^Product Manager Coding$/).checked).toBe(true);
+  expect(box(/^Quality Lead Routines and evaluations$/).checked).toBe(true);
+  expect(box(/^Quality Lead Coding$/).checked).toBe(false);
 });
 
 /**

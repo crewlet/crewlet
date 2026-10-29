@@ -12,8 +12,13 @@
  *
  * WIDE SEPARATION. The input grows THIRTY-TWO times, so a linear pass reads
  * about 32 and a quadratic one about 1,024, and the bound is their geometric
- * middle, 181: more than five times of headroom on each side. Sixteen times,
- * with a bound of 64, was not enough under a full parallel suite.
+ * middle, 181. Measured, the margins are narrower than that arithmetic: over
+ * twenty full parallel runs the linear cases read 9.8 to 43.6, four times
+ * under the bound at worst, and the historical regressions read 471 to 1,073,
+ * 2.6 times over it at worst. A regression whose linear term is large reads
+ * well under 1,024 at a small run, so a case whose regression read under
+ * twice the bound takes a larger base run (`inlineTokens.test.ts`). Sixteen
+ * times, with a bound of 64, was not enough under a full parallel suite.
  *
  * THE PROCESS'S CPU TIME, NOT THE WALL CLOCK. Under a full parallel suite
  * every core is oversubscribed, and the wall clock counts the time this worker
@@ -27,7 +32,8 @@
  *
  * EQUAL EXPOSURE. What noise is left only ever adds time, and lands on a
  * sample in proportion to how long it runs. So each size is calibrated on its
- * own to about [SAMPLE_MS] of CPU a sample, the two compared as TIME PER CALL,
+ * own to about [SAMPLE_MS] of CPU a sample (a single call, where one call of
+ * a slow input takes longer than that), the two compared as TIME PER CALL,
  * and each size's time is the fastest of several samples, interleaved, after
  * a warm-up. Timing both sizes with the same number of calls made a large
  * sample thirty-two times longer than a small one, and so thirty-two times as
