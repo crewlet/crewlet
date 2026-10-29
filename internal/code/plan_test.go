@@ -1069,7 +1069,7 @@ func claimedReads() map[string]statement {
 		"code_checks_running_idx": {`SELECT commit_oid, name, attempt, runner_node FROM code_checks
 			INDEXED BY code_checks_running_idx WHERE repo_id = ? AND state = 'running'`,
 			[]any{"repo-1"}, []string{"code_checks_running_idx (repo_id=?)"}},
-		// THE SEARCH MODE'S INDEX ITS LATER READERS SEEK (replicated 0078):
+		// THE SEARCH MODE'S INDEX ITS LATER READERS SEEK (replicated 0079):
 		// the indexed repositories in name order, a keyset page at a time —
 		// the walk of a git node that keeps indexes, and of a search across
 		// the company's repositories — its partial predicate repeated
