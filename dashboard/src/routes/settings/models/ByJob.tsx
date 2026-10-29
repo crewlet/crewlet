@@ -361,7 +361,7 @@ function JobCell({
           />
         </span>
       ) : (
-        <Text as="span" variant="body" className="models-byjob__value">
+        <Text as="span" variant="body">
           {key || placeholder}
         </Text>
       )}

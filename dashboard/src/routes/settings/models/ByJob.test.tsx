@@ -227,8 +227,9 @@ test("the assistant's picker offers only a model that denies web tools, and open
 test("a member reads every value, in the picker's type, with no picker", () => {
   mount(company({ admin: false }));
   expect(screen.queryAllByRole("combobox")).toHaveLength(0);
-  const values = [...document.querySelectorAll<HTMLElement>(".models-byjob__value")];
-  expect(values.map((v) => v.textContent)).toContain("sonnet");
+  // The value is body text, never the mono a key is set in elsewhere (Nit 7).
+  const values = screen.getAllByText("sonnet", { selector: ".crewlet-text" });
+  expect(values.length).toBeGreaterThan(0);
   expect(values.every((v) => !v.classList.contains("mono"))).toBe(true);
   // THE CONDITION reaches a member too: it is why their seat waits.
   expect(document.body.textContent).toContain("Sign-in refused");
