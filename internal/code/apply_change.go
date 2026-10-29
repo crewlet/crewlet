@@ -271,9 +271,10 @@ func writeChange(ctx context.Context, tx *sql.Tx, r changeRow) error {
 // ([writeChange]), a record of a bulk rebase held the lane past
 // statelog.ApplyTxTimeBudget (doc.go's measured section).
 func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables int) (int, error) {
+	w := &b.writes
 	var opened, moved []*changeRow
-	for _, id := range b.touched {
-		if b.opened[id] {
+	for _, id := range w.touched {
+		if w.opened[id] {
 			opened = append(opened, b.rows[id])
 		} else {
 			moved = append(moved, b.rows[id])
@@ -300,25 +301,25 @@ func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables in
 	}
 	if _, err := store.InsertRows(ctx, tx, maxVariables,
 		`INSERT INTO code_revisions (change_id, n, head_oid, pusher, pusher_kind, push_id, position, at) VALUES `,
-		`(?, ?, ?, ?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, n) DO NOTHING`, len(b.revisions),
+		`(?, ?, ?, ?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, n) DO NOTHING`, len(w.revisions),
 		func(i int) []any {
-			r := b.revisions[i]
+			r := w.revisions[i]
 			return []any{r.change, r.n, r.head, r.pusher, string(r.kind), r.pushID, b.packed, b.at}
 		}); err != nil {
 		return 0, fmt.Errorf("code: write the revisions: %w", err)
 	}
 	if _, err := store.InsertRows(ctx, tx, maxVariables,
 		`INSERT INTO code_change_authors (change_id, author, author_kind, first_revision, position) VALUES `,
-		`(?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, author) DO NOTHING`, len(b.authors),
+		`(?, ?, ?, ?, ?)`, `ON CONFLICT (change_id, author) DO NOTHING`, len(w.authors),
 		func(i int) []any {
-			a := b.authors[i]
+			a := w.authors[i]
 			return []any{a.change, a.author, string(a.kind), a.first, b.packed}
 		}); err != nil {
 		return 0, fmt.Errorf("code: write the authors: %w", err)
 	}
 	if _, err := store.InsertRows(ctx, tx, maxVariables, `INSERT INTO code_change_bodies (change_id, body) VALUES `,
-		`(?, ?)`, `ON CONFLICT (change_id) DO NOTHING`, len(b.bodies), func(i int) []any {
-			return []any{b.bodies[i].change, b.bodies[i].body}
+		`(?, ?)`, `ON CONFLICT (change_id) DO NOTHING`, len(w.bodies), func(i int) []any {
+			return []any{w.bodies[i].change, w.bodies[i].body}
 		}); err != nil {
 		return 0, fmt.Errorf("code: write the descriptions of the changes opened: %w", err)
 	}

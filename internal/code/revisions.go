@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 )
@@ -62,15 +61,17 @@ import (
 // branch commands name as sources, the changes whose targets and heads its
 // commands set, and the authors among its pushers of the changes whose heads
 // they move — and moved by each entry in the record's order. The push decide
-// moves a copy of it by each entry it admits, so it counts EXACTLY the rows
-// the record's apply will write about changes beside its entries' own — the
-// apply reads the same rows, which the broker's arbitration on the
-// repository's subject guarantees, and writes what the same model makes of
-// the same entries — and holds the record to [MaxRecordRows] with them. A
-// push whose changes' rows would take its record past the bound beside the
-// entries before it is CARRIED, decided by none of its batch's rounds, to
-// lead the committer's next batch; one whose rows would take even a record
-// of its own past it is refused [RefusalTooManyChanges].
+// moves it by each entry it admits, so it counts EXACTLY the rows the
+// record's apply will write about changes beside its entries' own — the apply
+// reads the same rows, which the broker's arbitration on the repository's
+// subject guarantees, and writes what the same model makes of the same
+// entries — and holds the record to [MaxRecordRows] with them. It tries each
+// entry on the book itself, journaled, and takes back one the record cannot
+// hold ([bookTrial]): what an entry costs a round is what its own commands
+// reach. A push whose changes' rows would take its record past the bound
+// beside the entries before it is CARRIED, decided by none of its batch's
+// rounds, to lead the committer's next batch; one whose rows would take even
+// a record of its own past it is refused [RefusalTooManyChanges].
 //
 // # The record's format does not move
 //
@@ -123,11 +124,6 @@ type changeBook struct {
 	// and zero in the decide, which counts opens without numbering them: a
 	// number is the apply's to give ([Applier.applyChangeOpen]'s rule).
 	next int64
-	// opened is every change the record's entries opened ([changeBook.open]),
-	// whose row the apply INSERTS where it writes every other back; and
-	// bodies the descriptions of those that carry one.
-	opened map[string]bool
-	bodies []bodyRow
 	// rows is every change read, by id, as the entries so far moved it.
 	rows map[string]*changeRow
 	// bySource is the live change each branch heads, and byTarget the
@@ -138,6 +134,22 @@ type changeBook struct {
 	// record's head moves can reach: the ones read, and the ones the entries
 	// so far added.
 	authored map[[2]string]bool
+	// writes is what the entries so far make the record's apply write.
+	writes bookWrites
+	// trial is what the entry the decide is trying has done to the book so
+	// far ([changeBook.try]), kept to take it back; nil while no entry is on
+	// trial — and always in the apply, which writes every entry it meets.
+	trial *bookTrial
+}
+
+// bookWrites is what a record's entries make its apply write about changes:
+// the rows a decide counts and the apply writes ([changeBook.rowCount]).
+type bookWrites struct {
+	// opened is every change the entries opened ([changeBook.open]), whose
+	// row the apply INSERTS where it writes every other back; and bodies the
+	// descriptions of those that carry one.
+	opened map[string]bool
+	bodies []bodyRow
 	// touched is every change the entries moved, in the order first moved —
 	// the order the apply writes them in — and isTouched the same changes as
 	// a set, since a push that moves hundreds asks it once a move.
@@ -149,6 +161,63 @@ type changeBook struct {
 	authors   []authorRow
 	// merges is how many changes the entries merged.
 	merges int
+}
+
+// noWrites is a record's writes before its first entry.
+func noWrites() bookWrites {
+	return bookWrites{opened: map[string]bool{}, isTouched: map[string]bool{}}
+}
+
+// bookTrial is what one entry on trial did to a [changeBook] — everything it
+// changed, each as it was before — so that taking the entry back leaves the
+// book exactly as the entry found it.
+//
+// # Why a journal, never a copy
+//
+// The decide reads ONE book a round for its whole batch — every live change
+// any of its commands can reach — and tries each entry on it before it knows
+// the record can hold what the entry writes. A copy of the book an entry
+// cost every change the BATCH reached, on every entry and on every
+// compare-and-set round of the repository's one committer goroutine, while it
+// holds a connection of the reader pool: a push moving a thousand change
+// branches beside sixty-three one-command pushes copied sixty-four thousand
+// rows a round — 79–80 ms and 64 MB, against 47–50 ms and 11 MB tried in
+// place (doc.go's measured section). The journal holds only what the entry's
+// own commands reached, so an entry costs what it moves — nothing at all for
+// one that reaches no change.
+type bookTrial struct {
+	// touched, bodies, revisions, authors and merges are the record's writes'
+	// lengths and count as the entry found them, and next the book's next
+	// number: what taking it back cuts them to.
+	touched, bodies, revisions, authors, merges int
+	next                                        int64
+	// moved is every change the entry moved, by id, as it was before the
+	// entry first moved it; and added every change it opened, which taking
+	// it back forgets.
+	moved map[string]changeRow
+	added []string
+	// authored is every pair of a change and an author the entry added.
+	authored [][2]string
+	// sources and targets are what its opens pointed at their changes, each
+	// as it was, in the order set: a source's change ([changeBook.bySource]),
+	// and a target's changes by how many it held ([changeBook.byTarget]).
+	sources []sourceWas
+	targets []targetWas
+}
+
+// sourceWas is the change the book named for a branch before an entry's open
+// named its own there: id, where held says it named one.
+type sourceWas struct {
+	source, id string
+	held       bool
+}
+
+// targetWas is how many changes a branch was the target of before an entry's
+// open added one, where held says the book named it at all.
+type targetWas struct {
+	target string
+	n      int
+	held   bool
 }
 
 // revisionRow is one code_revisions row a record writes.
@@ -181,9 +250,9 @@ type bodyRow struct{ change, body string }
 func readChangeBook(ctx context.Context, tx *sql.Tx, repoID string, entries []PushEntry, packed, at int64) (
 	*changeBook, error) {
 
-	b := &changeBook{repo: repoID, packed: packed, at: at, opened: map[string]bool{},
-		rows: map[string]*changeRow{}, bySource: map[string]string{}, byTarget: map[string][]string{},
-		authored: map[[2]string]bool{}, isTouched: map[string]bool{}}
+	b := &changeBook{repo: repoID, packed: packed, at: at, rows: map[string]*changeRow{},
+		bySource: map[string]string{}, byTarget: map[string][]string{}, authored: map[[2]string]bool{},
+		writes: noWrites()}
 	var sources []string
 	var pairs [][2]string
 	seenSource, seenPair := map[string]bool{}, map[[2]string]bool{}
@@ -290,34 +359,77 @@ func (b *changeBook) readAuthors(ctx context.Context, tx *sql.Tx, pairs [][2]str
 	return rows.Err()
 }
 
-// clone is a book of its own with b's state, which moving changes nothing of
-// b: what the decide tries an entry on before it admits it.
-func (b *changeBook) clone() *changeBook {
-	c := &changeBook{repo: b.repo, packed: b.packed, at: b.at, next: b.next, opened: maps.Clone(b.opened),
-		bodies: slices.Clone(b.bodies), rows: make(map[string]*changeRow, len(b.rows)),
-		bySource: maps.Clone(b.bySource), byTarget: make(map[string][]string, len(b.byTarget)),
-		authored: maps.Clone(b.authored), touched: slices.Clone(b.touched), isTouched: maps.Clone(b.isTouched),
-		revisions: slices.Clone(b.revisions), authors: slices.Clone(b.authors), merges: b.merges}
-	for id, row := range b.rows {
-		copied := *row
-		c.rows[id] = &copied
-	}
-	for target, ids := range b.byTarget {
-		c.byTarget[target] = slices.Clone(ids)
-	}
-	return c
+// try puts the decide's next entry on trial: what its moves and its open do
+// to the book from here is journaled ([bookTrial]), so that [changeBook.takeBack]
+// can undo it, until [changeBook.keep] admits it.
+func (b *changeBook) try() {
+	w := &b.writes
+	b.trial = &bookTrial{touched: len(w.touched), bodies: len(w.bodies), revisions: len(w.revisions),
+		authors: len(w.authors), merges: w.merges, next: b.next}
 }
 
-// afresh is a book of its own whose changes and authors are as b's moves left
-// them and which has moved nothing yet: the changes as the NEXT record would
-// read them, were b's record to land — the ones b's opened among them, as
-// rows that record finds — what the decide weighs a push it cannot fit beside
-// the entries before it by, as the first of a record of its own.
-func (b *changeBook) afresh() *changeBook {
-	c := b.clone()
-	c.touched, c.isTouched, c.revisions, c.authors, c.merges = nil, map[string]bool{}, nil, nil, 0
-	c.opened, c.bodies = map[string]bool{}, nil
-	return c
+// keep admits the entry on trial: its moves are the record's.
+func (b *changeBook) keep() { b.trial = nil }
+
+// takeBack undoes everything the entry on trial did, leaving the book exactly
+// as [changeBook.try] found it — every change it moved as it was, every one it
+// opened forgotten, and the record's writes cut back to what they held —
+// at the cost of what the entry reached.
+func (b *changeBook) takeBack() {
+	t, w := b.trial, &b.writes
+	b.trial = nil
+	for id, was := range t.moved {
+		*b.rows[id] = was
+	}
+	for _, id := range t.added {
+		delete(b.rows, id)
+	}
+	for _, pair := range t.authored {
+		delete(b.authored, pair)
+	}
+	for i := len(t.sources) - 1; i >= 0; i-- {
+		if s := t.sources[i]; s.held {
+			b.bySource[s.source] = s.id
+		} else {
+			delete(b.bySource, s.source)
+		}
+	}
+	for i := len(t.targets) - 1; i >= 0; i-- {
+		if was := t.targets[i]; was.held {
+			b.byTarget[was.target] = b.byTarget[was.target][:was.n]
+		} else {
+			delete(b.byTarget, was.target)
+		}
+	}
+	// THE CHANGES THE ENTRY FIRST MOVED are the record's writes past their
+	// length before it — the ones it opened among them.
+	for _, id := range w.touched[t.touched:] {
+		delete(w.isTouched, id)
+		delete(w.opened, id)
+	}
+	w.touched, w.bodies = w.touched[:t.touched], w.bodies[:t.bodies]
+	w.revisions, w.authors, w.merges, b.next = w.revisions[:t.revisions], w.authors[:t.authors], t.merges, t.next
+}
+
+// alone is the rows e — and the change it opens, where it carries one — would
+// make its record write about changes, and how many it moves, as the first
+// entry of a record of its own once the book's record has landed: the
+// changes as that record leaves them, the ones it opened among them as rows
+// the next record finds, and none of its writes. What the decide weighs a
+// push it cannot fit beside the entries before it by. It leaves the book as
+// it found it, its record's writes and every change.
+func (b *changeBook) alone(e PushEntry) (rows, moved int) {
+	record := b.writes
+	b.writes = noWrites()
+	b.try()
+	b.move(e)
+	if e.Change != nil {
+		b.open(e)
+	}
+	rows, moved = b.rowCount(), b.moved()
+	b.takeBack()
+	b.writes = record
+	return rows, moved
 }
 
 // rowCount is the rows the book's moves make the record's apply write: every
@@ -326,23 +438,42 @@ func (b *changeBook) afresh() *changeBook {
 // repository's own row, whose next number an open moves, is the record's
 // already ([recordRows]).
 func (b *changeBook) rowCount() int {
-	return len(b.touched) + len(b.revisions) + len(b.authors) + len(b.bodies)
+	w := &b.writes
+	return len(w.touched) + len(w.revisions) + len(w.authors) + len(w.bodies)
 }
 
 // moved is how many changes the book's moves reached.
-func (b *changeBook) moved() int { return len(b.touched) }
+func (b *changeBook) moved() int { return len(b.writes.touched) }
 
 // touch counts change id moved by this record — one version, at the record's
-// position, however many entries move it.
+// position, however many entries move it — and answers its row for the move
+// to change, saved first for an entry on trial.
 func (b *changeBook) touch(id string) *changeRow {
 	row := b.rows[id]
-	if !b.isTouched[id] {
-		b.isTouched[id] = true
-		b.touched = append(b.touched, id)
+	if t := b.trial; t != nil {
+		if _, saved := t.moved[id]; !saved {
+			if t.moved == nil {
+				t.moved = map[string]changeRow{}
+			}
+			t.moved[id] = *row
+		}
+	}
+	if w := &b.writes; !w.isTouched[id] {
+		w.isTouched[id] = true
+		w.touched = append(w.touched, id)
 		row.version++
 		row.position = b.packed
 	}
 	return row
+}
+
+// author adds pair, a change and an author it did not hold, journaled for an
+// entry on trial.
+func (b *changeBook) author(pair [2]string) {
+	b.authored[pair] = true
+	if b.trial != nil {
+		b.trial.authored = append(b.trial.authored, pair)
+	}
 }
 
 // liveOn is the live change source heads, and false for none.
@@ -373,14 +504,15 @@ func (b *changeBook) move(e PushEntry) {
 		}
 		row = b.touch(row.id)
 		row.head, row.revision = c.New, row.revision+1
-		b.revisions = append(b.revisions, revisionRow{change: row.id, n: row.revision, head: c.New, pusher: pusher,
-			kind: kind, pushID: e.PushID})
+		b.writes.revisions = append(b.writes.revisions, revisionRow{change: row.id, n: row.revision, head: c.New,
+			pusher: pusher, kind: kind, pushID: e.PushID})
 		// A PUSH NO SEAT OR PERSON MADE adds no author — no decide admits
 		// one, since a token bound to nobody reads only, and an author row
 		// naming nobody would name what no review could ask after.
 		if pair := [2]string{row.id, pusher}; pusher != "" && !b.authored[pair] {
-			b.authored[pair] = true
-			b.authors = append(b.authors, authorRow{change: row.id, author: pusher, kind: kind, first: row.revision})
+			b.author(pair)
+			b.writes.authors = append(b.writes.authors, authorRow{change: row.id, author: pusher, kind: kind,
+				first: row.revision})
 		}
 	}
 	for _, c := range commands {
@@ -389,13 +521,13 @@ func (b *changeBook) move(e PushEntry) {
 		}
 		for _, id := range b.byTarget[c.Ref] {
 			row := b.rows[id]
-			if !row.state.Live() || row.head != c.New || b.merges >= MaxPushMerges {
+			if !row.state.Live() || row.head != c.New || b.writes.merges >= MaxPushMerges {
 				continue
 			}
 			row = b.touch(id)
 			row.state, row.mergedVia, row.mergeOID = ChangeStateMerged, MergedViaPush, c.New
 			row.mergedAt = sql.NullInt64{Int64: b.at, Valid: true}
-			b.merges++
+			b.writes.merges++
 		}
 	}
 	for _, c := range commands {
@@ -468,20 +600,29 @@ func (b *changeBook) open(e PushEntry) (string, string) {
 	if b.next > 0 {
 		b.next++
 	}
+	// WHAT IT POINTS AT ITS CHANGE, as it was, for an entry on trial.
+	if t := b.trial; t != nil {
+		was, held := b.bySource[row.source]
+		ids, named := b.byTarget[row.target]
+		t.added = append(t.added, id)
+		t.sources = append(t.sources, sourceWas{source: row.source, id: was, held: held})
+		t.targets = append(t.targets, targetWas{target: row.target, n: len(ids), held: named})
+	}
 	b.rows[id] = row
 	b.bySource[row.source] = id
 	b.byTarget[row.target] = append(b.byTarget[row.target], id)
 	// TOUCHED BY ITS OPEN, so the record's later moves of it count no
 	// second version.
-	b.isTouched[id] = true
-	b.touched = append(b.touched, id)
-	b.opened[id] = true
-	b.revisions = append(b.revisions, revisionRow{change: id, n: 1, head: source.New, pusher: owner, kind: kind,
+	w := &b.writes
+	w.isTouched[id] = true
+	w.touched = append(w.touched, id)
+	w.opened[id] = true
+	w.revisions = append(w.revisions, revisionRow{change: id, n: 1, head: source.New, pusher: owner, kind: kind,
 		pushID: e.PushID})
-	b.authored[[2]string{id, owner}] = true
-	b.authors = append(b.authors, authorRow{change: id, author: owner, kind: kind, first: 1})
+	b.author([2]string{id, owner})
+	w.authors = append(w.authors, authorRow{change: id, author: owner, kind: kind, first: 1})
 	if e.Change.Body != "" {
-		b.bodies = append(b.bodies, bodyRow{change: id, body: e.Change.Body})
+		w.bodies = append(w.bodies, bodyRow{change: id, body: e.Change.Body})
 	}
 	return id, ""
 }

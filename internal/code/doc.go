@@ -1402,6 +1402,19 @@
 //     twenty such rounds, each forced by a peer's record on the repository,
 //     would spend the whole of [CommitBudget].
 //
+// A ROUND OVER LIVE CHANGES (the changes arm, in the bounded run that
+// measured the changes a record moves above, interleaved with the build
+// before it, two rounds): one push moving the heads of [MaxCommandsPerPush]
+// live changes beside sixty-three one-command pushes that move none is 47–50
+// ms a round and 11 MB, where the group's sixty-four pushes reaching no
+// change are 3.0–3.4 ms — the difference the reads of the thousand changes
+// and of the authors their pusher already is, which the round cannot do
+// without. The build before tried each entry on a copy of the round's change
+// book, every change the batch reached copied for every entry: 79–80 ms and
+// 64 MB the same round. The journal ([bookTrial]) holds what each entry
+// reached and nothing more, so the sixty-three that reach no change cost the
+// round nothing of the book.
+//
 // A READ: one full page of a snapshot's refs ([MaxSnapshotItems]) from a
 // repository of [MaxRefsPerRepo] refs is 57–59 ms to serve, 5.7–5.9 µs a
 // ref, nearly all of it the driver's scan. A full read's walk of the refs'

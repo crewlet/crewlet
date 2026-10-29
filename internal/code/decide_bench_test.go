@@ -49,7 +49,12 @@ import (
 //     its deepest directory as the rest of a record carries
 //     ([filledRecord]: 2 492 more), so every create of the chain holds every
 //     name the record spells below it — the most gaps a record's ranges can
-//     be cut into, and the most names a nested create's own walk passes.
+//     be cut into, and the most names a nested create's own walk passes;
+//   - changes: one push moving the heads of [MaxCommandsPerPush] live changes
+//     by a pusher already their author ([estate.seedLiveChanges]), then
+//     [MaxPushesPerRecord] − 1 pushes of one create each that move none — the
+//     round whose change book ([changeBook]) holds the most changes beside
+//     the most entries it tries that reach none of them.
 //
 // And what each arm times:
 //
@@ -140,6 +145,19 @@ func BenchmarkDecideABatch(b *testing.B) {
 		return RefusalRefConflict
 	}
 
+	const changed = "0190f3c4-0000-7000-8000-00000000be05"
+	repository(changed, team)
+	e.seedLiveChanges(changed, MaxCommandsPerPush)
+	moving := make([]Command, MaxCommandsPerPush)
+	for c := range moving {
+		moving[c] = Command{Ref: liveSource(c), Old: liveHead(c), New: oid(fmt.Sprint("rebased", c))}
+	}
+	rebased := []Proposal{benchProposal(changed, moving)}
+	for p := 1; p < MaxPushesPerRecord; p++ {
+		rebased = append(rebased, benchProposal(changed, []Command{{
+			Ref: fmt.Sprintf("refs/heads/team%02d/work/one", p), Old: ZeroOID, New: oid(fmt.Sprint(p))}}))
+	}
+
 	type arm struct {
 		name, repo string
 		batch      []Proposal
@@ -162,6 +180,7 @@ func BenchmarkDecideABatch(b *testing.B) {
 				return chain[len(chain)-1] + fmt.Sprintf("/s%06d", i)
 			}
 		}), "", firstLands},
+		{"changes", changed, rebased, "", nil},
 	} {
 		if shape.decided == nil {
 			shape.decided = func(string) Refusal { return shape.refused }

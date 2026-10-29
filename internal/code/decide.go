@@ -153,17 +153,20 @@ import (
 // batch's branch commands can move, and the authors its pushers already are of
 // them, read ONCE a round into one model ([changeBook]), moved by every entry
 // it admits as the apply will move it, and the record held to [MaxRecordRows]
-// with what that model writes. The batcher cannot count them — they are what
-// the repository holds, which only a snapshot reads — so a push whose changes'
-// rows would take the record past its bound beside the entries before it is
-// CARRIED: the round decides nothing of it or of any push after it, and the
-// committer runs them, in the order they arrived, as its next batch, the
-// carried push first ([Committer.commit]). There its rows are the record's
-// first; a push whose changes' rows would take even a record of its own past
-// the bound — weighed against the changes as the entries before it leave
-// them, since those land first — is refused WHOLE, too_many_changes
-// ([RefusalTooManyChanges]), nothing of it decided. Judged after the pack
-// bound, so a push past both is told the bound that clears in a minute.
+// with what that model writes. Each entry is tried on the model itself and
+// taken back where the record cannot hold it ([bookTrial]), so an entry costs
+// the round what its own commands reach, never what the batch's do. The
+// batcher cannot count them — they are what the repository holds, which only
+// a snapshot reads — so a push whose changes' rows would take the record past
+// its bound beside the entries before it is CARRIED: the round decides
+// nothing of it or of any push after it, and the committer runs them, in the
+// order they arrived, as its next batch, the carried push first
+// ([Committer.commit]). There its rows are the record's first; a push whose
+// changes' rows would take even a record of its own past the bound — weighed
+// against the changes as the entries before it leave them, since those land
+// first — is refused WHOLE, too_many_changes ([RefusalTooManyChanges]),
+// nothing of it decided. Judged after the pack bound, so a push past both is
+// told the bound that clears in a minute.
 //
 // # A push that already landed is answered from its row
 //
@@ -572,33 +575,32 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		// them, after the entries before it: a push whose changes' rows take
 		// the record past its bound is decided nothing of — refused whole,
 		// too_many_changes, where even a record of its own could never hold
-		// them, and carried to lead the next batch where one could.
+		// them, and carried to lead the next batch where one could. TRIED ON
+		// THE BOOK ITSELF and taken back where it does not fit ([bookTrial]):
+		// what an entry costs is what its own commands reach.
 		entry := p.entryWith(cmds, quota.day.Label)
-		trial := book.clone()
-		trial.move(entry)
+		book.try()
+		book.move(entry)
 		// AND THE CHANGE IT ASKS FOR, opened in its own entry where its rules
 		// let it ([pushOpen]) — after the entry's own moves, since a push to
 		// a branch heading a live change revises that one rather than opens
 		// another — and its rows counted with the record's.
 		var change *ChangeAnswer
 		if p.Change != nil {
-			entry.Change, change = pushOpen(p, cmds, w, trial, repo)
+			entry.Change, change = pushOpen(p, cmds, w, book, repo)
 			if entry.Change != nil {
-				trial.open(entry)
+				book.open(entry)
 			}
 		}
 		own := entryRows(entry)
-		if recordRows(rows+own+trial.rowCount()) > MaxRecordRows {
+		if recordRows(rows+own+book.rowCount()) > MaxRecordRows {
 			// ALONE is the push leading the next record, the entries before
 			// it landed: what it would cost there decides whether it can
 			// land at all.
-			solo := book.afresh()
-			solo.move(entry)
-			if entry.Change != nil {
-				solo.open(entry)
-			}
-			if alone := recordRows(own + solo.rowCount()); alone > MaxRecordRows {
-				detail := tooManyChangesDetail(solo.moved(), alone)
+			book.takeBack()
+			changeRows, moved := book.alone(entry)
+			if alone := recordRows(own + changeRows); alone > MaxRecordRows {
+				detail := tooManyChangesDetail(moved, alone)
 				answers[i].refused, answers[i].detail = RefusalTooManyChanges, detail
 				answers[i].commands = refuseEvery(p.Commands, RefusalTooManyChanges, detail)
 				continue
@@ -606,7 +608,8 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			answers[i].carried, carrying = true, true
 			continue
 		}
-		book, rows = trial, rows+own
+		book.keep()
+		rows += own
 		w.apply(p, cmds)
 		quota.count(p)
 		answers[i].inRecord, answers[i].change = true, change
