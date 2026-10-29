@@ -27,10 +27,10 @@ import {
   Text,
   useToast,
 } from "@crewlethq/ui";
+import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { ModelDeviceStatus } from "~/protocol/models.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { isAbort } from "~/protocol/rest.ts";
 import type { ModelDevice } from "~/protocol/models.ts";
 import { cancelDeviceSignIn, startDeviceSignIn } from "../api.ts";
 import type { ModelView } from "../data.ts";
@@ -62,6 +62,13 @@ function hostOf(url: string): string | null {
     return null;
   }
 }
+
+/**
+ * The poll's answers that end following a session: it is gone, or no longer
+ * this reader's to see. Every other failure is a moment's, and the poll asks
+ * again.
+ */
+const LOST: readonly QueryErrorCode[] = ["not_found", "unauthorized"];
 
 /** What went wrong, by what the person was doing: each has its own title and its own way on. */
 type Problem = { kind: "start" | "cancel"; sentence: string };
@@ -122,9 +129,13 @@ export function DeviceDialog({
   }, [polled.data, session?.id]);
   // A SESSION THE ENGINE NO LONGER ANSWERS FOR (gone, or no longer this
   // reader's to see) is said, with the way on, rather than drawn as waiting
-  // for an approval that can never be read back.
+  // for an approval that can never be read back. Anything else (a node not
+  // ready yet, a slow answer, a dropped socket) passes: the status stays and
+  // the next poll asks again.
   const lost =
-    live && polled.error ? polled.detail || "The engine no longer answers for it." : null;
+    live && polled.error && LOST.includes(polled.error)
+      ? polled.detail || "The engine no longer answers for it."
+      : null;
 
   useEffect(() => {
     if (session?.status !== "approved" || approved.current) return;
@@ -152,17 +163,13 @@ export function DeviceDialog({
       onClose();
       return;
     }
-    // TIED TO THE DIALOG: an answer that lands after it closed acts for nothing.
-    const signal = lifetime();
+    // A CANCEL THAT HAS STARTED FINISHES, so the session is ended rather
+    // than left in doubt; an answer that lands after the dialog closed acts
+    // for nothing on screen.
+    const screen = lifetime();
     setCancelling(true);
-    let answer: Awaited<ReturnType<typeof cancelDeviceSignIn>>;
-    try {
-      answer = await cancelDeviceSignIn(session.id, signal);
-    } catch (err) {
-      if (isAbort(err)) return;
-      throw err;
-    }
-    if (signal.aborted) return;
+    const answer = await cancelDeviceSignIn(session.id);
+    if (screen.aborted) return;
     setCancelling(false);
     if (answer.kind === "refused") {
       setProblem({ kind: "cancel", sentence: answer.sentence });
