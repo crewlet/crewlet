@@ -128,9 +128,9 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 	if err := os.WriteFile(filepath.Join(clone, "src", "a.txt"), []byte("a, changed in the box\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, clone, box, git, "commit", "-q", "-a", "-m", "a box's change")
-	pushed := strings.TrimSpace(runGit(t, clone, box, git, "rev-parse", "HEAD"))
-	runGit(t, clone, box, git, "push", "-q", "origin", branch)
+	runGit(t, clone, box, "commit", "-q", "-a", "-m", "a box's change")
+	pushed := strings.TrimSpace(runGit(t, clone, box, "rev-parse", "HEAD"))
+	runGit(t, clone, box, "push", "-q", "origin", branch)
 	if got := person.LsRemote(url, 2)["refs/heads/"+branch]; got != pushed {
 		t.Fatalf("the host's %s is %s, want the box's commit %s", branch, got, pushed)
 	}
@@ -224,11 +224,18 @@ func boxEnv(t *testing.T, env []string, git string, g sandbox.BoxGit, hook map[s
 	return out
 }
 
-// runGit runs git in dir under the box's environment env, failing t where it
-// exits non-zero, and answers its standard output.
-func runGit(t *testing.T, dir string, env []string, git string, args ...string) string {
+// runGit runs git in dir as a box runs it — through its shell, under the
+// box's environment env, whose PATH names the box's git first — failing t
+// where it exits non-zero, and answers its standard output. Through the
+// shell, never an exec of the git itself: a box's git is the box's, not one
+// this module starts (gitproc's TestOnlyGitprocExecsGit).
+func runGit(t *testing.T, dir string, env []string, args ...string) string {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), git, args...)
+	words := make([]string, len(args))
+	for i, arg := range args {
+		words[i] = sandbox.ShellQuote(arg)
+	}
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "git "+strings.Join(words, " "))
 	cmd.Dir, cmd.Env = dir, env
 	var out, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &stderr
