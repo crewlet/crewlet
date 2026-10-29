@@ -141,10 +141,10 @@ type Option struct {
 type Role string
 
 const (
-	// RoleApprover: the answer IS the decision.
+	// RoleApprover is a person whose answer IS the decision.
 	RoleApprover Role = "approver"
-	// RoleContributor: the answer is an input to a decision somebody else
-	// makes.
+	// RoleContributor is a person whose answer is an input to a decision
+	// somebody else makes.
 	RoleContributor Role = "contributor"
 )
 

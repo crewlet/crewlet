@@ -175,14 +175,15 @@ func (a Ask) Redacted() Ask {
 type AskOutcome string
 
 const (
-	// AskRecorded: the ask is on the job's row, and the run parks on it
-	// once its CLI ends.
+	// AskRecorded is an ask on the job's row, which the run parks on once
+	// its CLI ends.
 	AskRecorded AskOutcome = "recorded"
-	// AskAlreadyAsked: the job asked a question already, which stands. A
-	// run asks one question at a time, because one answer resumes it.
+	// AskAlreadyAsked is a job that asked a question already, which stands.
+	// A run asks one question at a time, because one answer resumes it.
 	AskAlreadyAsked AskOutcome = "already_asked"
-	// AskNotRunning: the row does not hold this job running, so nothing
-	// can park on the ask: the job ended, was stopped, or was replaced.
+	// AskNotRunning is a row that does not hold this job running, so
+	// nothing can park on the ask: the job ended, was stopped, or was
+	// replaced.
 	AskNotRunning AskOutcome = "not_running"
 )
 

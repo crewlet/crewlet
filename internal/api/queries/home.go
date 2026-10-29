@@ -744,17 +744,17 @@ func (s Sources) answeredDecisions(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	if work {
-		fresh, err := freshness(p)
-		if err != nil {
-			return nil, err
+		fresh, freshErr := freshness(p)
+		if freshErr != nil {
+			return nil, freshErr
 		}
-		got, err := s.Work.AnsweredAsks(ctx, worklet.DecisionsQuery{
+		got, readErr := s.Work.AnsweredAsks(ctx, worklet.DecisionsQuery{
 			Handle: handle,
 			Level:  fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 			MinPosition: fresh.MinPosition,
 		}, s.clock(), s.zone())
-		if err != nil {
-			return nil, err
+		if readErr != nil {
+			return nil, readErr
 		}
 		asks, truncated = got.Asks, got.Truncated
 		if !shows(ctx, authz.KindTask) {

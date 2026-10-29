@@ -237,9 +237,9 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// row just read as waiting, whose job the answer is pinned to: a run
 	// asks a new question only under a new job, so the options this checks
 	// are the ones the answer reaches.
-	if _, err := sandbox.AnswerText(run.Decision, choice, answer); err != nil {
-		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("answer_run was refused: %s. "+
-			"Nothing was answered.", err.Error())), nil
+	if _, unoffered := sandbox.AnswerText(run.Decision, choice, answer); unoffered != nil {
+		return refusedBy(tools.RefusalInvalid, unoffered, fmt.Sprintf("answer_run was refused: %s. "+
+			"Nothing was answered.", unoffered.Error())), nil
 	}
 	parties, refusal := t.parties(ctx, run)
 	if refusal != nil {

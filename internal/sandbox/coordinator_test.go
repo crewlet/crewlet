@@ -1955,7 +1955,16 @@ func TestASettleLeavesTheNextJobItsOwnTail(t *testing.T) {
 			`{"version":4,"iteration":1}`)}); err != nil || !suspended {
 			t.Errorf("the relaunch's suspension: suspended=%v err=%v", suspended, err)
 		}
-		rig.ask("t1", Ask{Question: "which file?", To: AskToRequester})
+		// ASKED UNDER THE RESUME'S OWN CONTEXT, as the relaunched job's
+		// question is recorded while the resume holds the run.
+		asking, _, err := rig.pending.Get(ctx, r.TurnID)
+		if err != nil {
+			t.Errorf("Get: %v", err)
+		}
+		if got, err := rig.pending.RecordAsk(ctx, r.TurnID, asking.LaunchID,
+			Ask{Question: "which file?", To: AskToRequester}); err != nil || got != AskRecorded {
+			t.Errorf("the relaunch's ask: %q, %v", got, err)
+		}
 		rig.runner.Finish(Result{})
 		next, _, err := rig.pending.Get(ctx, r.TurnID)
 		if err != nil {

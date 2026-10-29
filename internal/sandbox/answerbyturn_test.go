@@ -226,9 +226,9 @@ func TestAnAnswerByTurnRecordsTheOptionItChose(t *testing.T) {
 	launchScheduled(t, rig, "t1")
 	parksOnADecision(t, rig, "t1")
 
-	given, ev := givenAgainst(t, rig, "t1")
+	given, _ := givenAgainst(t, rig, "t1")
 	given.Choice, given.Answer = "release-2", "  and cut a patch  "
-	ev = events.New(given, events.TraceContext{})
+	ev := events.New(given, events.TraceContext{})
 	disposition, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev)
 	if err != nil || disposition != AnswerConsumed {
 		t.Fatalf("AnswerByTurn = %q, %v, want consumed", disposition, err)
@@ -278,9 +278,9 @@ func TestAnAnswerByTurnChoosingWhatWasNotOfferedIsSpentUnrecorded(t *testing.T) 
 	launchScheduled(t, rig, "t1")
 	parksOnADecision(t, rig, "t1")
 
-	given, ev := givenAgainst(t, rig, "t1")
+	given, _ := givenAgainst(t, rig, "t1")
 	given.Choice = "develop"
-	ev = events.New(given, events.TraceContext{})
+	ev := events.New(given, events.TraceContext{})
 	disposition, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev)
 	if err != nil || disposition != AnswerNotMine {
 		t.Fatalf("AnswerByTurn = %q, %v, want not_mine", disposition, err)
@@ -297,7 +297,7 @@ func TestAnAnswerByTurnChoosingWhatWasNotOfferedIsSpentUnrecorded(t *testing.T) 
 	}
 
 	// And the question still takes an answer that chooses what it offers.
-	given, ev = givenAgainst(t, rig, "t1")
+	given, _ = givenAgainst(t, rig, "t1")
 	given.Choice = "main"
 	ev = events.New(given, events.TraceContext{})
 	if d, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev); err != nil || d != AnswerConsumed {
