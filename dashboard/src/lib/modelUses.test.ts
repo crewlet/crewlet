@@ -11,6 +11,7 @@ import {
   categoryState,
   intentOf,
   noUses,
+  providerOrder,
   usesForIntent,
   usesOf,
   withCategory,
@@ -193,5 +194,20 @@ describe("applyUses", () => {
     applyUses(before, "big", noUses(), usesForIntent("all", ["boss", "lead"], false));
     expect(before).toEqual(snapshot);
     expect(agentRoles(before as unknown as Record<string, unknown>).has("boss")).toBe(false);
+  });
+});
+
+describe("providerOrder", () => {
+  // THE ORDER A SEAT THAT NAMES NO MODEL FALLS BACK THROUGH: the document's
+  // own order, reconciled against the map rather than trusted.
+  it("comes in the document's declared order, reconciled against the map", () => {
+    const llm = { alpha: {}, bravo: {}, charlie: {} };
+    expect(providerOrder(llm, ["charlie", "gone", "charlie", "alpha"])).toEqual([
+      "charlie",
+      "alpha",
+      "bravo",
+    ]);
+    // No order recorded: sorted, arbitrary and stable.
+    expect(providerOrder({ zulu: {}, alpha: {} }, undefined)).toEqual(["alpha", "zulu"]);
   });
 });

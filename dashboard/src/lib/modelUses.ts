@@ -175,6 +175,31 @@ export function usesForIntent(
   return out;
 }
 
+/**
+ * The order the company's models are declared in, the order a seat that names
+ * none falls back through, as the engine's `Providers.ProviderOrder` reads it.
+ *
+ * `llm_order` is how the document carries it, because a JSON object's keys
+ * are sorted on the way out; it is reconciled against the map rather than
+ * trusted, since the two travel separately: a key it names that the map lacks
+ * is dropped, and a key the map has that it omits comes after, sorted.
+ */
+export function providerOrder(llm: Record<string, unknown>, order: unknown): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const key of Array.isArray(order) ? order : []) {
+    if (typeof key !== "string" || !Object.hasOwn(llm, key) || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return [
+    ...out,
+    ...Object.keys(llm)
+      .filter((key) => !seen.has(key))
+      .sort(),
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // The next document
 // ---------------------------------------------------------------------------
