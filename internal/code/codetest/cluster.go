@@ -203,9 +203,9 @@ func fleetCases() []fleetCase {
 		{"F40_EveryMemberRoutesAnEngineWriteToTheHome", everyMemberRoutesAnEngineWriteToTheHome},
 		{"F41_AnEngineWriteWhoseHomeDiesAfterAppendIsOnePush", anEngineWriteWhoseHomeDiesAfterAppendIsOnePush},
 		{"F42_ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds", aRevokedSeatIsRefusedOnceTheLaggingCommitterSheds},
-		{"F42_ABoxReadsItsOwnPushThroughAnotherNode", aBoxReadsItsOwnPushThroughAnotherMember},
-		{"F43_ABoxPushesOnTopOfWhatAnotherNodeShowedIt", aBoxPushesOnTopOfWhatAnotherMemberShowedIt},
-		{"F44_ABoxNeverSeesABranchGoBack", aBoxNeverSeesABranchGoBackAcrossMembers},
+		{"F45_ABoxReadsItsOwnPushThroughAnotherNode", aBoxReadsItsOwnPushThroughAnotherMember},
+		{"F46_ABoxPushesOnTopOfWhatAnotherNodeShowedIt", aBoxPushesOnTopOfWhatAnotherMemberShowedIt},
+		{"F47_ABoxNeverSeesABranchGoBack", aBoxNeverSeesABranchGoBackAcrossMembers},
 		{"LY8_ALargeNodePublishesForEveryNode", aLargeNodePublishesForEveryNode},
 		{"LY9_TwoMaintainersLandOnePublication", twoMaintainersLandOnePublication},
 	}

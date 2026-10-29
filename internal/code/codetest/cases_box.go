@@ -43,7 +43,7 @@ func (s boxScene) launch(seat string, access code.Access) (host.BoxRunRef, *Pers
 func (s boxScene) personURL(n Node) string { return n.URL() + "/git/" + s.repo }
 func (s boxScene) boxURL(n Node) string    { return BoxURL(n, s.repo) }
 
-// F40: a box clones its run's repository, commits, pushes its branch and
+// F43: a box clones its run's repository, commits, pushes its branch and
 // fetches it back — every cache at the head equal to the rows.
 func aBoxPushesAndFetchesItsGrants(t *testing.T, newFleet NewFleet) {
 	c := newCase(t, newFleet, Shape{}, Settings())
@@ -68,7 +68,7 @@ func aBoxPushesAndFetchesItsGrants(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// F41: a run that ended between two of its box's requests: the first is
+// F44: a run that ended between two of its box's requests: the first is
 // served, the second is refused 403 in git's words.
 func anEndedRunIsRefused(t *testing.T, newFleet NewFleet) {
 	c := newCase(t, newFleet, Shape{}, Settings())
@@ -89,7 +89,7 @@ func anEndedRunIsRefused(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// F42: a box reads its own push through another node at once, with no
+// F45: a box reads its own push through another node at once, with no
 // barrier: the push raised the run's floor to its row, and the other node's
 // session sync reaches it.
 func aBoxReadsItsOwnPushThroughAnotherNode(t *testing.T, newFleet NewFleet) {
@@ -101,7 +101,7 @@ func aBoxReadsItsOwnPushThroughAnotherNode(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// F43: a box's push whose advertisement one node served past the box's floor
+// F46: a box's push whose advertisement one node served past the box's floor
 // and whose receive-pack another node — its copy last synced below that —
 // receives lands whole: the advertisement raised the floor before its first
 // byte, so the receive-pack's session sync holds every base the thin pack
@@ -115,7 +115,7 @@ func aBoxPushesOnTopOfWhatAnotherNodeShowedIt(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// F44: a box never sees a branch go back between two nodes: the `ls-refs` a
+// F47: a box never sees a branch go back between two nodes: the `ls-refs` a
 // node served past the run's floor raised it, so the other node — its copy
 // behind — answers at least that far.
 func aBoxNeverSeesABranchGoBack(t *testing.T, newFleet NewFleet) {
@@ -127,26 +127,26 @@ func aBoxNeverSeesABranchGoBack(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// The RunFleet halves of F42–F44, on a cluster: the two nodes are members
+// The RunFleet halves of F45–F47, on a cluster: the two nodes are members
 // that are not the repository's committer, so every push is decided by a
 // third.
 
 func aBoxReadsItsOwnPushThroughAnotherMember(t *testing.T, c Cluster) {
-	s, rc := memberScene(t, c, "fleet-f42")
+	s, rc := memberScene(t, c, "fleet-f45")
 	s.seed()
 	s.readsItsOwnPush()
 	rc.converged()
 }
 
 func aBoxPushesOnTopOfWhatAnotherMemberShowedIt(t *testing.T, c Cluster) {
-	s, rc := memberScene(t, c, "fleet-f43")
+	s, rc := memberScene(t, c, "fleet-f46")
 	s.seed()
 	s.pushesOnTopOfWhatAnotherNodeShowed()
 	rc.converged()
 }
 
 func aBoxNeverSeesABranchGoBackAcrossMembers(t *testing.T, c Cluster) {
-	s, rc := memberScene(t, c, "fleet-f44")
+	s, rc := memberScene(t, c, "fleet-f47")
 	s.seed()
 	s.neverSeesABranchGoBack()
 	rc.converged()
