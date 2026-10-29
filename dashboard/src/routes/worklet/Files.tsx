@@ -33,20 +33,9 @@ import { useNow } from "~/lib/clock.ts";
 import { fmtBytes, fmtDateTime, relTime } from "~/lib/format.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { needsWords } from "~/lib/access.ts";
-import { rest, RestError } from "~/protocol/rest.ts";
+import { pathSegments } from "~/lib/segment.ts";
+import { pathSegment, rest, RestError } from "~/protocol/rest.ts";
 import type { WorkFile } from "~/protocol/index.ts";
-
-/**
- * A file's address under `/worklet/files/`, each segment escaped — the project,
- * then the path's own segments, so a `/` in a path stays a separator and a `#`
- * or a space in a name cannot end the URL early.
- *
- * THE TAIL ONLY: the route's head is written where the request is made, so
- * `src/protocol/proxy.test.ts` reads the path the download reaches.
- */
-export function fileAddress(project: string, path: string): string {
-  return `${encodeURIComponent(project)}/${path.split("/").map(encodeURIComponent).join("/")}`;
-}
 
 /** The name a download is saved under: the path's last segment. */
 export function fileName(path: string): string {
@@ -131,7 +120,9 @@ function FileRow({ file }: { file: WorkFile }) {
     setBusy(true);
     setRefusal("");
     try {
-      const bytes = await rest.blob(`/worklet/files/${fileAddress(file.project, file.path)}`);
+      const bytes = await rest.blob(
+        `/worklet/files/${pathSegment(file.project)}/${pathSegments(file.path)}`,
+      );
       const url = URL.createObjectURL(bytes);
       const link = document.createElement("a");
       link.href = url;

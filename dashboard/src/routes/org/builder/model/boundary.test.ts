@@ -16,7 +16,8 @@
  *   module of `~/contract/` (the engine's own sets, which that directory's
  *   suite holds to data and shapes importing nothing but each other),
  *   `~/lib/avatar.ts` (the ONE reading of a seat's avatar, which imports
- *   nothing but the contract, held below) or
+ *   nothing but the contract, held below), `~/lib/segment.ts` (the ONE rule
+ *   of a URL path segment, which imports nothing, held below) or
  *   `~/protocol/configAnswer.ts` (the ONE reading of a `/config` refusal,
  *   which imports nothing but types and `engineAnswer.ts`, itself importing
  *   nothing but the contract's mark of an engine answer, both held below); the rest of `~/protocol`
@@ -34,6 +35,9 @@ const CONFIG_ANSWER = "~/protocol/configAnswer.ts";
 
 /** The one runtime import the model may make from `~/lib` beyond formatting and storage keys. */
 const AVATAR = "~/lib/avatar.ts";
+
+/** The one rule of a URL path segment, which a lead's unit path is built by: it imports nothing. */
+const SEGMENT = "~/lib/segment.ts";
 
 /** This directory, relative to `src/`. */
 const MODEL = "routes/org/builder/model/";
@@ -110,6 +114,7 @@ describe("the builder core", () => {
           spec.startsWith("~/contract/") ||
           spec === CONFIG_ANSWER ||
           spec === AVATAR ||
+          spec === SEGMENT ||
           (typeOnly && spec.startsWith("~/protocol/"));
         if (!allowed) offending.push(`${name}: ${typeOnly ? "import type" : "import"} "${spec}"`);
       }
@@ -205,4 +210,14 @@ describe("the builder core", () => {
       { spec: "~/protocol/index.ts", typeOnly: true },
     ]);
   });
+});
+
+test("builds a path segment through a module that imports nothing", () => {
+  const segment = modules().find(({ path }) => path === "lib/segment.ts");
+  expect(segment, "lib/segment.ts is gone").toBeDefined();
+  expect(imports(segment!.text)).toEqual([]);
+  const body = code(segment!.text);
+  expect(
+    FORBIDDEN_GLOBALS.filter(([, pattern]) => pattern.test(body)).map(([label]) => label),
+  ).toEqual([]);
 });

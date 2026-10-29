@@ -166,7 +166,10 @@ export async function conversationFile(
   if (!UUID.test(ref.conversation_id) || !UUID.test(ref.file_id)) {
     throw new RestError(0, { error: "invalid_body", detail: "the file reference is not one" });
   }
-  return rest.blob(`/assistant/conversations/${ref.conversation_id}/files/${ref.file_id}`, signal);
+  return rest.blob(
+    `/assistant/conversations/${pathSegment(ref.conversation_id)}/files/${pathSegment(ref.file_id)}`,
+    signal,
+  );
 }
 
 /** Where a turn stream stands, as the drawer says it. */

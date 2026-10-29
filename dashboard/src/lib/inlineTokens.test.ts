@@ -275,6 +275,9 @@ describe("what an address is", () => {
       "https://acme.atlassian.net/wiki/spaces/~me/pages/2",
     );
     expect(canonical("https://acme.atlassian.net/wiki/spaces/D/pages/abc/T", wiki)).toBeNull();
+    // DOTS ALONE ARE NO SEGMENT: a URL parser keeps `...`, and rebuilt as a
+    // path it is a name no space has, so the page is drawn as words.
+    expect(canonical("https://acme.atlassian.net/wiki/spaces/.../pages/2/T", wiki)).toBeNull();
   });
 
   test("a segment that decodes to a slash, or that no code host allows, labels nothing", () => {

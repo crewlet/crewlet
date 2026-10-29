@@ -6,7 +6,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { fileAddress, fileName, ProjectFiles } from "./Files.tsx";
+import { fileName, ProjectFiles } from "./Files.tsx";
 import { Router } from "~/app/router.tsx";
 import { useClient, useConnection } from "~/lib/store-hooks.ts";
 import { rest, RestError } from "~/protocol/rest.ts";
@@ -111,8 +111,7 @@ test("a download refused on authority says which grant would admit the reader", 
   );
 });
 
-test("a path is escaped segment by segment and saved under its own name", () => {
-  expect(fileAddress("ENG", "a b/c#d.md")).toBe("ENG/a%20b/c%23d.md");
+test("a file is saved under its own name", () => {
   expect(fileName("reports/2026/q3.md")).toBe("q3.md");
   expect(fileName("notes.txt")).toBe("notes.txt");
 });

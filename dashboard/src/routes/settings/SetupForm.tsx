@@ -52,7 +52,7 @@ import {
 } from "@crewlethq/ui";
 import { CopyGlyph, FileTextGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
 import { marked, paths, Problems, withProblems } from "~/ui/Problems.tsx";
-import { rest, RestError } from "~/protocol/index.ts";
+import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import { isWholeReference } from "~/lib/references.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
 import type {
@@ -64,6 +64,7 @@ import type {
 import { href } from "~/app/router.tsx";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { SETUP_ASSISTANT_HELP, setupDraftFields } from "./setupDraft.ts";
+import { linkSegment } from "~/lib/segment.ts";
 
 /** What the engine answers a submission with. */
 interface Submitted {
@@ -141,8 +142,10 @@ export function vendorLink(
     // the engine currently reads for it. WHAT IS TYPED WINS otherwise, so
     // the link follows the box as somebody fills it in.
     const value = isWholeReference(typed) ? (read?.(field) ?? "").trim() : typed;
-    if (value === "") return "";
-    resolved = resolved.replace(`{${field}}`, encodeURIComponent(value));
+    // A VALUE THAT CANNOT BE ONE SEGMENT (dots alone) links nowhere, as an empty one does.
+    const segment = linkSegment(value);
+    if (segment === null) return "";
+    resolved = resolved.replace(`{${field}}`, segment);
   }
   return resolved;
 }
@@ -808,10 +811,13 @@ export function SetupForm({
         // one request per agent, so a banner reporting the third one's
         // refusal over ten closed blocks names nothing a reader can act on.
         refused.current = section;
-        const answer = (await rest.post(`/setup/integrations/${section.tool.key}/inputs`, {
-          ...body,
-          ...(section.seat ? { seat: section.seat } : {}),
-        })) as Submitted;
+        const answer = (await rest.post(
+          `/setup/integrations/${pathSegment(section.tool.key)}/inputs`,
+          {
+            ...body,
+            ...(section.seat ? { seat: section.seat } : {}),
+          },
+        )) as Submitted;
         rotated = rotated || answer.reloaded === true;
       }
       refused.current = undefined;
@@ -1352,12 +1358,15 @@ export function SetupForm({
     }
     setVerdicts((was) => ({ ...was, [key]: "checking" }));
     try {
-      const answer = (await rest.post(`/setup/integrations/${section.tool.key}/verify`, {
-        field: r.field,
-        value,
-        ...(section.seat ? { seat: section.seat } : {}),
-        ...(Object.keys(typed).length > 0 ? { values: typed } : {}),
-      })) as SetupVerdict;
+      const answer = (await rest.post(
+        `/setup/integrations/${pathSegment(section.tool.key)}/verify`,
+        {
+          field: r.field,
+          value,
+          ...(section.seat ? { seat: section.seat } : {}),
+          ...(Object.keys(typed).length > 0 ? { values: typed } : {}),
+        },
+      )) as SetupVerdict;
       setVerdicts((was) => ({ ...was, [key]: answer }));
     } catch (err) {
       // THE CHECK DID NOT RUN, which is not the app refusing the key: a

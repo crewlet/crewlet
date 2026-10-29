@@ -26,7 +26,7 @@ import { useState } from "react";
 import { Button, Callout, InlineCode, Modal, ValueField } from "@crewlethq/ui";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { isWholeReference } from "~/lib/references.ts";
-import { rest, RestError } from "~/protocol/index.ts";
+import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import { reloadFailure } from "./secretReload.ts";
 
 export function SecretDialog({
@@ -64,7 +64,7 @@ export function SecretDialog({
       // THE PATH SEGMENT IS ENCODED, and the value goes as the body. A name
       // is the operator's text until the engine has judged it, so it cannot
       // be pasted into a URL raw.
-      const answer = await rest.putText("/secrets/" + encodeURIComponent(name.trim()), value);
+      const answer = await rest.putText("/secrets/" + pathSegment(name.trim()), value);
       onDone(name.trim());
       const failure = reloadFailure(answer);
       if (failure) {

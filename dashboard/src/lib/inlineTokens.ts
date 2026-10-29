@@ -81,6 +81,7 @@
 import { safeHref } from "@crewlethq/ui";
 import type { LinkHost, LinkHostKind } from "~/contract/integrations.ts";
 import { overlapsAny, writtenOutSpans } from "./writtenOut.ts";
+import { linkSegment } from "./segment.ts";
 
 /** One token of a run, as [at, end) and what it is. */
 export type InlineToken =
@@ -563,7 +564,18 @@ function underApp(
  */
 function rebuilt(base: string | null, parts: readonly string[]): string | null {
   if (base === null || !parts.every((p) => SEGMENT.test(p))) return null;
-  return safeHref(`${base}/${parts.map((p) => encodeURIComponent(p)).join("/")}`);
+  const path = segmentsOf(parts);
+  return path === null ? null : safeHref(`${base}/${path}`);
+}
+
+/**
+ * `parts` as the path of a link, each one segment ([linkSegment]), or null
+ * where one cannot be: a title or a name of dots alone is drawn as words,
+ * never as an address that goes to the page above.
+ */
+function segmentsOf(parts: readonly string[]): string | null {
+  const segments = parts.map(linkSegment);
+  return segments.every((s) => s !== null) ? segments.join("/") : null;
 }
 
 /** A host at a domain or under it, on a dot: `acme.slack.com` is Slack's, `slack.com.evil.test` is not. */
@@ -863,8 +875,8 @@ export function referenceTarget(
         : sep === "!"
           ? `-/merge_requests/${id}`
           : `-/issues/${id}`;
-  const encoded = segments.map((part) => encodeURIComponent(part)).join("/");
-  return { vendor, href: safeHref(`${base}/${encoded}/${tail}`) };
+  const encoded = segmentsOf(segments);
+  return { vendor, href: encoded === null ? null : safeHref(`${base}/${encoded}/${tail}`) };
 }
 
 /** The code host whose `owners` hold `owner` (any case), or null for none or two. */
@@ -888,7 +900,8 @@ export function repositoryTarget(
 ): ReferenceTarget | null {
   const host = ownerHost(owner, hosts);
   if (host === null) return null;
-  const href = safeHref(`${host.url}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+  const path = segmentsOf([owner, repo]);
+  const href = path === null ? null : safeHref(`${host.url}/${path}`);
   return { vendor: host.kind as "github" | "gitlab", href };
 }
 

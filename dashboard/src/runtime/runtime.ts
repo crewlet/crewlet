@@ -49,6 +49,7 @@ import {
 } from "./bridge.ts";
 // RELATIVE, as in the bridge: the runtime is built alone, where the `~` alias does not exist.
 import { RUNTIME_CONTRACT } from "../contract/artifacts.ts";
+import { pathSegment } from "../lib/segment.ts";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type Unsubscribe = () => void;
@@ -491,7 +492,7 @@ bridge.onTheme.add(() => {
 /** The ticket path this document was served under, which every asset of the artifact is served beside. */
 const ticketBase = (() => {
   const [, t, ticket] = window.location.pathname.split("/");
-  return t === "t" && ticket ? `/t/${ticket}` : "";
+  return t === "t" && ticket ? `/t/${pathSegment(ticket)}` : "";
 })();
 
 const state = {
@@ -591,7 +592,7 @@ const crewlet = Object.freeze({
   assets: Object.freeze({
     list: () =>
       bridge.call<{ id: string; name: string; contentType: string; size: number }[]>("assets.list"),
-    url: (id: string) => `${ticketBase}/_assets/${encodeURIComponent(id)}`,
+    url: (id: string) => `${ticketBase}/_assets/${pathSegment(id)}`,
   }),
   openLink: (url: string) => {
     let parsed: URL;

@@ -49,6 +49,7 @@ import { ADMIN, expand } from "~/lib/access.ts";
 import { useIamGesture } from "~/lib/iamWrite.ts";
 import { loginProblem } from "~/lib/login.ts";
 import { useWaiting } from "~/lib/waiting.ts";
+import { pathSegment } from "~/protocol/rest.ts";
 
 /** A directory row, as much of it as an edit and a mint need. */
 export interface EditableRow {
@@ -450,7 +451,7 @@ export function EditPersonDialog({
     if (done || nothing || login.trim() === "" || loginWrong) return;
     const answer = await write.run({
       method: "PATCH",
-      path: `/iam/people/${encodeURIComponent(row.id)}`,
+      path: `/iam/people/${pathSegment(row.id)}`,
       body: change,
     });
     if (!answer) return;

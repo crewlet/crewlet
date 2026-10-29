@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { GATE_REQUEST_TIMEOUT_MS } from "../contract/gate.ts";
-import { modules } from "../test/source.ts";
+import { lineOf, modules, parse, stringValue, walk, type Node } from "../test/source.ts";
 import {
   isAbort,
   pathSegment,
@@ -527,14 +527,99 @@ test("a path segment is one segment, whatever it holds, or refused", () => {
     expect(() => pathSegment(value), value).toThrow(RangeError);
 });
 
-// EVERY SEGMENT A PROTOCOL MODULE PUTS IN A PATH GOES THROUGH [pathSegment].
-// `encodeURIComponent` sends `..` as `..`, and `/config/llm-providers/..`
-// reaches `/config`: an id that is only dots asked the route above it.
-test("no protocol module encodes a path segment by hand", () => {
-  const by = modules()
-    .filter(({ path }) => path.startsWith("protocol/") && path !== "protocol/rest.ts")
-    .filter(({ path }) => !/\.test\.tsx?$/.test(path))
-    .filter(({ text }) => text.includes("encodeURIComponent("))
-    .map(({ path }) => path);
-  expect(by).toEqual([]);
+// EVERY PATH SEGMENT GOES THROUGH THE ONE RULE (`lib/segment.ts`), read off
+// every module's syntax tree. `encodeURIComponent` sends `..` as `..`, and
+// `/config/llm-providers/..` reaches `/config`: an id that is only dots asked
+// the route above it. So no module but the rule's own names
+// `encodeURIComponent`, and in every request path (a template passed to
+// `rest.*` or held as a `path`, any template starting with `/`, and a
+// `"/x/" + value` concatenation) whatever follows a `/`, up to the query, is
+// one segment (`pathSegment`, `pathSegments` or `linkSegment`). A template
+// that starts with what another builder returned (`${base(id)}/...`) is held
+// at that builder's own template.
+describe("every path segment is one segment", () => {
+  const SEGMENTERS = new Set(["pathSegment", "pathSegments", "linkSegment"]);
+  /**
+   * The one place a path is built from a DECLARED SHAPE rather than segment by
+   * segment: the assistant's route table (`contract/assistant.ts`), each route
+   * a literal whose `{id}` is filled by [pathSegment], and the export and
+   * stream addresses the engine answers, refused unless they sit under that
+   * table's prefix. Named by module and expression, so a new one is a decision.
+   */
+  const DECLARED: ReadonlySet<string> = new Set([
+    "protocol/assistant.ts tail",
+    "protocol/assistant.ts path.slice(ASSISTANT_PREFIX.length)",
+    "protocol/assistant.ts streamUrl.slice(ASSISTANT_PREFIX.length)",
+  ]);
+  const cooked = (quasi: Node) =>
+    ((quasi.value as { cooked?: string | null; raw: string }).cooked ??
+      (quasi.value as { raw: string }).raw) as string;
+  const isSegment = (node: Node) =>
+    node.type === "CallExpression" &&
+    (node.callee as Node).type === "Identifier" &&
+    SEGMENTERS.has(String((node.callee as Node).name));
+
+  test("no module but the rule's own encodes a segment itself", () => {
+    const offending: string[] = [];
+    for (const { path, text, lang } of modules()) {
+      if (path === "lib/segment.ts") continue;
+      const line = lineOf(text);
+      walk(parse(text, lang), (node) => {
+        if (node.type === "Identifier" && node.name === "encodeURIComponent")
+          offending.push(`${path}:${line(node.start)}`);
+      });
+    }
+    expect(offending).toEqual([]);
+  });
+
+  test("whatever follows a slash in a request path is one segment", () => {
+    const offending: string[] = [];
+    const declared = new Set<string>();
+    let checked = 0;
+    for (const { path, text, lang } of modules()) {
+      const line = lineOf(text);
+      walk(parse(text, lang), (node, parent, key) => {
+        if (node.type === "BinaryExpression" && node.operator === "+") {
+          const left = stringValue(node.left as Node);
+          if (left !== null && left.startsWith("/") && left.endsWith("/")) {
+            checked++;
+            if (!isSegment(node.right as Node))
+              offending.push(`${path}:${line(node.start)} "${left}" + a value`);
+          }
+          return;
+        }
+        if (node.type !== "TemplateLiteral") return;
+        const quasis = node.quasis as Node[];
+        const expressions = node.expressions as Node[];
+        if (expressions.length === 0) return;
+        const passed =
+          parent?.type === "CallExpression" &&
+          key === "arguments" &&
+          (parent.callee as Node).type === "MemberExpression" &&
+          ((parent.callee as Node).object as Node).type === "Identifier" &&
+          ((parent.callee as Node).object as Node).name === "rest";
+        if (!passed && !cooked(quasis[0]!).startsWith("/")) return;
+        checked++;
+        // THE PATH ENDS AT THE QUERY: what follows a `?` is no segment.
+        let inQuery = false;
+        expressions.forEach((expression, i) => {
+          const before = cooked(quasis[i]!);
+          inQuery ||= before.includes("?");
+          if (inQuery || !before.endsWith("/")) return;
+          if (isSegment(expression)) return;
+          const named = `${path} ${text.slice(expression.start, expression.end)}`;
+          if (DECLARED.has(named)) {
+            declared.add(named);
+            return;
+          }
+          offending.push(`${path}:${line(expression.start)} after "${before}"`);
+        });
+      });
+    }
+    // FLOOR: the walk reached the request paths it exists for.
+    expect(checked).toBeGreaterThan(40);
+    expect(offending).toEqual([]);
+    // Every declared shape is still built where it was named: a stale one goes.
+    expect([...declared].sort()).toEqual([...DECLARED].sort());
+  });
 });

@@ -55,7 +55,7 @@ import { useRest } from "./useRest.ts";
 import { useOrg } from "./store-hooks.ts";
 import { useViewer } from "./viewer.ts";
 import { loginKind, loginWords } from "./login.ts";
-import { rest } from "~/protocol/rest.ts";
+import { pathSegment, rest } from "~/protocol/rest.ts";
 import type { SeatActivity } from "~/contract/wire.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { ProviderErrorKind } from "~/contract/failures.ts";
@@ -870,7 +870,8 @@ export function useSeatSetup(handle: string): SeatSetup {
   const asked = !!seat && (granted || led !== null);
   const withheld = !!seat && !asked && !viewer.loading;
   const lead = useRest(
-    led ? `/config/roles/${led.handle}+${led.unit?.id ?? ""}` : null,
+    // A CACHE KEY, never requested: `leadDocument` builds the two requests.
+    led ? `lead ${led.handle} ${led.unit?.id ?? ""}` : null,
     (signal) => (led ? leadDocument(led, signal) : Promise.resolve(null)),
   );
   const read = led
@@ -916,8 +917,8 @@ export function useSeatSetup(handle: string): SeatSetup {
  */
 async function leadDocument(seat: Seat, signal: AbortSignal): Promise<CompanyDocument> {
   const [role, unit] = await Promise.all([
-    rest.get(`/config/roles/${encodeURIComponent(seat.handle)}`, signal),
-    seat.unit ? rest.get(`/config/units/${encodeURIComponent(seat.unit.id)}`, signal) : null,
+    rest.get(`/config/roles/${pathSegment(seat.handle)}`, signal),
+    seat.unit ? rest.get(`/config/units/${pathSegment(seat.unit.id)}`, signal) : null,
   ]);
   const own = isRecordValue(unit) ? { ...unit, roles: undefined, children: undefined } : null;
   return {

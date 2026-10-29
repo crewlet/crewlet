@@ -1181,3 +1181,13 @@ describe("Worklet's scope", () => {
     expect(sequenceWords("project")).toBe("G then P");
   });
 });
+
+// `#/..` IS A NAME, NOT A STEP: a fragment is never resolved as a path, so the
+// route for an item named `..` is that item's, and reads back as it was built.
+test("a route segment of dots alone reads back as the same route, never the one above", () => {
+  for (const name of ["..", ".", "..."]) {
+    const hash = buildHash(["worklet", name]);
+    expect(parseHash(hash).path).toEqual(["worklet", name]);
+    expect(new URL(`https://dash.example/${hash}`).hash).toBe(hash);
+  }
+});
