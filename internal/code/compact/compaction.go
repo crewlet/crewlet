@@ -160,17 +160,17 @@ func (c *Compactor) compact(ctx context.Context, cand code.CompactionCandidate, 
 	defer b.sc.Remove()
 	adm.Release()
 
-	if out, err := c.upload(ctx, cand, &b); err != nil {
+	if out, err = c.upload(ctx, cand, &b); err != nil {
 		return out, err
 	}
-	if err := c.fault(ctx, codefault.CompactAfterUpload, 0); err != nil {
+	if err = c.fault(ctx, codefault.CompactAfterUpload, 0); err != nil {
 		return c.failed(cand, "propose", err)
 	}
 	res, err := c.o.Estate.Compact(ctx, b.proposal)
 	if err != nil {
 		return c.failed(cand, "propose", err)
 	}
-	if err := c.fault(ctx, codefault.CompactAfterPropose, 0); err != nil {
+	if err = c.fault(ctx, codefault.CompactAfterPropose, 0); err != nil {
 		return c.failed(cand, "adopt", err)
 	}
 	return c.answered(ctx, cand, b, res, began)
@@ -197,8 +197,8 @@ func (c *Compactor) buildChecked(ctx context.Context, cand code.CompactionCandid
 	if err != nil {
 		return built{}, c.failedOnly(cand, "build", err), err
 	}
-	if out, err := c.countHolds(cand, b, cap); err != nil {
-		return built{}, out, err
+	if out, countErr := c.countHolds(cand, b, cap); countErr != nil {
+		return built{}, out, countErr
 	}
 	if ratio := pastBound(b.outs, c.bounds.maxBundle); ratio > 0 {
 		// ONE REBUILD, in the same reserved slot, at the densest offender's
@@ -211,8 +211,8 @@ func (c *Compactor) buildChecked(ctx context.Context, cand code.CompactionCandid
 		if b, err = c.build(ctx, cand.ID, s, adm, p, cut, limits); err != nil {
 			return built{}, c.failedOnly(cand, "build", err), err
 		}
-		if out, err := c.countHolds(cand, b, cap); err != nil {
-			return built{}, out, err
+		if out, countErr := c.countHolds(cand, b, cap); countErr != nil {
+			return built{}, out, countErr
 		}
 		if pastBound(b.outs, c.bounds.maxBundle) > 0 {
 			b.sc.Remove()
@@ -220,7 +220,7 @@ func (c *Compactor) buildChecked(ctx context.Context, cand code.CompactionCandid
 			return built{}, OutcomeFailed, errBundleTooLarge
 		}
 	}
-	if err := b.proposal.ValidateUnstored(); err != nil {
+	if err = b.proposal.ValidateUnstored(); err != nil {
 		// THE BUILDER'S OWN BUG — every rule above passed and one of its
 		// committer's did not — refused before any byte is stored.
 		b.sc.Remove()
