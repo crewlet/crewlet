@@ -1057,6 +1057,16 @@ func (c *cluster) PauseApplier(t testing.TB, node string) (resume func()) {
 	}
 }
 
+// Level waits until node's data node has reached the code log's end (Fleet).
+func (c *cluster) Level(ctx context.Context, node string) error {
+	for _, m := range c.members {
+		if m.id == node {
+			return m.data.Level(ctx)
+		}
+	}
+	return fmt.Errorf("codecluster: no member called %q (%v)", node, c.Members())
+}
+
 // Kill is the member's process dying: its git node killed, its broker client
 // closed FIRST — a process that dies sends nothing more, so no answer it was
 // in the middle of reaches its asker, which hears silence — its estate

@@ -120,6 +120,11 @@ type Fleet interface {
 	Restart(t testing.TB, node string)
 	// PauseApplier stops the data node's applier until resume.
 	PauseApplier(t testing.TB, node string) (resume func())
+	// Level waits until the data node's rows hold every record the code
+	// log held when it was asked ([DataNode.Level]): what a case awaits
+	// once it has resumed an applier, before it asks anything of the rows
+	// that applier is catching up to.
+	Level(ctx context.Context, node string) error
 	// Objects is the object store's backend.
 	Objects() objstore.Backend
 	// Audited is every push record a host published, in order.
@@ -842,6 +847,11 @@ func (f *SoloFleet) Restart(t testing.TB, _ string) {
 func (f *SoloFleet) PauseApplier(t testing.TB, _ string) (resume func()) {
 	t.Helper()
 	return f.data.PauseApplier(t)
+}
+
+// Level waits until the data node has reached the code log's end (Fleet).
+func (f *SoloFleet) Level(ctx context.Context, _ string) error {
+	return f.data.Level(ctx)
 }
 
 // teardown stops every incarnation's broker, the crashes released FIRST —

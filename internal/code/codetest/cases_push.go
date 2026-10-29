@@ -37,6 +37,15 @@ func aPushAppliedLateIsReportedPending(t *testing.T, newFleet NewFleet) {
 		t.Errorf("a push applied late printed %q, want [remote rejected] (pending: durable at …): %s", reason, res)
 	}
 	resume()
+	// THE LATE PUSH APPLIED FIRST, as the re-run's claim needs: its
+	// advertisement is a linearizable read, which waits for the late push's
+	// record — the record before its barrier — and a resumed applier that
+	// had not yet committed it when the read's budget ran out answered the
+	// re-run 503 `behind`, on a machine slow to restart that applier. So the
+	// paused data node's rows are awaited, never raced.
+	if err := c.Fleet.Level(c.Ctx, c.Fleet.DataNodes()[0]); err != nil {
+		t.Fatalf("the paused data node catching up once resumed: %v", err)
+	}
 	again := p.Push(c.Ctx, work, c.URL(0), "main")
 	if again.Err != nil || !again.UpToDate("refs/heads/main") {
 		t.Errorf("the push re-run once it applied: %s, want main up to date", again)
