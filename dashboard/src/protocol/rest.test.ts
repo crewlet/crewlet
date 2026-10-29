@@ -14,6 +14,7 @@ import {
   RestError,
   retryAfterSeconds,
 } from "./index.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -36,7 +37,7 @@ function stub(respond: (url: string, init: RequestInit) => Response) {
 const json = (payload: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json", ...headers },
   });
 
 // A REQUEST THAT NEVER SETTLES IS ABANDONED.
@@ -418,11 +419,12 @@ describe("Retry-After", () => {
   });
 });
 
-// ONLY AN ANSWER WITH AN ENGINE ERROR CODE IS THE ENGINE'S REFUSAL. Every
-// refusal it writes is JSON with an `error` code, so a gateway's page, a JSON
-// body of a proxy's own, or a 200 cut off part way through is something else —
-// and a write's caller reading one as a refusal dropped the operation id of a
-// gesture the engine went on to finish.
+// ONLY AN ANSWER WITH THE ENGINE'S MARK AND AN ERROR CODE IS THE ENGINE'S
+// REFUSAL. Every refusal it writes is JSON with an `error` code and carries its
+// mark (`X-Crewlet-Engine`), so a gateway's page, a JSON body of a proxy's own,
+// a proxy's JSON spelled like the engine's but unmarked, or a 200 cut off part
+// way through is something else, and a write's caller reading one as a refusal
+// dropped the operation id of a gesture the engine went on to finish.
 describe("whether an answer is the engine's own", () => {
   const cases: [string, () => Response, boolean][] = [
     ["an engine refusal", () => json({ error: "eviction_refused", detail: "live" }, 409), false],
@@ -443,6 +445,16 @@ describe("whether an answer is the engine's own", () => {
       true,
     ],
     ["a proxy's own JSON", () => json({ message: "upstream closed" }, 502), true],
+    // FORGED: the engine's envelope, from something that is not the engine.
+    ...([403, 413] as const).map((status): [string, () => Response, boolean] => [
+      `a proxy's ${status} in the engine's own shape, without its mark`,
+      () =>
+        new Response(JSON.stringify({ error: "forbidden", detail: "blocked by policy" }), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+      true,
+    ]),
     [
       "a 200 cut off part way through",
       () =>

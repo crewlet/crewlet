@@ -712,6 +712,15 @@ describe("the selection in the URL", () => {
       () => new Response("<html>502</html>", { status: 502 }),
       "Could not reach the engine to check",
     ],
+    ...([403, 413] as const).map((status): [string, () => Response, string] => [
+      `a proxy's ${status} in the engine's shape, without its mark`,
+      () =>
+        new Response(JSON.stringify({ error: "forbidden" }), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+      "Could not reach the engine to check",
+    ]),
     [
       "the engine's own 500",
       () => json({ error: "internal", detail: "store: disk full" }, 500),
@@ -878,7 +887,7 @@ describe("somebody else signing in mid-edit", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
 
-    engine.script = () => (who === EDITOR ? null : json({}, 401));
+    engine.script = () => (who === EDITOR ? null : json({ error: "unauthorized" }, 401));
     who = NOBODY;
     reconnect(store);
     expect(

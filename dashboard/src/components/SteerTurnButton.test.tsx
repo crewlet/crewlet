@@ -19,6 +19,7 @@ import { useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { STEER_NOTE_MAX_RUNES, STEER_READS } from "~/contract/steer.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 vi.mock("~/lib/store-hooks.ts", () => ({
   useConnection: vi.fn(),
@@ -122,7 +123,7 @@ describe("a note the turn refuses on its bounds", () => {
         async () =>
           new Response(JSON.stringify({ error: code, detail }), {
             status: 409,
-            headers: { "Content-Type": "application/json" },
+            headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
           }),
       ),
     );

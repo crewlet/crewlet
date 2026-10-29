@@ -25,6 +25,14 @@ export interface ConfigAnswer {
   readonly status: number;
   readonly body: unknown;
   readonly etag?: string | null;
+  /**
+   * Whether the answer carried the engine's mark ([markedByEngine]): false
+   * for one something in front of the engine wrote, whatever its body says.
+   * `answerOf` records it for every answer it reads; an answer a caller builds
+   * itself (a fixture, a scripted engine) names its own origin, and leaving
+   * it out reads as the engine's.
+   */
+  readonly fromEngine?: boolean;
 }
 
 /** Why the engine holds a revision the write was not built on. */
@@ -97,9 +105,10 @@ export interface ConfigUnsettled {
   /**
    * Whether the ENGINE answered ([answeredByEngine]). False where nothing did
    * (a dropped connection, the client's own deadline) or something in front
-   * of it did (a gateway's 504 page): its answer never reached this screen.
-   * True where it answered a 5xx of its own, which is an engine that FAILED,
-   * possibly after it stored the revision.
+   * of it did (a gateway's 504 page, a proxy's 403 or 413), whatever the
+   * status: its answer never reached this screen. True where it answered a
+   * 5xx of its own, which is an engine that FAILED, possibly after it stored
+   * the revision.
    */
   readonly answered: boolean;
   /** The status that came back; 0 where nothing did. */
@@ -162,6 +171,20 @@ const text = (value: unknown): string => (typeof value === "string" ? value : ""
 export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
   const body = isRecord(answer.body) ? answer.body : {};
   const code = text(body.error);
+  // NOT THE ENGINE'S ANSWER, FIRST, whatever its status: nothing came back,
+  // or something in front of the engine answered (a gateway's 504, a proxy's
+  // 403 or 413, its HTML or its JSON). It says nothing about what the engine
+  // did, so it is no refusal of the engine's to read by status: read as one,
+  // a proxy's 403 asked a person for a grant and its 413 for a smaller draft,
+  // for a write that may have landed.
+  if (!answeredByEngine(answer.status, code, answer.fromEngine ?? true)) {
+    return {
+      kind: "unsettled",
+      answered: false,
+      status: answer.status,
+      detail: text(body.detail) || code,
+    };
+  }
   // A MANAGED DOCUMENT'S REFUSAL IS NOT ABOUT THE CREDENTIAL, which the
   // engine accepted: it is about where the company is written (ADR-0030), so
   // it is its own answer rather than a grant to ask for. FIRST, because it is
@@ -230,13 +253,8 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
   // might have landed, for a write nothing ever read.
   if (answer.status === 503 && code === "draining") return { kind: "draining", detail };
   if (answer.status === 503 && code === "starting") return { kind: "starting", detail };
-  if (answer.status === 0 || answer.status >= 500)
-    return {
-      kind: "unsettled",
-      answered: answeredByEngine(answer.status, code),
-      status: answer.status,
-      detail,
-    };
+  if (answer.status >= 500)
+    return { kind: "unsettled", answered: true, status: answer.status, detail };
   // Every other refusal is about the document or the request that carried it:
   // a validation error, a patch the engine could not apply, a body too large.
   const problems = Array.isArray(body.problems) ? (body.problems as ConfigProblem[]) : [];
