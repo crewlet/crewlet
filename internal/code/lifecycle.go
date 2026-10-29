@@ -314,7 +314,8 @@ type LifecycleResult struct {
 	Repo RepoRef `json:"repo"`
 	// Refusal names why the request was refused; empty where it was not.
 	Refusal LifecycleRefusal `json:"refusal,omitempty"`
-	// Detail is the refusal's sentence.
+	// Detail is the refusal's sentence, or for an outcome unknown what is
+	// unknown and that the same request again is how to learn it.
 	Detail string `json:"detail,omitempty"`
 	// Position is where the request's record landed — this request's own write,
 	// or for a repeat the first copy's — and ZERO where it wrote none: a
@@ -815,7 +816,11 @@ func (d *lifecycleDecision) refuse(r LifecycleRefusal, format string, args ...an
 // is answered from it.
 //
 // A REFUSAL IS AN ANSWER, never an error: [LifecycleResult.Refusal] and its
-// sentence, nothing published. An ERROR is a request this node could not
+// sentence, nothing published. So is an OUTCOME this node could not learn — a
+// record appended and its acknowledgement lost — answered
+// statelog.OutcomeUnknown, which its caller retries as the same operation
+// (the ledger answers what landed) rather than reads as a fault of the node
+// that decided it. An ERROR is a request this node could not
 // decide — [ErrInvalid] for a request no node could, [ErrNotServing] for one
 // this node RAN NOTHING of (it decides no lifecycle request, holds no chart, is
 // behind the company's configuration, or the code log refused this node), so
@@ -1368,8 +1373,14 @@ func (s *Store) lifecycleAnswer(ctx context.Context, req LifecycleRequest, id st
 	case !d.wrote:
 		return LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: d.row}, nil
 	case result.Outcome == statelog.OutcomeUnknown:
-		return LifecycleResult{}, unknownOutcome(ctx, "code: whether the %s of %s landed is unknown "+
-			"(operation %s); make the same request again", req.Kind, cmpName(req, d.row), req.OpID)
+		// AN OUTCOME, NEVER AN ERROR: the record may have landed, and the
+		// same request again — the same operation — is what finds out. As an
+		// error it crossed the estate's wire as words with no sentinel, and
+		// every caller asking a data node read it as that node's fault,
+		// telling whoever asked that trying again could not help.
+		return LifecycleResult{Outcome: statelog.OutcomeUnknown, Repo: d.row, Detail: fmt.Sprintf(
+			"whether the %s of %s landed is unknown (operation %s); make the same request again",
+			req.Kind, cmpName(req, d.row), req.OpID)}, nil
 	case result.Outcome == statelog.OutcomePending:
 		// DURABLE, NOT YET APPLIED HERE: the row is the one the decide read.
 		return LifecycleResult{Outcome: statelog.OutcomePending, Repo: d.row, Position: result.Position}, nil

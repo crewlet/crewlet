@@ -2,6 +2,7 @@ package code_test
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -145,6 +146,46 @@ func TestALifecycleRequestIsOneWrite(t *testing.T) {
 	}
 	if got := n.end(); got != end {
 		t.Fatalf("the log grew from %d to %d records: a repeated request wrote again", end, got)
+	}
+}
+
+// A LIFECYCLE REQUEST WHOSE OUTCOME IS UNKNOWN IS ANSWERED SO — an outcome,
+// never an error. Its record is appended and the acknowledgement lost: the
+// answer says the outcome is unknown and names the operation, so whoever asked
+// makes the same request again, which the ledger answers with what landed. As
+// an error it crossed the estate's wire as words with no sentinel, and the
+// tool that asked a data node for it read the node as broken and told its
+// caller that trying again could not help.
+//
+// Mutation: answer the lost acknowledgement as an error again → red.
+func TestALifecycleRequestWhoseOutcomeIsUnknownIsAnsweredSo(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	lossy := newGatedPublisher(n.pub, 1)
+	lossy.lose = func(context.Context, statelog.Request) bool { return true }
+	s, err := code.NewStore(code.StoreOptions{
+		Publisher: lossy, DB: n.db.Reader(), NodeID: n.id,
+		Now:       func() time.Time { return harnessAt },
+		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{Roster: n.chart}, true },
+		Policy:    func() code.LifecyclePolicy { return n.scratch },
+	})
+	if err != nil {
+		t.Fatalf("build the store: %v", err)
+	}
+	req := lcCreate(lcPerson, "eng-lost", unitOwned("eng"))
+	res, err := s.Lifecycle(t.Context(), req)
+	if err != nil || res.Outcome != statelog.OutcomeUnknown || res.Refusal != "" ||
+		!strings.Contains(res.Detail, req.OpID) {
+		t.Fatalf("a create whose acknowledgement was lost answered %+v, %v — want the outcome unknown, "+
+			"naming its operation", res, err)
+	}
+	if res.Position != (statelog.Position{}) {
+		t.Errorf("an unknown outcome answered position %s, which no caller may raise its floor by", res.Position)
+	}
+	again := n.life(req)
+	if again.Outcome != statelog.OutcomeApplied || again.Repo.Name != "eng-lost" {
+		t.Fatalf("the same request again answered %+v, want the create the lost answer landed", again)
 	}
 }
 
