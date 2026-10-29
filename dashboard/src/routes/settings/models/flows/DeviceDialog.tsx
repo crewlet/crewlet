@@ -238,6 +238,7 @@ export function DeviceDialog({
                   variant="block"
                   monospace
                   ariaLabel="Copy the code"
+                  className="models-copy-block"
                 />
               ) : (
                 <Text as="p" variant="caption" tone="tertiary">

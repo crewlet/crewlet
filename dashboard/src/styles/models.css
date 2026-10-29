@@ -7,12 +7,8 @@
 .models-stack {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-4);
-  min-width: 0;
-}
-
-.models-stack {
   gap: var(--spacing-3);
+  min-width: 0;
 }
 
 .models-alarms {
@@ -39,13 +35,8 @@
   gap: var(--spacing-3);
 }
 
-.models-host > *,
-.models-stack > .crewlet-copyable {
+.models-host > * {
   align-self: stretch;
-}
-
-.models-note {
-  margin-block-start: var(--spacing-3);
 }
 
 .models-waiting {
@@ -118,35 +109,9 @@
   gap: var(--spacing-2);
 }
 
-.models-steps > li > .crewlet-copyable {
+/* A command or a code to copy fills the line it stands on (a node's login, a device code's step), so it reads as one line to copy. */
+.models-copy-block {
   align-self: stretch;
-}
-
-.models-assign {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
-  gap: var(--spacing-4);
-}
-
-.models-assign__phase {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  min-width: 0;
-  margin: 0;
-  padding: var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-}
-
-.models-assign__phase > legend {
-  padding-inline: var(--spacing-1);
-}
-
-.models-assign__seats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-2) var(--spacing-4);
 }
 
 /* The Assistant's one picker, as wide as a cell's on the grid under it. */
@@ -211,7 +176,10 @@
 
 .models-who__grid {
   display: grid;
-  grid-template-columns: minmax(8rem, 1fr) repeat(var(--phases), minmax(4.5rem, auto));
+  grid-template-columns: minmax(8rem, 1fr) repeat(
+      var(--models-who-columns, 3),
+      minmax(4.5rem, auto)
+    );
   align-items: center;
   gap: var(--spacing-2) var(--spacing-3);
   overflow-x: auto;
@@ -225,7 +193,8 @@
   text-align: center;
 }
 
-.models-who__grid .crewlet-checkbox {
+/* Each seat's boxes stand centred under their column's head; its name keeps the start edge. */
+.models-who__row > :not(:first-child) {
   justify-self: center;
 }
 
@@ -250,20 +219,6 @@
 /* The add wizard's keyboard wrapper takes no box, so the wizard still fills its screen. */
 .models-keys {
   display: contents;
-}
-
-/* One line of meta under a choice (a place's readiness, isolation and start; what an intent replaces), joined by a middle dot. */
-.models-meta {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  column-gap: var(--spacing-1);
-}
-
-/* The dot ends the part before it, so a line the meta wraps onto starts with a word. */
-.models-meta > :not(:last-child)::after {
-  content: "·";
-  margin-inline-start: var(--spacing-1);
 }
 
 /* A job named by its glyph and its word, in the word's ink. */
@@ -297,7 +252,7 @@
 
 /* A wizard area a deep link focuses: it takes focus to move the reader there, and draws no ring of its own. */
 .models-focus-target:focus {
-  outline: none;
+  outline: 2px solid transparent;
 }
 
 /* The review's note on models a change leaves unused: one quiet line each. */
@@ -545,10 +500,6 @@
   flex-direction: column;
   align-items: flex-start;
   gap: var(--spacing-2);
-}
-
-.models-host__node > .crewlet-copyable {
-  align-self: stretch;
 }
 
 /* The device code's steps, with the waiting status and the note on the steps' own edge (QA Minor 11). */

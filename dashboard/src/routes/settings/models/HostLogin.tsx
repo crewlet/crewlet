@@ -109,6 +109,7 @@ export function HostLogin({
                       variant="block"
                       monospace
                       ariaLabel={`Copy the login command for ${login.node}`}
+                      className="models-copy-block"
                     />
                   </>
                 ) : null}
