@@ -8,6 +8,12 @@
  * panel of the "Another model" choice and is empty unless that choice is
  * made, so an alias picked above is never echoed in a second field.
  *
+ * AN ALIAS IS ONLY ITS OWN ID. A model on `claude-haiku-4-5` is not on the
+ * `haiku` alias: the alias follows the CLI's latest Haiku, and the full id
+ * stays on that release. So a full id opens under "Another model", which
+ * names it as the catalogue does and says it is a fixed version, rather than
+ * under the alias it resembles, which would move the model on its next save.
+ *
  * WHERE THE SUGGESTIONS COME FROM (N6): `llm_models`, the models.dev
  * catalogue for the CLI's provider, read by the engine with no credential
  * (D1). Whether a plan reaches a model is the test call's question. With no
@@ -42,10 +48,16 @@ export function ModelStep({
   const answer = listing.data;
   const aliases = answer?.aliases ?? [];
   const isAlias = aliases.some((a) => a.id === draft.model);
-  // "ANOTHER MODEL" STAYS CHOSEN while its field is emptied, so clearing the
-  // field to type a new id does not throw the reader back to the list.
-  const [another, setAnother] = useState(() => draft.model !== "" && !isAlias);
+  // THE READER'S OWN CHOICE, once made: "Another model" stays chosen while its
+  // field is emptied, so clearing it to type a new id does not throw the
+  // reader back to the list. UNTIL THEN IT IS READ FROM THE ALIASES AS THEY
+  // STAND, never decided once on the first render: the CLI's aliases arrive
+  // after it, and an edit of a model on `haiku` opened as "Another model"
+  // with `haiku` typed in its field.
+  const [chosen, setChosen] = useState<"alias" | "another" | null>(null);
+  const another = chosen === "another" || (chosen === null && draft.model !== "" && !isAlias);
   const [open, setOpen] = useState(false);
+  const catalogued = another ? answer?.models.find((m) => m.id === draft.model.trim()) : undefined;
 
   const options = useMemo<ComboboxOption[]>(() => {
     const q = draft.model.trim().toLowerCase();
@@ -116,11 +128,11 @@ export function ModelStep({
         value={another ? ANOTHER : isAlias ? draft.model : null}
         onChange={(v) => {
           if (v === ANOTHER) {
-            setAnother(true);
+            setChosen("another");
             if (isAlias) onChange("");
             return;
           }
-          setAnother(false);
+          setChosen("alias");
           onChange(v);
         }}
         options={[
@@ -128,7 +140,9 @@ export function ModelStep({
           {
             value: ANOTHER,
             label: "Another model",
-            detail: "Any model id the CLI takes.",
+            detail: catalogued
+              ? `${catalogued.name}, a fixed version.`
+              : "Any model id the CLI takes.",
             separated: true,
             panel: field,
           },
