@@ -105,7 +105,7 @@ func everyLandedAnswer(t *testing.T) map[string]tools.Result {
 	// THE OPERATOR'S OWN VERBS.
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusReseed)}}
 	answered, err := answerRunTool(t, desk).Call(t.Context(),
-		map[string]any{"turn_id": "t1", "answer": "use main"})
+		map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "answer": "use main"})
 	if err != nil {
 		t.Fatal(err)
 	}

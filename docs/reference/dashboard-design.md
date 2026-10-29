@@ -2919,7 +2919,8 @@ controls were; a read or snoozed update shows its new state. 700 ms later
 moved on first.
 
 **What was answered before waits in a closed group.** The asks put to the
-reader and closed in the last week (`answered_decisions`) are an **Answered**
+reader and closed in the last week, and the coding runs' questions the reader
+answered themselves (`answered_decisions`), are an **Answered**
 group after Updates, closed and counted ("Answered 4"): its label is a
 disclosure button inside the heading, so a reader moving by heading lands on
 it and Enter opens it. Each row names who asked, the question, and who
@@ -4536,7 +4537,7 @@ a tool arrives in it with the control that sends it. The controls
 | An option · Something else and Send | A question in the Inbox's pane | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}`, then `mark_inbox{read}` for the notices that asked it |
 | Send | The reply box under the Inbox's conversation | `comment_on_work_item{item, body, reply_to}` |
 | Link a task · Attach a page | The Inbox's reply box | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
-| An option · Something else and Send answer | A parked coding run in the Inbox's pane, and its Answer dialog | `answer_run{turn_id, choice}` / `answer_run{turn_id, answer}` |
+| An option · Something else and Send answer | A parked coding run in the Inbox's pane, and its Answer dialog | `answer_run{turn_id, launch_id, choice}` / `answer_run{turn_id, launch_id, answer}` |
 | Accept · Change and Submit · Something else · Reply | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
 | Drag a row · `Alt` + ↑/↓ | My work's Priorities reading (your own queue, or one in your line) | `set_priorities{handle, items, if_match}` — the whole stored list with the one row moved, conditional on the record's version |
 | Publish · Save as draft | The composer (`#/doclet/new`) | `write_page{title, body, container, parent?, labels?, status}`: a draft and a published page are one write with the status set |
@@ -5338,8 +5339,9 @@ be read at a glance:
 - **Waiting on a person** — every coding run parked on a question: whose, the
   question, who it asks (the chart's names for the seats the engine resolved),
   how long it has waited and how long its box is still held, and **Answer**,
-  which sends `answer_run{turn_id, choice}` for an option or
-  `answer_run{turn_id, answer}` for words, as the person reading.
+  which sends `answer_run{turn_id, launch_id, choice}` for an option or
+  `answer_run{turn_id, launch_id, answer}` for words, as the person reading,
+  naming the question it drew.
 - **In a box** — the rest of the detached runs in flight, eight before it
   says how many more. Empty, it says *Finished runs are on their turn’s
   trace*: a settled run's row is deleted, so the sentence it replaced,
@@ -7040,8 +7042,8 @@ it, so a link to one run landed on a board with the run below the fold.
   - A parked run's banner says what it asked, **who it is put to** (the
     audience the engine resolved when the run parked, by name, and the lead
     chain when the coding agent's label named nobody), how long its box is
-    held, and carries **Answer**: `answer_run{turn_id, choice}` for an option,
-    or `{turn_id, answer}` for words, which reaches
+    held, and carries **Answer**: `answer_run{turn_id, launch_id, choice}` for
+    an option, or `{turn_id, launch_id, answer}` for words, which reaches
     a run whatever launched it. `pending` is the ordinary outcome: the answer
     is on the seat's inbox and the node holding the seat resumes the run.
   - A running run's page polls its live output from the node that owns it

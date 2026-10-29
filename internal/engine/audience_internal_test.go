@@ -61,7 +61,7 @@ func audienceChart(t *testing.T) *org.Organization {
 	return o
 }
 
-// EVERY LABEL THE ASK SHIM DOCUMENTS RESOLVES TO THE SEATS IT MEANS, and one
+// EVERY AUDIENCE `ask_and_wait` TAKES (`to`) RESOLVES TO THE SEATS IT MEANS, and one
 // that names nobody the chart has falls back to the seat's lead chain — SAYING
 // it fell back, because "put to me" and "reached me because nobody else could
 // be named" are different things to the person reading it.

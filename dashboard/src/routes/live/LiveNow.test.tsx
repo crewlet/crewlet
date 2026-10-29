@@ -454,6 +454,7 @@ test("a parked run is a row of Waiting on a person with its audience and Answer"
             role: "Engineer",
             status: "awaiting_clarification",
             question: "Drop the polling fallback?",
+            question_context: "",
             audience: "jane",
             audience_handles: ["jane"],
             started_at: ago(3_000_000),

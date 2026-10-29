@@ -100,9 +100,12 @@ func TestARunEndedAtItsDeadlineIsCollectedWithWhatItDid(t *testing.T) {
 // stopping is not one a person's answer could continue, so a question it
 // recorded before its cap ended it is collected with the rest of what it did:
 // the turn is resumed, judging a run cut off at its cap, and nobody is asked.
+// The question is still SAID, in the note that ends it: the turn and the
+// seat's next turn read that the run was waiting on a person, and what for.
 //
 // Mutation: park on the claimed row's question whether or not the run was
-// ended at its cap, and the run waits on an answer nothing will continue.
+// ended at its cap, and the run waits on an answer nothing will continue;
+// leave the question out of the note, and it is lost without a trace.
 func TestARunEndedAtItsDeadlineIsNotParkedOnItsQuestion(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -121,17 +124,20 @@ func TestARunEndedAtItsDeadlineIsNotParkedOnItsQuestion(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("resumed %d times, want the turn back with what its run did", len(calls))
 	}
-	if calls[0].Success || !strings.Contains(calls[0].Answer, "wall-clock cap") {
-		t.Errorf("the resume reads success %v and %q, want the run said to be cut off at its cap",
-			calls[0].Success, calls[0].Answer)
+	if calls[0].Success || !strings.Contains(calls[0].Answer, "wall-clock cap") ||
+		!strings.Contains(calls[0].Answer, "It had asked: which branch?") {
+		t.Errorf("the resume reads success %v and %q, want the run said to be cut off at its "+
+			"cap with the question it had asked", calls[0].Success, calls[0].Answer)
 	}
 	if calls[0].Run.Question != "" || calls[0].Run.Branch != "" {
 		t.Errorf("the resume carries the run's question %q and branch %q; want neither, as nothing is "+
 			"waiting on them", calls[0].Run.Question, calls[0].Run.Branch)
 	}
 	recs := rig.phases()
-	if len(recs) != 1 || strings.Contains(recs[0].Notes, "stopped to ask") || !recs[0].Failed {
-		t.Errorf("the run's record is %+v; want it failed at its cap, not stopped to ask", recs)
+	if len(recs) != 1 || strings.Contains(recs[0].Notes, "stopped to ask") || !recs[0].Failed ||
+		!strings.Contains(recs[0].Error, "It had asked: which branch?") {
+		t.Errorf("the run's record is %+v; want it failed at its cap, not stopped to ask, "+
+			"naming the question it had asked", recs)
 	}
 	if run, found, err := rig.pending.Get(t.Context(), "t1"); err != nil ||
 		(found && run.Status == StatusAwaiting) {

@@ -750,10 +750,32 @@ func runAnswerPreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, fmt.Errorf("%w: no coding run %s is parked on a question",
 				ErrInvalidArguments, a.String("turn_id"))
 		}
+		// THE QUESTION THE PERSON IS SHOWN IS THE ONE ANSWERED: a run that
+		// moved on to another since the proposal was drafted is refused here,
+		// before anybody approves an answer to a question it no longer asks.
+		if value(run, "launch_id") != a.String("launch_id") {
+			return proposal.Preview{}, fmt.Errorf("%w: coding run %s has moved on to another "+
+				"question since; read it again and answer that one", ErrInvalidArguments,
+				a.String("turn_id"))
+		}
 		var c changes
 		c.fact("run", "Coding run", value(run, "agent_handle")+" on "+
 			orDefault(value(run, "work_key"), "no task"))
 		c.fact("question", "Question", value(run, "question"))
+		if choice := a.String("choice"); choice != "" {
+			label := ""
+			options, _ := cards.Lookup(run, "decision.options").([]any)
+			for _, option := range options {
+				if value(option, "id") == choice {
+					label = value(option, "label")
+				}
+			}
+			if label == "" {
+				return proposal.Preview{}, fmt.Errorf("%w: %q is not an option of coding run "+
+					"%s's question", ErrInvalidArguments, choice, a.String("turn_id"))
+			}
+			c.move("choice", "Choice", "", label)
+		}
 		c.move("answer", "Answer", "", a.String("answer"))
 		return proposal.Preview{Title: "Answer coding run", Target: a.String("turn_id"),
 			Note:         "The run resumes on the answer.",

@@ -68,7 +68,7 @@ func decisionSchema() map[string]any {
 // recommended and why, what was looked at, and the role the person is asked
 // in), which every tool that asks a person to choose takes alike: a work
 // item's ask under `decision` ([decisionSchema]), and a coding run's ask at the
-// top of its arguments ([askAndWait]). One builder, so the shape a model learns
+// top of its arguments ([AskAndWait]). One builder, so the shape a model learns
 // on one is the shape it meets on the other. A fresh map on every call: each
 // caller adds the properties of its own.
 func choiceProperties() map[string]any {

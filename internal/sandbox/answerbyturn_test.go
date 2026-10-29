@@ -292,8 +292,10 @@ func TestAnAnswerByTurnChoosingWhatWasNotOfferedIsSpentUnrecorded(t *testing.T) 
 		t.Fatal("an answer choosing an option nobody offered resumed the run")
 	}
 	records := rig.answeredRecords()
-	if len(records) != 1 || records[0].Outcome != types.AnswerNotAwaiting {
-		t.Fatalf("recorded %+v, want one not_awaiting", records)
+	// UNDER ITS OWN OUTCOME: the run was waiting, so "not awaiting" would
+	// tell the person the wrong thing about why their answer was not used.
+	if len(records) != 1 || records[0].Outcome != types.AnswerUnoffered {
+		t.Fatalf("recorded %+v, want one unoffered", records)
 	}
 
 	// And the question still takes an answer that chooses what it offers.

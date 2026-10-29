@@ -103,7 +103,8 @@ const (
 	// codingModeWork does the scripted work: the rounds the model answers.
 	codingModeWork = "work"
 	// codingModeAsk parks the run on a structured question through
-	// `ask_and_wait` over the seat's bridge, and ends it without submitting:
+	// `ask_and_wait` over the seat's bridge, is refused the submission it
+	// tries after it, and ends without submitting:
 	// its Stop hook still asks for notes, as Claude Code's does at the end of
 	// every turn.
 	codingModeAsk = "ask"
@@ -655,9 +656,9 @@ func (h codingHooks) play(ctx context.Context, session *mcp.ClientSession, event
 	return strings.Join(notes, "\n\n"), nil
 }
 
-// codingAsk is a [codingModeAsk] run's one call: its structured question,
-// over a session it opens on the seat's bridge, then the Stop hook its CLI
-// runs as it ends its turn.
+// codingAsk is a [codingModeAsk] run's calls: its structured question, over a
+// session it opens on the seat's bridge, the submission the bridge refuses it
+// once it has asked, then the Stop hook its CLI runs as it ends its turn.
 func codingAsk(ctx context.Context, args codingArgs, hooks codingHooks, stream codingStream) error {
 	bridge, err := bridgeURL(args.mcpConfig)
 	if err != nil {
@@ -669,7 +670,7 @@ func codingAsk(ctx context.Context, args codingArgs, hooks codingHooks, stream c
 		return fmt.Errorf("connecting to the bridge at %s to ask: %w", bridge, err)
 	}
 	defer func() { _ = session.Close() }()
-	stream.init([]string{builtin.AskAndWaitTool})
+	stream.init([]string{builtin.AskAndWaitTool, runner.SubmitWorkTool})
 	id := claudeID("toolu_")
 	options := make([]any, len(codingOptions))
 	for i, option := range codingOptions {
@@ -687,6 +688,18 @@ func codingAsk(ctx context.Context, args codingArgs, hooks codingHooks, stream c
 	stream.toolResult(id, out, failed)
 	if failed {
 		return fmt.Errorf("asking over the bridge: %s", out)
+	}
+	// AND A SUBMISSION AFTER THE QUESTION IS REFUSED, through the seat's real
+	// surface: the job is parked, and a CLI that submits rather than ending
+	// is told so rather than told its work was delivered (ADR-0068).
+	id = claudeID("toolu_")
+	submission := map[string]any{"outcome": "delivered", "summary": "Done before the answer."}
+	stream.toolUse(id, runner.SubmitWorkTool, submission)
+	out, failed = callOverBridge(ctx, session, id, runner.SubmitWorkTool, submission)
+	stream.toolResult(id, out, failed)
+	if !failed || !strings.Contains(out, "parked on their answer") {
+		return fmt.Errorf("a submission after the question answered %q (failed %v), "+
+			"want it refused as parked", out, failed)
 	}
 	_, err = hooks.play(ctx, session, codingEventFinish, stream)
 	return err

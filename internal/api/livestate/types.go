@@ -505,11 +505,13 @@ type SandboxEntry struct {
 	StartedAt string `json:"started_at"`
 
 	// Question and Audience appear once a run pauses on a clarification,
-	// with the question's Markdown context and the choice it offers where
-	// it has them (ADR-0068). The question and both of those are the run's
-	// body, withheld together ([SandboxEntry.For]).
+	// with the choice it offers where it has one (ADR-0068). Its Markdown
+	// context is ALWAYS on the wire, empty where it gave none, as every
+	// reader of a run's ask sends it, so a client never reads its absence
+	// as a different kind of question. The question and both of those are
+	// the run's body, withheld together ([SandboxEntry.For]).
 	Question        string             `json:"question,omitempty"`
-	QuestionContext string             `json:"question_context,omitempty"`
+	QuestionContext string             `json:"question_context"`
 	Decision        *decision.Decision `json:"decision,omitempty"`
 	Audience        string             `json:"audience,omitempty"`
 

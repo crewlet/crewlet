@@ -517,12 +517,19 @@ const (
 	// person has to answer it again. A chat reply let go of the same way goes
 	// on to its seat as the ordinary message it is, and announces nothing.
 	AnswerDeclined AnswerOutcome = "declined"
+
+	// AnswerUnoffered is an answer by turn whose choice is not an option of
+	// the question it names (ADR-0068): spent without being recorded, the
+	// question still waiting. `answer_run` checks the choice against the
+	// question before it delivers, so one arriving here names a question
+	// that is not the one the answer was checked against.
+	AnswerUnoffered AnswerOutcome = "unoffered"
 )
 
-// Valid reports whether o is one of the four outcomes.
+// Valid reports whether o is one of the five outcomes.
 func (o AnswerOutcome) Valid() bool {
 	switch o {
-	case AnswerResumed, AnswerNotAwaiting, AnswerGone, AnswerDeclined:
+	case AnswerResumed, AnswerNotAwaiting, AnswerGone, AnswerDeclined, AnswerUnoffered:
 		return true
 	}
 	return false
@@ -607,6 +614,8 @@ func (e SandboxRunAnswered) SummaryFor(actor string) string {
 		return lead(actor, "was answered after its sandbox run had ended")
 	case AnswerDeclined:
 		return lead(actor, "was answered, but its sandbox run could not be resumed with the answer")
+	case AnswerUnoffered:
+		return lead(actor, "was answered with a choice its sandbox run's question does not offer")
 	}
 	return lead(actor, "was answered")
 }

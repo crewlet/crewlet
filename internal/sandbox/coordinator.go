@@ -1591,7 +1591,7 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, bool
 		return Result{}, false, err
 	}
 	if ended {
-		result = endedAtDeadline(result, run.Deadline)
+		result = endedAtDeadline(result, run.Deadline, run.Question)
 	}
 	c.warnNotesUnasked(ctx, run, result)
 	// HELD TO THE RECORD'S BOUND here, where every collected result enters,
@@ -1708,9 +1708,18 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 // it did not get to say it was done; and its collection parks it on no
 // question ([withoutQuestion]): a run that is being stopped is not one a
 // person's answer could continue.
-func endedAtDeadline(result Result, deadline time.Time) Result {
+//
+// BUT THE QUESTION IT ASKED IS SAID. `asked` is the question the job recorded
+// on its way out (redacted where it was recorded, and bounded by the ask), and
+// the note names it, so the turn that judges the run and the seat's next turn,
+// which read this note on the run's record, know a person's answer was what it
+// was waiting for. Dropped with the park, the question left no trace at all.
+func endedAtDeadline(result Result, deadline time.Time, asked string) Result {
 	why := fmt.Sprintf("the run was ended at its turn's wall-clock cap, %s, before it "+
 		"finished; what it had done by then is collected", deadline.UTC().Format(time.RFC3339))
+	if asked != "" {
+		why += ". It had asked: " + asked
+	}
 	result.Success = false
 	if result.Error != "" {
 		why += ". It had reported: " + result.Error
@@ -2382,12 +2391,13 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 		if err != nil {
 			// A CHOICE THE QUESTION DOES NOT OFFER, which `answer_run`
 			// checked against this same question before it delivered:
-			// spent and said, never handed to the run as an option
-			// nobody offered.
+			// spent and said under an outcome of its own, never handed to
+			// the run as an option nobody offered, and never told as a
+			// run that was not waiting, which it was.
 			log.ErrorContext(ctx, "sandbox_answer_choice_unoffered",
 				"turn_id", given.TurnID, "launch_id", given.LaunchID, "choice", given.Choice,
 				"answered_by", given.AnsweredBy, "error", err.Error())
-			answered(run, types.AnswerNotAwaiting)
+			answered(run, types.AnswerUnoffered)
 			return AnswerNotMine, nil
 		}
 		recorded, won, err := c.record(ctx, run, words, answer)

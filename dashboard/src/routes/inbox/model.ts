@@ -43,7 +43,7 @@ import {
   type ItemRef,
 } from "~/lib/work.ts";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
-import { runAsk, runAskTexts } from "~/lib/runs.ts";
+import { runAskTexts } from "~/lib/runs.ts";
 import { conditionKey, type Attention } from "~/lib/attention.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
@@ -518,15 +518,15 @@ export function askTexts(ask: WorkAskRow): string[] {
 
 /**
  * What an answered question asked, as its row and its pane head it: an ask's
- * question, or a coding run's ([runAsk]).
+ * question, or a coding run's, whole (`RunQuestion`).
  */
 export function answeredQuestion(answered: AnsweredDecision): string {
-  return "run" in answered ? runAsk(answered.run).title : askQuestion(answered.ask);
+  return "run" in answered ? answered.run.question.trim() : askQuestion(answered.ask);
 }
 
 /** Every text of an answered question a reader reads as one message ([askTexts]). */
 export function answeredTexts(answered: AnsweredDecision): string[] {
-  return "run" in answered ? runAskTexts(runAsk(answered.run)) : askTexts(answered.ask);
+  return "run" in answered ? runAskTexts(answered.run) : askTexts(answered.ask);
 }
 
 /** What an ask says beside its question: the body, or what follows its first line. */
@@ -811,6 +811,12 @@ export function pairAnswered(
  * An answer as the row and the pane say it: who closed the ask, the verb, and
  * what they said. "You" for the reader, by name for anybody else, since a
  * colleague may answer a question put to you.
+ *
+ * A CHOICE CAN CARRY WORDS of its own (a choice with a note), on a work
+ * item's answer and a run's alike, and those words are the answer's `body`:
+ * the record holds the option's label there only where nothing else was
+ * written. Read as the label alone, they were dropped, and the person read
+ * back an answer shorter than the one they gave.
  */
 export interface AnswerWords {
   who: string;
@@ -818,6 +824,8 @@ export interface AnswerWords {
   verb: string;
   /** The option's label or the words, empty for a resolution. */
   said: string;
+  /** The words written beside a choice, or "" where none were. */
+  note: string;
   kind: "choice" | "reply" | "resolved";
   /** The chosen option was the asker's recommendation. */
   recommended: boolean;
@@ -835,6 +843,7 @@ export function answerWords(
       who,
       verb: "closed it without an answer",
       said: "",
+      note: "",
       kind: "resolved",
       recommended: false,
     };
@@ -842,15 +851,17 @@ export function answerWords(
   const decision = "run" in answered ? answered.run.decision : answered.ask.decision;
   const option = a.choice ? decision?.options.find((o) => o.id === a.choice) : undefined;
   if (option) {
+    const body = a.body.trim();
     return {
       who,
       verb: "chose",
       said: option.label,
+      note: body === option.label.trim() ? "" : body,
       kind: "choice",
       recommended: decision?.recommended === option.id,
     };
   }
-  return { who, verb: "replied", said: a.body, kind: "reply", recommended: false };
+  return { who, verb: "replied", said: a.body, note: "", kind: "reply", recommended: false };
 }
 
 /**

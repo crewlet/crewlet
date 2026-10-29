@@ -287,7 +287,8 @@ sandbox_run_stopped        # a run a person ended by pausing its seat with
                            # operator_id): once, under an id its ending
                            # recorded, like a loss — but never a failure
 sandbox_run_answered       # what an answer to a parked run's question became
-                           # (resumed | not_awaiting | gone | declined), by
+                           # (resumed | not_awaiting | gone | declined |
+                           # unoffered), by
                            # which route
                            # (chat | operator) and from whom. The operator
                            # route travels as an inbox wake

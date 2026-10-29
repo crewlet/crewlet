@@ -654,6 +654,21 @@ type BridgeAppend struct {
 // former entirely.
 const MaxBridgeCalls = 200
 
+// The two tools whose calls END an executor's run, as the bridge records them:
+// submitting its work, or asking a person and parking on the answer
+// (ADR-0068). Named here, beside the log that keeps them, because the log's
+// bound keeps them and the bridge's nudge reads them by these names; the
+// runner's submission and the ask tool are named after them (a test in
+// internal/engine holds the runner's to this one).
+const (
+	SubmitWorkTool = "submit_work"
+	AskAndWaitTool = "ask_and_wait"
+)
+
+// EndsRun reports whether a call to the tool named is one of the two ways an
+// executor's run ends ([SubmitWorkTool], [AskAndWaitTool]).
+func EndsRun(tool string) bool { return tool == SubmitWorkTool || tool == AskAndWaitTool }
+
 // PendingRun is one detached job's durable state, keyed by its kick-off turn.
 //
 // The json tags are a WIRE FORMAT, not decoration: the record lives in the
@@ -1054,6 +1069,24 @@ type PendingRun struct {
 	// was cut. Reported rather than hidden, because a log that silently
 	// skips is a log that lies about what the run did.
 	BridgeCallsElided int `json:"bridge_calls_elided,omitempty"`
+
+	// AnsweredThrough is the place ([BridgeCall.Seq]) of the last call the
+	// round made before a person's answer carried it on, and zero for a
+	// round no answer has carried on: every call up to it was made by a job
+	// that asked, or by one before it, before the run knew the answer.
+	// Written by the launch that continues an asking job
+	// ([PendingRun.Continues]), off the same write that keeps those calls;
+	// kept by a relaunch that carries the round on after a loss, and zeroed
+	// by a new round.
+	//
+	// A PLACE, NOT A SEARCH. The collection that closes the round reports
+	// only a submission made after it, because one made before the answer
+	// was made without it. Read instead as "after the round's last
+	// `ask_and_wait`", the cut moved with whatever the log happened to
+	// hold: an ask the cap dropped from the middle ([MaxBridgeCalls]) left
+	// the submission before it standing, and a submission the asking job
+	// made after its own question was read as the carried-on run's.
+	AnsweredThrough int `json:"answered_through,omitempty"`
 
 	// Charged is whether this launch's collected tokens are on the fleet's
 	// token counter.

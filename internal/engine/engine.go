@@ -78,7 +78,7 @@ type Company struct {
 	// ([runner.Config.Ask]) rather than filed in Tools, because no other
 	// phase has a run to park. Built with the builtins ([Engine.equip]);
 	// nil on an epoch built without an engine, whose runs offer none.
-	AskTool tools.Callable
+	AskTool runner.RunAsk
 
 	// ActivatedAt is the instant the revision this epoch was applied from
 	// was activated — the activation pointer's own ([coord.Activation.At]),

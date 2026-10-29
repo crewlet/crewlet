@@ -139,9 +139,15 @@ func writeTools() []Tool {
 			})),
 		write("answer_coding_run", "answer_run", false, "answer coding runs",
 			"Propose an answer to a coding run parked on a question for the person.",
-			object([]string{"turn_id", "answer"}, map[string]*schema{
+			object([]string{"turn_id", "launch_id"}, map[string]*schema{
 				"turn_id": text("The run's turn id.", nameBytes),
-				"answer":  text("The answer, verbatim.", 32<<10),
+				"launch_id": text("The question being answered: the run's launch_id, read with "+
+					"its question.", nameBytes),
+				"choice": text("The id of the option chosen, where the question offers "+
+					"options (its decision).", nameBytes),
+				// The bound answer_run itself refuses past (builtin.MaxRunAnswerBytes).
+				"answer": text("The answer in words, verbatim: the whole answer to an open "+
+					"question, or what to add to a choice.", 16<<10),
 			})),
 		write("create_page", "write_page", false, "write pages",
 			"Propose a new knowledge page.",

@@ -1341,8 +1341,13 @@ const (
 	// as a decision (the run's ask drawn with the decision components, its
 	// options read back with the chosen one marked, and its answered history
 	// in the Inbox's Answered group), all in lazy chunks, took it to
-	// 4637.3 KiB. 4638 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 542<<10
+	// 4637.3 KiB. 4638 KiB, which still refuses a doubled baseline. Its
+	// review's fixes (a run's question drawn whole and clamped with Show all
+	// rather than split, an answer naming the question it answers, a choice
+	// read back with the words beside it, and the focus kept on the outcome)
+	// took it to 4638.7 KiB.
+	// 4639 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 543<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

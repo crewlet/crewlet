@@ -25,7 +25,6 @@ import {
   fmtCount,
   fmtDate,
   fmtDuration,
-  firstSentence,
   fmtPct,
   humanize,
   inTime,
@@ -244,11 +243,6 @@ describe("text", () => {
     expect(conversationLabel("work:ENG-32")).toBe("work:ENG-32");
     expect(conversationLabel("slack:C9:1718.001")).toBe("slack:C9:1718.001");
     expect(conversationLabel("")).toBe("");
-  });
-
-  test("a heading is the first sentence of a longer text", () => {
-    expect(firstSentence("May I delete it? It holds the fixtures.")).toBe("May I delete it?");
-    expect(firstSentence("v1.2 ships today")).toBe("v1.2 ships today");
   });
 
   test("an engine identifier becomes a label", () => {

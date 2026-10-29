@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -189,17 +188,10 @@ func (l *bridgeLedger) Append(ctx context.Context, runID string, call mcpbridge.
 	// that holds its submission, and a row that holds its question (the
 	// ask was recorded before its call returned). A call the gate refused
 	// is no end (the run goes on) and tells nobody.
-	if l.nudge != nil && endsRun(call.Name) && !call.Failed {
+	if l.nudge != nil && sandbox.EndsRun(call.Name) && !call.Failed {
 		l.nudge(ctx, sandbox.Nudge{TurnID: runID, LaunchID: launch, Why: sandbox.NudgeSubmitted})
 	}
 	return nil
-}
-
-// endsRun reports whether a successful call to the tool named is how an
-// executor's run ends: submitting its work, or asking a person and parking on
-// the answer (ADR-0068).
-func endsRun(tool string) bool {
-	return tool == runner.SubmitWorkTool || tool == builtin.AskAndWaitTool
 }
 
 // spent is the meter's running total in the shape a run's row carries, and

@@ -28,7 +28,6 @@ import {
   ReadingPaneReasoning,
   Select,
   Stack,
-  Text,
   Textarea,
   type ComboboxOption,
   type SelectOption,
@@ -62,7 +61,8 @@ import { steerReadsSentence } from "~/lib/steer.ts";
 import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
 import { textBudget } from "~/lib/format.ts";
 import { CHECKED_WORDS, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
-import { RUNS_POLL_MS, runAsk, runAskTexts } from "~/lib/runs.ts";
+import { RUNS_POLL_MS, runAskTexts, unanswerable } from "~/lib/runs.ts";
+import { RunQuestion } from "./RunQuestion.tsx";
 import { TokenScope } from "./InlineToken.tsx";
 import type { SandboxRun } from "~/protocol/index.ts";
 import { useServicesRun } from "~/lib/services.ts";
@@ -942,7 +942,7 @@ export function AnswerRunButton({
   run,
   seat,
 }: {
-  /** The parked run: its turn, which the answer names, and what it asked. */
+  /** The parked run: its turn and the question it asks, which the answer names. */
   run: AnsweredRun;
   /** Whose run it is, by name, for the dialog's title. */
   seat: string;
@@ -978,21 +978,27 @@ export function AnswerRunButton({
 
 /**
  * What the answer dialog is handed of a parked run: a durable row, or a live
- * entry, which carries the question alone.
+ * entry, which carries no launch.
  */
-type AnsweredRun = Pick<SandboxRun, "turn_id" | "question" | "question_context" | "decision">;
+type AnsweredRun = Pick<
+  SandboxRun,
+  "turn_id" | "launch_id" | "question" | "question_context" | "decision"
+>;
 
 /**
- * The run's question as the Inbox reads it (`runAsk`): its title, its context
- * as Markdown, the run's recommendation, and, for a run that asked to choose,
- * its options as the buttons an ask's are (`AnswerChoices`), each answering
- * with one press. "Something else", and an open question from the start,
- * answers in words.
+ * The run's question as the Inbox reads it: its title (`RunQuestion`), its
+ * context as Markdown, the run's recommendation, and, for a run that asked to
+ * choose, its options as the buttons an ask's are (`AnswerChoices`), each
+ * answering with one press. "Something else", and an open question from the
+ * start, answers in words.
  *
- * READ OFF THE RUN'S DURABLE ROW where the dialog has it: the live projection
- * a seat's page draws from carries the question's title alone, never its
- * context or options, and an answer chosen without them would be an answer
- * to a question the reader never saw whole.
+ * READ OFF THE RUN'S DURABLE ROW where the dialog has it, because THE ANSWER
+ * NAMES THE QUESTION DRAWN (`launch_id`), and the live projection a seat's
+ * page draws from carries no launch: until the row is read, nothing is sent
+ * ([unanswerable]). A run that has moved on to another question refuses the
+ * answer `conflict`, in the engine's words, and the refusal asks the durable
+ * row again, so the dialog then draws the question the run asks now under
+ * that sentence.
  */
 function AnswerRunDialog({
   run,
@@ -1006,8 +1012,10 @@ function AnswerRunDialog({
   onClose: () => void;
 }) {
   const runs = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
-  const ask = runAsk(runs.data?.runs.find((r) => r.turn_id === run.turn_id) ?? run);
-  const decision = ask.decision;
+  const shown = runs.data?.runs.find((r) => r.turn_id === run.turn_id) ?? run;
+  const question = (shown.question ?? "").trim();
+  const context = shown.question_context.trim();
+  const decision = shown.decision;
   const options = decision?.options ?? [];
   const recommended = options.find((o) => o.id === decision?.recommended);
   // "SOMETHING ELSE" OPENED THE FIELD in the options' place; a question with
@@ -1016,10 +1024,11 @@ function AnswerRunDialog({
   const inWords = options.length === 0 || open;
   const [chosen, setChosen] = useState<string | null>(null);
   const [answer, setAnswer] = useState("");
-  const blocked = answer.trim() ? undefined : "Write the answer first.";
+  const notYet = unanswerable(shown);
+  const blocked = notYet ?? (answer.trim() ? undefined : "Write the answer first.");
   const send = async (args: { choice: string } | { answer: string }) => {
     const result = await write.run(
-      { turn_id: run.turn_id, ...args },
+      { turn_id: run.turn_id, launch_id: shown.launch_id, ...args },
       { done: `Sent your answer to ${seat}'s coding run` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
@@ -1057,16 +1066,12 @@ function AnswerRunDialog({
         </>
       }
     >
-      <TokenScope texts={runAskTexts(ask)}>
+      <TokenScope texts={runAskTexts(shown)}>
         <div className="col gap-3">
-          {ask.title && (
-            <Text as="p" variant="heading">
-              {renderTokens(ask.title, "question", "text", true)}
-            </Text>
-          )}
-          {ask.context && (
+          {question && <RunQuestion question={question} as="dialog" />}
+          {context && (
             <Prose as="div" measure="none" className="prose md">
-              {renderMarkdown(ask.context, { ...CHECKED_WORDS, scoped: true })}
+              {renderMarkdown(context, { ...CHECKED_WORDS, scoped: true })}
             </Prose>
           )}
           {recommended && decision?.rationale && (
@@ -1104,6 +1109,7 @@ function AnswerRunDialog({
               options={options}
               recommended={decision?.recommended}
               pending={write.busy ? chosen : null}
+              blocked={notYet}
               onChoose={(choice) => {
                 setChosen(choice);
                 void send({ choice });
