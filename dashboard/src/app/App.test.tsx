@@ -489,7 +489,6 @@ describe("a section, for a reader holding none of its grants", () => {
         "mcp-tools",
         "limits",
         "storage",
-        "models",
         "secrets",
         "nodes",
         "config",

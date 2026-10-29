@@ -293,12 +293,12 @@ describe("a widget whose choice is not made", () => {
 
 describe("a reader whose access no longer opens a widget's page", () => {
   // WHAT A MEMBER (Worklet and Doclet, no Admin) CANNOT OPEN, read off the
-  // registry's own rule: Spend's readings are every reader's, so a Settings
-  // widget is not by its key alone a closed one.
+  // registry's own rule: Spend's readings and the models are every reader's,
+  // so a Settings widget is not by its key alone a closed one.
   const closed = defs.filter((d) => !canUse(d, MEMBER.grants));
 
   test("there are some to hold to it", () => {
-    expect(closed.map((d) => d.key)).toContain("settings.models");
+    expect(closed.map((d) => d.key)).toContain("settings.secrets");
   });
 
   test.each(closed.map((d) => [d.key, d] as const))(

@@ -375,6 +375,11 @@ export default defineConfig({
       "/stream": { target: "http://localhost:8000" },
       "/config": { target: "http://localhost:8000" },
       "/secrets": { target: "http://localhost:8000" },
+      // Every model route Settings › Models writes through: a credential, a
+      // test, a retry, a host login's check and a device sign-in
+      // (routes/settings/models/api.ts). The models themselves are the
+      // socket's questions.
+      "/llm": { target: "http://localhost:8000" },
       "/setup": { target: "http://localhost:8000" },
       // The state log's two operator gates, evict and readmit, which the
       // Fleet screen's replication panels write. The retention document they

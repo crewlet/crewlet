@@ -22,6 +22,7 @@
  */
 
 import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
+import type { ModelDevice, ModelEntriesAnswer, ModelsAnswer, RunnersAnswer } from "./models.ts";
 // THE SHAPES AN ENGINE GATE HOLDS ARE NOT DECLARED HERE. They live in
 // `../contract/`, the one home of every declaration a Go test reads, and this
 // file composes them into the answers and frames it declares. RELATIVE, like
@@ -6826,6 +6827,14 @@ export interface QueryMap {
   artifact_data_state: DataStateAnswer;
   artifact_data_usage: DataUsageAnswer;
   brand: BrandAnswer;
+  /** Every model, in an admin's reading or a member's (Settings › Models). */
+  llm_entries: ModelEntriesAnswer;
+  /** Where a model's coding runs can happen, on each node. Admin. */
+  llm_runners: RunnersAnswer;
+  /** The models a CLI can run (`agent`, and `provider` for OpenCode). Admin. */
+  llm_models: ModelsAnswer;
+  /** One device sign-in (`id`). Admin. */
+  llm_device_sign_in: ModelDevice;
 }
 
 export type QueryName = keyof QueryMap;

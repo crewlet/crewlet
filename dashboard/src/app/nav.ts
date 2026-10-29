@@ -18,7 +18,7 @@
  *     row: the user block IS the reader, and opens it from its name and menu.
  *
  * Settings is what the ENGINE runs, and nothing the company decides: a column
- * of four groups, Runtime (Models & keys, MCP Tools, Secrets, Limits), Spend
+ * of four groups, Runtime (Models, MCP Tools, Secrets, Limits), Spend
  * (the readings, never the ceilings), Access (People, Service accounts, API
  * tokens, Sign-in policy, Audit log) and Engine (Nodes, Configuration,
  * Backups & retention, File storage). It lists only what lives in it: a row
@@ -881,13 +881,15 @@ export const WORKSPACES: WorkspaceRow[] = [
     sections: [
       {
         key: "models",
-        label: "Models & keys",
+        label: "Models",
         icon: "cpu",
         path: ["settings", "models"],
         hint: "Models, the CLIs they run through, and how each signs in",
-        keywords: ["models", "llm", "provider", "cli", "api key", "subscription"],
+        keywords: ["models", "keys", "llm", "provider", "cli", "api key", "subscription"],
         group: "Runtime",
-        grants: ["admin"],
+        // EVERY MEMBER'S: each model's condition is what tells a member why
+        // a seat waits. The reading names no credential, and every action on
+        // the page is an admin's (`llm_entries`' two readings).
       },
       {
         key: "mcp-tools",
@@ -1170,7 +1172,7 @@ export const RESERVED_SEGMENTS: string[] = [
  * its own copy of the sections is a second table that is wrong the day a
  * section moves. A section whose path IS its workspace's landing page is one
  * destination under the workspace's name, found by that section's words too:
- * Settings opens on Models & keys, and "models" finds it.
+ * Settings opens on Models, and "models" finds it.
  */
 export interface Destination {
   key: string;
@@ -1332,9 +1334,8 @@ export function workspaceOpen(row: WorkspaceRow, held: readonly string[]): boole
  * Where a workspace's row, its `g` chord and its palette entry open for a
  * reader holding `held`: its own path, or, where that landing section is
  * closed to them, the first of its sections they can open and the company
- * runs. Settings lands on Models & keys, which is Admin's, and a reader
- * holding only Worklet was sent to a refusal although Token spend and
- * Expensive tasks are theirs. `held` null is a reader not yet read: the
+ * runs. A landing closed to the reader sent them to a refusal although other
+ * sections of the workspace were theirs. `held` null is a reader not yet read: the
  * workspace's own path, as the frame draws every lock only once it knows.
  */
 export function landingPath(

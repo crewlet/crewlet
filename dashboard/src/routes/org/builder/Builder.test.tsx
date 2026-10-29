@@ -539,9 +539,8 @@ describe("what an org push re-checks", () => {
   });
 });
 
-// NO PROVIDER, NO TURN. The dashboard writes none, so the builder says where one
-// comes from rather than leaving agents whose work waits with nothing to say
-// why.
+// NO PROVIDER, NO TURN. The builder writes none, so it says where one comes
+// from rather than leaving agents whose work waits with nothing to say why.
 test("a company with no model provider is told so, and one with a provider is not", async () => {
   const without = company();
   delete without.providers;
@@ -552,8 +551,12 @@ test("a company with no model provider is told so, and one with a provider is no
   const caution = (
     await screen.findByText(/No model provider is set, so agents can’t work\./)
   ).closest(".crewlet-callout") as HTMLElement;
-  // And it gives the steps that add one, the card's own: the declaration the
-  // engine walks from a company only the store holds.
+  // It sends the reader to Settings › Models to add one, signed in and tested.
+  expect(within(caution).getByRole("link", { name: "Settings, Models" }).getAttribute("href")).toBe(
+    "#/settings/models?flow=add",
+  );
+  // And it gives the steps that add one from a terminal, the card's own: the
+  // declaration the engine walks from a company only the store holds.
   fireEvent.click(within(caution).getByRole("button", { name: "The steps" }));
   expect(within(caution).getByText(/crewlet config export > company\.yaml/).textContent).toBe(
     PROVIDER_STEPS,

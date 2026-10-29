@@ -14,6 +14,7 @@ import { describe, expect, test } from "vitest";
 // unnoticed: it goes green on whatever is written, not on what is correct.
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  listed,
   fmtSetting,
   asSentence,
   configValueKind,
@@ -460,4 +461,15 @@ test("a configured duration reads in the largest unit that divides it", () => {
   expect(fmtSetting(300)).toBe("5 minutes");
   expect(fmtSetting(90)).toBe("1m 30s");
   expect(fmtSetting(0)).toBe("0ms");
+});
+
+test('a list keeps the comma before its last item, so an item carrying its own "and" stays one item', () => {
+  expect(listed([])).toBe("");
+  expect(listed(["coding"])).toBe("coding");
+  expect(listed(["coding", "reviewing and evaluations"])).toBe(
+    "coding and reviewing and evaluations",
+  );
+  expect(listed(["coding", "reviewing and evaluations", "task delegations and routines"])).toBe(
+    "coding, reviewing and evaluations, and task delegations and routines",
+  );
 });

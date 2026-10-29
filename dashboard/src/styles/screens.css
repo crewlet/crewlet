@@ -10187,60 +10187,6 @@ a.live-row:focus-visible {
   color: var(--color-text-secondary);
 }
 
-/* ---- Settings › Models & keys ------------------------------------------ */
-
-/* A MODEL'S ROW LEADS WITH ITS CONFIG KEY and carries the CLI and the model
-   under it: the key is what a seat's `llm:` names, the CLI and the model are
-   what runs. The second line cuts at its end rather than wrapping a long model
-   id across the row. The sign-in cell is the same pair: the mode over where
-   its credential comes from. */
-.model-name {
-  min-width: 0;
-  gap: 2px;
-}
-
-/* A credential written into the document, in the edit form: the locked
-   sentence stands where the field would be, at THE INPUT'S OWN SIZE (the
-   kit's `compact` step), not the body's — at the body step it read as a
-   different component among the inputs. */
-.model-credential-locked {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-height: 2.25rem;
-  padding: var(--spacing-1) var(--spacing-1) var(--spacing-1) var(--spacing-3);
-  border: 1px dashed var(--color-border-default);
-  border-radius: var(--radius-md);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-compact);
-  line-height: var(--font-line-height-normal);
-}
-.model-credential-locked-text {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.model-credential-locked > button {
-  flex: none;
-}
-
-/* The variables a model's CLI is handed, one per line: a name and the
-   reference it reads, which wrap at the reference rather than mid-name. */
-.model-env {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  overflow-wrap: anywhere;
-}
-
-/* The way out to Configuration, under the sign-in it changes: inside the
-   card's own padding, a step below the list it follows. */
-.model-signin-change {
-  margin: var(--spacing-3) 0 0;
-}
-
 /* ---- Signing in ----------------------------------------------------------
    The screens a browser is on BEFORE it holds a session the frame can use
    (`#/login`, `#/invite/…`, `#/enrol`), drawn outside the frame on

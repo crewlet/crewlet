@@ -32,7 +32,6 @@ import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { configStanding, offRevision } from "~/lib/configStanding.ts";
 import { standingCaption } from "./standingWords.ts";
-import { authWords, modelLine, usesOf } from "~/lib/models.ts";
 import { SERVER_STATE_WORDS } from "~/lib/mcpServers.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRest } from "~/lib/useRest.ts";
@@ -42,7 +41,8 @@ import { OPERATOR_SOURCE } from "~/contract/audit.ts";
 import { CATALOG, entryState } from "~/routes/settings/integrations/catalogue.tsx";
 import { ADMIN } from "~/lib/access.ts";
 import { useRetentionReport } from "~/routes/settings/Retention.tsx";
-import { useModels } from "~/routes/settings/Models.tsx";
+import { MODELS_POLL_MS } from "~/routes/settings/models/data.ts";
+import { HEALTH, product } from "~/routes/settings/models/words.ts";
 import {
   FINDING_WORDS,
   type DirectoryFinding,
@@ -285,59 +285,58 @@ function McpServers() {
   );
 }
 
-// ---- Models & keys ----------------------------------------------------------------------
+// ---- Models ----------------------------------------------------------------------------
 
 function Models() {
-  // THE PAGE'S OWN QUESTION, read the way the page reads it. A model no seat
-  // names is the one thing here that drifts, so it leads.
-  const models = useModels();
+  // THE PAGE'S OWN QUESTION, every member's: the engine's reading of each
+  // model. A model that cannot answer leads, then one nothing runs on, which
+  // is the one thing here that drifts.
+  const models = useQuery("llm_entries", undefined, { pollMs: MODELS_POLL_MS });
   const entries = useMemo(() => {
-    const all = models.entries.map((entry) => ({
-      entry,
-      seats: usesOf(models.seats, entry.key).length,
-    }));
-    return [...all.filter((m) => m.seats === 0), ...all.filter((m) => m.seats > 0)];
-  }, [models.entries, models.seats]);
-  const unused = entries.filter((m) => m.seats === 0).length;
+    const all = models.data?.entries ?? [];
+    const rank = (e: (typeof all)[number]) =>
+      e.health === "ready" || e.health === "untested" ? (e.used_by.length === 0 ? 1 : 2) : 0;
+    return [...all].sort((a, b) => rank(a) - rank(b));
+  }, [models.data]);
+  const unused = entries.filter((e) => e.used_by.length === 0).length;
+  const stopped = entries.filter((e) => e.health !== "ready" && e.health !== "untested").length;
   return (
-    <WidgetCard title="Models & keys" from="settings">
+    <WidgetCard title="Models" from="settings">
       <QueryState
         error={models.error}
         refusal={models.refusal}
-        // NOT "AND NO DATA": a company with nothing configured answers null,
-        // which is an answer, and would otherwise read as loading for ever.
         loading={models.loading}
         empty={
           !models.loading && !models.error && entries.length === 0
-            ? { title: "No models configured", hint: "Add one under providers.llm." }
+            ? { title: "No models yet", hint: "Add one under Settings, Models." }
             : undefined
         }
       >
         <List>
-          {entries.slice(0, ROWS).map(({ entry, seats: n }) => {
-            const sign = authWords(entry.authMode);
+          {entries.slice(0, ROWS).map((entry) => {
+            const health = HEALTH[entry.health];
             return (
               <ListItem
                 key={entry.key}
                 href={href(["settings", "models", entry.key])}
                 trailing={
-                  n === 0 ? (
-                    <Tag variant="warning" title="No seat’s chain names this model.">
+                  entry.used_by.length === 0 && health.tone === "success" ? (
+                    <Tag variant="warning" title="No seat and no assistant runs on this model.">
                       Unused
                     </Tag>
                   ) : (
-                    <Tag title={sign.hint}>{sign.label}</Tag>
+                    <Tag variant={health.tone}>{health.label}</Tag>
                   )
                 }
               >
-                {modelLine(entry)}
+                {`${entry.key}: ${product(entry.agent)}, ${entry.model}`}
               </ListItem>
             );
           })}
         </List>
         <More total={entries.length} to={["settings", "models"]} />
-        {unused === 0 && entries.length > 0 && (
-          <WidgetNote>{`${plural(entries.length, "model")}, each run by a seat.`}</WidgetNote>
+        {stopped === 0 && unused === 0 && entries.length > 0 && (
+          <WidgetNote>{`${plural(entries.length, "model")}, each ready and in use.`}</WidgetNote>
         )}
       </QueryState>
     </WidgetCard>
@@ -683,8 +682,8 @@ export const widgets = defineWidgets([
   {
     key: "settings.models",
     from: "settings",
-    label: "Models & keys",
-    description: "Each model’s CLI, how it signs in, and any no seat runs",
+    label: "Models",
+    description: "Each model's condition, and any that nothing runs on",
     icon: CpuGlyph,
     hue: "blue",
     size: { w: 4, minW: 3, minH: 6, vertical: true },

@@ -195,6 +195,10 @@ test("a fresh setup opens on Identity with the company's name, and its first Con
   // NO BACK ON THE FIRST STEP, and Identity is never skipped.
   expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Skip for now" })).toBeNull();
+  // Continue is the wizard's primary action, the slot that keeps one width on every step.
+  expect(
+    screen.getByRole("button", { name: "Continue" }).closest(".crewlet-setup-wizard__primary"),
+  ).not.toBeNull();
   fireEvent.change(screen.getByDisplayValue("FairSplit"), { target: { value: "FairSplit Labs" } });
   fireEvent.click(screen.getByRole("button", { name: "Continue" }));
   expect(await stepHeading("Logos")).toBeTruthy();
@@ -263,6 +267,11 @@ test("an administrator adopts from Review once every contrast warning is acknowl
   mount(["admin"], [brandKitRow()]);
   expect(await stepHeading("Review")).toBeTruthy();
   const adopt = screen.getByRole("button", { name: "Publish as the company brand" });
+  // THE FINISH IS THE WIZARD'S PRIMARY ACTION, by name: on a phone that slot takes the footer's second row.
+  expect(adopt.closest(".crewlet-setup-wizard__primary")).not.toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Save as draft" }).closest(".crewlet-setup-wizard__primary"),
+  ).toBeNull();
   // NOTHING IS SAID BEFORE A FINISH IS TRIED.
   expect(screen.queryByRole("alert")).toBeNull();
   fireEvent.click(adopt);

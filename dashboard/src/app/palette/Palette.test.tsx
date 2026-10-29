@@ -1445,11 +1445,10 @@ describe("a screen found by what it holds", () => {
     expect(hits).toContain("Tasks");
   });
 
-  // SETTINGS OPENS WHERE THE READER MAY READ: a reader holding only Worklet
-  // was sent to Models & keys, which is Admin's, and its entry read "needs
-  // Admin access" although Token spend and Expensive tasks are theirs.
-  // Mutation: go to the workspace's own path and the press lands on the lock.
-  test("a reader holding only Worklet opens Settings on Token spend, unlocked", () => {
+  // SETTINGS OPENS ON MODELS FOR EVERY READER: each model's condition is
+  // every member's to read, so the landing is never a lock. Mutation: give
+  // the Models section a grant and a Worklet-only reader is sent elsewhere.
+  test("a reader holding only Worklet opens Settings on Models, unlocked", () => {
     const to = vi.fn();
     const nav = { to } as unknown as Parameters<typeof destinationHits>[1];
     const runs = { tracker: true, knowledge: true };
@@ -1465,7 +1464,7 @@ describe("a screen found by what it holds", () => {
     ).find((h) => h.id === "nav-settings")!;
     expect(settings.hint).not.toMatch(/needs/);
     settings.go();
-    expect(to).toHaveBeenCalledWith(["settings", "spend"]);
+    expect(to).toHaveBeenCalledWith(["settings", "models"]);
     const admin = destinationHits(
       "settings",
       nav,

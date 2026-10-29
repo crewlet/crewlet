@@ -3861,6 +3861,42 @@ through the [model routes](../reference/api-endpoints.md#llm-models-settings--mo
 each its own verb and each recorded in the Audit log as a `model_acted` row,
 refused ones included.
 
+**Two lenses and a page per model.** *Models* lists every model with its
+condition, how it signs in and what it is used for, under the model alarms;
+*By job* is every seat as a row, with the model it runs for each kind of work
+and the Assistant's model above it. A model's own page has its sign-in, its
+sit-out, its last test, its usage over seven days and every place that runs on
+it. Every member opens the page; every change on it is an admin's.
+
+**Adding and editing a model is one wizard**, which writes the model and every
+use it is given as one revision: the name and the coding CLI (both fixed once
+the model exists), how it signs in, the model, where its coding runs (only for
+a CLI with a runner), what it is used for, its limits, a test call, and a review
+of exactly what changes. *Use it for* offers the work a person tells apart
+rather than the engine's five fields, and each choice writes every field it
+covers:
+
+| Use it for | Writes |
+|---|---|
+| Coding | the seat's `llm` |
+| Reviewing and delegations | `llm_review` and `llm_subagent` |
+| Routines and evaluations | `llm_auxiliary` and `llm_judge` |
+| Everything | the seat's `llm`, clearing the four satellites, so every job resolves to it |
+| Assistant | `assistant.llm`, company-wide, with no seats; the model must deny web tools |
+
+The two pairs are paired by the model each wants: reviewing and the delegated
+work take a strong model, and the routines and the onboarding judge, each under
+a fixed deadline, a fast one, so one model chosen serves both jobs it writes.
+Each field is written as one model, never a chain: a fallback the field named
+before is dropped, and the review names every one it drops. Taking a model off
+a job removes it from the field, and a field left empty is deleted, so the job
+resolves as an unset one does (the review shows where it lands). Routines
+and evaluations, whose jobs have a fixed deadline
+([Auxiliary work and latency](#auxiliary-work-and-latency)), notes when the
+model chosen is not a fast one, and never refuses it. A model the
+assistant already runs on keeps it until another model is chosen for the
+assistant.
+
 **Status comes from every node's heartbeat.** Each node publishes, per model,
 how it signs in there, whether it sits out a vendor's limit and until when,
 when it last answered and last failed, the seats parked on it and, for a model
@@ -3924,7 +3960,11 @@ cannot reach the catalogue offers the aliases, the page and free text.
 `llm_credential_expires_soon` at 7, `llm_sign_in_refused`, `llm_limit`, and
 `llm_limit_waiting` once a seat has waited 15 minutes) are the node's own
 evaluation, shown at the top of the page, on `/health` and in the alarm
-reference.
+reference. On the page each offers the gesture that fixes it: a credential's
+opens its sign-in, and a limit's is **Retry now**. A limit that holds seats
+also offers to move them, to a model that answers now (never one on the same
+plan, whose session or weekly limit holds it too) or to a new one, with the
+wizard's *Use it for* opened on those seats' categories.
 
 ## Operating it
 
