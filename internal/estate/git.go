@@ -458,11 +458,60 @@ func (r *Router) Home(repoID string) (string, error) {
 	return h.home(r, repoID), nil
 }
 
-// homeReading is one reading of who serves git, as [Router.Home] orders a
-// repository's git nodes over it: every live git node the placement names, and
-// whether this node's own git half is built — which places it in the order
-// where the placement does not yet name it, so its reads are answered in
-// process.
+// HomeOf answers which of repoIDs this node is the HOME of ([Router.Home]),
+// every one judged against ONE READING of who serves git: the set holds
+// exactly the ids this node is home for. An error is UNKNOWN for every one of
+// them — who serves git could not be read, or it names no git node
+// ([ErrNoGitNode]) — never "home to none", so a node that cannot tell does
+// none of a home's work rather than guess. No ids read nothing.
+//
+// ONE READING FOR MANY REPOSITORIES, because what reads it — the backstop pass
+// of the home's change work (internal/code/home), over every repository its
+// workers' listings name, every minute on every git node — is a question about
+// the whole listing: asked a repository at a time, each answer read the
+// presence view again (its leases cloned under its lock, every node's profile
+// decoded, the git nodes copied and sorted) before the one rendezvous order
+// that is the answer, so a git node home to an eighth of ten thousand
+// repositories paid all of that every minute for each of the rest, to find out
+// that it is not their home. Read once, a repository costs its rendezvous
+// order alone — 575 ns over eight git nodes and 1.28 µs over sixteen, 5.8 ms
+// and 12.8 ms for ten thousand, the one read of the placement included
+// (BenchmarkHomeOf, -benchtime 20x and one count, two E-cores of an Intel Core
+// Ultra 7 265U, 2026-10-28) — and a pass judges every repository against one
+// fleet rather than a fleet that moved part way through it. Two nodes whose
+// readings differ may each judge themselves a repository's home, as they may a
+// repository at a time: a home's work is decided by its repository's writers,
+// which take it once (ADR-0059).
+//
+// THE HOME'S, NOT THE MAINTAINER'S ([Router.MaintainerOf]): the change work
+// reads two commits' facts on a git node's read lane and asks for records —
+// nothing charged to the background budget a node advertises, the one figure
+// the maintainer's placement weighs — so nothing places it past the home,
+// whose copy a repository's reads keep warm; and a node not yet listed among
+// the git nodes is in this order by its own built half, as it is in Home's,
+// rather than gone as it is from the maintainer's listing.
+func (r *Router) HomeOf(repoIDs []string) (map[string]bool, error) {
+	if len(repoIDs) == 0 {
+		return map[string]bool{}, nil
+	}
+	h, err := r.readHomes()
+	if err != nil {
+		return nil, fmt.Errorf("estate: the homes of %d repositories: %w", len(repoIDs), err)
+	}
+	out := map[string]bool{}
+	for _, id := range repoIDs {
+		if h.home(r, id) == r.self {
+			out[id] = true
+		}
+	}
+	return out, nil
+}
+
+// homeReading is one reading of who serves git, as [Router.Home] and
+// [Router.HomeOf] order a repository's git nodes over it: every live git node
+// the placement names, and whether this node's own git half is built — which
+// places it in the order where the placement does not yet name it, so its
+// reads are answered in process.
 type homeReading struct {
 	nodes []string
 	own   bool

@@ -319,9 +319,14 @@
 // of alike nodes: the first node of the same rendezvous order with NO demotion
 // — one function builds both, so on a quiet fleet a repository's reads, its
 // engine writes and its own git work meet on one git node — and UNKNOWN,
-// never a guess, where who serves git cannot be read. A home that went quiet
-// is still the home; work two nodes of a split presence view both do is work
-// its repository's committer takes once.
+// never a guess, where who serves git cannot be read. [Router.HomeOf] answers
+// which of many repositories this node is the home of off ONE reading of who
+// serves git, three-valued as Home is — the set, or unknown for every one —
+// for a caller that judges many at once: the backstop pass of the home's
+// change work (internal/code/home), over every repository its workers list,
+// which asked a repository at a time would read the presence view again for
+// each. A home that went quiet is still the home; work two nodes of a split
+// presence view both do is work its repository's writers take once.
 //
 // [Router.Maintainer] names the git node a repository's MAINTENANCE — the
 // compaction of its packs, the publication of its layers — is placed on, which
