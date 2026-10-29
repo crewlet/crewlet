@@ -45,6 +45,26 @@ func TestARuntimeAuditRecordIsItsAuthors(t *testing.T) {
 			OperatorID: "token:ops", Dir: "/var/backups/two", Outcome: AuditFailed}),
 		actor:   "token:ops",
 		summary: "token:ops backup to /var/backups/two failed",
+	}, {
+		name: "a credential set on a model, named and never valued",
+		payload: NewModelActed(ModelActed{ActorName: "jane-founder", ActorKind: "human",
+			OperatorID: "session:0f3c", Action: ModelCredential, ProviderKey: "sonnet",
+			Names: []string{"ANTHROPIC_API_KEY_SONNET"}, Outcome: AuditApplied}),
+		actor:   "jane-founder",
+		summary: "jane-founder set the credential of model sonnet (ANTHROPIC_API_KEY_SONNET)",
+	}, {
+		name: "a credential the vendor refused, on a dry run",
+		payload: NewModelActed(ModelActed{ActorName: "jane-founder", ActorKind: "human",
+			Action: ModelCredential, ProviderKey: "sonnet", DryRun: true,
+			Names: []string{"K"}, Outcome: AuditRefused, Refusal: "credential_refused"}),
+		actor:   "jane-founder",
+		summary: "jane-founder tested a credential for model sonnet (K): refused (credential_refused)",
+	}, {
+		name: "a retry",
+		payload: NewModelActed(ModelActed{ActorName: "token:ops", ActorKind: "operator",
+			Action: ModelRetry, ProviderKey: "default", Outcome: AuditApplied}),
+		actor:   "token:ops",
+		summary: "token:ops retried model default",
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

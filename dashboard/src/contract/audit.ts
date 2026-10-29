@@ -15,6 +15,7 @@ export const OPERATOR_SOURCE = "operator";
 export const RUNTIME_AUDIT_TYPES = [
   "operator_acted",
   "backup_requested",
+  "model_acted",
   "assistant_conversation_read",
   "assistant_turn_completed",
 ] as const;
