@@ -72,7 +72,7 @@
 // dates, its tree — and what the push row says of who built it, that one
 // write asked again is one push, that a conflict and a refusal store nothing,
 // and that a git node killed at every point of a write's path leaves one push
-// or none; F39–F41 (RunFleet) that a write asked through every member is
+// or none; F40–F42 (RunFleet) that a write asked through every member is
 // built by the repository's home, that a home killed after its write's append
 // leaves the write applied as one push — the walk's runner-up answering it
 // from the push's row — and that a seat a revision revoked is refused,

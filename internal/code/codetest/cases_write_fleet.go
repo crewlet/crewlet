@@ -27,7 +27,7 @@ func (rc *repoCase) writesOf(id string) []code.PushRow {
 	return rows
 }
 
-// F39: EVERY MEMBER ROUTES AN ENGINE WRITE TO THE REPOSITORY'S HOME (ADR-0059).
+// F40: EVERY MEMBER ROUTES AN ENGINE WRITE TO THE REPOSITORY'S HOME (ADR-0059).
 // A seat's write asked through each member's own router — the home's among
 // them, which asks its own git half in process at its place — is built by the
 // repository's home and by no other member: the git node that built a write is
@@ -38,21 +38,21 @@ func (rc *repoCase) writesOf(id string) []code.PushRow {
 // would warm a copy of the repository on every member a seat writes through,
 // and build each write beside a copy cold until it synced.
 func everyMemberRoutesAnEngineWriteToTheHome(t *testing.T, c Cluster) {
-	rc := newRepoCase(t, c, "fleet-f39")
+	rc := newRepoCase(t, c, "fleet-f40")
 	home := rc.committer()
 	p := NewPerson(t, c, "ceo")
 	work := p.Init()
 	head := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
 	rc.mustPush(p, work, rc.other(home), "main")
 
-	ref := "refs/heads/seats/" + FixtureAlice + "/f39"
+	ref := "refs/heads/seats/" + FixtureAlice + "/f40"
 	// at is the branch's head once a write made it, and base its start until
 	// then; asked is the member each write was asked through, by its push.
 	at, base := "", head
 	asked := map[string]string{}
 	for i, via := range c.DataNodes() {
 		w := commitFiles(t, rc.id, seatAt(t, FixtureAlice), ref, at, base, "asked through "+via,
-			put(fmt.Sprintf("f39/%d.txt", i), via+"\n"))
+			put(fmt.Sprintf("f40/%d.txt", i), via+"\n"))
 		res, err := c.GitWriteThrough(rc.ctx, via, w)
 		if err != nil || res.Outcome != statelog.OutcomeApplied || res.Commit == "" {
 			t.Fatalf("the write asked through %s = (%+v, %v), want it applied", via, res, err)
@@ -72,7 +72,7 @@ func everyMemberRoutesAnEngineWriteToTheHome(t *testing.T, c Cluster) {
 	rc.converged()
 }
 
-// F40: AN ENGINE WRITE WHOSE HOME DIES AFTER ITS APPEND IS ONE PUSH (ADR-0062).
+// F41: AN ENGINE WRITE WHOSE HOME DIES AFTER ITS APPEND IS ONE PUSH (ADR-0062).
 // The repository's home builds a seat's write and lands it — its proposal
 // answered, its record durable — and dies before it answers: a CRASH at
 // code.HostAfterPropose, never a Block (F21's rule), and the member KILLED,
@@ -90,7 +90,7 @@ func everyMemberRoutesAnEngineWriteToTheHome(t *testing.T, c Cluster) {
 // and a node that holds none fills nothing for a write not stamped its walk's
 // home (F27's rule): the case is the push's, not the fill's.
 func anEngineWriteWhoseHomeDiesAfterAppendIsOnePush(t *testing.T, c Cluster) {
-	rc := newRepoCase(t, c, "fleet-f40")
+	rc := newRepoCase(t, c, "fleet-f41")
 	order := rendezvous.Order(rc.id, c.DataNodes())
 	home, runnerUp, via := order[0], order[1], order[2]
 	p := NewPerson(t, c, "ceo")
@@ -101,8 +101,8 @@ func anEngineWriteWhoseHomeDiesAfterAppendIsOnePush(t *testing.T, c Cluster) {
 		t.Fatalf("the premise: the runner-up %s holds no copy of a repository pushed through it", runnerUp)
 	}
 
-	w := commitFiles(t, rc.id, seatAt(t, FixtureAlice), "refs/heads/seats/"+FixtureAlice+"/f40", "", head,
-		"built by the home", put("f40.txt", "f40\n"))
+	w := commitFiles(t, rc.id, seatAt(t, FixtureAlice), "refs/heads/seats/"+FixtureAlice+"/f41", "", head,
+		"built by the home", put("f41.txt", "f41\n"))
 	pushID := code.WritePushID(w.OpID)
 	reached := make(chan struct{})
 	c.Faults().Arm(codefault.HostAfterPropose, codefault.Action{Once: true, Crash: true, Reached: reached})
@@ -145,7 +145,7 @@ func anEngineWriteWhoseHomeDiesAfterAppendIsOnePush(t *testing.T, c Cluster) {
 	rc.converged()
 }
 
-// F41: A REVOKED SEAT IS REFUSED ONCE THE LAGGING COMMITTER SHEDS
+// F42: A REVOKED SEAT IS REFUSED ONCE THE LAGGING COMMITTER SHEDS
 // (M3-decisions M3-O8). A revision takes alice out of the chart. The
 // repository's committer — its home git node too, one rendezvous order over
 // one set — fails to apply it: it keeps the chart that still holds her and is
@@ -165,18 +165,18 @@ func anEngineWriteWhoseHomeDiesAfterAppendIsOnePush(t *testing.T, c Cluster) {
 // (code.CommitterOptions.Current); with all three dropped, the member behind
 // builds the write by the chart it kept and lands it — red.
 func aRevokedSeatIsRefusedOnceTheLaggingCommitterSheds(t *testing.T, c Cluster) {
-	rc := newRepoCase(t, c, "fleet-f41")
+	rc := newRepoCase(t, c, "fleet-f42")
 	behind := rc.committer()
 	via := rc.other(behind)
 	p := NewPerson(t, c, "ceo")
 	work := p.Init()
 	head := p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
 	rc.mustPush(p, work, via, "main")
-	ref := "refs/heads/seats/" + FixtureAlice + "/f41"
+	ref := "refs/heads/seats/" + FixtureAlice + "/f42"
 
 	// THE PREMISE: alice may write the branch before the revision.
 	granted, err := c.GitWriteThrough(rc.ctx, via, commitFiles(t, rc.id, seatAt(t, FixtureAlice), ref, "", head,
-		"before the revision", put("f41.txt", "before\n")))
+		"before the revision", put("f42.txt", "before\n")))
 	if err != nil || granted.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("the premise: alice's write before the revision = (%+v, %v), want it applied", granted, err)
 	}
@@ -184,7 +184,7 @@ func aRevokedSeatIsRefusedOnceTheLaggingCommitterSheds(t *testing.T, c Cluster) 
 	restore := c.Revoke(t, FixtureAlice, behind)
 	defer restore()
 	w := commitFiles(t, rc.id, seatAt(t, FixtureAlice), ref, granted.Commit, "", "after the revision",
-		put("f41.txt", "after\n"))
+		put("f42.txt", "after\n"))
 	res, err := c.GitWriteThrough(rc.ctx, via, w)
 	if err != nil || res.Outcome != "" || res.Command.Reason != code.RefusalNotPermitted {
 		t.Errorf("alice's write once a revision revoked her, its committer behind it = (%+v, %v), want it refused "+

@@ -199,9 +199,9 @@ func fleetCases() []fleetCase {
 		{"F30_ACompactionAnsweredLateIsCollapsed", aCompactionAnsweredLateIsCollapsed},
 		{"F31_AChangeOpenSurvivesItsCommitter", aChangeOpenSurvivesItsCommitter},
 		{"F39_AConversationSurvivesItsWriter", aConversationSurvivesItsWriter},
-		{"F39_EveryMemberRoutesAnEngineWriteToTheHome", everyMemberRoutesAnEngineWriteToTheHome},
-		{"F40_AnEngineWriteWhoseHomeDiesAfterAppendIsOnePush", anEngineWriteWhoseHomeDiesAfterAppendIsOnePush},
-		{"F41_ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds", aRevokedSeatIsRefusedOnceTheLaggingCommitterSheds},
+		{"F40_EveryMemberRoutesAnEngineWriteToTheHome", everyMemberRoutesAnEngineWriteToTheHome},
+		{"F41_AnEngineWriteWhoseHomeDiesAfterAppendIsOnePush", anEngineWriteWhoseHomeDiesAfterAppendIsOnePush},
+		{"F42_ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds", aRevokedSeatIsRefusedOnceTheLaggingCommitterSheds},
 		{"LY8_ALargeNodePublishesForEveryNode", aLargeNodePublishesForEveryNode},
 		{"LY9_TwoMaintainersLandOnePublication", twoMaintainersLandOnePublication},
 	}

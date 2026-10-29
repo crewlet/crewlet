@@ -62,7 +62,7 @@ const members = 3
 // at once.
 //
 // THE GIT WRITE ATTEMPT is production's (estate.GitWriteAttempt) too, though
-// it is what F40's home — killed after its write's proposal, its answer never
+// it is what F41's home — killed after its write's proposal, its answer never
 // sent — costs before the runner-up is asked, on each backend: a git node
 // uploads a write's bundle only while the upload's allowance and the
 // proposal's own attempt are still left (code.WriteUploadAllowance and
