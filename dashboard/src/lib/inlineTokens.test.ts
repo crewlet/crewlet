@@ -19,6 +19,7 @@ import {
   referenceTarget,
   repositoryTarget,
 } from "./inlineTokens.ts";
+import { LINEAR_BOUND, growth as grown } from "../test/growth.ts";
 
 /** What a run's tokens are, as `kind:text`, read under `owners`. */
 function said(text: string, owners: readonly string[] = []): string[] {
@@ -537,5 +538,37 @@ describe("cost", () => {
     ["repositories and numbers", (n) => "a/b #1 ".repeat(n / 7)],
   ])("%s read in linear time", (_, make) => {
     expect(growth(make, 5_000)).toBeLessThan(8);
+  });
+});
+
+// THE TWO PATTERNS THAT READ A RUN TWICE, timed with room to spare
+// (`test/growth.ts`): a call over a run thirty-two times longer must take
+// under 181 times as long, where a linear pass takes about thirty-two and a
+// quadratic one about a thousand, and more than four times, so a case that
+// measured nothing passes nothing.
+describe("cost of a colour's channels and a host's base path", () => {
+  const holdsLinear = (ratio: number) => {
+    expect(ratio, "the larger run took no longer, so this measured nothing").toBeGreaterThan(4);
+    expect(ratio).toBeLessThan(LINEAR_BOUND);
+  };
+
+  // A CODE SPAN IS AN AGENT'S TOO: `rgb(1`, a run of spaces and a letter.
+  test("a colour's channels between runs of spaces read in linear time", () => {
+    holdsLinear(
+      grown((n) => {
+        const code = `rgb(1${" ".repeat(n)}x`;
+        return () => codeColour(code);
+      }, 1_000),
+    );
+  });
+
+  // A CONFIGURED HOST'S BASE, a run of slashes before its last part.
+  test("a configured host's base path of slashes reads in linear time", () => {
+    holdsLinear(
+      grown((n) => {
+        const hosts: LinkHost[] = [{ kind: "jira", url: `https://x.test${"/".repeat(n)}a` }];
+        return () => describeLink("https://x.test/a/browse/GP-1", hosts);
+      }, 1_000),
+    );
   });
 });
