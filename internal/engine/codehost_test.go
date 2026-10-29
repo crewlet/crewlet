@@ -34,6 +34,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -184,6 +185,58 @@ func TestACompanyWithoutNativeCodeBuildsNoHost(t *testing.T) {
 				if _, err := os.Stat(dir); err == nil {
 					t.Fatalf("a node that serves no git made a cache directory at %s", dir)
 				}
+			}
+		})
+	}
+}
+
+// A GIT NODE VERIFIES A BOX'S TOKEN, ITS CODE HOST BUILT OR NOT: the box
+// tokens are built at New over the fleet's keyring, whatever the company runs,
+// so a node whose box routes find no code host to serve them — which tells a
+// box why only once its token verifies (api.CodeSurface.VerifyBox) —
+// verifies a token another node of the fleet minted exactly as a node serving
+// the code host does, and refuses one another keyring signed.
+//
+// Mutation: build the box tokens with the code host rather than at New — the
+// node serving none holds none, red.
+func TestAGitNodeVerifiesABoxsTokenWithOrWithoutItsHost(t *testing.T) {
+	t.Parallel()
+	ref := host.BoxRunRef{TurnID: uuid.Must(uuid.NewV7()).String(), LaunchID: uuid.NewString()}
+	stranger, err := host.NewBoxTokens(runtoken.OneKey("k", "another fleet's key"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		doc   string
+		hosts bool
+	}{
+		{"no code hosted", noCodeCompany, false},
+		{"code hosted", gitCompany, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := gitNodeBootstrap(t, nil)
+			e, err := newGitNode(t, b, tc.doc)
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			if _, hosts := e.CodeHost(); hosts != tc.hosts {
+				t.Fatalf("CodeHost() = %t, want %t", hosts, tc.hosts)
+			}
+			peer, err := host.NewBoxTokens(b.Secrets.TokenMaterial(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tokens := e.BoxTokens()
+			if tokens == nil {
+				t.Fatal("the node holds no box tokens")
+			}
+			if got, signed := tokens.Verify(peer.Mint(ref)); !signed || got != ref {
+				t.Errorf("a token the fleet's keyring signed verifies as %+v, %t; want %+v", got, signed, ref)
+			}
+			if _, signed := tokens.Verify(stranger.Mint(ref)); signed {
+				t.Error("a token another keyring signed verifies")
 			}
 		})
 	}

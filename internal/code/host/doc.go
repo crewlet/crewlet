@@ -299,7 +299,10 @@
 // A seat's coding box is git's other client, under /box/git/ on the public
 // listener beside its other two edges, with its RUN'S credential: git's Basic
 // user name BoxUser and a per-run token (BoxTokens, key domain BoxKeyDomain)
-// as the password, which the API's guard never reads. admitBox (boxadmit.go)
+// as the password, which the API's guard never reads — and which the API's
+// box route on a node serving no code host checks through the admission's own
+// credential step (ChallengeBox) before it tells the box why, since that
+// reason is the deployment's state on a public route. admitBox (boxadmit.go)
 // admits it by the run's ROW, read on every request (Runs, the engine's
 // adapter over the fleet's pending store) — the token is a backstop of
 // RunTokenTTL, the row the authority — three-valued, so a store that cannot be

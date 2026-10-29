@@ -8,7 +8,8 @@ import (
 
 // EngineCode is [CodeSurface] over a running engine — its git host, the code
 // domain's reads and who read a unit's repository, each resolved on EVERY
-// CALL — or nil for a nil engine, which [New] refuses by name.
+// CALL, and the box tokens every node holds from boot — or nil for a nil
+// engine, which [New] refuses by name.
 //
 // HERE, beside the seam it satisfies, so `crewlet run` and any harness serving
 // an engine's API reach the code host through the same adapter, and a case
@@ -78,4 +79,13 @@ func (c engineCode) RepoReaders() (builtin.ReadersDeps, error) {
 		return deps, nil
 	}
 	return builtin.ReadersDeps{}, why
+}
+
+// VerifyBox is whether token is a coding box's run token this fleet signed,
+// by the engine's own box tokens ([engine.Engine.BoxTokens]): built at New on
+// every node over the keyring Tier A requires there, so it answers on a node
+// whose code host is not built — the one place it is asked.
+func (c engineCode) VerifyBox(token string) bool {
+	_, signed := c.e.BoxTokens().Verify(token)
+	return signed
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -22,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -31,18 +33,30 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // fixedCode is a code surface answering what it holds for good: a git host,
 // the code domain's reads and who read a unit's repository — each absent where
 // it holds nil, for the reason why (the company hosts no code where why is
-// nil).
+// nil) — and the box tokens a coding box's run token verifies by, none where
+// it holds nil.
 type fixedCode struct {
 	git     api.GitRoutes
 	reads   queries.CodeReads
 	readers builtin.ReadersDeps
 	why     error
+	boxes   *host.BoxTokens
+}
+
+// VerifyBox is whether boxes signed token: nothing is, where it holds none.
+func (f fixedCode) VerifyBox(token string) bool {
+	if f.boxes == nil {
+		return false
+	}
+	_, signed := f.boxes.Verify(token)
+	return signed
 }
 
 func (f fixedCode) unserved() error {
@@ -599,6 +613,117 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 						req.method, req.path, rec.Body.String())
 				}
 				unclaimed(req.method+" "+req.path, body.Detail)
+			}
+		})
+	}
+}
+
+// AN UNSERVED BOX ROUTE TELLS WHY ONLY TO A TOKEN THIS FLEET SIGNED.
+// /box/git/ is public — on api.public, reached from wherever a sandbox runs —
+// so a node that serves none of the code host now tells a coding box its
+// reason (a company hosting no code, an apply in flight, an apply that
+// failed, a configuration it could not read, a restart owed, a reason the
+// seam does not explain) only once the request presents a run token this
+// fleet signed, and then in exactly the words a person is told on /git/. Any
+// other request — no credential, a person's bearer, another user name than
+// the box's, an operator token as the password, a token another fleet signed
+// or another of this fleet's per-run edges did — is answered the code host's
+// own challenge, the box admission's credential step, in the same bytes
+// whatever the reason: it learns nothing of the deployment's state.
+//
+// Mutations: answer the reason before the credential (boxGitRoute calling
+// unservedGit first, as gitRoute does) — the first row's request without a
+// credential is told the 404, red; challenge in a person's words
+// (auth.GitChallenge) — red.
+func TestAnUnservedBoxRouteAnswersOnlyASignedToken(t *testing.T) {
+	t.Parallel()
+	keyring := runtoken.OneKey("k", "this fleet's key")
+	boxes, err := host.NewBoxTokens(keyring, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherFleet, err := host.NewBoxTokens(runtoken.OneKey("k", "another fleet's key"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge, err := runtoken.New(runtoken.Options{Domain: mcpbridge.KeyDomain, Material: keyring})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := host.BoxRunRef{TurnID: uuid.Must(uuid.NewV7()).String(), LaunchID: uuid.NewString()}
+	basic := func(user, password string) string { return "Basic " + basicAuth(user, password) }
+	signed := basic(host.BoxUser, boxes.Mint(run))
+	unsigned := []struct{ name, authorization string }{
+		{"no credential", ""},
+		{"a person's bearer", "Bearer secret"},
+		{"another user name, with a signed token", basic("crewlet", boxes.Mint(run))},
+		{"an operator token as the password", basic(host.BoxUser, "secret")},
+		{"another fleet's token", basic(host.BoxUser, otherFleet.Mint(run))},
+		{"the tool bridge's token, over this keyring", basic(host.BoxUser,
+			bridge.Mint(run.LaunchID+"~"+run.TurnID, time.Hour))},
+	}
+	verify := func(token string) bool {
+		_, ok := boxes.Verify(token)
+		return ok
+	}
+	request := func(method, path, authorization string) *http.Request {
+		r := httptest.NewRequest(method, path, nil)
+		if authorization != "" {
+			r.Header.Set("Authorization", authorization)
+		}
+		return r
+	}
+	// answer is what a client is shown: its status and the three headers a
+	// git route's answer can carry, then its words.
+	answer := func(rec *httptest.ResponseRecorder) string {
+		return fmt.Sprintf("%d [%s] [%s] [%s] %q", rec.Code, rec.Header().Get("Content-Type"),
+			rec.Header().Get("WWW-Authenticate"), rec.Header().Get("Retry-After"), rec.Body.String())
+	}
+	for _, reason := range []struct {
+		name string
+		why  error
+	}{
+		{"not hosted", engine.ErrCodeNotHosted},
+		{"applying", fmt.Errorf("%w (epoch 4)", engine.ErrCodeApplying)},
+		{"apply failed", fmt.Errorf("%w (epoch 4)", engine.ErrCodeApplyFailed)},
+		{"unknown", fmt.Errorf("%w (epoch 4)", engine.ErrCodeUnknown)},
+		{"needs restart", engine.ErrCodeNeedsRestart},
+		{"unexplained", errors.New("a seam that says something else")},
+	} {
+		t.Run(reason.name, func(t *testing.T) {
+			t.Parallel()
+			a := codeApp(t, nil, fixedCode{why: reason.why, boxes: boxes})
+			// WHAT A PERSON IS TOLD, which a signed box is told too.
+			told := answer(ask(t, a, http.MethodGet, "/git/web.git/info/refs?service=git-upload-pack", true))
+			for _, req := range boxRequests {
+				for _, row := range unsigned {
+					// THE ADMISSION'S OWN CHALLENGE of the same request.
+					want := httptest.NewRecorder()
+					if !host.ChallengeBox(want, request(req.method, req.path, row.authorization), verify,
+						slog.New(slog.DiscardHandler)) {
+						t.Fatalf("%s: the box admission admits it, so it is no unsigned request", row.name)
+					}
+					rec := httptest.NewRecorder()
+					a.ServeHTTP(rec, request(req.method, req.path, row.authorization))
+					switch got := answer(rec); {
+					case rec.Code != http.StatusUnauthorized ||
+						rec.Header().Get("WWW-Authenticate") != `Basic realm="crewlet", charset="UTF-8"`:
+						t.Errorf("%s %s with %s answered %s, want git's 401 challenge", req.method, req.path,
+							row.name, got)
+					case got != answer(want):
+						t.Errorf("%s %s with %s answered\n  %s\nwhere the box admission answers\n  %s",
+							req.method, req.path, row.name, got, answer(want))
+					case strings.Contains(rec.Body.String(), "API token"):
+						t.Errorf("%s %s with %s was challenged in a person's words: %s", req.method, req.path,
+							row.name, got)
+					}
+				}
+				rec := httptest.NewRecorder()
+				a.ServeHTTP(rec, request(req.method, req.path, signed))
+				if got := answer(rec); got != told {
+					t.Errorf("%s %s with a signed token answered\n  %s\nwhere a person is told\n  %s",
+						req.method, req.path, got, told)
+				}
 			}
 		})
 	}

@@ -1140,11 +1140,13 @@ func TestABoxFetchOfAUnitRepositoryIsRecorded(t *testing.T) {
 }
 
 // NOTHING AFTER ADMISSION ASKS WHICH ADMITTER RAN: in the host's own files,
-// only the box's admission reads git's Basic credential or names a box path,
-// only the admission's accessors read a box's run, and only the person's
-// admission reads the guard's resolution (iam.From) — so a box is never
-// admitted by a person's credential, nor a person by a run's, and no step
-// after admission branches on the transport but through the admission.
+// only the box's admission names a box path and only its credential step
+// (ChallengeBox, which the API's route for a node serving no code host runs
+// too) reads git's Basic credential, only the admission's accessors read a
+// box's run, and only the person's admission reads the guard's resolution
+// (iam.From) — so a box is never admitted by a person's credential, nor a
+// person by a run's, and no step after admission branches on the transport
+// but through the admission.
 //
 // Mutations: a strings.HasPrefix(r.URL.Path, "/box/") in fetch.go — red; an
 // iam.From in admitBox — red.
@@ -1184,7 +1186,7 @@ func TestNothingAfterAdmissionAsksWhichAdmitterRan(t *testing.T) {
 					switch {
 					case n.Sel.Name == "BoxGitPrefix" && who != "admitBox":
 						t.Errorf("%s: %s names auth.BoxGitPrefix", fset.Position(n.Pos()), who)
-					case n.Sel.Name == "BasicAuth" && who != "admitBox":
+					case n.Sel.Name == "BasicAuth" && who != "ChallengeBox":
 						t.Errorf("%s: %s reads git's Basic credential", fset.Position(n.Pos()), who)
 					case n.Sel.Name == "From" && isIdent(n.X, "iam") && who != "admit":
 						t.Errorf("%s: %s reads the guard's resolution (iam.From)", fset.Position(n.Pos()), who)

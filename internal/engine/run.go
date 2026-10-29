@@ -3381,6 +3381,18 @@ func (e *Engine) OtelReceiver() *sandbox.OtelReceiver { return e.sandboxOtel }
 // session opened by a run is the session the route resolves.
 func (e *Engine) Bridge() *mcpbridge.Bridge { return e.bridge }
 
+// BoxTokens is this node's coding-box git credential — what a box's run token
+// is minted and verified by, over the fleet's keyring under
+// host.BoxKeyDomain — built at New on every node whatever its roles and
+// whatever its company runs, so never nil.
+//
+// Exposed for the receiver's and the bridge's reason: the API this process
+// serves verifies a box's token with the tokens this engine mints and its
+// code host admits by, never a second set built beside them — and verifies it
+// where no code host is built, since a box route on a node serving none tells
+// a box why only once its token verifies (api.CodeSurface.VerifyBox).
+func (e *Engine) BoxTokens() *host.BoxTokens { return e.boxTokens }
+
 // tokenMaterial is the Tier A keyring the per-run token issuers derive from,
 // nil-safe for an engine built without one.
 func tokenMaterial(boot *config.Bootstrap) runtoken.Material {

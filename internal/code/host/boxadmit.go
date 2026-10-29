@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -31,7 +32,8 @@ import (
 //     an operator token presented as the password fails the verify like any
 //     other value. Each refusal is git's 401 challenge in the box's own words
 //     (auth.GitChallengeSaying), never the person's, which names an API token
-//     — the one credential a box must never hold.
+//     — the one credential a box must never hold. The step is [ChallengeBox],
+//     which the API's box route on a node serving no code host runs too.
 //  3. RUN — the row its token names ([Runs.Run]), THREE-VALUED: a store that
 //     cannot be read is 503 and never 401 (the credential was good, and
 //     nothing about it is known to be wrong); an unknown run, a launch the row
@@ -117,18 +119,11 @@ func (s *Server) admitBox(ctx context.Context, w http.ResponseWriter, r *http.Re
 	}
 
 	// 2 THE CREDENTIAL.
-	user, password, presented := r.BasicAuth()
-	switch {
-	case !presented:
-		s.challengeBox(w, r, name, "none", boxNoneSentence)
-		return admission{}, false
-	case user != BoxUser:
-		s.challengeBox(w, r, name, "user", boxUserSentence)
-		return admission{}, false
-	}
-	ref, signed := s.o.Boxes.Tokens.Verify(password)
-	if !signed {
-		s.challengeBox(w, r, name, "token", boxTokenSentence)
+	var ref BoxRunRef
+	if ChallengeBox(w, r, func(token string) (signed bool) {
+		ref, signed = s.o.Boxes.Tokens.Verify(token)
+		return signed
+	}, s.log) {
 		return admission{}, false
 	}
 	b := boxRefusal{s: s, w: w, r: r, ref: ref, name: name}
@@ -252,13 +247,39 @@ func grantedNames(run BoxRun) string {
 	return strings.Join(names, ", ")
 }
 
-// challengeBox answers a box's request that presented no credential this fleet
-// signed: git's 401 challenge in the box's own words, logged at DEBUG with why
-// — none, the wrong user, or a token that does not verify — and never the
-// value presented.
-func (s *Server) challengeBox(w http.ResponseWriter, r *http.Request, name, reason, words string) {
-	s.log.Debug("code_box_challenged", "repo", name, "path", r.URL.Path, "reason", reason)
+// ChallengeBox is a box's admission's CREDENTIAL step (step 2) on its own: it
+// answers a request that presents no credential this fleet signed — no Basic
+// credential at all, a user name other than [BoxUser], or a password signed
+// refuses — with git's 401 challenge in the box's own words, logs it on log
+// at DEBUG (code_box_challenged) with why (`none`, `user` or `token`) and
+// never the value presented, and reports true; a request presenting a run
+// token signed accepts is left unanswered, and false.
+//
+// EXPORTED FOR THE ONE OTHER PLACE a box's credential is decided before an
+// admission can run: the API's box route on a node that serves no code host
+// now, which tells a box WHY only once it presents a token this fleet signed
+// (internal/api; M3-decisions U8) — /box/git/ is public, and that reason is
+// the deployment's state. ONE STEP FOR BOTH, so a box is challenged in the
+// same words, at the same level, by a node serving the code host and by one
+// that serves none, and nothing reads a box's credential by a grammar of its
+// own (TestNothingAfterAdmissionAsksWhichAdmitterRan holds every other reader
+// of git's Basic out of this package). signed is the caller's verify: the
+// admission's keeps the run its token names.
+func ChallengeBox(w http.ResponseWriter, r *http.Request, signed func(token string) bool, log *slog.Logger) bool {
+	var why, words string
+	switch user, password, presented := r.BasicAuth(); {
+	case !presented:
+		why, words = "none", boxNoneSentence
+	case user != BoxUser:
+		why, words = "user", boxUserSentence
+	case !signed(password):
+		why, words = "token", boxTokenSentence
+	default:
+		return false
+	}
+	log.Debug("code_box_challenged", "path", r.URL.Path, "reason", why)
 	auth.GitChallengeSaying(w, words)
+	return true
 }
 
 // boxRefusal answers one admitted token's refusal: what its run, its seat and

@@ -2989,6 +2989,21 @@ is logged `code_box_refused`, and a `503` `code_box_unavailable`, each with its
 reason, the run's turn and launch, the seat and the repository — never the
 token.
 
+**A node serving none of the code host tells a box why only once its token
+verifies.** Where a node serves none of it now — the company hosts no code;
+the node is applying the configuration the fleet activated, could not apply
+it, or could not read it; its runtime is owed a restart — a person's `/git/`
+request is told which, in the `404` or `503` [git prints](#what-git-prints-and-what-it-means).
+`/box/git/` is public, and that reason is the deployment's state, so a box's
+request is told it only once it presents a run token this fleet signed: any
+other — no credential, a person's, a token that does not verify — is
+challenged `401` in exactly the words the admission's first step uses, and
+logged as it logs one (`code_box_challenged`, under the component `api`),
+whatever the reason. Every node verifies the token, its code host built or
+not, since every node holds the keyring it is signed under. A box's git
+loses nothing: it asks its credential helper at the challenge, as on every
+first request, and is told the reason on the next.
+
 **A box reads at its run's session.** A person's reads of refs go through the
 code log's barrier; a box's are read at its run's **floor** — a position on the
 code log at or past everything its box has been shown and has pushed — with no
@@ -4920,7 +4935,7 @@ line says and push the branch's next commit with `-o change`.
 | `code_scratch_expiry_skipped` | `WARN` | The live turns' holds on a page of idle scratch repositories could not be read — the run store, the seat leases, or a seat holder that did not answer within two seconds (`error`, naming which) — so this pass expired none; the next pass asks again ([A scratch repository's idle expiry](#a-scratch-repositorys-idle-expiry)). |
 | `code_retention_duty_declined`, `code_retention_duty_resumed` | `WARN` or `DEBUG`, `INFO` or `DEBUG` | This node does not take the duty, and gives it back if it holds it (`code_retention_duty_given_back`). It logs a `_declined` line each time the reason it declines for changes, at that reason's level — so a decline that keeps its reason is one line however many ticks it lasts — and one `_resumed` line when it stops declining, `INFO` if any reason of that decline warned and `DEBUG` otherwise. `WARN` where the reason is a fault: its copy of the code log is out of service (`domain`), or it does not serve the revision the fleet is on (`reason`: `behind`, with this node's `applied_epoch` and the `fleet_epoch`, once the lag is confirmed — its apply of the revision failed, or it has been behind for longer than the 45 seconds of propagation; or `unknown`, with the `error` that kept it from telling, as when the activation pointer could not be read). `DEBUG`, and asked again a reconcile interval (15 seconds) later rather than a tick, while it is no fault: `reason` `propagating` (with the `fleet_epoch`, and the `applied_epoch` once its reconciler has read the pointer) on a node still applying the fleet's revision or still starting — every restart's first turn runs before its reconciler is built — and `not_activated` while the fleet has activated no revision yet, which a fresh deployment meets for the seconds before its first activation. A node that fails one activation and then applies the fleet's next logs four lines: `propagating` at `DEBUG` while it applies the first, `behind` at `WARN` once its failure confirms the lag, `propagating` at `DEBUG` when the next activation arrives, and `_resumed` at `INFO` once it serves that one. |
 | `code_push` | `INFO` | One push this node received, whatever became of it: the repository, the push's id, the credential it came through (`operator_id`) and the human seat its principal holds (`seat`, empty for a credential bound to none) — for a [coding box](#coding-boxes)'s, no credential, the seat whose run it is, and the run's `turn_id` and `launch_id` — the `outcome` (`applied`, `pending`, `unknown`, `refused`, `failed`) and any `refusal`, how many commands and how many went through, the bundle's bytes, the position its record landed at and how long it took. |
-| `code_box_challenged` | `DEBUG` | A [coding box](#coding-boxes)'s request presented no credential this fleet signed — none (`reason`: `none`), a user name other than `run` (`user`), or a token that does not verify (`token`) — and was challenged `401`. Debug, because the route is public and anybody who reaches it can produce one. |
+| `code_box_challenged` | `DEBUG` | A [coding box](#coding-boxes)'s request presented no credential this fleet signed — none (`reason`: `none`), a user name other than `run` (`user`), or a token that does not verify (`token`) — and was challenged `401`, with its `path`: by the code host's admission, or, under the component `api`, by a node serving none of the code host now, which tells a box why only past this challenge. Debug, because the route is public and anybody who reaches it can produce one. |
 | `code_box_refused`, `code_box_unavailable` | `INFO`, `WARN` | A coding box's signed token was refused `403` (`reason`: `run_unknown`, `run_superseded`, `run_ended`, `not_granted`, `read_only`, `seat_stopped`, `not_permitted`), or answered `503` because this node could not judge it (`run_unread`, `pauses_unread`, `no_chart`, `behind_config`, `floor_unraised`): with the run's `turn_id` and `launch_id`, the `seat` and the `repo`, never the token. |
 | `code_box_floor_unraised` | `WARN` | A coding box's push applied, and its run's floor could not be raised to the push's row in the run store: the push was answered `ok` all the same, and what the box may read behind is its own push, whose objects it holds. |
 | `code_box_floor_unreadable` | `WARN` | Under the component `engine`: a coding run's row names a code-log floor this build cannot read, or one on another log, so its box reads through the barrier until its next answer raises the row to a readable one. |

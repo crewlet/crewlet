@@ -78,7 +78,10 @@ import (
 // ([engine.Engine.CodeUnserved]): a company that hosts no code is a 404, and a
 // node that serves none of it now while the configuration the fleet activated
 // hosts code — or before this node has read whether it does — a 503 that says
-// which of four it is ([codeUnserved]).
+// which of four it is ([codeUnserved]). A coding box is told only once its
+// request presents a run token this fleet signed, and challenged until then
+// ([App.boxGitRoute]): its prefix is public, and the reason is the
+// deployment's state.
 
 // GitRoutes is the code host as the API mounts it; *host.Server satisfies it.
 // The Box handlers are the same three entry points behind a coding box's
@@ -119,6 +122,14 @@ type CodeSurface interface {
 	// clock a range that names no end is cut on — or why this node serves
 	// none, on CodeReads' terms: the readers stand with the code reads.
 	RepoReaders() (builtin.ReadersDeps, error)
+
+	// VerifyBox is whether token is a coding box's run token this fleet
+	// signed: the engine's own box tokens (host.BoxTokens.Verify), over the
+	// keyring Tier A derives on EVERY node whatever the company runs — so it
+	// answers where GitRoutes finds no code host, which is the one place it
+	// is asked: a box route there tells a box why only once its token
+	// verifies ([App.boxGitRoute]).
+	VerifyBox(token string) bool
 }
 
 // codeQuestions is the code surface as the code questions find it on every
@@ -301,11 +312,13 @@ func servesGit(b *config.Bootstrap) bool {
 // the guard never resolves a run's token, which is no credential of its, so
 // behind a router every box request would be refused before the code host's
 // box admission — the run's token, its row and the seat's grant, read on every
-// request — ever ran. They are served through [App.gitRoute] like the
-// person's, so a node whose code host is not serving answers a box in the
-// same words it answers a person, and mounted where the person's are, on a
-// node whose roles name git; the table keeps their patterns, so the listener
-// walk publishes them ([auth.BoxGitPrefix] is public).
+// request — ever ran. They are served through [App.boxGitRoute], resolved per
+// request as the person's are, so a node whose code host is not serving tells
+// a box why in the same words it tells a person — but only once the box's
+// request presents a run token this fleet signed, since the route is public
+// and the reason is the deployment's state; and mounted where the person's
+// are, on a node whose roles name git. The table keeps their patterns, so the
+// listener walk publishes them ([auth.BoxGitPrefix] is public).
 //
 // The git patterns are the host's own constants, so the path a handler reads
 // its repository from is the path it was mounted at, and this file spells no
@@ -326,9 +339,9 @@ func (a *App) mountCode(mux authz.Mux) error {
 	mount(git, host.PatternInfoRefs, transport, a.gitRoute(GitRoutes.InfoRefs))
 	mount(git, host.PatternUploadPack, transport, a.gitRoute(GitRoutes.UploadPack))
 	mount(git, host.PatternReceivePack, transport, a.gitRoute(GitRoutes.ReceivePack))
-	mux.Handle(host.PatternBoxInfoRefs, a.gitRoute(GitRoutes.BoxInfoRefs))
-	mux.Handle(host.PatternBoxUploadPack, a.gitRoute(GitRoutes.BoxUploadPack))
-	mux.Handle(host.PatternBoxReceivePack, a.gitRoute(GitRoutes.BoxReceivePack))
+	mux.Handle(host.PatternBoxInfoRefs, a.boxGitRoute(GitRoutes.BoxInfoRefs))
+	mux.Handle(host.PatternBoxUploadPack, a.boxGitRoute(GitRoutes.BoxUploadPack))
+	mux.Handle(host.PatternBoxReceivePack, a.boxGitRoute(GitRoutes.BoxReceivePack))
 	// A WRITE TO THE DRAIN GATE, refused while draining like every POST: a
 	// check is new work on the node, a repair a write into its copy. Only
 	// where git is served: it checks THIS node's cache, which a node without
@@ -363,30 +376,76 @@ func gitRefusal(w http.ResponseWriter, _ *http.Request, _ authz.Policy, d authz.
 }
 
 // gitRoute serves one of the host's git handlers, resolved for this request,
-// or answers in git's own form why this node serves none now.
+// or answers in git's own form why this node serves none now
+// ([unservedGit]).
 func (a *App) gitRoute(pick func(GitRoutes) http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g, why := a.code.GitRoutes()
 		if why != nil {
-			// IN GIT'S FORM, git printing nothing of the envelope: the
-			// sentence, and the code in brackets after it for a script
-			// that greps what git printed.
-			u := codeUnserved(why)
-			switch u.code {
-			case httpjson.CodeNotFound:
-				auth.GitText(w, http.StatusNotFound, u.detail)
-			case httpjson.CodeQueryFailed:
-				log.Warn("api_code_unserved_unexplained", "error", why)
-				auth.GitText(w, http.StatusInternalServerError,
-					"this node could not say why it serves no code host; its log says what it was told")
-			default:
-				auth.GitUnavailable(w, httpjson.RetrySeconds(u.retryAfter),
-					u.detail+" ("+string(u.code)+")")
-			}
+			unservedGit(w, why)
 			return
 		}
 		pick(g).ServeHTTP(w, r)
 	})
+}
+
+// boxGitRoute is [App.gitRoute] for a coding box's route, which tells WHY this
+// node serves no code host now only to a request presenting a run token this
+// fleet signed ([CodeSurface.VerifyBox]), and answers any other the code
+// host's own challenge — the box admission's credential step,
+// [host.ChallengeBox].
+//
+// # Why a box's route, and only a box's, waits on the token
+//
+// /box/git/ is PUBLIC: served on api.public, reached from wherever a sandbox
+// runs, so anybody who can reach the listener can ask it. Answered before any
+// credential, the reason told whoever asked the deployment's state — whether
+// the company hosts code (404), that this node is applying the configuration
+// the fleet activated, that its apply failed, that it could not read that
+// configuration, that its runtime is owed a restart (503), or that the seam
+// broke its contract (500). A box holding its run's token is told exactly
+// what a person is, since what it says is the box's to act on: retry, or ask
+// another node. A person's routes keep their answers: the guard stands in
+// front of them, so nobody reaches a reason there without a credential.
+//
+// THE SAME CHALLENGE THE ADMISSION ANSWERS, by the one step both run, so a box
+// whose credential helper has not answered yet — git's first request carries
+// no credential — is challenged in the same words by a node that serves the
+// code host and by one that serves none, and git asks its helper as it always
+// does: the token it presents then is told the reason. The token is verified
+// by the engine's own box tokens over the keyring every node holds, so a node
+// with no code host built — every node this answers for — verifies it as a
+// node serving one does.
+func (a *App) boxGitRoute(pick func(GitRoutes) http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g, why := a.code.GitRoutes()
+		if why == nil {
+			pick(g).ServeHTTP(w, r)
+			return
+		}
+		if host.ChallengeBox(w, r, a.code.VerifyBox, log) {
+			return
+		}
+		unservedGit(w, why)
+	})
+}
+
+// unservedGit answers a git route on a node that serves none of the code host
+// now, by the engine's reason ([codeUnserved]) — IN GIT'S FORM, git printing
+// nothing of the envelope: the sentence, and the code in brackets after it
+// for a script that greps what git printed.
+func unservedGit(w http.ResponseWriter, why error) {
+	u := codeUnserved(why)
+	switch u.code {
+	case httpjson.CodeNotFound:
+		auth.GitText(w, http.StatusNotFound, u.detail)
+	case httpjson.CodeQueryFailed:
+		log.Warn("api_code_unserved_unexplained", "error", why)
+		auth.GitText(w, http.StatusInternalServerError,
+			"this node could not say why it serves no code host; its log says what it was told")
+	default:
+		auth.GitUnavailable(w, httpjson.RetrySeconds(u.retryAfter), u.detail+" ("+string(u.code)+")")
+	}
 }
 
 // codeNotServed answers a /code/ route this node serves none of the code host
