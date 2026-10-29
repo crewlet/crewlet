@@ -7,7 +7,7 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { CheckAnswer } from "~/protocol/models.ts";
-import { apiKeyEntry, modelsData } from "~/test/modelViews.ts";
+import { apiKeyEntry, modelsData } from "~/routes/settings/models/fixtures.ts";
 import { TestDialog } from "./TestDialog.tsx";
 
 const checkModel = vi.hoisted(() => vi.fn());

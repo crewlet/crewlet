@@ -8,7 +8,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { ModelSittingOut } from "~/protocol/models.ts";
-import { apiKeyEntry, modelsData } from "~/test/modelViews.ts";
+import { apiKeyEntry, modelsData } from "~/routes/settings/models/fixtures.ts";
 import { RetryDialog } from "./RetryDialog.tsx";
 
 const retryModel = vi.hoisted(() => vi.fn());

@@ -5,10 +5,10 @@
  * so the page behind never keeps saying the sign-in was refused (QA M4).
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { ModelDevice } from "~/protocol/models.ts";
-import { apiKeyEntry, modelsData } from "~/test/modelViews.ts";
+import { apiKeyEntry, modelsData } from "~/routes/settings/models/fixtures.ts";
 import { DEVICE_POLL_MS, DeviceDialog } from "./DeviceDialog.tsx";
 
 const api = vi.hoisted(() => ({ startDeviceSignIn: vi.fn(), cancelDeviceSignIn: vi.fn() }));
@@ -59,12 +59,15 @@ test("a started sign-in shows the address and the code, and follows the session 
   const link = await screen.findByRole("link", { name: /Open auth\.openai\.com/ });
   expect(link.getAttribute("href")).toBe(SESSION.url);
   // QA Minor 11: the address is the next thing to do, so it takes the focus.
-  expect(document.activeElement).toBe(link);
+  // Focus moves once the address has rendered: waited for, not read once, so a loaded run agrees.
+  await waitFor(() => expect(document.activeElement).toBe(link));
   expect(screen.getByText("QXJM-7KPD")).toBeDefined();
-  const last = polled.calls.at(-1)!;
-  expect(last[0]).toBe("llm_device_sign_in");
-  expect(last[1]).toEqual({ id: "dev-1" });
-  expect(last[2]).toEqual({ enabled: true, pollMs: DEVICE_POLL_MS });
+  await waitFor(() => {
+    const last = polled.calls.at(-1)!;
+    expect(last[0]).toBe("llm_device_sign_in");
+    expect(last[1]).toEqual({ id: "dev-1" });
+    expect(last[2]).toEqual({ enabled: true, pollMs: DEVICE_POLL_MS });
+  });
   expect(DEVICE_POLL_MS).toBe(3000);
 });
 

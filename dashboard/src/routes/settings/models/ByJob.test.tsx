@@ -28,7 +28,7 @@ import {
   modelsData,
   modelsDoc,
   runs,
-} from "~/test/modelViews.ts";
+} from "~/routes/settings/models/fixtures.ts";
 import { ByJob } from "./ByJob.tsx";
 import type { ModelsData } from "./data.ts";
 import { WIZARD_STEPS } from "./parts.tsx";

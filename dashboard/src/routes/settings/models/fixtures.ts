@@ -22,7 +22,7 @@ import type {
 } from "~/protocol/models.ts";
 import type { CompanyDocument, OrgProjection } from "~/protocol/types.ts";
 import { modelViews, type ModelsData } from "~/routes/settings/models/data.ts";
-import { withDerived } from "./org.ts";
+import { withDerived } from "~/test/org.ts";
 
 /** The instant every model reading here is taken at. */
 export const MODELS_NOW = Date.parse("2026-10-29T12:00:00Z");
@@ -84,7 +84,7 @@ export function modelEntry(over: Partial<ModelEntry> & { key: string }): ModelEn
     last_success: at(-5),
     last_failure: null,
     waiting: null,
-    usage: { days: 7, calls: 0, total_tokens: 0, cost_usd: 0, priced_calls: 0 },
+    usage: { days: 7, calls: 0, total_tokens: 0 },
     used_by: [],
     device_sign_in: null,
     ...over,

@@ -25,7 +25,7 @@ import {
   modelsData,
   runs,
   signIn,
-} from "~/test/modelViews.ts";
+} from "~/routes/settings/models/fixtures.ts";
 import type { ModelsData } from "./data.ts";
 import { Overview } from "./Overview.tsx";
 
@@ -42,7 +42,7 @@ function company({ admin = true } = {}): ModelsData {
       modelEntry({
         key: "default",
         sign_in: signIn({ route: "api-key", mode: "api-key", variable: "ANTHROPIC_API_KEY" }),
-        usage: { days: 7, calls: 40, total_tokens: 900_000, cost_usd: 12.5, priced_calls: 30 },
+        usage: { days: 7, calls: 40, total_tokens: 900_000 },
         used_by: [...runs("backend-engineer", ...EVERY_JOB), ...runs("pm", "executor")],
       }),
       modelEntry({
@@ -138,8 +138,10 @@ test("the figures say how many are not ready and why, and the card does not coun
   expect(tile("Ready")).toMatch(/2\s*of 5/);
   expect(tile("Ready")).toContain("3 models not ready");
   expect(tile("Sitting out or refused")).toContain("1 sitting out and 1 cannot sign in");
-  expect(tile("Spend, 7 days")).toContain("$12.50");
-  expect(tile("Spend, 7 days")).toContain("10 calls on a subscription");
+  // TOKENS, NEVER MONEY (dashboard-design rule 19).
+  expect(tile("Tokens, 7 days")).toContain("900");
+  expect(tile("Tokens, 7 days")).toContain("over 40 calls");
+  expect(document.body.textContent).not.toMatch(/\$\d/);
   const head = document.querySelector(".crewlet-card__header")?.textContent ?? "";
   expect(head).not.toMatch(/\d/);
 });
@@ -168,7 +170,7 @@ test("a member reads the list without a credential, a cost or an action", () => 
   const heads = screen.getAllByRole("columnheader").map((h) => h.textContent);
   expect(heads).not.toContain("Sign-in");
   expect(heads).not.toContain("Actions");
-  expect(screen.queryByText("Spend, 7 days")).toBeNull();
+  expect(screen.queryByText("Tokens, 7 days")).toBeNull();
   expect(screen.queryByRole("button", { name: "Add model" })).toBeNull();
   expect(document.body.textContent).not.toContain("ANTHROPIC_API_KEY");
 });

@@ -21,7 +21,7 @@ import {
   modelsData,
   runs,
   signIn,
-} from "~/test/modelViews.ts";
+} from "~/routes/settings/models/fixtures.ts";
 import { Alarms } from "./Alarms.tsx";
 import type { ModelsData } from "./data.ts";
 import { NEW_CREDENTIAL, WIZARD_STEPS } from "./parts.tsx";

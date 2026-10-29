@@ -10,7 +10,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import type { ModelEntry, ModelUse } from "~/protocol/models.ts";
 import { EntryPage, whoRuns } from "./EntryPage.tsx";
-import { apiKeyEntry, modelsData, seat } from "~/test/modelViews.ts";
+import { apiKeyEntry, modelsData, seat } from "~/routes/settings/models/fixtures.ts";
 
 vi.mock("./api.ts", () => ({ checkHostLogin: vi.fn() }));
 

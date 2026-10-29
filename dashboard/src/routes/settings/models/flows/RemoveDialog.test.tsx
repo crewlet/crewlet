@@ -10,7 +10,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Router } from "~/app/router.tsx";
 import type { ModelReference } from "~/protocol/models.ts";
-import { apiKeyEntry, modelsData, modelsDoc, seat } from "~/test/modelViews.ts";
+import { apiKeyEntry, modelsData, modelsDoc, seat } from "~/routes/settings/models/fixtures.ts";
 import { RemoveDialog } from "./RemoveDialog.tsx";
 
 const removeModel = vi.hoisted(() => vi.fn());
