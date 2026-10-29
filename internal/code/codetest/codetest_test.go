@@ -221,7 +221,7 @@ func (a droppingDeleted) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Rec
 }
 
 // A suite whose check passes a liar certifies nothing:
-// ExpungeRetiredPackOutlivesItsLongestRead (F42) must catch a topology whose
+// ExpungeRetiredPackOutlivesItsLongestRead (F50) must catch a topology whose
 // expunge commit deletes the dropping packs' rows rather than retiring them —
 // the first collection past their uploads' grace deletes what a reader may
 // still be reading — and pass an honest one.

@@ -17,7 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE EXPUNGE CASES (F40–F42): a person's purge of a repository's unreachable
+// THE EXPUNGE CASES (F48–F50): a person's purge of a repository's unreachable
 // objects, served by its maintainer's expunge loop (internal/code/compact's
 // expunge.go) — a begin that leaves dropping what no ref reached at its scan
 // and moves the repository's drop epoch, a rescue of what a ref reaches again
@@ -30,7 +30,7 @@ import (
 // Each case is written once, over an expungeScene, so Run's fleet of its own
 // and RunFleet's shared cluster run the same body.
 
-// expungePushEvery is F41's push rate: a push to main every 100 ms, ten a
+// expungePushEvery is F49's push rate: a push to main every 100 ms, ten a
 // second into one repository — past what an agent fleet sustains into one
 // repository on code.limits' daily quota, so a cycle that a busy repository
 // would starve is starved here.
@@ -261,7 +261,7 @@ func (s *expungeScene) converged() {
 	}
 }
 
-// F40: an expunge raced by a write it must refuse and one it must keep.
+// F48: an expunge raced by a write it must refuse and one it must keep.
 //
 // A PUSH CHECKED BEFORE THE BEGIN and decided after it is refused
 // `expunging`, whole, naming the epochs: its receiver checked it against a
@@ -358,7 +358,7 @@ func (s *expungeScene) vsAPushCheckedBeforeIt() {
 	s.converged()
 }
 
-// F41: an expunge under a push to main every 100 ms commits in ONE CYCLE —
+// F49: an expunge under a push to main every 100 ms commits in ONE CYCLE —
 // neither its begin nor its commit refused — inside the ExpungePoll its pass
 // was taken up in: a begin's decide reads its inputs and the epoch, a
 // commit's its open expunge alone, and no push moves either. The cycle is
@@ -447,7 +447,7 @@ func (s *expungeScene) underAPushEvery100ms() {
 	s.converged()
 }
 
-// mainPusher is F41's pusher: a commit to main every expungePushEvery, from a
+// mainPusher is F49's pusher: a commit to main every expungePushEvery, from a
 // goroutine of its own, each pushed until it lands — a push refused
 // `expunging`, checked before a begin and decided after it, run again as its
 // refusal says — and any other answer ending it, said.
@@ -541,7 +541,7 @@ func (m *mainPusher) push(i int) bool {
 	}
 }
 
-// outlives is F42: an expunge's retirements — its begin's inputs and the
+// outlives is F50: an expunge's retirements — its begin's inputs and the
 // dropping packs its commit retires — keep their objects from the collector
 // for code.RetireGrace, as a compaction's inputs do (C4): a retention pass
 // 23 h after the commit sweeps none of them and a collection past every
@@ -637,19 +637,19 @@ func (s *expungeScene) outlives() error {
 	return convergedOn(s.c.Ctx, s.c.Fleet, s.name)
 }
 
-// F40 (expungeScene.vsAPushCheckedBeforeIt) on two git nodes: the push
+// F48 (expungeScene.vsAPushCheckedBeforeIt) on two git nodes: the push
 // received by the first, the expunge run by whichever maintains the
 // repository.
 func expungeVsAPushCheckedBeforeIt(t *testing.T, newFleet NewFleet) {
 	sceneOf(newCase(t, newFleet, Shape{GitNodes: 2}, Settings())).vsAPushCheckedBeforeIt()
 }
 
-// F41 (expungeScene.underAPushEvery100ms) on two git nodes.
+// F49 (expungeScene.underAPushEvery100ms) on two git nodes.
 func expungeUnderAPushEvery100ms(t *testing.T, newFleet NewFleet) {
 	sceneOf(newCase(t, newFleet, Shape{GitNodes: 2}, Settings())).underAPushEvery100ms()
 }
 
-// ExpungeRetiredPackOutlivesItsLongestRead is F42 (expungeScene.outlives) as
+// ExpungeRetiredPackOutlivesItsLongestRead is F50 (expungeScene.outlives) as
 // a check a topology that lies can be run through, nil when the topology
 // behaves.
 func ExpungeRetiredPackOutlivesItsLongestRead(t *testing.T, newFleet NewFleet) error {
@@ -657,29 +657,29 @@ func ExpungeRetiredPackOutlivesItsLongestRead(t *testing.T, newFleet NewFleet) e
 	return sceneOf(newCase(t, newFleet, Shape{}, Settings())).outlives()
 }
 
-// F42 (ExpungeRetiredPackOutlivesItsLongestRead).
+// F50 (ExpungeRetiredPackOutlivesItsLongestRead).
 func expungeRetiredPackOutlivesItsLongestRead(t *testing.T, newFleet NewFleet) {
 	if err := ExpungeRetiredPackOutlivesItsLongestRead(t, newFleet); err != nil {
 		t.Error(err)
 	}
 }
 
-// F40 on a fleet: the push received by a member that is not the
+// F48 on a fleet: the push received by a member that is not the
 // repository's committer, the expunge run by whichever member maintains it.
 func expungeVsAPushCheckedBeforeItOnAFleet(t *testing.T, c Cluster) {
-	fleetSceneOf(newRepoCase(t, c, "fleet-f40")).vsAPushCheckedBeforeIt()
+	fleetSceneOf(newRepoCase(t, c, "fleet-f48")).vsAPushCheckedBeforeIt()
 }
 
-// F41 on a fleet.
+// F49 on a fleet.
 func expungeUnderAPushEvery100msOnAFleet(t *testing.T, c Cluster) {
-	fleetSceneOf(newRepoCase(t, c, "fleet-f41")).underAPushEvery100ms()
+	fleetSceneOf(newRepoCase(t, c, "fleet-f49")).underAPushEvery100ms()
 }
 
-// F42 on a fleet: LAST of RunFleet's cases, since its passes move the
+// F50 on a fleet: LAST of RunFleet's cases, since its passes move the
 // retention's and the collector's clocks a day on for every repository the
 // shared cluster holds.
 func expungeRetiredPackOutlivesItsLongestReadOnAFleet(t *testing.T, c Cluster) {
-	if err := fleetSceneOf(newRepoCase(t, c, "fleet-f42")).outlives(); err != nil {
+	if err := fleetSceneOf(newRepoCase(t, c, "fleet-f50")).outlives(); err != nil {
 		t.Error(err)
 	}
 }
