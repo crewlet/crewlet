@@ -2977,3 +2977,32 @@ test("editing either key clears the shared result", async () => {
   fireEvent.change(app, { target: { value: "fake-app-2" } });
   expect(screen.queryByText(detail)).toBeNull();
 });
+
+// A HELD KEY STAYS WHEN ITS BOX IS LEFT EMPTY, said under the test control
+// until something is typed. Mutation: drop the caption's condition on the
+// box being empty and it stays beside a typed key.
+test("an empty box over a held key says the stored key stays", () => {
+  stubCheck({ outcome: "works", detail: "unused" });
+  render(
+    <SetupForm
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...together,
+            requirements: together.requirements.map((r) =>
+              r.field === "app_key" ? { ...r, present: true } : r,
+            ),
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const caption = "A key is stored. Leave this empty to keep it.";
+  expect(screen.getByText(caption)).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Application key"), { target: { value: "fake-app" } });
+  expect(screen.queryByText(caption)).toBeNull();
+});
