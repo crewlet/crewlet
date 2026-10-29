@@ -214,6 +214,10 @@ type Options struct {
 	Node string
 	// Now is injectable so a test can pin a row's timestamp.
 	Now func() time.Time
+	// Guard decides each route's policy and every in-handler admission;
+	// nil is the request context's caller with no org chart, which is what
+	// the engine serves. A test records what was asked through it.
+	Guard authz.Guard
 }
 
 // Service is the model routes.
@@ -248,9 +252,12 @@ func New(opts Options) (*Service, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	guard := opts.Guard
+	if guard == nil {
+		guard = authz.ContextGuard(authz.NoChart{})
+	}
 	return &Service{engine: opts.Engine, config: opts.Config, secrets: opts.Secrets,
-		leases: opts.Leases, audit: opts.Audit, node: opts.Node, now: now,
-		guard: authz.ContextGuard(authz.NoChart{})}, nil
+		leases: opts.Leases, audit: opts.Audit, node: opts.Node, now: now, guard: guard}, nil
 }
 
 // Routes registers the surface on the API's mux, every route through

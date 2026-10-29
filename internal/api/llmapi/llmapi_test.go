@@ -68,6 +68,8 @@ type fakeEngine struct {
 	device  coord.DeviceSignIn
 	devErr  error
 	running int
+	// onCheck runs as a check returns: a test cancels the request there.
+	onCheck func()
 }
 
 type checked struct {
@@ -82,6 +84,9 @@ func (f *fakeEngine) CheckModel(_ context.Context, key string, draft *config.LLM
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.checks = append(f.checks, checked{key, draft, values, smoke})
+	if f.onCheck != nil {
+		f.onCheck()
+	}
 	return f.check, nil
 }
 
@@ -148,7 +153,10 @@ func (c *fakeConfig) Reads(_ context.Context, names []string) (map[string][]stri
 	return out, nil
 }
 
-func (c *fakeConfig) Reload(_ context.Context, summary string, _ iam.Actor, expect string) (configapi.Applied, error) {
+func (c *fakeConfig) Reload(ctx context.Context, summary string, _ iam.Actor, expect string) (configapi.Applied, error) {
+	if err := ctx.Err(); err != nil {
+		return configapi.Applied{}, err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.reloads = append(c.reloads, summary)
@@ -164,6 +172,8 @@ type stored struct {
 type fakeSecrets struct {
 	mu   sync.Mutex
 	rows map[string]stored
+	// refuse is what a seal of each name answers instead of storing it.
+	refuse map[string]error
 }
 
 func (s *fakeSecrets) Describe(_ context.Context, name string) (secrets.Record, bool, error) {
@@ -173,10 +183,16 @@ func (s *fakeSecrets) Describe(_ context.Context, name string) (secrets.Record, 
 	return secrets.Record{Name: name}, ok, nil
 }
 
-func (s *fakeSecrets) Set(_ context.Context, name, value string, _ secrets.Author,
+func (s *fakeSecrets) Set(ctx context.Context, name, value string, _ secrets.Author,
 	source secrets.Source, _ time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.refuse[name]; err != nil {
+		return err
+	}
 	s.rows[name] = stored{value, source}
 	return nil
 }
@@ -214,6 +230,32 @@ type rig struct {
 	secrets *fakeSecrets
 	audit   *audit
 	leases  coord.Backend
+	guard   *recordingGuard
+}
+
+// recordingGuard is the engine's guard, recording every policy it is asked
+// and refusing the actions in deny.
+type recordingGuard struct {
+	mu    sync.Mutex
+	asked []authz.Action
+	deny  map[authz.Action]bool
+}
+
+func (g *recordingGuard) decide(r *http.Request, p authz.Policy) authz.Decision {
+	g.mu.Lock()
+	g.asked = append(g.asked, p.Action)
+	denied := g.deny[p.Action]
+	g.mu.Unlock()
+	if denied {
+		return authz.Decision{Allowed: false}
+	}
+	return authz.ContextGuard(authz.NoChart{})(r, p)
+}
+
+func (g *recordingGuard) wasAsked(action authz.Action) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Contains(g.asked, action)
 }
 
 func newRig(t *testing.T) *rig {
@@ -235,9 +277,10 @@ func newRigAs(t *testing.T, caller iam.Principal) *rig {
 		Lines: []cliagent.Check{{Name: cliagent.CheckBinary, OK: true, Detail: "claude at /usr/local/bin/claude"}}},
 		running: 1},
 		config: &fakeConfig{doc: doc}, secrets: &fakeSecrets{rows: map[string]stored{}},
-		audit: &audit{}, leases: coordmemory.New()}
+		audit: &audit{}, leases: coordmemory.New(), guard: &recordingGuard{deny: map[authz.Action]bool{}}}
 	svc, err := llmapi.New(llmapi.Options{Engine: r.engine, Config: r.config, Secrets: r.secrets,
-		Leases: r.leases, Audit: r.audit, Node: "node-a", Now: func() time.Time { return clock }})
+		Leases: r.leases, Audit: r.audit, Node: "node-a", Now: func() time.Time { return clock },
+		Guard: r.guard.decide})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +296,14 @@ func newRigAs(t *testing.T, caller iam.Principal) *rig {
 
 func (r *rig) do(t *testing.T, method, path, body string, headers map[string]string) (int, map[string]any) {
 	t.Helper()
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	return r.doCtx(t, t.Context(), method, path, body, headers)
+}
+
+// doCtx is [rig.do] under ctx.
+func (r *rig) doCtx(t *testing.T, ctx context.Context, method, path, body string,
+	headers map[string]string) (int, map[string]any) {
+	t.Helper()
+	req := httptest.NewRequestWithContext(ctx, method, path, strings.NewReader(body))
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -579,6 +629,12 @@ func TestEveryModelRouteTakesItsVerb(t *testing.T) {
 			t.Errorf("%s is mounted with %+v, want %s", pattern, got, action)
 		}
 	}
+	// A CREDENTIAL'S DRY RUN IS NO CHECK (ADR-0055): it runs the candidate,
+	// and a draft's CLI, so it is decided as the write it tests, never as a
+	// read grant's check.
+	if got := mux.policies["PUT /llm/providers/{key}/credential"]; got.DryRun {
+		t.Errorf("the credential route declares its dry run a check: %+v", got)
+	}
 	if len(mux.policies) != len(want) {
 		t.Errorf("mounted %d routes, want %d", len(mux.policies), len(want))
 	}
@@ -646,5 +702,107 @@ func TestADraftIsCheckedOnlyByWhoMayWriteIt(t *testing.T) {
 	if code, body := r.do(t, http.MethodPost, "/llm/providers/opus/check", draftBody, nil); code != http.StatusOK ||
 		len(r.engine.checks) != 1 || r.engine.checks[0].draft == nil {
 		t.Errorf("a fresh admin's draft check = %d %v", code, body)
+	}
+}
+
+// A CREDENTIAL'S DRAFT ASKS `config.write` OF ITS OWN, and its write asks it
+// before a re-activation.
+//
+// The route is mounted at `secrets.write`, which is admin's with a recent
+// proof as `config.write` is, so no caller tells the two apart: a guard that
+// refuses `config.write` alone does. A draft is refused before it runs, and a
+// write whose name a revision reads is refused before anything is tested or
+// sealed; a saved entry's dry run never asks it.
+func TestACredentialAsksConfigWriteWhereItWritesTheConfig(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.guard.deny[authz.ActionConfigWrite] = true
+
+	code, body := r.do(t, http.MethodPut, "/llm/providers/opus/credential?dry_run=true",
+		`{"values": {"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-a-candidate-key-0000"},
+		"entity": {"agent": "claude-code", "model": "opus",
+		"auth": {"mode": "api-key", "api_key": "${ANTHROPIC_API_KEY_SONNET}"}}}`, nil)
+	if code != http.StatusForbidden || len(r.engine.checks) != 0 {
+		t.Errorf("a draft without config.write = %d %v, ran %d checks", code, body, len(r.engine.checks))
+	}
+
+	code, body = r.do(t, http.MethodPut, "/llm/providers/sonnet/credential", sonnetKey, nil)
+	if code != http.StatusForbidden || len(r.engine.checks) != 0 || len(r.secrets.rows) != 0 ||
+		len(r.config.reloads) != 0 {
+		t.Errorf("a write re-activating without config.write = %d %v: checks %d, sealed %v, reloads %v",
+			code, body, len(r.engine.checks), r.secrets.rows, r.config.reloads)
+	}
+
+	fresh := newRig(t)
+	if code, body := fresh.do(t, http.MethodPut, "/llm/providers/sonnet/credential?dry_run=true",
+		sonnetKey, nil); code != http.StatusOK || fresh.guard.wasAsked(authz.ActionConfigWrite) {
+		t.Errorf("a saved entry's dry run = %d %v, asked config.write %v", code, body,
+			fresh.guard.wasAsked(authz.ActionConfigWrite))
+	}
+}
+
+// A CREDENTIAL THAT PASSED ITS TEST IS SEALED AND RE-ACTIVATED EVEN WHEN ITS
+// CALLER LEAVES.
+//
+// The test takes up to two minutes; a person who closes the page then would
+// otherwise leave the request's context cancelled under the seal and the
+// re-activation, and a two-value write half stored.
+func TestACredentialFinishesWhenItsCallerLeaves(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	r.engine.onCheck = cancel
+	code, body := r.doCtx(t, ctx, http.MethodPut, "/llm/providers/sonnet/credential", sonnetKey, nil)
+	if code != http.StatusOK || r.secrets.rows["ANTHROPIC_API_KEY_SONNET"].value == "" ||
+		len(r.config.reloads) != 1 {
+		t.Errorf("a write whose caller left = %d %v: sealed %v, reloads %v", code, body,
+			r.secrets.rows, r.config.reloads)
+	}
+}
+
+// A SEAL THAT STOPS PART WAY SAYS WHAT IT STORED, and re-activates nothing.
+func TestACredentialSealThatFailsSaysWhatItStored(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.secrets.refuse = map[string]error{"ANTHROPIC_API_KEY_SONNET": context.DeadlineExceeded}
+	code, body := r.do(t, http.MethodPut, "/llm/providers/sonnet/credential", sonnetKey, nil)
+	sealed, ok := body["sealed"].([]any)
+	if code != http.StatusInternalServerError || !ok || len(sealed) != 0 ||
+		!strings.Contains(body["detail"].(string), "Nothing was stored") || len(r.config.reloads) != 0 {
+		t.Errorf("a refused seal = %d %v, reloads %v, want 500 naming no value sealed", code, body,
+			r.config.reloads)
+	}
+}
+
+// A NAME THAT IS NOT ONE NEVER REACHES THE AUDIT: it may be the key itself,
+// pasted where the name goes.
+func TestARefusedNameIsNotAudited(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	code, body := r.do(t, http.MethodPut, "/llm/providers/sonnet/credential",
+		`{"values": {"sk-ant-api03-pasted-into-the-name-7d2K": "x"}}`, nil)
+	if code != http.StatusBadRequest {
+		t.Fatalf("a key as a name = %d %v, want 400", code, body)
+	}
+	if raw, _ := json.Marshal(r.audit.rows); strings.Contains(string(raw), "pasted-into-the-name") {
+		t.Errorf("the audit carries the refused name: %s", raw)
+	}
+}
+
+// A TEST'S 429 KNOWS NO END: `limited.until` is null rather than the zero
+// time, which a page drew as the year 1.
+func TestALimitedCandidateSaysNoEnd(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.engine.check = llmapi.Check{At: clock, Failure: "rate_limit",
+		Limited: &coord.ModelSitOut{Window: "unknown", Said: "429 rate limited"}}
+	code, body := r.do(t, http.MethodPut, "/llm/providers/sonnet/credential?dry_run=true", sonnetKey, nil)
+	limited, _ := body["limited"].(map[string]any)
+	if code != http.StatusOK || limited == nil {
+		t.Fatalf("a limited candidate = %d %v", code, body)
+	}
+	if until, present := limited["until"]; !present || until != nil {
+		t.Errorf("limited.until = %v, want null", until)
 	}
 }

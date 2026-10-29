@@ -59,7 +59,9 @@ type CheckAnswer struct {
 // Limited is a vendor's limit a candidate credential met: the test passes,
 // since a 429 proves the credential authenticated, and the answer says so.
 type Limited struct {
-	Until    time.Time  `json:"until"`
+	// Until is when the run's sit-out ends; null for a test's 429, which
+	// sits nothing out and knows no end the vendor did not say.
+	Until    *time.Time `json:"until"`
 	ResetsAt *time.Time `json:"resets_at"`
 	Window   string     `json:"window"`
 	Said     string     `json:"said,omitempty"`
@@ -79,7 +81,11 @@ func limitedOf(sit *coord.ModelSitOut) *Limited {
 	if sit == nil {
 		return nil
 	}
-	out := &Limited{Until: sit.Until, Window: sit.Window, Said: sit.Said}
+	out := &Limited{Window: sit.Window, Said: sit.Said}
+	if !sit.Until.IsZero() {
+		until := sit.Until
+		out.Until = &until
+	}
 	if !sit.ResetsAt.IsZero() {
 		at := sit.ResetsAt
 		out.ResetsAt = &at
@@ -120,10 +126,13 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 		return
 	}
 	names := slices.Sorted(maps.Keys(req.Values))
-	rec.Names = names
 	if !checkValues(w, req.Values, names) {
 		return
 	}
+	// RECORDED ONLY ONCE THEY ARE NAMES: a refused one may be a key pasted
+	// into the name's place, and the audit is read by everyone who reads
+	// the feed.
+	rec.Names = names
 	by := actor(r)
 
 	company, active, ok := s.activeEntry(w, r, key)
@@ -206,6 +215,11 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 		return
 	}
 
+	// PAST THE TEST, THE WRITE FINISHES whatever the caller does: a person
+	// who closes the page after a two-minute test would otherwise leave
+	// some values sealed and some not, and the revision not re-activated.
+	ctx = context.WithoutCancel(ctx)
+
 	// WHICH ENTRIES READ THESE NAMES, and which of them sat out here on the
 	// sign-in this write replaces: read before anything is sealed.
 	entries := entriesReading(company, names)
@@ -215,12 +229,21 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 		return
 	}
 	author := secrets.Author{Name: by.Name, Kind: string(by.Kind), OperatorID: by.OperatorID}
+	sealed := make([]string, 0, len(names))
 	for _, name := range names {
 		if sealErr := s.secrets.Set(ctx, name, req.Values[name], author, secrets.SourceModels,
 			s.now()); sealErr != nil {
-			s.fail(w, "seal the credential", sealErr)
+			// SAID BY NAME, as `PUT /secrets` says a seal that stopped part
+			// way: what is stored now, and that nothing was re-activated.
+			log.ErrorContext(ctx, "llm_request_failed", "what", "seal the credential",
+				"model", key, "sealed", sealed, "error", sealErr)
+			httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeInternalError,
+				httpjson.Detail{"sealed": sealed,
+					"detail": "The store refused a value part way. " + sealedSentence(sealed),
+					"hint":   "send the same values again: the running company still reads the ones it read"})
 			return
 		}
+		sealed = append(sealed, name)
 		log.InfoContext(ctx, "model_credential_written", "model", key, "name", name,
 			"bytes", len(req.Values[name]), "by", by.Name, "operator", by.OperatorID)
 	}
@@ -519,4 +542,13 @@ func createOnly(w http.ResponseWriter, r *http.Request) (bool, bool) {
 	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadIfMatch, map[string]string{
 		"hint": "a credential write takes If-None-Match: * to store only names nothing holds"})
 	return false, false
+}
+
+// sealedSentence says which values a seal that stopped part way stored.
+func sealedSentence(sealed []string) string {
+	if len(sealed) == 0 {
+		return "Nothing was stored."
+	}
+	return strings.Join(sealed, ", ") + " " + plural(len(sealed), "is", "are") +
+		" stored, and nothing was re-activated."
 }

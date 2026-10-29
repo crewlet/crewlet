@@ -2354,7 +2354,7 @@ each. Every answer that depends on the node names it (`node`).
 | `GET` | `/llm/runners` | `admin` | Whether each executor cell (`direct`, `container`, `e2b`) can start a box on each node (query `llm_runners`) |
 | `GET` | `/llm/models?agent=claude-code\|codex\|opencode[&provider=…]` | `admin` | The models a model step suggests (query `llm_models`) |
 | `GET` | `/llm/device-sign-ins/{id}` | `admin` | One device sign-in while its record lingers (query `llm_device_sign_in`) |
-| `PUT` | `/llm/providers/{key}/credential` | `secrets.write`, and `config.write` when it re-activates | Test candidate credential values with the model's own CLI, and store them only if they sign it in; `?dry_run=true` tests and stores nothing |
+| `PUT` | `/llm/providers/{key}/credential` | `secrets.write`, and `config.write` with a draft `entity` or when it re-activates | Test candidate credential values with the model's own CLI, and store them only if they sign it in; `?dry_run=true` tests and stores nothing |
 | `POST` | `/llm/providers/{key}/check` | `models.check`; with a draft `entity`, also `config.write` and `secrets.write` | The doctor over the API, on this node |
 | `POST` | `/llm/providers/{key}/retry` | `models.retry` | Probe a sitting-out model once, or clear its sit-out on every node |
 | `POST` | `/llm/providers/{key}/host-login/check` | `models.check` | Read a CLI login's status on this node now |
@@ -2502,12 +2502,17 @@ provider the catalogue does not list.
    `502 credential_untested`; a CLI that cannot run (no binary) is
    `422 validation_error` at `providers.llm.<key>.agent` with the doctor's
    remedy. A `429` passes: it proves the credential authenticated, and the
-   answer's `limited` says so.
+   answer's `limited` says so, `{"until", "resets_at", "window", "said"}`, with
+   `until` null, since a test sits nothing out, and `resets_at` the vendor's
+   reset when it named one.
 6. With `dry_run=true` the answer is `200 {"ok": true, "verified", "hints",
    "check", "limited"}` and nothing is stored.
 7. Each value is sealed (source `models`), and the revision that reads any of
    them is [re-activated](#a-secret-write-re-activates-the-revision-that-reads-it)
-   once, held to `If-Match` when the caller sent one.
+   once, held to `If-Match` when the caller sent one. From here the write
+   finishes even when the caller disconnects. A seal that fails part way is
+   `500 internal_error` with `sealed`, the names stored before it, and
+   re-activates nothing; send the values again.
 
 ```json
 {"verified": "Answered a one-turn Claude Code run in 3.4 s with only this value.",
