@@ -60,7 +60,7 @@ import (
 //
 // # Its tables
 //
-// code_mergeability, one row a change (replicated 0075), written by the
+// code_mergeability, one row a change (replicated 0077), written by the
 // records on the change's own subject and removed only with the change by its
 // repository's purge. Its conflicted paths' bytes count in the change's
 // conversation's text_bytes, as its revisions' facts do, so a purge part
