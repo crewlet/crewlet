@@ -320,7 +320,10 @@ func TestADecisionIsCountedOnceItIsApplied(t *testing.T) {
 			return resolvedAs(refreshed)(r)
 		},
 		query: func(ctx context.Context, _ string, _ map[string]any) (any, error) {
-			p, _ := iam.From(ctx)
+			p, how := iam.From(ctx)
+			if how != iam.Resolved {
+				return nil, errors.New("the question was asked as nobody resolved")
+			}
 			seen <- p.ReauthAt
 			return nil, nil
 		},
