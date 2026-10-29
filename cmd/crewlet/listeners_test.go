@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -49,14 +50,42 @@ func answer(t *testing.T, method, url string) (int, string) {
 	}
 }
 
-// bound reports whether something is listening on a port of this host.
-func bound(port int) bool {
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), time.Second)
+// listening reports whether socket — the very socket a listener holds, never
+// the port it was bound to — is still open, and so still able to complete a
+// connection.
+//
+// NOT A DIAL OF ITS PORT, which is what this asked until a loaded run failed
+// on it. A port its socket has let go is anybody's: the kernel hands it to the
+// next bind that asks for any port and finds it, and the suite binds such
+// ports by the thousand, every package's cases in one network namespace. So a
+// dial after a stop reaches whatever holds the port by then, and says nothing
+// of the listener that stopped: in round 140 of
+// [TestAStoppedListenerAcceptsNothing], with internal/engine and
+// internal/code/host binding beside it, a dial of 127.0.0.1:35409 was accepted
+// after its listener's Serve had returned, which closes that listener's socket
+// before it returns. The socket answers for itself: Go marks it closed as its
+// Close begins, and Close returns only once the descriptor is closed, which
+// takes the listening socket out of the kernel's lookups — nothing can connect
+// to it after that.
+func listening(t *testing.T, socket net.Listener) bool {
+	t.Helper()
+	conn, ok := socket.(syscall.Conn)
+	if !ok {
+		t.Fatalf("%T is not a socket that can say whether it is open", socket)
+	}
+	raw, err := conn.SyscallConn()
 	if err != nil {
+		t.Fatalf("ask %s whether it is open: %v", socket.Addr(), err)
+	}
+	switch err := raw.Control(func(uintptr) {}); {
+	case err == nil:
+		return true
+	case errors.Is(err, net.ErrClosed):
+		return false
+	default:
+		t.Fatalf("ask %s whether it is open: %v", socket.Addr(), err)
 		return false
 	}
-	_ = conn.Close()
-	return true
 }
 
 // A NODE WITH api.public BINDS TWO SOCKETS, each serving its own routes and
@@ -102,8 +131,9 @@ func TestANodeWithAPublicListenerBindsTwoSockets(t *testing.T) {
 	}
 
 	surface.stop(context.Background(), logging.Get("test"))
-	for name, port := range map[string]int{"api.port": boot.API.Port, "api.public.port": boot.API.Public.Port} {
-		if bound(port) {
+	for name, socket := range map[string]net.Listener{"api.port": surface.server.socket,
+		"api.public.port": surface.public.socket} {
+		if listening(t, socket) {
 			t.Errorf("%s is still listening after the node stopped", name)
 		}
 	}
@@ -145,7 +175,7 @@ func TestANodeWithAnArtifactListenerBindsAThirdSocket(t *testing.T) {
 		t.Errorf("the node did not say where and how it serves artifacts:\n%s", logged.String())
 	}
 	surface.stop(context.Background(), logging.Get("test"))
-	if bound(port) {
+	if listening(t, surface.artifacts.socket) {
 		t.Error("api.artifacts.port is still listening after the node stopped")
 	}
 }
@@ -161,7 +191,8 @@ func TestAnUnbindableArtifactPortFailsTheNode(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = taken.Close() })
 	e := testEngine(t)
-	boot := bootstrapFor(t, reservePort(t))
+	api := reserveSocket(t)
+	boot := bootstrapFor(t, api.Addr().(*net.TCPAddr).Port)
 	port := taken.Addr().(*net.TCPAddr).Port
 	boot.API.Artifacts = config.APIArtifacts{Host: "127.0.0.1", Port: port,
 		ExternalURL: "http://127.0.0.1:" + strconv.Itoa(port)}
@@ -170,7 +201,7 @@ func TestAnUnbindableArtifactPortFailsTheNode(t *testing.T) {
 		surface.stop(context.Background(), logging.Get("test"))
 		t.Fatal("binding an artifact port already in use reported success")
 	}
-	if bound(boot.API.Port) {
+	if listening(t, api) {
 		t.Error("api.port is still listening although the node failed to start")
 	}
 }
@@ -222,7 +253,7 @@ func TestTheArtifactListenerIsBoundBeforeTheBoot(t *testing.T) {
 			}
 		}
 		listeners.close(context.Background(), log)
-		if tc.want && bound(port) {
+		if tc.want && listening(t, listeners.artifacts.socket) {
 			t.Errorf("%s: api.artifacts.port is still listening after a failed boot closed it", tc.name)
 		}
 	}
@@ -241,7 +272,8 @@ func TestAnUnbindablePublicPortFailsTheNode(t *testing.T) {
 	t.Cleanup(func() { _ = taken.Close() })
 
 	e := testEngine(t)
-	boot := bootstrapFor(t, reservePort(t))
+	api := reserveSocket(t)
+	boot := bootstrapFor(t, api.Addr().(*net.TCPAddr).Port)
 	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: taken.Addr().(*net.TCPAddr).Port}
 	surface, err := serveNode(t, boot, e)
 	if err == nil {
@@ -251,7 +283,7 @@ func TestAnUnbindablePublicPortFailsTheNode(t *testing.T) {
 	if !strings.Contains(err.Error(), "bind") {
 		t.Errorf("the error does not say what failed: %v", err)
 	}
-	if bound(boot.API.Port) {
+	if listening(t, api) {
 		t.Error("api.port is still listening although the node failed to start")
 	}
 }
@@ -271,7 +303,6 @@ func TestAListenerStoppedBeforeItIsServedIsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := socket.Addr().(*net.TCPAddr).Port
 	served := make(chan struct{})
 	l := &apiListener{server: &http.Server{ReadHeaderTimeout: apiReadHeaderTimeout},
 		socket: socket, served: served}
@@ -281,7 +312,7 @@ func TestAListenerStoppedBeforeItIsServedIsClosed(t *testing.T) {
 		defer close(stopped)
 		shutdownListener(context.Background(), l, "api", logging.Get("test"))
 	}()
-	for deadline := time.Now().Add(10 * time.Second); bound(port); {
+	for deadline := time.Now().Add(10 * time.Second); listening(t, socket); {
 		if time.Now().After(deadline) {
 			t.Fatal("the socket is still listening while its stop waits for Serve")
 		}
@@ -302,7 +333,7 @@ func TestAListenerStoppedBeforeItIsServedIsClosed(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the stop never returned once the Serve it waited for had")
 	}
-	if bound(port) {
+	if listening(t, socket) {
 		t.Error("the socket is still listening after its stop returned")
 	}
 }
@@ -438,13 +469,8 @@ func TestTheProbesOutliveThePublicListener(t *testing.T) {
 	}()
 
 	// The public listener has begun to close...
-	port := func(addr string) int {
-		_, p, _ := net.SplitHostPort(addr)
-		n, _ := strconv.Atoi(p)
-		return n
-	}
 	deadline := time.Now().Add(apiShutdownGrace)
-	for bound(port(publicAddr)) {
+	for listening(t, publicListener.socket) {
 		if time.Now().After(deadline) {
 			t.Fatal("the public listener never began to close")
 		}
@@ -460,7 +486,7 @@ func TestTheProbesOutliveThePublicListener(t *testing.T) {
 	case <-time.After(3 * apiShutdownGrace):
 		t.Fatal("the surface never stopped")
 	}
-	if bound(port(adminAddr)) {
+	if listening(t, adminListener.socket) {
 		t.Error("api.port is still listening after the surface stopped")
 	}
 }
@@ -528,8 +554,7 @@ func TestTheShutdownFinishesGitBeforeTheListenerCloses(t *testing.T) {
 	if got := taken(); !slices.Equal(got, []string{"drain", "git", "stop"}) {
 		t.Errorf("the shutdown ran %v, want the drain, the git requests and then the teardown", got)
 	}
-	_, p, _ := net.SplitHostPort(addr)
-	if n, _ := strconv.Atoi(p); bound(n) {
+	if listening(t, admin.socket) {
 		t.Error("api.port is still listening after the shutdown")
 	}
 }
@@ -554,19 +579,19 @@ func (e *recordingEngine) Stop(context.Context)  { e.step("stop") }
 // Its Serve has RETURNED, because the goroutine listenAPI starts belongs to
 // the stop: a stop that does not wait for it fails this in round 0 at any
 // GOMAXPROCS, Serve having yet to return in over 96% of such stops on 2 or 4
-// cores and in every one on 1 (Go 1.27.2, measured). A dial of its address is
-// REFUSED — the symptom a person meets. The stop's own close of the socket is
-// not this case's to hold: it makes the dial refused in every round whether or
-// not the stop waits, and [TestAListenerStoppedBeforeItIsServedIsClosed] holds
-// it by keeping the window open rather than racing for it. What the dial
-// catches here is a stop that does neither, which leaves the socket to a Serve
-// still to run and fails in 20–61% of rounds on 2 or more cores and under
-// 0.1% on 1, where the dialler seldom runs before that Serve has closed it;
-// on 2 or more cores 500 rounds put a miss below one in 10^48. And nothing is
-// logged at warn or above, read once every round's Serve has returned, so no
-// round's goroutine can log after the check. A round is a bind, a stop and a
-// refused dial, so the 500 take about a tenth of a second under the race
-// detector.
+// cores and in every one on 1 (Go 1.27.2, measured). Its socket is CLOSED,
+// which is what refuses a person's dial — asked of the socket itself
+// ([listening]), never by dialling its address: a loaded run's dial of a
+// stopped listener's port was accepted by another socket that had taken the
+// port, after that listener's Serve had returned and closed it. The stop's
+// own close of the socket is not this case's to hold: it closes the socket in
+// every round whether or not the stop waits, and
+// [TestAListenerStoppedBeforeItIsServedIsClosed] holds it by keeping the
+// window open rather than racing for it. What the socket catches here is a
+// stop that does neither, which leaves it to a Serve still to run. And nothing
+// is logged at warn or above, read once every round's Serve has returned, so
+// no round's goroutine can log after the check. A round is a bind and a stop,
+// so the 500 take about a tenth of a second under the race detector.
 func TestAStoppedListenerAcceptsNothing(t *testing.T) {
 	t.Parallel()
 	var logged lockedBuffer
@@ -584,10 +609,8 @@ func TestAStoppedListenerAcceptsNothing(t *testing.T) {
 			t.Fatalf("round %d: the stop of %s returned while the goroutine serving it was still running",
 				round, addr)
 		}
-		conn, err := net.DialTimeout("tcp", addr, time.Second)
-		if err == nil {
-			_ = conn.Close()
-			t.Fatalf("round %d: %s accepted a connection after its listener stopped", round, addr)
+		if listening(t, listener.socket) {
+			t.Fatalf("round %d: %s is still listening after its listener stopped", round, addr)
 		}
 	}
 	if logged.String() != "" {

@@ -918,6 +918,16 @@ var reserved = struct {
 // took in that gap.
 func reservePort(t *testing.T) int {
 	t.Helper()
+	//nolint:errcheck // Listen on a TCP address always yields *TCPAddr.
+	return reserveSocket(t).Addr().(*net.TCPAddr).Port
+}
+
+// reserveSocket is [reservePort]'s socket itself, for a case that asks it
+// afterwards whether it is still listening ([listening]): the node it is
+// handed to is what closes this very socket, whatever has taken its port by
+// the time the case looks.
+func reserveSocket(t *testing.T) net.Listener {
+	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("reserve a port: %v", err)
@@ -931,8 +941,7 @@ func reservePort(t *testing.T) int {
 			_ = l.Close()
 		}
 	})
-	//nolint:errcheck // Listen on a TCP address always yields *TCPAddr.
-	return l.Addr().(*net.TCPAddr).Port
+	return l
 }
 
 // takeReserved removes and returns the socket reserved for addr, or nil.
