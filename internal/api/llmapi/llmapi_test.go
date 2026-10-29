@@ -310,11 +310,11 @@ func newRigAs(t *testing.T, caller iam.Principal) *rig {
 
 func (r *rig) do(t *testing.T, method, path, body string, headers map[string]string) (int, map[string]any) {
 	t.Helper()
-	return r.doCtx(t, t.Context(), method, path, body, headers)
+	return r.doCtx(t.Context(), t, method, path, body, headers)
 }
 
 // doCtx is [rig.do] under ctx.
-func (r *rig) doCtx(t *testing.T, ctx context.Context, method, path, body string,
+func (r *rig) doCtx(ctx context.Context, t *testing.T, method, path, body string,
 	headers map[string]string) (int, map[string]any) {
 	t.Helper()
 	req := httptest.NewRequestWithContext(ctx, method, path, strings.NewReader(body))
@@ -768,7 +768,7 @@ func TestACredentialFinishesWhenItsCallerLeaves(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	r.engine.onCheck = cancel
-	code, body := r.doCtx(t, ctx, http.MethodPut, "/llm/providers/sonnet/credential", sonnetKey, nil)
+	code, body := r.doCtx(ctx, t, http.MethodPut, "/llm/providers/sonnet/credential", sonnetKey, nil)
 	if code != http.StatusOK || r.secrets.rows["ANTHROPIC_API_KEY_SONNET"].value == "" ||
 		len(r.config.reloads) != 1 {
 		t.Errorf("a write whose caller left = %d %v: sealed %v, reloads %v", code, body,

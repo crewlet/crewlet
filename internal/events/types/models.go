@@ -157,7 +157,7 @@ func deviceEndWords(status string) string {
 	case "":
 		return "ended"
 	}
-	return string(status)
+	return status
 }
 
 // actorPossessive is actor's, for a phrase about something they started;
