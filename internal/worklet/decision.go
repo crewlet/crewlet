@@ -47,10 +47,12 @@ import (
 // under it would turn an answer given to one set of options into an answer
 // to another. The writer refuses an edit that changes it.
 
-// checkText is [decision.CheckText] as this package's refusal, marked
-// [ErrInvalid] with the sentence unchanged.
-func checkText(field, value string, limit int, required bool) error {
-	if err := decision.CheckText(field, value, limit, required); err != nil {
+// checkText is [decision.CheckText] for an optional value, as this package's
+// refusal, marked [ErrInvalid] with the sentence unchanged: what an answered
+// decision carries is bounded by the caps its ask was written under, and may
+// be empty.
+func checkText(field, value string, limit int) error {
+	if err := decision.CheckText(field, value, limit, false); err != nil {
 		return invalid("%w", err)
 	}
 	return nil

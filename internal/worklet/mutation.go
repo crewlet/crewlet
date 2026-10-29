@@ -1415,19 +1415,19 @@ func (a *AnsweredDecision) check() error {
 	if a == nil {
 		return nil
 	}
-	if err := checkText("answered.question", a.Question, decision.MaxQuestion, false); err != nil {
+	if err := checkText("answered.question", a.Question, decision.MaxQuestion); err != nil {
 		return err
 	}
 	if a.Choice != nil {
-		if err := checkText("answered.choice.label", a.Choice.Label, decision.MaxOptionLabel, false); err != nil {
+		if err := checkText("answered.choice.label", a.Choice.Label, decision.MaxOptionLabel); err != nil {
 			return err
 		}
-		if err := checkText("answered.choice.detail", a.Choice.Detail, decision.MaxOptionDetail, false); err != nil {
+		if err := checkText("answered.choice.detail", a.Choice.Detail, decision.MaxOptionDetail); err != nil {
 			return err
 		}
 	}
 	if a.Inform != nil {
-		return checkText("answered.inform.channel", a.Inform.Channel, decision.MaxInformChannel, false)
+		return checkText("answered.inform.channel", a.Inform.Channel, decision.MaxInformChannel)
 	}
 	return nil
 }
