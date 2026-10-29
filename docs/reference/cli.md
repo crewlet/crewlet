@@ -1275,6 +1275,7 @@ asks for no more pushes than it prints:
 
 ```
 web — active, owned by unit:engineering, default branch main
+  managed by:   code.repos
   description:  The customer-facing web app.
   visibility:   unit — only the seats the chart relates to its owner read it
   protections:  refs/heads/main (no force, no delete), refs/heads/release/** (no direct push)
