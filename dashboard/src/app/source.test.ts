@@ -647,7 +647,11 @@ test("a column with no word in its head declares one", () => {
           siblings.push(line);
         }
       }
-      if (siblings.some((line) => /^\s*label:\s*["']\S/.test(line))) continue;
+      // A WORD, OR THE NAME OF ONE: a column built per item of a table of words
+      // (By job's one column per category) labels itself from that table, which
+      // a literal cannot. An empty string is still refused.
+      if (siblings.some((line) => /^\s*label:\s*(["']\S|[A-Za-z_$][\w$.[\]]*,?$)/.test(line)))
+        continue;
       if (siblings.some((line) => /^\s*action:\s*true,?$/.test(line))) continue;
       offenders.push(`${path}:${at + 1}`);
     }
