@@ -94,7 +94,7 @@ func (m refusalMux) logRefusals(pattern string, h http.Handler) http.Handler {
 		m.log.InfoContext(r.Context(), "config_write_refused",
 			"route", routeOf(r, pattern), "method", r.Method, "status", watched.status, "code", envelope.Error,
 			"by", by.Name, "kind", string(by.Kind), "operator", by.OperatorID,
-			"base_revision", strings.Trim(strings.TrimSpace(r.Header.Get("If-Match")), `"`),
+			"base_revision", baseRevision(r.Header.Get("If-Match")),
 			"dry_run", r.URL.Query().Get("dry_run") == "true", "request_id", id)
 	})
 }
@@ -109,6 +109,53 @@ func routeOf(r *http.Request, mounted string) string {
 		return r.Pattern
 	}
 	return mounted
+}
+
+// invalidRevision is the base_revision of an If-Match that is not one
+// revision tag: never a tag, which cannot hold `<`.
+const invalidRevision = "<invalid>"
+
+// baseRevision is the revision ifMatch names, as the log may carry it: empty
+// where none was sent, `*` for whatever the target holds, the tag without its
+// quotes (or a weak tag's `W/`) where it has a revision tag's shape, and
+// [invalidRevision] for anything else. NEVER THE HEADER AS SENT: it is the
+// caller's text, and a header of any length or content would otherwise be
+// written into the log verbatim. Every tag this engine answers is a UUID or
+// a kind and a hex digest, so a tag is at most 128 bytes of letters,
+// digits, `.`, `_`, `:` and `-`; a list of several is not one revision.
+func baseRevision(ifMatch string) string {
+	ifMatch = strings.TrimSpace(ifMatch)
+	switch {
+	case ifMatch == "":
+		return ""
+	case ifMatch == "*":
+		return "*"
+	}
+	tag := strings.TrimPrefix(ifMatch, "W/")
+	if len(tag) >= 2 && tag[0] == '"' && tag[len(tag)-1] == '"' {
+		tag = tag[1 : len(tag)-1]
+	}
+	if !isToken(tag, "._:-") {
+		return invalidRevision
+	}
+	return tag
+}
+
+// isToken reports whether s is 1 to 128 bytes of ASCII letters, digits and
+// the punctuation in extra.
+func isToken(s, extra string) bool {
+	if s == "" || len(s) > 128 {
+		return false
+	}
+	for _, c := range []byte(s) {
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		case strings.IndexByte(extra, c) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // requestID is the request's id: sent, where it is one printable token of at

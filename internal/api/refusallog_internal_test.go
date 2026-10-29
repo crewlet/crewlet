@@ -98,3 +98,46 @@ func TestARefusedWriteLogsOneLineAndNothingItCarried(t *testing.T) {
 		t.Errorf("a landed write, a 5xx or a read logged: %s", logged.String())
 	}
 }
+
+// A BASE REVISION IS LOGGED ONLY IN A TAG'S SHAPE. If-Match is the caller's
+// text; the line carries it only where it is one revision tag of at most 128
+// bytes, and marks anything else invalid rather than writing it down.
+func TestABaseRevisionIsLoggedOnlyInATagsShape(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("a", 128)
+	for _, tc := range []struct{ ifMatch, want string }{
+		{"", ""},
+		{"*", "*"},
+		{`"0192f1a4-9b2d-7c03-a4e1-5f3b9d0c7a12"`, "0192f1a4-9b2d-7c03-a4e1-5f3b9d0c7a12"},
+		{`"llm-providers-3fa9c1d2e4b6a8807f1e2d3c4b5a6978"`, "llm-providers-3fa9c1d2e4b6a8807f1e2d3c4b5a6978"},
+		{`W/"rev-41"`, "rev-41"},
+		{"rev-41", "rev-41"},
+		{`"` + long + `"`, long},
+		{`"` + long + `a"`, invalidRevision},
+		{`"rev-41", "rev-42"`, invalidRevision},
+		{`"glpat a secret"`, invalidRevision},
+		{`"rev-41\u0000"`, invalidRevision},
+		{`"rév"`, invalidRevision},
+		{`""`, invalidRevision},
+	} {
+		if got := baseRevision(tc.ifMatch); got != tc.want {
+			t.Errorf("baseRevision(%q) = %q, want %q", tc.ifMatch, got, tc.want)
+		}
+	}
+
+	// AND THE LINE USES IT: a header that is not a tag reaches the log as
+	// invalid, its text nowhere.
+	var logged bytes.Buffer
+	inner := http.NewServeMux()
+	refusalMux{Mux: inner, log: slog.New(slog.NewJSONHandler(&logged, nil))}.Handle("PUT /config",
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			httpjson.Fail(w, http.StatusConflict, httpjson.CodeRevisionAdvanced)
+		}))
+	req := httptest.NewRequest(http.MethodPut, "/config", nil)
+	req.Header.Set("If-Match", `"pasted glpat-a-secret-value-0000 here"`)
+	inner.ServeHTTP(httptest.NewRecorder(), req)
+	if !strings.Contains(logged.String(), `"base_revision":"<invalid>"`) ||
+		strings.Contains(logged.String(), "glpat") {
+		t.Errorf("an If-Match that is no tag logged %s", logged.String())
+	}
+}

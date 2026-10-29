@@ -1367,7 +1367,8 @@ caller does not hold) logs one `config_write_refused` at INFO, on the
 request was served on, such as `PUT /secrets/{name}` or
 `DELETE /config/llm-providers/{id}`, never the path, which would name it),
 `method`, `status`, `code` (the problem's code from the answer's `error`),
-`by`, `kind`, `operator`, `base_revision` (the `If-Match` written against),
+`by`, `kind`, `operator`, `base_revision` (the `If-Match` written against,
+where it is one revision tag of at most 128 bytes, and `<invalid>` otherwise),
 `dry_run` and `request_id`. It never carries a value, a secret's name or the
 problem's detail. INFO rather than WARNING because a refusal is the engine
 working as meant: a stale tab or an expired step-up refuses routinely. Each
