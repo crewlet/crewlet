@@ -172,8 +172,10 @@ func (c *fakeConfig) Reload(ctx context.Context, summary string, _ iam.Actor, ex
 type stored struct {
 	value  string
 	source secrets.Source
-	// op is the operation key of the create that sealed the row.
-	op string
+	// op is the operation key of the create that sealed the row, and
+	// sealed when, by the service's clock.
+	op     string
+	sealed time.Time
 }
 
 type fakeSecrets struct {
@@ -191,7 +193,7 @@ func (s *fakeSecrets) Describe(_ context.Context, name string) (secrets.Record, 
 }
 
 func (s *fakeSecrets) Create(ctx context.Context, name, value string, _ secrets.Author,
-	source secrets.Source, _ time.Time, opID string) (bool, error) {
+	source secrets.Source, now time.Time, opID string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -203,29 +205,29 @@ func (s *fakeSecrets) Create(ctx context.Context, name, value string, _ secrets.
 	if _, held := s.rows[name]; held {
 		return false, nil
 	}
-	s.rows[name] = stored{value, source, opID}
+	s.rows[name] = stored{value, source, opID, now}
 	return true, nil
 }
 
-func (s *fakeSecrets) OpOf(_ context.Context, name string) (string, bool, error) {
+func (s *fakeSecrets) OpOf(_ context.Context, name string) (string, time.Time, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row, ok := s.rows[name]
-	return row.op, ok, nil
+	return row.op, row.sealed, ok, nil
 }
 
 func (s *fakeSecrets) Reclaim(_ context.Context, name, value string, _ secrets.Author,
-	source secrets.Source, _ time.Time, opID string) (bool, error) {
+	source secrets.Source, now time.Time, opID string, notBefore time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.refuse[name]; err != nil {
 		return false, err
 	}
 	row, ok := s.rows[name]
-	if !ok || opID == "" || row.op != opID {
+	if !ok || opID == "" || row.op != opID || row.sealed.Before(notBefore) {
 		return false, nil
 	}
-	s.rows[name] = stored{value, source, opID}
+	s.rows[name] = stored{value, source, opID, now}
 	return true, nil
 }
 
@@ -1038,5 +1040,53 @@ func TestACreatesKeyIsItsPrincipalsAndExpires(t *testing.T) {
 	old.secrets.refuse = nil
 	if code, body := createAs(t, old, gatewayCreate, staleKey); code != http.StatusPreconditionFailed {
 		t.Errorf("a key past the retry window = %d %v, want 412", code, body)
+	}
+}
+
+// A CREATE'S RETRY WINDOW RUNS FROM THE SEAL, BY THE ENGINE'S CLOCK.
+//
+// A caller mints its own key, and a UUIDv7 carries whatever instant the
+// caller wrote into it, so the window cannot be measured from the key: a key
+// dated a year ahead stamps rows its retry could take for a day a year later.
+// Rows sealed past the window are refused to the same key whatever its own
+// instant says: a key that looks fresh now (minted "a year ahead" of rows
+// sealed a year ago) and a key minted an hour ago over rows sealed a day and
+// an hour ago alike, and the stored values are untouched.
+func TestACreatesRetryWindowRunsFromItsSeal(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		minted time.Time
+		sealed time.Time
+	}{
+		{"a key dated ahead of rows sealed a year ago", clock, clock.Add(-365 * 24 * time.Hour)},
+		{"a key from an hour ago over rows sealed a day and an hour ago", clock.Add(-time.Hour),
+			clock.Add(-llmapi.CreateRetryWindow - time.Hour)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.secrets.refuse = map[string]error{"GATEWAY_URL": context.DeadlineExceeded}
+			_, body := createAs(t, r, gatewayCreate, statelog.NewOpID(tc.minted, ""))
+			key, _ := body["op_id"].(string)
+			if key == "" {
+				t.Fatalf("the first attempt names no op_id: %v", body)
+			}
+			r.secrets.refuse = nil
+			r.secrets.mu.Lock()
+			row := r.secrets.rows["GATEWAY_KEY"]
+			row.sealed = tc.sealed
+			r.secrets.rows["GATEWAY_KEY"] = row
+			r.secrets.mu.Unlock()
+
+			code, body := createAs(t, r, gatewayCreate, key)
+			if code != http.StatusPreconditionFailed {
+				t.Errorf("a retry over a row sealed outside the window = %d %v, want 412", code, body)
+			}
+			if got := r.secrets.rows["GATEWAY_KEY"]; got.value != "sk-ant-api03-a-gateway-key-0000" ||
+				!got.sealed.Equal(tc.sealed) {
+				t.Errorf("the stale row was re-sealed: %+v", got)
+			}
+		})
 	}
 }

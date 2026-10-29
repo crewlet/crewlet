@@ -257,7 +257,7 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 				// end state is this request's and nothing is learnt of
 				// what was stored.
 				created, sealErr = s.secrets.Reclaim(ctx, name, req.Values[name], author,
-					secrets.SourceModels, s.now(), opID)
+					secrets.SourceModels, s.now(), opID, s.now().Add(-CreateRetryWindow))
 			}
 			if sealErr == nil && !created {
 				httpjson.FailWithFields(w, http.StatusPreconditionFailed, httpjson.CodeAlreadyExists,
@@ -491,12 +491,12 @@ func (s *Service) refuseStored(w http.ResponseWriter, r *http.Request, names []s
 
 	var held []string
 	for _, name := range names {
-		op, found, err := s.secrets.OpOf(r.Context(), name)
+		op, sealed, found, err := s.secrets.OpOf(r.Context(), name)
 		if err != nil {
 			s.fail(w, "read the secret store", err)
 			return false
 		}
-		if found && (op != opID || !s.retryable(opID)) {
+		if found && (op != opID || !s.retryable(opID) || sealed.Before(s.now().Add(-CreateRetryWindow))) {
 			held = append(held, name)
 		}
 	}
@@ -513,9 +513,21 @@ func (s *Service) refuseStored(w http.ResponseWriter, r *http.Request, names []s
 // CreateRetryWindow is how long a create's operation key finishes what it
 // sealed: a day, the span a client retrying a request that lost its answer
 // works in, and short enough that a key found in an old log names nothing.
+//
+// MEASURED FROM THE SEAL, BY THE ENGINE'S CLOCK: a row is its key's to finish
+// only while it was sealed within the window ([Secrets.OpOf], the notBefore
+// [Secrets.Reclaim] is handed). The key's own instant cannot be the measure:
+// a caller mints its key, and a UUIDv7 carries whatever time the caller wrote
+// into it, so a key dated a year ahead would stamp rows its retry could take
+// for a day a year later. [Service.retryable] narrows it further, never
+// widens it.
 const CreateRetryWindow = 24 * time.Hour
 
-// retryable reports whether opID was minted within [CreateRetryWindow].
+// retryable reports whether opID was minted within [CreateRetryWindow] of
+// now, and no more than a minute ahead of it: defence in depth beside the
+// seal's time, which alone decides. A key outside it, honest but skewed or
+// dated to game the window, finishes nothing; the create is refused 412 as
+// one under another key is, and a fresh key creates the rest.
 func (s *Service) retryable(opID string) bool {
 	minted, ok := statelog.OpMintedAt(opID)
 	if !ok {

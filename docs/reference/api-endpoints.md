@@ -2509,8 +2509,9 @@ provider the catalogue does not list.
    or one minted for it, scoped by the caller as on every keyed route. Each
    row it seals carries the key. A create that stopped part way (a `500` with
    `sealed`, or a `412` on a later name) answers `op_id`. The same request sent
-   again under that key, within a day, re-seals the names its key sealed with
-   the values it sends now, and creates the rest. Any other create naming them
+   again under that key re-seals the names its key sealed, within a day of
+   their seal by the engine's own clock (never the time the key carries, which
+   its caller writes), with the values it sends now, and creates the rest. Any other create naming them
    is `412`, whatever value it sends: the store is never read for a value, so
    no answer says whether a guess equals what is stored. The key is in no
    other answer, listing, log or audit row.

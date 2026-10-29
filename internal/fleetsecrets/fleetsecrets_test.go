@@ -637,15 +637,22 @@ func TestACreatesRetryReclaimsOnlyItsOwnRows(t *testing.T) {
 		clock, "op-1"); err != nil || !created {
 		t.Fatalf("the keyed create = (%v, %v)", created, err)
 	}
-	if op, found, err := store.OpOf(ctx, "GATEWAY_KEY"); err != nil || !found || op != "op-1" {
-		t.Fatalf("OpOf = (%q, %v, %v), want op-1", op, found, err)
+	if op, sealed, found, err := store.OpOf(ctx, "GATEWAY_KEY"); err != nil || !found || op != "op-1" ||
+		!sealed.Equal(clock) {
+		t.Fatalf("OpOf = (%q, %v, %v, %v), want op-1 sealed at %v", op, sealed, found, err, clock)
+	}
+	// SEALED BEFORE notBefore, by the store's own record: refused whatever
+	// the key.
+	if wrote, err := store.Reclaim(ctx, "GATEWAY_KEY", "late", nodeA, secrets.SourceModels,
+		clock, "op-1", clock.Add(time.Second)); err != nil || wrote {
+		t.Errorf("a reclaim of a row sealed before notBefore = (%v, %v), want it refused", wrote, err)
 	}
 	if wrote, err := store.Reclaim(ctx, "GATEWAY_KEY", "corrected", nodeA, secrets.SourceModels,
-		clock, "op-2"); err != nil || wrote {
+		clock, "op-2", clock.Add(-time.Hour)); err != nil || wrote {
 		t.Errorf("another key's reclaim = (%v, %v), want it refused", wrote, err)
 	}
 	if wrote, err := store.Reclaim(ctx, "GATEWAY_KEY", "corrected", nodeA, secrets.SourceModels,
-		clock, "op-1"); err != nil || !wrote {
+		clock, "op-1", clock.Add(-time.Hour)); err != nil || !wrote {
 		t.Fatalf("its own key's reclaim = (%v, %v)", wrote, err)
 	}
 	if got, _ := store.Get(ctx, "GATEWAY_KEY"); got != "corrected" {
@@ -653,14 +660,15 @@ func TestACreatesRetryReclaimsOnlyItsOwnRows(t *testing.T) {
 	}
 	// A PLAIN WRITE CLEARS THE KEY: the row is that write's now.
 	mustSet(t, store, "GATEWAY_KEY", "rotated")
-	if op, _, _ := store.OpOf(ctx, "GATEWAY_KEY"); op != "" {
+	if op, _, _, _ := store.OpOf(ctx, "GATEWAY_KEY"); op != "" {
 		t.Errorf("a plain write left the key %q on the row", op)
 	}
 	if wrote, _ := store.Reclaim(ctx, "GATEWAY_KEY", "late", nodeA, secrets.SourceModels,
-		clock, "op-1"); wrote {
+		clock, "op-1", clock.Add(-time.Hour)); wrote {
 		t.Error("a retry re-sealed over a plain write that followed its create")
 	}
-	if wrote, _ := store.Reclaim(ctx, "ABSENT", "x", nodeA, secrets.SourceModels, clock, "op-1"); wrote {
+	if wrote, _ := store.Reclaim(ctx, "ABSENT", "x", nodeA, secrets.SourceModels, clock, "op-1",
+		clock.Add(-time.Hour)); wrote {
 		t.Error("a reclaim wrote a row nothing created")
 	}
 }
