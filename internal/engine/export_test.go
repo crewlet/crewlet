@@ -30,14 +30,34 @@ func GitReadForTest(ctx context.Context, e *Engine, q code.GitQuery) (code.GitAn
 }
 
 // CodeReadingForTest is the code half of e's alarm reading now
-// ([Engine.codeReading]) — its git cache's and its compactor's, read the way
-// every evaluation reads them — for a case outside the package that judges
-// what a running node's compactor found, apart from when the alarm table next
-// evaluates it.
-func CodeReadingForTest(e *Engine) statelog.Reading {
+// ([Engine.codeReading]) — its committer's, its git cache's and its
+// compactor's, read the way every evaluation reads them — for a case outside
+// the package that judges what a running node's committer or compactor found,
+// apart from when the alarm table next evaluates it.
+func CodeReadingForTest(ctx context.Context, e *Engine) statelog.Reading {
 	var r statelog.Reading
-	e.codeReading(&r)
+	e.codeReading(ctx, time.Now().UTC(), &r)
 	return r
+}
+
+// WithCommitterPublisher is opts with wrap standing between a data node's
+// committer and the code log's write authority it publishes through
+// ([code.CommitterOptions.Publisher]), for a case outside the package whose
+// subject is what a running node's committer raises — a repository's queue
+// filled behind a batch held at its publish, rather than by a burst raced
+// against batches a healthy committer lands in milliseconds.
+func WithCommitterPublisher(opts Options, wrap func(code.Publisher) code.Publisher) Options {
+	opts.committerPublisher = wrap
+	return opts
+}
+
+// CommitterOf is the committer e's runtime decides pushes with, nil where it
+// built none, for a case outside the package that proposes to it directly.
+func CommitterOf(e *Engine) *code.Committer {
+	if n := e.native.Load(); n != nil {
+		return n.committer
+	}
+	return nil
 }
 
 // ItemRanker is the ranker the tracker's item search is built with, so the

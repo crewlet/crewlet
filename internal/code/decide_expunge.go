@@ -805,7 +805,7 @@ func (c *Committer) refusedExpunge(ctx context.Context, p ExpungeProposal, opID 
 		c.log.ErrorContext(ctx, "code_expunge_invalid", "repo", p.RepoID(), "op_id", opID, "error", err)
 		return ExpungeResult{}, err
 	case errors.Is(err, statelog.ErrConflict):
-		c.countBusy(kindExpunge, 1)
+		c.countBusy(p.RepoID(), kindExpunge, busyContended, 1)
 		return ExpungeResult{Refusal: RefusalBusy, Detail: "the repository kept changing for every round the " +
 			"write may take; " + p.again()}, nil
 	case errors.As(err, &refusal) && refusal.Reason == statelog.ReasonDeleted:

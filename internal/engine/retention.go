@@ -173,10 +173,12 @@ type retention struct {
 	// reads as nothing to report.
 	objects func(now time.Time, out *statelog.Reading)
 
-	// code fills the code host's half of a reading — what this node's git
-	// cache refused for memory ([Engine.codeReading]). Nil reads as nothing
-	// to report, which is also what it fills on a node holding no cache.
-	code func(out *statelog.Reading)
+	// code fills the code host's half of a reading at now — what this
+	// node's committer refused busy for a backlog, and what its git cache
+	// and its compactor found ([Engine.codeReading]). Nil reads as nothing
+	// to report, which is also what it fills on a node holding neither a
+	// committer nor a cache.
+	code func(ctx context.Context, now time.Time, out *statelog.Reading)
 
 	// seats is the running company's agent-seat count, which the census a
 	// log's read rate is held against scales with

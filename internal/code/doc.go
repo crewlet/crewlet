@@ -198,7 +198,11 @@
 // asked with no deadline may wait less than a budget, and one whose caller has
 // gone is never decided, so every push a committer decides is answered inside
 // its asker's attempt — never after the asker has handed the same push id to
-// another node.
+// another node. Every busy refusal names its reason on the busy counter — a
+// repository's queue, the node's bound, a deadline, a lost race — and the
+// first two, the committer's own BACKLOG, are what the node raises
+// code_commit_busy for over [CommitBusyWindow] ([Committer.AlarmReading],
+// busy.go).
 //
 // WHICH NODE DECIDES is the estate router's: a push is asked of its
 // repository's committer, the first live data node in the rendezvous order of

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -622,7 +623,7 @@ func TestTheCompactionBehindAlarmFiresOnItsNode(t *testing.T) {
 	// deadline leaves room for it only so that a pass too early fails here by
 	// its count rather than by the clock.
 	deadline := time.Now().Add(codecompact.Poll + time.Minute)
-	for engine.CodeReadingForTest(e).CodeCompactionBehind == 0 {
+	for engine.CodeReadingForTest(t.Context(), e).CodeCompactionBehind == 0 {
 		if time.Now().After(deadline) {
 			t.Fatalf("the compactor's reading named no repository at the pack bound after %d listings",
 				listings.Load())
@@ -661,6 +662,182 @@ func TestTheCompactionBehindAlarmFiresOnItsNode(t *testing.T) {
 	if !strings.Contains(detail, boundRepo) {
 		t.Errorf("the report's %s says %q, want the repository at the bound named", statelog.KindCodeCompactionBehind,
 			detail)
+	}
+}
+
+// heldPublisher holds every publish of a data node's committer until the case
+// releases it — or the batch's own budget ends — and then publishes through
+// the code log's own write authority.
+type heldPublisher struct {
+	inner   code.Publisher
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (h *heldPublisher) Publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
+	select {
+	case h.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-h.release:
+	case <-ctx.Done():
+		return statelog.Result{}, ctx.Err()
+	}
+	return h.inner.Publish(ctx, req)
+}
+
+// THE BUSY ALARM FIRES ON ITS DATA NODE, through the wiring a running node
+// has: the committer of a data node WITHOUT the git role — a node that holds
+// no git cache, and decides the pushes of every repository rendezvous ranks it
+// first for — refuses busy the proposals its repository's full queue cannot
+// hold, and the node's own reading carries them into the alarm table, so
+// code_commit_busy stands on that node naming the repository by its name. The
+// queue is filled behind the committer's first batch, held at its publish.
+//
+// Mutations: read the committer only where a git cache stands (codeReading's
+// early return on a node without one), and the reading counts nothing and the
+// alarm never fires here; leave the name out of the reading, and the detail
+// names the repository's id.
+func TestTheCommitBusyAlarmFiresOnItsDataNode(t *testing.T) {
+	t.Parallel()
+	const past = 3
+	b := gitNodeBootstrap(t, []string{"data", "ingress", "seats", "workers"})
+	held := &heldPublisher{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	e, err := engine.New(t.Context(), engine.WithCommitterPublisher(engine.Options{
+		Bootstrap: b, Company: parsedCompany(t, gitCompany),
+		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+	}, func(inner code.Publisher) code.Publisher {
+		held.inner = inner
+		return held
+	}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.WithoutCancel(t.Context())) })
+	// RELEASED BEFORE THE NODE STOPS (cleanups run last first), so the stop
+	// does not wait out the held batch's budget.
+	var released sync.Once
+	release := func() { released.Do(func() { close(held.release) }) }
+	t.Cleanup(release)
+	if _, hosts := e.CodeHost(); hosts {
+		t.Fatal("the premise: a node without the git role builds no code host, and holds no git cache")
+	}
+	c := engine.CommitterOf(e)
+	if c == nil {
+		t.Fatal("the premise: a data node of a company hosting code decides its pushes")
+	}
+	seam, ok := engine.OperatorCode(e)
+	if !ok {
+		t.Fatal("the node serves no code operations")
+	}
+	var web string
+	waitFor(t, "the declared repository to exist", func() bool {
+		answer, err := seam.Read(t.Context(), code.ReadQuery{Asker: code.Principal{Kind: code.PrincipalOperator,
+			OperatorID: "op-1", Seat: "founder"}, Kind: code.ReadRepos,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}})
+		if err != nil {
+			return false
+		}
+		for _, r := range answer.Repos {
+			if r.Name == "web" {
+				web = r.ID
+			}
+		}
+		return web != ""
+	})
+
+	// STALE, every one, so the batches append nothing once released.
+	stale := func(i int) code.Proposal {
+		return code.Proposal{
+			PushID: uuid.Must(uuid.NewV7()).String(), RepoID: web,
+			Principal: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "founder"},
+			Via:       code.ViaGit, Node: "node-a", ReceivedAt: time.Now().UTC(),
+			Commands: []code.Command{{Ref: fmt.Sprintf("refs/heads/q%04d", i),
+				Old: "1111111111111111111111111111111111111111", New: "2222222222222222222222222222222222222222"}},
+		}
+	}
+	if err := stale(0).Validate(); err != nil {
+		t.Fatalf("the premise: the proposal is one a committer would decide: %v", err)
+	}
+	type answer struct {
+		res code.ProposeResult
+		err error
+	}
+	answers := make(chan answer, code.CommitterInbox+past+1)
+	propose := func(i int) {
+		res, err := c.Propose(t.Context(), stale(i))
+		answers <- answer{res, err}
+	}
+	go propose(0)
+	select {
+	case <-held.entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the committer's first batch never reached its publish")
+	}
+	// THE QUEUE FILLED BEHIND THE HELD BATCH, and every proposal past it
+	// answered busy at once.
+	for i := 1; i <= code.CommitterInbox+past; i++ {
+		go propose(i)
+	}
+	for range past {
+		select {
+		case a := <-answers:
+			if a.err != nil || a.res.Answer.Refused != code.RefusalBusy ||
+				!strings.Contains(a.res.Answer.Detail, "queued for this repository") {
+				t.Fatalf("a proposal past the full queue answered %+v, %v; want busy, the queue full", a.res.Answer,
+					a.err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("no proposal past the full queue was answered busy")
+		}
+	}
+
+	reading := engine.CodeReadingForTest(t.Context(), e)
+	if reading.CodeCommitBusy != past || reading.CodeCommitBusyOfRepo != past || reading.CodeCommitBusyNode != 0 ||
+		reading.CodeCommitBusyRepo != "web" {
+		t.Fatalf("the node's reading is %d refused, %d of %q, %d at the node's bound; want %d of web, by its name",
+			reading.CodeCommitBusy, reading.CodeCommitBusyOfRepo, reading.CodeCommitBusyRepo,
+			reading.CodeCommitBusyNode, past)
+	}
+
+	// AND THE ALARM, at the node's next evaluation of its reading. The rest
+	// is room for a loaded machine.
+	deadline := time.Now().Add(statelog.AlarmInterval + time.Minute)
+	for {
+		kinds, _ := e.Alarms()
+		if slices.Contains(kinds, statelog.KindCodeCommitBusy) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the node's alarms are %v with its committer refusing a full queue's pushes, want %s",
+				kinds, statelog.KindCodeCommitBusy)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	report, ok := e.RetentionReport(t.Context())
+	if !ok {
+		t.Fatal("a node evaluating alarms has no retention report")
+	}
+	var detail string
+	for _, a := range report.Alarms {
+		if a.Kind == statelog.KindCodeCommitBusy {
+			detail = a.Detail
+		}
+	}
+	if !strings.Contains(detail, fmt.Sprintf("%d for web alone", past)) {
+		t.Errorf("the report's %s says %q, want the repository's refusals named by its name",
+			statelog.KindCodeCommitBusy, detail)
+	}
+
+	// EVERY CALLER ANSWERED once the batch is let through.
+	release()
+	for range code.CommitterInbox + 1 {
+		select {
+		case <-answers:
+		case <-time.After(time.Minute):
+			t.Fatal("a queued proposal was never answered after the batch ahead of it was let through")
+		}
 	}
 }
 

@@ -879,7 +879,7 @@ func (c *Committer) refusedChange(ctx context.Context, p ChangeProposal, err err
 		c.log.ErrorContext(ctx, "code_change_invalid", "repo", p.RepoID(), "op_id", p.OpID, "error", err)
 		return ChangeResult{}, err
 	case errors.Is(err, statelog.ErrConflict):
-		c.countBusy(kindChange, 1)
+		c.countBusy(p.RepoID(), kindChange, busyContended, 1)
 		return ChangeResult{ChangeID: p.ChangeID(), Refusal: ChangeRefusalBusy,
 			Detail: "the repository kept changing for every round the write may take; " + changeAgain}, nil
 	case errors.As(err, &refusal) && refusal.Reason == statelog.ReasonDeleted:

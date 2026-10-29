@@ -342,9 +342,11 @@ const (
 	KindObjectiveBurn            Kind = "objective_burn"
 	KindClockSkew                Kind = "clock_skew"
 
-	// The code host's: a git node's own work, beside the logs'.
+	// The code host's: a git node's own work, beside the logs', and the
+	// committer's on the data node that decides a repository's pushes.
 	KindCodeMaintenanceRefused Kind = "code_maintenance_refused"
 	KindCodeCompactionBehind   Kind = "code_compaction_behind"
+	KindCodeCommitBusy         Kind = "code_commit_busy"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -682,6 +684,30 @@ type Reading struct {
 	CodeCompactionBehind        int
 	CodeCompactionBehindLargest int64
 	CodeCompactionBehindRepo    string
+
+	// CodeCommitBusy is how many proposals this node's COMMITTER — the data
+	// node a repository's pushes are decided on, the first live data node in
+	// its rendezvous order — refused busy for a BACKLOG over the last
+	// TrimInterval: a repository's queue full, or the node holding its whole
+	// bound across every repository it commits for (internal/code's
+	// Committer.AlarmReading). CodeCommitBusyRepo is the repository with the
+	// most of them, by the name this node's rows hold for it, else its id;
+	// CodeCommitBusyOfRepo is how many were that repository's; and
+	// CodeCommitBusyNode is how many met the node's whole bound rather than
+	// one repository's queue. A proposal its asker could not wait for, or a
+	// record that lost every compare-and-set round, is no part of it.
+	//
+	// EACH WAS ALREADY JUDGED AT THE COMMITTER'S OWN BOUNDS, which this
+	// framework does not import, so the alarm borrows them whole (ADR-0015)
+	// and fires at any count. And the window is TrimInterval itself, which
+	// the committer borrows in turn (code.CommitBusyWindow), so the detail
+	// names the span from this package's own constant rather than from a
+	// copy of it. All zero on a node that decides no push — no data role, or
+	// a company that hosts no code — and on one that turned none away.
+	CodeCommitBusy       int
+	CodeCommitBusyRepo   string
+	CodeCommitBusyOfRepo int
+	CodeCommitBusyNode   int
 }
 
 // Alarm is one condition currently true on this node.
@@ -1478,6 +1504,51 @@ var table = []rule{
 			"still standing, the repository takes pushes faster than one node " +
 			"merges them: `crewlet.code.compact.duration` beside the pushes' " +
 			"rate says by how much. See docs/concepts/code-host.md.",
+	},
+	{
+		// THE THRESHOLD IS THE COMMITTER'S OWN BOUNDS (ADR-0015): a
+		// repository's queue — its count and its bytes — and the node's
+		// bytes across every repository it commits for, at which the
+		// committer already refused each proposal it counts. This framework
+		// imports no code-host package, so the rule fires at any count, never
+		// at a number of its own. Only a BACKLOG is counted, because only a
+		// backlog says this committer turns proposals away: a proposal whose
+		// asker's attempt ran out first is a cause upstream of the committer,
+		// and a record that lost every compare-and-set round is a second
+		// committer during a handoff — both counted by crewlet.code.commit.busy
+		// and logged, never alarmed. Raised by the node that decides the
+		// repository's pushes, whatever node received them, since it is the
+		// one whose queue is full.
+		kind: KindCodeCommitBusy,
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d proposal(s) were refused busy in the last %s because this node's "+
+					"committer could not hold them — %d for %s alone, %d at the node's whole bound across "+
+					"its repositories — each deciding nothing, and sent again by whoever made it; read "+
+					"code_commit_busy in this node's log",
+					r.CodeCommitBusy, spoken(TrimInterval), r.CodeCommitBusyOfRepo, r.CodeCommitBusyRepo,
+					r.CodeCommitBusyNode),
+				r.CodeCommitBusy > 0
+		},
+		remedy: "Nothing of a refused proposal landed, and nothing is lost: a git " +
+			"client runs the push again, a compaction is planned again at its " +
+			"node's next pass and a change's write is sent again, each paying " +
+			"another round trip, and a person meeting `busy` pushes again " +
+			"themselves. A repository's queue fills when it takes pushes faster " +
+			"than one committer commits them (docs/concepts/scaling.md measures " +
+			"the rate), so spread the pushes over repositories: each has a queue " +
+			"and a chain of records of its own, and repositories rank different " +
+			"data nodes first. The node's whole bound is one node " +
+			"committing for too many busy repositories at once: each " +
+			"repository's committer is the first live data node in its " +
+			"rendezvous order, so more data nodes spread them. A seat pushing in " +
+			"a loop is held to `code.limits.pushes_per_seat_day` a day. Each " +
+			"`code_commit_busy` line in this node's log names a repository and a " +
+			"minute, with how many proposals were refused at its own queue " +
+			"(`queue`), at the node's bound (`node`), too late for their asker " +
+			"(`late`) and after every compare-and-set round (`contended`); the " +
+			"last two raise no alarm, and the `reason` attribute of " +
+			"`crewlet.code.commit.busy` counts all four. See " +
+			"docs/concepts/code-host.md.",
 	},
 }
 

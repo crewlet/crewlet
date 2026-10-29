@@ -519,7 +519,8 @@ func (r *Retention) sweepRepo(ctx context.Context, id string, now time.Time, pac
 			// THE CONTEXT, NOT THE REPOSITORY, as a purge step's.
 			return false, ctx.Err()
 		case err != nil:
-			report.fail(r.nameOf(ctx, id), err.Error())
+			// THE REPORT IS KEYED BY NAME, as an operator reads it.
+			report.fail(r.Store.NameOf(ctx, id), err.Error())
 			return false, nil
 		case res.Rows == 0:
 			return false, nil
@@ -530,16 +531,6 @@ func (r *Retention) sweepRepo(ctx context.Context, id string, now time.Time, pac
 			return false, nil
 		}
 	}
-}
-
-// nameOf is the name a failure of repository id's is reported by: the name
-// this node's rows hold for it, or the id where they hold none — the report is
-// keyed by name, as an operator reads it.
-func (r *Retention) nameOf(ctx context.Context, id string) string {
-	if name, found, err := r.Store.repoName(ctx, id); err == nil && found {
-		return name
-	}
-	return id
 }
 
 // purge steps one repository until its purge is done, a step fails, the

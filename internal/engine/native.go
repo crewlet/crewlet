@@ -138,9 +138,13 @@ type native struct {
 	// ([builtWith.runsCode]) and nil otherwise: a log runs in every
 	// register, but a committer exists only where somebody asked for pushes
 	// to be decided. Handed out only through [Engine.writeSide], so a node
-	// in a maintenance mode decides nothing. changeWriter is the committer's
-	// sibling, built and handed out with it: the writer of changes'
-	// conversations, each on the change's own subject.
+	// in a maintenance mode decides nothing. The committer is also READ, at
+	// each alarm evaluation, for what it refused busy for a backlog — on
+	// every data node that holds one, the git role or not — and its reading
+	// is assigned field by field in [Engine.codeReading] itself, where the
+	// reading's producers gate finds each field written. changeWriter is the
+	// committer's sibling, built and handed out with it: the writer of
+	// changes' conversations, each on the change's own subject.
 	codeStore    *code.Store
 	committer    *code.Committer
 	changeWriter *code.ChangeWriter
@@ -397,8 +401,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			}); err != nil {
 				return fmt.Errorf("engine: code store: %w", err)
 			}
+			var publisher code.Publisher = running.publisher
+			if e.committerPublisher != nil {
+				publisher = e.committerPublisher(publisher)
+			}
 			if n.committer, err = code.NewCommitter(code.CommitterOptions{
-				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
+				Publisher: publisher, DB: sl.estate().Reader(), NodeID: nodeID,
 				// THE DECIDING NODE'S EPOCH, read per decision, so a
 				// limit an activation moves holds from that activation
 				// on — on every committer at once, since each reads its

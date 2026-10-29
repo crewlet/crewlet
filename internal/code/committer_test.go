@@ -190,6 +190,12 @@ func reading(rec *metrics.Recorder, name string) metrics.Snapshot {
 	return metrics.Snapshot{}
 }
 
+// pushesBusy is how many pushes rec counted refused busy for reason (the
+// busy counter's `reason`: queue, node, late or contended).
+func pushesBusy(rec *metrics.Recorder, reason string) uint64 {
+	return readingOf(rec, metrics.CodeCommitBusy, metrics.Attrs{"kind": "push", "reason": reason}).Total
+}
+
 // requireOK fails t unless a is an applied push whose every command is ok.
 func requireOK(t *testing.T, a answer) {
 	t.Helper()
@@ -637,8 +643,8 @@ func TestAFullInboxIsBusyNotBlocked(t *testing.T) {
 	if got := gate.calls.Load(); got != 1 {
 		t.Fatalf("%d publishes reached the gate before the busy answer, want the held one", got)
 	}
-	if got := reading(rec, metrics.CodeCommitBusy).Total; got != 1 {
-		t.Fatalf("the busy counter reads %d, want 1", got)
+	if got := pushesBusy(rec, "queue"); got != 1 {
+		t.Fatalf("the busy counter reads %d at the repository's queue, want 1", got)
 	}
 	gate.open()
 	requireOK(t, await(t, lead))
@@ -771,8 +777,12 @@ func TestANodeFullOfBytesIsBusy(t *testing.T) {
 			"node was full rather than the repository", busyAPI.Answer.Detail)
 	}
 	requireOnePlacement(t, busyAPI.Answer)
-	if got := reading(rec, metrics.CodeCommitBusy).Total; got != 2 {
-		t.Fatalf("the busy counter reads %d, want 2: one per repository refused", got)
+	// ONE A REPOSITORY, each under the bound it met: the first repository's
+	// own queue, the second the node's.
+	for _, reason := range []string{"queue", "node"} {
+		if got := pushesBusy(rec, reason); got != 1 {
+			t.Fatalf("the busy counter reads %d pushes refused for %s, want 1", got, reason)
+		}
 	}
 
 	gate.open()
@@ -868,8 +878,8 @@ func TestAQueuedPushIsNeverDecidedPastOneBudget(t *testing.T) {
 	if got := n.end() - before; got != 2 {
 		t.Fatalf("%d records appended, want 2", got)
 	}
-	if got := reading(rec, metrics.CodeCommitBusy).Total; got != 3 {
-		t.Fatalf("the busy counter reads %d, want the tail's 3", got)
+	if got := pushesBusy(rec, "late"); got != 3 {
+		t.Fatalf("the busy counter reads %d too late, want the tail's 3", got)
 	}
 }
 
@@ -962,8 +972,8 @@ func TestAPushItsAskerCannotWaitForIsBusyAtOnce(t *testing.T) {
 	if got := n.end() - before; got != 1 {
 		t.Fatalf("%d records appended, want the lead's alone", got)
 	}
-	if got := reading(rec, metrics.CodeCommitBusy).Total; got != 1 {
-		t.Fatalf("the busy counter reads %d, want 1", got)
+	if got := pushesBusy(rec, "late"); got != 1 {
+		t.Fatalf("the busy counter reads %d too late, want 1", got)
 	}
 }
 
@@ -1014,8 +1024,8 @@ func TestAQueuedPushIsAnsweredBeforeItsAskerGivesUp(t *testing.T) {
 	if got := n.target(repo, "refs/heads/waiting"); got != "" {
 		t.Fatalf("refs/heads/waiting is at %s, want no ref", got)
 	}
-	if got := reading(rec, metrics.CodeCommitBusy).Total; got != 1 {
-		t.Fatalf("the busy counter reads %d, want 1", got)
+	if got := pushesBusy(rec, "late"); got != 1 {
+		t.Fatalf("the busy counter reads %d too late, want 1", got)
 	}
 }
 
@@ -1061,8 +1071,8 @@ func TestAPushIsJudgedByItsCallersDeadline(t *testing.T) {
 	if got := n.end() - before; got != 2 {
 		t.Fatalf("%d records appended, want 2: the lead, and the push its asker still waits for", got)
 	}
-	if got := reading(rec, metrics.CodeCommitBusy).Total; got != 1 {
-		t.Fatalf("the busy counter reads %d, want 1", got)
+	if got := pushesBusy(rec, "late"); got != 1 {
+		t.Fatalf("the busy counter reads %d too late, want 1", got)
 	}
 }
 

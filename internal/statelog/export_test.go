@@ -1,6 +1,16 @@
 package statelog
 
-import "log/slog"
+import (
+	"log/slog"
+	"time"
+)
+
+// SpokenForTest is d as an alarm's detail says a duration ([spoken]).
+//
+// EXPORTED FOR A TEST because a detail that names a window by the constant it
+// borrows, rather than by a literal of its own, is a rule a case can hold
+// only by rendering the constant the same way.
+func SpokenForTest(d time.Duration) string { return spoken(d) }
 
 // RankOffersForTest is [collectOffers]' ordering, over offers already
 // collected.

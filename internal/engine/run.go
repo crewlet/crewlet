@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/code"
 	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/readaudit"
 	"github.com/crewlet/crewlet/internal/compact"
@@ -391,6 +392,13 @@ type Engine struct {
 	// nil — every engine New builds outside this package's tests — hands the
 	// compactor the router's code seam as it is ([Engine.buildCodeHost]).
 	compactorEstate func(codecompact.Estate) codecompact.Estate
+
+	// committerPublisher is Options.committerPublisher, kept because a
+	// runtime the first apply that hosts code starts builds its committer
+	// too: nil — every engine New builds outside this package's tests —
+	// hands the committer the code log's write authority as it is
+	// ([Engine.startNative]).
+	committerPublisher func(code.Publisher) code.Publisher
 
 	// sandboxSeats are the seats whose sandbox control topic this node has
 	// attached, so a seat is attached exactly once however it came to be
@@ -1084,6 +1092,16 @@ type Options struct {
 	// compactor a repository at the pack bound without pushing two thousand
 	// packs into it.
 	compactorEstate func(codecompact.Estate) codecompact.Estate
+
+	// committerPublisher stands between a data node's committer and the code
+	// log's write authority it publishes through
+	// ([code.CommitterOptions.Publisher]), nil for none. UNEXPORTED for
+	// cacheDisk's reason (export_test.go): the knob exists only so a case
+	// whose subject is the busy alarm a running node raises can hold the
+	// committer's first batch at its publish, and so fill a repository's
+	// queue, rather than race a burst against batches a healthy committer
+	// lands in milliseconds.
+	committerPublisher func(code.Publisher) code.Publisher
 }
 
 // New assembles an engine.
@@ -1311,6 +1329,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		cacheDisk:           opts.cacheDisk,
 		gitMemory:           opts.gitMemory,
 		compactorEstate:     opts.compactorEstate,
+		committerPublisher:  opts.committerPublisher,
 		usageEvery:          opts.usageEvery,
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,

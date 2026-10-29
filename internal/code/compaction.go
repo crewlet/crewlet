@@ -498,7 +498,7 @@ func (c *Committer) refusedCompaction(ctx context.Context, comp Compaction, err 
 			"compaction_id", comp.CompactionID, "node", comp.Node, "error", err)
 		return CompactResult{}, err
 	case errors.Is(err, statelog.ErrConflict):
-		c.countBusy(kindCompaction, 1)
+		c.countBusy(comp.RepoID, kindCompaction, busyContended, 1)
 		return CompactResult{Refusal: RefusalBusy, Detail: "the repository kept changing for every round " +
 			"the write may take; the next pass plans again"}, nil
 	case errors.As(err, &refusal) && refusal.Reason == statelog.ReasonDeleted:

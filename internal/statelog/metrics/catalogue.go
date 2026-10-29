@@ -761,35 +761,41 @@ func Catalogue() []Instrument {
 		},
 		{
 			Name: CodeCommitBusy, Kind: KindCounter, Unit: UnitCount,
-			Attributes: []string{"kind"},
-			Shows: "Proposals refused `busy`, undecided, by `kind`: `push`, " +
-				"whose client runs `git push` again; `compaction`, which " +
-				"the git node that built it plans again at its next pass; " +
-				"`expunge`, a record of an expunge of a repository's " +
-				"unreachable objects — a person's purge request, which they " +
-				"ask for again, or the begin or the commit its maintainer " +
-				"built, which it plans again at its next pass; and `change`, " +
-				"a write of a change's lifecycle, which its asker sends " +
-				"again. One " +
-				"of three causes that point at different remedies. A BACKLOG: a " +
+			Attributes: []string{"kind", "reason"},
+			Shows: "Proposals refused `busy`, undecided, by `kind` and `reason`. " +
+				"`kind`: `push`, whose client runs `git push` again; " +
+				"`compaction`, which the git node that built it plans again at " +
+				"its next pass; `expunge`, a record of an expunge of a " +
+				"repository's unreachable objects — a person's purge request, " +
+				"which they ask for again, or the begin or the commit its " +
+				"maintainer built, which it plans again at its next pass; and " +
+				"`change`, a write of a change's lifecycle, which its asker " +
+				"sends again. `reason` is one of four causes, each pointing at " +
+				"a different remedy. Two are a BACKLOG, which raises " +
+				"`code_commit_busy` on the committer's node: `queue`, a " +
 				"repository taking pushes faster than one node's committer " +
 				"commits them (its queue of 1 024 proposals, or sixteen " +
-				"records' bytes, is full), or the node holding sixty-four " +
-				"records' bytes of proposals across its repositories. A " +
-				"DEADLINE, either way round: a proposal that waited behind " +
-				"earlier ones until its asker's attempt had no more left than " +
-				"the 30-second commit budget and a second for the answer, or " +
-				"one that ARRIVED with no more than that left — the attempt " +
-				"spent before it reached the committer, waiting for the node to " +
-				"take it (its proposal slots full), for the node to reach the " +
-				"asker's own writes, or under a caller deadline shorter than 31 " +
-				"seconds; asked with no deadline, one that waited that budget " +
-				"whole. Or a record that lost every compare-and-set round it may " +
-				"take. A `compaction` busy is a repository whose pushes keep " +
-				"its committer's queue full, and whose pack count grows " +
-				"meanwhile; an `expunge` busy, one whose unreachable objects " +
-				"stay in the store meanwhile. No repository is an attribute — which one is hot is " +
-				"a question for its rows, not a time series a repository.",
+				"records' bytes, is full); and `node`, the node holding " +
+				"sixty-four records' bytes of proposals across its " +
+				"repositories. `late` is a DEADLINE, either way round: a " +
+				"proposal that waited behind earlier ones until its asker's " +
+				"attempt had no more left than the 30-second commit budget and " +
+				"a second for the answer, or one that ARRIVED with no more than " +
+				"that left — the attempt spent before it reached the committer, " +
+				"waiting for the node to take it (its proposal slots full), for " +
+				"the node to reach the asker's own writes, or under a caller " +
+				"deadline shorter than 31 seconds; asked with no deadline, one " +
+				"that waited that budget whole. `contended` is a record that " +
+				"lost every compare-and-set round it may take: the repository " +
+				"kept changing, a second committer deciding it during a " +
+				"handoff. Neither of the last two says this committer turns " +
+				"proposals away, so neither raises an alarm. A `compaction` " +
+				"busy is a repository whose pushes keep its committer's queue " +
+				"full, and whose pack count grows meanwhile; an `expunge` busy, " +
+				"one whose unreachable objects stay in the store meanwhile. No " +
+				"repository is an attribute — which one is hot is a question " +
+				"for its rows and the node's `code_commit_busy` lines, a " +
+				"repository a minute, not a time series a repository.",
 		},
 		{
 			Name: CodeCompactRuns, Kind: KindCounter, Unit: UnitCount,

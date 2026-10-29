@@ -486,7 +486,7 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 		r.objects(now, &out)
 	}
 	if r.code != nil {
-		r.code(&out)
+		r.code(ctx, now, &out)
 	}
 	r.space(&out, now)
 	r.maintenance(ctx, now, &out)

@@ -202,6 +202,13 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			"2 repository(ies) this node maintains hold the most live packs a repository may — the most, " +
 				"web, holds 2051",
 		},
+		"proposals a committer could not hold": {
+			statelog.KindCodeCommitBusy,
+			statelog.Reading{CodeCommitBusy: 3, CodeCommitBusyRepo: "web", CodeCommitBusyOfRepo: 2,
+				CodeCommitBusyNode: 1},
+			"3 proposal(s) were refused busy in the last 15m because this node's committer could not hold " +
+				"them — 2 for web alone, 1 at the node's whole bound",
+		},
 		"a service objective burning its budget": {
 			statelog.KindObjectiveBurn,
 			statelog.Reading{ObjectiveBurns: burning(objectives.ArtifactReady, 90, 10)},
@@ -581,6 +588,47 @@ func TestTheCompactionBehindAlarmBorrowsThePackBound(t *testing.T) {
 		if fired && !strings.Contains(alarm.Detail, c.reading.CodeCompactionBehindRepo) {
 			t.Errorf("%s: the detail %q names no repository, and an operator is told the node is behind "+
 				"on nothing they can find", name, alarm.Detail)
+		}
+	}
+}
+
+// THE BUSY ALARM FIRES AT THE COMMITTER'S BOUNDS, never at a number of its
+// own: every proposal the reading counts was refused busy by the committer at
+// a repository's queue or the node's whole bound (code.CommitterInbox,
+// CommitterInboxBytes, CommitterNodeBytes — a package this framework does not
+// import), so one is the alarm. A repository and a node's share the reading
+// carries are figures for the detail — a repository named with nothing
+// counted is no backlog — and the window the detail names is the trim's tick,
+// the constant the committer borrows (code.CommitBusyWindow), never a copy.
+//
+// Mutations: fire past a count of the rule's own (ten, say), and the single
+// refusal raises nothing; fire on a named repository, and the reading that
+// counts nothing raises it; name another span in the detail (the evaluation's
+// AlarmInterval), and it misstates the window the committer counts over.
+func TestCodeCommitBusyFiresAtTheCommittersBounds(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		reading statelog.Reading
+		fires   bool
+	}{
+		"one proposal refused at a repository's queue": {statelog.Reading{CodeCommitBusy: 1,
+			CodeCommitBusyRepo: "web", CodeCommitBusyOfRepo: 1}, true},
+		"proposals refused at the node's whole bound": {statelog.Reading{CodeCommitBusy: 5,
+			CodeCommitBusyRepo: "api", CodeCommitBusyOfRepo: 3, CodeCommitBusyNode: 5}, true},
+		"a repository named with nothing counted": {statelog.Reading{CodeCommitBusyRepo: "web"}, false},
+		"a node that decides no push":             {statelog.Reading{}, false},
+	} {
+		alarm, fired := find(statelog.Evaluate(c.reading), statelog.KindCodeCommitBusy)
+		if fired != c.fires {
+			t.Errorf("%s: fired %v, want %v", name, fired, c.fires)
+		}
+		if !fired {
+			continue
+		}
+		window := "in the last " + statelog.SpokenForTest(statelog.TrimInterval)
+		if !strings.Contains(alarm.Detail, c.reading.CodeCommitBusyRepo) || !strings.Contains(alarm.Detail, window) {
+			t.Errorf("%s: the detail %q does not name the repository with the most refusals and the window %q",
+				name, alarm.Detail, window)
 		}
 	}
 }

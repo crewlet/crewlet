@@ -150,6 +150,17 @@ func (s *Store) repoName(ctx context.Context, id string) (string, bool, error) {
 	return name, true, nil
 }
 
+// NameOf is the name repository id is reported by, as an operator reads it:
+// the name this node's rows hold for it, or the id where they hold none or
+// could not be read — for a report keyed by name that has only an id in hand,
+// the retention pass's failures and the busy alarm's repository among them.
+func (s *Store) NameOf(ctx context.Context, id string) string {
+	if name, found, err := s.repoName(ctx, id); err == nil && found {
+		return name
+	}
+	return id
+}
+
 // The purge's decide statements. remainingSQL is the tracker's BOUNDED COUNT:
 // the decide needs "more than PurgePartRows", never the total, so each table
 // a part deletes from — the pushes, the refs, the packs, the retired packs, the

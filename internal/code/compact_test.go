@@ -630,8 +630,9 @@ func TestABusyCompactionIsCountedApartFromABusyPush(t *testing.T) {
 		t.Fatalf("an expunge record past the node's bytes answered %+v, %v; want busy, the node full", expunge, err)
 	}
 	for _, kind := range []string{"push", "compaction", "expunge"} {
-		if got := readingOf(rec, metrics.CodeCommitBusy, metrics.Attrs{"kind": kind}).Total; got != 1 {
-			t.Errorf("the busy counter reads %d of kind %s, want 1", got, kind)
+		attrs := metrics.Attrs{"kind": kind, "reason": "node"}
+		if got := readingOf(rec, metrics.CodeCommitBusy, attrs).Total; got != 1 {
+			t.Errorf("the busy counter reads %d under %v, want 1", got, attrs)
 		}
 	}
 	if got := n.end(); got != before {

@@ -180,6 +180,12 @@ import (
 // repository rendezvous ranks it first for, and per-repository bounds alone
 // let a thousand of the largest pushes from as many repositories hold about a
 // gibibyte of entries (EntryRoom each), and as much again decoded.
+//
+// A refusal at either bound is a BACKLOG, the one busy that says this
+// committer turns proposals away, so the committer keeps those refusals for
+// [CommitBusyWindow] by repository and the engine reads them into the node's
+// alarm reading ([Committer.AlarmReading]): code_commit_busy stands on the data
+// node whose committer refused them (busy.go).
 
 // CommitterOptions configure a committer.
 type CommitterOptions struct {
@@ -230,7 +236,8 @@ type CommitterOptions struct {
 	// Metrics records the batch sizes and the busy refusals; nil records
 	// nothing.
 	Metrics *metrics.Recorder
-	// Logger is where a failed batch is reported; nil is the package's.
+	// Logger is where a failed batch is reported, and a minute's busy
+	// refusals of a repository (code_commit_busy); nil is the package's.
 	Logger *slog.Logger
 }
 
@@ -277,6 +284,10 @@ type Committer struct {
 	// (export_test.go), which holds a round under the rules the formation
 	// before the publish read to forming none there.
 	formedInRound func(formed int)
+
+	// busyWindow is every busy refusal of the last CommitBusyWindow, a
+	// bucket a minute, which [Committer.AlarmReading] reads (busy.go).
+	busyWindow busyWindow
 
 	// life is the batches' context: the committer's own lifetime, never a
 	// caller's — THE ONE CONTEXT STORED IN A STRUCT, because a batch is
@@ -556,11 +567,11 @@ func (c *Committer) queue(ctx context.Context, q *queued) answered {
 	if refusal := q.late(q.arrived); refusal != "" {
 		// TOO LATE BEFORE IT IS QUEUED: answered without taking the place
 		// in the queue a proposal that can still be decided needs.
-		return c.busy(q, refusal)
+		return c.busy(q, busyLate, refusal)
 	}
 	//nolint:contextcheck // The batch is the committer's, not this caller's: it runs under the committer's own lifetime so a caller that hangs up never cancels the batch other callers are in.
-	if refused, full := c.enqueue(q); full {
-		return c.busy(q, refused)
+	if refused, full := c.enqueue(q); full != "" {
+		return c.busy(q, full, refused)
 	} else if refused != "" {
 		return answered{err: fmt.Errorf("%w: %s", ErrNotServing, refused)}
 	}
@@ -602,7 +613,7 @@ func (c *Committer) await(ctx context.Context, q *queued) answered {
 		case <-expire:
 			expire = nil
 			if q.withdraw() {
-				return c.busy(q, q.shortOfTime(q.deadline.Sub(c.clock())))
+				return c.busy(q, busyLate, q.shortOfTime(q.deadline.Sub(c.clock())))
 			}
 			// A BATCH TOOK IT FIRST, with a whole budget and the margin
 			// still in hand: its answer comes inside the attempt.
@@ -618,11 +629,11 @@ func (c *Committer) await(ctx context.Context, q *queued) answered {
 	}
 }
 
-// busy counts q refused busy and answers it so, undecided: a push with every
-// command it carries refused, a compaction, an expunge record or a change's
-// write refused whole.
-func (c *Committer) busy(q *queued, refusal string) answered {
-	c.countBusy(q.kind(), 1)
+// busy counts q refused busy for reason and answers it so, undecided: a push
+// with every command it carries refused, a compaction, an expunge record or a
+// change's write refused whole.
+func (c *Committer) busy(q *queued, reason busyReason, refusal string) answered {
+	c.countBusy(q.repoID(), q.kind(), reason, 1)
 	switch {
 	case q.compaction != nil:
 		return answered{compact: CompactResult{Refusal: RefusalBusy, Detail: refusal}}
@@ -635,34 +646,39 @@ func (c *Committer) busy(q *queued, refusal string) answered {
 	return answered{res: ProposeResult{Answer: refuseAll(q.p, RefusalBusy, refusal)}}
 }
 
-// countBusy counts n proposals of kind refused busy — under the `kind` the
-// instrument names, so a repository's pushes refused for a backlog read apart
-// from a compaction that met one.
-func (c *Committer) countBusy(kind string, n int) {
+// countBusy counts n proposals of kind to repoID refused busy for reason —
+// under the `kind` and the `reason` the instrument names, so a repository's
+// pushes refused for a backlog read apart from a compaction that met one, and a
+// backlog apart from a deadline or a lost race — and files them in the window
+// code_commit_busy is read from, writing the lines of any minute that filing
+// closed (busy.go).
+func (c *Committer) countBusy(repoID, kind string, reason busyReason, n int) {
 	if c.metrics != nil {
-		c.metrics.Add(metrics.CodeCommitBusy, uint64(n), metrics.Attrs{"kind": kind})
+		c.metrics.Add(metrics.CodeCommitBusy, uint64(n), metrics.Attrs{"kind": kind, "reason": string(reason)})
 	}
+	c.sayBusy(c.busyWindow.file(c.clock(), repoID, reason, n))
 }
 
 // enqueue puts q on its repository's queue, starting the repository's
 // goroutine when it has none, and counts it held until [Committer.release].
-// It answers why it did not: full for a queue at its count or its bytes, or a
-// node holding its bytes, and a sentence either way.
+// It answers why it did not: a sentence, and the bound a full one met —
+// [busyQueue] for the repository's count or bytes, [busyNode] for the node's
+// bytes — or none for a committer that is stopping.
 //
 // THE SEND IS UNDER mu, which is what makes the idle exit race-free: a
 // goroutine leaves the map only under mu and only with an empty queue, so a
 // proposal either reaches a goroutine that will drain it or starts a new one.
-func (c *Committer) enqueue(q *queued) (string, bool) {
+func (c *Committer) enqueue(q *queued) (string, busyReason) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.stopped {
-		return "the committer is stopping", false
+		return "the committer is stopping", ""
 	}
 	if c.held+q.bytes > c.nodeBytes {
 		// BEFORE A GOROUTINE IS STARTED for a repository this node may
 		// hold nothing of.
 		return fmt.Sprintf("%d bytes of pushes are held across this node's repositories, and %d "+
-			"more would pass the %d it holds", c.held, q.bytes, c.nodeBytes), true
+			"more would pass the %d it holds", c.held, q.bytes, c.nodeBytes), busyNode
 	}
 	rc := c.repos[q.repoID()]
 	if rc == nil {
@@ -673,16 +689,16 @@ func (c *Committer) enqueue(q *queued) (string, bool) {
 	}
 	if rc.queued+q.bytes > CommitterInboxBytes {
 		return fmt.Sprintf("%d bytes of pushes are queued for this repository on this node, "+
-			"and %d more would pass the %d it holds", rc.queued, q.bytes, CommitterInboxBytes), true
+			"and %d more would pass the %d it holds", rc.queued, q.bytes, CommitterInboxBytes), busyQueue
 	}
 	select {
 	case rc.inbox <- q:
 		rc.queued += q.bytes
 		c.held += q.bytes
-		return "", false
+		return "", ""
 	default:
 		return fmt.Sprintf("%d pushes are queued for this repository on this node, the most "+
-			"it holds", len(rc.inbox)), true
+			"it holds", len(rc.inbox)), busyQueue
 	}
 }
 
@@ -851,7 +867,7 @@ func (c *Committer) admit(q *queued) bool {
 		return false
 	}
 	if refusal := q.late(c.clock()); refusal != "" {
-		q.answer <- c.busy(q, refusal)
+		q.answer <- c.busy(q, busyLate, refusal)
 		return false
 	}
 	return true
@@ -1227,7 +1243,7 @@ func (c *Committer) refused(ctx context.Context, repoID string, batch []Proposal
 	var refusal *statelog.Unavailable
 	switch {
 	case errors.Is(err, statelog.ErrConflict):
-		c.countBusy(kindPush, len(batch))
+		c.countBusy(repoID, kindPush, busyContended, len(batch))
 		for i, p := range batch {
 			out[i].res.Answer = refuseAll(p, RefusalBusy, "the repository kept changing for every "+
 				"round the write may take; run git push again")

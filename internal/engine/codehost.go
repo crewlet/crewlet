@@ -432,7 +432,11 @@ type codeHostParts struct {
 	withdrawStatus queue.Unsubscribe
 }
 
-// codeReading fills the reading's code half from this node's git cache: how
+// codeReading fills the reading's code half at now from this node's
+// committer: how many proposals it refused busy for a backlog over the window
+// code_commit_busy stands for, the repository with the most of them — named
+// by this node's own rows, else by its id — and how many met the node's whole
+// bound ([code.Committer.AlarmReading]). And from this node's git cache: how
 // many repositories it cannot write a bitmap of for memory — its own, or the
 // one a publication of a repository it maintains writes — the largest of those
 // charges and the budget they are past ([cache.Cache.AlarmReading]), which
@@ -453,13 +457,37 @@ type codeHostParts struct {
 // hosts no code, holds no cache and leaves the fields zero, which the table
 // reads as nothing wrong here.
 //
+// THE COMMITTER BESIDE THE CACHE, NEVER INSIDE ITS BRANCH: a committer runs on
+// every data node of a company that hosts code ([native.committer]), the git
+// role or not, and a data node without it holds no cache — so a reading that
+// asked the committer only where a cache stood was silent on exactly the node
+// whose queue was full. Its four fields are ASSIGNED HERE, from the concrete
+// committer's reading, because the reading's producers gate follows a call
+// that hands the reading on, never one whose result is the committer's own
+// shape (TestEveryAlarmReadingFieldHasAProducer).
+//
 // Read from the PUBLISHED runtime at each evaluation, never captured, as every
 // surface asks for the code host ([Engine.CodeHost]); a reading taken after
 // the host stopped reads the cache's last pass, which is the truth about the
 // node until it exits.
-func (e *Engine) codeReading(out *statelog.Reading) {
+func (e *Engine) codeReading(ctx context.Context, now time.Time, out *statelog.Reading) {
 	n := e.native.Load()
-	if n == nil || n.gitCache == nil {
+	if n == nil {
+		return
+	}
+	if n.committer != nil {
+		busy := n.committer.AlarmReading(now)
+		out.CodeCommitBusy = busy.Refused
+		out.CodeCommitBusyOfRepo = busy.OfRepo
+		out.CodeCommitBusyNode = busy.Node
+		if busy.Repo != "" {
+			// THE NAME AN OPERATOR KNOWS, read from this node's own rows
+			// only while something was refused: one point read an
+			// evaluation, the id where the rows hold none.
+			out.CodeCommitBusyRepo = n.codeStore.NameOf(ctx, busy.Repo)
+		}
+	}
+	if n.gitCache == nil {
 		return
 	}
 	n.gitCache.AlarmReading(out)
