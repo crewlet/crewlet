@@ -974,6 +974,22 @@ function offline(err) {
 * finish it with.
 */
 var REQUEST_TIMEOUT_MS = 3e4;
+/**
+* One path segment of a request, from a value the engine named (a model's
+* key, a sign-in's id): always exactly one segment, or no request at all.
+*
+* `encodeURIComponent` escapes `/`, `?` and `#`, which would otherwise reach
+* another route or start the query. It cannot make `.` or `..` a name: a
+* segment of dots alone is a step along the path, and the URL standard reads
+* `%2E%2E` as `..` too, so no escaping sends it as one segment. No name the
+* engine mints is one (a model's key starts with a letter or a digit), so
+* such a value is refused here, before anything is sent, rather than sent to
+* the route above.
+*/
+function pathSegment(value) {
+	if (/^\.*$/.test(value)) throw new RangeError(`"${value}" cannot be sent as one path segment`);
+	return encodeURIComponent(value);
+}
 /** A deadline as a person would say it: seconds under two minutes, else
 *  minutes. */
 function waitWords(ms) {
@@ -3511,4 +3527,4 @@ function refusalOf(tool, opId, err, floors) {
 	};
 }
 //#endregion
-export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, stepUpAsked, unavailableRetryMs, whenRequestsSettle };
+export { BROKER_FINDING_KINDS, BROKER_KINDS, BROKER_REMOVE_TIMEOUT_MS, LiveSocket, QueryError, REQUEST_TIMEOUT_MS, RestError, SESSION_KEEPALIVE_MS, SessionFloors, SessionKeepAlive, Store, act, api, auth, confirmStepUp, currentSessionNeed, domainOf, isAbort, isLogRefusal, keepsOperation, lastAnsweredAt, layoutOpID, needSession, newActOpID, newGateOpID, onSessionNeed, onStepUpAsked, pathSegment, queryErrorCode, refusedGrants, rest, retryAfterMs, retryAfterSeconds, sessionNeedsEnrolment, sessionRestored, setStepUpConfirmer, stepUpAsked, unavailableRetryMs, whenRequestsSettle };
