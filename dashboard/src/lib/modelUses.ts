@@ -6,10 +6,13 @@
  * THREE CATEGORIES, FIVE FIELDS. The engine resolves a seat's five jobs from
  * five fields (`SEAT_JOB_FIELDS`, held to the engine by a Go gate). A person
  * tells three kinds of work apart, so the page offers those, and a category
- * writes every field it holds in the same revision: Coding is `llm`, Reviewing
- * and evaluations is `llm_review` and `llm_judge`, Task delegations and
- * routines is `llm_subagent` and `llm_auxiliary`. The Assistant is the
- * company's, not a seat's: `assistant.llm`, with no seats.
+ * writes every field it holds in the same revision: Coding is `llm`;
+ * Reviewing and delegations is `llm_review` and `llm_subagent`; Routines and
+ * evaluations is `llm_auxiliary` and `llm_judge`. The pairs are paired by the
+ * model each wants: the review and the delegated work take a strong model, and
+ * the routines and the onboarding judge, each under a fixed deadline, a fast
+ * one, so one choice of model serves both jobs it writes. The Assistant is
+ * the company's, not a seat's: `assistant.llm`, with no seats.
  *
  * ONE MODEL PER FIELD. The page writes a field as one scalar key and never a
  * chain (decision D3): a chain the document held there is replaced, and every
@@ -35,28 +38,28 @@ export const SEAT_JOBS = Object.keys(SEAT_JOB_FIELDS) as SeatJob[];
 const SATELLITES = SEAT_JOBS.filter((j) => j !== "executor");
 
 /** What a person picks a model for: a category of seat work. */
-export type JobCategory = "coding" | "checks" | "handoffs";
+export type JobCategory = "coding" | "reviews" | "routines";
 
 /** The categories in the order every surface lists them. */
-export const CATEGORY_ORDER: readonly JobCategory[] = ["coding", "checks", "handoffs"];
+export const CATEGORY_ORDER: readonly JobCategory[] = ["coding", "reviews", "routines"];
 
 /** The engine jobs each category holds, and so the fields it writes. */
 export const CATEGORY_JOBS: Readonly<Record<JobCategory, readonly SeatJob[]>> = {
   coding: ["executor"],
-  checks: ["review", "judge"],
-  handoffs: ["subagent", "auxiliary"],
+  reviews: ["review", "subagent"],
+  routines: ["auxiliary", "judge"],
 };
 
 /** The category each seat job belongs to. */
 export const CATEGORY_OF: Readonly<Record<SeatJob, JobCategory>> = {
   executor: "coding",
-  review: "checks",
-  judge: "checks",
-  subagent: "handoffs",
-  auxiliary: "handoffs",
+  review: "reviews",
+  subagent: "reviews",
+  auxiliary: "routines",
+  judge: "routines",
 };
 
-/** The fields a category writes, as its tooltip names them: "llm_review and llm_judge". */
+/** The fields a category writes, as its tooltip names them: "llm_review and llm_subagent". */
 export function categoryFields(category: JobCategory): string[] {
   return CATEGORY_JOBS[category].map((j) => SEAT_JOB_FIELDS[j]);
 }

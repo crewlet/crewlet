@@ -3879,17 +3879,21 @@ covers:
 | Use it for | Writes |
 |---|---|
 | Coding | the seat's `llm` |
-| Reviewing and evaluations | `llm_review` and `llm_judge` |
-| Task delegations and routines | `llm_subagent` and `llm_auxiliary` |
+| Reviewing and delegations | `llm_review` and `llm_subagent` |
+| Routines and evaluations | `llm_auxiliary` and `llm_judge` |
 | Everything | the seat's `llm`, clearing the four satellites, so every job resolves to it |
 | Assistant | `assistant.llm`, company-wide, with no seats; the model must deny web tools |
 
+The two pairs are paired by the model each wants: reviewing and the delegated
+work take a strong model, and the routines and the onboarding judge, each under
+a fixed deadline, a fast one, so one model chosen serves both jobs it writes.
 Each field is written as one model, never a chain: a fallback the field named
 before is dropped, and the review names every one it drops. Taking a model off
 a job removes it from the field, and a field left empty is deleted, so the job
-resolves as an unset one does (the review shows where it lands). A category
-whose jobs have a fixed deadline ([Auxiliary work and latency](#auxiliary-work-and-latency))
-notes when the model chosen is not a fast one, and never refuses it. A model the
+resolves as an unset one does (the review shows where it lands). Routines
+and evaluations, whose jobs have a fixed deadline
+([Auxiliary work and latency](#auxiliary-work-and-latency)), notes when the
+model chosen is not a fast one, and never refuses it. A model the
 assistant already runs on keeps it until another model is chosen for the
 assistant.
 

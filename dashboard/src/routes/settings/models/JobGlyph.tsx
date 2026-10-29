@@ -13,7 +13,7 @@ import {
   CodeGlyph,
   LayoutGridGlyph,
   ListChecksGlyph,
-  SplitGlyph,
+  RefreshCwGlyph,
   type GlyphSize,
 } from "@crewlethq/icons/glyphs";
 import type { JobCategory } from "~/lib/modelUses.ts";
@@ -23,8 +23,8 @@ export type Job = JobCategory | "assistant" | "everything" | "none";
 
 const GLYPHS: Record<Exclude<Job, "assistant">, ComponentType<{ size?: GlyphSize | number }>> = {
   coding: CodeGlyph,
-  checks: ListChecksGlyph,
-  handoffs: SplitGlyph,
+  reviews: ListChecksGlyph,
+  routines: RefreshCwGlyph,
   everything: LayoutGridGlyph,
   none: CircleDashedGlyph,
 };

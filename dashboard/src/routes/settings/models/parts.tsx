@@ -9,7 +9,7 @@ import { Menu, RelativeTime, StatusDot, Text } from "@crewlethq/ui";
 import { EllipsisGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { fmtDate } from "~/lib/format.ts";
-import type { JobCategory } from "~/lib/modelUses.ts";
+import { CATEGORY_ORDER, type JobCategory } from "~/lib/modelUses.ts";
 import type { ModelView } from "./data.ts";
 import { HEALTH, ROUTE, WINDOW } from "./words.ts";
 
@@ -49,7 +49,7 @@ const WIZARD_PARAMS = { step: null, focus: null, seat: null, job: null } as cons
 
 const isStep = (v: string): v is WizardStep => (WIZARD_STEPS as readonly string[]).includes(v);
 const FOCUSES = ["credential", "host-login"] as const;
-const JOBS = ["coding", "checks", "handoffs", "assistant"] as const;
+const JOBS: readonly string[] = [...CATEGORY_ORDER, "assistant"];
 
 /**
  * The address a wizard opens at, read back: a parameter the page does not
@@ -69,9 +69,7 @@ export function wizardAtOf(params: {
       ? { focus: params.focus as WizardAt["focus"] }
       : {}),
     ...(params.seat ? { seat: params.seat } : {}),
-    ...((JOBS as readonly string[]).includes(params.job)
-      ? { job: params.job as WizardAt["job"] }
-      : {}),
+    ...(JOBS.includes(params.job) ? { job: params.job as WizardAt["job"] } : {}),
   };
 }
 

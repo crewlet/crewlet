@@ -52,6 +52,14 @@ const role = (doc: CompanyDocument, handle: string) =>
   agentRoles(doc as unknown as Record<string, unknown>).get(handle)!;
 
 describe("the categories", () => {
+  // PAIRED BY THE MODEL EACH JOB WANTS: the review with the delegated work (a
+  // strong model), the routines with the onboarding judge (a fast one, each
+  // under a fixed deadline), so one model chosen serves both jobs it writes.
+  it("pair the jobs that want the same kind of model", () => {
+    expect(CATEGORY_JOBS.reviews).toEqual(["review", "subagent"]);
+    expect(CATEGORY_JOBS.routines).toEqual(["auxiliary", "judge"]);
+  });
+
   it("cover every seat job exactly once", () => {
     const covered = CATEGORY_ORDER.flatMap((c) => CATEGORY_JOBS[c]);
     expect([...covered].sort()).toEqual([...SEAT_JOBS].sort());
@@ -59,8 +67,8 @@ describe("the categories", () => {
 
   it("name the fields they write", () => {
     expect(categoryFields("coding")).toEqual(["llm"]);
-    expect(categoryFields("checks")).toEqual(["llm_review", "llm_judge"]);
-    expect(categoryFields("handoffs")).toEqual(["llm_subagent", "llm_auxiliary"]);
+    expect(categoryFields("reviews")).toEqual(["llm_review", "llm_subagent"]);
+    expect(categoryFields("routines")).toEqual(["llm_auxiliary", "llm_judge"]);
   });
 });
 
@@ -84,23 +92,24 @@ describe("intentOf", () => {
     expect(intentOf(noUses())).toBe("none");
     expect(intentOf({ ...noUses(), assistant: true })).toBe("assistant");
     expect(intentOf(usesForIntent("all", ["a", "b"], false))).toBe("all");
-    expect(intentOf(usesForIntent("checks", ["a"], false))).toBe("checks");
+    expect(intentOf(usesForIntent("reviews", ["a"], false))).toBe("reviews");
     // THE ASSISTANT BESIDE SEAT WORK keeps the seat choice.
-    expect(intentOf(usesForIntent("handoffs", ["a"], true))).toBe("handoffs");
+    expect(intentOf(usesForIntent("routines", ["a"], true))).toBe("routines");
   });
 
   it("reads a category split by hand as custom", () => {
     const uses: Uses = { ...noUses(), jobs: { ...noUses().jobs, review: ["a"] } };
     expect(intentOf(uses)).toBe("custom");
-    expect(categoryState(uses, "a", "checks")).toBe("some");
+    expect(categoryState(uses, "a", "reviews")).toBe("some");
   });
 
   it("switches a whole category for one seat", () => {
-    const on = withCategory(noUses(), "a", "handoffs", true);
-    expect(on.jobs.subagent).toEqual(["a"]);
+    const on = withCategory(noUses(), "a", "routines", true);
     expect(on.jobs.auxiliary).toEqual(["a"]);
-    expect(categoryState(on, "a", "handoffs")).toBe("all");
-    expect(categoryState(withCategory(on, "a", "handoffs", false), "a", "handoffs")).toBe("none");
+    expect(on.jobs.judge).toEqual(["a"]);
+    expect(on.jobs.subagent).toEqual([]);
+    expect(categoryState(on, "a", "routines")).toBe("all");
+    expect(categoryState(withCategory(on, "a", "routines", false), "a", "routines")).toBe("none");
   });
 });
 
@@ -110,11 +119,12 @@ describe("applyUses", () => {
       company(),
       "big",
       noUses(),
-      usesForIntent("checks", ["flat"], false),
+      usesForIntent("routines", ["flat"], false),
     );
     const flat = role(doc, "flat");
-    expect(flat.llm_review).toBe("big");
+    expect(flat.llm_auxiliary).toBe("big");
     expect(flat.llm_judge).toBe("big");
+    expect(flat.llm_review).toBeUndefined();
     expect(flat.llm).toBe("old");
     // THE CHAIN IT REPLACED is named for the review.
     expect(dropped).toEqual([{ seat: "flat", job: "judge", keys: ["fast", "old"] }]);
@@ -125,10 +135,11 @@ describe("applyUses", () => {
       company(),
       "big",
       noUses(),
-      usesForIntent("checks", ["mapped"], false),
+      usesForIntent("reviews", ["mapped"], false),
     );
     const mapped = role(doc, "mapped");
     expect(mapped.llm_review).toBe("big");
+    expect(mapped.llm_subagent).toBe("big");
     // The mapping held only its default once review left it, so it is stored as the scalar.
     expect(mapped.llm).toBe("old");
     expect(dropped).toContainEqual({ seat: "mapped", job: "review", keys: ["old", "fast"] });
@@ -158,15 +169,15 @@ describe("applyUses", () => {
   });
 
   it("deletes a field the model was alone in, so the job resolves as an unset one", () => {
-    const first = applyUses(company(), "big", noUses(), usesForIntent("handoffs", ["lead"], false));
+    const first = applyUses(company(), "big", noUses(), usesForIntent("routines", ["lead"], false));
     const { doc } = applyUses(
       first.doc,
       "big",
-      usesForIntent("handoffs", ["lead"], false),
+      usesForIntent("routines", ["lead"], false),
       noUses(),
     );
-    expect(role(doc, "lead").llm_subagent).toBeUndefined();
     expect(role(doc, "lead").llm_auxiliary).toBeUndefined();
+    expect(role(doc, "lead").llm_judge).toBeUndefined();
   });
 
   it("writes the assistant's model, company-wide, and leaves seats alone", () => {
