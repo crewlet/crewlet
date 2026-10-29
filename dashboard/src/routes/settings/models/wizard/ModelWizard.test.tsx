@@ -270,6 +270,26 @@ test("the credential is tested, then stored with its draft before the document t
   expect(location.hash).toContain("settings/models/sonnet-key");
 });
 
+test("a save that answers after the wizard closed neither moves the page nor goes on", async () => {
+  show();
+  await walkToReview();
+  let answer!: (value: unknown) => void;
+  let sent: AbortSignal | null = null;
+  vi.mocked(api.writeDocument).mockImplementationOnce((_doc, _options, signal) => {
+    sent = signal;
+    return new Promise((resolve) => (answer = resolve)) as never;
+  });
+  press("Create model");
+  await waitFor(() => expect(sent).not.toBeNull());
+  location.hash = "#/somewhere-else";
+  cleanup();
+  expect(sent!.aborted).toBe(true);
+  await act(async () =>
+    answer({ kind: "saved", revisionId: "rev-2", epoch: 2, warnings: [], derived: null }),
+  );
+  expect(location.hash).toBe("#/somewhere-else");
+});
+
 test("a refused key is said at the key, and the Method step is where it is fixed", async () => {
   vi.mocked(api.testCredential).mockResolvedValue({
     kind: "refused",

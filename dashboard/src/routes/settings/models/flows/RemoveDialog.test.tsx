@@ -66,13 +66,15 @@ function open(assistantWebDenied: boolean) {
     assistant: { enabled: true, key: "sonnet" },
   });
   const onDone = vi.fn();
-  render(
+  view = render(
     <Router>
       <RemoveDialog model={data.models[0]!} data={data} onClose={() => {}} onDone={onDone} />
     </Router>,
   );
   return onDone;
 }
+
+let view: ReturnType<typeof render>;
 
 const settle = () => act(async () => {});
 
@@ -156,4 +158,29 @@ test("the removal waits for the typed name, then states the revision it read and
   });
   expect(onDone).toHaveBeenCalled();
   expect(window.location.hash).toContain("settings/models");
+});
+
+test("a removal that answers after the dialog closed neither toasts nor moves the page", async () => {
+  const onDone = open(true);
+  await screen.findByRole("list", { name: "Where sonnet is named" });
+  await settle();
+  fireEvent.change(screen.getByRole("textbox"), { target: { value: "sonnet" } });
+  let answer!: (value: unknown) => void;
+  let sent: AbortSignal | null = null;
+  removeModel.mockImplementationOnce((_k, _r, _o, signal: AbortSignal) => {
+    sent = signal;
+    return new Promise((resolve) => (answer = resolve));
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Remove model" }));
+  window.location.hash = "#/somewhere-else";
+  view.unmount();
+  expect(sent!.aborted).toBe(true);
+  await act(async () =>
+    answer({
+      outcome: { kind: "saved", revisionId: "rev-2", epoch: 3, warnings: [], derived: null },
+      references: [],
+    }),
+  );
+  expect(onDone).not.toHaveBeenCalled();
+  expect(window.location.hash).toBe("#/somewhere-else");
 });
