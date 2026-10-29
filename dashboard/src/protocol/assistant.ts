@@ -49,7 +49,7 @@
 // RELATIVE, not through `~`: protocol/ is also built alone as protocol.js,
 // where the alias does not exist.
 import { ASSISTANT_PROTOCOL_VERSION } from "../contract/assistant.ts";
-import { isAbort, rest, RestError } from "./rest.ts";
+import { isAbort, pathSegment, rest, RestError } from "./rest.ts";
 import {
   ASSISTANT_STALL_MS,
   assistantEventId,
@@ -96,7 +96,7 @@ export async function call<R extends AssistantRoute>(
   // as a literal so the dev server's proxy gate can read where it goes.
   const tail = template
     .slice(ASSISTANT_PREFIX.length)
-    .replace("{id}", encodeURIComponent(options.id ?? ""));
+    .replace("{id}", () => pathSegment(options.id ?? ""));
   const { body: answer } = await rest.request(method, `/assistant/${tail}`, {
     // A FILE IS SENT AS ITS OWN BYTES, typed as the browser typed it; the
     // engine sniffs the bytes and refuses a type it does not take.

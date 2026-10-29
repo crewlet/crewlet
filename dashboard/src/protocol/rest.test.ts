@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { GATE_REQUEST_TIMEOUT_MS } from "../contract/gate.ts";
+import { modules } from "../test/source.ts";
 import {
   isAbort,
   pathSegment,
@@ -512,4 +513,16 @@ test("a path segment is one segment, whatever it holds, or refused", () => {
   }
   for (const value of ["", ".", "..", "..."])
     expect(() => pathSegment(value), value).toThrow(RangeError);
+});
+
+// EVERY SEGMENT A PROTOCOL MODULE PUTS IN A PATH GOES THROUGH [pathSegment].
+// `encodeURIComponent` sends `..` as `..`, and `/config/llm-providers/..`
+// reaches `/config`: an id that is only dots asked the route above it.
+test("no protocol module encodes a path segment by hand", () => {
+  const by = modules()
+    .filter(({ path }) => path.startsWith("protocol/") && path !== "protocol/rest.ts")
+    .filter(({ path }) => !/\.test\.tsx?$/.test(path))
+    .filter(({ text }) => text.includes("encodeURIComponent("))
+    .map(({ path }) => path);
+  expect(by).toEqual([]);
 });
