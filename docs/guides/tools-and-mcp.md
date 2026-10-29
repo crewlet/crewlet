@@ -318,7 +318,7 @@ is (copy the directory into your assistant's skills folder).
 
 ### The company's code
 
-Seven more, registered wherever the company hosts its git repositories in the
+Nine more, registered wherever the company hosts its git repositories in the
 engine (`code.native`; see [Code Host](../concepts/code-host.md)) — on every
 node, whatever its roles, since a node holding no copy of the code log and no
 `git` role reaches both through the nodes that do. They are offered on the
@@ -326,7 +326,7 @@ terms the node's `/code/` reads are: a node whose runtime was already running
 when `code.native` was turned on offers them once it restarts into it, and one
 that turned it off keeps them until that restart ([Turn it
 on](code.md#turn-it-on)). A company that hosts no code is given none of them,
-and the operator catalogue serves the same seven, so an operator's own
+and the operator catalogue serves the same nine, so an operator's own
 assistant reads the company's code exactly as a seat does. Every one is a
 read: none counts as a delivery, a [worker](../concepts/turn-engine.md#workers)
 may be handed any of them, and the operator catalogue records no call to one.
@@ -340,6 +340,8 @@ may be handed any of them, and the operator catalogue records no call to one.
 | `code_diff` | What changed between two commits: the per-file stat, filtered by up to 64 `paths`, or one `file`'s patch, a page at a time, with renames detected unless `renames` is false |
 | `code_compare` | How two commits relate: their merge base, whether either contains the other, how many commits each has that the other lacks, and the first page of what `head` changed since the merge base |
 | `code_landed_in` | Whether a commit reached a branch (`target`, resolved to its tip now and never a commit id), the push that landed it there and kept it there, the push that introduced the commit, and what the git node's index of pushes covers ([Which push landed a commit](../concepts/code-host.md#which-push-landed-a-commit)) |
+| `code_log` | The commits that changed a file or a directory (`path`), or every commit, newest first from a commit (`rev`): each with its parents, its author and address as the commit states them, its two dates, its subject and the push that introduced it, `limit` a page (1 to 100, 25 by default; `next` back as `cursor`). `grep` keeps the commits whose message holds its words — a literal, in any case, never a pattern — and `since` (RFC 3339) those committed from then on. A page ends sooner where its subjects fill it, and one the git node's time ended says so: it lists what it found and names where the next page begins ([A path's history](../concepts/code-host.md#a-paths-history)) |
+| `code_blame` | Which commit last changed each line of a file (`path`) at a commit (`rev`): every line with its commit, the line it was in that commit and its old path where the file was renamed since, and each commit once with its author, date, subject and the push behind it — at most 500 lines a call (`start_line`, `end_line`), a page at a time (`next` back as `cursor`) ([Who changed a line](../concepts/code-host.md#who-changed-a-line)) |
 
 **Every revision is a commit id or a ref.** A whole or abbreviated commit id
 (7 or more hex digits) costs nothing; anything else — a branch, a tag, a
@@ -386,22 +388,29 @@ The bound is that turn's alone: a colleague the seat asks reads for the seat,
 and the turn the answer wakes is the seat's own work.
 An operator's own assistant calls the tools in no turn, for its caller alone.
 
-**A repository's text is fenced.** A file's lines and a patch are text its
-committers wrote — importers and outside contributors among them — whom a read
-by commit id cannot name, so each arrives
+**A repository's text is fenced.** A file's lines — a blame's among them —
+and a patch are text its committers wrote — importers and outside contributors
+among them — whom a read by commit id cannot name, so each arrives
 [fenced](../concepts/agent-runtime.md#text-somebody-else-wrote) as `repo_file`
-or `repo_patch` at trust `external`, naming no writer; every other string of an
-answer — a path, a ref, a description — has the fence's escapes applied.
+or `repo_patch` at trust `external`, naming no writer; so does every commit's
+subject a history or a blame names, as `repo_commit`, a message its pusher
+wrote. Every other string of an answer — a path, a ref, a description, a
+commit's author and address — has the fence's escapes applied.
 
 **One page is one answer, never cut.** A git node answers a page of at most
 56 KiB of JSON and says where the next begins; a listing these tools cut
 themselves — repositories, branches — is cut whole-row and names where the next
-page begins. A page whose text spells so many fence markers that, escaped, it
-outgrows one answer is refused naming a narrower read: a line range, or a
-file's lines in place of its patch.
+page begins. A history's and a blame's pages are cut as the tools send them,
+every subject's and every line's fence counted, so a hundred fenced subjects
+are several pages and never one answer too large; a subject, an author or a
+line too long for any answer is described by its size (`subject_bytes`,
+`author_bytes`, `text_bytes`) rather than cut. A page whose text spells so many
+fence markers that, escaped, it outgrows one answer is refused naming a
+narrower read: a line range, fewer commits, or a file's lines in place of its
+patch.
 
 **And one no seat is given: `code_repo_readers`**, which the operator
-catalogue serves beside the seven, on their terms — who read a
+catalogue serves beside the nine, on their terms — who read a
 `visibility: unit` repository's contents over a range of company days (`from`
 and `to`, both inclusive, the thirty days ending today where the call names
 neither, at most 181 apart; `next` back as `cursor`): every credential and the

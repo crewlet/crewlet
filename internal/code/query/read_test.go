@@ -29,22 +29,31 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// A PATH REACHES GIT ONLY ON STANDARD INPUT. Every kind is read over paths
-// built to be read as options — a directory `--output=x`, files `-r` and
-// `a:b`, a name with a newline — by abbreviated ids, and every argument list
-// a read ran is held to its template: the kind's fixed options, whole ids at
-// their places, and `--disambiguate=` validated hex, the one option argument a
-// read builds. Each path was fed to cat-file's batch, `<id>:<path>`, where it
-// is a name like any other, and a filtered stat's and a patch's files to
-// diff-pairs as the raw records diff-tree wrote. This is what keeps
-// diff-tree's, diff-pairs' and rev-list's `--output` out — the writers gate
-// argues their run-time arguments in its allowance — so an argument a read
-// adds is red here. A landed-in read's ancestry checks are held too: whole
-// ids, both sides. And a change's revisions: their facts walk and diff the
-// paths by ids alone, anchors on them are found by the batch and diffed by
-// pairs numbered rather than named, and an interdiff kept to them filters
-// git's records as a filtered stat does, its touched paths no pathspec.
-func TestAPathReachesGitOnlyOnStandardInput(t *testing.T) {
+// A PATH REACHES GIT ONLY AS DATA. Every kind is read over paths built to be
+// read as options — a directory `--output=x`, files `-r` and `a:b`, a name
+// with a newline — by abbreviated ids, and every argument list a read ran is
+// held to its template: the kind's fixed options, whole ids at their places,
+// `--disambiguate=` validated hex, a history's window as numbers the server
+// formats and a blame's range as two, and — for a history and a blame alone,
+// which read no path on a standard input — the path as the ONE argument after
+// `--`, where git reads it as a path whatever it spells: a history's as a
+// literal pathspec, a blame's as itself. Every other path was fed to
+// cat-file's batch, `<id>:<path>`, where it is a name like any other, and a
+// filtered stat's and a patch's files to diff-pairs as the raw records
+// diff-tree wrote. This is what keeps diff-tree's, diff-pairs', rev-list's,
+// log's and blame's `--output` out — the writers gate argues their run-time
+// arguments in its allowance — so an argument a read adds is red here, and
+// so is a path moved before `--`. And every path `--output=x` spells is read
+// as the path it is: its history lists its commit, its blame its line. A
+// landed-in read's ancestry checks are held too: whole ids, both sides. And a
+// change's revisions: their facts walk and diff the paths by ids alone,
+// anchors on them are found by the batch and diffed by pairs numbered rather
+// than named, and an interdiff kept to them filters git's records as a
+// filtered stat does, its touched paths no pathspec.
+//
+// Mutations: the log's path before `--`, or `--output=x` added to the log's
+// or the blame's arguments → red.
+func TestAPathReachesGitOnlyAsData(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
 	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
@@ -95,6 +104,26 @@ func TestAPathReachesGitOnlyOnStandardInput(t *testing.T) {
 	mustRead(t, s, interdiffQ(repo, code.InterdiffQuery{FromBase: head, FromHead: base, ToBase: base, ToHead: head,
 		ToTouched: []string{"-r"}, File: "-r"}))
 
+	// A HISTORY AND A BLAME, each path the one argument after `--`: every
+	// path's history is its two commits, and its blame its one line of the
+	// head's, whatever the path spells.
+	for _, p := range paths {
+		got := commits(pages(t, s, logQ(repo, code.LogQuery{Rev: head[:8], Path: p, Since: historyDay}),
+			code.MaxGitAnswerBytes))
+		if !slices.Equal(got, []string{head, base}) {
+			t.Errorf("the history of %q lists %v, want the head and the base", p, got)
+		}
+		blamed := mustRead(t, s, blameQ(repo, code.BlameQuery{Rev: head[:9], Path: p}))
+		if l := blamed.Blame.Lines; len(l) != 1 || l[0].Commit != head || l[0].Text != "two" {
+			t.Errorf("the blame of %q names %+v, want its one line, the head's", p, l)
+		}
+	}
+	mustRead(t, s, logQ(repo, code.LogQuery{Rev: head, Grep: "head", Limit: 1}))
+	if q := logQ(repo, code.LogQuery{Rev: head, Limit: 1}); mustRead(t, s, q).Next != "" {
+		q.Cursor = mustRead(t, s, q).Next
+		mustRead(t, s, q)
+	}
+
 	ran := rec.ran()
 	if len(ran) < 20 {
 		t.Fatalf("the reads ran %d processes; the case reads nothing", len(ran))
@@ -102,6 +131,22 @@ func TestAPathReachesGitOnlyOnStandardInput(t *testing.T) {
 	for _, c := range ran {
 		if !fitsTemplate(c.Args) {
 			t.Errorf("a read ran git %q, which no template of a read admits", c.Args)
+		}
+		if c.Args[0] != "log" && c.Args[0] != "blame" && slices.Contains(c.Args, "--") {
+			t.Errorf("a read ran git %q, naming a path as an argument", c.Args)
+		}
+	}
+	for _, sub := range []string{"log", "blame"} {
+		saw := map[string]bool{}
+		for _, c := range ran {
+			if c.Args[0] == sub && len(c.Args) > 2 && c.Args[len(c.Args)-2] == "--" {
+				saw[strings.TrimPrefix(c.Args[len(c.Args)-1], logLiteralTemplate)] = true
+			}
+		}
+		for _, p := range paths {
+			if !saw[p] {
+				t.Errorf("no %s named %q as its one argument after --", sub, p)
+			}
 		}
 	}
 	fed := strings.Join(rec.fed("cat-file"), "\x00")
@@ -143,14 +188,45 @@ var templates = [][]string{
 	{"patch-id", "--verbatim"},
 }
 
-// fitsTemplate reports whether args is one of templates.
+// logLiteralTemplate is the magic a history's path follows `--` with.
+const logLiteralTemplate = ":(literal)"
+
+// historyTemplates are a history's argument lists — its fixed options, its
+// format with or without the message, its window (a since, a skip, both or
+// neither), the commit, and its path as a literal pathspec, the one argument
+// after `--`, or none — and a blame's: its range, the commit, and its path,
+// the one argument after `--`. "<since>" and "<skip>" are the numbers the
+// server formats, "<literal>" the literal magic and any path, "<path>" any
+// path, "<lines>" two line numbers.
+func historyTemplates() [][]string {
+	var out [][]string
+	for _, format := range []string{"--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%ct%x00%s%x00",
+		"--format=%H%x00%P%x00%an%x00%ae%x00%at%x00%ct%x00%s%x00%B%x00"} {
+		for _, window := range [][]string{{}, {"<since>"}, {"<skip>"}, {"<since>", "<skip>"}} {
+			for _, path := range [][]string{{}, {"--", "<literal>"}} {
+				out = append(out, slices.Concat([]string{"log", "-z", "--topo-order", "--no-mailmap", "--no-color",
+					"--no-notes", format}, window, []string{"<oid>"}, path))
+			}
+		}
+	}
+	return append(out, []string{"blame", "--porcelain", "-L", "<lines>", "<oid>", "--", "<path>"})
+}
+
+// fitsTemplate reports whether args is one of templates, or a history's or a
+// blame's.
 func fitsTemplate(args []string) bool {
-	for _, tmpl := range templates {
+	for _, tmpl := range slices.Concat(templates, historyTemplates()) {
 		if fits(args, tmpl) {
 			return true
 		}
 	}
 	return false
+}
+
+// digits reports whether s is a number the server formats: decimal digits
+// alone.
+func digits(s string) bool {
+	return s != "" && strings.Trim(s, "0123456789") == ""
 }
 
 func fits(args, tmpl []string) bool {
@@ -181,6 +257,24 @@ func fits(args, tmpl []string) bool {
 			if !ok || !gitref.ValidOID(a) || !gitref.ValidOID(b) {
 				return false
 			}
+		case "<since>":
+			if n, ok := strings.CutPrefix(args[i], "--max-age="); !ok || !digits(n) {
+				return false
+			}
+		case "<skip>":
+			if n, ok := strings.CutPrefix(args[i], "--skip="); !ok || !digits(n) {
+				return false
+			}
+		case "<lines>":
+			if a, b, ok := strings.Cut(args[i], ","); !ok || !digits(a) || !digits(b) {
+				return false
+			}
+		case "<literal>":
+			if !strings.HasPrefix(args[i], logLiteralTemplate) {
+				return false
+			}
+		case "<path>":
+			// A blame's path, after `--`: whatever it spells, a path.
 		default:
 			if args[i] != want {
 				return false

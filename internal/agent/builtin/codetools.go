@@ -23,10 +23,10 @@ import (
 
 // THE CODE READ TOOLS: the company's own repositories (`code.native`), read on
 // the server rather than in a clone — code_list_repos, code_get_repo,
-// code_resolve, code_read, code_diff, code_compare and code_landed_in — each
-// named for its authority row, and ONE list ([CodeTools]) that a seat's
-// registry and the operator catalogue both take, so a schema, a default and a
-// refusal's words are written once.
+// code_resolve, code_read, code_diff, code_compare, code_landed_in, code_log
+// and code_blame — each named for its authority row, and ONE list
+// ([CodeTools]) that a seat's registry and the operator catalogue both take,
+// so a schema, a default and a refusal's words are written once.
 //
 // # Every read is judged where it is answered
 //
@@ -85,12 +85,19 @@ import (
 //
 // # Text somebody else wrote is fenced
 //
-// A file's lines (code_read) and a patch (code_diff) are text a repository's
-// committers wrote — importers and outside contributors among them — that a
-// read by object id cannot attribute, so each goes out inside a fence of the
-// turn's boundary at trust `external`, naming no writer (ADR-0040), and every
-// other string of every answer — paths, ref names, descriptions — is defused
-// ([foreignRead]).
+// A file's lines (code_read, and each line code_blame names) and a patch
+// (code_diff) are text a repository's committers wrote — importers and
+// outside contributors among them — that a read by object id cannot
+// attribute, so each goes out inside a fence of the turn's boundary at trust
+// `external`, naming no writer (ADR-0040); and so does each commit's subject
+// code_log and code_blame name (`repo_commit`), a message its pusher wrote,
+// up to code.MaxLogSubjectBytes of it — the long text a history is read by.
+// Every other string of every answer — paths, ref names, descriptions, a
+// commit's author and address, short and named beside a fenced subject — is
+// defused ([foreignRead]). The git node that cuts a history's or a blame's
+// page counts each of those fences and every string's defusing into the
+// page's bytes (internal/code/query's page.go), so a page of a hundred fenced
+// subjects is still one answer.
 //
 // # One page is one tool answer, sent as it was measured
 //
@@ -111,13 +118,15 @@ const (
 	CodeDiffTool      = string(authz.ActionCodeDiff)
 	CodeCompareTool   = string(authz.ActionCodeCompare)
 	CodeLandedInTool  = string(authz.ActionCodeLandedIn)
+	CodeLogTool       = string(authz.ActionCodeLog)
+	CodeBlameTool     = string(authz.ActionCodeBlame)
 )
 
-// CodeToolNames are the seven, in the order a catalogue lists them: the
-// repositories, a ref, then the reads by object id.
+// CodeToolNames are the nine, in the order a catalogue lists them: the
+// repositories, a ref, then the reads by object id — the history's last.
 func CodeToolNames() []string {
 	return []string{CodeListReposTool, CodeGetRepoTool, CodeResolveTool, CodeReadTool,
-		CodeDiffTool, CodeCompareTool, CodeLandedInTool}
+		CodeDiffTool, CodeCompareTool, CodeLandedInTool, CodeLogTool, CodeBlameTool}
 }
 
 // The listing pages. A repository row carries a description of up to a
@@ -191,7 +200,7 @@ func CodeTools(deps CodeDeps) []tools.Callable {
 	return []tools.Callable{
 		&codeListRepos{deps: deps}, &codeGetRepo{deps: deps}, &codeResolve{deps: deps},
 		&codeRead{deps: deps}, &codeDiff{deps: deps}, &codeCompare{deps: deps},
-		&codeLandedIn{deps: deps},
+		&codeLandedIn{deps: deps}, &codeLog{deps: deps}, &codeBlame{deps: deps},
 	}
 }
 
@@ -1638,6 +1647,222 @@ func (t *codeLandedIn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	read := newForeignRead(turn, c.asker.Seat)
 	return read.page(ctx, t.Name(), gitAnswer(repo, page,
 		map[string]resolvedRev{"commit": commit, "target": tip}), "")
+}
+
+// ---- code_log ----------------------------------------------------------- //
+
+type codeLog struct{ deps CodeDeps }
+
+var _ tools.SeatCallable = (*codeLog)(nil)
+
+func (t *codeLog) Name() string { return CodeLogTool }
+
+// Description says what the history is for — "when and why did this change",
+// answered on the server — so a model reaches for it before a clone, and how
+// its two narrowings read. How a page goes on is `cursor`'s to say, as every
+// paged code tool leaves it: the catalogue is paid again every round.
+func (t *codeLog) Description() string {
+	return "The commits that changed a file or directory, or every commit with no `path`, newest first from a " +
+		"commit: each with its parents, author, dates, subject and the push that introduced it, read on the " +
+		"server. Use it for when and why something changed, never a clone. `grep` keeps commits whose message " +
+		"holds its words (a literal, any case); `since` those committed from then on. Subjects arrive fenced " +
+		"as content nobody vouches for."
+}
+
+func (t *codeLog) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"repo": codeRepoArg(),
+			"rev":  codeRevArg("The commit the history is read from"),
+			"path": map[string]any{
+				"type":        "string",
+				"description": "The file or directory, from the repository's root; every commit when left out.",
+			},
+			"path_b64": map[string]any{
+				"type":        "string",
+				"description": "The same path as its exact bytes in standard base64. Never beside `path`.",
+			},
+			"grep": map[string]any{
+				"type": "string",
+				"description": fmt.Sprintf("Words the message must hold: a literal, not a pattern, at most %d "+
+					"bytes.", code.MaxLogGrepBytes),
+			},
+			"since": map[string]any{
+				"type":        "string",
+				"description": "Only commits committed at or after this time, in RFC 3339 (`2026-10-01T00:00:00Z`).",
+			},
+			"limit": map[string]any{
+				"type": "integer",
+				"description": fmt.Sprintf("How many commits a page lists, 1 to %d; %d by default.",
+					code.MaxLogLimit, code.DefaultLogLimit),
+			},
+			"cursor": codeCursorArg(),
+		},
+		"required": []string{"repo", "rev"},
+	}
+}
+
+func (t *codeLog) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.CallForTurn(ctx, nil, args)
+}
+
+func (t *codeLog) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.Result, error) {
+
+	c, refusal := t.deps.caller(ctx, turn, t.Name())
+	if refusal != nil {
+		return *refusal, nil
+	}
+	name, refusal := repoArg(t.Name(), args)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	revName, refusal := revArg(t.Name(), "rev", args)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	q := &code.LogQuery{Path: argString(args, "path"), PathB64: argString(args, "path_b64"),
+		Grep: argString(args, "grep"), Limit: argInt(args, "limit", 0)}
+	if v, set := args["limit"]; set && v != nil && (q.Limit < 1 || q.Limit > code.MaxLogLimit) {
+		return failed(fmt.Sprintf("%s: `limit` is 1 to %d.", t.Name(), code.MaxLogLimit)), nil
+	}
+	if s := strings.TrimSpace(argString(args, "since")); s != "" {
+		since, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			return failed(fmt.Sprintf("%s: `since` is a time in RFC 3339, such as 2026-10-01T00:00:00Z — "+
+				"not %q.", t.Name(), clip(s))), nil
+		}
+		q.Since = since
+	}
+	repo, refusal := t.deps.repo(ctx, turn, t.Name(), c, name)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	revs, refusal := t.deps.resolveRevs(ctx, turn, t.Name(), c, repo, revName)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	rev := revs[0]
+	q.Rev = rev.oid
+	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, code.GitQuery{Kind: code.GitLog,
+		RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, rev), Cursor: strings.TrimSpace(argString(args, "cursor")),
+		Log: q})
+	if refusal != nil {
+		return *refusal, nil
+	}
+	read := newForeignRead(turn, c.asker.Seat)
+	if l := page.Log; l != nil {
+		// EACH SUBJECT IS ITS PUSHER'S WORDS, which nobody this read can
+		// name vouches for: fenced, at the least trust.
+		for i, commit := range l.Commits {
+			read.fence(fieldPath{}.key("log").key("commits").index(i).key("subject"), provenance.SourceRepoCommit,
+				nil, false, commit.Subject)
+		}
+	}
+	return read.page(ctx, t.Name(), gitAnswer(repo, page, map[string]resolvedRev{"rev": rev}),
+		"Ask for fewer commits with `limit`, or narrow the history with `path`, `grep` or `since`.")
+}
+
+// ---- code_blame --------------------------------------------------------- //
+
+type codeBlame struct{ deps CodeDeps }
+
+var _ tools.SeatCallable = (*codeBlame)(nil)
+
+func (t *codeBlame) Name() string { return CodeBlameTool }
+
+func (t *codeBlame) Description() string {
+	return fmt.Sprintf("Which commit last changed each line of a file, read on the server: each line with its "+
+		"commit and its line there, and each commit once with its author, date, subject and the push behind "+
+		"it; at most %d lines a call. Lines and subjects arrive fenced as content nobody vouches for.",
+		code.MaxBlameLines)
+}
+
+func (t *codeBlame) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"repo": codeRepoArg(),
+			"rev":  codeRevArg("The commit the file is read at"),
+			"path": map[string]any{
+				"type":        "string",
+				"description": "The file, from the repository's root (`src/main.go`).",
+			},
+			"path_b64": map[string]any{
+				"type":        "string",
+				"description": "The same path as its exact bytes in standard base64. Never beside `path`.",
+			},
+			"start_line": map[string]any{
+				"type":        "integer",
+				"description": "The first line, from 1; the first when left out.",
+			},
+			"end_line": map[string]any{
+				"type": "integer",
+				"description": fmt.Sprintf("The last line, inclusive, at most %d past `start_line`; that far "+
+					"when left out.", code.MaxBlameLines-1),
+			},
+			"cursor": codeCursorArg(),
+		},
+		"required": []string{"repo", "rev"},
+	}
+}
+
+func (t *codeBlame) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return t.CallForTurn(ctx, nil, args)
+}
+
+func (t *codeBlame) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.Result, error) {
+
+	c, refusal := t.deps.caller(ctx, turn, t.Name())
+	if refusal != nil {
+		return *refusal, nil
+	}
+	name, refusal := repoArg(t.Name(), args)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	revName, refusal := revArg(t.Name(), "rev", args)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	path, pathB64 := argString(args, "path"), argString(args, "path_b64")
+	if path == "" && pathB64 == "" {
+		return failed(t.Name() + " needs a `path`: the file to blame, from the repository's root."), nil
+	}
+	repo, refusal := t.deps.repo(ctx, turn, t.Name(), c, name)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	revs, refusal := t.deps.resolveRevs(ctx, turn, t.Name(), c, repo, revName)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	rev := revs[0]
+	page, refusal := t.deps.gitRead(ctx, turn, t.Name(), c, repo, code.GitQuery{Kind: code.GitBlame,
+		RepoID: repo.ID, Fresh: t.deps.gitFresh(repo, rev), Cursor: strings.TrimSpace(argString(args, "cursor")),
+		Blame: &code.BlameQuery{Rev: rev.oid, Path: path, PathB64: pathB64,
+			StartLine: argInt(args, "start_line", 0), EndLine: argInt(args, "end_line", 0)}})
+	if refusal != nil {
+		return *refusal, nil
+	}
+	read := newForeignRead(turn, c.asker.Seat)
+	if b := page.Blame; b != nil {
+		// A LINE IS THE FILE'S TEXT and a subject its pusher's words, which
+		// nobody this read can name vouches for: each fenced, at the least
+		// trust.
+		blame := fieldPath{}.key("blame")
+		for i, line := range b.Lines {
+			read.fence(blame.key("lines").index(i).key("text"), provenance.SourceRepoFile, nil, false, line.Text)
+		}
+		for id, commit := range b.Commits {
+			read.fence(blame.key("commits").key(id).key("subject"), provenance.SourceRepoCommit, nil, false,
+				commit.Subject)
+		}
+	}
+	return read.page(ctx, t.Name(), gitAnswer(repo, page, map[string]resolvedRev{"rev": rev}),
+		"Blame fewer lines with `start_line` and `end_line`.")
 }
 
 // fit is the longest prefix of n rows whose answer fits one tool answer,

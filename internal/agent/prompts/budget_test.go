@@ -67,9 +67,12 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 // 870 -> 930 for a section, deliberately: the code guidance (`code_history`),
 // which a seat of a company hosting code renders, measures ~55, and took the
 // prompt from ~807 to ~862 — inside 870, but with the headroom gone that lets
-// the next sentence land without a decision.
+// the next sentence land without a decision. It measures ~68 since it names
+// who last changed a line and how a file's history went beside what it named
+// (code_blame and code_log, the same family): the sentence the headroom was
+// left for.
 //
-// Measured at ~862, so this leaves ~8%: enough that a sentence can be added,
+// Measured at ~875, so this leaves ~6%: enough that a sentence can be added,
 // tight enough that a section cannot. The plain contract alone — no tracker,
 // no workers, no sandbox, no code — measures ~508 of it.
 //
@@ -272,8 +275,11 @@ func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 // has met, and why: the section is rendered only for a seat of a company
 // hosting code, while the allowance is every lead's in every company — taken
 // out of it, the room would be charged to leads whose prompt never carries the
-// section. The prose is now ~1,313 with every gated section rendered, the turn
-// ~2,393, so ~4% headroom again.
+// section. The prose was then ~1,313 with every gated section rendered and the
+// turn ~2,393, ~4% headroom again; the guidance has since grown to ~68 tokens
+// (it names history and blame too), so the prose is ~1,326 and the turn
+// ~2,406, ~3% headroom — inside the budget, with nothing taken from the
+// allowance.
 func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	seat := bigLead(500)

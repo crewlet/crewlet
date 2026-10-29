@@ -1,7 +1,8 @@
 // Package query is THE SERVER-SIDE READS OF A REPOSITORY BY OBJECT ID: a
 // tree's listing, a file's lines, a diff's stat or one file's patch, how two
-// commits compare, and whether a commit landed in a branch and which push
-// landed it — and of a change's revisions, by the ids their rows record: a
+// commits compare, whether a commit landed in a branch and which push landed
+// it, a path's history (log.go) and which commit last changed each line of a
+// file (blame.go) — and of a change's revisions, by the ids their rows record: a
 // revision's facts against its target (facts.go), where lines anchored in one
 // revision are in another (anchor.go), and what a change changed between two
 // revisions (interdiff.go) — real git over a PINNED incarnation of the node's
@@ -28,11 +29,14 @@
 // # Which push, from the copy's index
 //
 // Every commit an answer names — its revision, a diff's or a comparison's
-// commits and merge base, a landed-in read's commit and tip — is named with
-// the push that introduced it (code.GitAnswer.PushedBy), read from the pinned
-// copy's index of pushes (cache.Cache.Provenance), and the answer carries
-// what that index holds (code.Coverage): both are in every page's envelope,
-// measured into it before a page is cut. The index DECORATES and nothing
+// commits and merge base, a landed-in read's commit and tip, every commit a
+// history's page lists or a blame's page names — is named with the push that
+// introduced it (code.GitAnswer.PushedBy), read from the pinned copy's index
+// of pushes (cache.Cache.Provenance), and the answer carries what that index
+// holds (code.Coverage): both are in every page's envelope, measured into it
+// before a page is cut — or, for a commit a page finds as it is cut, into
+// that commit's own cost, so a page the history fills still fits. The index
+// DECORATES and nothing
 // waits on it: a copy whose index cannot be read yet — a run a previous
 // process wrote, not yet checked — answers without either. A read this node
 // answered as the repository's home (code.GitQuery.Home) marks its history
@@ -71,25 +75,34 @@
 // would answer for another commit (objects.go has the measurement). One that
 // matches more than one object is refused, asking for more of its digits.
 //
-// # Nothing a client wrote reaches git's command line
+// # Nothing a client wrote reaches git's command line as an option
 //
-// A read's argument lists carry fixed options and validated whole ids — and
+// A read's argument lists carry fixed options and validated whole ids —
 // `--disambiguate=` an abbreviation's validated digits, the one option
-// argument a read builds. A PATH reaches git only on a standard input: `git
-// cat-file --batch-check -Z`'s, which resolves `<id>:<path>` to the id of the
-// tree or file it names, so every later process is handed that id, and `git
-// diff-pairs -z`'s, which reads back the raw records diff-tree wrote, paths
-// and all, to count or patch the files a diff read asks for (diff.go). A path
-// is never a pathspec — a diff's paths are filtered here, over git's whole raw
-// answer, and so are an interdiff's touched paths, each a file's whole name —
-// and no option can hide in one: `--output=x` is a file's name there like any
-// other. A re-anchoring's diff-pairs is handed no path at all, its pairs
-// numbered (anchor.go). TestAPathReachesGitOnlyOnStandardInput holds every
-// argument list a read runs to its template. diff-tree, diff-pairs and
-// rev-list each take `--output`, which creates the file it names in the
-// repository they run in: the writers gate (cache.TestNothingButSyncWritesACache)
-// argues each of this package's run-time arguments — whole ids, and `-M` — in
-// its allowance, and the template test is what keeps an `--output` out.
+// argument a read builds, and numbers the server formats: a history's
+// `--max-age=` and `--skip=`, a blame's `-L` range. A PATH is data: it
+// reaches git on a standard input — `git cat-file --batch-check -Z`'s, which
+// resolves `<id>:<path>` to the id of the tree or file it names, so every
+// later process is handed that id, and `git diff-pairs -z`'s, which reads back
+// the raw records diff-tree wrote, paths and all, to count or patch the files
+// a diff read asks for (diff.go) — or, for the two reads whose git reads no
+// path there, as the ONE argument after `--`, where git reads an argument as
+// a path and never as an option: a history's as a literal pathspec
+// (`:(literal)<path>`, log.go) and a blame's as itself, blame taking a path
+// rather than a pathspec (blame.go). Never `log --stdin`, which reads a path
+// a line at a time and takes a carriage return off its end. A diff's paths are
+// filtered here, over git's whole raw answer, and so are an interdiff's
+// touched paths, each a file's whole name, so no option can hide in one:
+// `--output=x` is a file's name there like any other. A re-anchoring's
+// diff-pairs is handed no path at all, its pairs numbered (anchor.go).
+// TestAPathReachesGitOnlyAsData holds every argument list a read runs to its
+// template, a history's and a blame's path the one argument after `--`.
+// diff-tree, diff-pairs, rev-list, log and blame each take `--output`, which
+// creates the file it names in the repository they run in: the writers gate
+// (cache.TestNothingButSyncWritesACache) argues each of this package's
+// run-time arguments — whole ids, `-M`, the formatted numbers and the paths
+// after `--` — in its allowance, and the template test is what keeps an
+// `--output` out.
 //
 // # The share: half the read lane, around a read's long git only
 //
@@ -141,16 +154,18 @@
 // included: run out, the read is too large to answer anywhere — save a
 // landed-in search, which by then knows the oldest move that kept its commit
 // and answers how far it reached, as its bound of checks ends it (landed.go),
-// and a revision's patch-id, which is omitted rather than refused (facts.go).
-// Its wait for each process's read-lane slot is charged nothing, since it is
-// the node's contention and not the read's size. The short checks before it
-// (objects.go) run to their own bound, outside it.
+// a revision's patch-id, which is omitted rather than refused (facts.go), and
+// a history's walk, whose page answers the commits it reached with its cursor
+// past them (log.go). Its wait for each process's read-lane slot is charged
+// nothing, since it is the node's contention and not the read's size. The
+// short checks before it (objects.go) run to their own bound, outside it.
 //
 // And the caller's context ENDS WHEN THE ANSWER IS DUE (code.AnswerBy, the
 // estate's git arm and its in-process run alike): every wait takes it, and a
 // wait it ends is answered code.ErrGitUnready while the asker still listens
 // (code.AnswerDue) — syncing during the sync, share during a wait for the
-// node's git or a run of it — never the context's error and never too large:
+// node's git or a run of it, a history's walk that reached a commit answering
+// those it reached — never the context's error and never too large:
 // a run the due instant ended had less than its budget. So time the asker's
 // attempt does not hold for — the read lane's queue and the short checks, left
 // out of its sum — makes a read unready under load, never late
@@ -205,15 +220,21 @@
 // every cursor is a position in an answer that is a function of object ids
 // alone, so a cursor one node issued is sound on any other: a listing's n-th
 // entry, a stat's n-th file, a file's line or the byte inside an overlong one,
-// a patch's byte. A listing's Total, a file's Lines and a diff's totals are the
-// whole answer's on every page.
+// a patch's byte, a history's n-th commit, a blame's line. A listing's Total,
+// a file's Lines and a diff's totals are the whole answer's on every page. A
+// history's and a blame's pages carry text the code tools fence — every
+// commit's subject, every blamed line — and are measured AS SENT, each field
+// fenced and every string neutralised (page.go), so a page of a hundred
+// fenced subjects is one tool answer and never a refusal of one; each field
+// git leaves unbounded is described past its bound rather than cut.
 //
 // # The memo
 //
 // Every page a read's git cuts — but a landed-in read's, a revision's facts'
-// and a re-anchoring's (memoizable says why) — is kept in the pinned copy's
-// memo (the cache's, cache.MemoBatch), keyed by everything it is a function
-// of, and a read that
+// and a re-anchoring's (memoizable says why), and a history's page its budget
+// or its due instant cut short — is kept in the pinned copy's memo (the
+// cache's, cache.MemoBatch), keyed by everything it is a function of, and a
+// read that
 // asks for a page already cut is answered from it with no git run (memo.go):
 // asked as soon as the grant is judged for a read naming whole ids, before any
 // git runs, since an entry is in a copy's memo only where a read of that copy

@@ -97,6 +97,24 @@ type Trace struct {
 	Crashes int
 }
 
+// Reported reports whether an error event of the run printed any of formats —
+// each a printf format as git's source spells it, read in the canonical form
+// every event's format is recorded in. For a caller that answers one of git's
+// own refusals of its request in its own words (a blame's range past the
+// file's end): by the FORMAT, never the message, which carries whatever the
+// request named — a path among it.
+func (t Trace) Reported(formats ...string) bool {
+	for _, f := range formats {
+		c := canonicalFormat(f)
+		for _, seen := range t.Formats {
+			if seen == c {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // crashFormats are git's reports of a process of the run's tree dying of a
 // signal, by canonical format: run-command's wait_or_whine for any child a
 // git process waited for (every git), and 2.56's own for the pack-objects

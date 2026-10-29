@@ -34,13 +34,14 @@ import (
 // before any ref, so everything after the expansion names whole ids.
 //
 // THEN ONE `git cat-file --batch-check -Z` finds every id and path at once,
-// fed on its standard input — the one place a path reaches git, where no
-// option can hide (`--output=x` is a path there like any other): each id
-// itself and peeled (`<id>^{}`, what a tag names), and the tree or file the
-// read's path names (`<id>:<path>`, or `<id>^{tree}` for a root) — for a
-// re-anchoring, the object at each anchor's path in the commit its side names,
-// which may be none. Records end in NUL both ways (-Z), so a path holding a
-// newline is one record.
+// fed on its standard input, where no option can hide (`--output=x` is a path
+// there like any other): each id itself and peeled (`<id>^{}`, what a tag
+// names), and the tree or file the read's path names (`<id>:<path>`, or
+// `<id>^{tree}` for a root) — a blame's file among them, which its blame then
+// names as the one argument after `--` (blame.go) — and for a re-anchoring,
+// the object at each anchor's path in the commit its side names, which may be
+// none. Records end in NUL both ways (-Z), so a path holding a newline is one
+// record.
 
 // object is one object as a check found it.
 type object struct {
@@ -58,9 +59,10 @@ type found struct {
 	// revs is each revision the query names, as the query spells it, whole
 	// or abbreviated.
 	revs map[string]object
-	// path is the path a tree or a file read names, decoded, and target the
-	// object it names: the tree a listing lists, the file a read reads —
-	// absent (an empty id) where the path names nothing.
+	// path is the path a tree, a file or a blame read names, decoded, and
+	// target the object it names: the tree a listing lists, the file a read
+	// reads or a blame blames — absent (an empty id) where the path names
+	// nothing.
 	path   string
 	target object
 	// placed is, for a re-anchoring, the object at each anchor's path in the
@@ -90,6 +92,10 @@ func revsOf(q code.GitQuery) []string {
 		revs = []string{q.RevisionFacts.Head, q.RevisionFacts.Target}
 	case code.GitInterdiff:
 		revs = []string{q.Interdiff.FromHead, q.Interdiff.ToHead}
+	case code.GitLog:
+		revs = []string{q.Log.Rev}
+	case code.GitBlame:
+		revs = []string{q.Blame.Rev}
 	case code.GitReanchor:
 		revs = []string{q.Reanchor.Head}
 		if q.Reanchor.Base != "" {
@@ -120,8 +126,10 @@ func placedAt(q *code.ReanchorQuery, whole map[string]string) []string {
 	return lines
 }
 
-// pathOf is the path a tree or a file read names, decoded (validated
-// already, by code.GitQuery.Validate).
+// pathOf is the path a tree, a file or a blame read names, decoded (validated
+// already, by code.GitQuery.Validate) — the object the batch looks up at the
+// read's revision. A log's path is no such object: a history names the
+// commits that changed a path, which its revision need not hold.
 func pathOf(q code.GitQuery) string {
 	var p string
 	switch q.Kind {
@@ -129,8 +137,16 @@ func pathOf(q code.GitQuery) string {
 		p, _ = code.GitPath("tree.path", q.Tree.Path, q.Tree.PathB64, true)
 	case code.GitBlob:
 		p, _ = code.GitPath("blob.path", q.Blob.Path, q.Blob.PathB64, true)
+	case code.GitBlame:
+		p, _ = code.GitPath("blame.path", q.Blame.Path, q.Blame.PathB64, false)
 	}
 	return p
+}
+
+// lookedUp reports whether a read of q's kind looks its path up in the batch:
+// a tree's, a file's and a blame's.
+func lookedUp(q code.GitQuery) bool {
+	return q.Kind == code.GitTree || q.Kind == code.GitBlob || q.Kind == code.GitBlame
 }
 
 // find is step 7: what every revision and the path name, or the first
@@ -169,7 +185,7 @@ func (r *read) find(ctx context.Context) (objs found, absent string, err error) 
 	}
 	objs = found{revs: map[string]object{}, path: pathOf(r.q)}
 	pathLine := -1
-	if r.q.Kind == code.GitTree || r.q.Kind == code.GitBlob {
+	if lookedUp(r.q) {
 		pathLine = len(in)
 		if objs.path == "" {
 			in = append(in, ids[0]+"^{tree}")

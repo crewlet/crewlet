@@ -79,15 +79,17 @@ const executorSandboxSection = "\n## Sandbox code work" +
 const KeyCodeHistory = "code_history"
 
 // CodeHistoryTools are the code tools [codeHistorySection]'s claims rest on:
-// what a file says, what changed and whether a commit reached a branch, read
-// by the commit ids a ref resolves to. The section renders only where the
-// executor holds EVERY one of them, so a prompt never sends a seat to a tool
-// its surface does not carry; they are registered together where a company
-// hosts code, so a seat holds all of them or none. Exported for the test in
-// internal/agent/builtin that holds them to the code tools that package
-// registers, which this package cannot import.
+// what a file says, what changed, who last changed a line, how a file's
+// history went and whether a commit reached a branch, read by the commit ids a
+// ref resolves to. The section renders only where the executor holds EVERY one
+// of them, so a prompt never sends a seat to a tool its surface does not
+// carry; they are registered together where a company hosts code, so a seat
+// holds all of them or none. Exported for the test in internal/agent/builtin
+// that holds them to the code tools that package registers, which this
+// package cannot import.
 func CodeHistoryTools() []string {
-	return []string{"code_resolve", "code_read", "code_diff", "code_compare", "code_landed_in"}
+	return []string{"code_resolve", "code_read", "code_diff", "code_compare", "code_landed_in", "code_log",
+		"code_blame"}
 }
 
 // codeHistorySection is the one rule about reading the company's code that no
@@ -102,9 +104,10 @@ func CodeHistoryTools() []string {
 // The tools by their family's name rather than one by one, so the sentence
 // stays true as later reads join the family.
 const codeHistorySection = "\n## Reading the company's code" +
-	"\nWhat a file says, what changed, and whether a commit reached a branch " +
-	"are read on the server with the `code_*` tools, by commit id — never " +
-	"from a clone, which costs minutes for one file."
+	"\nWhat a file says, what changed, who last changed a line, how a file's " +
+	"history went, and whether a commit reached a branch are read on the " +
+	"server with the `code_*` tools, by commit id — never from a clone, which " +
+	"costs minutes for one file."
 
 // ExecutorInput is everything the executor prompt renders beyond the seat
 // itself.

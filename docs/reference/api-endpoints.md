@@ -5026,8 +5026,8 @@ The **same tools a seat holds**, not a parallel implementation: `list_work_items
 write answers its `op_id` here, and takes it back, by the tracker's own rule
 (below). Wherever the company hosts its repositories in the engine
 (`code.native`), it serves the code reads too — `code_list_repos`,
-`code_get_repo`, `code_resolve`, `code_read`, `code_diff`, `code_compare` and
-`code_landed_in` (see [The company's code](../guides/tools-and-mcp.md#the-companys-code)) —
+`code_get_repo`, `code_resolve`, `code_read`, `code_diff`, `code_compare`,
+`code_landed_in`, `code_log` and `code_blame` (see [The company's code](../guides/tools-and-mcp.md#the-companys-code)) —
 read as you, so every repository, and none recorded as `operator_acted`. And
 it serves the deployment's health — `fleet_health`, and `code_status` where the
 code reads are — an administrator's reads, refused to anybody else, which an

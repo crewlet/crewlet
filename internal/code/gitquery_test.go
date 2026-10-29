@@ -4,8 +4,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -134,6 +136,92 @@ func TestAGitQueryIsRefusedByField(t *testing.T) {
 			case tc.want == nil:
 			case !errors.Is(err, tc.want):
 				t.Fatalf("Validate = %v, want %v", err, tc.want)
+			case !strings.Contains(err.Error(), tc.field+":"):
+				t.Errorf("Validate = %v, want it to name %s", err, tc.field)
+			}
+		})
+	}
+}
+
+// A HISTORY'S AND A BLAME'S READ IS REFUSED BY FIELD. A log names a commit, a
+// clean path or none (every commit), a literal of at most MaxLogGrepBytes that
+// is UTF-8 holding no NUL, a page of up to MaxLogLimit commits (none the
+// default), and a Since no earlier than the first instant a commit's date can
+// name and no later than a day past the node's clock — a year typed wrong is
+// told so rather than answered an empty history. A blame names a commit, a
+// file (never the root), and a range of at most MaxBlameLines lines counted
+// from 1, its end at or after its start; a start with no end is a range all
+// the same, however far out. Each refusal names its field.
+func TestAHistoryAndABlameAreRefusedByField(t *testing.T) {
+	t.Parallel()
+	const id = "0123456789abcdef0123456789abcdef01234567"
+	asker := code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ci"}
+	repo := "01920000-0000-7000-8000-000000000001"
+	history := func(m func(q *code.LogQuery)) code.GitQuery {
+		q := code.GitQuery{Kind: code.GitLog, RepoID: repo, Asker: asker, Log: &code.LogQuery{Rev: id}}
+		m(q.Log)
+		return q
+	}
+	blame := func(m func(q *code.BlameQuery)) code.GitQuery {
+		q := code.GitQuery{Kind: code.GitBlame, RepoID: repo, Asker: asker,
+			Blame: &code.BlameQuery{Rev: id, Path: "src/a.go"}}
+		m(q.Blame)
+		return q
+	}
+	for _, tc := range []struct {
+		name  string
+		q     code.GitQuery
+		field string // "" is a valid query
+	}{
+		{"every commit", history(func(*code.LogQuery) {}), ""},
+		{"a path's", history(func(q *code.LogQuery) { q.Path = "src/--output=x" }), ""},
+		{"an abbreviation", history(func(q *code.LogQuery) { q.Rev = id[:7] }), ""},
+		{"a literal at its bound", history(func(q *code.LogQuery) {
+			q.Grep = strings.Repeat("é", code.MaxLogGrepBytes/2)
+		}), ""},
+		{"the most commits", history(func(q *code.LogQuery) { q.Limit = code.MaxLogLimit }), ""},
+		{"since the epoch", history(func(q *code.LogQuery) { q.Since = time.Unix(0, 0) }), ""},
+		{"since later today", history(func(q *code.LogQuery) { q.Since = time.Now().Add(12 * time.Hour) }), ""},
+		{"a ref", history(func(q *code.LogQuery) { q.Rev = "main" }), "log.rev"},
+		{"a path up", history(func(q *code.LogQuery) { q.Path = "../a" }), "log.path"},
+		{"a literal past its bound", history(func(q *code.LogQuery) {
+			q.Grep = strings.Repeat("a", code.MaxLogGrepBytes+1)
+		}), "log.grep"},
+		{"a literal that is no UTF-8", history(func(q *code.LogQuery) { q.Grep = "caf\xe9" }), "log.grep"},
+		{"a literal holding a NUL", history(func(q *code.LogQuery) { q.Grep = "a\x00b" }), "log.grep"},
+		{"a negative limit", history(func(q *code.LogQuery) { q.Limit = -1 }), "log.limit"},
+		{"a limit past the most", history(func(q *code.LogQuery) { q.Limit = code.MaxLogLimit + 1 }), "log.limit"},
+		{"since before 1970", history(func(q *code.LogQuery) { q.Since = time.Unix(-1, 0) }), "log.since"},
+		{"since a year not yet", history(func(q *code.LogQuery) { q.Since = time.Now().AddDate(1, 0, 0) }),
+			"log.since"},
+		{"a blame beside it", func() code.GitQuery {
+			q := history(func(*code.LogQuery) {})
+			q.Blame = &code.BlameQuery{Rev: id, Path: "a"}
+			return q
+		}(), "blame"},
+		{"a file", blame(func(*code.BlameQuery) {}), ""},
+		{"the widest range", blame(func(q *code.BlameQuery) { q.StartLine, q.EndLine = 10, 9+code.MaxBlameLines }),
+			""},
+		{"a start with no end", blame(func(q *code.BlameQuery) { q.StartLine = 1 << 40 }), ""},
+		{"the last line an int counts", blame(func(q *code.BlameQuery) { q.StartLine = math.MaxInt }), ""},
+		{"no file", blame(func(q *code.BlameQuery) { q.Path = "" }), "blame.path"},
+		{"a ref", blame(func(q *code.BlameQuery) { q.Rev = "HEAD" }), "blame.rev"},
+		{"a negative start", blame(func(q *code.BlameQuery) { q.StartLine = -1 }), "blame.start_line"},
+		{"a negative end", blame(func(q *code.BlameQuery) { q.EndLine = -1 }), "blame.end_line"},
+		{"a backwards range", blame(func(q *code.BlameQuery) { q.StartLine, q.EndLine = 9, 3 }), "blame.end_line"},
+		{"a line too many", blame(func(q *code.BlameQuery) { q.StartLine, q.EndLine = 10, 10+code.MaxBlameLines }),
+			"blame.end_line"},
+		{"none of its own", code.GitQuery{Kind: code.GitBlame, RepoID: repo, Asker: asker}, "blame"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.q.Validate()
+			switch {
+			case tc.field == "" && err != nil:
+				t.Fatalf("Validate = %v, want a valid query", err)
+			case tc.field == "":
+			case !errors.Is(err, code.ErrInvalid):
+				t.Fatalf("Validate = %v, want ErrInvalid", err)
 			case !strings.Contains(err.Error(), tc.field+":"):
 				t.Errorf("Validate = %v, want it to name %s", err, tc.field)
 			}

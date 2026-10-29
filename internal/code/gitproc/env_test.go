@@ -741,7 +741,7 @@ func TestAConfigKeyOutsideTheAllowlistIsRefused(t *testing.T) {
 		"uploadpackfilter.tree.maxDepth", "uploadpackfilter.object:type.allow", "uploadpackfilter.combine.allow",
 		"receive.procReceiveRefs", "receive.unpackLimit", "receive.fsckObjects", "receive.maxInputSize",
 		"receive.advertisePushOptions", "receive.autogc", "receive.updateServerInfo",
-		"pack.writeReverseIndex", "pack.indexVersion",
+		"pack.writeReverseIndex", "pack.indexVersion", "core.quotePath", "mailmap.blob",
 	} {
 		if _, err := fake.Run(t.Context(), gitproc.Cmd{Args: []string{"x"}, Config: []gitproc.KV{{Key: key, Value: "1"}}, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline}); err != nil {
 			t.Errorf("the allowlisted %s: %v", key, err)

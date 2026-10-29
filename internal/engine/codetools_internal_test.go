@@ -8,7 +8,7 @@ import (
 
 // THE CODE TOOLS ARE OFFERED WHERE THE CODE HOST IS SERVED, through the running
 // wiring: a company whose node's runtime serves its repositories holds the
-// seven in every seat's registry — equipped at the apply, after the runtime it
+// nine in every seat's registry — equipped at the apply, after the runtime it
 // starts — and the operator's halves read the same deps; a company that hosts
 // no code is given none, whose tools would answer every call that no
 // repository is served. The terms are [OperatorCode]'s, the code host's REST

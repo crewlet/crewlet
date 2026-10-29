@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // A PAGE IS MEASURED AS ITS JSON, because what bounds it is the bytes of the
@@ -87,6 +88,57 @@ func textCost(b []byte) int {
 	return cost
 }
 
+// A FIELD THE CODE TOOLS FENCE IS COSTED AS THEY SEND IT. A page of a file or
+// of a patch fences one text, whose fence the room a page leaves beside a
+// tool's envelope holds; a log's page fences every commit's subject and a
+// blame's every line and every commit's subject — a hundred, five hundred —
+// so each such field is costed here as internal/agent/builtin's code tools
+// send it: inside the fence they put a repository's text in, naming no writer
+// at trust external (provenance.Fence), its text NEUTRALISED there as every
+// other string of a code tool's answer is (provenance.Neutralise: every
+// marker-shaped `[` lengthened into `[escaped `). The fence's label and closer
+// are read off provenance itself at init, so a fence grown longer is costed
+// longer; only the turn's own boundary, which no git node knows, is not —
+// text spelling it is a turn's own echo, and a page it lengthens past one
+// answer is refused by the tool naming a narrower read, never cut.
+
+// fenceCost is what the fence of each source a log or a blame fences adds to
+// a text once encoded: its opening line, the line feed before its closer and
+// the closer.
+var fenceCost = map[provenance.Source]int{}
+
+// costModel is what a log's and a blame's pages were measured with — what each
+// fence adds, and what neutralising one marker does — in every key the memo
+// keeps such a page under: a build whose fence or escape is longer cuts its
+// pages anew rather than serve one measured short of it.
+var costModel string
+
+// init measures both after the table above, which the measuring reads: an
+// init runs after every package variable is set, and in the order this file
+// declares it.
+func init() {
+	for _, src := range []provenance.Source{provenance.SourceRepoFile, provenance.SourceRepoCommit} {
+		const text = "x"
+		fenced := provenance.Fence(provenance.NewBoundary(), src, provenance.TrustExternal, nil, text)
+		fenceCost[src] = encodedLen(fenced) - encodedLen(text)
+	}
+	costModel = fmt.Sprintf("fence/%d/%d/%d", fenceCost[provenance.SourceRepoFile],
+		fenceCost[provenance.SourceRepoCommit], neutralGrowth("[untrusted"))
+}
+
+// neutralCost is s's bytes inside a JSON string once a code tool's answer has
+// neutralised it — what every string of a log's or a blame's page costs, and
+// what each field's bound (code.MaxLogSubjectBytes and its kin) is held to.
+func neutralCost(s string) int {
+	return textCost([]byte(provenance.Neutralise("", s)))
+}
+
+// neutralGrowth is what neutralising s adds to its encoding: nothing but for
+// text spelling a fence's marker.
+func neutralGrowth(s string) int {
+	return neutralCost(s) - textCost([]byte(s))
+}
+
 // jsonLen is v's encoded bytes.
 func jsonLen(v any) int {
 	out, err := json.Marshal(v)
@@ -127,10 +179,12 @@ func widestCursor(letter byte, numbers int) string {
 
 // THE CURSORS. A page's Next is a letter and one or two positions, each
 // decimal: "e:<n>" the n-th entry of a listing (counted from 0), "f:<n>" the
-// n-th file of a diff's stat, "l:<n>" line n of a file, "b:<n>:<o>" byte o of
-// line n, "p:<o>" byte o of a patch. Each is a position in an answer that is
-// a function of object ids alone — the same listing, file or patch on every
-// node at every position — so a cursor any node issued is sound on any other.
+// n-th file of a diff's stat, "l:<n>" line n of a file — or of a blame's range
+// — "b:<n>:<o>" byte o of line n, "p:<o>" byte o of a patch, "s:<n>" the n-th
+// commit of a history's walk (counted from 0, the commits git skips first).
+// Each is a position in an answer that is a function of object ids alone —
+// the same listing, file, patch or walk on every node at every position — so a
+// cursor any node issued is sound on any other.
 
 // cursor is a parsed Next: its letter and positions; the zero cursor is a
 // first page.

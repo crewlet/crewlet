@@ -119,6 +119,8 @@ const (
 	ActionCodeDiff      Action = "code_diff"
 	ActionCodeCompare   Action = "code_compare"
 	ActionCodeLandedIn  Action = "code_landed_in"
+	ActionCodeLog       Action = "code_log"
+	ActionCodeBlame     Action = "code_blame"
 	// ActionCodeRepoReaders is WHO READ a `visibility: unit` repository —
 	// the operator tool `code_repo_readers` and the query registry's
 	// question of the same name, on `GET /code/repos/{name}/readers` and
@@ -717,6 +719,8 @@ var rules = map[Action]rule{
 	ActionCodeDiff:      {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeCompare:   {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeLandedIn:  {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeLog:       {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeBlame:     {class: ClassEverybody, recency: iam.RecencyAny},
 	// BUT WHO READ A REPOSITORY IS ADMIN'S, as the company-wide trail is
 	// ([ActionAuditRead]): the answer names every person, credential and
 	// seat that read a unit's code and how much, which is an audit of the

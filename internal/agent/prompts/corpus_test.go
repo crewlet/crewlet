@@ -117,7 +117,7 @@ func richExecutorInput() ExecutorInput {
 		AvailableTools: []string{
 			"read_file", "delegate", "comment_on_work_item",
 			// AND THE CODE TOOLS, so the guidance they gate renders.
-			"code_resolve", "code_read", "code_diff", "code_compare", "code_landed_in",
+			"code_resolve", "code_read", "code_diff", "code_compare", "code_landed_in", "code_log", "code_blame",
 		},
 		Workers:             "- `researcher` — digs; returns `findings`",
 		CounterpartyProfile: "Ana prefers bullet points — and emoji 👍",

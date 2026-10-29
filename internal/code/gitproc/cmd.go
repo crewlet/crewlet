@@ -574,6 +574,11 @@ var allowedConfig = map[string]string{
 	// its line, rather than every byte past ASCII written as an octal escape.
 	"core.quotepath": "a seat's read of one file's patch (internal/code/query's diff-pairs): its header names " +
 		"a UTF-8 path as it is, as the stat beside it does",
+	// Where a `.mailmap` is read from in a bare repository — HEAD's, unless
+	// this names another blob — and nothing else: it runs nothing and dials
+	// nothing. Set EMPTY, it names no blob, so no mailmap is read.
+	"mailmap.blob": "a seat's blame (internal/code/query's blame.go): empty, so a commit's author is named as the " +
+		"commit states it — git blame reads HEAD's .mailmap in a bare repository and has no --no-mailmap",
 }
 
 // subcommand is what Args[0] must be.

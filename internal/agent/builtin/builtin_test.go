@@ -323,6 +323,8 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.CodeDiffTool:      false,
 		builtin.CodeCompareTool:   false,
 		builtin.CodeLandedInTool:  false,
+		builtin.CodeLogTool:       false,
+		builtin.CodeBlameTool:     false,
 
 		// THE DEPLOYMENT'S HEALTH: two reads of what the fleet already
 		// publishes, which a worker of a granted seat may be handed.
@@ -1044,9 +1046,9 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// AND THE DATASTORE BESIDE IT, which the four data tools take
 		// with the artifacts half.
 		ArtifactData: artifactDataDeps(newFakeData()),
-		// AND THE CODE HOST, whose seven read tools register only over a
+		// AND THE CODE HOST, whose nine read tools register only over a
 		// code host and the requester ceiling's halves beside it: left out,
-		// every walk over this fixture met their seven authority rows as
+		// every walk over this fixture met their nine authority rows as
 		// rules no registered tool answers.
 		Code: codeDeps(newCodeHost()),
 		// AND THE HEALTH TOOLS, over a lease table and the git nodes' status

@@ -3099,11 +3099,14 @@ A git node also answers questions about a repository's content without a
 clone: a tree's listing, a file's lines, a diff — its per-file stat, or one
 file's patch — how two commits compare (their merge base, which contains
 which, the commits each has that the other lacks, and what one changed since
-the merge base), whether a commit landed in a branch and which push landed
-it (`landed_in`, [Which push landed a commit](#which-push-landed-a-commit)),
-and what a change's revisions are: a revision's facts against its target,
-where lines anchored in one revision are in another, and what the change
-changed between two ([A revision's facts](#a-revisions-facts)).
+the merge base), a path's history ([A path's history](#a-paths-history)),
+which commit last changed each line of a file
+([Who changed a line](#who-changed-a-line)), whether a commit landed in a
+branch and which push landed it (`landed_in`,
+[Which push landed a commit](#which-push-landed-a-commit)), and what a change's
+revisions are: a revision's facts against its target, where lines anchored in
+one revision are in another, and what the change changed between two
+([A revision's facts](#a-revisions-facts)).
 It answers each with real git over its own
 [cache](#the-cache-on-a-git-node), in the cache's read lane, from the copy it
 holds, and names in every answer the push that introduced each commit the
@@ -3111,17 +3114,19 @@ answer names, with what its index of pushes holds.
 
 **Who asks them** is a seat, through its code tools, and a person through
 their own assistant, which the operator catalogue serves the same tools to:
-`code_read`, `code_diff`, `code_compare` and `code_landed_in` read by commit
-id, beside `code_list_repos`, `code_get_repo` and `code_resolve`, which read
-the rows — what a repository is, its branches, what a ref points at now — at
-linearizable ([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
+`code_read`, `code_diff`, `code_compare`, `code_landed_in`, `code_log` and
+`code_blame` read by commit id, beside `code_list_repos`, `code_get_repo` and
+`code_resolve`, which read the rows — what a repository is, its branches, what
+a ref points at now — at linearizable
+([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
 A turn reads each repository it names once, and resolves the refs a call
 names in one read — a comparison's two branches cost one barrier — so a seat
 that resolves a branch once and reads by the commit it answers pays one
 barrier for the repository and one for the branch, however many files it
-reads. A file's lines and a patch reach the model
-[fenced](agent-runtime.md#text-somebody-else-wrote), at trust `external`: a
-read by commit id knows the bytes and not whose they are.
+reads. A file's lines — a blame's among them — and a patch reach the model
+[fenced](agent-runtime.md#text-somebody-else-wrote), at trust `external`, and
+so does every commit's subject a history or a blame names: a read by commit id
+knows the bytes and not whose they are.
 
 **By object id, never by ref.** Every revision a read names is an object id,
 whole or abbreviated to 7 or more hex digits. What a branch or a tag points at
@@ -3132,22 +3137,26 @@ name — git's own reading of a short name tries it as a ref first, so a branch
 or a tag named like an abbreviation would answer for another commit — and one
 that two objects begin with is refused, asking for more of its digits.
 
-**A path is data.** A path a read names reaches git only on a batch command's
+**A path is data.** A path a read names reaches git on a batch command's
 standard input, where it resolves to the id of the tree or file it names, and
-every git process the read runs is handed ids and fixed options alone: no path
-is ever an argument, so none can be read as an option. A diff's stat is
-filtered by the paths a read names after git has answered, never by a
-pathspec, and so is an interdiff by the paths its revisions touch.
+every git process the read runs is handed ids, fixed options and numbers the
+node formats alone — or, for a history and a blame, whose git reads no path on
+its standard input, the path as the ONE argument after `--`, which git reads as
+a path and never as an option, a history's as a literal pathspec: so no path
+can be read as an option, and a path named `--output=x` is the path
+`--output=x`. A diff's stat is filtered by the paths a read names after git has
+answered, never by a pathspec, and so is an interdiff by the paths its
+revisions touch.
 
 **One page at a time, never cut.** Every answer is at most 56 KiB of JSON and
 says where the next page starts: a listing's entries, a stat's files, a file's
-lines and a patch's lines are each whole on the page that holds them, and a
-listing's total, a file's line count and a diff's totals are the whole answer's
-on every page. A line of a file longer than a page is served in pieces at
-character boundaries that concatenate to the line; a line of a patch longer
-than a page is refused, naming the file's lines to read instead. A binary file
-is answered by its size, as git calls one binary: a NUL in its first 8 000
-bytes.
+lines, a patch's lines, a history's commits and a blame's lines are each whole
+on the page that holds them, and a listing's total, a file's line count and a
+diff's totals are the whole answer's on every page. A line of a file longer
+than a page is served in pieces at character boundaries that concatenate to the
+line; a line of a patch longer than a page is refused, naming the file's lines
+to read instead. A binary file is answered by its size, as git calls one
+binary: a NUL in its first 8 000 bytes.
 
 **Who may read** is judged by the git node that answers, from its own chart,
 by the rules of [Who may read and push](#who-may-read-and-push): a person reads
@@ -3230,6 +3239,69 @@ even where git answered anyway — it reads around a damaged index from the
 packs and exits as if it had not — and the cache repairs what it reported
 while other nodes answer.
 
+### A path's history
+
+`code_log` asks for the commits that changed a file or a directory — or every
+commit — newest first from a commit: one `git log --topo-order` over the copy,
+walking by generation where the copy holds a commit-graph, and reading the
+graph's changed-path filters, so a commit that touched nothing under the path
+is passed over without a diff. Each commit is named with its parents, its
+author and address as the commit states them — never a `.mailmap`'s, so the
+answer is a function of the commits alone — its two dates, its subject (the
+message's first paragraph) and the push that introduced it. The path is the
+history as git keeps it: a file renamed is listed under each name for the
+commits that touched that name, the rename among the old name's, and a file
+deleted since keeps the history it had.
+
+**A literal, matched on the node.** `grep` keeps the commits whose whole
+message holds its words, in any case, matched by the node over each message as
+it streams by — never handed to git as a pattern — so a message of any length
+is searched in memory the size of the words, and a dot is a dot. `since` keeps
+the commits committed from a time on, as git's `--since` does: the walk stops
+at a commit committed before it on each line of history it reaches.
+
+**A page ends where the history says.** A page holds as many commits as
+`limit` asks and its 56 KiB hold — every subject counted fenced, as the tools
+send it — and ends before the next; its cursor is how many commits of the walk
+the pages before it covered, so the next page's walk skips them. `scanned` is
+how many commits a page covered, the ones `grep` passed over included, and
+`complete` that the walk reached the history's end. A walk that runs the
+read's ten seconds of git — a `grep` that matches little in a long history —
+answers what it found with its cursor past it, never an error and never a
+claim that nothing more matches; one that reached no commit at all in that
+time is too large, naming the narrowing (a path, a later `since`).
+
+**A record no message can forge.** Every field of a commit ends in a NUL
+byte, which no message holds — the code host's own check of every push and
+every engine-built commit refuses a NUL in a commit — so a message holding
+whatever other bytes it likes, a forged commit's worth of them included, is
+read as the one commit it is. A record that does not read as git writes one
+fails the page, logged `code_git_unparsed`, and is never answered.
+
+### Who changed a line
+
+`code_blame` asks which commit last changed each line of a file at a commit:
+one `git blame --porcelain` of a range of at most 500 lines, its path the one
+argument after `--`. Each line comes with its commit, the line it was in that
+commit, and the path it had there where the file was renamed since; each commit
+once a page, with its author as the commit states it — a blame in a bare
+repository would read the `.mailmap` at the default branch, which the node
+turns off — its date, its subject (the message's first line) and the push that
+introduced it. A blame's cost is the walk of the file's history for the lines
+it names, so a range is read in pages by one blame: the run that cuts the first
+page cuts every page of the range, and the rest are answered from the
+[memo](#the-memo). A range that begins past the file's end is refused naming
+how many lines the file has; a path that names a directory or nothing is
+refused; an empty file has no lines.
+
+**Described, never cut.** A subject past 4 KiB, an author's name or address
+past 1 KiB and a line past 8 KiB — each measured as the tools send it, a
+control byte six bytes and a fence's marker its escape — are answered absent,
+beside their size (`subject_bytes`, `author_bytes`, `author_email_bytes`,
+`text_bytes`), in a history and a blame alike, and so are a merge's parents
+past 64 (`parent_count`): so the widest commit, and the widest line with its
+commit, always fit a page, and no page carries half a field read as the whole.
+
 ### The memo
 
 Every page a git node cuts for a server-side read is kept beside its copy —
@@ -3251,10 +3323,12 @@ the fiftieth page of a file is a read of the forty-nine before it, and the
 recursive listing of a 100 000-file tree is some 250 pages, each a whole
 `ls-tree`. So the git that misses cuts every page from the one asked to the
 answer's end — a listing's, a file's or its line range's, a stat's, a
-patch's — and the memo keeps each: reading a file page by page streams it once,
-and listing that tree page by page runs `ls-tree` once. A comparison is kept
-whole; whether a commit landed in a branch never is, since its answer moves
-with the branch. A read that misses a page another read on the node is
+patch's, a blame's range — and the memo keeps each: reading a file page by
+page streams it once, listing that tree page by page runs `ls-tree` once, and
+blaming a range page by page blames it once. A comparison is kept whole; a
+history's page is its walk's own, kept where the walk ended it and never where
+the read's ten seconds of git did; whether a commit landed in a branch never
+is, since its answer moves with the branch. A read that misses a page another read on the node is
 cutting waits for it and is answered from what that read kept, so the seats a
 push's review reaches, all asking for the same diff at once, cost the node one
 git process rather than one each.
@@ -4377,7 +4451,11 @@ credential that made it, so a CI job blaming its way through history waits
 behind every machine credential that has asked less, and goes ahead of
 people's clones only for the machines' third of a busy lane — once people
 have spent more than twice what the machine credentials have lately; the
-node keeps no limiter of lazy fetches beside the share.
+node keeps no limiter of lazy fetches beside the share. A seat is steered
+off that path altogether: `code_blame` and `code_log` answer who changed a
+line and how a file's history went on the node, one git process over the copy
+it holds and no fetch at all ([Who changed a line](#who-changed-a-line),
+[A path's history](#a-paths-history)).
 
 **Measured** on four E-cores of an Intel Core Ultra 7 265U with the transfer
 lane as wide as the cores (`internal/code/gitproc`'s `BenchmarkTransferShare`,
@@ -4585,6 +4663,7 @@ line says and push the branch's next commit with `-o change`.
 | `code_fetched_unpublished` | `WARN` | Under the component `code.readaudit`: the event stream refused a flush of this node's records of [who read](#who-read-it) its unit repositories. The records it held back (`records`, and the `reads` they count) are kept, sealed, and published again by the next flush, fifteen seconds later. |
 | `code_fetched_dropped` | `WARN` | Under `code.readaudit`: the stream refused this node's records of reads for longer than the node keeps them (4 096 records): the oldest `records`, and the `reads` they counted, are dropped, and who read those repositories answers without them. |
 | `code_fetched_lost_at_stop` | `WARN` | Under `code.readaudit`: the node stopped while the stream was refusing its last records of reads; those `records` and their `reads` are in no answer. |
+| `code_git_unparsed` | `ERROR` | Under the component `code.query`: a [history](#a-paths-history) or a [blame](#who-changed-a-line) read answered output that does not read as git writes it — a record past its fields, an id that is no id, a porcelain line out of its place (`kind`, `error`). The read fails and nothing of that page is answered: a bug in the reader, or a git writing what this build does not read — never a message's doing, since every field ends in a byte no message holds. |
 | `code_git_reads_stop_unfinished` | `WARN` | Under the component `code.query`: stopping its code host, the node cut its [server-side reads](#server-side-reads) in flight — each answered unready, so its asker took it to the next git node — and some had still not returned when the stop's wait ended. A read of a `visibility: unit` repository that answers after this line is recorded after the code host's stop, and so after the node's stop has flushed what [who read it](#who-read-it) is kept from. |
 | `code_status_answerer_not_withdrawn` | `WARN` | Stopping its code host, the node could not finish withdrawing its answers to the fleet's code-status question (`crewlet.code.status`), which it stops answering first so that no peer is told of a cache that is going: the broker refused to drop its subscription, or answers already in flight outlasted the stop's wait — the `error` says which. Either way the node starts no answer after this line, and the host's stop goes ahead. |
 | `code_verify_finished` | `INFO` | A check of this node's copy of a repository ended: the `packs` it checked, how many files the sync before it had found damaged and `repaired_by_sync` in place, the `problems` it found, and how a repair put it right: `repaired_in_place`, its own directory read whole in place, and `rebuilt`, a new copy (both, a rebuild of what the read in place left). Its report is read at `GET /code/repos/{name}/verify/{id}` for an hour after. |

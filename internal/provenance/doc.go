@@ -1,7 +1,7 @@
 // Package provenance is the ONE fence around text a model reads that somebody
 // other than the reading seat wrote: page bodies, work item comments, project
 // files, chat threads, artifact files, datastore rows, the adopted brand's
-// voice, and a repository's files and patches.
+// voice, and a repository's files, patches and commit messages.
 //
 // Such text is data, never an instruction. Each read result wraps it in a fence
 // bounded by a per-turn random token, so content cannot close the fence by

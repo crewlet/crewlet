@@ -70,20 +70,28 @@ const (
 	SourceBrandVoice Source = "brand_voice"
 
 	// SourceRepoFile is a file's lines in one of the company's git
-	// repositories, read at a commit, and SourceRepoPatch one file's patch
-	// between two commits. Neither names a writer: a read by object id
-	// knows the bytes and not whose they are, and a repository routinely
-	// holds commits its importers and contributors authored outside the
-	// company, so both are read at [TrustExternal].
+	// repositories, read at a commit — a blamed line's among them — and
+	// SourceRepoPatch one file's patch between two commits. Neither names a
+	// writer: a read by object id knows the bytes and not whose they are,
+	// and a repository routinely holds commits its importers and
+	// contributors authored outside the company, so both are read at
+	// [TrustExternal].
 	SourceRepoFile  Source = "repo_file"
 	SourceRepoPatch Source = "repo_patch"
+
+	// SourceRepoCommit is a commit's message in one of those repositories —
+	// the subject a history or a blame names each commit by — read at
+	// [TrustExternal] and naming no writer for SourceRepoFile's reason: the
+	// author a commit states is text its pusher wrote, no principal the
+	// read can name, and an import carries commits authored anywhere.
+	SourceRepoCommit Source = "repo_commit"
 )
 
 // Sources are every surface.
 var Sources = []Source{
 	SourcePageBody, SourcePageComment, SourceWorkDescription, SourceWorkComment,
 	SourceProjectFile, SourceChatThread, SourceArtifactFile, SourceArtifactRow,
-	SourceBrandVoice, SourceRepoFile, SourceRepoPatch,
+	SourceBrandVoice, SourceRepoFile, SourceRepoPatch, SourceRepoCommit,
 }
 
 // Valid reports whether s is one of [Sources].

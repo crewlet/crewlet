@@ -5,8 +5,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -55,8 +57,14 @@ import (
 // (cache.MemoBatch.Extend), so a stat's run holds one page's counts at a time
 // however many files it counts. Reading a file page by page costs one stream
 // of it. A comparison, whose answer is one page, is memoized whole; an
-// interdiff's pages as a diff's are; and a landed-in read, a revision's facts
-// and a re-anchoring never (memoizable says why).
+// interdiff's pages as a diff's are; a blame's run cuts every page of its
+// range, as a file's does; a history's page is its walk's own — the walk ends
+// where the page does, since its cost is the walk — memoized where the walk
+// ended it, and never where the read's budget or its due instant did, which
+// is the machine's and the moment's; and a landed-in read, a revision's facts
+// and a re-anchoring never (memoizable says why). A history's and a blame's
+// key carries the measure their pages were cut with (costModel), since a
+// fence they are measured with is a build's.
 //
 // # A page fits whatever it is stamped with
 //
@@ -75,7 +83,7 @@ import (
 // TestAMemoEntryHoldsEveryFieldOfItsAnswer holds the encoding to the answers'
 // fields, and TestAnAnswersShapeIsItsMemoFormat holds this name to a
 // fingerprint of them, so a change to either fails until this moves with it.
-const memoFormat = "page/2"
+const memoFormat = "page/3"
 
 // memoPage is one page as the memo keeps it.
 type memoPage struct {
@@ -146,6 +154,19 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 		parts = append(parts, whole[q.Interdiff.FromHead], whole[q.Interdiff.ToHead], file,
 			strconv.FormatBool(f.filters()), strconv.Itoa(len(f.paths)))
 		parts = append(parts, f.paths...)
+	case code.GitLog:
+		// Since as the second its walk stops before, the limit as the page
+		// applies it, and the cost the page's fields were measured at.
+		path, _ := code.GitPath("log.path", q.Log.Path, q.Log.PathB64, true)
+		since := ""
+		if !q.Log.Since.IsZero() {
+			since = strconv.FormatInt(sinceSecond(q.Log.Since), 10)
+		}
+		parts = append(parts, whole[q.Log.Rev], path, q.Log.Grep, since, strconv.Itoa(logLimitOf(q.Log)),
+			costModel)
+	case code.GitBlame:
+		start, end := q.Blame.Range()
+		parts = append(parts, whole[q.Blame.Rev], pathOf(q), strconv.Itoa(start), strconv.Itoa(end), costModel)
 	}
 	return cache.NewMemoKey(append(parts, formatCursor(at))...)
 }
@@ -348,6 +369,14 @@ func (w *pageWriter) uint(n uint64) { *w = binary.AppendUvarint(*w, n) }
 func (w *pageWriter) int(n int)     { w.uint(uint64(max(n, 0))) }
 func (w *pageWriter) size(n int64)  { w.uint(uint64(max(n, 0))) }
 func (w *pageWriter) str(s string)  { w.uint(uint64(len(s))); *w = append(*w, s...) }
+
+// time writes an instant as its seconds since the epoch — signed, which a
+// commit's dates never need and the encoding costs nothing to allow — and its
+// nanoseconds, read back in UTC as every answer states one.
+func (w *pageWriter) time(t time.Time) {
+	*w = binary.AppendVarint(*w, t.Unix())
+	w.uint(uint64(t.Nanosecond()))
+}
 func (w *pageWriter) flag(v bool) {
 	if v {
 		*w = append(*w, 1)
@@ -420,6 +449,58 @@ func appendPage(buf []byte, p memoPage) []byte {
 		w.int(c.Total)
 		w.int(c.Added)
 		w.int(c.Deleted)
+	case code.GitLog:
+		l := a.Log
+		w.str(l.Path)
+		w.str(l.PathB64)
+		w.int(len(l.Commits))
+		for _, c := range l.Commits {
+			w.str(c.OID)
+			w.int(len(c.Parents))
+			for _, p := range c.Parents {
+				w.str(p)
+			}
+			w.int(c.ParentCount)
+			w.str(c.Author)
+			w.int(c.AuthorBytes)
+			w.str(c.AuthorEmail)
+			w.int(c.AuthorEmailBytes)
+			w.time(c.AuthoredAt)
+			w.time(c.CommittedAt)
+			w.str(c.Subject)
+			w.int(c.SubjectBytes)
+		}
+		w.int(l.Scanned)
+		w.flag(l.Complete)
+	case code.GitBlame:
+		b := a.Blame
+		w.str(b.Path)
+		w.str(b.PathB64)
+		w.int(b.StartLine)
+		w.int(b.EndLine)
+		w.int(len(b.Lines))
+		for _, l := range b.Lines {
+			w.int(l.Line)
+			w.str(l.Commit)
+			w.int(l.OrigLine)
+			w.str(l.OrigPath)
+			w.str(l.OrigPathB64)
+			w.str(l.Text)
+			w.int(l.TextBytes)
+		}
+		// The commits by id, in order: one page, one encoding.
+		w.int(len(b.Commits))
+		for _, id := range slices.Sorted(maps.Keys(b.Commits)) {
+			c := b.Commits[id]
+			w.str(id)
+			w.str(c.Author)
+			w.int(c.AuthorBytes)
+			w.str(c.AuthorEmail)
+			w.int(c.AuthorEmailBytes)
+			w.time(c.AuthoredAt)
+			w.str(c.Subject)
+			w.int(c.SubjectBytes)
+		}
 	}
 	return w
 }
@@ -541,6 +622,25 @@ func (r *pageReader) str() string {
 	return s
 }
 
+// time is an instant as pageWriter.time wrote it.
+func (r *pageReader) time() time.Time {
+	if r.err != nil {
+		return time.Time{}
+	}
+	secs, n := binary.Varint([]byte(r.s[:min(len(r.s), binary.MaxVarintLen64)]))
+	if n <= 0 {
+		r.err = errMemoPage
+		return time.Time{}
+	}
+	r.s = r.s[n:]
+	nanos := r.uint()
+	if r.err != nil || nanos >= uint64(time.Second) {
+		r.err = errMemoPage
+		return time.Time{}
+	}
+	return time.Unix(secs, int64(nanos)).UTC()
+}
+
 func (r *pageReader) flag() bool {
 	if r.err != nil || len(r.s) == 0 || r.s[0] > 1 {
 		r.err = errMemoPage
@@ -613,6 +713,37 @@ func decodePage(body []byte) (memoPage, error) {
 		}
 		c.Total, c.Added, c.Deleted = r.int(), r.int(), r.int()
 		a.Compare = c
+	case code.GitLog:
+		l := &code.LogAnswer{Path: r.str(), PathB64: r.str(), Commits: []code.LogCommit{}}
+		if n := r.count(); r.err == nil {
+			l.Commits = make([]code.LogCommit, n)
+			for i := range l.Commits {
+				l.Commits[i] = readLogCommit(r)
+			}
+		}
+		l.Scanned, l.Complete = r.int(), r.flag()
+		a.Log = l
+	case code.GitBlame:
+		b := &code.BlameAnswer{Path: r.str(), PathB64: r.str(), StartLine: r.int(), EndLine: r.int(),
+			Lines: []code.BlameLine{}, Commits: map[string]code.BlameCommit{}}
+		if n := r.count(); r.err == nil {
+			b.Lines = make([]code.BlameLine, n)
+			for i := range b.Lines {
+				b.Lines[i] = code.BlameLine{Line: r.int(), Commit: r.str(), OrigLine: r.int(), OrigPath: r.str(),
+					OrigPathB64: r.str(), Text: r.str(), TextBytes: r.int()}
+			}
+		}
+		if n := r.count(); r.err == nil {
+			for range n {
+				id := r.str()
+				b.Commits[id] = code.BlameCommit{Author: r.str(), AuthorBytes: r.int(), AuthorEmail: r.str(),
+					AuthorEmailBytes: r.int(), AuthoredAt: r.time(), Subject: r.str(), SubjectBytes: r.int()}
+			}
+			if len(b.Commits) != n {
+				r.err = errMemoPage // an id twice: no page this build writes
+			}
+		}
+		a.Blame = b
 	default:
 		return memoPage{}, errMemoPage
 	}
@@ -620,6 +751,23 @@ func decodePage(body []byte) (memoPage, error) {
 		return memoPage{}, errMemoPage
 	}
 	return p, nil
+}
+
+// readLogCommit reads one commit of a history as appendPage wrote it.
+func readLogCommit(r *pageReader) code.LogCommit {
+	c := code.LogCommit{OID: r.str()}
+	if n := r.count(); r.err == nil && n > 0 {
+		c.Parents = make([]string, n)
+		for i := range c.Parents {
+			c.Parents[i] = r.str()
+		}
+	}
+	c.ParentCount = r.int()
+	c.Author, c.AuthorBytes = r.str(), r.int()
+	c.AuthorEmail, c.AuthorEmailBytes = r.str(), r.int()
+	c.AuthoredAt, c.CommittedAt = r.time(), r.time()
+	c.Subject, c.SubjectBytes = r.str(), r.int()
+	return c
 }
 
 // readFile reads one diff file as appendFile wrote it.

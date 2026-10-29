@@ -556,19 +556,32 @@ var cacheWriters = []writerRow{
 			"spelled as literals are the two whole object ids a read resolved and `-M`; a path never reaches " +
 			"the command line (the stat is filtered after git answers, an interdiff's by its touched paths, and " +
 			"the records it admits reach diff-pairs on its standard input), and " +
-			"query.TestAPathReachesGitOnlyOnStandardInput holds every argument list to its template, so no " +
+			"query.TestAPathReachesGitOnlyAsData holds every argument list to its template, so no " +
 			"--output can be added unseen", nil},
 	{"internal/code/query/compare.go", kindGit + " rev-list",
 		"a seat's comparison of two commits: `--left-right --count <base>...<head>` over two whole commit " +
-			"ids a read resolved; query.TestAPathReachesGitOnlyOnStandardInput holds the argument list to its " +
+			"ids a read resolved; query.TestAPathReachesGitOnlyAsData holds the argument list to its " +
 			"template", nil},
 	{"internal/code/query/facts.go", kindGit + " diff-tree",
 		"a revision's facts: the paths a change touches (`-r --name-only -z --no-renames`) and its patch for " +
 			"patch-id (`-r -p --full-index …`, written to the reader through its Stdout, into a spool the cache " +
 			"made with no name), whose only arguments not spelled as literals are the base and head the read " +
 			"resolved to whole ids — the empty tree's id, a constant, for a history sharing none with its " +
-			"target's; query.TestAPathReachesGitOnlyOnStandardInput holds both argument lists to their " +
+			"target's; query.TestAPathReachesGitOnlyAsData holds both argument lists to their " +
 			"templates, so no --output can be added unseen", nil},
+	{"internal/code/query/log.go", kindGit + " log",
+		"a path's history: the only arguments not spelled as literals are the format — one of two constants, " +
+			"with or without the message — the --max-age= and --skip= numbers the server formats from a validated " +
+			"query, the whole commit id a read resolved and, after `--`, the path as a literal pathspec, which git " +
+			"reads as a path whatever it spells (`-- :(literal)--output=x` is the history of that path, measured " +
+			"on 2.56.0); query.TestAPathReachesGitOnlyAsData holds every argument list to its template, so no " +
+			"--output can be added unseen", nil},
+	{"internal/code/query/blame.go", kindGit + " blame",
+		"a file's blame: the only arguments not spelled as literals are the -L range the server formats, the " +
+			"whole commit id a read resolved and, after `--`, the path, which git reads as a path whatever it " +
+			"spells (`blame <id> -- --output=x` answers that no such path exists, measured on 2.56.0); " +
+			"query.TestAPathReachesGitOnlyAsData holds the argument list to its template, so no --output can be " +
+			"added unseen", nil},
 }
 
 type writerKey struct{ file, kind string }
@@ -626,6 +639,12 @@ var gitReaders = map[string]gitReader{
 		"(2.56.0: `diff-pairs -z --numstat --output=f` exits 0 and leaves f behind)"},
 	"patch-id": {why: "hashes the patch on its standard input and prints its id: it opens no object and no ref, " +
 		"and its options (--stable, --unstable, --verbatim) choose how it hashes, none what it writes"},
+	"log": {writes: "--output", why: "lists a path's history by id; --output, a diff option its revision walker " +
+		"takes, creates the file it names in the directory git runs in (2.56.0 and 2.55.0: `log --output=f -1` " +
+		"exits 0 and leaves f behind)"},
+	"blame": {writes: "--output", why: "annotates a file's lines by id, reading only the object database; " +
+		"--output, a diff option its revision parser takes, creates the file it names (2.56.0 and 2.55.0: " +
+		"`blame --output=f <id> -- file` exits 0 and leaves f behind)"},
 }
 
 const uploadPackReads = "serves a fetch: its pack goes to the client, and the one file it writes in the " +

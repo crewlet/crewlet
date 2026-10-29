@@ -197,8 +197,9 @@ func New(o Options) (*Server, error) {
 }
 
 // Read answers q: a page of the tree, file, diff, comparison or interdiff it
-// names; whether a commit landed in a target and the push that landed it; a
-// revision's facts; or where anchored lines are in a revision.
+// names; a page of a path's history, or of a file's blame; whether a commit
+// landed in a target and the push that landed it; a revision's facts; or
+// where anchored lines are in a revision.
 //
 //  1. q is validated (code.GitQuery.Validate), and its cursor read as one its
 //     kind issues.
@@ -262,13 +263,14 @@ func New(o Options) (*Server, error) {
 //     git has answered whole (memo.go).
 //  9. Every commit the answer names — its revision, a diff's, a
 //     comparison's or an interdiff's commits, a landed-in read's commit and
-//     tip, a revision's head and target, a re-anchoring's commits — is named
-//     with the push that introduced it (code.GitAnswer.PushedBy), from the copy's
+//     tip, a revision's head and target, a re-anchoring's commits, every
+//     commit a history's page lists or a blame's page names — is named with
+//     the push that introduced it (code.GitAnswer.PushedBy), from the copy's
 //     index of pushes, and the answer carries what that index holds
-//     (code.Coverage) — measured into every page's envelope, so a page cut
-//     against it fits with them. A copy whose index cannot be read yet is
-//     answered without either: an index decorates an answer, and no read
-//     waits on it.
+//     (code.Coverage) — measured into every page's envelope, or for a commit
+//     a page itself finds, into that commit's cost, so a page cut against it
+//     fits with them. A copy whose index cannot be read yet is answered
+//     without either: an index decorates an answer, and no read waits on it.
 //  10. A read this node answered as the repository's home (code.GitQuery.Home)
 //     marks the repository's history wanted (cache.Cache.WantHistory): the one
 //     node a walk asks first reads it back, once per fleet, and only for a
@@ -755,6 +757,10 @@ func (r *read) answer(ctx context.Context, objs found, at cursor) (code.GitAnswe
 		return r.reanchorRead(ctx, objs)
 	case code.GitInterdiff:
 		return r.interdiffRead(ctx, objs, at, m)
+	case code.GitLog:
+		return r.logRead(ctx, objs, at, m)
+	case code.GitBlame:
+		return r.blameRead(ctx, objs, at, m)
 	}
 	return r.compareRead(ctx, objs, m)
 }
@@ -864,6 +870,12 @@ func cursorOf(q code.GitQuery) (cursor, error) {
 			return parseCursor(q.Cursor, q.Kind, map[byte]int{'p': 1})
 		}
 		return parseCursor(q.Cursor, q.Kind, map[byte]int{'f': 1})
+	case code.GitLog:
+		// A history's page begins past the commits of the walk the pages
+		// before it covered.
+		return parseCursor(q.Cursor, q.Kind, map[byte]int{'s': 1})
+	case code.GitBlame:
+		return parseCursor(q.Cursor, q.Kind, map[byte]int{'l': 1})
 	}
 	// A comparison answers its first page of files and no more — a diff of
 	// its merge base and head reads the rest — a landed-in read one answer

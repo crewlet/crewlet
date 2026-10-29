@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"path"
 	"slices"
 	"strings"
@@ -1567,8 +1568,10 @@ type RevisionFactsRow struct {
 // every position, so a read by one needs no level — what a ref points at is a
 // row, which ResolveQuery and its kin answer — and none of git's revision
 // grammar reaches the git node, whose argument lists carry validated ids and
-// fixed options alone. A PATH is data, never an argument: it reaches git only
-// on a batch command's standard input (internal/code/query's rule).
+// fixed options alone. A PATH is data, never an option: it reaches git on a
+// batch command's standard input, or — for a log and a blame, which read no
+// path there — as the one argument after `--`, a log's as a literal pathspec
+// (internal/code/query's rule).
 //
 // EVERY ANSWER IS ONE PAGE, at most [MaxGitAnswerBytes] of JSON, with a cursor
 // (GitAnswer.Next) where the next page starts; one item that cannot fit a page
@@ -1646,6 +1649,66 @@ const MaxReanchors = 64
 // page.
 const maxAnchorIDBytes = 64
 
+// THE BOUNDS OF A LOG AND A BLAME. Every field git leaves unbounded — a
+// commit's subject, its author's name and address, its parents, a blamed
+// line's text — is DESCRIBED, NEVER CUT, past its bound: answered absent
+// beside its size, so a page never carries half a field read as the whole.
+// Each bound is of the field's ENCODED size — its JSON, every control byte
+// six and every byte that is not UTF-8 six, with the escape the fence a code
+// tool puts it in or beside writes into it — so the widest commit and the
+// widest blamed line with its commit always fit one page with room to spare,
+// however the text is spelled: a subject of 4 KiB of control bytes would
+// otherwise encode to 24 KiB.
+
+// MaxLogLimit is the most commits one log page lists, and DefaultLogLimit how
+// many a read naming none lists. A HUNDRED, a long screen of history, and a
+// page past it is bounded in bytes as well: a page ends before the commit
+// whose encoding — its subject's fence included — would take the answer past
+// MaxGitAnswerBytes, so a hundred subjects of 4 KiB is several pages, never
+// one answer too large to send. TWENTY-FIVE by default: the screen a "when
+// did this change" question reads first.
+const (
+	MaxLogLimit     = 100
+	DefaultLogLimit = 25
+)
+
+// MaxLogGrepBytes is the longest literal a log is kept to: a few words of a
+// message, which a model looks for — never a document — and short enough that
+// the streaming matcher's table is nothing beside the page.
+const MaxLogGrepBytes = 256
+
+// MaxLogSubjectBytes is the most a commit's SUBJECT may encode to and be
+// answered: the message's first paragraph, as git's %s joins it. 4 KiB holds
+// any subject a person writes, and a page of them at its bound is still a
+// dozen commits; past it the subject is described by its size
+// (LogCommit.SubjectBytes).
+const MaxLogSubjectBytes = 4 << 10
+
+// MaxLogPersonBytes is the most a commit's author's name, or address, may
+// encode to and be answered. A JUDGMENT: git and fsck bound neither, RFC 5321
+// bounds an address at 254 octets, and 1 KiB holds every real name and
+// address with room; past it each is described by its size.
+const MaxLogPersonBytes = 1 << 10
+
+// MaxLogParents is the most parents a commit's answer lists: an octopus
+// merge's, 64 ids of 43 bytes encoded. Past it the parents are described by
+// their count (LogCommit.ParentCount).
+const MaxLogParents = 64
+
+// MaxBlameLines is the most lines one blame names, its whole range: a few
+// screens of a file, which its answer pages within. A blame's cost is the
+// walk of the file's history for the lines it names, so a range is bounded
+// rather than the file, and that walk is the read's own git, within its one
+// budget like any other: a range whose walk runs it out is refused naming a
+// narrower one.
+const MaxBlameLines = 500
+
+// MaxBlameLineBytes is the most a blamed line's text may encode to and be
+// answered: twice a subject's bound, since a source line of generated code or
+// minified text runs long; past it the line is described by its size
+// (BlameLine.TextBytes).
+const MaxBlameLineBytes = 8 << 10
+
 // GitReadKind is what a [GitQuery] asks. A closed set ([GitReadKinds]).
 type GitReadKind string
 
@@ -1685,12 +1748,26 @@ const (
 	// touches, its stat or one file's patch, answered as a diff is (Kind
 	// interdiff, its Diff part).
 	GitInterdiff GitReadKind = "interdiff"
+	// GitLog is the history of a path — or of every path — from a commit:
+	// the commits that changed it, newest first by generation, a page at a
+	// time, each with its parents, its author, its two dates and its
+	// subject, and optionally only those whose message holds a literal.
+	GitLog GitReadKind = "log"
+	// GitBlame is which commit last changed each line of a file at a commit,
+	// and the line — and the path, where it was another — it had there: at
+	// most MaxBlameLines lines a read, a page at a time.
+	GitBlame GitReadKind = "blame"
 )
 
 // GitReadKinds is the closed set.
+//
+// A KIND IS AN ESTATE REQUEST'S, NEVER A RECORD'S: a GitQuery crosses the
+// estate wire and is answered by a git node from its cache, and no record of
+// the code log names one, so a kind added here moves no RecordVersion and
+// takes no versionedFields row.
 func GitReadKinds() []GitReadKind {
 	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitLandedIn, GitRevisionFacts, GitReanchor,
-		GitInterdiff}
+		GitInterdiff, GitLog, GitBlame}
 }
 
 // Valid reports a kind this build answers.
@@ -1759,6 +1836,8 @@ type GitQuery struct {
 	RevisionFacts *RevisionFactsQuery `json:"revision_facts,omitempty"`
 	Reanchor      *ReanchorQuery      `json:"reanchor,omitempty"`
 	Interdiff     *InterdiffQuery     `json:"interdiff,omitempty"`
+	Log           *LogQuery           `json:"log,omitempty"`
+	Blame         *BlameQuery         `json:"blame,omitempty"`
 }
 
 // TreeQuery lists one tree.
@@ -1936,6 +2015,68 @@ type InterdiffQuery struct {
 	FileB64 string `json:"file_b64,omitempty"`
 }
 
+// LogQuery is the history of a path from a commit, or of every path.
+type LogQuery struct {
+	// Rev is the commit the history is read from (or a tag naming one),
+	// whole or abbreviated.
+	Rev string `json:"rev"`
+	// Path is the file or the directory whose history is read, from the
+	// repository's root — its commits are those that changed it, as git's
+	// history simplification keeps them — and none reads every commit.
+	// PathB64 is the same path as its exact bytes in standard base64, for a
+	// path that is not valid UTF-8: at most one of the two is set. A path
+	// the commit does not hold is a history all the same: a file deleted
+	// since was changed by the commits before its deletion.
+	Path    string `json:"path,omitempty"`
+	PathB64 string `json:"path_b64,omitempty"`
+	// Grep keeps the commits whose whole message holds it: a LITERAL,
+	// matched case-folded in the git node's own code over each message as it
+	// streams by, never handed to git — a regular expression from a model is
+	// a runtime nobody bounded, and text on a command line is what a read by
+	// oid never carries. Valid UTF-8, no NUL, at most MaxLogGrepBytes.
+	Grep string `json:"grep,omitempty"`
+	// Since keeps the commits committed at or after it, as git's --since
+	// does: the walk stops at a commit committed before it on each line of
+	// history it reaches, so a commit dated after it whose every line runs
+	// through an older one is not listed. Zero keeps every one.
+	Since time.Time `json:"since,omitzero"`
+	// Limit is the most commits a page lists, 1 to MaxLogLimit; zero is
+	// DefaultLogLimit. A page past the answer's bytes holds fewer.
+	Limit int `json:"limit,omitempty"`
+}
+
+// BlameQuery is which commit last changed each line of a range of a file.
+type BlameQuery struct {
+	// Rev is the commit the file is read at (or a tag naming one), whole or
+	// abbreviated, and Path the file in it (PathB64 its exact bytes, as a
+	// TreeQuery's): REQUIRED, and a file there.
+	Rev     string `json:"rev"`
+	Path    string `json:"path,omitempty"`
+	PathB64 string `json:"path_b64,omitempty"`
+	// StartLine and EndLine are the range, 1-based and inclusive, at most
+	// MaxBlameLines lines: zero is the file's first line, and the line
+	// MaxBlameLines − 1 past StartLine, or the file's last where that is
+	// sooner. A page ends where the answer is full, and its Next resumes
+	// inside the range.
+	StartLine int `json:"start_line,omitempty"`
+	EndLine   int `json:"end_line,omitempty"`
+}
+
+// Range is the blame's range as its git is asked it: its first line and its
+// last, the default end MaxBlameLines − 1 past the first — the file's last
+// line where that is sooner, which git clamps it to.
+func (q BlameQuery) Range() (start, end int) {
+	start = max(q.StartLine, 1)
+	end = q.EndLine
+	if end == 0 {
+		// The line MaxBlameLines − 1 past the first, or the last an int
+		// counts to: a range that far out names no line of any file, and is
+		// refused by git's own end of the file rather than by an overflow.
+		end = start + min(MaxBlameLines-1, math.MaxInt-start)
+	}
+	return start, end
+}
+
 // ValidRev reports whether rev names an object as a read by oid takes it: a
 // whole object id (40 lowercase hex digits, not the zero id), or an
 // ABBREVIATION of one, MinAbbrevDigits to 39 lowercase hex digits. Never a ref,
@@ -2022,10 +2163,12 @@ func WirePath(p string) (text, b64 string) {
 // Validate refuses a read the git node cannot answer as asked ([ErrInvalid],
 // naming the field): a kind this build does not know, a repository id that is
 // not canonical, an asker no principal is, a sub-query other than its kind's
-// or none, a revision [ValidRev] refuses, a path [GitPath] refuses, a line
-// range that runs backwards, and a diff naming both a file and paths. A
-// cursor longer than any a git node issues is [ErrBadCursor]; whether a
-// shorter one is the kind's own is the git node's to judge.
+// or none, a revision [ValidRev] refuses, a path [GitPath] refuses — or none
+// where a blame names its file — a line range that runs backwards or past a
+// blame's MaxBlameLines, a diff naming both a file and paths, and a log whose
+// literal, limit or date no log takes. A cursor longer than any a git node
+// issues is [ErrBadCursor]; whether a shorter one is the kind's own is the
+// git node's to judge.
 func (q GitQuery) Validate() error {
 	if !q.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %v", ErrInvalid, q.Kind, GitReadKinds())
@@ -2065,7 +2208,7 @@ func (q GitQuery) Validate() error {
 	}{{GitTree, q.Tree != nil}, {GitBlob, q.Blob != nil}, {GitDiff, q.Diff != nil},
 		{GitCompare, q.Compare != nil}, {GitLandedIn, q.LandedIn != nil},
 		{GitRevisionFacts, q.RevisionFacts != nil}, {GitReanchor, q.Reanchor != nil},
-		{GitInterdiff, q.Interdiff != nil}} {
+		{GitInterdiff, q.Interdiff != nil}, {GitLog, q.Log != nil}, {GitBlame, q.Blame != nil}} {
 		switch {
 		case s.kind == q.Kind && !s.present:
 			return fmt.Errorf("%w: %s: a %s read names what it reads", ErrInvalid, s.kind, s.kind)
@@ -2088,6 +2231,10 @@ func (q GitQuery) Validate() error {
 		return q.Reanchor.validate()
 	case GitInterdiff:
 		return q.Interdiff.validate()
+	case GitLog:
+		return q.Log.validate()
+	case GitBlame:
+		return q.Blame.validate()
 	}
 	return q.Compare.validate()
 }
@@ -2286,6 +2433,61 @@ func (q InterdiffQuery) validate() error {
 	return err
 }
 
+// logSinceAhead is how far past this node's clock a log's Since may be: a day,
+// the most two nodes' clocks or an asker's idea of today may honestly differ
+// by. Past it the asker named a date that is not yet — a year typed wrong —
+// and is told so rather than answered an empty history.
+const logSinceAhead = 24 * time.Hour
+
+func (q LogQuery) validate() error {
+	if err := validRev("log.rev", q.Rev); err != nil {
+		return err
+	}
+	if _, err := GitPath("log.path", q.Path, q.PathB64, true); err != nil {
+		return err
+	}
+	switch {
+	case len(q.Grep) > MaxLogGrepBytes:
+		return fmt.Errorf("%w: log.grep: %d bytes, past the %d a log's literal may have", ErrInvalid,
+			len(q.Grep), MaxLogGrepBytes)
+	case !utf8.ValidString(q.Grep) || strings.IndexByte(q.Grep, 0) >= 0:
+		return fmt.Errorf("%w: log.grep: a literal is valid UTF-8 holding no NUL", ErrInvalid)
+	case q.Limit < 0 || q.Limit > MaxLogLimit:
+		return fmt.Errorf("%w: log.limit: %d; a page lists 1 to %d commits, %d when left out", ErrInvalid,
+			q.Limit, MaxLogLimit, DefaultLogLimit)
+	case q.Since.IsZero():
+	case q.Since.Before(time.Unix(0, 0)):
+		return fmt.Errorf("%w: log.since: %s is before 1970, the first instant a commit's date can name",
+			ErrInvalid, q.Since.UTC().Format(time.RFC3339))
+	case q.Since.After(time.Now().Add(logSinceAhead)):
+		return fmt.Errorf("%w: log.since: %s is not yet: give a date in the past", ErrInvalid,
+			q.Since.UTC().Format(time.RFC3339))
+	}
+	return nil
+}
+
+func (q BlameQuery) validate() error {
+	if err := validRev("blame.rev", q.Rev); err != nil {
+		return err
+	}
+	if _, err := GitPath("blame.path", q.Path, q.PathB64, false); err != nil {
+		return err
+	}
+	start, end := q.Range()
+	switch {
+	case q.StartLine < 0:
+		return fmt.Errorf("%w: blame.start_line: %d; lines count from 1", ErrInvalid, q.StartLine)
+	case q.EndLine < 0:
+		return fmt.Errorf("%w: blame.end_line: %d; lines count from 1", ErrInvalid, q.EndLine)
+	case end < start:
+		return fmt.Errorf("%w: blame.end_line: %d is before start_line %d", ErrInvalid, end, start)
+	case end-start >= MaxBlameLines:
+		return fmt.Errorf("%w: blame.end_line: lines %d to %d are %d lines; a blame names at most %d",
+			ErrInvalid, start, end, end-start+1, MaxBlameLines)
+	}
+	return nil
+}
+
 // validTouched refuses a revision's touched paths as an interdiff's asker
 // gives them back: a list beside the word that it touches all, a list past
 // either bound its facts hold one to, or a path no tree entry is named by.
@@ -2348,7 +2550,8 @@ type GitAnswer struct {
 	// with the query otherwise unchanged; empty on the last page.
 	Next string `json:"next,omitempty"`
 	// PushedBy is the push that INTRODUCED each commit the answer names —
-	// its Rev, a diff's or a comparison's commits — by the commit's whole id,
+	// its Rev, a diff's or a comparison's commits, every commit a log page
+	// lists or a blame page's lines name — by the commit's whole id,
 	// where the answering node's index of which push introduced each commit
 	// holds it. A commit it does not name was introduced outside Coverage, or
 	// by a push that listed more than MaxIntroduced commits.
@@ -2364,6 +2567,109 @@ type GitAnswer struct {
 	LandedIn      *LandedInAnswer      `json:"landed_in,omitempty"`
 	RevisionFacts *RevisionFactsAnswer `json:"revision_facts,omitempty"`
 	Reanchor      *ReanchorAnswer      `json:"reanchor,omitempty"`
+	Log           *LogAnswer           `json:"log,omitempty"`
+	Blame         *BlameAnswer         `json:"blame,omitempty"`
+}
+
+// LogAnswer is one page of a history: the commits that changed the path (or
+// any path), newest first by generation — git's `log --topo-order`, every
+// parent after every child — as many as the page's limit and its bytes hold.
+// The push that introduced each is the answer's PushedBy.
+type LogAnswer struct {
+	// Path is the path whose history it is, empty for a whole history
+	// (PathB64 per [WirePath]).
+	Path    string `json:"path,omitempty"`
+	PathB64 string `json:"path_b64,omitempty"`
+	// Commits is the page, in the walk's order.
+	Commits []LogCommit `json:"commits"`
+	// Scanned is how many commits of the history this page covers — every
+	// one a Grep did not keep included — so the next page begins that many
+	// commits further on.
+	Scanned int `json:"scanned"`
+	// Complete is set where the walk reached the history's end: there is no
+	// next page. A page the read's budget of git ended is never complete,
+	// and carries what it found and a Next: never a claim that nothing more
+	// matches.
+	Complete bool `json:"complete,omitempty"`
+}
+
+// LogCommit is one commit of a history. Every field git leaves unbounded is
+// described, never cut, past its bound (see MaxLogSubjectBytes and its kin).
+type LogCommit struct {
+	OID string `json:"oid"`
+	// Parents are the commit's parents' ids, none for a root; past
+	// MaxLogParents they are absent and ParentCount is how many there are.
+	Parents     []string `json:"parents,omitempty"`
+	ParentCount int      `json:"parent_count,omitempty"`
+	// Author and AuthorEmail are the commit's author as it states them —
+	// never as a `.mailmap` would rename them, which would make an answer a
+	// function of a file at some branch rather than of the commit — each past
+	// MaxLogPersonBytes absent with its size in AuthorBytes or
+	// AuthorEmailBytes.
+	Author           string `json:"author,omitempty"`
+	AuthorBytes      int    `json:"author_bytes,omitempty"`
+	AuthorEmail      string `json:"author_email,omitempty"`
+	AuthorEmailBytes int    `json:"author_email_bytes,omitempty"`
+	// AuthoredAt and CommittedAt are the commit's two dates, to the second.
+	AuthoredAt  time.Time `json:"authored_at"`
+	CommittedAt time.Time `json:"committed_at"`
+	// Subject is the message's first paragraph, its lines joined as git's
+	// %s joins them — or, past MaxLogSubjectBytes, absent with SubjectBytes
+	// its size.
+	Subject      string `json:"subject,omitempty"`
+	SubjectBytes int    `json:"subject_bytes,omitempty"`
+}
+
+// BlameAnswer is one page of a blame: each line of the page's part of the
+// range, with the commit that last changed it, and each of those commits
+// once. The push that introduced each commit is the answer's PushedBy.
+type BlameAnswer struct {
+	// Path is the file blamed (PathB64 per [WirePath]).
+	Path    string `json:"path"`
+	PathB64 string `json:"path_b64,omitempty"`
+	// StartLine and EndLine are the first and the last line THIS page
+	// attributes — both zero for an empty file, which has none.
+	StartLine int         `json:"start_line"`
+	EndLine   int         `json:"end_line"`
+	Lines     []BlameLine `json:"lines"`
+	// Commits is every commit a line of the page names, by its whole id,
+	// once.
+	Commits map[string]BlameCommit `json:"commits"`
+}
+
+// BlameLine is one line of a blame.
+type BlameLine struct {
+	// Line is its number in the file blamed, and Commit the commit that last
+	// changed it, whole.
+	Line   int    `json:"line"`
+	Commit string `json:"commit"`
+	// OrigLine is its number in Commit's version of the file, and OrigPath
+	// that file's path where it was another — a file renamed since (PathB64
+	// per [WirePath]).
+	OrigLine    int    `json:"orig_line"`
+	OrigPath    string `json:"orig_path,omitempty"`
+	OrigPathB64 string `json:"orig_path_b64,omitempty"`
+	// Text is the line, without its line feed — or, past
+	// MaxBlameLineBytes, absent with TextBytes its size.
+	Text      string `json:"text,omitempty"`
+	TextBytes int    `json:"text_bytes,omitempty"`
+}
+
+// BlameCommit is a commit a blame's lines name: its author as it states them
+// (never a `.mailmap`'s), the date it was authored and its subject, each
+// described past its bound as a LogCommit's is.
+type BlameCommit struct {
+	Author           string    `json:"author,omitempty"`
+	AuthorBytes      int       `json:"author_bytes,omitempty"`
+	AuthorEmail      string    `json:"author_email,omitempty"`
+	AuthorEmailBytes int       `json:"author_email_bytes,omitempty"`
+	AuthoredAt       time.Time `json:"authored_at"`
+	// Subject is the message's first LINE, as git's blame names it — not
+	// the first paragraph a log's subject is — absent past
+	// MaxLogSubjectBytes with SubjectBytes its size, and empty for a
+	// commit whose message is.
+	Subject      string `json:"subject,omitempty"`
+	SubjectBytes int    `json:"subject_bytes,omitempty"`
 }
 
 // RevisionFactsAnswer is what a revision's head is against its target's tip:

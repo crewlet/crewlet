@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -25,7 +26,7 @@ var (
 	stamped = []string{"RepoID", "Position", "Memo", "PushedBy", "Coverage"}
 	partOf  = map[code.GitReadKind]string{code.GitTree: "Tree", code.GitBlob: "Blob", code.GitDiff: "Diff",
 		code.GitCompare: "Compare", code.GitLandedIn: "LandedIn", code.GitRevisionFacts: "RevisionFacts",
-		code.GitReanchor: "Reanchor", code.GitInterdiff: "Diff"}
+		code.GitReanchor: "Reanchor", code.GitInterdiff: "Diff", code.GitLog: "Log", code.GitBlame: "Blame"}
 	unkept = []string{"LandedIn", "RevisionFacts", "Reanchor"}
 )
 
@@ -63,10 +64,16 @@ func TestThePartsAPageHoldsAreTheMemoizedKinds(t *testing.T) {
 }
 
 // filled is v with every field set, recursively, to a value of its own: a
-// string its path, a number counted up, a flag set, a slice of two, a pointer
-// to a filled value — so a field the encoding leaves out reads back as its
-// zero, which no field here is.
+// string its path, a number counted up, a flag set, a slice of two, a map of
+// two, a pointer to a filled value, an instant counted up to the nanosecond —
+// so a field the encoding leaves out reads back as its zero, which no field
+// here is.
 func filled(v reflect.Value, path string, n *int) {
+	if v.Type() == reflect.TypeFor[time.Time]() {
+		*n++
+		v.Set(reflect.ValueOf(time.Unix(int64(*n), int64(*n)).UTC()))
+		return
+	}
 	switch v.Kind() {
 	case reflect.String:
 		v.SetString(path)
@@ -81,6 +88,15 @@ func filled(v reflect.Value, path string, n *int) {
 			filled(s.Index(i), fmt.Sprintf("%s[%d]", path, i), n)
 		}
 		v.Set(s)
+	case reflect.Map:
+		m := reflect.MakeMap(v.Type())
+		for i := range 2 {
+			k, e := reflect.New(v.Type().Key()).Elem(), reflect.New(v.Type().Elem()).Elem()
+			filled(k, fmt.Sprintf("%s{%d}", path, i), n)
+			filled(e, fmt.Sprintf("%s[%d]", path, i), n)
+			m.SetMapIndex(k, e)
+		}
+		v.Set(m)
 	case reflect.Pointer:
 		p := reflect.New(v.Type().Elem())
 		filled(p.Elem(), path, n)
@@ -177,10 +193,13 @@ func shapeOf() string {
 	seen := map[reflect.Type]bool{}
 	var walk func(ty reflect.Type)
 	walk = func(ty reflect.Type) {
-		for ty.Kind() == reflect.Pointer || ty.Kind() == reflect.Slice {
+		// A MAP'S VALUES are what it holds, as a slice's elements are; its
+		// keys are strings. An instant is one value, whatever the standard
+		// library keeps inside it.
+		for ty.Kind() == reflect.Pointer || ty.Kind() == reflect.Slice || ty.Kind() == reflect.Map {
 			ty = ty.Elem()
 		}
-		if ty.Kind() != reflect.Struct || seen[ty] {
+		if ty.Kind() != reflect.Struct || seen[ty] || ty == reflect.TypeFor[time.Time]() {
 			return
 		}
 		seen[ty] = true
@@ -209,7 +228,7 @@ func shapeOf() string {
 // memoShapes is the shape of the answers each memoFormat this build reads was
 // written over: a format names one shape, for ever.
 var memoShapes = map[string]string{
-	"page/2": "e19253458e1843a7",
+	"page/3": "58a34d6416bdda9c",
 }
 
 // AN ANSWER'S SHAPE IS ITS MEMO FORMAT. An entry a node keeps outlives the

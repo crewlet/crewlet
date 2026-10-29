@@ -647,3 +647,36 @@ func TestALineLongerThanALineGitWritesIsSkippedWhole(t *testing.T) {
 		}
 	}
 }
+
+// A REFUSAL IS READ BY ITS FORMAT, never by its words: Reported names a format
+// an error event printed, as git's source spells it — whatever conversions it
+// spells, %lu or %d — and nothing a message says, so a request whose path
+// spells another refusal's words is not that refusal.
+//
+// Mutation: Reported matching the event's message rather than its format —
+// the path that spells the refusal reads as it → red.
+func TestATraceReportsARefusalByItsFormat(t *testing.T) {
+	t.Parallel()
+	const pastEnd = "file %s has only %lu lines"
+	tr, _, _ := gitproc.ReadTrace("/srv/r.git", []byte(versionLine(1, "2.56.0")+
+		errorLine(1, pastEnd, "file a.txt has only 3 lines")+exitLine(1, 128)), 0)
+	switch {
+	case !tr.Reported(pastEnd):
+		t.Errorf("a trace holding %q does not report it: %q", pastEnd, tr.Formats)
+	case !tr.Reported("file %s has only %d lines"):
+		t.Error("a format read another conversion of is not reported as the one it is")
+	case !tr.Reported("file %s has only %lu line", pastEnd):
+		t.Error("one of several formats reported is not reported")
+	case tr.Reported("file %s has only %lu line"):
+		t.Error("the singular is reported for the plural")
+	}
+	spelled, _, _ := gitproc.ReadTrace("/srv/r.git", []byte(versionLine(1, "2.56.0")+
+		errorLine(1, "no such path %s in %s", "no such path file a.txt has only 3 lines in HEAD")+
+		exitLine(1, 128)), 0)
+	if spelled.Reported(pastEnd) {
+		t.Error("a message whose path spells the refusal is reported as the refusal")
+	}
+	if spelled.Reported() {
+		t.Error("no format asked about is reported")
+	}
+}
