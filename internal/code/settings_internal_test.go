@@ -18,6 +18,7 @@ func TestSettingsEqualReadsEveryFieldButTheActivation(t *testing.T) {
 		ManagedBy: ManagedConfig, Kind: RepoProject, Owner: Owner{Kind: OwnerUnit, Ref: "ENG"},
 		DefaultBranch: "main", Description: "one", Visibility: VisibilityCompany,
 		Protections: []Protection{{Pattern: "refs/heads/main", DirectPush: DirectPersons}},
+		PathOwners:  []PathOwner{{Owner: Owner{Kind: OwnerUnit, Ref: "ENG"}, Paths: []string{"web/**"}}},
 		ConfigEpoch: 1,
 	}
 	variants := map[string]func(*RepoSettings){
@@ -30,6 +31,13 @@ func TestSettingsEqualReadsEveryFieldButTheActivation(t *testing.T) {
 		"Visibility":    func(s *RepoSettings) { s.Visibility = VisibilityUnit },
 		"Protections": func(s *RepoSettings) {
 			s.Protections = []Protection{{Pattern: "refs/heads/main", DirectPush: DirectNone}}
+		},
+		// A GLOB ADDED TO THE ONE OWNER, the change a slice comparison of
+		// the owners alone would miss had their globs been compared by
+		// count or by first element.
+		"PathOwners": func(s *RepoSettings) {
+			s.PathOwners = []PathOwner{{Owner: Owner{Kind: OwnerUnit, Ref: "ENG"}, Paths: []string{"docs/**",
+				"web/**"}}}
 		},
 	}
 	ignored := map[string]bool{"ConfigEpoch": true}
@@ -61,5 +69,9 @@ func TestSettingsEqualReadsEveryFieldButTheActivation(t *testing.T) {
 	none.Protections, empty.Protections = nil, []Protection{}
 	if !none.equal(empty) {
 		t.Error("no rules and an empty rule list compare unequal")
+	}
+	none.PathOwners, empty.PathOwners = nil, []PathOwner{}
+	if !none.equal(empty) {
+		t.Error("no path owners and an empty list of them compare unequal")
 	}
 }

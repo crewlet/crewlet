@@ -324,6 +324,17 @@ const (
 	// rule is asked about every command in the decide.
 	MaxProtectionsPerRepo = config.CodeMaxProtections
 
+	// MaxPathOwners is config.CodeMaxPathOwners: the path owners one
+	// repository's settings name, each one row of code_path_owners — so the
+	// final purge deletes them beside its rules, as it deletes those, inside
+	// MaxRecordRows (the limits test holds the sum), and a settings record
+	// replacing them all touches twice this many rows.
+	MaxPathOwners = config.CodeMaxPathOwners
+
+	// MaxPathOwnerPaths is config.CodeMaxPathOwnerPaths: the globs one path
+	// owner names, packed into its one row.
+	MaxPathOwnerPaths = config.CodeMaxPathOwnerPaths
+
 	// MaxSnapshotItems is the most rows one snapshot or listing page
 	// carries: about 1–2 MB of JSON for typical refs and about 4 MB at
 	// worst (every ref at MaxRefNameBytes), under the estate reply's

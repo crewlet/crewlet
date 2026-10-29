@@ -16,10 +16,11 @@ import "slices"
 // their scope index.
 var ReproducibleTables = []string{
 	// A repository, its name claim, and what it holds: refs (tombstones
-	// included), the pack bundles a push stored, the push history and the
-	// protection rules.
+	// included), the pack bundles a push stored, the push history, the
+	// protection rules and the path owners — the last two written whole by
+	// every record that carries the repository's settings.
 	"code_repos", "code_names", "code_refs", "code_packs", "code_pushes",
-	"code_protections",
+	"code_protections", "code_path_owners",
 
 	// The packs a record retired, each kept from the collector until a
 	// retire_sweep record removes it past RetireGrace — every node derives

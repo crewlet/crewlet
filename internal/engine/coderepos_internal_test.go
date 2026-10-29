@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -540,6 +541,101 @@ func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 	stray.Owner = config.CodeOwner{Unit: "Marketing"}
 	if _, err := declaredRepo(c.Org.Index(), stray); err == nil || !strings.Contains(err.Error(), "Marketing") {
 		t.Errorf("an owner the chart does not resolve was declared (%v), want it named", err)
+	}
+
+	// PATH OWNERS, in their one form whatever order the document wrote them
+	// in: by kind, then reference, each one's globs sorted — and a unit named
+	// by its name recorded by the key the chart resolves for it.
+	pathed := c.Config.Code.Repos[0]
+	pathed.PathOwners = []config.CodePathOwner{
+		{Paths: []string{"web/**", "docs/**"}, Unit: "Engineering"},
+		{Paths: []string{"Makefile"}, Seat: "swe"},
+	}
+	owned, err := declaredRepo(c.Org.Index(), pathed)
+	want := []code.PathOwner{
+		{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "swe"}, Paths: []string{"Makefile"}},
+		{Owner: code.Owner{Kind: code.OwnerUnit, Ref: config.MintUnitID("Engineering")},
+			Paths: []string{"docs/**", "web/**"}},
+	}
+	if err != nil || !reflect.DeepEqual(owned.Settings.PathOwners, want) {
+		t.Errorf("web's path owners are declared as %+v (%v), want %+v", owned.Settings.PathOwners, err, want)
+	}
+	if err := owned.Validate(); err != nil {
+		t.Errorf("web's declaration with its path owners is not one the domain records: %v", err)
+	}
+	pathed.PathOwners = []config.CodePathOwner{{Paths: []string{"web/**"}, Unit: "Marketing"}}
+	if _, err := declaredRepo(c.Org.Index(), pathed); err == nil ||
+		!strings.Contains(err.Error(), "path_owners[0].unit") || !strings.Contains(err.Error(), "Marketing") {
+		t.Errorf("a path owner the chart does not resolve was declared (%v), want it named at its field", err)
+	}
+}
+
+// PATH OWNERS RECONCILE FROM THE DOCUMENT: code.repos' path_owners reach the
+// repository it declares in their one form — each unit by the key the chart
+// resolves for it, whichever spelling the document used, the owners by kind
+// then reference and each one's globs sorted — an activation that changes one
+// glob settles it in one settings record, one that changes nothing writes its
+// activation fence alone, and one that drops them leaves the repository with
+// none.
+//
+// Mutations: compare settings without their path owners
+// (code.RepoSettings.equal) — the changed glob never reaches the log, red;
+// leave them out of the reconcile's batch read — the unchanged activation
+// writes a settings record, red.
+func TestPathOwnersReconcileFromTheDocument(t *testing.T) {
+	t.Parallel()
+	sales := "  - name: Sales\n    roles:\n      - name: Manager\n        handle: mgr\n        llm: zulu\n"
+	doc := func(webGlob string, owned bool) string {
+		repo := "    - name: web\n      owner: {unit: Engineering}\n"
+		if owned {
+			repo += "      path_owners:\n" +
+				"        - {paths: [\"" + webGlob + "\", \"docs/**\"], unit: Engineering}\n" +
+				"        - {paths: [\"Makefile\"], seat: mgr}\n" +
+				"        - {paths: [\"sales/**\"], unit: sales}\n"
+		}
+		return codeReposDoc(repo, sales)
+	}
+	ownersWith := func(webGlob string) []code.PathOwner {
+		return []code.PathOwner{
+			{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "mgr"}, Paths: []string{"Makefile"}},
+			{Owner: code.Owner{Kind: code.OwnerUnit, Ref: config.MintUnitID("Engineering")},
+				Paths: []string{"docs/**", webGlob}},
+			{Owner: code.Owner{Kind: code.OwnerUnit, Ref: "sales"}, Paths: []string{"sales/**"}},
+		}
+	}
+	e := newSandboxNode(t, parseCompany(t, doc("web/**", true)))
+	servesCodeReads(t, e)
+	reconciled(t, e)
+	web := mustRepo(t, e, "web")
+	if !reflect.DeepEqual(web.PathOwners, ownersWith("web/**")) {
+		t.Fatalf("web's path owners are %+v, want %+v", web.PathOwners, ownersWith("web/**"))
+	}
+
+	// ONE GLOB CHANGED: one settings record beside the fence.
+	before := codeLogEnd(t, e)
+	applyReconciled(t, e, doc("web/**/*.go", true))
+	if got := mustRepo(t, e, "web").PathOwners; !reflect.DeepEqual(got, ownersWith("web/**/*.go")) {
+		t.Errorf("after an activation changing one glob, web's path owners are %+v, want %+v", got,
+			ownersWith("web/**/*.go"))
+	}
+	if wrote := codeLogWrites(t, e, before); !slices.Equal(wrote,
+		[]code.Subject{code.CompanySubject(), code.RepoSubject(web.ID)}) {
+		t.Errorf("an activation changing one glob wrote %v to the code log, want its fence and one "+
+			"settings record", wrote)
+	}
+
+	// NOTHING CHANGED: the fence alone.
+	before = codeLogEnd(t, e)
+	applyReconciled(t, e, doc("web/**/*.go", true))
+	if wrote := codeLogWrites(t, e, before); !slices.Equal(wrote, []code.Subject{code.CompanySubject()}) {
+		t.Errorf("an activation changing nothing wrote %v to the code log, want its fence alone, %v", wrote,
+			code.CompanySubject())
+	}
+
+	// DROPPED: none.
+	applyReconciled(t, e, doc("", false))
+	if got := mustRepo(t, e, "web").PathOwners; len(got) != 0 {
+		t.Errorf("after an activation that names no path owners, web has %+v", got)
 	}
 }
 

@@ -4,8 +4,9 @@
 //
 // # A repository is rows
 //
-// A repository's settings, its protection rules, its refs and the list of packs
-// it holds are replicated tables, and only this package's applier writes them:
+// A repository's settings, its protection rules, its path owners, its refs and
+// the list of packs it holds are replicated tables, and only this package's
+// applier writes them:
 // every change is ONE record on the code log, arbitrated at the broker and
 // applied into N identical SQL copies with the checkpoint in the same
 // transaction as the rows. That is ADR-0002 — the stream is the write-ahead
@@ -379,8 +380,9 @@
 // comes back is a question about which activation removed it.
 //
 // AND IT COSTS ONE READ OF THE DECLARED SET, not two publishes a repository:
-// [Store.EnsureRepos], the reconcile's form, reads every declared claim, row
-// and rule in the one snapshot a publish on the fence's subject decides from,
+// [Store.EnsureRepos], the reconcile's form, reads every declared claim, row,
+// rule and path owner in the one snapshot a publish on the fence's subject
+// decides from,
 // and sends only what changed — a new name, different settings, a restore —
 // through the per-repository path ([Store.EnsureRepo]). That snapshot passes
 // every check an empty per-repository decision passes, and its deferred-scope
@@ -431,6 +433,15 @@
 // that exists to keep one team's seats out of another's. It is a setting like
 // any other, carried whole by every create, settings and restore record, so
 // changing it is one settings record and the reconcile's comparison sees it.
+//
+// A repository's PATH OWNERS ([PathOwner]) are no row of that relation at all:
+// a unit or a seat named the owner of some of its paths is whom a change
+// touching them asks for a review, and holds on the repository what the chart
+// gives it and nothing more — [GrantOf] reads no path owner, and none is on the
+// [RepoRef] every read, push and fetch decides from. They are settings like
+// the rest, carried whole by the same records; a tool's change adds and
+// removes globs one owner at a time, resolved against the rows its decide
+// reads ([PathOwnersChange]).
 //
 // A SEAT'S PUSH is held to its grant AT THE DECIDE, by the repository's
 // committer from the chart and the calendar of its own epoch ([SeatRules]),
@@ -1164,14 +1175,18 @@
 // [Store.EnsureRepos], whose one publish reads every claim, row and rule in
 // one transaction, against 1.7–2.0 ms a repository through [Store.EnsureRepo]
 // — seventeen to twenty seconds of every data node's reads at ten thousand,
-// for an activation that appends one fence record.
+// for an activation that appends one fence record. Measured before that read
+// took each repository's path owners too: one more statement, driven from the
+// same list and seeking code_path_owners' key once a repository, as the rules'
+// statement seeks theirs — the benchmark's repositories name none.
 //
 // A CHANGED ACTIVATION (internal/engine's BenchmarkAChangedActivation, the
 // reconcile end to end on one booted node, its fence, walk and batch read
 // included, one count each, [reconcileInFlight] the width): over the same ten
 // thousand, the activation that creates them all is 18.3–19.5 s, one that
 // deletes them all 17.2–18.5 s, one that restores them all 16.3–17.2 s, and
-// one that changes nothing 0.45–0.53 s. By width, creating them took 67 s
+// one that changes nothing 0.45–0.53 s (its batch read, too, before the path
+// owners' statement above). By width, creating them took 67 s
 // one at a time, 35 s two, 25 s four and 18–21 s at every width from eight to
 // a hundred and twenty-eight — a create's round trip is 6.7 ms alone, and
 // the floor is this node's applier and the decisions' own snapshots, about

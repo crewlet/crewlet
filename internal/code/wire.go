@@ -1122,6 +1122,14 @@ type RepoDetail struct {
 	CreatedAt  time.Time `json:"created_at"`
 	// Limits are the SERVING node's epoch's: what an import chunks to.
 	Limits Limits `json:"limits"`
+	// PathOwners are who owns which of its paths, as its settings carry them
+	// ([RepoSettings.PathOwners]): on the detail alone, never on the
+	// [RepoRef] beside it, which every push, fetch and listing reads and
+	// which no path owner changes a thing about. At their bound — every glob
+	// of every owner at its longest, in JSON's widest spelling — the detail
+	// still fits the room a page beside it leaves the estate's reply
+	// ([MaxPageBytes]; the limits test holds it).
+	PathOwners []PathOwner `json:"path_owners,omitempty"`
 }
 
 // ChangeRow is a change as its row holds it (code_changes): every column, as

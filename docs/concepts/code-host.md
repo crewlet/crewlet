@@ -64,7 +64,9 @@ This is the product's current shape, not a configuration choice:
   detail ([Reading changes](#reading-changes)) — but no tool, route or push
   opens or reads one in this release, and no change is reviewed or gated in
   front of a protected branch. A protection rule decides what a push may do to
-  a ref, and nothing else stands in front of one.
+  a ref, and nothing else stands in front of one. So a repository's [path
+  owners](#path-owners) are recorded and read, and no review is asked of them
+  yet.
 - **Nothing publishes a repository's layers.** A git node installs the chain
   the rows name ([Published layers](#published-layers)), and no row names one
   yet, so each node serves from the index and graph it writes itself.
@@ -96,6 +98,11 @@ code:
         - branch: release/**       # every branch inside release/, never release itself
           allow_delete: true
         - tag: "v*"                # a tag rule: a tag never moves
+      path_owners:
+        - paths: ["web/**"]        # everything inside web/
+          unit: Engineering        # a unit (id or name) or a seat (handle) — exactly one
+        - paths: ["**/*.sql"]      # every SQL file, at any depth
+          seat: agent-dba
     - name: infra
       owner: { seat: agent-cto }
       archived: true               # read-only: takes no push
@@ -122,6 +129,9 @@ code:
   whole, and reading it is not; unarchiving it is setting it back to `false`.
 - **`protect`** — at most 64 rules, each naming exactly one of a `branch` or a
   `tag` pattern, each pattern once.
+- **`path_owners`** — at most 64 owners, each exactly one of `unit` or `seat`
+  resolved as `owner` is, owning 1 to 32 globs of the repository's paths, each
+  glob once and each owner in one entry ([Path owners](#path-owners)).
 
 At most 10 000 repositories one document — a typo guard two orders of
 magnitude past a large company's, not a limit anybody is expected to meet. It
@@ -176,6 +186,51 @@ repository's `protect`, naming the rule to add — and never fails on it. An
 archived repository is not warned about: it takes no push at all, so nothing
 can move or delete its branch until it is unarchived, and the revision that
 unarchives it brings the warning back.
+
+### Path owners
+
+A repository's **path owners** say who owns which part of its tree: each a
+unit — whose [effective lead](organization-model.md#lead-inheritance) a review
+is asked of — or a seat, and the globs of the paths it owns. What a path owner
+is for is **review routing**: a change whose revision touches an owner's paths
+asks it for a review — once changes are reviewed, which they are not yet
+([What it does not do yet](#what-it-does-not-do-yet)). It **grants nothing**. A seat named a path owner reads
+and pushes the repository by its [grant](#who-may-read-and-push) exactly as it
+did before — owning `deploy/**` lets no seat push there that could not, and a
+`visibility: unit` repository still shuts out a seat outside its unit,
+whatever paths it owns — because a seat's standing is derived from the chart
+and its tier, and no path owner is read there.
+
+A glob is **a [protection rule](#protection-rules)'s pattern grammar, read
+over a tree's paths**: it starts at the repository's root, a component of `*` matches one component,
+`*` inside a component any run of characters but `/`, and a component of `**`
+any number of whole components — zero or more in the middle, one or more as
+the last. So `*.go` is the Go files at the root and no deeper, `**/*.go` every
+Go file of the tree, `docs/**` everything inside `docs` but never a file named
+`docs`, and `web/**/test/*` every file directly inside a `test` directory
+anywhere under `web`. A glob with no `*` matches **only** that path, where git's
+own pathspec would also match everything below a directory of that name. It
+is at most 128 bytes, and one holding a `*` at most eight components, which is
+what bounds what asking it about a path can cost. `*` is the one
+metacharacter: `?`, `[`, `\` and a leading `!` — read by another glob dialect
+as a single character, a class, an escape and a negation — are refused rather
+than read as themselves.
+
+A repository names at most **64** owners, each owning at most **32** globs —
+sixty-four teams or seats on one repository, and a handful of directories
+each — and an owner is named once: everything one owner owns is one entry, a
+unit named by its name and by its key being one owner. A scratch repository
+takes none; it is its seat's own. Path owners are part of the settings, carried
+whole by the records that carry them and settled at an activation like every
+other field ([What each change does at its activation](#what-each-change-does-at-its-activation)).
+For a repository a tool made, a settings change adds globs to an owner and
+removes them, applied to the owners the deciding node's rows hold — never a
+whole list the asker read elsewhere — so two requests giving one owner a glob
+each both land; an owner left with no glob is no path owner any more, and an
+owner a change gives globs to must be one the chart holds, while one it only
+removes them from need not be. A repository's detail answers its path owners
+(`GET /code/repos/{name}`), in their one order: by kind, then reference, each
+one's globs sorted.
 
 ### The reconcile and the activation fence
 
@@ -237,10 +292,11 @@ Beside the projects `code.repos` declares, the code host keeps repositories a
 them — create, rename, change the settings of, archive, unarchive, delete,
 restore, or protect a branch of — as one **lifecycle request** on any data
 node, in one snapshot of the rows. What a request sends for a repository that
-exists is a **change** — one field, one protection rule, the archive flag —
-which the deciding node applies to the settings its own rows hold, never a
-whole set the asker read elsewhere: two people adding two protection rules at
-once each keep theirs. A request names its operation, so asking it again is
+exists is a **change** — one field, one protection rule, the archive flag,
+globs added to or removed from a [path owner](#path-owners) — which the
+deciding node applies to the settings its own rows hold, never a whole set the
+asker read elsewhere: two people adding two protection rules at once each keep
+theirs. A request names its operation, so asking it again is
 one write, answered from the first; and a create's repository id is derived
 from its operation, so a retry long after still finds the repository it made.
 A repository `code.repos` declares refuses every tool's request

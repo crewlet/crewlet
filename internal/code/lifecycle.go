@@ -169,11 +169,124 @@ type RepoChange struct {
 	// Owner is a PROJECT repository's new owner: a scratch repository stays
 	// its seat's own.
 	Owner *Owner `json:"owner,omitempty"`
+	// PathOwners is a PROJECT repository's path owners, changed glob by glob:
+	// a scratch repository takes none.
+	//
+	// A request is no record, so this field takes no versionedFields row:
+	// the record a settings change leads to carries the repository's settings
+	// whole, and [RepoSettings.PathOwners] names the row those take. It
+	// crosses the estate's wire to whichever data node decides it, under the
+	// code domain's stated condition — no build carrying the domain has run
+	// without it, none of the domain being on main — so every node asked it
+	// reads it.
+	PathOwners *PathOwnersChange `json:"path_owners,omitempty"`
 }
 
 // empty reports a change that changes nothing.
 func (c RepoChange) empty() bool {
-	return c.Description == nil && c.DefaultBranch == nil && c.Visibility == nil && c.Owner == nil
+	return c.Description == nil && c.DefaultBranch == nil && c.Visibility == nil && c.Owner == nil &&
+		c.PathOwners == nil
+}
+
+// PathOwnersChange is a settings request's change to who owns which of a
+// repository's paths: globs ADDED to an owner and globs REMOVED from one —
+// never the whole list, which a caller could form only from rows it read in
+// another transaction, so two requests adding globs to one owner at once would
+// each drop the other's. The decide applies it to the owners its own rows hold
+// ([PathOwnersChange.applyTo]): a glob an owner has already is added as
+// nothing, one it does not have is removed as nothing, and an owner left with
+// no glob is no path owner any more. An owner it adds globs to is one the
+// deciding node's chart holds; one it only removes globs from need not be, so
+// a unit the chart dropped can still be taken off.
+type PathOwnersChange struct {
+	// Add gives each owner the globs beside it, beside those it has.
+	Add []PathOwner `json:"add,omitempty"`
+	// Remove takes the globs beside each owner from it.
+	Remove []PathOwner `json:"remove,omitempty"`
+}
+
+// invalid is why c is no change, or "": a glob at least, each entry naming a
+// unit or a seat — that owner once in each list — with 1 to [MaxPathOwnerPaths]
+// globs gitref reads, each once, and no glob both added to and removed from
+// one owner, which is two requests rather than one.
+func (c PathOwnersChange) invalid() string {
+	if len(c.Add) == 0 && len(c.Remove) == 0 {
+		return "path_owners: a change adds or removes a glob at least"
+	}
+	added := make(map[Owner][]string, len(c.Add))
+	for _, l := range []struct {
+		list    string
+		entries []PathOwner
+	}{{"add", c.Add}, {"remove", c.Remove}} {
+		list, entries := l.list, l.entries
+		seen := make(map[Owner]bool, len(entries))
+		for i, po := range entries {
+			at := fmt.Sprintf("path_owners.%s[%d]", list, i)
+			switch {
+			case !po.Owner.Kind.Valid():
+				return fmt.Sprintf("%s.owner.kind: %q is not one of %v", at, po.Owner.Kind, OwnerKinds())
+			case strings.TrimSpace(po.Owner.Ref) == "":
+				return at + ".owner.ref: a path owner names a unit or a seat"
+			case seen[po.Owner]:
+				return fmt.Sprintf("%s.owner: %s is named twice; list each owner's globs once", at,
+					ownerWords(po.Owner))
+			case len(po.Paths) == 0:
+				return at + ".paths: an entry names a glob at least"
+			case len(po.Paths) > MaxPathOwnerPaths:
+				return fmt.Sprintf("%s.paths: %d globs, past the %d one path owner may name", at,
+					len(po.Paths), MaxPathOwnerPaths)
+			}
+			seen[po.Owner] = true
+			for k, glob := range po.Paths {
+				if _, err := gitref.ParsePathGlob(glob); err != nil {
+					return fmt.Sprintf("%s.paths[%d]: %q is not a path glob: %v", at, k, glob, err)
+				}
+				if slices.Contains(po.Paths[:k], glob) {
+					return fmt.Sprintf("%s.paths[%d]: %q is listed twice", at, k, glob)
+				}
+			}
+			if list == "add" {
+				added[po.Owner] = po.Paths
+			}
+		}
+	}
+	for i, po := range c.Remove {
+		for k, glob := range po.Paths {
+			if slices.Contains(added[po.Owner], glob) {
+				return fmt.Sprintf("path_owners.remove[%d].paths[%d]: %q is added to %s by the same "+
+					"change; ask one or the other", i, k, glob, ownerWords(po.Owner))
+			}
+		}
+	}
+	return ""
+}
+
+// applyTo is owners — a repository's, as its rows hold them — with c applied,
+// in the one form a record carries them in ([CanonicalPathOwners]).
+func (c PathOwnersChange) applyTo(owners []PathOwner) []PathOwner {
+	globs := make(map[Owner][]string, len(owners)+len(c.Add))
+	for _, po := range owners {
+		globs[po.Owner] = slices.Clone(po.Paths)
+	}
+	for _, po := range c.Remove {
+		globs[po.Owner] = slices.DeleteFunc(globs[po.Owner], func(g string) bool {
+			return slices.Contains(po.Paths, g)
+		})
+	}
+	for _, po := range c.Add {
+		for _, g := range po.Paths {
+			if !slices.Contains(globs[po.Owner], g) {
+				globs[po.Owner] = append(globs[po.Owner], g)
+			}
+		}
+	}
+	out := make([]PathOwner, 0, len(globs))
+	for owner, paths := range globs {
+		if len(paths) > 0 {
+			out = append(out, PathOwner{Owner: owner, Paths: paths})
+		}
+	}
+	return CanonicalPathOwners(out)
 }
 
 // ProtectChange is one rule for one pattern; a nil Rule removes the pattern's.
@@ -314,6 +427,11 @@ func (r LifecycleRequest) invalid() string {
 		if r.Change.empty() {
 			return "change: a settings request changes at least one field"
 		}
+		if r.Change.PathOwners != nil {
+			if why := r.Change.PathOwners.invalid(); why != "" {
+				return "change." + why
+			}
+		}
 	case LifecycleProtect:
 		switch {
 		case !gitref.ValidPattern(r.Protect.Pattern):
@@ -404,13 +522,29 @@ func lifecycleActor(p Principal) Actor {
 }
 
 // settingsOf is a repository's settings as a record carries them, from its
-// row as a read serves it.
-func settingsOf(r RepoRef) RepoSettings {
+// row as a read serves it and its path owners, which no [RepoRef] carries —
+// read beside it in the same decide ([pathOwnersIn]), since a record carries
+// the settings WHOLE, and one formed without them would remove every path
+// owner the repository has.
+func settingsOf(r RepoRef, owners []PathOwner) RepoSettings {
 	return RepoSettings{
 		ManagedBy: r.ManagedBy, Kind: r.Kind, Owner: r.Owner, DefaultBranch: r.DefaultBranch,
 		Description: r.Description, Archived: r.Status == RepoStatusArchived, Visibility: r.Visibility,
-		Protections: slices.Clone(r.Protections),
+		Protections: slices.Clone(r.Protections), PathOwners: slices.Clone(owners),
 	}
+}
+
+// pathOwnersAdded is every path owner req gives globs to: a settings change's
+// additions, and a create's whole list — what the deciding node's chart must
+// hold, whoever asks.
+func pathOwnersAdded(req LifecycleRequest) []PathOwner {
+	switch {
+	case req.Kind == LifecycleSettings && req.Change.PathOwners != nil:
+		return req.Change.PathOwners.Add
+	case req.Kind == LifecycleCreate:
+		return req.Create.PathOwners
+	}
+	return nil
 }
 
 // lifecycleRefusal is whether actor may ask req of a repository — repo as it
@@ -435,11 +569,24 @@ func settingsOf(r RepoRef) RepoSettings {
 // included: renamed to <handle>.<slug>, a project would read as that seat's
 // own scratch repository and squat the name the seat's create would take; and
 // a scratch repository keeps its seat's handle, whoever renames it.
+//
+// AND A PATH OWNER THE CHART DOES NOT HOLD, for every actor, wherever a
+// request gives one globs ([pathOwnersAdded]), as an owner the chart does not
+// hold is refused a repository: a path owner is whom a review is asked of, and
+// a unit or a seat the chart lacks is nobody to ask. Naming one grants nothing
+// ([PathOwner]), so a seat that maintains the repository may name any the
+// chart holds — the same review it could request by name.
 func lifecycleRefusal(req LifecycleRequest, repo, next RepoRef, roster Roster) (bool, string) {
 	actor := req.Actor
 	if req.Kind == LifecycleRename {
 		if why := renameForm(repo, req.Name); why != "" {
 			return true, why
+		}
+	}
+	for _, po := range pathOwnersAdded(req) {
+		if !rosterHolds(roster, po.Owner) {
+			return true, fmt.Sprintf("the path owner %s is no %s of the chart", ownerWords(po.Owner),
+				po.Owner.Kind)
 		}
 	}
 	if actor.Kind == PrincipalOperator {
@@ -873,7 +1020,15 @@ func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster 
 				return statelog.Decision{}, s.goneOrMissing(ctx, tx, req.RepoID, &d)
 			}
 			d.row = v.ref
-			payload, op, err := s.decideOnRepo(req, v.ref, roster, &d)
+			// ITS PATH OWNERS, which no RepoRef carries, beside its row: every
+			// kind but a hold writes the settings whole, or decides from them.
+			var owners []PathOwner
+			if req.Kind != LifecycleHold {
+				if owners, err = pathOwnersIn(ctx, tx, req.RepoID); err != nil {
+					return statelog.Decision{}, err
+				}
+			}
+			payload, op, err := s.decideOnRepo(req, v.ref, owners, roster, &d)
 			if err != nil || payload == nil {
 				return statelog.Decision{}, err
 			}
@@ -892,10 +1047,11 @@ func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster 
 }
 
 // decideOnRepo is the decide of a kind on the repository's own subject, from
-// its row v: the record's payload and op, or nil where the request is
-// refused (d says why) or writes nothing. An error is the request's own fault.
-func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, roster Roster, d *lifecycleDecision) (any,
-	OpKind, error) {
+// its row v and its path owners: the record's payload and op, or nil where the
+// request is refused (d says why) or writes nothing. An error is the request's
+// own fault.
+func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, owners []PathOwner, roster Roster,
+	d *lifecycleDecision) (any, OpKind, error) {
 
 	if req.Kind == LifecycleHold {
 		return decideHold(req, v, roster, d)
@@ -911,7 +1067,7 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, roster Roster, d *
 		toolRepoRefusal(v, d)
 		return nil, "", nil
 	}
-	next := settingsOf(v)
+	next := settingsOf(v, owners)
 	nextRef := v
 	switch req.Kind {
 	case LifecycleSettings:
@@ -932,6 +1088,17 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, roster Roster, d *
 				return nil, "", nil
 			}
 			next.Owner = *c.Owner
+		}
+		if c.PathOwners != nil {
+			if v.Kind == RepoScratch {
+				d.refuse(LifecycleNotPermitted, "%s is a scratch repository, which takes no path owners: it "+
+					"is its seat's own", v.Name)
+				return nil, "", nil
+			}
+			// RESOLVED AGAINST THE ROWS THIS DECIDE READ, so a change to one
+			// owner's globs keeps every other's — and another request's
+			// globs added to the same owner meanwhile.
+			next.PathOwners = c.PathOwners.applyTo(next.PathOwners)
 		}
 		nextRef.Owner, nextRef.Visibility = next.Owner, next.Visibility
 	case LifecycleArchive:
@@ -963,13 +1130,13 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, roster Roster, d *
 			// answer.
 			return nil, "", nil
 		}
-		restored := settingsOf(v)
+		restored := settingsOf(v, owners)
 		return LifecycleRecord{RepoID: v.ID, Settings: &restored}, OpRestore, nil
 	}
 	if err := next.Validate(); err != nil {
 		return nil, "", err
 	}
-	if next.equal(settingsOf(v)) {
+	if next.equal(settingsOf(v, owners)) {
 		// AN IDEMPOTENT NO-OP: the row already says it.
 		return nil, "", nil
 	}

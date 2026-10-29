@@ -125,29 +125,44 @@ func parsePattern(pattern string, buf []part) (Pattern, bool) {
 		if components > MaxPatternComponents {
 			return Pattern{}, false
 		}
-		parts := buf[:0]
-		if cap(parts) < components+1 {
-			parts = make([]part, 0, components+1)
-		}
-		for c := range strings.SplitSeq(pattern, "/") {
-			parts = append(parts, partOf(c))
-		}
-		if last := len(parts) - 1; parts[last].kind == partAny {
-			parts = append(parts[:last], part{kind: partOne}, part{kind: partAny})
-		}
-		p := Pattern{parts: parts, head: uint8(len(parts))}
-		for k, pt := range parts {
-			if pt.kind != partAny {
-				continue
-			}
-			if int(p.head) == len(parts) {
-				p.head = uint8(k)
-			}
-			p.tail = uint8(len(parts) - 1 - k)
-		}
-		return p, true
+		parts, head, tail := readGlob(pattern, components, buf)
+		return Pattern{parts: parts, head: head, tail: tail}, true
 	}
 	return Pattern{}, false
+}
+
+// readGlob reads glob — checked already, of components components, holding a
+// * — into its parts, in buf where they fit its capacity: each component once
+// ([partOf]), a trailing ** read as the one * and the ** it means, and how many
+// parts come before the first ** (head; all of them where there is none) and
+// after the last (tail).
+//
+// THE ONE READING of a glob over '/'-separated names, a protection pattern's
+// over a ref and a path glob's over a tree's path ([ParsePathGlob]), so the two
+// cannot read one glob two ways — above all the trailing **, which matches one
+// component or more, never the prefix before it.
+func readGlob(glob string, components int, buf []part) (parts []part, head, tail uint8) {
+	parts = buf[:0]
+	if cap(parts) < components+1 {
+		parts = make([]part, 0, components+1)
+	}
+	for c := range strings.SplitSeq(glob, "/") {
+		parts = append(parts, partOf(c))
+	}
+	if last := len(parts) - 1; parts[last].kind == partAny {
+		parts = append(parts[:last], part{kind: partOne}, part{kind: partAny})
+	}
+	head = uint8(len(parts))
+	for k, pt := range parts {
+		if pt.kind != partAny {
+			continue
+		}
+		if int(head) == len(parts) {
+			head = uint8(k)
+		}
+		tail = uint8(len(parts) - 1 - k)
+	}
+	return parts, head, tail
 }
 
 // partOf reads one component of a valid pattern.

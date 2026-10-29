@@ -1934,9 +1934,13 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 	// tombstones included, on every detail read.
 	summary := v.summary(head)
 	summary.Access = g.Access.String()
+	owners, err := pathOwnersIn(ctx, tx, id)
+	if err != nil {
+		return err
+	}
 	out.Repo = &RepoDetail{RepoSummary: summary,
 		Branches: v.branches, Tags: v.tags, Tombstones: v.tombstones,
-		CreatedAt: store.DecodeTime(v.createdAt), Limits: r.limits()}
+		CreatedAt: store.DecodeTime(v.createdAt), Limits: r.limits(), PathOwners: owners}
 	return nil
 }
 

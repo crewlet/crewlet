@@ -676,10 +676,11 @@ func (s *Store) unchanged(ctx context.Context, a Activation, declared []Declared
 }
 
 // unchangedIn is [Store.unchanged]'s read, in tx: every declared name's claim,
-// the rows of the repositories they name and those repositories' rules — three
-// statements, each driven from its list and seeking a primary key once an
-// element (planner.go) — and the declarations EnsureRepo's two decides would
-// both write nothing for, with what EnsureRepo answers for each.
+// the rows of the repositories they name, those repositories' rules and their
+// path owners — four statements, each driven from its list and seeking a
+// primary key once an element (planner.go) — and the declarations EnsureRepo's
+// two decides would both write nothing for, with what EnsureRepo answers for
+// each.
 func unchangedIn(ctx context.Context, tx *sql.Tx, a Activation, declared []Declared) (map[string]Ensured, error) {
 	tokens := make([]string, len(declared))
 	for i, d := range declared {
@@ -746,8 +747,8 @@ func keyPairs(ctx context.Context, tx *sql.Tx, query string, keys []string) (map
 	return out, rows.Err()
 }
 
-// reposIn reads the rows and rules of every repository ids names, in two
-// statements — the batch form of [repoIn].
+// reposIn reads the rows, rules and path owners of every repository ids names,
+// in three statements — the batch form of [repoIn].
 func reposIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repoRow, error) {
 	out := make(map[string]repoRow, len(ids))
 	if len(ids) == 0 {
@@ -802,11 +803,43 @@ func reposIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]repoRow,
 	if err := rules.Err(); err != nil {
 		return nil, fmt.Errorf("code: read the declared repositories' protections: %w", err)
 	}
+	// AND THE PATH OWNERS, in one statement too, put in the order a
+	// declaration's settings carry them in.
+	if err := pathOwnersOf(ctx, tx, list, func(id string, po PathOwner) {
+		if row, ok := out[id]; ok {
+			row.PathOwners = append(row.PathOwners, po)
+			out[id] = row
+		}
+	}); err != nil {
+		return nil, fmt.Errorf("code: read the declared repositories' path owners: %w", err)
+	}
 	for id, row := range out {
 		slices.SortFunc(row.Protections, func(a, b Protection) int { return strings.Compare(a.Pattern, b.Pattern) })
+		slices.SortFunc(row.PathOwners, comparePathOwners)
 		out[id] = row
 	}
 	return out, nil
+}
+
+// pathOwnersOf reads the path owners of every repository list — a JSON list of
+// ids — in ONE statement, handing each to keep with its repository's id, in no
+// order a caller may rely on.
+func pathOwnersOf(ctx context.Context, tx *sql.Tx, list string, keep func(id string, po PathOwner)) error {
+	rows, err := tx.QueryContext(ctx, pathOwnersOfSQL, list)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id, kind, packed string
+		var po PathOwner
+		if err := rows.Scan(&id, &kind, &po.Owner.Ref, &packed); err != nil {
+			return err
+		}
+		po.Owner.Kind, po.Paths = OwnerKind(kind), unpackPaths(packed)
+		keep(id, po)
+	}
+	return rows.Err()
 }
 
 // claim is EnsureRepo's first step, on the name's subject: a create when
@@ -1084,6 +1117,7 @@ type repoRow struct {
 	PurgeParts    int
 	DeletedAt     sql.NullInt64
 	Protections   []Protection
+	PathOwners    []PathOwner
 	// LastActivityAt is the repository's idle clock, as the store encodes an
 	// instant, and Version the composed position of the last record on its
 	// subject: what a scratch expiry's decide holds to its pass
@@ -1097,11 +1131,11 @@ func (r repoRow) settings() RepoSettings {
 	return RepoSettings{
 		ManagedBy: r.ManagedBy, Kind: r.Kind, Owner: r.Owner, Visibility: r.Visibility,
 		DefaultBranch: r.DefaultBranch, Description: r.Description, Archived: r.Status == RepoStatusArchived,
-		Protections: r.Protections, ConfigEpoch: r.ConfigEpoch,
+		Protections: r.Protections, PathOwners: r.PathOwners, ConfigEpoch: r.ConfigEpoch,
 	}
 }
 
-// repoIn reads a repository's row and its rules in tx.
+// repoIn reads a repository's row, its rules and its path owners in tx.
 func repoIn(ctx context.Context, tx *sql.Tx, id string) (repoRow, bool, error) {
 	var (
 		row                                       repoRow
@@ -1121,7 +1155,38 @@ func repoIn(ctx context.Context, tx *sql.Tx, id string) (repoRow, bool, error) {
 	if row.Protections, err = protectionsIn(ctx, tx, id); err != nil {
 		return repoRow{}, false, err
 	}
+	if row.PathOwners, err = pathOwnersIn(ctx, tx, id); err != nil {
+		return repoRow{}, false, err
+	}
 	return row, true, nil
+}
+
+// pathOwnersIn reads a repository's path owners in tx, in the order its
+// settings carry them in ([comparePathOwners]) — nil where it names none, as
+// settings that name none carry them.
+func pathOwnersIn(ctx context.Context, tx *sql.Tx, id string) ([]PathOwner, error) {
+	rows, err := tx.QueryContext(ctx, pathOwnersSQL, id)
+	if err != nil {
+		return nil, fmt.Errorf("code: read %s's path owners: %w", id, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []PathOwner
+	for rows.Next() {
+		var kind, packed string
+		var po PathOwner
+		if err := rows.Scan(&kind, &po.Owner.Ref, &packed); err != nil {
+			return nil, fmt.Errorf("code: read %s's path owners: %w", id, err)
+		}
+		po.Owner.Kind, po.Paths = OwnerKind(kind), unpackPaths(packed)
+		out = append(out, po)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("code: read %s's path owners: %w", id, err)
+	}
+	// THE STATEMENT ORDERS BY THE KEY, and this states it again as a property
+	// the comparison relies on rather than a property of a plan.
+	slices.SortFunc(out, comparePathOwners)
+	return out, nil
 }
 
 // protectionsIn reads a repository's rules, sorted by pattern — the order a
@@ -1154,7 +1219,8 @@ func protectionsIn(ctx context.Context, tx *sql.Tx, id string) ([]Protection, er
 // The lifecycle decides' statements. claimsSQL and reposRowsSQL are
 // [Store.unchanged]'s batch forms of claimSQL and repoRowSQL, each driven from
 // its JSON list (planner.go); the batch's rules are the listing's own
-// statement, protectionsOfSQL.
+// statement, protectionsOfSQL, and its path owners pathOwnersOfSQL, the batch
+// form of pathOwnersSQL.
 const (
 	claimSQL  = `SELECT repo_id FROM code_names WHERE token = ?`
 	claimsSQL = `SELECT token, repo_id FROM code_names
@@ -1167,5 +1233,9 @@ const (
 		WHERE id = ?`
 	protectionsSQL = `SELECT pattern, allow_force, allow_delete, direct_push FROM code_protections
 		WHERE repo_id = ? ORDER BY pattern`
+	pathOwnersSQL = `SELECT owner_kind, owner, paths FROM code_path_owners
+		WHERE repo_id = ? ORDER BY owner_kind, owner`
+	pathOwnersOfSQL = `SELECT repo_id, owner_kind, owner, paths FROM code_path_owners
+		WHERE repo_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
 	readBackSQL = `SELECT config_epoch FROM code_repos WHERE id = ?`
 )

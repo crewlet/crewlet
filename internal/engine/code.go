@@ -643,12 +643,13 @@ func retiredByOmission(l code.RepoLife) bool {
 
 // declaredRepo is one code.repos entry as the domain records it, against the
 // chart of the activation being applied, indexed once for the whole list
-// ([codeOwners]): the owner resolved to its unit's key (or the seat's handle),
-// every protection rule spelled as its namespaced pattern
-// ([config.CodeProtection.Pattern]) and SORTED — the record carries one
-// canonical order, so every node deciding one declaration forms
-// byte-identical records, and [code.RepoSettings.Validate] refuses any other —
-// and the default branch defaulted.
+// ([codeOwners]): the owner and every path owner resolved to a unit's key (or
+// a seat's handle), every protection rule spelled as its namespaced pattern
+// ([config.CodeProtection.Pattern]) and SORTED, and the path owners in their
+// one form ([code.CanonicalPathOwners]) — the record carries one canonical
+// order, so every node deciding one declaration forms byte-identical records,
+// and [code.RepoSettings.Validate] refuses any other — and the default branch
+// defaulted.
 //
 // AN ERROR only for a revision validation refuses — an owner the chart does
 // not resolve: a runnable revision never reaches it, and one that does is
@@ -660,24 +661,9 @@ func declaredRepo(o *org.Index, r config.CodeRepo) (code.Declared, error) {
 		return code.Declared{}, fmt.Errorf("%w: the epoch has no chart to resolve the "+
 			"owner on", code.ErrInvalid)
 	}
-	var owner code.Owner
-	switch unit, seat := strings.TrimSpace(r.Owner.Unit), strings.TrimSpace(r.Owner.Seat); {
-	case unit != "" && seat == "":
-		u := o.UnitByRef(unit)
-		if u == nil {
-			return code.Declared{}, fmt.Errorf("%w: owner.unit: %q is no unit of the "+
-				"chart, which the configuration's validation refuses", code.ErrInvalid, unit)
-		}
-		owner = code.Owner{Kind: code.OwnerUnit, Ref: u.Key()}
-	case seat != "" && unit == "":
-		if o.SeatByHandle(seat) == nil {
-			return code.Declared{}, fmt.Errorf("%w: owner.seat: %q is no seat's handle, "+
-				"which the configuration's validation refuses", code.ErrInvalid, seat)
-		}
-		owner = code.Owner{Kind: code.OwnerSeat, Ref: seat}
-	default:
-		return code.Declared{}, fmt.Errorf("%w: owner: a declaration names exactly one "+
-			"of a unit and a seat, which the configuration's validation requires", code.ErrInvalid)
+	owner, err := declaredOwner(o, "owner", r.Owner.Unit, r.Owner.Seat)
+	if err != nil {
+		return code.Declared{}, err
 	}
 	protections := make([]code.Protection, 0, len(r.Protect))
 	for _, rule := range r.Protect {
@@ -687,11 +673,43 @@ func declaredRepo(o *org.Index, r config.CodeRepo) (code.Declared, error) {
 		})
 	}
 	slices.SortFunc(protections, func(a, b code.Protection) int { return cmp.Compare(a.Pattern, b.Pattern) })
+	owners := make([]code.PathOwner, 0, len(r.PathOwners))
+	for i, po := range r.PathOwners {
+		who, err := declaredOwner(o, fmt.Sprintf("path_owners[%d]", i), po.Unit, po.Seat)
+		if err != nil {
+			return code.Declared{}, err
+		}
+		owners = append(owners, code.PathOwner{Owner: who, Paths: po.Paths})
+	}
 	return code.Declared{Name: r.Name, Settings: code.RepoSettings{
 		ManagedBy: code.ManagedConfig, Owner: owner, Visibility: code.Visibility(r.Visibility.Resolved()),
 		DefaultBranch: r.ResolvedDefaultBranch(), Description: r.Description, Archived: r.Archived,
-		Protections: protections,
+		Protections: protections, PathOwners: code.CanonicalPathOwners(owners),
 	}}, nil
+}
+
+// declaredOwner is the owner a declaration names at field — exactly one of a
+// unit, resolved to its KEY whichever spelling the declaration used, or a seat,
+// by its handle — or [code.ErrInvalid] for one the configuration's validation
+// refuses.
+func declaredOwner(o *org.Index, field, unit, seat string) (code.Owner, error) {
+	switch unit, seat = strings.TrimSpace(unit), strings.TrimSpace(seat); {
+	case unit != "" && seat == "":
+		u := o.UnitByRef(unit)
+		if u == nil {
+			return code.Owner{}, fmt.Errorf("%w: %s.unit: %q is no unit of the chart, which the "+
+				"configuration's validation refuses", code.ErrInvalid, field, unit)
+		}
+		return code.Owner{Kind: code.OwnerUnit, Ref: u.Key()}, nil
+	case seat != "" && unit == "":
+		if o.SeatByHandle(seat) == nil {
+			return code.Owner{}, fmt.Errorf("%w: %s.seat: %q is no seat's handle, which the "+
+				"configuration's validation refuses", code.ErrInvalid, field, seat)
+		}
+		return code.Owner{Kind: code.OwnerSeat, Ref: seat}, nil
+	}
+	return code.Owner{}, fmt.Errorf("%w: %s: a declaration names exactly one of a unit and a seat, "+
+		"which the configuration's validation requires", code.ErrInvalid, field)
 }
 
 // codeOwners is the epoch c's chart indexed for declaredRepo — built ONCE a

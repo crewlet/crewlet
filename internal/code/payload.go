@@ -315,6 +315,90 @@ type Owner struct {
 	Ref string `json:"ref"`
 }
 
+// PathOwner is one owner of a repository's paths: a unit, by its key, or a
+// seat, by its handle — and the globs over the repository's tree it owns
+// (gitref.ParsePathGlob), sorted and each once. What a path owner is for is
+// REVIEW: a change touching its paths asks it for one. It GRANTS NOTHING — a
+// seat's standing on a repository is its grant ([GrantOf]), read off the chart
+// and its tier, and no path owner is read there — and so it is never on a
+// [RepoRef], which every read, push and fetch decides from.
+type PathOwner struct {
+	Owner Owner    `json:"owner"`
+	Paths []string `json:"paths"`
+}
+
+// equal compares two path owners, their globs as slices.
+func (p PathOwner) equal(o PathOwner) bool {
+	return p.Owner == o.Owner && slices.Equal(p.Paths, o.Paths)
+}
+
+// comparePathOwners is the canonical order of a repository's path owners: by
+// the owner's kind, then its reference — every unit and every seat once, the
+// one order every node forms a record in and [RepoSettings.Validate] holds a
+// record to.
+func comparePathOwners(a, b PathOwner) int {
+	if c := strings.Compare(string(a.Owner.Kind), string(b.Owner.Kind)); c != 0 {
+		return c
+	}
+	return strings.Compare(a.Owner.Ref, b.Owner.Ref)
+}
+
+// CanonicalPathOwners is owners in the ONE FORM a record carries them in: by
+// owner ([comparePathOwners]), each owner's globs sorted — a copy, leaving
+// owners as it was. THE ONE PLACE the order is formed, read by the engine's
+// reconcile for a declaration and by a lifecycle request's decide for a
+// change, so every node deciding one declaration forms byte-identical records.
+// It removes nothing: an owner or a glob named twice is the caller's to
+// refuse, and [RepoSettings.Validate] refuses it.
+func CanonicalPathOwners(owners []PathOwner) []PathOwner {
+	if len(owners) == 0 {
+		return nil
+	}
+	out := make([]PathOwner, len(owners))
+	for i, po := range owners {
+		out[i] = PathOwner{Owner: po.Owner, Paths: slices.Sorted(slices.Values(po.Paths))}
+	}
+	slices.SortStableFunc(out, comparePathOwners)
+	return out
+}
+
+// pathOwnersInvalid is why owners are no repository's path owners in the form
+// a record carries them, or "": at most [MaxPathOwners], each a unit or a seat
+// naming itself, with 1 to [MaxPathOwnerPaths] globs gitref reads, sorted and
+// each once, and the owners sorted and each once ([comparePathOwners]).
+func pathOwnersInvalid(owners []PathOwner) string {
+	if len(owners) > MaxPathOwners {
+		return fmt.Sprintf("path_owners: %d owners, past the cap of %d", len(owners), MaxPathOwners)
+	}
+	for i, po := range owners {
+		at := fmt.Sprintf("path_owners[%d]", i)
+		switch {
+		case !po.Owner.Kind.Valid():
+			return fmt.Sprintf("%s.owner.kind: %q is not one of %v", at, po.Owner.Kind, OwnerKinds())
+		case strings.TrimSpace(po.Owner.Ref) == "":
+			return at + ".owner.ref: a path owner names a unit or a seat"
+		case len(po.Paths) == 0:
+			return at + ".paths: a path owner owns at least one glob"
+		case len(po.Paths) > MaxPathOwnerPaths:
+			return fmt.Sprintf("%s.paths: %d globs, past the cap of %d", at, len(po.Paths), MaxPathOwnerPaths)
+		case i > 0 && comparePathOwners(owners[i-1], po) >= 0:
+			return fmt.Sprintf("%s.owner: %s %s is not after %s %s — the owners are sorted by kind and "+
+				"reference and each named once, so one declaration forms one record on every node", at,
+				po.Owner.Kind, po.Owner.Ref, owners[i-1].Owner.Kind, owners[i-1].Owner.Ref)
+		}
+		for k, glob := range po.Paths {
+			if _, err := gitref.ParsePathGlob(glob); err != nil {
+				return fmt.Sprintf("%s.paths[%d]: %q is not a path glob: %v", at, k, glob, err)
+			}
+			if k > 0 && po.Paths[k-1] >= glob {
+				return fmt.Sprintf("%s.paths[%d]: %q is not after %q — an owner's globs are sorted and "+
+					"each named once", at, k, glob, po.Paths[k-1])
+			}
+		}
+	}
+	return ""
+}
+
 // Protection is one rule over the refs a pattern matches.
 type Protection struct {
 	// Pattern is refs/heads/<glob> or refs/tags/<glob> (gitref's grammar).
@@ -355,6 +439,23 @@ type RepoSettings struct {
 	// Protections are sorted by Pattern and unique — the canonical order,
 	// so two nodes deciding one declaration form byte-identical records.
 	Protections []Protection `json:"protections,omitempty"`
+	// PathOwners are who owns which of its paths, in the one form a record
+	// carries them in ([CanonicalPathOwners]): at most [MaxPathOwners], each
+	// owner once and each one's globs sorted and once — none on a scratch
+	// repository, which is its seat's own.
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this field — none of the domain is on main, so
+	// no image and no release holds it — and while that is so, every build
+	// that meets a record carrying settings reads it. Once a build without it
+	// has run, each op whose payload carries settings takes {Name:
+	// "RepoSettings.PathOwners", Since: 2, Op: <the op: create, settings,
+	// restore>, Path: []string{"mutation", "settings", "path_owners"}} in
+	// versionedFields, with RecordVersion at 2, its line under "What each
+	// version added" and a Carrying record in the statelogtest candidate —
+	// such a build would apply settings without their path owners, and a
+	// node running it would hold none of the rows every other node holds.
+	PathOwners []PathOwner `json:"path_owners,omitempty"`
 	// ConfigEpoch is the activation these settings came from
 	// (configplane.ActivationStamp), which the activation fence and the
 	// reconcile's lifecycle rules compare.
@@ -381,6 +482,9 @@ func (s RepoSettings) Validate() error {
 			ErrInvalid)
 	case s.Kind == RepoScratch && len(s.Protections) > 0:
 		return fmt.Errorf("%w: protections: a scratch repository takes no protections — it is its "+
+			"seat's own", ErrInvalid)
+	case s.Kind == RepoScratch && len(s.PathOwners) > 0:
+		return fmt.Errorf("%w: path_owners: a scratch repository takes no path owners — it is its "+
 			"seat's own", ErrInvalid)
 	case !s.Owner.Kind.Valid():
 		return fmt.Errorf("%w: owner.kind: %q is not one of %v", ErrInvalid, s.Owner.Kind, OwnerKinds())
@@ -419,17 +523,22 @@ func (s RepoSettings) Validate() error {
 				"record on every node", ErrInvalid, i, p.Pattern, s.Protections[i-1].Pattern)
 		}
 	}
+	if why := pathOwnersInvalid(s.PathOwners); why != "" {
+		return fmt.Errorf("%w: %s", ErrInvalid, why)
+	}
 	return nil
 }
 
-// equal compares two settings field by field, Protections as slices (both are
-// sorted by Validate's rule), and IGNORES ConfigEpoch — the activation a value
-// came from is not a difference in the value.
+// equal compares two settings field by field, Protections and PathOwners as
+// slices (both are sorted by Validate's rule, and each path owner's globs too),
+// and IGNORES ConfigEpoch — the activation a value came from is not a
+// difference in the value.
 func (s RepoSettings) equal(o RepoSettings) bool {
 	return s.ManagedBy == o.ManagedBy && s.Kind == o.Kind && s.Owner == o.Owner &&
 		s.DefaultBranch == o.DefaultBranch && s.Description == o.Description &&
 		s.Archived == o.Archived && s.Visibility == o.Visibility &&
-		slices.Equal(s.Protections, o.Protections)
+		slices.Equal(s.Protections, o.Protections) &&
+		slices.EqualFunc(s.PathOwners, o.PathOwners, PathOwner.equal)
 }
 
 // status is the status settings put an active repository in.

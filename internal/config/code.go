@@ -55,6 +55,21 @@ const (
 	// decide, and 64 is the scope-term cap of the other domains.
 	CodeMaxProtections = 64
 
+	// CodeMaxPathOwners is the most PATH OWNERS one repository names — units
+	// and seats, each owning the paths its globs match: as many as it carries
+	// protection rules ([CodeMaxProtections]). A path owner is whom a change
+	// touching its paths asks for a review, so this is also the most review
+	// requests one change's paths can make; sixty-four teams or seats is past
+	// any company's on one repository.
+	CodeMaxPathOwners = 64
+
+	// CodeMaxPathOwnerPaths is the most globs one path owner names: a team's
+	// part of a tree is a handful of directories, each one glob (dir/**), and
+	// thirty-two is past what one team owns of one repository. With
+	// [CodeMaxPathOwners] it bounds what a change's paths are matched against
+	// — 2 048 globs — and the bytes the repository's settings carry.
+	CodeMaxPathOwnerPaths = 32
+
 	// CodeMaxDescriptionBytes bounds a repository description: one
 	// paragraph, which rides every settings record and every listing row.
 	CodeMaxDescriptionBytes = 1_024
@@ -304,6 +319,20 @@ type CodeRepo struct {
 	Description   string           `yaml:"description,omitempty" json:"description,omitempty" desc:"One paragraph, at most 1024 bytes."`
 	Archived      bool             `yaml:"archived,omitempty" json:"archived,omitempty" desc:"Read-only: still fetched and cloned, and takes no push."`
 	Protect       []CodeProtection `yaml:"protect,omitempty" json:"protect,omitempty" desc:"The rules a push to the refs they match is held to, at most 64. A ref no rule matches may be force-pushed or deleted by anybody who may push."`
+	// PathOwners are who owns which of the repository's paths: whom a change
+	// touching them asks for a review. They GRANT NOTHING — who may read and
+	// push is the chart's and the tier's, whatever a path owner names.
+	PathOwners []CodePathOwner `yaml:"path_owners,omitempty" json:"path_owners,omitempty" desc:"Who owns which of the repository's paths, at most 64 owners: a change touching an owner's paths asks it for a review. A path owner is asked, never granted: it reads and pushes what the chart lets it, as before."`
+}
+
+// CodePathOwner is one owner of a repository's paths: exactly one of a unit or
+// a seat, and the globs over the repository's tree it owns
+// (gitref.ParsePathGlob). An owner is named once in a repository's list, so
+// everything one owner owns is one entry.
+type CodePathOwner struct {
+	Paths []string `yaml:"paths" json:"paths" desc:"The paths it owns: 1 to 32 globs over the repository's tree, each relative to its root, at most 128 bytes. A component of * matches one component and * within one any run of characters but /; ** matches whole components (zero or more, one or more as the last), so docs/** is everything inside docs and **/*.go every Go file; a glob holding a * has at most eight components, and a glob with no * matches only that path. ?, [, \\ and a leading ! are refused: * is the one metacharacter. Each glob once."`
+	Unit  string   `yaml:"unit,omitempty" json:"unit,omitempty" desc:"A unit of the chart: its id, or its name where it has none — its effective lead is whom a review is asked of. Exactly one of unit and seat."`
+	Seat  string   `yaml:"seat,omitempty" json:"seat,omitempty" desc:"A seat, by its handle. Exactly one of unit and seat."`
 }
 
 // ResolvedDefaultBranch is the repository's default branch with its default
@@ -628,9 +657,10 @@ func validateCodeRepos(path Path, repos []CodeRepo, o *org.Organization) error {
 
 // validate holds one declared repository at path, against the document's
 // chart: its name, its one owner resolving on the chart, its visibility, its
-// default branch, its description and its protection rules — at most
+// default branch, its description, its protection rules — at most
 // [CodeMaxProtections], each naming exactly one of a branch or a tag pattern
-// in gitref's grammar, each pattern protected once, and no force on a tag.
+// in gitref's grammar, each pattern protected once, and no force on a tag — and
+// its path owners ([validatePathOwners]).
 func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 	var p problems
 	switch {
@@ -701,7 +731,94 @@ func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 		}
 		first[pattern] = k
 	}
+	validatePathOwners(&p, at(path, "path_owners"), r.PathOwners, owners)
 	return p.err()
+}
+
+// validatePathOwners holds a repository's path owners at path into p: at most
+// [CodeMaxPathOwners], each naming exactly one of a unit or a seat the chart
+// resolves, and 1 to [CodeMaxPathOwnerPaths] globs in gitref's path grammar,
+// each once — and each OWNER once, by what the chart resolves it to, so a unit
+// named once by its key and once by its name is one owner named twice.
+//
+// RUNNABLE, as an owner's rules are: the reconcile records a unit by the key
+// the chart resolves, so one it cannot resolve has no key to record, and the
+// code domain refuses settings past these bounds, a glob its grammar does not
+// read and an owner listed twice — the one form a record carries, which a
+// declaration listing an owner twice is not.
+func validatePathOwners(p *problems, path Path, list []CodePathOwner, owners *codeOwners) {
+	if len(list) > CodeMaxPathOwners {
+		p.add(path, ErrOutOfRange,
+			"%d path owners, past the %d one repository may name: list a team rather than each of its "+
+				"seats — a unit's owner is its effective lead", len(list), CodeMaxPathOwners)
+	}
+	first := make(map[string]int, len(list))
+	for k, po := range list {
+		entry := idx(path, k)
+		key, resolved := po.validate(p, entry, owners)
+		if !resolved {
+			continue
+		}
+		if was, dup := first[key]; dup {
+			p.add(entry, ErrConflict,
+				"%s owns paths at path_owners[%d] already: one owner is one entry, so list "+
+					"everything it owns in that one", key, was)
+			continue
+		}
+		first[key] = k
+	}
+}
+
+// validate holds one path owner at path into p, and answers who it resolves
+// to — "unit <key>" or "seat <handle>", as the chart names the owner whatever
+// spelling the entry used — where it resolves at all.
+func (po CodePathOwner) validate(p *problems, path Path, owners *codeOwners) (string, bool) {
+	paths := at(path, "paths")
+	switch n := len(po.Paths); {
+	case n == 0:
+		p.add(paths, ErrMissing,
+			"a path owner names the paths it owns: one glob or more, such as dir/** for a directory")
+	case n > CodeMaxPathOwnerPaths:
+		p.add(paths, ErrOutOfRange,
+			"%d globs, past the %d one path owner may name: own a directory with dir/** rather than "+
+				"each of its files", n, CodeMaxPathOwnerPaths)
+	}
+	seen := make(map[string]int, len(po.Paths))
+	for m, glob := range po.Paths {
+		if _, err := gitref.ParsePathGlob(glob); err != nil {
+			p.add(idx(paths, m), ErrShape, "%q is not a path glob: %v", glob, err)
+			continue
+		}
+		if was, dup := seen[glob]; dup {
+			p.add(idx(paths, m), ErrConflict, "%q is listed twice (first at paths[%d])", glob, was)
+			continue
+		}
+		seen[glob] = m
+	}
+	switch unit, seat := strings.TrimSpace(po.Unit), strings.TrimSpace(po.Seat); {
+	case unit == "" && seat == "":
+		p.add(path, ErrMissing,
+			"a path owner is a unit or a seat: set unit to a unit's id or name, or seat to a seat's handle")
+	case unit != "" && seat != "":
+		p.add(path, ErrConflict, "a path owner is one unit or one seat: set unit or seat, not both")
+	case unit != "":
+		u := owners.index.UnitByRef(unit)
+		if u == nil {
+			p.add(at(path, "unit"), ErrUnknownValue,
+				"%q is no unit of this company's chart, by id or by name; the units are: %s",
+				unit, owners.units())
+			return "", false
+		}
+		return "unit " + u.Key(), true
+	default:
+		if owners.index.SeatByHandle(seat) == nil {
+			p.add(at(path, "seat"), ErrUnknownValue,
+				"%q is no seat's handle in this company; the seats are: %s", seat, owners.seats())
+			return "", false
+		}
+		return "seat " + seat, true
+	}
+	return "", false
 }
 
 // codeOwners is the document's chart as code.repos' owners are resolved

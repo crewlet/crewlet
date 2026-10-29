@@ -81,6 +81,11 @@ code:
         - branch: release/**         # every branch inside release/ ...
           allow_delete: true         # ... may be deleted, never force-pushed
         - tag: "v*"                  # a release tag never moves
+      path_owners:                   # whom a change touching these paths asks for a review
+        - paths: ["web/**"]          # everything inside web/
+          unit: Engineering          # its lead is asked
+        - paths: ["**/*.sql", "deploy/**"]
+          seat: dba                  # every SQL file, at any depth, and deploy/
     - name: legacy
       owner: { seat: founder }
       archived: true                 # read-only: takes no push
@@ -102,6 +107,15 @@ field, the pattern grammar and what each change does at its activation are in
 relates to its owner — the owning unit's members and the leads above them.
 It never narrows a person: you, and everyone with a token, read every
 repository whatever it says ([Visibility](../concepts/code-host.md#visibility)).
+
+`path_owners` names who owns which part of the tree: a unit, whose lead is
+asked, or a seat, and the globs of the paths it owns. A glob starts at the
+repository's root — `*.go` is the Go files at the root alone, `**/*.go` every
+one, `web/**` everything inside `web/` — and a glob with no `*` names one
+file. A path owner is **whom a change touching its paths asks for a review**,
+and that is all it is: it reads and pushes the repository as its seat always
+could, so owning `deploy/**` lets no seat push there that could not before
+([Path owners](../concepts/code-host.md#path-owners)).
 
 ## Give each person a token
 

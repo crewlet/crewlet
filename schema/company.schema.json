@@ -201,6 +201,48 @@
         "null"
       ]
     },
+    "CodePathOwner": {
+      "additionalProperties": false,
+      "properties": {
+        "paths": {
+          "description": "The paths it owns: 1 to 32 globs over the repository's tree, each relative to its root, at most 128 bytes. A component of * matches one component and * within one any run of characters but /; ** matches whole components (zero or more, one or more as the last), so docs/** is everything inside docs and **/*.go every Go file; a glob holding a * has at most eight components, and a glob with no * matches only that path. ?, [, \\ and a leading ! are refused: * is the one metacharacter. Each glob once.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "seat": {
+          "description": "A seat, by its handle. Exactly one of unit and seat.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "unit": {
+          "description": "A unit of the chart: its id, or its name where it has none — its effective lead is whom a review is asked of. Exactly one of unit and seat.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "CodeProtection": {
       "additionalProperties": false,
       "properties": {
@@ -304,6 +346,16 @@
         },
         "owner": {
           "$ref": "#/$defs/CodeOwner"
+        },
+        "path_owners": {
+          "description": "Who owns which of the repository's paths, at most 64 owners: a change touching an owner's paths asks it for a review. A path owner is asked, never granted: it reads and pushes what the chart lets it, as before.",
+          "items": {
+            "$ref": "#/$defs/CodePathOwner"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "protect": {
           "description": "The rules a push to the refs they match is held to, at most 64. A ref no rule matches may be force-pushed or deleted by anybody who may push.",

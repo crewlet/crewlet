@@ -65,14 +65,25 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 	// decide forms it only once at most PurgePartRows of the repository's
 	// pushes, refs, packs, retired packs and changes' revisions, authors,
 	// bodies and rows remain: those, every protection rule
-	// (MaxProtectionsPerRepo), the published chain — which no part removes:
-	// MaxPublishedLayers layers of MaxLayerParts parts each — the name claim,
-	// the repository's row, its kind's count and the deletion marker.
+	// (MaxProtectionsPerRepo) and every path owner (MaxPathOwners, one row an
+	// owner), the published chain — which no part removes: MaxPublishedLayers
+	// layers of MaxLayerParts parts each — the name claim, the repository's
+	// row, its kind's count and the deletion marker.
 	chain := code.MaxPublishedLayers * (1 + code.MaxLayerParts)
-	if final := code.PurgePartRows + code.MaxProtectionsPerRepo + chain + 4; final > code.MaxRecordRows {
+	if final := code.PurgePartRows + code.MaxProtectionsPerRepo + code.MaxPathOwners + chain + 4; final >
+		code.MaxRecordRows {
 		t.Errorf("the final purge removes up to %d rows (PurgePartRows %d + MaxProtectionsPerRepo %d + "+
-			"a chain's %d + 4), past the %d one record's apply may touch (MaxRecordRows)", final,
-			code.PurgePartRows, code.MaxProtectionsPerRepo, chain, code.MaxRecordRows)
+			"MaxPathOwners %d + a chain's %d + 4), past the %d one record's apply may touch (MaxRecordRows)",
+			final, code.PurgePartRows, code.MaxProtectionsPerRepo, code.MaxPathOwners, chain,
+			code.MaxRecordRows)
+	}
+	// AND A RECORD CARRYING A REPOSITORY'S SETTINGS WHOLE: a settings change
+	// or a restore deletes its rules and path owners and writes the new ones,
+	// and moves the repository's row — a create writes them with its claim.
+	if settings := 2*(code.MaxProtectionsPerRepo+code.MaxPathOwners) + 1; settings > code.MaxRecordRows {
+		t.Errorf("a settings record touches up to %d rows (twice MaxProtectionsPerRepo %d and MaxPathOwners "+
+			"%d, and the row), past the %d one record's apply may touch (MaxRecordRows)", settings,
+			code.MaxProtectionsPerRepo, code.MaxPathOwners, code.MaxRecordRows)
 	}
 	// A MAXIMAL PUSH OF DELETIONS FITS ONE RECORD'S ROWS with its sweep's
 	// room: a push row, its pack and its refs, the object each deletion left,

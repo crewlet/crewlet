@@ -499,6 +499,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Branches: 2, Tags: 1, Tombstones: 4, CreatedAt: created,
 			Limits: code.Limits{MaxPushBytes: 1 << 20, MaxBlobBytes: 1 << 10, RepoMaxBytes: 1 << 30,
 				PushesPerSeatDay: 40},
+			PathOwners: []code.PathOwner{{Owner: code.Owner{Kind: code.OwnerUnit, Ref: "plat"},
+				Paths: []string{"deploy/**", "web/**"}}},
 		}, Refs: []code.RefRow{{Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666",
 			Position: at}}, Introduced: []code.IntroducedRow{introduced},
 			Due: []code.CompactionCandidate{{ID: ref.ID, Name: "app", LivePacks: 40, LiveObjects: 4_000,
@@ -737,7 +739,10 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		"a settings change": {Kind: code.LifecycleSettings, OpID: op,
 			Actor:  code.Principal{Kind: code.PrincipalOperator, OperatorID: "pat:7", Seat: "founder"},
 			RepoID: ref.ID, Change: &code.RepoChange{Description: &desc, DefaultBranch: &branch,
-				Visibility: &vis, Owner: &owner}},
+				Visibility: &vis, Owner: &owner, PathOwners: &code.PathOwnersChange{
+					Add:    []code.PathOwner{{Owner: owner, Paths: []string{"deploy/**", "web/**"}}},
+					Remove: []code.PathOwner{{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "dev"}, Paths: []string{"a"}}},
+				}}},
 		"a protection": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
 			Protect: &code.ProtectChange{Pattern: "refs/heads/release/*", Rule: &code.Protection{
 				Pattern: "refs/heads/release/*", AllowForce: true, AllowDelete: true,

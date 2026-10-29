@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -415,8 +416,37 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, at applyContext) 
 	if err != nil {
 		return 0, fmt.Errorf("code: write %s's protections at %s: %w", p.RepoID, at.position, err)
 	}
-	return 1 + 2*int(created) + protections, nil
+	owners, err := insertPathOwners(ctx, tx, at.maxVariables, p.RepoID, s.PathOwners)
+	if err != nil {
+		return 0, fmt.Errorf("code: write %s's path owners at %s: %w", p.RepoID, at.position, err)
+	}
+	return 1 + 2*int(created) + protections + owners, nil
 }
+
+// insertPathOwners writes a repository's path owners, one row an owner with its
+// globs packed one a line ([packPaths]). An owner the record names twice —
+// which no writer forms, the settings holding each owner once — keeps its first
+// row rather than aborting the transaction on every node, as a protection's
+// pattern does.
+func insertPathOwners(ctx context.Context, tx *sql.Tx, maxVariables int, repoID string,
+	owners []PathOwner) (int, error) {
+
+	return store.InsertRows(ctx, tx, maxVariables,
+		`INSERT INTO code_path_owners (repo_id, owner_kind, owner, paths) VALUES `,
+		`(?, ?, ?, ?)`, `ON CONFLICT (repo_id, owner_kind, owner) DO NOTHING`, len(owners),
+		func(i int) []any {
+			po := owners[i]
+			return []any{repoID, string(po.Owner.Kind), po.Owner.Ref, packPaths(po.Paths)}
+		})
+}
+
+// packPaths and unpackPaths are a path owner's globs as its row holds them:
+// one a line, in the record's order. A glob holds no control character
+// (gitref.ParsePathGlob), so no newline is a glob's and the packing is
+// exact both ways.
+func packPaths(paths []string) string { return strings.Join(paths, "\n") }
+
+func unpackPaths(packed string) []string { return strings.Split(packed, "\n") }
 
 // insertProtections writes a repository's rules in the record's order. A
 // pattern the record names twice — which no writer forms, the settings being
@@ -591,7 +621,28 @@ func (a *Applier) applySettings(ctx context.Context, tx *sql.Tx, at applyContext
 	if err != nil {
 		return 0, err
 	}
-	return int(n) + replaced, nil
+	owners, err := replacePathOwners(ctx, tx, at, p.RepoID, s.PathOwners)
+	if err != nil {
+		return 0, err
+	}
+	return int(n) + replaced + owners, nil
+}
+
+// replacePathOwners deletes a repository's path owners and writes the new set:
+// at most MaxPathOwners rows each way.
+func replacePathOwners(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
+	owners []PathOwner) (int, error) {
+
+	res, err := tx.ExecContext(ctx, clearPathOwnersSQL, repoID)
+	if err != nil {
+		return 0, fmt.Errorf("code: clear %s's path owners at %s: %w", repoID, at.position, err)
+	}
+	removed, _ := res.RowsAffected()
+	written, err := insertPathOwners(ctx, tx, at.maxVariables, repoID, owners)
+	if err != nil {
+		return 0, fmt.Errorf("code: write %s's path owners at %s: %w", repoID, at.position, err)
+	}
+	return int(removed) + written, nil
 }
 
 // replaceProtections deletes a repository's rules and writes the new set.
@@ -662,7 +713,11 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, at applyContext,
 	if err != nil {
 		return 0, err
 	}
-	return int(n) + replaced, nil
+	owners, err := replacePathOwners(ctx, tx, at, p.RepoID, s.PathOwners)
+	if err != nil {
+		return 0, err
+	}
+	return int(n) + replaced + owners, nil
 }
 
 // managerRefuses reports a settings or restore record whose manager is not the
@@ -704,6 +759,7 @@ const (
 			config_epoch = ?, last_activity_at = ?, version = ?
 		WHERE id = ?`
 	clearProtectionsSQL = `DELETE FROM code_protections WHERE repo_id = ?`
+	clearPathOwnersSQL  = `DELETE FROM code_path_owners WHERE repo_id = ?`
 	deleteRepoSQL       = `UPDATE code_repos SET
 			status = 'deleted', deleted_at = ?, config_epoch = ?, version = ?
 		WHERE id = ? AND status IN ('active', 'archived')`

@@ -948,12 +948,14 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // repository's pushes, refs, packs, retired packs, ref drops and changes'
 // revisions, authors, bodies and rows remain AND the pushes and the bodies
 // among them weigh at most PurgePartBytes — a part's own bounds — and it
-// holds at most MaxProtectionsPerRepo rules and a published chain of at most
+// holds at most MaxProtectionsPerRepo rules, MaxPathOwners path owners (one row
+// each, their globs packed into it) and a published chain of at most
 // MaxPublishedLayers layers of MaxLayerParts parts each: with the name claim,
 // the row, its kind's count and the marker that is PurgePartRows +
-// MaxProtectionsPerRepo + MaxPublishedLayers × (1 + MaxLayerParts) + 4 rows,
-// which the limits test holds within MaxRecordRows. A change's revisions,
-// authors and body go before the changes, through which alone they are found.
+// MaxProtectionsPerRepo + MaxPathOwners + MaxPublishedLayers × (1 +
+// MaxLayerParts) + 4 rows, which the limits test holds within MaxRecordRows. A
+// change's revisions, authors and body go before the changes, through which
+// alone they are found.
 //
 // AN OLD NAME a rename left redirecting to the repository is NOT released
 // here: how many a repository holds is bounded by nothing a part counts — one
@@ -972,7 +974,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	for _, stmt := range []string{
 		purgeAllPushesSQL, purgeAllRefsSQL, purgeAllPacksSQL, purgeAllRetiredSQL, purgeAllDropsSQL,
 		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllBodiesSQL, purgeAllChangesSQL, purgeAllLayerPartsSQL,
-		purgeAllLayersSQL, clearProtectionsSQL,
+		purgeAllLayersSQL, clearProtectionsSQL, clearPathOwnersSQL,
 	} {
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)
 		if err != nil {

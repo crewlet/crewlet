@@ -349,6 +349,9 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 	rule := func(r string) string {
 		return web + "      protect:\n        - " + r + "\n"
 	}
+	owner := func(entries ...string) string {
+		return web + "      path_owners:\n        - " + strings.Join(entries, "\n        - ") + "\n"
+	}
 	for name, tc := range map[string]struct {
 		doc string
 		// path and kind are the one problem the document must be refused
@@ -475,6 +478,54 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 			path: "code.repos[0].protect[0].direct_push", kind: "unknown_value",
 			says: []string{"admins", "persons, none"},
 		},
+		"a path owner owning no path": {
+			doc:  codeRepos(owner("{unit: Engineering}")),
+			path: "code.repos[0].path_owners[0].paths", kind: "missing", says: []string{"dir/**"},
+		},
+		"a path owner who is nobody": {
+			doc:  codeRepos(owner(`{paths: ["web/**"]}`)),
+			path: "code.repos[0].path_owners[0]", kind: "missing",
+		},
+		"a path owner who is two": {
+			doc:  codeRepos(owner(`{paths: ["web/**"], unit: Engineering, seat: swe}`)),
+			path: "code.repos[0].path_owners[0]", kind: "conflict",
+		},
+		"a path owner the chart does not have": {
+			doc:  codeRepos(owner(`{paths: ["web/**"], unit: Marketing}`)),
+			path: "code.repos[0].path_owners[0].unit", kind: "unknown_value",
+			says: []string{`"Marketing"`, "the units are: engineering (Engineering), platform (Platform Team)"},
+		},
+		"a path owner's seat the chart does not have": {
+			doc:  codeRepos(owner(`{paths: ["web/**"], seat: cto}`)),
+			path: "code.repos[0].path_owners[0].seat", kind: "unknown_value", says: []string{"cto", "ceo", "swe"},
+		},
+		"a path that is no path glob": {
+			doc:  codeRepos(owner(`{paths: ["web/**", "/docs/**"], unit: Engineering}`)),
+			path: "code.repos[0].path_owners[0].paths[1]", kind: "shape",
+			says: []string{`"/docs/**"`, "relative to the repository's root"},
+		},
+		"a path listed twice": {
+			doc:  codeRepos(owner(`{paths: ["web/**", "docs/**", "web/**"], unit: Engineering}`)),
+			path: "code.repos[0].path_owners[0].paths[2]", kind: "conflict", says: []string{`"web/**"`, "paths[0]"},
+		},
+		"a path owner past its paths": {
+			doc: func() string {
+				var globs []string
+				for i := range config.CodeMaxPathOwnerPaths + 1 {
+					globs = append(globs, fmt.Sprintf("%q", fmt.Sprintf("d%d/**", i)))
+				}
+				return codeRepos(owner("{paths: [" + strings.Join(globs, ", ") + "], seat: swe}"))
+			}(),
+			path: "code.repos[0].path_owners[0].paths", kind: "out_of_range", says: []string{"33", "32"},
+		},
+		// ONE OWNER BY TWO SPELLINGS IS ONE OWNER NAMED TWICE: the record
+		// names a unit by its key, whichever the document used.
+		"one path owner named twice": {
+			doc: codeRepos(owner(`{paths: ["web/**"], unit: Engineering}`,
+				`{paths: ["docs/**"], unit: engineering}`)),
+			path: "code.repos[0].path_owners[1]", kind: "conflict",
+			says: []string{"unit engineering", "path_owners[0]"},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -496,9 +547,38 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 	}
 }
 
+// A REPOSITORY NAMES AT MOST CodeMaxPathOwners PATH OWNERS, refused past it at
+// its path_owners as one problem — over a chart holding as many units, so no
+// owner past the bound is also unknown or named twice — and accepted at it.
+func TestPathOwnersAreBounded(t *testing.T) {
+	t.Parallel()
+	doc := func(owners int) string {
+		var units, list strings.Builder
+		for i := range config.CodeMaxPathOwners + 1 {
+			fmt.Fprintf(&units, "  - name: Team %d\n    id: team-%d\n", i, i)
+		}
+		for i := range owners {
+			fmt.Fprintf(&list, "        - {paths: [\"t%d/**\"], unit: team-%d}\n", i, i)
+		}
+		return "name: Acme\nroles:\n  - name: CEO\n    handle: ceo\nunits:\n" + units.String() +
+			"code:\n  native: true\n  repos:\n    - name: web\n      owner: {seat: ceo}\n      path_owners:\n" +
+			list.String()
+	}
+	if _, err := config.ParseCompany([]byte(doc(config.CodeMaxPathOwners))); err != nil {
+		t.Fatalf("%d path owners are refused: %v", config.CodeMaxPathOwners, err)
+	}
+	_, err := config.ParseCompany([]byte(doc(config.CodeMaxPathOwners + 1)))
+	problems := config.Problems(err)
+	if len(problems) != 1 || problems[0].Path != "code.repos[0].path_owners" || problems[0].Kind != "out_of_range" ||
+		!strings.Contains(problems[0].Message, "65") || !strings.Contains(problems[0].Message, "64") {
+		t.Fatalf("problems = %+v, want the one at code.repos[0].path_owners naming 65 and 64", problems)
+	}
+}
+
 // A WHOLE DECLARATION IS ACCEPTED: an owner by a unit's NAME, one by a unit's
-// id, one by a seat, a branch glob, a frozen branch and a tag rule — and every
-// repository's default branch protected, so nothing is warned either.
+// id, one by a seat, a branch glob, a frozen branch and a tag rule, and path
+// owners naming units by name and by id and a seat — and every repository's
+// default branch protected, so nothing is warned either.
 func TestADeclaredCodeBlockIsAccepted(t *testing.T) {
 	t.Parallel()
 	c, err := config.ParseCompany([]byte(codeChart + `code:
@@ -514,12 +594,18 @@ func TestADeclaredCodeBlockIsAccepted(t *testing.T) {
           direct_push: none
         - tag: "v*"
           allow_delete: true
+      path_owners:
+        - {paths: ["web/**", "**/*.go"], unit: Engineering}
+        - {paths: ["Makefile", ".github/workflows/*.yml"], seat: swe}
+        - {paths: ["deploy/**"], unit: Platform Team}
     - name: infra
       owner: {unit: platform}
       default_branch: trunk
       archived: true
       protect:
         - {branch: trunk, allow_force: true}
+      path_owners:
+        - {paths: ["**"], unit: platform}
     - name: notes
       owner: {seat: ceo}
       protect:

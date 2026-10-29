@@ -1,8 +1,9 @@
 // Package gitref is THE GRAMMAR OF GIT NAMES THE ENGINE AND ITS CONFIGURATION
 // SHARE: repository names, refs, branch names, protection patterns and object
-// ids, with their bounds — and where the seats' own branches live
-// ([SeatsRoot], [ReservedSeatBranch]), which a push and a repository's default
-// branch are both judged by.
+// ids, with their bounds — where the seats' own branches live ([SeatsRoot],
+// [ReservedSeatBranch]), which a push and a repository's default branch are
+// both judged by — and the GLOB OVER A REPOSITORY'S TREE PATHS ([PathGlob]),
+// which a path owner names its part of a tree by.
 //
 // Configuration validates a document with it at `crewlet validate`, the code
 // domain decides a push with it, and the sandbox judges with it the branch a
@@ -16,16 +17,17 @@
 //
 // # Git's rules are the floor
 //
-// [ValidRef] is `git check-ref-format` implemented in Go, and [MatchPattern]
-// is `git for-each-ref`'s glob over whole components. Neither is trusted to
-// have been transcribed correctly: the tests run every case of both tables
-// through real git and hold the Go rule to git's verdict, and each row
-// records git's answer beside this package's, so a row whose two answers
-// differ has to say why and a git that changes its mind fails the suite
-// instead of quietly disagreeing with it. The matcher is then held to the
-// rule its doc states, written out plainly in the tests, on every shape a
-// short pattern and ref can take — because it is written for speed, and the
-// git table only samples.
+// [ValidRef] is `git check-ref-format` implemented in Go, [MatchPattern] is
+// `git for-each-ref`'s glob over whole components, and [PathGlob.Match] is the
+// same glob over a tree's paths, which is git's glob pathspec (`:(glob)…`).
+// None is trusted to have been transcribed correctly: the tests run every case
+// of their tables through real git and hold the Go rule to git's verdict, and
+// each row records git's answer beside this package's, so a row whose two
+// answers differ has to say why and a git that changes its mind fails the
+// suite instead of quietly disagreeing with it. Both matchers are then held to
+// the ONE rule their docs state, written out plainly in the tests, on every
+// shape a short glob and name can take — because each walk is written for
+// speed, and the git tables only sample.
 //
 // # Where this package is stricter than git
 //
@@ -38,11 +40,16 @@
 //   - a ref has the form refs/<namespace>/<name> (git takes refs/x);
 //   - a branch is never `@` (git takes it outside a repository);
 //   - a literal protection pattern matches only the identical ref (git's
-//     for-each-ref also matches it as a prefix up to a `/`).
+//     for-each-ref also matches it as a prefix up to a `/`), and a literal
+//     path glob only the identical path (a pathspec also matches every path
+//     below a directory of that name);
+//   - a path glob's one metacharacter is `*`: `?`, `[` and `\`, which git's
+//     wildmatch reads as metacharacters too, are refused rather than read, and
+//     so is a leading `!`, gitignore's negation.
 //
 // Each narrows what git would take to a name the engine carries correctly —
-// across JSON, on every client's disk, and in a protection rule that reaches
-// exactly as far as it says.
+// across JSON, on every client's disk, and in a protection rule or a path
+// owner's glob that reaches exactly as far as it says.
 //
 // # Measured
 //

@@ -294,6 +294,7 @@ const (
 	nameKey       = "sqlite_autoindex_code_names_1"
 	pushKey       = "sqlite_autoindex_code_pushes_1"
 	protectionKey = "sqlite_autoindex_code_protections_1"
+	pathOwnerKey  = "sqlite_autoindex_code_path_owners_1"
 	deletionKey   = "sqlite_autoindex_code_deletions_1"
 	changeKey     = "sqlite_autoindex_code_changes_1"
 	authorKey     = "sqlite_autoindex_code_change_authors_1"
@@ -336,6 +337,9 @@ func registeredStatements() map[string]statement {
 		"repo version":        {repoVersionSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"settings":            {settingsSQL, []any{"config", "unit", "ENG", "company", "main", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"clear protections":   {clearProtectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
+		"path owners":         {pathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
+		"path owners of":      {pathOwnersOfSQL, []any{`["repo-1","repo-2"]`}, []string{pathOwnerKey + " (repo_id=?)"}},
+		"clear path owners":   {clearPathOwnersSQL, []any{"repo-1"}, []string{pathOwnerKey + " (repo_id=?)"}},
 		"delete repo":         {deleteRepoSQL, []any{1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"restore repo":        {restoreRepoSQL, []any{"config", "unit", "ENG", "company", "main", "", "active", 1, 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"pushes applied":      {pushesAppliedSQL, []any{ids}, []string{pushKey + " (push_id=?)"}},

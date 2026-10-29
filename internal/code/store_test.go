@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -130,7 +131,26 @@ func (n *node) settingsOf(name string) code.RepoSettings {
 			}
 			s.Protections = append(s.Protections, p)
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		owners, err := tx.QueryContext(n.t.Context(), `
+			SELECT owner_kind, owner, paths FROM code_path_owners
+			WHERE repo_id = ? ORDER BY owner_kind, owner`, id)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = owners.Close() }()
+		for owners.Next() {
+			var po code.PathOwner
+			var packed string
+			if err := owners.Scan(&po.Owner.Kind, &po.Owner.Ref, &packed); err != nil {
+				return err
+			}
+			po.Paths = strings.Split(packed, "\n")
+			s.PathOwners = append(s.PathOwners, po)
+		}
+		return owners.Err()
 	})
 	if err != nil {
 		n.t.Fatalf("read repository %q's settings: %v", name, err)
@@ -191,6 +211,14 @@ func TestEveryDeclaredSettingsChangeWritesOneRecord(t *testing.T) {
 		"the visibility changed": func() code.RepoSettings {
 			s := suiteSettings()
 			s.Visibility = code.VisibilityUnit
+			return s
+		}(),
+		"path owners named": func() code.RepoSettings {
+			s := suiteSettings()
+			s.PathOwners = []code.PathOwner{
+				{Owner: code.Owner{Kind: code.OwnerSeat, Ref: "dev"}, Paths: []string{"Makefile"}},
+				{Owner: code.Owner{Kind: code.OwnerUnit, Ref: "ENG"}, Paths: []string{"docs/**", "web/**"}},
+			}
 			return s
 		}(),
 	} {
