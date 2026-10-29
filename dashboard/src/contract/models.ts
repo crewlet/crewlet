@@ -152,3 +152,15 @@ export const SEAT_JOB_FIELDS = {
  * `config.Placements` by the entry gate.
  */
 export type RunnerCellName = "direct" | "container" | "e2b";
+
+/**
+ * The longest the engine lets each model route work before it answers, in
+ * seconds: a test runs the CLI for real (up to three runs), a credential's test
+ * one isolated run, a retry one probe. The dashboard waits a little past each
+ * rather than abandoning a request the engine is still answering. Held against
+ * `llmapi.CheckBudget`, `CredentialBudget` and `RetryBudget` by
+ * `internal/api/llmapi.TestTheModelsScreenWaitsAsLongAsTheEngineWorks`.
+ */
+export const MODEL_CHECK_BUDGET_SECONDS = 180;
+export const MODEL_CREDENTIAL_BUDGET_SECONDS = 120;
+export const MODEL_RETRY_BUDGET_SECONDS = 60;

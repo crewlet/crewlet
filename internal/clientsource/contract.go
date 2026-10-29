@@ -155,6 +155,9 @@ var contract = []Entry{
 	{"ModelSignInRoute", ReadUnion, "internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns"},
 	{"ModelLimitWindow", ReadUnion, "internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns"},
 	{"ModelCheckName", ReadUnion, "internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns"},
+	{"MODEL_CHECK_BUDGET_SECONDS", ReadScalar, "internal/api/llmapi.TestTheModelsScreenWaitsAsLongAsTheEngineWorks"},
+	{"MODEL_CREDENTIAL_BUDGET_SECONDS", ReadScalar, "internal/api/llmapi.TestTheModelsScreenWaitsAsLongAsTheEngineWorks"},
+	{"MODEL_RETRY_BUDGET_SECONDS", ReadScalar, "internal/api/llmapi.TestTheModelsScreenWaitsAsLongAsTheEngineWorks"},
 
 	// config.ts
 	{"ENTITY_KINDS", ReadLiteral, "internal/api/configapi.TestEntityKindsMatchTheClient"},

@@ -243,6 +243,17 @@ export interface CredentialCheck {
   limited: CredentialLimited | null;
 }
 
+/** A re-activation after a stored secret (`configapi.Reloaded`). */
+export interface ConfigReloaded {
+  revision_id?: string;
+  epoch?: number;
+  error?: string;
+  detail?: string;
+  deferred?: boolean;
+  stored_revision_id?: string;
+  node?: string;
+}
+
 /** `PUT /llm/providers/{key}/credential`: stored, after its test passed. */
 export interface CredentialStored {
   verified: string;
@@ -251,9 +262,11 @@ export interface CredentialStored {
   hints: Record<string, string>;
   /** Every model that reads one of the names, and so signs in with it now. */
   entries: string[];
-  reload: { revision_id: string; epoch: number; error?: string } | null;
+  /** The re-activation that makes running models read it: landed, or why it did not. */
+  reload: ConfigReloaded | null;
   cleared: string[];
-  running_runs: number;
+  /** Runs still on the old value, or null where the count could not be read. */
+  running_runs: number | null;
   limited: CredentialLimited | null;
 }
 
@@ -279,9 +292,22 @@ export interface HostLoginAnswer {
   shares_login_with: string[];
 }
 
-/** A dependant of a model the remove refusal names: a seat's job, or the assistant. */
+/** One written reference to a model, by identity: a seat's job, or the assistant's chat or deep work (`configapi.RemovalAt`). */
+export interface ModelReferenceAt {
+  seat?: string;
+  job?: ModelJob;
+  assistant?: "chat" | "deep_work";
+}
+
+/** A dependant the remove refusal names: where it is, the field, and the whole chain written there. */
 export interface ModelReference {
-  at: { seat: string; job: ModelJob } | { assistant: "chat" | "deep_work" };
+  at: ModelReferenceAt;
   segments: Array<string | number>;
   chain: string[];
+}
+
+/** What one reference to a removed model becomes: another model, or null to leave the job unset. */
+export interface ModelRepoint {
+  at: ModelReferenceAt;
+  to: string | null;
 }
