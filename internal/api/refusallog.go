@@ -75,6 +75,11 @@ const requestIDHeader = "X-Request-Id"
 
 func (m refusalMux) logRefusals(pattern string, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// READS PASS THROUGH ON PURPOSE. Every route is wrapped, a read's
+		// included, because a mount need not name its method: configapi's
+		// `/config` and `/config/` carry its reads and its writes alike, so
+		// only the request's method can say which this is. A read is served
+		// as it would be unwrapped, with no line and no request id.
 		if !isWrite(r.Method) {
 			h.ServeHTTP(w, r)
 			return
