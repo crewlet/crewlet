@@ -19,7 +19,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -46,6 +45,9 @@ type CheckLine struct {
 	Detail string `json:"detail"`
 	Kind   string `json:"kind,omitempty"`
 	Remedy string `json:"remedy,omitempty"`
+	// Meaning is, on an auth failure, whether the vendor refused the
+	// credential ("refused") or the CLI never used it ("unread").
+	Meaning string `json:"meaning,omitempty"`
 }
 
 // CheckAnswer is a check's answer: when, on which node, whether it passed,
@@ -74,7 +76,7 @@ func answerOf(c Check) CheckAnswer {
 		Lines: make([]CheckLine, 0, len(c.Lines))}
 	for _, line := range c.Lines {
 		out.Lines = append(out.Lines, CheckLine{Check: string(line.Name), OK: line.OK,
-			Detail: line.Detail, Kind: line.Kind, Remedy: line.Remedy})
+			Detail: line.Detail, Kind: line.Kind, Remedy: line.Remedy, Meaning: string(line.Meaning)})
 	}
 	return out
 }
@@ -129,6 +131,7 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 	if !decode(w, r, &req, `{"values": {"NAME": "value"}, "entity": {...}}`) {
 		return
 	}
+	trimValues(req.Values)
 	names := slices.Sorted(maps.Keys(req.Values))
 	if !checkValues(w, req.Values, names) {
 		return
@@ -210,7 +213,7 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 		s.fail(w, "test the credential", err)
 		return
 	}
-	if !s.passed(w, key, names, checked) {
+	if !s.passed(w, key, names, checked, wordsFor(draft, key, names)) {
 		return
 	}
 	verified := fmt.Sprintf("Answered a one-turn %s run in %.1f s with only %s.",
@@ -319,19 +322,23 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 	httpjson.Write(w, http.StatusOK, answer)
 }
 
-// passed answers a test that did not pass, and reports whether it did.
-func (s *Service) passed(w http.ResponseWriter, key string, names []string, c Check) bool {
+// passed answers a test that did not pass, and reports whether it did,
+// naming the credential in words.
+//
+// A REFUSED SIGN-IN IS SAID BY WHAT IT MEANT, not in the CLI's words: Claude
+// Code says "Not logged in · Please run /login" of a token it never used, and
+// that, quoted at a field the person just pasted into, sent them to a login
+// that would change nothing. The CLI's words stay on the check's lines.
+func (s *Service) passed(w http.ResponseWriter, key string, names []string, c Check,
+	words credentialWords) bool {
+
 	switch c.Failure {
 	case "", "rate_limit":
 		// A 429 PROVES THE CREDENTIAL AUTHENTICATED: the vendor knew who
 		// was asking and said they had spent their plan.
 		return true
 	case "auth":
-		said := strings.TrimSuffix(strings.TrimSpace(c.Said), ".")
-		message := "Nothing was stored, and the current credential still signs the model in."
-		if said != "" {
-			message = said + ". " + message
-		}
+		message := words.refused(meaningOf(c))
 		problems := make([]config.Problem, 0, len(names))
 		for _, name := range names {
 			path := config.Path{"values", name}
@@ -427,10 +434,7 @@ func nameProblems(company *config.Company, key string, entry *config.LLMProvider
 	reads := company.LLMEntryReads(key)
 	sources := entry.CredentialSources(key)
 	tokenVar, keyVar := slotVar(sources.Token), slotVar(sources.APIKey)
-	profile, known := cliprofile.Builtin(string(entry.Agent))
-	if entry.Agent == "" {
-		profile, known = cliprofile.Builtin("claude-code")
-	}
+	profile, known := builtinProfile(entry)
 	var out []config.Problem
 	for _, name := range names {
 		path := config.Path{"values", name}
@@ -443,10 +447,18 @@ func nameProblems(company *config.Company, key string, entry *config.LLMProvider
 				Message: fmt.Sprintf("%s is not read by this model: it signs in with %s", name, reading)})
 			continue
 		}
+		// BEFORE ANY CLI RUNS: a value with a space or a line break inside
+		// is never one the vendor issued, and Claude Code ignores such a
+		// token outright, so testing it only produces a misleading refusal.
+		if problem := strayProblem(wordsFor(entry, key, []string{name}).noun, values[name]); problem != "" {
+			out = append(out, config.Problem{Path: path.String(), Segments: path, Kind: "invalid",
+				Message: problem})
+			continue
+		}
 		if !known {
 			continue
 		}
-		value := strings.TrimSpace(values[name])
+		value := values[name]
 		isKey := profile.APIKeyPrefix != "" && strings.HasPrefix(value, profile.APIKeyPrefix)
 		isToken := profile.TokenPrefix != "" && strings.HasPrefix(value, profile.TokenPrefix)
 		switch {

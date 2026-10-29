@@ -2514,7 +2514,12 @@ provider the catalogue does not list.
 2. Every name must be a variable the entry reads (`422 validation_error` at
    `["values", NAME]`), and a value of the wrong kind by its vendor's prefix (an
    API key in a token's slot, or the reverse) is refused there too, before any
-   call.
+   call. The whitespace around each value is trimmed, and a value holding a
+   space, a line break, a tab or an invisible formatting character inside is
+   refused at the value with how many and where ("This token contains 2 spaces
+   (characters 66 and 67)."): a terminal that wraps a long token turns the
+   break into spaces when it is copied, and Claude Code ignores such a token
+   outright.
 3. `If-None-Match: *` refuses a name already stored: `412 already_exists` with
    `names`, so a create never overwrites a secret another model reads. It is
    decided again at the seal, in one step of the store's: a name another write
@@ -2534,8 +2539,13 @@ provider the catalogue does not list.
    anything is tested or sealed.
 5. The candidate values are handed to the model's own CLI, in an isolated home,
    for one one-turn call, within the entry's `timeout_seconds` capped at 120 s.
-   A refusal is `422 credential_rejected` at the value with the vendor's
-   sentence, and nothing is stored; a vendor that did not answer is
+   A refusal is `422 credential_rejected` at the value, and nothing is stored.
+   Its `detail` says what the failure meant rather than quoting the CLI: the
+   vendor refused the credential (wrong, expired or revoked, with the command
+   that makes a new token where the CLI has one), or the CLI never used it, so
+   the vendor never saw it (the profile's `auth_markers` `meaning: unread`).
+   The CLI's own words stay on the check's lines, and a failing line carries
+   `meaning` (`refused` or `unread`) beside its `kind`; a vendor that did not answer is
    `502 credential_untested`; a CLI that cannot run (no binary) is
    `422 validation_error` at `providers.llm.<key>.agent` with the doctor's
    remedy. A `429` passes: it proves the credential authenticated, and the
