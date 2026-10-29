@@ -324,6 +324,10 @@ type Engine struct {
 	// itself: a case standing up several engines on one coordination store.
 	testNode string
 
+	// checkHomes is where a candidate credential's test makes its throwaway
+	// home ([Engine.CheckModel]); empty is the process's temporary directory.
+	checkHomes string
+
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
 	// [Engine.Apply].
