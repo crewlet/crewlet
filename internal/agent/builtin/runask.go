@@ -302,7 +302,10 @@ func (t *AskAndWait) Gate(submit tools.Callable) tools.Callable {
 	return &submitGate{submit: submit, desk: t.deps.Desk}
 }
 
-// submitGate is [AskAndWait.Gate]'s submission.
+// submitGate is [AskAndWait.Gate]'s submission: a FORWARDER, reached only
+// through [tools.Invoke] on the run's surface, which has checked the call
+// against the submission's own schema before the gate decides it (the
+// forwarders list in internal/tools holds it to that).
 type submitGate struct {
 	submit tools.Callable
 	desk   RunAskDesk

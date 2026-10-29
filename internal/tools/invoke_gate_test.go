@@ -16,9 +16,11 @@ import (
 
 // forwarders are the wrappers that forward a call to the tool they wrap,
 // each reached only through [tools.Invoke] itself: builtin's authority gate
-// decides the call, then hands it on.
+// decides the call, then hands it on, and so does the gate a coding run's
+// submission passes once its job has asked a person (ADR-0068).
 var forwarders = map[string][]string{
 	"internal/agent/builtin/authority.go": {"gated", "gatedSeat"},
+	"internal/agent/builtin/runask.go":    {"submitGate"},
 }
 
 // EVERY TOOL IS CALLED THROUGH tools.Invoke (ADR-0059): a tool's Call or
