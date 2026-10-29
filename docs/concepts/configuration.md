@@ -1360,6 +1360,20 @@ Every write this surface logs — `config_revision_written`, `secret_written`,
 `backup_taken`, `retention_gate` and the rest — carries the same pair as `by`
 and `operator`.
 
+A write to the config, the secrets or a model that is refused with a `4xx`
+(a stale `If-Match`, a validation problem, a missing step-up, a grant the
+caller does not hold) logs one `config_write_refused` at INFO, on the
+`api.config`, `api.secrets` or `api.llm` logger: `route` (the mounted pattern,
+such as `PUT /secrets/{name}`, never the path, which would name the secret),
+`method`, `status`, `code` (the problem's code from the answer's `error`),
+`by`, `kind`, `operator`, `base_revision` (the `If-Match` written against),
+`dry_run` and `request_id`. It never carries a value, a secret's name or the
+problem's detail. INFO rather than WARNING because a refusal is the engine
+working as meant: a stale tab or an expired step-up refuses routinely. Each
+write answers an `X-Request-Id` header, the caller's own where it sent one
+(a printable token of at most 128 bytes) and a minted UUID where not, so a
+refusal a user reports can be found in the log by it.
+
 See the [API endpoints reference](../reference/api-endpoints.md#config--live-config-management-auth-gated) for the per-route auth + status semantics.
 
 ### Managed configuration
