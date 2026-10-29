@@ -146,7 +146,7 @@ func (l boxLayout) workspace() string { return filepath.Join(l.home(), Workspace
 func (l boxLayout) tmp() string { return filepath.Join(l.home(), ".tmp") }
 
 // meta is the box's own .crewlet/, where its runner's markers, reports and
-// shim live — the box's side, never a record.
+// bin directory live: the box's side, never a record.
 func (l boxLayout) meta() string { return filepath.Join(l.home(), ".crewlet") }
 
 // metaName is [boxLayout.meta] as a name in the home.
@@ -861,8 +861,8 @@ func signalJob(l boxLayout, what string, send func(pid int) error) bool {
 type LocalOptions struct {
 	// Placement is Direct (default) or Container. It is the ONE thing that
 	// differs between the two local cells, which is why one backend serves
-	// both: everything else — the box root, the reap, the process group,
-	// the ask shim — is identical.
+	// both: everything else (the box root, the reap, the process group,
+	// the box's bin directory) is identical.
 	Placement Placement
 
 	// StateDir is where boxes are created: [BoxRoot] of it.

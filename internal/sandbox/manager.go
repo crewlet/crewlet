@@ -490,7 +490,7 @@ func (m *Manager) discard(ctx context.Context, box Sandbox) {
 
 // Reconnect reattaches to an existing (possibly paused) box: Connect
 // auto-resumes a paused one. No re-Install and no setup re-apply — the box
-// already carries the ask shim, the work dir and the launch's provisioning —
+// already carries its bin directory, the work dir and the launch's provisioning,
 // which is why a box is only ever reattached for the CLI it was installed for.
 func (m *Manager) Reconnect(ctx context.Context, placement Placement, sandboxID, codingAgent string) (Sandbox, Runner, error) {
 	runner, err := m.RunnerFor(codingAgent)

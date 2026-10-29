@@ -420,8 +420,18 @@ func jobFinished(_ *testing.T, rig *coordRig) {
 }
 
 // jobAsks is the job that stopped to ask a person something.
-func jobAsks(_ *testing.T, rig *coordRig) {
-	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
+//
+// ASKED AS A JOB ASKS, through the store and under the launch the row holds,
+// whatever status the matrix placed the run in: only a running job's ask is
+// recorded, and a row placed past it refuses one, as it refuses a call that
+// outlived its job. The completion then collects whatever the row holds.
+func jobAsks(t *testing.T, rig *coordRig) {
+	t.Helper()
+	run := rig.get("t1")
+	if _, err := rig.pending.RecordAsk(t.Context(), "t1", run.LaunchID, whichBranch()); err != nil {
+		t.Fatalf("RecordAsk: %v", err)
+	}
+	rig.runner.Finish(Result{})
 }
 
 // collectFails is the box that died between finishing and being read back.
@@ -883,6 +893,13 @@ func (s *refusingStore) AppendBridgeCall(ctx context.Context, turnID string, a B
 		return false, errRefusedCall
 	}
 	return s.inner.AppendBridgeCall(ctx, turnID, a)
+}
+
+func (s *refusingStore) RecordAsk(ctx context.Context, turnID, launch string, ask Ask) (AskOutcome, error) {
+	if s.called("RecordAsk") {
+		return "", errRefusedCall
+	}
+	return s.inner.RecordAsk(ctx, turnID, launch, ask)
 }
 
 func (s *refusingStore) ListActive(ctx context.Context) ([]PendingRun, error) {

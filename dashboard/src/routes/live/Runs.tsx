@@ -72,7 +72,7 @@ import { WITHHELD_WHY, WITHHELD_WORDS, questionWithheld } from "~/lib/access.ts"
 import { useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg, nameOfIn, useSeatBadgeOf, type NameOf } from "~/lib/seats.ts";
-import { RUNS_POLL_MS } from "~/lib/runs.ts";
+import { RUNS_POLL_MS, runAsk } from "~/lib/runs.ts";
 import { deliveredLine, fromPhaseEvent, type PhaseRecord } from "~/lib/phases.ts";
 import { AnswerRunButton } from "~/components/writes.tsx";
 import { LiveOutput } from "./trace/Waterfall.tsx";
@@ -319,7 +319,7 @@ export function AwaitingBanner({
     <Callout variant="warning" icon={<CircleQuestionMarkGlyph size="md" />}>
       <span className="col gap-2 run-awaiting">
         <strong>
-          {run.question ||
+          {runAsk(run).title ||
             (questionWithheld(run)
               ? "Waiting on a question you can’t see."
               : "The run asked a question.")}
@@ -343,7 +343,7 @@ export function AwaitingBanner({
             : ""}
         </span>
         <span className="row gap-2">
-          <AnswerRunButton turnId={run.turn_id} seat={seat} question={run.question ?? ""} />
+          <AnswerRunButton run={run} seat={seat} />
         </span>
       </span>
     </Callout>

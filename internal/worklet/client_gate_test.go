@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/clientsource"
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -282,7 +283,7 @@ func TestTheDashboardBoundsWorkletTextAtTheEnginesCaps(t *testing.T) {
 		"TASK_TITLE_MAX_BYTES":        worklet.MaxTitle,
 		"TASK_BODY_MAX_BYTES":         worklet.MaxBody,
 		"VIEW_NAME_MAX_BYTES":         worklet.MaxViewName,
-		"DECISION_QUESTION_MAX_BYTES": worklet.MaxDecisionQuestion,
+		"DECISION_QUESTION_MAX_BYTES": decision.MaxQuestion,
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {

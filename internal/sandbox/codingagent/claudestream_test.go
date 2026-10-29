@@ -364,8 +364,8 @@ func TestAClaudeRunInARealBoxIsCollectedFromItsStream(t *testing.T) {
 	}
 	p := codingagent.PathsFor(box)
 
-	// The stand-in sits in the shim directory the wrapper puts first on
-	// PATH, so `claude` resolves to it. It exits 3 AFTER printing a
+	// The stand-in sits in the box's own bin directory, which the wrapper
+	// puts first on PATH, so `claude` resolves to it. It exits 3 AFTER printing a
 	// successful result: the status recorded must be its own, not the
 	// copy's.
 	stream := strings.Join(claudeRunStream, "\n") + "\n"

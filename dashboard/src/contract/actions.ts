@@ -165,7 +165,10 @@ export const ACTIONS = {
     // A PARKED CODING RUN ANSWERED BY ITS TURN. It lands on the seat's
     // inbox rather than in a log a question reads, so it raises no floor;
     // the run's record moves when the node holding the seat resumes it.
-    args: ["turn_id", "answer"],
+    //
+    // A RUN THAT ASKED A PERSON TO CHOOSE is answered with one of its options
+    // (`choice`), words (`answer`), or both: a choice with a note.
+    args: ["turn_id", "choice", "answer"],
     domain: null,
     refreshes: ["sandbox_runs", "decisions"],
     scope: "person",

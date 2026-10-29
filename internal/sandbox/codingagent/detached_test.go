@@ -45,32 +45,12 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 	p := codingagent.PathsFor(b)
 	for _, path := range []string{
 		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(),
-		p.Ask(), p.MCPConfig(), p.Findings(), p.BinDir(), p.AskShim(),
+		p.MCPConfig(), p.Findings(), p.BinDir(),
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(),
 	} {
 		if !strings.HasPrefix(path, b.Home()+"/") {
 			t.Fatalf("%q is not under the box home %q", path, b.Home())
 		}
-	}
-}
-
-// The shim goes under the box, not a system directory: a local backend runs as
-// an unprivileged user and two boxes would overwrite each other there.
-func TestTheAskShimLivesInTheBoxNotASystemPath(t *testing.T) {
-	t.Parallel()
-	runner := codingagent.NewClaudeCode()
-	b := box(t, runner)
-	p := paths(b)
-
-	shim, err := b.ReadFile(t.Context(), p.AskShim())
-	if err != nil || len(shim) == 0 {
-		t.Fatalf("the ask shim was not installed: %v", err)
-	}
-	if strings.HasPrefix(p.AskShim(), "/usr/") {
-		t.Fatalf("the shim was installed at %q", p.AskShim())
-	}
-	if !strings.Contains(string(shim), p.Ask()) {
-		t.Fatalf("the shim does not write to this box's ask path:\n%s", shim)
 	}
 }
 
@@ -118,15 +98,15 @@ func TestStartLaunchesDetachedAndWritesBothMarkers(t *testing.T) {
 	}
 }
 
-// The brief's `crewlet-ask` instruction only resolves if the shim directory is
-// on the agent's PATH.
-func TestTheShimDirectoryIsOnTheAgentsPath(t *testing.T) {
+// An executable a setup step installs in the box's own bin directory only
+// resolves ahead of the image's if that directory is first on the agent's PATH.
+func TestTheBoxsBinDirectoryIsOnTheAgentsPath(t *testing.T) {
 	t.Parallel()
 	runner := codingagent.NewClaudeCode()
 	b := box(t, runner)
 	script := startAndScript(t, runner, b, sandbox.RunRequest{Brief: "fix it"})
 	if !strings.Contains(script, paths(b).BinDir()) || !strings.Contains(script, `:"$PATH"`) {
-		t.Fatalf("the shim directory is not on PATH:\n%s", script)
+		t.Fatalf("the box's bin directory is not on PATH:\n%s", script)
 	}
 }
 
@@ -180,7 +160,7 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 		t.Fatal("the prior run's artefacts were never cleared")
 	}
 	for _, want := range []string{
-		p.Done(), p.ExitCode(), p.Result(), p.Stream(), p.Findings(), p.Ask(),
+		p.Done(), p.ExitCode(), p.Result(), p.Stream(), p.Findings(),
 		// The previous run's instructions, which are not this run's — its
 		// hooks name a bridge session its end closed.
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig(),
@@ -454,7 +434,6 @@ func TestEverythingCollectedIsRedacted(t *testing.T) {
 	secret := "ghp_" + strings.Repeat("b", 36)
 	b.Put(p.Findings(), "cloned with "+secret+"\nDelivered: "+secret)
 	b.Put(p.Err(), "git clone https://"+secret+"@example.com/acme/api")
-	b.Put(p.Ask(), `{"question":"is `+secret+` right?","to":"requester"}`)
 
 	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
 	if err != nil {
@@ -464,70 +443,12 @@ func TestEverythingCollectedIsRedacted(t *testing.T) {
 		t.Fatalf("refs = %q, want the one the report named", res.DeliveredRefs)
 	}
 	for name, field := range map[string]string{
-		"text": res.Text, "transcript": res.Transcript,
-		"error": res.Error, "question": res.Question,
+		"text": res.Text, "transcript": res.Transcript, "error": res.Error,
 		"delivered ref": res.DeliveredRefs[0],
 	} {
 		if strings.Contains(field, secret) {
 			t.Fatalf("a credential survived in %s: %q", name, field)
 		}
-	}
-}
-
-func TestARecordedQuestionSurfacesAsNeedingInput(t *testing.T) {
-	t.Parallel()
-	runner := codingagent.NewClaudeCode()
-	b := box(t, runner)
-	p := paths(b)
-	b.Put(p.Findings(), "Outcome: blocked")
-	b.Put(p.Ask(), `{"question":"which branch should I target?","to":"team"}`)
-
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	if !res.NeedsInput {
-		t.Fatal("a recorded question did not park the run")
-	}
-	if res.Question != "which branch should I target?" || res.AskTo != "team" {
-		t.Fatalf("question = %q, to = %q", res.Question, res.AskTo)
-	}
-}
-
-// A question with no audience is still a question.
-func TestAQuestionWithNoAudienceDefaultsToTheRequester(t *testing.T) {
-	t.Parallel()
-	runner := codingagent.NewClaudeCode()
-	b := box(t, runner)
-	b.Put(paths(b).Ask(), `{"question":"which branch?"}`)
-
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	if !res.NeedsInput || res.AskTo != "requester" {
-		t.Fatalf("NeedsInput = %v, AskTo = %q", res.NeedsInput, res.AskTo)
-	}
-}
-
-// A malformed signal must not lose the result the run did produce.
-func TestAMalformedAskDoesNotLoseTheResult(t *testing.T) {
-	t.Parallel()
-	runner := codingagent.NewClaudeCode()
-	b := box(t, runner)
-	p := paths(b)
-	b.Put(p.Findings(), "Outcome: succeeded")
-	b.Put(p.Ask(), "{not json")
-
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	if res.NeedsInput {
-		t.Fatal("an unreadable signal parked the run")
-	}
-	if !strings.Contains(res.Text, "succeeded") {
-		t.Fatalf("the result was lost: %q", res.Text)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/auxspend"
@@ -162,8 +163,8 @@ func TestABridgeSessionWithNoMeterSendsNoSpend(t *testing.T) {
 // refused submission is no end, and one its job no longer takes names a job
 // that is over.
 //
-// Mutation: nudge on every recorded call, on a refused submission, or on one
-// the row did not take, and this goes red.
+// Mutation: nudge on every recorded call, on a refused submission or ask, or
+// on one the row did not take, and this goes red.
 func TestARecordedSubmissionTellsTheRunsWaiterToLookNow(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -176,6 +177,11 @@ func TestARecordedSubmissionTellsTheRunsWaiterToLookNow(t *testing.T) {
 		{"a submission the gate refused", "launch-1", tools.Call{Name: runner.SubmitWorkTool, Failed: true}, false},
 		{"any other call", "launch-1", tools.Call{Name: "read_page"}, false},
 		{"a submission its job no longer takes", "launch-0", tools.Call{Name: runner.SubmitWorkTool}, false},
+		// AN ASK ENDS THE RUN AS A SUBMISSION DOES (ADR-0068), and one the
+		// tool refused (malformed, its store unreachable, or its job moved
+		// on) ends nothing: the run was told so and goes on.
+		{"a recorded ask", "launch-1", tools.Call{Name: builtin.AskAndWaitTool}, true},
+		{"an ask the tool refused", "launch-1", tools.Call{Name: builtin.AskAndWaitTool, Failed: true}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

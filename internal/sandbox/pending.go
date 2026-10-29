@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
@@ -812,15 +813,24 @@ type PendingRun struct {
 
 	// Branch is the pushed WIP branch: the durable half of the work, and
 	// what a re-seeded run starts from when its snapshot is gone. It is the
-	// branch the run's ask recorded ([Result.WIPBranch]), held to
-	// [MaxBranchBytes] and to a name git accepts, and empty when the ask
-	// could not say — never one of the refs the run delivered, which are a
+	// branch the run's ask named ([Ask.Branch]), held to [MaxBranchBytes]
+	// and to a name git accepts, and empty when the ask named none: never one of the refs the run delivered, which are a
 	// pull request's URL as often as a branch.
 	Branch    string `json:"branch"`
 	SessionID string `json:"session_id"`
 
-	Question string `json:"question"`
-	Audience string `json:"audience"`
+	// Question is what the job the row holds asked a person, in one
+	// sentence, and Audience who it put it to, as the run wrote it; both
+	// empty on a job that asked nothing. QuestionContext is the ask's
+	// Markdown context, and Decision the choice it asks for, nil for an
+	// open question. Written together, with [PendingRun.Branch], by
+	// [PendingStore.RecordAsk], and cleared together when the next job
+	// opens; the branch stays for the job that carries the work on, and
+	// the next ask writes it again. See [Ask].
+	Question        string             `json:"question"`
+	QuestionContext string             `json:"question_context,omitempty"`
+	Decision        *decision.Decision `json:"decision,omitempty"`
+	Audience        string             `json:"audience"`
 
 	// ParkedInputTokens and ParkedOutputTokens are what the job that
 	// asked the question cost, recorded with the question.
@@ -1680,6 +1690,24 @@ type PendingStore interface {
 	// fail the box's call over it.
 	AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error)
 
+	// RecordAsk records the question job `launch` asked a person through its
+	// bridge (ADR-0068) onto the fields a parked question is read from
+	// ([PendingRun.Question], [PendingRun.QuestionContext],
+	// [PendingRun.Decision], [PendingRun.Audience], [PendingRun.Branch]),
+	// as [Ask.Redacted] has it. The run is parked on it when its CLI ends
+	// and the job is collected.
+	//
+	// PINNED TO THE JOB AND TO ITS RUNNING, like a bridged call: recorded
+	// only while the row holds that job launching or running
+	// ([AskNotRunning] otherwise), so a call that outlived its job never
+	// parks the next one, and a job already claimed by its collection is
+	// not changed under it. ONE QUESTION PER JOB ([AskAlreadyAsked]),
+	// because one answer resumes it; the first stands.
+	//
+	// The ask must be valid ([Ask.Validate]); one that is not is an error,
+	// because the tool that writes it has already refused it to the run.
+	RecordAsk(ctx context.Context, turnID, launch string, ask Ask) (AskOutcome, error)
+
 	// ListActive returns every run that still owns engine-side state.
 	ListActive(ctx context.Context) ([]PendingRun, error)
 
@@ -1997,16 +2025,10 @@ func (c ConversationRef) preferred(a, b PendingRun) bool {
 	return a.TurnID > b.TurnID
 }
 
-// Clarification is what a parked run is waiting for.
+// Clarification is what parking a run on the question its job asked records
+// beside it. The question itself is on the row already, written by the ask
+// ([PendingStore.RecordAsk]).
 type Clarification struct {
-	Question string
-	// Audience is who should answer: "requester", "team", "manager", or a
-	// handle. Carried rather than derived, because the coding agent chose
-	// it and the engine has no better information about who knows.
-	Audience string
-	// Branch is the WIP pushed before parking — the durable half of the work
-	// while the question waits — as the ask recorded it ([Result.WIPBranch]).
-	Branch    string
 	SessionID string
 
 	// InputTokens and OutputTokens are what the job that asked cost,

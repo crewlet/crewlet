@@ -159,6 +159,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AParkedJobsCondensationIsKeptForItsAnswer", testAParkedJobsCondensationIsKeptForItsAnswer},
 	}
 	cases = append(cases, noteCases...)
+	cases = append(cases, askCases...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -815,7 +816,7 @@ func testAClaimReportsWhereItCameFrom(t *testing.T, s sandbox.PendingStore) {
 	// does not mean "was parked".
 	mustLaunched(t, s, run("t1"))
 	if err := s.MarkAwaiting(t.Context(), "t1",
-		sandbox.Clarification{Question: "which branch?", Audience: "requester", AskedAt: time.Now().UTC()}); err != nil {
+		sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
 	got, won, err := s.ClaimForResume(t.Context(), "t1", answerTo(t, s, "t1"), sandbox.Fence{})
@@ -907,7 +908,7 @@ func testAFinishedRunIsNotRecreatedByALateWrite(t *testing.T, s sandbox.PendingS
 		"MarkBoxPaused": func() error { return s.MarkBoxPaused(ctx, "t1", base) },
 		"ReleaseBox":    func() error { return s.ReleaseBox(ctx, "t1") },
 		"MarkAwaiting": func() error {
-			return s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "still there?", AskedAt: time.Now().UTC()})
+			return s.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()})
 		},
 		"MarkSuspended": func() error {
 			_, err := s.MarkSuspended(ctx, "t1", suspension())
@@ -1114,7 +1115,7 @@ func testADecidedRunTakesNoOtherWrite(t *testing.T, s sandbox.PendingStore) {
 		},
 		"AttachSandbox": func() error { return s.AttachSandbox(ctx, "t1", sandbox.BoxRef{SandboxID: "box-2"}, sandbox.Fence{}) },
 		"MarkAwaiting": func() error {
-			return s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "still there?", AskedAt: time.Now().UTC()})
+			return s.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()})
 		},
 		"SetStatus": func() error { return s.SetStatus(ctx, "t1", sandbox.StatusRunning, sandbox.Fence{}) },
 		// ALOUD, because the park is the second half of a launch the
@@ -1467,7 +1468,7 @@ func testACompletionDoesNotClaimAParkedRun(t *testing.T, s sandbox.PendingStore)
 	// it. A completion that finds it there is a duplicate of the one that
 	// parked it.
 	mustLaunched(t, s, run("t1"))
-	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{Question: "which branch?", AskedAt: time.Now().UTC()}); err != nil {
+	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
 	if _, won, err := s.ClaimForResume(t.Context(), "t1", completionOf(t, s, "t1"), sandbox.Fence{}); err != nil || won {
@@ -1600,7 +1601,8 @@ func testAReleaseHandsTheClaimBackWhereItFoundIt(t *testing.T, s sandbox.Pending
 	mustClaim(t, s, "t1")
 
 	mustLaunched(t, s, run("t2"))
-	if err := s.MarkAwaiting(t.Context(), "t2", sandbox.Clarification{Question: "which branch?", AskedAt: time.Now().UTC()}); err != nil {
+	Ask(t, s, "t2", sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	if err := s.MarkAwaiting(t.Context(), "t2", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
 	answered, won, err := s.ClaimForResume(t.Context(), "t2", answerTo(t, s, "t2"), sandbox.Fence{})
@@ -1896,7 +1898,7 @@ func testOnlyALaunchClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {
 			return s.SetStatus(ctx, "t1", sandbox.StatusRunning, sandbox.Fence{})
 		}},
 		{"park on a question", func() error {
-			return s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "which branch?", AskedAt: time.Now().UTC()})
+			return s.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()})
 		}},
 		{"expire the pause", func() error {
 			_, err := s.ExpirePause(ctx, "t1")
@@ -1934,10 +1936,11 @@ func testParkingCarriesTheBranch(t *testing.T, s sandbox.PendingStore) {
 	// days later loses nothing a re-seed cannot recover. A question parked
 	// over unpushed work is a question whose answer arrives to an empty box.
 	mustLaunched(t, s, run("t1"))
+	Ask(t, s, "t1", sandbox.Ask{Question: "which base branch?", To: sandbox.AskToRequester,
+		Branch: "wip/swe/t1"})
 	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
-		Question: "which base branch?", Audience: "requester",
-		Branch: "wip/swe/t1", SessionID: "sess-1",
-		AskedAt: time.Now().UTC(),
+		SessionID: "sess-1",
+		AskedAt:   time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
@@ -1955,14 +1958,14 @@ func testParkingCarriesTheBranch(t *testing.T, s sandbox.PendingStore) {
 func testAQuestionIsParkedWithItsAnchor(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	mustLaunched(t, s, run("t1"))
-	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "which branch?"}); err == nil {
+	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{}); err == nil {
 		t.Fatal("a park with no instant the question was asked at was accepted")
 	}
 	if got := mustGet(t, s, "t1"); got.Status == sandbox.StatusAwaiting || got.Question != "" {
 		t.Fatalf("run %q asking %q, want the refused park to have written nothing", got.Status, got.Question)
 	}
 	asked := time.Now().UTC().Truncate(time.Microsecond)
-	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "which branch?", AskedAt: asked}); err != nil {
+	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: asked}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusAwaiting || !got.AskedAt.Equal(asked) {
@@ -2252,8 +2255,9 @@ func testAnAnswerFindsTheRunThatAsked(t *testing.T, s sandbox.PendingStore) {
 	mustLaunched(t, s, first)
 	mustLaunched(t, s, second)
 	for _, id := range []string{"t1", "t2"} {
+		Ask(t, s, id, sandbox.Ask{Question: "?" + id, To: sandbox.AskToRequester})
 		if err := s.MarkAwaiting(t.Context(), id,
-			sandbox.Clarification{Question: "?" + id, AskedAt: time.Now().UTC()}); err != nil {
+			sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 			t.Fatalf("park %s: %v", id, err)
 		}
 	}
@@ -2390,7 +2394,7 @@ func testAnAnswerWithNoConversationMatchesNothing(t *testing.T, s sandbox.Pendin
 	// answer to its question.
 	mustLaunched(t, s, run("t1"))
 	if err := s.MarkAwaiting(t.Context(), "t1",
-		sandbox.Clarification{Question: "?", AskedAt: time.Now().UTC()}); err != nil {
+		sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
 	if _, ok, _ := findAwaiting(t.Context(), s, "swe",
@@ -2587,7 +2591,8 @@ func testAClaimedAnswerIsNotExpired(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-// park moves a seeded run to awaiting_clarification with a box attached.
+// park has a seeded run ask a question and moves it to awaiting_clarification
+// with a box attached.
 func park(t *testing.T, s sandbox.PendingStore, turnID string) {
 	t.Helper()
 	ctx := t.Context()
@@ -2596,13 +2601,12 @@ func park(t *testing.T, s sandbox.PendingStore, turnID string) {
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
-	if err := s.MarkAwaiting(ctx, turnID, sandbox.Clarification{
-		// The branch is what the answer re-seeds from once the box is
-		// reclaimed, so a parked run without one is not a realistic
-		// starting point for anything the reaper does.
-		Question: "which branch?", Audience: "requester", Branch: "wip/" + turnID,
-		AskedAt: time.Now().UTC(),
-	}); err != nil {
+	// The branch is what the answer re-seeds from once the box is
+	// reclaimed, so a parked run without one is not a realistic starting
+	// point for anything the reaper does.
+	Ask(t, s, turnID, sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester,
+		Branch: "wip/" + turnID})
+	if err := s.MarkAwaiting(ctx, turnID, sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 }
@@ -2985,7 +2989,7 @@ func testAParkedJobsCondensationIsKeptForItsAnswer(t *testing.T, s sandbox.Pendi
 	mustLaunched(t, s, r)
 	cost := sandbox.AuxTokens{Input: 900, Output: 60, CacheRead: 300}
 	if err := s.MarkAwaiting(ctx, r.TurnID, sandbox.Clarification{
-		Question: "which branch?", AskedAt: base, InputTokens: 5000, OutputTokens: 400, Condensed: cost,
+		AskedAt: base, InputTokens: 5000, OutputTokens: 400, Condensed: cost,
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
@@ -3013,7 +3017,6 @@ func testWorkItemSurvivesParkAndResume(t *testing.T, s sandbox.PendingStore) {
 	mustLaunched(t, s, r)
 	claimed := mustClaim(t, s, "t1")
 	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
-		Question: "which branch?", Audience: "requester",
 		AskedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("park: %v", err)
@@ -3032,17 +3035,17 @@ func testWorkItemSurvivesParkAndResume(t *testing.T, s sandbox.PendingStore) {
 }
 
 func testAParkedRunRecordsWhoItsAudienceIs(t *testing.T, s sandbox.PendingStore) {
-	// THE PARK WRITES WHOM THE QUESTION IS PUT TO, in the same write as the
-	// question — the label alone ("manager") answered nobody's "what is
-	// waiting on me" — and a new job opened on the row takes it away with
-	// the question, because a question that is gone waits on nobody.
+	// THE PARK WRITES WHOM THE QUESTION IS PUT TO, beside the label the ask
+	// recorded: the label alone ("manager") answered nobody's "what is
+	// waiting on me". A new job opened on the row takes both away with the
+	// question, because a question that is gone waits on nobody.
 	mustBeginLaunch(t, s, run("t1"))
 	if ok, err := s.MarkSuspended(t.Context(), "t1", suspension()); err != nil || !ok {
 		t.Fatalf("suspend: %v %v", ok, err)
 	}
+	Ask(t, s, "t1", sandbox.Ask{Question: "which base branch?", To: sandbox.AskToManager})
 	mustClaim(t, s, "t1")
 	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
-		Question: "which base branch?", Audience: "manager",
 		Answerers: sandbox.Audience{Handles: []string{"founder", "cto"}, Fallback: true},
 		AskedAt:   time.Now().UTC(),
 	}); err != nil {
@@ -3058,10 +3061,10 @@ func testAParkedRunRecordsWhoItsAudienceIs(t *testing.T, s sandbox.PendingStore)
 
 	mustBeginLaunch(t, s, run("t1"))
 	again := mustGet(t, s, "t1")
-	if len(again.AudienceHandles) != 0 || again.AudienceFallback {
-		t.Errorf("a new job kept the last question's audience %v (fallback %v) — "+
+	if again.Audience != "" || len(again.AudienceHandles) != 0 || again.AudienceFallback {
+		t.Errorf("a new job kept the last question's audience %q %v (fallback %v): "+
 			"the run would read as waiting on people nobody is asking",
-			again.AudienceHandles, again.AudienceFallback)
+			again.Audience, again.AudienceHandles, again.AudienceFallback)
 	}
 }
 
@@ -3079,7 +3082,7 @@ func testARequesterSurvivesTheLaunchThatRecordsIt(t *testing.T, s sandbox.Pendin
 	if claimed.Requester != "ada" {
 		t.Fatalf("the claim read requester %q, want ada", claimed.Requester)
 	}
-	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{Question: "q", AskedAt: time.Now().UTC()}); err != nil {
+	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
 	if got := mustGet(t, s, "t1"); got.Requester != "ada" {
@@ -3112,7 +3115,7 @@ func testAColleaguesAskSurvivesEveryWriteOfItsTurn(t *testing.T, s sandbox.Pendi
 	}
 	check("the launch", mustGet(t, s, "t1"))
 	check("the claim", mustClaim(t, s, "t1"))
-	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{Question: "q", AskedAt: time.Now().UTC()}); err != nil {
+	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
 	check("the park", mustGet(t, s, "t1"))
@@ -3191,7 +3194,6 @@ func testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem(
 	// resolution the newer build parked with; what it must not drop is the
 	// key it has never heard of, and the item.
 	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
-		Question:  "q",
 		Answerers: sandbox.Audience{Handles: []string{"ada", "grace"}, Fallback: true},
 		AskedAt:   time.Now().UTC(),
 	}); err != nil {
@@ -4276,7 +4278,7 @@ func testANewQuestionForgetsTheLastOnesAnswer(t *testing.T, s sandbox.PendingSto
 	ctx := t.Context()
 	mustLaunched(t, s, run("t1"))
 	asked := base.Add(time.Hour)
-	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "?", AskedAt: asked}); err != nil {
+	if err := s.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: asked}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	if got := mustGet(t, s, "t1"); !got.AskedAt.Equal(asked) {

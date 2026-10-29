@@ -109,6 +109,14 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	if _, err := builtin.Register(c.Tools, deps); err != nil {
 		return err
 	}
+	// THE EXECUTOR RUN'S ASK, over the same tracker and knowledge base
+	// the builtins check a decision's evidence against, and the run's row
+	// through whatever sandbox runtime this node holds when it is called.
+	if tool := builtin.NewAskAndWait(builtin.RunAskDeps{
+		Desk: runAsks{engine: e}, Work: deps.Work, Pages: deps.Pages.Reader,
+	}); tool != nil {
+		c.AskTool = tool
+	}
 	// THE SHARED MCP SERVERS, into the same registry and straight after
 	// the builtins, because this is the surface every seat's is cloned
 	// from. Per-role children are NOT here: they belong to a seat's lease

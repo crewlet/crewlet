@@ -343,7 +343,7 @@ func (e SandboxEntry) For(r Reach) SandboxEntry {
 	out.Task = ""
 	out.BodyWithheld = true
 	if r.Record == "" || !slices.Contains(e.AudienceHandles, r.Record) {
-		out.Question = ""
+		out.Question, out.QuestionContext, out.Decision = "", "", nil
 	}
 	return out
 }

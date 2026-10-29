@@ -16,7 +16,8 @@ type NudgeWhy string
 
 const (
 	// NudgeSubmitted is a run whose work was just submitted over its tool
-	// bridge (`submit_work`): its CLI is about to end its turn and exit, so
+	// bridge (`submit_work`), or whose question was just asked there
+	// (`ask_and_wait`): its CLI is about to end its turn and exit, so
 	// the waiter that drives it polls it now and on a short schedule after
 	// ([nudgeOffsets]) rather than at its next pass.
 	NudgeSubmitted NudgeWhy = "submitted"

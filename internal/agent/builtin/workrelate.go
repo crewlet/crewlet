@@ -454,7 +454,7 @@ func (d WorkDeps) inferOnly(ctx context.Context,
 // whole before it names the rest by id.
 //
 // Eight kibibytes: a structured ask's question is at most
-// [worklet.MaxDecisionQuestion] and always carried, and an ask in prose is
+// [decision.MaxQuestion] and always carried, and an ask in prose is
 // carried whole while they fit — the refusal is read as a tool result, and
 // five questions at their 32 KiB cap would be most of an answer spent on
 // asking which one.

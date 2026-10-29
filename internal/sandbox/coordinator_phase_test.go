@@ -164,13 +164,15 @@ func TestTheTranscriptRidesThePhaseRecordRedacted(t *testing.T) {
 // runtoken opens with, which internal/redact knows. A runner redacts what it
 // collects; this holds the boundary the records leave by, the publish, with a
 // runner that redacted nothing: every record the coordinator publishes for the
-// run — its report, its transcript, its failure, its question, and the answer
-// it resumes the turn with — carries the marker and none of the tokens.
+// run (its report, its transcript, its failure, its question, and the answer
+// it resumes the turn with) carries the marker and none of the tokens. A
+// question is redacted where its ask is recorded ([Ask.Redacted]), so the
+// question's case asks through the store with the tokens in its context.
 //
-// Mutation: skip the publish's redaction of a box's result (runPhase's and
-// park's), and the report's, the failure's and the question's records carry
-// the tokens; drop the run-token rule from internal/redact, and every case
-// does.
+// Mutation: skip the publish's redaction of a box's result (runPhase's), or
+// the ask's where it is recorded, and the report's, the failure's and the
+// question's records carry the tokens; drop the run-token rule from
+// internal/redact, and every case does.
 func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 	t.Parallel()
 	const engine = "https://engine.example.com"
@@ -191,15 +193,15 @@ func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 		t.Fatalf("runtoken.New: %v", err)
 	}
 
-	for name, result := range map[string]func(printed string) Result{
-		"a report": func(printed string) Result {
-			return Result{Success: true, Text: "my setup:\n" + printed, Transcript: "[tool] bash: env\n" + printed}
+	for name, result := range map[string]func(printed string) (Result, *Ask){
+		"a report": func(printed string) (Result, *Ask) {
+			return Result{Success: true, Text: "my setup:\n" + printed, Transcript: "[tool] bash: env\n" + printed}, nil
 		},
-		"a failure": func(printed string) Result {
-			return Result{Error: "the bridge refused me:\n" + printed, Transcript: "[tool] bash: cat .mcp.json\n" + printed}
+		"a failure": func(printed string) (Result, *Ask) {
+			return Result{Error: "the bridge refused me:\n" + printed, Transcript: "[tool] bash: cat .mcp.json\n" + printed}, nil
 		},
-		"a question": func(printed string) Result {
-			return Result{NeedsInput: true, AskTo: "requester", Question: "is this right?\n" + printed}
+		"a question": func(printed string) (Result, *Ask) {
+			return Result{}, &Ask{Question: "is this right?", Context: "my setup:\n" + printed, To: AskToRequester}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -214,7 +216,11 @@ func TestABoxThatPrintsItsTokensPersistsNone(t *testing.T) {
 			}
 			printed := "OTEL_EXPORTER_OTLP_ENDPOINT=" + endpoint + "\n" +
 				`{"mcpServers": {"crewlet": {"type": "http", "url": "` + engine + "/mcp/" + tokens[1] + `"}}}`
-			rig.runner.Finish(result(printed))
+			finished, asked := result(printed)
+			if asked != nil {
+				rig.ask("t1", *asked)
+			}
+			rig.runner.Finish(finished)
 
 			payload, ev := rig.completion("t1")
 			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
@@ -321,10 +327,8 @@ func TestEveryCollectedRunIsPublishedWithItsOutcome(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("asks")
 	rig.coordinator.countRun("swe", StatusRunning)
-	rig.runner.Finish(Result{
-		NeedsInput: true, Question: "which branch?", AskTo: "requester",
-		InputTokens: 300, CostUSD: 0.05,
-	})
+	rig.ask("asks", Ask{Question: "which branch?", To: AskToRequester})
+	rig.runner.Finish(Result{InputTokens: 300, CostUSD: 0.05})
 	payload, ev := rig.completion("asks")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)

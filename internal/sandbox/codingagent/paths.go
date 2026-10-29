@@ -119,8 +119,14 @@ func (p Paths) Done() string { return p.WorkDir() + "/done" }
 // ExitCode is the wrapper's status, surfaced on collect to explain a crash.
 func (p Paths) ExitCode() string { return p.WorkDir() + "/exit_code" }
 
-// Ask is where the crewlet-ask shim drops a question.
-func (p Paths) Ask() string { return p.WorkDir() + "/ask.json" }
+// BinDir is the box's own bin directory, first on the run's PATH
+// ([withBoxBin]): where a setup step installs an executable for the run, a
+// coding CLI among them, without root.
+//
+// Under the box's own home, not a system path: a local backend runs as an
+// unprivileged engine user with no business writing to /usr/local/bin, and two
+// boxes there would overwrite each other's tools.
+func (p Paths) BinDir() string { return p.WorkDir() + "/bin" }
 
 // MCPConfig is where the scoped MCP surface is rendered.
 func (p Paths) MCPConfig() string { return p.WorkDir() + "/mcp.json" }
@@ -182,14 +188,3 @@ func (p Paths) OpenCodeSteerPlugin() string { return p.WorkDir() + "/opencode-st
 // treats its presence as the success signal. Under WorkDir for the same reason
 // the rest is.
 func (p Paths) Findings() string { return p.WorkDir() + "/findings.md" }
-
-// BinDir is where the crewlet-ask shim is installed.
-//
-// Under the box's own home, not a system path: a local backend runs as an
-// unprivileged engine user with no business writing to /usr/local/bin, and two
-// boxes there would overwrite each other's shim. Start prepends this to PATH
-// so the shim resolves exactly as it would from a system directory.
-func (p Paths) BinDir() string { return p.WorkDir() + "/bin" }
-
-// AskShim is the shim's own path.
-func (p Paths) AskShim() string { return p.BinDir() + "/crewlet-ask" }

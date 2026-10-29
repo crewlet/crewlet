@@ -157,7 +157,8 @@ func SandboxRecords(runs []sandbox.PendingRun) []livestate.SandboxRecord {
 			Task:      run.Label,
 			Status:    status,
 			StartedAt: isoOrEmpty(started),
-			Question:  run.Question, Audience: run.Audience,
+			Question:  run.Question, QuestionContext: run.QuestionContext,
+			Decision: run.Decision, Audience: run.Audience,
 			// WHO THE QUESTION IS PUT TO, which only the record knows: a
 			// reader whose own record is among them is shown the
 			// question whatever their reach to the seat that asked —

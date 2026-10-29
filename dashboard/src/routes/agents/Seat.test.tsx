@@ -2476,3 +2476,66 @@ test("a company running no Worklet leaves no empty slot in the seat's bar", asyn
   ).toEqual([]);
   expect(within(bar).queryByRole("button", { name: /^Message/ })).toBeNull();
 });
+
+// A PARKED RUN IS ANSWERED FROM ITS SEAT WITH WHAT IT ASKED WHOLE. The live
+// projection the seat's page draws from carries the question's title alone,
+// so the answer dialog reads the run's durable row for its context and its
+// options: an option chosen without them would answer a question the reader
+// never saw.
+//
+// Mutation: draw the dialog off the live entry alone, and the context and the
+// options are missing; send the option as `answer`, and the write is wrong.
+test("a parked run is answered from its seat with its context and options", async () => {
+  const { store } = mount("#/company/org/seats/swe", {
+    answers: {
+      viewer: { ...OPERATOR, acts: EVERY_ACT },
+      sandbox_runs: {
+        runs: [
+          {
+            turn_id: "t-7",
+            agent_handle: "swe",
+            status: "awaiting_clarification",
+            question: "Which retry ceiling should the client use?",
+            question_context: "The API allows **five** retries.",
+            decision: {
+              question: "Which retry ceiling should the client use?",
+              options: [
+                { id: "three", label: "Three" },
+                { id: "five", label: "Five" },
+              ],
+              recommended: "three",
+              role: "contributor",
+            },
+          },
+        ],
+      },
+    },
+    agents: [WORKING],
+  });
+  act(() =>
+    store.applySandboxes([
+      {
+        turn_id: "t-7",
+        role: "SWE",
+        agent_handle: "swe",
+        agent_id: "a-swe",
+        coding_agent: "claude",
+        sandbox_id: "box-1",
+        status: "awaiting_clarification",
+        started_at: "2026-09-21T09:45:50Z",
+        question: "Which retry ceiling should the client use?",
+      },
+    ]),
+  );
+  await settle();
+  expect(screen.getByText(/A coding run is waiting on a question:/).textContent).toContain(
+    "Which retry ceiling should the client use?",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Answer" }));
+  const dialog = await screen.findByRole("dialog");
+  await settle();
+  expect(dialog.querySelector(".prose strong")?.textContent).toBe("five");
+  fireEvent.click(within(dialog).getByRole("button", { name: /Three/ }));
+  await waitFor(() => expect(posted).toHaveLength(1));
+  expect(posted[0]).toEqual({ tool: "answer_run", args: { turn_id: "t-7", choice: "three" } });
+});

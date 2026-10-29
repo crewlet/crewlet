@@ -114,20 +114,27 @@ func TestAQuestionFromASeatTheChartLostIsPutToNobody(t *testing.T) {
 	}
 }
 
-// THE CODING AGENT IS TOLD HOW TO ASK, WITH NAMES THE PARK RESOLVES. The
-// roster and the manager it is given are handles, so a `--to` copied from
-// either resolves exactly rather than falling back.
+// THE CODING AGENT IS TOLD HOW TO ASK, WITH NAMES THE PARK RESOLVES, AND TO
+// GIVE ITS OPTIONS AS OPTIONS. The roster and the manager it is given are
+// handles, so a `to` copied from either resolves exactly rather than falling
+// back; and a run told only to ask wrote its choices into the question as
+// prose, which a person could not answer with a press.
 func TestTheAskBriefNamesWhomTheParkCanResolve(t *testing.T) {
 	t.Parallel()
 	o := audienceChart(t)
 	seat := o.SeatByHandle("swe")
 	brief := askBrief(o, seat)
-	if !strings.Contains(brief, "crewlet-ask") {
+	if !strings.Contains(brief, "`"+builtin.AskAndWaitTool+"`") {
 		t.Fatalf("the brief does not tell the coding agent how to ask:\n%s", brief)
+	}
+	for _, field := range []string{"`options`", "`recommended`", "`rationale`", "`branch`"} {
+		if !strings.Contains(brief, field) {
+			t.Errorf("the brief does not tell the coding agent to fill %s:\n%s", field, brief)
+		}
 	}
 	// AND THE WAY THAT DOES NOT WAIT: a question the run can go on without
 	// is asked with the seat's own tools and answered in its next turn, so a
-	// run told only of the shim parks — holding its box — on every question.
+	// run told only of the park parks, holding its box, on every question.
 	if !strings.Contains(brief, "`"+builtin.CommentOnWorkTool+"` with `ask`") ||
 		!strings.Contains(brief, runner.SubmitWorkTool) {
 		t.Fatalf("the brief does not tell the coding agent to ask with its tools and "+
@@ -139,7 +146,7 @@ func TestTheAskBriefNamesWhomTheParkCanResolve(t *testing.T) {
 	}
 	for _, name := range []string{"cto", "ada", "qa"} {
 		if got := resolveAudience(o, nil, nil, sandbox.PendingRun{AgentHandle: "swe"}, name); got.Fallback {
-			t.Errorf("a --to %q copied from the brief fell back", name)
+			t.Errorf("a `to` %q copied from the brief fell back", name)
 		}
 	}
 }

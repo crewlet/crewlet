@@ -216,6 +216,12 @@ type Config struct {
 	// a turn on an assembly mistake. See agentrun.go.
 	Launcher AgentLauncher
 
+	// Ask is the tool the executor's run asks a person through and parks
+	// on (`ask_and_wait`, ADR-0068), offered on that run's surface beside
+	// `submit_work`: the two ways the run ends. Nil offers none, which is a
+	// runner built outside an engine.
+	Ask tools.Callable
+
 	// Steer is where the turn's notes from a person wait
 	// (internal/agent/steer): taken at the opening of every run of the
 	// REVIEWER — the turn's own conversation the engine drives — and by the
@@ -1474,6 +1480,17 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 			return nil, fmt.Errorf("runner: %s: %w", ph, err)
 		}
 		active = append([]string{submit.Name()}, active...)
+	}
+	// THE EXECUTOR'S OTHER WAY TO END: parking on a person's answer. Here,
+	// in the funnel the launch and the collection both take, so the surface
+	// a collection rebuilds holds the tool its run called.
+	if ph == phase.Execute && r.cfg.Ask != nil {
+		var err error
+		snapshot, err = snapshot.With(tools.Entry{Tool: r.cfg.Ask, Origin: tools.OriginBuiltin})
+		if err != nil {
+			return nil, fmt.Errorf("runner: %s: %w", ph, err)
+		}
+		active = append(active, r.cfg.Ask.Name())
 	}
 
 	// The discovery pair reaches its surface through a closure, because

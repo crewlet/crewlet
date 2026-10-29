@@ -23,6 +23,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  Button,
   ButtonLink,
   EmptyState,
   IconButton,
@@ -62,11 +63,12 @@ import type { SeatCondition } from "~/lib/decisions.ts";
 import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { LimitRemedy } from "~/components/LimitRemedy.tsx";
 import { AnswerAsk, type AskAnswer } from "~/components/writes.tsx";
+import { AnswerChoices, AnsweredChoices } from "~/components/AnswerChoices.tsx";
 import { TechnicalDetails } from "~/components/common.tsx";
 import { Composer } from "~/components/Composer.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { RUNS_POLL_MS } from "~/lib/runs.ts";
+import { RUNS_POLL_MS, runAsk, runAskTexts } from "~/lib/runs.ts";
 import { answerFate, type GivenAnswer } from "./answerFate.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { addressMark, InertAddress, TokenScope } from "~/components/InlineToken.tsx";
@@ -78,6 +80,7 @@ import type { Attention } from "~/lib/attention.ts";
 import { describeFollowUp, detailItem, itemAddress, labelAfterKey } from "~/lib/work.ts";
 import type {
   AnsweredDecision,
+  AnsweredWorkAsk,
   SandboxRun,
   WorkAskRow,
   WorkDecisionEvidence,
@@ -86,12 +89,13 @@ import type {
 } from "~/protocol/index.ts";
 import {
   answerWords,
+  answeredQuestion,
+  answeredTexts,
   askContext,
   askTexts,
   askQuestion,
   followThrough,
   budgetLine,
-  firstSentence,
   moment,
   noticeNote,
   noticeText,
@@ -276,11 +280,15 @@ function OpenPane({
   return null;
 }
 
-/** "Answered Exact search", where the controls that answered it were. */
+/**
+ * "Answered Exact search (Recommended)", where the controls that answered it
+ * were: an ask's, or a coding run's once the run took it.
+ */
 function answeredWith(answer: AskAnswer): ReactNode {
   return (
     <>
       Answered <strong>{answer.kind === "choice" ? answer.label : `“${answer.text}”`}</strong>
+      {answer.kind === "choice" && answer.recommended && " (Recommended)"}
     </>
   );
 }
@@ -409,18 +417,24 @@ const WAS_ASKED: Readonly<Record<string, string>> = {
 };
 
 /**
- * An answered ask, read in full: the page it was answered on with the buttons
- * replaced by the answer, then what the asker has done with it since, then
- * the conversation.
+ * An answered question, read in full: the page it was answered on with the
+ * buttons replaced by the answer, an ask's or a coding run's alike.
  *
  * WHO ANSWERED IS SAID, because it is not always the reader: a colleague may
  * answer a question put to you, and the line under the answer says so and
  * where to disagree.
  *
+ * AN ASK'S goes on to what the asker has done with it since, then the
+ * conversation, whose first entry is the answer with the option it chose.
  * WHAT HAPPENED NEXT IS FOUR STEPS (asked, answered, picked up, acted on),
  * the last two read from the asker's seat as it is now and from its first
  * record on the task since (`followed_up`). A person who asked has no seat
  * state to read, so their steps stop at the answer.
+ *
+ * A CODING RUN'S has no thread and no record on a task to follow, so the
+ * reading is the run's ask itself: its context, and the options it offered
+ * with the chosen one marked, as `RunPane` draws them once it is answered
+ * there, then the way to the run.
  */
 function AnsweredPane({
   answered,
@@ -434,26 +448,39 @@ function AnsweredPane({
   now: number;
 }) {
   const viewer = useViewer();
-  const agents = useAgents();
-  const ask = answered.ask;
   const words = answerWords(answered, viewer.owner, index);
-  const seat = agents.find((a) => a.handle === ask.asked_by);
-  const follow = followThrough(answered, frame.who?.kind === "agent" ? seat : undefined);
+  const run = "run" in answered ? answered.run : null;
+  const ask = "run" in answered ? null : answered;
+  const decision = run ? run.decision : ask?.ask.decision;
+  const asked = (decision && WAS_ASKED[decision.role]) || "asked you";
   const said =
     words.kind === "resolved" ? null : words.kind === "choice" ? words.said : `“${words.said}”`;
+  const context = run ? runAsk(run).context : "";
   return (
-    <TokenScope texts={askTexts(ask)}>
+    <TokenScope texts={answeredTexts(answered)}>
       <ReadingPane>
         {frame.byline(
           <>
             <strong>{frame.name}</strong>
-            {` ${(ask.decision && WAS_ASKED[ask.decision.role]) || "asked you"}`}
+            {run ? `’s coding run ${asked}` : ` ${asked}`}
             {frame.task && <> on {frame.task}</>}
           </>,
         )}
         <ReadingPaneTitle>
-          {renderTokens(askQuestion(ask), "question", "text", true)}
+          {renderTokens(answeredQuestion(answered), "question", "text", true)}
         </ReadingPaneTitle>
+        {context && (
+          <ReadingPaneLead>
+            {renderMarkdown(context, { ...CHECKED_WORDS, scoped: true })}
+          </ReadingPaneLead>
+        )}
+        {run && decision && (
+          <AnsweredChoices
+            options={decision.options}
+            recommended={decision.recommended}
+            chosen={words.kind === "choice" ? (answered.answer.choice ?? null) : null}
+          />
+        )}
         <ReadingPaneOutcome>
           {`${words.who} ${words.verb}`}
           {said && (
@@ -469,39 +496,79 @@ function AnsweredPane({
             {`${words.who} answered for you at ${moment(answered.answer.at, now)}. Reply below if you see it differently.`}
           </Text>
         )}
-        {follow ? (
-          <ReadingPaneSection label="What happened next">
-            <Stepper
-              label={`What ${frame.name} did with the answer`}
-              orientation="vertical"
-              steps={followSteps(answered, follow, frame.name, words, now, index)}
-              current={
-                follow.state === "acted" ? null : follow.state === "acting" ? "done" : "picked"
-              }
-              tone={follow.state === "held" ? "warning" : "info"}
-              pulse={follow.state === "acting"}
-            />
-          </ReadingPaneSection>
-        ) : null}
-        <Conversation
-          item={frame.address}
-          itemKey={frame.itemKey}
-          of={{ kind: "ask", comment: ask.comment, options: ask.decision?.options ?? [] }}
-          label="Replies to this question"
-          to={frame.name}
-          replyTo={ask.comment}
-          placeholder={`Add to your answer for ${frame.name}. @mention to bring someone in.`}
-          index={index}
-          now={now}
-        />
+        {run && <RunLink turnId={run.turn_id} />}
+        {ask && (
+          <AskFollowThrough answered={ask} frame={frame} words={words} index={index} now={now} />
+        )}
       </ReadingPane>
     </TokenScope>
   );
 }
 
+/** What the asker of an answered ask has done with it since, and the conversation. */
+function AskFollowThrough({
+  answered,
+  frame,
+  words,
+  index,
+  now,
+}: {
+  answered: AnsweredWorkAsk;
+  frame: Frame;
+  words: AnswerWords;
+  index: OrgIndex;
+  now: number;
+}) {
+  const agents = useAgents();
+  const ask = answered.ask;
+  const seat = agents.find((a) => a.handle === ask.asked_by);
+  const follow = followThrough(answered, frame.who?.kind === "agent" ? seat : undefined);
+  return (
+    <>
+      {follow ? (
+        <ReadingPaneSection label="What happened next">
+          <Stepper
+            label={`What ${frame.name} did with the answer`}
+            orientation="vertical"
+            steps={followSteps(answered, follow, frame.name, words, now, index)}
+            current={
+              follow.state === "acted" ? null : follow.state === "acting" ? "done" : "picked"
+            }
+            tone={follow.state === "held" ? "warning" : "info"}
+            pulse={follow.state === "acting"}
+          />
+        </ReadingPaneSection>
+      ) : null}
+      <Conversation
+        item={frame.address}
+        itemKey={frame.itemKey}
+        of={{ kind: "ask", comment: ask.comment, options: ask.decision?.options ?? [] }}
+        label="Replies to this question"
+        to={frame.name}
+        replyTo={ask.comment}
+        placeholder={`Add to your answer for ${frame.name}. @mention to bring someone in.`}
+        index={index}
+        now={now}
+      />
+    </>
+  );
+}
+
+/** The way from a coding run's question to the run, after what is said of its hold. */
+function RunLink({ turnId, hold = "" }: { turnId: string; hold?: string }) {
+  return (
+    <Text as="p" variant="caption">
+      {hold ? `${hold}. ` : ""}
+      <Link href={href(["live", "runs", turnId])} size="inherit">
+        Open the run
+      </Link>
+    </Text>
+  );
+}
+
 /** The four steps from the question to the work, as the pane draws them. */
 function followSteps(
-  answered: AnsweredDecision,
+  answered: AnsweredWorkAsk,
   follow: FollowThrough,
   asker: string,
   words: AnswerWords,
@@ -715,6 +782,15 @@ function Conversation({
   );
 }
 
+/**
+ * A coding run parked on a question, read as an ask is: its question as the
+ * title, its context as Markdown, the run's recommendation with the evidence
+ * it cites, then the answer. A run that asked to choose is answered with one
+ * press of an option (`answer_run{turn_id, choice}`), the recommended one
+ * first and filled, through the same buttons an ask's options are
+ * (`AnswerChoices`); "Something else", and an open question from the start,
+ * answers in words (`answer_run{turn_id, answer}`).
+ */
 function RunPane({
   run,
   frame,
@@ -728,6 +804,10 @@ function RunPane({
 }) {
   const write = useAct("answer_run");
   const [text, setText] = useState("");
+  // "SOMETHING ELSE" OPENED THE FIELD in the options' place.
+  const [open, setOpen] = useState(false);
+  // THE OPTION BEING SENT, which its button says while the write is out.
+  const [chosen, setChosen] = useState<string | null>(null);
   // THE ANSWER THE ENGINE ACCEPTED, and what it said back about it: the
   // question it answers and the answer's own id. `pending` is all the press
   // can say; the run's own record says the rest (see `answerFate`).
@@ -746,13 +826,28 @@ function RunPane({
   const seenTaken = useRef(false);
   const fate = given ? answerFate(given, record, runs.data !== undefined, seenTaken.current) : null;
   if (fate === "recorded" || fate === "taken") seenTaken.current = true;
-  const question = run.question ?? "";
+  const ask = runAsk(run);
+  const decision = ask.decision;
+  const options = decision?.options ?? [];
+  const recommended = options.find((o) => o.id === decision?.recommended);
   // A QUESTION THIS READER CAN'T SEE IS NOT ASKED OF THEM: the answer form
   // asked for an answer to a question it never showed.
   const hidden = questionWithheld(run);
-  const heading =
-    firstSentence(question) ||
-    (hidden ? "This run is waiting on a question you can’t see." : "The run paused on a question");
+  // THE RUN'S OWN TASK AND THE RUN ITSELF ARE NOT EVIDENCE of anything: the
+  // byline names the one and the line at the end opens the other.
+  const evidence = (decision?.evidence ?? []).filter(
+    (ev) =>
+      !(ev.kind === "task" && (ev.ref === run.work_item?.id || ev.ref === run.work_item?.key)) &&
+      !(ev.kind === "run" && ev.ref === run.turn_id),
+  );
+  const chips = evidence.length > 0 ? <Evidence list={evidence} /> : null;
+  // THE REASONING SITS WITH WHAT IT RECOMMENDS, and goes once an answer is
+  // sent: what is left to read then is the answer.
+  const reasoning =
+    !given && recommended && decision?.rationale
+      ? { label: recommended.label, text: decision.rationale }
+      : null;
+  const inWords = options.length === 0 || open;
   const hold = holdLine(run, now);
   const blocked = text.trim() ? undefined : "Write the answer first.";
   // ONCE PER ANSWER: telling the screen redraws it, and the screen's
@@ -763,15 +858,14 @@ function RunPane({
     if (!given || fate === null || fate === "sent") return;
     if (told.current === given.answerId + fate) return;
     told.current = given.answerId + fate;
-    const answer: AskAnswer = { kind: "reply", text: given.text };
     if (fate === "recorded") {
       // RECORDED ON THE RUN, its resume waiting for the seat: answered, and
       // kept open, saying what the seat is doing first.
-      onSettled("Answered", answer, true);
+      onSettled("Answered", given.answer, true);
       return;
     }
     if (fate === "taken") {
-      onSettled("Answered", answer);
+      onSettled("Answered", given.answer);
       return;
     }
     if (fate === "ended") {
@@ -804,11 +898,11 @@ function RunPane({
       (r.status === "launching" || r.status === "running" || r.status === "resumed"),
   );
 
-  const send = async () => {
-    if (!pressable(write, blocked)) return;
-    const answer = text.trim();
+  // ONE SEND for a choice and for words: the press differs only in what it
+  // carries, and the answer's fate is read the same way after it.
+  const send = async (args: { choice: string } | { answer: string }, said: AskAnswer) => {
     const result = await write.run(
-      { turn_id: run.turn_id, answer },
+      { turn_id: run.turn_id, ...args },
       { done: `Sent your answer to ${frame.name}’s coding run` },
     );
     // THE RECORD IS ASKED AGAIN by the refusal itself: already_answered is a
@@ -821,99 +915,179 @@ function RunPane({
       setUnused(null);
       seenTaken.current = false;
       setGiven({
-        text: answer,
+        answer: said,
         launchId: typeof receipt.launch_id === "string" ? receipt.launch_id : (run.launch_id ?? ""),
         answerId: typeof receipt.answer_id === "string" ? receipt.answer_id : "",
       });
       // SENT, NOT ANSWERED: the row stays open, marked as sent, until the
       // run's record says the answer was taken or why it was not.
-      onSettled("Sent", { kind: "reply", text: answer }, true);
+      onSettled("Sent", said, true);
     }
   };
+  const sendWords = () => {
+    if (!pressable(write, blocked)) return;
+    const answer = text.trim();
+    void send({ answer }, { kind: "reply", text: answer });
+  };
+  const choose = (choice: string) => {
+    const option = options.find((o) => o.id === choice);
+    if (!option) return;
+    setChosen(choice);
+    void send(
+      { choice },
+      {
+        kind: "choice",
+        id: option.id,
+        label: option.label,
+        recommended: option.id === decision?.recommended,
+      },
+    );
+  };
   return (
-    <ReadingPane>
-      {frame.byline(
-        <>
-          <strong>{frame.name}</strong>
-          {"’s coding run"}
-          {frame.task && <> on {frame.task}</>}
-        </>,
-      )}
-      <ReadingPaneTitle>{heading}</ReadingPaneTitle>
-      {/* THE RUN'S OWN WORDS, verbatim, where the heading is only their start. */}
-      {question.trim() !== heading && <ReadingPaneQuote verbatim>{question}</ReadingPaneQuote>}
-      {given !== null ? (
-        // PENDING UNTIL THE RUN TOOK IT: sent, recorded or ended is never the
-        // success check a used answer gets.
-        <ReadingPaneOutcome tone={fate === "taken" ? "done" : "pending"}>
-          {fate === "taken" ? (
-            <>
-              Answered <strong>{`“${given.text}”`}</strong>
-            </>
-          ) : fate === "recorded" ? (
-            <>
-              Answer recorded.{" "}
-              {busyOn ? busyLine(busyOn, frame.name) : `${frame.name}’s run picks it up next.`}
-            </>
-          ) : fate === "ended" ? (
-            <>Answer sent. {frame.name}’s run has ended.</>
-          ) : (
-            <>Answer sent. Waiting for {frame.name}’s run to take it.</>
-          )}
-        </ReadingPaneOutcome>
-      ) : superseded ? (
-        <Stack gap={2}>
-          {unused && <RefusalStrip onDismiss={() => setUnused(null)}>{unused}</RefusalStrip>}
-          {record?.answered_at && (
-            <Text as="p" variant="caption">
-              {answeredAt(record, now)}
-            </Text>
-          )}
-        </Stack>
-      ) : hidden ? (
-        <Text as="p" variant="body">
-          Its lead or an admin can answer it.
-        </Text>
-      ) : (
-        <Stack gap={2}>
-          {unused && <RefusalStrip onDismiss={() => setUnused(null)}>{unused}</RefusalStrip>}
-          <Field
-            label="Your answer to the run"
-            value={text}
-            onChange={setText}
-            onSubmit={() => void send()}
-            placeholder="Answer as the coding agent will read it"
-            disabled={!write.access.can || write.busy}
-            actions={
-              <WriteButton
-                write={write}
-                size="small"
-                variant="primary"
-                blocked={blocked}
-                showRefusal={false}
-                onPress={() => void send()}
-              >
-                Send answer
-              </WriteButton>
+    <TokenScope texts={runAskTexts(ask)}>
+      <ReadingPane>
+        {frame.byline(
+          <>
+            <strong>{frame.name}</strong>
+            {"’s coding run"}
+            {decision && ASKED[decision.role] ? ` ${ASKED[decision.role]}` : ""}
+            {frame.task && <> on {frame.task}</>}
+          </>,
+        )}
+        <ReadingPaneTitle>
+          {ask.title
+            ? renderTokens(ask.title, "question", "text", true)
+            : hidden
+              ? "This run is waiting on a question you can’t see."
+              : "The run paused on a question"}
+        </ReadingPaneTitle>
+        {ask.context && (
+          <ReadingPaneLead>
+            {renderMarkdown(ask.context, { ...CHECKED_WORDS, scoped: true })}
+          </ReadingPaneLead>
+        )}
+        {reasoning ? (
+          <ReadingPaneReasoning
+            title={
+              <>
+                {`${frame.name} recommends `}
+                <strong>{renderTokens(reasoning.label, "recommended", "text", true)}</strong>
+              </>
             }
+            footer={chips}
+          >
+            <p>{renderTokens(reasoning.text, "reasoning", "checked", true)}</p>
+          </ReadingPaneReasoning>
+        ) : (
+          chips
+        )}
+        {given !== null && decision && (
+          // THE OPTIONS STAY, THE ONE CHOSEN MARKED, as an answered run's
+          // pane reads them once it has left Needs you.
+          <AnsweredChoices
+            options={options}
+            recommended={decision.recommended}
+            chosen={given.answer.kind === "choice" ? given.answer.id : null}
           />
-          {/* THE ENGINE'S SENTENCE (the refusal catalog's), and only the
-              time beside it on the reader's clock, off the run's record. */}
-          <RefusalNote write={write} />
-          {refusedAnswered && record?.answered_at && (
-            <Text as="p" variant="caption">
-              {answeredAt(record, now)}
-            </Text>
-          )}
-        </Stack>
-      )}
-      <Text as="p" variant="caption">
-        {hold ? `${hold}. ` : ""}
-        <Link href={href(["live", "runs", run.turn_id])} size="inherit">
-          Open the run
-        </Link>
-      </Text>
-    </ReadingPane>
+        )}
+        {given !== null ? (
+          // PENDING UNTIL THE RUN TOOK IT: sent, recorded or ended is never the
+          // success check a used answer gets.
+          <ReadingPaneOutcome tone={fate === "taken" ? "done" : "pending"}>
+            {fate === "taken" ? (
+              answeredWith(given.answer)
+            ) : fate === "recorded" ? (
+              <>
+                Answer recorded.{" "}
+                {busyOn ? busyLine(busyOn, frame.name) : `${frame.name}’s run picks it up next.`}
+              </>
+            ) : fate === "ended" ? (
+              <>Answer sent. {frame.name}’s run has ended.</>
+            ) : (
+              <>Answer sent. Waiting for {frame.name}’s run to take it.</>
+            )}
+          </ReadingPaneOutcome>
+        ) : superseded ? (
+          <Stack gap={2}>
+            {unused && <RefusalStrip onDismiss={() => setUnused(null)}>{unused}</RefusalStrip>}
+            {record?.answered_at && (
+              <Text as="p" variant="caption">
+                {answeredAt(record, now)}
+              </Text>
+            )}
+          </Stack>
+        ) : hidden ? (
+          <Text as="p" variant="body">
+            Its lead or an admin can answer it.
+          </Text>
+        ) : (
+          <Stack gap={2}>
+            {unused && <RefusalStrip onDismiss={() => setUnused(null)}>{unused}</RefusalStrip>}
+            {inWords ? (
+              <>
+                {/* THE FIELD TAKES THE FOCUS only when a press opened it:
+                    stepping onto a run with j or k must not drop the reader
+                    into a field. */}
+                <Field
+                  label="Your answer to the run"
+                  value={text}
+                  onChange={setText}
+                  onSubmit={sendWords}
+                  placeholder="Answer as the coding agent will read it"
+                  disabled={!write.access.can || write.busy}
+                  autoFocus={open}
+                  actions={
+                    <>
+                      {options.length > 0 && (
+                        <Button
+                          size="small"
+                          variant="ghost"
+                          onClick={() => {
+                            write.dismiss();
+                            setOpen(false);
+                          }}
+                          disabled={write.busy}
+                        >
+                          Cancel
+                        </Button>
+                      )}
+                      <WriteButton
+                        write={write}
+                        size="small"
+                        variant="primary"
+                        blocked={blocked}
+                        showRefusal={false}
+                        onPress={sendWords}
+                      >
+                        Send answer
+                      </WriteButton>
+                    </>
+                  }
+                />
+                {/* THE ENGINE'S SENTENCE (the refusal catalog's), and only the
+                    time beside it on the reader's clock, off the run's record. */}
+                <RefusalNote write={write} />
+              </>
+            ) : (
+              <AnswerChoices
+                write={write}
+                options={options}
+                recommended={decision?.recommended}
+                pending={write.busy ? chosen : null}
+                onChoose={choose}
+                onSomethingElse={() => setOpen(true)}
+              />
+            )}
+            {refusedAnswered && record?.answered_at && (
+              <Text as="p" variant="caption">
+                {answeredAt(record, now)}
+              </Text>
+            )}
+          </Stack>
+        )}
+        <RunLink turnId={run.turn_id} hold={hold} />
+      </ReadingPane>
+    </TokenScope>
   );
 }
 

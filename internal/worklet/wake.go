@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -77,7 +78,7 @@ type Wake struct {
 	// by id, and an id alone tells the asker nothing it can read at a
 	// glance; the label lives on a different row, which is why the caller
 	// fills it rather than this package resolving it.
-	AnswersDecision *Decision
+	AnswersDecision *decision.Decision
 
 	// Dependents, Parent and Thread are the three routing facts this
 	// package cannot derive from the two states of ONE task, and they are
@@ -953,7 +954,7 @@ func (w Wake) excerpt() string {
 func excerptOf(text string) string { return textcut.Within(strings.TrimSpace(text), MaxExcerpt) }
 
 // chosen is the option this wake's comment chose, when its ask carried one.
-func (w Wake) chosen() *DecisionOption {
+func (w Wake) chosen() *decision.Option {
 	if w.Comment == nil || w.Comment.Choice == "" || w.AnswersDecision == nil {
 		return nil
 	}

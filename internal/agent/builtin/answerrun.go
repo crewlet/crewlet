@@ -24,8 +24,8 @@ const AnswerRunTool = "answer_run"
 
 // MaxRunAnswerBytes bounds one answer to a parked coding run.
 //
-// THE PAGE ITS QUESTION IS HELD TO ([sandbox.MaxQuestionBytes]), because the
-// answer travels where the question does, beside it. It is sealed onto the
+// THE PAGE ITS QUESTION'S CONTEXT IS HELD TO ([sandbox.MaxAskContextBytes]),
+// because the answer travels where the question does, beside it. It is sealed onto the
 // run's coordination row with the delivery it came in, which every status flip
 // and every listing of active runs reads whole until the run is carried on;
 // and then it is that run's prompt — the asking run's next message in its own
@@ -42,7 +42,7 @@ const AnswerRunTool = "answer_run"
 //
 // NOT [ToolAnswerBytes], which bounds what a tool answers a model: no tool's
 // answer carries this one.
-const MaxRunAnswerBytes = sandbox.MaxQuestionBytes
+const MaxRunAnswerBytes = sandbox.MaxAskContextBytes
 
 // RunDesk is what answer_run needs: the run an answer names, the way to put the
 // answer on the control topic of the seat that holds it, and who gave the
@@ -135,7 +135,9 @@ func (t *answerRun) Name() string { return AnswerRunTool }
 
 func (t *answerRun) Description() string {
 	return "Answer a coding run that stopped to ask a person a question, by " +
-		"naming the run's turn. The answer is recorded on the run at once, and " +
+		"naming the run's turn. Where the question offers options, name the one " +
+		"chosen in `choice`, with any words beside it in `answer`; an open " +
+		"question is answered in `answer`. The answer is recorded on the run at once, and " +
 		"the run resumes with it as the reply to the question it is waiting on " +
 		"now, on the node that holds its seat, as soon as that seat is free of " +
 		"any other coding run. Use this for any parked run, including one " +
@@ -152,14 +154,20 @@ func (t *answerRun) Parameters() map[string]any {
 				"type":        "string",
 				"description": "The turn id of the parked run — its `turn_id` on the sandbox-runs board.",
 			},
+			"choice": map[string]any{
+				"type": "string",
+				"description": "The id of the option chosen, where the run's question " +
+					"offers options: one of its `decision.options` on the sandbox-runs board.",
+			},
 			"answer": map[string]any{
 				"type": "string",
 				"description": fmt.Sprintf("Your answer to the run's question, as the "+
-					"coding agent should read it. At most %d KiB: put anything longer on "+
+					"coding agent should read it: the whole answer to an open question, "+
+					"or what to add to a `choice`. At most %d KiB: put anything longer on "+
 					"a page the run can read, and say where it is.", MaxRunAnswerBytes>>10),
 			},
 		},
-		"required": []any{"turn_id", "answer"},
+		"required": []any{"turn_id"},
 	}
 }
 
@@ -185,9 +193,11 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed("answer_run needs a `turn_id` — the parked run's turn id."), nil
 	}
 	answer := strings.TrimSpace(argString(args, "answer"))
+	choice := strings.TrimSpace(argString(args, "choice"))
 	switch {
-	case answer == "":
-		return failed("answer_run needs an `answer` — what the coding agent should be told."), nil
+	case answer == "" && choice == "":
+		return failed("answer_run needs a `choice` naming the option chosen, or an " +
+			"`answer` saying what the coding agent should be told, or both."), nil
 	case len(answer) > MaxRunAnswerBytes:
 		return failed(fmt.Sprintf("That answer is %d KiB and one answer may be at most %d KiB: "+
 			"it becomes the run's next message, or a fresh run's brief where the run cannot "+
@@ -223,6 +233,14 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"waiting for an answer, so there is no question for this to answer.",
 			clip(turnID), run.Status)), nil
 	}
+	// THE CHOICE NAMES AN OPTION OF THIS QUESTION, checked against the
+	// row just read as waiting, whose job the answer is pinned to: a run
+	// asks a new question only under a new job, so the options this checks
+	// are the ones the answer reaches.
+	if _, unoffered := sandbox.AnswerText(run.Decision, choice, answer); unoffered != nil {
+		return refusedBy(tools.RefusalInvalid, unoffered, fmt.Sprintf("answer_run was refused: %s. "+
+			"Nothing was answered.", unoffered.Error())), nil
+	}
 	parties, refusal := t.parties(ctx, run)
 	if refusal != nil {
 		return *refusal, nil
@@ -237,8 +255,9 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// seat it delivers to, so a seat named here is only ever the same one.
 	given := types.SandboxAnswerGiven{
 		TurnID: run.TurnID, Agent: parties.seat.String(), AgentHandle: parties.handle,
-		Answer: answer, AnsweredBy: actor.Handle, AnsweredByKind: string(actor.Kind),
-		OperatorID: actor.OperatorID,
+		Answer: answer, Choice: choice, AnsweredBy: actor.Handle,
+		AnsweredByKind: string(actor.Kind),
+		OperatorID:     actor.OperatorID,
 		// THE QUESTION THIS ANSWERS, off the row just checked as waiting:
 		// the answer resumes the run only while it still waits on it.
 		LaunchID: run.LaunchID,
@@ -264,6 +283,9 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if answerID != uuid.Nil {
 		result["answer_id"] = answerID.String()
+	}
+	if choice != "" {
+		result["choice"] = choice
 	}
 	return jsonResult(result)
 }

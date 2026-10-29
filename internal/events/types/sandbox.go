@@ -3,6 +3,7 @@ package types
 import (
 	"time"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events"
 )
 
@@ -149,11 +150,16 @@ type SandboxClarificationRequested struct {
 	// for — see [AgentPhaseCompleted.WorkKey] and ADR-0017. Carried so the
 	// work-key filter answers with a run's WHOLE record rather than only
 	// its phases.
-	WorkKey         string `json:"work_key,omitempty"`
-	SandboxID       string `json:"sandbox_id"`
-	Question        string `json:"question"`
-	Audience        string `json:"audience"`
-	ConversationKey string `json:"conversation_key"`
+	WorkKey   string `json:"work_key,omitempty"`
+	SandboxID string `json:"sandbox_id"`
+	// Question is what the run asked, in one sentence; QuestionContext its
+	// Markdown context, and Decision the choice it asks for, absent for an
+	// open question (ADR-0068).
+	Question        string             `json:"question"`
+	QuestionContext string             `json:"question_context,omitempty"`
+	Decision        *decision.Decision `json:"decision,omitempty"`
+	Audience        string             `json:"audience"`
+	ConversationKey string             `json:"conversation_key"`
 	// WorkItem is the item the parked turn is charged to — the one its row
 	// recorded at launch — so a question can be shown against the work it
 	// is about. Absent when the turn is on nothing.
@@ -416,8 +422,16 @@ type SandboxAnswerGiven struct {
 	AgentHandle string `json:"agent_handle"`
 
 	// Answer is the person's reply, verbatim. Redacted where it is handed
-	// to the run it carries on, like a chat reply.
+	// to the run it carries on, like a chat reply. Empty where Choice says
+	// it all.
 	Answer string `json:"answer"`
+
+	// Choice is the option of the run's question the person chose, by its
+	// id, or empty for an answer in words alone. The run reads it as that
+	// option's label and id beside the words (internal/sandbox's
+	// AnswerText), checked against the question this answer is pinned to
+	// ([SandboxAnswerGiven.LaunchID]).
+	Choice string `json:"choice,omitempty"`
 
 	// AnsweredBy, AnsweredByKind and OperatorID are who answered, in the
 	// three halves iam.ActorFor makes of a principal: the author (the seat
@@ -549,6 +563,27 @@ type SandboxRunAnswered struct {
 	AnsweredBy     string `json:"answered_by,omitempty"`
 	AnsweredByKind string `json:"answered_by_kind,omitempty"`
 	OperatorID     string `json:"operator_id,omitempty"`
+
+	// LaunchID is the question the answer was given to, by the job that
+	// asked it, and AskedAt when it was put.
+	LaunchID string    `json:"launch_id,omitempty"`
+	AskedAt  time.Time `json:"asked_at,omitzero"`
+
+	// Question, QuestionContext and Decision are what the run asked, as
+	// its row held them ([SandboxClarificationRequested]), and
+	// AudienceHandles whom it was put to: the one record of the question
+	// that outlives the run, read back as a person's answered decision
+	// (ADR-0068).
+	Question        string             `json:"question,omitempty"`
+	QuestionContext string             `json:"question_context,omitempty"`
+	Decision        *decision.Decision `json:"decision,omitempty"`
+	AudienceHandles []string           `json:"audience_handles,omitempty"`
+
+	// Choice is the option the person chose, by id, and Answer their own
+	// words, redacted; either may be empty, never both on an answer by
+	// turn.
+	Choice string `json:"choice,omitempty"`
+	Answer string `json:"answer,omitempty"`
 }
 
 // EventType is the "sandbox_run_answered" wire type.

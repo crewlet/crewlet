@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
@@ -214,7 +215,7 @@ func TestAnAnswerIsHeldToThePageItsQuestionIs(t *testing.T) {
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusAwaiting)}}
 	tool := answerRunTool(t, desk)
 	result, _ := tool.Call(t.Context(), map[string]any{
-		"turn_id": "t1", "answer": strings.Repeat("a", sandbox.MaxQuestionBytes+1),
+		"turn_id": "t1", "answer": strings.Repeat("a", builtin.MaxRunAnswerBytes+1),
 	})
 	if !result.Failed || tools.RefusalOf(result) != tools.RefusalInvalid {
 		t.Fatalf("answer_run with an answer a byte past a page = %+v, want invalid", result)
@@ -223,8 +224,8 @@ func TestAnAnswerIsHeldToThePageItsQuestionIs(t *testing.T) {
 		t.Fatalf("an answer past the bound was delivered: %d bytes", len(desk.delivered[0].Answer))
 	}
 	for _, want := range []string{
-		fmt.Sprintf("That answer is %d KiB", sandbox.MaxQuestionBytes>>10+1),
-		fmt.Sprintf("at most %d KiB", sandbox.MaxQuestionBytes>>10),
+		fmt.Sprintf("That answer is %d KiB", builtin.MaxRunAnswerBytes>>10+1),
+		fmt.Sprintf("at most %d KiB", builtin.MaxRunAnswerBytes>>10),
 		"Put the detail on a page",
 	} {
 		if !strings.Contains(result.Output, want) {
@@ -232,7 +233,7 @@ func TestAnAnswerIsHeldToThePageItsQuestionIs(t *testing.T) {
 		}
 	}
 
-	page := strings.Repeat("a", sandbox.MaxQuestionBytes)
+	page := strings.Repeat("a", builtin.MaxRunAnswerBytes)
 	result, err := tool.Call(t.Context(), map[string]any{"turn_id": "t1", "answer": page})
 	if err != nil || result.Failed {
 		t.Fatalf("answer_run with an answer as long as a question may be = %+v, %v; "+
@@ -357,5 +358,68 @@ func TestTheAnsweredRefusalSaysOnlyWhatTheRecordSays(t *testing.T) {
 		if (want == "") == claims || (want != "" && !strings.Contains(result.Output, want)) {
 			t.Errorf("a %s run's refusal says %q, want %q", status, result.Output, want)
 		}
+	}
+}
+
+// decided is a parked run whose question offers a choice.
+func decided(t *testing.T, turnID string) sandbox.PendingRun {
+	t.Helper()
+	run := parked(t, turnID, sandbox.StatusAwaiting)
+	run.Decision = &decision.Decision{
+		Question: run.Question, Role: decision.RoleApprover, Recommended: "keep",
+		Options: []decision.Option{
+			{ID: "keep", Label: "Keep the expected differences"},
+			{ID: "exact", Label: "Keep style attributes byte for byte"},
+		},
+	}
+	return run
+}
+
+// A CHOICE IS AN OPTION OF THE QUESTION IT ANSWERS, and is delivered as one: by
+// its id, beside any words, so the run reads the option it named. A choice the
+// question does not offer is refused before anything is delivered, naming the
+// options it does, and so is a choice on an open question: the run would be
+// told it chose something nobody offered. An answer is a choice or words, and
+// never neither.
+//
+// Mutation: deliver without checking the choice against the run's decision,
+// and the unoffered choice reaches the seat.
+func TestAnswerRunDeliversAChoiceOfTheQuestionsOwnOptions(t *testing.T) {
+	t.Parallel()
+	desk := &deskFake{runs: map[string]sandbox.PendingRun{
+		"t1": decided(t, "t1"), "t2": parked(t, "t2", sandbox.StatusAwaiting),
+	}}
+	tool := answerRunTool(t, desk)
+
+	result, err := tool.Call(t.Context(), map[string]any{"turn_id": "t1", "choice": "exact",
+		"answer": "and note it in the PR"})
+	if err != nil || result.Failed {
+		t.Fatalf("answer_run with a choice = %+v, %v", result, err)
+	}
+	if len(desk.delivered) != 1 || desk.delivered[0].Choice != "exact" ||
+		desk.delivered[0].Answer != "and note it in the PR" {
+		t.Fatalf("delivered %+v, want the choice and the words", desk.delivered)
+	}
+	var receipt map[string]any
+	if err := json.Unmarshal([]byte(result.Output), &receipt); err != nil || receipt["choice"] != "exact" {
+		t.Errorf("the receipt %s does not name the choice", result.Output)
+	}
+
+	for _, tc := range []struct {
+		name string
+		args map[string]any
+		want string
+	}{
+		{"an unoffered choice", map[string]any{"turn_id": "t1", "choice": "rewrite"}, "keep, exact"},
+		{"a choice on an open question", map[string]any{"turn_id": "t2", "choice": "keep"}, "no options"},
+		{"neither a choice nor words", map[string]any{"turn_id": "t1"}, "`choice`"},
+	} {
+		got, err := tool.Call(t.Context(), tc.args)
+		if err != nil || !got.Failed || !strings.Contains(got.Output, tc.want) {
+			t.Errorf("%s: answer_run = %+v, %v; want refused naming %q", tc.name, got, err, tc.want)
+		}
+	}
+	if len(desk.delivered) != 1 {
+		t.Fatalf("%d answers delivered, want only the offered choice's", len(desk.delivered))
 	}
 }

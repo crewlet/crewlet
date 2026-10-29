@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 	"github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -248,9 +249,8 @@ func seedClaimedAnswer(t *testing.T, e *Engine, turnID string, reply *events.Eve
 	store := sandbox.NewCoordStore(e.backends.Fleet)
 	ctx := t.Context()
 	asked := time.Now().UTC().Add(-time.Hour)
-	if err := store.MarkAwaiting(ctx, turnID, sandbox.Clarification{
-		Question: "which branch?", AskedAt: asked,
-	}); err != nil {
+	sandboxtest.Ask(t, store, turnID, sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	if err := store.MarkAwaiting(ctx, turnID, sandbox.Clarification{AskedAt: asked}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	raw, err := json.Marshal(reply)

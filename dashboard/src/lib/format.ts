@@ -945,6 +945,16 @@ export function firstLine(body: string): string {
 }
 
 /**
+ * The first sentence of a text, or its first line where no sentence ends in
+ * it: what fits a heading of what a longer text says.
+ */
+export function firstSentence(text: string): string {
+  const line = firstLine(text);
+  const end = /^(.+?[.?!])(?:\s|$)/.exec(line);
+  return end ? end[1]! : line;
+}
+
+/**
  * "Good morning, Jane", in the READER's clock, which is whose morning it is,
  * and with the first word of their name. A reader nobody named is greeted
  * without one rather than as "there" or as a token id.

@@ -74,8 +74,8 @@ func TestACompletionsResumeCarriesWhatTheEngineSpentOnTheJob(t *testing.T) {
 //
 // The completion that parks resumes nothing, and the answer's resume — days
 // later, perhaps on another node — collects nothing. So the condensation of the
-// collection that parked (here the question itself, past what a question
-// carries) is written with the question, and the answer's resume reads it, with
+// collection that parked (here the asking job's report, past what a run's
+// record carries) is written with the question, and the answer's resume reads it, with
 // the job's bridged spend, off the job's own record.
 //
 // Mutation: leave the condensation off the park, or the bridged half off the
@@ -83,8 +83,8 @@ func TestACompletionsResumeCarriesWhatTheEngineSpentOnTheJob(t *testing.T) {
 func TestAParkedJobsEngineSpendReachesTheAnswersResume(t *testing.T) {
 	t.Parallel()
 	rig := condensingRig(t, "asks")
-	rig.runner.Finish(Result{NeedsInput: true, AskTo: "requester",
-		Question: lines("which branch", 1000), InputTokens: 700, OutputTokens: 80})
+	rig.ask("asks", whichBranch())
+	rig.runner.Finish(Result{Text: lines("report", 7000), InputTokens: 700, OutputTokens: 80})
 
 	payload, ev := rig.completion("asks")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {

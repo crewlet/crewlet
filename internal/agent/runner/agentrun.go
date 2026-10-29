@@ -551,6 +551,15 @@ func (r *Runner) observeLoads(surface *tools.Surface, called []ledger.Call) {
 	}
 }
 
+// askName is the name of the tool the executor's run asks a person through,
+// empty where the runner offers none ([Config.Ask]).
+func (r *Runner) askName() string {
+	if r.cfg.Ask == nil {
+		return ""
+	}
+	return r.cfg.Ask.Name()
+}
+
 // frozen is the turn-start context a runner builds every launch's prompt from,
 // as a park carries it: the blocks' rendered text and the prior-turns block —
 // what [Runner.executorPrompt] reads of them, and nothing else.
@@ -625,7 +634,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	}
 	surface = built
 
-	replaySubmission(ctx, submit, logged)
+	replaySubmission(ctx, submit, logged, r.askName())
 
 	run := r.cfg.Resume.Run
 	res := agentRunResult(answer, bridged, run, state.LaunchedAt, began)
@@ -779,7 +788,25 @@ func inAdmissionOrder(bridged []BridgedCall) []BridgedCall {
 // what makes that true here too. A call the decoder rejects is skipped rather than failing the resume —
 // the run happened, its other calls happened, and a malformed submission is
 // exactly the "said nothing" case the rescue path exists for.
-func replaySubmission(ctx context.Context, submit *structured.Tool[workPayload], bridged []ledger.Call) {
+//
+// ONLY WHAT THE RUN SUBMITTED AFTER IT LAST ASKED. A run that asked a person
+// and was carried on by the answer keeps the calls it made before the
+// question, and a submission among them was made before the run knew the
+// answer: replayed, it would report the carried-on run as the work it
+// submitted before it asked, whether or not the run went on to submit again.
+// asked is the ask tool's name (`ask_and_wait`), empty where the run was
+// offered none.
+func replaySubmission(ctx context.Context, submit *structured.Tool[workPayload], bridged []ledger.Call,
+	asked string,
+) {
+	if asked != "" {
+		for i := len(bridged) - 1; i >= 0; i-- {
+			if bridged[i].Name == asked && !bridged[i].Failed {
+				bridged = bridged[i+1:]
+				break
+			}
+		}
+	}
 	for _, call := range bridged {
 		if call.Name != SubmitWorkTool || call.Failed {
 			continue

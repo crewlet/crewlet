@@ -449,9 +449,8 @@ func TestACarriedResultHoldsEachPieceToItsBound(t *testing.T) {
 	t.Parallel()
 	const budget = 4 << 10
 	long := strings.Repeat("a line of the run's own words\n", 1000)
-	got := CarriedResult(Result{Text: long, Error: long, Question: long, Transcript: long}, budget)
-	for name, piece := range map[string]string{"report": got.Text, "failure": got.Error,
-		"question": got.Question} {
+	got := CarriedResult(Result{Text: long, Error: long, Transcript: long}, budget)
+	for name, piece := range map[string]string{"report": got.Text, "failure": got.Error} {
 		if len(piece) > budget || !strings.Contains(piece, "not shown") {
 			t.Errorf("the %s is %d bytes, saying %q; want it inside %d with its note", name,
 				len(piece), piece[max(0, len(piece)-80):], budget)

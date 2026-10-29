@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 	"github.com/crewlet/crewlet/internal/seat"
 )
 
@@ -590,8 +591,8 @@ func answeredRun(t *testing.T, seal *sandbox.AnswerSeal, store sandbox.PendingSt
 		t.Fatalf("MarkSuspended: %v", err)
 	}
 	asked := time.Now().UTC()
-	if err := store.MarkAwaiting(ctx, turnID, sandbox.Clarification{
-		Question: "which branch?", Audience: "requester", AskedAt: asked}); err != nil {
+	sandboxtest.Ask(t, store, turnID, sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	if err := store.MarkAwaiting(ctx, turnID, sandbox.Clarification{AskedAt: asked}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	run, _, err := store.Get(ctx, turnID)

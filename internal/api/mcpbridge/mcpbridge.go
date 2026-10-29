@@ -1502,7 +1502,11 @@ func (o *binding) execute(admitted toolloop.Admitted, name string, args map[stri
 			res, err = toolloop.ToolResult{}, nil
 		}
 	}()
-	res, err = admitted(o.caller.Acting(o.ctx), llm.ToolCall{Name: name, Arguments: args})
+	// THE SESSION'S JOB rides the call, so a tool that writes the run's own
+	// row (a question it parks on) writes the job that made the call, or
+	// nothing ([turnctx.WithJob]).
+	ctx := turnctx.WithJob(o.caller.Acting(o.ctx), o.session.Launch)
+	res, err = admitted(ctx, llm.ToolCall{Name: name, Arguments: args})
 	return res, nil, err
 }
 

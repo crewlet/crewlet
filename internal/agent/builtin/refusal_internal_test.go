@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -192,7 +193,7 @@ func TestAContentRefusalIsASentenceForAPerson(t *testing.T) {
 		{"a comment", &worklet.TextCapError{Field: worklet.TextComment,
 			Size: worklet.MaxCommentBody + 9, Limit: worklet.MaxCommentBody},
 			[]string{"`body`", "comment", fmt.Sprint(worklet.MaxCommentBody + 9)}},
-		{"any other content refusal", worklet.Decision{Question: "Which?"}.Validate(),
+		{"any other content refusal", invalidDecision(),
 			[]string{"a decision has 0 option(s)"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -351,4 +352,11 @@ func TestAmbiguousAnswerCandidatesAreWholeOrReferenced(t *testing.T) {
 	if strings.Contains(got, "long long") || strings.Contains(got, "…") && !strings.Contains(got, "… and more") {
 		t.Errorf("a candidate was cut rather than carried whole or referenced:\n%s", got)
 	}
+}
+
+// invalidDecision is the tracker's refusal of a decision with no options, as
+// its writer marks it: a content refusal that is no text cap.
+func invalidDecision() error {
+	_, err := worklet.ValidateDecision(context.Background(), decision.Decision{Question: "Which?"}, nil)
+	return err
 }

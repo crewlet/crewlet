@@ -639,8 +639,7 @@ func testAStartedJobsBriefStaysReadThroughEveryWriteThatForgetsItsBox(t *testing
 		if ok, err := s.MarkSuspended(ctx, turnID, suspension()); err != nil || !ok {
 			t.Fatalf("MarkSuspended = %v, %v", ok, err)
 		}
-		if err := s.MarkAwaiting(ctx, turnID, sandbox.Clarification{Question: "which branch?",
-			Audience: "requester", Branch: "wip/" + turnID, AskedAt: base}); err != nil {
+		if err := s.MarkAwaiting(ctx, turnID, sandbox.Clarification{AskedAt: base}); err != nil {
 			t.Fatalf("MarkAwaiting: %v", err)
 		}
 		if run := mustGet(t, s, turnID); !run.Launch.Started || len(unread(turnID)) != 0 {

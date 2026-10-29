@@ -14,10 +14,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
@@ -454,8 +458,17 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	if parked.Question != codingQuestion {
 		t.Fatalf("question = %q", parked.Question)
 	}
-	if parked.Audience != "requester" {
-		t.Fatalf("audience = %q", parked.Audience)
+	if parked.Audience != "requester" || parked.Branch != "wip/flake" {
+		t.Fatalf("audience = %q, branch = %q", parked.Audience, parked.Branch)
+	}
+	// THE QUESTION IS ASKED AS A DECISION: its options as options, the one
+	// recommended, and its context apart from the title, which is what the
+	// Inbox draws as a choice a person presses rather than prose.
+	if d := parked.Decision; d == nil || len(d.Options) != len(codingOptions) ||
+		d.Recommended != "main" || d.Question != codingQuestion ||
+		!strings.Contains(parked.QuestionContext, "**api**") {
+		t.Fatalf("the parked question is %+v with context %q, want the run's decision",
+			parked.Decision, parked.QuestionContext)
 	}
 	// The seat is FREE while it waits: a person can take days, and the
 	// answer arrives on the seat's own inbox.
@@ -506,6 +519,67 @@ func TestACodingRunThatAsksAQuestionParksAndResumesOnTheAnswer(t *testing.T) {
 	}
 	// AND IT SUBMITTED: the turn settled on the carried-on run's own
 	// submission, never on the answer filed as a report and rescued.
+	if outcome := n.settledOutcome(t, parked.TurnID); outcome != "delivered" {
+		t.Fatalf("the answered turn settled with outcome %q, want the run's own "+
+			"`delivered` submission", outcome)
+	}
+}
+
+// A RUN'S STRUCTURED QUESTION IS ANSWERED WITH A PRESS AND CARRIES THE RUN ON
+// (ADR-0068). The run asks through `ask_and_wait` over its bridge, with its
+// options as options; the board the Inbox reads carries the question as a
+// decision; a person answers by choosing one, through the route the Inbox's
+// option button presses (`answer_run` with `choice`); and the run resumes in
+// its own session told the option it was given, in its own words and by its
+// id, then submits its work.
+//
+// Mutation: deliver an answer's words without its choice, and the resumed run
+// is told nothing it can act on.
+func TestARunsStructuredQuestionIsAnsweredWithAChoiceAndResumes(t *testing.T) {
+	t.Parallel()
+	n := startCoding(t, codingModeAsk)
+	waitFor(t, "the seat to be claimed", func() bool {
+		return slices.Contains(n.engine.Node().Host().Held(), "swe")
+	})
+	n.wakeInConversation(t, "swe", "the api test is flaking, please fix it", codingConversation)
+	waitFor(t, "the run to park on its question", func() bool {
+		for _, run := range n.activeRuns(t) {
+			if run.Status == sandbox.StatusAwaiting && run.Decision != nil {
+				return true
+			}
+		}
+		return false
+	}, n.diagnose)
+	parked := n.runFor(t, sandbox.StatusAwaiting)
+
+	// THE INBOX'S SOURCE says the question as a decision.
+	var row map[string]any
+	for _, r := range n.board(t) {
+		if r["turn_id"] == parked.TurnID {
+			row = r
+		}
+	}
+	d, _ := row["decision"].(map[string]any)
+	if row["question"] != codingQuestion || d == nil || d["recommended"] != "main" ||
+		len(d["options"].([]any)) != len(codingOptions) {
+		t.Fatalf("the board carries %v, want the question with its decision", row)
+	}
+
+	status, raw := bearer(t, n.node, http.MethodPost, "/operator/act/"+builtin.AnswerRunTool,
+		map[string]any{"args": map[string]any{"turn_id": parked.TurnID, "choice": "main"}},
+		map[string]string{opkey.Header: uuid.Must(uuid.NewV7()).String()})
+	if status != http.StatusOK {
+		t.Fatalf("POST /operator/act/%s answered %d: %s", builtin.AnswerRunTool, status, raw)
+	}
+	waitFor(t, "the answered run to settle", func() bool {
+		return len(n.activeRuns(t)) == 0
+	}, n.diagnose)
+	if argv := n.agentArgv(t); !slices.Contains(argv, "--resume") {
+		t.Fatalf("the answered run was not resumed in its own session: argv = %v", argv)
+	}
+	if brief := n.agentBrief(t); !strings.Contains(brief, "Chosen option: Target main (`main`).") {
+		t.Fatalf("the resumed run was not told the option chosen: its prompt = %q", brief)
+	}
 	if outcome := n.settledOutcome(t, parked.TurnID); outcome != "delivered" {
 		t.Fatalf("the answered turn settled with outcome %q, want the run's own "+
 			"`delivered` submission", outcome)
@@ -890,17 +964,6 @@ func TestTheContainerModeRunsTheSameProtocol(t *testing.T) {
 	res, err := box.Exec(t.Context(), "cat "+p.WorkDir()+"/probe", sandbox.ExecOptions{})
 	if err != nil || res.ExitCode != 0 || !strings.Contains(res.Stdout, "hello") {
 		t.Fatalf("Exec = %+v, %v", res, err)
-	}
-	// And the ask shim runs, which is the one part of the protocol that is
-	// a script the engine wrote into somebody else's image.
-	if _, err := box.Exec(t.Context(),
-		`PATH='`+p.BinDir()+`':"$PATH" crewlet-ask "which branch?" --to team`,
-		sandbox.ExecOptions{}); err != nil {
-		t.Fatalf("the ask shim: %v", err)
-	}
-	blob, err := box.ReadFile(t.Context(), p.Ask())
-	if err != nil || !strings.Contains(string(blob), "which branch?") {
-		t.Fatalf("ask.json = %q, %v", blob, err)
 	}
 }
 

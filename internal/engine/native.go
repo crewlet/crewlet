@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -1492,7 +1493,7 @@ var _ builtin.ChannelDirectory = liveChannels{}
 // transport or tool server is started for. Mattermost's company block is
 // switched by `enabled`; Slack's is on by being declared — the rule
 // [Engine.startNotifications] starts each transport by.
-func (c liveChannels) ChatSurfaces(handle string) []worklet.InformSurface {
+func (c liveChannels) ChatSurfaces(handle string) []decision.InformSurface {
 	company := c.engine.Company()
 	if company == nil || company.Org == nil || company.Config == nil {
 		return nil
@@ -1501,13 +1502,13 @@ func (c liveChannels) ChatSurfaces(handle string) []worklet.InformSurface {
 	if seat == nil {
 		return nil
 	}
-	var out []worklet.InformSurface
+	var out []decision.InformSurface
 	if mm := company.Config.Integrations.Mattermost; mm != nil && mm.Enabled &&
 		seat.Mattermost.BotToken != "" {
-		out = append(out, worklet.InformMattermost)
+		out = append(out, decision.InformMattermost)
 	}
 	if company.Config.Integrations.Slack != nil && seat.Slack.BotToken != "" {
-		out = append(out, worklet.InformSlack)
+		out = append(out, decision.InformSlack)
 	}
 	return out
 }

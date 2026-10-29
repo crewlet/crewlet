@@ -733,39 +733,81 @@ func (s Sources) answeredDecisions(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	answer := map[string]any{"handle": handle, "items": []worklet.AnsweredAsk{}}
+	answer := map[string]any{"handle": handle, "items": []any{}}
+	since := s.clock().Add(-worklet.AnsweredWindow).UTC()
+	var (
+		asks      []worklet.AnsweredAsk
+		truncated bool
+	)
 	work, err := keptHere(s.Work)
-	if err != nil || !work {
-		return answer, err
-	}
-	fresh, err := freshness(p)
 	if err != nil {
 		return nil, err
 	}
-	got, err := s.Work.AnsweredAsks(ctx, worklet.DecisionsQuery{
-		Handle: handle,
-		Level:  fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
-		MinPosition: fresh.MinPosition,
-	}, s.clock(), s.zone())
-	if err != nil {
-		return nil, err
-	}
-	items := got.Asks
-	if !shows(ctx, authz.KindTask) {
-		// A COPY, never the reader's own rows, which another caller of
-		// the same answer may still hold.
-		items = make([]worklet.AnsweredAsk, len(got.Asks))
-		for i, ask := range got.Asks {
-			ask.FollowedUp = nil
-			items[i] = ask
+	if work {
+		fresh, freshErr := freshness(p)
+		if freshErr != nil {
+			return nil, freshErr
 		}
+		got, readErr := s.Work.AnsweredAsks(ctx, worklet.DecisionsQuery{
+			Handle: handle,
+			Level:  fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
+			MinPosition: fresh.MinPosition,
+		}, s.clock(), s.zone())
+		if readErr != nil {
+			return nil, readErr
+		}
+		asks, truncated = got.Asks, got.Truncated
+		if !shows(ctx, authz.KindTask) {
+			// A COPY, never the reader's own rows, which another caller of
+			// the same answer may still hold.
+			asks = make([]worklet.AnsweredAsk, len(got.Asks))
+			for i, ask := range got.Asks {
+				ask.FollowedUp = nil
+				asks[i] = ask
+			}
+		}
+		answer["read_level"] = got.Level
+		answer["complete"] = got.Complete
 	}
+	// AND THE CODING RUNS' QUESTIONS THEY ANSWERED (ADR-0068), over the same
+	// window, whether or not this company keeps a tracker: a run asks in a
+	// decision's shape on every company, and is read back beside a work
+	// item's answered ask.
+	runs, more, err := s.answeredRuns(ctx, handle, since)
+	if err != nil {
+		return nil, err
+	}
+	items, cut := newestAnswered(asks, runs, worklet.MaxAnswered)
 	answer["items"] = items
-	answer["since"] = got.Since
-	answer["truncated"] = got.Truncated
-	answer["read_level"] = got.Level
-	answer["complete"] = got.Complete
+	answer["since"] = since
+	answer["truncated"] = truncated || more || cut
 	return answer, nil
+}
+
+// newestAnswered is a work item's answered asks and a run's together, newest
+// closing first, at most limit, with whether any were left out.
+func newestAnswered(asks []worklet.AnsweredAsk, runs []AnsweredRunAsk, limit int) ([]any, bool) {
+	type dated struct {
+		at   time.Time
+		item any
+	}
+	all := make([]dated, 0, len(asks)+len(runs))
+	for _, ask := range asks {
+		all = append(all, dated{ask.At, ask})
+	}
+	for _, run := range runs {
+		all = append(all, dated{run.At, run})
+	}
+	slices.SortStableFunc(all, func(a, b dated) int { return b.at.Compare(a.at) })
+	cut := len(all) > limit
+	if cut {
+		all = all[:limit]
+	}
+	out := make([]any, len(all))
+	for i, d := range all {
+		out[i] = d.item
+	}
+	return out, cut
 }
 
 // waitingSince is when a parked run began waiting on its question: when its

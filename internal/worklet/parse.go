@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 )
@@ -338,7 +339,7 @@ func wakeBody(record MutationRecord) string {
 // kinds that WRITE an ask: an edit re-sends the whole comment, decision
 // included, and a wake rendering the options again would ask the question
 // twice.
-func askedDecision(record MutationRecord) *Decision {
+func askedDecision(record MutationRecord) *decision.Decision {
 	switch record.Notify.Kind {
 	case ChangeComment, ChangeCreated:
 	default:

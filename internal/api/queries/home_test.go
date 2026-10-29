@@ -205,12 +205,16 @@ func TestAnsweredDecisionsShowTheFollowUpOnlyToATrackerReader(t *testing.T) {
 			if err != nil {
 				t.Fatalf("answered_decisions: %v", err)
 			}
-			items := got.(map[string]any)["items"].([]worklet.AnsweredAsk)
-			if len(items) != 1 || items[0].Answer.Body != "Ship it" {
+			items := got.(map[string]any)["items"].([]any)
+			if len(items) != 1 {
 				t.Fatalf("items are %+v, want the one answered ask", items)
 			}
-			if (items[0].FollowedUp != nil) != c.shown {
-				t.Errorf("the follow-up is %+v, want shown=%v", items[0].FollowedUp, c.shown)
+			item, ok := items[0].(worklet.AnsweredAsk)
+			if !ok || item.Answer.Body != "Ship it" {
+				t.Fatalf("items are %+v, want the one answered ask", items)
+			}
+			if (item.FollowedUp != nil) != c.shown {
+				t.Errorf("the follow-up is %+v, want shown=%v", item.FollowedUp, c.shown)
 			}
 		})
 	}

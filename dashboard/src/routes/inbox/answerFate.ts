@@ -7,15 +7,16 @@
  * what the first screen draws.
  */
 
+import type { AskAnswer } from "~/components/writes.tsx";
 import type { SandboxRun } from "~/protocol/types.ts";
 
 /**
- * An answer a person gave a parked run by its turn (`answer_run`): what they
- * wrote, the question it answers (`launch_id`) and the answer's own id
- * (`answer_id`), as the engine answered them.
+ * An answer a person gave a parked run by its turn (`answer_run`): the option
+ * they chose or what they wrote, the question it answers (`launch_id`) and the
+ * answer's own id (`answer_id`), as the engine answered them.
  */
 export interface GivenAnswer {
-  text: string;
+  answer: AskAnswer;
   launchId: string;
   answerId: string;
 }

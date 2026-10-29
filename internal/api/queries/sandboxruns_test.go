@@ -14,9 +14,11 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
 var runBase = time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC)
@@ -195,8 +197,8 @@ func TestAParkedBoxWithNoPauseStampStillReadsAsHeld(t *testing.T) {
 		t.Fatalf("AttachSandbox: %v", err)
 	}
 	// The park lands; the stamp that would have dated it does not.
+	sandboxtest.Ask(t, store, "t1", sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
 	if err := store.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{
-		Question: "which branch?", Audience: "requester",
 		AskedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
@@ -409,9 +411,9 @@ func TestSandboxRunsNarrowsToOnePersonsAudience(t *testing.T) {
 		"to-cy":     {Handles: []string{"cy"}, Fallback: true},
 		"to-nobody": {},
 	} {
+		sandboxtest.Ask(t, store, turnID, sandbox.Ask{Question: "which branch?", To: sandbox.AskToTeam})
 		if err := store.MarkAwaiting(t.Context(), turnID, sandbox.Clarification{
-			Question: "which branch?", Audience: "team", Answerers: answerers,
-			AskedAt: time.Now().UTC(),
+			Answerers: answerers, AskedAt: time.Now().UTC(),
 		}); err != nil {
 			t.Fatalf("MarkAwaiting %s: %v", turnID, err)
 		}
@@ -524,6 +526,9 @@ func parkedRun() sandbox.PendingRun {
 	return sandbox.PendingRun{
 		TurnID: "t-1", AgentHandle: "swe", Role: "SWE", Status: sandbox.StatusAwaiting,
 		TaskDescription: "port the importer", Question: "which branch?",
+		QuestionContext: "Both `main` and `next` build.",
+		Decision: &decision.Decision{Question: "which branch?", Role: decision.RoleApprover,
+			Options: []decision.Option{{ID: "main", Label: "main"}, {ID: "next", Label: "next"}}},
 		Reply:           "chat:C1",
 		AudienceHandles: []string{"ana"},
 		BridgeCalls:     []sandbox.BridgeCall{{Name: "get_work_item", Args: `{"id":"ENG-1"}`}},
@@ -566,7 +571,8 @@ func boardAs(ctx context.Context, t *testing.T, chart authz.Chart) map[string]an
 // does; classify the entry as status and every row but the admin's does.
 func TestASandboxRunsBodyIsItsSeatsTrail(t *testing.T) {
 	t.Parallel()
-	body := []string{"task_description", "question", "reply", "bridge_calls"}
+	body := []string{"task_description", "question", "question_context", "decision",
+		"reply", "bridge_calls"}
 	for _, c := range []struct {
 		name     string
 		ctx      context.Context
@@ -619,8 +625,11 @@ func TestASandboxRunsBodyIsItsSeatsTrail(t *testing.T) {
 func TestAParkedQuestionReachesItsAudience(t *testing.T) {
 	t.Parallel()
 	asked := boardAs(asSeat(t, "ana"), t, flatChart{})
-	if asked["question"] != "which branch?" {
-		t.Errorf("the person the question is put to was shown %v, want it", asked["question"])
+	if asked["question"] != "which branch?" || asked["question_context"] == nil ||
+		asked["decision"] == nil {
+		t.Errorf("the person the question is put to was shown %v, %v, %v; want the "+
+			"question with its context and its options", asked["question"],
+			asked["question_context"], asked["decision"])
 	}
 	for _, key := range []string{"task_description", "reply", "bridge_calls"} {
 		if _, shown := asked[key]; shown {
@@ -630,7 +639,10 @@ func TestAParkedQuestionReachesItsAudience(t *testing.T) {
 	if asked["body_withheld"] != true {
 		t.Errorf("body_withheld = %v, want true: the task is still withheld", asked["body_withheld"])
 	}
-	if _, shown := boardAs(asSeat(t, "bo"), t, flatChart{})["question"]; shown {
-		t.Error("somebody the question is not put to was shown it")
+	stranger := boardAs(asSeat(t, "bo"), t, flatChart{})
+	for _, key := range []string{"question", "question_context", "decision"} {
+		if _, shown := stranger[key]; shown {
+			t.Errorf("somebody the question is not put to was shown its %s", key)
+		}
 	}
 }

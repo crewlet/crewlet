@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
 // THE R1/R2 RACE, end to end through a seat's inbox, on BOTH backends.
@@ -119,9 +120,11 @@ func (r *answerResumer) Resume(ctx context.Context, req sandbox.ResumeRequest) e
 		sandbox.Suspension{State: json.RawMessage(`{"messages":[]}`)}); err != nil {
 		return err
 	}
-	return r.store.MarkAwaiting(ctx, req.Run.TurnID, sandbox.Clarification{
-		Question: "which test suite?", Audience: "requester", AskedAt: time.Now().UTC(),
-	})
+	if err := sandboxtest.RecordAsk(ctx, r.store, req.Run.TurnID,
+		sandbox.Ask{Question: "which test suite?", To: sandbox.AskToRequester}); err != nil {
+		return err
+	}
+	return r.store.MarkAwaiting(ctx, req.Run.TurnID, sandbox.Clarification{AskedAt: time.Now().UTC()})
 }
 
 func (r *answerResumer) resumedWith() []string {
@@ -326,9 +329,8 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 		sandbox.Suspension{State: json.RawMessage(`{"messages":[]}`)}); err != nil {
 		t.Fatalf("MarkSuspended: %v", err)
 	}
-	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{
-		Question: "which branch?", Audience: "requester", AskedAt: time.Now().UTC(),
-	}); err != nil {
+	sandboxtest.Ask(t, store, "t1", sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	if err := coordinator.RecoverSeat(ctx, "swe", "node-a", 1); err != nil {

@@ -603,12 +603,12 @@ func TestAStoppedSeatLaunchesNothing(t *testing.T) {
 	refusedCleanly(t, e, "t1", jobs)
 }
 
-// A LAUNCHED RUN IS TOLD HOW TO GET A PERSON'S ANSWER. The box carries the ask
-// shim and the collection reads what it writes, and the run's system text is
-// the only place that says either exists: without it no run could park on a
-// question at all. Both ways are said — the tools for a question the run can go
-// on without, the shim for one it cannot — with the names the chart gives the
-// seat.
+// A LAUNCHED RUN IS TOLD HOW TO GET A PERSON'S ANSWER. The run's surface
+// carries `ask_and_wait` and the collection parks on what it records, and the
+// run's system text is the only place that says when to use it: without it a
+// run guessed rather than parked. Both ways are said (the tools for a question
+// the run can go on without, `ask_and_wait` with its options for one it
+// cannot) with the names the chart gives the seat.
 func TestALaunchedRunIsToldHowToGetAPersonsAnswer(t *testing.T) {
 	t.Parallel()
 	c, seat := executorCompany(t)
@@ -623,7 +623,8 @@ func TestALaunchedRunIsToldHowToGetAPersonsAnswer(t *testing.T) {
 	if len(started) != 1 {
 		t.Fatalf("%d jobs started, want 1", len(started))
 	}
-	for _, said := range []string{`crewlet-ask "`, "`" + builtin.CommentOnWorkTool + "` with `ask`"} {
+	for _, said := range []string{"`" + builtin.AskAndWaitTool + "` with", "`options`",
+		"`" + builtin.CommentOnWorkTool + "` with `ask`"} {
 		if !strings.Contains(started[0].System, said) {
 			t.Errorf("the run's system text does not say %q:\n%s", said, started[0].System)
 		}

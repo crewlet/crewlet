@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -99,7 +100,7 @@ type AskRow struct {
 	// Decision is the structure the ask carries when it asks somebody to
 	// choose — the options, the recommendation and the evidence — so the
 	// person or the model answering it decides from the same read.
-	Decision *Decision `json:"decision,omitempty"`
+	Decision *decision.Decision `json:"decision,omitempty"`
 
 	// Open says the ask is still waiting on an answer. Every row my_work
 	// lists is — the block is what is still owed — but the row is the
@@ -622,7 +623,7 @@ func askRowsOf(ctx context.Context, tx *sql.Tx, pending []askRecord,
 // than composing a call from the options.
 //
 // The item is the task's ADDRESS ([ItemAddress]), never its bare key.
-func answerCall(address, comment string, decision *Decision) string {
+func answerCall(address, comment string, decision *decision.Decision) string {
 	if decision != nil && decision.Recommended != "" {
 		return fmt.Sprintf("%s(item: %q, body: \"…\", answers: %q, choice: %q)",
 			CommentOnWorkTool, address, comment, decision.Recommended)

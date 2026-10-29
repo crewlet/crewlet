@@ -157,7 +157,7 @@ const auxCondensePrefix = "condense_"
 // both directions.
 var auxCondenseKinds = []string{
 	"conversation", "thread", "argument", "tool_error", "produced",
-	"source", "task", "answer", "outcome", "report", "question",
+	"source", "task", "answer", "outcome", "report",
 }
 
 // AuxCondense is the purpose of a compaction of one kind of text:

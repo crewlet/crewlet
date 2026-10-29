@@ -15,6 +15,29 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
 
+// realBox is a local box on the engine host with the runner's plumbing
+// installed, as a launch leaves one.
+func realBox(t *testing.T) (*codingagent.Runner, sandbox.Sandbox) {
+	t.Helper()
+	local, err := sandbox.NewLocal(sandbox.LocalOptions{
+		Placement: sandbox.Direct, StateDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	box, err := local.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { box.Close(t.Context()) })
+
+	runner := codingagent.NewClaudeCode()
+	if err = runner.Install(t.Context(), box); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	return runner, box
+}
+
 // steerWiring is what an executor run's launch hands its CLI for its turn's
 // notes: the bridge's server and its unlisted tool, as the engine names them.
 var steerWiring = sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take",
@@ -302,9 +325,9 @@ func fixture(t *testing.T, version, name string) string {
 	return string(raw)
 }
 
-// installClaude puts a stand-in `claude` on a real box's PATH — the shim
-// directory the wrapper puts first — running body, and answering `--version`
-// as the newest release measured does.
+// installClaude puts a stand-in `claude` on a real box's PATH (the box's own
+// bin directory, which the wrapper puts first), running body, and answering
+// `--version` as the newest release measured does.
 func installClaude(t *testing.T, box sandbox.Sandbox, body string) {
 	t.Helper()
 	p := codingagent.PathsFor(box)

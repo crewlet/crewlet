@@ -23,6 +23,11 @@
  * Needs you its notices ride on it rather than being listed again under
  * Updates, and answering it marks them read, so an answered question does not
  * come back as an update.
+ *
+ * AND ONE QUESTION IS ONE ROW, open or answered: a question answered on this
+ * visit stays in Needs you and is not listed under Answered as well, and one
+ * the engine lists as answered while its open row is still read leaves Needs
+ * you ([pairAnswered]).
  */
 
 import { firstLine, fmtDateCompact, toWall, zoneOffset } from "~/lib/format.ts";
@@ -31,12 +36,14 @@ import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import {
   ENGINE_SENTENCES,
   authorOf,
+  decisionTexts,
   nameAuthor,
   noticeItem,
   turnItem,
   type ItemRef,
 } from "~/lib/work.ts";
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
+import { runAsk, runAskTexts } from "~/lib/runs.ts";
 import { conditionKey, type Attention } from "~/lib/attention.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
@@ -46,6 +53,7 @@ import type {
   AgentRow,
   AnsweredDecision,
   AnsweredDecisionsAnswer,
+  AnsweredWorkAsk,
   WorkAskRow,
   WorkInboxAnswer,
   WorkInboxNotice,
@@ -63,9 +71,12 @@ export type InboxRow =
   | { kind: "condition"; key: string; at?: string; item: Attention }
   | { kind: "notice"; key: string; at: string; notice: WorkInboxNotice }
   /**
-   * An ask put to the reader and closed in the last week, from
-   * `answered_decisions`. Keyed as its open row was ([subjectKey]), so the
-   * open row in the address names the same ask before and after its answer.
+   * An ask put to the reader and closed in the last week, or a coding run's
+   * question they answered in it, from `answered_decisions`. An ask is keyed
+   * as its open row was ([subjectKey]), so the open row in the address names
+   * the same ask before and after its answer; a run's question by its turn
+   * and the launch that asked ([answeredRows]), since one turn's run can ask
+   * again.
    */
   | { kind: "answered"; key: string; at: string; answered: AnsweredDecision };
 
@@ -114,7 +125,9 @@ export function inboxSelection(row: InboxRow | null): InboxSelection | null {
     case "notice":
       return of("task", taskId(noticeItem(row.notice)), "update");
     case "answered":
-      return of("task", taskId(row.answered.ask), "decision");
+      return "run" in row.answered
+        ? of("run", row.answered.run.turn_id, "decision")
+        : of("task", taskId(row.answered.ask), "decision");
   }
 }
 
@@ -326,7 +339,10 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
     case "condition":
       return whoOf(index, row.item.who);
     case "answered":
-      return whoOf(index, row.answered.ask.asked_by);
+      return whoOf(
+        index,
+        "run" in row.answered ? row.answered.run.agent_handle : row.answered.ask.asked_by,
+      );
     case "notice": {
       const n = row.notice;
       if (n.actor_kind === "system") return null;
@@ -373,8 +389,11 @@ export function rowItem(row: InboxRow): ItemRef | null {
       break;
     case "condition":
       return null;
-    case "answered":
-      return row.answered.ask;
+    case "answered": {
+      if (!("run" in row.answered)) return row.answered.ask;
+      const ref = row.answered.run.work_item;
+      return ref ? turnItem(ref) : null;
+    }
     case "notice": {
       const item = noticeItem(row.notice);
       return item.id || item.key ? item : null;
@@ -401,7 +420,7 @@ export function rowKey(row: InboxRow): string {
     case "condition":
       return "";
     case "answered":
-      return row.answered.ask.key;
+      return "run" in row.answered ? (row.answered.run.work_item?.key ?? "") : row.answered.ask.key;
     case "notice":
       return row.notice.subject_key ?? "";
   }
@@ -426,16 +445,6 @@ export function noticeText(notice: WorkInboxNotice, index: OrgIndex): string {
 /** A sentence's first letter in capitals: a reason's words as a heading. */
 function capital(s: string): string {
   return s ? s[0]!.toUpperCase() + s.slice(1) : s;
-}
-
-/**
- * The first sentence of a text, or its first line where no sentence ends in
- * it: what fits a heading of what a longer text says.
- */
-export function firstSentence(text: string): string {
-  const line = firstLine(text);
-  const end = /^(.+?[.?!])(?:\s|$)/.exec(line);
-  return end ? end[1]! : line;
 }
 
 /** What a change of each kind did, for a notice whose reason does not say it. */
@@ -502,11 +511,22 @@ export function askQuestion(ask: WorkAskRow): string {
  * is placed by what the others name (`TokenScope`).
  */
 export function askTexts(ask: WorkAskRow): string[] {
-  const decision = ask.decision;
-  const options = (decision?.options ?? []).flatMap((o) => [o.label, o.detail ?? ""]);
-  return [askQuestion(ask), askContext(ask), decision?.rationale ?? "", ...options].filter(
+  return [askQuestion(ask), askContext(ask), ...decisionTexts(ask.decision)].filter(
     (text) => text.trim() !== "",
   );
+}
+
+/**
+ * What an answered question asked, as its row and its pane head it: an ask's
+ * question, or a coding run's ([runAsk]).
+ */
+export function answeredQuestion(answered: AnsweredDecision): string {
+  return "run" in answered ? runAsk(answered.run).title : askQuestion(answered.ask);
+}
+
+/** Every text of an answered question a reader reads as one message ([askTexts]). */
+export function answeredTexts(answered: AnsweredDecision): string[] {
+  return "run" in answered ? runAskTexts(runAsk(answered.run)) : askTexts(answered.ask);
 }
 
 /** What an ask says beside its question: the body, or what follows its first line. */
@@ -725,14 +745,66 @@ function atNine(c: Civil, tz: string): string {
 // What was answered
 // ---------------------------------------------------------------------------
 
-/** The asks `answered_decisions` lists, as rows, newest closing first. */
+/** What `answered_decisions` lists, as rows, newest closing first. */
 export function answeredRows(answer: AnsweredDecisionsAnswer | null | undefined): InboxRow[] {
   return (answer?.items ?? []).map((answered) => ({
     kind: "answered",
-    key: subjectKey({ kind: "ask", at: answered.ask.asked_at, ask: answered.ask }),
+    key:
+      "run" in answered
+        ? runQuestionKey(answered.run.turn_id, answered.run.launch_id)
+        : subjectKey({ kind: "ask", at: answered.ask.asked_at, ask: answered.ask }),
     at: answered.at,
     answered,
   }));
+}
+
+/**
+ * One coding run's question: its turn and the launch that asked it. A turn's
+ * run that asks again does so under a new launch, so the turn alone (the open
+ * row's key, [subjectKey]) names whichever question it is parked on now.
+ */
+function runQuestionKey(turn: string, launch: string | undefined): string {
+  return `run:${turn}:${launch ?? ""}`;
+}
+
+/**
+ * The question a row asks or answered, the same for an open row and for the
+ * answered row it becomes, or null for a row that is not a question.
+ */
+export function questionOf(row: InboxRow): string | null {
+  if (row.kind === "answered") return row.key;
+  if (row.kind !== "decision") return null;
+  switch (row.subject.kind) {
+    case "ask":
+      return row.key;
+    case "run":
+      return runQuestionKey(row.subject.run.turn_id, row.subject.run.launch_id);
+    case "seat":
+      return null;
+  }
+}
+
+/**
+ * Needs you and Answered with each question in one of them, never both.
+ *
+ * A QUESTION ANSWERED ON THIS VISIT (`settled`, by its row's key) stays in
+ * Needs you, marked with its answer, and is not listed under Answered as
+ * well. ANY OTHER question Answered lists has left Needs you: the two reads
+ * are asked apart, and the open one can still list a question the person
+ * answered a moment ago in another tab, which they must not see as waiting.
+ */
+export function pairAnswered(
+  needs: readonly InboxRow[],
+  answered: readonly InboxRow[],
+  settled: Pick<ReadonlySet<string>, "has">,
+): { needs: InboxRow[]; answered: InboxRow[] } {
+  const here = new Set(needs.filter((r) => settled.has(r.key)).map(questionOf));
+  const closed = answered.filter((r) => !here.has(questionOf(r)));
+  const gone = new Set(closed.map(questionOf));
+  return {
+    needs: needs.filter((r) => settled.has(r.key) || !gone.has(questionOf(r))),
+    answered: closed,
+  };
 }
 
 /**
@@ -767,16 +839,15 @@ export function answerWords(
       recommended: false,
     };
   }
-  const option = a.choice
-    ? answered.ask.decision?.options.find((o) => o.id === a.choice)
-    : undefined;
+  const decision = "run" in answered ? answered.run.decision : answered.ask.decision;
+  const option = a.choice ? decision?.options.find((o) => o.id === a.choice) : undefined;
   if (option) {
     return {
       who,
       verb: "chose",
       said: option.label,
       kind: "choice",
-      recommended: answered.ask.decision?.recommended === option.id,
+      recommended: decision?.recommended === option.id,
     };
   }
   return { who, verb: "replied", said: a.body, kind: "reply", recommended: false };
@@ -798,7 +869,7 @@ export type FollowThrough =
   | { state: "held"; reason: "paused" | "stopped" };
 
 export function followThrough(
-  answered: AnsweredDecision,
+  answered: AnsweredWorkAsk,
   seat: AgentRow | undefined,
 ): FollowThrough | null {
   const f = answered.followed_up;
