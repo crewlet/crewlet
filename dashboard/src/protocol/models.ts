@@ -11,6 +11,7 @@
 
 import type {
   ModelAlarmKind,
+  ModelDeviceStatus,
   ModelHealth,
   ModelJob,
   ModelLimitWindow,
@@ -94,15 +95,6 @@ export interface ModelUse {
   written?: boolean;
   source?: "seat" | "executor" | "default-entry" | "first-entry";
 }
-
-/**
- * Where a device sign-in is (`coord.DeviceSignInStatus`). Declared here, beside
- * the answer that carries it, until the engine exports the set's slice
- * (`coord.DeviceSignInStatuses`); it then moves to `contract/models.ts` and a Go
- * gate holds it to the engine's.
- */
-export type ModelDeviceStatus =
-  "starting" | "pending" | "cancel_requested" | "approved" | "failed" | "expired" | "cancelled";
 
 /** A Codex device sign-in session. */
 export interface ModelDevice {
