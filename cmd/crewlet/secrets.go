@@ -6,11 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
@@ -68,6 +71,7 @@ const secretsUsage = `crewlet secrets — read and rotate the encrypted secret s
 Usage:
   crewlet secrets list                     What is set, and when it was last written
   crewlet secrets set NAME [-value V]      Store or rotate one secret (reads stdin without -value)
+  crewlet secrets set NAME NAME...         Store several as one write, read as NAME=value lines on stdin
   crewlet secrets get NAME -reveal         Print one secret to stdout (break-glass; logged)
   crewlet secrets unset NAME               Remove one secret
   crewlet secrets keygen [-key-id ID]      A fresh keyring key, with the config snippet to install it
@@ -137,18 +141,24 @@ func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) 
 	// The trailing form — `secrets get -config path TOKEN` — leaves the
 	// name here instead. Anything beyond one is an error rather than a
 	// silently ignored argument.
+	// SET TAKES SEVERAL, as one write: a rotation of every credential one
+	// model or integration reads lands as one activation, never as a
+	// company signing in with a mix of the old and the new values.
+	names := append(nonEmpty(name), fs.Args()...)
 	name, given := onePositional(fs, name)
-	if given > 1 {
+	if given > 1 && sub != "set" {
 		return fmt.Errorf("secrets %s takes one name, got %d", sub, given)
 	}
 	// THE ENGINE'S OWN KEYS ARE REFUSED BEFORE ANYTHING OPENS, whichever
 	// way this would reach the store: the node refuses them, and so does the
 	// store itself, so there is no route on which asking could do anything
 	// but fail later and less clearly.
-	if secrets.Reserved(name) {
-		return fmt.Errorf("%w: %s\n\nThe address index's key belongs to the "+
-			"identity estate. `crewlet secrets rekey` moves it with everything "+
-			"else and counts it", secrets.ErrReservedName, name)
+	for _, asked := range append(names, name) {
+		if secrets.Reserved(asked) {
+			return fmt.Errorf("%w: %s\n\nThe address index's key belongs to the "+
+				"identity estate. `crewlet secrets rekey` moves it with everything "+
+				"else and counts it", secrets.ErrReservedName, asked)
+		}
 	}
 
 	ctx := context.Background()
@@ -158,6 +168,9 @@ func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) 
 	commands := map[string]func(sv *secretTarget) error{
 		"list": func(sv *secretTarget) error { return listSecrets(ctx, sv, stdout) },
 		"set": func(sv *secretTarget) error {
+			if len(names) > 1 {
+				return setSecrets(ctx, sv, names, os.Stdin, stdout, stderr)
+			}
 			return setSecret(ctx, sv, name, *value, isFlagSet(fs, "value"), stdout, stderr)
 		},
 		"get":   func(sv *secretTarget) error { return getSecret(ctx, sv, name, stdout) },
@@ -182,6 +195,11 @@ func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) 
 	}
 	if err := secretsCallError(sub, name, *reveal); err != nil {
 		return err
+	}
+	if len(names) > 1 && isFlagSet(fs, "value") {
+		return errors.New("secrets set -value stores one name; several names read " +
+			"their values from stdin, one NAME=value line each, so no value lands " +
+			"in shell history")
 	}
 
 	run := storeRun{command: "crewlet secrets " + sub, reveals: sub == "get", offline: true}
@@ -250,8 +268,21 @@ type secretBackend interface {
 	// shell's user as the author of a row that named the API token instead.
 	// The source is offered the same way, and only a write made directly
 	// keeps it: the node stamps its route's own word, whatever the command.
+	//
+	// Through a node it also reports what the write did to the running
+	// company: the paths that read the name and the re-activation the node
+	// made (ADR-0070), which a write made directly does not make.
 	Set(ctx context.Context, name, value string, by secrets.Author,
-		source secrets.Source, now time.Time) (secrets.Author, error)
+		source secrets.Source, now time.Time) (storedSecret, error)
+
+	// SetMany stores several values as ONE write: through a node, `PUT
+	// /secrets`, which re-activates the revision that reads any of them
+	// once (or, with deferReload, re-activates nothing, for a writer whose
+	// last write re-activates for every value it sealed: a provisioning
+	// run); directly, each row in turn, since nothing is running to
+	// re-activate.
+	SetMany(ctx context.Context, values map[string]string, by secrets.Author,
+		source secrets.Source, now time.Time, deferReload bool) (storedSecret, error)
 	Get(ctx context.Context, name string) (string, error)
 
 	// Values reads the values held under the names asked for, and no
@@ -269,6 +300,16 @@ type secretBackend interface {
 	// personal values — per keyring key, which is what a rotation has to
 	// see moved before the old key can go.
 	EngineKeys(ctx context.Context) (engineHeld, error)
+}
+
+// storedSecret is what a write did: the author the row records, and (through
+// a running node) the paths of the active revision that read each name and
+// the re-activation the node made, nil where nothing reads any of them or the
+// store was written directly.
+type storedSecret struct {
+	Author secrets.Author
+	ReadBy map[string][]string
+	Reload *configapi.Reloaded
 }
 
 // rotation is what one rekey moved: the store's rows, and the identity
@@ -682,7 +723,7 @@ func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 	}
 	// THIS COMMAND'S OWN WORD, and no flag offers another: written directly
 	// the row records `cli`, and a running node records its route's `api`.
-	recorded, err := sv.Set(ctx, name, value, hostAuthor(), secrets.SourceCLI,
+	written, err := sv.Set(ctx, name, value, hostAuthor(), secrets.SourceCLI,
 		time.Now().UTC())
 	if err != nil {
 		return err
@@ -691,48 +732,147 @@ func setSecret(ctx context.Context, sv *secretTarget, name, value string,
 	// reason it was read from stdin. The author is the one the ROW records,
 	// and the credential beside it where one made the write.
 	fmt.Fprintf(stdout, "stored %s (%d bytes) as %s\n", name, len(value),
-		describeAuthor(recorded.Name, recorded.OperatorID))
+		describeAuthor(written.Author.Name, written.Author.OperatorID))
 	// SAID EVERY TIME, because which way it went is invisible afterwards and
 	// decides who reads it when: an operator who cannot tell finds out when a
 	// vendor rejects a credential a node has not picked up yet.
 	fmt.Fprintf(stdout, "written to %s\n", sv.where)
-	fmt.Fprintln(stdout, sv.writtenNote())
+	fmt.Fprintln(stdout, sv.writtenNote(written))
 	return nil
 }
 
+// setSecrets stores several values as one write ([secretBackend.SetMany]),
+// each read from in as a `NAME=value` line.
+//
+// FROM STDIN, AS NAMED LINES, never as arguments and never in the order the
+// names were given: a value on argv lands in shell history, and a list read by
+// position swaps two credentials silently when the order is wrong. Every name
+// given has to arrive exactly once and nothing else may, so a file meant for
+// another rotation is refused rather than half-applied. A value that holds a
+// newline (a PEM key) is stored on its own, with `crewlet secrets set NAME`.
+func setSecrets(ctx context.Context, sv *secretTarget, names []string, in io.Reader,
+	stdout, stderr io.Writer) error {
+
+	fmt.Fprintf(stderr, "reading %s from stdin, one NAME=value line each...\n",
+		strings.Join(names, ", "))
+	values, err := namedValuesFrom(in, names)
+	if err != nil {
+		return err
+	}
+	written, err := sv.SetMany(ctx, values, hostAuthor(), secrets.SourceCLI, time.Now().UTC(), false)
+	if err != nil {
+		return err
+	}
+	for _, name := range slices.Sorted(maps.Keys(values)) {
+		fmt.Fprintf(stdout, "stored %s (%d bytes)\n", name, len(values[name]))
+	}
+	fmt.Fprintf(stdout, "written to %s\n", sv.where)
+	fmt.Fprintln(stdout, sv.writtenNote(written))
+	return nil
+}
+
+// namedValuesFrom reads one `NAME=value` line per name in names from r, and
+// refuses anything else: a name given twice or not at all, a line naming one
+// not asked for, a line with no `=`. Blank lines are skipped. Bounded as a
+// single value is ([readPipedValue]), by every name's value at its longest.
+func namedValuesFrom(r io.Reader, names []string) (map[string]string, error) {
+	asked := map[string]bool{}
+	for _, name := range names {
+		if asked[name] {
+			return nil, fmt.Errorf("secrets set names %s twice", name)
+		}
+		if err := secrets.CheckName(name); err != nil {
+			return nil, err
+		}
+		asked[name] = true
+	}
+	most := int64(len(names)) * (secrets.MaxValueBytes + 1<<10)
+	body, err := io.ReadAll(io.LimitReader(r, most+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > most {
+		return nil, fmt.Errorf("%w: more than %d bytes arrived for %d names, so the rest "+
+			"was not read", secrets.ErrValueTooLarge, most, len(names))
+	}
+	values := map[string]string{}
+	for line := range strings.Lines(string(body)) {
+		line = strings.TrimSuffix(line, "\n")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		name, value, ok := strings.Cut(line, "=")
+		switch {
+		case !ok:
+			return nil, errors.New("a line on stdin is not NAME=value; nothing was stored")
+		case !asked[name]:
+			return nil, fmt.Errorf("stdin carries %s, which the command line does not "+
+				"name; nothing was stored", name)
+		}
+		if _, twice := values[name]; twice {
+			return nil, fmt.Errorf("stdin carries %s twice; nothing was stored", name)
+		}
+		if err := secrets.CheckValue(value); err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		values[name] = value
+	}
+	for _, name := range names {
+		if _, ok := values[name]; !ok {
+			return nil, fmt.Errorf("stdin carries no %s=value line; nothing was stored", name)
+		}
+	}
+	return values, nil
+}
+
 // writtenNote is who reads a value written this way, and when, said after
-// every write of a value a running engine reads: [secretsFleetNote] through a
-// node, [secretsStoppedNote] on the store reached directly.
+// every write of a value a running engine reads: through a node, what the
+// node's re-activation did ([reloadNote]); on the store reached directly,
+// [secretsStoppedNote].
 //
 // ONE ANSWER FOR EVERY COMMAND THAT WRITES ONE, because each of them leaves
 // the same gap: `crewlet llm login -capture-token` and `-token-stdin`, and
 // `crewlet llm export -secret-store`, once said only where the value went, and
 // a running fleet kept signing in without the new token until something
 // applied the company.
-func (t *secretTarget) writtenNote() string {
+func (t *secretTarget) writtenNote(written storedSecret) string {
 	if t.throughNode {
-		return secretsFleetNote
+		return reloadNote(written.Reload)
 	}
 	return secretsStoppedNote
 }
 
-// secretsFleetNote is what a write to the FLEET's store does not do yet.
-//
-// The engine resolves a `${VAR}` through a snapshot of the store taken at each
-// configuration apply, so a value written to a running fleet is read at its
-// next apply and not before — and an operator who rotated a key and saw the
-// old one still in use would conclude the write failed. Re-activating the
-// current revision is the gesture, and on a running fleet it is the node's
-// reload.
-const secretsFleetNote = "The running fleet reads it at its next configuration " +
-	"apply; POST /config/reload to a node that is up re-activates the current " +
-	"revision now."
+// secretsUnreadNote is a write through a node of a value nothing the running
+// company reads: nothing was re-activated, because nothing that runs changes.
+const secretsUnreadNote = "Nothing the running company reads names it, so nothing " +
+	"was re-activated; a revision that names it reads it when that revision applies."
+
+// reloadNote is what a node's re-activation after a write did, as an operator
+// reads it (ADR-0070): the revision and epoch the running fleet reads the value
+// at, or why it was not re-activated and the gesture that does it once that is
+// fixed. The value is sealed in every case.
+func reloadNote(reload *configapi.Reloaded) string {
+	switch {
+	case reload == nil:
+		return secretsUnreadNote
+	case reload.Deferred:
+		return "It is stored and not active yet: the running company reads it at the " +
+			"next re-activation."
+	case reload.Error == "":
+		return fmt.Sprintf("The running fleet reads it now: the node re-activated the "+
+			"company as revision %s, epoch %d.", reload.RevisionID, reload.Epoch)
+	default:
+		return fmt.Sprintf("It is stored and was NOT re-activated (%s): %s. POST "+
+			"/config/reload to a node re-activates the current revision once that is fixed.",
+			reload.Error, strings.TrimSuffix(reload.Detail, "."))
+	}
+}
 
 // secretsStoppedNote is who reads a value written while this node's engine was
 // stopped, and when.
 //
 // The store is the fleet's, so the value is there for every node at once —
-// but each reads it through its snapshot ([secretsFleetNote]): this node's
+// but each reads it through the snapshot it takes at an apply: this node's
 // engine when it starts, and a node already running on the same store (an
 // external broker's fleet) at its next apply. Said, because an operator who
 // rotated a key and saw a running peer go on using the old one would

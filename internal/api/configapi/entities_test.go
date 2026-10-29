@@ -297,6 +297,11 @@ func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
 		for _, method := range []string{
 			http.MethodDelete, http.MethodPost, http.MethodPatch,
 		} {
+			// A MODEL IS THE ONE COLLECTION REMOVED BY ADDRESS, with every
+			// dependant repointed in the same write (removal_test.go).
+			if kind == configapi.EntityLLMProviders && method == http.MethodDelete {
+				continue
+			}
 			res := s.do(t, method, "/config/"+kind+"/ceo", "", nil)
 			if res.Code != http.StatusMethodNotAllowed {
 				t.Errorf("%s /config/%s/ceo = %d, want 405 — an entity path serves "+

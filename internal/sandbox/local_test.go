@@ -208,6 +208,58 @@ func TestThePerCommandEnvOverridesTheRunEnv(t *testing.T) {
 	}
 }
 
+// A JOB LAUNCHED INTO A KEPT BOX CARRIES ITS OWN LAUNCH'S ENVIRONMENT, never
+// the one the box was made with. A follow-up job reaches a kept box through
+// Connect, and the box it gets back holds no environment of its own: so a
+// credential replaced between the two launches reaches the second job, and one
+// the new sign-in no longer names (a token swapped for a key) is gone from it
+// rather than lingering beside the new one, where a CLI that prefers the old
+// variable would sign in with a credential the vendor already refused. That is
+// what lets a job refused on a replaced sign-in be relaunched in its own box
+// and sign in with the new one.
+//
+// Mutation: have a reattached box keep the env it was created with, and the
+// old token reaches the follow-up job.
+func TestAFollowUpInAKeptBoxCarriesItsOwnLaunchsEnv(t *testing.T) {
+	t.Parallel()
+	local := newDirect(t)
+	first := mustCreate(t, local, Spec{Env: map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-old"}})
+	kept, err := local.Connect(t.Context(), first.ID())
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	result, err := kept.Exec(t.Context(), `echo "${CLAUDE_CODE_OAUTH_TOKEN-unset}:${ANTHROPIC_API_KEY-unset}"`,
+		ExecOptions{Env: map[string]string{"ANTHROPIC_API_KEY": "sk-ant-api03-new"}})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if got := strings.TrimSpace(result.Stdout); got != "unset:sk-ant-api03-new" {
+		t.Fatalf("the follow-up job saw %q, want only its own launch's credential (unset:sk-ant-api03-new)", got)
+	}
+
+	// THE CONTAINER CELL'S TOO: its env file is the follow-up job's alone.
+	container := &Local{opts: LocalOptions{Placement: Container}, root: t.TempDir()}
+	layout, err := container.layout("box-1")
+	if err != nil {
+		t.Fatalf("layout: %v", err)
+	}
+	if err := os.MkdirAll(layout.root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	box, err := container.reattach("box-1")
+	if err != nil {
+		t.Fatalf("reattach: %v", err)
+	}
+	reattached := box.(*containerBox)
+	if _, err := reattached.envArgs(map[string]string{"ANTHROPIC_API_KEY": "sk-ant-api03-new"}); err != nil {
+		t.Fatalf("envArgs: %v", err)
+	}
+	blob, _ := os.ReadFile(reattached.layout.envFile())
+	if strings.Contains(string(blob), "CLAUDE_CODE_OAUTH_TOKEN") || !strings.Contains(string(blob), "sk-ant-api03-new") {
+		t.Fatalf("the reattached container's env file = %q, want the follow-up job's credential alone", blob)
+	}
+}
+
 // ---------------------------------------------------------------------
 // the escape guard
 // ---------------------------------------------------------------------

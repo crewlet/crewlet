@@ -83,8 +83,14 @@ func mountedAs(t *testing.T, opts secretsapi.Options, caller iam.Principal) http
 }
 
 // newService builds the surface, failing the test on a wiring mistake.
+//
+// A CASE THAT NAMES NO COMPANY writes into one that reads none of its
+// secrets, so it is about the store alone and re-activates nothing.
 func newService(t *testing.T, opts secretsapi.Options) *secretsapi.Service {
 	t.Helper()
+	if opts.Config == nil {
+		opts.Config = &company{}
+	}
 	svc, err := secretsapi.New(opts)
 	if err != nil {
 		t.Fatalf("secretsapi.New: %v", err)
@@ -254,6 +260,8 @@ func TestWithoutAKeyringTheSurfaceIsRefused(t *testing.T) {
 			ActiveKeyID: "k1"}, "Options.Cipher"},
 		{"no active key", secretsapi.Options{Fleet: coordmem.NewFleet(),
 			Cipher: cipherFor(t, "k1")}, "Options.ActiveKeyID"},
+		{"no config surface", secretsapi.Options{Fleet: coordmem.NewFleet(),
+			Cipher: cipherFor(t, "k1"), ActiveKeyID: "k1"}, "Options.Config"},
 	} {
 		svc, err := secretsapi.New(c.opts)
 		if err == nil {

@@ -2101,6 +2101,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// AND THE IDENTITY ESTATE'S HALF of a rotation, which only a
 		// record can move, and the assistant's, which a rotation waits out.
 		Identity: keyring, Assistant: assistantValues,
+		// AND THE CONFIG SURFACE, so a write of a value the company reads
+		// re-activates the revision that reads it (ADR-0070), through the
+		// same Reload `POST /config/reload` performs.
+		Config: configSurface,
 	})
 	if err != nil {
 		return nil, err
@@ -2597,6 +2601,15 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// AND THE SOCKET'S ARTIFACT ROOMS, decided by that same admission and
 	// fed by this engine's appliers and presence hub.
 	opts.Rooms = artifactRooms
+	// SETTINGS › MODELS: the model routes, writing through the config
+	// surface and the fleet's store under the same keyring, audited on this
+	// node's queue, and the questions that read every model's state.
+	modelSurface, err := api.NewModelSurface(e, configSurface, cipher, e.Backends().Queue)
+	if err != nil {
+		return nil, err
+	}
+	opts.Models = modelSurface
+	api.ModelSources(&opts.Sources, e, cipher)
 	app, err := api.New(opts) //nolint:contextcheck // see the paragraph above the options
 	if err == nil {
 		err = assistantSvc.bindRoutes(app)

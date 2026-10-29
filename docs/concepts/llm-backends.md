@@ -331,7 +331,7 @@ providers:
         OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
 
       auth:
-        mode: subscription           # subscription (default) | api-key | inherit-env
+        mode: subscription           # subscription (default) | api-key | inherit-env | env
         token: "${MY_OAUTH_TOKEN}"   # subscription only; else the profile's own token variable
         # api_key: "${MY_API_KEY}"   # api-key only — refused under any other mode;
                                      #   else the profile's own key variable
@@ -339,6 +339,19 @@ providers:
 
       overrides: {}                  # any field under "Profile fields"
 ```
+
+**The key is the entry's name, and a directory's and a variable's.** Seats
+select the entry by it, the default `state_dir` is named for it, and its
+credential bundle is read from `CREWLET_LLM_CLI_<KEY>_CREDENTIALS`. So a key
+is lowercase letters, digits, `.`, `_` and `-`, starting with a letter or a
+digit, at most 63 characters (`^[a-z0-9][a-z0-9._-]{0,62}$`, a DNS label with
+two more separators): a `/` would nest one entry's login inside another's, and
+`Fast` beside `fast` would be two entries on one bundle. For the same reason
+**no two keys may share a bundle variable**: the variable maps `.`, `_` and `-`
+alike, so `gpt-5`, `gpt_5` and `gpt.5` would all restore and export one login,
+and the keys after the first are refused, naming the one they collide with.
+Both are admission rules, like the credential rules below: a write is refused,
+and a revision being applied is warned about.
 
 **`model` is required.** A CLI with no model named runs the vendor's current
 default, which moves under you and bills as a model nobody chose. A reference
@@ -401,13 +414,14 @@ region, serve the executor as they serve every other phase.
 **`auth.mode` defaults to `subscription`, not `inherit-env`**, on purpose: an
 entry that silently picked up a stray `ANTHROPIC_API_KEY` from the engine's
 environment would bill the metered account while you believed you were on a
-flat-rate plan. The three modes:
+flat-rate plan. The four modes:
 
 | `auth.mode` | What reaches the CLI |
 |---|---|
 | `subscription` (default) | its login — credential files in the entry's directory, or a database export — and a headless token in its `token_env` where `auth.token` or that variable resolves. Its `api_key_env` is removed. |
 | `api-key` | one key in its `api_key_env`: `auth.api_key`, or that variable itself looked up through the secret store and then the environment (never for a [shared](#profile-fields) variable). Its `token_env` is removed, and no login is seeded: the call runs in the seat's [key home](#isolation-the-part-that-actually-matters). |
 | `inherit-env` | whichever of the two variables the **engine's own** environment holds — the deliberate escape hatch for an unusual CLI, and the only mode in which a host credential reaches the child. Where that is the key, the call runs in the key home, as under `api-key`; otherwise beside the login, as under `subscription`. |
+| `env` | the entry's own `env` and nothing else: a cloud provider's switch and credentials, or a gateway's address and token ([route 7](#7-a-cloud-provider-or-gateway-authmode-env)). Its `token_env` and `api_key_env` are both removed, and no login is seeded: the call runs in the key home. |
 
 **One key, never a list.** A CLI holds one sign-in and rotates nothing, so an
 entry has at most one token or one key; a second key is a second entry, placed
@@ -421,9 +435,11 @@ token — so each of these would run with the credential unused:
 | Written | Refused because | Instead |
 |---|---|---|
 | `auth.mode: api-key` on a CLI whose profile names no `api_key_env` (`hermes`, `pi`, `opencode`, `kimi-code`) | the key has no variable to go in | `hermes`, `pi`, `opencode`: leave `auth.mode` at `subscription` and set the key in `env` under its provider's own variable ([below](#6-a-provider-key-in-env-opencode-hermes-pi)). `kimi-code`: put the key in the credential directory's `config.toml` — `crewlet llm login`, or a [credential bundle](#4-move-a-login-onto-another-host). A build of the CLI that does read a key variable: name it with `overrides.api_key_env` |
-| `auth.api_key` under `subscription` or `inherit-env` | only `api-key` mode reads it | set `auth.mode: api-key`, or drop it |
+| `auth.api_key` under `subscription`, `inherit-env` or `env` | only `api-key` mode reads it | set `auth.mode: api-key`, or drop it |
 | `auth.token` on a CLI whose profile names no `token_env` (every built-in profile but `claude-code`) | the CLI mints no headless token | remove it |
-| `auth.token` under `api-key` or `inherit-env` | `api-key` removes the token variable and `inherit-env` forwards the engine's own | `auth.mode: subscription` |
+| `auth.token` under `api-key`, `inherit-env` or `env` | `api-key` and `env` remove the token variable, and `inherit-env` forwards the engine's own | `auth.mode: subscription` |
+| `auth.mode: env` with an `env` that sets none of the profile's `sign_in_env` (on an `env_sign_in` CLI: no credential-named variable), or on a CLI whose profile declares neither | the mode hands the CLI no token, no key and no login, so nothing would sign it in | set the switch or the gateway token your cloud or gateway takes in `env` ([route 7](#7-a-cloud-provider-or-gateway-authmode-env)), or another mode |
+| a name from the profile's `sign_in_env` in `env` under any mode but `env` (Claude Code's `CLAUDE_CODE_USE_BEDROCK`, `ANTHROPIC_AUTH_TOKEN`, ...) | the mode hands the CLI a plan token or a key beside it, which the CLI ranks by rules of its own | `auth.mode: env` |
 | `auth.mode: inherit-env` on a CLI that names neither variable | nothing would be forwarded | `subscription`, with the key in `env` or a login |
 | `auth.mode: subscription` — the default — on a CLI that keeps no login and mints no token but reads a key (`qwen-code`) | `subscription` removes the key variable, so the entry would sign in to nothing | `auth.mode: api-key`, with the key as `auth.api_key` |
 | `auth.mode: api-key` with no `auth.api_key` on a CLI whose key variable is [shared](#profile-fields) (`qwen-code`'s `OPENAI_API_KEY`) | that variable holds other vendors' keys too, so the engine never reads it in the entry's place | name the key: `auth.api_key: "${DASHSCOPE_API_KEY}"` |
@@ -739,13 +755,15 @@ reads `stopped` with the reason `provider`, and the dashboard's Inbox draws one
 condition for the kind of limit ("Claude Code subscription limit reached.
 Agents resume at 4:30 PM.") rather than a row per seat. The condition reaches
 every reader of the dashboard, so it names no entry: which entries are spent and
-which carries a seat is on **Settings › Models**, for an admin. A seat whose chain has an entry that still answers is never parked: it
+which carries a seat is on [**Settings › Models**](#managing-models-from-the-dashboard): every member reads which
+models sit out and until when, and an admin reads which credential and which
+vendor sentence too. A seat whose chain has an entry that still answers is never parked: it
 runs on that entry, and the condition says so. A chain whose head is limited and
 whose fallback failed for another reason is retried as any failed turn is,
 because nothing says that failure lasts. An apply that changes the company's
 models releases every park at once, so the redelivery asks the new entries; an
-entry whose specification the apply left unchanged keeps its sit-out (below)
-and refuses before any CLI starts, so a limit that still holds parks the seat
+entry that still calls as the same account keeps its sit-out
+([below](#a-limit-is-the-sign-ins)) and refuses before any CLI starts, so a limit that still holds parks the seat
 again at the cost of one delivery and no process. A seat whose mail its coding
 run holds has no delivery to come: the release re-fires the run's held
 completion instead, which is collected again and refused on the carried limit
@@ -777,9 +795,9 @@ answering, rather than being collected and reviewed again, and its box
 launched again, every time the backend's hour-long sit-out of the entry ends
 inside a longer vendor window.
 
-The sit-out is the entry's own, on the node that heard the sentence: every other
-node learns the same thing from its own calls, once per window. A later sit-out
-never shortens an earlier one.
+The sit-out is the sign-in's, on the node that heard the sentence
+([below](#a-limit-is-the-sign-ins)): every other node learns the same thing from
+its own calls, once per window. A later sit-out never shortens an earlier one.
 
 **An executor's run is heard too.** A seat's executor is its CLI's own run in a
 box, which never goes through a call on this host, so the node that collects a run
@@ -801,9 +819,10 @@ the first member of the seat's chain that is not sitting out, so a reviewer
 sending the turn back an hour into the same window moves to the next entry
 rather than walking into the same limit, and a launch every member of which
 sits out parks the seat as a call's limited chain does. **An apply keeps it**:
-an entry an apply rebuilds with its specification unchanged carries the sit-out
-over — its window, the reset the vendor named and how far its backoff has
-stepped — since its plan is no less spent for a new configuration revision.
+an entry an apply rebuilds on the same account finds its window, the reset the
+vendor named and how far its backoff has stepped, since its plan is no less
+spent for a new configuration revision; one whose credential changed starts
+clean ([below](#a-limit-is-the-sign-ins)).
 
 **A login is never sat out.** An expired or missing login is `auth`, which also
 moves the seat down its chain, but the very next call tries the entry again:
@@ -811,6 +830,69 @@ moves the seat down its chain, but the very next call tries the entry again:
 running, and a window would hold a signed-in seat on its fallback for nothing.
 Finding out a login is still missing costs a CLI that exits at once rather than
 a model call.
+
+### A limit is the sign-in's
+
+What a vendor says about a limit is said about an **account**, so the engine
+keeps it per sign-in, not per entry. Each entry has a sign-in identity: a keyed
+hash of its CLI, its `auth.mode` and every credential its CLI is handed (the
+token, the key, a gateway token or a cloud switch in its `env`) with where it
+reaches (the profile's `identity_env`: a cloud region and profile, a project, a
+gateway's address), or, for a login
+kept in files, of that login's install record, which a login command, an import,
+a bundle restore or a device sign-in writes and a token refresh does not. The
+key is derived from the node's keyring, so every node computes one identity for
+one credential. Each node keeps one record per identity for as long as it runs,
+and every entry reads its own:
+
+- **Entries on one credential pause together.** A session or weekly limit is
+  the whole plan's, so the first entry to hear it sits out every entry on the
+  same account, which spares each of the others a process launch learning it
+  again.
+- **A model's own limit holds that model only.** "You've hit your Opus limit"
+  (Claude Code's `seven_day_opus`) sits out the entries that hand the CLI the
+  same model argument, and an entry on Sonnet on the same plan still answers.
+  The argument is matched exactly: `sonnet` is not `claude-sonnet-5-5`, which
+  learns at its first call.
+- **A rotated credential starts clean.** A new token stored under the same
+  `${VAR}` is a new identity with nothing to sit out, and a fresh
+  `crewlet llm login` is too. An apply that changes anything else (a timeout,
+  a seat, the model of another entry) changes nothing here.
+- **A keyring rotation starts every sit-out clean once**, since every identity
+  moves with it.
+
+**Which limit, and when it lifts, are read from the CLI's fields first.** Claude
+Code writes a `rate_limit_event` on every run; a rejected one carries the reset
+as an epoch and the window by name (`five_hour` is a session, `seven_day` a
+week, `seven_day_opus` and `seven_day_sonnet` one model's), and the last one a
+run wrote dates the limit it reported (`limit_reset_events`). Where no event
+names it, the sentence does: its reset (`reset_unit: clock`) and its wording
+(`limit_windows`: "weekly limit" is a week). A limit nothing names is `unknown`.
+The window rides on the refusal (`window`), so what a person is told can say
+"weekly". The structured path is Claude Code's alone for now: Codex writes no
+rate-limit event on `codex exec --json` (its `rate_limits` are in a run's
+session file only, which a call on this host never writes), so a Codex limit's
+reset comes from its sentence, and its window from the sentence's wording
+("usage limit for" a model is that model's).
+
+A reset named in words is read in one of three shapes, each optionally followed
+by its zone in parentheses: a time of day ("4:30pm", "16:30", "4:31 PM"), its
+next occurrence; a weekday and a time ("Mon 9am"), that day's next occurrence
+strictly after the report, so a weekly reset reported on a Monday at ten is next
+Monday's; or a date and a time ("Nov 3rd, 2026 3:45 PM"), which carries its own
+day. **A time with no zone is read in the CLI's own zone, which the engine sets.**
+Every CLI the engine starts, on this host and in a box, is handed `TZ`: the
+engine's own `TZ` where it names a zone the system knows, else `UTC`. Codex
+writes its reset as a local time with no zone ("try again at 4:31 PM"), and
+before the zone was handed over it was whatever the host or the box's image
+defaulted to, which the engine could only guess. A `TZ` an entry's `env` sets is
+overruled for the same reason.
+
+**A refused sign-in is read from the CLI's fields first too** (`auth_events`): a
+Claude Code run that ends on `api_error_status: 401`, or retried with
+`error: authentication_failed`, is an `auth` failure whatever its sentence says,
+in a run the CLI reported failed. It is never sat out; it is the sign-in's last
+failure, and the readiness verdict of every entry on the same account.
 
 ### What a sentinel may be
 
@@ -2694,7 +2776,7 @@ the override that takes the stream if you want it.
 
 ## Authentication
 
-There are two ways to pay for a model, and an entry signs in one of them:
+There are three ways to pay for a model, and an entry signs in one of them:
 
 - **A plan** — Claude Pro / Max, ChatGPT Plus / Pro, a Copilot or Cursor seat.
   The login is the vendor's browser OAuth with PKCE, often with SSO, MFA, or a
@@ -2704,6 +2786,9 @@ There are two ways to pay for a model, and an entry signs in one of them:
   the vendor's own login where the entry reads it.
 - **A key** — an Anthropic or OpenAI API key, or the key of the provider an
   OpenCode model names. Routes 5 and 6.
+- **A cloud account or a gateway**: Amazon Bedrock, Google Vertex AI or
+  Microsoft Foundry billing Anthropic's models to your cloud, or a company
+  gateway in front of them. Route 7.
 
 ### 0. Already logged in on this machine? Adopt it
 
@@ -2782,6 +2867,30 @@ CLI exited without leaving one and writes nothing, rather than printing
 `Login written to …` over an empty directory. Backing out of the vendor's
 sign-in is the usual way to get there; run the login again.
 
+#### Codex signs in by device code
+
+Codex's profile also declares its **device-code sign-in**
+(`device_login_args`: `codex login --device-auth -c
+cli_auth_credentials_store=file`, pinned to the file store so a host whose
+Codex config selects the keyring cannot leave `auth.json` empty), which the
+engine runs with **no terminal**. It runs in the entry's login home like the
+command above, reads what Codex prints on either stream with its colour
+stripped, and relays two things, once: the address to open
+(`https://auth.openai.com/codex/device`) and the one-time code to enter there.
+Nothing is pasted back through Crewlet: the person approves at OpenAI, Codex
+learns of it by polling and writes its own `auth.json`, and the engine carries
+that file into `credentials/` as it carries any login, with a new [install
+record](#the-newest-login-wins). Exported to the secret store, that login then
+replaces the older login every other node holds at its next apply.
+
+The code lapses after the lifetime Codex prints (`expires in 15 minutes`), or
+15 minutes where it prints none; the engine waits that long and 30 seconds
+more for the approval to arrive, then stops Codex and its process group and
+signs nothing in. A Codex that prints no code within a minute is stopped as one
+that will not. The sign-in is refused for an entry whose calls read no login
+(`auth.mode: api-key` or `env`, or `inherit-env` with the key in the engine's
+environment), since nothing it stored would sign a call in.
+
 **One `crewlet llm` command at a time per state directory and CLI.** `login`,
 `status` and a vendor's own `logout` all run the CLI in the same login home,
 rebuilt from the shared login for each command and emptied after it, so a
@@ -2856,8 +2965,9 @@ place.
 
 **Only a login creates the shared login, and a logout outlasts everything
 else.** `crewlet llm login` (with `-capture-token` and `-username`),
-`-from-host`, `crewlet llm import` and a bundle restored into an empty
-directory are what create the shared login. A seat, `crewlet llm status` and a
+`-from-host`, `crewlet llm import` and a restored bundle are what create the
+shared login, and a bundle replaces one only when it is [the newer
+login](#the-newest-login-wins). A seat, `crewlet llm status` and a
 vendor's own logout only ever *refresh* the login they started from: each
 writes back only over that very login, so a call or a `status` running while
 `crewlet llm logout` ran cannot put the login back — for a credential file as
@@ -2922,6 +3032,15 @@ Already have a token from elsewhere?
 ```bash
 pass show anthropic/crewlet-oauth | crewlet llm login default -token-stdin
 ```
+
+**A pasted token is your own subscription, on your own engine.** A token from
+`claude setup-token` signs Claude Code in as the person who made it, on their
+plan. Paste one only into a self-hosted engine you run for yourself or your own
+team, on a subscription that permits that use; a token made by somebody else,
+or an engine that serves people outside the plan, needs an API key (option 5)
+or a cloud provider (option 7) instead. The token lasts a year from when it is
+made: the engine dates it from when it was stored, since the token itself is
+opaque, and tells you before it lapses.
 
 The entry reads the token from `auth.token` where it names one, and otherwise
 from the profile's own variable — through the secret store first, then the
@@ -3028,9 +3147,12 @@ crewlet llm export default -secret-store
 
 That engine restores it when it builds a company to run — at boot, and again
 at every apply it publishes (a revision the apply refuses writes none) —
-whenever its own `credentials/` directory is empty and nobody has [logged the
-entry out](#1-broker-the-vendors-own-login-any-cli) since its last login, so a
-fresh container on the same store comes up already authenticated. `crewlet llm
+unless somebody has [logged the entry
+out](#1-broker-the-vendors-own-login-any-cli) there since its last login: into
+a `credentials/` directory that holds no login, so a fresh container on the
+same store comes up already authenticated, and over a login installed
+**before** the bundle's, so a re-login exported to the store reaches every node
+([the newest login wins](#the-newest-login-wins)). `crewlet llm
 list`, `status`, `export` and `doctor` restore it first too, so they answer
 about the login the engine would run with; `login`, `logout` and `import` do
 not, since each replaces or removes that login. `crewlet validate` never does:
@@ -3049,7 +3171,7 @@ the bundle instead — `crewlet llm export default` to stdout, kept in your own
 secret manager and piped to `crewlet llm import` on each host, or a login on
 each host.
 Each node restores the bundle
-into its own empty directory: `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` by convention,
+into its own directory: `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` by convention,
 or whatever variable the entry's `auth.credential_bundle` names. Each node then
 holds its own copy of one refresh token, so where the vendor rotates refresh
 tokens two nodes fork it exactly as `-from-host` forks yours — a headless token
@@ -3069,6 +3191,49 @@ never packs a write that stopped part way, beside a manifest naming the CLI
 exports as `claude-code`), which is never written into the credential
 directory. Sessions, history, and caches never go into a bundle.
 
+#### The newest login wins
+
+Every write that **installs** a login gives it an **install record**,
+`credentials/.crewlet-login`, `{"id": <128 random bits>, "at": <RFC 3339>}`,
+committed in the same step as the login's files: `crewlet llm login` (brokered,
+`-capture-token` or `-username`, whenever the CLI left a login file),
+`-from-host`, `import`, the [device sign-in](#codex-signs-in-by-device-code)
+and a restored bundle. `crewlet llm logout` removes it with the login. A
+refresh a seat or a local box carries back is the same login, so it leaves the
+record alone. The record is no credential path: no seat's home, no box and no
+CLI is ever handed it.
+
+A bundle carries its login's record in its manifest, and the restore compares
+the two:
+
+- a directory holding **no login** takes the bundle, whatever it carries;
+- a directory holding a login takes the bundle only when the bundle's record
+  names a **different** login installed **later**. A login with no record (one
+  a bundle without a record restored) counts as installed at the beginning of
+  time, so any recorded bundle replaces it;
+- a bundle **with no record** replaces nothing: nothing in it says it is newer
+  than the login a node holds, so it restores only into a directory holding
+  none;
+- the [logout's record](#1-broker-the-vendors-own-login-any-cli) outranks every
+  bundle, the newest included, as before.
+
+So a login made on a node **after** the bundle was exported, `crewlet llm
+login` there or a device sign-in, is never overwritten by the older bundle,
+and a bundle of the login a node already holds (one it restored, then
+refreshed) is never newer than it, however stale its token. A restore writes
+the **bundle's** record rather than a new one, so every node restoring one
+bundle holds one record for it, and a second restore of it writes nothing. A
+restore that replaces a login replaces all of it, keeping only the files of
+the old one that are no login, and moves the operator epoch as `-from-host`
+does, so a sign-in running on that node meanwhile is not read as a refresh of
+it ([Token refresh across seats](#token-refresh-across-seats)). The instants
+are each node's wall clock, so two nodes whose clocks disagree by more than
+the time between two logins can order those two logins the wrong way.
+
+`crewlet llm import` never replaces a login, newer or not: it refuses one the
+target already holds, as below. An import writes the bundle's record, and a
+new one for a bundle that carries none, since you installed it now.
+
 **Between two hosts that share no database**, pipe it instead:
 
 ```bash
@@ -3077,9 +3242,9 @@ crewlet llm export default | ssh other-host crewlet llm import default
 
 `import` reads the bundle from **stdin** — a credential on argv is visible in
 `ps` and lands in shell history — and refuses to overwrite a login the target
-already has. A host that has been running holds the fresher refresh token, and
-restoring a boot-time blob over it is how a fleet logs itself out; `crewlet
-llm logout <KEY>` first if you mean to replace it.
+already has, whatever its install record says. A host that has been running
+holds the fresher refresh token, and restoring a blob over it is how a fleet
+logs itself out; `crewlet llm logout <KEY>` first if you mean to replace it.
 
 ### 5. A metered API key
 
@@ -3178,6 +3343,82 @@ key given in the seat's `role.sandbox.env` is counted by the remote-box check as
 well. A CLI that does not read its key from the environment — `kimi-code` reads
 its metered key only from `config.toml` in the credential directory — does not
 declare `env_sign_in`, and a key in its `env` is not counted.
+
+### 7. A cloud provider or gateway (`auth.mode: env`)
+
+Claude Code also reaches Anthropic's models through a cloud provider's own
+account (Amazon Bedrock, Google Vertex AI, Microsoft Foundry) or through a
+company gateway that takes a bearer token of its own. Each is a switch and
+its credentials in the CLI's environment, so the entry's `env` carries them
+and `auth.mode: env` says that `env` is the entry's sign-in:
+
+```yaml
+providers:
+  llm:
+    bedrock:
+      model: sonnet                       # an alias, or the cloud's own model id
+      auth:
+        mode: env
+      env:
+        CLAUDE_CODE_USE_BEDROCK: "1"
+        AWS_REGION: us-east-1
+        AWS_BEARER_TOKEN_BEDROCK: "${AWS_BEARER_TOKEN_BEDROCK}"   # or the AWS key pair
+    vertex:
+      model: sonnet
+      auth:
+        mode: env
+      env:
+        CLAUDE_CODE_USE_VERTEX: "1"
+        CLOUD_ML_REGION: us-east5
+        ANTHROPIC_VERTEX_PROJECT_ID: "${GCP_PROJECT_ID}"
+    foundry:
+      model: sonnet
+      auth:
+        mode: env
+      env:
+        CLAUDE_CODE_USE_FOUNDRY: "1"
+        ANTHROPIC_FOUNDRY_RESOURCE: "${FOUNDRY_RESOURCE}"
+        ANTHROPIC_FOUNDRY_API_KEY: "${FOUNDRY_API_KEY}"
+    gateway:
+      model: sonnet
+      auth:
+        mode: env
+      env:
+        ANTHROPIC_BASE_URL: https://llm-gateway.example.com
+        ANTHROPIC_AUTH_TOKEN: "${GATEWAY_TOKEN}"
+```
+
+Every credential is a `${VAR}`, resolved through the secret store and then the
+environment like the rest of `env`, and redacted on every config read.
+
+**The entry's `env` is then its only sign-in.** The mode removes the profile's
+token variable and its key variable from the CLI's environment, so the plan
+token every `subscription` entry falls back to (`CLAUDE_CODE_OAUTH_TOKEN`) is
+no longer handed to a cloud or gateway entry, on this host or in its
+[box](#the-executors-run-in-a-box), where the cloud switch outranks it and it
+was never used. No login is seeded: the call runs in the seat's
+[key home](#isolation-the-part-that-actually-matters), as under `api-key`. The
+credential bundle is read as under every mode.
+
+**What signs the CLI in is the profile's `sign_in_env`**
+([Profile fields](#profile-fields)): for Claude Code `ANTHROPIC_AUTH_TOKEN`,
+`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and
+`CLAUDE_CODE_USE_FOUNDRY`. A write under `auth.mode: env` whose `env` sets none
+of them is refused, as is one on a CLI whose profile lists none; on an
+`env_sign_in` CLI (`opencode`, `hermes`, `pi`) the mode takes any
+[credential-named](#6-a-provider-key-in-env-opencode-hermes-pi) variable in
+`env` instead. `auth.token` and `auth.api_key` are refused under it, since
+neither would reach the CLI. The other way round, a name from `sign_in_env` in
+the `env` of an entry under any other mode is refused too: that mode hands the
+CLI a credential of its own beside it, a plan token or a metered key, which the
+CLI then ranks by rules of its own. `crewlet llm doctor` and `crewlet llm
+list` report such an entry's sign-in as `env` (`sign-in : env sets
+CLAUDE_CODE_USE_BEDROCK`).
+
+A remote [box](code-sandbox.md) counts the same names as a sign-in, so a cloud
+or gateway entry's executor runs in any cell, and a seat that signs Claude Code
+in itself through its `role.sandbox.env` is handed none of the entry's sign-in
+and keeps the rest of its `env` (the gateway's address, the region).
 
 ### A login of several files is written whole
 
@@ -3576,6 +3817,20 @@ it runs on.
 | `limit_events` | The CLI's own structured limit report, matched before any sentinel: `match` (conditions on the event, naming the `event_type_path` discriminator and at least one field beside it), `said_path` (the vendor's sentence) and `reset_separator`/`reset_unit` (the reset in that sentence). `jsonl` output only. |
 | `limit_markers` | Sentences recognising a spent plan; see above. Each may carry `reset_separator` and `reset_unit` (`epoch`, `seconds` or `clock`). |
 | `auth_markers` | Sentences recognising an expired login. |
+| `auth_events` | The CLI's own structured report of a refused sign-in, read before every limit report and sentinel: `match` (conditions on the event, naming the `event_type_path` discriminator and at least one field beside it) and `said_path` (the vendor's sentence). `jsonl` output only. Claude Code's are its result event with `api_error_status: 401` and its `system` event of subtype `api_retry` with `error: authentication_failed`. |
+| `limit_reset_events` | Events that date and name the limit a run reported, from the CLI's own fields: `match` (as `limit_events`), `resets_at: {path, unit}` (`epoch`, `epoch_ms` or `rfc3339`) and `window: {path, map}` (the vendor's window names mapped to `session`, `weekly`, `model` or `unknown`; a name the map does not hold is `unknown`). The last match of a run wins. They classify nothing: a run still reports its limit by `limit_events` or a marker. `jsonl` output only. |
+| `limit_windows` | `{contains, window}`: the window a vendor's sentence names (`weekly limit` is `weekly`), for a limit no `limit_reset_events` entry named one for. Compared case-sensitively against the sentence already taken as the vendor's report. |
+| `sign_in_env` | The variables that sign the CLI in when an entry's `env` sets one: a cloud provider's switch or a gateway's token (Claude Code's `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and `CLAUDE_CODE_USE_FOUNDRY`). [`auth.mode: env`](#7-a-cloud-provider-or-gateway-authmode-env) requires one. Never `token_env`, `api_key_env` or an isolation variable, and never beside `env_sign_in`. |
+| `identity_env` | Variables, none of them a credential, whose values say which account or endpoint a call reaches (Claude Code's `AWS_REGION`, `AWS_PROFILE`, `ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION`, `ANTHROPIC_FOUNDRY_RESOURCE` and the Bedrock, Vertex, Foundry and gateway base URLs). Folded into the entry's sign-in identity, so two entries in different regions, projects or gateways sit out their limits apart. Never an isolation variable. |
+| `token_prefix` | How the vendor's headless token begins (`sk-ant-oat01-`): what a stored token's hint shows, and what tells a key pasted where a token belongs from the token. Requires `token_env`. |
+| `api_key_prefix` | How the vendor's API key begins (`sk-ant-api03-`, `sk-`), for the same two readings. Requires `api_key_env`, and may not overlap `token_prefix`. |
+| `token_lifetime_days` | How long a headless token the CLI mints lasts, as the vendor documents it (Claude Code: 365). A stored token's expiry is computed as when it was stored plus this, never read from the token, which is opaque. Zero is unknown. Requires `token_env`. |
+| `device_login_args` | The vendor's device-code sign-in, which prints an address and a one-time code a person enters elsewhere, then waits for their approval (Codex's `login --device-auth`). Requires `device_code_patterns`. |
+| `device_code_patterns` | `{url, code, lifetime}`: regular expressions, each with a capture group, that read the address, the code and the code's lifetime in minutes out of what `device_login_args` prints, with colour stripped. `url` and `code` are required. |
+| `status_text_args` | The `status_args` command in words, for `crewlet llm status`, where `status_args` prints JSON for the engine to read. Absent, `crewlet llm status` shows what `status_args` prints. |
+| `status_fields` | `{method, account}`: where in the JSON `status_args` prints the sign-in method and the account are, each a list of paths of which the first holding a string wins. Absent, a status reads the exit code alone (0 signed in, 1 signed out). |
+| `model_aliases` | `{id, name, detail}`: model names the CLI resolves itself (`opus`, `sonnet`, `haiku`), which no catalogue lists. |
+| `models_docs` | The vendor's own page of the models the CLI takes; an `https` address. |
 | `marker_scope` | Where markers match: `answer-and-stderr` (default), `stderr`, or `events` (the class in the CLI's own failure events, compared by equality; `jsonl` only, and stderr is not searched). |
 | `marker_events` | Under `marker_scope: events`, the event kinds (read through `event_type_path`) the CLI reports a failure in. Refused beside any other scope. |
 | `marker_path` | Under `marker_scope: events`, where in such an event the failure class is; a sentinel must equal it. Refused beside any other scope. |
@@ -3596,6 +3851,80 @@ it runs on.
 
 ---
 
+## Managing models from the dashboard
+
+**Settings › Models** is this page on a screen: what each model is doing on
+every node, and the gestures that change it. It reads one question,
+[`llm_entries`](../reference/api-endpoints.md#get-llmentries), and writes
+through the [model routes](../reference/api-endpoints.md#llm-models-settings--models),
+each its own verb and each recorded in the Audit log as a `model_acted` row,
+refused ones included.
+
+**Status comes from every node's heartbeat.** Each node publishes, per model,
+how it signs in there, whether it sits out a vendor's limit and until when,
+when it last answered and last failed, the seats parked on it and, for a model
+signed in with a CLI login, that login's state on its disk. The page joins them:
+a model is `sitting_out` while any live node sits it out, `no_sign_in` when
+nothing signs it in on the node answering, `rejected` after a refusal newer than
+its last answer or past its credential's expiry, `expiring` within seven days of
+that expiry, `untested` before anything said whether it works, and `ready`
+otherwise. A node whose beat carried no report is shown as one that did not say,
+never as a node where nothing happened. Members read every model's condition;
+only an admin reads the credential's name, its hint, who stored it and when, the
+account a login names and the vendor's own sentence.
+
+**A credential is tested before it is stored.** Rotating a token or a key types
+the new value once: the engine hands it to the model's own CLI, in a home of
+its own, for one one-turn call, and seals it only if the vendor signed it in (a
+`429` counts: it proves the credential authenticated). A refused value is never
+stored, so the model goes on signing in with the credential it had. Once
+sealed, the revision that reads it is re-activated in the same request, so every
+node reads it at the epoch the answer names
+([ADR-0070](../../adr/0070-a-secret-write-re-activates-the-revision-that-reads-it.md)),
+and the answer says which models read the value, which of them sat out on the
+sign-in it replaced, and how many runs are still running on the old one until
+their segment ends. A pasted setup-token is the operator's own subscription,
+for a self-hosted company; the wizard says so beside it.
+
+**Retry and clear.** A model sitting out can be probed now (one call on the
+answering node; if it answers, every node clears the sit-out) or cleared without
+a call, when the person knows the limit is over: every chain parked on it probes
+again at once, and one still limited parks again with the vendor's fresh word.
+
+**Test** runs `crewlet llm doctor`'s checks on the answering node, line by line,
+with or without the real completions; a test of an existing model is a real call
+on its sign-in and is remembered as any call is.
+
+**Host logins are read, never made.** A model that signs in with a CLI login
+shows that login's state on each node (`signed_in`, `signed_out` or `unknown`,
+how and as whom where the CLI says) and the command that signs it in on that
+node, `crewlet llm login <key>`, which the operator runs there. The check reruns
+the CLI's own status command now; it never calls the network.
+
+**Codex signs in with a device code.** The engine runs `codex login
+--device-auth` on the node that took the request and relays only the address and
+the one-time code; the person approves at OpenAI, nothing is pasted back, and
+the login the approval made is sealed as the model's credential bundle and
+re-activated, so every node restores it.
+
+**Removing a model repoints what names it.** The remove flow lists every seat
+job and assistant target that runs on the model, asks where each moves (another
+model, or unset, which falls back as an unset job does), shows where a job that
+named nothing will land now, and removes the model and every repoint as one
+revision ([the route](../reference/api-endpoints.md#delete-configllm-providersid-remove-a-model-and-repoint-what-names-it)).
+
+**Suggestions without a credential.** The model step lists the models each
+vendor offers from the public [models.dev](https://models.dev) catalogue, the
+CLI's own aliases and the vendor's model page; nothing typed on the page is sent
+anywhere to list them, and any model name is still accepted as text. A node that
+cannot reach the catalogue offers the aliases, the page and free text.
+
+**The model alarms** (`llm_credential_expiring` at 30 days,
+`llm_credential_expires_soon` at 7, `llm_sign_in_refused`, `llm_limit`, and
+`llm_limit_waiting` once a seat has waited 15 minutes) are the node's own
+evaluation, shown at the top of the page, on `/health` and in the alarm
+reference.
+
 ## Operating it
 
 ```bash
@@ -3605,6 +3934,19 @@ crewlet llm doctor default -no-smoke  # skip the real completions
 crewlet llm status default            # ask the CLI who it's logged in as
 crewlet llm logout default            # revoke locally + delete credentials
 ```
+
+`status` answers in two parts. The first line is the CLI's status command read
+as the engine reads it: its exit is the answer (0 `signed in`, 1 `signed out`,
+anything else `unknown`, with the first line the CLI wrote on stderr), and
+where the command prints JSON, the profile's `status_fields` add how it is
+signed in and as whom (`default: signed in (claude.ai) as ops@example.com`,
+read from `claude auth status`'s `authMethod` and `email` or `orgName`, the
+account cut to 120 bytes). The CLI's own words follow, from `status_text_args`
+where the profile has them (`claude auth status --text`) and from
+`status_args` otherwise. The command exits non-zero unless the reading is
+`signed in`. The check runs in the entry's login home within 10 seconds; a
+status command reads the CLI's own credential file and calls no network, so a
+status that does not answer in time is `unknown` rather than a wedged command.
 
 `doctor` is the command that matters, and it examines **every** entry — a
 fallback entry included, because the moment a plan is spent is the worst
@@ -3708,6 +4050,18 @@ An entry no seat's executor launches on reports no executor section,
 rather than reporting what it would need for a run it never makes. The full rules are in the [CLI
 reference](../reference/cli.md#crewlet-llm).
 
+**The measured lines are checks.** `binary`, `version`, `sign-in`,
+`token usage`, `smoke test`, `local tools`, `web` and `executor` are each one
+check (`binary`, `version`, `sign-in`, `usage`, `smoke`, `shell`, `web`,
+`executor`), and the engine keeps them as structure as well as text: each
+says whether it passed, what it found (the line), and for a failure its kind
+and its remedy (the problems it raised). The kind is a failed call's (`auth`,
+`rate_limit`, `timeout`, `server`, `fatal`) where a probe's call failed, and
+`config` where the entry or the CLI's build is the thing to change, so a client
+can tell a credential to replace from a setting to fix. The problems list is
+the checks' problems in the order of the lines. A skipped probe is no failure:
+the check that stopped it, a missing binary, carries the problem once.
+
 ### How `doctor` judges a sign-in
 
 The `sign-in` line names every route that authenticates the CLI, read off
@@ -3718,8 +4072,13 @@ that `auth.mode: api-key` removes is not a sign-in, and `crewlet llm list`'s
 configured bundle first, as the engine does — so the two commands cannot
 disagree. The routes are credential files in the entry's directory,
 a headless token, an API key under `api-key`, a token or key forwarded under
-`inherit-env`, and a [credential-named](#6-a-provider-key-in-env-opencode-hermes-pi)
-variable in `env` on a CLI that reads its key from its environment.
+`inherit-env`, a name from the profile's `sign_in_env` that `env` sets under
+[`auth.mode: env`](#7-a-cloud-provider-or-gateway-authmode-env), and a
+[credential-named](#6-a-provider-key-in-env-opencode-hermes-pi)
+variable in `env` on a CLI that reads its key from its environment. In the
+`SIGN-IN` column they are `credentials`, `token`, `api key`, `inherited token`
+or `inherited key`, `env`, and `environment`; `none` where nothing signs the
+CLI in, and `unknown` where the shared login could not be read.
 
 `${VAR}` references and the conventional variables an entry falls back to
 are resolved in the process running `crewlet llm` — the secret store first,

@@ -49,6 +49,7 @@ import (
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -303,6 +304,30 @@ type Engine struct {
 	// and the inbox holds it took because of them. See seatpause.go.
 	pauses seatPauses
 
+	// runners is this node's executor-cell readiness and the loop that
+	// keeps it ([runnerProbe]), published on the heartbeat.
+	runners runnerProbe
+
+	// hostLogins is what each model entry's CLI says of its login on this
+	// node's disk, and the loop that keeps it ([hostLogins]).
+	hostLogins hostLogins
+
+	// retries is this node's watched copy of the fleet's model retries
+	// ([modelRetries]).
+	retries modelRetries
+
+	// signIns is the device sign-ins this node runs, and the watch that
+	// hears their cancels ([deviceSignIns]).
+	signIns deviceSignIns
+
+	// testNode is the node id an engine built with no node answers for
+	// itself: a case standing up several engines on one coordination store.
+	testNode string
+
+	// checkHomes is where a candidate credential's test makes its throwaway
+	// home ([Engine.CheckModel]); empty is the process's temporary directory.
+	checkHomes string
+
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
 	// [Engine.Apply].
@@ -400,6 +425,12 @@ type Engine struct {
 	// sandboxPollInterval is Options.SandboxPollInterval, kept because an
 	// apply can be what starts the poll.
 	sandboxPollInterval time.Duration
+
+	// plans is the node's registry of coding-CLI sign-ins
+	// ([cliagent.Plans]), made once at boot under a key derived from the
+	// keyring and handed to every revision's build, so a sit-out outlives
+	// every apply and a sign-in's id is the same on every node.
+	plans *cliagent.Plans
 
 	// fakePlay is Options.fakePlay: what a `providers.sandbox.fake`
 	// company's runs do, nil for the double's own demonstration. Kept
@@ -1173,6 +1204,15 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// THE SIGN-IN KEY BESIDE IT, derived from the same keyring and
+	// [config.Secrets.Keyring]'s one decoding of it, which openCipher has
+	// just proved: what makes a model's sign-in id the same on every node
+	// and across restarts ([cliagent.SignInID]).
+	ring, err := opts.Bootstrap.Secrets.Keyring()
+	if err != nil {
+		return nil, fmt.Errorf("engine: secrets keyring: %w", err)
+	}
+	plans := cliagent.NewPlans(ring.Derive(cliagent.SignInKeyInfo))
 	// AND THE ESTATE'S ENVELOPES OVER IT, for the same reason and in the same
 	// place: every request this node's router sends is signed with them and
 	// every reply it is sent verified, and a data node answers its peers
@@ -1373,6 +1413,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
 		fakePlay:            opts.fakePlay,
+		plans:               plans,
 		usageEvery:          opts.usageEvery,
 		resumeGate:          opts.resumeGate,
 		sandboxSeats:        map[string]bool{},
@@ -1707,7 +1748,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// the probe, as a bad configuration exits whatever the probe says.
 	var company *Company
 	if opts.Company != nil {
-		company, err = NewCompanyWith(opts.Company, e.resolver())
+		// ON THE NODE'S REGISTRY OF SIGN-INS, as every apply's revision
+		// is ([Engine.Apply]): built on none, the boot's entries kept their
+		// sit-outs in registries of their own, which the first apply's
+		// entries never found.
+		company, err = newCompany(opts.Company, e.resolver(), e.plans)
 		if err != nil {
 			return nil, err
 		}
@@ -1986,6 +2031,13 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// handed meets a node that already knows. Bounded: past its budget the
 	// watch keeps trying and the screening defers until it answers.
 	e.startSeatPauses(ctx)
+	// WHERE THIS NODE CAN START A BOX, probed now and kept: what the
+	// heartbeat tells the Models page.
+	e.startRunnerProbe(ctx)
+	e.startHostLogins(ctx)
+	// THE RETRIES PEOPLE ASKED FOR, applied as every node hears them.
+	e.startModelRetries(ctx)
+	e.startDeviceSignIns(ctx)
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx); err != nil {
@@ -2619,6 +2671,12 @@ func (e *Engine) teardown(ctx context.Context) {
 	// And the pause watch, for the same reason: a resume landing on a
 	// client that is closing would lift a hold on nothing.
 	e.stopSeatPauses()
+	e.stopRunnerProbe()
+	e.stopHostLogins()
+	e.stopModelRetries()
+	// A SESSION THIS NODE RUNS ENDS AS FAILED, its record saying why, so
+	// the person starts again on a node that is up.
+	e.stopDeviceSignIns()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing
 	// it while a seat was still finishing a turn would tell a coordinator
@@ -3277,7 +3335,8 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 	// under a lock and never from a child.
 	status := coord.NodeStatus{
 		StartedAt: e.startedAt, AdminPosture: e.adminPosture,
-		MCP: e.mcpStatus(ctx),
+		MCP: e.mcpStatus(ctx), Runners: e.runnerStatus(),
+		Models: e.modelStatus(ctx),
 	}
 	if b := e.backends; b != nil && b.Queue != nil {
 		status.InFlight = b.Queue.InFlightCount()

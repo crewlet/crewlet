@@ -705,15 +705,16 @@ func (m *credentialMissing) reason() string {
 			how += ", or for " + varRefs(m.issued) + " the integration's provision command"
 		}
 		parts = append(parts, fmt.Sprintf("%s %s and nothing this engine runs mints %s: "+
-			"seal %s (%s) and POST /config/reload, or set %s in the engine's own "+
-			"environment and restart it",
+			"seal %s (%s), which a running node re-activates the company for as it "+
+			"stores it (POST /config/reload for one stored with the engine stopped), "+
+			"or set %s in the engine's own environment and restart it",
 			varRefs(m.unset), plural(m.unset, "is not set", "are not set"),
 			plural(m.unset, "it", "them"), plural(m.unset, "it", "them"), how,
 			plural(m.unset, "it", "them")))
 	}
 	if len(m.empty) > 0 {
-		parts = append(parts, fmt.Sprintf("%s %s: seal a value (crewlet secrets set) and "+
-			"POST /config/reload",
+		parts = append(parts, fmt.Sprintf("%s %s: seal a value (crewlet secrets set), which "+
+			"a running node re-activates the company for as it stores it",
 			varRefs(m.empty), plural(m.empty, "is set to an empty value", "are set to empty values")))
 	}
 	for _, name := range slices.Sorted(maps.Keys(m.unissued)) {

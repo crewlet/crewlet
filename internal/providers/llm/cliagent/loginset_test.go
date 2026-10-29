@@ -124,7 +124,7 @@ func twoFileBundle(files map[string]string) (string, error) {
 	for _, name := range slices.Sorted(maps.Keys(files)) {
 		entries = append(entries, bundleFile{name: name, data: []byte(files[name])})
 	}
-	return packBundle(twoFileConfig("", nil).Agent, entries)
+	return packBundle(bundleManifest{Agent: twoFileConfig("", nil).Agent}, entries)
 }
 
 // seededHome is what a seat's first call is seeded with: its home's copy of

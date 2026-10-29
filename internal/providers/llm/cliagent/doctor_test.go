@@ -370,19 +370,25 @@ func TestTheSmokeTestAsksTheWayAPhaseAsks(t *testing.T) {
 // docs promise has to be in it.
 func TestTheReportCarriesEveryLineTheDocsPromise(t *testing.T) {
 	t.Parallel()
+	// The measured lines are the checks' details.
 	d := Diagnosis{
 		Provider: "subscription", Agent: "claude-code", Binary: "/usr/local/bin/claude",
-		BinaryPath: "/usr/local/bin/claude", Version: "2.0.31 (Claude Code)",
 		WrittenFor: "Claude Code CLI 2.x", StateDir: "/var/lib/crewlet/llm-cli/subscription",
-		Credentials: "present", TokenEnv: "set", SignIn: "credential files in /var/lib",
-		TokenUsage: "reported by CLI",
-		Smoke:      "ok: 812 in / 34 out",
+		Credentials: "present", TokenEnv: "set",
+		Checks: []Check{
+			{Name: CheckBinary, OK: true, Detail: "/usr/local/bin/claude"},
+			{Name: CheckVersion, OK: true, Detail: "2.0.31 (Claude Code)"},
+			{Name: CheckSignIn, OK: true, Detail: "credential files in /var/lib"},
+			{Name: CheckUsage, OK: true, Detail: "reported by CLI"},
+			{Name: CheckSmoke, OK: true, Detail: "ok: 812 in / 34 out"},
+		},
 	}
 	var out strings.Builder
 	d.Render(&out)
 	for _, want := range []string{
-		"provider", "cli agent", "binary", "version", "written for",
-		"state dir", "credentials", "token env", "sign-in", "token usage", "smoke test", "problems",
+		"provider", "cli agent", "binary        : /usr/local/bin/claude", "version       : 2.0.31",
+		"written for", "state dir", "credentials", "token env", "sign-in       : credential files",
+		"token usage   : reported by CLI", "smoke test    : ok: 812", "problems",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report is missing the %q line:\n%s", want, out.String())

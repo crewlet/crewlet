@@ -566,6 +566,37 @@ test("runtime calls are merged in, drawn as their author, and narrowed by Where"
   expect(screen.queryByText("took it off the board")).toBeNull();
 });
 
+// A MODEL GESTURE IS DRAWN AS WHAT WAS DONE TO WHICH MODEL, linked to the
+// models, and the secret names a credential call touched stay in its summary.
+test("a model gesture names its action and its entry", async () => {
+  serving({
+    work_activity: { records: [], complete: true },
+    events: {
+      events: [
+        runtimeEvent({
+          id: "ev-3",
+          type: "model_acted",
+          failed: false,
+          summary: "jane set the credential of model sonnet (ANTHROPIC_API_KEY_SONNET)",
+          tags: {
+            node: "node-a",
+            actor_kind: "human",
+            operator_id: "session:0192f00e",
+            action: "device_sign_in",
+            provider_key: "sonnet",
+          },
+        }),
+      ],
+      next: null,
+      exhausted: true,
+    },
+  });
+  mount();
+  await waitFor(() => expect(screen.getByText("model device sign in")).toBeTruthy());
+  const entry = screen.getByRole("link", { name: "sonnet" });
+  expect(entry.getAttribute("href")).toBe("#/settings/models");
+});
+
 /** One row of the company trail of every artifact, as `artifact_trail` answers it. */
 function trailRow(over: Record<string, unknown> = {}) {
   return {

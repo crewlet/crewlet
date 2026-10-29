@@ -192,11 +192,12 @@
           "x-crewlet-secret": true
         },
         "mode": {
-          "description": "subscription (default), api-key, or inherit-env.",
+          "description": "subscription (default), api-key, inherit-env, or env (the entry's env signs the CLI in: a cloud provider or a gateway).",
           "enum": [
             "subscription",
             "api-key",
             "inherit-env",
+            "env",
             "",
             null
           ]

@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
@@ -356,18 +357,18 @@ func (p *Provider) Logout(ctx context.Context, out, errOut io.Writer) error {
 	// so it is finished by the read and removed with the rest; one that cannot
 	// be finished cannot be told apart file by file, and the logout REPLACES
 	// it whole — it removes the login an operator asked removed either way.
+	// Its install record goes in the same write ([LoginInstall]): a record
+	// left behind would name a login that is gone, and order whatever is
+	// restored or written next against it.
 	removeErr := p.ws.markLoggedOut()
 	if err := p.ws.bumpLoginEpoch(); err != nil {
 		removeErr = errors.Join(removeErr, err)
 	}
 	var kept map[string][]byte
 	if current, err := p.ws.readLoginLocked(); err == nil {
-		kept = maps.Clone(current)
-		maps.DeleteFunc(kept, func(name string, content []byte) bool {
-			return p.profile.HoldsLogin(name, content)
-		})
+		kept = p.ws.notLoginIn(current)
 	}
-	if err := p.ws.writeLoginLocked(ctx, p.key, kept); err != nil {
+	if err := p.ws.installLoginLocked(ctx, p.key, kept, LoginInstall{}); err != nil {
 		removeErr = errors.Join(removeErr, err)
 	}
 	if removeErr != nil {
@@ -403,7 +404,10 @@ func (p *Provider) discardLoginHome(ctx context.Context) error {
 	return p.ws.emptyLoginHome()
 }
 
-// Status asks the CLI who it is logged in as.
+// Status asks the CLI who it is logged in as, IN WORDS, for a person reading
+// `crewlet llm status`: the profile's [cliprofile.Profile.StatusTextArgs] where
+// its status_args print JSON for the engine to read ([Provider.LoginStatus]),
+// and status_args themselves where they are already the CLI's words.
 //
 // A status makes no login, so it is carried out as a refresh ([syncRefresh]):
 // a home whose CLI changed nothing writes nothing, and one whose CLI did
@@ -418,7 +422,11 @@ func (p *Provider) Status(ctx context.Context, out, errOut io.Writer) error {
 			"`crewlet llm doctor` reports what can be observed instead",
 			ErrNoLoginCommand, p.agent)
 	}
-	_, err := p.runInCredentialHome(ctx, syncRefresh, p.profile.StatusArgs, nil, out, errOut)
+	args := p.profile.StatusTextArgs
+	if len(args) == 0 {
+		args = p.profile.StatusArgs
+	}
+	_, err := p.runInCredentialHome(ctx, syncRefresh, args, nil, out, errOut)
 	return err
 }
 
@@ -500,14 +508,20 @@ func (p *Provider) AdoptHostLogin(ctx context.Context, home string) ([]string, e
 	// THE EPOCH FIRST, before the write it counts ([Workspace.bumpLoginEpoch]):
 	// one that cannot be moved writes nothing, since a login of record that
 	// landed with no epoch behind it reads as no operator's write at all.
-	if err := p.ws.bumpLoginEpoch(); err != nil {
+	if err = p.ws.bumpLoginEpoch(); err != nil {
 		return nil, err
 	}
 	// THE HOST'S LOGIN, WHOLE, AS ONE WRITE: every file it holds, and none of
 	// the files it does not — a file of the login it replaces left beside it
 	// would make a login of two sign-ins — put in place in one step a seat
-	// starting its generation now reads before or after, never part way.
-	if err := p.ws.writeLoginLocked(ctx, p.key, login); err != nil {
+	// starting its generation now reads before or after, never part way,
+	// with a new install record ([LoginInstall]), since it is a login
+	// installed now, and newer than any bundle exported before it.
+	install, err := newLoginInstall(time.Now())
+	if err != nil {
+		return nil, err
+	}
+	if err := p.ws.installLoginLocked(ctx, p.key, login, install); err != nil {
 		return nil, err
 	}
 	if err := p.ws.clearLoggedOut(); err != nil {
@@ -615,8 +629,19 @@ func (p *Provider) hostStoreName(home string) string {
 // then hold. And only the files of it that are a login travel
 // ([Workspace.loginIn]): a settings file the CLI also keeps its login in,
 // holding none, is the CLI's record of itself on this host.
+//
+// And it CARRIES THE LOGIN'S INSTALL RECORD ([LoginInstall]) in its manifest,
+// read in the same hold of the shared login's lock as the files, so it is the
+// record that login was committed with: the restore orders the bundle's login
+// against the one a node holds by it ([Provider.RestoreBundle]). A login with
+// no record exports a bundle with none.
 func (p *Provider) ExportBundle(ctx context.Context) (string, error) {
-	files, err := p.ws.Login(ctx)
+	unlock, err := p.ws.lockShared(ctx)
+	if err != nil {
+		return "", err
+	}
+	files, install, err := p.ws.loginAndInstallLocked()
+	unlock()
 	if err != nil {
 		return "", err
 	}
@@ -629,7 +654,11 @@ func (p *Provider) ExportBundle(ctx context.Context) (string, error) {
 	for _, name := range slices.Sorted(maps.Keys(login)) {
 		packed = append(packed, bundleFile{name: name, data: login[name]})
 	}
-	return packBundle(p.agent, packed)
+	manifest := bundleManifest{Agent: p.agent}
+	if !install.IsZero() {
+		manifest.Login = &install
+	}
+	return packBundle(manifest, packed)
 }
 
 // bundleManifest is what a bundle's [cliprofile.BundleManifest] entry holds.
@@ -645,6 +674,12 @@ type bundleManifest struct {
 	// (`<state_dir>/<agent>`, [Shared]) — so an entry that leaves `agent`
 	// out, and drives claude-code, writes "claude-code".
 	Agent string `json:"agent"`
+	// Login is the install record of the login the bundle carries
+	// ([LoginInstall]), nil for a login exported with none. It is how a node
+	// tells a newer login from the one it holds ([Provider.RestoreBundle]),
+	// and the record every node restoring the bundle then holds, so each of
+	// them answers the same [SignInID] for it.
+	Login *LoginInstall `json:"login,omitempty"`
 }
 
 // bundleFile is one login file in a bundle, under its file name.
@@ -653,13 +688,13 @@ type bundleFile struct {
 	data []byte
 }
 
-// packBundle writes a bundle: the manifest naming agent, then each file, as
-// one base64 gzip tar. The format's ONE writer: [Provider.ExportBundle] writes
+// packBundle writes a bundle: its manifest, then each file, as one base64 gzip
+// tar. The format's ONE writer: [Provider.ExportBundle] writes
 // through it, and so does every bundle this package's suite builds as an
 // export would, so the suite cannot hold the restore to a format the export
 // does not write.
-func packBundle(agent string, files []bundleFile) (string, error) {
-	manifest, err := json.Marshal(bundleManifest{Agent: agent})
+func packBundle(m bundleManifest, files []bundleFile) (string, error) {
+	manifest, err := json.Marshal(m)
 	if err != nil {
 		return "", fmt.Errorf("cliagent: writing the bundle's manifest: %w", err)
 	}
@@ -688,7 +723,9 @@ func packBundle(agent string, files []bundleFile) (string, error) {
 	return base64.StdEncoding.EncodeToString(raw.Bytes()), nil
 }
 
-// RestoreBundle unpacks a bundle into an EMPTY credential directory.
+// RestoreBundle restores a bundle as the entry's login when it is the NEWEST
+// login this node knows of: into a credential directory holding no login, or
+// over one installed before it.
 //
 // Validated on the way in, because an archive is an execution surface if it
 // is unpacked on trust: only the profile's own credential file names, regular
@@ -702,21 +739,48 @@ func packBundle(agent string, files []bundleFile) (string, error) {
 // empty login as a credential pi cannot read, and as a login already present
 // it turned away every later restore, the right bundle included.
 //
-// It refuses to overwrite an existing login: a node that has been running has
-// the fresher refresh token, and restoring a boot-time blob over it is how a
-// fleet logs itself out. At boot that is the ordinary case and not an error;
-// [Provider.ImportBundle] is the operator's form, which says so.
+// THE NEWEST LOGIN WINS, by the logins' install records ([LoginInstall]). The
+// bundle replaces a login the directory holds only when the bundle carries a
+// record that is a DIFFERENT login installed LATER ([LoginInstall.Newer]); a
+// login with no record counts as installed at the zero instant, older than any
+// recorded bundle. Restored only into an empty directory, as it once was, a
+// fresh sign-in exported to the store (a device sign-in made through another
+// node, a re-login after a revoked one) never reached a node that had ever held
+// a login; restored whenever it differed, a boot-time blob would overwrite a
+// login made on this node after it, and a refresh token the node had rotated
+// since, which is how a fleet logs itself out. The record decides between the
+// two: a refresh keeps its login's record, so a bundle of the login a node
+// already holds is never newer than it, however stale its token.
 //
-// NOT AN OPERATOR'S WRITE, unlike the import: it fills an empty directory with
-// the login the deployment was configured with, so it leaves the operator
-// epoch where it is ([Workspace.bumpLoginEpoch]) — and a login an operator made
-// on this node whose export failed, which is why the directory is empty, is
-// still carried out over it by the next command, being the newer of the two.
+// A BUNDLE WITH NO RECORD restores only into a directory holding no login:
+// nothing in it says it is newer than anything, so it replaces nothing. Its
+// login is then held with no record, and the first recorded bundle replaces it.
+// A bundle that cannot be read at all (another CLI's, a broken archive) is no
+// newer login either: where a login is held it stands and nothing is said,
+// and only a directory holding none reports the refusal that leaves it
+// signed out.
 //
-// And it DECLINES AFTER A LOGOUT, answering [ErrLoggedOut]: the directory a
-// logout empties is one an operator emptied, and refilling it from the
-// deployment's configuration undid the logout at the next boot, apply or
-// `status` ([Workspace.markLoggedOut]).
+// The bundle's OWN record is written with it, never a new one: every node
+// restoring one bundle then holds one record, so a second restore of it is no
+// newer and writes nothing, and each node answers one [SignInID] for one login.
+//
+// NOT AN OPERATOR'S WRITE, unlike the import, where it fills an empty
+// directory with the login the deployment was configured with: it leaves the
+// operator epoch where it is ([Workspace.bumpLoginEpoch]), so a login an
+// operator made on this node whose export failed, which is why the directory is
+// empty, is still carried out over it by the next command. One that REPLACES a
+// login moves the epoch as an operator's write does: it writes over a login
+// exactly as `-from-host` does, and a sign-in running meanwhile, or a login a
+// failed export left pending, must not read it as a refresh of the login it
+// began from.
+//
+// And it DECLINES AFTER A LOGOUT, answering [ErrLoggedOut], whatever the
+// bundle's record: the directory a logout empties is one an operator emptied,
+// and refilling it from the deployment's configuration undid the logout at the
+// next boot, apply or `status` ([Workspace.markLoggedOut]).
+//
+// A bundle that is not newer is the ordinary case at every boot and not an
+// error; [Provider.ImportBundle] is the operator's form, which says so.
 func (p *Provider) RestoreBundle(ctx context.Context, blob string) error {
 	if err := p.restoreBundle(ctx, blob, false); err != nil && !errors.Is(err, ErrLoginPresent) {
 		return err
@@ -901,6 +965,17 @@ func (p *Provider) retireBundle() string {
 // and so it answers [ErrLoginPresent] where a login is already in place rather
 // than nothing.
 //
+// IT NEVER REPLACES A LOGIN, newer bundle or not, unlike the automatic restore:
+// an operator is there to be told, and `crewlet llm logout` then the import is
+// the way to say that this bundle, and not the login in place, is the one. The
+// automatic restore has nobody to ask, so it decides by the install records.
+//
+// It writes the bundle's install record ([LoginInstall]), as the restore does,
+// so the node that imports a bundle and every node that restores it hold one
+// record for one login; a bundle that carries none is given a new one, since an
+// operator installed it now, and with none it would count as older than every
+// recorded bundle and be replaced by the next boot's restore.
+//
 // DECIDED UNDER THE SHARED LOGIN'S LOCK, with the writes: a caller that looked
 // for a login first and then restored was told "restored" whenever a login
 // landed between the two, about a bundle that had written nothing.
@@ -919,56 +994,82 @@ func (p *Provider) ImportBundle(ctx context.Context, blob string) error {
 // differ only in whether the restore is the operator's own write of the login
 // of record.
 func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool) error {
-	present, err := p.ws.HasLogin(ctx)
-	if err != nil {
+	if operator {
+		// The operator's form answers a login already in place before it
+		// reads the bundle: it never replaces one (see ImportBundle).
+		present, err := p.ws.HasLogin(ctx)
+		if err != nil {
+			return err
+		}
+		if present {
+			return ErrLoginPresent
+		}
+	}
+	if err := p.declineAfterLogout(operator); err != nil {
 		return err
 	}
-	if present {
-		return ErrLoginPresent
-	}
-	if err = p.declineAfterLogout(operator); err != nil {
-		return err
-	}
-	staged, err := p.stageBundle(blob)
+	staged, bundled, err := p.stageBundle(blob)
 	if err != nil {
+		// A BUNDLE THAT CANNOT BE READ IS NO NEWER LOGIN: a node that holds
+		// one keeps it, as the engine runs it, and the restore says nothing,
+		// as it did when a bundle reached only an empty directory. Reported
+		// there, a bundle another CLI's left behind refused the very
+		// `crewlet llm export` that replaces it, on the node signed in to the
+		// new CLI. Where nothing is held the refusal is what explains a
+		// signed-out entry, so it is reported.
+		if present, hasErr := p.ws.HasLogin(ctx); !operator && hasErr == nil && present {
+			return ErrLoginPresent
+		}
 		return err
 	}
 
-	// THE EMPTINESS ASKED AGAIN UNDER THE SHARED LOGIN'S LOCK, with the
-	// writes: the check above is the cheap path for a node that already has
-	// a login, and a login that landed while the bundle was being validated
-	// is the fresher one — as a logout that landed meanwhile is the newer
+	// DECIDED UNDER THE SHARED LOGIN'S LOCK, with the writes: a login that
+	// landed while the bundle was being validated is read here with the
+	// record it was committed with, and is the fresher one unless the bundle
+	// is newer than it, as a logout that landed meanwhile is the newer
 	// decision.
 	unlock, err := p.ws.lockShared(ctx)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	current, err := p.ws.readLoginLocked()
+	current, held, err := p.ws.loginAndInstallLocked()
 	if err != nil {
 		return err
 	}
-	if len(p.ws.loginIn(current)) > 0 {
+	replacing := len(p.ws.loginIn(current)) > 0
+	if replacing && (operator || !bundled.Newer(held)) {
 		return ErrLoginPresent
 	}
 	if err = p.declineAfterLogout(operator); err != nil {
 		return err
 	}
-	if operator {
-		// The operator's own login of record, counted BEFORE it is written
+	install := bundled
+	if operator && install.IsZero() {
+		// AN OPERATOR'S IMPORT OF A BUNDLE WITH NO RECORD is still a login
+		// installed now, by somebody who chose it: left with no record, it
+		// counted as older than any recorded bundle, and the next boot's
+		// restore of a configured one undid the import.
+		if install, err = newLoginInstall(time.Now()); err != nil {
+			return err
+		}
+	}
+	if operator || replacing {
+		// An operator's own login of record, or a restore that writes over a
+		// login as one does, counted BEFORE it is written
 		// ([Workspace.bumpLoginEpoch]): an epoch that cannot be moved writes
 		// nothing.
 		if err = p.ws.bumpLoginEpoch(); err != nil {
 			return err
 		}
 	}
-	// A FILE THE BUNDLE DOES NOT CARRY STAYS: whatever the shared login holds
-	// here is no login (the check above) — a settings file the CLI also keeps
-	// its login in, holding none — and a bundle carries only the files that
-	// are one ([Provider.ExportBundle]), so the restore is not in its way.
-	next := maps.Clone(current)
+	// THE BUNDLE'S LOGIN WHOLE, beside the files of the directory that are no
+	// login (a settings file the CLI also keeps its login in, holding none),
+	// which a bundle never carries ([Provider.ExportBundle]): a file of the
+	// login it replaces left beside it would make a login of two sign-ins.
+	next := p.ws.notLoginIn(current)
 	maps.Copy(next, staged)
-	if err = p.ws.writeLoginLocked(ctx, p.key, next); err != nil {
+	if err = p.ws.installLoginLocked(ctx, p.key, next, install); err != nil {
 		return err
 	}
 	if operator {
@@ -978,8 +1079,21 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 	return nil
 }
 
-// stageBundle unpacks a bundle into the login it holds, by file name, writing
-// nothing.
+// notLoginIn is the part of files, the shared login as read, that is NOT a
+// login ([Workspace.loginIn]): the settings files a write that replaces or
+// removes the login keeps, as the CLI's record of itself rather than anybody's
+// sign-in.
+func (w *Workspace) notLoginIn(files map[string][]byte) map[string][]byte {
+	out := maps.Clone(files)
+	if out == nil {
+		out = map[string][]byte{}
+	}
+	maps.DeleteFunc(out, w.profile.HoldsLogin)
+	return out
+}
+
+// stageBundle unpacks a bundle into the login it holds, by file name, and the
+// install record its manifest carries (zero for none), writing nothing.
 //
 // VALIDATED WHOLE, THEN WRITTEN WHOLE. Every entry is checked and held before
 // anything reaches the disk, because the checks reject a bundle mid-archive:
@@ -987,16 +1101,16 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 // and HasLogin reads a directory with any file of a login in it as one — so a
 // refused restore could leave a half-populated home that the next boot
 // declines to repair. The write itself is ONE STEP for the same reason
-// ([Workspace.writeLoginLocked]): written a file at a time, a restore killed or
+// ([Workspace.installLoginLocked]): written a file at a time, a restore killed or
 // refused by the disk between two of them left exactly that half.
-func (p *Provider) stageBundle(blob string) (map[string][]byte, error) {
+func (p *Provider) stageBundle(blob string) (map[string][]byte, LoginInstall, error) {
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(blob))
 	if err != nil {
-		return nil, fmt.Errorf("cliagent: the credential bundle is not base64: %w", err)
+		return nil, LoginInstall{}, fmt.Errorf("cliagent: the credential bundle is not base64: %w", err)
 	}
 	zr, err := gzip.NewReader(bytes.NewReader(raw))
 	if err != nil {
-		return nil, fmt.Errorf("cliagent: the credential bundle is not gzip: %w", err)
+		return nil, LoginInstall{}, fmt.Errorf("cliagent: the credential bundle is not gzip: %w", err)
 	}
 	defer func() { _ = zr.Close() }()
 
@@ -1013,10 +1127,10 @@ func (p *Provider) stageBundle(blob string) (map[string][]byte, error) {
 	// "finished".
 	decompressed, err := io.ReadAll(io.LimitReader(zr, maxBundle+1))
 	if err != nil {
-		return nil, fmt.Errorf("cliagent: reading the credential bundle: %w", err)
+		return nil, LoginInstall{}, fmt.Errorf("cliagent: reading the credential bundle: %w", err)
 	}
 	if len(decompressed) > maxBundle {
-		return nil, fmt.Errorf(
+		return nil, LoginInstall{}, fmt.Errorf(
 			"cliagent: the credential bundle is larger than %d bytes decompressed, "+
 				"so it was not unpacked — a bundle this size is not a login; "+
 				"re-export it with `crewlet llm export %s`", maxBundle, p.key)
@@ -1036,35 +1150,35 @@ func (p *Provider) stageBundle(blob string) (map[string][]byte, error) {
 	staged := make(map[string][]byte, len(allowed))
 	tr := tar.NewReader(bytes.NewReader(decompressed))
 	for {
-		header, err := tr.Next()
-		if errors.Is(err, io.EOF) {
+		header, nextErr := tr.Next()
+		if errors.Is(nextErr, io.EOF) {
 			break
 		}
-		if err != nil {
-			return nil, fmt.Errorf("cliagent: reading the credential bundle: %w", err)
+		if nextErr != nil {
+			return nil, LoginInstall{}, fmt.Errorf("cliagent: reading the credential bundle: %w", nextErr)
 		}
 		if header.Typeflag != tar.TypeReg {
-			return nil, fmt.Errorf("cliagent: the credential bundle holds %q, which is not a "+
+			return nil, LoginInstall{}, fmt.Errorf("cliagent: the credential bundle holds %q, which is not a "+
 				"regular file", header.Name)
 		}
 		name := filepath.Base(header.Name)
 		if name != header.Name {
-			return nil, fmt.Errorf("cliagent: the credential bundle holds %q, which is not a "+
+			return nil, LoginInstall{}, fmt.Errorf("cliagent: the credential bundle holds %q, which is not a "+
 				"%q credential file", header.Name, p.agent)
 		}
-		data, err := io.ReadAll(io.LimitReader(tr, maxBundle+1))
-		if err != nil {
-			return nil, fmt.Errorf("cliagent: reading %q from the bundle: %w", name, err)
+		data, readErr := io.ReadAll(io.LimitReader(tr, maxBundle+1))
+		if readErr != nil {
+			return nil, LoginInstall{}, fmt.Errorf("cliagent: reading %q from the bundle: %w", name, readErr)
 		}
 		if len(data) > maxBundle {
-			return nil, fmt.Errorf("cliagent: %q in the credential bundle is larger than %d bytes",
+			return nil, LoginInstall{}, fmt.Errorf("cliagent: %q in the credential bundle is larger than %d bytes",
 				name, maxBundle)
 		}
 		// ONCE EACH: a name held twice is two answers to one question, and
 		// the last of them winning is a choice nothing made — for the
 		// manifest, which CLI the bundle is.
 		if _, twice := staged[name]; twice || (name == cliprofile.BundleManifest && haveManifest) {
-			return nil, fmt.Errorf("cliagent: the credential bundle holds %q twice, so it was not "+
+			return nil, LoginInstall{}, fmt.Errorf("cliagent: the credential bundle holds %q twice, so it was not "+
 				"unpacked — re-export it with `crewlet llm export %s`", name, p.key)
 		}
 		if name == cliprofile.BundleManifest {
@@ -1077,15 +1191,29 @@ func (p *Provider) stageBundle(blob string) (map[string][]byte, error) {
 		staged[name] = data
 		order = append(order, name)
 	}
-	if err := p.checkBundleCLI(manifest, haveManifest); err != nil {
-		return nil, err
+	named, err := p.checkBundleCLI(manifest, haveManifest)
+	if err != nil {
+		return nil, LoginInstall{}, err
+	}
+	var install LoginInstall
+	if named.Login != nil {
+		// A RECORD THAT CANNOT BE ORDERED IS REFUSED, not read as none: a
+		// bundle that says it carries a record and carries no usable one is
+		// not one `crewlet llm export` wrote, and taken as recordless it
+		// would quietly lose to every login it was exported to replace.
+		if err := named.Login.check(); err != nil {
+			return nil, LoginInstall{}, fmt.Errorf("cliagent: the credential bundle's install record "+
+				"cannot be read (%v), so it was not restored: export it again (`crewlet llm export %s`)",
+				err, p.key)
+		}
+		install = *named.Login
 	}
 	for _, name := range order {
 		if !allowed[name] {
 			// The bundle is this CLI's, by its manifest, and still holds a
 			// file this entry does not keep: one exported while the entry's
 			// credential_paths said otherwise, or not by `crewlet llm export`.
-			return nil, fmt.Errorf("cliagent: the credential bundle holds %q, which is not a %q "+
+			return nil, LoginInstall{}, fmt.Errorf("cliagent: the credential bundle holds %q, which is not a %q "+
 				"credential file (it keeps %s) — re-export it with `crewlet llm export %s`",
 				name, p.agent, strings.Join(slices.Sorted(maps.Keys(allowed)), ", "), p.key)
 		}
@@ -1094,20 +1222,21 @@ func (p *Provider) stageBundle(blob string) (map[string][]byte, error) {
 		// A bundle `crewlet llm export` writes always holds a login: it
 		// refuses an entry with none. One that holds none restored nothing,
 		// and `crewlet llm import` said "Restored" over an empty directory.
-		return nil, fmt.Errorf("cliagent: the credential bundle holds no %q login file, so there is "+
+		return nil, LoginInstall{}, fmt.Errorf("cliagent: the credential bundle holds no %q login file, so there is "+
 			"nothing to restore — export it again (`crewlet llm export %s`) where %q is signed in",
 			p.agent, p.key, p.agent)
 	}
-	return staged, nil
+	return staged, install, nil
 }
 
 // checkBundleCLI answers [ErrForeignBundle] unless a bundle's manifest names
 // this entry's CLI — the provider's agent, the same name its files are kept
-// under in the state directory — as the one the bundle was exported from.
+// under in the state directory, as the one the bundle was exported from, and
+// the manifest otherwise.
 //
 // A bundle naming no CLI is refused as one naming another: nothing in it says
 // whose its files are, and a file name is the guess this replaces.
-func (p *Provider) checkBundleCLI(manifest []byte, found bool) error {
+func (p *Provider) checkBundleCLI(manifest []byte, found bool) (bundleManifest, error) {
 	none := fmt.Sprintf("it holds no %s", cliprofile.BundleManifest)
 	if found {
 		var named bundleManifest
@@ -1118,7 +1247,7 @@ func (p *Provider) checkBundleCLI(manifest []byte, found bool) error {
 		case named.Agent == "":
 			none = fmt.Sprintf("its %s names no agent", cliprofile.BundleManifest)
 		case named.Agent == p.agent:
-			return nil
+			return named, nil
 		default:
 			// A BUNDLE IS KEYED BY THE ENTRY (CREWLET_LLM_CLI_<KEY>_CREDENTIALS,
 			// or the entry's own auth.credential_bundle), not by its CLI, so
@@ -1126,14 +1255,14 @@ func (p *Provider) checkBundleCLI(manifest []byte, found bool) error {
 			// another CLI is still the one restored after the move — refused
 			// at every boot and apply until it is replaced, which is the
 			// remedy to name.
-			return fmt.Errorf("%w: it names %q, and %q runs %q — a bundle restores only into "+
+			return bundleManifest{}, fmt.Errorf("%w: it names %q, and %q runs %q; a bundle restores only into "+
 				"the CLI it was exported from, so one exported before %q moved to %q, or for "+
 				"another entry, is refused until it is replaced: sign %q in and export its "+
 				"bundle again (`crewlet llm export %s`)",
 				ErrForeignBundle, named.Agent, p.key, p.agent, p.key, p.agent, p.agent, p.key)
 		}
 	}
-	return fmt.Errorf("%w: it names none (%s), and a bundle restores only into the CLI it was "+
+	return bundleManifest{}, fmt.Errorf("%w: it names none (%s), and a bundle restores only into the CLI it was "+
 		"exported from, so one that cannot say which is refused until it is replaced: sign %q "+
 		"in and export its bundle again (`crewlet llm export %s`)",
 		ErrForeignBundle, none, p.agent, p.key)
@@ -1184,6 +1313,47 @@ func (p *Provider) declineAfterLogout(operator bool) error {
 func (p *Provider) runInCredentialHome(
 	ctx context.Context, mode syncMode, args []string,
 	in io.Reader, out, errOut io.Writer, extra ...map[string]string,
+) (bool, error) {
+	return p.inCredentialHome(ctx, mode, errOut, func(ctx context.Context, home string, env []string) error {
+		cmd := exec.CommandContext(ctx, p.profile.Binary, args...) //nolint:gosec // args come from a validated profile
+		cmd.Dir = home
+		cmd.Env = env
+		cmd.Stdin = in
+		cmd.Stdout = out
+		cmd.Stderr = errOut
+		// NO procgroup.Set HERE, deliberately, and it is the one child in this
+		// package that does without: an interactive login has to read the
+		// operator's terminal, and a process in its own group is not in the
+		// tty's FOREGROUND group, so it cannot read stdin and would be stopped
+		// with SIGTTIN the moment it tried. The prompt is the whole point of
+		// this command. (A command with no terminal to read, the device
+		// sign-in and the login status, runs in a group of its own:
+		// [DeviceLogin], [Provider.LoginStatus].)
+		//
+		// WaitDelay still applies. Without it, cancelling this context killed
+		// the CLI while a forked helper kept the inherited pipes open, and Wait
+		// blocked on EOF that was never coming: an operator's Ctrl+C left the
+		// command hanging.
+		cmd.WaitDelay = p.termGrace
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("cliagent: %s %s: %w", p.profile.Binary, strings.Join(args, " "), err)
+		}
+		return nil
+	}, extra...)
+}
+
+// credentialCommand runs one auth command in the login home, given the home
+// and the whole environment the command runs with, and answers how it ended.
+type credentialCommand func(ctx context.Context, home string, env []string) error
+
+// inCredentialHome is [Provider.runInCredentialHome] for any way of running the
+// command: everything around it (the lock, the carry of what an earlier
+// command left, the prune, the seed, the carry back and the prune after) is
+// the same for a command attached to the operator's terminal and for one whose
+// output the engine reads, so it is written once.
+func (p *Provider) inCredentialHome(
+	ctx context.Context, mode syncMode, errOut io.Writer, command credentialCommand,
+	extra ...map[string]string,
 ) (bool, error) {
 	home := p.ws.loginHome()
 	cache := p.ws.loginCache()
@@ -1275,28 +1445,7 @@ func (p *Provider) runInCredentialHome(
 		}
 	}
 
-	cmd := exec.CommandContext(ctx, p.profile.Binary, args...) //nolint:gosec // args come from a validated profile
-	cmd.Dir = home
-	cmd.Env = buildEnv(p.profile, checkout, env, p.auth)
-	cmd.Stdin = in
-	cmd.Stdout = out
-	cmd.Stderr = errOut
-	// NO procgroup.Set HERE, deliberately, and it is the one child in this
-	// package that does without: an interactive login has to read the
-	// operator's terminal, and a process in its own group is not in the
-	// tty's FOREGROUND group — so it cannot read stdin and would be stopped
-	// with SIGTTIN the moment it tried. The prompt is the whole point of
-	// this command.
-	//
-	// WaitDelay still applies. Without it, cancelling this context killed
-	// the CLI while a forked helper kept the inherited pipes open, and Wait
-	// blocked on EOF that was never coming — an operator's Ctrl+C left the
-	// command hanging.
-	cmd.WaitDelay = p.termGrace
-	runErr := cmd.Run()
-	if runErr != nil {
-		runErr = fmt.Errorf("cliagent: %s %s: %w", p.profile.Binary, strings.Join(args, " "), runErr)
-	}
+	runErr := command(ctx, home, buildEnv(p.profile, checkout, env, p.auth))
 
 	// Carried out even on failure: a login that authenticated and then
 	// failed a later step still wrote a credential worth keeping — and on an

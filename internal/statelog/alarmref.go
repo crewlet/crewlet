@@ -28,6 +28,14 @@ func AlarmReference() string {
 		}
 		fmt.Fprintf(&b, perLogNote, sentenceList(named))
 	}
+	if perEntry := PerEntryKinds(); len(perEntry) > 0 {
+		named := make([]string, len(perEntry))
+		for i, kind := range perEntry {
+			named[i] = "`" + string(kind) + "`"
+		}
+		fmt.Fprintf(&b, perEntryNote, sentenceList(named),
+			CredentialNoticeDays, CredentialWarningDays, spoken(LimitWaitingGrace))
+	}
 	b.WriteString("\n| Alarm | What it means | What to do |\n")
 	b.WriteString("|---|---|---|\n")
 	for _, rule := range table {
@@ -135,6 +143,21 @@ var alarmMeaning = map[Kind]string{
 		"document, a frame becoming ready in a viewer's browser, a datastore verdict) " +
 		"is failing fast enough to spend its month's error budget early: in both the " +
 		"long and the short window of one of the two burn-rate pairs.",
+	KindLLMCredentialExpiring: "A model's credential expires in thirty days or less, " +
+		"and more than seven. The expiry is computed from when the credential was " +
+		"stored and the lifetime its CLI declares (a Claude Code setup-token lasts a " +
+		"year), because the token itself does not say.",
+	KindLLMCredentialExpiresSoon: "A model's credential expires in seven days or less. " +
+		"It replaces `llm_credential_expiring` for that model.",
+	KindLLMSignInRefused: "A model cannot sign in: its latest refusal on any node is " +
+		"newer than its latest answer on any node, its credential's computed expiry has " +
+		"passed, or nothing signs it in while a seat or the assistant runs on it.",
+	KindLLMLimit: "A model sits out a plan limit on at least one node, and no seat has " +
+		"waited on it for fifteen minutes. Its seats fall back to the next entry in " +
+		"their chain meanwhile.",
+	KindLLMLimitWaiting: "A seat has been parked for fifteen minutes or more on a chain " +
+		"naming a model that sits out a limit, with nothing to fall back to. It replaces " +
+		"`llm_limit` for that model.",
 }
 
 const alarmHeader = `# Alarms
@@ -176,6 +199,22 @@ each log the alarm comes to stand on writes its own ` + "`alarm_raised`" + `, an
 log it stops standing on its own ` + "`alarm_cleared`" + `, carrying the log as
 ` + "`domain`" + `, so a second log joining an alarm that is already up, and the first
 one leaving it, are each said.
+`
+
+// perEntryNote says which alarms are about one model entry, rendered from the
+// table's own flag, with the owner's fixed thresholds.
+const perEntryNote = `
+These are about one model entry rather than the node:
+
+%s.
+
+Each names every entry it stands on in its ` + "`entries`" + ` list, with that
+entry's own measurement, and writes its log lines per entry, carrying it as
+` + "`entry`" + `. Every data node evaluates them from the same fleet-wide inputs
+(each live node's heartbeat and the secret store), so they read the same on
+every node. Their thresholds are fixed, with no setting: a credential's expiry
+is said at %d days and again at %d, and a limit turns into
+` + "`llm_limit_waiting`" + ` once a seat has waited %s on it.
 `
 
 const alarmFooter = `

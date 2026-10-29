@@ -14,22 +14,6 @@ import (
 // ClaudeCodeName is this runner's config name.
 const ClaudeCodeName = "claude-code"
 
-// ClaudeCodeCredentialEnv is every variable that signs Claude Code in to a
-// model from its environment: a Pro/Max plan's headless token, an Anthropic
-// key or bearer token, or a toggle moving it onto a cloud provider's own
-// credentials (Bedrock, Vertex AI, Microsoft Foundry).
-//
-// The engine reads it to tell whether ANYTHING in a run's environment signs
-// the CLI in, the seat's own role.sandbox.env included, which is why every
-// member is here: the entry's own sign-in is underlaid by name beneath what
-// the seat brought, and Claude Code ranks an API key above a plan token, so a
-// list that missed one would report a box signed in to nothing when it was
-// not.
-var ClaudeCodeCredentialEnv = []string{
-	"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
-	"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
-}
-
 // ClaudeCode drives Claude Code headless.
 //
 // It reaches its model through the run ENVIRONMENT rather than a config file,

@@ -55,6 +55,9 @@ type Tracker struct {
 	// has run at all. Both are for [Tracker.Standing].
 	order    []Kind
 	observed bool
+
+	// latest is the latest evaluation's alarms, for [Tracker.Latest].
+	latest []Alarm
 }
 
 // instance is what the tracker writes ONE PAIR OF LOG LINES for: a kind, and
@@ -73,9 +76,14 @@ type Tracker struct {
 // node-wide kind is one instance with no log, even where it lists logs of its
 // own: `backup_age` names the logs it holds past their replay window, and those
 // are one problem with one remedy rather than a line each.
+//
+// A PER-ENTRY KIND ([PerEntryKinds]) is the same move over model entries: one
+// instance per entry it stands on, so the second model whose token comes due
+// raises a line of its own.
 type instance struct {
 	kind   Kind
 	domain string
+	entry  string
 }
 
 // firing is one instance currently up.
@@ -88,6 +96,15 @@ type firing struct {
 // one per log a per-log kind stands on, carrying that log's own measurement,
 // and otherwise one with no log, carrying the alarm's.
 func instancesOf(a Alarm) ([]instance, []string) {
+	if perEntryKind(a.Kind) && len(a.Entries) > 0 {
+		keys := make([]instance, 0, len(a.Entries))
+		details := make([]string, 0, len(a.Entries))
+		for _, e := range a.Entries {
+			keys = append(keys, instance{kind: a.Kind, entry: e.Key})
+			details = append(details, e.Detail)
+		}
+		return keys, details
+	}
 	if !perLogKind(a.Kind) || len(a.Domains) == 0 {
 		return []instance{{kind: a.Kind}}, []string{a.Detail}
 	}
@@ -154,6 +171,7 @@ func (t *Tracker) Observe(ctx context.Context, alarms []Alarm) []Alarm {
 	defer t.mu.Unlock()
 
 	t.observed = true
+	t.latest = slices.Clone(alarms)
 	t.order = t.order[:0]
 	for _, a := range alarms {
 		if !slices.Contains(t.order, a.Kind) {
@@ -200,6 +218,9 @@ func (i instance) attrs(rest ...any) []any {
 	if i.domain != "" {
 		out = append(out, "domain", i.domain)
 	}
+	if i.entry != "" {
+		out = append(out, "entry", i.entry)
+	}
 	return append(out, rest...)
 }
 
@@ -209,7 +230,23 @@ func compareInstances(a, b instance) int {
 	if c := cmp.Compare(a.kind, b.kind); c != 0 {
 		return c
 	}
-	return cmp.Compare(a.domain, b.domain)
+	if c := cmp.Compare(a.domain, b.domain); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.entry, b.entry)
+}
+
+// Latest is the alarms the latest evaluation found, in the table's order, and
+// nil before any evaluation has run.
+//
+// THE SAME EVALUATION every other surface reads: the Models page shows this
+// node's latest instances of the model kinds from here rather than judging the
+// thresholds a second time, so the page, the health count, the gauge and the
+// log lines cannot disagree about whether a token is expiring.
+func (t *Tracker) Latest() []Alarm {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return slices.Clone(t.latest)
 }
 
 // Standing reports the kinds the latest evaluation found firing, the

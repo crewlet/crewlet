@@ -81,6 +81,11 @@ type Fleet struct {
 	pauseWatchers map[*watcher[coord.SeatPauseUpdate]]struct{}
 	runWatchers   map[string]map[*watcher[coord.SandboxRunUpdate]]struct{}
 
+	// retries and signIns are the two classes keyed by a model entry, each
+	// with its own open watches.
+	retries entryRecords[coord.ModelRetry, coord.ModelRetryUpdate]
+	signIns entryRecords[coord.DeviceSignIn, coord.DeviceSignInUpdate]
+
 	// version is the one counter every versioned write draws from, sandbox
 	// runs and mailbox records alike. Store-wide rather than per record, as
 	// a KV revision is, so a record deleted and created again never hands
@@ -132,6 +137,8 @@ func NewFleet() *Fleet {
 		mailboxes:    map[uuid.UUID]coord.MailboxRecord{},
 		pauses:       map[uuid.UUID]coord.SeatPause{},
 		uploads:      map[string]versioned{},
+		retries:      newRetryRecords(),
+		signIns:      newSignInRecords(),
 	}
 }
 

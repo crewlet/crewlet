@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
@@ -14,11 +16,16 @@ import (
 // constructed from resolved values, not from a config document.
 type AuthMode string
 
-// The three modes. Subscription is the default and the point of the backend.
+// The four modes. Subscription is the default and the point of the backend.
 const (
 	AuthSubscription AuthMode = "subscription"
 	AuthAPIKey       AuthMode = "api-key"
 	AuthInheritEnv   AuthMode = "inherit-env"
+	// AuthEnv is an entry whose own env signs the CLI in: a cloud
+	// provider's switch and credentials, or a gateway's address and token
+	// ([cliprofile.Profile.SignInEnv]). Neither the token nor the key
+	// reaches the CLI, and no login is seeded.
+	AuthEnv AuthMode = "env"
 )
 
 // Auth is one provider's resolved credential material.
@@ -131,8 +138,38 @@ func childEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 		env[name] = value
 	}
 
+	// THE ZONE IS THE ENGINE'S, ALWAYS STATED, and over the entry's env: a
+	// CLI writes the instant its limit resets as a time of day in its own
+	// zone, Codex with no zone at all ("try again at 4:31 PM"), and the
+	// engine reads that time in the zone it handed the CLI ([resetAt]).
+	// Inherited only where the host had one, as TZ used to be, the zone of a
+	// zone-less sentence was whatever the host or a box's image defaulted
+	// to, which the engine could only guess.
+	env["TZ"], _ = childZone()
+
 	applyAuth(env, p, auth)
 	return env
+}
+
+// childZone is the zone every child the engine starts is handed, by its TZ
+// name and as a location: the engine's own TZ where it is set to a zone the
+// system knows, and UTC otherwise. Named rather than inherited so the engine
+// and the CLI agree on it, which is what lets a reset the CLI names with no
+// zone be read ([resetAt]).
+//
+// UTC, not the host's local zone, where TZ names none: Go reads the host's
+// /etc/localtime when TZ is unset, and a box (or a container image) has its
+// own, so "local" is the one value two processes cannot be relied on to share.
+func childZone() (string, *time.Location) {
+	name := strings.TrimPrefix(os.Getenv("TZ"), ":")
+	if name == "" {
+		return "UTC", time.UTC
+	}
+	zone, err := time.LoadLocation(name)
+	if err != nil {
+		return "UTC", time.UTC
+	}
+	return name, zone
 }
 
 // applyAuth puts the credential the mode asks for into the child environment,
@@ -151,6 +188,19 @@ func applyAuth(env map[string]string, p cliprofile.Profile, auth Auth) {
 		}
 		if p.TokenEnv != "" {
 			delete(env, p.TokenEnv)
+		}
+	case AuthEnv:
+		// THE ENTRY'S ENV IS THE SIGN-IN, and nothing else may compete
+		// with it. Left in place, the plan token the convention resolves
+		// for every subscription entry reached a Bedrock entry's CLI, and
+		// into its box, where the cloud switch outranks it and it was never
+		// used: a credential handed to a process that does not need it. No
+		// subscription_env either: that tells a CLI to use the login a home
+		// holds, and this entry has none.
+		for _, name := range []string{p.TokenEnv, p.APIKeyEnv} {
+			if name != "" {
+				delete(env, name)
+			}
 		}
 	case AuthInheritEnv:
 		// The deliberate escape hatch: whichever of the two the ENGINE's

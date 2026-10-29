@@ -267,6 +267,8 @@ The gate stops there rather than being folded into every worker duty, and that i
 
 A config revision and the *values* its `${VAR}` references resolve to are two different things, and re-activating an unchanged revision is the documented gesture for picking up a rotated credential. The payload is byte-identical, so an apply that compared payloads would rebuild nothing on exactly the operation an operator performs to make it rebuild: the LLM providers would keep the revoked key, the trackers their old token, and every shared MCP child the credential it captured at spawn.
 
+**A rotation is one write.** A write through a running node's `/secrets` of a name the active revision reads makes the re-activation itself, in the same request, and answers the revision and epoch it produced; a batch of values (`PUT /secrets`) makes one ([Secret Store](secret-store.md#a-write-through-a-node-re-activates-what-reads-it), ADR-0070). `POST /config/reload` is left for a value written any other way, and for a write whose own re-activation answered an error.
+
 **Nothing compares the payload.** No step between the operator's gesture and the rebuild looks at a revision's bytes, so there is nothing for a rotation to slip through. The property falls out of the control plane's shape instead:
 
 - The pointer's **KV sequence is the epoch**, and the store assigns a new one on every write. Re-activating a revision therefore mints a new epoch even though the value written is byte-identical.
@@ -292,7 +294,12 @@ A per-role child is reconciled where its seat is held and only there: every node
 
 That is the whole of the comparison, and it is over resolved values rather than a digest of them. Nothing keeps a digest of live credentials across applies, which is what a broader selective rebuild would need and what would turn a rotation into a leak the moment such a digest reached a log line or a row.
 
-> One more surface, and it is out of the engine's hands entirely rather than merely off the apply path: a **running code sandbox** received its credentials in the box's environment at launch, and no engine-side refresh reaches a live box. There the bound is the run's duration plus any clarification pause, not seconds. Tear the run down if a rotation is a revocation.
+> One more surface, and no re-activation reaches it while it runs: a **running code sandbox** received its model credential in its environment at launch, and a process's environment cannot change. Every *launch* builds its environment from the current epoch's entry, so a new box, and every later segment of a running turn (a send-back, a continuation after a person's answer), already takes the new credential, and a follow-up segment in a kept box carries its own launch's environment rather than the box's. What is left is a segment running when the credential changes:
+>
+> - **Where the old credential still works**, the segment runs to its end on it, and its next segment launches on the new one.
+> - **Where the vendor revoked it**, the segment ends refused. Each launch records the entry's sign-in identity on the run's row (`sign_in_id`, a keyed digest that names no credential), so the node collecting the run sees that it was refused on a sign-in the entry no longer uses, and relaunches the same round **once**, in the same box, continuing the run's own session, with the new credential (log line `run_relaunched_signed_in`). A relaunched segment refused again is an ordinary failure.
+>
+> Stop the seat's running work (pause it with *stop running work*) if a rotation must cut a running segment off at once.
 
 ---
 

@@ -42,9 +42,10 @@ func (f *FleetStore) PutPositions(ctx context.Context, p coord.NodePositions) er
 // not read node X" has to be louder than "there is no node X".
 func (f *FleetStore) Positions(ctx context.Context) ([]coord.NodePositions, error) {
 	var out []coord.NodePositions
-	// THE BUCKET HOLDS EIGHT KEY CLASSES — a node's positions, a trim hold,
+	// THE BUCKET HOLDS TEN KEY CLASSES — a node's positions, a trim hold,
 	// a backup point, a domain's published floor, a capacity operation, a
-	// node's admission, its maintenance acknowledgement and a seat pause —
+	// node's admission, its maintenance acknowledgement, a seat pause, a
+	// model retry and a device sign-in —
 	// so the walk filters, and that filter is the load-bearing half of sharing a bucket:
 	// a hold decoded as a positions row yields an EMPTY node id and a
 	// domains map of zero values, which the trim reads as a node that has

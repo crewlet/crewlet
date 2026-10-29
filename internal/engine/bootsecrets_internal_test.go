@@ -214,13 +214,13 @@ func TestTheCompanysHalfOfTheBootIsBelowTheBoundary(t *testing.T) {
 		t.Fatal("New no longer calls opts.Recovered(), so this guard asserts nothing — " +
 			"point it at whatever replaced the boundary")
 	}
-	for _, name := range []string{"bootSecrets", "NewCompanyWith", "stampActivation", "restoreBundles"} {
+	for _, name := range []string{"bootSecrets", "newCompany", "stampActivation", "restoreBundles"} {
 		if at := firstCall(fn, name); at == token.NoPos || at < boundary {
 			t.Errorf("New calls %s at %v, want it below the boundary at %v: it is the company's, "+
 				"and a startup probe sized for the store knows nothing of it", name, at, boundary)
 		}
 	}
-	if snapshot, build := firstCall(fn, "bootSecrets"), firstCall(fn, "NewCompanyWith"); snapshot > build {
+	if snapshot, build := firstCall(fn, "bootSecrets"), firstCall(fn, "newCompany"); snapshot > build {
 		t.Error("New builds its company before it holds a secret snapshot, so the company " +
 			"resolves its references from the environment alone")
 	}

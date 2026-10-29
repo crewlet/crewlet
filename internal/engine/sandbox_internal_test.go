@@ -134,7 +134,9 @@ roles:
 	if run.model != "claude-sonnet-5" {
 		t.Errorf("the box's model = %q, want the resolved model", run.model)
 	}
-	if want := map[string]string{"ANTHROPIC_API_KEY": "sk-ant-entry"}; !maps.Equal(run.env, want) {
+	// TZ rides with it: the zone the engine reads the run's limit reset in.
+	want := map[string]string{"ANTHROPIC_API_KEY": "sk-ant-entry", "TZ": run.env["TZ"]}
+	if run.env["TZ"] == "" || !maps.Equal(run.env, want) {
 		t.Errorf("the run environment = %v, want exactly %v", run.env, want)
 	}
 }

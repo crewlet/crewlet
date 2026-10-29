@@ -29,6 +29,8 @@ import (
 //   - store-login stores the login FAKE_LOGIN_KEY names;
 //   - store-list prints the logins it holds;
 //   - store-usage <session> prints that session's usage report;
+//   - store-device-login plays a device-code sign-in ([fakeDeviceLogin]);
+//   - store-status plays a status command ([fakeStatus]);
 //   - store-file-login writes a login FILE, $HOME/.fake/creds.json, holding
 //     FAKE_LOGIN_KEY — a CLI that keeps its login in a file, for the cases
 //     about one;
@@ -191,6 +193,10 @@ func fakeStore() {
 		if verb == "store-token-only-login" {
 			_ = os.Remove(filepath.Join(filepath.Dir(file), "config.toml"))
 		}
+	case "store-device-login":
+		fakeDeviceLogin()
+	case "store-status":
+		fakeStatus()
 	case "store-list":
 		for _, c := range read() {
 			fmt.Println(c["id"])

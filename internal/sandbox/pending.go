@@ -2358,6 +2358,29 @@ type LaunchRecord struct {
 	// so spend by provider names the entry that ran rather than nobody.
 	ProviderKey string `json:"provider_key,omitempty"`
 
+	// SignInID is the sign-in identity the job's CLI was handed at its
+	// launch: the entry's cliagent SignInID, a keyed digest of its
+	// credentials that names no credential. Empty where the launch had none
+	// to name.
+	//
+	// WHY THE ROW CARRIES IT: a credential replaced while a job runs cannot
+	// reach that job (a process's environment cannot change), so the job
+	// can end refused by the vendor on the OLD credential while the entry
+	// already signs in with the new one. Comparing this against the entry's
+	// identity at collection is what tells that ending from an ordinary
+	// refusal, on whichever node collects the job: the identity is keyed by
+	// the fleet keyring, so it compares across nodes and restarts.
+	//
+	// A PEER THAT DOES NOT KNOW IT drops it when it rewrites the row (this
+	// section carries no Extra of its own), and an empty identity is read as
+	// "not recorded", which relaunches nothing: the safe direction.
+	SignInID string `json:"sign_in_id,omitempty"`
+
+	// FollowUp is why this job was launched as a follow-up of the job
+	// before it in the same round, where that is a reason the collection
+	// acts on ([FollowUpReason]); empty for every other launch.
+	FollowUp FollowUpReason `json:"follow_up,omitempty"`
+
 	// Iteration is the turn iteration the launching executor suspended in,
 	// written by [PendingStore.MarkSuspended].
 	Iteration int `json:"iteration,omitempty"`
@@ -2434,6 +2457,22 @@ type LaunchRecord struct {
 	// the resume the answer drives, as [PendingRun.ParkedInputTokens] is.
 	Condensed AuxTokens `json:"parked_condensed,omitzero"`
 }
+
+// FollowUpReason is why a job was launched as a follow-up of the job before it
+// in the same round, where the collection of the new job has to know.
+type FollowUpReason string
+
+const (
+	// FollowUpSignInReplaced is a job relaunched because the job before it
+	// was refused by its vendor on a sign-in that had been replaced while it
+	// ran. ONCE: a job launched for this reason that is refused again is an
+	// ordinary refusal, so a credential that keeps failing fails the turn
+	// rather than relaunching it for ever.
+	FollowUpSignInReplaced FollowUpReason = "sign_in_replaced"
+)
+
+// Valid reports whether the reason is one this build names.
+func (r FollowUpReason) Valid() bool { return r == FollowUpSignInReplaced }
 
 // AuxTokens is what calls to a seat's AUXILIARY model cost, split the way
 // every token figure in the engine is: the whole input, the share of it the

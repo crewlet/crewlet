@@ -183,6 +183,10 @@ type LaunchRequest struct {
 	// entry that served them, on whichever node collects the run.
 	ProviderKey string
 
+	// SignInID is the sign-in identity the run's CLI is handed, written onto
+	// the job's record ([LaunchRecord.SignInID]).
+	SignInID string
+
 	// Continue is set when this job CONTINUES the job before it, which
 	// parked on a person's question that has now been answered, or was lost
 	// with its host ([PendingRun.Lost]) — and so is the same round of the
@@ -304,6 +308,9 @@ type Continuation struct {
 	// Brief is the prompt the continued session is given: the answer, and
 	// what to do with it.
 	Brief string
+	// Reason is why the round is carried on, where the job's collection
+	// acts on it ([LaunchRecord.FollowUp]); empty otherwise.
+	Reason FollowUpReason
 }
 
 // LaunchResult reports what a launch produced.
@@ -430,7 +437,8 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Continues: req.Continue != nil,
 		// The model and the entry the run's phase record is filed under;
 		// the store keys the rest of that record on the launch it mints.
-		Launch: LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey},
+		Launch: LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey,
+			SignInID: req.SignInID, FollowUp: followUpOf(req.Continue)},
 		// THE TURN'S NOTES: the seat anchor, the brief's notes, read by the
 		// job this write opens, and the box's, waiting after them — see
 		// [PendingStore.BeginLaunch].
@@ -959,4 +967,13 @@ func handBackSubject(agentID string, ev *events.Event) string {
 		return controlSubject(agentID)
 	}
 	return inboxSubject(agentID)
+}
+
+// followUpOf is the reason a launch carries a round on, as its job's record
+// keeps it.
+func followUpOf(c *Continuation) FollowUpReason {
+	if c == nil {
+		return ""
+	}
+	return c.Reason
 }

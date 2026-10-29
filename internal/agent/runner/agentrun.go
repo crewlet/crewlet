@@ -167,6 +167,11 @@ type Continuation struct {
 	// because the session already holds every note it read before it asked.
 	SessionID string
 	Brief     string
+
+	// SignInReplaced is a launch carrying on a round whose job was refused
+	// on a sign-in replaced while it ran ([Rotated]): the launch records it
+	// on the new job, so that job is not carried on again for it.
+	SignInReplaced bool
 }
 
 // executeAsAgentRun launches the executor as a detached agentic run.
@@ -364,6 +369,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		Notes: fresh,
 		Continue: &Continuation{
 			SessionID: carry.session(), Brief: continued,
+			SignInReplaced: isRotated(carry),
 		},
 		Surface:    surface,
 		Spend:      bridged,

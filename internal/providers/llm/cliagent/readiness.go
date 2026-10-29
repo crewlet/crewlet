@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -50,10 +49,9 @@ import (
 // longer than this.
 const readinessMemory = 10 * time.Minute
 
-// readiness is the entry's memory of what its calls met, guarded for
-// concurrent calls.
+// readiness is the sign-in's memory of what its calls met, held in its [Plan]
+// and guarded by the plan's mutex.
 type readiness struct {
-	mu sync.Mutex
 	// verdict is the failure the next call is expected to meet, nil for
 	// none; since is when it was established and stamp the login files as
 	// they were then.
@@ -78,13 +76,14 @@ func (p *Provider) Unready(ctx context.Context) error {
 	if err := p.SittingOut(); err != nil {
 		return err
 	}
-	stamp := p.loginStamp()
+	stamp := p.LoginStamp()
 	missing := p.missingSignIn(ctx)
 	now := p.now()
 
-	p.ready.mu.Lock()
-	defer p.ready.mu.Unlock()
-	r := &p.ready
+	plan := p.Plan()
+	plan.mu.Lock()
+	defer plan.mu.Unlock()
+	r := &plan.ready
 	if r.verdict != nil && (r.stamp != stamp || now.Sub(r.since) >= readinessMemory) {
 		r.verdict, r.retry = nil, true
 	}
@@ -103,17 +102,35 @@ func (p *Provider) remember(err error) {
 	var stamp string
 	verdict := err != nil && (llm.KindOf(err) == llm.KindAuth || errors.Is(err, llm.ErrNotRunnable))
 	if verdict {
-		stamp = p.loginStamp()
+		stamp = p.LoginStamp()
 	}
 	now := p.now()
-	p.ready.mu.Lock()
-	defer p.ready.mu.Unlock()
+	plan := p.Plan()
+	plan.mu.Lock()
+	defer plan.mu.Unlock()
 	switch {
 	case err == nil:
-		p.ready.verdict, p.ready.retry, p.ready.answered = nil, false, true
+		plan.ready.verdict, plan.ready.retry, plan.ready.answered = nil, false, true
 	case verdict:
-		p.ready.verdict, p.ready.since, p.ready.stamp, p.ready.retry = err, now, stamp, false
+		plan.ready.verdict, plan.ready.since, plan.ready.stamp, plan.ready.retry = err, now, stamp, false
+		// WHAT A PERSON IS SHOWN, not only what the next call is told: the
+		// refusal is the sign-in's last failure until an answer outdates it
+		// ([PlanState.LastFailure]).
+		if plan.lastFailure == nil || !now.Before(plan.lastFailure.At) {
+			plan.lastFailure = &Failure{Kind: llm.KindOf(err), At: now.UTC(),
+				Said: boundSaid(firstLine(failureSaid(err)))}
+		}
 	}
+}
+
+// failureSaid is what a classified failure says, without the classification's
+// own prefix: the vendor's sentence where the CLI gave one.
+func failureSaid(err error) string {
+	var failure *llm.Error
+	if errors.As(err, &failure) && failure.Err != nil {
+		return failure.Err.Error()
+	}
+	return err.Error()
 }
 
 // missingSignIn is the classified failure of an entry nothing signs in, or nil:
@@ -148,14 +165,14 @@ func (p *Provider) missingSignIn(ctx context.Context) error {
 func (p *Provider) declaresSignIn() bool {
 	prof := p.profile
 	return len(prof.CredentialPaths) > 0 || prof.CredentialStore != nil ||
-		prof.TokenEnv != "" || prof.APIKeyEnv != ""
+		prof.TokenEnv != "" || prof.APIKeyEnv != "" || len(prof.SignInEnv) > 0
 }
 
-// loginStamp identifies the entry's login files as they are now: each file the
+// LoginStamp identifies the entry's login files as they are now: each file the
 // shared login may hold ([Workspace.loginNames]) that is there, by its name,
 // size and modification time, so a login written or removed by another
 // process reads as a change without reading a credential.
-func (p *Provider) loginStamp() string {
+func (p *Provider) LoginStamp() string {
 	var b strings.Builder
 	for _, name := range p.ws.loginNames() {
 		path := p.ws.sharedPath(name)

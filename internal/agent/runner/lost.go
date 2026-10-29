@@ -89,8 +89,9 @@ func (l Lost) why() string {
 }
 
 // carried is a run whose round a resume carries on rather than collects: one
-// that asked a person and was answered ([Asked]), or one lost with its host
-// ([Lost]). [Runner.continueAgentRun] relaunches either the same way.
+// that asked a person and was answered ([Asked]), one lost with its host
+// ([Lost]), or one refused on a sign-in replaced while it ran ([Rotated]).
+// [Runner.continueAgentRun] relaunches each the same way.
 type carried interface {
 	// session is the run's own CLI session, which the relaunch continues
 	// where it runs in that run's box; "" continues none.

@@ -70,6 +70,39 @@
 // command reads that the node lists, and asks for them together rather than
 // one request per credential. It is handed exactly the names it asks for —
 // never the store.
+//
+// # A write re-activates the revision that reads it (ADR-0070)
+//
+// A `${VAR}` in the company document is resolved when a provider or a
+// transport is built, from a snapshot an apply takes, so a value sealed and
+// left there changes nothing that is running: the old credential keeps
+// signing every model and integration in until something re-activates, and
+// nothing a person was shown said so. So every write here (`PUT
+// /secrets/{name}`, the batch `PUT /secrets` and `DELETE /secrets/{name}`)
+// asks the config surface which paths of the active revision read the names it
+// wrote ([Reactivator]), and when any does, re-activates that revision
+// SYNCHRONOUSLY after the store write, in the same request: the answer names
+// the paths (`read_by`) and the revision and epoch it produced (`reload`), so
+// the page that made the write can show the epoch its change lands at.
+//
+// Synchronous rather than through the engine's coalescing republisher, which
+// exists to bound a provisioning loop that might never converge: a person's
+// write is bounded by the person and by step-up, and the answer has to name
+// what it produced.
+//
+// THE STATUS STAYS 200 whatever the reload did. The value is sealed before the
+// reload is asked for, so a reload that lost a race or found the company
+// unrunnable is said in `reload.error` beside a write that happened:
+// crewlet-operator reads exactly 200 from this route. And the write asks
+// `config.write` of the guard before anything is sealed when a reload will
+// follow, as `/setup` asks the credential write on top of its own verb: both
+// are admin's with a recent proof, so nobody this route admitted before is
+// refused now.
+//
+// A MULTI-SECRET ROTATION IS ONE ACTIVATION. `PUT /secrets` seals every value
+// of its body and then reloads once, so rotating four credentials an entry
+// reads moves the fleet onto one new epoch rather than four, and the single
+// route is a batch of one through the same function.
 package secretsapi
 
 import (
@@ -85,6 +118,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/authz"
@@ -171,6 +205,7 @@ type IdentityResealed struct {
 // Service is the /secrets surface.
 type Service struct {
 	store     *fleetsecrets.Store
+	config    Reactivator
 	identity  Identity
 	assistant Assistant
 	keyID     string
@@ -209,8 +244,30 @@ type Options struct {
 	// without one.
 	Assistant Assistant
 
+	// Config re-activates the revision that reads a name this surface
+	// wrote (ADR-0070): configapi's Service in `crewlet run`. Required, for
+	// Fleet's reason: every node serving this surface holds the config
+	// surface beside it (ingress requires `data`), and a surface built
+	// without one would seal a rotated credential and leave every model
+	// and integration signing in with the old one, saying nothing.
+	Config Reactivator
+
 	// Now is injectable so a test can pin a row's timestamp.
 	Now func() time.Time
+}
+
+// Reactivator is the config surface as a secret write needs it: which paths
+// of the active revision read a name, and the re-activation that makes a
+// running node resolve it again. configapi's Service is the one in `crewlet
+// run`.
+type Reactivator interface {
+	// Reads reports, for each name the active revision reads, the config
+	// paths that read it ([config.Company.VariablesRead]); a name nothing
+	// reads is absent.
+	Reads(ctx context.Context, names []string) (map[string][]string, error)
+	// Reload re-publishes the active revision unchanged
+	// ([configapi.Service.Reload]).
+	Reload(ctx context.Context, summary string, by iam.Actor, expect string) (configapi.Applied, error)
 }
 
 // New builds the service.
@@ -235,12 +292,18 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("secretsapi: Options.ActiveKeyID is required: it " +
 			"is the key (secrets.active_key_id) a rekey re-seals onto")
 	}
+	if opts.Config == nil {
+		return nil, errors.New("secretsapi: Options.Config is required: a write " +
+			"re-activates the revision that reads the value, or the running " +
+			"company goes on signing in with the old one (ADR-0070)")
+	}
 	now := opts.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	return &Service{
 		store:     fleetsecrets.New(opts.Fleet, opts.Cipher),
+		config:    opts.Config,
 		identity:  opts.Identity,
 		assistant: opts.Assistant,
 		keyID:     opts.ActiveKeyID,
@@ -274,6 +337,10 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// rather than in a URL a proxy logs and bounds. The reveal's own verb
 	// on the route itself, since there is no metadata half to admit first.
 	mount("POST /secrets/reveal", authz.ActionSecretReveal, s.revealMany)
+	// SEVERAL VALUES, ONE ACTIVATION: a rotation of every credential one
+	// entry or integration reads, sealed together and re-activated once.
+	// The collection's PUT, which no {name} route can reach.
+	mount("PUT /secrets", authz.ActionSecretWrite, s.putMany)
 	// THE METADATA'S VERB, and a reveal asks the value's on top — see
 	// [Service.get]. The pattern cannot see `?reveal=true`.
 	mount("GET /secrets/{name}", authz.ActionSecretList, s.get)
@@ -560,32 +627,239 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		httpjson.Refuse(w, err)
 		return
 	}
-	caller, ok := auth.Caller(w, r)
+	written, ok := s.write(w, r, map[string]string{name: string(body)}, true)
 	if !ok {
 		return
 	}
-	by := iam.ActorFor(caller)
-	// THE AUTHOR AND THE CREDENTIAL BOTH, on the row: a row that named only
-	// the credential named, for a person's machine token, something the
-	// identity sweep deletes a week after it lapses.
-	if err := s.store.Set(r.Context(), name, string(body), secrets.Author{
-		Name: by.Name, Kind: string(by.Kind), OperatorID: by.OperatorID,
-	}, secrets.SourceAPI, s.now()); err != nil {
-		s.fail(w, "store the secret", err)
-		return
-	}
-	// The NAME and the byte count. Confirming the value would undo the
-	// reason it was sent as a body in the first place. No source: it is
-	// this route's constant, so the line says nothing by carrying it.
-	log.InfoContext(r.Context(), "secret_written", "name", name,
-		"bytes", len(body), "by", by.Name, "operator", by.OperatorID)
+	by := written.by
 	// THE PROVENANCE THE ROW RECORDS, in the answer: a client has no say in
-	// any of it, so the only honest confirmation is the node's.
+	// any of it, so the only honest confirmation is the node's. And what the
+	// write did to the running company: the paths that read the name, and
+	// the re-activation that made them read the new value (ADR-0070).
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"name": name, "bytes": len(body), "key_id": s.keyID,
 		"updated_by": by.Name, "updated_by_kind": string(by.Kind),
 		"operator_id": by.OperatorID, "source": secrets.SourceAPI,
+		"read_by": nonNil(written.readBy[name]), "reload": written.reload,
 	})
+}
+
+// MaxBatchBodyBytes bounds a `PUT /secrets` body: [MaxRevealNames] names of a
+// kilobyte each, beside a value of up to [MaxJSONValueBytes] each (the
+// longest a value is once spelled as a JSON string) inside the envelope. The
+// reveal answer's bound, because the two are the same set of pairs travelling
+// in opposite directions.
+const MaxBatchBodyBytes = MaxRevealAnswerBytes
+
+// batchRequest is the body `PUT /secrets` reads.
+type batchRequest struct {
+	Values map[string]string `json:"values"`
+	// DeferReload seals the values and re-activates nothing, for a writer
+	// that seals several values one at a time and re-activates once at its
+	// end: a provisioning run, whose every minted credential has to be
+	// durable the moment it exists (provision.TokenSink) and whose last
+	// write re-activates for all of them. The answer's `reload` is
+	// `{"deferred": true}`, and `read_by` says what the later re-activation
+	// will reach. A writer that never re-activates (a process that died)
+	// leaves the values sealed and inactive until the next re-activation.
+	DeferReload bool `json:"defer_reload"`
+}
+
+// putMany serves PUT /secrets: store or rotate several values, re-activating
+// the revision that reads them ONCE.
+//
+// ALL OR NOTHING AT THE DOOR. Every name is held to the reference grammar and
+// every value to the store's bound before anything is sealed, and a fault in
+// any refuses the whole body naming each one, because a rotation of four
+// credentials that sealed three is a company signing in with a mix of the old
+// and the new one, the state a batch exists to avoid.
+func (s *Service) putMany(w http.ResponseWriter, r *http.Request) {
+	if !noQuery(w, r, "PUT /secrets",
+		"send the values as the body, {\"values\": {\"NAME\": \"value\"}}, and "+
+			"nothing in the query") {
+		return
+	}
+	raw, err := httpjson.ReadBody(w, r, MaxBatchBodyBytes)
+	if err != nil {
+		httpjson.Refuse(w, err)
+		return
+	}
+	var req batchRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&req); err != nil {
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
+			"detail": "the body is not {\"values\": {...}}: " + err.Error(),
+			"hint":   "send each variable's value under values, keyed by its name",
+		})
+		return
+	}
+	switch {
+	case len(req.Values) == 0:
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
+			"detail": "values is empty",
+			"hint":   "name at least one variable to store",
+		})
+		return
+	case len(req.Values) > MaxRevealNames:
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
+			"detail": strconv.Itoa(len(req.Values)) + " values, and one request stores at most " +
+				strconv.Itoa(MaxRevealNames),
+			"hint": "split the values into requests of at most " + strconv.Itoa(MaxRevealNames),
+		})
+		return
+	}
+	names := slices.Sorted(maps.Keys(req.Values))
+	for _, name := range names {
+		if reserved(w, name) {
+			return
+		}
+	}
+	invalid := map[string]string{}
+	for _, name := range names {
+		if err := secrets.CheckName(name); err != nil {
+			invalid[name] = err.Error()
+		} else if err := secrets.CheckValue(req.Values[name]); err != nil {
+			invalid[name] = err.Error()
+		}
+	}
+	if len(invalid) > 0 {
+		bad := slices.Sorted(maps.Keys(invalid))
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody, httpjson.Detail{
+			"detail":  strings.Join(bad, ", ") + " cannot be stored, so nothing was",
+			"invalid": invalid,
+			"hint": "a secret is keyed by environment-variable name and holds at most " +
+				strconv.Itoa(secrets.MaxValueBytes>>10) + " KiB; correct each one named " +
+				"and send the whole body again",
+		})
+		return
+	}
+	written, ok := s.write(w, r, req.Values, !req.DeferReload)
+	if !ok {
+		return
+	}
+	sizes := make(map[string]int, len(names))
+	readBy := make(map[string][]string, len(names))
+	for _, name := range names {
+		sizes[name] = len(req.Values[name])
+		readBy[name] = nonNil(written.readBy[name])
+	}
+	httpjson.Write(w, http.StatusOK, map[string]any{
+		"names": names, "bytes": sizes, "read_by": readBy, "reload": written.reload,
+	})
+}
+
+// written is what [Service.write] did: who it wrote as, the paths of the
+// active revision reading each name, and the re-activation that followed, nil
+// when nothing reads any of them.
+type written struct {
+	by     iam.Actor
+	readBy map[string][]string
+	reload *configapi.Reloaded
+}
+
+// write seals every value and re-activates the revision that reads any of them
+// once, answering the refusal itself; ok is false when the request has been
+// answered. The names and values are already held to the grammar and the
+// bound.
+//
+// IN THIS ORDER: which paths read the names, then `config.write` when a
+// reload will follow (asked of the same guard the route was, BEFORE anything
+// is sealed, so a caller who may store a credential and may not re-activate the
+// company leaves nothing behind), then every seal, then the one reload.
+//
+// reactivates is false for a write whose caller re-activates at its own end
+// ([batchRequest.DeferReload]): nothing is re-activated, and `config.write`
+// is asked of the write that does.
+func (s *Service) write(w http.ResponseWriter, r *http.Request, values map[string]string,
+	reactivates bool) (written, bool) {
+	ctx := r.Context()
+	names := slices.Sorted(maps.Keys(values))
+	readBy, err := s.config.Reads(ctx, names)
+	if err != nil {
+		s.fail(w, "read which paths read the secret", err)
+		return written{}, false
+	}
+	if reactivates && len(readBy) > 0 &&
+		!authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionConfigWrite}) {
+		return written{}, false
+	}
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return written{}, false
+	}
+	by := iam.ActorFor(caller)
+	// A DEFERRED WRITE RE-ACTIVATES NOTHING, its failure included: the
+	// caller's last write does, for every name it sealed.
+	reactivate := func(names []string) *configapi.Reloaded {
+		if !reactivates {
+			// SAID PLAINLY, never a null a reader could take for "nothing
+			// reads it": the value is sealed and not active yet.
+			return &configapi.Reloaded{Deferred: true}
+		}
+		return s.reactivate(ctx, names, readBy, by, "written")
+	}
+	author := secrets.Author{Name: by.Name, Kind: string(by.Kind), OperatorID: by.OperatorID}
+	var sealed []string
+	for _, name := range names {
+		// THE AUTHOR AND THE CREDENTIAL BOTH, on the row: a row that named
+		// only the credential named, for a person's machine token,
+		// something the identity sweep deletes a week after it lapses.
+		if err := s.store.Set(ctx, name, values[name], author, secrets.SourceAPI, s.now()); err != nil {
+			// WHAT DID LAND STILL REACHES THE COMPANY: a row sealed and
+			// left unread is the trap this surface closes, so the names
+			// sealed before the failure are re-activated and named.
+			log.ErrorContext(ctx, "secret_write_failed", "name", name, "sealed", sealed,
+				"error", err, "by", by.Name, "operator", by.OperatorID)
+			httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeInternalError,
+				httpjson.Detail{
+					"sealed": nonNil(sealed),
+					"reload": reactivate(sealed),
+					"hint": "the values named under sealed are stored; send the others " +
+						"again",
+				})
+			return written{}, false
+		}
+		sealed = append(sealed, name)
+		// The NAME and the byte count. Confirming the value would undo the
+		// reason it was sent as a body in the first place. No source: it
+		// is this route's constant, so the line says nothing by carrying it.
+		log.InfoContext(ctx, "secret_written", "name", name,
+			"bytes", len(values[name]), "by", by.Name, "operator", by.OperatorID)
+	}
+	return written{by: by, readBy: readBy, reload: reactivate(sealed)}, true
+}
+
+// reactivate re-activates the active revision once, when it reads any of
+// names, and says what that did; nil when it reads none of them, which is the
+// `"reload": null` an answer carries.
+func (s *Service) reactivate(ctx context.Context, names []string, readBy map[string][]string,
+	by iam.Actor, what string) *configapi.Reloaded {
+
+	var read []string
+	for _, name := range names {
+		if len(readBy[name]) > 0 {
+			read = append(read, name)
+		}
+	}
+	if len(read) == 0 {
+		return nil
+	}
+	summary := "reload: secret " + read[0] + " " + what
+	if len(read) > 1 {
+		summary = "reload: secrets " + strings.Join(read, ", ") + " " + what
+	}
+	applied, err := s.config.Reload(ctx, summary, by, "")
+	outcome := configapi.ReloadOutcome(applied, err)
+	if err != nil {
+		log.WarnContext(ctx, "secret_reload_failed", "names", read, "error", err,
+			"by", by.Name, "operator", by.OperatorID,
+			"detail", "the values are sealed; POST /config/reload re-activates the company")
+	} else {
+		log.InfoContext(ctx, "secret_reloaded", "names", read, "revision", applied.RevisionID,
+			"epoch", applied.Epoch, "by", by.Name, "operator", by.OperatorID)
+	}
+	return outcome
 }
 
 // noQuery refuses a request to a route that takes no query string, naming its
@@ -638,6 +912,18 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	if reserved(w, name) {
 		return
 	}
+	// A REMOVAL OF A NAME THE COMPANY READS IS A CHANGE TO THE COMPANY too:
+	// whatever read it falls back to its convention or signs out, and the
+	// running company learns that only at a re-activation. Asked before the
+	// row goes, as a write asks.
+	readBy, err := s.config.Reads(r.Context(), []string{name})
+	if err != nil {
+		s.fail(w, "read which paths read the secret", err)
+		return
+	}
+	if len(readBy) > 0 && !authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionConfigWrite}) {
+		return
+	}
 	removed, err := s.store.Unset(r.Context(), name)
 	if err != nil {
 		s.fail(w, "remove the secret", err)
@@ -650,7 +936,13 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	by := iam.ActorFor(caller)
 	log.InfoContext(r.Context(), "secret_removed", "name", name,
 		"removed", removed, "by", by.Name, "operator", by.OperatorID)
-	httpjson.Write(w, http.StatusOK, map[string]any{"name": name, "removed": removed})
+	var reload *configapi.Reloaded
+	if removed {
+		reload = s.reactivate(r.Context(), []string{name}, readBy, by, "removed")
+	}
+	httpjson.Write(w, http.StatusOK, map[string]any{
+		"name": name, "removed": removed, "read_by": nonNil(readBy[name]), "reload": reload,
+	})
 }
 
 // rekey serves POST /secrets/rekey — re-seal every stale row, and every person's

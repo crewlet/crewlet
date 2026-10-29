@@ -7,10 +7,14 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/gitlab"
@@ -113,7 +117,124 @@ func (s sinkFlags) open(ctx context.Context, companySecrets *companyStore, stdou
 	if err != nil {
 		return nil, err
 	}
-	return provision.NewSecretStoreSink(store, hostAuthor()), nil
+	sink := provision.NewSecretStoreSink(store, hostAuthor())
+	if store.target.throughNode {
+		return &nodeSecretSink{SecretStoreSink: sink, target: store.target,
+			retries: flushRetries, recorded: map[string]string{}}, nil
+	}
+	return sink, nil
+}
+
+// nodeSecretSink is the secret store reached through a running node: each
+// value sealed the moment it is minted with its re-activation deferred, and
+// ONE re-activation at the end of the run for every value it sealed
+// (ADR-0070), through the batch `PUT /secrets`. There is then nothing left
+// for the operator to do for a running fleet to read them, which is what its
+// next step says instead of the store's own "re-activate the current
+// revision".
+type nodeSecretSink struct {
+	*provision.SecretStoreSink
+	target *secretTarget
+
+	// retries is how long Flush waits before each retry: [flushRetries],
+	// and nothing in a test.
+	retries []time.Duration
+
+	mu       sync.Mutex
+	recorded map[string]string
+}
+
+// Record implements [provision.TokenSink]: sealed now, re-activated at Flush.
+func (s *nodeSecretSink) Record(ctx context.Context, name, value string) error {
+	if err := s.SecretStoreSink.Record(ctx, name, value); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.recorded[name] = value
+	return nil
+}
+
+// Discard implements [provision.TokenSink]: a rolled-back value is not
+// re-activated at the end.
+func (s *nodeSecretSink) Discard(ctx context.Context) error {
+	s.mu.Lock()
+	s.recorded = map[string]string{}
+	s.mu.Unlock()
+	return s.SecretStoreSink.Discard(ctx)
+}
+
+// Flush implements [provision.TokenSink]: the run's one re-activation, over
+// every value it sealed, sent again as one batch the node re-activates for.
+//
+// RETRIED ON A TRANSIENT FAILURE ([flushRetries]): the values are sealed
+// already and sending them again seals the same bytes, so a node failing over
+// or a coordination store electing a leader costs a few seconds rather than a
+// run whose credentials stay inactive. A refusal (a 4xx, a company the node
+// cannot re-activate as it stands) is answered at once. A run that dies before
+// its flush leaves every value sealed and inactive until the next
+// re-activation: the next run's flush, or `POST /config/reload`.
+func (s *nodeSecretSink) Flush(ctx context.Context) error {
+	s.mu.Lock()
+	values := maps.Clone(s.recorded)
+	s.mu.Unlock()
+	if len(values) == 0 {
+		return s.SecretStoreSink.Flush(ctx)
+	}
+	var last error
+	for attempt := 0; ; attempt++ {
+		written, err := s.target.SetMany(ctx, values, hostAuthor(), secrets.SourceProvision,
+			time.Now().UTC(), false)
+		switch reload := written.Reload; {
+		case err != nil:
+			last = fmt.Errorf("re-activate the company for the values this run sealed: %w", err)
+		case reload != nil && reload.Error != "":
+			last = fmt.Errorf("the values are sealed and the company was not re-activated (%s): %s; "+
+				"POST /config/reload re-activates it", reload.Error, reload.Detail)
+		default:
+			s.mu.Lock()
+			s.recorded = map[string]string{}
+			s.mu.Unlock()
+			return s.SecretStoreSink.Flush(ctx)
+		}
+		if attempt >= len(s.retries) || !transientFlush(err, written.Reload) {
+			return last
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(last, ctx.Err())
+		case <-time.After(s.retries[attempt]):
+		}
+	}
+}
+
+// flushRetries is how long a provisioning run's flush waits before each
+// retry of its re-activation: two retries, two then five seconds, which is a
+// coordination store's leader election (the config surface answers one with
+// Retry-After: 2) with room to spare, and short enough that a person at the
+// terminal is told within ten seconds that it did not land. A sink built in a
+// test waits none.
+var flushRetries = []time.Duration{2 * time.Second, 5 * time.Second}
+
+// transientFlush reports whether a flush's failure may pass on its own: a
+// node that did not answer or answered 5xx, or a re-activation that lost a
+// race with another write or went unanswered. A refusal is not.
+func transientFlush(err error, reload *configapi.Reloaded) bool {
+	if err != nil {
+		var refused *nodeRefusal
+		return !errors.As(err, &refused) || refused.Status >= http.StatusInternalServerError
+	}
+	switch reload.Error {
+	case httpjson.CodeUnavailable, httpjson.CodeRevisionAdvanced, httpjson.CodeInternalError:
+		return true
+	}
+	return false
+}
+
+// NextStep implements [provision.TokenSink].
+func (*nodeSecretSink) NextStep() string {
+	return "nothing more: the node re-activated the revision that reads the " +
+		"values this run sealed, once, so the running fleet reads them now"
 }
 
 // check refuses an ambiguous or absent choice of sink, before anything reads
@@ -288,7 +409,13 @@ type sinkStore struct {
 func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Author,
 	source secrets.Source, now time.Time) error {
 
-	if _, err := s.target.Set(ctx, name, value, by, source, now); err != nil {
+	// DURABLE NOW, RE-ACTIVATED ONCE: a minted credential is sealed the
+	// moment it exists (provision.TokenSink.Record), and the run's last
+	// write re-activates for every value it sealed ([nodeSecretSink.Flush]),
+	// so a run that mints N credentials moves a running fleet onto one
+	// epoch rather than N.
+	if _, err := s.target.SetMany(ctx, map[string]string{name: value}, by, source, now,
+		true); err != nil {
 		return err
 	}
 	s.values.recorded(name, value)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -97,9 +98,10 @@ import (
 // park decided under one registry is released by an apply that installs
 // another ([Engine.reconcileProviderParks]): the redelivery asks the new
 // entries, and a limit that still holds parks the seat again at the cost of one
-// delivery. An entry whose spec the apply left unchanged carries its
-// predecessor's sit-out ([carrySitOuts]), so that re-park costs the delivery
-// and no process: the entry refuses before any CLI is started. The park is not
+// delivery. An entry that still calls as the same account finds the sit-out
+// its sign-in is serving on the node's registry ([cliagent.Plans]), so that
+// re-park costs the delivery and no process: the entry refuses before any CLI
+// is started. The park is not
 // carried across instead, because whether the seat's chain is still the one
 // that refused is the new company's to say (its `llm`, the entries it names),
 // and its first turn is what asks. A SEAT WHOSE MAIL ITS RUN HOLDS has no
@@ -220,6 +222,10 @@ type limitProbe struct {
 	basis providerBasis
 	until time.Time
 	seats map[uuid.UUID]string
+	// since is when each seat joined the probe: the instant it parked on
+	// this chain, which the Models page and the `llm_limit_waiting` alarm
+	// measure a wait from ([Engine.parkedByEntry]).
+	since map[uuid.UUID]time.Time
 	alarm alarm
 	// call is the call the probe is making, nil when none is.
 	call *probeCall
@@ -422,10 +428,16 @@ func (e *Engine) joinLimitProbe(ctx context.Context, basis providerBasis, seat u
 	}
 	probe := p.probes[key]
 	if probe == nil {
-		probe = &limitProbe{basis: basis, seats: map[uuid.UUID]string{}}
+		probe = &limitProbe{basis: basis, seats: map[uuid.UUID]string{},
+			since: map[uuid.UUID]time.Time{}}
 		p.probes[key] = probe
 	}
 	probe.seats[seat] = handle
+	if _, waiting := probe.since[seat]; !waiting {
+		// A seat that joins again while it waits keeps its first instant:
+		// a renewed park is the same wait.
+		probe.since[seat] = e.now()
+	}
 	if probe.call == nil && (probe.alarm == nil || retry.Before(probe.until)) {
 		probe.until = retry
 		e.armLimitProbeLocked(ctx, key, probe)
@@ -566,6 +578,7 @@ func (e *Engine) leaveLimitProbe(seat uuid.UUID, basis providerBasis) {
 		return
 	}
 	delete(probe.seats, seat)
+	delete(probe.since, seat)
 	if len(probe.seats) > 0 {
 		return
 	}
@@ -852,4 +865,52 @@ func (e *Engine) publishProviderPark(ctx context.Context, handle string, payload
 		log.WarnContext(ctx, "seat_provider_park_not_published", "type", ev.Type,
 			"seat", handle, "error", err)
 	}
+}
+
+// parkedByEntry is every seat this node holds parked on a limited chain, under
+// each entry the chain names, ordered by seat id: what the heartbeat's model
+// rows publish ([coord.ModelStatus.Parked]).
+//
+// UNDER EVERY ENTRY OF THE CHAIN, because a seat parks only once every member
+// it could fall back to is limited: each of them is what the seat waits on.
+func (e *Engine) parkedByEntry() map[string][]coord.ParkedSeat {
+	p := &e.limitProbes
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := map[string][]coord.ParkedSeat{}
+	for _, probe := range p.probes {
+		for seat, since := range probe.since {
+			for _, key := range probe.basis.keys {
+				out[key] = append(out[key], coord.ParkedSeat{Seat: seat, Since: since})
+			}
+		}
+	}
+	for key := range out {
+		slices.SortFunc(out[key], func(a, b coord.ParkedSeat) int {
+			return strings.Compare(a.Seat.String(), b.Seat.String())
+		})
+		out[key] = slices.CompactFunc(out[key], func(a, b coord.ParkedSeat) bool { return a.Seat == b.Seat })
+	}
+	return out
+}
+
+// rearmLimitProbesNaming makes every probe whose chain names entry fire now,
+// rather than at the instant it waits for: a person cleared the entry's
+// sit-out ([Engine.applyModelRetry]), so a seat parked on it may have a member
+// that answers. A chain that is still limited re-parks with the vendor's fresh
+// word. A probe whose call is out already is left to it.
+func (e *Engine) rearmLimitProbesNaming(ctx context.Context, entry string) int {
+	p := &e.limitProbes
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	armed := 0
+	for key, probe := range p.probes {
+		if probe.call != nil || !slices.Contains(probe.basis.keys, entry) {
+			continue
+		}
+		probe.until = e.now()
+		e.armLimitProbeLocked(ctx, key, probe)
+		armed++
+	}
+	return armed
 }

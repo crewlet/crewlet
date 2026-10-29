@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -274,7 +275,26 @@ func newRevealNode(t *testing.T, held map[string]string) *revealNode {
 			}
 			n.stored[name] = string(value)
 			n.mu.Unlock()
-			_, _ = fmt.Fprint(w, `{"updated_by":"token:ops","updated_by_kind":"operator"}`)
+			// AND THE RE-ACTIVATION A NODE MAKES of a value its company
+			// reads (ADR-0070), which a command prints.
+			_, _ = fmt.Fprint(w, `{"updated_by":"token:ops","updated_by_kind":"operator",`+
+				`"read_by":["providers.llm.default.auth.token"],`+
+				`"reload":{"revision_id":"r-2","epoch":7}}`)
+			return
+		}
+		// THE BATCH WRITE, which a provisioning sink records through.
+		if r.Method == http.MethodPut && r.URL.Path == "/secrets" {
+			var batch struct {
+				Values map[string]string `json:"values"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&batch)
+			n.mu.Lock()
+			if n.stored == nil {
+				n.stored = map[string]string{}
+			}
+			maps.Copy(n.stored, batch.Values)
+			n.mu.Unlock()
+			_, _ = fmt.Fprint(w, `{"read_by":{},"reload":null}`)
 			return
 		}
 		if r.Method == http.MethodPost && r.URL.Path == "/secrets/reveal" {
@@ -1140,7 +1160,7 @@ func TestASeatsNodeReadsAndStoresThroughTheDataNodeItNames(t *testing.T) {
 		t.Errorf("revealed %v, want the token the entry it names reads", node.reveals())
 	}
 
-	target, err := storeLLMSecret(t.Context(),
+	target, _, err := storeLLMSecret(t.Context(),
 		llmStoreAt(t, tokenEnviron("ops-token"), "login", "-config", cfg, "-api", node.server.URL),
 		"CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-captured")
 	if err != nil {

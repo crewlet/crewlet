@@ -67,7 +67,12 @@ import (
 // had just called valid. The epoch carries a nil registry instead, which is
 // what [Company.Models] documents and what the dispatcher reads to hold every
 // seat's work until a provider arrives.
-func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, error) {
+//
+// EVERY ENTRY ON THE NODE'S ONE [cliagent.Plans], which outlives the revision:
+// an entry rebuilt with the same sign-in finds the windows its predecessor was
+// sitting out there, and nil (a company built to validate it, not to run it)
+// gives each entry a registry of its own.
+func buildProviders(c *config.Company, r *config.Resolver, plans *cliagent.Plans) (*phase.Registry, error) {
 	order := c.Providers.ProviderOrder()
 	if len(order) == 0 {
 		return nil, nil
@@ -82,7 +87,7 @@ func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, err
 			// using it would fall back to another model with nothing said.
 			return nil, fmt.Errorf("engine: provider %q is in the order but not in the map", key)
 		}
-		p, err := BuildCLIAgent(key, spec, r)
+		p, err := BuildCLIAgent(key, spec, r, plans)
 		if err != nil {
 			return nil, err
 		}
@@ -154,7 +159,12 @@ func (c *Company) restoreBundles(ctx context.Context) {
 // kept by the vendor's CLI in a directory on disk, and at most a single
 // long-lived token or API key beside it, so there is no pool here and nothing
 // to rotate: a second key is a second entry in the seat's fallback chain.
-func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver) (*cliagent.Provider, error) {
+//
+// plans is the node's registry of sign-ins ([cliagent.Config.Plans]); nil
+// gives the entry one of its own, which is what a command that reports on one
+// entry needs.
+func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver,
+	plans *cliagent.Plans) (*cliagent.Provider, error) {
 	stateDir, err := spec.ResolvedStateDir(key)
 	if err != nil {
 		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
@@ -251,6 +261,7 @@ func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver) (*cl
 		Auth:                       auth,
 		CredentialBundle:           bundle,
 		CredentialBundleConfigured: bundleConfigured,
+		Plans:                      plans,
 	})
 }
 

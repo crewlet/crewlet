@@ -1272,6 +1272,76 @@ type Profile struct {
 	// AuthMarkers recognise an expired login.
 	AuthMarkers []AuthMarker `yaml:"auth_markers,omitempty"`
 
+	// AuthEvents recognise a refused sign-in by the CLI's own structured
+	// report, ahead of every limit report and sentinel; see [AuthEvent].
+	AuthEvents []AuthEvent `yaml:"auth_events,omitempty"`
+
+	// LimitResetEvents date and name the limit a run reported, from the
+	// CLI's own fields; see [LimitResetEvent].
+	LimitResetEvents []LimitResetEvent `yaml:"limit_reset_events,omitempty"`
+
+	// LimitWindows name the window of a limit from the vendor's sentence,
+	// where no [LimitResetEvent] named one; see [LimitWindowWording].
+	LimitWindows []LimitWindowWording `yaml:"limit_windows,omitempty"`
+
+	// SignInEnv lists the variables that sign this CLI in when an entry's
+	// env sets one: a cloud provider's switch (CLAUDE_CODE_USE_BEDROCK) or a
+	// gateway's token (ANTHROPIC_AUTH_TOKEN). What auth.mode env requires
+	// one of, and what `crewlet llm list` reports as the route.
+	//
+	// A LIST, unlike [Profile.EnvSignIn]'s declaration, because these CLIs
+	// sign in by a handful of fixed names, and a switch such as
+	// CLAUDE_CODE_USE_BEDROCK is no credential: no credential-name rule
+	// would count it.
+	SignInEnv []string `yaml:"sign_in_env,omitempty"`
+
+	// IdentityEnv lists the variables, none of them a credential, whose
+	// values say WHICH account or endpoint a call reaches: a cloud region and
+	// profile, a project and location, a gateway's address. Folded into the
+	// entry's sign-in identity beside its credentials, so two entries on one
+	// cloud switch but different regions, projects or gateways are two
+	// sign-ins, and a limit one meets does not sit the other out.
+	IdentityEnv []string `yaml:"identity_env,omitempty"`
+
+	// TokenPrefix and APIKeyPrefix are how the vendor's headless token and
+	// its API key begin (`sk-ant-oat01-`, `sk-ant-api03-`): what a hint of
+	// a stored credential shows, and what tells a key pasted where a token
+	// belongs from the token. Empty where the vendor's credentials share no
+	// prefix.
+	TokenPrefix  string `yaml:"token_prefix,omitempty"`
+	APIKeyPrefix string `yaml:"api_key_prefix,omitempty"`
+
+	// TokenLifetimeDays is how long the headless token the CLI mints
+	// ([Profile.CaptureTokenArgs]) lasts, as the vendor documents it. Zero
+	// is unknown. The token is opaque, so its expiry is computed from when
+	// it was stored, never read from it.
+	TokenLifetimeDays int `yaml:"token_lifetime_days,omitempty"`
+
+	// DeviceLoginArgs runs the vendor's device-code sign-in, which prints
+	// an address and a one-time code a person enters elsewhere and then
+	// waits for their approval; see [DeviceCodePatterns].
+	DeviceLoginArgs []string `yaml:"device_login_args,omitempty"`
+
+	// DeviceCodePatterns read the address and the code out of what
+	// DeviceLoginArgs prints.
+	DeviceCodePatterns *DeviceCodePatterns `yaml:"device_code_patterns,omitempty"`
+
+	// StatusTextArgs asks the CLI who it is logged in as, in words, where
+	// StatusArgs prints JSON: what `crewlet llm doctor` shows a person.
+	// Empty shows StatusArgs' own output.
+	StatusTextArgs []string `yaml:"status_text_args,omitempty"`
+
+	// StatusFields locates the sign-in method and the account in the JSON
+	// StatusArgs prints; see [StatusFields]. Nil reads only the exit code.
+	StatusFields *StatusFields `yaml:"status_fields,omitempty"`
+
+	// ModelAliases are model names the CLI resolves itself; see
+	// [ModelAlias].
+	ModelAliases []ModelAlias `yaml:"model_aliases,omitempty"`
+
+	// ModelsDocs is the vendor's own page listing the models the CLI takes.
+	ModelsDocs string `yaml:"models_docs,omitempty"`
+
 	// MarkerScope is where the two marker sets above may be matched —
 	// see [MarkerScope]. Empty searches the answer and stderr, which is
 	// what a CLI reporting a spent plan as its answer needs.
@@ -1978,6 +2048,8 @@ func (p *Profile) problems() []string {
 		m.Reset.validate(fmt.Sprintf("limit_markers[%d]", i), add)
 	}
 	p.validateLimitEvents(add)
+	p.validateEventReports(add)
+	p.validateSignIn(add)
 	// Checked at all, which it was not: an auth marker fires KindAuth, and
 	// KindAuth exhausts the credential exactly as a spent plan does — so an
 	// unusable sentinel costs the same here as it does above.
@@ -2404,6 +2476,12 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 			add("credential_paths[%d] %q has the file name %s, which every bundle keeps its "+
 				"manifest under — the entry naming the CLI it was exported from — so a login "+
 				"file by that name could not travel in one", i, rel, BundleManifest)
+			continue
+		}
+		if name == LoginInstallFile {
+			add("credential_paths[%d] %q has the file name %s, which the engine keeps a login's "+
+				"install record under beside the login, so a login file by that name would be "+
+				"read as the record", i, rel, LoginInstallFile)
 			continue
 		}
 		if first, taken := byName[name]; taken {

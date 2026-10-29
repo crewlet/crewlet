@@ -132,7 +132,198 @@ type NodeStatus struct {
 	// reads it, and the settings screen asking each node in turn would be
 	// the fan-out whose partial answers the file head refused.
 	MCP []MCPServerStatus
+
+	// Models is what this node knows about each configured model entry,
+	// one row per entry of its ACTIVE revision ([ModelStatus]). Nil is
+	// "this node runs none".
+	//
+	// On the heartbeat for MCP's reason: a model's sit-out, its last answer
+	// and its last refusal are each node's own (a node's process meets the
+	// vendor's limit, and its memory keeps the window), every node already
+	// re-sends its status, and the Models page reading one lease listing
+	// answers for the fleet without asking each node in turn. A node that
+	// did not report is a column of its own on that page, never a row of
+	// zeros.
+	Models []ModelStatus
+
+	// Runners is whether each executor cell can start a box on this node,
+	// as its runner probe last found it. Nil is a node that has not probed
+	// (one that runs no executor, or one still booting).
+	Runners *RunnerStatus
 }
+
+// ModelStatus is one configured model entry, as ONE node holds it at the
+// beat.
+//
+// THE NODE'S OWN VIEW, never the fleet's: the sign-in route is what THIS node
+// resolves (a variable may be set in one node's environment and not
+// another's), and the sit-out, the last answer and the last failure are this
+// node's memory of its own calls. The reader joins the rows across nodes.
+type ModelStatus struct {
+	// Key is the entry's key in `providers.llm`.
+	Key string
+
+	// Plan is the first [ModelPlanChars] hex characters of the entry's
+	// sign-in identity, and "" when nothing signs it in. A PREFIX AND
+	// NEVER THE WHOLE: it is enough for a reader to say "these entries
+	// share one sign-in", which is all a reader of the lease needs, and the
+	// whole identity is a credential's fingerprint nothing publishes.
+	Plan string
+
+	// SignIn is the route this node resolves the entry's sign-in through,
+	// in cliagent's words (token, credentials, api-key, env, inherit-env,
+	// environment, none), and Resolves whether its credential resolved
+	// here.
+	SignIn   string
+	Resolves bool
+
+	// SittingOut is the window the entry sits out on this node, nil when
+	// it sits out none.
+	SittingOut *ModelSitOut
+
+	// LastAnswer is when the entry's sign-in last answered a call on this
+	// node, zero when it has not since this process started.
+	LastAnswer time.Time
+
+	// LastFailure is the latest failure of the entry's sign-in on this
+	// node, nil when there is none.
+	LastFailure *ModelFailure
+
+	// Parked is the seats THIS node holds parked on a chain naming the
+	// entry, by agent id as MCP rows name seats (ADR-0013), ordered by id.
+	Parked []ParkedSeat
+
+	// HostLogin is the entry's CLI login on this node's disk, only for an
+	// entry that signs in with credential files: nil for every other.
+	HostLogin *HostLogin
+}
+
+// ModelSitOut is a sit-out window on the wire.
+type ModelSitOut struct {
+	// Until is when the entry is tried again, ResetsAt when the vendor said
+	// the limit lifts (zero where it named no instant), and Since the
+	// report that opened the window.
+	Until, ResetsAt, Since time.Time
+
+	// Window is which of the vendor's limits it is, in cliagent's words
+	// (session, weekly, model, unknown).
+	Window string
+
+	// Said is the head of the vendor's own sentence, bounded to
+	// [MaxModelSaidBytes].
+	Said string
+}
+
+// ModelFailure is a failure on the wire: its llm kind (auth, rate_limit,
+// timeout, server, fatal), when, and the head of what the CLI said, bounded to
+// [MaxModelSaidBytes].
+type ModelFailure struct {
+	Kind string
+	At   time.Time
+	Said string
+}
+
+// ParkedSeat is one seat parked on a chain naming an entry, since when.
+type ParkedSeat struct {
+	Seat  uuid.UUID
+	Since time.Time
+}
+
+// HostLoginState is a CLI login's state as its own status command reports it.
+type HostLoginState string
+
+const (
+	// HostSignedIn is a status command that exited 0.
+	HostSignedIn HostLoginState = "signed_in"
+	// HostSignedOut is one that exited 1, the CLIs' own "not logged in".
+	HostSignedOut HostLoginState = "signed_out"
+	// HostLoginUnknown is anything else: the command could not run, timed
+	// out, or exited with a code that is no answer.
+	HostLoginUnknown HostLoginState = "unknown"
+)
+
+// Valid reports whether the state is one this build names.
+func (s HostLoginState) Valid() bool {
+	switch s {
+	case HostSignedIn, HostSignedOut, HostLoginUnknown:
+		return true
+	}
+	return false
+}
+
+// HostLogin is an entry's CLI login on one node's disk.
+type HostLogin struct {
+	State HostLoginState
+
+	// Method is how it signed in, as the CLI says (claude.ai, console,
+	// chatgpt), and Account the account it names, bounded to
+	// [MaxModelAccountBytes]. Either may be empty: not every CLI says.
+	Method, Account string
+
+	// Detail is why the state is unknown, bounded to [MaxModelSaidBytes].
+	Detail string
+
+	// CheckedAt is when the status command last ran.
+	CheckedAt time.Time
+}
+
+// RunnerState is whether one executor cell can start a box on a node.
+type RunnerState string
+
+const (
+	// RunnerReady is a cell whose probe passed.
+	RunnerReady RunnerState = "ready"
+	// RunnerNotReady is a declared cell whose probe failed.
+	RunnerNotReady RunnerState = "not_ready"
+	// RunnerUnconfigured is a cell `providers.sandbox` does not declare.
+	RunnerUnconfigured RunnerState = "unconfigured"
+)
+
+// Valid reports whether the state is one this build names.
+func (s RunnerState) Valid() bool {
+	switch s {
+	case RunnerReady, RunnerNotReady, RunnerUnconfigured:
+		return true
+	}
+	return false
+}
+
+// RunnerStatus is each executor cell's readiness on one node.
+type RunnerStatus struct {
+	Direct, Container, E2B RunnerCell
+}
+
+// RunnerCell is one cell's probe result: its state, what the probe found, and
+// for a cell that is not ready the one thing to do about it. Detail and Fix
+// are bounded to [MaxModelSaidBytes].
+type RunnerCell struct {
+	State     RunnerState
+	Detail    string
+	Fix       string
+	CheckedAt time.Time
+}
+
+// ModelPlanChars is how much of a sign-in identity a heartbeat carries: twelve
+// hex characters, 48 bits, which tells a company's handful of sign-ins apart
+// and reverses to nothing.
+const ModelPlanChars = 12
+
+// MaxModelSaidBytes bounds the text a model row or a runner cell carries: the
+// vendor's sentence behind a sit-out or a failure, a login's detail, a probe's
+// finding and its fix.
+//
+// 240, because the useful part is the head: "You've hit your session limit ·
+// resets 4:30pm (America/Vancouver)" is 66 bytes, a CLI's auth refusal is a
+// line, and a probe's fix is one sentence. A row carries text only while a
+// failure or a sit-out stands, so the bound costs a healthy entry nothing on a
+// beat re-sent every [ReconcileInterval]; the whole sentence is in the node's
+// own `cli_agent_limit_reported` line.
+const MaxModelSaidBytes = 240
+
+// MaxModelAccountBytes bounds a host login's account (an email or an org
+// name): 120 bytes, past any real address, so a CLI that printed something
+// else there cannot grow the beat.
+const MaxModelAccountBytes = 120
 
 // MCPServerStatus is one configured MCP server, as ONE node runs it at the
 // beat.
@@ -287,7 +478,98 @@ func (s NodeStatus) Meta() map[string]any {
 		}
 		out["mcp"] = rows
 	}
+	if len(s.Models) > 0 {
+		rows := make([]map[string]any, len(s.Models))
+		for i, m := range s.Models {
+			rows[i] = m.meta()
+		}
+		out["models"] = rows
+	}
+	if s.Runners != nil {
+		out["runners"] = map[string]any{
+			"direct":    s.Runners.Direct.meta(),
+			"container": s.Runners.Container.meta(),
+			"e2b":       s.Runners.E2B.meta(),
+		}
+	}
 	return out
+}
+
+// meta is one model row on the wire. Every optional part is OMITTED when
+// unset, so a healthy entry's row is its key, its plan and its route.
+func (m ModelStatus) meta() map[string]any {
+	row := map[string]any{"key": m.Key, "sign_in": m.SignIn, "resolves": m.Resolves}
+	if m.Plan != "" {
+		row["plan"] = textcut.Bytes(m.Plan, ModelPlanChars)
+	}
+	if o := m.SittingOut; o != nil {
+		sit := map[string]any{
+			"until":  stamp(o.Until),
+			"since":  stamp(o.Since),
+			"window": o.Window,
+			"said":   textcut.Within(o.Said, MaxModelSaidBytes),
+		}
+		if !o.ResetsAt.IsZero() {
+			sit["resets_at"] = stamp(o.ResetsAt)
+		}
+		row["sitting_out"] = sit
+	}
+	if !m.LastAnswer.IsZero() {
+		row["last_answer"] = stamp(m.LastAnswer)
+	}
+	if f := m.LastFailure; f != nil {
+		row["last_failure"] = map[string]any{
+			"kind": f.Kind, "at": stamp(f.At),
+			"said": textcut.Within(f.Said, MaxModelSaidBytes),
+		}
+	}
+	if len(m.Parked) > 0 {
+		parked := make([]map[string]any, len(m.Parked))
+		for i, p := range m.Parked {
+			parked[i] = map[string]any{"seat": p.Seat.String(), "since": stamp(p.Since)}
+		}
+		row["parked"] = parked
+	}
+	if h := m.HostLogin; h != nil {
+		login := map[string]any{"state": string(h.State), "checked_at": stamp(h.CheckedAt)}
+		if h.Method != "" {
+			login["method"] = textcut.Within(h.Method, MaxModelSaidBytes)
+		}
+		if h.Account != "" {
+			login["account"] = textcut.Within(h.Account, MaxModelAccountBytes)
+		}
+		if h.Detail != "" {
+			login["detail"] = textcut.Within(h.Detail, MaxModelSaidBytes)
+		}
+		row["host_login"] = login
+	}
+	return row
+}
+
+// meta is one runner cell on the wire.
+func (c RunnerCell) meta() map[string]any {
+	cell := map[string]any{"state": string(c.State), "checked_at": stamp(c.CheckedAt)}
+	if c.Detail != "" {
+		cell["detail"] = textcut.Within(c.Detail, MaxModelSaidBytes)
+	}
+	if c.Fix != "" {
+		cell["fix"] = textcut.Within(c.Fix, MaxModelSaidBytes)
+	}
+	return cell
+}
+
+// stamp is an instant on the wire: RFC 3339 in UTC to the nanosecond, so a
+// model's last answer and its last failure on two nodes still order the way
+// they happened when they land in the same second.
+func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
+
+// instant reads [stamp]'s spelling back, zero for anything else.
+func instant(v any) time.Time {
+	at, err := time.Parse(time.RFC3339Nano, stringFromMeta(v))
+	if err != nil {
+		return time.Time{}
+	}
+	return at.UTC()
 }
 
 // StatusFromMeta reads a peer's status off a presence lease's Meta, and
@@ -347,7 +629,92 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 		m.Shared, _ = row["shared"].(bool)
 		status.MCP = append(status.MCP, m)
 	}
+	for _, r := range listFromMeta(raw["models"]) {
+		row, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		if m, ok := modelFromMeta(row); ok {
+			status.Models = append(status.Models, m)
+		}
+	}
+	if runners, ok := raw["runners"].(map[string]any); ok {
+		status.Runners = &RunnerStatus{
+			Direct:    cellFromMeta(runners["direct"]),
+			Container: cellFromMeta(runners["container"]),
+			E2B:       cellFromMeta(runners["e2b"]),
+		}
+	}
 	return status, true
+}
+
+// modelFromMeta reads one model row, reporting false for a row naming no
+// entry: a row a reader cannot attribute is dropped rather than drawn
+// unnamed, as an MCP row is.
+func modelFromMeta(row map[string]any) (ModelStatus, bool) {
+	key := stringFromMeta(row["key"])
+	if key == "" {
+		return ModelStatus{}, false
+	}
+	m := ModelStatus{
+		Key:        key,
+		Plan:       stringFromMeta(row["plan"]),
+		SignIn:     stringFromMeta(row["sign_in"]),
+		LastAnswer: instant(row["last_answer"]),
+	}
+	m.Resolves, _ = row["resolves"].(bool)
+	if sit, ok := row["sitting_out"].(map[string]any); ok {
+		m.SittingOut = &ModelSitOut{
+			Until:    instant(sit["until"]),
+			ResetsAt: instant(sit["resets_at"]),
+			Since:    instant(sit["since"]),
+			Window:   stringFromMeta(sit["window"]),
+			Said:     stringFromMeta(sit["said"]),
+		}
+	}
+	if f, ok := row["last_failure"].(map[string]any); ok {
+		m.LastFailure = &ModelFailure{
+			Kind: stringFromMeta(f["kind"]),
+			At:   instant(f["at"]),
+			Said: stringFromMeta(f["said"]),
+		}
+	}
+	for _, p := range listFromMeta(row["parked"]) {
+		seat, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		// A row naming no seat is a park nobody can be told about, and
+		// is dropped for [seatFromMeta]'s reason.
+		if id := seatFromMeta(seat["seat"]); id != uuid.Nil {
+			m.Parked = append(m.Parked, ParkedSeat{Seat: id, Since: instant(seat["since"])})
+		}
+	}
+	if h, ok := row["host_login"].(map[string]any); ok {
+		m.HostLogin = &HostLogin{
+			State:     HostLoginState(stringFromMeta(h["state"])),
+			Method:    stringFromMeta(h["method"]),
+			Account:   stringFromMeta(h["account"]),
+			Detail:    stringFromMeta(h["detail"]),
+			CheckedAt: instant(h["checked_at"]),
+		}
+	}
+	return m, true
+}
+
+// cellFromMeta reads one runner cell; a cell the peer did not send reads with
+// an empty state, which [RunnerState.Valid] tells apart from every answer.
+func cellFromMeta(v any) RunnerCell {
+	cell, ok := v.(map[string]any)
+	if !ok {
+		return RunnerCell{}
+	}
+	return RunnerCell{
+		State:     RunnerState(stringFromMeta(cell["state"])),
+		Detail:    stringFromMeta(cell["detail"]),
+		Fix:       stringFromMeta(cell["fix"]),
+		CheckedAt: instant(cell["checked_at"]),
+	}
 }
 
 // listFromMeta accepts the typed slice this build writes and the []any a JSON

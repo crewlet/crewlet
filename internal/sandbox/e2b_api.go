@@ -311,6 +311,17 @@ func (a *e2bAPI) getBox(ctx context.Context, sandboxID string) (e2bBox, error) {
 	return out, nil
 }
 
+// listBoxes lists at most limit of the deployment's sandboxes and discards
+// them: the one authenticated read the runner probe makes ([ProbeE2B]), which
+// proves the key and the route without making or waking a box.
+//
+// E2B's `GET /v2/sandboxes` ("List all sandboxes"), with its `limit` query
+// parameter, from the same OpenAPI spec as [e2bAPI.getBox].
+func (a *e2bAPI) listBoxes(ctx context.Context, limit int) error {
+	var out []e2bBox
+	return a.do(ctx, http.MethodGet, fmt.Sprintf("/v2/sandboxes?limit=%d", limit), nil, &out)
+}
+
 // killBox terminates a sandbox by id, without resuming it.
 //
 // A PAUSED BOX IS KILLED WHERE IT LIES. The reaper's whole reason to exist is

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,7 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/config"
@@ -27,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -212,11 +217,12 @@ func TestASecretWriteReportsTheAuthorTheNodeRecorded(t *testing.T) {
 		`"updated_by":"jane.doe","updated_by_kind":"operator",` +
 		`"operator_id":"pat:0192f00d-0000-7000-8000-00000000000a"}`
 
-	recorded, err := node.client(t).Set(t.Context(), "GL_TOKEN", "value",
+	written, err := node.client(t).Set(t.Context(), "GL_TOKEN", "value",
 		secrets.Author{Name: "shell-user", Kind: "operator"}, secrets.SourceCLI, time.Now())
 	if err != nil {
 		t.Fatalf("set: %v", err)
 	}
+	recorded := written.Author
 	want := secrets.Author{Name: "jane.doe", Kind: "operator",
 		OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
 	if recorded != want {
@@ -537,6 +543,7 @@ func TestUnsetReportsWhetherARowWent(t *testing.T) {
 func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 	t.Parallel()
 	node := newFakeSecretsNode(t)
+	node.body = `{"read_by":["integrations.gitlab.token"],"reload":{"revision_id":"r-9","epoch":12}}`
 	cfg := bootstrapWithKeyring(t, "k1")
 
 	var out, errs bytes.Buffer
@@ -554,14 +561,14 @@ func TestTheCommandWritesThroughTheNamedNode(t *testing.T) {
 	if !strings.Contains(out.String(), node.server.URL) {
 		t.Errorf("the output does not say which store it wrote: %q", out.String())
 	}
-	// AND WHEN THE RUNNING FLEET READS IT: at its next apply, which a reload
-	// brings forward — the running fleet's note, never the stopped engine's,
-	// which would tell an operator the value waits for a start that is not
-	// coming. Said by nothing, a rotated key the engine went on using read
-	// as a write that failed.
-	if !strings.Contains(out.String(), secretsFleetNote) {
-		t.Errorf("a write through a node does not say the running fleet reads it "+
-			"at its next apply: %q", out.String())
+	// AND WHEN THE RUNNING FLEET READS IT: now, at the revision and epoch
+	// the node's re-activation produced (ADR-0070), never the stopped
+	// engine's note, which would tell an operator the value waits for a
+	// start that is not coming. Said by nothing, a rotated key the engine
+	// went on using read as a write that failed.
+	if !strings.Contains(out.String(), "revision r-9, epoch 12") {
+		t.Errorf("a write through a node does not say the revision the running "+
+			"fleet reads it at: %q", out.String())
 	}
 	if strings.Contains(out.String(), secretsStoppedNote) {
 		t.Errorf("a write through a running node was told the engine reads it "+
@@ -892,8 +899,53 @@ func secretsNode(t *testing.T) *secretsClient {
 // client reads them. The keyring's active key is k1.
 func secretsNodeOver(t *testing.T, fleet coord.Fleet, cipher secrets.Cipher) *secretsClient {
 	t.Helper()
+	return secretsNodeReading(t, fleet, cipher, &nodeCompany{})
+}
+
+// nodeCompany is the company a real /secrets surface asks about a write:
+// which paths read each name, and the re-activation, which it counts.
+type nodeCompany struct {
+	mu      sync.Mutex
+	reads   map[string][]string
+	reloads []string
+	// refuse is what each reload answers in turn before they land, for a
+	// case about a re-activation that fails and is retried.
+	refuse []error
+}
+
+func (c *nodeCompany) Reads(_ context.Context, names []string) (map[string][]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := map[string][]string{}
+	for _, name := range names {
+		if paths, ok := c.reads[name]; ok {
+			out[name] = paths
+		}
+	}
+	return out, nil
+}
+
+func (c *nodeCompany) Reload(_ context.Context, summary string, _ iam.Actor,
+	_ string) (configapi.Applied, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reloads = append(c.reloads, summary)
+	if len(c.refuse) > 0 {
+		err := c.refuse[0]
+		c.refuse = c.refuse[1:]
+		return configapi.Applied{}, err
+	}
+	return configapi.Applied{RevisionID: "r-" + strconv.Itoa(len(c.reloads)),
+		Epoch: int64(100 + len(c.reloads))}, nil
+}
+
+// secretsNodeReading is [secretsNodeOver] over a company that reads what c
+// says, so a case can watch what the node re-activates.
+func secretsNodeReading(t *testing.T, fleet coord.Fleet, cipher secrets.Cipher,
+	c *nodeCompany) *secretsClient {
+	t.Helper()
 	svc, err := secretsapi.New(secretsapi.Options{Fleet: fleet,
-		Cipher: cipher, ActiveKeyID: "k1"})
+		Cipher: cipher, ActiveKeyID: "k1", Config: c})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1017,5 +1069,207 @@ func TestAWritePastTheSizeEveryStoreKeepsIsNotSentToTheNode(t *testing.T) {
 	}
 	if n := requests.Load(); n != 0 {
 		t.Errorf("the client sent %d request(s) carrying a value no store keeps", n)
+	}
+}
+
+// SEVERAL SECRETS SET TOGETHER ARE ONE ACTIVATION, and each value arrives by
+// its name.
+//
+// A rotation of every credential one model reads, one command each, moved the
+// fleet through an epoch per credential, each running a mix of the old and the
+// new values. `crewlet secrets set A B` reads NAME=value lines and sends them
+// as one `PUT /secrets`, which the node re-activates once, and says the epoch.
+func TestSettingSeveralSecretsIsOneActivation(t *testing.T) {
+	t.Parallel()
+	sum := make([]byte, 32)
+	sum[0] = 1
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1",
+		Keys: map[string][]byte{"k1": sum}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	company := &nodeCompany{reads: map[string][]string{
+		"AWS_ACCESS_KEY_ID":     {"providers.llm.bedrock.env.AWS_ACCESS_KEY_ID"},
+		"AWS_SECRET_ACCESS_KEY": {"providers.llm.bedrock.env.AWS_SECRET_ACCESS_KEY"},
+	}}
+	client := secretsNodeReading(t, coordmem.NewFleet(), cipher, company)
+	target := &secretTarget{secretBackend: client, throughNode: true, where: "the node"}
+
+	var out, errs bytes.Buffer
+	err = setSecrets(t.Context(), target, []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"},
+		strings.NewReader("AWS_SECRET_ACCESS_KEY=s3cr=et\n\nAWS_ACCESS_KEY_ID=AKIA-not-real\n"),
+		&out, &errs)
+	if err != nil {
+		t.Fatalf("set: %v\n%s", err, errs.String())
+	}
+	if len(company.reloads) != 1 {
+		t.Fatalf("reloads = %q, want ONE for both", company.reloads)
+	}
+	if !strings.Contains(out.String(), "revision r-1, epoch 101") {
+		t.Errorf("the output does not name the epoch it landed at: %q", out.String())
+	}
+	values, err := client.Values(t.Context(), []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// BY NAME, whatever the order, and a value keeps an = of its own.
+	if values["AWS_SECRET_ACCESS_KEY"] != "s3cr=et" || values["AWS_ACCESS_KEY_ID"] != "AKIA-not-real" {
+		t.Errorf("stored %v", values)
+	}
+
+	// ANY FAULT STORES NOTHING: a name not asked for, one missing, one twice.
+	for _, in := range []string{
+		"AWS_ACCESS_KEY_ID=a\nOTHER=b\n",
+		"AWS_ACCESS_KEY_ID=a\n",
+		"AWS_ACCESS_KEY_ID=a\nAWS_ACCESS_KEY_ID=b\nAWS_SECRET_ACCESS_KEY=c\n",
+		"AWS_ACCESS_KEY_ID a\nAWS_SECRET_ACCESS_KEY=c\n",
+	} {
+		if err := setSecrets(t.Context(), target, []string{"AWS_ACCESS_KEY_ID",
+			"AWS_SECRET_ACCESS_KEY"}, strings.NewReader(in), &out, &errs); err == nil {
+			t.Errorf("stdin %q was stored", in)
+		}
+	}
+	if len(company.reloads) != 1 {
+		t.Errorf("a refused set re-activated: %q", company.reloads)
+	}
+}
+
+// A PROVISIONING RUN THROUGH A NODE RE-ACTIVATES ONCE, HOWEVER MANY VALUES IT
+// MINTS.
+//
+// Each minted credential is sealed the moment it exists (the sink's contract:
+// a token live at the vendor and recorded nowhere cannot be revoked), with its
+// re-activation deferred; the run's flush re-activates once for all of them.
+// Re-activating per value moved a running fleet through an epoch per seat.
+func TestAProvisioningRunThroughANodeReactivatesOnce(t *testing.T) {
+	t.Parallel()
+	sum := make([]byte, 32)
+	sum[0] = 2
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1",
+		Keys: map[string][]byte{"k1": sum}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{"GITLAB_TOKEN_CEO", "GITLAB_TOKEN_QA", "GITLAB_TOKEN_SWE"}
+	company := &nodeCompany{reads: map[string][]string{}}
+	for _, name := range names {
+		company.reads[name] = []string{"roles.integrations.gitlab.token"}
+	}
+	client := secretsNodeReading(t, coordmem.NewFleet(), cipher, company)
+	target := &secretTarget{secretBackend: client, throughNode: true, where: "the node"}
+	store := sinkStore{target: target,
+		values: &storedValues{values: map[string]string{}, held: map[string]bool{}}}
+	sink := nodeSink(store, target)
+
+	for _, name := range names {
+		if err := sink.Record(t.Context(), name, "glpat-"+name); err != nil {
+			t.Fatalf("record %s: %v", name, err)
+		}
+	}
+	if len(company.reloads) != 0 {
+		t.Fatalf("a recorded value re-activated before the run ended: %q", company.reloads)
+	}
+	held, err := client.Values(t.Context(), names)
+	if err != nil || len(held) != len(names) {
+		t.Fatalf("the minted values are not durable before the flush: (%v, %v)", held, err)
+	}
+	if err := sink.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(company.reloads) != 1 {
+		t.Errorf("reloads = %q, want ONE for the whole run", company.reloads)
+	}
+	if err := sink.Flush(t.Context()); err != nil || len(company.reloads) != 1 {
+		t.Errorf("a second flush with nothing new re-activated: %q (%v)", company.reloads, err)
+	}
+}
+
+// nodeSink is a provisioning run's sink through a node, as sinkFlags.open
+// builds one, waiting nothing between retries.
+func nodeSink(store sinkStore, target *secretTarget) *nodeSecretSink {
+	return &nodeSecretSink{SecretStoreSink: provision.NewSecretStoreSink(store, hostAuthor()),
+		target: target, retries: []time.Duration{0, 0}, recorded: map[string]string{}}
+}
+
+// nodeSinkOver is a run's store, target and sink over one node's /secrets.
+func nodeSinkOver(t *testing.T, company *nodeCompany) (*secretsClient, *nodeSecretSink) {
+	t.Helper()
+	sum := make([]byte, 32)
+	sum[0] = 3
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1",
+		Keys: map[string][]byte{"k1": sum}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := secretsNodeReading(t, coordmem.NewFleet(), cipher, company)
+	target := &secretTarget{secretBackend: client, throughNode: true, where: "the node"}
+	store := sinkStore{target: target,
+		values: &storedValues{values: map[string]string{}, held: map[string]bool{}}}
+	return client, nodeSink(store, target)
+}
+
+// A RUN THAT DIES BEFORE ITS FLUSH LEAVES ITS VALUES SEALED AND INACTIVE.
+//
+// Every minted credential is durable, so nothing is lost; none is active,
+// since nothing re-activated, until the next run's flush (or a reload) does.
+func TestARunThatDiesBeforeItsFlushLeavesItsValuesSealedAndInactive(t *testing.T) {
+	t.Parallel()
+	company := &nodeCompany{reads: map[string][]string{
+		"GITLAB_TOKEN_A": {"roles[0].integrations.gitlab.token"},
+		"GITLAB_TOKEN_B": {"roles[1].integrations.gitlab.token"},
+	}}
+	client, died := nodeSinkOver(t, company)
+	for _, name := range []string{"GITLAB_TOKEN_A", "GITLAB_TOKEN_B"} {
+		if err := died.Record(t.Context(), name, "glpat-"+name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// THE PROCESS DIES HERE: no flush.
+	held, err := client.Values(t.Context(), []string{"GITLAB_TOKEN_A", "GITLAB_TOKEN_B"})
+	if err != nil || len(held) != 2 {
+		t.Fatalf("the values of a run that died = (%v, %v), want both sealed", held, err)
+	}
+	if len(company.reloads) != 0 {
+		t.Fatalf("a run that never flushed re-activated: %q", company.reloads)
+	}
+	// THE NEXT RUN'S FLUSH re-activates, and the company reads them then.
+	target := died.target
+	store := sinkStore{target: target,
+		values: &storedValues{values: map[string]string{}, held: map[string]bool{}}}
+	next := nodeSink(store, target)
+	if err := next.Record(t.Context(), "GITLAB_TOKEN_A", "glpat-GITLAB_TOKEN_A"); err != nil {
+		t.Fatal(err)
+	}
+	if err := next.Flush(t.Context()); err != nil || len(company.reloads) != 1 {
+		t.Errorf("the next run's flush = %v, reloads %q, want one", err, company.reloads)
+	}
+}
+
+// A FLUSH WHOSE RE-ACTIVATION FAILS FOR A MOMENT IS RETRIED, AND ONE THE
+// COMPANY REFUSES IS SAID AT ONCE.
+func TestAFlushRetriesATransientFailure(t *testing.T) {
+	t.Parallel()
+	company := &nodeCompany{reads: map[string][]string{"TOKEN": {"roles[0].x"}},
+		refuse: []error{&configapi.RacedError{Base: "r-1", Current: "r-2"}}}
+	_, sink := nodeSinkOver(t, company)
+	if err := sink.Record(t.Context(), "TOKEN", "v"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Flush(t.Context()); err != nil {
+		t.Fatalf("a flush that lost one race = %v, want it retried", err)
+	}
+	if len(company.reloads) != 2 {
+		t.Errorf("reloads = %q, want the raced one and its retry", company.reloads)
+	}
+
+	refused := &nodeCompany{reads: map[string][]string{"TOKEN": {"roles[0].x"}},
+		refuse: []error{&configapi.ValidationError{Err: errors.New("seat x names no model")}}}
+	_, sink = nodeSinkOver(t, refused)
+	if err := sink.Record(t.Context(), "TOKEN", "v"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Flush(t.Context()); err == nil || len(refused.reloads) != 1 {
+		t.Errorf("a refused re-activation = %v after %d tries, want it said at once",
+			err, len(refused.reloads))
 	}
 }

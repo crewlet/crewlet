@@ -544,6 +544,13 @@ type Options struct {
 	// else leaves out; `crewlet run` always wires it.
 	Rooms *Rooms
 
+	// Models serves the model routes under /llm/providers/ and
+	// /llm/device-sign-ins/, normally an llmapi.Service: a model's
+	// credential tested before it is stored, its checks, a retry of a
+	// sit-out, a host login's status and a device sign-in. The reads beside
+	// them are questions ([queries.Sources.Models]).
+	Models guardedMounter
+
 	// Secrets serves /secrets, normally a secretsapi.Service: the fleet's
 	// credential store.
 	Secrets guardedMounter
@@ -934,6 +941,9 @@ func New(opts Options) (*App, error) {
 		// the list of which credentials a company has NOT configured is
 		// worth as much to an attacker as the ones it has.
 		{"setup", opts.Setup},
+		// A MODEL'S CREDENTIAL, CHECKS AND SIGN-INS, each route on its
+		// own verb (internal/api/llmapi).
+		{"models", opts.Models},
 	} {
 		if err := surface.m.Routes(mux); err != nil {
 			return nil, fmt.Errorf("api: mount the %s surface: %w", surface.name, err)
@@ -1153,6 +1163,7 @@ func (o Options) missing() error {
 		{"Config", o.Config == nil},
 		{"Secrets", o.Secrets == nil},
 		{"Setup", o.Setup == nil},
+		{"Models", o.Models == nil},
 		{"Retention", o.Retention == nil},
 		{"Capacity", o.Capacity == nil},
 		{"FleetBroker", o.FleetBroker == nil},
@@ -1541,6 +1552,10 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any) (a
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnauthorized, what)
 	case errors.Is(err, queries.ErrNotFound):
 		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)
+	case errors.Is(err, queries.ErrUnknownProvider):
+		// A REQUEST TO CHANGE, as a refused parameter is: the socket has
+		// one code for that, and the detail names the provider.
+		return nil, &stream.BadParamsError{What: what, Detail: err.Error()}
 	case errors.Is(err, queries.ErrBadParams):
 		// TRANSLATED RATHER THAN LEFT TO THE DEFAULT, which is what it
 		// was: an untranslated refusal reached the socket as an
@@ -1648,6 +1663,11 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// `message` cannot say which one.
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			httpjson.Detail{"detail": queries.RefusalDetail(err)})
+	case errors.Is(err, queries.ErrUnknownProvider):
+		// 422: the parameter is well formed and names nothing the
+		// catalogue holds, which the page answers with free text.
+		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeUnknownProvider,
+			httpjson.Detail{"detail": err.Error()})
 	case errors.Is(err, queries.ErrNotFound):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 	case errors.Is(err, stream.ErrNoCompany):

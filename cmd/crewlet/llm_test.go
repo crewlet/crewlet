@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -1010,7 +1011,7 @@ func TestAnLLMWriteSaysWhenARunningEngineReadsIt(t *testing.T) {
 			node := newRevealNode(t, nil)
 			return llmStoreAt(t, tokenEnviron(cliFixtureToken), sub, "-api", node.server.URL),
 				func(name string) bool { _, ok := node.holds(name); return ok }
-		}, secretsFleetNote},
+		}, reloadNote(&configapi.Reloaded{RevisionID: "r-2", Epoch: 7})},
 		{"the fleet's store, with the engine stopped", func(t *testing.T, sub string) (*companyStore, func(string) bool) {
 			cfg := bootstrapWithKeyring(t, "k1")
 			store := llmStoreAt(t, noEnviron, sub, "-config", cfg)

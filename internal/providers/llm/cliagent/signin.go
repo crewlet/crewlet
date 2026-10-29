@@ -98,6 +98,14 @@ func (p *Provider) signInFrom(login map[string][]byte, loginErr error) signIn {
 		s.sources = append(s.sources, source)
 	}
 
+	if p.auth.Mode == AuthEnv {
+		// The route an env-mode entry signs in by, read off the child's map
+		// like every other: what the operator's env sets of the names the
+		// profile lists, as the CLI is handed them.
+		for _, name := range p.profile.SignsInWithEnv(env) {
+			s.sources = append(s.sources, signInSource{state: "env", line: "env sets " + name})
+		}
+	}
 	if !p.profile.EnvSignIn {
 		return s
 	}
@@ -120,15 +128,86 @@ func (p *Provider) signInFrom(login map[string][]byte, loginErr error) signIn {
 	return s
 }
 
-// signsInWithKey reports whether this entry's calls hand the CLI a key: every
-// call under api-key, which never signs in with a login, and a call under
-// inherit-env whose engine environment holds the key variable. Such a call runs
-// in the seat's key home ([Workspace.AcquireForKey]).
+// SignInRoute is how an entry's CLI signs in, in the words a status read
+// publishes: a closed set, so a reader that draws one (the Models screen) can
+// be held to it.
+type SignInRoute string
+
+// The routes, in the order [Provider.signIn] reads them.
+const (
+	// RouteCredentials is a login the CLI keeps in credential files.
+	RouteCredentials SignInRoute = "credentials"
+	// RouteToken is a headless subscription token.
+	RouteToken SignInRoute = "token"
+	// RouteAPIKey is a metered API key (auth.mode api-key).
+	RouteAPIKey SignInRoute = "api-key"
+	// RouteInheritEnv is a token or key forwarded from the engine's own
+	// environment (auth.mode inherit-env).
+	RouteInheritEnv SignInRoute = "inherit-env"
+	// RouteEnv is the entry's env alone, a cloud provider's switch or a
+	// gateway's token (auth.mode env).
+	RouteEnv SignInRoute = "env"
+	// RouteEnvironment is a provider key in the entry's env, on a CLI that
+	// reads one ([cliprofile.Profile.EnvSignIn]).
+	RouteEnvironment SignInRoute = "environment"
+	// RouteNone is nothing this node can see signing the CLI in.
+	RouteNone SignInRoute = "none"
+)
+
+// SignInRoutes is the closed set.
+var SignInRoutes = []SignInRoute{RouteCredentials, RouteToken, RouteAPIKey, RouteInheritEnv,
+	RouteEnv, RouteEnvironment, RouteNone}
+
+// Valid reports whether r is one of [SignInRoutes].
+func (r SignInRoute) Valid() bool { return slices.Contains(SignInRoutes, r) }
+
+// SignInRoute is how this entry's CLI signs in as THIS node resolves it, and
+// whether anything does. The first route of [Provider.signIn], the reading
+// `crewlet llm list` prints, so the page and the command cannot disagree; a
+// shared login that cannot be read reads as [RouteNone], with resolves false.
+func (p *Provider) SignInRoute(ctx context.Context) (route SignInRoute, resolves bool) {
+	s := p.signIn(ctx)
+	if len(s.sources) == 0 {
+		return RouteNone, false
+	}
+	switch s.sources[0].state {
+	case "token":
+		return RouteToken, true
+	case "credentials":
+		return RouteCredentials, true
+	case "api key":
+		return RouteAPIKey, true
+	case "inherited token", "inherited key":
+		return RouteInheritEnv, true
+	case "env":
+		return RouteEnv, true
+	default:
+		return RouteEnvironment, true
+	}
+}
+
+// SignsInWithLogin reports whether this entry signs its CLI in with a login
+// kept in credential files, which only the CLI can say the state of: no key
+// and no env sign-in, no token reaching the CLI, and a profile that can ask the
+// CLI who it is logged in as ([cliprofile.Profile.StatusArgs]).
+func (p *Provider) SignsInWithLogin() bool {
+	if p.signsInWithKey() || len(p.profile.StatusArgs) == 0 {
+		return false
+	}
+	return len(p.handedCredentials()) == 0
+}
+
+// signsInWithKey reports whether this entry's calls sign the CLI in with
+// something other than a login: every call under api-key and env, neither of
+// which ever signs in with one, and a call under inherit-env whose engine
+// environment holds the key variable. Such a call runs in the seat's key home
+// ([Workspace.AcquireForKey]), where no login is seeded: a login there would
+// compete with the key or the cloud provider the entry chose.
 //
 // Read off [childEnv], as [Provider.signIn] is, so the home a call runs in and
 // the doctor's account of its sign-in are one reading of one environment.
 func (p *Provider) signsInWithKey() bool {
-	if p.auth.Mode == AuthAPIKey {
+	if p.auth.Mode == AuthAPIKey || p.auth.Mode == AuthEnv {
 		return true
 	}
 	if p.auth.Mode != AuthInheritEnv || p.profile.APIKeyEnv == "" {
@@ -215,6 +294,23 @@ func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
 		}
 	}
 	switch p.AuthMode() {
+	case AuthEnv:
+		names := p.profile.SignInEnv
+		if len(names) == 0 {
+			return ModeSignIn{
+				Mode: AuthEnv, Reads: "hands the CLI only its env's credential-named variables",
+				Unset:  "and its env sets none that resolves",
+				Supply: fmt.Sprintf("set the provider's key in providers.llm.%s.env", p.key),
+			}, true
+		}
+		return ModeSignIn{
+			Mode: AuthEnv, Variables: slices.Clone(names),
+			Reads: fmt.Sprintf("signs the CLI in with its env alone (one of %s)",
+				strings.Join(names, ", ")),
+			Unset: "and its env sets none of them",
+			Supply: fmt.Sprintf("set one in providers.llm.%s.env, with the cloud provider's "+
+				"credentials or the gateway's address beside it", p.key),
+		}, true
 	case AuthAPIKey:
 		name := p.profile.APIKeyEnv
 		switch {

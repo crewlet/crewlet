@@ -212,7 +212,7 @@ func wireAPI(
 	}
 	secretSurface, err := secretsapi.New(secretsapi.Options{
 		Fleet: backends.Fleet, Cipher: cipher, ActiveKeyID: boot.Secrets.ActiveKeyID,
-		Identity: keyring,
+		Identity: keyring, Config: configSurface,
 	})
 	if err != nil {
 		return fail("secret surface", err)
@@ -358,6 +358,13 @@ func wireAPI(
 	// THE SAME HAND-OVER cmd/crewlet makes, which is the one place an
 	// absent surface stays absent rather than being mounted over a nil.
 	humans.Mount(&opts)
+	// AND SETTINGS › MODELS, through the one constructor cmd/crewlet calls.
+	modelSurface, err := api.NewModelSurface(e, configSurface, cipher, backends.Queue)
+	if err != nil {
+		return fail("model surface", err)
+	}
+	opts.Models = modelSurface
+	api.ModelSources(&opts.Sources, e, cipher)
 	if amend != nil {
 		amend(&opts)
 	}

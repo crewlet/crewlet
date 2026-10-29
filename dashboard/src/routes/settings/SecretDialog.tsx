@@ -137,9 +137,10 @@ export function SecretDialog({
         <Callout variant="neutral">
           {/* WHEN it takes effect, because a rotation that appears to succeed
               and quietly does not is the failure the store exists to remove.
-              A provider holds the value it was built with. */}
-          {readers.length === 1 ? "One field uses it." : `${readers.length} fields use it.`} Running
-          seats pick it up after a re-activation or restart.
+              Saving re-activates the configuration that reads it (ADR-0070),
+              so the running company switches to it at once. */}
+          {readers.length === 1 ? "One field uses it." : `${readers.length} fields use it.`} Saving
+          switches them to the new value now.
         </Callout>
       )}
 

@@ -126,8 +126,8 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// models are not the ones that refused it: a park decided under
 		// another registry is released, since whether the seat's chain is
 		// still the one that refused is this company's to say. An entry
-		// whose spec the apply left unchanged keeps its predecessor's
-		// sit-out ([carrySitOuts]), so a limit that still holds parks the
+		// that still calls as the same account finds its sign-in's
+		// sit-out ([cliagent.Plans]), so a limit that still holds parks the
 		// seat again at the cost of one delivery and no process: the
 		// entry refuses before any CLI is started. A seat whose mail its
 		// run holds is parked again by its run's completion, which the
@@ -148,6 +148,9 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// AND A PAUSE WHOSE SEAT THIS COMPANY REMOVED goes with the seat.
 		// See seatpause.go.
 		e.clearRemovedSeatPauses(ctx, c)
+		// AND A RETRY WHOSE MODEL IT REMOVED goes with the model. See
+		// modelretry.go.
+		e.clearRemovedModelRetries(ctx, c)
 		steps = append(steps, "mailboxes")
 	}
 
