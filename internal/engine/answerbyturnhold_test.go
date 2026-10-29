@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
 // busySeat is one seat wired end to end as a node wires it: its inbox routed
@@ -115,7 +116,8 @@ func (s *busySeat) launch(t *testing.T, turnID string) {
 // parks finishes turnID's job on a question.
 func (s *busySeat) parks(t *testing.T, turnID, question string) sandbox.PendingRun {
 	t.Helper()
-	s.runner.Finish(sandbox.Result{NeedsInput: true, Question: question, AskTo: "requester"})
+	sandboxtest.Ask(t, s.store, turnID, sandbox.Ask{Question: question, To: sandbox.AskToRequester})
+	s.runner.Finish(sandbox.Result{})
 	complete(t, s.coordinator, s.store, turnID)
 	run := mustRun(t, s.store, turnID)
 	if run.Status != sandbox.StatusAwaiting {

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -319,8 +320,8 @@ func TestAnAskedWakeRendersTheOptionsAndTheAnsweringCall(t *testing.T) {
 func TestAnAnsweredWakeRendersTheChoice(t *testing.T) {
 	t.Parallel()
 	answers := "c-ask"
-	decision := decisionFixture()
-	decision.Inform = &worklet.Inform{Surface: worklet.InformSlack, Channel: "releases"}
+	asked := decisionFixture()
+	asked.Inform = &decision.Inform{Surface: decision.InformSlack, Channel: "releases"}
 	answer := worklet.Comment{
 		ID: "c-ans", Task: "t-1", Author: "ana", AuthorKind: worklet.AuthorHuman,
 		Body: "the audit first", Answers: &answers, Choice: "hold",
@@ -328,7 +329,7 @@ func TestAnAnsweredWakeRendersTheChoice(t *testing.T) {
 	record := askRecord(t, worklet.TaskPatch{Comment: &answer}, worklet.Wake{
 		Kind:    worklet.ChangeComment,
 		After:   worklet.Task{Key: "ENG-1", Project: "ENG", Title: "release"},
-		Comment: &answer, AnswersDecision: decision,
+		Comment: &answer, AnswersDecision: asked,
 		Thread: worklet.ThreadParties{AnsweredAuthor: "cy"},
 	})
 	prompt := promptFor(t, record)

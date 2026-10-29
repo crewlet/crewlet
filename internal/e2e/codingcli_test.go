@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
@@ -102,10 +102,10 @@ const codingVersion = "2.1.310 (Claude Code)"
 const (
 	// codingModeWork does the scripted work: the rounds the model answers.
 	codingModeWork = "work"
-	// codingModeAsk parks the run on a question through `crewlet-ask`, the
-	// shim the runner installs, and ends it without calling a tool over the
-	// bridge — its Stop hook still asks for notes, as Claude Code's does at
-	// the end of every turn.
+	// codingModeAsk parks the run on a structured question through
+	// `ask_and_wait` over the seat's bridge, and ends it without submitting:
+	// its Stop hook still asks for notes, as Claude Code's does at the end of
+	// every turn.
 	codingModeAsk = "ask"
 	// codingModeHeld runs until [codingReleaseEnv] exists, then submits its
 	// work over the seat's bridge and ends reporting it finished — so a case
@@ -118,8 +118,14 @@ const (
 	codingModeHeld = "held"
 )
 
-// codingQuestion is what a [codingModeAsk] run asks.
+// codingQuestion is what a [codingModeAsk] run asks, and codingOptions the
+// options it gives, the first recommended: a person answers it with a press.
 const codingQuestion = "Which branch should I target?"
+
+var codingOptions = []map[string]any{
+	{"id": "main", "label": "Target main", "detail": "Release with the next tag."},
+	{"id": "next", "label": "Target next", "detail": "Hold for the next minor."},
+}
 
 // codingHeldReport is what a [codingModeHeld] run reports once released, and
 // codingHeldOutcome the outcome it submits.
@@ -176,10 +182,9 @@ func writeCodingShim(dir, endpoint string) (string, error) {
 // the suite need Docker, and the container argv and the path escape guards
 // have their own tests in internal/sandbox.
 //
-// THE SHIM DIRECTORY IS ON THE RUN'S PATH: the wrapper prepends
-// `$HOME/.crewlet/bin` to the login shell's PATH, which is where the runner
-// puts `crewlet-ask` too, so a CLI copied there is the `claude` the run's
-// command line names.
+// THE BOX'S BIN DIRECTORY IS ON THE RUN'S PATH: the wrapper prepends
+// `$HOME/.crewlet/bin` to the login shell's PATH, so a CLI a setup step copies
+// there is the `claude` the run's command line names.
 func codingSandbox(boxes, shim string) string {
 	return fmt.Sprintf(`  sandbox:
     default_run_in: direct
@@ -415,23 +420,15 @@ func runCodingCLI(endpoint string) int {
 		}
 		// ONLY AS THE RUN WAS TOLD TO. A real CLI parks on a question only
 		// because its standing instructions say how, so a stand-in that
-		// asked whatever it was told would pass a launch that never told
-		// it — the gap a run with the shim in its box and no word of it
-		// once was.
+		// asked whatever it was told would pass a launch that never told it.
 		if told, err := toldHowToAsk(parsed); err != nil || !told {
 			return fail("the run was to ask a person, and its standing instructions "+
-				"never say how (crewlet-ask): %v", err)
+				"never say how (%s): %v", builtin.AskAndWaitTool, err)
 		}
-		// THE RUNNER'S OWN SHIM, on the run's PATH: what it writes is the
-		// signal the collection reads, so a question asked any other way
-		// would test a protocol the engine does not speak.
-		ask := exec.Command("crewlet-ask", codingQuestion, "--to", "requester")
-		ask.Stdout, ask.Stderr = os.Stderr, os.Stderr
-		if err := ask.Run(); err != nil {
-			return fail("asking through crewlet-ask: %v", err)
-		}
-		stream.init(nil)
-		if err := codingAskFinish(context.Background(), parsed, hooks, stream); err != nil {
+		// THE SEAT'S OWN TOOL, over the run's bridge: what it records on the
+		// run's row is what the collection parks on, so a question asked any
+		// other way would test a protocol the engine does not speak.
+		if err := codingAsk(context.Background(), parsed, hooks, stream); err != nil {
 			return fail("%v", err)
 		}
 		stream.result("success", "blocked on a question", 1, replyUsage{})
@@ -658,14 +655,10 @@ func (h codingHooks) play(ctx context.Context, session *mcp.ClientSession, event
 	return strings.Join(notes, "\n\n"), nil
 }
 
-// codingAskFinish plays a [codingModeAsk] run's Stop hooks, over a session it
-// opens on the seat's bridge for them alone, where it was handed any. It asks
-// no model, so a note one hands back goes no further than the CLI's own
-// transcript line.
-func codingAskFinish(ctx context.Context, args codingArgs, hooks codingHooks, stream codingStream) error {
-	if len(hooks[codingEventFinish]) == 0 {
-		return nil
-	}
+// codingAsk is a [codingModeAsk] run's one call: its structured question,
+// over a session it opens on the seat's bridge, then the Stop hook its CLI
+// runs as it ends its turn.
+func codingAsk(ctx context.Context, args codingArgs, hooks codingHooks, stream codingStream) error {
 	bridge, err := bridgeURL(args.mcpConfig)
 	if err != nil {
 		return err
@@ -673,9 +666,28 @@ func codingAskFinish(ctx context.Context, args codingArgs, hooks codingHooks, st
 	session, err := mcp.NewClient(&mcp.Implementation{Name: "claude", Version: "e2e"}, nil).
 		Connect(ctx, &mcp.StreamableClientTransport{Endpoint: bridge, HTTPClient: httpx.Client(0)}, nil)
 	if err != nil {
-		return fmt.Errorf("connecting to the bridge at %s for the run's Stop hook: %w", bridge, err)
+		return fmt.Errorf("connecting to the bridge at %s to ask: %w", bridge, err)
 	}
 	defer func() { _ = session.Close() }()
+	stream.init([]string{builtin.AskAndWaitTool})
+	id := claudeID("toolu_")
+	options := make([]any, len(codingOptions))
+	for i, option := range codingOptions {
+		options[i] = option
+	}
+	input := map[string]any{
+		"question": codingQuestion,
+		"context":  "The flaky **api** test passes on both branches; the fix is pushed to `wip/flake`.",
+		"to":       "requester", "branch": "wip/flake",
+		"options": options, "recommended": "main", "role": "approver",
+		"rationale": "main ships with the next tag.",
+	}
+	stream.toolUse(id, builtin.AskAndWaitTool, input)
+	out, failed := callOverBridge(ctx, session, id, builtin.AskAndWaitTool, input)
+	stream.toolResult(id, out, failed)
+	if failed {
+		return fmt.Errorf("asking over the bridge: %s", out)
+	}
 	_, err = hooks.play(ctx, session, codingEventFinish, stream)
 	return err
 }
@@ -690,7 +702,7 @@ func toldHowToAsk(args codingArgs) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return strings.Contains(string(raw), "crewlet-ask"), nil
+	return strings.Contains(string(raw), builtin.AskAndWaitTool), nil
 }
 
 // codingHeldSubmit is a released [codingModeHeld] run's one call: its

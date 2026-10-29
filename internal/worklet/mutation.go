@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -1414,19 +1415,19 @@ func (a *AnsweredDecision) check() error {
 	if a == nil {
 		return nil
 	}
-	if err := checkText("answered.question", a.Question, MaxDecisionQuestion, false); err != nil {
+	if err := checkText("answered.question", a.Question, decision.MaxQuestion, false); err != nil {
 		return err
 	}
 	if a.Choice != nil {
-		if err := checkText("answered.choice.label", a.Choice.Label, MaxOptionLabel, false); err != nil {
+		if err := checkText("answered.choice.label", a.Choice.Label, decision.MaxOptionLabel, false); err != nil {
 			return err
 		}
-		if err := checkText("answered.choice.detail", a.Choice.Detail, MaxOptionDetail, false); err != nil {
+		if err := checkText("answered.choice.detail", a.Choice.Detail, decision.MaxOptionDetail, false); err != nil {
 			return err
 		}
 	}
 	if a.Inform != nil {
-		return checkText("answered.inform.channel", a.Inform.Channel, MaxInformChannel, false)
+		return checkText("answered.inform.channel", a.Inform.Channel, decision.MaxInformChannel, false)
 	}
 	return nil
 }
@@ -1451,10 +1452,10 @@ type AnsweredDecision struct {
 
 	// Choice is the option the answer chose. Nil for an answer in prose,
 	// which is an answer too — "none of these" is one.
-	Choice *DecisionOption `json:"choice,omitempty"`
+	Choice *decision.Option `json:"choice,omitempty"`
 
 	// Inform is where the asker said it would report the outcome.
-	Inform *Inform `json:"inform,omitempty"`
+	Inform *decision.Inform `json:"inform,omitempty"`
 }
 
 // Batched reports a record written as part of a BULK GESTURE.

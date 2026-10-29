@@ -1915,7 +1915,10 @@ the choice as the answer, and a parked run is answered by its turn.
 closed in the last seven days, newest closing first, each with who closed it
 (a colleague may answer for you), when, the option chosen or the words, and
 the asker's first record on the task since, which says whether the answer has
-been acted on. It takes the same scope rule. The dashboard's Inbox keeps
+been acted on. A coding run's question the person answered is listed beside
+them, in the same shape: what the run asked, its options and the one chosen,
+and when ([Mid-run clarification](../concepts/code-sandbox.md#mid-run-clarification-ask_and_wait)).
+It takes the same scope rule. The dashboard's Inbox keeps
 these in a closed **Answered** group at the end of the list; an answer older
 than the week is on its task's thread.
 

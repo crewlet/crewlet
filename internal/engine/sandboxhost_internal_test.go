@@ -259,7 +259,7 @@ func TestAReplyTooLargeForTheBrokerIsCarriedAtTheSmallerBound(t *testing.T) {
 	run := runOnHost(t, store, a, "t1")
 	// EACH PIECE AT THE FIRST BOUND, written so JSON grows it about fourfold.
 	heavy := strings.Repeat(strings.Repeat(`"<`, 40)+"\n", sandbox.MaxCondenseBytes/81)
-	a.runner.Finish(sandbox.Result{Text: heavy, Error: heavy, NeedsInput: true, Question: heavy})
+	a.runner.Finish(sandbox.Result{Text: heavy, Error: heavy})
 	claimed, won, err := store.ClaimForResume(t.Context(), "t1",
 		sandbox.CompletionTail(run.LaunchID), sandbox.Fence{})
 	if err != nil || !won {
@@ -286,7 +286,7 @@ func TestAReplyTooLargeForTheBrokerIsCarriedAtTheSmallerBound(t *testing.T) {
 		t.Fatalf("OpenReply = %+v, %q, %v", rep, why, err)
 	}
 	for name, piece := range map[string]string{
-		"report": rep.Result.Text, "failure": rep.Result.Error, "question": rep.Result.Question,
+		"report": rep.Result.Text, "failure": rep.Result.Error,
 	} {
 		if len(piece) > sandbox.MaxRunTextBytes || !strings.Contains(piece, "not shown") {
 			t.Errorf("the %s crossed at %d bytes (note %v), want it held to %d with the note saying so",

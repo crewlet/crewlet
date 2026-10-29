@@ -364,6 +364,8 @@ var runKeys = map[string]runShown{
 	"placement":           runStatus,
 	"task_description":    runBody,
 	"question":            runQuestion,
+	"question_context":    runQuestion,
+	"decision":            runQuestion,
 	"audience":            runStatus,
 	"audience_handles":    runStatus,
 	"audience_fallback":   runStatus,
@@ -470,7 +472,14 @@ func runRow(run sandbox.PendingRun, answeredBy string) map[string]any {
 		// provider default.
 		"placement":        run.Placement,
 		"task_description": run.TaskDescription,
+		// THE QUESTION AS IT WAS ASKED (ADR-0068): one sentence, its
+		// Markdown context, and the choice it offers, which a person
+		// answers with one press. The context is empty and the decision
+		// null on an open question with nothing to add, never absent: a
+		// reader shown the question is shown all of it.
 		"question":         run.Question,
+		"question_context": run.QuestionContext,
+		"decision":         run.Decision,
 		"audience":         run.Audience,
 		// WHO THE QUESTION IS PUT TO, resolved against the chart when the
 		// run parked, and whether that is a fallback — the seat's lead

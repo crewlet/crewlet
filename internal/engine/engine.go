@@ -73,6 +73,13 @@ type Company struct {
 	// wholesale by every apply. See the seatTools field in run.go.
 	Tools *tools.Registry
 
+	// AskTool is `ask_and_wait`, the tool an executor's run asks a person
+	// through and parks on (ADR-0068): offered on that run's surface alone
+	// ([runner.Config.Ask]) rather than filed in Tools, because no other
+	// phase has a run to park. Built with the builtins ([Engine.equip]);
+	// nil on an epoch built without an engine, whose runs offer none.
+	AskTool tools.Callable
+
 	// ActivatedAt is the instant the revision this epoch was applied from
 	// was activated — the activation pointer's own ([coord.Activation.At]),
 	// or a boot's reading of the boot row's `served_at`
@@ -341,6 +348,10 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		// call sites ([Engine.agentRunFor]), so a turn launches the same
 		// way whether it is dispatched or resumed.
 		Launcher: in.Launcher,
+		// THE EXECUTOR RUN'S WAY TO PARK ON A PERSON, built with the
+		// epoch's builtins: its evidence is checked against the same
+		// tracker and knowledge base a work item's decision is.
+		Ask: c.AskTool,
 		// The turn's note box, opened by the caller because the caller is
 		// what files it where a person's note can find it.
 		Steer: in.Steer,

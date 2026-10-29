@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -31,14 +32,14 @@ func answerOn(t *testing.T, r *roundTrip, opID, task, id, by, ask, choice, body 
 		AuthorKind: kind, Body: body, Answers: &askID, Choice: choice, CreatedAt: at})
 }
 
-var shipOrHold = &worklet.Decision{
+var shipOrHold = &decision.Decision{
 	Question: "Ship or hold?",
-	Options: []worklet.DecisionOption{
+	Options: []decision.Option{
 		{ID: "ship", Label: "Ship it"},
 		{ID: "hold", Label: "Hold it"},
 	},
 	Recommended: "ship",
-	Role:        worklet.RoleApprover,
+	Role:        decision.RoleApprover,
 }
 
 // WHAT A PERSON DECIDED LATELY is every ask put to them and closed, by them or

@@ -858,7 +858,8 @@ func parkUnfenced(t *testing.T, rig *coordRig) {
 	rig.coordinator.lease = leased(Fence{})
 	rig.launchingUnder("t1", Fence{})
 	rig.suspend("t1")
-	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester})
+	rig.runner.Finish(Result{})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)

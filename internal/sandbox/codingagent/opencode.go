@@ -587,7 +587,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		//
 		// `question` is the one tool denied: it asks a PERSON, through a form
 		// a headless run cancels, and a run that has something to ask has
-		// `crewlet-ask`, which reaches the seat that started it.
+		// `ask_and_wait` on its bridge, which parks it on a person's answer.
 		//
 		// The rules of every document OpenCode reads are added together in
 		// its order, so these come after a repository's own and, the last

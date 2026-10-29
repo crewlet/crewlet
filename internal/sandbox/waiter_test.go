@@ -258,6 +258,26 @@ func (r *waiterRig) suspendIn(ctx context.Context, turnID string) {
 	}
 }
 
+// ask records ask as the question the job the row holds now asked, the way the
+// run's ask tool does over its bridge ([PendingStore.RecordAsk]), failing the
+// case unless it was recorded. A collection parks a run on what its row holds,
+// so a case whose run asks records the ask while the job is running and then
+// finishes the runner with the rest of what it reports.
+func (r *waiterRig) ask(turnID string, ask Ask) {
+	r.t.Helper()
+	run := r.get(turnID)
+	got, err := r.pending.RecordAsk(r.t.Context(), turnID, run.LaunchID, ask)
+	if err != nil || got != AskRecorded {
+		r.t.Fatalf("RecordAsk on %s (%s) = %q, %v; want it recorded", turnID, run.Status, got, err)
+	}
+}
+
+// whichBranch is the question a rig's run asks where the case is about the
+// park rather than what was asked: put to the requester, as most are.
+func whichBranch() Ask {
+	return Ask{Question: "which branch?", To: AskToRequester}
+}
+
 func (r *waiterRig) get(turnID string) PendingRun {
 	r.t.Helper()
 	return r.getIn(r.t.Context(), turnID)
@@ -626,10 +646,8 @@ func TestAParkedRunIsNeitherPolledNorHeartBeaten(t *testing.T) {
 	rig := newWaiterRig(t)
 	run := rig.launch("t1")
 	box := rig.provider.Box(run.SandboxID)
-	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
-		Question: "which branch?", Audience: "requester",
-		AskedAt: rig.now,
-	}); err != nil {
+	rig.ask("t1", whichBranch())
+	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{AskedAt: rig.now}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	rig.runner.Finish(Result{Success: true})
@@ -692,14 +710,13 @@ func TestAFailedPublishIsRetriedOnTheNextTick(t *testing.T) {
 // the pause reaper
 // ---------------------------------------------------------------------
 
-// park moves a launched run onto a question with its box snapshotted.
+// park has a launched run ask a question and moves it onto it, with its box
+// snapshotted.
 func (r *waiterRig) park(turnID string) {
 	r.t.Helper()
 	ctx := r.t.Context()
-	if err := r.pending.MarkAwaiting(ctx, turnID, Clarification{
-		Question: "which branch?", Audience: "requester", Branch: "wip/t1",
-		AskedAt: r.now,
-	}); err != nil {
+	r.ask(turnID, Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+	if err := r.pending.MarkAwaiting(ctx, turnID, Clarification{AskedAt: r.now}); err != nil {
 		r.t.Fatalf("MarkAwaiting: %v", err)
 	}
 	if err := r.pending.MarkBoxPaused(ctx, turnID, r.now); err != nil {
@@ -887,10 +904,8 @@ func TestAParkedBoxWhosePauseWasNeverRecordedIsStillReaped(t *testing.T) {
 		t.Fatalf("Pause: %v", err)
 	}
 	// The park lands; the stamp that would have dated it does not.
-	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
-		Question: "which branch?", Audience: "requester", Branch: "wip/t1",
-		AskedAt: rig.now,
-	}); err != nil {
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{AskedAt: rig.now}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
 	if rig.get("t1").Paused() {

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -26,9 +27,51 @@ import (
 
 // decisionSchema is the `decision` argument's JSON Schema.
 //
-// EVERY CAP IS IN A DESCRIPTION, read off the tracker's own constants, so the
+// EVERY CAP IS IN A DESCRIPTION, read off the decision's own constants, so the
 // number a model is told is the number it is refused at.
 func decisionSchema() map[string]any {
+	properties := choiceProperties()
+	properties["question"] = map[string]any{
+		"type": "string",
+		"description": fmt.Sprintf("What is being decided, in one "+
+			"sentence of at most %d bytes. The context goes in `body`.",
+			decision.MaxQuestion),
+	}
+	properties["inform"] = map[string]any{
+		"type": "object",
+		"description": "The chat channel you will report the outcome in " +
+			"once it is decided: a surface you hold a bot on, and a " +
+			"channel a team in the org chart declares. The person " +
+			"answering is told you will post it there, and your turn " +
+			"woken by their answer is not finished until you have.",
+		"properties": map[string]any{
+			"surface": map[string]any{
+				"type": "string",
+				"enum": []any{string(decision.InformMattermost), string(decision.InformSlack)},
+			},
+			"channel": map[string]any{"type": "string"},
+		},
+		"required": []any{"surface", "channel"},
+	}
+	return map[string]any{
+		"type": "object",
+		"description": "Structure the question when somebody has to CHOOSE: " +
+			"the options, the one you recommend and why, and what you looked " +
+			"at. Only with `ask`. The person answers by naming an option in " +
+			"`choice`, and you are woken with their choice.",
+		"properties": properties,
+		"required":   []any{"question", "options", "role"},
+	}
+}
+
+// choiceProperties are the schema of a decision's CHOICE (its options, the one
+// recommended and why, what was looked at, and the role the person is asked
+// in), which every tool that asks a person to choose takes alike: a work
+// item's ask under `decision` ([decisionSchema]), and a coding run's ask at the
+// top of its arguments ([askAndWait]). One builder, so the shape a model learns
+// on one is the shape it meets on the other. A fresh map on every call: each
+// caller adds the properties of its own.
+func choiceProperties() map[string]any {
 	option := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -40,13 +83,13 @@ func decisionSchema() map[string]any {
 			"label": map[string]any{
 				"type": "string",
 				"description": fmt.Sprintf("The option as a button would "+
-					"say it, at most %d bytes.", worklet.MaxOptionLabel),
+					"say it, at most %d bytes.", decision.MaxOptionLabel),
 			},
 			"detail": map[string]any{
 				"type": "string",
 				"description": fmt.Sprintf("What choosing it means — its "+
 					"cost, its risk, what happens next. At most %d bytes.",
-					worklet.MaxOptionDetail),
+					decision.MaxOptionDetail),
 			},
 		},
 		"required": []any{"id", "label"},
@@ -57,9 +100,9 @@ func decisionSchema() map[string]any {
 			"kind": map[string]any{
 				"type": "string",
 				"enum": []any{
-					string(worklet.EvidenceTask), string(worklet.EvidencePage),
-					string(worklet.EvidenceTurn), string(worklet.EvidenceRun),
-					string(worklet.EvidenceURL),
+					string(decision.EvidenceTask), string(decision.EvidencePage),
+					string(decision.EvidenceTurn), string(decision.EvidenceRun),
+					string(decision.EvidenceURL),
 				},
 			},
 			"ref": map[string]any{
@@ -78,64 +121,34 @@ func decisionSchema() map[string]any {
 		"required": []any{"kind", "ref"},
 	}
 	return map[string]any{
-		"type": "object",
-		"description": "Structure the question when somebody has to CHOOSE: " +
-			"the options, the one you recommend and why, and what you looked " +
-			"at. Only with `ask`. The person answers by naming an option in " +
-			"`choice`, and you are woken with their choice.",
-		"properties": map[string]any{
-			"question": map[string]any{
-				"type": "string",
-				"description": fmt.Sprintf("What is being decided, in one "+
-					"sentence of at most %d bytes. The context goes in `body`.",
-					worklet.MaxDecisionQuestion),
-			},
-			"options": map[string]any{
-				"type": "array",
-				"description": fmt.Sprintf("%d to %d choices — two to four "+
-					"is what a person weighs well.", worklet.MinDecisionOptions,
-					worklet.MaxDecisionOptions),
-				"items": option,
-			},
-			"recommended": map[string]any{
-				"type":        "string",
-				"description": "The id of the option you would choose.",
-			},
-			"rationale": map[string]any{
-				"type": "string",
-				"description": fmt.Sprintf("Why you recommend it, at most %d "+
-					"bytes.", worklet.MaxDecisionRationale),
-			},
-			"evidence": map[string]any{
-				"type": "array",
-				"description": fmt.Sprintf("What you looked at, at most %d. A "+
-					"work item or page must exist.", worklet.MaxDecisionEvidence),
-				"items": evidence,
-			},
-			"role": map[string]any{
-				"type": "string",
-				"enum": []any{string(worklet.RoleApprover), string(worklet.RoleContributor)},
-				"description": "`approver` when their answer IS the decision; " +
-					"`contributor` when it is an input to one somebody else makes.",
-			},
-			"inform": map[string]any{
-				"type": "object",
-				"description": "The chat channel you will report the outcome in " +
-					"once it is decided: a surface you hold a bot on, and a " +
-					"channel a team in the org chart declares. The person " +
-					"answering is told you will post it there, and your turn " +
-					"woken by their answer is not finished until you have.",
-				"properties": map[string]any{
-					"surface": map[string]any{
-						"type": "string",
-						"enum": []any{string(worklet.InformMattermost), string(worklet.InformSlack)},
-					},
-					"channel": map[string]any{"type": "string"},
-				},
-				"required": []any{"surface", "channel"},
-			},
+		"options": map[string]any{
+			"type": "array",
+			"description": fmt.Sprintf("%d to %d choices: two to four "+
+				"is what a person weighs well.", decision.MinOptions,
+				decision.MaxOptions),
+			"items": option,
 		},
-		"required": []any{"question", "options", "role"},
+		"recommended": map[string]any{
+			"type":        "string",
+			"description": "The id of the option you would choose.",
+		},
+		"rationale": map[string]any{
+			"type": "string",
+			"description": fmt.Sprintf("Why you recommend it, at most %d "+
+				"bytes.", decision.MaxRationale),
+		},
+		"evidence": map[string]any{
+			"type": "array",
+			"description": fmt.Sprintf("What you looked at, at most %d. A "+
+				"work item or page must exist.", decision.MaxEvidence),
+			"items": evidence,
+		},
+		"role": map[string]any{
+			"type": "string",
+			"enum": []any{string(decision.RoleApprover), string(decision.RoleContributor)},
+			"description": "`approver` when their answer IS the decision; " +
+				"`contributor` when it is an input to one somebody else makes.",
+		},
 	}
 }
 
@@ -151,7 +164,7 @@ func decisionSchema() map[string]any {
 // ([worklet.ValidateDecision]). A lookup that FAILS is the node's condition,
 // and is answered as one.
 func (d WorkDeps) readDecision(ctx context.Context, tool string, actor Actor,
-	raw any, pageReader PageReader) (*worklet.Decision, *tools.Result) {
+	raw any, pageReader PageReader) (*decision.Decision, *tools.Result) {
 
 	encoded, err := json.Marshal(raw)
 	if err != nil {
@@ -160,14 +173,14 @@ func (d WorkDeps) readDecision(ctx context.Context, tool string, actor Actor,
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
-	var decision worklet.Decision
-	if err = decoder.Decode(&decision); err != nil {
+	var asked decision.Decision
+	if err = decoder.Decode(&asked); err != nil {
 		return nil, refusalOf(failed(fmt.Sprintf("%s: `decision` does not have "+
 			"the shape its schema describes (%v). It takes question, options "+
 			"[{id, label, detail}], recommended, rationale, evidence [{kind, ref, "+
 			"label}], role and inform {surface, channel}.", tool, err)))
 	}
-	checked, err := worklet.ValidateDecision(ctx, decision, evidenceLookup{
+	checked, err := worklet.ValidateDecision(ctx, asked, evidenceLookup{
 		work: d, pages: pageReader,
 	})
 	switch {
@@ -196,7 +209,7 @@ type ChannelDirectory interface {
 	// because a promise to post where the seat has no identity is one it
 	// can never keep, and the engine would hold its turn open for a post
 	// no tool of its can make.
-	ChatSurfaces(handle string) []worklet.InformSurface
+	ChatSurfaces(handle string) []decision.InformSurface
 
 	// UnitChannels is every channel a unit of the chart declares, as the
 	// chart spells it.
@@ -223,9 +236,9 @@ type ChannelDirectory interface {
 // channel nobody checked the seat's bot is in. A leading `#` is accepted and
 // the chart's own spelling is stored, so the card and the prompt render the
 // name the company uses.
-func (d WorkDeps) checkInform(tool string, actor Actor, inform worklet.Inform) (worklet.Inform, *tools.Result) {
+func (d WorkDeps) checkInform(tool string, actor Actor, inform decision.Inform) (decision.Inform, *tools.Result) {
 	if actor.Kind != worklet.AuthorAgent {
-		return worklet.Inform{}, refusalOf(refused(tools.RefusalForbidden,
+		return decision.Inform{}, refusalOf(refused(tools.RefusalForbidden,
 			fmt.Sprintf("%s: `decision.inform` asks the engine to hold the "+
 				"asker's turn until the outcome is posted in %s, and only an "+
 				"agent seat has a turn to hold. Ask without `inform`, and post "+
@@ -233,7 +246,7 @@ func (d WorkDeps) checkInform(tool string, actor Actor, inform worklet.Inform) (
 				tool, clip(inform.Channel))))
 	}
 	if d.Channels == nil {
-		return worklet.Inform{}, refusalOf(failed(fmt.Sprintf("%s: this "+
+		return decision.Inform{}, refusalOf(failed(fmt.Sprintf("%s: this "+
 			"surface has no chart to check `decision.inform` against, so it "+
 			"cannot promise a post. Ask without `inform`. Nothing was posted.",
 			tool)))
@@ -248,7 +261,7 @@ func (d WorkDeps) checkInform(tool string, actor Actor, inform worklet.Inform) (
 			}
 			held = strings.Join(names, ", ")
 		}
-		return worklet.Inform{}, refusalOf(failed(fmt.Sprintf("%s: "+
+		return decision.Inform{}, refusalOf(failed(fmt.Sprintf("%s: "+
 			"`decision.inform.surface` is %q, which you cannot post on — the "+
 			"chat surfaces you hold a bot on here are: %s. Name one of them, "+
 			"or ask without `inform`. Nothing was posted.", tool,
@@ -266,7 +279,7 @@ func (d WorkDeps) checkInform(tool string, actor Actor, inform worklet.Inform) (
 	if len(declared) > 0 {
 		listed = strings.Join(declared, ", ")
 	}
-	return worklet.Inform{}, refusalOf(failed(fmt.Sprintf("%s: "+
+	return decision.Inform{}, refusalOf(failed(fmt.Sprintf("%s: "+
 		"`decision.inform.channel` is %q, which no team in the org chart "+
 		"declares — the channels it does are: %s. Name one of them, or ask "+
 		"without `inform`. Nothing was posted.", tool, clip(inform.Channel),
@@ -286,8 +299,13 @@ var _ worklet.EvidenceLookup = evidenceLookup{}
 // reference in these tools takes.
 func (l evidenceLookup) Task(ctx context.Context, ref string) (worklet.CitedTask, error) {
 	if l.work.Reader == nil {
-		return worklet.CitedTask{}, errors.New("this surface has no " +
-			"Worklet reader to check a work item against")
+		// A COMPANY WITHOUT CREWLET WORKS CANNOT CITE A WORK ITEM by
+		// kind, for the reason [evidenceLookup.PageID] gives a page: a
+		// coding run of a company on another tracker asks with the same
+		// evidence a work item's decision takes.
+		return worklet.CitedTask{}, fmt.Errorf("%w: this company does not run "+
+			"Crewlet Works, so a `task` cannot be checked; cite it as a `url`",
+			worklet.ErrInvalid)
 	}
 	got, err := l.work.Reader.Task(ctx, ref, worklet.DetailWants{}, seatRead)
 	if err != nil {

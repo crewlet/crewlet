@@ -2717,7 +2717,9 @@ company did.** That is Home until its reader arranges it (see
   ask stays as one line, "Answered Hold release (Recommended)", "Answered Ship
   anyway" or "Answered “the reply”", until the card is drawn afresh; there is
   no undo, because the asker is woken the moment the answer lands. A coding run parked on a question is answered
-  by its turn (`answer_run`), with how long its box is still held. A seat the
+  by its turn (`answer_run`), with how long its box is still held: its row shows
+  the question's one sentence, never the context under it, and its **Answer**
+  dialog draws the run's ask as the Inbox does, its options as buttons. A seat the
   engine stopped on a spent budget offers **Raise budget** — a dialog of that
   scope's three ceilings, opened on the seat's own when its own window is the
   one refusing and on the company's when the company's is, with the refusing
@@ -2892,9 +2894,15 @@ opens the field in their place and sends the answer in words
 from the start. Where the ask promised a channel (`decision.inform`) the line
 under the answer says "Your answer is also posted to #channel": the engine
 holds the asker to it (`ExternalNotification.owes`), and an ask that promised
-nothing draws no such line. A parked coding run's pane heads with its
-question's first sentence, quotes the question whole and verbatim, says how
-long its box is still held, and answers by its turn (`answer_run`). A stopped
+nothing draws no such line. A parked coding run's pane is drawn as a
+question is (ADR-0068): its one-sentence question heads it with its inline
+references placed, its context follows as Markdown, its recommendation sits with
+the reasoning and the evidence it cites, and its options are buttons, the
+recommended one first and filled, with "Something else" to answer in words. An
+open question is answered in its field. It says how long the box is still held
+and answers by its turn (`answer_run`). A question from an older build, one
+free-text block, draws its first sentence as the heading and the rest as
+Markdown; nothing is ever quoted verbatim. A stopped
 seat's names the window that is spent and offers the two ways out: raise the
 ceiling, or hand the item on. A condition's says what it costs to leave and
 where the answer is.
@@ -2916,7 +2924,11 @@ group after Updates, closed and counted ("Answered 4"): its label is a
 disclosure button inside the heading, so a reader moving by heading lands on
 it and Enter opens it. Each row names who asked, the question, and who
 answered and how ("Maya Ops chose **Ship anyway**"), since a colleague may
-answer a question put to you. A row answered on this visit is in Needs you
+answer a question put to you. A coding run's question the reader answered is
+a row of the same group, drawn the same way: its pane reads the run's ask in
+full (the question, its context, its options with the chosen one marked) and
+links to the run, with no conversation, since a run's question has no thread.
+A row answered on this visit is in Needs you
 instead, never in both. Opened, its rows step with `j` and `k`; a link to one
 opens the group. An answered ask's pane reads like the one it was answered
 on, with the answer in place of the buttons, a line saying who answered for
@@ -4524,7 +4536,7 @@ a tool arrives in it with the control that sends it. The controls
 | An option · Something else and Send | A question in the Inbox's pane | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}`, then `mark_inbox{read}` for the notices that asked it |
 | Send | The reply box under the Inbox's conversation | `comment_on_work_item{item, body, reply_to}` |
 | Link a task · Attach a page | The Inbox's reply box | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
-| Send answer | A parked coding run in the Inbox's pane | `answer_run{turn_id, answer}` |
+| An option · Something else and Send answer | A parked coding run in the Inbox's pane, and its Answer dialog | `answer_run{turn_id, choice}` / `answer_run{turn_id, answer}` |
 | Accept · Change and Submit · Something else · Reply | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
 | Drag a row · `Alt` + ↑/↓ | My work's Priorities reading (your own queue, or one in your line) | `set_priorities{handle, items, if_match}` — the whole stored list with the one row moved, conditional on the record's version |
 | Publish · Save as draft | The composer (`#/doclet/new`) | `write_page{title, body, container, parent?, labels?, status}`: a draft and a published page are one write with the status set |
@@ -5326,7 +5338,8 @@ be read at a glance:
 - **Waiting on a person** — every coding run parked on a question: whose, the
   question, who it asks (the chart's names for the seats the engine resolved),
   how long it has waited and how long its box is still held, and **Answer**,
-  which sends `answer_run{turn_id, answer}` as the person reading.
+  which sends `answer_run{turn_id, choice}` for an option or
+  `answer_run{turn_id, answer}` for words, as the person reading.
 - **In a box** — the rest of the detached runs in flight, eight before it
   says how many more. Empty, it says *Finished runs are on their turn’s
   trace*: a settled run's row is deleted, so the sentence it replaced,
@@ -7027,7 +7040,8 @@ it, so a link to one run landed on a board with the run below the fold.
   - A parked run's banner says what it asked, **who it is put to** (the
     audience the engine resolved when the run parked, by name, and the lead
     chain when the coding agent's label named nobody), how long its box is
-    held, and carries **Answer** — `answer_run{turn_id, answer}`, which reaches
+    held, and carries **Answer**: `answer_run{turn_id, choice}` for an option,
+    or `{turn_id, answer}` for words, which reaches
     a run whatever launched it. `pending` is the ordinary outcome: the answer
     is on the seat's inbox and the node holding the seat resumes the run.
   - A running run's page polls its live output from the node that owns it

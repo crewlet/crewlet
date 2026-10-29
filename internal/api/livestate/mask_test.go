@@ -81,7 +81,7 @@ var sandboxFields = map[string]class{
 	"sandbox_id": status, "status": status,
 	"started_at": status, "audience": status, "owner": status, "paused_at": status,
 	"body_withheld": status,
-	"task":          body, "question": body,
+	"task":          body, "question": body, "question_context": body, "decision": body,
 	"work_item": tracker,
 }
 

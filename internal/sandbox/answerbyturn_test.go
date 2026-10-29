@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -48,7 +49,8 @@ func launchScheduled(t *testing.T, rig *coordRig, turnID string) {
 // coordinator its completion, which parks it.
 func parksOnAQuestion(t *testing.T, rig *coordRig, turnID string) {
 	t.Helper()
-	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "manager"})
+	rig.ask(turnID, Ask{Question: "which branch?", To: AskToManager})
+	rig.runner.Finish(Result{})
 	payload, ev := rig.completion(turnID)
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
@@ -87,8 +89,13 @@ func asksAgain(t *testing.T, rig *coordRig) func(context.Context, PendingRun) {
 			t.Errorf("relaunch: %v", err)
 		}
 		rig.suspendIn(ctx, run.TurnID)
+		relaunched := rig.getIn(ctx, run.TurnID)
+		if got, err := rig.pending.RecordAsk(ctx, run.TurnID, relaunched.LaunchID,
+			Ask{Question: "which test suite?", To: AskToRequester}); err != nil || got != AskRecorded {
+			t.Errorf("the second question = %q, %v, want it recorded", got, err)
+		}
 		if err := rig.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
-			Question: "which test suite?", AskedAt: rig.now.Add(time.Hour),
+			AskedAt: rig.now.Add(time.Hour),
 		}); err != nil {
 			t.Errorf("the second question: %v", err)
 		}
@@ -173,13 +180,128 @@ func TestAnAnswerByTurnResumesARunWithNoConversation(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("published %d sandbox_run_answered, want one", len(records))
 	}
+	got := records[0]
+	got.AskedAt, got.AudienceHandles, got.LaunchID = time.Time{}, nil, ""
 	want := types.SandboxRunAnswered{
 		Agent: sweID, AgentHandle: "swe", RoleName: "SWE", TurnID: "t1",
 		Via: types.AnswerViaOperator, Outcome: types.AnswerResumed,
 		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
+		Question: "which branch?", Answer: "use the release branch",
 	}
-	if got := records[0]; got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("sandbox_run_answered = %+v, want %+v", got, want)
+	}
+	if records[0].LaunchID == "" || records[0].AskedAt.IsZero() {
+		t.Errorf("the record names no question it answered: launch %q, asked at %v",
+			records[0].LaunchID, records[0].AskedAt)
+	}
+}
+
+// parksOnADecision is [parksOnAQuestion] for a run that asks a person to
+// choose: its ask carries a decision whose options the answer names by id.
+func parksOnADecision(t *testing.T, rig *coordRig, turnID string) {
+	t.Helper()
+	const question = "which branch?"
+	rig.ask(turnID, Ask{Question: question, Decision: choosing(question), To: AskToManager})
+	rig.runner.Finish(Result{})
+	payload, ev := rig.completion(turnID)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if got := rig.get(turnID); got.Status != StatusAwaiting || got.Decision == nil {
+		t.Fatalf("the run is %q with decision %+v after asking, want it parked on its decision",
+			got.Status, got.Decision)
+	}
+}
+
+// AN ANSWER BY TURN THAT CHOOSES IS RECORDED AS THE OPTION IT CHOSE, as the run
+// asked it: the option's label and its id, then the person's words. The run
+// reads what it offered, never a bare id it would have to look up.
+//
+// Mutation: record the answer's words alone, and the run never learns what was
+// chosen.
+func TestAnAnswerByTurnRecordsTheOptionItChose(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	launchScheduled(t, rig, "t1")
+	parksOnADecision(t, rig, "t1")
+
+	given, ev := givenAgainst(t, rig, "t1")
+	given.Choice, given.Answer = "release-2", "  and cut a patch  "
+	ev = events.New(given, events.TraceContext{})
+	disposition, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev)
+	if err != nil || disposition != AnswerConsumed {
+		t.Fatalf("AnswerByTurn = %q, %v, want consumed", disposition, err)
+	}
+	if rig.fireRetries() != 1 {
+		t.Fatal("the recorded answer's resume was not queued")
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 {
+		t.Fatalf("the run was resumed %d times, want once", len(calls))
+	}
+	const want = "Chosen option: Target release/2 (`release-2`).\n\nand cut a patch"
+	if asked := askedOf(calls[0]); asked.Answer != want || asked.By != "founder" {
+		t.Errorf("the run is carried on with %+v, want the answer %q from the person who gave it",
+			asked, want)
+	}
+
+	// AND THE RECORD THAT OUTLIVES THE RUN SAYS THE SAME (ADR-0068): the
+	// question with its options, the option chosen by id and the person's own
+	// words apart from it, which is what their answered decisions read back.
+	rig.finished("t1")
+	records := rig.answeredRecords()
+	if len(records) != 1 {
+		t.Fatalf("published %d sandbox_run_answered, want one", len(records))
+	}
+	got := records[0]
+	if got.Outcome != types.AnswerResumed || got.Choice != "release-2" ||
+		got.Answer != "and cut a patch" || got.Decision == nil ||
+		len(got.Decision.Options) != 2 || got.Question != "which branch?" {
+		t.Errorf("sandbox_run_answered = %+v, want the question, its decision, the choice "+
+			"and the person's own words", got)
+	}
+}
+
+// AN ANSWER BY TURN CHOOSING WHAT THE QUESTION DOES NOT OFFER IS SPENT, NOT
+// RECORDED. `answer_run` checks the choice against the same question before it
+// delivers, so one arriving here was checked against another; handed to the
+// run, it would be told it chose something nobody offered. Nothing is resumed,
+// the question stays open for an answer it can take, and the person is told
+// on the record that theirs did not land.
+//
+// Mutation: record the answer whatever its choice, and the run resumes on an
+// option it never offered.
+func TestAnAnswerByTurnChoosingWhatWasNotOfferedIsSpentUnrecorded(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	launchScheduled(t, rig, "t1")
+	parksOnADecision(t, rig, "t1")
+
+	given, ev := givenAgainst(t, rig, "t1")
+	given.Choice = "develop"
+	ev = events.New(given, events.TraceContext{})
+	disposition, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev)
+	if err != nil || disposition != AnswerNotMine {
+		t.Fatalf("AnswerByTurn = %q, %v, want not_mine", disposition, err)
+	}
+	if got := rig.get("t1"); got.Status != StatusAwaiting || got.Answer != nil {
+		t.Fatalf("the run is %q with answer %+v, want it still waiting on its question", got.Status, got.Answer)
+	}
+	if rig.fireRetries() != 0 || len(rig.resumer.calls()) != 0 {
+		t.Fatal("an answer choosing an option nobody offered resumed the run")
+	}
+	records := rig.answeredRecords()
+	if len(records) != 1 || records[0].Outcome != types.AnswerNotAwaiting {
+		t.Fatalf("recorded %+v, want one not_awaiting", records)
+	}
+
+	// And the question still takes an answer that chooses what it offers.
+	given, ev = givenAgainst(t, rig, "t1")
+	given.Choice = "main"
+	ev = events.New(given, events.TraceContext{})
+	if d, err := rig.coordinator.AnswerByTurn(t.Context(), given, ev); err != nil || d != AnswerConsumed {
+		t.Fatalf("an offered choice after it = %q, %v, want consumed", d, err)
 	}
 }
 

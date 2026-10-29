@@ -25,14 +25,14 @@ import (
 //     daemon (DOCKER_HOST, a rootless socket forwarded from elsewhere) mounts
 //     the DAEMON's filesystem instead, so the box directory the engine wrote
 //     is not the one the container sees. Nothing errors; the agent simply
-//     finds no brief, no credentials and no shim.
+//     finds no brief, no credentials and no tools.
 //
 //  2. What the container writes there, the engine must be able to manage.
 //     Under a ROOTFUL runtime a container's root is the host's root, so every
 //     directory the box creates in the mount is root-owned: the engine, which
-//     is not root, can then neither write into it — `Install` creating
-//     .crewlet/bin from inside the box and then writing the ask shim from
-//     outside failed with EACCES, which is exactly how this was found — nor
+//     is not root, can then neither write into it (`Install` creating
+//     .crewlet/bin from inside the box and then writing a file into it from
+//     outside failed with EACCES, which is exactly how this was found) nor
 //     unlink from it, so `removeBox`'s RemoveAll leaves the checkout behind
 //     and every box directory leaks on the engine host for good.
 
@@ -184,7 +184,7 @@ func verifyMount(ctx context.Context, box execer, layout boxLayout) error {
 		return localErrorf("container sandbox %s writes its box directory as a user this "+
 			"engine cannot manage: the container created %s and this process can neither "+
 			"write into it nor remove it (%v). The engine would be left unable to install "+
-			"the agent's shim or reclaim the box's disk. Run the container as this user by "+
+			"a run's files or reclaim the box's disk. Run the container as this user by "+
 			"passing `--user %d:%d` in providers.sandbox.local.run_args, or use a rootless "+
 			"container runtime",
 			layout.id, filepath.Join(layout.home(), made), detail, os.Getuid(), os.Getgid())

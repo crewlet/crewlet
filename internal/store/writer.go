@@ -68,6 +68,12 @@ var tagKeys = map[string]string{
 	// through disagreed about a dimension Append reads back out of the
 	// tags. One map is what makes that disagreement unrepresentable.
 	"turn_id": "turn_id",
+	// WHO ANSWERED a coding run's question: the one dimension a person's
+	// answered decisions select the answers' records by (ADR-0068), before
+	// reading the few that are theirs whole. A listing never selects the
+	// payload, so without it every answer in the window was read whole to
+	// find one person's.
+	"answered_by": "answered_by",
 	// The unit of work behind that run: turn_id names one EXECUTION, which
 	// is what a phase row, a live call and the turns list are keyed on, and
 	// a trigger that fails without acting is redelivered — so one unit of

@@ -40,7 +40,8 @@ const ExecutorHeader = "\n## Your turn" +
 	"\nDecide what to do about the task below and do it, in this one pass. " +
 	"Use tool calls for every action — writing about an action does not " +
 	"perform it. End by calling `submit_work` exactly once, reporting what " +
-	"you actually did." +
+	"you actually did, unless you park on a person's answer as your standing " +
+	"instructions describe." +
 	"\n" +
 	"\n**Finish the arc in this pass:** read, decide, then call the tool " +
 	"that delivers — the reply, the comment, the status change, the create. " +

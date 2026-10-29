@@ -282,7 +282,7 @@ func TestTheCodingAgentIsToldItsTaskAndItsEnvironment(t *testing.T) {
 func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 	t.Parallel()
 	const seat = "You are Agent SWE at Acme.\nSEAT-IDENTITY-MARKER"
-	const ask = "## If you get blocked on a human decision\nRun crewlet-ask --to founder"
+	const ask = "## If you get blocked on a human decision\nCall ask_and_wait with to: founder"
 	for name, tc := range map[string]struct{ label, named string }{
 		"labelled":   {label: "Ship the login fix\nand tell Ana", named: "Ship the login fix"},
 		"unlabelled": {},
@@ -311,7 +311,7 @@ func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 			if got.Brief != req.Brief {
 				t.Errorf("the brief is\n%q\nwant the turn's ask alone\n%q", got.Brief, req.Brief)
 			}
-			if strings.Contains(got.Brief, "SEAT-IDENTITY-MARKER") || strings.Contains(got.Brief, "crewlet-ask") {
+			if strings.Contains(got.Brief, "SEAT-IDENTITY-MARKER") || strings.Contains(got.Brief, "ask_and_wait") {
 				t.Errorf("standing instructions reached the brief:\n%s", got.Brief)
 			}
 			rig.queue.mu.Lock()
@@ -328,8 +328,8 @@ func TestARunsOwnSystemTextLeadsItsStandingInstructions(t *testing.T) {
 
 // THE CODING AGENT IS TOLD IT MAY ASK, and whom — the addendum the engine
 // composes rides the standing instructions the box is started with. Without it
-// the ask shim was installed and never mentioned, so a run blocked on a
-// decision could not park on a question at all.
+// a run held the ask tool with no word of when to use it, so a run blocked on
+// a decision could not park on a question at all.
 //
 // And the row records WHO ASKED, which is what the park resolves a question to
 // "the requester" against days later.
@@ -337,13 +337,13 @@ func TestTheCodingAgentIsToldHowToAskAndTheRowWhoAsked(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
-	req.Ask = "## If you get blocked on a human decision\nRun crewlet-ask --to founder"
+	req.Ask = "## If you get blocked on a human decision\nCall ask_and_wait with to: founder"
 	req.Turn.Requester = "ada"
 	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	started := rig.runner.Started()
-	if len(started) != 1 || !strings.Contains(started[0].System, "crewlet-ask --to founder") {
+	if len(started) != 1 || !strings.Contains(started[0].System, "ask_and_wait with to: founder") {
 		t.Fatalf("the coding agent's standing instructions do not carry how to ask:\n%v", started)
 	}
 	if got := rig.get("t1").Requester; got != "ada" {

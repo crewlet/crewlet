@@ -33,10 +33,8 @@ func askAndAnswerAfter(t *testing.T, rig *coordRig, reap bool, made []BridgeCall
 			t.Fatalf("AppendBridgeCall: %v", err)
 		}
 	}
-	rig.runner.Finish(Result{
-		NeedsInput: true, Question: "which branch?", AskTo: "requester",
-		WIPBranch: "wip/t1", SessionID: "sess-ask",
-	})
+	rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+	rig.runner.Finish(Result{SessionID: "sess-ask"})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
@@ -190,7 +188,8 @@ func TestAnAnsweredQuestionIsRedacted(t *testing.T) {
 	rig := newCoordRig(t)
 	secret := "ghp_" + strings.Repeat("c", 36)
 	rig.launch("t1")
-	rig.runner.Finish(Result{NeedsInput: true, Question: "may I use " + secret + "?", AskTo: "requester"})
+	rig.ask("t1", Ask{Question: "may I use " + secret + "?", To: AskToRequester})
+	rig.runner.Finish(Result{})
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)

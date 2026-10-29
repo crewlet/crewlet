@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -68,14 +69,14 @@ func TestACommentCanAskWithADecision(t *testing.T) {
 	if comment.Ask != "pm" || comment.Decision == nil {
 		t.Fatalf("the comment is %+v, want an ask carrying its decision", comment)
 	}
-	decision := comment.Decision
-	if len(decision.Options) != 2 || decision.Recommended != "ship" ||
-		decision.Role != worklet.RoleApprover {
-		t.Errorf("the decision is %+v", decision)
+	asked := comment.Decision
+	if len(asked.Options) != 2 || asked.Recommended != "ship" ||
+		asked.Role != decision.RoleApprover {
+		t.Errorf("the decision is %+v", asked)
 	}
-	if decision.Evidence[0].Ref != "id-2" || decision.Evidence[1].Ref != "p1" {
+	if asked.Evidence[0].Ref != "id-2" || asked.Evidence[1].Ref != "p1" {
 		t.Errorf("the evidence is stored as %+v, want the task's and the page's ids",
-			decision.Evidence)
+			asked.Evidence)
 	}
 	if !strings.Contains(got.Output, `"decision"`) {
 		t.Errorf("the answer does not show the decision as stored: %s", got.Output)
@@ -225,11 +226,11 @@ func TestACreateCanCarryItsAskInOneRecord(t *testing.T) {
 // fakeChannels is a chart with chat surfaces per seat and declared unit
 // channels.
 type fakeChannels struct {
-	surfaces map[string][]worklet.InformSurface
+	surfaces map[string][]decision.InformSurface
 	channels []string
 }
 
-func (f fakeChannels) ChatSurfaces(handle string) []worklet.InformSurface {
+func (f fakeChannels) ChatSurfaces(handle string) []decision.InformSurface {
 	return f.surfaces[handle]
 }
 
@@ -246,8 +247,8 @@ func informRegistry(t *testing.T, trk *fakeTracker,
 		Work: builtin.WorkDeps{
 			Reader: trk, Writer: trk.as, Actor: actor,
 			Channels: fakeChannels{
-				surfaces: map[string][]worklet.InformSurface{
-					"eng": {worklet.InformSlack},
+				surfaces: map[string][]decision.InformSurface{
+					"eng": {decision.InformSlack},
 				},
 				channels: []string{"releases", "product"},
 			},
@@ -342,7 +343,7 @@ func TestAnInformChannelMustBeOneTheChartDeclares(t *testing.T) {
 		t.Fatalf("a declared channel on a held surface was refused: %s", got.Output)
 	}
 	inform := trk.patched[0].Comment.Decision.Inform
-	if inform == nil || inform.Surface != worklet.InformSlack || inform.Channel != "releases" {
+	if inform == nil || inform.Surface != decision.InformSlack || inform.Channel != "releases" {
 		t.Errorf("the inform is stored as %+v, want slack/releases as the chart spells it",
 			inform)
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -71,7 +72,7 @@ type ResolvedThread struct {
 	// what a wake needs to say which option was chosen, and what the
 	// caller shows beside the choice. Immutable once asked, so reading it
 	// here rather than inside the write's snapshot cannot go stale.
-	AnswersDecision *Decision
+	AnswersDecision *decision.Decision
 }
 
 // AlreadyAnsweredError reports an `answers` naming a question that already
@@ -309,7 +310,7 @@ func inferAnswer(ctx context.Context, tx *sql.Tx, task, author string) (string, 
 type openAsk struct {
 	id, task, author, asked string
 	removed                 bool
-	decision                *Decision
+	decision                *decision.Decision
 
 	// answeredBy is the comment that answered it, with its author and
 	// instant; resolvedBy and resolvedAt a resolve that closed it.

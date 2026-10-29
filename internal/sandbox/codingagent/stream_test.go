@@ -312,7 +312,7 @@ func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 				t.Fatal(err)
 			}
 			b.Put(p.Result(), string(result))
-			b.Put(p.Ask(), strings.Repeat("q", b.ReadCap()+1)) // a piece that cannot be read
+			b.Put(p.Findings(), strings.Repeat("r", b.ReadCap()+1)) // a piece that cannot be read
 			b.Put(p.Err(), stderr)
 			b.Put(p.ExitCode(), "1")
 
@@ -325,7 +325,7 @@ func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 					len(res.Error), len(res.Error)-testFailureBound, testFailureBound)
 			}
 			for _, want := range []string{
-				"the question the coding agent recorded", // the refused piece, first
+				"the report the coding agent wrote", // the refused piece, first
 				"the coding agent exited with status 1",
 				"error_during_execution: the provider answered 529",
 				"were not read: a run's failure is read from its end",
@@ -334,7 +334,7 @@ func TestTheWholeFailureIsWhatOneCondensationCanTake(t *testing.T) {
 					t.Errorf("the failure lost %q: %.400q", want, res.Error)
 				}
 			}
-			if !strings.HasPrefix(res.Error, "the question the coding agent recorded") {
+			if !strings.HasPrefix(res.Error, "the report the coding agent wrote") {
 				t.Errorf("the failure opens %.120q; want the piece that could not be read first", res.Error)
 			}
 			if !strings.HasSuffix(res.Error, "FATAL: the last line") {
@@ -408,32 +408,6 @@ func TestAReportPastTheCapDegradesOnlyItself(t *testing.T) {
 	}
 }
 
-// A QUESTION PAST THE CAP IS NOT PARKED ON. Nobody could be shown it, so the
-// run does not wait for an answer to it; it reads as not succeeded, saying so.
-func TestAQuestionPastTheCapIsNotParkedOn(t *testing.T) {
-	t.Parallel()
-	runner := codingagent.NewClaudeCode()
-	b := box(t, runner)
-	p := paths(b)
-	b.Put(p.Findings(), "Outcome: blocked")
-	b.Put(p.Ask(), `{"question":"`+strings.Repeat("q", b.ReadCap())+`","to":"team"}`)
-	b.Put(p.ExitCode(), "0")
-
-	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
-	if res.NeedsInput || res.Success {
-		t.Errorf("needs input %v, success %v; want neither", res.NeedsInput, res.Success)
-	}
-	if !strings.Contains(res.Error, "the question the coding agent recorded") {
-		t.Errorf("the refusal is not said: %q", res.Error)
-	}
-	if res.Text != "Outcome: blocked" {
-		t.Errorf("the report = %q; want it still collected", res.Text)
-	}
-}
-
 // A BOX THAT COULD NOT BE READ IS AN ERROR, not a smaller result: that is the
 // box failing, which the coordinator answers, and it is not a piece that was
 // too large to read.
@@ -443,7 +417,7 @@ func TestAnUnreadableBoxIsAnErrorNotAPiece(t *testing.T) {
 	b := box(t, runner)
 	p := paths(b)
 	b.Put(p.Findings(), "Outcome: succeeded")
-	for _, path := range []string{p.Result(), p.Err(), p.ExitCode(), p.Findings(), p.Ask()} {
+	for _, path := range []string{p.Result(), p.Err(), p.ExitCode(), p.Findings()} {
 		b.ReadErr = func(read string) error {
 			if read == path {
 				return errBoxUnreadable

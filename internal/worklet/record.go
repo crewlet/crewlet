@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -553,7 +554,7 @@ type Comment struct {
 	// choose — see decision.go. Only on the comment that ASKS, and never
 	// changed after: an answer names an option by id, and options edited
 	// under it would turn that answer into an answer to something else.
-	Decision *Decision `json:"decision,omitempty"`
+	Decision *decision.Decision `json:"decision,omitempty"`
 
 	// Choice is the option an ANSWER chose, by id, checked against the
 	// decision of the ask it answers inside the write's own snapshot.

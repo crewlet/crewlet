@@ -11,125 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
-
-// A DECISION IS REFUSED AT WRITE FOR EVERY WAY IT CAN BE MALFORMED, naming the
-// field, and a well-formed one passes untouched.
-//
-// Each row is one clause of [worklet.Decision.Validate]; a clause that stopped
-// refusing would let a decision through that a person cannot answer — one
-// option, two options with one id, a recommendation that is not on offer, a
-// link that is not https — and nothing downstream checks again.
-func TestADecisionIsValidatedField(t *testing.T) {
-	t.Parallel()
-	long := func(n int) string { return strings.Repeat("x", n) }
-	for _, c := range []struct {
-		name  string
-		edit  func(*worklet.Decision)
-		field string // "" when the decision must pass
-	}{
-		{"well formed", func(*worklet.Decision) {}, ""},
-		{"a contributor", func(d *worklet.Decision) { d.Role = worklet.RoleContributor }, ""},
-		{"six options", func(d *worklet.Decision) {
-			for i := len(d.Options); i < worklet.MaxDecisionOptions; i++ {
-				d.Options = append(d.Options, worklet.DecisionOption{
-					ID: fmt.Sprintf("o%d", i), Label: "another"})
-			}
-		}, ""},
-		{"no recommendation", func(d *worklet.Decision) { d.Recommended = "" }, ""},
-		{"every evidence kind", func(d *worklet.Decision) {
-			d.Evidence = []worklet.Evidence{
-				{Kind: worklet.EvidenceTask, Ref: "ENG-1"},
-				{Kind: worklet.EvidencePage, Ref: "p-1"},
-				{Kind: worklet.EvidenceTurn, Ref: "turn-1"},
-				{Kind: worklet.EvidenceRun, Ref: "run-1"},
-				{Kind: worklet.EvidenceURL, Ref: "https://example.com/a", Label: "a"},
-			}
-		}, ""},
-		{"an inform", func(d *worklet.Decision) {
-			d.Inform = &worklet.Inform{Surface: worklet.InformSlack, Channel: "eng"}
-		}, ""},
-
-		{"no question", func(d *worklet.Decision) { d.Question = "  " }, "decision.question"},
-		{"a long question", func(d *worklet.Decision) {
-			d.Question = long(worklet.MaxDecisionQuestion + 1)
-		}, "decision.question"},
-		{"one option", func(d *worklet.Decision) { d.Options = d.Options[:1] }, "at least 2"},
-		{"seven options", func(d *worklet.Decision) {
-			for i := len(d.Options); i <= worklet.MaxDecisionOptions; i++ {
-				d.Options = append(d.Options, worklet.DecisionOption{
-					ID: fmt.Sprintf("o%d", i), Label: "another"})
-			}
-		}, "maximum is 6"},
-		{"an id with a capital", func(d *worklet.Decision) { d.Options[0].ID = "Ship" }, "options[0].id"},
-		{"an id with a space", func(d *worklet.Decision) { d.Options[1].ID = "hold on" }, "options[1].id"},
-		{"a 33-byte id", func(d *worklet.Decision) { d.Options[0].ID = long(33) }, "options[0].id"},
-		{"two options one id", func(d *worklet.Decision) { d.Options[1].ID = "ship" }, "names two options"},
-		{"no label", func(d *worklet.Decision) { d.Options[0].Label = "" }, "options[0].label"},
-		{"a long label", func(d *worklet.Decision) {
-			d.Options[0].Label = long(worklet.MaxOptionLabel + 1)
-		}, "options[0].label"},
-		{"a long detail", func(d *worklet.Decision) {
-			d.Options[1].Detail = long(worklet.MaxOptionDetail + 1)
-		}, "options[1].detail"},
-		{"a recommendation not on offer", func(d *worklet.Decision) { d.Recommended = "wait" }, "decision.recommended"},
-		{"a long rationale", func(d *worklet.Decision) {
-			d.Rationale = long(worklet.MaxDecisionRationale + 1)
-		}, "decision.rationale"},
-		{"nine pieces of evidence", func(d *worklet.Decision) {
-			for range worklet.MaxDecisionEvidence + 1 {
-				d.Evidence = append(d.Evidence, worklet.Evidence{
-					Kind: worklet.EvidenceTurn, Ref: "turn"})
-			}
-		}, "maximum is 8"},
-		{"an unknown evidence kind", func(d *worklet.Decision) {
-			d.Evidence = []worklet.Evidence{{Kind: "doc", Ref: "x"}}
-		}, "evidence[0].kind"},
-		{"evidence with no ref", func(d *worklet.Decision) {
-			d.Evidence = []worklet.Evidence{{Kind: worklet.EvidenceTask}}
-		}, "evidence[0].ref"},
-		{"an http url", func(d *worklet.Decision) {
-			d.Evidence = []worklet.Evidence{{Kind: worklet.EvidenceURL, Ref: "http://example.com"}}
-		}, "https://"},
-		{"a script url", func(d *worklet.Decision) {
-			d.Evidence = []worklet.Evidence{{Kind: worklet.EvidenceURL, Ref: "javascript:alert(1)"}}
-		}, "https://"},
-		{"a relative url", func(d *worklet.Decision) {
-			d.Evidence = []worklet.Evidence{{Kind: worklet.EvidenceURL, Ref: "/doclet/pages/1"}}
-		}, "https://"},
-		{"no role", func(d *worklet.Decision) { d.Role = "" }, "decision.role"},
-		{"an unknown role", func(d *worklet.Decision) { d.Role = "owner" }, "decision.role"},
-		{"an unknown surface", func(d *worklet.Decision) {
-			d.Inform = &worklet.Inform{Surface: "teams", Channel: "eng"}
-		}, "inform.surface"},
-		{"an inform with no channel", func(d *worklet.Decision) {
-			d.Inform = &worklet.Inform{Surface: worklet.InformMattermost}
-		}, "inform.channel"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			d := *decisionFixture()
-			d.Options = append([]worklet.DecisionOption(nil), d.Options...)
-			c.edit(&d)
-			err := d.Validate()
-			switch {
-			case c.field == "" && err != nil:
-				t.Fatalf("a well-formed decision was refused: %v", err)
-			case c.field == "":
-				return
-			case err == nil:
-				t.Fatalf("the decision was accepted; want a refusal naming %q", c.field)
-			case !errors.Is(err, worklet.ErrInvalid):
-				t.Fatalf("the refusal %v is not marked invalid, so a surface "+
-					"would read it as the node's failure", err)
-			case !strings.Contains(err.Error(), c.field):
-				t.Fatalf("the refusal %q does not name %q", err, c.field)
-			}
-		})
-	}
-}
 
 // THE CHECKS THAT NEED THE WORLD: a task reference is stored as the task's ID —
 // a key is retired by a move and the record is kept for ever — a page must
@@ -144,9 +29,9 @@ func TestValidateDecisionResolvesTasksAndRequiresPages(t *testing.T) {
 		pages: map[string]string{"KB/Audit plan": "page-uuid-1"},
 	}
 	d := *decisionFixture()
-	d.Evidence = []worklet.Evidence{
-		{Kind: worklet.EvidenceTask, Ref: "ENG-7", Label: "the audit"},
-		{Kind: worklet.EvidencePage, Ref: "KB/Audit plan"},
+	d.Evidence = []decision.Evidence{
+		{Kind: decision.EvidenceTask, Ref: "ENG-7", Label: "the audit"},
+		{Kind: decision.EvidencePage, Ref: "KB/Audit plan"},
 	}
 	got, err := worklet.ValidateDecision(t.Context(), d, lookup)
 	if err != nil {
@@ -165,15 +50,15 @@ func TestValidateDecisionResolvesTasksAndRequiresPages(t *testing.T) {
 	}
 
 	for name, c := range map[string]struct {
-		evidence worklet.Evidence
+		evidence decision.Evidence
 		invalid  bool
 	}{
-		"an unknown task": {worklet.Evidence{Kind: worklet.EvidenceTask, Ref: "ENG-404"}, true},
-		"a missing page":  {worklet.Evidence{Kind: worklet.EvidencePage, Ref: "page-2"}, true},
-		"a lookup down":   {worklet.Evidence{Kind: worklet.EvidencePage, Ref: "boom"}, false},
+		"an unknown task": {decision.Evidence{Kind: decision.EvidenceTask, Ref: "ENG-404"}, true},
+		"a missing page":  {decision.Evidence{Kind: decision.EvidencePage, Ref: "page-2"}, true},
+		"a lookup down":   {decision.Evidence{Kind: decision.EvidencePage, Ref: "boom"}, false},
 	} {
 		d := *decisionFixture()
-		d.Evidence = []worklet.Evidence{c.evidence}
+		d.Evidence = []decision.Evidence{c.evidence}
 		_, err := worklet.ValidateDecision(t.Context(), d, lookup)
 		if err == nil {
 			t.Errorf("%s: accepted", name)
@@ -219,7 +104,7 @@ func TestATaskEvidenceLabelIsStoredWithoutTheKeyTheLinkSays(t *testing.T) {
 	}}
 	for _, c := range table.Cases {
 		d := *decisionFixture()
-		d.Evidence = []worklet.Evidence{{Kind: worklet.EvidenceTask, Ref: "GP-20", Label: c.Label}}
+		d.Evidence = []decision.Evidence{{Kind: decision.EvidenceTask, Ref: "GP-20", Label: c.Label}}
 		got, err := worklet.ValidateDecision(t.Context(), d, lookup)
 		if err != nil {
 			t.Fatalf("%q: refused: %v", c.Label, err)
@@ -346,7 +231,7 @@ func TestADecisionRidesOnlyTheAskAndNeverChanges(t *testing.T) {
 	// — and one that changes it, or drops it, does not.
 	changed := decisionFixture()
 	changed.Options[1].Label = "Ship Monday"
-	for name, d := range map[string]*worklet.Decision{"changed": changed, "dropped": nil} {
+	for name, d := range map[string]*decision.Decision{"changed": changed, "dropped": nil} {
 		if err := write("op-"+name, worklet.Comment{ID: "c-a", Body: "Friday?",
 			Ask: "ana", Decision: d}); !errors.Is(err, worklet.ErrInvalid) {
 			t.Errorf("an edit that %s the decision: %v", name, err)
@@ -437,12 +322,12 @@ func TestASecondAnswerToOneAskIsRefused(t *testing.T) {
 func TestTheAnswerExcerptNamesTheChoice(t *testing.T) {
 	t.Parallel()
 	answers := "c-ask"
-	wake := func(body, choice string, decision *worklet.Decision) string {
+	wake := func(body, choice string, asked *decision.Decision) string {
 		n := worklet.Wake{
 			Kind: worklet.ChangeComment,
 			Comment: &worklet.Comment{ID: "c-ans", Body: body, Answers: &answers,
 				Choice: choice},
-			AnswersDecision: decision,
+			AnswersDecision: asked,
 		}.Notify(nil)
 		if n == nil {
 			t.Fatal("an answer woke nobody")
@@ -491,16 +376,16 @@ func TestAnAskRowCarriesItsDecision(t *testing.T) {
 }
 
 // decisionFixture is a fresh well-formed decision the caller may change.
-func decisionFixture() *worklet.Decision {
-	return &worklet.Decision{
+func decisionFixture() *decision.Decision {
+	return &decision.Decision{
 		Question: "Ship on Friday or hold for the audit?",
-		Options: []worklet.DecisionOption{
+		Options: []decision.Option{
 			{ID: "ship", Label: "Ship Friday"},
 			{ID: "hold", Label: "Hold for the audit", Detail: "about a week"},
 		},
 		Recommended: "ship",
 		Rationale:   "The audit reviews last quarter's code.",
-		Role:        worklet.RoleApprover,
+		Role:        decision.RoleApprover,
 	}
 }
 
@@ -522,30 +407,4 @@ func (f fakeEvidence) PageID(_ context.Context, ref string) (string, bool, error
 	}
 	id, ok := f.pages[ref]
 	return id, ok, nil
-}
-
-// EVERY FAULT OF A DECISION IN ONE REFUSAL (ADR-0059): an asker writes a
-// refused decision again once, and a refusal naming one fault of several
-// spent that attempt on the next.
-//
-// Mutation: return from Validate at its first fault and only the question is
-// named.
-func TestEveryFaultOfADecisionIsNamedAtOnce(t *testing.T) {
-	t.Parallel()
-	d := decisionFixture()
-	d.Question = ""
-	d.Options[0].ID = "Ship"
-	d.Options[1].Label = ""
-	d.Recommended = "nope"
-	d.Role = "boss"
-	err := d.Validate()
-	if !errors.Is(err, worklet.ErrInvalid) {
-		t.Fatalf("Validate = %v, want an invalid refusal", err)
-	}
-	for _, want := range []string{"decision.question is empty", "decision.options[0].id",
-		"decision.options[1].label is empty", "decision.recommended is \"nope\"", "decision.role is \"boss\""} {
-		if !strings.Contains(worklet.Sentence(err), want) {
-			t.Errorf("the refusal %q does not name %q", worklet.Sentence(err), want)
-		}
-	}
 }

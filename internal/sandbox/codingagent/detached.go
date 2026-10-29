@@ -3,7 +3,6 @@ package codingagent
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -272,7 +271,9 @@ func (r *Runner) noteInstruction() string {
 	return ""
 }
 
-// Install prepares the box: the artefact directory and the ask shim.
+// Install prepares the box: the artefact directory every file of a run's is
+// written under ([Paths.WorkDir]), and the box's own bin directory first on
+// the run's PATH ([Paths.BinDir]).
 //
 // The CLI itself is NOT installed here — it ships in the image, which is what
 // makes a coding box a template rather than a per-run build. Environment
@@ -284,19 +285,13 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 	if _, err := box.Exec(ctx, "mkdir -p "+shellQuote(paths.BinDir()), sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("codingagent: preparing %s: %w", paths.BinDir(), err)
 	}
-	if err := box.WriteFile(ctx, paths.AskShim(), []byte(AskShim(paths.Ask()))); err != nil {
-		return fmt.Errorf("codingagent: installing the ask shim: %w", err)
-	}
-	if _, err := box.Exec(ctx, "chmod +x "+shellQuote(paths.AskShim()), sandbox.ExecOptions{}); err != nil {
-		return fmt.Errorf("codingagent: making the ask shim executable: %w", err)
-	}
 	return nil
 }
 
 // ClearArtifacts removes the previous run's markers before a reuse run.
 //
-// A reused box still carries the prior run's done marker, result, findings and
-// ask file. Without clearing them the completion poll fires immediately on the
+// A reused box still carries the prior run's done marker, result and
+// findings. Without clearing them the completion poll fires immediately on the
 // stale marker and Collect reads the old result. Its brief, system text,
 // settings and configuration go too: a run's instructions are its own — a
 // previous job's hooks name a bridge session that job's end closed. (Whatever
@@ -312,7 +307,7 @@ func (r *Runner) Install(ctx context.Context, box sandbox.Sandbox) error {
 func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error {
 	p := PathsFor(box)
 	out := r.cli.Output(p)
-	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Ask(), p.Brief(), p.System(),
+	files := []string{p.Done(), p.ExitCode(), p.Result(), p.Findings(), p.Brief(), p.System(),
 		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.OpenCodeConfig()}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
@@ -390,7 +385,7 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 			return sandbox.RunHandle{}, fmt.Errorf("codingagent: writing the brief: %w", err)
 		}
 	}
-	inner := withShimPath(r.cli.Command(req, paths, configPath), paths)
+	inner := withBoxBin(r.cli.Command(req, paths, configPath), paths)
 	script := wrapperScript(inner, out, paths)
 
 	// A LOGIN SHELL, and the -l is load-bearing: a coding CLI is commonly
@@ -399,8 +394,8 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// finds no CLI at all in exactly the images operators build.
 	//
 	// It also means the box's PATH inside the wrapper is the PROFILE's, not
-	// the environment the engine handed the process — which is why the shim
-	// directory is prepended INSIDE the script (see withShimPath) rather
+	// the environment the engine handed the process, which is why the box's
+	// bin directory is prepended INSIDE the script ([withBoxBin]) rather
 	// than exported around it: an assignment made outside would be replaced
 	// by the profile before the agent ever ran.
 	pid, err := box.StartBackground(ctx, "sh -lc "+shellQuote(script), sandbox.ExecOptions{Env: req.Env})
@@ -473,12 +468,10 @@ func withNoteInstruction(system, instruction string) string {
 	return system + "\n\n" + instruction
 }
 
-// withShimPath prepends the box's shim directory to PATH for one command.
-//
-// The shim lives under the box's own home rather than a system directory (see
-// [Paths.BinDir]), so the system text's `crewlet-ask "..."` instruction only
-// resolves if that directory is on the agent's PATH.
-func withShimPath(cmd string, paths Paths) string {
+// withBoxBin prepends the box's own bin directory ([Paths.BinDir]) to PATH for
+// one command, so an executable a setup step installed there resolves ahead of
+// the image's.
+func withBoxBin(cmd string, paths Paths) string {
 	return "PATH=" + shellQuote(paths.BinDir()) + `:"$PATH" ` + cmd
 }
 
@@ -718,13 +711,6 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		said = append(said, result.Error)
 	}
 
-	result, refusal, err = r.overlayAsk(ctx, box, result)
-	if err != nil {
-		return sandbox.Result{}, err
-	}
-	if refusal != "" {
-		refused = append(refused, refusal)
-	}
 	if len(refused) > 0 {
 		// A PIECE THAT COULD NOT BE READ IS A RUN THAT DID NOT FULLY REPORT,
 		// so it does not read as a success whatever else it said — and the
@@ -932,45 +918,4 @@ func refusedPiece(ctx context.Context, box sandbox.Sandbox, path, what string, l
 	}
 	return fmt.Sprintf("%s (%s) is %s, past the %s the engine reads back from a box whole, "+
 		"so it was not read", what, path, size, humanSize(int64(limit)))
-}
-
-// overlayAsk surfaces a question the shim recorded, if there is one, and a
-// refusal where the question file was too large to read whole.
-func (r *Runner) overlayAsk(ctx context.Context, box sandbox.Sandbox, result sandbox.Result) (sandbox.Result, string, error) {
-	blob, refusal, err := readWhole(ctx, box, PathsFor(box).Ask(), "the question the coding agent recorded")
-	if err != nil || refusal != "" {
-		// A question nobody can read whole is not one to park on: the run
-		// is not waiting for an answer to something nobody was shown.
-		return result, refusal, err
-	}
-	blob = strings.TrimSpace(blob)
-	if blob == "" {
-		return result, "", nil
-	}
-	var ask struct {
-		Question string `json:"question"`
-		To       string `json:"to"`
-		Branch   string `json:"branch"`
-	}
-	if err := json.Unmarshal([]byte(blob), &ask); err != nil {
-		// A malformed signal is not a reason to lose the result the run
-		// did produce; the run reads as finished rather than as parked.
-		log.WarnContext(ctx, "coding_agent_ask_unreadable", "agent", r.cli.Name(), "error", err.Error())
-		return result, "", nil
-	}
-	if ask.Question == "" {
-		return result, "", nil
-	}
-	result.NeedsInput = true
-	result.Question = redact.Secrets(ask.Question)
-	result.AskTo = ask.To
-	if result.AskTo == "" {
-		result.AskTo = "requester"
-	}
-	// The branch as the ask recorded it, redacted like the question: it is
-	// a word from inside the box. Whether it is a branch at all, and short
-	// enough to carry, is the coordinator's to decide for every runner
-	// alike ([sandbox.MaxBranchBytes]).
-	result.WIPBranch = redact.Secrets(strings.TrimSpace(ask.Branch))
-	return result, "", nil
 }

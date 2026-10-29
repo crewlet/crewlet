@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -62,7 +63,7 @@ type AskView struct {
 
 	// Decision is the structure the ask carries when it asked somebody to
 	// choose — see decision.go.
-	Decision *Decision `json:"decision,omitempty"`
+	Decision *decision.Decision `json:"decision,omitempty"`
 }
 
 // readAskViews resolves comment ids to the asks they are about.

@@ -159,12 +159,13 @@ type LaunchRequest struct {
 	Label string
 
 	// Ask is the addendum telling the coding agent how to get a person's
-	// answer — asked with its tools when it can go on without it, or parked
-	// with the ask shim when it cannot — with the names it may address. The
-	// ENGINE composes it, because the tools and the names are the seat's and
-	// the chart's and this package holds neither; empty adds nothing, and
-	// leaves a run that has the shim in its box and no way to know it. A
-	// standing instruction, so it rides System's channel ([buildSystem]).
+	// answer (asked with its tools when it can go on without it, or parked
+	// through `ask_and_wait` when it cannot, ADR-0068) with the names it may
+	// address. The ENGINE composes it, because the tools and the names are
+	// the seat's and the chart's and this package holds neither; empty adds
+	// nothing, and leaves a run that holds the tool with no word of when to
+	// park on it. A standing instruction, so it rides System's channel
+	// ([buildSystem]).
 	Ask string
 
 	Spec       Spec
@@ -841,8 +842,8 @@ func summarise(brief string) string {
 // it must write, because only it knows the box's path for it.
 //
 // THE RUN'S OWN TEXT FIRST, the framing after it: that text is who the model is
-// and what it answers for, and the box and the ask shim are details of where
-// it is working.
+// and what it answers for, and the box and how to ask a person are details of
+// where it is working.
 func buildSystem(req LaunchRequest) string {
 	names := slices.Collect(maps.Keys(req.MCPServers))
 	own := strings.TrimSpace(req.System)

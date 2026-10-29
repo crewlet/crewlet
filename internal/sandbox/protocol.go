@@ -286,23 +286,6 @@ type Result struct {
 	// of a run and not others — so its runs report none.
 	Turns int
 
-	// NeedsInput means the agent asked a question and stopped. Question and
-	// AskTo say what it asked and who should answer: "requester", "team",
-	// "manager", or a name.
-	NeedsInput bool
-	Question   string
-	AskTo      string
-
-	// WIPBranch is the branch the run pushed before it asked, as the ask
-	// recorded it: the name the agent gave, or the one git reported where
-	// it asked. It is what a run re-seeded on a fresh machine is told to
-	// check out ([PendingRun.Branch]), so it is carried as its own fact —
-	// never inferred from DeliveredRefs, which name pull requests as often
-	// as branches and are empty for the branch a run pushes and opens
-	// nothing for. Empty when the ask named none and git could not say,
-	// and on a run that did not ask.
-	WIPBranch string
-
 	// DeliveredRefs are the branches and pull or merge requests the run
 	// reported delivering, in its report's order: the `Delivered:` lines it
 	// wrote, or the pull-request URLs its prose holds where it named none.

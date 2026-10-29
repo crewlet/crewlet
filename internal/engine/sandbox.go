@@ -2244,13 +2244,11 @@ func auxTokensOf(s auxspend.Spent) sandbox.AuxTokens {
 
 // runPartKind is what the compactor is told a piece of a run's account IS,
 // which decides what its rewrite must keep: a report its findings, a failure
-// its cause, a question the question and its options.
+// its cause.
 func runPartKind(part sandbox.RunPart) compact.Kind {
 	switch part {
 	case sandbox.PartFailure:
 		return compact.KindToolError
-	case sandbox.PartQuestion:
-		return compact.KindQuestion
 	default:
 		return compact.KindReport
 	}

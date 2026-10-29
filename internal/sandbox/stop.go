@@ -362,11 +362,10 @@ func (c *Coordinator) LaunchStopped(turnID string) (RunStop, bool) {
 }
 
 // stoppedResult is what a run a person stopped reports: what it said up to
-// then, never a success — it did not get to say it was done — and never a
-// question, which nothing will answer. Its phase record says who stopped it
-// ([runPhase]).
+// then, never a success, since it did not get to say it was done. Its phase
+// record says who stopped it ([runPhase]), and its ending parks it on no
+// question, which nothing would answer.
 func stoppedResult(result Result) Result {
 	result.Success = false
-	result.NeedsInput, result.Question, result.AskTo = false, "", ""
 	return result
 }

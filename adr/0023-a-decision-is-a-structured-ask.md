@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/worklet`
-- **Enforced-by:** `internal/worklet.TestADecisionRidesOnlyTheAskAndNeverChanges`, `internal/worklet.TestADecisionIsValidatedField`, `internal/worklet.TestAChoiceMustNameAnOptionOfTheAskItAnswers`, `internal/engine.TestAnInformedAnswerOwesTheChatSurface`
+- **Enforced-by:** `internal/worklet.TestADecisionRidesOnlyTheAskAndNeverChanges`, `internal/decision.TestADecisionIsValidatedField`, `internal/worklet.TestAChoiceMustNameAnOptionOfTheAskItAnswers`, `internal/engine.TestAnInformedAnswerOwesTheChatSurface`
 - **Cost-when-tried:** "no decision engine" was read as "no decision structure". A question that needed somebody to choose travelled as prose on an `ask` comment — the options somewhere in the body, the recommendation a sentence among others, the evidence links a reader went looking for — and the answer was prose the asker then had to map back onto the options it had in mind. The dashboard design dropped its "Also posts to Slack" line because nothing could keep it; when the line came back as `inform`, the tracker accepted it from an operator, for a surface the company did not run and for a channel nothing declared, and a second answer to one ask landed beside the first, claiming to close a question the first had already closed.
 - **Tag-status:** unreleased
 
@@ -13,7 +13,10 @@ carries a `Decision`** — a question, two to six options, what the asker
 recommends and why, the evidence it looked at, the role the person is asked in
 and, optionally, the chat channel the asker will report the outcome in — and
 the answer is a comment that names **one of those options by id**. The type,
-its caps and its validation are `internal/worklet/decision.go`; the writing
+its caps and its structural validation are `internal/decision`, shared with the
+question a coding run parks on
+([ADR-0068](0068-a-run-asks-a-person-in-the-shape-a-decision-is-asked.md)); the
+checks that need the tracker are `internal/worklet/decision.go`; the writing
 tools are `comment_on_work_item` and `create_work_item` in `agent/builtin`,
 the same tools a seat, an operator's assistant and the dashboard's buttons all
 reach.

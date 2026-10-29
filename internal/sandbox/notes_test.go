@@ -294,9 +294,8 @@ func TestAParkedRunsEndingNeverExpiresTheNotesItsJobsBriefCarried(t *testing.T) 
 				t.Fatalf("Launch: %v", err)
 			}
 			rig.suspend("t1")
-			if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
-				Question: "which branch?", Audience: "requester", Branch: "wip/t1", AskedAt: rig.now,
-			}); err != nil {
+			rig.ask("t1", Ask{Question: "which branch?", To: AskToRequester, Branch: "wip/t1"})
+			if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{AskedAt: rig.now}); err != nil {
 				t.Fatalf("MarkAwaiting: %v", err)
 			}
 			forget(t, rig.pending)

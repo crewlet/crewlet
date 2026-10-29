@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 )
@@ -113,7 +114,7 @@ func Owes(metadata map[string]string) string {
 	if Reason(metadata[MetaVia]) != ReasonAnswered {
 		return ""
 	}
-	var inform Inform
+	var inform decision.Inform
 	if raw := metadata[MetaInform]; raw == "" ||
 		json.Unmarshal([]byte(raw), &inform) != nil || !inform.Surface.Valid() {
 		return ""
@@ -383,7 +384,7 @@ func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 func promptDecision(b *strings.Builder, meta map[string]string, reason Reason) {
 	switch reason {
 	case ReasonAsked:
-		var decision Decision
+		var decision decision.Decision
 		raw := meta[MetaDecision]
 		if raw == "" || json.Unmarshal([]byte(raw), &decision) != nil ||
 			len(decision.Options) == 0 {
@@ -396,14 +397,14 @@ func promptDecision(b *strings.Builder, meta map[string]string, reason Reason) {
 }
 
 // promptAskedDecision is the decision block the person asked reads.
-func promptAskedDecision(b *strings.Builder, meta map[string]string, d Decision) {
+func promptAskedDecision(b *strings.Builder, meta map[string]string, d decision.Decision) {
 	b.WriteString("\n## The decision you are asked for\n")
 	b.WriteString("**Question:** " + d.Question + "\n")
 	switch d.Role {
-	case RoleApprover:
+	case decision.RoleApprover:
 		b.WriteString("**You are asked as:** approver — your answer IS the " +
 			"decision.\n")
-	case RoleContributor:
+	case decision.RoleContributor:
 		b.WriteString("**You are asked as:** contributor — your answer is an " +
 			"input to a decision somebody else makes.\n")
 	}
@@ -473,10 +474,10 @@ type answeringCall struct {
 // escalation guidance tells a seat to end its turn blocked on the branch it
 // asked about, and this wake is what that branch was waiting for.
 func promptAnsweredDecision(b *strings.Builder, meta map[string]string) {
-	var option DecisionOption
+	var option decision.Option
 	chose := meta[MetaChoice] != "" &&
 		json.Unmarshal([]byte(meta[MetaChoice]), &option) == nil && option.ID != ""
-	var inform Inform
+	var inform decision.Inform
 	informs := meta[MetaInform] != "" &&
 		json.Unmarshal([]byte(meta[MetaInform]), &inform) == nil && inform.Channel != ""
 	if !chose && !informs && meta[MetaQuestion] == "" {

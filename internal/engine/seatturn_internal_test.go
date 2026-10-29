@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
 // A PERSON'S ANSWER ARRIVING MID-TURN IS RECORDED AT ONCE AND RESUMED AS THE
@@ -41,7 +42,9 @@ func TestAnAnswerArrivingMidTurnIsResumedWhenTheTurnEnds(t *testing.T) {
 		t.Fatalf("the premise: the seat's own conditions refuse a resume (%s)", refusal.Reason)
 	}
 	r.seedRun(t, e, "t1")
-	r.runner.Finish(sandbox.Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
+	sandboxtest.Ask(t, sandbox.NewCoordStore(e.backends.Fleet), "t1",
+		sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	r.runner.Finish(sandbox.Result{})
 	eventually(t, "the run to park on its question", func() bool {
 		return slices.Contains(sandbox.Awaiting, r.run(t, e, "t1").Status)
 	})

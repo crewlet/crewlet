@@ -307,9 +307,8 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		System:      req.System,
 		Brief:       req.Brief,
 		// HOW TO WAIT ON A PERSON, with the names the chart gives this
-		// seat, from the pinned epoch — see [askBrief]. Without it the box
-		// carries the ask shim and the collection reads what it writes,
-		// but nothing tells the run either exists.
+		// seat, from the pinned epoch (see [askBrief]). Without it the run
+		// holds `ask_and_wait` and nothing tells it when to park on it.
 		Ask:   askBrief(company.Org, l.seat),
 		Task:  l.turn.Task,
 		Label: l.turn.Task,

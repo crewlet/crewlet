@@ -167,8 +167,8 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 	}
 
 	// The stand-in records each argument on a line of its own, and what it
-	// read on stdin, and prints a result, from the shim directory the wrapper
-	// puts first on PATH.
+	// read on stdin, and prints a result, from the box's own bin directory,
+	// which the wrapper puts first on PATH.
 	argv, stdin := p.WorkDir()+"/argv", p.WorkDir()+"/stdin"
 	fake := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > '" + argv + "'\n" +
 		"cat > '" + stdin + "'\n" +

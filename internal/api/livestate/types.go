@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
@@ -503,9 +504,14 @@ type SandboxEntry struct {
 
 	StartedAt string `json:"started_at"`
 
-	// Question and Audience appear once a run pauses on a clarification.
-	Question string `json:"question,omitempty"`
-	Audience string `json:"audience,omitempty"`
+	// Question and Audience appear once a run pauses on a clarification,
+	// with the question's Markdown context and the choice it offers where
+	// it has them (ADR-0068). The question and both of those are the run's
+	// body, withheld together ([SandboxEntry.For]).
+	Question        string             `json:"question,omitempty"`
+	QuestionContext string             `json:"question_context,omitempty"`
+	Decision        *decision.Decision `json:"decision,omitempty"`
+	Audience        string             `json:"audience,omitempty"`
 
 	// AudienceHandles are the seats the parked question may be answered by
 	// ([sandbox.PendingRun.AudienceHandles]), which is who is shown the

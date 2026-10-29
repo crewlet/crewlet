@@ -130,7 +130,18 @@ func TestABoxThatIsOnlyUnreachableIsNoLoss(t *testing.T) {
 // coordinator.
 func loseAndClaim(t *testing.T, rig *coordRig, partial Result) error {
 	t.Helper()
+	return askLoseAndClaim(t, rig, nil, partial)
+}
+
+// askLoseAndClaim is [loseAndClaim] for a job that asked a person something
+// before it was lost: the ask is recorded on its row while it runs, as the
+// run's ask tool records it, and nil asks nothing.
+func askLoseAndClaim(t *testing.T, rig *coordRig, asked *Ask, partial Result) error {
+	t.Helper()
 	rig.launch("t1")
+	if asked != nil {
+		rig.ask("t1", *asked)
+	}
 	rig.runner.Lose(partial)
 	if fired := rig.tick(); fired != 1 {
 		t.Fatalf("announced %d completions for a lost job, want 1", fired)
@@ -241,8 +252,8 @@ func TestALostJobCountsTheRoundsLossesBeforeIt(t *testing.T) {
 func TestALostJobThatHadAskedIsParkedOnItsQuestion(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
-	if err := loseAndClaim(t, rig, Result{NeedsInput: true, Question: "which branch?",
-		AskTo: "requester"}); err != nil {
+	asked := whichBranch()
+	if err := askLoseAndClaim(t, rig, &asked, Result{}); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}
 	if got := rig.get("t1"); got.Status != StatusAwaiting || got.Question != "which branch?" {

@@ -438,7 +438,7 @@ func TestTheClaudeCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 // an agent that would not do the work. The box is the boundary instead, the
 // same stance claude-code takes with --permission-mode bypassPermissions.
 // `question` alone is denied: it asks a person through a form a headless run
-// cancels, and a run with something to ask has crewlet-ask.
+// cancels, and a run with something to ask asks through its bridge's tool.
 func TestTheOpenCodeConfigLeavesNoPermissionGateForNobodyToAnswer(t *testing.T) {
 	t.Parallel()
 	cfg, body := writeOpenCodeConfig(t, sandbox.RunRequest{

@@ -254,6 +254,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// And its question is answered, or was never asked — either way a
 		// reply arriving now belongs to the new job, not the old one.
 		existing.Question, existing.Audience = "", ""
+		existing.QuestionContext, existing.Decision = "", nil
 		// And whom it was put to: the audience is the question's, and a
 		// question that is gone waits on nobody.
 		existing.AudienceHandles, existing.AudienceFallback = nil, false
@@ -436,11 +437,8 @@ func (s *CoordStore) MarkAwaiting(ctx context.Context, turnID string, q Clarific
 	}
 	_, _, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
 		run.Status = StatusAwaiting
-		run.Question = q.Question
-		run.Audience = q.Audience
 		run.AudienceHandles = append([]string(nil), q.Answerers.Handles...)
 		run.AudienceFallback = q.Answerers.Fallback
-		run.Branch = q.Branch
 		run.SessionID = q.SessionID
 		run.ParkedInputTokens, run.ParkedOutputTokens = q.InputTokens, q.OutputTokens
 		run.ParkedCacheReadTokens, run.ParkedCacheWriteTokens = q.CacheReadTokens, q.CacheWriteTokens
@@ -965,6 +963,44 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 		return true
 	})
 	return won, err
+}
+
+// RecordAsk records the question a running job asked. See the contract on
+// [PendingStore].
+//
+// THROUGH THE LIVE WRITE, so a run whose ending was decided is not given a
+// question it can never be parked on.
+func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask Ask) (AskOutcome, error) {
+	if launch == "" {
+		return AskNotRunning, nil
+	}
+	if err := ask.Validate(); err != nil {
+		return "", fmt.Errorf("sandbox: recording the question run %s asked: %w", turnID, err)
+	}
+	ask = ask.Redacted()
+	outcome := AskNotRunning
+	_, _, err := s.mutateLive(ctx, turnID, func(run *PendingRun) bool {
+		switch {
+		case run.LaunchID != launch ||
+			(run.Status != StatusLaunching && run.Status != StatusRunning):
+			outcome = AskNotRunning
+			return false
+		case run.asked():
+			outcome = AskAlreadyAsked
+			return false
+		}
+		run.Question, run.QuestionContext = ask.Question, ask.Context
+		run.Decision, run.Audience, run.Branch = ask.Decision, ask.To, ask.Branch
+		outcome = AskRecorded
+		return true
+	})
+	if errors.Is(err, ErrRunEnding) {
+		return AskNotRunning, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return outcome, nil
 }
 
 // appendBounded adds one call and drops from the MIDDLE past the cap.

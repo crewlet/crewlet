@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
 // AN ANSWER BY TURN IS SPENT ONCE, AND SAID ONCE, WHATEVER ITS RUN DID NEXT.
@@ -167,7 +168,8 @@ func (w *spentWorld) parked(t *testing.T, h *spentHolder) sandbox.PendingRun {
 	if _, err := w.store.MarkSuspended(ctx, "t1", sandbox.Suspension{State: []byte(`{"messages":[]}`)}); err != nil {
 		t.Fatalf("MarkSuspended: %v", err)
 	}
-	w.runner.Finish(sandbox.Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
+	sandboxtest.Ask(t, w.store, "t1", sandbox.Ask{Question: "which branch?", To: sandbox.AskToRequester})
+	w.runner.Finish(sandbox.Result{})
 	complete(t, h.coordinator, w.store, "t1")
 	run := mustRun(t, w.store, "t1")
 	if run.Status != sandbox.StatusAwaiting {

@@ -1373,6 +1373,11 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.SandboxRunComplete
 		case found && latest.LaunchID == run.LaunchID:
 			run.BridgeCalls, run.BridgeCallsElided = latest.BridgeCalls, latest.BridgeCallsElided
 		}
+		// AND NO QUESTION, whatever it asked on its way: a run that is being
+		// stopped is not one a person's answer could continue
+		// ([endedAtDeadline]), so it is collected and resumed like any
+		// ending, with nothing parked.
+		run = withoutQuestion(run)
 	}
 
 	// Carried on the claimed row from here, so that handing the claim back
@@ -1389,7 +1394,7 @@ func (c *Coordinator) completeAdmitted(adm admitted, ev types.SandboxRunComplete
 	run.Charged, run.CompanyCharged = c.charge(ctx, run, result)
 	run.Launch = c.publishPhase(ctx, run, result)
 
-	if result.NeedsInput {
+	if run.asked() {
 		return c.park(ctx, run, result)
 	}
 
@@ -1699,14 +1704,14 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 }
 
 // endedAtDeadline is what a run its turn's cap ended reports: what it said up
-// to then, marked as cut off. Never a success, whatever it had written — it
-// did not get to say it was done — and never a question: a run that is being
-// stopped is not one a person's answer could continue.
+// to then, marked as cut off. Never a success, whatever it had written, since
+// it did not get to say it was done; and its collection parks it on no
+// question ([withoutQuestion]): a run that is being stopped is not one a
+// person's answer could continue.
 func endedAtDeadline(result Result, deadline time.Time) Result {
 	why := fmt.Sprintf("the run was ended at its turn's wall-clock cap, %s, before it "+
 		"finished; what it had done by then is collected", deadline.UTC().Format(time.RFC3339))
 	result.Success = false
-	result.NeedsInput, result.Question, result.AskTo = false, "", ""
 	if result.Error != "" {
 		why += ". It had reported: " + result.Error
 	}
@@ -1881,16 +1886,16 @@ func runPhase(run PendingRun, facts LaunchRecord, result Result, collected time.
 		// ([Coordinator.StopSeat]), and a record marked failed would list
 		// it with the runs that broke. Who stopped it is the note.
 		rec.Notes = "stopped by " + run.Stop.By + " before it finished"
-	case run.Lost != nil && !result.NeedsInput:
+	case run.Lost != nil && !run.asked():
 		// LOST, NOT FAILED: its host cut it off mid-step ([JobLoss]), which
 		// says nothing about the run, and its round is carried on. What
 		// happened is the note.
 		rec.Notes = lostNote(*run.Lost)
-	case result.NeedsInput:
+	case run.asked():
 		// STOPPED, NOT FAILED: the run is parked on a question and will
 		// be resumed by its answer. The question is the note a reader
-		// needs beside the record.
-		rec.Notes = "stopped to ask: " + redact.Secrets(result.Question)
+		// needs beside the record, redacted where the ask was recorded.
+		rec.Notes = "stopped to ask: " + run.Question
 	case !result.Success:
 		rec.Failed = true
 		rec.Error = redact.Secrets(result.Error)
@@ -1944,7 +1949,8 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	announcement := types.SandboxClarificationRequested{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 		TurnID: run.TurnID, WorkKey: run.WorkKey, SandboxID: run.SandboxID,
-		Question: redact.Secrets(result.Question), Audience: result.AskTo,
+		Question: run.Question, QuestionContext: run.QuestionContext, Decision: run.Decision,
+		Audience: run.Audience,
 		// THE IDENTITY, like the launch announcement: this event is
 		// display, and the durable thread is what a person reading the
 		// feed means by the run's conversation.
@@ -1968,11 +1974,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	}
 
 	if err := c.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
-		Question: result.Question, Audience: result.AskTo,
-		// THE BRANCH THE ASK RECORDED, never the run's first delivered
-		// ref: that was a pull request's URL whenever the run opened one,
-		// and a re-seeded run was told to check out the URL.
-		Branch: result.WIPBranch, SessionID: result.SessionID,
+		SessionID:   result.SessionID,
 		InputTokens: result.InputTokens, OutputTokens: result.OutputTokens,
 		CacheReadTokens: result.CacheReadTokens, CacheWriteTokens: result.CacheWriteTokens,
 		// And what condensing this collection cost, paid by the same resume.
@@ -1981,7 +1983,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		// the label is the coding agent's own words, and "what is waiting
 		// on me" is a question nobody could answer while it was all the
 		// row said. See [PendingRun.AudienceHandles].
-		Answerers: c.audience.ResolveAudience(run, result.AskTo),
+		Answerers: c.audience.ResolveAudience(run, run.Audience),
 		AskedAt:   asked,
 	}); err != nil {
 		// THE WAIT DID NOT LAND, so this run is not parked and this turn
@@ -2027,7 +2029,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		}
 	}
 	log.InfoContext(ctx, "sandbox_run_awaiting_clarification",
-		"turn_id", run.TurnID, "audience", result.AskTo)
+		"turn_id", run.TurnID, "audience", run.Audience)
 	return nil
 }
 
@@ -2289,6 +2291,7 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 	answered := func(run PendingRun, outcome types.AnswerOutcome) {
 		c.announceAnswered(ctx, run, types.AnswerViaOperator, outcome, answerer{
 			by: given.AnsweredBy, kind: given.AnsweredByKind, operatorID: given.OperatorID,
+			choice: given.Choice, said: redact.Secrets(strings.TrimSpace(given.Answer)),
 		})
 	}
 	if given.LaunchID == "" {
@@ -2375,7 +2378,18 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 			answered(run, types.AnswerNotAwaiting)
 			return AnswerNotMine, nil
 		}
-		words, answer := answerGivenOf(given, trigger, c.now())
+		words, answer, err := answerGivenOf(run, given, trigger, c.now())
+		if err != nil {
+			// A CHOICE THE QUESTION DOES NOT OFFER, which `answer_run`
+			// checked against this same question before it delivered:
+			// spent and said, never handed to the run as an option
+			// nobody offered.
+			log.ErrorContext(ctx, "sandbox_answer_choice_unoffered",
+				"turn_id", given.TurnID, "launch_id", given.LaunchID, "choice", given.Choice,
+				"answered_by", given.AnsweredBy, "error", err.Error())
+			answered(run, types.AnswerNotAwaiting)
+			return AnswerNotMine, nil
+		}
 		recorded, won, err := c.record(ctx, run, words, answer)
 		if err != nil {
 			// THE RECORD MAY HAVE LANDED — the chat route's ambiguous case,
@@ -2492,19 +2506,26 @@ func declinedCopy(declined []string, delivery string) bool {
 }
 
 // answerGivenOf is what recording an answer by turn writes: the words the seal
-// carries — the answer as the person gave it, and who gave it as iam.ActorFor
-// named them, author, kind and credential — and the record they are sealed
-// onto ([Coordinator.record]), with the one delivery the answer arrived in —
-// the [types.SandboxAnswerGiven] event itself, carried so a copy of it can be
-// handed back to the seat should the answer be let go of.
-func answerGivenOf(given types.SandboxAnswerGiven, trigger *events.Event, now time.Time,
-) (AnswerWords, RecordedAnswer) {
+// carries (the answer as the run reads it, the option chosen from the run's own
+// question and the person's words, [AnswerText], and who gave it as
+// iam.ActorFor named them, author, kind and credential) and the record they are
+// sealed onto ([Coordinator.record]), with the one delivery the answer arrived
+// in: the [types.SandboxAnswerGiven] event itself, carried so a copy of it can
+// be handed back to the seat should the answer be let go of. An error is a
+// choice run's question does not offer.
+func answerGivenOf(run PendingRun, given types.SandboxAnswerGiven, trigger *events.Event,
+	now time.Time,
+) (AnswerWords, RecordedAnswer, error) {
+	if _, err := AnswerText(run.Decision, given.Choice, given.Answer); err != nil {
+		return AnswerWords{}, RecordedAnswer{}, err
+	}
 	words := AnswerWords{
 		// Redacted HERE, as a chat reply is: it is sealed onto the run's
 		// row and handed as it is to the run's coding CLI, whose box and
 		// session keep it.
-		Text: redact.Secrets(given.Answer), Via: types.AnswerViaOperator,
-		By: given.AnsweredBy, ByKind: given.AnsweredByKind, OperatorID: given.OperatorID,
+		Text: redact.Secrets(strings.TrimSpace(given.Answer)), Choice: given.Choice,
+		Via: types.AnswerViaOperator,
+		By:  given.AnsweredBy, ByKind: given.AnsweredByKind, OperatorID: given.OperatorID,
 	}
 	answer := RecordedAnswer{
 		EventIDs: []string{trigger.ID.String()}, PostedAt: trigger.Timestamp, RecordedAt: now,
@@ -2515,10 +2536,10 @@ func answerGivenOf(given types.SandboxAnswerGiven, trigger *events.Event, now ti
 		// text, and an event that cannot be carried costs only the copy a
 		// let-go would hand back.
 		log.Warn("sandbox_answer_event_unencodable", "event_id", trigger.ID.String(), "error", err.Error())
-		return words, answer
+		return words, answer, nil
 	}
 	answer.Events = []json.RawMessage{raw}
-	return words, answer
+	return words, answer, nil
 }
 
 // answeredAs is what a settled answer became, from what the resume left the
@@ -2532,9 +2553,12 @@ func answeredAs(disposition AnswerDisposition) types.AnswerOutcome {
 }
 
 // answerer is who gave an answer, in the three halves iam.ActorFor makes of a
-// principal — see [types.SandboxRunAnswered.AnsweredBy].
+// principal (see [types.SandboxRunAnswered.AnsweredBy]), and what they
+// answered: the option chosen, by id, and their own words, which the answer's
+// record announces beside the question they answer.
 type answerer struct {
 	by, kind, operatorID string
+	choice, said         string
 }
 
 // chatAnswerer is who a chat reply came from: the sender as the transport's
@@ -2561,6 +2585,16 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 		TurnID: run.TurnID, WorkKey: run.WorkKey, WorkItem: run.WorkItem,
 		Via: via, Outcome: outcome,
 		AnsweredBy: by.by, AnsweredByKind: by.kind, OperatorID: by.operatorID,
+		// THE QUESTION AND ITS ANSWER, which the run's row forgets once the
+		// run moves on: this record is the one account of what a person was
+		// asked and what they chose that outlives the run, and a person's
+		// answered decisions read it from the event log (ADR-0068).
+		LaunchID: run.LaunchID, Question: run.Question, QuestionContext: run.QuestionContext,
+		Decision: run.Decision, AudienceHandles: slices.Clone(run.AudienceHandles),
+		Choice: by.choice, Answer: by.said,
+	}
+	if !run.AskedAt.IsZero() {
+		payload.AskedAt = run.AskedAt.UTC()
 	}
 	ev := events.New(payload, events.TraceContext{TraceID: run.TraceID, ParentSpanID: run.SpanID})
 	ev.Source = run.Role
@@ -4700,8 +4734,19 @@ type AskedRun struct {
 // askedRun is what run's recorded answer resumes it with: the words its seal
 // opened to ([AnswerSeal.Open]), never anything else on the row about them.
 func askedRun(run PendingRun, answer AnswerWords) *AskedRun {
+	text, err := AnswerText(run.Decision, answer.Choice, answer.Text)
+	if err != nil {
+		// UNREACHABLE: a choice is checked against the question it answers
+		// before it is recorded, and a run asks a new question only under a
+		// new job, which no answer of the old one opens on. Said, and the
+		// run handed the words it was given rather than a choice nobody
+		// offered.
+		log.Error("sandbox_answer_choice_unread", "turn_id", run.TurnID,
+			"launch_id", run.LaunchID, "choice", answer.Choice, "error", err.Error())
+		text = answer.Text
+	}
 	return &AskedRun{
-		Question: redact.Secrets(run.Question), Answer: redact.Secrets(answer.Text),
+		Question: redact.Secrets(run.Question), Answer: redact.Secrets(text),
 		By: answer.attribution(), Branch: run.Branch, SessionID: run.SessionID,
 		BoxKept: run.SandboxID != "",
 	}

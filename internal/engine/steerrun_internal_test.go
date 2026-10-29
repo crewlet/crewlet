@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
 )
 
 // A person's note to a turn whose coding run is out, through the real turn: the
@@ -578,8 +579,9 @@ func TestAParkedRunHoldsItsNotesForWhatResumesIt(t *testing.T) {
 		CodingAgent: "claude-code", PauseTTLSec: 1800}, sandbox.Fence{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkAwaiting(ctx, "run-1", sandbox.Clarification{Question: "which branch?",
-		Audience: "requester", Branch: "wip/run-1", AskedAt: time.Now().UTC()}); err != nil {
+	sandboxtest.Ask(t, store, "run-1", sandbox.Ask{Question: "which branch?",
+		To: sandbox.AskToRequester, Branch: "wip/run-1"})
+	if err := store.MarkAwaiting(ctx, "run-1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
 	filed, err := runs.File(ctx, "run-1", steer.Note{ID: "n-parked", Text: "and tag it", By: "founder"})

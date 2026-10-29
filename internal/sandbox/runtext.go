@@ -30,11 +30,12 @@ import (
 //
 // THE WHOLE RECORD FITS, and this is its arithmetic. The record's variable
 // text is the report, the failure detail and the transcript (each at most
-// this), the question in its notes ([MaxQuestionBytes]) and the delivered
-// refs ([MaxDeliveredRefBytes]); everything else on it is identifiers and
-// counts, a few KiB. JSON can grow text six-fold — a control byte becomes
-// \u00XX, `<`, `>` and `&` become \u003c and its kin, an invalid byte becomes
-// \ufffd — so the worst case is (3 × 256 + 16 + 16) KiB × 6, about 4.7 MiB,
+// this), the question in its notes (one sentence, [decision.MaxQuestion]
+// bytes) and the delivered refs ([MaxDeliveredRefBytes]); everything else on
+// it is identifiers and counts, a few KiB. JSON can grow text six-fold (a
+// control byte becomes \u00XX, `<`, `>` and `&` become \u003c and its kin,
+// an invalid byte becomes \ufffd), so the worst case is (3 × 256 + 16 + 1)
+// KiB × 6, about 4.6 MiB,
 // with the ceiling's other 3 MiB to spare. A field added to the record that
 // carries text a box wrote needs its own bound and a line here, or this
 // promise is no longer one.
@@ -225,39 +226,15 @@ const (
 	// PartFailure is [Result.Error]: why the run did not finish — its exit
 	// status, its CLI's own error, and what it printed to stderr.
 	PartFailure RunPart = "failure"
-	// PartQuestion is [Result.Question]: what the run stopped to ask a
-	// person.
-	PartQuestion RunPart = "question"
 )
 
-// RunParts is every part a [Condenser] can be asked about.
-var RunParts = []RunPart{PartReport, PartFailure, PartQuestion}
+// RunParts is every part a [Condenser] can be asked about. A run's question
+// is none of them: it is asked through a tool that holds it to its bounds
+// before it is recorded ([Ask.Validate]), so there is nothing to condense.
+var RunParts = []RunPart{PartReport, PartFailure}
 
 // Valid reports whether the part is one this package names.
 func (p RunPart) Valid() bool { return slices.Contains(RunParts, p) }
-
-// MaxQuestionBytes bounds the question a run parks on.
-//
-// SIZED TO WHERE IT TRAVELS, and it travels further than anything else a run
-// writes: it is the note on the run's phase record, a field of the park's
-// announcement, a field of the run's coordination row — read and written whole
-// on every status flip and every listing of active runs for as long as it
-// waits — the banner a person answers it from, the operator's `answer_run`
-// reply, and, once answered, the prompt of the run that carries the work on:
-// the asking run's next message in its own CLI session, or a fresh run's
-// brief, which that run's CLI re-sends with every request it makes from then
-// on. 16 KiB is about four thousand tokens: a page of prose, room for a
-// question, its context and its options with plenty to spare. A question
-// longer than a page is the report put in the wrong place — the report has
-// 256 KiB of its own — and the shim's own route already stops near 128 KiB,
-// the most one argument can carry. Past it the question is condensed by the
-// seat's auxiliary model, never cut.
-//
-// AN ANSWER BY TURN IS HELD TO THE SAME PAGE
-// ([github.com/crewlet/crewlet/internal/agent/builtin.MaxRunAnswerBytes]): it
-// rides beside the question, on the row until the run is carried on and in
-// that prompt after it, so a bound changed here moves that one with it.
-const MaxQuestionBytes = 16 << 10
 
 // MaxDeliveredRefBytes bounds the branches and pull requests a run's record
 // lists as delivered.
@@ -273,22 +250,22 @@ const MaxQuestionBytes = 16 << 10
 // rather than dropped unsaid.
 const MaxDeliveredRefBytes = 16 << 10
 
-// MaxBranchBytes bounds the branch a parked run records with its question
-// ([Result.WIPBranch], [PendingRun.Branch]).
+// MaxBranchBytes bounds the branch a run names with its question
+// ([Ask.Branch], [PendingRun.Branch]).
 //
 // SIZED TO WHERE IT TRAVELS AND TO WHAT A BRANCH IS. It rides the run's
-// coordination row beside the question ([MaxQuestionBytes]) — read and written
+// coordination row beside the question ([MaxAskContextBytes]), read and written
 // whole on every status flip and every listing of active runs — and, where the
 // asking run's own session cannot be continued, the brief of the fresh run that
 // carries the work on from it, which that run's CLI re-sends with every request
 // it makes. Git keeps a branch as a path under refs/heads, every part of which
 // a filesystem holds to 255 bytes, and a work-in-progress branch is a few
 // parts at most: 1 KiB is four parts at their longest, past any name a person
-// or an agent gives one, and a sixteenth of the question it is parked beside.
+// or an agent gives one, and a sixteenth of the context it is parked beside.
 //
-// A BRANCH IS AN IDENTIFIER, so one past it is NOT RECORDED rather than cut
-// ([fitBranch]): a shortened branch names nothing a fresh machine could check
-// out.
+// A BRANCH IS AN IDENTIFIER, so one past it is REFUSED to the run that named
+// it rather than cut ([Ask.Validate]): a shortened branch names nothing a
+// fresh machine could check out.
 const MaxBranchBytes = 1 << 10
 
 // MaxCondenseBytes is the most text one [Condenser] call reads: what the
@@ -304,9 +281,9 @@ const MaxCondenseBytes = 2 << 20
 
 // failureReserve is what the coordinator may itself put in front of a
 // runner's failure detail before condensing it, held back from what a runner
-// may compose: the sentence saying a question nobody could be asked
-// ([questionRefusal]) and its separator. A KiB is several times that — a
-// test holds the refusal at its longest to half of it — and out of two MiB it
+// may compose: the sentence saying the run was ended at its turn's wall-clock
+// cap and its separator ([endedAtDeadline]). A KiB is several times that (a
+// test holds the sentence to half of it), and out of two MiB it
 // costs the error stream's share nothing a reader would miss, while leaving
 // the sentence room to be reworded.
 //
@@ -366,8 +343,7 @@ type Condenser interface {
 // already trusts no runner to have redacted what it hands back (see
 // [runPhase]). Bounded in a runner, a runner that forgot the bound would
 // publish an unbounded transcript, and the record carrying the run's only
-// spend would be refused whole. And THE BRANCH a question was asked with, for
-// the run's row rather than its record ([fitBranch]).
+// spend would be refused whole.
 //
 // TWO HALVES, because a run's box and the seat its result is fitted for need
 // not be on one node ([BoxReader]). [boundBox] is the half that reads no model
@@ -419,15 +395,14 @@ const MaxRunEventBytes = 16 << 10
 // arithmetic is the record's own and fits whatever the text.
 var BoxReadCarries = []int{MaxCondenseBytes, MaxRunTextBytes}
 
-// CarriedResult is result with its report, failure and question each held to
-// budget by whole lines, the note saying so counted inside it — a report and
-// a question keeping their start, a failure both its ends ([keepLines]) — for
-// a reply between nodes ([BoxReadCarries]).
+// CarriedResult is result with its report and failure each held to budget by
+// whole lines, the note saying so counted inside it (a report keeping its
+// start, a failure both its ends, [keepLines]), for a reply between nodes
+// ([BoxReadCarries]).
 func CarriedResult(result Result, budget int) Result {
 	why := fmt.Sprintf("past the %d KiB a box's host sends back of it", budget>>10)
 	result.Text = carriedPart(PartReport, result.Text, budget, why)
 	result.Error = carriedPart(PartFailure, result.Error, budget, why)
-	result.Question = carriedPart(PartQuestion, result.Question, budget, why)
 	return result
 }
 
@@ -442,69 +417,16 @@ func carriedPart(part RunPart, text string, budget int, why string) string {
 }
 
 // fitText is the half of [Coordinator.fitResult] a model may write: the
-// question, the branch it was asked with, the report and the failure, each
-// held to its bound and condensed past it by the seat's auxiliary model.
+// report and the failure, each held to its bound and condensed past it by the
+// seat's auxiliary model.
 func (c *Coordinator) fitText(ctx context.Context, run PendingRun, result Result) Result {
 	// THIS COLLECTION'S OWN, counted from nothing: the field is the
 	// coordinator's, and a runner that set it would be charging the turn
 	// for a rewrite nobody made.
 	result.Condensed = AuxTokens{}
-	// THE QUESTION FIRST, because a question nobody can be asked becomes
-	// part of the failure — fitted after it, the refusal rode past the
-	// failure's bound.
-	if result.NeedsInput {
-		result = c.fitQuestion(ctx, run, result)
-	}
-	result.WIPBranch = fitBranch(ctx, run, result.WIPBranch)
 	result.Text = c.fitPart(ctx, run, PartReport, result.Text, MaxRunTextBytes, &result.Condensed)
 	result.Error = c.fitPart(ctx, run, PartFailure, result.Error, MaxRunTextBytes, &result.Condensed)
 	return result
-}
-
-// fitQuestion holds a question to [MaxQuestionBytes]: condensed past it, and
-// where no model can condense it, whole lines from its start — a question is
-// read from the top, like a report — with the rest said.
-//
-// A QUESTION NO LINE OF WHICH FITS IS NOT ASKED. Its first line alone is past
-// the bound, so whole lines leave nobody anything to answer, and a fragment
-// of it read as the question is a question the agent never asked. The run is
-// not parked on it: it resumes as not succeeded, saying why, and the executor
-// can ask the coding agent again for a question a person can read.
-func (c *Coordinator) fitQuestion(ctx context.Context, run PendingRun, result Result) Result {
-	question := result.Question
-	if len(question) <= MaxQuestionBytes {
-		return result
-	}
-	if rewritten, ok := c.condensed(ctx, run, PartQuestion, question, MaxQuestionBytes,
-		&result.Condensed); ok {
-		result.Question = rewritten
-		return result
-	}
-	if first, _, _ := strings.Cut(question, "\n"); len(first)+1 <= MaxQuestionBytes {
-		result.Question = wholeLines(PartQuestion, question, MaxQuestionBytes)
-		return result
-	}
-	refusal := questionRefusal(len(question))
-	log.WarnContext(ctx, "sandbox_question_not_asked", "turn_id", run.TurnID,
-		"launch_id", run.LaunchID, "bytes", len(question))
-	// The branch goes with the ask it was recorded by: nothing parks.
-	result.NeedsInput, result.Question, result.AskTo, result.WIPBranch = false, "", "", ""
-	result.Success = false
-	if result.Error == "" {
-		result.Error = refusal
-	} else {
-		result.Error = refusal + ":\n" + result.Error
-	}
-	return result
-}
-
-// questionRefusal is the sentence a failure opens with when its question
-// could not be asked: the one thing the coordinator itself puts in front of a
-// runner's failure, which [failureReserve] holds room for.
-func questionRefusal(bytes int) string {
-	return fmt.Sprintf("the question the coding agent asked is %s with no line break in its "+
-		"first %d KiB, past what a question carries, and no model could condense it, so nobody "+
-		"was asked it", kib(bytes), MaxQuestionBytes>>10)
 }
 
 // boundRefs is a run's delivered refs, redacted, deduplicated in the order
@@ -536,29 +458,6 @@ func boundRefs(refs []string) ([]string, int) {
 		kept = append(kept, ref)
 	}
 	return kept, left
-}
-
-// fitBranch is the branch a run recorded with its question, redacted, or ""
-// where it is not one to hand on: past [MaxBranchBytes], or a name git would
-// refuse ([ValidBranch]) — which a credential the redaction replaced always is.
-//
-// DROPPED RATHER THAN CUT OR MENDED, and said in the log. Without a branch the
-// answer's text tells a re-seeded run in general terms to check out the branch
-// the work was pushed to, which is true; with a wrong one it names a branch to
-// check out that does not exist. Here rather than in a runner, for the reason
-// the transcript's bound is ([Coordinator.fitResult]): this is where every
-// collected result enters, whichever runner read it.
-func fitBranch(ctx context.Context, run PendingRun, branch string) string {
-	branch = redact.Secrets(branch)
-	if branch == "" || (len(branch) <= MaxBranchBytes && ValidBranch(branch)) {
-		return branch
-	}
-	log.WarnContext(ctx, "sandbox_branch_not_recorded", "turn_id", run.TurnID,
-		"launch_id", run.LaunchID, "bytes", len(branch),
-		"detail", "the branch the run recorded with its question is not a name git accepts for a "+
-			"branch, or is past what a run's row carries, so the run is parked with no branch and "+
-			"its re-seed is told to check out the branch it pushed in general terms")
-	return ""
 }
 
 // The two halves of a long transcript a run's record keeps, in whole lines.

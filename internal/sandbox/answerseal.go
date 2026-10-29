@@ -114,9 +114,15 @@ func (s *AnswerSeal) KeyIDs() []string { return s.verifier.KeyIDs() }
 // AnswerWords is what a person's answer says and who gave it: what the seal
 // carries, and what a reader is handed once it opens.
 type AnswerWords struct {
-	// Text is the reply as the resumed turn is handed it, redacted where it
-	// was recorded ([Reply.answerOf], [answerGivenOf]).
+	// Text is the person's own words, redacted where they were recorded
+	// ([Reply.answerOf], [answerGivenOf]); empty for an answer that is a
+	// choice alone.
 	Text string
+
+	// Choice is the option of the run's question the person chose, by id,
+	// or empty for an answer in words (ADR-0068). The resumed run reads the
+	// two together ([AnswerText]), and the answer's record announces both.
+	Choice string
 
 	// Via is the route it came by ([RecordedAnswer.Via], which carries it in
 	// the clear for the store and must agree with it).
@@ -149,7 +155,8 @@ func (w AnswerWords) attribution() string {
 // answerer is who gave this answer, as its record announces them
 // ([Coordinator.announceAnswered]).
 func (w AnswerWords) answerer() answerer {
-	return answerer{by: w.By, kind: w.ByKind, operatorID: w.OperatorID}
+	return answerer{by: w.By, kind: w.ByKind, operatorID: w.OperatorID,
+		choice: w.Choice, said: w.Text}
 }
 
 // sealedAnswer is the body the seal covers.
@@ -165,6 +172,7 @@ type sealedAnswer struct {
 	ByKind     string          `json:"by_kind"`
 	OperatorID string          `json:"operator_id"`
 	Text       string          `json:"text"`
+	Choice     string          `json:"choice"`
 }
 
 // Seal is answer recording words as the answer to the question run's job
@@ -177,6 +185,7 @@ func (s *AnswerSeal) Seal(run PendingRun, words AnswerWords, answer RecordedAnsw
 	body, err := json.Marshal(sealedAnswer{
 		TurnID: run.TurnID, LaunchID: run.LaunchID, EventIDs: answer.EventIDs, Via: words.Via,
 		By: words.By, ByKind: words.ByKind, OperatorID: words.OperatorID, Text: words.Text,
+		Choice: words.Choice,
 	})
 	if err != nil {
 		return RecordedAnswer{}, fmt.Errorf("sandbox: encoding the answer to run %s: %w", run.TurnID, err)
@@ -226,6 +235,6 @@ func (s *AnswerSeal) Open(run PendingRun) (AnswerWords, error) {
 		return AnswerWords{}, fmt.Errorf("%w: it was sealed as come by %q, and the row says %q",
 			ErrAnswerUnopened, sealed.Via, answer.Via)
 	}
-	return AnswerWords{Text: sealed.Text, Via: sealed.Via, By: sealed.By, ByKind: sealed.ByKind,
-		OperatorID: sealed.OperatorID}, nil
+	return AnswerWords{Text: sealed.Text, Choice: sealed.Choice, Via: sealed.Via, By: sealed.By,
+		ByKind: sealed.ByKind, OperatorID: sealed.OperatorID}, nil
 }

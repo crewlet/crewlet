@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -20,8 +21,8 @@ import (
 func TestAnInformedAnswerOwesItsAskerAndNobodyElse(t *testing.T) {
 	t.Parallel()
 	answers := "c-ask"
-	decision := decisionFixture()
-	decision.Inform = &worklet.Inform{Surface: worklet.InformSlack, Channel: "releases"}
+	asked := decisionFixture()
+	asked.Inform = &decision.Inform{Surface: decision.InformSlack, Channel: "releases"}
 	answer := worklet.Comment{
 		ID: "c-ans", Task: "t-1", Author: "ana", AuthorKind: worklet.AuthorHuman,
 		Body: "the audit first", Answers: &answers, Choice: "hold",
@@ -30,7 +31,7 @@ func TestAnInformedAnswerOwesItsAskerAndNobodyElse(t *testing.T) {
 		Kind: worklet.ChangeComment,
 		After: worklet.Task{Key: "ENG-1", Project: "ENG", Title: "release",
 			Watchers: []string{"bo"}},
-		Comment: &answer, AnswersDecision: decision,
+		Comment: &answer, AnswersDecision: asked,
 		Thread: worklet.ThreadParties{AnsweredAuthor: "cy"},
 	}
 	byHandle := routedByHandle(t, askRecord(t, worklet.TaskPatch{Comment: &answer}, wake))
@@ -39,10 +40,10 @@ func TestAnInformedAnswerOwesItsAskerAndNobodyElse(t *testing.T) {
 		t.Fatalf("the asker was routed under %q, so the case asserts nothing",
 			asker.Metadata[worklet.MetaVia])
 	}
-	if asker.Owes != string(worklet.InformSlack) {
+	if asker.Owes != string(decision.InformSlack) {
 		t.Errorf("the asker's wake owes %q, want %q — the answer would close on "+
 			"a tracker comment and the promised post would never be made",
-			asker.Owes, worklet.InformSlack)
+			asker.Owes, decision.InformSlack)
 	}
 	if watcher.Metadata[worklet.MetaVia] == "" {
 		t.Fatal("the watcher was not routed, so the case asserts nothing")
@@ -120,7 +121,7 @@ func TestOnlyAnAgentAskerMayPromiseToInform(t *testing.T) {
 	r := newRoundTrip(t)
 	assign(t, r, "decide", "ana")
 	informed := decisionFixture()
-	informed.Inform = &worklet.Inform{Surface: worklet.InformSlack, Channel: "releases"}
+	informed.Inform = &decision.Inform{Surface: decision.InformSlack, Channel: "releases"}
 	for _, kind := range []worklet.AuthorKind{worklet.AuthorOperator, worklet.AuthorHuman} {
 		_, err := r.writer.UpdateTask(t.Context(), "op-"+string(kind), "decide", "ENG",
 			worklet.NoIfMatch, worklet.TaskPatch{Comment: &worklet.Comment{
