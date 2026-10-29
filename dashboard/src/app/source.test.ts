@@ -635,7 +635,7 @@ test("a label line names a word, or the table one comes from, and never nothing"
  * A COLUMN WHOSE HEAD IS A GLYPH STILL HAS A NAME.
  *
  * `GridColumn.header` is drawn in the head row, so a column twenty pixels wide
- * carries a mark or nothing at all — a work item's type, a row's actions, a
+ * carries a mark or nothing at all: a work item's type, a row's actions, a
  * pair of state tags. That is right for the wide table and wrong for the card a
  * grid becomes below the phone breakpoint (640px, `breakpoint.phone`), where
  * the head is gone and every value draws its own name beside it: a cell with no name draws none, and the card gets a bare
@@ -643,19 +643,19 @@ test("a label line names a word, or the table one comes from, and never nothing"
  * tracker at 390px, it reads as a rendering fault rather than as a value.
  *
  * So the column says the word separately, in `label`. NOTHING ELSE CATCHES
- * THIS: the field is optional by necessity — a column with a real head must not
- * repeat it — so a new glyph column type-checks, renders, and is wrong only on
+ * THIS: the field is optional by necessity (a column with a real head must not
+ * repeat it), so a new glyph column type-checks, renders, and is wrong only on
  * a phone, which no suite in this tree has a viewport for.
  *
  * EXCEPT A COLUMN OF ROW ACTIONS, which says `action: true` instead: its cell
- * is a button that names itself, so the card draws no name beside it — and a
+ * is a button that names itself, so the card draws no name beside it, and a
  * `label` this rule had demanded there printed the word twice, `SIGN OUT  Sign
  * out` on every session of the Account page.
  *
  * THE SIBLINGS ARE FOUND BY INDENTATION, which is a real invariant here rather
  * than a guess: prettier is a gate (`make dashboard-lint`), so a literal's own
  * properties share a column and everything nested under one is indented past
- * it. Brace-counting would be the obvious alternative and is the worse one — a
+ * it. Brace-counting would be the obvious alternative and is the worse one: a
  * cell is JSX with children, template strings and comments in it, and a counter
  * walking through those answers confidently and wrongly. `typescript` is not
  * the alternative either: at 7.x the package exports its syntax tree only under
