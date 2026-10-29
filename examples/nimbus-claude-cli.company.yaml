@@ -236,7 +236,7 @@ providers:
                                     #   CLI slot, and the learning passes
                                     #   below queue for the same four.
       auth:
-        mode: subscription          # subscription (default) | api-key | inherit-env.
+        mode: subscription          # subscription (default) | api-key | inherit-env | env.
                                     #   Deliberately not inherit-env: a
                                     #   backend that silently picked up a
                                     #   stray ANTHROPIC_API_KEY would bill

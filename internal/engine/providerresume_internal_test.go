@@ -568,7 +568,7 @@ func (m *countedLimit) Complete(ctx context.Context, req llm.Request) (*llm.Comp
 // AGAIN AT ONCE. The seat's resume met the limit mid-turn and parked it, and its
 // node holds the job. A published company releases every park decided under the
 // models it replaces and re-fires the job; its entry, left unchanged by the
-// apply, keeps the sit-out its predecessor was serving (carrySitOuts), so the job
+// apply, keeps the sit-out its sign-in is serving (cliagent.Plans), so the job
 // is collected again and its resume refused on that limit before its turn runs,
 // and the seat is parked on it once more, its probe armed: no review, no model
 // call, and no job collected and reviewed into the vendor's window once the

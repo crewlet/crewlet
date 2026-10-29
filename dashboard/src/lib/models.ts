@@ -197,6 +197,10 @@ export const AUTH_WORDS: Record<CLIAuthMode, { label: string; hint: string }> = 
     label: "Engine environment",
     hint: "Forwards the CLI’s token or key variable from the engine’s own environment.",
   },
+  env: {
+    label: "Cloud or gateway",
+    hint: "Signs in with the entry’s own env: a cloud provider’s switch and credentials, or a gateway’s token.",
+  },
 };
 
 /** An auth mode's words, or the value itself for one this build does not know. */
@@ -208,8 +212,8 @@ export function authWords(mode: string): { label: string; hint: string } {
 
 /**
  * The credential an entry's sign-in reads, and what it is called: the token
- * under `subscription`, the API key under `api-key`. `inherit-env` reads
- * neither from the document, and so has none.
+ * under `subscription`, the API key under `api-key`. `inherit-env` and `env`
+ * read neither from the document, and so have none.
  */
 export function signInCredential(
   entry: ModelEntry,
@@ -248,6 +252,8 @@ export function signInSource(entry: ModelEntry): string {
       return "the CLI’s own key variable";
     case "inherit-env":
       return "the engine’s own variables";
+    case "env":
+      return "the entry’s env";
     default:
       return "";
   }

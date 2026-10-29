@@ -3331,15 +3331,23 @@ func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun
 // model provider, and the provider the run's model names reads the one
 // variable it reads.
 //
-// ONE UNIT FOR CLAUDE CODE'S SIGN-IN: when the seat's own environment already
-// signs Claude Code in ([codingagent.ClaudeCodeCredentialEnv]), the entry adds
-// none of its own ([entrySignInName]). Claude Code has several sign-ins under
-// different names and ranks them — a cloud toggle routes away from the
-// Anthropic API altogether, and ANTHROPIC_API_KEY outranks a plan's
-// CLAUDE_CODE_OAUTH_TOKEN — so underlaying by name cannot see that a seat is
-// already signed in. An api-key entry's key underlaid beside a seat's own plan
-// token silently moved that seat onto the company's metered key, and beside a
-// Bedrock toggle it rode into a box that never reads it.
+// ONE UNIT FOR THE SIGN-IN OF A CLI THAT HAS SEVERAL: when the entry's profile
+// lists names that sign its CLI in beyond its token and its key
+// ([cliprofile.Profile.SignInEnv]) and the seat's own environment already signs
+// the CLI in ([cliagent.Provider.CredentialEnvNames], which reads that list),
+// the entry adds none of its own sign-in
+// ([entrySignInName]). Such a CLI ranks its sign-ins by name (Claude Code's
+// cloud toggle routes away from the Anthropic API altogether, and
+// ANTHROPIC_API_KEY outranks a plan's CLAUDE_CODE_OAUTH_TOKEN), so underlaying
+// by name cannot see that a seat is already signed in. An api-key entry's key
+// underlaid beside a seat's own plan token silently moved that seat onto the
+// company's metered key, and beside a Bedrock toggle it rode into a box that
+// never reads it.
+//
+// THE PROFILE'S LIST, NOT A LIST OF THE RUNNER'S: the names that sign a CLI in
+// are a fact about that CLI, which its profile records once and an override
+// can extend, so a cloud switch a build of the CLI adds is one profile edit,
+// and an entry's `auth.mode: env` and this rule read the same names.
 //
 // THE REST OF THE ENTRY'S ENV STILL LIES BENEATH IT. A base URL, a region or
 // a proxy says where the run's requests go, not whom they are made as, so a
@@ -3350,7 +3358,7 @@ func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun
 // other phase of its entry goes through.
 func entryEnv(agent *cliagent.Provider, seatEnv map[string]string) map[string]string {
 	env := agent.SandboxEnv()
-	if agent.Agent() != codingagent.ClaudeCodeName || !signsIn(seatEnv, codingagent.ClaudeCodeCredentialEnv) {
+	if len(agent.Profile().SignInEnv) == 0 || !signsIn(seatEnv, agent.CredentialEnvNames()) {
 		return env
 	}
 	for name := range env {
@@ -3361,21 +3369,19 @@ func entryEnv(agent *cliagent.Provider, seatEnv map[string]string) map[string]st
 	return env
 }
 
-// entrySignInName reports whether name is part of a Claude Code entry's
-// sign-in, which a seat signing Claude Code in itself replaces as one unit
-// ([entryEnv]): a name Claude Code signs in by, its cloud toggles included
-// ([codingagent.ClaudeCodeCredentialEnv]); the profile's own token or key
-// variable, which an override may have renamed
-// ([cliagent.Provider.CredentialEnvNames]); and any credential-named variable
-// ([cliprofile.IsCredentialName]) — a cloud sign-in's own key, such as
-// Bedrock's AWS_BEARER_TOKEN_BEDROCK or the AWS key pair, which with the
-// entry's toggle gone no request of the run reads, and which would sit in a
-// box whose agent runs with every permission as a company credential the
-// seat's run never uses.
+// entrySignInName reports whether name is part of an entry's sign-in, which a
+// seat signing the CLI in itself replaces as one unit ([entryEnv]): a name the
+// CLI signs in by, its profile's token and key variables (which an override may
+// have renamed) and its sign_in_env, such as Claude Code's gateway bearer token
+// and its cloud toggles ([cliagent.Provider.CredentialEnvNames]); and any
+// credential-named variable
+// ([cliprofile.IsCredentialName]), such as a cloud sign-in's own key (Bedrock's
+// AWS_BEARER_TOKEN_BEDROCK or the AWS key pair), which with the entry's toggle
+// gone no request of the run reads, and which would sit in a box whose agent
+// runs with every permission as a company credential the seat's run never
+// uses.
 func entrySignInName(agent *cliagent.Provider, name string) bool {
-	return slices.Contains(codingagent.ClaudeCodeCredentialEnv, name) ||
-		slices.Contains(agent.CredentialEnvNames(), name) ||
-		cliprofile.IsCredentialName(name)
+	return slices.Contains(agent.CredentialEnvNames(), name) || cliprofile.IsCredentialName(name)
 }
 
 // signsIn reports whether env carries a non-blank value under any of names.
@@ -3445,17 +3451,15 @@ func sandboxCredentials(agent *cliagent.Provider, key, seat string, placement sa
 // the engine host: the rule a seat's remote run and the assistant's deep work
 // are both held to before a box is started.
 func entrySignsIn(agent *cliagent.Provider, env map[string]string) bool {
+	// THE PROFILE'S OTHER SIGN-INS COUNT TOO ([cliprofile.Profile.SignInEnv],
+	// which [cliagent.Provider.CredentialEnvNames] reads): for Claude Code a
+	// bearer token, or a Bedrock, Vertex AI or Foundry toggle, whether the seat
+	// brought one, which is then handed none of the entry's sign-in
+	// ([entryEnv]), or the entry's own env carries it into the box: a gateway's
+	// bearer token, a cloud of the company's. Judged by the profile's token and
+	// key variables alone, such a remote run was refused as signed in to nothing
+	// when it was signed in to its gateway or its cloud.
 	if signsIn(env, agent.CredentialEnvNames()) {
-		return true
-	}
-	// CLAUDE CODE'S OTHER SIGN-INS COUNT TOO — a bearer token, a Bedrock,
-	// Vertex AI or Foundry toggle — whether the seat brought one, which is then
-	// handed none of the entry's sign-in ([entryEnv]), or the entry's own env
-	// carries it into the box: a gateway's bearer token, a cloud of the
-	// company's. Judged by the profile's two names alone, such a remote run was
-	// refused as signed in to nothing when it was signed in to its gateway or
-	// its cloud.
-	if agent.Agent() == codingagent.ClaudeCodeName && signsIn(env, codingagent.ClaudeCodeCredentialEnv) {
 		return true
 	}
 	// A CLI THAT READS ITS PROVIDER'S KEY FROM ITS OWN ENVIRONMENT has no one
@@ -3527,6 +3531,15 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 		lead := fmt.Sprintf("seat %q's executor runs on %q in %q, and nothing in this run's "+
 			"environment authenticates it: %s", seat, key, placement, sign.Missing())
 		switch {
+		case sign.Mode == cliagent.AuthEnv && len(sign.Variables) == 0:
+			// The entry's env is its whole sign-in and seeds no login, so
+			// no cell helps: the remedy is the env, which the lead names.
+			return &SandboxCredentialError{msg: lead}
+		case sign.Mode == cliagent.AuthEnv:
+			// No login either way, so a local cell is no remedy here: the
+			// env is, the entry's or the seat's.
+			return &SandboxCredentialError{msg: fmt.Sprintf(
+				"%s; or set %s in this seat's role.sandbox.env", lead, strings.Join(sign.Variables, " or "))}
 		case len(sign.Variables) == 0 && len(sign.Misnamed) == 0:
 			// The mode hands the CLI nothing, so the remedy is the mode
 			// — and the login it names reaches a box only in a local cell.

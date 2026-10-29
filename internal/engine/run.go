@@ -49,6 +49,7 @@ import (
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -400,6 +401,12 @@ type Engine struct {
 	// sandboxPollInterval is Options.SandboxPollInterval, kept because an
 	// apply can be what starts the poll.
 	sandboxPollInterval time.Duration
+
+	// plans is the node's registry of coding-CLI sign-ins
+	// ([cliagent.Plans]), made once at boot under a key derived from the
+	// keyring and handed to every revision's build, so a sit-out outlives
+	// every apply and a sign-in's id is the same on every node.
+	plans *cliagent.Plans
 
 	// fakePlay is Options.fakePlay: what a `providers.sandbox.fake`
 	// company's runs do, nil for the double's own demonstration. Kept
@@ -1173,6 +1180,15 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, err
 	}
+	// THE SIGN-IN KEY BESIDE IT, derived from the same keyring and
+	// [config.Secrets.Keyring]'s one decoding of it, which openCipher has
+	// just proved: what makes a model's sign-in id the same on every node
+	// and across restarts ([cliagent.SignInID]).
+	ring, err := opts.Bootstrap.Secrets.Keyring()
+	if err != nil {
+		return nil, fmt.Errorf("engine: secrets keyring: %w", err)
+	}
+	plans := cliagent.NewPlans(ring.Derive(cliagent.SignInKeyInfo))
 	// AND THE ESTATE'S ENVELOPES OVER IT, for the same reason and in the same
 	// place: every request this node's router sends is signed with them and
 	// every reply it is sent verified, and a data node answers its peers
@@ -1373,6 +1389,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		sandboxOtel:         otel,
 		sandboxPollInterval: opts.SandboxPollInterval,
 		fakePlay:            opts.fakePlay,
+		plans:               plans,
 		usageEvery:          opts.usageEvery,
 		resumeGate:          opts.resumeGate,
 		sandboxSeats:        map[string]bool{},

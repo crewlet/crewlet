@@ -2535,8 +2535,20 @@ func (s *Secrets) TokenMaterial() runtoken.Material {
 // document before decoding, because the values it carries are needed the
 // instant the process starts.
 func (s *Secrets) Cipher() (secrets.Cipher, error) {
+	ring, err := s.Keyring()
+	if err != nil {
+		return nil, err
+	}
+	return secrets.NewCipher(ring)
+}
+
+// Keyring is the decoded keyring [Secrets.Cipher] seals under, for a caller
+// that derives a key of its own from it ([secrets.Keyring.Derive]) rather than
+// sealing: one decoding of the material, so the two can never disagree about
+// which key is active.
+func (s *Secrets) Keyring() (secrets.Keyring, error) {
 	if !s.Enabled() {
-		return nil, fault(field("secrets.keys"), ErrMissing,
+		return secrets.Keyring{}, fault(field("secrets.keys"), ErrMissing,
 			"this node has no keyring. Generate a key with `crewlet secrets "+
 				"keygen` and add it to `secrets.keys`")
 	}
@@ -2551,12 +2563,12 @@ func (s *Secrets) Cipher() (secrets.Cipher, error) {
 			// path is the element's own material field: `keys` is a list, so
 			// a path naming the id as if it were a map key pointed at nothing
 			// in the file.
-			return nil, fault(at(idx(field("secrets.keys"), i), "material"), ErrShape,
+			return secrets.Keyring{}, fault(at(idx(field("secrets.keys"), i), "material"), ErrShape,
 				keyMaterialProblem, key.ID, err)
 		}
 		ring.Keys[key.ID] = material
 	}
-	return secrets.NewCipher(ring)
+	return ring, nil
 }
 
 // keyMaterialProblem is the ONE sentence unusable key material is refused

@@ -132,49 +132,6 @@ func TestARunsResetIsReadAgainstWhenItsEndingWasFirstRead(t *testing.T) {
 	}
 }
 
-// A REBUILT ENTRY KEEPS ITS SIT-OUT. Every apply builds every entry afresh, and
-// an entry with an unchanged spec is the same login, so the same spent plan —
-// carried, or every seat on the node relearned the window with a call each:
-// its window, the instant the vendor said the limit lifts, which a refusal
-// names to a person, and how far its backoff has stepped. A later bench is
-// kept where it ends later; an entry that sits nothing out carries nothing.
-//
-// Mutation: carry the window alone, and the rebuilt entry's refusal names no
-// reset and its next unnamed report starts the backoff from its first step.
-func TestARebuiltEntryKeepsItsSitOut(t *testing.T) {
-	t.Parallel()
-	collected := time.Date(2026, time.October, 27, 23, 16, 0, 0, time.UTC)
-	clock := func() time.Time { return collected.Add(time.Minute) }
-	before := shipped(t, "claude-code", "sonnet")
-	before.now = clock
-	if !before.RunEnded(t.Context(), RunEnd{Event: spentLine, Failed: true, At: collected}) {
-		t.Fatal("the premise: the old entry sits out")
-	}
-	before.sitOut.mu.Lock()
-	before.sitOut.unnamed = 2
-	before.sitOut.mu.Unlock()
-	after := shipped(t, "claude-code", "sonnet")
-	after.now = clock
-	after.CarrySitOut(before)
-	var refused *llm.Error
-	if err := after.SittingOut(); !errors.As(err, &refused) {
-		t.Fatal("the rebuilt entry was handed back the spent plan")
-	} else if want := time.Date(2026, time.October, 27, 23, 30, 0, 0, time.UTC); !refused.ResetsAt.Equal(want) {
-		t.Errorf("the rebuilt entry's refusal names the reset %v, want %v", refused.ResetsAt, want)
-	}
-	after.sitOut.mu.Lock()
-	unnamed := after.sitOut.unnamed
-	after.sitOut.mu.Unlock()
-	if unnamed != 2 {
-		t.Errorf("the rebuilt entry's backoff is at step %d, want the carried 2", unnamed)
-	}
-	clean := shipped(t, "claude-code", "sonnet")
-	clean.CarrySitOut(shipped(t, "claude-code", "sonnet"))
-	if err := clean.SittingOut(); err != nil {
-		t.Errorf("an entry carried from one sitting nothing out sits out: %v", err)
-	}
-}
-
 // AN ENDING READ AGAIN IS THE SAME REPORT. A completion held on a limit is
 // collected again when its hold lifts, and every collection reads the job's
 // ending. Dated by the reading, the ending opened a fresh window each time,
@@ -266,9 +223,7 @@ func TestASuccessFromBeforeTheWindowsEndLeavesItsReportStanding(t *testing.T) {
 	if !p.RunEnded(t.Context(), RunEnd{Event: spentLine, Failed: true, At: collected}) {
 		t.Fatal("the premise: the spent plan sits the entry out")
 	}
-	p.sitOut.mu.Lock()
-	p.sitOut.unnamed = 2
-	p.sitOut.mu.Unlock()
+	setUnnamed(p, 2)
 
 	for _, at := range []time.Time{collected.Add(-time.Hour), collected.Add(5 * time.Minute)} {
 		p.RunEnded(t.Context(), RunEnd{Answer: "fixed the flaky test", At: at})
@@ -287,18 +242,4 @@ func TestASuccessFromBeforeTheWindowsEndLeavesItsReportStanding(t *testing.T) {
 	if step := unnamedStep(p); step != 0 {
 		t.Errorf("a success dated after the window left the backoff at step %d, want it started again", step)
 	}
-}
-
-// sitOutUntil is when p's window ends.
-func sitOutUntil(p *Provider) time.Time {
-	p.sitOut.mu.Lock()
-	defer p.sitOut.mu.Unlock()
-	return p.sitOut.until
-}
-
-// unnamedStep is the step of [limitBackoff] p's next unnamed report takes.
-func unnamedStep(p *Provider) int {
-	p.sitOut.mu.Lock()
-	defer p.sitOut.mu.Unlock()
-	return p.sitOut.unnamed
 }

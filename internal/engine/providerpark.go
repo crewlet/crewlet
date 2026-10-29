@@ -97,9 +97,10 @@ import (
 // park decided under one registry is released by an apply that installs
 // another ([Engine.reconcileProviderParks]): the redelivery asks the new
 // entries, and a limit that still holds parks the seat again at the cost of one
-// delivery. An entry whose spec the apply left unchanged carries its
-// predecessor's sit-out ([carrySitOuts]), so that re-park costs the delivery
-// and no process: the entry refuses before any CLI is started. The park is not
+// delivery. An entry that still calls as the same account finds the sit-out
+// its sign-in is serving on the node's registry ([cliagent.Plans]), so that
+// re-park costs the delivery and no process: the entry refuses before any CLI
+// is started. The park is not
 // carried across instead, because whether the seat's chain is still the one
 // that refused is the new company's to say (its `llm`, the entries it names),
 // and its first turn is what asks. A SEAT WHOSE MAIL ITS RUN HOLDS has no

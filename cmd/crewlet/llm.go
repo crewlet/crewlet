@@ -175,7 +175,7 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 			return err
 		}
 		restoreConfiguredBundle(ctx, p, stderr)
-		return p.Status(ctx, stdout, stderr)
+		return statusLLM(ctx, p, stdout, stderr)
 	case "logout":
 		p, err := oneProvider(providers, key)
 		if err != nil {
@@ -203,6 +203,47 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 		return importLLM(ctx, providers, key, *companyPath, companySecrets, os.Stdin, stdout)
 	}
 	return nil
+}
+
+// statusLLM answers `crewlet llm status KEY`: one line of what the CLI's status
+// command says of its login, read as the engine reads it
+// ([cliagent.Provider.LoginStatus]), then the CLI's own words for a person
+// ([cliagent.Provider.Status], its status_text_args where it has them).
+//
+// THE ENGINE'S READING FIRST, because it is the answer the dashboard and the
+// heartbeat give for the same entry, and the line a script greps; the CLI's
+// words after it, because they say what the reading cannot (which plan, which
+// organisation, when it expires). It exits non-zero unless the reading is
+// signed in, as the CLI's own status command does, so a script that ran it
+// before keeps its meaning.
+func statusLLM(ctx context.Context, p *cliagent.Provider, stdout, stderr io.Writer) error {
+	status, err := p.LoginStatus(ctx)
+	if err != nil {
+		return err
+	}
+	line := fmt.Sprintf("%s: %s", p.Key(), strings.ReplaceAll(string(status.State), "_", " "))
+	if status.Method != "" {
+		line += " (" + status.Method + ")"
+	}
+	if status.Account != "" {
+		line += " as " + status.Account
+	}
+	fmt.Fprintln(stdout, line)
+	// The CLI's words are an account for a person, never the answer: a text
+	// form that fails says so on stderr and leaves the reading standing.
+	if err := p.Status(ctx, stdout, stderr); err != nil && status.State == cliagent.LoginSignedIn {
+		fmt.Fprintf(stderr, "crewlet: %s: the CLI's own account of its login failed: %v\n", p.Key(), err)
+	}
+	switch status.State {
+	case cliagent.LoginSignedIn:
+		return nil
+	case cliagent.LoginSignedOut:
+		return fmt.Errorf("%s holds no login: sign it in on this host with `crewlet llm login %s`, "+
+			"and `crewlet llm doctor %s` reports every other way it can be signed in",
+			p.Key(), p.Key(), p.Key())
+	default:
+		return fmt.Errorf("%s: the CLI did not say whether it holds a login: %s", p.Key(), status.Detail)
+	}
 }
 
 // llmCommands is every `crewlet llm` subcommand, checked before anything is
@@ -309,7 +350,7 @@ func llmEntryReads(company *config.Company, keys []string) []string {
 func cliAgents(company *config.Company, keys []string, resolver *config.Resolver) ([]cliAgentProvider, error) {
 	out := make([]cliAgentProvider, 0, len(keys))
 	for _, key := range keys {
-		built, err := engine.BuildCLIAgent(key, company.Providers.LLM[key], resolver)
+		built, err := engine.BuildCLIAgent(key, company.Providers.LLM[key], resolver, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -414,7 +455,7 @@ func doctorEntries(company *config.Company, keys []string, resolver *config.Reso
 	out := make([]doctorEntry, 0, len(keys))
 	for _, key := range keys {
 		entry := doctorEntry{key: key}
-		built, err := engine.BuildCLIAgent(key, company.Providers.LLM[key], resolver)
+		built, err := engine.BuildCLIAgent(key, company.Providers.LLM[key], resolver, nil)
 		if err != nil {
 			entry.diagnose = unbuilt(key, err)
 			out = append(out, entry)
@@ -883,8 +924,9 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 	fmt.Fprintf(stdout,
 		"Stored the credential bundle as %s in %s.\n%s\n"+
 			"A node restores it when it builds a company to run, at boot and at every\n"+
-			"apply, if this entry's credentials directory is empty and the entry was\n"+
-			"not logged out there since its last login. It is read under that name by\n"+
+			"apply, unless the entry was logged out there since its last login: into a\n"+
+			"credentials directory holding no login, or over one installed before this\n"+
+			"one, since the newest login wins. It is read under that name by\n"+
 			"convention; to name it in the company document instead:\n\n%s",
 		name, target.where, target.writtenNote(), authReference(key, "credential_bundle", name))
 	return nil
@@ -935,9 +977,10 @@ func storeLLMSecret(ctx context.Context, companySecrets *companyStore, name, val
 // visible in `ps` and lands in shell history, and the natural spelling —
 // `crewlet llm export k | ssh host crewlet llm import k` — is a pipe anyway.
 //
-// It REFUSES TO OVERWRITE an existing login, which is [Provider.RestoreBundle]'s
-// own rule: a host that has been running holds the fresher refresh token, and
-// restoring a blob over it is how a fleet logs itself out. That is reported
+// It REFUSES TO OVERWRITE an existing login, which is
+// [cliagent.Provider.ImportBundle]'s rule whatever the bundle's install record
+// says: a host that has been running holds the fresher refresh token, and an
+// operator replacing it says so with `crewlet llm logout` first. That is reported
 // here rather than swallowed, because "nothing happened" and "restored" look
 // identical from the outside and only one of them means the host is ready —
 // asked before stdin is read, so a refusal costs nothing, and answered again by

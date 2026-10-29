@@ -945,7 +945,7 @@ func TestTheScriptedCLIAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 		t.Fatalf("company config: %v", err)
 	}
 	provider, err := engine.BuildCLIAgent("scripted", cfg.Providers.LLM["scripted"],
-		config.NewResolver(nodeEnvironment(nil)))
+		config.NewResolver(nodeEnvironment(nil)), nil)
 	if err != nil {
 		t.Fatalf("BuildCLIAgent: %v", err)
 	}

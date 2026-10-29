@@ -430,6 +430,10 @@ type Error struct {
 	// It is the fact a person is told ("resumes at 4:30 PM"), and may lie
 	// past RetryAt, which a backend caps so that a raised plan is noticed.
 	ResetsAt time.Time
+	// Window is which of the vendor's limits refused it, for a
+	// [KindRateLimit]: the plan's session window, its weekly one, or one
+	// model's own ([LimitWindow]). Empty where the backend cannot tell.
+	Window LimitWindow
 	// Agent is the CLI the entry drives (`claude-code`), and Subscription
 	// whether that CLI signs in on a plan rather than a metered key: what
 	// a person is told a limit is OF ("Claude Code subscription limit
@@ -438,6 +442,39 @@ type Error struct {
 	Agent        string
 	Subscription bool
 	Err          error
+}
+
+// LimitWindow is which of a vendor's limits a report names: what a person is
+// told the limit is OF ("the weekly limit"), and whether it holds every model
+// of a plan or one model alone.
+//
+// AN ENUM OF THE ENGINE'S OWN WORDS, not the vendor's: Claude Code says
+// `five_hour` in its events and "session limit" in its sentences, and both are
+// [LimitSession]. A profile maps each vendor's spelling onto these, so
+// everything that reads a window reads one vocabulary.
+type LimitWindow string
+
+const (
+	// LimitSession is a plan's short rolling window (Claude Code's five
+	// hours), shared by every model on the plan.
+	LimitSession LimitWindow = "session"
+	// LimitWeekly is a plan's weekly window, shared by every model on it.
+	LimitWeekly LimitWindow = "weekly"
+	// LimitModel is a window one model has of its own ("Opus limit"): it
+	// holds that model only, and another model on the same plan still
+	// answers.
+	LimitModel LimitWindow = "model"
+	// LimitUnknown is a limit whose report named no window.
+	LimitUnknown LimitWindow = "unknown"
+)
+
+// Valid reports whether w is one of the four windows.
+func (w LimitWindow) Valid() bool {
+	switch w {
+	case LimitSession, LimitWeekly, LimitModel, LimitUnknown:
+		return true
+	}
+	return false
 }
 
 // LimitedUntil reports whether err is a rate limit, and when the entry that

@@ -291,7 +291,7 @@ func (c *Company) ValidateAdmission() error {
 func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
 		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
-		c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
+		c.validateLLMKeys(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
 		c.validateRunOptionalKeys(), c.validateFileRules(), c.validateAssistant())
 }
 

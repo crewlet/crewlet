@@ -129,7 +129,7 @@ func TestASettingsFileIsNeitherExportedNorLoggedOut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExportBundle: %v", err)
 	}
-	packed, err := p.stageBundle(blob)
+	packed, _, err := p.stageBundle(blob)
 	if err != nil {
 		t.Fatalf("stageBundle: %v", err)
 	}

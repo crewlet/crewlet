@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -96,10 +95,9 @@ var limitBackoff = [...]time.Duration{time.Minute, 2 * time.Minute, 5 * time.Min
 // even when the vendor's window runs for days.
 const maxLimitBench = time.Hour
 
-// bench is the entry's sit-out window and the report behind it, guarded for
-// concurrent calls.
+// bench is one window a sign-in sits out and the report behind it, held in its
+// [Plan] and guarded by the plan's mutex.
 type bench struct {
-	mu    sync.Mutex
 	until time.Time
 	// said is the CLI's own sentence that started it, repeated on every
 	// call it refuses so the reason never reads as the engine's.
@@ -107,20 +105,40 @@ type bench struct {
 	// resetsAt is when the vendor said the limit lifts, zero where it named
 	// no instant.
 	resetsAt time.Time
+	// since is when the report that opened the window in force was made.
+	since time.Time
+	// window is which of the vendor's limits it is.
+	window llm.LimitWindow
 	// unnamed counts the windows sat out for reports that named no reset
-	// since the entry last answered: the step of [limitBackoff] the next
+	// since the sign-in last answered: the step of [limitBackoff] the next
 	// one takes.
 	unnamed int
 }
 
-// bench sits the entry out for the report made at `at`: until reset (the
-// instant the vendor named, or a step of [limitBackoff] when it named none),
-// capped at [maxLimitBench], and answers when the entry is tried again. A later
-// bench never SHORTENS an earlier one: two seats' calls that both met the spent
-// plan report the same window, and the one that lands last must not cut it.
-// For the same reason a report made while a window is still in force does not
-// step the backoff: only a probe made after the window ended, and refused
-// again, does.
+// limitReport is one report of a limit, as the classification read it.
+type limitReport struct {
+	// reset is when the vendor said the limit lifts, zero for unnamed.
+	reset time.Time
+	// said is the vendor's sentence.
+	said string
+	// at is when the report was made: the instant the window runs from.
+	at time.Time
+	// window is which limit it is; [llm.LimitModel] holds only the model
+	// argument the entry hands its CLI.
+	window llm.LimitWindow
+}
+
+// bench sits the entry's sign-in out for a report: until reset (the instant
+// the vendor named, or a step of [limitBackoff] when it named none), capped at
+// [maxLimitBench], and answers when the entry is tried again. A report whose
+// window is one model's ([llm.LimitModel]) holds that model alone
+// ([Plan.scoped]); every other holds the whole sign-in.
+//
+// A later bench never SHORTENS an earlier one: two seats' calls that both met
+// the spent plan report the same window, and the one that lands last must not
+// cut it. For the same reason a report made while a window is still in force
+// does not step the backoff: only a probe made after the window ended, and
+// refused again, does.
 //
 // THE WINDOW RUNS FROM THE REPORT, NOT FROM THE CLOCK THAT READS IT. A call's
 // report is read as it is made, but a run's ending is read when its job is
@@ -133,33 +151,51 @@ type bench struct {
 // hour at a time, with nothing ever asking the vendor whether the quota was
 // back. Dated by the report, an ending read again lands inside the window its
 // first reading opened, or opens the same one, and moves nothing.
-func (p *Provider) bench(reset time.Time, said string, at time.Time) time.Time {
-	p.sitOut.mu.Lock()
-	defer p.sitOut.mu.Unlock()
-	b := &p.sitOut
+func (p *Provider) bench(report limitReport) time.Time {
+	plan := p.Plan()
+	plan.mu.Lock()
+	defer plan.mu.Unlock()
+	b := &plan.wide
+	if report.window == llm.LimitModel {
+		model := p.ModelArgument()
+		if plan.scoped[model] == nil {
+			plan.scoped[model] = &bench{}
+		}
+		b = plan.scoped[model]
+	}
+	return b.record(report)
+}
+
+// record is [Provider.bench] on one window.
+func (b *bench) record(report limitReport) time.Time {
 	var until time.Time
-	if reset.IsZero() {
-		if at.Before(b.until) {
+	if report.reset.IsZero() {
+		if report.at.Before(b.until) {
 			// Inside a window already in force: the same refusal, heard
 			// by another call or read again, which neither extends it
 			// nor steps on.
 			return b.until
 		}
-		until = at.Add(limitBackoff[min(b.unnamed, len(limitBackoff)-1)])
+		until = report.at.Add(limitBackoff[min(b.unnamed, len(limitBackoff)-1)])
 		b.unnamed++
 	} else {
-		until = at.Add(min(reset.Sub(at), maxLimitBench))
+		until = report.at.Add(min(report.reset.Sub(report.at), maxLimitBench))
 	}
 	if until.After(b.until) {
-		b.until, b.said, b.resetsAt = until, said, reset
+		b.until, b.said, b.resetsAt, b.since = until, report.said, report.reset, report.at
+		b.window = report.window
+		if !b.window.Valid() {
+			b.window = llm.LimitUnknown
+		}
 	}
 	return b.until
 }
 
-// answered ends the report behind the entry's window, for an answer heard at
-// `at` once that window is over: the limit has lifted, so a later report that
-// names no reset starts the backoff from its first step again, and no refusal
-// names the reset of a limit that is over.
+// answered ends the reports behind the windows this entry's calls are held by,
+// for an answer heard at `at` once those windows are over: the limit has
+// lifted, so a later report that names no reset starts the backoff from its
+// first step again, and no refusal names the reset of a limit that is over.
+// The answer is the sign-in's last ([PlanState.LastAnswer]).
 //
 // NOT AN ANSWER FROM INSIDE THE WINDOW, OR FROM BEFORE IT. No call is made
 // while the entry sits out, but one already running when another call's report
@@ -174,13 +210,71 @@ func (p *Provider) bench(reset time.Time, said string, at time.Time) time.Time {
 // opened it ([Provider.bench]), so an answer from before that report is from
 // before the window's end as well.
 func (p *Provider) answered(at time.Time) {
-	p.sitOut.mu.Lock()
-	defer p.sitOut.mu.Unlock()
-	b := &p.sitOut
+	plan := p.Plan()
+	model := p.ModelArgument()
+	plan.mu.Lock()
+	defer plan.mu.Unlock()
+	plan.wide.answered(at)
+	if scoped := plan.scoped[model]; scoped != nil && scoped.answered(at) {
+		delete(plan.scoped, model)
+	}
+	if at.After(plan.lastAnswer) {
+		plan.lastAnswer = at.UTC()
+	}
+}
+
+// answered is [Provider.answered] on one window, reporting whether the window
+// is over and its report ended.
+func (b *bench) answered(at time.Time) bool {
 	if at.Before(b.until) {
-		return
+		return false
 	}
 	b.resetsAt, b.unnamed = time.Time{}, 0
+	return true
+}
+
+// sitOut reads the window at now, false when it is not in force.
+func (b *bench) sitOut(now time.Time, model string) (SitOut, bool) {
+	if !now.Before(b.until) {
+		return SitOut{}, false
+	}
+	return SitOut{Until: b.until.UTC(), ResetsAt: b.resetsAt, Since: b.since.UTC(),
+		Window: b.window, Model: model, Said: b.said}, true
+}
+
+// clearBefore ends the window when the report that opened it was made before
+// `before`, and the backoff with it ([Plan.Clear]).
+func (b *bench) clearBefore(before time.Time) bool {
+	if b.until.IsZero() || !b.since.Before(before) {
+		return false
+	}
+	*b = bench{}
+	return true
+}
+
+// heldBy is the window this entry's calls are held by at now: the later of
+// the plan-wide one and the one of the model it hands its CLI.
+func (p *Provider) heldBy(now time.Time) (SitOut, bool) {
+	plan := p.Plan()
+	model := p.ModelArgument()
+	plan.mu.Lock()
+	defer plan.mu.Unlock()
+	held, ok := plan.wide.sitOut(now, "")
+	if scoped := plan.scoped[model]; scoped != nil {
+		if out, in := scoped.sitOut(now, model); in && (!ok || out.Until.After(held.Until)) {
+			held, ok = out, true
+		}
+	}
+	return held, ok
+}
+
+// SitOut is the window this entry's calls are held by now, and false when they
+// are held by none: the sign-in's plan-wide window or its model's own,
+// whichever runs later.
+func (p *Provider) SitOut() (SitOut, bool) {
+	held, ok := p.heldBy(p.now())
+	held.Said = boundSaid(held.Said)
+	return held, ok
 }
 
 // SittingOut is the classified refusal of a call made while the entry sits
@@ -192,14 +286,13 @@ func (p *Provider) answered(at time.Time) {
 // the next in the chain, classified exactly as a call's refusal is so
 // the hand-off reads the same in either place.
 func (p *Provider) SittingOut() error {
-	p.sitOut.mu.Lock()
-	until, said, resets := p.sitOut.until, p.sitOut.said, p.sitOut.resetsAt
-	p.sitOut.mu.Unlock()
-	if !p.now().Before(until) {
+	now := p.now()
+	held, ok := p.heldBy(now)
+	if !ok {
 		return nil
 	}
 	return p.limited(fmt.Errorf("%s, sitting out until %s, when this entry is tried again",
-		said, until.UTC().Format(time.RFC3339)), until, resets)
+		held.Said, held.Until.Format(time.RFC3339)), held.Until, held.ResetsAt, held.Window)
 }
 
 // classified turns a marker's hit into the call's failure: a limit sits the
@@ -209,7 +302,7 @@ func (p *Provider) classified(ctx context.Context, hit markerHit, reason string)
 	if hit.Kind != llm.KindRateLimit {
 		return p.fail(hit.Kind, fmt.Errorf("%s", reason))
 	}
-	until := p.bench(hit.Reset, reason, p.now())
+	until := p.bench(limitReport{reset: hit.Reset, said: reason, at: p.now(), window: hit.Window})
 	// WHERE IT MATCHED, beside what it matched: a sit-out takes the entry
 	// from every seat on this node, and the one question an operator who
 	// doubts it has is whether the vendor said it.
@@ -218,18 +311,19 @@ func (p *Provider) classified(ctx context.Context, hit markerHit, reason string)
 		resets = hit.Reset.UTC().Format(time.RFC3339)
 	}
 	log.WarnContext(ctx, "cli_agent_limit_reported", "provider", p.key, "agent", p.agent,
-		"source", string(hit.Source), "said", reason,
+		"source", string(hit.Source), "said", reason, "window", string(hit.Window),
 		"retry_at", until.UTC().Format(time.RFC3339), "resets_at", resets)
-	return p.limited(fmt.Errorf("%s", reason), until, hit.Reset)
+	return p.limited(fmt.Errorf("%s", reason), until, hit.Reset, hit.Window)
 }
 
-// limited is a classified rate limit carrying when the entry is tried again
-// and when the vendor said the limit lifts, so a caller telling a person to
+// limited is a classified rate limit carrying when the entry is tried again,
+// when the vendor said the limit lifts and which limit it is, so a caller telling a person to
 // wait can name the instant without reading it out of the vendor's sentence.
-func (p *Provider) limited(err error, until, resets time.Time) error {
+func (p *Provider) limited(err error, until, resets time.Time, window llm.LimitWindow) error {
 	failure := p.failure(llm.KindRateLimit, err)
 	failure.RetryAt = until
 	failure.ResetsAt = resets
+	failure.Window = window
 	return failure
 }
 
@@ -293,19 +387,14 @@ func (p *Provider) RunEnded(ctx context.Context, end RunEnd) bool {
 	if at.IsZero() {
 		at = p.now()
 	}
-	out := cliOutput{said: nonEmpty(end.Answer, end.Error), stderr: end.Error,
-		failed: end.Failed, at: at}
-	var lines []string
-	if event := strings.TrimSpace(end.Event); event != "" {
-		lines = append(lines, event)
+	hit, out, ok := p.endedHit(end, at)
+	if ok && hit.Kind == llm.KindAuth {
+		// A REFUSED SIGN-IN IS THE SIGN-IN'S, as a call's is: the readiness
+		// verdict and the last failure of every entry on the same account.
+		// Never sat out ([Provider.remember]).
+		p.remember(p.fail(llm.KindAuth, fmt.Errorf("%s", nonEmpty(hit.Said, firstLine(out.said)))))
+		return false
 	}
-	if p.profile.EffectiveMarkerScope() == cliprofile.MarkerScopeEvents {
-		if event := failureEvent(p.profile, end.Error); event != "" {
-			lines = append(lines, event)
-		}
-	}
-	out.stdout = strings.Join(lines, "\n")
-	hit, ok := classifyMarkers(p.profile, out)
 	if !ok || hit.Kind != llm.KindRateLimit {
 		if !end.Failed {
 			p.answered(at)
@@ -313,7 +402,7 @@ func (p *Provider) RunEnded(ctx context.Context, end RunEnd) bool {
 		return false
 	}
 	said := nonEmpty(hit.Said, firstLine(out.said))
-	until := p.bench(hit.Reset, said, at)
+	until := p.bench(limitReport{reset: hit.Reset, said: said, at: at, window: hit.Window})
 	if !p.now().Before(until) {
 		log.InfoContext(ctx, "cli_agent_run_limit_report_over", "provider", p.key,
 			"agent", p.agent, "said", said, "reported_at", at.UTC().Format(time.RFC3339),
@@ -327,9 +416,46 @@ func (p *Provider) RunEnded(ctx context.Context, end RunEnd) bool {
 		resets = hit.Reset.UTC().Format(time.RFC3339)
 	}
 	log.WarnContext(ctx, "cli_agent_run_limit_reported", "provider", p.key, "agent", p.agent,
-		"source", string(hit.Source), "said", said,
+		"source", string(hit.Source), "said", said, "window", string(hit.Window),
 		"retry_at", until.UTC().Format(time.RFC3339), "resets_at", resets)
 	return true
+}
+
+// EndedKind is how one of this entry's executor runs ended, as the one
+// classification every call takes reads it: a limit, a refused sign-in, or
+// the kind a sentinel named; false when nothing classified it (an answer, or a
+// failure no profile recognises). PURE: it records nothing on the entry's
+// [Plan], which [Provider.RunEnded] does. For the engine's question at a
+// run's collection, whether the run ended on a refused sign-in.
+func (p *Provider) EndedKind(end RunEnd) (llm.ErrorKind, bool) {
+	at := end.At
+	if at.IsZero() {
+		at = p.now()
+	}
+	hit, _, ok := p.endedHit(end, at)
+	if !ok {
+		return 0, false
+	}
+	return hit.Kind, true
+}
+
+// endedHit classifies a run's ending: what [Provider.RunEnded] and
+// [Provider.EndedKind] both read.
+func (p *Provider) endedHit(end RunEnd, at time.Time) (markerHit, cliOutput, bool) {
+	out := cliOutput{said: nonEmpty(end.Answer, end.Error), stderr: end.Error,
+		failed: end.Failed, at: at, zone: p.zone}
+	var lines []string
+	if event := strings.TrimSpace(end.Event); event != "" {
+		lines = append(lines, event)
+	}
+	if p.profile.EffectiveMarkerScope() == cliprofile.MarkerScopeEvents {
+		if event := failureEvent(p.profile, end.Error); event != "" {
+			lines = append(lines, event)
+		}
+	}
+	out.stdout = strings.Join(lines, "\n")
+	hit, ok := classifyMarkers(p.profile, out)
+	return hit, out, ok
 }
 
 // failureEvent is the failure event a run's collected error came out of, as one
@@ -377,33 +503,4 @@ func setPath(doc map[string]any, path cliprofile.Path, v any) bool {
 		node = next
 	}
 	return false
-}
-
-// CarrySitOut takes over prev's sit-out, for an entry an apply rebuilt with an
-// unchanged spec: the same login, so the same spent plan.
-//
-// A REBUILT PROVIDER IS NOT A NEW PLAN. Every apply builds every entry afresh,
-// and a fresh provider sits nothing out — so the first apply after an entry
-// met its limit, an edit to an unrelated seat, handed every seat on the node
-// the spent entry back, and each of their next calls and launches spent a
-// process learning the window again. An entry whose spec CHANGED is a new
-// question — another login, another model — and starts clean.
-func (p *Provider) CarrySitOut(prev *Provider) {
-	if prev == nil || prev == p {
-		return
-	}
-	prev.sitOut.mu.Lock()
-	until, said := prev.sitOut.until, prev.sitOut.said
-	resets, unnamed := prev.sitOut.resetsAt, prev.sitOut.unnamed
-	prev.sitOut.mu.Unlock()
-	p.sitOut.mu.Lock()
-	defer p.sitOut.mu.Unlock()
-	// THE WHOLE REPORT, not only its window: the instant the vendor said the
-	// limit lifts, which a refusal names to a person ("resumes at 4:30"), and
-	// how far the backoff has stepped, so a report after the rebuild that
-	// names no reset takes the next step rather than the first again.
-	if until.After(p.sitOut.until) {
-		p.sitOut.until, p.sitOut.said, p.sitOut.resetsAt = until, said, resets
-	}
-	p.sitOut.unnamed = max(p.sitOut.unnamed, unnamed)
 }

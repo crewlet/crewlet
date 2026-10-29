@@ -23,9 +23,11 @@
  * a headless token, or the files `crewlet llm login` wrote. `api-key`: one key,
  * put in the CLI's own key variable, billed to the metered account.
  * `inherit-env`: whichever of the CLI's two variables the engine's own
- * environment holds.
+ * environment holds. `env`: the entry's own env signs the CLI in (a cloud
+ * provider's switch and credentials, or a gateway's token), and neither the
+ * token nor the key reaches the CLI.
  */
-export type CLIAuthMode = "subscription" | "api-key" | "inherit-env";
+export type CLIAuthMode = "subscription" | "api-key" | "inherit-env" | "env";
 
 /**
  * What each built-in CLI is called where a person reads it: "Claude Code

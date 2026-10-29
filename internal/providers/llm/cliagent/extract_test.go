@@ -671,7 +671,7 @@ func TestAMarkerThatCarriesAResetInstantSitsTheEntryOutUntilIt(t *testing.T) {
 	if failure.Kind != llm.KindRateLimit {
 		t.Errorf("kind = %v, want rate limit", failure.Kind)
 	}
-	if left := time.Until(prov.sitOut.until); left < 40*time.Minute || left > 46*time.Minute {
+	if left := time.Until(sitOutUntil(prov)); left < 40*time.Minute || left > 46*time.Minute {
 		t.Errorf("the entry sits out %v, want the reset instant the sentinel carried", left)
 	}
 }

@@ -75,9 +75,10 @@ func cliProvider(t *testing.T, m chainMember) *cliagent.Provider {
 			// A text stream has no events to tell apart, so the profile's
 			// event filter goes with it — and so does everything else that
 			// reads such a stream: its requests, its MCP failure events, its
-			// structured limit reports, the cap's signature in it.
+			// structured limit and sign-in reports, the cap's signature in it.
 			"event_type_path": []any{}, "text_events": []any{},
 			"requests": nil, "cap": nil, "limit_events": nil,
+			"limit_reset_events": nil, "auth_events": nil,
 			"mcp": map[string]any{"failure_events": []any{}},
 		}
 	}

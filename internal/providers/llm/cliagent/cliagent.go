@@ -47,6 +47,12 @@
 //     every profile field is data an operator can replace from YAML rather
 //     than a Go literal that needs a Crewlet release — see [cliprofile].
 //
+// WHAT THE VENDOR SAID IS THE ACCOUNT'S, NOT THE ENTRY'S (ADR-0069). A sit-out,
+// the readiness verdict and the last answer and refusal are kept per sign-in
+// ([SignInID]) in one node-wide registry ([Plans]) that outlives every apply,
+// so a rebuilt entry on the same account keeps its window, a new credential
+// starts clean, and entries on one credential pause together: see plans.go.
+//
 // The backend obeys the same two rules as every other member of this
 // contract: it does not retry, and it classifies a failure no further than a
 // coarse kind. The one classification that is genuinely its own is a SPENT
@@ -66,6 +72,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -111,11 +118,19 @@ type Config struct {
 	// which of it reaches the child.
 	Auth Auth
 	// CredentialBundle is a resolved bundle from `crewlet llm export`,
-	// restored into an EMPTY credential directory so a container rebuilt on
-	// every deploy comes up already authenticated. Kept, not restored, by
+	// restored into a credential directory holding no login, or over a login
+	// installed before it ([Provider.RestoreBundle]), so a container rebuilt
+	// on every deploy comes up already authenticated. Kept, not restored, by
 	// [New]: [Provider.RestoreConfiguredBundle] is the restore, made by
 	// whoever builds the entry to run it.
 	CredentialBundle string
+	// Plans is the node's registry of sign-ins, which the entry's sit-outs
+	// and readiness are kept in ([Plans]): the engine creates one for the
+	// process and hands it to every build, so a rebuilt entry with the same
+	// sign-in finds the windows its predecessor was sitting out. Nil gives
+	// the entry a registry of its own, under a random key: what a `crewlet
+	// llm` command, which builds one entry to report on it, needs.
+	Plans *Plans
 	// CredentialBundleConfigured is whether CredentialBundle came from
 	// auth.credential_bundle rather than the conventional
 	// CREWLET_LLM_CLI_<KEY>_CREDENTIALS ([cliprofile.BundleVarName]), for the lines that
@@ -153,12 +168,19 @@ type Provider struct {
 	// queueing must not go on to launch a process nobody is waiting for.
 	slots chan struct{}
 
-	// sitOut is the window this entry sits out after its CLI reported a
-	// spent plan ([Provider.bench]).
-	sitOut bench
+	// plans is the node's registry of sign-ins ([Config.Plans]), and plan
+	// the [Plan] of the sign-in the entry last read itself to call as
+	// (planOf), under planMu: what the entry's sit-outs and readiness are
+	// kept in ([Provider.Plan]).
+	plans  *Plans
+	planMu sync.Mutex
+	plan   *Plan
+	planOf SignInID
 
-	// ready is what the entry's calls met, for [Provider.Unready].
-	ready readiness
+	// zone is the time zone every child this provider starts is handed as
+	// TZ ([childZone]), and so the zone a reset the CLI names with no zone
+	// of its own is read in.
+	zone *time.Location
 
 	// now is the clock the bench is read against — time.Now, and a fixed
 	// clock in the suite, which has to watch a window end without waiting
@@ -201,7 +223,14 @@ func New(cfg Config) (*Provider, error) {
 	if slots <= 0 {
 		slots = 1
 	}
+	plans := cfg.Plans
+	if plans == nil {
+		plans = NewPlans(nil)
+	}
+	_, zone := childZone()
 	p := &Provider{
+		plans:            plans,
+		zone:             zone,
 		key:              cfg.Key,
 		bundle:           cfg.CredentialBundle,
 		bundleConfigured: cfg.CredentialBundleConfigured,
@@ -788,7 +817,7 @@ func (p *Provider) completion(
 	// sentinel may stand — see [classifyMarkers].
 	said := nonEmpty(out.text, res.stdout)
 	if hit, ok := classifyMarkers(p.profile, cliOutput{
-		said: said, stdout: res.stdout, stderr: res.stderr, failed: failed, at: p.now(),
+		said: said, stdout: res.stdout, stderr: res.stderr, failed: failed, at: p.now(), zone: p.zone,
 	}); ok {
 		return nil, p.classified(ctx, hit, nonEmpty(hit.Said, firstLine(said, res.stderr)))
 	}
@@ -979,10 +1008,31 @@ func (p *Provider) completion(
 // that it failed (Muse Code: "run ended with Failed") says why there alone.
 // The events scope reads the CLI's own failure events and nothing else, and
 // the stderr scope stderr alone — see [cliprofile.MarkerScope].
+//
+// # Auth first, then the limit, then dated
+//
+// A refused sign-in reported in the CLI's own fields ([classifyAuthEvents])
+// is read before everything else: a CLI that names a 401 has said what
+// failed, whatever its prose says after. A limit, once recognised, is then
+// dated and named ([dateLimit]): the reset and the window from the CLI's own
+// structured event where it wrote one, else from the vendor's sentence.
 func classifyMarkers(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
+	if hit, ok := classifyAuthEvents(p, out); ok {
+		return hit, true
+	}
+	hit, ok := classifyReport(p, out)
+	if ok && hit.Kind == llm.KindRateLimit {
+		hit = dateLimit(p, hit, out)
+	}
+	return hit, ok
+}
+
+// classifyReport is [classifyMarkers]' recognition of a limit or a login in
+// the CLI's structured limit report and its words.
+func classifyReport(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
 	// THE CLI'S OWN STRUCTURED REPORT FIRST, whatever the scope: a status
 	// code survives the rewording that silently retires a sentinel.
-	if hit, ok := classifyLimitEvents(p, out.stdout, out.at); ok {
+	if hit, ok := classifyLimitEvents(p, out); ok {
 		return hit, true
 	}
 	var haystacks []haystack
@@ -1009,7 +1059,7 @@ func classifyMarkers(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
 			}
 			return markerHit{
 				Kind:   llm.KindRateLimit,
-				Reset:  resetAt(lineAt(hay.text, idx), marker.Reset, out.at),
+				Reset:  resetAt(lineAt(hay.text, idx), marker.Reset, out.at, out.zone),
 				Said:   lineAt(hay.text, idx),
 				Source: hay.source,
 			}, true
@@ -1044,6 +1094,9 @@ type cliOutput struct {
 	// at is when the run ended: what a reset the vendor names as a time of
 	// day, or as a delay, is read against.
 	at time.Time
+	// zone is the zone the CLI ran in, which a reset it names with no zone
+	// of its own is read in ([childZone]); nil reads UTC.
+	zone *time.Location
 }
 
 // haystack is one text a sentinel may be found in, and on what terms.
@@ -1107,6 +1160,8 @@ type markerHit struct {
 	Said string
 	// Source is where it matched, which is why it counts as the vendor's.
 	Source markerSource
+	// Window is which limit a rate limit is ([dateLimit]).
+	Window llm.LimitWindow
 }
 
 // lineAt returns the line of s containing byte offset idx, trimmed.

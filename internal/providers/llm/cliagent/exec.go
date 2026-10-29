@@ -943,16 +943,16 @@ func classifyFailureEvents(p cliprofile.Profile, stdout string) (markerHit, bool
 // ([cliprofile.LimitEvent]): a decoded event that meets every condition of one
 // of the profile's limit events. The vendor's sentence is the string at the
 // event's said path, or the whole line where it names none, and the reset is
-// read from that sentence as of at.
+// read from that sentence as of the run's end, in its zone.
 //
 // Every line is decoded and none is searched as text, for the reason
 // [classifyFailureEvents] gives: the model writes inside an event's strings,
 // never the fields the match reads.
-func classifyLimitEvents(p cliprofile.Profile, stdout string, at time.Time) (markerHit, bool) {
+func classifyLimitEvents(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
 	if len(p.LimitEvents) == 0 {
 		return markerHit{}, false
 	}
-	for line := range strings.SplitSeq(stdout, "\n") {
+	for line := range strings.SplitSeq(out.stdout, "\n") {
 		line = strings.TrimSpace(line)
 		doc, ok := decodeObject(line)
 		if !ok {
@@ -963,12 +963,10 @@ func classifyLimitEvents(p cliprofile.Profile, stdout string, at time.Time) (mar
 				continue
 			}
 			said := line
-			if value, found := lookup(doc, event.SaidPath); found && len(event.SaidPath) > 0 {
-				if text, isString := value.(string); isString && strings.TrimSpace(text) != "" {
-					said = strings.TrimSpace(text)
-				}
+			if text, found := textAt(doc, event.SaidPath); found {
+				said = text
 			}
-			return markerHit{Kind: llm.KindRateLimit, Reset: resetAt(said, event.Reset, at),
+			return markerHit{Kind: llm.KindRateLimit, Reset: resetAt(said, event.Reset, out.at, out.zone),
 				Said: said, Source: sourceEvent}, true
 		}
 	}
