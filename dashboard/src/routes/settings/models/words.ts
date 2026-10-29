@@ -10,6 +10,7 @@
 
 import {
   CLI_PRODUCTS,
+  type RunnerCellName,
   type ModelAlarmKind,
   type ModelCheckName,
   type ModelDeviceStatus,
@@ -22,14 +23,19 @@ import { categoryFields, type JobCategory } from "~/lib/modelUses.ts";
 
 type Tone = "success" | "neutral" | "warning" | "danger" | "info";
 
-/** A model's one reading, as the list's dot and the page's header say it. */
+/**
+ * A model's one reading, as the list's dot and the page's header say it. A
+ * CONDITION, never a use (design QA M14): `untested` is a model nothing has
+ * called yet, so it reads "Not tested"; whether anything runs on it is Used
+ * by's to say.
+ */
 export const HEALTH: Record<ModelHealth, { label: string; tone: Tone }> = {
   ready: { label: "Ready", tone: "success" },
   expiring: { label: "Expires soon", tone: "warning" },
   rejected: { label: "Sign-in refused", tone: "danger" },
   sitting_out: { label: "Sitting out", tone: "warning" },
   no_sign_in: { label: "Not signed in", tone: "danger" },
-  untested: { label: "Not used yet", tone: "neutral" },
+  untested: { label: "Not tested", tone: "neutral" },
 };
 
 /** How a model signs in on the answering node. */
@@ -94,15 +100,15 @@ export const CATEGORY_WORDS: Record<JobCategory, { label: string; hint: string; 
     hint: "The seat's own work: writing code, running tools, and its onboarding pass.",
     verb: "code",
   },
-  checks: {
-    label: "Reviewing and evaluations",
-    hint: "Checks a turn's result before it is accepted, and decides when onboarding is done.",
-    verb: "review and evaluate work",
+  reviews: {
+    label: "Reviewing and delegations",
+    hint: "Checks a turn's result and runs the smaller jobs a seat hands off.",
+    verb: "review work and run delegated tasks",
   },
-  handoffs: {
-    label: "Task delegations and routines",
-    hint: "Smaller jobs a seat hands off, and background passes: memory, summaries and reflection.",
-    verb: "run delegated tasks and routines",
+  routines: {
+    label: "Routines and evaluations",
+    hint: "Background memory and summaries, and the checks that decide when onboarding is done.",
+    verb: "run routines and evaluations",
   },
 };
 
@@ -122,22 +128,21 @@ export const ASSISTANT_USE = {
 /** Every seat job at once. */
 export const EVERYTHING = {
   label: "Everything",
-  hint: "Use this model for every seat job: coding, reviewing and evaluations, and task delegations and routines.",
+  hint: "Use this model for every seat job: coding, reviewing and delegations, and routines and evaluations.",
   tip: "Sets the seat's llm to this model and clears llm_review, llm_subagent, llm_auxiliary and llm_judge, so every seat job resolves to it. The Assistant is separate: choose it on its own.",
 } as const;
 
 /**
- * The categories holding a job with a fixed deadline, and the quiet note shown
- * when the model chosen is not a fast one. The deadlines are the engine's
+ * The category whose jobs have a fixed deadline, and the quiet note shown when
+ * the model chosen is not a fast one. The deadlines are the engine's
  * (llm-backends.md, "Auxiliary work and latency"): the onboarding extension
- * judge and the turn-start prefetch each have 30 seconds, condensing and the
+ * judge has 30 seconds; the turn-start prefetch 30, condensing and the
  * reflection passes 60. A note, never a block: a slow model is cut off and
  * does less, it does not stall a turn.
  */
 export const FAST_NOTE: Partial<Record<JobCategory, string>> = {
-  checks: "Onboarding evaluations run under a 30 s limit; a fast model is recommended.",
-  handoffs:
-    "Memory and summary passes run under 30 s and 60 s limits; a fast model is recommended.",
+  routines:
+    "Evaluations run under a 30 s limit and routines under 30 s and 60 s limits; a fast model is recommended.",
 };
 
 /** Whether a model name reads as a vendor's fast tier. */
@@ -149,3 +154,10 @@ export function isFastModel(model: string): boolean {
 export function product(agent: string): string {
   return CLI_PRODUCTS[agent] ?? agent;
 }
+
+/** Where a model's coding runs happen, as the wizard's choice and the model's page both name it. */
+export const RUN_IN: Record<RunnerCellName, string> = {
+  direct: "On this engine's host",
+  container: "In a container",
+  e2b: "In E2B",
+};
