@@ -801,6 +801,7 @@ export function ModelWizard({
             <UseItFor
               draft={draft}
               data={data}
+              served={original?.uses ?? null}
               error={reviewErrors}
               onChange={(patch) => set(patch)}
             />
@@ -839,6 +840,7 @@ export function ModelWizard({
                   ?.dropped ?? []
               }
               editing={!!original}
+              served={original?.uses ?? noUses()}
               keptCredential={kept.credential}
               problems={check.kind === "checking" ? [] : listedProblems}
               check={check}
