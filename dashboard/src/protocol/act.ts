@@ -45,7 +45,7 @@
 import { ACTIONS } from "../contract/actions.ts";
 import { session, type SessionDomain, type SessionFloors } from "./session.ts";
 import { layoutOpID } from "./gate.ts";
-import { isAbort, rest, RestError } from "./rest.ts";
+import { isAbort, pathSegment, rest, RestError } from "./rest.ts";
 import {
   writeFailed,
   writeLanded,
@@ -181,7 +181,7 @@ export async function act<T extends ActionTool>(
 
   let body: unknown;
   try {
-    ({ body } = await rest.request("POST", `/operator/act/${encodeURIComponent(tool)}`, {
+    ({ body } = await rest.request("POST", `/operator/act/${pathSegment(tool)}`, {
       body: { args },
       contentType: "application/json",
       headers: { "Idempotency-Key": opId },
