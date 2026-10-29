@@ -531,12 +531,17 @@ test("a path segment is one segment, whatever it holds, or refused", () => {
 // every module's syntax tree. `encodeURIComponent` sends `..` as `..`, and
 // `/config/llm-providers/..` reaches `/config`: an id that is only dots asked
 // the route above it. So no module but the rule's own names
-// `encodeURIComponent`, and in every request path (a template passed to
-// `rest.*` or held as a `path`, any template starting with `/`, and a
-// `"/x/" + value` concatenation) whatever follows a `/`, up to the query, is
-// one segment (`pathSegment`, `pathSegments` or `linkSegment`). A template
-// that starts with what another builder returned (`${base(id)}/...`) is held
-// at that builder's own template.
+// `encodeURIComponent`, and every value put into a request path, up to its
+// query, is one segment (`pathSegment`, `pathSegments` or `linkSegment`),
+// whether a `/` precedes it or not: `/x/v-${id}` is as much a step along the
+// path as `/x/${id}` when the id is `../..`.
+//
+// A REQUEST PATH is a template or a `+` chain (read whole, every link of it)
+// that is passed to `rest.*`, held as a request's `path` (an object naming a
+// `method` beside it), starts with `/` and no whitespace, or starts
+// with a call to a PATH BUILDER: a function, in any module, that returns one
+// of those. A path a builder starts is held at the builder's own template, so
+// what follows the call is held here.
 describe("every path segment is one segment", () => {
   const SEGMENTERS = new Set(["pathSegment", "pathSegments", "linkSegment"]);
   /**
@@ -551,13 +556,162 @@ describe("every path segment is one segment", () => {
     "protocol/assistant.ts path.slice(ASSISTANT_PREFIX.length)",
     "protocol/assistant.ts streamUrl.slice(ASSISTANT_PREFIX.length)",
   ]);
-  const cooked = (quasi: Node) =>
-    ((quasi.value as { cooked?: string | null; raw: string }).cooked ??
-      (quasi.value as { raw: string }).raw) as string;
-  const isSegment = (node: Node) =>
-    node.type === "CallExpression" &&
-    (node.callee as Node).type === "Identifier" &&
-    SEGMENTERS.has(String((node.callee as Node).name));
+
+  /** What a path spells, in order: the text written into it and the values put between. */
+  type Piece = { text: string } | { value: Node };
+  const piecesOf = (node: Node): Piece[] => {
+    if (node.type === "BinaryExpression" && node.operator === "+")
+      return [...piecesOf(node.left as Node), ...piecesOf(node.right as Node)];
+    const text = stringValue(node);
+    if (text !== null) return [{ text }];
+    if (node.type === "TemplateLiteral") {
+      const quasis = node.quasis as Node[];
+      const expressions = node.expressions as Node[];
+      return quasis.flatMap((quasi, i) => {
+        const value = quasi.value as { cooked?: string | null; raw: string };
+        const piece: Piece[] = [{ text: value.cooked ?? value.raw }];
+        const expression = expressions[i];
+        return expression ? [...piece, { value: expression }] : piece;
+      });
+    }
+    return [{ value: node }];
+  };
+  const isPathShaped = (node: Node) =>
+    node.type === "TemplateLiteral" || (node.type === "BinaryExpression" && node.operator === "+");
+  const calleeName = (node: Node) =>
+    node.type === "CallExpression" && (node.callee as Node).type === "Identifier"
+      ? String((node.callee as Node).name)
+      : null;
+  const isSegment = (node: Node) => SEGMENTERS.has(calleeName(node) ?? "");
+  const startsPath = (pieces: Piece[], builders: ReadonlySet<string>) => {
+    const first = pieces.find((p) => !("text" in p) || p.text !== "");
+    if (!first) return false;
+    // A URL PATH SPELLS NO WHITESPACE: `/ ${total}` is a count read aloud, not a route.
+    return "text" in first
+      ? /^\/\S*$/.test(first.text)
+      : builders.has(calleeName(first.value) ?? "");
+  };
+
+  /** What each function returns, keyed by the name it is bound to. */
+  const returnsOf = (root: Node): Map<string, Node[]> => {
+    const out = new Map<string, Node[]>();
+    const add = (name: string, fn: Node) => {
+      const body = fn.body as Node;
+      if (body.type !== "BlockStatement") {
+        out.set(name, [body]);
+        return;
+      }
+      const returned: Node[] = [];
+      walk(body, (node) => {
+        if (node !== body && /Function/.test(node.type)) return false;
+        if (node.type === "ReturnStatement" && node.argument) returned.push(node.argument as Node);
+      });
+      out.set(name, returned);
+    };
+    walk(root, (node) => {
+      if (node.type === "FunctionDeclaration" && node.id) add(String((node.id as Node).name), node);
+      if (
+        node.type === "VariableDeclarator" &&
+        (node.id as Node).type === "Identifier" &&
+        node.init &&
+        /Function/.test((node.init as Node).type)
+      )
+        add(String((node.id as Node).name), node.init as Node);
+    });
+    return out;
+  };
+
+  /** Every function that returns a path, read to a fixed point: a builder may start with another. */
+  const buildersIn = (trees: Node[]): Set<string> => {
+    const returns = new Map<string, Node[]>();
+    for (const tree of trees)
+      for (const [name, nodes] of returnsOf(tree))
+        returns.set(name, [...(returns.get(name) ?? []), ...nodes]);
+    const builders = new Set<string>();
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const [name, nodes] of returns) {
+        if (builders.has(name)) continue;
+        if (nodes.some((n) => isPathShaped(n) && startsPath(piecesOf(n), builders))) {
+          builders.add(name);
+          grew = true;
+        }
+      }
+    }
+    return builders;
+  };
+
+  const keyOf = (property: Node) =>
+    (property.key as Node).type === "Identifier"
+      ? String((property.key as Node).name)
+      : stringValue(property.key as Node);
+  /**
+   * A `path` held in a REQUEST: an object that names a `method` beside it, as
+   * a keyed write does. A draft's field path (`tabs.${i}.title`) is no request's.
+   */
+  const requestObjects = new WeakSet<Node>();
+  const isRequestPath = (property: Node) =>
+    keyOf(property) === "path" && requestObjects.has(property);
+
+  interface Source {
+    path: string;
+    text: string;
+    lang: "ts" | "tsx" | "dts";
+  }
+  /** The values in `sources`' request paths that are not one segment, and the paths read. */
+  function offendersIn(sources: readonly Source[]) {
+    const trees = sources.map((s) => parse(s.text, s.lang));
+    const builders = buildersIn(trees);
+    const offending: string[] = [];
+    const declared = new Set<string>();
+    let checked = 0;
+    sources.forEach(({ path, text }, m) => {
+      const line = lineOf(text);
+      walk(trees[m]!, (node, parent, key) => {
+        if (node.type === "ObjectExpression") {
+          const properties = (node.properties as Node[]).filter((p) => p.type === "Property");
+          if (properties.some((p) => keyOf(p) === "method"))
+            for (const property of properties) requestObjects.add(property);
+          return;
+        }
+        if (!isPathShaped(node)) return;
+        // A LINK OF A CHAIN is read with the whole chain, from its top.
+        if (parent?.type === "BinaryExpression" && parent.operator === "+") return;
+        const pieces = piecesOf(node);
+        if (pieces.every((p) => "text" in p)) return;
+        const passed =
+          parent?.type === "CallExpression" &&
+          key === "arguments" &&
+          (parent.callee as Node).type === "MemberExpression" &&
+          ((parent.callee as Node).object as Node).type === "Identifier" &&
+          ((parent.callee as Node).object as Node).name === "rest";
+        const held = parent?.type === "Property" && key === "value" && isRequestPath(parent);
+        if (!passed && !held && !startsPath(pieces, builders)) return;
+        checked++;
+        // THE PATH ENDS AT THE QUERY: what follows a `?` is no segment.
+        let before = "";
+        let inQuery = false;
+        pieces.forEach((piece, i) => {
+          if ("text" in piece) {
+            before = piece.text;
+            inQuery ||= piece.text.includes("?");
+            return;
+          }
+          const value = piece.value;
+          if (inQuery || isSegment(value)) return;
+          const leading = pieces.slice(0, i).every((p) => "text" in p && p.text === "");
+          if (leading && builders.has(calleeName(value) ?? "")) return;
+          const named = `${path} ${text.slice(value.start, value.end)}`;
+          if (DECLARED.has(named)) {
+            declared.add(named);
+            return;
+          }
+          offending.push(`${path}:${line(value.start)} after "${before}"`);
+        });
+      });
+    });
+    return { offending, declared, checked };
+  }
 
   test("no module but the rule's own encodes a segment itself", () => {
     const offending: string[] = [];
@@ -572,54 +726,59 @@ describe("every path segment is one segment", () => {
     expect(offending).toEqual([]);
   });
 
-  test("whatever follows a slash in a request path is one segment", () => {
-    const offending: string[] = [];
-    const declared = new Set<string>();
-    let checked = 0;
-    for (const { path, text, lang } of modules()) {
-      const line = lineOf(text);
-      walk(parse(text, lang), (node, parent, key) => {
-        if (node.type === "BinaryExpression" && node.operator === "+") {
-          const left = stringValue(node.left as Node);
-          if (left !== null && left.startsWith("/") && left.endsWith("/")) {
-            checked++;
-            if (!isSegment(node.right as Node))
-              offending.push(`${path}:${line(node.start)} "${left}" + a value`);
-          }
-          return;
-        }
-        if (node.type !== "TemplateLiteral") return;
-        const quasis = node.quasis as Node[];
-        const expressions = node.expressions as Node[];
-        if (expressions.length === 0) return;
-        const passed =
-          parent?.type === "CallExpression" &&
-          key === "arguments" &&
-          (parent.callee as Node).type === "MemberExpression" &&
-          ((parent.callee as Node).object as Node).type === "Identifier" &&
-          ((parent.callee as Node).object as Node).name === "rest";
-        if (!passed && !cooked(quasis[0]!).startsWith("/")) return;
-        checked++;
-        // THE PATH ENDS AT THE QUERY: what follows a `?` is no segment.
-        let inQuery = false;
-        expressions.forEach((expression, i) => {
-          const before = cooked(quasis[i]!);
-          inQuery ||= before.includes("?");
-          if (inQuery || !before.endsWith("/")) return;
-          if (isSegment(expression)) return;
-          const named = `${path} ${text.slice(expression.start, expression.end)}`;
-          if (DECLARED.has(named)) {
-            declared.add(named);
-            return;
-          }
-          offending.push(`${path}:${line(expression.start)} after "${before}"`);
-        });
-      });
-    }
+  test("every value put into a request path is one segment", () => {
+    const { offending, declared, checked } = offendersIn(modules());
     // FLOOR: the walk reached the request paths it exists for.
     expect(checked).toBeGreaterThan(40);
     expect(offending).toEqual([]);
     // Every declared shape is still built where it was named: a stale one goes.
     expect([...declared].sort()).toEqual([...DECLARED].sort());
+  });
+
+  // EACH SHAPE A PATH TAKES, a raw value in it found. Every one of these went
+  // unread before the guard read paths whole.
+  test.each<[string, string]>([
+    [
+      "held as a request's path",
+      'export const r = (id: string) => ({ method: "GET", path: `artifacts/${id}` });',
+    ],
+    [
+      "started by a builder",
+      "const base = (id: string) => `/a/${pathSegment(id)}`;\n" +
+        "export const r = (id: string, n: string) => `${base(id)}/versions/${n}`;",
+    ],
+    [
+      "started by a builder a builder starts",
+      "function base(id: string) { return `/a/${pathSegment(id)}`; }\n" +
+        "const versions = (id: string) => `${base(id)}/versions`;\n" +
+        "export const r = (id: string, n: string) => `${versions(id)}/${n}`;",
+    ],
+    [
+      "a chain past its first value",
+      'export const r = (a: string, b: string) => "/a/" + pathSegment(a) + "/b/" + b;',
+    ],
+    ["a value inside a segment", "export const r = (id: string) => `/x/v-${id}`;"],
+  ])("a raw value in a path %s is found", (_, text) => {
+    const { offending } = offendersIn([{ path: "case.ts", text, lang: "ts" }]);
+    expect(offending).toHaveLength(1);
+  });
+
+  test("a segmented path, a builder's own call and a query pass", () => {
+    const text =
+      "const base = (id: string) => `/a/${pathSegment(id)}`;\n" +
+      "export const r = (id: string, n: string, q: string) =>\n" +
+      '  [`${base(id)}/v-${pathSegment(n)}?q=${q}`, "/a/" + pathSegment(id) + "?q=" + q];';
+    const { offending, checked } = offendersIn([{ path: "case.ts", text, lang: "ts" }]);
+    expect(offending).toEqual([]);
+    expect(checked).toBe(3);
+  });
+
+  test("a field path and a count read aloud are no request's path", () => {
+    const text =
+      "export const r = (i: number, n: number) =>\n" +
+      "  [{ path: `tabs.${i}.title`, label: `Tab ${i}` }, `/ ${n}`];";
+    const { offending, checked } = offendersIn([{ path: "case.ts", text, lang: "ts" }]);
+    expect(offending).toEqual([]);
+    expect(checked).toBe(0);
   });
 });
