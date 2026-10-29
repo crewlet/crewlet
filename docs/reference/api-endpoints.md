@@ -329,8 +329,8 @@ one that strips it makes every answer read as one the node never gave, so a
 write's outcome is reported unknown and never as refused. A dashboard served
 from another origin (`api.auth.allowed_origins`) reads it because the node
 exposes it to permitted origins (`Access-Control-Expose-Headers`, beside the
-`ETag` and `Retry-After` it reads too); a proxy that rewrites that header must
-keep `X-Crewlet-Engine` in it.
+`ETag`, `Retry-After` and `X-Request-Id` it reads too); a proxy that rewrites
+that header must keep `X-Crewlet-Engine` in it.
 
 ---
 
