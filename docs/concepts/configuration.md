@@ -1373,7 +1373,7 @@ where it is one revision tag of at most 128 bytes, and `<invalid>` otherwise),
 problem's detail. INFO rather than WARNING because a refusal is the engine
 working as meant: a stale tab or an expired step-up refuses routinely. Each
 write answers an `X-Request-Id` header, the caller's own where it sent one
-(a printable token of at most 128 bytes) and a minted UUID where not, so a
+(one token of at most 128 bytes of letters, digits and `._~:+/=-`) and a minted UUID where not, so a
 refusal a user reports can be found in the log by it.
 
 See the [API endpoints reference](../reference/api-endpoints.md#config--live-config-management-auth-gated) for the per-route auth + status semantics.

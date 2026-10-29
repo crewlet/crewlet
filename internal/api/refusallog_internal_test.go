@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 )
 
@@ -139,5 +141,76 @@ func TestABaseRevisionIsLoggedOnlyInATagsShape(t *testing.T) {
 	if !strings.Contains(logged.String(), `"base_revision":"<invalid>"`) ||
 		strings.Contains(logged.String(), "glpat") {
 		t.Errorf("an If-Match that is no tag logged %s", logged.String())
+	}
+}
+
+// A REQUEST ID IS THE CALLER'S ONLY WHERE IT IS ONE TOKEN. Anything else is
+// replaced by a minted UUID, answered and logged, so no caller's text that is
+// not an id reaches the log through it.
+func TestARequestIDIsTheCallersOnlyWhereItIsOneToken(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, sent string
+		kept       bool
+	}{
+		{"a UUID", "0192f1a4-9b2d-7c03-a4e1-5f3b9d0c7a12", true},
+		{"a trace id", "1-67891233-abcdef012345678912345678", true},
+		{"base64", "q83vEjRWeJA=", true},
+		{"a=b", "a=b", true},
+		{"128 bytes", strings.Repeat("a", 128), true},
+		{"absent", "", false},
+		{"129 bytes", strings.Repeat("a", 129), false},
+		{"a space", "req 7f3a", false},
+		{"a tab", "req\t7f3a", false},
+		{"non-ASCII", "r\u00e9q-7f3a", false},
+		{"a=b quoted", `"a=b"`, false},
+		{"a newline", "req-7f3a\nlevel=ERROR", false},
+	} {
+		got := requestID(tc.sent)
+		if kept := got == tc.sent; kept != tc.kept {
+			t.Errorf("%s: requestID(%q) = %q, kept %v, want %v", tc.name, tc.sent, got, kept, tc.kept)
+		}
+		if !tc.kept {
+			if _, err := uuid.Parse(got); err != nil {
+				t.Errorf("%s: requestID(%q) minted %q, not a UUID", tc.name, tc.sent, got)
+			}
+		}
+	}
+}
+
+// A CHECK IS SAID TO BE ONE, AND A READ IS NEVER LOGGED. A refused dry run
+// logs dry_run true; a GET the surface refuses logs nothing, through a mount
+// with no method (configapi's), where the read and the write share a mount
+// and only the request's method tells them apart.
+func TestARefusedCheckSaysSoAndARefusedReadLogsNothing(t *testing.T) {
+	t.Parallel()
+	var logged bytes.Buffer
+	inner := http.NewServeMux()
+	refusalMux{Mux: inner, log: slog.New(slog.NewJSONHandler(&logged, nil))}.Handle("/config/",
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			httpjson.Fail(w, http.StatusUnprocessableEntity, httpjson.CodeInvalidBody)
+		}))
+	send := func(method, target string) *httptest.ResponseRecorder {
+		res := httptest.NewRecorder()
+		inner.ServeHTTP(res, httptest.NewRequest(method, target, nil))
+		return res
+	}
+
+	send(http.MethodPut, "/config/roles/ceo?dry_run=true")
+	var line map[string]any
+	if err := json.Unmarshal(logged.Bytes(), &line); err != nil || line["dry_run"] != true {
+		t.Errorf("a refused dry run logged %s, want dry_run true", logged.String())
+	}
+
+	logged.Reset()
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		if res := send(method, "/config/roles/ceo"); res.Code != http.StatusUnprocessableEntity ||
+			res.Header().Get(requestIDHeader) != "" {
+			t.Errorf("%s = %d answering request id %q, want the refusal with none", method,
+				res.Code, res.Header().Get(requestIDHeader))
+		}
+	}
+	if logged.Len() != 0 {
+		t.Errorf("a refused read logged: %s", logged.String())
 	}
 }

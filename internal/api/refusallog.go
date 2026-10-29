@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"unicode"
 
 	"github.com/google/uuid"
 
@@ -158,12 +157,13 @@ func isToken(s, extra string) bool {
 	return true
 }
 
-// requestID is the request's id: sent, where it is one printable token of at
-// most 128 bytes, or minted.
+// requestID is the request's id: sent, where it is one token of at most 128
+// bytes of letters, digits and the punctuation a UUID, a trace id or base64
+// carries (`.`, `_`, `~`, `:`, `+`, `/`, `=`, `-`), or minted. No space,
+// quote or control byte, so the id reads the same in a text log line as in
+// the header it was answered in.
 func requestID(sent string) string {
-	if sent != "" && len(sent) <= 128 && strings.IndexFunc(sent, func(r rune) bool {
-		return r > unicode.MaxASCII || !unicode.IsPrint(r) || unicode.IsSpace(r)
-	}) < 0 {
+	if isToken(sent, "._~:+/=-") {
 		return sent
 	}
 	return uuid.NewString()
