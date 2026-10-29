@@ -42,6 +42,16 @@ import (
 // record or a change's write waits in the same queue under the same bounds as
 // the pushes around it, and meeting a full queue is the same backlog.
 //
+// EVERY MINUTE IS ONE A CLOCK CAN READ — the epoch's first, every one before
+// it, the zero time's — so no minute marks a slot nothing was filed in: a slot
+// is empty while it has no map ([busyMinute.filled]), and the window has no
+// newest minute until its first filing or reading ([busyWindow.begun]).
+// Marked by minute zero, a refusal stamped in 1970's first minute — a node's
+// clock reset to the epoch — or at any instant before it, moved there by a
+// newest minute that began at zero, met a slot that seemed to hold its minute
+// already, with no map to count it in, and panicked on the goroutine that
+// refused it; and that minute was neither counted nor logged.
+//
 // No repository is an attribute of the counter (a time series a repository is
 // how a metrics backend falls over), so which one is hot is the reading's and
 // the log's: one code_commit_busy warning a repository a minute, with that
@@ -136,30 +146,43 @@ func (c *Committer) sayBusy(lines []busyLine) {
 }
 
 // busyWindow is a committer's busy refusals, a bucket a minute over the last
-// CommitBusyWindow.
+// CommitBusyWindow. The zero value is a window nothing was filed in or read
+// from.
 type busyWindow struct {
 	mu sync.Mutex
 	// minutes is a ring: a minute's bucket is the slot at its minute modulo
 	// busyBuckets, and a slot holding an older minute is that minute expired.
 	minutes [busyBuckets]busyMinute
 	// newest is the latest minute a refusal was filed in or a reading was
-	// taken at. A refusal stamped before it — an instant read before a
-	// reading's, or another refusal's, and filed after it, or a wall clock
-	// stepped back — is filed in it instead, so a minute whose lines were
-	// written never gains a refusal they did not count.
+	// taken at, once begun. A refusal stamped before it — an instant read
+	// before a reading's, or another refusal's, and filed after it, or a
+	// wall clock stepped back — is filed in it instead, so a minute whose
+	// lines were written never gains a refusal they did not count.
 	newest int64
+	// begun reports newest set: before the first filing or reading there is
+	// no newest minute, and the first refusal is filed in its own — where a
+	// newest that began at zero, the epoch's first minute, moved every
+	// earlier refusal into that minute.
+	begun bool
 }
 
-// busyMinute is one minute's refusals, by repository.
+// busyMinute is one minute's refusals, by repository. The zero value is a
+// slot nothing has been filed in.
 type busyMinute struct {
-	// at is the minute, counted in minutes since the Unix epoch; zero for a
-	// slot nothing has been filed in.
+	// at is the minute, counted in minutes since the Unix epoch — negative
+	// before it — and meaningful only in a filled slot.
 	at int64
-	// repos is each repository refused in the minute, by id.
+	// repos is each repository refused in the minute, by id: made when the
+	// slot's first refusal is filed, and nil in a slot nothing has been filed
+	// in — which is how the two are told apart, since every minute is one a
+	// clock can read and none can mark an empty slot.
 	repos map[string]*busyCounts
 	// said reports the minute's lines written.
 	said bool
 }
+
+// filled reports a slot a refusal has been filed in.
+func (m *busyMinute) filled() bool { return m.repos != nil }
 
 // busyCounts is one repository's refusals in one minute, by reason.
 type busyCounts struct{ queue, node, late, contended int }
@@ -196,8 +219,17 @@ type busyLine struct {
 
 // minuteOf is at's minute, in minutes since the Unix epoch — the wall clock's,
 // so a refusal stamped by the committer's clock and a reading taken by another
-// read the same minute.
-func minuteOf(at time.Time) int64 { return at.Unix() / int64(busyBucket/time.Second) }
+// read the same minute. FLOORED: Go's division truncates toward zero, which
+// would file the half minute before the epoch in the minute after it.
+func minuteOf(at time.Time) int64 {
+	const perMinute = int64(busyBucket / time.Second)
+	seconds := at.Unix()
+	minute := seconds / perMinute
+	if seconds%perMinute < 0 {
+		minute--
+	}
+	return minute
+}
 
 // slot is minute's slot in the ring.
 func (w *busyWindow) slot(minute int64) *busyMinute {
@@ -214,11 +246,14 @@ func (w *busyWindow) slot(minute int64) *busyMinute {
 func (w *busyWindow) file(at time.Time, repo string, reason busyReason, n int) []busyLine {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	minute := max(minuteOf(at), w.newest)
-	w.newest = minute
+	minute := minuteOf(at)
+	if w.begun {
+		minute = max(minute, w.newest)
+	}
+	w.newest, w.begun = minute, true
 	lines := w.closeBefore(minute)
 	s := w.slot(minute)
-	if s.at != minute {
+	if !s.filled() || s.at != minute {
 		*s = busyMinute{at: minute, repos: map[string]*busyCounts{}}
 	}
 	counts := s.repos[repo]
@@ -237,7 +272,9 @@ func (w *busyWindow) reading(now time.Time) (BusyReading, []busyLine) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	lines := w.closeBefore(minute)
-	w.newest = max(w.newest, minute)
+	if !w.begun || minute > w.newest {
+		w.newest, w.begun = minute, true
+	}
 	var out BusyReading
 	var of map[string]int
 	for i := range w.minutes {
@@ -245,7 +282,7 @@ func (w *busyWindow) reading(now time.Time) (BusyReading, []busyLine) {
 		// A MINUTE PAST THE WINDOW is expired; one later than now's is a
 		// refusal stamped a moment after the reading's clock was read, and
 		// stands.
-		if s.at == 0 || s.at <= minute-int64(busyBuckets) {
+		if !s.filled() || s.at <= minute-int64(busyBuckets) {
 			continue
 		}
 		for repo, counts := range s.repos {
@@ -276,7 +313,7 @@ func (w *busyWindow) reading(now time.Time) (BusyReading, []busyLine) {
 func (w *busyWindow) closeBefore(minute int64) []busyLine {
 	var closed []*busyMinute
 	for i := range w.minutes {
-		if s := &w.minutes[i]; s.at != 0 && s.at < minute && !s.said {
+		if s := &w.minutes[i]; s.filled() && s.at < minute && !s.said {
 			closed = append(closed, s)
 		}
 	}

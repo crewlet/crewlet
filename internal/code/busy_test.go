@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"testing"
 	"time"
 
@@ -157,4 +158,78 @@ func TestABacklogRaisesTheBusyReadingForItsWindow(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A BUSY REFUSAL IS FILED IN ITS OWN MINUTE, WHATEVER THE INSTANT. The epoch's
+// first minute, the minutes before it and the zero time's are minutes a clock
+// can read like any other — a node's clock reset to 1970, a case's clock never
+// set — so a refusal stamped in one is counted for the window, and its
+// minute's line is written once, naming that minute.
+//
+// Mutations: tell an empty slot by its minute being zero, and a refusal in
+// the epoch's first minute — or one moved there — panics on the slot's
+// missing map, or is never counted; start the newest minute at zero rather
+// than at the first filing, and the zero time's refusals are filed in the
+// epoch's minute; divide the seconds toward zero, and the half minute before
+// the epoch is filed in the minute after it.
+func TestABusyRefusalIsFiledInItsOwnMinuteAtAnyInstant(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo := repoOn(t, n, "web")
+	epoch := time.Unix(0, 0)
+	for name, tc := range map[string]struct {
+		// at is when each refusal is stamped, in order.
+		at []time.Time
+		// minutes is each minute's line: its minute and its refusals.
+		minutes map[string]float64
+	}{
+		"the zero time": {at: []time.Time{{}, {}},
+			minutes: map[string]float64{"0001-01-01T00:00:00Z": 2}},
+		"the epoch's first minute": {at: []time.Time{epoch, epoch.Add(30 * time.Second)},
+			minutes: map[string]float64{"1970-01-01T00:00:00Z": 2}},
+		"a half minute either side of the epoch": {
+			at:      []time.Time{epoch.Add(-30 * time.Second), epoch.Add(30 * time.Second)},
+			minutes: map[string]float64{"1969-12-31T23:59:00Z": 1, "1970-01-01T00:00:00Z": 1}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			logs := &lineLog{}
+			c, _ := committerOn(t, n, n.pub, func(o *code.CommitterOptions) {
+				o.Logger = slog.New(slog.NewJSONHandler(logs, nil))
+			})
+			clock := &fakeClock{at: tc.at[0]}
+			code.SetCommitterClock(c, clock.now)
+			// A NODE THAT HOLDS NOTHING: every proposal is refused at once,
+			// stamped by the committer's clock.
+			code.SetCommitterNodeBytes(c, 1)
+			for i, at := range tc.at {
+				clock.advance(at.Sub(clock.now()))
+				res, err := c.Propose(t.Context(), proposal(repo,
+					update(fmt.Sprintf("refs/heads/b%d", i), code.ZeroOID, oidOf("B"))))
+				if err != nil || res.Answer.Refused != code.RefusalBusy {
+					t.Fatalf("a push past the node's bytes at %v answered %+v, %v; want busy", at, res.Answer, err)
+				}
+			}
+			last := tc.at[len(tc.at)-1]
+			refused := len(tc.at)
+			want := code.BusyReading{Refused: refused, Repo: repo, OfRepo: refused, Node: refused}
+			if got := c.AlarmReading(last); got != want {
+				t.Fatalf("the reading at %v is %+v, want %+v", last, got, want)
+			}
+			// EACH MINUTE SAID ONCE, by its own minute, once it has closed.
+			c.AlarmReading(last.Add(time.Minute))
+			c.AlarmReading(last.Add(2 * time.Minute))
+			said := map[string]float64{}
+			for _, line := range logs.lines("code_commit_busy") {
+				minute, _ := line["minute"].(string)
+				if _, twice := said[minute]; twice {
+					t.Errorf("the minute %s was logged twice", minute)
+				}
+				said[minute], _ = line["refused"].(float64)
+			}
+			if !maps.Equal(said, tc.minutes) {
+				t.Errorf("the minutes logged are %v, want %v", said, tc.minutes)
+			}
+		})
+	}
 }
