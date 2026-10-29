@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -61,15 +62,41 @@ func faultsOf(t *testing.T, err error) []*config.Fault {
 	return faults
 }
 
+// listAtTheBound is a file of one valid check whose key holds a flow list of
+// the items item spells, as many as fit in MaxChecksFileBytes: the most items
+// one list of a file can hold.
+func listAtTheBound(key string, item func(i int) string) string {
+	var b strings.Builder
+	b.WriteString("checks:\n  - name: unit\n    run: make test\n    timeout_seconds: 600\n    " + key + ": [")
+	for i := 0; ; i++ {
+		next := item(i)
+		if i > 0 {
+			next = ", " + next
+		}
+		if b.Len()+len(next)+len("]\n") > code.MaxChecksFileBytes {
+			break
+		}
+		b.WriteString(next)
+	}
+	b.WriteString("]\n")
+	return b.String()
+}
+
 // A CHECKS FILE PARSES STRICTLY: every check of a whole file reads into the
 // definition it spells, and every way a file can say something other than
 // what a reader takes it to say is refused — at its authored path, as the kind
 // of mistake it is, on its line — and every fault in a file is reported, not
-// the first.
+// the first: up to MaxChecksFileFaults of them, and a count of the rest.
+//
+// And a parse costs no more than the file's bound: a list past its bound is
+// ONE fault, its count, whatever it holds and however many items a 64 KiB file
+// packs into it — none of them read, judged or compared with another.
 //
 // Mutation: accept an unknown key of a check (drop its fault) and "an unknown
 // key" goes red; let a key written twice through and "a key written twice"
-// does.
+// does; read a list's items before its count, and "numbers past the paths'
+// bound" gets a fault an item; list every fault, and "faults past the listed
+// ones" lists them all.
 func TestAChecksFileParsesStrictly(t *testing.T) {
 	t.Parallel()
 	const whole = `# The repository's checks.
@@ -119,6 +146,19 @@ checks:
 	for i := range cone {
 		cone[i] = fmt.Sprintf("dir%02d", i)
 	}
+	// MORE FAULTS THAN A REFUSAL LISTS: a key the grammar does not know,
+	// fifty more times than the refusal lists — each one listed in its turn
+	// up to the bound, and the rest counted by one fault at no field.
+	var unknown strings.Builder
+	var listed []wantFault
+	unknown.WriteString(valid)
+	for i := range code.MaxChecksFileFaults + 50 {
+		fmt.Fprintf(&unknown, "    k%04d: 1\n", i)
+		if i < code.MaxChecksFileFaults {
+			listed = append(listed, wantFault{fmt.Sprintf("checks[0].k%04d", i), config.ErrUnknownField, 5 + i})
+		}
+	}
+	listed = append(listed, wantFault{"", config.ErrOutOfRange, 0})
 	for _, tc := range []struct {
 		name string
 		doc  string
@@ -200,6 +240,18 @@ checks:
 			[]wantFault{{"checks[0].timout", config.ErrUnknownField, 5},
 				{"checks[0].name", config.ErrUnknownValue, 2},
 				{"checks[1].timeout_seconds", config.ErrOutOfRange, 8}}},
+		{"faults past the listed ones", unknown.String(), listed},
+		// A LIST PAST ITS BOUND IS ITS COUNT, at the most items a file holds:
+		// numbers, each a fault of its own were it read; names no shell
+		// takes, each a fault were it judged; and a cone of directories
+		// outside the repository.
+		{"numbers past the paths' bound", listAtTheBound("paths", strconv.Itoa),
+			[]wantFault{{"checks[0].paths", config.ErrOutOfRange, 5}}},
+		{"names past the env's bound", listAtTheBound("env", func(i int) string { return fmt.Sprint(i, "x") }),
+			[]wantFault{{"checks[0].env", config.ErrOutOfRange, 5}}},
+		{"directories past the cone's bound",
+			listAtTheBound("checkout", func(i int) string { return fmt.Sprint("../", i) }),
+			[]wantFault{{"checks[0].checkout", config.ErrOutOfRange, 5}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -213,6 +265,11 @@ checks:
 				t.Errorf("faults\n%v\nwant\n%v\n(%v)", got, tc.want, err)
 			}
 		})
+	}
+	_, counted := code.ParseChecks([]byte(unknown.String()))
+	if faults := faultsOf(t, counted); !strings.Contains(faults[len(faults)-1].Detail, "50 more faults") {
+		t.Errorf("the refusal's last fault says %q; want it to count the 50 faults it does not list",
+			faults[len(faults)-1].Detail)
 	}
 }
 
@@ -354,4 +411,71 @@ func FuzzParseChecks(f *testing.F) {
 			t.Fatalf("a parsed file written back reads as\n%+v\nnot\n%+v", again, file)
 		}
 	})
+}
+
+// BenchmarkParseChecks is ONE PARSE of a checks file at its bound — what the
+// home git node pays for the file on every change it dispatches, and what
+// `crewlet validate` pays for it on a laptop:
+//
+//   - whole: the most a VALID file makes a parse judge — as many checks as
+//     fit in MaxChecksFileBytes, each with every list at its bound (32 path
+//     globs, a cone of 64 directories, 32 variable names), every item read
+//     and judged;
+//   - paths, env and cone: one list holding as many items as fit in
+//     MaxChecksFileBytes — numbers where globs belong, names no shell takes,
+//     directories outside the repository — each refused by its count alone;
+//   - keys: a check of as many keys the grammar does not know as fit in the
+//     file, the refusal listing MaxChecksFileFaults of them.
+//
+// checksfile.go's package doc records the figures.
+func BenchmarkParseChecks(b *testing.B) {
+	// list is n items, the i-th spelled as format spells i, as a flow list.
+	list := func(n int, format string) string {
+		items := make([]string, n)
+		for i := range items {
+			items[i] = fmt.Sprintf(format, i)
+		}
+		return "[" + strings.Join(items, ", ") + "]"
+	}
+	var whole strings.Builder
+	whole.WriteString("checks:\n")
+	for c := range code.MaxChecksPerFile {
+		check := fmt.Sprintf("  - name: check-%02d\n    run: make check-%02d\n    timeout_seconds: 600\n"+
+			"    paths: %s\n    checkout: %s\n    env: %s\n", c, c, list(code.MaxCheckPaths, "src/p%02d/**"),
+			list(sandbox.MaxConePaths, "d%02d"), list(code.MaxCheckEnv, "E%02d"))
+		if whole.Len()+len(check) > code.MaxChecksFileBytes {
+			break
+		}
+		whole.WriteString(check)
+	}
+	var keys strings.Builder
+	keys.WriteString("checks:\n  - name: unit\n    run: make test\n    timeout_seconds: 600\n")
+	for i := 0; keys.Len()+len("    k00000: 1\n") <= code.MaxChecksFileBytes; i++ {
+		fmt.Fprintf(&keys, "    k%05d: 1\n", i)
+	}
+	for _, arm := range []struct {
+		name  string
+		doc   string
+		valid bool
+	}{
+		{"whole", whole.String(), true},
+		{"paths", listAtTheBound("paths", strconv.Itoa), false},
+		{"env", listAtTheBound("env", func(i int) string { return fmt.Sprint(i, "x") }), false},
+		{"cone", listAtTheBound("checkout", func(i int) string { return fmt.Sprint("../", i) }), false},
+		{"keys", keys.String(), false},
+	} {
+		b.Run(arm.name, func(b *testing.B) {
+			doc := []byte(arm.doc)
+			if len(doc) > code.MaxChecksFileBytes {
+				b.Fatalf("the %s file is %d bytes, past the bound", arm.name, len(doc))
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if _, err := code.ParseChecks(doc); (err == nil) != arm.valid {
+					b.Fatalf("the %s file parsed to %v", arm.name, err)
+				}
+			}
+		})
+	}
 }

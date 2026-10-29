@@ -1487,11 +1487,15 @@ on every change instead of the few it meant. So the file is refused for:
 - an alias or a merge key (`<<`), which spell a check somewhere other than
   where it stands;
 - more than one YAML document, more than 64 checks, or more than 64 KiB;
-- every value outside its bound above.
+- every value outside its bound above — a list longer than its bound by its
+  length alone, none of its items read, so a file costs whoever reads it no
+  more than its bound, whatever it packs into one list.
 
 Every fault is reported, not the first, each at its field and its line, in the
-shape a config document's are: `crewlet validate .crewlet/checks.yaml` reads
-the file as the code host does. It tells the file apart from either config
+shape a config document's are — the first 128 of them, with one more line
+counting the rest, since a 64 KiB file can hold thousands of faulty keys.
+`crewlet validate .crewlet/checks.yaml` reads the file as the code host does.
+It tells the file apart from either config
 tier by a `checks:` beside no key of either tier, whatever else the file
 carries — so a typo'd key beside `checks:` is refused at its own line by the
 file's strict reading, rather than reported as a document no tier could be

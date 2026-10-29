@@ -342,8 +342,9 @@ genuinely broken document. Force it with `-tier company` / `-tier bootstrap`.
 The same loop checks a repository's `.crewlet/checks.yaml` — told apart by a
 `checks:` beside no key of either tier, whatever else it carries, or forced
 with `-tier checks` — with every problem located at its field and line in the
-same payload, a typo'd key beside `checks:` among them, refused at its own line
-rather than reported as an undecidable document ([The checks
+same payload (the first 128, and one more counting the rest), a typo'd key
+beside `checks:` among them, refused at its own line rather than reported as an
+undecidable document ([The checks
 file](../concepts/code-host.md#the-checks-file)).
 
 ---

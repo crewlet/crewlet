@@ -785,7 +785,8 @@ crewlet.yaml: stream "nats", coordination "embedded-kv", store "…", roles [sea
 A **checks file** is read by the one parser the code host reads it with,
 strictly: every key it does not know, every key written twice, a value of the
 wrong shape and every value past its bound is a problem located at its field
-and line, as a config document's is ([The checks
+and line, as a config document's is — the first 128 of them, and one more
+problem, at no field, counting the rest ([The checks
 file](../concepts/code-host.md#the-checks-file)). It reaches nothing a
 repository holds: a check's secrets are named, never resolved.
 

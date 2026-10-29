@@ -44,7 +44,25 @@ import (
 // without a word (`name: 1.10` is the number 1.1) — every alias and merge key,
 // and every value outside its bound. EVERY failure, not the first: an author
 // fixing one field at a time pays a push per mistake, and they are usually
-// made together.
+// made together. Up to [MaxChecksFileFaults] of them are listed and the rest
+// counted.
+//
+// # Why a parse costs the file's bound, never more
+//
+// The home git node reads the file on every change it dispatches, so a file a
+// person can write costs that node no more than its bound: a LIST PAST ITS
+// BOUND IS REFUSED BY ITS COUNT ALONE, before any item of it is read
+// ([checkList]) — a 64 KiB file can hold some eleven thousand items, which
+// read, judged and each compared with every one before it took a parse
+// 162–198 ms on two E-cores and made a fault of each — duplicates are found
+// through a set, and a refusal lists at most MaxChecksFileFaults faults. What
+// a parse then costs is the YAML decode of at most MaxChecksFileBytes and a
+// walk of what it read: measured (BenchmarkParseChecks; one bounded run,
+// -benchtime 5x and one count, on two E-cores of a Core Ultra 7 265U under
+// other sessions' load), 5.3 ms for the largest file whose every item is read
+// and judged — sixty-four checks, every list of each at its bound — and
+// 4.1–6.9 ms for a 64 KiB file packing one list past its bound, or thousands
+// of keys the grammar does not know, into the same bytes.
 //
 // The faults are config's own ([config.Fault]: the authored path, the kind and
 // the line), so `crewlet validate -json` reports a checks file exactly as it
@@ -116,7 +134,46 @@ const (
 	// name is a key in every check row and a component of the token a check's
 	// box fetches with.
 	MaxCheckNameBytes = config.CodeMaxCheckNameBytes
+
+	// MaxChecksFileFaults is the most faults one refusal of a checks file
+	// LISTS; the faults past it are counted, in one more line. 128, twice
+	// MaxChecksPerFile: the mistake a person makes in every check of a file at
+	// its bound — a key spelled as the CI the file was moved from spells it,
+	// `script:` for `run:`, which is a key the grammar does not know beside
+	// one a check must have — is listed whole. NO MORE, because a refusal is
+	// read where its file is: a 64 KiB file can hold some eleven thousand
+	// faulty keys or items, and listing each built a multi-megabyte error,
+	// one line a fault, on every dispatch that read the file.
+	MaxChecksFileFaults = 2 * MaxChecksPerFile
 )
+
+// checkList is one of a check's lists and its bound: THE ONE STATEMENT OF ITS
+// COUNT RULE, which the parser applies to the list's node BEFORE it reads an
+// item — so a list past its bound costs a parse its count, whatever it holds,
+// and is one fault rather than one an item — and [defFaults] to a definition's
+// list before it judges an item, for the same reason.
+type checkList struct {
+	// max is how many items the list may hold.
+	max int
+	// items names what the list holds, and bound what holds it to max.
+	items, bound string
+}
+
+// The three lists a check names, each with its bound.
+var (
+	pathsList = checkList{max: MaxCheckPaths, items: "globs", bound: "a check names (code.MaxCheckPaths)"}
+	coneList  = checkList{max: sandbox.MaxConePaths, items: "directories",
+		bound: "a box's cone names (sandbox.MaxConePaths)"}
+	envList = checkList{max: MaxCheckEnv, items: "names", bound: "a check is given (code.MaxCheckEnv)"}
+)
+
+// over words a list of n items past the bound — false for one within it.
+func (l checkList) over(n int) (string, bool) {
+	if n <= l.max {
+		return "", false
+	}
+	return fmt.Sprintf("%d %s, past the %d %s", n, l.items, l.max, l.bound), true
+}
 
 // CheckCell is the kind of box a check runs in.
 //
@@ -286,9 +343,12 @@ func (e *checksFileError) Is(target error) bool { return target == ErrInvalid }
 //	checkout         a list of a cone's directories, or the scalar none
 //	env              a list of at most MaxCheckEnv variable names
 //
-// A file past [MaxChecksFileBytes] is refused unread. Every refusal is one
-// error holding every fault found — a join of [config.Fault]s, each located
-// at the field and the line it is about, that IS [ErrInvalid].
+// A file past [MaxChecksFileBytes] is refused unread, and a list past its
+// bound by its count, its items unread. Every refusal is one error holding
+// every fault found — a join of [config.Fault]s, each located at the field and
+// the line it is about, that IS [ErrInvalid] — the first
+// [MaxChecksFileFaults] of them listed and the rest counted by one more fault,
+// at no field.
 func ParseChecks(raw []byte) (ChecksFile, error) {
 	p := &checksParser{}
 	if len(raw) > MaxChecksFileBytes {
@@ -327,11 +387,21 @@ func ParseChecks(raw []byte) (ChecksFile, error) {
 
 // checksParser walks one file's tree, gathering every fault it finds.
 type checksParser struct {
+	// faults is the first MaxChecksFileFaults faults found, which the
+	// refusal lists.
 	faults []*config.Fault
+	// found counts every fault found, listed or not: a check is refused by
+	// a fault past the listed ones as by any other.
+	found int
 }
 
-// fault records one failure at path, on n's line where there is a node.
+// fault records one failure at path, on n's line where there is a node — or,
+// once MaxChecksFileFaults are listed, only counts it, formatting nothing.
 func (p *checksParser) fault(path config.Path, n *yaml.Node, kind error, detail string, args ...any) {
+	p.found++
+	if p.full() {
+		return
+	}
 	if len(args) > 0 {
 		detail = fmt.Sprintf(detail, args...)
 	}
@@ -342,10 +412,23 @@ func (p *checksParser) fault(path config.Path, n *yaml.Node, kind error, detail 
 	p.faults = append(p.faults, f)
 }
 
-// err is every fault found, as one [checksFileError], or nil for none.
+// full reports that the refusal lists all the faults it lists: a further one
+// is counted.
+func (p *checksParser) full() bool { return len(p.faults) == MaxChecksFileFaults }
+
+// err is every fault found, as one [checksFileError], or nil for none: the
+// listed faults and, where more were found, one more fault counting them.
 func (p *checksParser) err() error {
-	if len(p.faults) == 0 {
+	if p.found == 0 {
 		return nil
+	}
+	if more := p.found - len(p.faults); more > 0 {
+		// A FAULT AT NO FIELD, out of range: what is past the bound is the
+		// file's count of faults, and a reader fixing the ones listed reads
+		// the file again for the next.
+		return &checksFileError{Faults: append(p.faults, &config.Fault{Kind: config.ErrOutOfRange,
+			Detail: fmt.Sprintf("%d more faults past the first %d a refusal lists (code.MaxChecksFileFaults); "+
+				"fix those and read the file again", more, MaxChecksFileFaults)})}
 	}
 	return &checksFileError{Faults: p.faults}
 }
@@ -432,7 +515,7 @@ func (p *checksParser) check(path config.Path, n *yaml.Node) (CheckDef, bool) {
 			"timeout_seconds and the keys it sets beside them", shapeOf(n))
 		return CheckDef{}, false
 	}
-	before := len(p.faults)
+	before := p.found
 	var def CheckDef
 	failed := map[string]bool{}
 	present := p.mapping(path, n, func(key string, keyNode, value *yaml.Node) {
@@ -446,7 +529,7 @@ func (p *checksParser) check(path config.Path, n *yaml.Node) (CheckDef, bool) {
 		case "timeout_seconds":
 			def.TimeoutSeconds, ok = p.seconds(field, value)
 		case "paths":
-			def.Paths, ok = p.texts(field, value)
+			def.Paths, ok = p.texts(field, value, pathsList)
 		case "report":
 			def.Report, ok = p.report(field, value)
 		case "run_in":
@@ -456,7 +539,7 @@ func (p *checksParser) check(path config.Path, n *yaml.Node) (CheckDef, bool) {
 		case "checkout":
 			def.Checkout, ok = p.checkout(field, value)
 		case "env":
-			def.Env, ok = p.texts(field, value)
+			def.Env, ok = p.texts(field, value, envList)
 		default:
 			p.fault(field, keyNode, config.ErrUnknownField, "a check takes %s", strings.Join(checkKeys, ", "))
 			return
@@ -473,9 +556,15 @@ func (p *checksParser) check(path config.Path, n *yaml.Node) (CheckDef, bool) {
 		if key, _ := f.path[0].(string); failed[key] {
 			continue
 		}
-		p.fault(under(path, f.path...), nodeAt(n, f.path), f.kind, "%s", f.detail)
+		var at *yaml.Node
+		if !p.full() {
+			// THE LINE ONLY OF A FAULT THE REFUSAL LISTS: finding it walks
+			// the check's keys, which a file can hold thousands of.
+			at = nodeAt(n, f.path)
+		}
+		p.fault(under(path, f.path...), at, f.kind, "%s", f.detail)
 	}
-	return def, len(p.faults) == before
+	return def, p.found == before
 }
 
 // under is path extended by segments, in a new backing array: sibling fields
@@ -586,8 +675,9 @@ func (p *checksParser) text(path config.Path, n *yaml.Node) (string, bool) {
 	return "", false
 }
 
-// texts reads a list of text.
-func (p *checksParser) texts(path config.Path, n *yaml.Node) ([]string, bool) {
+// texts reads a list of text, held to list's bound: a list past it is one
+// fault, BY ITS COUNT, and none of its items is read ([checkList]).
+func (p *checksParser) texts(path config.Path, n *yaml.Node, list checkList) ([]string, bool) {
 	switch {
 	case n.Kind == yaml.AliasNode:
 		p.alias(path, n)
@@ -595,6 +685,10 @@ func (p *checksParser) texts(path config.Path, n *yaml.Node) ([]string, bool) {
 	case n.Kind != yaml.SequenceNode:
 		p.fault(path, n, config.ErrShape, "%s, where a list belongs — one item is a list of one, [%s]",
 			shapeOf(n), n.Value)
+		return nil, false
+	}
+	if detail, over := list.over(len(n.Content)); over {
+		p.fault(path, n, config.ErrOutOfRange, "%s", detail)
 		return nil, false
 	}
 	out := make([]string, 0, len(n.Content))
@@ -673,7 +767,7 @@ func (p *checksParser) checkout(path config.Path, n *yaml.Node) (CheckCheckout, 
 			"the whole tree, or write none for no checkout at all")
 		return CheckCheckout{}, false
 	case n.Kind == yaml.SequenceNode:
-		cone, ok := p.texts(path, n)
+		cone, ok := p.texts(path, n, coneList)
 		return CheckCheckout{Cone: cone}, ok
 	case n.Kind == yaml.ScalarNode && n.ShortTag() == "!!str" && n.Value == "none":
 		return CheckCheckout{None: true}, true
@@ -743,15 +837,21 @@ func defFaults(d CheckDef) []defFault {
 		add(config.Path{"timeout_seconds"}, config.ErrOutOfRange, "%d seconds: a check runs for 1 to %d "+
 			"seconds (code.CheckTimeoutCeiling, six hours)", d.TimeoutSeconds, ceiling)
 	}
-	if len(d.Paths) > MaxCheckPaths {
-		add(config.Path{"paths"}, config.ErrOutOfRange, "%d globs, past the %d a check names "+
-			"(code.MaxCheckPaths)", len(d.Paths), MaxCheckPaths)
-	}
-	for i, glob := range d.Paths {
-		if _, err := gitref.ParsePathGlob(glob); err != nil {
-			add(config.Path{"paths", i}, config.ErrUnknownValue, "%q is not a path glob: %v", glob, err)
-		} else if j := slices.Index(d.Paths[:i], glob); j >= 0 {
-			add(config.Path{"paths", i}, config.ErrConflict, "%q is paths[%d] too", glob, j)
+	// A LIST PAST ITS BOUND IS ITS COUNT'S FAULT ALONE and no item of it is
+	// judged ([checkList]); within it, a repeated item is found through the
+	// items before it as a set.
+	if detail, over := pathsList.over(len(d.Paths)); over {
+		add(config.Path{"paths"}, config.ErrOutOfRange, "%s", detail)
+	} else {
+		first := make(map[string]int, len(d.Paths))
+		for i, glob := range d.Paths {
+			if _, err := gitref.ParsePathGlob(glob); err != nil {
+				add(config.Path{"paths", i}, config.ErrUnknownValue, "%q is not a path glob: %v", glob, err)
+			} else if j, twice := first[glob]; twice {
+				add(config.Path{"paths", i}, config.ErrConflict, "%q is paths[%d] too", glob, j)
+			} else {
+				first[glob] = i
+			}
 		}
 	}
 	for _, r := range []struct{ key, path string }{{"junit", d.Report.JUnit}, {"sarif", d.Report.SARIF}} {
@@ -774,31 +874,37 @@ func defFaults(d CheckDef) []defFault {
 			add(config.Path{"run_in"}, config.ErrUnknownValue, "%q is not one of %v", d.RunIn, CheckCells())
 		}
 	}
-	switch co := d.Checkout; {
-	case co.None && len(co.Cone) > 0:
+	if co := d.Checkout; co.None && len(co.Cone) > 0 {
 		add(config.Path{"checkout"}, config.ErrConflict, "a checkout is none or a cone, never both")
-	case len(co.Cone) > sandbox.MaxConePaths:
-		add(config.Path{"checkout"}, config.ErrOutOfRange, "%d directories, past the %d a box's cone "+
-			"names (sandbox.MaxConePaths)", len(co.Cone), sandbox.MaxConePaths)
 	}
-	for i, dir := range d.Checkout.Cone {
-		if why := sandbox.ConePathProblem(dir); why != "" {
-			add(config.Path{"checkout", i}, config.ErrUnknownValue, "%q %s", dir, why)
-		} else if j := slices.Index(d.Checkout.Cone[:i], dir); j >= 0 {
-			add(config.Path{"checkout", i}, config.ErrConflict, "%q is checkout[%d] too", dir, j)
+	if detail, over := coneList.over(len(d.Checkout.Cone)); over {
+		add(config.Path{"checkout"}, config.ErrOutOfRange, "%s", detail)
+	} else {
+		first := make(map[string]int, len(d.Checkout.Cone))
+		for i, dir := range d.Checkout.Cone {
+			if why := sandbox.ConePathProblem(dir); why != "" {
+				add(config.Path{"checkout", i}, config.ErrUnknownValue, "%q %s", dir, why)
+			} else if j, twice := first[dir]; twice {
+				add(config.Path{"checkout", i}, config.ErrConflict, "%q is checkout[%d] too", dir, j)
+			} else {
+				first[dir] = i
+			}
 		}
 	}
-	if len(d.Env) > MaxCheckEnv {
-		add(config.Path{"env"}, config.ErrOutOfRange, "%d names, past the %d a check is given "+
-			"(code.MaxCheckEnv)", len(d.Env), MaxCheckEnv)
-	}
-	for i, name := range d.Env {
-		if !validEnvName(name) {
-			add(config.Path{"env", i}, config.ErrUnknownValue, "%q is not a variable name: a letter or an "+
-				"underscore, then letters, digits and underscores, at most %d bytes — the key of an entry "+
-				"in the company's code.checks.env", name, MaxCheckEnvNameBytes)
-		} else if j := slices.Index(d.Env[:i], name); j >= 0 {
-			add(config.Path{"env", i}, config.ErrConflict, "%q is env[%d] too", name, j)
+	if detail, over := envList.over(len(d.Env)); over {
+		add(config.Path{"env"}, config.ErrOutOfRange, "%s", detail)
+	} else {
+		first := make(map[string]int, len(d.Env))
+		for i, name := range d.Env {
+			if !validEnvName(name) {
+				add(config.Path{"env", i}, config.ErrUnknownValue, "%q is not a variable name: a letter or "+
+					"an underscore, then letters, digits and underscores, at most %d bytes — the key of an "+
+					"entry in the company's code.checks.env", name, MaxCheckEnvNameBytes)
+			} else if j, twice := first[name]; twice {
+				add(config.Path{"env", i}, config.ErrConflict, "%q is env[%d] too", name, j)
+			} else {
+				first[name] = i
+			}
 		}
 	}
 	return out

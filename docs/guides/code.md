@@ -369,8 +369,9 @@ checks file](../concepts/code-host.md#the-checks-file).
    # .crewlet/checks.yaml: 3 checks (unit, lint, web)
    ```
 
-   A broken file names every fault at once, each at its field and line;
-   `-json` gives them as a fix loop reads them:
+   A broken file names every fault at once, each at its field and line — the
+   first 128, and how many more there are past them; `-json` gives them as a
+   fix loop reads them:
 
    ```bash
    crewlet validate .crewlet/checks.yaml -json
