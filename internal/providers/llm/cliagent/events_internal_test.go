@@ -268,7 +268,7 @@ func TestTheSignInRouteIsTheListsFirstRoute(t *testing.T) {
 	}
 	for name, tc := range map[string]struct {
 		p       *Provider
-		route   string
+		route   SignInRoute
 		resolve bool
 		login   bool
 	}{
@@ -279,6 +279,9 @@ func TestTheSignInRouteIsTheListsFirstRoute(t *testing.T) {
 			route: "token", resolve: true},
 	} {
 		route, resolves := tc.p.SignInRoute(t.Context())
+		if !route.Valid() {
+			t.Errorf("%s: SignInRoute = %q, which is not one of %v", name, route, SignInRoutes)
+		}
 		if route != tc.route || resolves != tc.resolve {
 			t.Errorf("%s: SignInRoute = %q, %v; want %q, %v", name, route, resolves, tc.route, tc.resolve)
 		}
@@ -349,5 +352,22 @@ func TestARunsLastWordDecidesAndAnAnswerIsNeverARefusal(t *testing.T) {
 	stdout := `{"type":"result","subtype":"success","is_error":false,"result":"` + answer + `"}`
 	if hit, ok := classifyMarkers(p, cliOutput{said: answer, stdout: stdout, at: reportedAt}); ok {
 		t.Errorf("a clean answer opening with an auth sentinel classified as %+v", hit)
+	}
+}
+
+// EVERY ROUTE IS ONE THE SET NAMES, AND THE SET NOTHING ELSE. The Models screen
+// draws a route by a closed vocabulary held to this one, so a word the reading
+// can produce must be in the set and a value off the wire outside it is not.
+func TestASignInRouteIsOneOfTheClosedSet(t *testing.T) {
+	t.Parallel()
+	for _, r := range SignInRoutes {
+		if !r.Valid() {
+			t.Errorf("%q is in the set and not Valid", r)
+		}
+	}
+	for _, r := range []SignInRoute{"", "device", "api key", "inherited token"} {
+		if r.Valid() {
+			t.Errorf("%q is Valid and not in the set", r)
+		}
 	}
 }

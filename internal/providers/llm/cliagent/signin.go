@@ -128,30 +128,61 @@ func (p *Provider) signInFrom(login map[string][]byte, loginErr error) signIn {
 	return s
 }
 
-// SignInRoute is how this entry's CLI signs in as THIS node resolves it, in
-// the words a status read publishes: token | credentials | api-key | env |
-// inherit-env | environment | none. resolves is whether anything signs it in.
-// The first route of [Provider.signIn], the reading `crewlet llm list` prints,
-// so the page and the command cannot disagree; a shared login that cannot be
-// read reads as none, with resolves false.
-func (p *Provider) SignInRoute(ctx context.Context) (route string, resolves bool) {
+// SignInRoute is how an entry's CLI signs in, in the words a status read
+// publishes: a closed set, so a reader that draws one (the Models screen) can
+// be held to it.
+type SignInRoute string
+
+// The routes, in the order [Provider.signIn] reads them.
+const (
+	// RouteCredentials is a login the CLI keeps in credential files.
+	RouteCredentials SignInRoute = "credentials"
+	// RouteToken is a headless subscription token.
+	RouteToken SignInRoute = "token"
+	// RouteAPIKey is a metered API key (auth.mode api-key).
+	RouteAPIKey SignInRoute = "api-key"
+	// RouteInheritEnv is a token or key forwarded from the engine's own
+	// environment (auth.mode inherit-env).
+	RouteInheritEnv SignInRoute = "inherit-env"
+	// RouteEnv is the entry's env alone, a cloud provider's switch or a
+	// gateway's token (auth.mode env).
+	RouteEnv SignInRoute = "env"
+	// RouteEnvironment is a provider key in the entry's env, on a CLI that
+	// reads one ([cliprofile.Profile.EnvSignIn]).
+	RouteEnvironment SignInRoute = "environment"
+	// RouteNone is nothing this node can see signing the CLI in.
+	RouteNone SignInRoute = "none"
+)
+
+// SignInRoutes is the closed set.
+var SignInRoutes = []SignInRoute{RouteCredentials, RouteToken, RouteAPIKey, RouteInheritEnv,
+	RouteEnv, RouteEnvironment, RouteNone}
+
+// Valid reports whether r is one of [SignInRoutes].
+func (r SignInRoute) Valid() bool { return slices.Contains(SignInRoutes, r) }
+
+// SignInRoute is how this entry's CLI signs in as THIS node resolves it, and
+// whether anything does. The first route of [Provider.signIn], the reading
+// `crewlet llm list` prints, so the page and the command cannot disagree; a
+// shared login that cannot be read reads as [RouteNone], with resolves false.
+func (p *Provider) SignInRoute(ctx context.Context) (route SignInRoute, resolves bool) {
 	s := p.signIn(ctx)
 	if len(s.sources) == 0 {
-		return "none", false
+		return RouteNone, false
 	}
 	switch s.sources[0].state {
 	case "token":
-		return "token", true
+		return RouteToken, true
 	case "credentials":
-		return "credentials", true
+		return RouteCredentials, true
 	case "api key":
-		return "api-key", true
+		return RouteAPIKey, true
 	case "inherited token", "inherited key":
-		return "inherit-env", true
+		return RouteInheritEnv, true
 	case "env":
-		return "env", true
+		return RouteEnv, true
 	default:
-		return "environment", true
+		return RouteEnvironment, true
 	}
 }
 
