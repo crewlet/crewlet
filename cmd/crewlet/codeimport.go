@@ -2396,6 +2396,14 @@ func (imp *importer) push(ctx context.Context, step *importStep) stepOutcome {
 	}
 	slices.Sort(unplanned)
 	switch {
+	case len(rejected) > 0 && err != nil:
+		// GIT'S OWN WORDS FOR WHY, beside its lines for the refs. A ref's
+		// line names a class alone — `(unpacker error)` for every object
+		// the node's fsck refuses — and the reason is on git's stderr,
+		// which only a person at a terminal (live) saw go by: a script's
+		// or a CI job's import stopped telling its operator to fix a cause
+		// nothing had named.
+		return stepOutcome{err: fmt.Errorf("git refused it: %w", err), rejected: rejected}
 	case len(rejected) > 0:
 		return stepOutcome{err: errors.New("git refused it"), rejected: rejected}
 	case err != nil:

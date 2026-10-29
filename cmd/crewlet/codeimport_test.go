@@ -818,6 +818,50 @@ func TestAnImportReportsTheStepInFlightBeforeARefusal(t *testing.T) {
 	}
 }
 
+// AN IMPORT SAYS WHY GIT REFUSED A STEP, in git's own words. The line git
+// prints for a refused ref names a class alone — `[remote rejected] (unpacker
+// error)` for every object the node's fsck refuses, and for a pack past
+// receive.maxInputSize — and the reason is on git's stderr, which only a
+// person watching a terminal saw go by: an import run by a script or a CI job
+// stopped telling its operator to fix a cause nothing had named. Here the
+// source holds a commit whose author line carries a time zone of five digits,
+// which the node's receive.fsckObjects refuses as badTimezone.
+//
+// Mutation: answer a refused step without git's stderr, and the refusal names
+// no reason.
+func TestAnImportSaysWhyGitRefusedAStep(t *testing.T) {
+	t.Parallel()
+	h := importNode(t)
+	git := gittest.NewClient(t)
+	bare := filepath.Join(t.TempDir(), "source.git")
+	git.Run(t, "", "init", "--bare", "-q", bare)
+	tree, stderr, err := git.Try(t, "", strings.NewReader(""), "--git-dir="+bare, "hash-object", "-t", "tree", "-w",
+		"--stdin")
+	if err != nil {
+		t.Fatalf("the empty tree: %v\n%s", err, stderr)
+	}
+	commit := "tree " + strings.TrimSpace(tree) + "\n" +
+		"author A U Thor <author@example.com> 1767225600 +99999\n" +
+		"committer A U Thor <author@example.com> 1767225600 +0000\n\n" +
+		"a commit no fsck takes\n"
+	oid, stderr, err := git.Try(t, "", strings.NewReader(commit), "--git-dir="+bare, "hash-object", "-t", "commit",
+		"-w", "--literally", "--stdin")
+	if err != nil {
+		t.Fatalf("the malformed commit: %v\n%s", err, stderr)
+	}
+	git.Run(t, "", "--git-dir="+bare, "update-ref", "refs/heads/main", strings.TrimSpace(oid))
+	git.Run(t, "", "--git-dir="+bare, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	out, errOut, err := h.importInto(t, "file://"+bare)
+	if err == nil {
+		t.Fatalf("an import of a commit the node's fsck refuses succeeded:\n%s", out)
+	}
+	if !strings.Contains(errOut, "(unpacker error)") || !strings.Contains(err.Error(), "badTimezone") {
+		t.Errorf("the refusal does not say why git refused the step: %v\nstdout:\n%s\nstderr:\n%s", err, out,
+			errOut)
+	}
+}
+
 // AN IMPORT WITH A TOKEN THAT CANNOT PUSH STOPS BEFORE CLONING: the import
 // pushes as the person its token is bound to, and a token bound to nobody
 // fetches only — which the node says at a push's first request, so the import

@@ -1613,8 +1613,11 @@ to raise the limit and run again.
 
 **A failed step is safe to run again**: the import stops at the first step git
 refuses, printing git's own line for every ref it refused — `!
-<id>:refs/heads/frozen [remote rejected] (protected_direct: …)` — and saying
-how many steps of the run landed before it. Fix the cause and run the same
+<id>:refs/heads/frozen [remote rejected] (protected_direct: …)` — with git's own
+words for why, which a ref's line does not always carry (an object the node's
+object checks refuse is `(unpacker error)` there, and its reason is git's
+`remote: error: object …: badTimezone: …`), and saying how many steps of the
+run landed before it. Fix the cause and run the same
 command again: step 5 finds what landed and pushes the rest. The protections
 apply to an import as to any push, so a branch whose rule says `direct_push:
 none` refuses its own import: lift the rule for the import and restore it
