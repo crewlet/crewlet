@@ -913,9 +913,10 @@ sequenceDiagram
   the CLI replies.
 - **Cached at a corpus position.** Each node keeps 256 answers, keyed on the
   question (case and spacing folded) and where its tracker, pages and vector
-  logs are applied through. Any write that could change an answer moves the
-  position and retires every answer cached at the old one; a repeat spends
-  nothing and says `cached: true`. A company on Confluence has no position to
+  rows last changed. Any write that could change an answer moves the position
+  and retires every answer cached at the old one, while a read — even a
+  linearizable one, which appends a barrier to its log — moves nothing; a
+  repeat spends nothing and says `cached: true`. A company on Confluence has no position to
   key on — the wiki changes without the node hearing — so its answers are never
   cached.
 

@@ -5382,8 +5382,9 @@ refetched on focus and on reconnect.
 
 **A repeated question spends nothing.** Answers are cached on each node, 256
 of them, keyed on the question (case and spacing folded) and the node's
-**corpus position** — where its tracker, pages and vector logs are applied
-through — so any write that could change the answer retires every older one. A
+**corpus position** — where its tracker, pages and vector rows last changed —
+so any write that could change the answer retires every older one, and no read
+does. A
 cache hit answers `"cached": true` and `"tokens": {"input": 0, "output": 0}`,
 and is served even while the budget is spent. A company whose knowledge base
 is not native has no position to key on, so its answers are never cached.

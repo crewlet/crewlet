@@ -391,6 +391,12 @@ type Runner struct {
 	// rather than advanced — a load, a reanchor, a join — because each of
 	// those replaces the rows it was a claim about. UNDER mu.
 	reached Position
+	// changed is the position of the last record a committed transaction
+	// of this loop's CHANGED A ROW with — every record but a barrier this
+	// node applied ([writesNoRow]) — and the checkpoint wherever cursor is
+	// set rather than advanced, for reached's reason ([Runner.Changed]).
+	// UNDER mu.
+	changed Position
 	// checkpointAt is the broker's instant for the record at the cursor's
 	// sequence — the one this node consumed there — and zero where that is
 	// unknown ([cursorRow.storedAt]). UNDER mu AND MOVED WITH cursor, never
@@ -704,6 +710,7 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		// [Runner.checkpointAt] gives.
 		cursor:       checkpoint,
 		reached:      checkpoint,
+		changed:      checkpoint,
 		checkpointAt: d.CheckpointStoredAt,
 	}, nil
 }
@@ -812,6 +819,43 @@ func (r *Runner) mayCommitBeside(batch []Record) bool {
 		return false
 	}
 	return !r.verify || highest(batch, Position{}).Packed() <= r.cursor.Packed()
+}
+
+// Change is one reading of where this node's rows last changed ([Runner.Changed]).
+type Change struct {
+	// At is the position of the last record this node committed whose
+	// transaction changed a row: every record but a barrier.
+	At Position
+
+	// loads is how many times the rows under the checkpoint may have been
+	// replaced or reloaded when it was read ([Runner.rows]): a load
+	// reprocesses what an earlier build retained, which changes rows and
+	// moves no position.
+	loads uint64
+}
+
+// String is the reading as one token, which two readings of the same rows share
+// and two of different rows do not.
+func (c Change) String() string { return fmt.Sprintf("%s#%d", c.At, c.loads) }
+
+// Changed is where this node's rows LAST CHANGED: the position of the last
+// record its loop committed whose transaction wrote a row, beside how many
+// times the rows under the checkpoint may have been replaced or reloaded. Two
+// readings that are equal are of the same rows.
+//
+// # Why neither of the other two positions
+//
+// Because both move on every BARRIER, and a barrier is every linearizable
+// read anywhere in the fleet: [Runner.Reached] the moment the loop decodes
+// one, [Runner.Committed] once its checkpoint commits. A cache keyed on either
+// as "the rows as they were" — the knowledge answers are — is retired by the
+// reads its own answers make, and its next lookup misses over rows nothing
+// has changed. A barrier writes no row on any node ([writesNoRow]); this
+// moves on everything else, a record this node retained included.
+func (r *Runner) Changed() Change {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return Change{At: r.changed, loads: r.rows}
 }
 
 // reach moves the reached position over what run carries that writes no row
@@ -977,7 +1021,7 @@ func (r *Runner) Reanchored(at Position, created, storedAt time.Time) error {
 	}
 	r.created = created
 	r.cursor, r.checkpointAt = at, storedAt
-	r.reached = at
+	r.reached, r.changed = at, at
 	r.rows++
 	// THE DIVERGENCE TOO, and its record in the node estate is about the
 	// checkpoint this left, which [Runner.recallDiverged] removes the next
@@ -1729,7 +1773,7 @@ func (r *Runner) Rejoined(at Position, keyed, live time.Time) error {
 	if at.Generation != r.cursor.Generation {
 		r.truncated = nil
 	}
-	r.cursor, r.reached = at, at
+	r.cursor, r.reached, r.changed = at, at, at
 	r.rows++
 	if IdentityOf(keyed, live, !keyed.IsZero()) == StreamRecreated {
 		// THE ROWS ARE STILL ANOTHER STREAM'S: the verdict holds, and is
@@ -2525,6 +2569,7 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 			// [Runner.checkpointAt].
 			r.cursor, r.checkpointAt = at, row.storedAt
 		}
+		r.changed = r.cursor
 		r.rows++
 		// A RUN THAT STARTS OWES A VERIFICATION of that record before it
 		// applies past it: a boot is exactly when a node meets a broker
@@ -3090,6 +3135,9 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	var consumed []Record
 	var committedAt Position
 	var committedRecord time.Time
+	// changed is the position of the last record this transaction changed a
+	// row with ([Runner.Changed]).
+	var changed Position
 	var tally results
 	var rows int
 	var boundBy string
@@ -3135,7 +3183,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		// have — once for every attempt the store ran.
 		consumed, committedAt, tally, rows, boundBy = consumed[:0], Position{}, results{}, 0, ""
 		notes = notes[:0]
-		committedRecord = time.Time{}
+		committedRecord, changed = time.Time{}, Position{}
 		txStart := r.now()
 
 		hasDeferred, err := r.anyDeferred(ctx, tx)
@@ -3175,6 +3223,11 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 				}
 			}
 
+			// WHETHER THIS RECORD CHANGES A ROW ([Runner.Changed]): every
+			// record does but a barrier applied here — one retained below,
+			// under a key this node lacks or behind a retained record's
+			// scope, is a row of the deferral index.
+			wrote := true
 			switch {
 			case rec.verdict == KeyUnknown:
 				// THE SAME DISPOSITION AS A RECORD FROM A NEWER
@@ -3265,9 +3318,13 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 						tally.applied++
 						tally.version = max(tally.version, rec.V)
 					}
+					wrote = !writesNoRow(rec, r.spec.ArbitratedKinds)
 				}
 			}
 
+			if wrote {
+				changed = rec.Position
+			}
 			consumed = append(consumed, rec)
 			highWater = rec.Position
 			switch {
@@ -3349,7 +3406,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	// AND EVERY WAITER AT OR BELOW THE REACHED POSITION THE COMMIT LEAVES,
 	// which is never below it: a commit reaches every record it covers, and
 	// barriers already reached past it stay reached.
-	r.waiters.release(r.advance(at, committedRecord))
+	r.waiters.release(r.advance(at, committedRecord, changed))
 	if tally.retained > 0 {
 		// WHAT THE BATCH RETAINED, which no Apply call saw — see
 		// [RetentionHook]. AFTER the deferral index is refreshed above,
@@ -3687,11 +3744,15 @@ func (r *Runner) refreshDeferred(ctx context.Context) error {
 }
 
 // advance moves the in-memory checkpoint the publisher's fast path reads to a
-// position a transaction committed, and the reached position with it, and
-// answers the reached position it leaves.
-func (r *Runner) advance(at Position, record time.Time) Position {
+// position a transaction committed, the reached position with it and the
+// position its rows last changed at ([Runner.Changed]) to changed, and answers
+// the reached position it leaves.
+func (r *Runner) advance(at Position, record time.Time, changed Position) Position {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.changed.Packed() < changed.Packed() {
+		r.changed = changed
+	}
 	if r.cursor.Packed() < at.Packed() {
 		// THE PAIR MOVES TOGETHER — see [Runner.checkpointAt].
 		r.cursor, r.checkpointAt = at, record

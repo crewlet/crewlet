@@ -85,7 +85,8 @@ import (
 // surface builds its catalogue per request, and a cache built with it would
 // hold one request's answers. The key is the normalised question, the APPS
 // the asker uses and the CORPUS POSITION: where this node's pages, tracker and
-// vector logs have been applied through. A cache hit spends nothing and says
+// vector rows last changed, which a write moves and a read — a barrier on a
+// log — never does ([AnswerDeps.Corpus]). A cache hit spends nothing and says
 // `cached: true`. A company whose knowledge base is not native has no position
 // to key on — an external wiki can change under the answer without this node
 // hearing — so its answers are never cached.
@@ -212,9 +213,9 @@ type AnswerDeps struct {
 	// all is the one shape this is built to refuse.
 	Budget AnswerBudget
 
-	// Corpus is where this node's knowledge corpus is applied through, and
-	// false where it cannot say — the cache key's second half. Nil caches
-	// nothing.
+	// Corpus is where this node's knowledge corpus last changed — a token a
+	// write moves and a read never does — and false where it cannot say: the
+	// cache key's second half. Nil caches nothing.
 	Corpus func() (string, bool)
 
 	// Actor is who is asking, off the caller's own credential
