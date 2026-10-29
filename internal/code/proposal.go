@@ -628,8 +628,9 @@ func entryRows(e PushEntry) int {
 }
 
 // seatDayRows is the most rows a seat's entry makes its record's apply touch
-// in code_seat_days ([Applier.countSeatDays]): the seat's row of the day its
-// entry is counted against, and the one older day the count forgets. COUNTED
+// in code_seat_days ([countSeatDays]): the seat's row of the day its entry is
+// counted against, and the one day beyond the seat's two newest that the
+// count forgets. COUNTED
 // ONCE AN ENTRY, which overstates a record carrying a seat's entries twice —
 // they share the seat's two rows — and so only closes a batch earlier at the
 // row bound, never lets its apply pass it. The ONE count the batcher

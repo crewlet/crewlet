@@ -423,8 +423,10 @@ leaves a row more, naming the
 object it left, kept 14 days, and longer while the
 repository's pushes fill their records with such updates
 ([ref drops](code-host.md#retention-and-history)). A seat that has pushed
-holds one row more however much it pushes — its pushes on its newest company
-day, a row of about 30 bytes and its key's entry — where an index of the push
+holds two rows more at the most however much it pushes — its pushes on its two
+newest company days, each a row of about 30 bytes and its key's entry, the
+older kept for a node whose clock has not reached midnight yet
+([A seat's push](code-host.md#a-seats-push)) — where an index of the push
 rows for that one-day question would have kept an entry of some 40 bytes for
 every seat's push for its 181 days, about 1.8 GB at 250 000 pushes a day. The
 code log, which keeps only the trim's window of records, takes 1 481 bytes

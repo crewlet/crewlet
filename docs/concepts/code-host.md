@@ -2201,9 +2201,16 @@ The quota counts a seat across repositories, and each repository's committer
 counts what the code log has applied on its own node, so a seat pushing to
 several repositories in one instant may land past the bound by its pushes in
 flight at that instant, less one — never more, and never again that day: once
-the count is past the bound, every later push is refused. An exact count
-would put every push of a seat working in many repositories behind one
-another, on one arbitration, to save a few pushes on a bound of a thousand.
+the count is past the bound, every later push counted on that day is refused.
+Each committer counts on the day its own clock reads, so while two data nodes'
+clocks straddle the company's midnight a seat's pushes are counted on two days
+at once. The earlier day's count is kept beside the newer one's, so a
+committer whose clock has not reached midnight yet still holds the seat to its
+day — as long as no two data nodes' clocks stand a day apart, which
+[`clock_skew`](../reference/alarms.md) reports long before: it is raised by a
+clock an hour from the fleet's. An exact count would put every push of a seat
+working in many repositories behind one another, on one arbitration, to save a
+few pushes on a bound of a thousand.
 
 A data node that cannot judge a seat decides none of its pushes, and says so
 about itself, so the repository's next committer decides the push under the

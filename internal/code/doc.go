@@ -299,9 +299,11 @@
 // it — beside its repositories' live ones, where while nothing merged a
 // repository's packs every push's row stayed for as long as its repository
 // did, about 644 MB more a year. A seat that has
-// pushed holds one row more however much it pushes, its pushes on its newest
-// company day (code_seat_days, the counter the decide's daily quota reads): a
-// row of about thirty bytes and its key's entry, where an index of the push
+// pushed holds two rows more at the most however much it pushes, its pushes
+// on its two newest company days (code_seat_days, the counter the decide's
+// daily quota reads, which keeps the older for a committer whose clock has
+// not reached midnight yet): each a row of about thirty bytes and its key's
+// entry, where an index of the push
 // rows serving that one-day question would have kept an entry of some forty
 // bytes for every seat's push for its 181 days, about 1.8 GB at 250 000
 // pushes a day. A forced

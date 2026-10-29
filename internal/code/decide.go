@@ -91,8 +91,12 @@ import (
 // room left, its entries in one batch, at most MaxPushesPerRecord) for C
 // committers deciding its pushes in one instant — never more than its pushes
 // in flight at once less one, since a turn's tool calls run one after another,
-// and never cumulative: once its count passes the bound every later batch
-// refuses it. ACCEPTED as the product's call: an exact count would make every
+// and never cumulative: once its count of a day passes the bound, every later
+// batch deciding on that day refuses it, on a committer whose clock is still
+// on the day before another's as on any — the push apply keeps a seat's two
+// newest days ([countSeatDays]) — as long as no two committers' clocks stand
+// a day apart, which clock_skew reports long before, at an hour off the
+// fleet's. ACCEPTED as the product's call: an exact count would make every
 // repository's decide of one seat arbitrate on one subject, putting the
 // pushes of a seat working in many repositories behind one another to bound
 // an overshoot that is a few pushes on a bound of a thousand.

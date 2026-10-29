@@ -31,11 +31,13 @@
 -- code_pushes would cost every seat's push an index entry kept 181 days on every
 -- data node (about 1.8 GB at 250 000 pushes a day) and the decide up to a
 -- thousand of those entries a seat a batch inside the committer's snapshot,
--- where the counter is about one row a seat that ever pushed — the repository
--- row's own idiom, which counts its refs, packs and pushes so no read walks
--- them. Its writer is the push apply alone, counting each agent entry on the
--- day the decide stamped on it, and forgetting a seat's older days as it
--- counts a newer one, alike on every node with no clock of its own.
+-- where the counter is at most two rows a seat that ever pushed — the
+-- repository row's own idiom, which counts its refs, packs and pushes so no
+-- read walks them. Its writer is the push apply alone, counting each agent
+-- entry on the day the decide stamped on it, and forgetting a seat's oldest
+-- day beyond its two newest as it counts a newer one — the day before the
+-- newest kept for a committer whose clock has not reached midnight yet —
+-- alike on every node with no clock of its own.
 --
 -- Class: code_pushes stays reproducible: every column is written only from the
 -- records the applier applies. code_seat_days is reproducible

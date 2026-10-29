@@ -402,12 +402,13 @@ func registeredStatements() map[string]statement {
 		"decide repo":         {decideRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"decide deletion":     {decideDeletionSQL, []any{"repo-1"}, []string{deletionKey + " (repo_id=?)"}},
 		// A SEAT'S DAY IS ONE ROW, read by its key for every seat a round
-		// names, and an older day forgotten by the same key — never a count
-		// over the push history.
+		// names, and its oldest day beyond its two newest forgotten by the
+		// same key, read newest first — never a count over the push history,
+		// and never a sort of the seat's days.
 		"seat days": {seatDaysSQL, []any{"2031-04-02", `["seat-1","seat-2"]`},
 			[]string{"SCAN json_each AS j", seatDaysKey + " (seat=? AND day=?)"}},
-		"forget seat days": {forgetSeatDaysSQL, []any{`[["seat-1","2031-04-03"],["seat-2","2031-04-03"]]`},
-			[]string{"SCAN json_each AS j", seatDaysKey + " (seat=? AND day<?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"forget seat days": {forgetSeatDaysSQL, []any{`["seat-1","seat-2"]`},
+			[]string{"SCAN json_each AS j", seatDaysKey + " (seat=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		// A CODING RUN'S PUSHES TO ONE REPOSITORY, above its launch in log
 		// order: the repository's pushes by position, each row tested for
 		// the run — which no index carries (replicated 0070) — never a sort.

@@ -425,8 +425,69 @@ func TestTheQuotaDayIsTheCompanysDay(t *testing.T) {
 		t.Fatalf("a third push on the 8th is %q (%q), want push_quota counted since the 8th began and ending at "+
 			"its midnight in Santiago", got.refused, got.detail)
 	}
-	if n := e.num(`SELECT COUNT(*) FROM code_seat_days WHERE seat = 'dev'`); n != 1 {
-		t.Errorf("the counter holds %d of dev's days, want the 8th's alone: a newer day forgets the older", n)
+	if got := seatDays(t, e); !slices.Equal(got, []string{"2024-09-07:1", "2024-09-08:1"}) {
+		t.Errorf("the counter holds %v of dev's days, want the 7th's push and the 8th's", got)
+	}
+}
+
+// THE QUOTA HOLDS FOR A COMMITTER BEHIND MIDNIGHT: the committers of two
+// repositories whose clocks straddle the company's midnight, under a day
+// apart — X's clock still on the 2nd, Y's two seconds into the 3rd — each
+// decide one seat's pushes. X lands the seat's one push of the 2nd and
+// refuses the next; Y lands one of the 3rd, which every node applies; and X,
+// its clock still on the 2nd, refuses the seat's next push again, because the
+// 3rd's record kept the 2nd's count — the counter holds both days. Once X's
+// clock is past midnight too, the 3rd's count holds the seat there.
+//
+// Mutation: forget the seat's day before its newest as a newer one is counted
+// (OFFSET 1) — the 3rd's record takes the 2nd's row, X reads none, and lands a
+// second push of the seat on the 2nd, red.
+func TestTheQuotaHoldsForACommitterBehindMidnight(t *testing.T) {
+	t.Parallel()
+	const other = "0190f3c4-0000-7000-8000-00000000d0c2"
+	e := decideEstate(t)
+	e.apply(create(t, other, "api"))
+	limits := DefaultLimits()
+	limits.PushesPerSeatDay = 1
+	behind := time.Date(2031, 4, 2, 23, 59, 59, 0, time.UTC) // X: the last second of the 2nd
+	ahead := behind.Add(2 * time.Second)                     // Y: the 3rd
+	push := func(repo string, at time.Time, name string) decided {
+		t.Helper()
+		p := pushBy(seatOf("dev"), cmd(SeatNamespace("dev")+name, ZeroOID, oid(name)))
+		p.RepoID = repo
+		entries, answers, err := decideErr(e, repo, limits, DefaultDeletedRetention, onTheChart, at, &verdicts{}, p)
+		if err != nil {
+			t.Fatalf("decide %s: %v", name, err)
+		}
+		if len(entries) > 0 {
+			e.apply(pushOf(t, repo, entries...))
+		}
+		return answers[0]
+	}
+	if got := push(decideRepo, behind, "x1"); !got.inRecord {
+		t.Fatalf("the seat's first push of the 2nd is %q (%q), want it in the record", got.refused, got.detail)
+	}
+	if got := push(decideRepo, behind, "x2"); got.refused != RefusalPushQuota {
+		t.Fatalf("the seat's second push of the 2nd is %q (%q), want push_quota", got.refused, got.detail)
+	}
+	if got := push(other, ahead, "y1"); !got.inRecord {
+		t.Fatalf("the seat's first push of the 3rd, on another repository, is %q (%q), want it in the record",
+			got.refused, got.detail)
+	}
+	if got := push(decideRepo, behind, "x3"); got.refused != RefusalPushQuota ||
+		!strings.Contains(got.detail, "since 2031-04-02 began") {
+		t.Fatalf("the seat's next push on the 2nd, after the 3rd's landed, is %q (%q), want push_quota counted "+
+			"since the 2nd began: a committer behind midnight still holds the seat to its day", got.refused,
+			got.detail)
+	}
+	if got := seatDays(t, e); !slices.Equal(got, []string{"2031-04-02:1", "2031-04-03:1"}) {
+		t.Fatalf("the counter holds %v, want the 2nd's push and the 3rd's: the 3rd's record kept the day "+
+			"before it", got)
+	}
+	if got := push(decideRepo, ahead.Add(time.Second), "x4"); got.refused != RefusalPushQuota ||
+		!strings.Contains(got.detail, "since 2031-04-03 began") {
+		t.Fatalf("the seat's push once X's clock is past midnight is %q (%q), want push_quota counted since "+
+			"the 3rd began", got.refused, got.detail)
 	}
 }
 
@@ -451,18 +512,21 @@ func TestASeatsPushIsNeverDecidedWithNoChart(t *testing.T) {
 }
 
 // THE SEAT COUNTER IS A FUNCTION OF THE LOG (W24): three appliers given one
-// seat's pushes on two days — the second day's interleaved with a record
+// seat's pushes on three days — the second day's interleaved with a record
 // decided late on the first, a person's push beside one, and a record
 // redelivering a push already applied beside a new one — hold identical
-// code_seat_days rows after every record: the late record re-creates its day's
-// row and the seat's next entry of the newer day forgets it, the person's push
-// is counted nowhere, and the redelivered push id is counted once. And the
-// rows a count touches are counted in the record's: a seat's first push of a
-// new day reports two rows more than a person's push of the same shape, the
-// day's row and the older one it forgot.
+// code_seat_days rows after every record: the second day's records keep the
+// first day's row, so the late record adds to its day's whole count; the
+// third day's first entry forgets the first day, the oldest beyond the seat's
+// two newest; the person's push is counted nowhere; and the redelivered push
+// id is counted once. And the rows a count touches are counted in the
+// record's: a seat's first push of a third day reports two rows more than a
+// person's push of the same shape, the day's row and the oldest it forgot.
 //
-// Mutation: count every entry the record carries rather than the ones it
-// inserts — the redelivery is counted twice, red.
+// Mutations: count every entry the record carries rather than the ones it
+// inserts — the redelivery is counted twice, red; forget the seat's day
+// before its newest as a newer one is counted (OFFSET 1) — the second day's
+// record takes the first day's row, and the late record's day reads 1, red.
 func TestTheSeatCounterIsAFunctionOfTheLog(t *testing.T) {
 	t.Parallel()
 	seatPush := func(id, day string) PushEntry {
@@ -477,15 +541,17 @@ func TestTheSeatCounterIsAFunctionOfTheLog(t *testing.T) {
 		pushOf(t, "repo-a", seatPush("p3", "2031-04-01")),
 		pushOf(t, "repo-a", seatPush("p4", "2031-04-02"), pushEntry("person", move("refs/heads/x", ZeroOID, oid("x")))),
 		pushOf(t, "repo-a", seatPush("p2", "2031-04-02"), seatPush("p5", "2031-04-02")),
+		pushOf(t, "repo-a", seatPush("p6", "2031-04-03")),
 	}
 	// want is the seat's rows after each record, "day:pushes" in day order.
 	want := [][]string{
 		nil,
 		{"2031-04-01:1"},
-		{"2031-04-02:1"},
 		{"2031-04-01:1", "2031-04-02:1"},
-		{"2031-04-02:2"},
-		{"2031-04-02:3"},
+		{"2031-04-01:2", "2031-04-02:1"},
+		{"2031-04-01:2", "2031-04-02:2"},
+		{"2031-04-01:2", "2031-04-02:3"},
+		{"2031-04-02:3", "2031-04-03:1"},
 	}
 	appliers := []*estate{openApplyEstate(t), openApplyEstate(t), openApplyEstate(t)}
 	for i, r := range records {
@@ -504,14 +570,18 @@ func TestTheSeatCounterIsAFunctionOfTheLog(t *testing.T) {
 	for _, e := range []*estate{person, seat} {
 		e.apply(create(t, "repo-a", "a"))
 	}
-	seat.apply(pushOf(t, "repo-a", seatPush("p0", "2031-04-01")))
-	person.apply(pushOf(t, "repo-a", pushEntry("q0", move("refs/heads/seats/dev/p0", ZeroOID, oid("p0")))))
-	ofPerson := person.applyCounting(pushOf(t, "repo-a", pushEntry("q1",
-		move("refs/heads/seats/dev/p1", ZeroOID, oid("p1")))))
-	ofSeat := seat.applyCounting(pushOf(t, "repo-a", seatPush("p1", "2031-04-02")))
+	seat.apply(pushOf(t, "repo-a", seatPush("p0", "2031-03-31")), pushOf(t, "repo-a", seatPush("p1", "2031-04-01")))
+	person.apply(pushOf(t, "repo-a", pushEntry("q0", move("refs/heads/seats/dev/p0", ZeroOID, oid("p0")))),
+		pushOf(t, "repo-a", pushEntry("q1", move("refs/heads/seats/dev/p1", ZeroOID, oid("p1")))))
+	ofPerson := person.applyCounting(pushOf(t, "repo-a", pushEntry("q2",
+		move("refs/heads/seats/dev/p2", ZeroOID, oid("p2")))))
+	ofSeat := seat.applyCounting(pushOf(t, "repo-a", seatPush("p2", "2031-04-02")))
 	if ofSeat != ofPerson+seatDayRows {
-		t.Errorf("a seat's first push of a new day reports %d rows and a person's of the same shape %d, want "+
-			"%d more: its day's row and the older one it forgot", ofSeat, ofPerson, seatDayRows)
+		t.Errorf("a seat's first push of a third day reports %d rows and a person's of the same shape %d, want "+
+			"%d more: its day's row and the oldest one it forgot", ofSeat, ofPerson, seatDayRows)
+	}
+	if got := seatDays(t, seat); !slices.Equal(got, []string{"2031-04-01:1", "2031-04-02:1"}) {
+		t.Errorf("the counter holds %v, want the seat's two newest days", got)
 	}
 }
 
