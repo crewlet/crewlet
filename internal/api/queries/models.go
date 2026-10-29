@@ -210,13 +210,17 @@ type ModelWaiting struct {
 	Since time.Time `json:"since"`
 }
 
-// ModelUsage is the entry's spend over [ModelUsageDays].
+// ModelUsage is the entry's use over [ModelUsageDays], in calls and tokens.
+//
+// NO MONEY. The dashboard renders tokens and never a price (its rule 19), and
+// a price is quoted by one backend and not the rest, so a currency figure
+// here would be a number the one screen that reads this answer may not show,
+// and partial where it could. The spend rollup ([tokens.Bucket]) keeps its
+// own cost fields for the readers that ask for them.
 type ModelUsage struct {
-	Days        int     `json:"days"`
-	Calls       int     `json:"calls"`
-	TotalTokens int     `json:"total_tokens"`
-	CostUSD     float64 `json:"cost_usd"`
-	PricedCalls int     `json:"priced_calls"`
+	Days        int `json:"days"`
+	Calls       int `json:"calls"`
+	TotalTokens int `json:"total_tokens"`
 }
 
 // ModelUse is one job the entry runs, or is a fallback for: a seat's, by
@@ -455,7 +459,7 @@ func (s Sources) modelUsage(ctx context.Context) map[string]ModelUsage {
 	}
 	for _, row := range rollup.ByProvider {
 		out[row.ProviderKey] = ModelUsage{Days: ModelUsageDays, Calls: row.Calls,
-			TotalTokens: row.TotalTokens, CostUSD: row.CostUSD, PricedCalls: row.PricedCalls}
+			TotalTokens: row.TotalTokens}
 	}
 	return out
 }
