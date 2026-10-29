@@ -792,7 +792,10 @@ const (
 	// push is answered busy
 	// rather than decided once too little of its asker's attempt is left for
 	// its own batch, and one asked with no deadline once it has waited a
-	// whole CommitBudget (committer.go).
+	// whole CommitBudget (committer.go). A refusal there is as much this
+	// committer's backlog as a full queue's — the one a committer slower than
+	// its pushes meets, holding fewer than this many — and code_commit_busy
+	// counts it so (busy.go's `waited`).
 	//
 	// A ROUTED burst reaches it too: the estate answers a node's proposals
 	// on a registration of their own whose concurrency is this queue and

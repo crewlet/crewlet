@@ -169,7 +169,7 @@ import (
 // write of a change is judged from the chart as a seat's push is, and a node
 // that cannot judge one decides none.
 //
-// # Bounded in count and in bytes
+// # Bounded in count, in bytes and in time
 //
 // A repository's queue holds at most CommitterInbox proposals and
 // CommitterInboxBytes of entries; past either a push is refused busy AT
@@ -179,13 +179,20 @@ import (
 // each one's queueing to its caller's answer: a node commits for every
 // repository rendezvous ranks it first for, and per-repository bounds alone
 // let a thousand of the largest pushes from as many repositories hold about a
-// gibibyte of entries (EntryRoom each), and as much again decoded.
+// gibibyte of entries (EntryRoom each), and as much again decoded. A proposal
+// waits in the queue only while its asker's attempt still holds a batch and
+// its answer — one asked with no deadline, a whole CommitBudget — and is
+// refused busy past it, withdrawn as it waits ([Committer.await]) or refused
+// as its batch forms ([Committer.admit]).
 //
-// A refusal at either bound is a BACKLOG, the one busy that says this
-// committer turns proposals away, so the committer keeps those refusals for
-// [CommitBusyWindow] by repository and the engine reads them into the node's
-// alarm reading ([Committer.AlarmReading]): code_commit_busy stands on the data
-// node whose committer refused them (busy.go).
+// A refusal at any of these bounds is a BACKLOG, the one busy that says this
+// committer turns proposals away — the time bound's too, which a committer
+// slower than its pushes meets before its count (busy.go) — so the committer
+// keeps those refusals for [CommitBusyWindow] by repository and the engine
+// reads them into the node's alarm reading ([Committer.AlarmReading]):
+// code_commit_busy stands on the data node whose committer refused them. Only
+// a proposal that ARRIVED with its asker's attempt already spent, refused
+// before it takes a place in the queue, is no backlog of this committer's.
 
 // CommitterOptions configure a committer.
 type CommitterOptions struct {
@@ -566,7 +573,10 @@ func (c *Committer) queue(ctx context.Context, q *queued) answered {
 	}
 	if refusal := q.late(q.arrived); refusal != "" {
 		// TOO LATE BEFORE IT IS QUEUED: answered without taking the place
-		// in the queue a proposal that can still be decided needs.
+		// in the queue a proposal that can still be decided needs. Filed
+		// LATE, the one refusal at the queue's time bound that no backlog
+		// of this committer's made: its asker's attempt was spent before it
+		// arrived (busy.go).
 		return c.busy(q, busyLate, refusal)
 	}
 	//nolint:contextcheck // The batch is the committer's, not this caller's: it runs under the committer's own lifetime so a caller that hangs up never cancels the batch other callers are in.
@@ -613,7 +623,11 @@ func (c *Committer) await(ctx context.Context, q *queued) answered {
 		case <-expire:
 			expire = nil
 			if q.withdraw() {
-				return c.busy(q, busyLate, q.shortOfTime(q.deadline.Sub(c.clock())))
+				// THE QUEUE'S TIME BOUND, met behind this repository's
+				// earlier proposals: it queued with time to spare, so
+				// it WAITED out its asker here, a backlog of this
+				// committer's (busy.go).
+				return c.busy(q, busyWaited, q.shortOfTime(q.deadline.Sub(c.clock())))
 			}
 			// A BATCH TOOK IT FIRST, with a whole budget and the margin
 			// still in hand: its answer comes inside the attempt.
@@ -846,8 +860,11 @@ func (c *Committer) gather(rc *repoCommitter, first *queued, carried []*queued) 
 // already have handed the same push id to the runner-up, so deciding it here
 // would contend with that node on the repository's subject for a push nobody
 // here is waiting for. A push that is LATE ([queued.late]) is answered busy:
-// a batch started now could answer it only after its asker stopped waiting.
-// None is decided, and none appends anything; the client runs git push again.
+// a batch started now could answer it only after its asker stopped waiting —
+// and since every push queued with time to spare, it WAITED that time out
+// behind this repository's earlier batches, a backlog of this committer's
+// ([busyWaited]). None is decided, and none appends anything; the client runs
+// git push again.
 //
 // A SEAT'S PUSH IS JUDGED AGAIN HERE against the node's posture: queued while
 // the node served the company's configuration, it may meet its batch after
@@ -867,7 +884,7 @@ func (c *Committer) admit(q *queued) bool {
 		return false
 	}
 	if refusal := q.late(c.clock()); refusal != "" {
-		q.answer <- c.busy(q, busyLate, refusal)
+		q.answer <- c.busy(q, busyWaited, refusal)
 		return false
 	}
 	return true

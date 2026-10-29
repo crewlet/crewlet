@@ -709,14 +709,19 @@ type Reading struct {
 	// CodeCommitBusy is how many proposals this node's COMMITTER — the data
 	// node a repository's pushes are decided on, the first live data node in
 	// its rendezvous order — refused busy for a BACKLOG over the last
-	// TrimInterval: a repository's queue full, or the node holding its whole
-	// bound across every repository it commits for (internal/code's
-	// Committer.AlarmReading). CodeCommitBusyRepo is the repository with the
-	// most of them, by the name this node's rows hold for it, else its id;
-	// CodeCommitBusyOfRepo is how many were that repository's; and
-	// CodeCommitBusyNode is how many met the node's whole bound rather than
-	// one repository's queue. A proposal its asker could not wait for, or a
-	// record that lost every compare-and-set round, is no part of it.
+	// TrimInterval: a repository's queue full, the node holding its whole
+	// bound across every repository it commits for, or a proposal that
+	// queued with time to spare and lost it waiting behind earlier ones
+	// (internal/code's Committer.AlarmReading). CodeCommitBusyRepo is the
+	// repository with the most of them, by the name this node's rows hold
+	// for it, else its id; CodeCommitBusyOfRepo is how many were that
+	// repository's; CodeCommitBusyNode is how many met the node's whole bound
+	// rather than one repository's queue; and CodeCommitBusyWaited is how
+	// many waited in a queue until their asker could wait no longer — the
+	// queue's TIME bound, which a committer slower than its pushes meets
+	// before its count. A proposal that arrived with its asker's attempt
+	// already spent, or a record that lost every compare-and-set round, is
+	// no part of it.
 	//
 	// EACH WAS ALREADY JUDGED AT THE COMMITTER'S OWN BOUNDS, which this
 	// framework does not import, so the alarm borrows them whole (ADR-0015)
@@ -729,6 +734,7 @@ type Reading struct {
 	CodeCommitBusyRepo   string
 	CodeCommitBusyOfRepo int
 	CodeCommitBusyNode   int
+	CodeCommitBusyWaited int
 
 	// CodeChecksBacklog is how many queued attempts of checks have waited for
 	// a runner longer than their OWN timeout — each held to the
@@ -1549,26 +1555,31 @@ var table = []rule{
 	},
 	{
 		// THE THRESHOLD IS THE COMMITTER'S OWN BOUNDS (ADR-0015): a
-		// repository's queue — its count and its bytes — and the node's
-		// bytes across every repository it commits for, at which the
-		// committer already refused each proposal it counts. This framework
-		// imports no code-host package, so the rule fires at any count, never
-		// at a number of its own. Only a BACKLOG is counted, because only a
-		// backlog says this committer turns proposals away: a proposal whose
-		// asker's attempt ran out first is a cause upstream of the committer,
+		// repository's queue — its count, its bytes, and how long a proposal
+		// may wait in it, its asker's attempt less a batch and the answer —
+		// and the node's bytes across every repository it commits for, at
+		// which the committer already refused each proposal it counts. This
+		// framework imports no code-host package, so the rule fires at any
+		// count, never at a number of its own. Only a BACKLOG is counted,
+		// because only a backlog says this committer turns proposals away —
+		// the queue's time bound among them: a committer slower than its
+		// pushes meets it before its count, and turns every push past it away
+		// for as long as they keep coming. A proposal that arrived with its
+		// asker's attempt already spent is a cause upstream of the committer,
 		// and a record that lost every compare-and-set round is a second
 		// committer during a handoff — both counted by crewlet.code.commit.busy
 		// and logged, never alarmed. Raised by the node that decides the
 		// repository's pushes, whatever node received them, since it is the
-		// one whose queue is full.
+		// one whose queue is full or slow.
 		kind: KindCodeCommitBusy,
 		fires: func(r Reading) (string, bool) {
 			return fmt.Sprintf("%d proposal(s) were refused busy in the last %s because this node's "+
-					"committer could not hold them — %d for %s alone, %d at the node's whole bound across "+
-					"its repositories — each deciding nothing, and sent again by whoever made it; read "+
-					"code_commit_busy in this node's log",
+					"committer could not hold them or reach them in time — %d for %s alone, %d at the "+
+					"node's whole bound across its repositories, %d after waiting in the queue until their "+
+					"asker could wait no longer — each deciding nothing, and sent again by whoever made it; "+
+					"read code_commit_busy in this node's log",
 					r.CodeCommitBusy, spoken(TrimInterval), r.CodeCommitBusyOfRepo, r.CodeCommitBusyRepo,
-					r.CodeCommitBusyNode),
+					r.CodeCommitBusyNode, r.CodeCommitBusyWaited),
 				r.CodeCommitBusy > 0
 		},
 		remedy: "Nothing of a refused proposal landed, and nothing is lost: a git " +
@@ -1579,18 +1590,26 @@ var table = []rule{
 			"than one committer commits them (docs/concepts/scaling.md measures " +
 			"the rate), so spread the pushes over repositories: each has a queue " +
 			"and a chain of records of its own, and repositories rank different " +
-			"data nodes first. The node's whole bound is one node " +
-			"committing for too many busy repositories at once: each " +
+			"data nodes first. A proposal that waited in the queue until its " +
+			"asker could wait no longer is the same backlog drained too slowly " +
+			"for the queue to fill: the committer's batches take longer than the " +
+			"pushes keep arriving — the code log slow to append " +
+			"(`crewlet.statelog.publish.duration` on the `code` domain), or a " +
+			"repository's protection rules costly to decide — so the same " +
+			"remedies hold, and `crewlet.code.commit.batch.size` beside the busy " +
+			"counter says how full the batches ran. The node's whole bound is " +
+			"one node committing for too many busy repositories at once: each " +
 			"repository's committer is the first live data node in its " +
 			"rendezvous order, so more data nodes spread them. A seat pushing in " +
 			"a loop is held to `code.limits.pushes_per_seat_day` a day. Each " +
 			"`code_commit_busy` line in this node's log names a repository and a " +
 			"minute, with how many proposals were refused at its own queue " +
-			"(`queue`), at the node's bound (`node`), too late for their asker " +
-			"(`late`) and after every compare-and-set round (`contended`); the " +
-			"last two raise no alarm, and the `reason` attribute of " +
-			"`crewlet.code.commit.busy` counts all four. See " +
-			"docs/concepts/code-host.md.",
+			"(`queue`), at the node's bound (`node`), after waiting in the queue " +
+			"until their asker could wait no longer (`waited`), too late for " +
+			"their asker when they arrived (`late`) and after every " +
+			"compare-and-set round (`contended`); the last two raise no alarm, " +
+			"and the `reason` attribute of `crewlet.code.commit.busy` counts all " +
+			"five. See docs/concepts/code-host.md.",
 	},
 	{
 		// THE THRESHOLD IS EACH QUEUED CHECK'S OWN TIMEOUT (ADR-0015): a

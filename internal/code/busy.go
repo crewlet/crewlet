@@ -13,21 +13,38 @@ import (
 // THE BUSY ALARM'S READING: what this node's committer turned away for a
 // backlog, over the window code_commit_busy stands for.
 //
-// # Four reasons, two alarmed
+// # Five reasons, three alarmed
 //
 // A proposal refused busy is decided by nobody and sent again by whoever made
-// it, and it is refused for one of four reasons ([busyReason]) that point at
+// it, and it is refused for one of five reasons ([busyReason]) that point at
 // different remedies, so the busy counter (crewlet.code.commit.busy) carries
-// the reason beside the proposal's kind. Only a BACKLOG — a repository's queue
-// full ([busyQueue]) or the node holding its whole bound across its
-// repositories ([busyNode]) — says THIS committer turns proposals away, so only
-// those two raise the alarm. A LATE proposal ([busyLate]) is a symptom whose
-// cause is upstream of the committer: the asker's attempt was spent before a
-// batch could answer it — by the receiving node, the router's walk or the
-// serving node's floor wait, each with an instrument of its own. A CONTENDED
-// one ([busyContended]) lost every compare-and-set round, which is a second
-// committer deciding the repository during a handoff. Both are counted and
-// logged, never alarmed.
+// the reason beside the proposal's kind. Only a BACKLOG says THIS committer
+// turns proposals away, so only a backlog raises the alarm, and a backlog
+// turns a proposal away three ways: a repository's queue full by its count or
+// its bytes ([busyQueue]), the node holding its whole bound across its
+// repositories ([busyNode]), and the queue's TIME (CommitterInbox's doc) — a
+// proposal that queued with more of its asker's attempt left than a batch and
+// its answer, and lost it waiting behind the repository's earlier proposals
+// ([busyWaited]).
+//
+// THE TIME BOUND IS THE ONE A SLOW COMMITTER MEETS. One whose batches commit a
+// repository's proposals more slowly than they arrive holds those that
+// arrived in the twenty-odd to thirty seconds a proposal may wait — fewer than
+// CommitterInbox while fewer than some thirty-five to forty a second arrive —
+// and turns the rest away as they run out of time, never at the count: at the
+// decide's worst measured arm (CommitBudget's doc), some 2.4 s a record of 64,
+// thirty pushes a second to one repository leave about nine hundred queued
+// and three a second refused, for as long as they come. Filed as late, those
+// refusals left the alarm silent on exactly that committer, while the same
+// overload on a faster one raised it.
+//
+// A LATE proposal ([busyLate]) is one that ARRIVED with no more of its asker's
+// attempt left than a batch and its answer: a symptom whose cause is upstream
+// of the committer — the attempt spent by the receiving node, the router's
+// walk or the serving node's floor wait, each with an instrument of its own.
+// A CONTENDED one ([busyContended]) lost every compare-and-set round, which is
+// a second committer deciding the repository during a handoff. Both are
+// counted and logged, never alarmed.
 //
 // # A bucket a minute, expired by its minute
 //
@@ -40,7 +57,8 @@ import (
 // alarm's "in the last fifteen minutes" is never said of an older one. The
 // window counts every kind a backlog turns away — a compaction, an expunge
 // record or a change's write waits in the same queue under the same bounds as
-// the pushes around it, and meeting a full queue is the same backlog.
+// the pushes around it, and meeting a full queue, or running out of time in
+// it, is the same backlog.
 //
 // EVERY MINUTE IS ONE A CLOCK CAN READ — the epoch's first, every one before
 // it, the zero time's — so no minute marks a slot nothing was filed in: a slot
@@ -83,7 +101,8 @@ const busyBuckets = int((CommitBusyWindow + busyBucket - 1) / busyBucket)
 
 // busyReason is why a proposal was refused busy: the busy counter's `reason`
 // attribute, and which of a minute's counts the refusal is filed under
-// ([busyCounts]) — two of which raise code_commit_busy ([busyCounts.backlog]).
+// ([busyCounts]) — three of which raise code_commit_busy
+// ([busyCounts.backlog]).
 type busyReason string
 
 const (
@@ -95,10 +114,16 @@ const (
 	// repositories: one node committing for too many busy repositories at
 	// once.
 	busyNode busyReason = "node"
+	// busyWaited is a proposal that QUEUED with more of its asker's attempt
+	// left than a batch and its answer (CommitBudget and ReplyMargin) and
+	// lost it waiting behind the repository's earlier proposals on this
+	// node — withdrawn as it waits, or refused as its batch forms — or, asked
+	// with no deadline, one that waited a whole CommitBudget: the queue's
+	// time bound, met behind this committer's own batches.
+	busyWaited busyReason = "waited"
 	// busyLate is a proposal whose asker's attempt left no more than a batch
-	// and its answer (CommitBudget and ReplyMargin) — as it arrived, while it
-	// waited or as its batch formed — or, asked with no deadline, one that
-	// waited a whole CommitBudget.
+	// and its answer as it ARRIVED, before it took a place in the queue: the
+	// attempt was spent upstream of the committer.
 	busyLate busyReason = "late"
 	// busyContended is a record that lost every compare-and-set round the
 	// publisher may take: the repository kept changing under it.
@@ -107,7 +132,8 @@ const (
 
 // BusyReading is this committer's BACKLOG refusals over the last
 // CommitBusyWindow — the proposals it refused busy because a repository's
-// queue or the node's whole bound could not hold them — which the engine
+// queue or the node's whole bound could not hold them, or because they waited
+// in a queue until their asker could wait no longer — which the engine
 // carries into the alarm reading (statelog's code_commit_busy). A late or a
 // contended refusal is no part of it. The zero value is a committer that
 // turned nothing away.
@@ -122,6 +148,10 @@ type BusyReading struct {
 	// Node is how many met the node's whole bound (CommitterNodeBytes)
 	// rather than one repository's queue.
 	Node int
+	// Waited is how many waited in a queue until their asker could wait no
+	// longer ([busyWaited]): the queue's time bound, which a committer slower
+	// than its pushes meets before its count.
+	Waited int
 }
 
 // AlarmReading is this committer's backlog refusals over the CommitBusyWindow
@@ -140,8 +170,8 @@ func (c *Committer) AlarmReading(now time.Time) BusyReading {
 func (c *Committer) sayBusy(lines []busyLine) {
 	for _, l := range lines {
 		c.log.Warn("code_commit_busy", "repo", l.repo, "minute", l.minute, "refused", l.counts.total(),
-			"queue", l.counts.queue, "node", l.counts.node, "late", l.counts.late,
-			"contended", l.counts.contended)
+			"queue", l.counts.queue, "node", l.counts.node, "waited", l.counts.waited,
+			"late", l.counts.late, "contended", l.counts.contended)
 	}
 }
 
@@ -185,7 +215,7 @@ type busyMinute struct {
 func (m *busyMinute) filled() bool { return m.repos != nil }
 
 // busyCounts is one repository's refusals in one minute, by reason.
-type busyCounts struct{ queue, node, late, contended int }
+type busyCounts struct{ queue, node, waited, late, contended int }
 
 // add counts n refusals for reason.
 func (b *busyCounts) add(reason busyReason, n int) {
@@ -194,6 +224,8 @@ func (b *busyCounts) add(reason busyReason, n int) {
 		b.queue += n
 	case busyNode:
 		b.node += n
+	case busyWaited:
+		b.waited += n
 	case busyLate:
 		b.late += n
 	case busyContended:
@@ -202,12 +234,13 @@ func (b *busyCounts) add(reason busyReason, n int) {
 }
 
 // total is every refusal counted, whatever its reason.
-func (b busyCounts) total() int { return b.queue + b.node + b.late + b.contended }
+func (b busyCounts) total() int { return b.queue + b.node + b.waited + b.late + b.contended }
 
 // backlog is the refusals of this committer's own backlog — a repository's
-// queue full, or the node's whole bound — the two reasons that raise
-// code_commit_busy. A late or a contended refusal is no part of it.
-func (b busyCounts) backlog() int { return b.queue + b.node }
+// queue full, the node's whole bound, or a queue's time run out — the three
+// reasons that raise code_commit_busy. A late or a contended refusal is no
+// part of it.
+func (b busyCounts) backlog() int { return b.queue + b.node + b.waited }
 
 // busyLine is one code_commit_busy warning: a repository's refusals in one
 // closed minute.
@@ -296,6 +329,7 @@ func (w *busyWindow) reading(now time.Time) (BusyReading, []busyLine) {
 			of[repo] += backlog
 			out.Refused += backlog
 			out.Node += counts.node
+			out.Waited += counts.waited
 		}
 	}
 	for repo, n := range of {

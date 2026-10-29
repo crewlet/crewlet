@@ -182,13 +182,15 @@ var alarmMeaning = map[Kind]string{
 		"at the bound.",
 	KindCodeCommitBusy: "This node's committer — the data node a repository's " +
 		"pushes are decided on — refused proposals `busy` within the last trim " +
-		"tick because it could not hold them: a repository taking pushes faster " +
-		"than one committer commits them, its queue full, or this node committing " +
-		"for too many busy repositories at once, its whole bound held. Each was " +
-		"decided by nobody and is sent again. Raised by the committer's node " +
-		"alone, whichever node received the pushes, and only for a backlog: a " +
-		"proposal its asker could no longer wait for, or one that lost every " +
-		"compare-and-set round, is counted and logged and raises nothing.",
+		"tick because it could not hold them or reach them in time: a " +
+		"repository taking pushes faster than one committer commits them, its " +
+		"queue full or its proposals waiting in it until their asker could wait " +
+		"no longer, or this node committing for too many busy repositories at " +
+		"once, its whole bound held. Each was decided by nobody and is sent " +
+		"again. Raised by the committer's node alone, whichever node received " +
+		"the pushes, and only for a backlog: a proposal that arrived with its " +
+		"asker's attempt already spent, or one that lost every compare-and-set " +
+		"round, is counted and logged and raises nothing.",
 	KindCodeChecksBacklog: "Queued attempts of checks have waited for a runner " +
 		"longer than their own timeout — each judged at the timeout_seconds of " +
 		"the definition it was queued under, the time its author gave the check " +

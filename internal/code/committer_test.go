@@ -191,7 +191,7 @@ func reading(rec *metrics.Recorder, name string) metrics.Snapshot {
 }
 
 // pushesBusy is how many pushes rec counted refused busy for reason (the
-// busy counter's `reason`: queue, node, late or contended).
+// busy counter's `reason`: queue, node, waited, late or contended).
 func pushesBusy(rec *metrics.Recorder, reason string) uint64 {
 	return readingOf(rec, metrics.CodeCommitBusy, metrics.Attrs{"kind": "push", "reason": reason}).Total
 }
@@ -878,8 +878,10 @@ func TestAQueuedPushIsNeverDecidedPastOneBudget(t *testing.T) {
 	if got := n.end() - before; got != 2 {
 		t.Fatalf("%d records appended, want 2", got)
 	}
-	if got := pushesBusy(rec, "late"); got != 3 {
-		t.Fatalf("the busy counter reads %d too late, want the tail's 3", got)
+	// THE QUEUE'S TIME BOUND, met behind this committer's own batches: a
+	// backlog, never a deadline spent upstream.
+	if got := pushesBusy(rec, "waited"); got != 3 {
+		t.Fatalf("the busy counter reads %d pushes that waited out their time, want the tail's 3", got)
 	}
 }
 
@@ -1024,8 +1026,10 @@ func TestAQueuedPushIsAnsweredBeforeItsAskerGivesUp(t *testing.T) {
 	if got := n.target(repo, "refs/heads/waiting"); got != "" {
 		t.Fatalf("refs/heads/waiting is at %s, want no ref", got)
 	}
-	if got := pushesBusy(rec, "late"); got != 1 {
-		t.Fatalf("the busy counter reads %d too late, want 1", got)
+	// QUEUED IN TIME AND WITHDRAWN behind the batch ahead of it: the queue's
+	// time bound, which the busy alarm counts, never a deadline spent upstream.
+	if got := pushesBusy(rec, "waited"); got != 1 {
+		t.Fatalf("the busy counter reads %d pushes that waited out their time, want 1", got)
 	}
 }
 
@@ -1071,8 +1075,10 @@ func TestAPushIsJudgedByItsCallersDeadline(t *testing.T) {
 	if got := n.end() - before; got != 2 {
 		t.Fatalf("%d records appended, want 2: the lead, and the push its asker still waits for", got)
 	}
-	if got := pushesBusy(rec, "late"); got != 1 {
-		t.Fatalf("the busy counter reads %d too late, want 1", got)
+	// IT QUEUED WITH AN HOUR TO SPARE and spent it behind the lead: the
+	// queue's time bound, not a deadline spent before it arrived.
+	if got := pushesBusy(rec, "waited"); got != 1 {
+		t.Fatalf("the busy counter reads %d pushes that waited out their time, want 1", got)
 	}
 }
 

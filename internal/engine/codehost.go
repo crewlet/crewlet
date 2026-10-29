@@ -548,8 +548,9 @@ type codeHostParts struct {
 // codeReading fills the reading's code half at now from this node's
 // committer: how many proposals it refused busy for a backlog over the window
 // code_commit_busy stands for, the repository with the most of them — named
-// by this node's own rows, else by its id — and how many met the node's whole
-// bound ([code.Committer.AlarmReading]). And from this node's git cache: how
+// by this node's own rows, else by its id — how many met the node's whole
+// bound, and how many waited in a queue until their asker could wait no
+// longer ([code.Committer.AlarmReading]). And from this node's git cache: how
 // many repositories it cannot write a bitmap of for memory — its own, or the
 // one a publication of a repository it maintains writes — the largest of those
 // charges and the budget they are past ([cache.Cache.AlarmReading]), which
@@ -574,7 +575,7 @@ type codeHostParts struct {
 // every data node of a company that hosts code ([native.committer]), the git
 // role or not, and a data node without it holds no cache — so a reading that
 // asked the committer only where a cache stood was silent on exactly the node
-// whose queue was full. Its four fields are ASSIGNED HERE, from the concrete
+// whose queue was full. Its five fields are ASSIGNED HERE, from the concrete
 // committer's reading, because the reading's producers gate follows a call
 // that hands the reading on, never one whose result is the committer's own
 // shape (TestEveryAlarmReadingFieldHasAProducer).
@@ -606,6 +607,7 @@ func (e *Engine) codeReading(ctx context.Context, now time.Time, out *statelog.R
 		out.CodeCommitBusy = busy.Refused
 		out.CodeCommitBusyOfRepo = busy.OfRepo
 		out.CodeCommitBusyNode = busy.Node
+		out.CodeCommitBusyWaited = busy.Waited
 		if busy.Repo != "" {
 			// THE NAME AN OPERATOR KNOWS, read from this node's own rows
 			// only while something was refused: one point read an

@@ -18,19 +18,25 @@ import (
 // proposal away busy at once, and the committer's reading — what the engine
 // carries into code_commit_busy — counts it and names the repository, for
 // the whole CommitBusyWindow and no longer: fourteen minutes on it stands,
-// sixteen on it is gone. A proposal its asker cannot wait for, and a record
-// that lost every compare-and-set round, are each counted by the busy counter
-// under their own reason and are no part of the reading: neither says this
-// committer turns proposals away. Past the node's whole bound, every
+// sixteen on it is gone. A proposal that queued with time to spare and lost it
+// behind a held batch — withdrawn as it waits for its asker's deadline, or
+// refused as its batch forms after a whole budget asked with none — met the
+// queue's TIME bound, the same backlog, and the reading counts it too. A
+// proposal that ARRIVED with too little of its asker's attempt left, and a
+// record that lost every compare-and-set round, are each counted by the busy
+// counter under their own reason and are no part of the reading: neither says
+// this committer turns proposals away. Past the node's whole bound, every
 // repository's proposal is a backlog the reading counts as the node's, and
 // names the repository with the most of them; and the node's log says it a
 // repository a minute, once the minute has closed — never a line a refusal.
 //
 // Mutations: count `late` (or `contended`) as a backlog, and the reading
-// counts the deadline (or the lost race); keep a window of one bucket, and the
-// refusal is gone fourteen minutes on; file every refusal as `queue`, and the
-// node's bound reads as none; write a line a refusal, or the closed minute's
-// lines at every reading, and the log holds more than one a repository.
+// counts the arrival too late (or the lost race); file a wait that outlasted
+// its asker, or one past a whole budget, as `late`, and the reading misses the
+// committer that turned it away; keep a window of one bucket, and the refusal
+// is gone fourteen minutes on; file every refusal as `queue`, and the node's
+// bound reads as none; write a line a refusal, or the closed minute's lines at
+// every reading, and the log holds more than one a repository.
 func TestABacklogRaisesTheBusyReadingForItsWindow(t *testing.T) {
 	t.Parallel()
 	t.Run("a full queue", func(t *testing.T) {
@@ -87,6 +93,72 @@ func TestABacklogRaisesTheBusyReadingForItsWindow(t *testing.T) {
 			if a := await(t, ch); a.err != nil {
 				t.Fatalf("a held proposal: %v", a.err)
 			}
+		}
+	})
+
+	t.Run("a wait that outlasted its asker", func(t *testing.T) {
+		t.Parallel()
+		n := newNode(t)
+		repo := repoOn(t, n, "web")
+		gate := newGate(n.pub)
+		c, rec := committerOn(t, n, gate)
+		lead := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/lead", code.ZeroOID, oidOf("L"))))
+		eventually(t, "the first publish reaching the gate", func() bool { return gate.calls.Load() == 1 })
+
+		// QUEUED WITH TIME TO SPARE — a batch, its answer and a second —
+		// and the second spent behind the held batch.
+		ctx, cancel := context.WithTimeout(t.Context(), code.CommitBudget+code.ReplyMargin+time.Second)
+		defer cancel()
+		waiting := proposeAsync(ctx, c, proposal(repo, update("refs/heads/waited", code.ZeroOID, oidOf("W"))))
+		eventually(t, "the push queued", func() bool { return code.CommitterQueued(c, repo) == 1 })
+		if a := await(t, waiting); a.err != nil || a.res.Answer.Refused != code.RefusalBusy {
+			t.Fatalf("a push that waited out its asker's attempt answered %+v, %v; want busy", a.res.Answer, a.err)
+		}
+		want := code.BusyReading{Refused: 1, Repo: repo, OfRepo: 1, Waited: 1}
+		if got := c.AlarmReading(time.Now()); got != want {
+			t.Errorf("the reading is %+v, want the push that waited out its time: %+v", got, want)
+		}
+		if got := pushesBusy(rec, "waited"); got != 1 {
+			t.Errorf("the busy counter reads %d pushes that waited out their time, want 1", got)
+		}
+		if got := pushesBusy(rec, "late"); got != 0 {
+			t.Errorf("the busy counter reads %d pushes too late on arrival, want none: it queued in time", got)
+		}
+		gate.open()
+		requireOK(t, await(t, lead))
+	})
+
+	t.Run("a wait past a whole budget", func(t *testing.T) {
+		t.Parallel()
+		n := newNode(t)
+		repo := repoOn(t, n, "web")
+		gate := newGate(n.pub)
+		c, rec := committerOn(t, n, gate)
+		clock := &fakeClock{at: time.Unix(1_900_000_000, 0)}
+		code.SetCommitterClock(c, clock.now)
+		lead := proposeAsync(t.Context(), c, proposal(repo, update("refs/heads/lead", code.ZeroOID, oidOf("L"))))
+		eventually(t, "the first publish reaching the gate", func() bool { return gate.calls.Load() == 1 })
+
+		// ASKED WITH NO DEADLINE, and still queued a whole budget later:
+		// refused as the batch it would lead forms.
+		waiting := proposeAsync(t.Context(), c, proposal(repo,
+			update("refs/heads/waited", code.ZeroOID, oidOf("W"))))
+		eventually(t, "the push queued", func() bool { return code.CommitterQueued(c, repo) == 1 })
+		clock.advance(code.CommitBudget)
+		gate.open()
+		requireOK(t, await(t, lead))
+		if a := await(t, waiting); a.err != nil || a.res.Answer.Refused != code.RefusalBusy {
+			t.Fatalf("a push queued a whole budget answered %+v, %v; want busy", a.res.Answer, a.err)
+		}
+		want := code.BusyReading{Refused: 1, Repo: repo, OfRepo: 1, Waited: 1}
+		if got := c.AlarmReading(clock.now()); got != want {
+			t.Errorf("the reading is %+v, want the push that waited a whole budget: %+v", got, want)
+		}
+		if got := pushesBusy(rec, "waited"); got != 1 {
+			t.Errorf("the busy counter reads %d pushes that waited out their time, want 1", got)
+		}
+		if got := pushesBusy(rec, "late"); got != 0 {
+			t.Errorf("the busy counter reads %d pushes too late on arrival, want none: it queued in time", got)
 		}
 	})
 
@@ -153,7 +225,8 @@ func TestABacklogRaisesTheBusyReadingForItsWindow(t *testing.T) {
 		for repo, refused := range map[string]float64{api: 2, web: 1} {
 			line := said[repo]
 			if line["level"] != "WARN" || line["refused"] != refused || line["node"] != refused ||
-				line["queue"] != float64(0) || line["late"] != float64(0) || line["contended"] != float64(0) {
+				line["queue"] != float64(0) || line["waited"] != float64(0) || line["late"] != float64(0) ||
+				line["contended"] != float64(0) {
 				t.Errorf("%s's line is %v, want a warning of %v refused at the node's bound", repo, line, refused)
 			}
 		}
