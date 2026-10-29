@@ -93,8 +93,17 @@ export const ALARM_TONE: Record<ModelAlarmKind, "danger" | "warning"> = {
   llm_limit_waiting: "warning",
 };
 
-/** What a model is for, by category: its name, what it covers, and the verb a summary uses. */
-export const CATEGORY_WORDS: Record<JobCategory, { label: string; hint: string; verb: string }> = {
+/** A category's words: its name, what it covers, and the verb a summary uses. */
+interface CategoryWords {
+  label: string;
+  hint: string;
+  verb: string;
+}
+
+/** The words with every field a non-empty literal: an empty one is `never`, which nothing satisfies. */
+type Worded<T> = { [K in keyof T]: { [F in keyof T[K]]: T[K][F] extends "" ? never : T[K][F] } };
+
+const WORDS = {
   coding: {
     label: "Coding",
     hint: "The seat's own work: writing code, running tools, and its onboarding pass.",
@@ -110,7 +119,14 @@ export const CATEGORY_WORDS: Record<JobCategory, { label: string; hint: string; 
     hint: "Background memory and summaries, and the checks that decide when onboarding is done.",
     verb: "run routines and evaluations",
   },
-};
+} as const satisfies Record<JobCategory, CategoryWords>;
+
+/**
+ * What a model is for, by category. Each label is a column's head on By job
+ * and names it on a phone's card, so AN EMPTY WORD FAILS THE TYPECHECK here
+ * (`Worded`) rather than drawing a column nothing names.
+ */
+export const CATEGORY_WORDS = WORDS satisfies Worded<typeof WORDS>;
 
 /** A category's tooltip: the engine fields it writes. */
 export function categoryTip(category: JobCategory): string {

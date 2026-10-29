@@ -621,6 +621,40 @@ test("the element scanner reads a multi-line prop", () => {
  * the alternative either: at 7.x the package exports its syntax tree only under
  * `unstable/`, and a permanent gate does not rest on that.
  */
+/**
+ * A `label:` line that gives a column its word: a non-empty string literal,
+ * or the NAME of one, since a column built per item of a table of words (By
+ * job's one column per category) labels itself from that table, which a
+ * literal cannot. An empty literal of either quote, and a template literal of
+ * any kind, are refused: the first is nothing to read, and the second cannot
+ * be told from nothing by its spelling. A name is trusted to hold a word, so
+ * the tables it reads hold that themselves (`CATEGORY_WORDS` refuses an empty
+ * word at the typecheck, and By job's suite reads every head's name).
+ */
+function namesALabel(line: string): boolean {
+  return /^\s*label:\s*((["'])(?!\2)\S|[A-Za-z_$][\w$.[\]]*,?$)/.test(line);
+}
+
+test("a label line names a word, or the table one comes from, and never nothing", () => {
+  for (const line of [
+    '        label: "Coding",',
+    "        label: 'Coding',",
+    "        label: word,",
+    "        label: CATEGORY_WORDS[c].label,",
+    "        label: words.coding.label",
+  ])
+    expect(namesALabel(line), line).toBe(true);
+  for (const line of [
+    '        label: "",',
+    "        label: '',",
+    "        label: ``,",
+    "        label: `${word}`,",
+    '        label: " ",',
+    "        label: undefined ?? word,",
+  ])
+    expect(namesALabel(line), line).toBe(false);
+});
+
 test("a column with no word in its head declares one", () => {
   const offenders: string[] = [];
   let seen = 0;
@@ -647,11 +681,7 @@ test("a column with no word in its head declares one", () => {
           siblings.push(line);
         }
       }
-      // A WORD, OR THE NAME OF ONE: a column built per item of a table of words
-      // (By job's one column per category) labels itself from that table, which
-      // a literal cannot. An empty string is still refused.
-      if (siblings.some((line) => /^\s*label:\s*(["']\S|[A-Za-z_$][\w$.[\]]*,?$)/.test(line)))
-        continue;
+      if (siblings.some(namesALabel)) continue;
       if (siblings.some((line) => /^\s*action:\s*true,?$/.test(line))) continue;
       offenders.push(`${path}:${at + 1}`);
     }
