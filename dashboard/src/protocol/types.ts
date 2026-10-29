@@ -4033,6 +4033,15 @@ export interface SetupRequirement {
    * test it would have to fake.
    */
   check_note?: string;
+  /**
+   * The other fields of this list a check of this credential is made with,
+   * for an app that proves several values in one check (Datadog's API key
+   * and application key, against their region). The form offers one Test
+   * control after this field, enabled once this field and every one named
+   * here holds a value, and a result about all of them. Absent, the field
+   * is checked on its own.
+   */
+  check_with?: string[];
   mintable?: boolean;
   /**
    * Written without being asked for.

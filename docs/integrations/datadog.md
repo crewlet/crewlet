@@ -19,6 +19,35 @@ which tag on a monitor names an owner, and who is woken when none does.
 See [Setting an integration up](../reference/api-endpoints.md#setting-an-integration-up)
 for the routes behind it.
 
+### Testing the keys before you save them
+
+The form offers one **Test keys** control, after the application key. Datadog
+accepts or refuses the two keys together, so there is no separate test for the
+API key: the control is enabled once both keys are typed (the region always
+has a value), and one press checks both and shows one result. Editing either
+key, or the region, clears that result. Nothing is stored by a test.
+
+The engine checks in stages, with read-only calls, and stops at the first that
+fails, so the result names the key to replace:
+
+| Stage | Call | Result when Datadog refuses it |
+|---|---|---|
+| The API key, on its own | `GET /api/v1/validate` | "Datadog refused the API key: Forbidden." |
+| Both keys | `GET /api/v1/org` | "The API key is valid, but Datadog refused the application key: Forbidden." |
+| Reading users | `GET /api/v2/users`, one row | "Both keys are valid, but the application key lacks a permission Crewlet needs: reading users (Forbidden)." |
+| Reading roles | `GET /api/v2/roles`, one row | the same, naming reading roles |
+| Reading webhooks | `GET` of the configured webhook by name | the same, naming reading webhooks. A webhook that does not exist yet is not a failure: the first reconcile pass creates it |
+
+When every stage passes, the result reads "Works. Both keys are valid for the
+FairSplit organization in datadoghq.eu, and can read users, roles and
+webhooks." That is the whole claim: the reconcile also **writes** users, roles,
+application keys and the webhook, and a test cannot prove those permissions
+without making a change at Datadog, so a write the application key is not
+allowed surfaces on the first reconcile pass instead. A timeout, a `429` or a
+`5xx` at any stage is reported as Datadog not answering rather than as a
+refusal. The keys travel only in Datadog's request headers, and Datadog's own
+reason is repeated only when it is short and does not contain either key.
+
 ## Giving each agent its own Datadog identity
 
 `integrations.datadog.provisioning` carries the organization credential pair,

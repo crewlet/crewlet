@@ -8254,7 +8254,12 @@ check carries **Test key** under its field: one read-only call to the app
 (`POST /setup/integrations/{kind}/verify`), whose verdict (*works*, *refused*,
 *unreachable*, or not checked, with the app's reason) shows under the field
 and goes when the value is typed over; a credential the app proves only by
-using it says how, in its help. A check the engine turned away (a `${NAME}`
+using it says how, in its help. Credentials the app checks together
+(`check_with`, Datadog's API key and application key) share one **Test keys**
+control after the last of them: it is disabled, with an accessible reason
+naming the empty fields, until all of them hold a value, shows one verdict
+that names the key that failed, and that verdict goes when any of them is
+typed over. A check the engine turned away (a `${NAME}`
 naming no secret) says why and claims no verdict.
 
 **Crewlet's own services** have pages laid out as an app's and filled only
