@@ -458,7 +458,10 @@ func TestTheModelsAnswerCarriesNoMoney(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _ := json.Marshal(data)
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var tree any
 	if err := json.Unmarshal(raw, &tree); err != nil {
 		t.Fatal(err)
