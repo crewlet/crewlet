@@ -130,7 +130,7 @@ test("Cancel sign-in cancels the running session", async () => {
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
   });
-  expect(api.cancelDeviceSignIn).toHaveBeenCalledWith("dev-1", expect.any(AbortSignal));
+  expect(api.cancelDeviceSignIn).toHaveBeenCalledWith("dev-1");
   expect(onClose).toHaveBeenCalled();
 });
 
@@ -141,11 +141,11 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-test("a cancel that answers after the dialog closed acts for nothing", async () => {
+test("a cancel that has started finishes after the dialog closed, and acts for nothing on screen", async () => {
   api.startDeviceSignIn.mockResolvedValue({ kind: "ok", status: 201, value: SESSION });
   const answer = deferred<unknown>();
-  let sent: AbortSignal | null = null;
-  api.cancelDeviceSignIn.mockImplementation((_id: string, signal: AbortSignal) => {
+  let sent: unknown = "unset";
+  api.cancelDeviceSignIn.mockImplementation((_id: string, signal?: AbortSignal) => {
     sent = signal;
     return answer.promise;
   });
@@ -153,7 +153,8 @@ test("a cancel that answers after the dialog closed acts for nothing", async () 
   await screen.findByText("QXJM-7KPD");
   fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
   view.unmount();
-  expect(sent!.aborted).toBe(true);
+  // NO SIGNAL: closing the dialog cannot stop the cancel part way.
+  expect(sent).toBeUndefined();
   await act(async () => answer.resolve({ kind: "ok", status: 200, value: SESSION }));
   expect(onDone).not.toHaveBeenCalled();
   expect(onClose).not.toHaveBeenCalled();
@@ -213,6 +214,32 @@ test("a session the engine no longer answers for is said, never left waiting, an
   polled.detail = undefined;
   fireEvent.click(screen.getByRole("button", { name: "Start again" }));
   await waitFor(() => expect(api.startDeviceSignIn).toHaveBeenCalledTimes(2));
+});
+
+test("a session gone from this reader's sight is lost too, as one that no longer exists is", async () => {
+  api.startDeviceSignIn.mockResolvedValue({ kind: "ok", status: 201, value: SESSION });
+  const { view, model, onDone } = open();
+  await screen.findByText("QXJM-7KPD");
+  polled.error = "unauthorized";
+  view.rerender(<DeviceDialog model={model} onClose={() => {}} onDone={onDone} />);
+  expect(screen.getByText("This sign-in can no longer be followed")).toBeDefined();
+  expect(screen.getByRole("button", { name: "Start again" })).toBeDefined();
+});
+
+test("a poll that failed for a moment keeps the status and asks again", async () => {
+  api.startDeviceSignIn.mockResolvedValue({ kind: "ok", status: 201, value: SESSION });
+  const { view, model, onDone } = open();
+  await screen.findByText("QXJM-7KPD");
+  for (const code of ["unavailable", "timeout", "closed"]) {
+    polled.error = code;
+    polled.detail = "The node is still starting.";
+    view.rerender(<DeviceDialog model={model} onClose={() => {}} onDone={onDone} />);
+    expect(screen.queryByText("This sign-in can no longer be followed"), code).toBeNull();
+    expect(screen.getByText("Waiting for you to approve the code"), code).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Start again" }), code).toBeNull();
+    // STILL ASKING: the poll stays on while the session is live.
+    expect(polled.calls.at(-1)![2], code).toEqual({ enabled: true, pollMs: DEVICE_POLL_MS });
+  }
 });
 
 test("only an https address is offered to open", async () => {
