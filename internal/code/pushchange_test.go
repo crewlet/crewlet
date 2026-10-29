@@ -25,8 +25,9 @@ import (
 // embedded broker, and read back from the rows every data node derives alike.
 
 // pushOpening proposes one push of cmds to repo by who through c, asking for
-// change, and answers what became of it. A seat's push names the turn that
-// made it, as the engine stamps every seat's.
+// change, and answers what became of it. A seat's push git receives is its
+// coding box's, so it names the run that made it — the turn that launched the
+// run, the run's launch and its coding agent — as the engine stamps every one.
 func pushOpening(t *testing.T, c *code.Committer, repo string, who code.Principal, change *code.ChangeOption,
 	cmds ...code.Command) (code.Proposal, code.ProposeResult) {
 
@@ -34,7 +35,8 @@ func pushOpening(t *testing.T, c *code.Committer, repo string, who code.Principa
 	p := proposal(repo, cmds...)
 	p.Principal, p.Change = who, change
 	if who.Kind == code.PrincipalAgent {
-		p.Principal.Run = code.RunProvenance{TurnID: uuid.Must(uuid.NewV7()).String()}
+		p.Principal.Run = code.RunProvenance{TurnID: uuid.Must(uuid.NewV7()).String(),
+			RunID: uuid.NewString(), CodingAgent: "claude-code"}
 	}
 	res, err := c.Propose(t.Context(), p)
 	if err != nil {
