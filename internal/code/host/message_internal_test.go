@@ -11,7 +11,8 @@ import (
 
 // defaultMessageRows are messages a commit may carry as git stores them — what
 // commit-tree, a client's editor or another tool wrote — each a case of the
-// rules a revert's and a cherry-pick's default message follow.
+// rules a revert's and a cherry-pick's default message follow, and a pushed
+// change's default title (TestAChangesDefaultTitleIsGitLogsSubject).
 var defaultMessageRows = []string{
 	"subject only",
 	"subject\n\nbody\n\nSigned-off-by: x <x@example.com>\n",

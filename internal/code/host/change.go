@@ -140,30 +140,41 @@ func (s *Server) defaultTitle(ctx context.Context, l *landing, source code.Comma
 }
 
 // logSubject is the subject of raw, a commit object as `git cat-file commit`
-// prints it, whole or its head: its message's first paragraph, each line
-// trimmed and the lines joined by a space — git's own subject (%s), what `git
-// log` shows of the commit — or "" where raw holds no message. Its headers end
-// at the first blank line: a header's continuation lines (a signature's) each
-// start with a space.
+// prints it, whole or its head, as `git log --format=%s` shows it: its
+// message's first paragraph from where the message's subject starts — past
+// lines of nothing but git's white space, and with nothing from a NUL on
+// (commitSubject) — each line without its trailing white space and the lines
+// joined by a space (pretty.c's format_subject), or "" where raw holds no
+// message. Its headers end at the first blank line: a header's continuation
+// lines (a signature's) each start with a space. Its bytes are the commit's,
+// never re-encoded: a subject in another encoding is no title (asTitle).
 //
-// NOT commitSubject's (message.go), which is a message's first LINE — the
-// subject a revert quotes, as the sequencer finds it — since a change is first
-// read by what `git log` shows of its commit: a subject wrapped over two lines
-// titles it whole.
+// NOT commitSubject's subject (message.go), which is a message's first LINE —
+// the subject a revert quotes, as the sequencer finds it — since a change is
+// first read by what `git log` shows of its commit: a subject wrapped over two
+// lines titles it whole. It STARTS where that one does, as git's two do, so a
+// message opened with blank lines (`git commit --cleanup=verbatim`, a commit
+// another tool wrote) is titled by its first paragraph, as `git log` shows it,
+// rather than by its branch's name, and a NUL ends it where it ends git's
+// (TestAChangesDefaultTitleIsGitLogsSubject).
 func logSubject(raw []byte) string {
 	_, msg, ok := bytes.Cut(raw, []byte("\n\n"))
 	if !ok {
 		return ""
 	}
-	var lines []string
-	for line := range strings.Lines(string(msg)) {
-		line = strings.TrimSpace(line)
+	_, from := commitSubject(string(msg))
+	var b strings.Builder
+	for line := range strings.Lines(from) {
+		line = trimGitSpace(line)
 		if line == "" {
 			break
 		}
-		lines = append(lines, line)
+		if b.Len() > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(line)
 	}
-	return strings.Join(lines, " ")
+	return b.String()
 }
 
 // asTitle is s made a change's title, or "" where it cannot be one: valid
