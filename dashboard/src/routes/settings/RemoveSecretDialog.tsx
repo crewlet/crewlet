@@ -25,6 +25,7 @@ import { useState } from "react";
 import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
 import { CheckGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 import { rest, RestError } from "~/protocol/index.ts";
+import { reloadFailure } from "./secretReload.ts";
 
 export function RemoveSecretDialog({
   name,
@@ -44,6 +45,9 @@ export function RemoveSecretDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
+  // THE ROW IS GONE AND THE COMPANY STILL READS IT: the removal answered
+  // 200, and its re-activation did not land.
+  const [unapplied, setUnapplied] = useState<string | null>(null);
 
   const referenced = paths !== null && paths.length > 0;
   const unchecked = paths === null;
@@ -54,8 +58,13 @@ export function RemoveSecretDialog({
     setBusy(true);
     setError(null);
     try {
-      await rest.del("/secrets/" + encodeURIComponent(name));
+      const answer = await rest.del("/secrets/" + encodeURIComponent(name));
       onDone();
+      const failure = reloadFailure(answer);
+      if (failure) {
+        setUnapplied(failure);
+        return;
+      }
       onClose();
     } catch (err) {
       setError(err instanceof RestError ? err.message : String(err));
@@ -78,18 +87,24 @@ export function RemoveSecretDialog({
       size="md"
       stackBody
       footer={
-        <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
-            Cancel
+        unapplied ? (
+          <Button variant="primary" onClick={onClose}>
+            Close
           </Button>
-          <Button
-            variant="danger"
-            onClick={() => void submit()}
-            disabled={busy || (needsAcknowledgement && !acknowledged)}
-          >
-            {busy ? "Removing" : "Remove"}
-          </Button>
-        </>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => void submit()}
+              disabled={busy || (needsAcknowledgement && !acknowledged)}
+            >
+              {busy ? "Removing" : "Remove"}
+            </Button>
+          </>
+        )
       }
     >
       <p className="t-body secondary" style={{ margin: 0 }}>
@@ -135,7 +150,7 @@ export function RemoveSecretDialog({
         </Callout>
       )}
 
-      {needsAcknowledgement && (
+      {needsAcknowledgement && !unapplied && (
         <Checkbox
           framed
           tone="danger"
@@ -144,6 +159,16 @@ export function RemoveSecretDialog({
           onCheckedChange={setAcknowledged}
           label={referenced ? "Remove it anyway" : "Remove it without knowing what points at it"}
         />
+      )}
+
+      {unapplied && (
+        <Callout variant="warning" role="alert">
+          <span className="col" style={{ gap: 4 }}>
+            <span>Removed, but the company is still using the old value.</span>
+            <span className="t-caption">{unapplied}</span>
+            <span className="t-caption">It stops at the next configuration change.</span>
+          </span>
+        </Callout>
       )}
 
       {error && (
