@@ -144,8 +144,9 @@ func childEnv(p cliprofile.Profile, c *Checkout, extra map[string]string, auth A
 	// engine reads that time in the zone it handed the CLI ([resetAt]).
 	// Inherited only where the host had one, as TZ used to be, the zone of a
 	// zone-less sentence was whatever the host or a box's image defaulted
-	// to, which the engine could only guess.
-	env["TZ"], _ = childZone()
+	// to, which the engine could only guess. An entry's env may not set it
+	// (config refuses one), so this replaces nothing an operator wrote.
+	env[cliprofile.ZoneVariable], _ = childZone()
 
 	applyAuth(env, p, auth)
 	return env

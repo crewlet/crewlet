@@ -49,6 +49,14 @@ func TestAnEnvSignInIsTheEntrysOnlySignIn(t *testing.T) {
 			says: `the "codex" profile names no variable that does (sign_in_env)`,
 		},
 		{
+			// The engine pins every CLI's zone and reads resets in it, so an
+			// entry's own TZ would be replaced, or read the reset wrong.
+			name:  "a zone in env",
+			lines: []string{"agent: claude-code", "env: {TZ: Europe/Berlin}"},
+			path:  "providers.llm.sub.env.TZ", kind: ErrConflict,
+			says: "the zone the engine hands every CLI it starts",
+		},
+		{
 			// A bundle is a login, and env seeds none anywhere.
 			name: "a credential bundle under env mode",
 			lines: []string{"agent: claude-code", `auth: {mode: env, credential_bundle: "${BUNDLE}"}`,

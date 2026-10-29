@@ -1353,7 +1353,7 @@ func (p *Provider) SandboxEnv() map[string]string {
 	// in its own zone, and the engine reads a reset the CLI names without
 	// one in the zone it handed the run, never in whatever the box's image
 	// defaults to.
-	names = append(names, "TZ")
+	names = append(names, cliprofile.ZoneVariable)
 	isolation := p.profile.IsolationVariables()
 	out := map[string]string{}
 	for _, name := range names {

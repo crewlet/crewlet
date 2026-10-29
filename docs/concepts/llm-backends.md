@@ -885,8 +885,9 @@ Every CLI the engine starts, on this host and in a box, is handed `TZ`: the
 engine's own `TZ` where it names a zone the system knows, else `UTC`. Codex
 writes its reset as a local time with no zone ("try again at 4:31 PM"), and
 before the zone was handed over it was whatever the host or the box's image
-defaulted to, which the engine could only guess. A `TZ` an entry's `env` sets is
-overruled for the same reason.
+defaulted to, which the engine could only guess. An entry's `env` may not set
+`TZ` for the same reason: every write refuses it, naming the field; set `TZ` in
+the engine's own environment to move every CLI's zone.
 
 **A refused sign-in is read from the CLI's fields first too** (`auth_events`): a
 Claude Code run that ends on `api_error_status: 401`, or retried with
