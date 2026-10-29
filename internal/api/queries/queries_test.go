@@ -275,6 +275,9 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"decisions": "everybody",
 		// The other half of `decisions`: a person's own asks need no app.
 		"answered_decisions": "everybody",
+		// Each model's condition and uses, in two readings: a member's names no
+		// credential, no account and no vendor sentence, an admin's all of it.
+		"llm_entries": "everybody",
 
 		"events": "admin", "event_series": "admin", "event": "admin",
 		"trace": "admin", "turn": "admin", "fleet": "admin",
@@ -283,6 +286,10 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"integrations": "admin", "retention": "admin", "a2a_channels": "admin",
 		"config": "admin", "config_audit": "admin", "config_diff": "admin",
 		"config_entities": "admin", "limits": "admin", "sign_in_policy": "admin",
+		// Where a model's coding runs can happen, the catalogue a model step
+		// suggests from, and one device sign-in: the configuration's reader,
+		// and the one who starts a sign-in.
+		"llm_runners": "admin", "llm_models": "admin", "llm_device_sign_in": "admin",
 
 		"work_items": "worklet", "work_comments": "worklet",
 		"work_item_turns": "worklet", "work_views": "worklet",
