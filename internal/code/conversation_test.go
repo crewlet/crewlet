@@ -583,11 +583,13 @@ func TestAWriteWaitsItsTurnOnlyWhileItsAttemptHasRoom(t *testing.T) {
 	}
 }
 
-// A SEAT'S WRITE AND EVERY ASK OF REVIEWERS NEED THE DECIDING NODE'S CHART: on
-// a node that holds none yet the writer decides nothing of them and says so
-// about itself (ErrNotServing), so the router asks the repository's runner-up;
-// a person's comment is decided there as ever. And a node confirmed behind the
-// company's configuration decides none of them either.
+// A SEAT'S WRITE, EVERY ASK OF REVIEWERS AND EVERY MERGEABILITY NEED THE
+// DECIDING NODE'S CHART: on a node that holds none yet the writer decides
+// nothing of them and says so about itself (ErrNotServing), so the router asks
+// the repository's runner-up — a mergeability's readiness is the chart's to
+// judge, whose approvals count and who maintains the repository; a person's
+// comment is decided there as ever. And a node confirmed behind the company's
+// configuration decides none of them either.
 func TestAWriteTheChartJudgesNeedsTheDecidingNodesChart(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -603,6 +605,7 @@ func TestAWriteTheChartJudgesNeedsTheDecidingNodesChart(t *testing.T) {
 		for what, cw := range map[string]code.ConversationWrite{
 			"a seat's comment":         saying(repo, change, dev, "", "Hm."),
 			"a person's ask of review": asking(repo, change, ada, "plat-lead"),
+			"a home's mergeability":    n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean),
 		} {
 			if res, err := w.Converse(t.Context(), cw); !errors.Is(err, code.ErrNotServing) || n.end() != before {
 				t.Fatalf("%s: %s answered %+v, %v; want ErrNotServing, nothing appended", name, what, res, err)
@@ -984,9 +987,10 @@ func (n *node) seedMergeability(changeID string, width int64) {
 	ctx := n.t.Context()
 	if err := n.db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO code_mergeability (change_id, revision, target_ref,
-			target_oid, target_position, state, conflicts_count, node, bytes, position, at, conflicts)
-			VALUES (?, 1, 'refs/heads/main', '', 1, 'conflict', 1, 'node-a', ?, 1, 0, ?)`, changeID, width,
-			strings.Repeat("p", int(min(width, 1<<10)))); err != nil {
+			target_oid, target_position, state, conflicts_count, node, bytes, position, at, change_version,
+			readiness_version, ready, waits_person, conflicts)
+			VALUES (?, 1, 'refs/heads/main', '', 1, 'conflict', 1, 'node-a', ?, 1, 0, 1, 1, 0, 0, ?)`, changeID,
+			width, strings.Repeat("p", int(min(width, 1<<10)))); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE code_conversations SET text_bytes = text_bytes + ? WHERE change_id = ?`,

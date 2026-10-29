@@ -146,8 +146,12 @@ func (e *estate) Converse(_ context.Context, w code.ConversationWrite) (code.Con
 		e.revises = append(e.revises, *w.Revise)
 		e.done(w.Revise.RepoID, w.Revise.ChangeID, func(d *code.ChangeDue) { d.FactsDue = false })
 	case w.Mergeability != nil:
+		// A MERGE RECORDS THE READINESS beside it, and a refresh records it
+		// alone: either leaves the change owing no refresh.
 		e.merges = append(e.merges, *w.Mergeability)
-		e.done(w.Mergeability.RepoID, w.Mergeability.ChangeID, func(d *code.ChangeDue) { d.MergeDue = false })
+		e.done(w.Mergeability.RepoID, w.Mergeability.ChangeID, func(d *code.ChangeDue) {
+			d.MergeDue, d.RefreshDue = false, false
+		})
 	}
 	return code.ConversationResult{Outcome: statelog.OutcomeApplied, Position: e.at}, nil
 }
@@ -173,7 +177,7 @@ func (e *estate) done(repo, change string, settle func(*code.ChangeDue)) {
 		}
 	}
 	e.due[repo] = slices.DeleteFunc(e.due[repo], func(d code.ChangeDue) bool {
-		return d.ID == change && !d.FactsDue && !d.MergeDue
+		return d.ID == change && !d.FactsDue && !d.MergeDue && !d.RefreshDue
 	})
 	e.rechecks[repo] = slices.DeleteFunc(e.rechecks[repo], func(d code.ChangeDue) bool { return d.ID == change })
 	select {
@@ -598,6 +602,55 @@ func TestAChangeWhoseHeadIsInItsTargetIsLanded(t *testing.T) {
 		r.TargetPosition != measured.TipPosition || r.BaseOID != oid("9") || r.PatchID != oid("e") {
 		t.Fatalf("change 2's facts are %+v, want them matched to %v under digest %s at the tip's position %s",
 			r, matched, digest, measured.TipPosition)
+	}
+}
+
+// A HOME REFRESHES A READINESS WITHOUT A MERGE: a change owing only a refresh
+// of its stored readiness — a review, an ask, an answer to its findings moved
+// what it reads — is answered by a mergeability that MERGES NOTHING: its
+// revision, head and target named, marked a refresh, and nothing of a merge,
+// which its writer stamps from the change's row — with no copy synced, no
+// scratch made and no git run, the loop's cache and pool being stand-ins any
+// use of which fails the case. And a change whose facts the same turn
+// records, owing no merge, is refreshed in that turn: its facts moved what its
+// stored readiness read, and no listing named the refresh before they did.
+//
+// Mutations: merge a change owing a refresh → the stand-ins fail the case;
+// refresh nothing after a revise → web's second change is never refreshed.
+func TestAHomeRefreshesReadinessWithoutAMerge(t *testing.T) {
+	t.Parallel()
+	e := newEstate()
+	reviewed := code.ChangeDue{ID: changeID(repoA, 1), Number: 1, Revision: 2, Head: oid("b"),
+		SourceRef: "refs/heads/feature-b", TargetRef: "refs/heads/main", Tip: oid("1"),
+		TipPosition: statelog.Position{Stream: topics.CodeLogStream, Seq: 30}, RefreshDue: true}
+	e.owe(repoA, reviewed)
+	measured := e.hold(repoA, 2, oid("c"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"),
+		PatchID: oid("e"), Touched: []string{"c.go"}})
+	loopOn(t, "node-a", e, &placement{homes: map[string]string{repoA: "node-a"}}, newNudges(), time.Hour)
+	e.waitDone(t, repoA, 10*time.Second)
+	if revises, _ := e.wrote(); len(revises) != 1 || revises[0].ChangeID != measured.ID {
+		t.Fatalf("the home recorded the facts %+v, want the second change's alone", revises)
+	}
+	refreshed := map[string]code.Mergeability{}
+	for _, m := range e.waitMerged(t, 2, 10*time.Second) {
+		refreshed[m.ChangeID] = m
+	}
+	for _, due := range []code.ChangeDue{reviewed, measured} {
+		m, ok := refreshed[due.ID]
+		switch {
+		case !ok:
+			t.Errorf("change %d was never refreshed: %+v", due.Number, refreshed)
+		case !m.Refresh || m.Revision != due.Revision || m.HeadOID != due.Head || m.TargetRef != due.TargetRef ||
+			m.Node != "node-a":
+			t.Errorf("change %d was asked %+v, want a refresh of revision %d at %s into %s by node-a", due.Number,
+				m, due.Revision, due.Head, due.TargetRef)
+		case m.TargetOID != "" || !m.TargetPosition.IsZero() || m.State != "" || len(m.Conflicts) != 0:
+			t.Errorf("change %d's refresh names a merge of its own: %+v", due.Number, m)
+		}
+	}
+	if len(e.merged()) != 2 {
+		t.Errorf("the home asked %d mergeabilities, want the two refreshes alone: %+v", len(e.merged()),
+			e.merged())
 	}
 }
 

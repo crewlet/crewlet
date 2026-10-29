@@ -30,6 +30,9 @@ import (
 // its changes wait on ([ReadQuery.State] says why), and walks ONE index,
 // chosen by its filters in this order ([walkOf]):
 //
+//   - a need of a person: code_mergeability_waits_idx (replicated 0078), the
+//     changes whose stored readiness waits on a person, each kept only where
+//     the readiness the read judges still does (conversationread.go);
 //   - a reviewer, or a need of a review: code_reviewers_reviewer_idx
 //     (replicated 0072), the changes whose ask of that reviewer stands —
 //     the set a reviewer is asked to work through, newest change first
@@ -47,8 +50,9 @@ import (
 //   - a state: code_changes_state_idx, the company's changes in that state.
 //
 // NEWEST FIRST, always: a repository's walks by number, which is the order the
-// code log opened its changes in (a number is the apply's); a reviewer's by the
-// change's id, a UUIDv7 minted when it was opened; every other by the position
+// code log opened its changes in (a number is the apply's); a reviewer's and a
+// person's by the change's id, a UUIDv7 minted when it was opened; every other
+// by the position
 // of the record that opened each change and then its id, since one record can
 // open several. A filter the walked index does not seek — a repository beside
 // a work item, an owner or a reviewer, a state beside a work item or a
@@ -93,6 +97,17 @@ import (
 // [MaxChangeBodyBytes], and its authors are whoever pushed its source branch
 // as themselves, each a seat or a person of the company, some thirty
 // thousand of whom would fit.
+//
+// # Its readiness
+//
+// A live change's READINESS rides it — on one change's detail and on every
+// row of a listing ([ChangeSummary.Readiness]) — judged in the read's own
+// transaction against the read's one chart ([ReadinessOf], readiness.go), the
+// rows of a whole page read a kind at a time ([readinessRowsIn]), never the
+// answer the change's last mergeability stored: a read answers as of its
+// snapshot. So a read of changes is judged by a chart whoever asks — an
+// approver's eligibility is the chart's — and a reader that holds none
+// refuses one about itself ([Reader.chartFor]).
 
 // changeOrder is the order a listing of changes walks in, which its cursor is
 // spelled in.
@@ -106,9 +121,10 @@ const (
 	// of the record that opened each and then by id; its cursor is a
 	// [logCursor] of the two.
 	byOpening
-	// byAsk is the changes a reviewer is asked to review, newest first by
-	// the change's id; its cursor is the last id a page read.
-	byAsk
+	// byID is the changes a reviewer is asked to review, or whose stored
+	// readiness waits on a person, newest first by the change's id; its
+	// cursor is the last id a page read.
+	byID
 )
 
 // changeWalk is the one index a listing of changes walks, as its filters
@@ -125,8 +141,10 @@ type changeWalk struct {
 	// which a page tests on each row it read ([changeWalk.keeps]); live
 	// keeps a draft or open change alone, for a listing of what a live
 	// change waits on; fix keeps a change awaiting its owner's fix alone,
-	// which its conversation's counters say ([needingFixIn]).
-	repo, state, owner, work, live, fix bool
+	// which its conversation's counters say ([needingFixIn]); person keeps
+	// a change whose readiness, as the read judges it, waits on a person
+	// ([Readiness.WaitsPerson]).
+	repo, state, owner, work, live, fix, person bool
 }
 
 // walkOf is the walk q's filters choose, repoID the id of the repository q
@@ -136,8 +154,11 @@ type changeWalk struct {
 func walkOf(q ReadQuery, repoID string) changeWalk {
 	named, fix := repoID != "", q.Needs == NeedFix
 	switch {
+	case q.Needs == NeedPerson:
+		return changeWalk{index: waitsKey, order: byID, repo: named, state: q.State != "", owner: q.Owner != "",
+			work: q.Work != "", live: true, person: true}
 	case q.Reviewer != "" || q.Needs == NeedReview:
-		return changeWalk{index: reviewerAsksKey, keys: []any{q.waitedOn()}, order: byAsk, repo: named,
+		return changeWalk{index: reviewerAsksKey, keys: []any{q.waitedOn()}, order: byID, repo: named,
 			state: q.State != "", owner: q.Owner != "", work: q.Work != "", live: q.Needs == NeedReview}
 	case q.Work != "":
 		backend, id, _ := cutWork(q.Work)
@@ -159,7 +180,7 @@ func (w changeWalk) cursor(row changeRow) string {
 	switch w.order {
 	case byNumber:
 		return strconv.FormatInt(row.number, 10)
-	case byAsk:
+	case byID:
 		return row.id
 	}
 	return logCursor(row.opened, row.id)
@@ -172,7 +193,7 @@ func (w changeWalk) resume(cursor string) ([]any, bool) {
 	case byNumber:
 		n, err := strconv.ParseInt(cursor, 10, 64)
 		return []any{n}, err == nil && n > 0
-	case byAsk:
+	case byID:
 		return []any{cursor}, bareUUIDv7("cursor", cursor) == nil
 	}
 	// THE >= BESIDE THE OR keeps the index's range seek, which a bare OR
@@ -196,7 +217,10 @@ func (w changeWalk) keeps(row changeRow, q ReadQuery, repoID string) bool {
 func (w changeWalk) read(ctx context.Context, tx *sql.Tx, cursor string, limit int) ([]changeRow, error) {
 	switch w.index {
 	case reviewerAsksKey:
-		return w.readAsked(ctx, tx, cursor, limit)
+		return w.readByID(ctx, tx, changesAskedSQL, changesAskedAfterSQL, cursor, limit,
+			fmt.Sprintf("asking %v", w.keys[0]))
+	case waitsKey:
+		return w.readByID(ctx, tx, changesWaitingSQL, changesWaitingAfterSQL, cursor, limit, "waiting on a person")
 	case changesWorkKey:
 		return w.readBy(ctx, tx, changesOfWorkSQL, changesOfWorkAfterSQL, cursor, limit)
 	case changesOwnerKey:
@@ -327,13 +351,28 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 			return err
 		}
 	}
-	pg := page{maxRows: limit, maxB: r.pageBytes}
+	var kept []changeRow
 	for _, row := range scanned {
-		repo, listed := repos[row.repoID]
-		if !listed || !walk.keeps(row, q, repoID) || walk.fix && !fixing[row.id] {
+		if _, listed := repos[row.repoID]; listed && walk.keeps(row, q, repoID) && (!walk.fix || fixing[row.id]) {
+			kept = append(kept, row)
+		}
+	}
+	// EVERY KEPT CHANGE'S READINESS, judged in this transaction against
+	// this read's one chart — the rows of all of them read a kind at a time
+	// ([readinessRowsIn]) — before the page is cut, since what waits on a
+	// person is a filter of what is judged.
+	readiness, err := readinessIn(ctx, tx, kept, repos, chart)
+	if err != nil {
+		return err
+	}
+	pg := page{maxRows: limit, maxB: r.pageBytes}
+	for _, row := range kept {
+		judged := readiness[row.id]
+		if walk.person && (judged == nil || !judged.WaitsPerson()) {
 			continue
 		}
-		s := repo.summary(row)
+		s := repos[row.repoID].summary(row)
+		s.Readiness = judged
 		out.Changes = append(out.Changes, s)
 		if pg.add(s.encodedBytes()) {
 			out.Next = walk.cursor(row)
@@ -344,6 +383,30 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 		out.Next = walk.cursor(scanned[len(scanned)-1])
 	}
 	return nil
+}
+
+// readinessIn is the readiness of each LIVE change of rows, by id, judged in
+// tx against chart — every repository a row names in repos — and none for a
+// change no longer live, which merges nothing.
+func readinessIn(ctx context.Context, tx *sql.Tx, rows []changeRow, repos map[string]listedRepo,
+	chart Roster) (map[string]*Readiness, error) {
+
+	subjects := make([]readinessSubject, 0, len(rows))
+	for _, row := range rows {
+		if row.state.Live() {
+			subjects = append(subjects, readinessSubject{repo: repos[row.repoID].ref, row: row})
+		}
+	}
+	judged, err := readinessRowsIn(ctx, tx, subjects)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]*Readiness, len(subjects))
+	for i, s := range subjects {
+		readiness := ReadinessOf(judged[i], chart)
+		out[s.row.id] = &readiness
+	}
+	return out, nil
 }
 
 // listedReposIn is every repository a page of changes across repositories
@@ -454,8 +517,14 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if mergeErr != nil {
 			return mergeErr
 		}
+		readiness, readinessErr := readinessIn(ctx, tx, []changeRow{row}, map[string]listedRepo{row.repoID: repo},
+			chart)
+		if readinessErr != nil {
+			return readinessErr
+		}
 		out.Change = &ChangeDetail{ChangeSummary: repo.summary(row), Body: body, Authors: authors,
 			Conversation: conversation, Mergeability: merge}
+		out.Change.Readiness = readiness[row.id]
 		rows, err = tx.QueryContext(ctx, revisionsSQL, row.id, limit)
 	} else {
 		n, parseErr := strconv.ParseInt(q.Cursor, 10, 64)
@@ -626,7 +695,10 @@ func (q ReadQuery) validateChanges() error {
 			"a reviewer's review are needs=review")
 	case q.Needs == NeedMe && (q.Reviewer != "" || q.Owner != ""):
 		return refused("needs", "needs=me is what waits on the asker, and names no reviewer and no owner")
-	case q.Needs != "" && q.waitedOn() == "":
+	case q.Needs == NeedPerson && q.Reviewer != "":
+		return refused("reviewer", "needs=person lists the changes waiting on any person; the changes asking "+
+			"one reviewer's review are reviewer=")
+	case q.Needs != "" && q.Needs != NeedPerson && q.waitedOn() == "":
 		whose := map[Need]string{NeedReview: "unless it names whose — a reviewer — ",
 			NeedFix: "unless it names whose — an owner — "}[q.Needs]
 		return refused("needs", fmt.Sprintf("needs=%s is the asker's own %sand this credential is bound to no "+

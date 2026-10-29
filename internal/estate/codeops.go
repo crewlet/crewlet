@@ -149,8 +149,10 @@ var opCodeChange = define("code.change", opIdempotentWrite, codeDomain, false,
 // travels inside the write, checked by its Validate on the node that decides,
 // which records it as who wrote it.
 //
-// A WRITE THE CHART JUDGES — a seat's, and an ask of reviewers by anybody,
-// since each reviewer is judged by the chart — is declared so
+// A WRITE THE CHART JUDGES — a seat's, an ask of reviewers by anybody, since
+// each reviewer is judged by the chart, and the home's own record of a
+// revision's facts or a change's mergeability, whose path owners and whose
+// readiness the chart judges — is declared so
 // (code.ConversationWrite.JudgesChart, the writer's own rule), and a node
 // behind the company's configuration answers none of it, even asked last; a
 // person's comment consults no chart.

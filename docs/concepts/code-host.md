@@ -73,7 +73,8 @@ This is the product's current shape, not a configuration choice:
   branches writes its revisions, merges it or closes it, the repository's home
   records each revision's facts — asking a review of the [path
   owners](#path-owners) whose paths it touches — and whether it merges cleanly
-  into its target ([Mergeability](#mergeability)), and lands a change whose
+  into its target ([Mergeability](#mergeability)) with the change's
+  [readiness](#merge-readiness) judged beside it, and lands a change whose
   head its target holds ([The home's change work](#the-homes-change-work)), the
   [change writer](#reviews-and-findings) beside the committer decides who is
   asked to review it and what is said on it, and a data node answers a listing
@@ -1210,6 +1211,13 @@ answer that holds every record the code log had committed when it was asked.
   stands, and then your own changes waiting on your fix — one listing, read as
   those two one after the other, a change of both listed once. It names no
   reviewer and no owner, since it is yours.
+- **What waits on a person** is `needs=person`: the live changes whose
+  [readiness](#merge-readiness) waits on persons alone — an approval only a
+  person was asked for, a blocker a person raised and an author answered —
+  whoever asks, a seat included. It reads the changes whose stored readiness
+  waits on a person, newest first, and keeps those whose readiness the read
+  judges itself still does; a change that came to wait on one since its last
+  record is listed once its home refreshes it, a minute later at the most.
 - A need lists **live** changes alone, and is refused beside a closed or
   merged state.
 - **One change**, by its number on its repository — `web!42` — with its row
@@ -1220,16 +1228,24 @@ answer that holds every record the code log had committed when it was asked.
   change](#recorded-on-the-change)); a later page carries its revisions
   alone, after the revision the page before it ended at. A number
   the repository does not hold is "no such change", naming it (`web!43`).
+- **A live change's readiness rides it**, on its own read and on every row of
+  a listing: whether it may merge, judged in the read's own snapshot against
+  the read's chart ([Merge readiness](#merge-readiness)). So a read of
+  changes is judged by the chart whoever asks — a person's too — and a data
+  node that holds none yet refuses it as a node that is not serving, which
+  the next data node answers.
 
-**A listing reads the one index its filters lead with** — a reviewer's
+**A listing reads the one index its filters lead with** — the changes whose
+stored readiness waits on a person; a reviewer's
 standing asks; a work item's changes; an owner's in a state, which is also
 what `needs=fix` reads; a repository's in a state; a repository's; the
 company's in a state — so a repository's open changes are read without its
 closed and merged history, however long that grows. A filter that index does
 not hold — a repository beside a work item, an owner or a reviewer, a state
 beside a work item or a reviewer, an owner beside a repository with no state,
-a work item beside a reviewer, and whether a change waits on its owner's fix,
-which its conversation's counters say — is tested on each change the page
+a work item beside a reviewer, whether a change waits on its owner's fix,
+which its conversation's counters say, and whether it waits on a person,
+which its readiness says — is tested on each change the page
 read, never by reading further: a page is the changes it
 **read**, not the changes it kept, so it can be short, or empty with a cursor,
 and a reader pages until no cursor comes back. A page reads 50 changes unless
@@ -1286,7 +1302,7 @@ behind their batches and contend with every push to the repository.
 
 | Table | A row for | What it holds |
 |---|---|---|
-| `code_conversations` | each change that has been discussed | Its counters — its comments, its reviews, its open findings, its standing blockers and how many reviewers' standing verdict asks for changes — what its comments, reviews and findings weigh, and the version and position of its last record |
+| `code_conversations` | each change that has been discussed | Its counters — its comments, its reviews, its open findings, its standing blockers and how many reviewers' standing verdict asks for changes — what its comments, reviews and findings weigh, the version and position of its last record, and the version of what its [readiness](#merge-readiness) reads: one more for each ask for review, review, answer to findings and revision's facts |
 | `code_reviewers` | each reviewer it has asked | A seat, or a person by the human seat they hold; why — asked by name, or as a [path owner](#recorded-on-the-change) a revision's facts asked — whether the ask stands or was withdrawn — a withdrawn ask is kept, so the change says who was once asked — who asked, nobody for a path owner, and the note they asked with, at most 1 KiB |
 | `code_participants` | everybody who takes part in it | Each reviewer asked or reviewing and each author of a comment, by handle and kind, and a reviewer's **standing verdict**: the latest of their reviews that approves or asks for changes, and the revision it judged |
 | `code_comments` | each comment | Its thread, its parent or the finding it replies to, who said it — a seat, or a person with the credential they used — the line it points at, whether its thread is resolved and by whom, the turn that said it, and its body, at most 32 KiB |
@@ -1294,6 +1310,7 @@ behind their batches and contend with every push to the repository.
 | `code_findings` | each finding | The review and the revision that raised it, its raiser, where it points — a file, a side of the revision's diff, its lines, the commit and the blob they were read in — its severity and category, its state, and its last answer: the note, who gave it, the commit it names |
 | `code_finding_texts` | each finding | Its title (one line, at most 200 bytes), its body (at most 4 KiB) and the lines it suggests in place of the ones it points at (at most 16 KiB) — a row of its own, so the finding's state is rewritten without its text |
 | `code_revision_facts` | each revision its home read | What the revision is against its target, and the path owners it asked ([Recorded on the change](#recorded-on-the-change)) |
+| `code_mergeability` | each change its home merged | Whether its head merges into its target, and the readiness its home's last record judged beside it ([Mergeability](#mergeability)) |
 
 ### Reading a conversation
 
@@ -4016,7 +4033,9 @@ and their [mergeability](#mergeability): every git node runs a **home loop**
 for the repositories it is home to, and the rows are its work list. A change
 is **due** while its head revision holds no facts, or no mergeability, against
 the branch it merges into: a push that moves its head, and a retarget, make it
-due again, and each record takes its half off. A change whose target has moved
+due again, and each record takes its half off. A change whose readiness its
+mergeability stores was judged before what the readiness reads moved is due
+a refresh ([Merge readiness](#merge-readiness)). A change whose target has moved
 past the tip it was merged into is due again too, at the home's own pace
 ([A moved target asks again](#mergeability)). A change of an archived or a
 deleted repository is nobody's work, and neither is one whose target branch
@@ -4035,7 +4054,11 @@ tip as the rows hold it, then either
 
 and where it owes its merge, **merges it** into its target's tip — or lands
 it, where the target came to hold its head — and records what the merge did
-([Mergeability](#mergeability)).
+([Mergeability](#mergeability)); and where it owes no merge but what its
+[readiness](#merge-readiness) reads moved since its merge judged it — a
+review, an ask for review, an answer to its findings, the facts just
+recorded, an edit of the change — **refreshes its readiness**, merging
+nothing.
 
 Two things put a repository's work in front of its home:
 
@@ -4116,7 +4139,7 @@ it names no asker.
 
 | Table | A row for | What it holds |
 |---|---|---|
-| `code_mergeability` | each change its home merged | The revision merged, the target branch, the tip merged into and the position of the record that moved the branch there; the state; the conflicted paths it names and how many more there were; the git node that merged; and the record that wrote it, with its broker instant, which the change's next recheck is paced by |
+| `code_mergeability` | each change its home merged | The revision merged, the target branch, the tip merged into and the position of the record that moved the branch there; the state; the conflicted paths it names and how many more there were; the git node that merged; the record that merged, with its broker instant, which the change's next recheck is paced by; and the change's [readiness](#merge-readiness) as the last record judged it — whether it was ready, whether it waited on a person — beside the versions of the change's row and of what its readiness reads it was judged at |
 
 The change's own read carries it (`mergeability` on a change's detail): of
 its head revision into its target where its home has merged that, and of an
@@ -4142,6 +4165,66 @@ a scratch of its own, in the node's read lane under one unit of its seat
 git-work share ([Fair share](#fair-share)), within a read's ten seconds of git:
 a merge that runs out of them answers `unknown`. No route asks for one yet;
 a comparison's question arrives with the code host's questions.
+
+### Merge readiness
+
+Whether a live change may merge is answered as a list of **preconditions**,
+each judged from the rows of ONE snapshot and the chart of ONE epoch — never
+a workflow somebody has to remember to run, and never a decision the tracker
+records: what a merge counts is the change's own reviews and findings.
+
+| Precondition | Met when | Waits on, while unmet |
+|---|---|---|
+| `draft` | The change is open for review, not a draft. | Its owner, who marks it ready — as a principal that maintains the repository or a person may. |
+| `facts` | Its head revision's [facts](#recorded-on-the-change) against its current target are recorded. | Nobody: it is `computing` until its home reads them. |
+| `approval` | ONE COUNTED APPROVAL stands: an eligible reviewer's standing verdict approves the head revision, or an earlier revision whose diff the head carries unchanged. | The reviewers asked who may approve it; its owner, to ask one, where nobody is. |
+| `blocker` | No blocker stands. | Its owner while a blocker is open; each blocker an author answered, its raiser, who judges the answer. |
+| `mergeable` | Its head revision merges cleanly into its target, as its home recorded it — "as of" the tip it merged into, whatever the target did since. | Its owner, on a conflict. It is `computing` until its home merges the head revision, and while a merge decided nothing within its deadline. |
+
+- **A counted approval** is the standing verdict — the latest review that
+  approves or asks for changes — of a person, or of a seat the chart lets
+  review the repository, that is **not an author** of the change: an author's
+  approval never counts, and a reviewer who pushes the change's branch after
+  approving it becomes one. A reviewer's later request for changes replaces
+  their verdict, withdrawing their approval and holding nothing else: a merge
+  counts approvals and standing blockers, not requests.
+- **An approval carries to a later revision only on an equal patch id**: both
+  revisions' recorded `patch_id`s equal, neither empty nor omitted — the same
+  lines changed among the same neighbours, as a rebase that moved nothing near
+  them keeps it ([A revision's facts](#a-revisions-facts)). Until the head
+  revision's facts are recorded, an approval of an earlier one is `computing`;
+  an approval of a revision whose own facts were never recorded — its head
+  moved before its home read them — never carries, since a home reads the
+  head revision alone.
+- **Each standing blocker is named with who can clear it**: its raiser — by
+  dismissing it, or by a review of a later revision that does not carry it —
+  the seat the chart lets maintain the repository (its owning unit's
+  effective lead, or its owning seat, where its tier lets it maintain), and
+  any person, by dismissing it. A readiness names the 16 oldest and counts
+  the rest; the change's findings are read a page at a time.
+- **The first sentence** is the first unmet precondition's, in the order
+  above, else the first that is `computing`, else that the change is ready.
+  A change whose first unmet precondition waits on persons alone **waits on
+  a person**, which `needs=person` lists ([Reading changes](#reading-changes)).
+
+**Judged on every read, stored by its home.** A read of a change, and each
+row of a listing, judges the readiness again from the read's own snapshot.
+Each [mergeability](#mergeability) record judges it too — from its writer's
+own snapshot, with the merge it records — and stores whether the change was
+ready and whether it waited on a person, beside the versions of the change's
+row and of what the readiness reads that it was judged at. That stored answer
+is what a wake that a change became ready reads, and what `needs=person`
+seeks. When either version moves past it — a review, an ask for review, an
+answer to a finding, a revision's facts, an edit, a retarget, a draft flag —
+the change is due a **refresh** from its home: a mergeability record that
+merges nothing, judging the readiness again over the merge the row holds,
+which leaves the merge's own instant — what a moved target's recheck is paced
+by — as it was. A review is a record on the change's own subject, which no
+nudge names, so its refresh comes at the home's next pass, a minute later at
+the most. A refresh whose readiness is judged at its inputs already, or of a
+change whose head revision its home has not merged yet, is refused
+`superseded`, recorded nowhere. The chart moves no version: a stored answer
+is as of the chart that judged it, until the change's next record.
 
 ### Where lines are in another revision
 

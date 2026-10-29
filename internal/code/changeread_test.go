@@ -372,6 +372,9 @@ func TestAListingAcrossRepositoriesLeavesADeletedOnesChangesOut(t *testing.T) {
 func TestAListingIsTheChangesItsFiltersName(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
+	// THE CHART every listing judges its changes' readiness by, whoever
+	// asks.
+	n.chart = testChart()
 	c, _ := committerOn(t, n, n.pub)
 	ctx := t.Context()
 	web := changeRepo(t, n, "web")
@@ -482,6 +485,9 @@ func TestAListingIsTheChangesItsFiltersName(t *testing.T) {
 func TestOnlyAReadOfChangesTakesItsFields(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
+	// THE CHART a read of changes judges their readiness by, whoever asks:
+	// a cursor is judged once it is.
+	n.chart = testChart()
 	changeRepo(t, n, "web")
 	for name, tc := range map[string]struct {
 		q     code.ReadQuery

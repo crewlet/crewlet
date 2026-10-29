@@ -1343,6 +1343,8 @@ func TestACodeReadStatesItsFreshness(t *testing.T) {
 func TestACodeRowReadServesSessionAtItsFloor(t *testing.T) {
 	t.Parallel()
 	a, b := newTwoNodes(t)
+	// THE CHART a read of changes judges their readiness by, whoever asks.
+	b.chart = testChart()
 	id := a.ensure("app", described("app"), t1).RepoID
 	a.push(id, entry("p1", set("refs/heads/main", code.ZeroOID, oidOf("c1")),
 		set("refs/heads/release", code.ZeroOID, oidOf("r1"))))
@@ -1866,8 +1868,10 @@ func TestOnlyASeatsReadIsMadeForAnotherSeat(t *testing.T) {
 // nothing and asks a peer, never a definite "not permitted" or a listing with
 // every repository left out, which every peer holding a chart contradicts. A
 // roster that answers nil and no roster at all are the same; a person's read
-// asks no chart and is answered; and once the chart is there, the seat is
-// judged by it — a chart that denies is the answer again.
+// asks no chart and is answered — but for a read of changes, whose readiness
+// the chart judges for every asker, refused about the reader as a seat's is;
+// and once the chart is there, the seat is judged by it — a chart that denies
+// is the answer again.
 //
 // Mutation: answer AccessNone again with no chart → the seat's listing is
 // served empty and every other read refused not_permitted.
@@ -1912,6 +1916,25 @@ func TestAReaderWithNoChartRefusesAboutItself(t *testing.T) {
 			if err := read(); err != nil {
 				t.Errorf("%s: a person's %s = %v, want it answered: no chart decides a person", reader, name, err)
 			}
+		}
+		// A READ OF CHANGES judges their readiness by the chart whoever asks
+		// — an approver's eligibility is the chart's — so a person's is
+		// refused about the reader too; a page of a change's part, which
+		// carries no readiness, asks none.
+		for name, q := range map[string]code.ReadQuery{
+			"a listing of changes": {Kind: code.ReadChanges, Repo: "platform"},
+			"a change":             {Kind: code.ReadChange, Repo: "platform", Change: 1},
+		} {
+			q.Asker, q.Fresh = asker, stale
+			if _, err := r.Read(t.Context(), q); !errors.Is(err, code.ErrNotServing) ||
+				!strings.Contains(err.Error(), "a change's readiness") {
+				t.Errorf("%s: a person's %s = %v, want ErrNotServing saying no chart judges a readiness", reader,
+					name, err)
+			}
+		}
+		if _, err := r.Read(t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadChange, Repo: "platform",
+			Change: 1, Part: code.PartComments, Fresh: stale}); errors.Is(err, code.ErrNotServing) {
+			t.Errorf("%s: a person's page of a change's comments = %v, want it judged by no chart", reader, err)
 		}
 	}
 

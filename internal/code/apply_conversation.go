@@ -31,7 +31,10 @@ import (
 //
 // EVERY RECORD COUNTS ONE VERSION of its change's conversation and moves its
 // position to its own (code_conversations): the version guard a redelivery
-// meets, and what an answer is read from ([ChangeWriter.applied]).
+// meets, and what an answer is read from ([ChangeWriter.applied]). One that
+// moves what the change's readiness reads counts one READINESS VERSION too
+// ([movesReadiness]): what its home's due listing finds a stored readiness
+// judged before (changesdue.go).
 
 // applyChange is every record on a change's own subject.
 func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
@@ -104,19 +107,38 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 	if err != nil || rows == 0 {
 		return 0, err
 	}
+	if movesReadiness(payload) {
+		counts.readiness = 1
+	}
 	if err := touchConversation(ctx, tx, at, repoID, changeID, counts); err != nil {
 		return 0, err
 	}
 	return rows + 1, nil
 }
 
+// movesReadiness reports a record whose apply moves what the change's
+// readiness reads ([ReadinessOf]): an ask for review — whom an approval waits
+// on — a review — its verdict and its blockers — an answer to findings — its
+// blockers — and a revision's facts — the patch ids an approval is carried
+// by. A comment, a thread's resolution and a mergeability move none of it: a
+// mergeability that moved code_conversations.readiness_version would make
+// its own change due a refresh again at every refresh, for ever.
+func movesReadiness(payload any) bool {
+	switch payload.(type) {
+	case ReviewerRequest, Review, FindingResolve, Revise:
+		return true
+	}
+	return false
+}
+
 // conversationCounts is what one record moves its conversation's counters by:
 // its comments and its reviews; its OPEN findings — none of whose authors has
 // answered — and its STANDING BLOCKERS, the blockers that hold the change back
 // whatever their authors answered (S40); how many reviewers' standing verdict
-// asks for changes; and what its wide text weighs.
+// asks for changes; what its wide text weighs; and its readiness inputs'
+// version, by one for a record that moves what the readiness reads.
 type conversationCounts struct {
-	comments, reviews, openFindings, openBlockers, changesRequested, textBytes int64
+	comments, reviews, openFindings, openBlockers, changesRequested, textBytes, readiness int64
 }
 
 // touchConversation moves changeID's conversation by one record: its counters
@@ -126,7 +148,7 @@ func touchConversation(ctx context.Context, tx *sql.Tx, at applyContext, repoID,
 	counts conversationCounts) error {
 
 	if _, err := tx.ExecContext(ctx, touchConversationSQL, changeID, repoID, counts.comments, counts.reviews,
-		counts.openFindings, counts.openBlockers, counts.changesRequested, counts.textBytes,
+		counts.openFindings, counts.openBlockers, counts.changesRequested, counts.textBytes, counts.readiness,
 		at.packed); err != nil {
 		return fmt.Errorf("code: move change %s's conversation at %s: %w", changeID, at.position, err)
 	}
@@ -415,14 +437,15 @@ func changeRepoOf(body []byte) (string, bool) {
 const (
 	changeRepoSQL        = `SELECT repo_id FROM code_changes WHERE id = ?`
 	touchConversationSQL = `INSERT INTO code_conversations (change_id, repo_id, comments, reviews, open_findings,
-			open_blockers, changes_requested, text_bytes, version, position)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+			open_blockers, changes_requested, text_bytes, readiness_version, version, position)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
 		ON CONFLICT (change_id) DO UPDATE SET comments = code_conversations.comments + excluded.comments,
 			reviews = code_conversations.reviews + excluded.reviews,
 			open_findings = code_conversations.open_findings + excluded.open_findings,
 			open_blockers = code_conversations.open_blockers + excluded.open_blockers,
 			changes_requested = code_conversations.changes_requested + excluded.changes_requested,
 			text_bytes = code_conversations.text_bytes + excluded.text_bytes,
+			readiness_version = code_conversations.readiness_version + excluded.readiness_version,
 			version = code_conversations.version + 1, position = excluded.position`
 	// A review's writes: the reviewer's standing verdict before this one, by
 	// their participant row's key; the review, its findings and their texts,

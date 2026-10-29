@@ -5,10 +5,13 @@
 // and recording what it found (internal/code's Revise), merging it into its
 // target's tip and recording whether it merges cleanly (internal/code's
 // Mergeability), or landing a change whose head its target came to hold
-// (internal/code's ChangeLanded). The rows are the work list: a `changes_due`
-// read (internal/code's ReadChangesDue) names every live change whose head
-// revision holds no facts or no mergeability against the branch it merges
-// into, or whose moved target asks its merge again, and every record the home
+// (internal/code's ChangeLanded) — and REFRESHING a change's stored readiness
+// where what it reads moved since its merge judged it, merging nothing. The
+// rows are the work list: a `changes_due` read (internal/code's
+// ReadChangesDue) names every live change whose head revision holds no facts
+// or no mergeability against the branch it merges into, whose readiness its
+// review, an ask, an answer to its findings, its facts or its own row moved
+// past, or whose moved target asks its merge again, and every record the home
 // lands takes its change's work off the list by its own row. Nothing here
 // keeps a list of its own.
 //
@@ -72,7 +75,15 @@
 // again within the repository's budget, the oldest merge first (merge.go) — it
 // merges the change over this node's own copy, in a scratch beside it, and
 // asks the change writer to record what the merge did, or lands the change
-// where its target came to hold its head. A refusal that the rows moved since
+// where its target came to hold its head. And for each change owing no merge
+// whose readiness is due again — what its readiness reads moved since its
+// merge judged it, or this turn recorded its facts — it asks the change writer
+// for a REFRESH (internal/code's Mergeability.Refresh): no copy synced, no
+// scratch and no git, the writer judging the readiness again over the merge
+// the row holds. A change-subject record — a review, an ask — nudges no
+// repository: the watch sees subjects alone, and a change's subject names no
+// repository, so its refresh waits the backstop, a minute at the most. A
+// refusal that the rows moved since
 // — superseded, stale, a change closed or merged — is the rows answering, left
 // to the next pass, which reads them again; one that decided nothing for a
 // reason of the writer's or the log's — busy, the record refused or dropped —

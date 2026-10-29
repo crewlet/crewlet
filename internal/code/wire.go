@@ -611,11 +611,20 @@ type ChangeDue struct {
 	TargetRef   string            `json:"target_ref"`
 	Tip         string            `json:"tip"`
 	TipPosition statelog.Position `json:"tip_position"`
-	// FactsDue and MergeDue say what the home owes a change of a page of a
-	// `changes_due` read's due changes; a recheck owes its merge alone, and
-	// says neither, and so does a `checks_due` read's change.
-	FactsDue bool `json:"facts_due,omitempty"`
-	MergeDue bool `json:"merge_due,omitempty"`
+	// FactsDue, MergeDue and RefreshDue say what the home owes a change of a
+	// page of a `changes_due` read's due changes — its head revision's facts,
+	// its merge, and a refresh of the readiness its mergeability holds
+	// ([Mergeability.Refresh]); a recheck owes its merge alone, and says
+	// none, and so does a `checks_due` read's change.
+	//
+	// RefreshDue is AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.Push]'s: no
+	// build that carries the code domain has run without it — none of the
+	// domain is on main — and a home of a build that predates it would never
+	// refresh a stored readiness, whose change's next merge records it again.
+	FactsDue   bool `json:"facts_due,omitempty"`
+	MergeDue   bool `json:"merge_due,omitempty"`
+	RefreshDue bool `json:"refresh_due,omitempty"`
 	// Checked is a recheck's: the broker instant its mergeability was
 	// recorded at, which orders the rechecks; zero for every other.
 	Checked time.Time `json:"checked,omitzero"`
@@ -962,10 +971,12 @@ type ReadQuery struct {
 	// Reviewer, the changes whose ask of that reviewer stands — a seat by
 	// its handle, or a person by the human seat they hold; and Needs, the
 	// LIVE changes waiting on whom it names ([Need]): on a reviewer's review
-	// (review), on their owner's fix (fix), or on the asker either way (me).
-	// A listing either names walks the ONE index of who the changes wait on
-	// — a reviewer's standing asks, or an owner's changes in a state — and
-	// tests every other filter on the rows it read, as every listing does.
+	// (review), on their owner's fix (fix), on the asker either way (me), or
+	// on a person (person) — the last names no reviewer, whoever asks. A
+	// listing either names walks the ONE index of who the changes wait on —
+	// a reviewer's standing asks, an owner's changes in a state, the changes
+	// whose stored readiness waits on a person — and tests every other
+	// filter on the rows it read, as every listing does.
 	//
 	// THE CHANGES KINDS CAME WITH THIS BUILD'S LINE: no build that carries
 	// the code domain has run without these two — none of it is on main —
@@ -1668,6 +1679,12 @@ type ChangeSummary struct {
 	// by name: read, review, write or maintain) — never none, since a change
 	// of a repository the asker may not read is not listed at all.
 	Access string `json:"access,omitempty"`
+	// Readiness is whether the change may merge, judged in the read's one
+	// transaction against its one chart ([ReadinessOf]) — every row of a
+	// listing and one change's detail alike, never the answer its last
+	// mergeability stored ([MergeabilityRow.Ready]) — and nil for a change
+	// that is no longer live, which merges nothing.
+	Readiness *Readiness `json:"readiness,omitempty"`
 }
 
 // ChangeDetail is one change in detail: its summary, its description and its

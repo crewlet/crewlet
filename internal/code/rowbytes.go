@@ -342,6 +342,9 @@ func (c ChangeDue) encodedBytes() int {
 	if c.MergeDue {
 		n += field("merge_due", trueBytes, false)
 	}
+	if c.RefreshDue {
+		n += field("refresh_due", trueBytes, false)
+	}
 	if !c.Checked.IsZero() {
 		n += field("checked", timeBytes(c.Checked), false)
 	}
@@ -660,6 +663,78 @@ func (s ChangeSummary) encodedBytes() int {
 		field("ref", stringBytes(s.Ref), false)
 	if s.Access != "" {
 		n += field("access", stringBytes(s.Access), false)
+	}
+	if s.Readiness != nil {
+		n += field("readiness", s.Readiness.encodedBytes(), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the readiness's JSON encoding: its list null
+// where it has none, as every list a row carries unomitted is.
+func (r Readiness) encodedBytes() int {
+	list := len("null")
+	if r.Preconditions != nil {
+		list = 2
+		for i, p := range r.Preconditions {
+			if i > 0 {
+				list++
+			}
+			list += p.encodedBytes()
+		}
+	}
+	return 2 + field("met", intBytes(int64(r.Met)), true) + field("total", intBytes(int64(r.Total)), false) +
+		field("first", stringBytes(r.First), false) + field("preconditions", list, false)
+}
+
+// encodedBytes is the length of the precondition's JSON encoding.
+func (p Precondition) encodedBytes() int {
+	n := 2 + field("kind", stringBytes(string(p.Kind)), true) + field("state", stringBytes(string(p.State)), false)
+	if len(p.WaitsOn) > 0 {
+		n += field("waits_on", partiesBytes(p.WaitsOn), false)
+	}
+	if len(p.Blockers) > 0 {
+		list := 2
+		for i, b := range p.Blockers {
+			if i > 0 {
+				list++
+			}
+			list += b.encodedBytes()
+		}
+		n += field("blockers", list, false)
+	}
+	if p.BlockersOmitted != 0 {
+		n += field("blockers_omitted", intBytes(p.BlockersOmitted), false)
+	}
+	return n + field("detail", stringBytes(p.Detail), false)
+}
+
+// encodedBytes is the length of the blocker's JSON encoding.
+func (b Blocker) encodedBytes() int {
+	cleared := 2 + field("raiser", b.ClearedBy.Raiser.encodedBytes(), true)
+	if len(b.ClearedBy.Maintainers) > 0 {
+		cleared += field("maintainers", stringsBytes(b.ClearedBy.Maintainers), false)
+	}
+	if b.ClearedBy.Persons {
+		cleared += field("persons", trueBytes, false)
+	}
+	return 2 + field("finding_id", stringBytes(b.FindingID), true) +
+		field("state", stringBytes(string(b.State)), false) + field("cleared_by", cleared, false)
+}
+
+// encodedBytes is the length of the party's JSON encoding.
+func (p Party) encodedBytes() int {
+	return 2 + field("handle", stringBytes(p.Handle), true) + field("kind", stringBytes(string(p.Kind)), false)
+}
+
+// partiesBytes is the length of a list of parties.
+func partiesBytes(parties []Party) int {
+	n := 2
+	for i, p := range parties {
+		if i > 0 {
+			n++
+		}
+		n += p.encodedBytes()
 	}
 	return n
 }

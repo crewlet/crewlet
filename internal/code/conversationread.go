@@ -59,6 +59,16 @@ import (
 // change of both, the asker's own whose review is asked of them (a person may
 // be), listed once, by the first.
 //
+// What waits on A PERSON, needs=person, walks code_mergeability_waits_idx
+// (replicated 0078): the changes whose STORED readiness — the answer the last
+// mergeability record judged and stored (mergeability.go) — waits on one,
+// newest change first by its id, their rows by their keys beside them; and
+// keeps those whose readiness the read judges itself, in its own snapshot
+// against its own chart, still waits on one, since a stored answer is as of
+// the record that stored it. A change that came to wait on a person since its
+// last record is listed once its home refreshes it — at the home's next pass,
+// a minute later at the most.
+//
 // # A part of one change
 //
 // A `change` read names the part it pages: its revisions — the default, with
@@ -92,10 +102,16 @@ const (
 	// NeedMe is the changes waiting on the asker: those asking its review,
 	// then its own awaiting a fix. It names no reviewer and no owner.
 	NeedMe Need = "me"
+	// NeedPerson is the changes waiting on a PERSON: live, their readiness's
+	// first unmet precondition waiting on persons alone
+	// ([Readiness.WaitsPerson]) — a person's approval, a blocker a person
+	// raised and an author answered. Whoever asks, whatever seat they hold:
+	// it names no reviewer.
+	NeedPerson Need = "person"
 )
 
 // Needs is the closed set, in this order.
-func Needs() []Need { return []Need{NeedReview, NeedFix, NeedMe} }
+func Needs() []Need { return []Need{NeedReview, NeedFix, NeedMe, NeedPerson} }
 
 // Valid reports a need this build knows.
 func (n Need) Valid() bool { return slices.Contains(Needs(), n) }
@@ -221,35 +237,40 @@ func (r *Reader) changesWaitingOnMe(ctx context.Context, tx *sql.Tx, q ReadQuery
 	return nil
 }
 
-// readAsked is one page of the changes whose ask of the walk's reviewer
-// stands: at most limit asks, after the change a cursor names, newest first,
-// and the row of each change they name — every one, since a change's asks go
-// before its row in a purge and with it in the final one.
-func (w changeWalk) readAsked(ctx context.Context, tx *sql.Tx, cursor string, limit int) ([]changeRow, error) {
-	query, args := changesAskedSQL, slices.Clone(w.keys)
+// readByID is one page of a walk of changes by their ids, newest first — the
+// changes whose ask of the walk's reviewer stands, or whose stored readiness
+// waits on a person: at most limit ids by first, or by after past a cursor —
+// each binding the walk's keys, the cursor's id and the limit — and the row
+// of each change they name. EVERY ONE: a change's asks and its mergeability go
+// before its row in a purge, and with it in the final one. what names the walk
+// in a failure's sentence.
+func (w changeWalk) readByID(ctx context.Context, tx *sql.Tx, first, after, cursor string, limit int,
+	what string) ([]changeRow, error) {
+
+	query, args := first, slices.Clone(w.keys)
 	if cursor != "" {
 		resumed, ok := w.resume(cursor)
 		if !ok {
 			return nil, fmt.Errorf("%w: %q", ErrBadCursor, cursor)
 		}
-		query, args = changesAskedAfterSQL, append(args, resumed...)
+		query, args = after, append(args, resumed...)
 	}
 	rows, err := tx.QueryContext(ctx, query, append(args, limit)...)
 	if err != nil {
-		return nil, fmt.Errorf("code: list the changes asking %v: %w", w.keys[0], err)
+		return nil, fmt.Errorf("code: list the changes %s: %w", what, err)
 	}
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			_ = rows.Close()
-			return nil, fmt.Errorf("code: list the changes asking %v: %w", w.keys[0], err)
+			return nil, fmt.Errorf("code: list the changes %s: %w", what, err)
 		}
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return nil, fmt.Errorf("code: list the changes asking %v: %w", w.keys[0], err)
+		return nil, fmt.Errorf("code: list the changes %s: %w", what, err)
 	}
 	_ = rows.Close()
 	if len(ids) == 0 {
@@ -263,8 +284,7 @@ func (w changeWalk) readAsked(ctx context.Context, tx *sql.Tx, cursor string, li
 	for _, id := range ids {
 		row, found := byID[id]
 		if !found {
-			return nil, fmt.Errorf("code: an ask of %v stands on change %s, which the rows do not hold", w.keys[0],
-				id)
+			return nil, fmt.Errorf("code: the changes %s name change %s, which the rows do not hold", what, id)
 		}
 		out = append(out, row)
 	}
@@ -562,12 +582,17 @@ const (
 	// list of reviewers sought that index on the reviewer alone — every ask
 	// of that reviewer on every change, read to find the one.
 	reviewersKey = "sqlite_autoindex_code_reviewers_1"
+	// waitsKey is code_mergeability_waits_idx, (waits_person, change_id)
+	// WHERE waits_person = 1 (replicated 0078): the changes whose stored
+	// readiness waits on a person, newest change first.
+	waitsKey = "code_mergeability_waits_idx"
 )
 
 // The reads of a change's conversation, each registered in plan_test.go so
 // the pinned driver's planner is held to the index each is written for, and to
 // reading in its order: a reviewer's standing asks newest first, a first page
-// and a page after a cursor; the changes they name, driven from the list of
+// and a page after a cursor; the changes whose stored readiness waits on a
+// person, the same; the changes they name, driven from the list of
 // their ids; which of a page's changes await their owner's fix, and which of
 // them ask the asker's review, driven from that list too; one change's
 // counters by its key; its reviewers by theirs; its comments in thread order,
@@ -579,6 +604,13 @@ const (
 		WHERE reviewer = ? AND state = 'requested' ORDER BY change_id DESC LIMIT ?`
 	changesAskedAfterSQL = `SELECT change_id FROM code_reviewers INDEXED BY ` + reviewerAsksKey + `
 		WHERE reviewer = ? AND state = 'requested' AND change_id < ? ORDER BY change_id DESC LIMIT ?`
+	// THE CHANGES WAITING ON A PERSON, the index's partial predicate repeated
+	// verbatim: the pinned planner takes a partial index only for a statement
+	// that implies it in its own words.
+	changesWaitingSQL = `SELECT change_id FROM code_mergeability INDEXED BY ` + waitsKey + `
+		WHERE waits_person = 1 ORDER BY change_id DESC LIMIT ?`
+	changesWaitingAfterSQL = `SELECT change_id FROM code_mergeability INDEXED BY ` + waitsKey + `
+		WHERE waits_person = 1 AND change_id < ? ORDER BY change_id DESC LIMIT ?`
 	changesByIDSQL = `SELECT ` + changeColumns + ` FROM code_changes
 		WHERE id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
 	needingFixSQL = `SELECT v.change_id FROM json_each(?) AS j CROSS JOIN code_conversations AS v

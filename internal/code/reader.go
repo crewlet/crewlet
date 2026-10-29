@@ -82,9 +82,10 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 	return r, nil
 }
 
-// chartFor is the roster an asker is judged by: the serving node's current
-// chart for a seat, read ONCE a read so every row of a listing is judged by
-// one chart, and none for anybody else.
+// chartFor is the roster a read by asker is judged by: the serving node's
+// current chart for a seat's read and for every read that judges a change's
+// readiness (readiness: [ReadQuery.judgesReadiness]), read ONCE a read so
+// every row of a listing is judged by one chart, and none for anything else.
 //
 // A SEAT ASKING A READER THAT HOLDS NO CHART IS REFUSED ABOUT THE READER —
 // [ErrNotServing], before any row is read — and never judged. A node holds no
@@ -96,18 +97,31 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 // what every peer holding a chart would contradict. Refused about itself,
 // the reader is a node that ran nothing (estate's ranNothing), and the walk
 // asks the next data node. A chart that DENIES the seat is still the answer.
-func (r *Reader) chartFor(asker Principal) (Roster, error) {
-	if asker.Kind != PrincipalAgent {
+// A READ OF CHANGES IS REFUSED SO WHOEVER ASKS, for the same reason: judged
+// with no chart, no seat's approval would count and no seat would maintain
+// the repository, a readiness every peer holding a chart would contradict.
+func (r *Reader) chartFor(asker Principal, readiness bool) (Roster, error) {
+	if asker.Kind != PrincipalAgent && !readiness {
 		return nil, nil
 	}
 	var chart Roster
 	if r.roster != nil {
 		chart = r.roster()
 	}
-	if chart == nil {
+	switch {
+	case chart != nil:
+		return chart, nil
+	case asker.Kind == PrincipalAgent:
 		return nil, fmt.Errorf("%w: this node holds no chart to judge a seat's read by", ErrNotServing)
 	}
-	return chart, nil
+	return nil, fmt.Errorf("%w: this node holds no chart to judge a change's readiness by", ErrNotServing)
+}
+
+// judgesReadiness reports a read whose answer carries a change's readiness,
+// which the chart judges: a listing of changes, and a change's first page of
+// its revisions, which carries its detail.
+func (q ReadQuery) judgesReadiness() bool {
+	return q.Kind == ReadChanges || q.Kind == ReadChange && q.Cursor == "" && q.Part.detailed()
 }
 
 // inTx is one open transaction as a statelog.ReadEstate, so the checkpoint is
@@ -1347,8 +1361,9 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 	// transaction: a listing judged row by row against a chart an apply
 	// swapped mid-page would answer a page no epoch ever held. And read
 	// before any row: a seat asking a reader that holds none is refused
-	// about the reader ([Reader.chartFor]).
-	chart, chartErr := r.chartFor(q.Asker)
+	// about the reader ([Reader.chartFor]), and so is every read of changes,
+	// whose readiness the chart judges.
+	chart, chartErr := r.chartFor(q.Asker, q.judgesReadiness())
 	if chartErr != nil {
 		return ReadAnswer{}, chartErr
 	}
@@ -2926,7 +2941,7 @@ func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) 
 		}
 		tried[i] = names
 	}
-	chart, chartErr := r.chartFor(q.Asker)
+	chart, chartErr := r.chartFor(q.Asker, false)
 	if chartErr != nil {
 		return RefAnswer{}, chartErr
 	}

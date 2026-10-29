@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -58,11 +59,37 @@ import (
 // the instant the row was read at — so the next try waits its home's refresh,
 // as a target's move does, rather than every pass.
 //
+// # The readiness it stamps
+//
+// Every mergeability record carries the change's READINESS as its decide
+// judged it ([ReadinessOf], readiness.go): over the decide's own snapshot and
+// chart, with the merge the record carries in place of the row's
+// ([ReadinessRows.With]) — whatever the home read, which may be a record
+// behind — stamped by the writer as whether every precondition is met and
+// whether the first unmet one waits on persons alone, beside the versions of
+// the change's row and of its conversation's readiness inputs it was judged
+// at. The apply stores them, judging nothing again: the answer a wake that a
+// change became ready reads, and the one the listing of the changes waiting
+// on a person seeks.
+//
+// A REFRESH is a mergeability record that MERGES NOTHING: its home's answer to
+// readiness inputs that moved since the row's answer was judged — a review, an
+// ask for review, an answer to findings, a revision's facts, the change's own
+// row ([ChangeDue.RefreshDue]) — recording the readiness again over the merge
+// the row holds, which the writer stamps on it from the row. It is of the
+// row's merge or it is SUPERSEDED: one whose change holds no merge of that
+// revision against that branch — the home merges first, and the merge records
+// the readiness — and one whose row's answer is judged at the versions the
+// snapshot holds already, since nothing it reads has moved. Its apply
+// rewrites the row's answer and its versions alone, so the merge's instant —
+// what the home's recheck of a moved target is paced by — stays the merge's.
+//
 // # Its tables
 //
-// code_mergeability, one row a change (replicated 0077), written by the
-// applier (apply_mergeability.go) from the records on the change's own subject
-// and removed only with the change by its repository's purge. Its conflicted
+// code_mergeability, one row a change (replicated 0077, created again by 0078
+// with the readiness it stores), written by the applier
+// (apply_mergeability.go) from the records on the change's own subject and
+// removed only with the change by its repository's purge. Its conflicted
 // paths' bytes count in the change's conversation's text_bytes, as its
 // revisions' facts do, so a purge part weighs them by that one narrow row.
 
@@ -199,29 +226,87 @@ type Mergeability struct {
 	Conflicts        []string   `json:"conflicts,omitempty"`
 	ConflictsOmitted int64      `json:"conflicts_omitted,omitempty"`
 	// Node is the git node that merged: the repository's home as it took
-	// itself to be.
+	// itself to be — a refresh's, the home that asked it, whose apply leaves
+	// the row naming the node that merged.
 	Node string `json:"node"`
+	// Refresh is a record of the change's READINESS alone, over the merge its
+	// row holds — see this file's head — which runs no merge. Its revision,
+	// head and target name the merge it refreshes, and the writer STAMPS the
+	// rest of that merge from the row — the tip, its position and the state,
+	// which the home sends none of; it names no conflicted path, which its
+	// apply leaves on the row as they are.
+	//
+	// BASE FORMAT, under the condition [OpMergeability] states: a field the
+	// op gained after it landed, so once a build without it has run it takes
+	// {Name: "Mergeability.Refresh", Since: 2, Op: "mergeability", Path:
+	// []string{"mutation", "refresh"}}, which an older build defers the
+	// record by rather than replace the row whole with a merge naming none of
+	// its conflicted paths.
+	Refresh bool `json:"refresh,omitempty"`
+	// ChangeVersion and ReadinessVersion are the versions of the change's
+	// row (code_changes.version) and of its conversation's readiness inputs
+	// (code_conversations.readiness_version) the decide judged the readiness
+	// at, and Ready and WaitsPerson its answer ([Readiness.Ready],
+	// [Readiness.WaitsPerson]) over its own snapshot and chart with this
+	// record's merge: each STAMPED BY THE WRITER — the home sends none — so
+	// the apply stores the answer the record was decided with and judges
+	// nothing again.
+	//
+	// BASE FORMAT, under the condition [OpMergeability] states, as Refresh
+	// is: once a build without them has run they take {Name:
+	// "Mergeability.ChangeVersion", Since: 2, Op: "mergeability", Path:
+	// []string{"mutation", "change_version"}}, {Name:
+	// "Mergeability.ReadinessVersion", Since: 2, Op: "mergeability", Path:
+	// []string{"mutation", "readiness_version"}}, {Name: "Mergeability.Ready",
+	// Since: 2, Op: "mergeability", Path: []string{"mutation", "ready"}} and
+	// {Name: "Mergeability.WaitsPerson", Since: 2, Op: "mergeability", Path:
+	// []string{"mutation", "waits_person"}}, which an older build defers the
+	// record by rather than store a merge whose readiness it dropped.
+	ChangeVersion    int64 `json:"change_version,omitempty"`
+	ReadinessVersion int64 `json:"readiness_version,omitempty"`
+	Ready            bool  `json:"ready,omitempty"`
+	WaitsPerson      bool  `json:"waits_person,omitempty"`
 }
 
 // validFields holds a mergeability to [ConversationWrite.Validate]'s rules: a
-// revision from 1; whole object ids for the head and the target's tip; the
-// target a branch a change may name, and its tip's position one on the code
-// log; a state this build knows, with conflicts only beside a conflict — each
-// a path a record carries, named once, within both bounds — and none counted
-// beside any other state; and the node a node id config admits.
+// revision from 1; a whole object id for the head; the target a branch a
+// change may name; for a merge, a whole object id for the target's tip and
+// its position one on the code log, a state this build knows, with conflicts
+// only beside a conflict — each a path a record carries, named once, within
+// both bounds — and none counted beside any other state; for a refresh, none
+// of the tip, its position, the state or a conflict, which the writer stamps
+// from the change's row or the row keeps; for either, none of the readiness
+// the writer stamps; and the node a node id config admits.
 func (m *Mergeability) validFields() error {
 	if m.Revision < 1 {
 		return badField("mergeability.revision", "%d; a change's revisions count from 1", m.Revision)
 	}
-	for _, id := range []struct{ field, id string }{
-		{"mergeability.head_oid", m.HeadOID}, {"mergeability.target_oid", m.TargetOID},
-	} {
-		if !gitref.ValidOID(id.id) || id.id == ZeroOID {
-			return badField(id.field, "%q is not a whole object id", id.id)
-		}
+	if !gitref.ValidOID(m.HeadOID) || m.HeadOID == ZeroOID {
+		return badField("mergeability.head_oid", "%q is not a whole object id", m.HeadOID)
 	}
 	if why := branchProblem(m.TargetRef); why != "" {
 		return badField("mergeability.target_ref", "%s", why)
+	}
+	if m.ChangeVersion != 0 || m.ReadinessVersion != 0 || m.Ready || m.WaitsPerson {
+		return badField("mergeability.ready", "the writer stamps the change's readiness and the versions it "+
+			"judged it at, from its own snapshot, and the home sends none of them")
+	}
+	if m.Refresh {
+		switch {
+		case m.TargetOID != "" || !m.TargetPosition.IsZero() || m.State != "":
+			return badField("mergeability.refresh", "a refresh names the revision, the head and the target of "+
+				"the merge it refreshes, and the writer stamps the tip, its position and the state from the "+
+				"change's row: the home sends none of them")
+		case len(m.Conflicts) > 0 || m.ConflictsOmitted != 0:
+			return badField("mergeability.conflicts", "a refresh names no conflicted path: the change's row "+
+				"keeps its own")
+		case !config.ValidNodeID(m.Node):
+			return badField("mergeability.node", "%q is not a node id config admits", m.Node)
+		}
+		return nil
+	}
+	if !gitref.ValidOID(m.TargetOID) || m.TargetOID == ZeroOID {
+		return badField("mergeability.target_oid", "%q is not a whole object id", m.TargetOID)
 	}
 	switch p := m.TargetPosition; {
 	case p.IsZero():
@@ -266,15 +351,48 @@ func (m *Mergeability) validFields() error {
 	return nil
 }
 
+// stampedMergeabilityBytes is what the writer stamps on m, at its widest: the
+// readiness and both versions it was judged at, at the most digits a version
+// takes, and a refresh's tip, its position and its state from the row, at the
+// widest each is. EXACT — the stamped record's encoding less m's own — so a
+// record is held to [MaxConversationBytes] as the writer will publish it.
+func stampedMergeabilityBytes(m Mergeability) int {
+	widest := m
+	widest.ChangeVersion, widest.ReadinessVersion = math.MaxInt64, math.MaxInt64
+	widest.Ready, widest.WaitsPerson = true, true
+	if m.Refresh {
+		widest.TargetOID = strings.Repeat("f", gitref.OIDHexLen)
+		widest.TargetPosition = statelog.Position{Stream: topics.CodeLogStream, Generation: math.MaxUint32,
+			Seq: math.MaxUint64}
+		for _, s := range MergeStates() {
+			if len(s) > len(widest.State) {
+				widest.State = s
+			}
+		}
+	}
+	stamped, err := json.Marshal(widest)
+	if err != nil {
+		panic(fmt.Sprintf("code: encoding a mergeability: %v", err))
+	}
+	sent, err := json.Marshal(m)
+	if err != nil {
+		panic(fmt.Sprintf("code: encoding a mergeability: %v", err))
+	}
+	return len(stamped) - len(sent)
+}
+
 // mergeRow is what a mergeability's decide and apply read of a change's row:
-// the revision, branch and tip's position it is of, what it says, and what its
-// wide column weighs.
+// the revision, branch, tip and tip's position it is of, what it says, what
+// its wide column weighs, and the versions its readiness was judged at.
 type mergeRow struct {
-	revision       int64
-	targetRef      string
-	targetPosition int64
-	state          MergeState
-	bytes          int64
+	revision         int64
+	targetRef        string
+	targetOID        string
+	targetPosition   int64
+	state            MergeState
+	bytes            int64
+	changeVersion    int64
+	readinessVersion int64
 }
 
 // mergeabilityIn reads changeID's mergeability, and false where it holds none.
@@ -283,8 +401,8 @@ func mergeabilityIn(ctx context.Context, tx *sql.Tx, changeID string) (mergeRow,
 		m     mergeRow
 		state string
 	)
-	err := tx.QueryRowContext(ctx, mergeabilitySQL, changeID).Scan(&m.revision, &m.targetRef, &m.targetPosition,
-		&state, &m.bytes)
+	err := tx.QueryRowContext(ctx, mergeabilitySQL, changeID).Scan(&m.revision, &m.targetRef, &m.targetOID,
+		&m.targetPosition, &state, &m.bytes, &m.changeVersion, &m.readinessVersion)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return mergeRow{}, false, nil
@@ -297,12 +415,16 @@ func mergeabilityIn(ctx context.Context, tx *sql.Tx, changeID string) (mergeRow,
 
 // decideMergeability is a mergeability's rules over row — see this file's
 // head: a LIVE change (change_closed, change_merged); its head revision and
-// head and its current target (superseded); and, for that revision against
-// that branch, a tip no earlier than the row's, and a later one or an
-// undecided row where it is the same (superseded). Pure over the rows: it
-// reads no chart.
-func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, row changeRow, named string,
-	d conversationDecision) (conversationDecision, error) {
+// head and its current target (superseded); for a merge, a tip no earlier
+// than the row's for that revision against that branch, and a later one or an
+// undecided row where it is the same (superseded); for a refresh, the row's
+// merge of that revision against that branch, and readiness inputs moved past
+// the versions the row's answer was judged at (superseded). Then the
+// readiness, judged over the snapshot's rows with the record's merge and the
+// chart roster, stamped on the record with the versions it was judged at.
+// Pure over (the rows, w, roster).
+func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster Roster, repo RepoRef,
+	row changeRow, named string, d conversationDecision) (conversationDecision, error) {
 
 	m := *w.Mergeability
 	switch row.state {
@@ -326,18 +448,38 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 	if err != nil {
 		return conversationDecision{}, err
 	}
-	if held && prior.revision == m.Revision && prior.targetRef == m.TargetRef {
-		switch at := m.TargetPosition.Packed(); {
-		case prior.targetPosition > at:
-			return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("revision %d of %s is merged into %s at %s "+
-				"already, a later tip than %s", m.Revision, named, m.TargetRef, unpacked(prior.targetPosition),
-				m.TargetPosition))
-		case prior.targetPosition == at && prior.state.Decided():
-			return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("revision %d of %s is merged into %s at %s "+
-				"already (%s), and a merge of two commits is decided once", m.Revision, named, m.TargetRef,
-				m.TargetPosition, prior.state))
-		}
+	of := held && prior.revision == m.Revision && prior.targetRef == m.TargetRef
+	switch at := m.TargetPosition.Packed(); {
+	case m.Refresh && !of:
+		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("%s holds no merge of revision %d into %s to "+
+			"refresh: its home merges it, and the merge records its readiness", named, m.Revision, m.TargetRef))
+	case m.Refresh && prior.changeVersion == row.version && prior.readinessVersion == d.readiness:
+		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("%s's readiness is judged at its row's "+
+			"version %d and its conversation's readiness version %d already, and nothing it reads has moved "+
+			"since", named, row.version, d.readiness))
+	case m.Refresh:
+		// THE MERGE IT REFRESHES, stamped from the row: the record says what
+		// it judged the readiness over, and its apply touches no merge.
+		m.TargetOID, m.TargetPosition, m.State = prior.targetOID, unpacked(prior.targetPosition), prior.state
+	case of && prior.targetPosition > at:
+		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("revision %d of %s is merged into %s at %s "+
+			"already, a later tip than %s", m.Revision, named, m.TargetRef, unpacked(prior.targetPosition),
+			m.TargetPosition))
+	case of && prior.targetPosition == at && prior.state.Decided():
+		return d.refuse(ConversationRefusalSuperseded, fmt.Sprintf("revision %d of %s is merged into %s at %s "+
+			"already (%s), and a merge of two commits is decided once", m.Revision, named, m.TargetRef,
+			m.TargetPosition, prior.state))
 	}
+	// THE READINESS, from THIS snapshot with the record's merge: what the
+	// home read may be a record behind, and an answer the record's own apply
+	// would not leave true is no answer to store.
+	rows, err := readinessRowsIn(ctx, tx, []readinessSubject{{repo: repo, row: row}})
+	if err != nil {
+		return conversationDecision{}, err
+	}
+	readiness := ReadinessOf(rows[0].With(m), roster)
+	m.ChangeVersion, m.ReadinessVersion = row.version, d.readiness
+	m.Ready, m.WaitsPerson = readiness.Ready(), readiness.WaitsPerson()
 	d.payload = m
 	// THE MERGEABILITY'S ROW, and the conversation's own.
 	d.rows = 2
@@ -348,10 +490,14 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 // (code_mergeability, [Mergeability]): the revision and the target's tip it
 // merged — the branch, the tip and the position that moved it there — what
 // the merge did, the conflicted paths it names and how many more there were,
-// the git node that merged, and the record that wrote it with its broker
-// instant. A change whose head revision's row is missing, or is of an earlier
-// revision, is one its home has not merged yet; one whose target has moved
-// since says so by its tip, which its home merges again at its refresh.
+// the git node that merged, and the record that merged with its broker
+// instant; and the readiness the last record judged with it — whether it was
+// ready and whether it waited on a person, and the versions of the change's
+// row and its conversation's readiness inputs it was judged at — which a read
+// judges again rather than trusts ([ChangeSummary.Readiness]). A change whose
+// head revision's row is missing, or is of an earlier revision, is one its
+// home has not merged yet; one whose target has moved since says so by its
+// tip, which its home merges again at its refresh.
 type MergeabilityRow struct {
 	Revision         int64             `json:"revision"`
 	TargetRef        string            `json:"target_ref"`
@@ -363,6 +509,10 @@ type MergeabilityRow struct {
 	Node             string            `json:"node"`
 	Position         statelog.Position `json:"position"`
 	At               time.Time         `json:"at"`
+	ChangeVersion    int64             `json:"change_version"`
+	ReadinessVersion int64             `json:"readiness_version"`
+	Ready            bool              `json:"ready,omitempty"`
+	WaitsPerson      bool              `json:"waits_person,omitempty"`
 }
 
 // mergeabilityRowIn is changeID's mergeability as a read answers it, nil where
@@ -374,7 +524,8 @@ func mergeabilityRowIn(ctx context.Context, tx *sql.Tx, changeID string) (*Merge
 		targetPosition, position, t int64
 	)
 	err := tx.QueryRowContext(ctx, mergeabilityRowSQL, changeID).Scan(&m.Revision, &m.TargetRef, &m.TargetOID,
-		&targetPosition, &state, &m.ConflictsOmitted, &m.Node, &position, &t, &conflicts)
+		&targetPosition, &state, &m.ConflictsOmitted, &m.Node, &position, &t, &m.ChangeVersion,
+		&m.ReadinessVersion, &m.Ready, &m.WaitsPerson, &conflicts)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, nil
@@ -462,9 +613,10 @@ type MergePreviewAnswer struct {
 // a decide's and an apply's, and a read's whole. Its write is the applier's
 // (apply_mergeability.go).
 const (
-	mergeabilitySQL = `SELECT revision, target_ref, target_position, state, bytes FROM code_mergeability
-		WHERE change_id = ?`
+	mergeabilitySQL = `SELECT revision, target_ref, target_oid, target_position, state, bytes, change_version,
+			readiness_version
+		FROM code_mergeability WHERE change_id = ?`
 	mergeabilityRowSQL = `SELECT revision, target_ref, target_oid, target_position, state, conflicts_omitted, node,
-			position, at, conflicts
+			position, at, change_version, readiness_version, ready, waits_person, conflicts
 		FROM code_mergeability WHERE change_id = ?`
 )

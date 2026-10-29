@@ -19,11 +19,11 @@ import (
 // Estate is the code log and the git reads as the home's change work reaches
 // them — the router's code seam satisfies it (estate.CodeSeam): the due
 // listing (Read), a revision's facts (GitRead, asked of the repository's git
-// nodes, its home first), a record of them or of a change's mergeability on
-// the change (Converse, asked of the repository's committing data node's
-// change writer) and a landing (Change, asked of its committer). Each raises
-// this node's floors past what it landed, so the next listing reads it
-// wherever it is answered.
+// nodes, its home first), a record of them, of a change's mergeability or of
+// its readiness on the change (Converse, asked of the repository's committing
+// data node's change writer) and a landing (Change, asked of its committer).
+// Each raises this node's floors past what it landed, so the next listing
+// reads it wherever it is answered.
 type Estate interface {
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
 	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
@@ -55,8 +55,11 @@ const WorkerChanges = "changes"
 // changes is the home's CHANGE WORK, the worker every loop is built with: for
 // each live change of a repository, its head revision's facts read and
 // recorded on the change and its merge into its target's tip recorded beside
-// them, or the change landed where its target holds its head — and, a moved
-// target's changes merged again at the refresh, within a pass's budget.
+// them, or the change landed where its target holds its head; its readiness
+// recorded again, merging nothing, where what it reads moved since its merge
+// judged it — a review, an ask, an answer to findings, facts, its own row —
+// and, a moved target's changes merged again at the refresh, within a pass's
+// budget.
 type changes struct {
 	estate  Estate
 	cache   Cache
@@ -151,22 +154,28 @@ func (c *changes) Work(ctx context.Context, repoID string, floor statelog.Positi
 // otherwise, the path owners matched against the touched paths here, on the
 // home (code.MatchOwners), beside the digest of the owners the listing read;
 // then its MERGE where it owes one ([changes.merge]), whatever became of its
-// facts, since the merge reads none of them. It answers whether the change
-// was landed.
+// facts, since the merge reads none of them; and where it owes no merge, a
+// REFRESH of its readiness ([changes.refresh]) where it owes one, or where
+// this turn recorded facts its stored readiness was judged before. A merge
+// records the readiness itself, judged with its own snapshot, so a change
+// merged this turn owes no refresh. It answers whether the change was landed.
 func (c *changes) change(ctx context.Context, repoID string, due code.ChangeDue, owners []code.PathOwner,
 	at statelog.Position) (bool, error) {
 
 	var failed []error
+	revised := false
 	if due.FactsDue {
-		landed, err := c.facts(ctx, repoID, due, owners, at)
+		landed, recorded, err := c.facts(ctx, repoID, due, owners, at)
 		if landed {
 			return true, nil
 		}
+		revised = recorded
 		if err != nil {
 			failed = append(failed, err)
 		}
 	}
-	if due.MergeDue {
+	switch {
+	case due.MergeDue:
 		landed, err := c.merge(ctx, repoID, due, at)
 		if landed {
 			return true, errors.Join(failed...)
@@ -174,14 +183,19 @@ func (c *changes) change(ctx context.Context, repoID string, due code.ChangeDue,
 		if err != nil {
 			failed = append(failed, err)
 		}
+	case due.RefreshDue || revised:
+		if err := c.refresh(ctx, repoID, due, at); err != nil {
+			failed = append(failed, err)
+		}
 	}
 	return false, errors.Join(failed...)
 }
 
 // facts is a due change's facts read, then the change landed or its facts
-// recorded ([changes.change]), and whether it was landed.
+// recorded ([changes.change]): whether it was landed, and whether its facts
+// were recorded.
 func (c *changes) facts(ctx context.Context, repoID string, due code.ChangeDue, owners []code.PathOwner,
-	at statelog.Position) (bool, error) {
+	at statelog.Position) (bool, bool, error) {
 
 	began := c.now()
 	read, err := c.estate.GitRead(ctx, code.GitQuery{Kind: code.GitRevisionFacts, RepoID: repoID,
@@ -195,17 +209,18 @@ func (c *changes) facts(ctx context.Context, repoID string, due code.ChangeDue, 
 	}
 	switch {
 	case err != nil:
-		return false, fmt.Errorf("home: read the facts of revision %d of change %d of repository %s: %w",
+		return false, false, fmt.Errorf("home: read the facts of revision %d of change %d of repository %s: %w",
 			due.Revision, due.Number, repoID, err)
 	case read.RevisionFacts == nil:
-		return false, fmt.Errorf("home: the facts of revision %d of change %d of repository %s were answered "+
-			"with none", due.Revision, due.Number, repoID)
+		return false, false, fmt.Errorf("home: the facts of revision %d of change %d of repository %s were "+
+			"answered with none", due.Revision, due.Number, repoID)
 	}
 	f := read.RevisionFacts
 	if f.HeadInTarget {
-		return true, c.land(ctx, repoID, due, at)
+		return true, false, c.land(ctx, repoID, due, at)
 	}
-	return false, c.revise(ctx, repoID, due, f, owners, at)
+	recorded, err := c.revise(ctx, repoID, due, f, owners, at)
+	return false, recorded, err
 }
 
 // The outcomes of crewlet.code.home.merge.duration: a merge's state, a
@@ -332,12 +347,12 @@ func (c *changes) land(ctx context.Context, repoID string, due code.ChangeDue, a
 }
 
 // revise asks the repository's change writer to record due's revision's facts
-// f, its touched paths matched against owners: an answer that the rows moved
-// since — superseded, the change closed or merged — is the next pass's to
-// read; one that decided nothing for a reason of the log's is this turn's
-// failure.
+// f, its touched paths matched against owners, and answers whether they were
+// recorded: an answer that the rows moved since — superseded, the change
+// closed or merged — is the next pass's to read; one that decided nothing for
+// a reason of the log's is this turn's failure.
 func (c *changes) revise(ctx context.Context, repoID string, due code.ChangeDue, f *code.RevisionFactsAnswer,
-	owners []code.PathOwner, at statelog.Position) error {
+	owners []code.PathOwner, at statelog.Position) (bool, error) {
 
 	matched, digest := code.MatchOwners(owners, f.Touched, f.TouchesAll)
 	res, err := c.estate.Converse(ctx, code.ConversationWrite{OpID: statelog.NewOpID(c.now(), ""), Seen: at,
@@ -347,19 +362,47 @@ func (c *changes) revise(ctx context.Context, repoID string, due code.ChangeDue,
 			Node: c.node, RequestedOwners: matched, OwnersDigest: digest}})
 	switch {
 	case err != nil:
-		return fmt.Errorf("home: record the facts of revision %d of change %d of repository %s: %w", due.Revision,
-			due.Number, repoID, err)
+		return false, fmt.Errorf("home: record the facts of revision %d of change %d of repository %s: %w",
+			due.Revision, due.Number, repoID, err)
 	case slices.Contains(undecidedFacts, res.Refusal):
-		return fmt.Errorf("home: record the facts of revision %d of change %d of repository %s: %s: %s",
+		return false, fmt.Errorf("home: record the facts of revision %d of change %d of repository %s: %s: %s",
 			due.Revision, due.Number, repoID, res.Refusal, res.Detail)
 	case res.Refusal != "":
 		c.log.Debug("code_change_facts_refused", "repo", repoID, "change", due.Number, "revision", due.Revision,
 			"refusal", res.Refusal, "detail", res.Detail)
-		return nil
+		return false, nil
 	}
 	c.log.Debug("code_change_facts_recorded", "repo", repoID, "change", due.Number, "revision", due.Revision,
 		"target", due.TargetRef, "tip", due.Tip, "touched", len(f.Touched), "touches_all", f.TouchesAll,
 		"owners", len(matched), "position", res.Position.String())
+	return true, nil
+}
+
+// refresh asks the repository's change writer to record due's readiness again
+// over the merge its row holds — a mergeability that MERGES NOTHING
+// (code.Mergeability.Refresh): no copy synced, no scratch, no git — naming the
+// head revision, its head and its target, the writer stamping the merge from
+// the row and the readiness from its own snapshot. An answer that the rows
+// moved since — superseded: the row's answer judged at the inputs already, a
+// merge owed first, the change closed or merged — is the next pass's to read;
+// one that decided nothing for a reason of the log's is this turn's failure.
+func (c *changes) refresh(ctx context.Context, repoID string, due code.ChangeDue, at statelog.Position) error {
+	res, err := c.estate.Converse(ctx, code.ConversationWrite{OpID: statelog.NewOpID(c.now(), ""), Seen: at,
+		Mergeability: &code.Mergeability{RepoID: repoID, ChangeID: due.ID, Revision: due.Revision,
+			HeadOID: due.Head, TargetRef: due.TargetRef, Refresh: true, Node: c.node}})
+	switch {
+	case err != nil:
+		return fmt.Errorf("home: refresh the readiness of change %d of repository %s: %w", due.Number, repoID, err)
+	case slices.Contains(undecidedFacts, res.Refusal):
+		return fmt.Errorf("home: refresh the readiness of change %d of repository %s: %s: %s", due.Number, repoID,
+			res.Refusal, res.Detail)
+	case res.Refusal != "":
+		c.log.Debug("code_change_readiness_refused", "repo", repoID, "change", due.Number,
+			"revision", due.Revision, "refusal", res.Refusal, "detail", res.Detail)
+		return nil
+	}
+	c.log.Debug("code_change_readiness_refreshed", "repo", repoID, "change", due.Number,
+		"revision", due.Revision, "position", res.Position.String())
 	return nil
 }
 

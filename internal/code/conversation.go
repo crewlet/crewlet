@@ -124,9 +124,10 @@ const (
 	// merges into, no later than the facts it holds of that revision against
 	// that branch, or matched against path owners the repository has changed
 	// since; a merge into a tip before the one the change's mergeability is
-	// of, or into the same tip once that one is decided. The home's own
-	// refusal, which no principal is ever answered: its next pass reads the
-	// rows again.
+	// of, or into the same tip once that one is decided; a refresh of a merge
+	// the change does not hold, or of a readiness judged at the inputs the
+	// snapshot holds already. The home's own refusal, which no principal is
+	// ever answered: its next pass reads the rows again.
 	ConversationRefusalSuperseded ConversationRefusal = "superseded"
 
 	// ConversationRefusalBusy is a write the change's writer did not reach in

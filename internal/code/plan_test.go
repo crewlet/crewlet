@@ -652,20 +652,46 @@ func registeredStatements() map[string]statement {
 		// merge was recorded (sortingStatements says why).
 		"due repositories": {dueReposSQL, []any{"", MaxSnapshotItems, int64(3000)},
 			[]string{"code_changes_open_idx (repo_id>?)", factsKey + " (change_id=? AND n=?)",
-				mergeabilityKey + " (change_id=?)", refsKey + " (repo_id=? AND ref=?)", repoKey + " (id=?)"}},
+				mergeabilityKey + " (change_id=?)", conversationKey + " (change_id=?)",
+				refsKey + " (repo_id=? AND ref=?)", repoKey + " (id=?)"}},
 		"due repository": {dueRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"due changes": {dueChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",
-				factsKey + " (change_id=? AND n=?)", mergeabilityKey + " (change_id=?)"}},
+				factsKey + " (change_id=? AND n=?)", mergeabilityKey + " (change_id=?)",
+				conversationKey + " (change_id=?)"}},
 		"due rechecks": {dueRechecksSQL, []any{"repo-1", int64(3000), MaxSnapshotItems},
 			[]string{"code_changes_open_idx (repo_id=?)", refsKey + " (repo_id=? AND ref=?)",
 				mergeabilityKey + " (change_id=?)"}},
 		// A CHANGE'S MERGEABILITY: its row by its key, a decide's and an
-		// apply's, and a read's whole.
+		// apply's, and a read's whole; and a refresh's readiness written
+		// back by the same key.
 		"mergeability": {mergeabilitySQL, []any{"repo-1-change-000001"},
 			[]string{mergeabilityKey + " (change_id=?)"}},
 		"mergeability row": {mergeabilityRowSQL, []any{"repo-1-change-000001"},
 			[]string{mergeabilityKey + " (change_id=?)"}},
+		"refresh mergeability": {refreshMergeabilitySQL, []any{4, 3, true, false, "repo-1-change-000001", 2,
+			"refs/heads/main", 3000}, []string{mergeabilityKey + " (change_id=?)"}},
+		// A CHANGE'S READINESS (readiness.go): the counters, the authors, the
+		// standing verdicts that approve, the standing asks and the
+		// mergeabilities of a page of changes, each driven from the list of
+		// their ids, one seek of a key an element; the facts of a list of
+		// (change, revision) pairs, one seek of their key a pair; and one
+		// change's standing blockers, the oldest raised first, a seek of the
+		// partial index that holds them alone.
+		"readiness counters": {readinessCountersSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", conversationKey + " (change_id=?)"}},
+		"readiness authors": {readinessAuthorsSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", authorKey + " (change_id=?)"}},
+		"readiness approvals": {readinessApprovalsSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", participantKey + " (change_id=?)"}},
+		"readiness asks": {readinessAsksSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", reviewerKey + " (change_id=?)"}},
+		"readiness mergeabilities": {readinessMergesSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", mergeabilityKey + " (change_id=?)"}},
+		"readiness facts": {readinessFactsSQL, []any{`[["repo-1-change-000001",3],["repo-1-change-000001",1]]`},
+			[]string{"SCAN json_each AS j", factsKey + " (change_id=? AND n=?)"}},
+		"standing blockers": {standingBlockersSQL, []any{"repo-1-change-000001", MaxReadinessBlockers},
+			[]string{blockersKey + " (change_id=?)"}},
 		// A REVISION'S FACTS: one revision's by their key, a decide's and an
 		// apply's; whether a change holds any, by the key's prefix; who
 		// stands on request_changes before a revision, a range of the
@@ -746,6 +772,9 @@ func registeredStatements() map[string]statement {
 			[]string{reviewerAsksKey + " (reviewer=? AND state=?)"}},
 		"changes asked after": {changesAskedAfterSQL, []any{"seat-1", "repo-1-change-000031", 50},
 			[]string{reviewerAsksKey + " (reviewer=? AND state=? AND change_id<?)"}},
+		"changes waiting": {changesWaitingSQL, []any{50}, []string{waitsKey + " (waits_person=?)"}},
+		"changes waiting after": {changesWaitingAfterSQL, []any{"repo-1-change-000031", 50},
+			[]string{waitsKey + " (waits_person=? AND change_id<?)"}},
 		"changes by id": {changesByIDSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
 			[]string{changeKey + " (id=?)"}},
 		"changes needing a fix": {needingFixSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},

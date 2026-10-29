@@ -25,6 +25,13 @@ import (
 //   - its head revision's MERGE, where it holds no mergeability of that
 //     revision against that branch (code_mergeability by its key), which the
 //     home merges and records ([Mergeability]) — or lands, as above;
+//   - a REFRESH of its readiness ([Mergeability.Refresh]), where it holds a
+//     mergeability of its head revision against that branch whose readiness
+//     was judged at versions its own row (code_changes.version) or its
+//     conversation's readiness inputs (code_conversations.readiness_version)
+//     have moved past since — a review, an ask, an answer to findings, its
+//     facts, an edit of its row — which the home records over the merge the
+//     row holds, running none;
 //   - and a RECHECK of that merge — the change's mergeability is of its head
 //     revision against its branch, and its target has moved past the tip it
 //     merged into since, or the merge was undecided — once the mergeability
@@ -33,7 +40,8 @@ import (
 //     changes' merges again at the home's pace, never at its own.
 //
 // Every record the home makes takes its change off the list by its own row,
-// so the rows are the work list and nothing else is.
+// so the rows are the work list and nothing else is: a merge and a refresh
+// each store the versions they judged the readiness at.
 //
 // A CHANGE ON AN ARCHIVED OR A DELETED REPOSITORY IS NOBODY'S WORK: every write
 // of it would be refused (repo_archived, repo_deleted), and listed it would be
@@ -47,13 +55,13 @@ import (
 // code_changes_open_idx, which holds the live changes alone, in its own order
 // and grouped on its leading column, so a page is read in index order and
 // never sorted; with one ([ChangesDueQuery]) it pages that repository's
-// changes owing their facts or their merge by source branch, the same index's
-// range, each with its target's tip from code_refs' key, and the repository's
-// path owners beside them, read in the same snapshot as the changes they are
-// matched for — and on its FIRST PAGE the changes owing a recheck, at most as
-// many as the home asks ([ChangesDueQuery.Rechecks]), THE OLDEST MERGE FIRST.
-// Every change a page names is checked against its facts' key and its
-// mergeability's, one seek of each a change.
+// changes owing their facts, their merge or a refresh by source branch, the
+// same index's range, each with its target's tip from code_refs' key, and the
+// repository's path owners beside them, read in the same snapshot as the
+// changes they are matched for — and on its FIRST PAGE the changes owing a
+// recheck, at most as many as the home asks ([ChangesDueQuery.Rechecks]), THE
+// OLDEST MERGE FIRST. Every change a page names is checked against its facts'
+// key, its mergeability's and its conversation's, one seek of each a change.
 //
 // OLDEST FIRST, because a page cut at the home's budget in any other order
 // starves the rest: in source-branch order a repository with more changes due
@@ -222,7 +230,7 @@ func (r *Reader) dueChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, out *R
 			at int64
 		)
 		if err := rows.Scan(&c.ID, &c.Number, &c.Revision, &c.Head, &c.SourceRef, &c.TargetRef, &c.Tip,
-			&at, &c.FactsDue, &c.MergeDue); err != nil {
+			&at, &c.FactsDue, &c.MergeDue, &c.RefreshDue); err != nil {
 			return fmt.Errorf("code: list repository %s's due changes: %w", repoID, err)
 		}
 		c.TipPosition = statelog.Unpack(topics.CodeLogStream, at)
@@ -272,11 +280,11 @@ func dueRechecks(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, out *Re
 //
 //   - the repositories holding a due change, after a cursor, in the index's
 //     order and grouped on its leading column, each repository's state by its
-//     key — a change due its facts, its merge, or a recheck of its merge
-//     recorded at or before ?3;
+//     key — a change due its facts, its merge, a refresh, or a recheck of its
+//     merge recorded at or before ?3;
 //   - one repository's state by its key;
-//   - one repository's changes owing their facts or their merge after a source
-//     branch, the index's range, each saying which it owes;
+//   - one repository's changes owing their facts, their merge or a refresh
+//     after a source branch, the index's range, each saying which it owes;
 //   - one repository's changes owing a recheck — a mergeability of the head
 //     revision against the branch, behind its target's tip or undecided,
 //     recorded at or before ?2 — oldest first, at most ?3, the walk's one sort
@@ -291,7 +299,10 @@ func dueRechecks(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, out *Re
 // revision against its branch and either still of the target's tip and
 // decided, or recorded after the instant a recheck is due by — [mergeHeld],
 // what the listing of repositories asks of every live change it walks, where a
-// repository's own read asks the two halves of it apart.
+// repository's own read asks the two halves of it apart. A REFRESH IS DUE
+// where that mergeability's readiness was judged at versions the change's row
+// or its conversation have moved past — [refreshDue], its conversation's
+// readiness version read by the conversations' key.
 const (
 	dueReposSQL = `SELECT c.repo_id FROM code_changes AS c INDEXED BY code_changes_open_idx
 		WHERE c.repo_id > ?1 AND ` + liveChanges + `
@@ -300,7 +311,8 @@ const (
 					AND (NOT EXISTS (SELECT 1 FROM code_revision_facts AS f
 							WHERE f.change_id = c.id AND f.n = c.revision AND f.target_ref = c.target_ref)
 						OR NOT EXISTS (SELECT 1 FROM code_mergeability AS m
-							WHERE ` + mergeHeld + `)))
+							WHERE ` + mergeHeld + `)
+						OR EXISTS (SELECT 1 FROM code_mergeability AS m WHERE ` + refreshDue + `)))
 			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = c.repo_id AND r.status = 'active')
 		GROUP BY c.repo_id ORDER BY c.repo_id LIMIT ?2`
 	dueRepoSQL    = `SELECT status FROM code_repos WHERE id = ?`
@@ -309,7 +321,8 @@ const (
 			NOT EXISTS (SELECT 1 FROM code_revision_facts AS f
 				WHERE f.change_id = c.id AND f.n = c.revision AND f.target_ref = c.target_ref),
 			NOT EXISTS (SELECT 1 FROM code_mergeability AS m
-				WHERE m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref)
+				WHERE m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref),
+			EXISTS (SELECT 1 FROM code_mergeability AS m WHERE ` + refreshDue + `)
 		FROM code_changes AS c INDEXED BY code_changes_open_idx
 		CROSS JOIN code_refs AS t INDEXED BY ` + refsKey + `
 		WHERE c.repo_id = ?1 AND c.source_ref > ?2 AND ` + liveChanges + `
@@ -317,7 +330,8 @@ const (
 			AND (NOT EXISTS (SELECT 1 FROM code_revision_facts AS f
 					WHERE f.change_id = c.id AND f.n = c.revision AND f.target_ref = c.target_ref)
 				OR NOT EXISTS (SELECT 1 FROM code_mergeability AS m
-					WHERE m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref))
+					WHERE m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref)
+				OR EXISTS (SELECT 1 FROM code_mergeability AS m WHERE ` + refreshDue + `))
 		ORDER BY c.source_ref LIMIT ?3`
 	dueRechecksSQL = `SELECT c.id, c.number, c.revision, c.head_oid, c.source_ref, c.target_ref, t.target,
 			t.position, (SELECT m.at FROM code_mergeability AS m WHERE m.change_id = c.id) AS checked
@@ -335,4 +349,11 @@ const (
 	// recheck is due by, ?3.
 	mergeHeld = `m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref
 		AND ((m.target_position >= t.position AND m.state != 'unknown') OR m.at > ?3)`
+	// refreshDue is a change's mergeability, m, as one its home owes a
+	// refresh of: of the change's head revision against its branch, its
+	// readiness judged at a version of the change's row, c, or of its
+	// conversation's readiness inputs, that each has moved past since.
+	refreshDue = `m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref
+		AND (m.change_version < c.version OR m.readiness_version < (SELECT v.readiness_version
+			FROM code_conversations AS v WHERE v.change_id = c.id))`
 )

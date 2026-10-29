@@ -286,12 +286,23 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		t.Fatalf("codetest: %s: build the read authority: %v", d.o.ID, err)
 	}
 	limits := func() code.Limits { return d.o.Limits }
-	if p.reader, err = code.NewReader(code.ReaderOptions{Log: authority, Limits: limits}); err != nil {
-		t.Fatalf("codetest: %s: build the reader: %v", d.o.ID, err)
-	}
 	seatRules := d.o.SeatRules
 	if seatRules == nil {
 		seatRules = FixtureSeatRules
+	}
+	// THE READER JUDGES BY THE CHART ITS WRITERS DECIDE BY, as a node reads
+	// and writes by one epoch's: a seat's grant, and every change's readiness
+	// whoever reads it — a reader holding none refuses a read of changes.
+	roster := func() code.Roster {
+		rules, held := seatRules()
+		if !held {
+			return nil
+		}
+		return rules.Roster
+	}
+	if p.reader, err = code.NewReader(code.ReaderOptions{Log: authority, Limits: limits,
+		Roster: roster}); err != nil {
+		t.Fatalf("codetest: %s: build the reader: %v", d.o.ID, err)
 	}
 	if p.committer, err = code.NewCommitter(code.CommitterOptions{
 		Publisher: &faultPublisher{inner: pub, faults: d.o.Faults, appends: &d.appends},

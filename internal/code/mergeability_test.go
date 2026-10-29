@@ -99,6 +99,7 @@ func (n *node) mergeability(change string) heldMerge {
 func TestAMergeabilityRecordIsMonotone(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
+	n.chart = testChart()
 	repo, change := discussed(t, n, "web")
 	w, _ := writerOn(t, n, n.pub)
 	ctx := t.Context()

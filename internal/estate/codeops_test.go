@@ -736,16 +736,26 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			DueChanges: []code.ChangeDue{{ID: "019a0c2e-0000-7000-8000-0000000000e7", Number: 3, Revision: 2,
 				Head: "7777777777777777777777777777777777777777", SourceRef: "refs/heads/fix",
 				TargetRef: "refs/heads/main", Tip: "6666666666666666666666666666666666666666", TipPosition: at,
-				FactsDue: true, MergeDue: true}},
+				FactsDue: true, MergeDue: true, RefreshDue: true}},
 			Rechecks: []code.ChangeDue{{ID: "019a0c2e-0000-7000-8000-0000000000e8", Number: 4, Revision: 1,
 				Head: "8888888888888888888888888888888888888888", SourceRef: "refs/heads/more",
 				TargetRef: "refs/heads/main", Tip: "6666666666666666666666666666666666666666", TipPosition: at,
 				Checked: created}},
-			// A CHANGE'S MERGEABILITY as its read carries it, every field.
-			Change: &code.ChangeDetail{Mergeability: &code.MergeabilityRow{Revision: 2, TargetRef: "refs/heads/main",
-				TargetOID: "6666666666666666666666666666666666666666", TargetPosition: at,
-				State: code.MergeConflict, Conflicts: []string{"upload/retry.go"}, ConflictsOmitted: 3, Node: "git-a",
-				Position: at, At: created}},
+			// A CHANGE'S MERGEABILITY AND ITS READINESS as its read carries
+			// them, every field.
+			Change: &code.ChangeDetail{ChangeSummary: code.ChangeSummary{Readiness: &code.Readiness{Met: 3, Total: 5,
+				First: "app!42 conflicts with refs/heads/main",
+				Preconditions: []code.Precondition{{Kind: code.PreconditionBlocker, State: code.PreconditionUnmet,
+					WaitsOn: []code.Party{{Handle: "dev", Kind: code.PartyAgent}},
+					Blockers: []code.Blocker{{FindingID: "019a0c2e-0000-7000-8000-0000000000e4",
+						State: code.FindingDisputed, ClearedBy: code.ClearedBy{Raiser: code.Party{Handle: "founder",
+							Kind: code.PartyPerson}, Maintainers: []string{"cto"}, Persons: true}}},
+					BlockersOmitted: 2, Detail: "3 blockers stand"}}}},
+				Mergeability: &code.MergeabilityRow{Revision: 2, TargetRef: "refs/heads/main",
+					TargetOID: "6666666666666666666666666666666666666666", TargetPosition: at,
+					State: code.MergeConflict, Conflicts: []string{"upload/retry.go"}, ConflictsOmitted: 3,
+					Node: "git-a", Position: at, At: created, ChangeVersion: 4, ReadinessVersion: 6, Ready: true,
+					WaitsPerson: true}},
 			// A CHANGE'S CONVERSATION'S PARTS, every field of each row.
 			Reviewers: []code.ReviewerRow{{Reviewer: "plat-lead", Kind: code.PartyAgent, Reason: code.ReviewerAsked,
 				State: code.ReviewerRequested, RequestedBy: "dev", RequestedByKind: code.PartyAgent,
@@ -943,6 +953,11 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 				Handle: "reader", Why: code.SkipBelowReview}},
 			ReReview:     []code.Reviewer{{Handle: "cto", Kind: code.PartyAgent}},
 			LeadFallback: &code.Reviewer{Handle: "cto", Kind: code.PartyAgent}}},
+		"a change's mergeability": {Mergeability: &code.Mergeability{RepoID: ref.ID, ChangeID: item.ChangeID,
+			Revision: 3, HeadOID: "9999999999999999999999999999999999999999", TargetRef: "refs/heads/main",
+			TargetOID: "7777777777777777777777777777777777777777", TargetPosition: at, State: code.MergeConflict,
+			Conflicts: []string{"upload/retry.go"}, ConflictsOmitted: 2, Node: "node-b", Refresh: true,
+			ChangeVersion: 4, ReadinessVersion: 6, Ready: true, WaitsPerson: true}},
 	} {
 		w.OpID, w.Asker, w.Seen = "019a0c2e-0000-7000-8000-0000000000e0.code_comment_on_change", seat, at
 		d.mu.Lock()

@@ -104,12 +104,14 @@
 //
 // ITS HOME'S WORK LIST IS ITS ROWS (changesdue.go): a live change whose head
 // revision holds no facts, or no mergeability, against the branch it merges
-// into — or whose mergeability its moved target asks again, once its home's
-// refresh has passed — on an active repository, its target a live branch, is
-// due its home's change work ([ReadChangesDue], the engine's own read), which
-// records the facts ([Revise]) and whether the change merges cleanly into its
-// target's tip ([Mergeability], mergeability.go), or lands the change — each
-// taking its part off the list by its own row.
+// into — or whose stored readiness was judged before what it reads moved, or
+// whose mergeability its moved target asks again, once its home's refresh has
+// passed — on an active repository, its target a live branch, is due its
+// home's change work ([ReadChangesDue], the engine's own read), which records
+// the facts ([Revise]) and whether the change merges cleanly into its target's
+// tip with its readiness beside it ([Mergeability], mergeability.go), refreshes
+// that readiness alone, or lands the change — each taking its part off the
+// list by its own row.
 //
 // ITS REVISIONS ARE ITS PUSHES' (revisions.go). The apply of the push record
 // that moves a live change's source writes the change's next revision and
@@ -152,7 +154,10 @@
 // names a repository, and a read of one change, are refused whole where the
 // asker or the seat it reads for may not read it; a listing that names none
 // leaves out the changes of every repository either may not, and of a
-// deleted one.
+// deleted one. Both carry each live change's readiness, judged in the read's
+// own transaction (readiness.go); and what waits on a person ([NeedPerson])
+// walks the changes whose stored readiness does, keeping those the read
+// judges still do.
 //
 // # A change's conversation is rows on its own subject
 //
@@ -211,6 +216,23 @@
 // [ReviewerPathOwner]), skips the rest by [SkipReason], and stamps whom else
 // the facts concern, so the apply judges nothing again; code_revision_facts
 // keeps one row a revision, and a change read's revisions carry it.
+//
+// A CHANGE'S MERGE READINESS IS JUDGED, NEVER TRUSTED (readiness.go): one pure
+// [ReadinessOf] over the rows one snapshot holds and the chart one epoch holds
+// — a [Precondition] a [PreconditionKind]: not a draft, its head revision's
+// facts recorded, one counted approval (an eligible reviewer's standing
+// verdict, never an author's, carried to a later revision only on an equal
+// recorded patch id), no standing blocker — each named with who can clear it
+// (S40) — and its head merging cleanly — each met, unmet or computing, an
+// unmet one naming whom it waits on. Every read of changes judges it again in
+// its own transaction, so it takes the reader's chart whoever asks; and every
+// [Mergeability] record's decide judges it with the merge it records and
+// stamps the answer, which the applier stores beside the versions it was
+// judged at — what a wake that a change became ready reads, and what
+// [NeedPerson] seeks — a home refreshing it, merging nothing, once a review,
+// an ask, an answer to findings, facts or the change's own row moves them
+// ([Mergeability.Refresh]). It reads the change's own review objects, never a
+// decision of the tracker's.
 //
 // # A repository's checks are rows on their own subject
 //

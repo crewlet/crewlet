@@ -86,12 +86,14 @@ import (
 // The chart then judges whom they ask, skip and wake (revise.go's head).
 //
 // A CHANGE'S MERGEABILITY ([Mergeability], mergeability.go) is the home's too,
-// asked by no principal and judged by no chart: it takes a LIVE change
-// (change_closed, change_merged), and is decided only while it is of the
-// change's head revision against its current target, and of a tip no earlier
-// than the one the change's row holds for that revision against that branch —
-// the same tip only where that row is undecided — else SUPERSEDED, recorded
-// nowhere.
+// asked by no principal: it takes a LIVE change (change_closed,
+// change_merged), and is decided only while it is of the change's head
+// revision against its current target, and of a tip no earlier than the one
+// the change's row holds for that revision against that branch — the same tip
+// only where that row is undecided — or, a REFRESH, of the merge the row holds,
+// whose readiness inputs moved since its answer was judged; else SUPERSEDED,
+// recorded nowhere. The chart then judges the change's READINESS over the
+// snapshot with the record's merge ([ReadinessOf]), stamped on the record.
 //
 // A write that asks for what the conversation already says — every reviewer
 // it asks already asked and nobody it withdraws still asked, a thread's state
@@ -170,9 +172,9 @@ func (w ConversationWrite) measure() (int, error) {
 		// wake.
 		stamped += stampedReviseBytes(*w.Revise) - principalBytes(w.Asker)
 	case w.Mergeability != nil:
-		// THE HOME'S OWN WRITE, which names no asker and is stamped with
-		// nothing: the record is what the home sent.
-		stamped -= principalBytes(w.Asker)
+		// THE HOME'S OWN WRITE, which names no asker: what the writer stamps
+		// is the readiness it judges, and a refresh's merge from the row.
+		stamped += stampedMergeabilityBytes(*w.Mergeability) - principalBytes(w.Asker)
 	}
 	if stamped > MaxConversationBytes {
 		why := fmt.Sprintf("%d bytes, past the %d one write of a change's conversation may take of its record "+
@@ -267,15 +269,16 @@ func (w ConversationWrite) ChangeID() string {
 
 // JudgesChart reports a write whose decide reads the deciding node's chart: a
 // SEAT's — its grant on the repository — every ask of reviewers, whoever
-// asks, since each reviewer is judged by the chart, and every revision's
-// facts, whose path owners the chart resolves to the seats they are asked of
-// and judges. A change's mergeability reads none: it is two commits merged.
-// ONE ANSWER, which the
-// estate declares the operation's grant by and the writer refuses a node that
-// cannot judge one by, so the two never disagree about which writes a node
-// behind the company's configuration may decide.
+// asks, since each reviewer is judged by the chart; every revision's facts,
+// whose path owners the chart resolves to the seats they are asked of and
+// judges; and every change's mergeability, whose readiness the chart judges —
+// who may approve it, who maintains its repository ([ReadinessOf]). ONE
+// ANSWER, which the estate declares the operation's grant by and the writer
+// refuses a node that cannot judge one by, so the two never disagree about
+// which writes a node behind the company's configuration may decide.
 func (w ConversationWrite) JudgesChart() bool {
-	return w.Revise != nil || w.Asker.Kind.readsChart() || (w.Reviewers != nil && len(w.Reviewers.Request) > 0)
+	return w.Revise != nil || w.Mergeability != nil || w.Asker.Kind.readsChart() ||
+		(w.Reviewers != nil && len(w.Reviewers.Request) > 0)
 }
 
 // validFields is every rule of [ConversationWrite.Validate] but the record's
@@ -521,8 +524,9 @@ func (c *Comment) validFields() error {
 // conversationDecision is one round's decision of a write of a change's
 // conversation: its refusal and sentence where it is refused; unchanged where
 // the rows already say what it asks; the record's payload, stamped, where it
-// forms one, and the rows its apply will touch; and the conversation's version
-// and position as the snapshot read them either way.
+// forms one, and the rows its apply will touch; and the conversation's
+// version, position and readiness inputs' version as the snapshot read them
+// either way.
 type conversationDecision struct {
 	refusal   ConversationRefusal
 	detail    string
@@ -531,6 +535,7 @@ type conversationDecision struct {
 	rows      int
 	version   int64
 	position  int64
+	readiness int64
 }
 
 // refuse is d refused under code with detail.
@@ -581,7 +586,7 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 			repo.name, changeID))
 	}
 	named := ChangeRef(repo.name, row.number)
-	if d.version, d.position, _, err = conversationIn(ctx, tx, changeID); err != nil {
+	if d.version, d.position, d.readiness, err = conversationIn(ctx, tx, changeID); err != nil {
 		return conversationDecision{}, err
 	}
 	switch {
@@ -590,9 +595,9 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 		// guard and the chart's judgment of the path owners.
 		return decideRevise(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, d)
 	case w.Mergeability != nil:
-		// THE HOME'S OWN too, judged by no chart: its rules are the merge's
-		// guard alone.
-		return decideMergeability(ctx, tx, w, row, named, d)
+		// THE HOME'S OWN too: its rules are the merge's guard, and the
+		// chart judges the readiness it stamps.
+		return decideMergeability(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, d)
 	}
 	asker, kind := w.Asker.party()
 	if kind == "" {
@@ -1032,19 +1037,19 @@ func withinConversation(dec statelog.Decision, d conversationDecision) error {
 }
 
 // conversationIn reads a change's conversation row: its version, the packed
-// position of its last record and what its wide text weighs — zeros where the
-// change has none yet.
-func conversationIn(ctx context.Context, tx *sql.Tx, changeID string) (version, position, textBytes int64,
+// position of its last record and its readiness inputs' version — zeros
+// where the change has none yet.
+func conversationIn(ctx context.Context, tx *sql.Tx, changeID string) (version, position, readiness int64,
 	err error) {
 
-	err = tx.QueryRowContext(ctx, conversationSQL, changeID).Scan(&version, &position, &textBytes)
+	err = tx.QueryRowContext(ctx, conversationSQL, changeID).Scan(&version, &position, &readiness)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return 0, 0, 0, nil
 	case err != nil:
 		return 0, 0, 0, fmt.Errorf("code: read change %s's conversation: %w", changeID, err)
 	}
-	return version, position, textBytes, nil
+	return version, position, readiness, nil
 }
 
 // commentRow is what a decide and an apply read of one comment.
@@ -1144,7 +1149,7 @@ func reviewerStates(ctx context.Context, tx *sql.Tx, changeID string, handles []
 // MaxReviewersPerChange + 1 deep over the reviewers' key — a change's withdrawn
 // asks are rows too, and the count need only say whether one more fits.
 const (
-	conversationSQL = `SELECT version, position, text_bytes FROM code_conversations WHERE change_id = ?`
+	conversationSQL = `SELECT version, position, readiness_version FROM code_conversations WHERE change_id = ?`
 	commentSQL      = `SELECT id, change_id, thread_id, parent_id, author, author_kind, resolved
 		FROM code_comments WHERE id = ?`
 	authorsAmongSQL = `SELECT a.author, a.author_kind FROM json_each(?2) AS j CROSS JOIN code_change_authors AS a
