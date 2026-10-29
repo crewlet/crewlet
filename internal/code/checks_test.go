@@ -52,8 +52,8 @@ func (n *node) publishCheck(repo string, op code.OpKind, payload any) (statelog.
 func (n *node) seedEnded(repoID string, at time.Time, count int) {
 	n.t.Helper()
 	for i := range count {
-		n.exec(`INSERT INTO code_checks (repo_id, oid, name, attempt, state, purpose, change_id, revision,
-			candidate_id, entry_id, target_ref, base_oid, defs_oid, required, run_in, timeout_seconds, reason,
+		n.exec(`INSERT INTO code_checks (repo_id, commit_oid, name, attempt, state, purpose, change_id,
+			revision, candidate_id, entry_id, target_ref, base_oid, defs_oid, required, run_in, timeout_seconds, reason,
 			runner_node, placement, box_handle, borrowed, reporter, queued_at, started_at, finished_at,
 			duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, url,
 			summary, def, failures, tail)

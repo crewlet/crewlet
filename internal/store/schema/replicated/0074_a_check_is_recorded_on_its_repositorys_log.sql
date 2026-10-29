@@ -12,7 +12,11 @@
 -- state only rises, a running tie keeps the lower (started_at, runner_node), an
 -- ending's tie keeps a measurement over infrastructure's.
 --
--- code_checks is one row an attempt, keyed (repo_id, oid, name, attempt).
+-- code_checks is one row an attempt, keyed (repo_id, commit_oid, name,
+-- attempt): commit_oid is the commit checked, as code_findings names one,
+-- and never `oid`, which is the rowid's own alias — the pinned driver reads
+-- `excluded.oid` in an upsert as the rowid (store's
+-- TestNoColumnIsNamedForTheRowid).
 --   - The QUEUE — purpose (head, candidate, tip, bisect), change_id and revision
 --     for a change's head, candidate_id and entry_id for a queue's candidate,
 --     target_ref, base_oid (what an API-first check's diff is read against),
@@ -74,7 +78,7 @@
 -- on the same subject, and by the repository's purge.
 CREATE TABLE code_checks (
     repo_id           TEXT    NOT NULL,
-    oid               TEXT    NOT NULL,
+    commit_oid        TEXT    NOT NULL,
     name              TEXT    NOT NULL,
     attempt           INTEGER NOT NULL,
     state             TEXT    NOT NULL,
@@ -109,31 +113,31 @@ CREATE TABLE code_checks (
     def               TEXT    NOT NULL,
     failures          TEXT    NOT NULL,
     tail              TEXT    NOT NULL,
-    PRIMARY KEY (repo_id, oid, name, attempt)
+    PRIMARY KEY (repo_id, commit_oid, name, attempt)
 );
 
 CREATE TABLE code_check_logs (
-    repo_id TEXT    NOT NULL,
-    oid     TEXT    NOT NULL,
-    name    TEXT    NOT NULL,
-    attempt INTEGER NOT NULL,
-    object  TEXT    NOT NULL,
-    hash    TEXT    NOT NULL,
-    size    INTEGER NOT NULL,
-    PRIMARY KEY (repo_id, oid, name, attempt)
+    repo_id    TEXT    NOT NULL,
+    commit_oid TEXT    NOT NULL,
+    name       TEXT    NOT NULL,
+    attempt    INTEGER NOT NULL,
+    object     TEXT    NOT NULL,
+    hash       TEXT    NOT NULL,
+    size       INTEGER NOT NULL,
+    PRIMARY KEY (repo_id, commit_oid, name, attempt)
 );
 
-CREATE INDEX code_checks_queued_idx ON code_checks (queued_at, repo_id, oid, name, attempt)
+CREATE INDEX code_checks_queued_idx ON code_checks (queued_at, repo_id, commit_oid, name, attempt)
     WHERE state = 'queued';    -- the attempts waiting for a runner, oldest first: a runner's claim walk, the backlog's oldest
 
 CREATE INDEX code_checks_running_idx ON code_checks (repo_id, runner_node)
     WHERE state = 'running';    -- a repository's running attempts by runner: the home's sweep of a lost runner's
 
-CREATE INDEX code_checks_change_idx ON code_checks (change_id, oid, name, attempt);    -- a change's attempts: its readiness, its checks, its page
+CREATE INDEX code_checks_change_idx ON code_checks (change_id, commit_oid, name, attempt);    -- a change's attempts: its readiness, its checks, its page
 
-CREATE INDEX code_checks_finished_idx ON code_checks (repo_id, finished_at, oid, name, attempt, row_bytes);    -- a repository's attempts by their ending, oldest first, with their widths: the horizon, a sweep, a purge part, the purge's count
+CREATE INDEX code_checks_finished_idx ON code_checks (repo_id, finished_at, commit_oid, name, attempt, row_bytes);    -- a repository's attempts by their ending, oldest first, with their widths: the horizon, a sweep, a purge part, the purge's count
 
-CREATE INDEX code_checks_recent_idx ON code_checks (finished_at, repo_id, oid, name, attempt)
+CREATE INDEX code_checks_recent_idx ON code_checks (finished_at, repo_id, commit_oid, name, attempt)
     WHERE finished_at > 0;    -- every repository's ended attempts by their ending: a window's checks, and the retention duty's listing of what outlives the history
 
 CREATE INDEX code_check_logs_object_idx ON code_check_logs (object);    -- the collector's question of a batch of objects, the audit's and a backup's walk

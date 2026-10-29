@@ -809,10 +809,10 @@ func registeredStatements() map[string]statement {
 		// a covering read of code_checks_finished_idx and deleted in its
 		// order, their logs through them; the final purge's two; and the
 		// retention duty's listing, one row an instant and a repository.
-		"check row":            {readCheckSQL, []any{"repo-1", oid("c"), "unit", 1}, []string{checksKey + " (repo_id=? AND oid=? AND name=? AND attempt=?)"}},
-		"drop check log":       {dropCheckLogSQL, []any{"repo-1", oid("c"), "unit", 1}, []string{checkLogsKey + " (repo_id=? AND oid=? AND name=? AND attempt=?)"}},
+		"check row":            {readCheckSQL, []any{"repo-1", oid("c"), "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND name=? AND attempt=?)"}},
+		"drop check log":       {dropCheckLogSQL, []any{"repo-1", oid("c"), "unit", 1}, []string{checkLogsKey + " (repo_id=? AND commit_oid=? AND name=? AND attempt=?)"}},
 		"checks oldest":        {checksOldestSQL, []any{"repo-1", 1, 1000, CheckHorizonRows + 1}, []string{"COVERING INDEX " + checksEndedKey + " (repo_id=? AND finished_at>=? AND finished_at<?)"}},
-		"delete oldest logs":   {deleteOldestCheckLogsSQL, []any{"repo-1", 1, 1000, CheckHorizonRows}, []string{"COVERING INDEX " + checksEndedKey + " (repo_id=? AND finished_at>=? AND finished_at<?)", checkLogsKey + " (repo_id=? AND oid=? AND name=? AND attempt=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"delete oldest logs":   {deleteOldestCheckLogsSQL, []any{"repo-1", 1, 1000, CheckHorizonRows}, []string{"COVERING INDEX " + checksEndedKey + " (repo_id=? AND finished_at>=? AND finished_at<?)", checkLogsKey + " (repo_id=? AND commit_oid=? AND name=? AND attempt=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"delete oldest checks": {deleteOldestChecksSQL, []any{"repo-1", 1, 1000, CheckHorizonRows}, []string{"COVERING INDEX " + checksEndedKey + " (repo_id=? AND finished_at>=? AND finished_at<?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all check logs": {purgeAllCheckLogsSQL, []any{"repo-1"}, []string{checkLogsKey + " (repo_id=?)"}},
 		"purge all checks":     {purgeAllChecksSQL, []any{"repo-1"}, []string{checksKey + " (repo_id=?)"}},
@@ -981,15 +981,15 @@ func claimedReads() map[string]statement {
 		// home's sweep of a repository's running checks by runner, the running
 		// state repeated likewise; and a change's checks by commit, name and
 		// attempt.
-		"code_checks_queued_idx": {`SELECT repo_id, oid, name, attempt FROM code_checks
+		"code_checks_queued_idx": {`SELECT repo_id, commit_oid, name, attempt FROM code_checks
 			INDEXED BY code_checks_queued_idx WHERE state = 'queued' AND queued_at >= ?
-			ORDER BY queued_at, repo_id, oid, name, attempt LIMIT ?`,
+			ORDER BY queued_at, repo_id, commit_oid, name, attempt LIMIT ?`,
 			[]any{0, 1024}, []string{"code_checks_queued_idx (queued_at>=?)"}},
-		"code_checks_running_idx": {`SELECT oid, name, attempt, runner_node FROM code_checks
+		"code_checks_running_idx": {`SELECT commit_oid, name, attempt, runner_node FROM code_checks
 			INDEXED BY code_checks_running_idx WHERE repo_id = ? AND state = 'running'`,
 			[]any{"repo-1"}, []string{"code_checks_running_idx (repo_id=?)"}},
-		"code_checks_change_idx": {`SELECT oid, name, attempt, state FROM code_checks
-			INDEXED BY code_checks_change_idx WHERE change_id = ? ORDER BY oid, name, attempt`,
+		"code_checks_change_idx": {`SELECT commit_oid, name, attempt, state FROM code_checks
+			INDEXED BY code_checks_change_idx WHERE change_id = ? ORDER BY commit_oid, name, attempt`,
 			[]any{"repo-1-change-000001"}, []string{"code_checks_change_idx (change_id=?)"}},
 	}
 }

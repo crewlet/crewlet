@@ -89,7 +89,7 @@ func (e *estate) checksDump() string {
 	for _, table := range []string{"code_checks", "code_check_logs"} {
 		if err := e.db.Reader().Read(context.Background(), func(tx *sql.Tx) error {
 			rows, err := tx.QueryContext(context.Background(),
-				`SELECT * FROM `+table+` ORDER BY repo_id, oid, name, attempt`)
+				`SELECT * FROM `+table+` ORDER BY repo_id, commit_oid, name, attempt`)
 			if err != nil {
 				return err
 			}
@@ -120,8 +120,8 @@ func (e *estate) checksDump() string {
 // checkColumn is one column of key's row.
 func (e *estate) checkColumn(key CheckKey, column string) string {
 	e.t.Helper()
-	return fmt.Sprint(e.one(`SELECT `+column+` FROM code_checks WHERE repo_id = ? AND oid = ? AND name = ? AND
-		attempt = ?`, key.RepoID, key.OID, key.Name, key.Attempt))
+	return fmt.Sprint(e.one(`SELECT `+column+` FROM code_checks WHERE repo_id = ? AND commit_oid = ? AND
+		name = ? AND attempt = ?`, key.RepoID, key.OID, key.Name, key.Attempt))
 }
 
 // openChecksEstate is an estate holding the cases' repository.
