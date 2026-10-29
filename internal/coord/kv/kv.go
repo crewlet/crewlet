@@ -815,11 +815,11 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 	protocol := opts.EffectiveProtocol()
 	key := encodeResource(resource)
 
-	// sibling is whether this round met this owner's own claim still
-	// minting, which the last round's answer names if every round is spent.
+	// sibling is whether the last round met this owner's own claim still
+	// minting, which names the answer if every round is spent: each round
+	// that reaches the record sets it before it can go round again.
 	var sibling bool
 	for range casAttempts {
-		sibling = false
 		snap, err := s.readForClaim(ctx, l, resource)
 		if err != nil {
 			return nil, "", err
