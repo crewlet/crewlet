@@ -167,6 +167,26 @@ func TestACodeQuestionHandsTheReaderTheCallersWholeFreshness(t *testing.T) {
 	}
 }
 
+// ONE REPOSITORY'S QUESTION ASKS FOR ITS PATH OWNERS, and no other does: its
+// detail is where an API reader learns who owns which of its paths
+// (code.ReadQuery.PathOwners), and the reader refuses the ask on every other
+// kind of read.
+//
+// Mutation: ask every question for path owners — the listing and the history
+// ask a read that refuses it, red.
+func TestOnlyTheRepositoryQuestionAsksForPathOwners(t *testing.T) {
+	t.Parallel()
+	for _, q := range codeQuestions {
+		stub := &stubCode{}
+		if _, err := askNative(t, queries.Sources{Code: stub}, q.what, q.args); err != nil {
+			t.Fatalf("%s: %v", q.what, err)
+		}
+		if got, want := stub.last().PathOwners, q.kind == code.ReadRepo; got != want {
+			t.Errorf("%s asked the reader for path owners: %t, want %t", q.what, got, want)
+		}
+	}
+}
+
 // A CODE QUESTION REFUSES IN THIS SURFACE'S VOCABULARY, which every transport
 // renders: a repository nobody declared is an absence that says which
 // (`not_declared`, the sentence naming the setting that declares one); one the

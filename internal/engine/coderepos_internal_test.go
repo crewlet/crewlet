@@ -55,12 +55,13 @@ func webRepo(description string) string {
 // apiRepo is a repository owned by a seat.
 const apiRepo = "    - name: api\n      owner: {seat: swe}\n      protect: [{branch: main}]\n"
 
-// repoNamed reads one repository through e's own router, linearizably.
+// repoNamed reads one repository through e's own router, linearizably, with
+// its path owners.
 func repoNamed(t *testing.T, e *Engine, name string) (*code.RepoDetail, error) {
 	t.Helper()
 	answer, err := e.router.Code().Read(t.Context(), code.ReadQuery{
 		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"}, Kind: code.ReadRepo, Repo: name,
-		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
+		PathOwners: true, Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
 	})
 	if err != nil {
 		return nil, err

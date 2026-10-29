@@ -24,10 +24,11 @@ func pathOwner(kind code.OwnerKind, ref string, paths ...string) code.PathOwner 
 }
 
 // ownersOf is the path owners of the repository name, as a person's read of
-// its detail answers them.
+// its detail answers them when it asks for them.
 func (n *node) ownersOf(name string) []code.PathOwner {
 	n.t.Helper()
-	answer, err := n.reader.Read(n.t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepo, Repo: name})
+	answer, err := n.reader.Read(n.t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepo, Repo: name,
+		PathOwners: true})
 	if err != nil {
 		n.t.Fatalf("read %s's detail: %v", name, err)
 	}
@@ -277,6 +278,67 @@ func TestAPathOwnerGrantsNothing(t *testing.T) {
 		if after := standing(name); !reflect.DeepEqual(after, before) {
 			t.Errorf("%s with every unit and seat its path owner reads as %v, and as %v without them: a path "+
 				"owner grants nothing", name, after, before)
+		}
+	}
+}
+
+// THE PATH OWNERS ARE ANSWERED ONLY TO A READ THAT ASKS FOR THEM. A read of
+// one repository that does not — every resolution of a repository, a tool's
+// once a turn among them — and a refs listing's first page answer its detail
+// without them, one that does answers them in their one form, and every other
+// kind refuses the ask, naming it: no other read answers them.
+//
+// Mutation: read the path owners on every detail (Reader.repo's ask dropped)
+// — a resolution answers them, red.
+func TestOnlyAReadThatAsksIsAnsweredThePathOwners(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	s := suiteSettings()
+	s.PathOwners = []code.PathOwner{pathOwner(code.OwnerSeat, "dev", "Makefile"),
+		pathOwner(code.OwnerUnit, "ENG", "docs/*.md", "web/**")}
+	id := n.ensure("web", s, t1).RepoID
+	read := func(q code.ReadQuery) (code.ReadAnswer, error) {
+		q.Asker = asker
+		return n.reader.Read(t.Context(), q)
+	}
+	resolved, err := read(code.ReadQuery{Kind: code.ReadRepo, Repo: "web"})
+	if err != nil || resolved.Repo == nil || resolved.Repo.ID != id {
+		t.Fatalf("a read of web = (%+v, %v), want its detail", resolved.Repo, err)
+	}
+	if resolved.Repo.PathOwners != nil {
+		t.Errorf("a read of web that asks for no path owners answers %+v", resolved.Repo.PathOwners)
+	}
+	listed, err := read(code.ReadQuery{Kind: code.ReadRefs, Repo: "web"})
+	if err != nil || listed.Repo == nil || listed.Repo.PathOwners != nil {
+		t.Errorf("a refs listing's first page = (%+v, %v), want its detail without the path owners", listed.Repo,
+			err)
+	}
+	asked, err := read(code.ReadQuery{Kind: code.ReadRepo, Repo: "web", PathOwners: true})
+	if err != nil || asked.Repo == nil || !reflect.DeepEqual(asked.Repo.PathOwners, s.PathOwners) {
+		t.Errorf("a read of web that asks for its path owners = (%+v, %v), want %+v", asked.Repo, err,
+			s.PathOwners)
+	}
+	for _, q := range []code.ReadQuery{
+		{Kind: code.ReadRepos},
+		{Kind: code.ReadRefs, Repo: "web"},
+		{Kind: code.ReadPushes, Repo: "web"},
+		{Kind: code.ReadChanges, Repo: "web"},
+	} {
+		q.PathOwners = true
+		if _, err := read(q); !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), "path_owners") {
+			t.Errorf("a %s read asking for path owners = %v, want ErrInvalid naming path_owners", q.Kind, err)
+		}
+	}
+	for _, q := range []code.ReadQuery{
+		{Kind: code.ReadCompactionDue, MinPacks: 1},
+		{Kind: code.ReadPublicationDue},
+		{Kind: code.ReadExpungeDue},
+		{Kind: code.ReadChangesDue, ChangesDue: &code.ChangesDueQuery{RecheckBefore: t1}},
+	} {
+		q.PathOwners = true
+		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrInvalid) ||
+			!strings.Contains(err.Error(), "path_owners") {
+			t.Errorf("a %s read asking for path owners = %v, want ErrInvalid naming path_owners", q.Kind, err)
 		}
 	}
 }

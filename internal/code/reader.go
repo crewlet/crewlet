@@ -1536,6 +1536,8 @@ func (q ReadQuery) validate() error {
 		return fmt.Errorf("%w: brief: only a push history is read in brief", ErrInvalid)
 	case q.Push != "" && q.Kind != ReadPushes:
 		return fmt.Errorf("%w: push: only a push history is narrowed to one push", ErrInvalid)
+	case q.PathOwners && q.Kind != ReadRepo:
+		return fmt.Errorf("%w: path_owners: only a read of one repository answers its path owners", ErrInvalid)
 	case q.Push != "" && !ValidPushID(q.Push):
 		return fmt.Errorf("%w: push: %q is not a push's id, a UUIDv7 in its canonical lowercase spelling",
 			ErrInvalid, q.Push)
@@ -1626,6 +1628,8 @@ func (q ReadQuery) validateIntroduced() error {
 		return refused("brief", "an introduced read condenses every push in its range its own way")
 	case q.Push != "":
 		return refused("push", "an introduced read names its pushes by its range alone")
+	case q.PathOwners:
+		return refused("path_owners", "only a read of one repository answers its path owners")
 	case q.MinPacks != 0:
 		return refused("min_packs", "only a compaction_due read names a floor of live packs")
 	case q.Change != 0:
@@ -1721,7 +1725,7 @@ func (q ReadQuery) validateRunPushes() error {
 		{"push", q.Push != ""}, {"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""},
 		{"work", q.Work != ""}, {"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
-		{"checks_due", q.ChecksDue != nil},
+		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners},
 	} {
 		if f.set {
 			return refused(f.field, "a run_pushes read names its repositories in its run and filters nothing")
@@ -1765,7 +1769,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
-		{"checks_due", q.ChecksDue != nil},
+		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -1800,7 +1804,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
-		{"checks_due", q.ChecksDue != nil},
+		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -1831,7 +1835,7 @@ func (q ReadQuery) validateExpungeDue() error {
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
-		{"checks_due", q.ChecksDue != nil},
+		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_due read lists every repository with an expunge open or a "+
@@ -2052,13 +2056,18 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 	// tombstones included, on every detail read.
 	summary := v.summary(head)
 	summary.Access = g.Access.String()
-	owners, err := pathOwnersIn(ctx, tx, id)
-	if err != nil {
-		return err
-	}
 	out.Repo = &RepoDetail{RepoSummary: summary,
 		Branches: v.branches, Tags: v.tags, Tombstones: v.tombstones,
-		CreatedAt: store.DecodeTime(v.createdAt), Limits: r.limits(), PathOwners: owners}
+		CreatedAt: store.DecodeTime(v.createdAt), Limits: r.limits()}
+	// THE PATH OWNERS ONLY TO A READ THAT ASKS ([ReadQuery.PathOwners]): a
+	// refs listing's first page and every resolution of a repository read
+	// this detail for its row, and at their bound the path owners are a
+	// quarter of a mebibyte of JSON each of them would carry and drop.
+	if q.PathOwners {
+		if out.Repo.PathOwners, err = pathOwnersIn(ctx, tx, id); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

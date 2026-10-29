@@ -171,6 +171,10 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 	if kind != code.ReadRepos {
 		q.Repo = p.String("name")
 	}
+	// ONE REPOSITORY IN DETAIL ANSWERS WHO OWNS ITS PATHS: this question is
+	// the read of that ([code.ReadQuery.PathOwners]), where a tool's
+	// resolution of a repository reads its detail for its row alone.
+	q.PathOwners = kind == code.ReadRepo
 	// A HISTORY IN BRIEF ([code.ReadQuery.Brief]) is asked as `true`, and
 	// anything else but `false` is refused rather than read as a whole
 	// history: a page a screen polls is several hundred kilobytes heavier

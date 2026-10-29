@@ -909,6 +909,23 @@ type ReadQuery struct {
 	// which such a build refuses as a kind it does not know, rather than ride
 	// a field it ignores.
 	Push string `json:"push,omitempty"`
+	// PathOwners asks a `repo` read for the repository's PATH OWNERS beside
+	// its detail ([RepoDetail.PathOwners]), and nothing else answers them: a
+	// read of who owns which of its paths sets it — the API's question of one
+	// repository does — and a read that RESOLVES a repository does not:
+	// every seat tool's once a turn, a refs listing's first page, the status
+	// and readers questions'. None of those reads a path owner, and at their
+	// bound the path owners are a quarter of a mebibyte of JSON on each — one
+	// more statement on the serving node, and the bytes encoded there,
+	// shipped and decoded to be dropped. Refused on every other kind.
+	//
+	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.Push]'s: no
+	// build that carries the code domain has run without this field — none
+	// of the domain is on main — and a build that predates it, which decodes
+	// and ignores it, answers every detail with the path owners: a heavier
+	// answer, never a wrong one.
+	PathOwners bool `json:"path_owners,omitempty"`
 	// Change is a `change` read's number: the change's on the repository
 	// Repo names, web!42's 42 — REQUIRED there, at least 1, and refused on
 	// every other kind.
@@ -1543,10 +1560,11 @@ type RepoDetail struct {
 	// PathOwners are who owns which of its paths, as its settings carry them
 	// ([RepoSettings.PathOwners]): on the detail alone, never on the
 	// [RepoRef] beside it, which every push, fetch and listing reads and
-	// which no path owner changes a thing about. At their bound — every glob
-	// of every owner at its longest, in JSON's widest spelling — the detail
-	// still fits the room a page beside it leaves the estate's reply
-	// ([MaxPageBytes]; the limits test holds it).
+	// which no path owner changes a thing about — and only to a read that
+	// asks for them ([ReadQuery.PathOwners]), since every resolution of a
+	// repository reads this detail for its row. At their bound
+	// ([MaxPathOwnersBytes]) the detail still fits the room a page beside it
+	// leaves the estate's reply ([MaxPageBytes]; the limits test holds it).
 	PathOwners []PathOwner `json:"path_owners,omitempty"`
 }
 

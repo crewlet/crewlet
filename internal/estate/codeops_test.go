@@ -1042,6 +1042,11 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, CeilingSeat: "lead", Kind: code.ReadRefs,
 			Repo: "app", Prefix: "refs/heads/seats/dev/", Cursor: "refs/heads/seats/dev/a", Limit: 7,
 			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}},
+		// ONE REPOSITORY WITH ITS PATH OWNERS: the ask dropped on the wire
+		// would answer the detail without them.
+		{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
+			Kind: code.ReadRepo, Repo: "app", PathOwners: true,
+			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}},
 		{Kind: code.ReadIntroduced, Introduced: &code.IntroducedQuery{RepoID: ref.ID, After: at,
 			Through: statelog.Position{Stream: codeStream, Generation: 2, Seq: 90}}, Cursor: "1000041/push-1",
 			Limit: 1, Fresh: statelog.FloorAt(statelog.ReadSession, at)},
