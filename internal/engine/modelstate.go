@@ -33,7 +33,12 @@ func (e *Engine) modelStatus(ctx context.Context) []coord.ModelStatus {
 	keys := slices.Sorted(maps.Keys(c.Config.Providers.LLM))
 	rows := make([]coord.ModelStatus, 0, len(keys))
 	for _, key := range keys {
-		row := coord.ModelStatus{Key: key, SignIn: "none", Parked: parked[key]}
+		row := coord.ModelStatus{Key: key, SignIn: "none", Parked: parked[key], ParkedCount: len(parked[key])}
+		for _, p := range row.Parked {
+			if row.ParkedSince.IsZero() || p.Since.Before(row.ParkedSince) {
+				row.ParkedSince = p.Since
+			}
+		}
 		provider, ok := c.Models.Provider(key)
 		if !ok {
 			rows = append(rows, row)

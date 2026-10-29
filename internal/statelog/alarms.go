@@ -565,11 +565,11 @@ type Reading struct {
 	// waiting thresholds are measured against. A zero ModelsAt is a node
 	// that gathered none, which evaluates no model alarm.
 	//
-	// FLEET-WIDE INPUTS, not this node's: a limit met on one node and a
-	// refusal on another are both the entry's, so every data node gathers
-	// the same rows (the live leases' model rows, the secret store's write
-	// instants and the active company) and evaluates the same alarms, as
-	// `backup_age` reads the fleet's one backup register.
+	// FLEET-WIDE INPUTS where the fact is the fleet's: a limit met on one
+	// node and a refusal on another are both the entry's, so every data
+	// node reads the live leases' model rows and the secret store's write
+	// instants alike, as `backup_age` reads the fleet's one backup register.
+	// [ModelCondition.NoSignIn] is the gathering node's own reading.
 	Models   []ModelCondition
 	ModelsAt time.Time
 }

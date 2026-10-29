@@ -210,9 +210,12 @@ These are about one model entry rather than the node:
 
 Each names every entry it stands on in its ` + "`entries`" + ` list, with that
 entry's own measurement, and writes its log lines per entry, carrying it as
-` + "`entry`" + `. Every data node evaluates them from the same fleet-wide inputs
-(each live node's heartbeat and the secret store), so they read the same on
-every node. Their thresholds are fixed, with no setting: a credential's expiry
+` + "`entry`" + `. Every data node evaluates them. A refusal, a limit, a wait and
+a stored credential's age come from the fleet's own records (each live node's
+heartbeat and the secret store), so those read the same on every node; whether
+anything signs a model in, and how long its token lasts, are the evaluating
+node's own reading, so a model nothing signs in on one node is said by that
+node. Their thresholds are fixed, with no setting: a credential's expiry
 is said at %d days and again at %d, and a limit turns into
 ` + "`llm_limit_waiting`" + ` once a seat has waited %s on it.
 `

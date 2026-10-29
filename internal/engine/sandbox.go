@@ -1427,6 +1427,17 @@ func runnerLost(lost *sandbox.LostRun) *runner.Lost {
 // renamed or removed since the launch — and one that is not a coding CLI's
 // bench nothing; a run that succeeded starts the entry's backoff over, as a
 // call that was answered does.
+//
+// THE ENDING IS THE SIGN-IN'S THE RUN LAUNCHED WITH, never the entry's current
+// one. A run launched before its entry's credential was replaced ran on the
+// old credential to its end, so what it met (a refusal, a spent plan, an
+// answer) says nothing about the new one. Recorded on the entry, a refusal on
+// a revoked token became the NEW sign-in's last failure and readiness verdict
+// (a false `llm_sign_in_refused`, and the assistant refusing the entry for the
+// verdict's ten minutes), and a limit on the old plan benched a new account
+// with quota left. Such an ending records nothing: the old sign-in is no
+// entry's now, and the run itself is carried on with the new one where it was
+// refused ([Engine.signInReplaced]).
 func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.PendingRun, ended sandbox.RunEnding) {
 	if c == nil || c.Models == nil || run.Launch.ProviderKey == "" ||
 		(ended.Text == "" && ended.Error == "" && ended.Event == "") {
@@ -1438,6 +1449,14 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 	}
 	agent, isCLI := provider.(*cliagent.Provider)
 	if !isCLI {
+		return
+	}
+	if launched := run.Launch.SignInID; launched != "" && launched != string(agent.SignInID()) {
+		log.InfoContext(ctx, "executor_run_ended_on_a_replaced_sign_in",
+			"turn_id", run.TurnID, "seat", run.AgentHandle,
+			"provider_key", run.Launch.ProviderKey,
+			"detail", "the run ran on a sign-in its entry no longer uses; how it ended is "+
+				"recorded on none the entry signs in with now")
 		return
 	}
 	if agent.RunEnded(ctx, cliagent.RunEnd{Answer: ended.Text, Error: ended.Error,

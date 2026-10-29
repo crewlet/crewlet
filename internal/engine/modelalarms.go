@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -18,14 +19,27 @@ import (
 // across the fleet, which the alarm table judges at the owner's fixed
 // thresholds ([statelog.KindLLMCredentialExpiring] and the four beside it).
 //
-// FLEET-WIDE, AND THE SAME ON EVERY DATA NODE: the live leases' model rows (a
-// limit met on one node, a refusal on another), the secret store's write
-// instants and the active company. Every data node evaluates them, as
-// `backup_age` reads the fleet's one backup register, so the alarm reads the
-// same whichever node a person asks.
+// MOSTLY FLEET-WIDE: the live leases' model rows (a limit met on one node, a
+// refusal on another) and the secret store's write instants are the fleet's,
+// as `backup_age` reads the fleet's one backup register, so a refusal, a limit,
+// a wait and a stored credential's age read the same whichever node a person
+// asks. Two inputs are this node's own reading, and say so: whether anything
+// signs an entry in here, and its CLI's token lifetime.
 //
-// UNMEASURED IS SILENT: a lease table that cannot be read leaves the reading's
-// ModelsAt zero, and the table judges nothing about models on that tick.
+// A READ THAT FAILS CARRIES THE LAST GOOD ONE. The lease table and the secret
+// store are read on every evaluation, and a blip in either must not read as
+// "no model sits out" or "no token expires": that cleared every standing model
+// alarm on the blip and raised each again on the next tick, two log lines per
+// entry per blip, and a health count that flickered. So each input that cannot
+// be read is the last one that could, and the failure is logged. Only a node
+// that has never read the leases judges nothing about models.
+
+// modelInputs is the last good read of each fleet-wide model input.
+type modelInputs struct {
+	mu     sync.Mutex
+	nodes  map[string][]coord.ModelStatus
+	stored map[string]time.Time
+}
 
 // modelsReading fills the model half of an alarm reading.
 func (e *Engine) modelsReading(ctx context.Context, now time.Time, out *statelog.Reading) {
@@ -33,16 +47,37 @@ func (e *Engine) modelsReading(ctx context.Context, now time.Time, out *statelog
 	if c == nil || c.Config == nil || len(c.Config.Providers.LLM) == 0 {
 		return
 	}
+	in := &e.modelInputs
 	nodes, err := e.liveModelRows(ctx)
+	in.mu.Lock()
 	if err != nil {
+		log.WarnContext(ctx, "model_alarms_leases_unread", "error", err,
+			"detail", "the model alarms are judged on the last heartbeats this node read")
+		nodes = in.nodes
+	} else {
+		in.nodes = nodes
+	}
+	in.mu.Unlock()
+	if nodes == nil {
 		return
 	}
+	nodes = maps.Clone(nodes)
 	if _, reported := nodes[e.selfNode()]; !reported {
 		// THIS NODE'S OWN ROWS, read now where its lease did not carry
 		// them yet (a node in its first beat).
 		nodes[e.selfNode()] = e.modelStatus(ctx)
 	}
-	out.Models = modelConditions(c, nodes, e.selfNode(), e.storedAt(ctx), e.namedEntries(c),
+	stored, err := e.storedAt(ctx)
+	in.mu.Lock()
+	if err != nil {
+		log.WarnContext(ctx, "model_alarms_secrets_unread", "error", err,
+			"detail", "the credential expiries are judged on the last write instants this node read")
+		stored = in.stored
+	} else {
+		in.stored = stored
+	}
+	in.mu.Unlock()
+	out.Models = modelConditions(c, nodes, e.selfNode(), stored, e.namedEntries(c),
 		e.tokenLifetimes(c), now)
 	out.ModelsAt = now
 }
@@ -87,10 +122,16 @@ func modelConditions(c *Company, nodes map[string][]coord.ModelStatus, self stri
 					latest := *window
 					m.SittingOut = &latest
 				}
+				// THE FIRST WAIT, which travels whole beside the
+				// bounded list of seats ([coord.MaxModelParkedSeats]).
+				waiting := row.ParkedSince
 				for _, parked := range row.Parked {
-					if m.WaitingSince.IsZero() || parked.Since.Before(m.WaitingSince) {
-						m.WaitingSince = parked.Since
+					if waiting.IsZero() || parked.Since.Before(waiting) {
+						waiting = parked.Since
 					}
+				}
+				if !waiting.IsZero() && (m.WaitingSince.IsZero() || waiting.Before(m.WaitingSince)) {
+					m.WaitingSince = waiting
 				}
 				if node == self && !row.Resolves && named[key] {
 					m.NoSignIn = true
@@ -118,21 +159,21 @@ func variableOf(source config.CredentialSource) string {
 	return source.Fallback
 }
 
-// storedAt is when the secret store last wrote each secret, by name; empty
-// when the store cannot be listed, which leaves every expiry unknown.
-func (e *Engine) storedAt(ctx context.Context) map[string]time.Time {
+// storedAt is when the secret store last wrote each secret, by name: empty on a
+// node with no store, an error where the store could not be listed.
+func (e *Engine) storedAt(ctx context.Context) (map[string]time.Time, error) {
 	out := map[string]time.Time{}
 	if e.backends == nil || e.backends.Fleet == nil || e.cipher == nil {
-		return out
+		return out, nil
 	}
 	records, err := fleetsecrets.New(e.backends.Fleet, e.cipher).List(ctx)
 	if err != nil {
-		return out
+		return nil, err
 	}
 	for _, r := range records {
 		out[r.Name] = r.UpdatedAt
 	}
-	return out
+	return out, nil
 }
 
 // tokenLifetimes is each coding-CLI entry's headless-token lifetime, zero where

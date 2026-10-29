@@ -203,7 +203,39 @@ type limitProbes struct {
 	// [Engine.stopProviderParks] ends and waits for: the call is this
 	// node's, and a stopping node must not leave one running.
 	asking sync.WaitGroup
+
+	// waits is when each seat this node parked on a limit began waiting,
+	// which the Models page and the `llm_limit_waiting` alarm measure from
+	// ([Engine.parkedByEntry]).
+	//
+	// THE SEAT'S, NOT A PROBE'S: an apply that brings new models releases
+	// every park decided under the old ones, and the seat's next delivery
+	// parks it again at once on the same limit, under a new probe. Dated by
+	// the probe, the wait restarted at every apply, so a seat stuck for an
+	// hour read as parked for seconds and the alarm that turns red at
+	// fifteen minutes went out and came back with every config change. A wait
+	// ends when the chain answers (or stops reporting a limit) or the seat
+	// leaves this node; a park that follows a release for any other reason
+	// within [parkCarryWindow] is the same wait.
+	waits map[uuid.UUID]parkWait
 }
+
+// parkWait is one seat's wait: when it began, when its last park was released
+// for a reason that does not end the wait (zero while it is parked), and the
+// entries of the chain it last parked on.
+type parkWait struct {
+	since, releasedAt time.Time
+	keys              []string
+}
+
+// parkCarryWindow is how soon after a release that does not end the wait a
+// park still continues it: ONE MINUTE. The park that follows an apply's
+// release is the seat's next delivery meeting the same limit, which the
+// entry's sit-out refuses before any process starts, so it lands within the
+// delivery's own queue latency, seconds; a minute covers a slow redelivery and
+// is far below the fifteen minutes the wait is judged at, so a seat that
+// truly got through and later met a new limit starts a new wait.
+const parkCarryWindow = time.Minute
 
 // probeKey names one limited chain: the registry it was decided under and its
 // keys in order.
@@ -435,8 +467,19 @@ func (e *Engine) joinLimitProbe(ctx context.Context, basis providerBasis, seat u
 	probe.seats[seat] = handle
 	if _, waiting := probe.since[seat]; !waiting {
 		// A seat that joins again while it waits keeps its first instant:
-		// a renewed park is the same wait.
-		probe.since[seat] = e.now()
+		// a renewed park is the same wait, and so is a park soon after a
+		// release that did not end it ([limitProbes.waits]).
+		now := e.now()
+		if p.waits == nil {
+			p.waits = map[uuid.UUID]parkWait{}
+		}
+		wait, known := p.waits[seat]
+		if !known || (!wait.releasedAt.IsZero() && now.Sub(wait.releasedAt) > parkCarryWindow) {
+			wait = parkWait{since: now}
+		}
+		wait.releasedAt, wait.keys = time.Time{}, basis.keys
+		p.waits[seat] = wait
+		probe.since[seat] = wait.since
 	}
 	if probe.call == nil && (probe.alarm == nil || retry.Before(probe.until)) {
 		probe.until = retry
@@ -562,7 +605,30 @@ func (e *Engine) endLimitProbe(ctx context.Context, key probeKey, probe *limitPr
 		if parking := e.providerParks.parking(seat); parking != nil && probeKeyOf(parking.basis) == key {
 			e.releaseProviderParking(ctx, seat, parking, why)
 		}
+		// THE WAIT IS OVER: the chain answered, or stopped reporting a
+		// limit.
+		e.endParkWait(seat)
 	}
+}
+
+// parkReleased marks seat's wait as released at this instant, without ending
+// it: a park within [parkCarryWindow] continues it.
+func (e *Engine) parkReleased(seat uuid.UUID) {
+	p := &e.limitProbes
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if wait, known := p.waits[seat]; known {
+		wait.releasedAt = e.now()
+		p.waits[seat] = wait
+	}
+}
+
+// endParkWait forgets when seat began waiting: its wait is over.
+func (e *Engine) endParkWait(seat uuid.UUID) {
+	p := &e.limitProbes
+	p.mu.Lock()
+	delete(p.waits, seat)
+	p.mu.Unlock()
 }
 
 // leaveLimitProbe takes seat off the probe of the chain basis names, and
@@ -783,6 +849,9 @@ func (e *Engine) releaseProviderParking(ctx context.Context, seat uuid.UUID, par
 		return false
 	}
 	e.leaveLimitProbe(seat, parking.basis)
+	// RELEASED, NOT ANSWERED: a park soon after continues this wait
+	// ([limitProbes.waits]); one that ends it forgets it after this.
+	e.parkReleased(seat)
 	e.publishProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: why})
 	e.readmitResumes(waitProvider)
 	return true
@@ -807,6 +876,7 @@ func (e *Engine) reconcileProviderParks(ctx context.Context, next *Company) {
 // (see [seatParks.forget]), and says the seat no longer waits here: the node
 // that takes it asks its own models on the first delivery.
 func (e *Engine) forgetProviderPark(ctx context.Context, seat uuid.UUID) {
+	e.endParkWait(seat)
 	if parking, ok := e.providerParks.forget(ctx, e, providerParkSpec, seat); ok {
 		e.leaveLimitProbe(seat, parking.basis)
 		e.publishProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: seatReleasedHere})
@@ -883,6 +953,19 @@ func (e *Engine) parkedByEntry() map[string][]coord.ParkedSeat {
 			for _, key := range probe.basis.keys {
 				out[key] = append(out[key], coord.ParkedSeat{Seat: seat, Since: since})
 			}
+		}
+	}
+	// A WAIT BETWEEN A RELEASE AND ITS RE-PARK is still a wait: the seat is
+	// reported on the chain it last parked on, from when it began, for as
+	// long as a park would continue it. Left out, a heartbeat in that gap
+	// cleared the waiting alarm the re-park then raised again.
+	now := e.now()
+	for seat, wait := range p.waits {
+		if wait.releasedAt.IsZero() || now.Sub(wait.releasedAt) > parkCarryWindow {
+			continue
+		}
+		for _, key := range wait.keys {
+			out[key] = append(out[key], coord.ParkedSeat{Seat: seat, Since: wait.since})
 		}
 	}
 	for key := range out {

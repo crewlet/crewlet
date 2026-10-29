@@ -191,6 +191,8 @@ func TestUnknownLivenessIsNotADeadSession(t *testing.T) {
 	c, _ := chainCompany(t, chainMember{key: "codex-review", agent: "codex", model: "gpt-6.1-sol", subscription: true})
 	e := epochEngine(c)
 	e.backends, e.testNode = &Backends{Fleet: fleet}, "node-2"
+	e.startDeviceSignIns(t.Context())
+	t.Cleanup(e.stopDeviceSignIns)
 	running := coord.DeviceSignIn{ID: uuid.New(), Entry: "codex-review", Node: "node-1",
 		Status: coord.DevicePending, StartedAt: time.Now(), ExpiresAt: time.Now().Add(15 * time.Minute),
 		By: person.Name, ByKind: person.Kind}

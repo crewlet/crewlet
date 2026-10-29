@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // A DEVICE SIGN-IN, the engine's half (M11 of the Models design): a person
@@ -69,8 +70,18 @@ const deviceSweepInterval = coord.ReconcileInterval
 
 // deviceFinalWriteBudget bounds the write that records how a session ended,
 // made after the session's own context may be gone: ten seconds, a few store
-// round trips.
+// round trips. A FRESH budget of its own, never what the approval before it
+// left over: a re-activation that took its whole budget must still leave the
+// session saying how it ended.
 const deviceFinalWriteBudget = 10 * time.Second
+
+// deviceApproveBudget bounds what an approval does before that write: export
+// the login, seal it, and re-activate the revision so every node restores it.
+// The budget the engine already gives the re-activation a sealed credential
+// asks for ([setup.RecordDeadline], which [Engine.rebuildForSealedSecrets]
+// runs under): an apply rebuilds every entry, which the export and the seal
+// are seconds beside.
+const deviceApproveBudget = setup.RecordDeadline
 
 var (
 	// ErrSignInInProgress is a start for an entry whose session is running.
@@ -111,14 +122,30 @@ type deviceSignIns struct {
 	cancel context.CancelFunc
 	done   chan struct{}
 
+	// stopping refuses new sessions once the node has begun ending them:
+	// set under mu before [Engine.stopDeviceSignIns] waits on sessions, and
+	// read under mu where a start adds to it, so no session is added to a
+	// wait that has begun.
+	stopping bool
+
 	// login is cliagent.DeviceLogin outside a test.
 	login func(ctx context.Context, p *cliagent.Provider, out func(cliagent.DeviceCode)) error
+
+	// approveBudget and finalBudget are [deviceApproveBudget] and
+	// [deviceFinalWriteBudget] outside a test.
+	approveBudget, finalBudget time.Duration
 }
 
-// deviceSession is one session this node runs.
+// deviceSession is one session this node runs: reserved under the entry's key
+// before its record is claimed, so neither a second start on this node nor
+// this node's own sweep reads the session as nobody's while its record is
+// being written ([Engine.sessionOver]).
 type deviceSession struct {
 	id     uuid.UUID
+	record coord.DeviceSignIn
 	cancel context.CancelCauseFunc
+	// done is closed once the session's last write is made.
+	done chan struct{}
 }
 
 // errSessionCancelled and errNodeStopping are why a session's context ended.
@@ -169,6 +196,7 @@ func (e *Engine) startDeviceSignIns(ctx context.Context) {
 func (e *Engine) stopDeviceSignIns() {
 	d := &e.signIns
 	d.mu.Lock()
+	d.stopping = true
 	cancel, done := d.cancel, d.done
 	for _, s := range d.running {
 		s.cancel(errNodeStopping)
@@ -204,38 +232,26 @@ func (e *Engine) StartDeviceSignIn(ctx context.Context, key string, by iam.Actor
 		StartedAt: now, ExpiresAt: now.Add(deviceCodeWait + deviceCodeLifetime),
 		By: by.Name, ByKind: by.Kind, OperatorID: by.OperatorID,
 	}
-	stored, err := e.claimDeviceSignIn(ctx, record)
+	session, login, err := e.reserveDeviceSession(record)
 	if err != nil {
 		return coord.DeviceSignIn{}, err
 	}
+	stored, err := e.claimDeviceSignIn(ctx, record)
+	if err != nil {
+		e.unreserveDeviceSession(session.deviceSession, false)
+		return coord.DeviceSignIn{}, err
+	}
 
-	d := &e.signIns
-	d.mu.Lock()
-	if d.base == nil {
-		d.mu.Unlock()
-		return coord.DeviceSignIn{}, errors.New("engine: this node runs no device sign-ins: it has not started")
+	type coded struct {
+		record coord.DeviceSignIn
+		err    error
 	}
-	// THE NODE'S LIFETIME, NOT THE REQUEST'S: the session outlives the
-	// request that started it (the person approves minutes later), and ends
-	// with the node, which fails it ([Engine.stopDeviceSignIns]).
-	sessionCtx, cancel := context.WithCancelCause(d.base)
-	if d.running == nil {
-		d.running = map[string]*deviceSession{}
-	}
-	d.running[key] = &deviceSession{id: stored.ID, cancel: cancel}
-	login := d.login
-	if login == nil {
-		login = cliagent.DeviceLogin
-	}
-	d.sessions.Add(1)
-	d.mu.Unlock()
-
-	coded := make(chan coord.DeviceSignIn, 1)
+	codes := make(chan coded, 1)
 	ended := make(chan coord.DeviceSignIn, 1)
+	sessionCtx, cancel := session.ctx, session.cancel
 	go func() {
-		defer d.sessions.Done()
 		defer cancel(nil)
-		err := login(sessionCtx, agent, func(code cliagent.DeviceCode) {
+		loginErr := login(sessionCtx, agent, func(code cliagent.DeviceCode) {
 			pending, werr := e.updateDeviceSignIn(sessionCtx, key, stored.ID, func(s *coord.DeviceSignIn) bool {
 				if s.Status.Ended() {
 					return false
@@ -250,41 +266,131 @@ func (e *Engine) StartDeviceSignIn(ctx context.Context, key string, by iam.Actor
 				return true
 			})
 			if werr != nil {
+				// A CODE NOBODY CAN READ IS NO SIGN-IN: the person
+				// is shown nothing to approve, so the session ends
+				// here, saying why, rather than waiting out a code
+				// on a record that never got it.
+				werr = fmt.Errorf("the device code could not be recorded for the person to read: %w", werr)
 				log.WarnContext(sessionCtx, "device_sign_in_not_recorded", "provider", key, "error", werr)
+				cancel(werr)
 			}
 			select {
-			case coded <- pending:
+			case codes <- coded{record: pending, err: werr}:
 			default:
 			}
 		})
-		final := e.endDeviceSignIn(sessionCtx, key, stored.ID, agent, by, err)
-		d.mu.Lock()
-		if s := d.running[key]; s != nil && s.id == stored.ID {
-			delete(d.running, key)
-		}
-		d.mu.Unlock()
+		final := e.endDeviceSignIn(sessionCtx, key, stored.ID, agent, by, loginErr)
+		e.unreserveDeviceSession(session.deviceSession, true)
 		ended <- final
 	}()
 
+	// endOf is the session's end, once it is cancelled: what its record
+	// says, or, where the person's request ends first, the session as it
+	// was claimed. A CLI slow to exit holds the session, never the request.
+	endOf := func() (coord.DeviceSignIn, bool) {
+		select {
+		case final := <-ended:
+			return final, true
+		case <-ctx.Done():
+			return stored, false
+		}
+	}
 	wait := time.NewTimer(deviceCodeWait)
 	defer wait.Stop()
 	select {
-	case pending := <-coded:
-		return pending, nil
+	case got := <-codes:
+		if got.err != nil {
+			final, _ := endOf()
+			return final, fmt.Errorf("%w: %w", ErrDeviceSignInUnavailable, got.err)
+		}
+		return got.record, nil
 	case final := <-ended:
-		if final.Status == coord.DevicePending || final.Status == coord.DeviceApproved {
+		if final.Status == coord.DeviceApproved {
 			return final, nil
 		}
 		return final, fmt.Errorf("%w: %s", ErrDeviceSignInUnavailable, final.Detail)
 	case <-wait.C:
-		cancel(fmt.Errorf("the CLI printed no device code within %s", deviceCodeWait))
-		final := <-ended
+		why := fmt.Errorf("the CLI printed no device code within %s", deviceCodeWait)
+		cancel(why)
+		final, ok := endOf()
+		if !ok {
+			return final, fmt.Errorf("%w: %w", ErrDeviceSignInUnavailable, why)
+		}
 		return final, fmt.Errorf("%w: %s", ErrDeviceSignInUnavailable, final.Detail)
 	case <-ctx.Done():
 		// The person's request ended; the session goes on, and its record
 		// says how it is doing.
 		return stored, ctx.Err()
 	}
+}
+
+// reservedSession is a session reserved on this node and the context it runs
+// under.
+type reservedSession struct {
+	*deviceSession
+	ctx context.Context
+}
+
+// reserveDeviceSession reserves record's entry for a session on this node:
+// refused while the node is stopping or has not started, and with a
+// [SignInInProgressError] where this node already runs one for the entry. The
+// session counts in the node's wait from here, so a stop that begins after
+// this waits for it.
+func (e *Engine) reserveDeviceSession(record coord.DeviceSignIn) (reservedSession,
+	func(context.Context, *cliagent.Provider, func(cliagent.DeviceCode)) error, error) {
+
+	d := &e.signIns
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	switch {
+	case d.base == nil:
+		return reservedSession{}, nil, errors.New("engine: this node runs no device sign-ins: it has not started")
+	case d.stopping:
+		return reservedSession{}, nil, fmt.Errorf("%w: %w", ErrDeviceSignInUnavailable, errNodeStopping)
+	}
+	if running := d.running[record.Entry]; running != nil {
+		return reservedSession{}, nil, &SignInInProgressError{Running: running.record}
+	}
+	// THE NODE'S LIFETIME, NOT THE REQUEST'S: the session outlives the
+	// request that started it (the person approves minutes later), and ends
+	// with the node, which fails it ([Engine.stopDeviceSignIns]).
+	ctx, cancel := context.WithCancelCause(d.base)
+	session := &deviceSession{id: record.ID, record: record, cancel: cancel, done: make(chan struct{})}
+	if d.running == nil {
+		d.running = map[string]*deviceSession{}
+	}
+	d.running[record.Entry] = session
+	d.sessions.Add(1)
+	login := d.login
+	if login == nil {
+		login = cliagent.DeviceLogin
+	}
+	return reservedSession{deviceSession: session, ctx: ctx}, login, nil
+}
+
+// budget is a test's budget where it set one, else the constant.
+func (d *deviceSignIns) budget(set, constant time.Duration) time.Duration {
+	if set > 0 {
+		return set
+	}
+	return constant
+}
+
+// unreserveDeviceSession takes a session off this node's entries once it is
+// over (ran) or was never started (its claim refused), says it is done, and
+// takes it out of the node's wait.
+func (e *Engine) unreserveDeviceSession(s *deviceSession, ran bool) {
+	d := &e.signIns
+	d.mu.Lock()
+	if running := d.running[s.record.Entry]; running == s {
+		delete(d.running, s.record.Entry)
+	}
+	d.mu.Unlock()
+	if !ran {
+		s.cancel(nil)
+	}
+	close(s.done)
+	d.sessions.Done()
 }
 
 // deviceEntry is an entry a device sign-in can sign in, with its config.
@@ -400,15 +506,16 @@ func (e *Engine) updateDeviceSignIn(ctx context.Context, key string, id uuid.UUI
 func (e *Engine) endDeviceSignIn(sessionCtx context.Context, key string, id uuid.UUID,
 	agent *cliagent.Provider, by iam.Actor, loginErr error) coord.DeviceSignIn {
 
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(sessionCtx), deviceFinalWriteBudget)
-	defer cancel()
 	status, detail := coord.DeviceApproved, ""
 	var revision string
 	var epoch uint64
 	switch cause := context.Cause(sessionCtx); {
 	case loginErr == nil:
+		approving, cancel := context.WithTimeout(context.WithoutCancel(sessionCtx),
+			e.signIns.budget(e.signIns.approveBudget, deviceApproveBudget))
 		var err error
-		revision, epoch, err = e.sealDeviceLogin(ctx, key, agent, by)
+		revision, epoch, err = e.sealDeviceLogin(approving, key, agent, by)
+		cancel()
 		if err != nil {
 			// THE CLI SIGNED IN, so the session is approved; where the
 			// login could not be stored or carried to the fleet, the
@@ -424,6 +531,9 @@ func (e *Engine) endDeviceSignIn(sessionCtx context.Context, key string, id uuid
 	default:
 		status, detail = coord.DeviceFailed, loginErr.Error()
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(sessionCtx),
+		e.signIns.budget(e.signIns.finalBudget, deviceFinalWriteBudget))
+	defer cancel()
 	final, err := e.updateDeviceSignIn(ctx, key, id, func(s *coord.DeviceSignIn) bool {
 		s.Status, s.Detail, s.RevisionID, s.Epoch = status, detail, revision, epoch
 		return true
@@ -513,12 +623,12 @@ func (e *Engine) CancelDeviceSignIn(ctx context.Context, id uuid.UUID, by iam.Ac
 		running.cancel(errSessionCancelled)
 		log.InfoContext(ctx, "device_sign_in_cancelled", "provider", held.Entry,
 			"session", id.String(), "by", by.Name)
-		deadline := time.Now().Add(deviceFinalWriteBudget)
-		for time.Now().Before(deadline) {
-			if now, err := e.DeviceSignIn(ctx, id); err == nil && now.Status.Ended() {
-				return now, nil
-			}
-			time.Sleep(50 * time.Millisecond)
+		// THE SESSION'S OWN END, which its last write precedes: answered
+		// as it ended, or as it stands where the caller stops waiting.
+		select {
+		case <-running.done:
+		case <-ctx.Done():
+			return coord.DeviceSignIn{}, ctx.Err()
 		}
 		return e.DeviceSignIn(ctx, id)
 	}
@@ -568,21 +678,38 @@ func (e *Engine) heardDeviceSignIn(_ context.Context, s coord.DeviceSignIn) {
 func (e *Engine) sweepDeviceSignIns(ctx context.Context) {
 	fleet := e.backends.Fleet
 	all, err := fleet.ListDeviceSignIns(ctx)
-	if err != nil || len(all) == 0 {
+	if err != nil {
+		log.WarnContext(ctx, "device_sign_ins_not_swept", "error", err,
+			"detail", "the sessions could not be listed; the next sweep tries again")
+		return
+	}
+	if len(all) == 0 {
 		return
 	}
 	live, err := e.liveNodeSet(ctx)
 	if err != nil {
+		log.WarnContext(ctx, "device_sign_ins_not_swept", "error", err,
+			"detail", "the live nodes could not be listed, so no session is judged orphaned "+
+				"on this sweep")
 		return
 	}
 	for _, s := range all {
 		switch {
 		case s.Lapsed(e.now()):
-			_, _ = fleet.DeleteDeviceSignIn(ctx, s.Entry, s.Version)
+			if _, err := fleet.DeleteDeviceSignIn(ctx, s.Entry, s.Version); err != nil {
+				log.WarnContext(ctx, "device_sign_in_not_removed", "provider", s.Entry,
+					"session", s.ID.String(), "error", err,
+					"detail", "a lapsed session reads as absent everywhere; the next sweep removes it")
+			}
 		case !s.Status.Ended() && e.sessionOver(s, live):
 			failed := s
 			failed.Status, failed.Detail = coord.DeviceFailed, errNodeStopping.Error()
-			if _, ok, err := fleet.UpdateDeviceSignIn(ctx, failed); err == nil && ok {
+			_, ok, err := fleet.UpdateDeviceSignIn(ctx, failed)
+			switch {
+			case err != nil:
+				log.WarnContext(ctx, "device_sign_in_orphan_not_failed", "provider", s.Entry,
+					"session", s.ID.String(), "node", s.Node, "error", err)
+			case ok:
 				log.InfoContext(ctx, "device_sign_in_orphaned", "provider", s.Entry,
 					"session", s.ID.String(), "node", s.Node,
 					"detail", "the node running the sign-in is gone; the session is failed so "+

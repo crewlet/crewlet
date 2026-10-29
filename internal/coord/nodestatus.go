@@ -2,6 +2,7 @@ package coord
 
 import (
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -190,8 +191,13 @@ type ModelStatus struct {
 	LastFailure *ModelFailure
 
 	// Parked is the seats THIS node holds parked on a chain naming the
-	// entry, by agent id as MCP rows name seats (ADR-0013), ordered by id.
-	Parked []ParkedSeat
+	// entry, by agent id as MCP rows name seats (ADR-0013). On the wire it is
+	// the [MaxModelParkedSeats] longest-waiting of them; ParkedCount is how
+	// many there are and ParkedSince when the first of them parked, so a
+	// reader says "and N more" and dates the wait without the whole list.
+	Parked      []ParkedSeat
+	ParkedCount int
+	ParkedSince time.Time
 
 	// HostLogin is the entry's CLI login on this node's disk, only for an
 	// entry that signs in with credential files: nil for every other.
@@ -319,6 +325,14 @@ const ModelPlanChars = 12
 // beat re-sent every [ReconcileInterval]; the whole sentence is in the node's
 // own `cli_agent_limit_reported` line.
 const MaxModelSaidBytes = 240
+
+// MaxModelParkedSeats bounds the parked seats a model row names on the wire:
+// EIGHT, the longest-waiting first. A row's size must not grow with the
+// company: every seat of a hundred-seat company parked on one plan would put
+// a hundred ids on a beat re-sent every [ReconcileInterval]. Eight is what a
+// person reads before "and N more", and the count and the earliest instant
+// travel whole beside them.
+const MaxModelParkedSeats = 8
 
 // MaxModelAccountBytes bounds a host login's account (an email or an org
 // name): 120 bytes, past any real address, so a CLI that printed something
@@ -524,11 +538,25 @@ func (m ModelStatus) meta() map[string]any {
 		}
 	}
 	if len(m.Parked) > 0 {
-		parked := make([]map[string]any, len(m.Parked))
-		for i, p := range m.Parked {
+		named := slices.Clone(m.Parked)
+		slices.SortFunc(named, func(a, b ParkedSeat) int {
+			if c := a.Since.Compare(b.Since); c != 0 {
+				return c
+			}
+			return strings.Compare(a.Seat.String(), b.Seat.String())
+		})
+		count, since := max(m.ParkedCount, len(named)), named[0].Since
+		if !m.ParkedSince.IsZero() && m.ParkedSince.Before(since) {
+			since = m.ParkedSince
+		}
+		named = named[:min(len(named), MaxModelParkedSeats)]
+		parked := make([]map[string]any, len(named))
+		for i, p := range named {
 			parked[i] = map[string]any{"seat": p.Seat.String(), "since": stamp(p.Since)}
 		}
 		row["parked"] = parked
+		row["parked_count"] = count
+		row["parked_since"] = stamp(since)
 	}
 	if h := m.HostLogin; h != nil {
 		login := map[string]any{"state": string(h.State), "checked_at": stamp(h.CheckedAt)}
@@ -679,6 +707,8 @@ func modelFromMeta(row map[string]any) (ModelStatus, bool) {
 			Said: stringFromMeta(f["said"]),
 		}
 	}
+	m.ParkedCount = intFromMeta(row["parked_count"])
+	m.ParkedSince = instant(row["parked_since"])
 	for _, p := range listFromMeta(row["parked"]) {
 		seat, ok := p.(map[string]any)
 		if !ok {
