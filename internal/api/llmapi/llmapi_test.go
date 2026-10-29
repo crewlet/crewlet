@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 var clock = time.Date(2026, 10, 28, 22, 0, 0, 0, time.UTC)
@@ -50,6 +51,10 @@ providers:
     codex-review:
       agent: codex
       model: gpt-6.1-sol
+    gateway:
+      model: sonnet
+      auth: {mode: api-key, api_key: "${GATEWAY_KEY}"}
+      env: {ANTHROPIC_BASE_URL: "${GATEWAY_URL}"}
 roles:
   - name: QA
     handle: qa
@@ -167,6 +172,8 @@ func (c *fakeConfig) Reload(ctx context.Context, summary string, _ iam.Actor, ex
 type stored struct {
 	value  string
 	source secrets.Source
+	// op is the operation key of the create that sealed the row.
+	op string
 }
 
 type fakeSecrets struct {
@@ -184,16 +191,41 @@ func (s *fakeSecrets) Describe(_ context.Context, name string) (secrets.Record, 
 }
 
 func (s *fakeSecrets) Create(ctx context.Context, name, value string, _ secrets.Author,
-	source secrets.Source, _ time.Time) (bool, error) {
+	source secrets.Source, _ time.Time, opID string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.refuse[name]; err != nil {
+		return false, err
+	}
 	if _, held := s.rows[name]; held {
 		return false, nil
 	}
-	s.rows[name] = stored{value, source}
+	s.rows[name] = stored{value, source, opID}
+	return true, nil
+}
+
+func (s *fakeSecrets) OpOf(_ context.Context, name string) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row, ok := s.rows[name]
+	return row.op, ok, nil
+}
+
+func (s *fakeSecrets) Reclaim(_ context.Context, name, value string, _ secrets.Author,
+	source secrets.Source, _ time.Time, opID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.refuse[name]; err != nil {
+		return false, err
+	}
+	row, ok := s.rows[name]
+	if !ok || opID == "" || row.op != opID {
+		return false, nil
+	}
+	s.rows[name] = stored{value, source, opID}
 	return true, nil
 }
 
@@ -207,7 +239,7 @@ func (s *fakeSecrets) Set(ctx context.Context, name, value string, _ secrets.Aut
 	if err := s.refuse[name]; err != nil {
 		return err
 	}
-	s.rows[name] = stored{value, source}
+	s.rows[name] = stored{value: value, source: source}
 	return nil
 }
 
@@ -282,6 +314,13 @@ func newRig(t *testing.T) *rig {
 // newRigAs is [newRig] served as caller.
 func newRigAs(t *testing.T, caller iam.Principal) *rig {
 	t.Helper()
+	return newRigOver(t, caller, &fakeSecrets{rows: map[string]stored{}})
+}
+
+// newRigOver is [newRigAs] over the secret store store, which another rig may
+// share.
+func newRigOver(t *testing.T, caller iam.Principal, store *fakeSecrets) *rig {
+	t.Helper()
 	doc, err := config.ParseCompany([]byte(company))
 	if err != nil {
 		t.Fatal(err)
@@ -290,7 +329,7 @@ func newRigAs(t *testing.T, caller iam.Principal) *rig {
 		Elapsed: 3400 * time.Millisecond, Hints: map[string]string{"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-…7d2K"},
 		Lines: []cliagent.Check{{Name: cliagent.CheckBinary, OK: true, Detail: "claude at /usr/local/bin/claude"}}},
 		running: 1},
-		config: &fakeConfig{doc: doc}, secrets: &fakeSecrets{rows: map[string]stored{}},
+		config: &fakeConfig{doc: doc}, secrets: store,
 		audit: &audit{}, leases: coordmemory.New(), guard: &recordingGuard{deny: map[authz.Action]bool{}}}
 	svc, err := llmapi.New(llmapi.Options{Engine: r.engine, Config: r.config, Secrets: r.secrets,
 		Leases: r.leases, Audit: r.audit, Node: "node-a", Now: func() time.Time { return clock },
@@ -832,7 +871,7 @@ func TestACreateNeverSealsOverAValueStoredDuringItsTest(t *testing.T) {
 	r := newRig(t)
 	r.engine.onCheck = func() {
 		r.secrets.mu.Lock()
-		r.secrets.rows["ANTHROPIC_API_KEY_SONNET"] = stored{"theirs", secrets.SourceCLI}
+		r.secrets.rows["ANTHROPIC_API_KEY_SONNET"] = stored{value: "theirs", source: secrets.SourceCLI}
 		r.secrets.mu.Unlock()
 	}
 	code, body := r.do(t, http.MethodPut, "/llm/providers/sonnet/credential", sonnetKey,
@@ -872,5 +911,132 @@ func TestACallTheGuardRefusesIsAudited(t *testing.T) {
 	if row := r.audit.last(t); row.Action != types.ModelDeviceSignInCancel ||
 		row.Outcome != types.AuditRefused || row.Refusal != "step_up_required" {
 		t.Errorf("the step-up refusal is audited as %+v", row)
+	}
+}
+
+// gatewayCreate is a create of both values the gateway entry reads.
+const gatewayCreate = `{"values": {"GATEWAY_KEY": "sk-ant-api03-a-gateway-key-0000",
+	"GATEWAY_URL": "https://gw.example.com"}}`
+
+// createAs is a create-only credential write of body for the gateway entry, with
+// the operation key key ("" for none).
+func createAs(t *testing.T, r *rig, body, key string) (int, map[string]any) {
+	t.Helper()
+	headers := map[string]string{"If-None-Match": "*"}
+	if key != "" {
+		headers["Idempotency-Key"] = key
+	}
+	return r.do(t, http.MethodPut, "/llm/providers/gateway/credential", body, headers)
+}
+
+// A CREATE THAT STOPPED PART WAY IS FINISHED BY ITS OWN RETRY, KNOWN BY ITS KEY.
+//
+// A create of several names seals them one at a time; one that stopped after
+// the first left it stored, and a retry of the same body was refused 412 on
+// what that very request sealed. The rows a create seals carry its operation
+// key, and the same request sent again under that key re-seals them with the
+// values it sends now, never reading what is stored: a changed value lands,
+// and nothing about a stored value is answered. Without the key, or under
+// another, the names are another's and refused.
+func TestARetriedCreateFinishesWhatItsKeySealed(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.secrets.refuse = map[string]error{"GATEWAY_URL": context.DeadlineExceeded}
+	code, body := createAs(t, r, gatewayCreate, "")
+	if sealed, _ := json.Marshal(body["sealed"]); code != http.StatusInternalServerError ||
+		string(sealed) != `["GATEWAY_KEY"]` {
+		t.Fatalf("the first attempt = %d %v, want it stopped after GATEWAY_KEY", code, body)
+	}
+	key, _ := body["op_id"].(string)
+	if key == "" {
+		t.Fatalf("the stopped attempt names no op_id to retry with: %v", body)
+	}
+	r.secrets.refuse = nil
+
+	if code, body := createAs(t, r, gatewayCreate, ""); code != http.StatusPreconditionFailed {
+		t.Errorf("a retry with no key = %d %v, want 412", code, body)
+	}
+	if code, body := createAs(t, r, gatewayCreate, statelog.NewOpID(clock, "")); code != http.StatusPreconditionFailed {
+		t.Errorf("a retry under another key = %d %v, want 412", code, body)
+	}
+
+	// THE SAME KEY, A CHANGED VALUE: the end state is the retry's.
+	changed := `{"values": {"GATEWAY_KEY": "sk-ant-api03-a-corrected-key-1111",
+		"GATEWAY_URL": "https://gw.example.com"}}`
+	code, body = createAs(t, r, changed, key)
+	if code != http.StatusOK {
+		t.Fatalf("the retry under its key = %d %v, want it to finish", code, body)
+	}
+	if got := r.secrets.rows["GATEWAY_KEY"].value; got != "sk-ant-api03-a-corrected-key-1111" {
+		t.Errorf("GATEWAY_KEY is %q, want the retried request's value", got)
+	}
+	if got := r.secrets.rows["GATEWAY_URL"].value; got != "https://gw.example.com" {
+		t.Errorf("GATEWAY_URL is %q", got)
+	}
+	if raw, _ := json.Marshal(body); strings.Contains(string(raw), key) {
+		t.Errorf("a successful answer carries the operation key: %s", raw)
+	}
+	if raw, _ := json.Marshal(r.audit.rows); strings.Contains(string(raw), key) {
+		t.Errorf("the audit carries the operation key: %s", raw)
+	}
+}
+
+// A GUESS AT ANOTHER REQUEST'S VALUE LEARNS NOTHING.
+//
+// A create naming a secret another request sealed is 412 whether the value it
+// sends equals what is stored or not, with the same answer, and the stored
+// value is untouched: a create that told the two apart would let a caller
+// test guesses against a write-only secret.
+func TestACreateNeverAnswersWhetherAGuessMatches(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	if code, body := createAs(t, r, gatewayCreate, ""); code != http.StatusOK {
+		t.Fatalf("the first create = %d %v", code, body)
+	}
+	wrong := `{"values": {"GATEWAY_KEY": "sk-ant-api03-a-wrong-guess-9999",
+		"GATEWAY_URL": "https://gw.example.com"}}`
+	var answers []string
+	for _, guess := range []string{gatewayCreate, wrong} {
+		code, body := createAs(t, r, guess, "")
+		if code != http.StatusPreconditionFailed {
+			t.Errorf("a guess = %d %v, want 412 whether or not it matches", code, body)
+		}
+		delete(body, "op_id")
+		raw, _ := json.Marshal(body)
+		answers = append(answers, string(raw))
+	}
+	if answers[0] != answers[1] {
+		t.Errorf("a matching and a wrong guess are answered apart:\n%s\n%s", answers[0], answers[1])
+	}
+	if got := r.secrets.rows["GATEWAY_KEY"].value; got != "sk-ant-api03-a-gateway-key-0000" {
+		t.Errorf("a guess changed the stored value: %q", got)
+	}
+}
+
+// A KEY IS ITS PRINCIPAL'S, AND ITS DAY'S. Another principal sending the same
+// key, and a key past [llmapi.CreateRetryWindow], finish nothing.
+func TestACreatesKeyIsItsPrincipalsAndExpires(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.secrets.refuse = map[string]error{"GATEWAY_URL": context.DeadlineExceeded}
+	_, body := createAs(t, r, gatewayCreate, "")
+	key, _ := body["op_id"].(string)
+	r.secrets.refuse = nil
+
+	other := newRigOver(t, iam.Principal{ID: uuid.New(), Login: iam.TokenLogin("other"),
+		Kind: iam.KindMachine, Stage: iam.StageActive, Grants: iam.AllGrants,
+		ReauthAt: time.Now().Add(time.Hour)}, r.secrets)
+	if code, body := createAs(t, other, gatewayCreate, key); code != http.StatusPreconditionFailed {
+		t.Errorf("another principal under the same key = %d %v, want 412", code, body)
+	}
+
+	old := newRig(t)
+	stale := statelog.NewOpID(clock.Add(-llmapi.CreateRetryWindow-time.Hour), "")
+	old.secrets.refuse = map[string]error{"GATEWAY_URL": context.DeadlineExceeded}
+	_, body = createAs(t, old, gatewayCreate, stale)
+	staleKey, _ := body["op_id"].(string)
+	old.secrets.refuse = nil
+	if code, body := createAs(t, old, gatewayCreate, staleKey); code != http.StatusPreconditionFailed {
+		t.Errorf("a key past the retry window = %d %v, want 412", code, body)
 	}
 }
