@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -286,10 +287,14 @@ func TestAPathOwnerGrantsNothing(t *testing.T) {
 // one repository that does not — every resolution of a repository, a tool's
 // once a turn among them — and a refs listing's first page answer its detail
 // without them, one that does answers them in their one form, and every other
-// kind refuses the ask, naming it: no other read answers them.
+// kind refuses the ask, naming it: no other read answers them. Every kind
+// this build reads is asked (code.ReadKinds), so a kind added later is named
+// here or the test fails: a duty listing with a validator of its own, which
+// lists every field it refuses, cannot leave the ask out unseen.
 //
-// Mutation: read the path owners on every detail (Reader.repo's ask dropped)
-// — a resolution answers them, red.
+// Mutations: read the path owners on every detail (Reader.repo's ask
+// dropped) — a resolution answers them, red; drop path_owners from the
+// checks_due listing's refused fields — its read takes the ask, red.
 func TestOnlyAReadThatAsksIsAnsweredThePathOwners(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -318,27 +323,44 @@ func TestOnlyAReadThatAsksIsAnsweredThePathOwners(t *testing.T) {
 		t.Errorf("a read of web that asks for its path owners = (%+v, %v), want %+v", asked.Repo, err,
 			s.PathOwners)
 	}
-	for _, q := range []code.ReadQuery{
-		{Kind: code.ReadRepos},
-		{Kind: code.ReadRefs, Repo: "web"},
-		{Kind: code.ReadPushes, Repo: "web"},
-		{Kind: code.ReadChanges, Repo: "web"},
-	} {
-		q.PathOwners = true
-		if _, err := read(q); !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), "path_owners") {
-			t.Errorf("a %s read asking for path owners = %v, want ErrInvalid naming path_owners", q.Kind, err)
-		}
+	// Each kind as it is read — a principal's with its asker, the engine's
+	// own with none, and whatever else the kind requires — so that without
+	// the ask no field of it is refused, and with it the ask is.
+	launch := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}
+	asks := map[code.ReadKind]code.ReadQuery{
+		code.ReadRepos:   {Asker: asker},
+		code.ReadPushes:  {Asker: asker, Repo: "web"},
+		code.ReadRefs:    {Asker: asker, Repo: "web"},
+		code.ReadChanges: {Asker: asker, Repo: "web"},
+		code.ReadChange:  {Asker: asker, Repo: "web", Change: 1},
+		code.ReadChecks:  {Asker: asker, Repo: "web"},
+		code.ReadCheck: {Asker: asker, Repo: "web",
+			Checks: &code.CheckQuery{OID: strings.Repeat("6", 40), Name: "unit", Attempt: 1}},
+		code.ReadIntroduced:     {Introduced: &code.IntroducedQuery{RepoID: id}},
+		code.ReadRunPushes:      {RunPushes: &code.RunPushesQuery{Run: runA, Repos: []string{id}, After: launch}},
+		code.ReadCompactionDue:  {MinPacks: 1},
+		code.ReadPublicationDue: {},
+		code.ReadExpungeDue:     {},
+		code.ReadChangesDue:     {ChangesDue: &code.ChangesDueQuery{RecheckBefore: t1}},
+		code.ReadChecksDue:      {},
 	}
-	for _, q := range []code.ReadQuery{
-		{Kind: code.ReadCompactionDue, MinPacks: 1},
-		{Kind: code.ReadPublicationDue},
-		{Kind: code.ReadExpungeDue},
-		{Kind: code.ReadChangesDue, ChangesDue: &code.ChangesDueQuery{RecheckBefore: t1}},
-	} {
+	for _, kind := range code.ReadKinds() {
+		q, named := asks[kind]
+		switch {
+		case kind == code.ReadRepo:
+			continue
+		case !named:
+			t.Errorf("a %s read is never asked for path owners here: name it, so its refusal is held", kind)
+			continue
+		}
+		q.Kind = kind
+		if _, err := n.reader.Read(t.Context(), q); errors.Is(err, code.ErrInvalid) {
+			t.Errorf("a %s read that asks for no path owners = %v, want no field refused", kind, err)
+		}
 		q.PathOwners = true
 		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrInvalid) ||
 			!strings.Contains(err.Error(), "path_owners") {
-			t.Errorf("a %s read asking for path owners = %v, want ErrInvalid naming path_owners", q.Kind, err)
+			t.Errorf("a %s read asking for path owners = %v, want ErrInvalid naming path_owners", kind, err)
 		}
 	}
 }
