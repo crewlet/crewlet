@@ -61,10 +61,10 @@ import (
 // # Its tables
 //
 // code_mergeability, one row a change (replicated 0077), written by the
-// records on the change's own subject and removed only with the change by its
-// repository's purge. Its conflicted paths' bytes count in the change's
-// conversation's text_bytes, as its revisions' facts do, so a purge part
-// weighs them by that one narrow row.
+// applier (apply_mergeability.go) from the records on the change's own subject
+// and removed only with the change by its repository's purge. Its conflicted
+// paths' bytes count in the change's conversation's text_bytes, as its
+// revisions' facts do, so a purge part weighs them by that one narrow row.
 
 // MergeState is what a change's head revision does merged into its target's
 // tip (code_mergeability.state): a closed set ([MergeStates]).
@@ -344,40 +344,6 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 	return d, nil
 }
 
-// applyMergeability writes a change's mergeability ([Mergeability]) — its one
-// row, replaced whole by every record the decide took — moving the change's
-// conversation's text_bytes by what the conflicted paths weigh, less what the
-// row they replace weighed, so a purge weighs the change's subject's wide rows
-// by its one narrow row. The row's instant is the record's broker instant,
-// which its home's next recheck is paced by (changesdue.go).
-//
-// PURE IN THE RECORD, its position, its broker instant and the prior row.
-func applyMergeability(ctx context.Context, tx *sql.Tx, at applyContext, m Mergeability) (int, conversationCounts,
-	error) {
-
-	if !m.State.Valid() {
-		return 0, conversationCounts{}, fmt.Errorf("code: the mergeability at %s says %q, which no writer forms",
-			at.position, m.State)
-	}
-	prior, held, err := mergeabilityIn(ctx, tx, m.ChangeID)
-	if err != nil {
-		return 0, conversationCounts{}, err
-	}
-	conflicts := strings.Join(m.Conflicts, "\x00")
-	weight := int64(len(conflicts))
-	if _, err := tx.ExecContext(ctx, writeMergeabilitySQL, m.ChangeID, m.Revision, m.TargetRef, m.TargetOID,
-		m.TargetPosition.Packed(), string(m.State), len(m.Conflicts), m.ConflictsOmitted, m.Node, weight,
-		at.packed, at.at(), conflicts); err != nil {
-		return 0, conversationCounts{}, fmt.Errorf("code: write %s's mergeability at %s: %w", m.ChangeID,
-			at.position, err)
-	}
-	counts := conversationCounts{textBytes: weight}
-	if held {
-		counts.textBytes -= prior.bytes
-	}
-	return 1, counts, nil
-}
-
 // MergeabilityRow is a change's mergeability as its home recorded it
 // (code_mergeability, [Mergeability]): the revision and the target's tip it
 // merged — the branch, the tip and the position that moved it there — what
@@ -492,21 +458,13 @@ type MergePreviewAnswer struct {
 	Position         statelog.Position `json:"position"`
 }
 
-// A mergeability's statements, each registered in plan_test.go: the row by its
-// key, a decide's and an apply's, and a read's whole; and its write by the
-// same key, the row replaced whole by every record the decide took.
+// A mergeability's reads, each registered in plan_test.go: the row by its key,
+// a decide's and an apply's, and a read's whole. Its write is the applier's
+// (apply_mergeability.go).
 const (
 	mergeabilitySQL = `SELECT revision, target_ref, target_position, state, bytes FROM code_mergeability
 		WHERE change_id = ?`
 	mergeabilityRowSQL = `SELECT revision, target_ref, target_oid, target_position, state, conflicts_omitted, node,
 			position, at, conflicts
 		FROM code_mergeability WHERE change_id = ?`
-	writeMergeabilitySQL = `INSERT INTO code_mergeability (change_id, revision, target_ref, target_oid,
-			target_position, state, conflicts_count, conflicts_omitted, node, bytes, position, at, conflicts)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (change_id) DO UPDATE SET revision = excluded.revision, target_ref = excluded.target_ref,
-			target_oid = excluded.target_oid, target_position = excluded.target_position, state = excluded.state,
-			conflicts_count = excluded.conflicts_count, conflicts_omitted = excluded.conflicts_omitted,
-			node = excluded.node, bytes = excluded.bytes, position = excluded.position, at = excluded.at,
-			conflicts = excluded.conflicts`
 )
