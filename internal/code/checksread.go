@@ -220,7 +220,7 @@ func (q ReadQuery) validateChecksDue() error {
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
-		{"path_owners", q.PathOwners},
+		{"path_owners", q.PathOwners}, {"expunge_tips", q.ExpungeTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a checks_due read lists the repositories a home owes check work in, or "+

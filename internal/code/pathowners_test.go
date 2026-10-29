@@ -341,6 +341,7 @@ func TestOnlyAReadThatAsksIsAnsweredThePathOwners(t *testing.T) {
 		code.ReadCompactionDue:  {MinPacks: 1},
 		code.ReadPublicationDue: {},
 		code.ReadExpungeDue:     {},
+		code.ReadExpungeTips:    {ExpungeTips: &code.ExpungeTipsQuery{RepoID: id, Since: t1}},
 		code.ReadChangesDue:     {ChangesDue: &code.ChangesDueQuery{RecheckBefore: t1}},
 		code.ReadChecksDue:      {},
 	}

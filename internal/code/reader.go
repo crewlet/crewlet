@@ -1895,6 +1895,8 @@ func (q ReadQuery) validateExpungeTips() error {
 		{"min_packs", q.MinPacks != 0}, {"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""},
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
+		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_tips read lists one repository's ref drops since an instant, a "+
