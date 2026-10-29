@@ -230,7 +230,9 @@ export function ByJob({ data, onFlow }: { data: ModelsData; onFlow: OnFlow }) {
                   options={options[c]}
                   byKey={byKey}
                   slow={(key) => slowFor(key, c)}
-                  onPick={(key) => onFlow("edit", key, { step: "assign", seat: s.handle, job: c })}
+                  onPick={(key) =>
+                    onFlow("edit", key, { step: "assign", add: [{ job: c, seat: s.handle }] })
+                  }
                 />
               ),
             })),
@@ -287,7 +289,7 @@ function AssistantLine({
                 emptyMessage="No model denies web tools yet"
                 onChange={(v) =>
                   String(v) !== key &&
-                  onFlow("edit", String(v), { step: "assign", job: "assistant" })
+                  onFlow("edit", String(v), { step: "assign", add: [{ job: "assistant" }] })
                 }
               />
             </span>

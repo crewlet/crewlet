@@ -195,11 +195,10 @@ test("every pick opens the picked model's wizard at Use it for, with only the se
       expect(onFlow).toHaveBeenCalledTimes(1);
       expect(onFlow).toHaveBeenCalledWith("edit", key, {
         step: "assign",
-        seat: seat.handle,
-        job: category,
+        add: [{ job: category, seat: seat.handle }],
       });
       const at = onFlow.mock.calls[0]![2] as Record<string, unknown>;
-      expect(Object.keys(at).sort()).toEqual(["job", "seat", "step"]);
+      expect(Object.keys(at).sort()).toEqual(["add", "step"]);
       expect(WIZARD_STEPS).toContain(at.step);
     }
   }
@@ -221,7 +220,10 @@ test("the assistant's picker offers only a model that denies web tools, and open
   fireEvent.mouseDown(
     screen.getAllByRole("option").find((o) => o.textContent?.startsWith("haiku"))!,
   );
-  expect(onFlow).toHaveBeenCalledWith("edit", "haiku", { step: "assign", job: "assistant" });
+  expect(onFlow).toHaveBeenCalledWith("edit", "haiku", {
+    step: "assign",
+    add: [{ job: "assistant" }],
+  });
 });
 
 test("a member reads every value, in the picker's type, with no picker", () => {

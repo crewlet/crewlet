@@ -49,7 +49,7 @@ export function Models({ id }: { id?: string }) {
       nav.to(["settings", "models", key], { flow: next });
       return;
     }
-    flow.open(next, key);
+    flow.open(next, key, at);
   };
   const model = useMemo(
     () => data.models.find((m) => m.key === flow.entry) ?? null,

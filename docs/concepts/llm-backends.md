@@ -3960,7 +3960,11 @@ cannot reach the catalogue offers the aliases, the page and free text.
 `llm_credential_expires_soon` at 7, `llm_sign_in_refused`, `llm_limit`, and
 `llm_limit_waiting` once a seat has waited 15 minutes) are the node's own
 evaluation, shown at the top of the page, on `/health` and in the alarm
-reference.
+reference. On the page each offers the gesture that fixes it: a credential's
+opens its sign-in, and a limit's is **Retry now**. A limit that holds seats
+also offers to move them, to a model that answers now (never one on the same
+plan, whose session or weekly limit holds it too) or to a new one, with the
+wizard's *Use it for* opened on those seats' categories.
 
 ## Operating it
 

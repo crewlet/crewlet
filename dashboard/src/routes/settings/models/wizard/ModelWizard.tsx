@@ -47,7 +47,7 @@ import {
 } from "../api.ts";
 import type { ModelsData, ModelView } from "../data.ts";
 import { failureWords, type SignInFacts } from "../flows/TestDialog.tsx";
-import type { WizardAt, WizardStep } from "../parts.tsx";
+import type { WizardAdd, WizardAt, WizardStep } from "../parts.tsx";
 import { CATEGORY_WORDS } from "../words.ts";
 import {
   METHODS,
@@ -183,38 +183,43 @@ function checkVerdict(lines: readonly CheckLine[], signIn: SignInFacts) {
   return { ok: true, message: smoke?.detail ?? "It answers." };
 }
 
-/** The draft an edit opens with: the model as written, plus the use its action is about. */
+/** The draft the wizard opens with: a new model or the model as written, plus the uses its action adds. */
 function openingDraft(
   data: ModelsData,
   editing: ModelView | undefined,
   target: WizardAt | undefined,
 ) {
-  if (!editing) {
-    const d = emptyDraft();
-    const taken = data.models.map((m) => m.admin?.sign_in.variable ?? "").filter(Boolean);
-    d.variable = suggestedVariable(d, taken);
-    // THE COMPANY'S FIRST MODEL does everything for every seat until a second one arrives.
-    if (data.models.length === 0 && data.seats.length > 0) {
-      d.intent = "all";
-      d.uses = usesForIntent(
-        "all",
-        data.seats.map((s) => s.handle),
-        false,
-      );
-    }
-    return d;
-  }
-  const d = draftOf(editing);
-  // A SEAT'S JOB PICKED ON BY JOB, or the assistant, arrives added, for Review to show and save.
-  if (target?.job === "assistant" && !d.uses.assistant) {
-    const uses = { ...d.uses, assistant: true };
-    return { ...d, uses, intent: intentOf(uses) };
-  }
-  if (target?.job && target.job !== "assistant" && target.seat) {
-    const uses = withCategory(d.uses, target.seat, target.job, true);
-    return { ...d, uses, intent: intentOf(uses) };
+  return withAdded(editing ? draftOf(editing) : newDraft(data), target?.add ?? []);
+}
+
+/** A new model's draft: a variable no other model reads, and for the company's first model, everything. */
+function newDraft(data: ModelsData): Draft {
+  const d = emptyDraft();
+  const taken = data.models.map((m) => m.admin?.sign_in.variable ?? "").filter(Boolean);
+  d.variable = suggestedVariable(d, taken);
+  // THE COMPANY'S FIRST MODEL does everything for every seat until a second one arrives.
+  if (data.models.length === 0 && data.seats.length > 0) {
+    d.intent = "all";
+    d.uses = usesForIntent(
+      "all",
+      data.seats.map((s) => s.handle),
+      false,
+    );
   }
   return d;
+}
+
+/**
+ * The draft with the uses an action asked for added (a seat's job picked on
+ * By job, the seats moved off a limit, the assistant), for Use it for to show
+ * checked and Review to save.
+ */
+function withAdded(d: Draft, add: readonly WizardAdd[]): Draft {
+  if (add.length === 0) return d;
+  let uses = d.uses;
+  for (const a of add)
+    uses = "seat" in a ? withCategory(uses, a.seat, a.job, true) : { ...uses, assistant: true };
+  return { ...d, uses, intent: intentOf(uses) };
 }
 
 export function ModelWizard({

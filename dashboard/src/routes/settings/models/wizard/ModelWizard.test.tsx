@@ -381,7 +381,7 @@ test("a Codex model on a ChatGPT sign-in is created, then handed to the device s
 });
 
 test("Review names the fallback the write drops, and says the test call has not run", async () => {
-  show({ editing: "sonnet", target: { step: "assign", seat: "qa", job: "reviews" } });
+  show({ editing: "sonnet", target: { step: "assign", add: [{ job: "reviews", seat: "qa" }] } });
   press("Review changes");
   await screen.findByText("The engine accepts this change");
   expect(
@@ -390,6 +390,29 @@ test("Review names the fallback the write drops, and says the test call has not 
   expect(screen.getByText("Not run")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Run test call" })).toBeTruthy();
   await act(async () => {});
+});
+
+/**
+ * QA M10: seats moved off a limit arrive at Use it for already added, on the
+ * model chosen and on a model being added alike, and nothing else is.
+ */
+test("the seats an alarm moves arrive added at Use it for, and only those", () => {
+  const add: WizardAt["add"] = [
+    { job: "coding", seat: "pm" },
+    { job: "routines", seat: "qa" },
+  ];
+  const box = (name: RegExp) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
+  show({ editing: "sonnet", target: { step: "assign", add } });
+  expect(heading()).toBe("Use it for");
+  expect(box(/^Product Manager: Coding on sonnet$/).checked).toBe(true);
+  expect(box(/^Quality Lead: Routines and evaluations on sonnet$/).checked).toBe(true);
+  expect(box(/^Product Manager: Reviewing and delegations on sonnet$/).checked).toBe(false);
+  expect(box(/^Backend Engineer: Coding on sonnet$/).checked).toBe(false);
+  cleanup();
+  show({ target: { step: "assign", add } });
+  expect(box(/^Product Manager: Coding on /).checked).toBe(true);
+  expect(box(/^Quality Lead: Routines and evaluations on /).checked).toBe(true);
+  expect(box(/^Quality Lead: Coding on /).checked).toBe(false);
 });
 
 test("focus starts on the step's heading, and Cancel gives it back to what opened the wizard", async () => {

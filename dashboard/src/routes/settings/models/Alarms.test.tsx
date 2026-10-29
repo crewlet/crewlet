@@ -5,11 +5,12 @@
  * The invariants: models reading one secret, or sharing one plan, are ONE
  * alarm; the title names the cause and the vendor's sentence never leads (QA
  * M11); seats and jobs are said by their names, never a handle (QA M8); the
- * worst alarm comes first; and every fix opens its flow through `onFlow` at
- * the right step with nothing chosen for the reader (the deep-link walk).
+ * worst alarm comes first; every fix opens its flow through `onFlow` at the
+ * right step with nothing chosen for the reader (the deep-link walk); and a
+ * limit holding seats offers to move them, with the seats added (QA M10).
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import type { ModelAlarm } from "~/protocol/models.ts";
@@ -223,17 +224,100 @@ test("every alarm's fix opens its flow at the right step, and arrives neutral", 
   expect(all.map((c) => c.title).sort()).toEqual(Object.keys(expected).sort());
   for (const callout of all) {
     onFlow.mockClear();
-    // ONE GESTURE per alarm.
-    expect(callout.el.querySelectorAll(".crewlet-callout__action button")).toHaveLength(1);
+    // ONE FIX per alarm; a limit holding seats adds the menu that moves them.
+    expect(callout.el.querySelectorAll(".crewlet-callout__action button")).toHaveLength(
+      callout.title.includes("limit") ? 2 : 1,
+    );
     fireEvent.click(callout.button!);
     expect(onFlow).toHaveBeenCalledTimes(1);
     expect(onFlow.mock.calls[0]).toEqual(expected[callout.title]);
     const at = onFlow.mock.calls[0]![2] as Record<string, unknown> | undefined;
     if (at) {
-      expect(Object.keys(at).every((k) => ["step", "focus", "seat", "job"].includes(k))).toBe(true);
+      expect(Object.keys(at).every((k) => ["step", "focus", "add"].includes(k))).toBe(true);
       expect(WIZARD_STEPS).toContain(at.step);
     }
   }
+});
+
+/**
+ * QA M10: a limit's seats are not left waiting for a reset. The second
+ * gesture moves them, every seat's category on the limited models, to a model
+ * that answers now (never one on the same plan, never one that cannot do the
+ * coding it would take), or to a model being added.
+ */
+test("a limit offers to move the seats it holds to a model that answers, with them added", () => {
+  const data = company();
+  // A READY MODEL whose CLI runs no coding cannot take coding, which these seats need.
+  data.models.push(
+    ...modelsData({
+      entries: [
+        modelEntry({ key: "codex-ready", agent: "codex", model: "gpt-6.1", health: "ready" }),
+        modelEntry({ key: "haiku", model: "claude-haiku-4-5", health: "ready" }),
+        // ON THE LIMITED PLAN: ready by its own last answer, held by the plan's limit all the same.
+        modelEntry({ key: "plan-mate", plan: "plan-a", health: "ready" }),
+      ],
+    }).models,
+  );
+  // A LIMITED MODEL that last answered is still the one the seats are moving off.
+  data.models.find((m) => m.key === "aux")!.entry.health = "ready";
+  const onFlow = mount(data);
+  const limit = callouts().find((c) => c.title.includes("limit"))!;
+  const trigger = within(limit.el).getByRole("button", {
+    name: "Use a different model for these seats",
+  });
+  // The fix comes first: Retry now is still the alarm's primary gesture.
+  expect(limit.button?.textContent).toBe("Retry now");
+  fireEvent.click(trigger);
+  const offered = screen.getAllByRole("menuitem").map((i) => i.textContent ?? "");
+  // opus is expiring but still answers; the refused, the unsigned, the limited, its plan's and the Codex model are not offered.
+  expect(offered.map((t) => t.split("claude")[0])).toEqual(["opus", "haiku", "Add a model"]);
+  const moved = [
+    { job: "coding", seat: "backend-engineer" },
+    { job: "reviews", seat: "backend-engineer" },
+    { job: "routines", seat: "backend-engineer" },
+  ];
+  fireEvent.click(screen.getAllByRole("menuitem").find((i) => i.textContent?.startsWith("haiku"))!);
+  expect(onFlow).toHaveBeenCalledWith("edit", "haiku", { step: "assign", add: moved });
+  onFlow.mockClear();
+  fireEvent.click(trigger);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Add a model" }));
+  expect(onFlow).toHaveBeenCalledWith("add", undefined, { step: "cli", add: moved });
+});
+
+test("a model's own limit holds that model alone, so its plan's other models are offered", () => {
+  const data = company();
+  for (const key of ["default", "aux"]) {
+    const m = data.models.find((x) => x.key === key)!;
+    m.entry.sitting_out = { ...m.entry.sitting_out!, window: "model" };
+  }
+  // A LIMITED MODEL is never offered back, whatever its last reading says.
+  data.models.find((m) => m.key === "aux")!.entry.health = "ready";
+  data.models.push(
+    ...modelsData({ entries: [modelEntry({ key: "plan-mate", plan: "plan-a", health: "ready" })] })
+      .models,
+  );
+  mount(data);
+  const limit = callouts().find((c) => c.title.includes("limit"))!;
+  fireEvent.click(
+    within(limit.el).getByRole("button", { name: "Use a different model for these seats" }),
+  );
+  expect(screen.getAllByRole("menuitem").map((i) => i.textContent?.split("claude")[0])).toEqual([
+    "opus",
+    "plan-mate",
+    "Add a model",
+  ]);
+});
+
+test("a limit that holds no seat offers no move", () => {
+  const data = company();
+  data.models.find((m) => m.key === "default")!.uses = data.models.find(
+    (m) => m.key === "aux",
+  )!.uses;
+  mount(data);
+  const limit = callouts().find((c) => c.title.includes("limit"))!;
+  expect(
+    within(limit.el).queryByRole("button", { name: "Use a different model for these seats" }),
+  ).toBeNull();
 });
 
 test("an alarm whose engine names no model is drawn in the engine's words, with no gesture", () => {

@@ -29,27 +29,54 @@ export const WIZARD_STEPS = [
 ] as const;
 export type WizardStep = (typeof WIZARD_STEPS)[number];
 
+/** A use the wizard opens with added to the model: one seat's category, or the assistant. */
+export type WizardAdd = { job: JobCategory; seat: string } | { job: "assistant" };
+
 /**
  * Where the model wizard opens: the step, the field to focus there
  * (`credential` opens a stored secret for replacing; `host-login` is the
- * host's sign-in), and on Use it for, a seat's category or the assistant to
- * add to the model.
+ * host's sign-in), and the uses to add to the model (a seat's category picked
+ * on By job, every seat a limit holds, or the assistant).
  */
 export interface WizardAt {
   step: WizardStep;
   focus?: "credential" | "host-login" | undefined;
-  seat?: string | undefined;
-  job?: JobCategory | "assistant" | undefined;
+  add?: readonly WizardAdd[] | undefined;
 }
 
 /** Renewing a token and replacing a key are both the wizard's Method step, its secret open. */
 export const NEW_CREDENTIAL: WizardAt = { step: "signin", focus: "credential" };
 
-const WIZARD_PARAMS = { step: null, focus: null, seat: null, job: null } as const;
+const WIZARD_PARAMS = { step: null, focus: null, add: null } as const;
 
 const isStep = (v: string): v is WizardStep => (WIZARD_STEPS as readonly string[]).includes(v);
 const FOCUSES = ["credential", "host-login"] as const;
-const JOBS: readonly string[] = [...CATEGORY_ORDER, "assistant"];
+const isCategory = (v: string): v is JobCategory =>
+  (CATEGORY_ORDER as readonly string[]).includes(v);
+/** A seat handle as the engine writes one (`roles[].handle`), so an address cannot carry anything else. */
+const HANDLE = /^[a-z0-9][a-z0-9-]*$/;
+
+/**
+ * The uses to add, as one parameter: `assistant`, or `category:handle`, comma
+ * separated. A handle holds neither character, so the list reads back whole.
+ */
+function addParam(add: readonly WizardAdd[]): string {
+  return add.map((a) => ("seat" in a ? `${a.job}:${a.seat}` : a.job)).join(",");
+}
+
+function addOf(param: string): WizardAdd[] {
+  const out: WizardAdd[] = [];
+  for (const part of param.split(",")) {
+    if (part === "assistant") {
+      out.push({ job: "assistant" });
+      continue;
+    }
+    const pair = part.split(":");
+    const [job = "", seat = ""] = pair;
+    if (pair.length === 2 && isCategory(job) && HANDLE.test(seat)) out.push({ job, seat });
+  }
+  return out;
+}
 
 /**
  * The address a wizard opens at, read back: a parameter the page does not
@@ -59,17 +86,16 @@ const JOBS: readonly string[] = [...CATEGORY_ORDER, "assistant"];
 export function wizardAtOf(params: {
   step: string;
   focus: string;
-  seat: string;
-  job: string;
+  add: string;
 }): WizardAt | undefined {
   if (!isStep(params.step)) return undefined;
+  const add = params.add ? addOf(params.add) : [];
   return {
     step: params.step,
     ...((FOCUSES as readonly string[]).includes(params.focus)
       ? { focus: params.focus as WizardAt["focus"] }
       : {}),
-    ...(params.seat ? { seat: params.seat } : {}),
-    ...(JOBS.includes(params.job) ? { job: params.job as WizardAt["job"] } : {}),
+    ...(add.length > 0 ? { add } : {}),
   };
 }
 
@@ -78,8 +104,7 @@ export function wizardQuery(at: WizardAt): Record<string, string> {
   return {
     step: at.step,
     ...(at.focus ? { focus: at.focus } : {}),
-    ...(at.seat ? { seat: at.seat } : {}),
-    ...(at.job ? { job: at.job } : {}),
+    ...(at.add && at.add.length > 0 ? { add: addParam(at.add) } : {}),
   };
 }
 
@@ -91,22 +116,31 @@ export function wizardQuery(at: WizardAt): Record<string, string> {
  * opens the wizard at the step and field the action is about, in place, or on
  * that model's page where the action is about another model; closing it
  * returns to where it was opened. An alarm's deep link arrives on the same
- * address and so opens neutral: nothing is chosen for the reader.
+ * address and so opens neutral: no value is chosen for the reader. The one
+ * thing an address adds is a use (`add`), and only one the reader asked for:
+ * the seat's job they picked a model for, or the seats a limit holds that
+ * they chose to move.
+ *
+ * `open` takes an address too, so adding a model can start with uses already
+ * added (moving seats off a limit onto a model not yet added).
  */
 export function useFlow(entryFromPage?: string) {
   const [flow, setFlow] = useParam("flow", "", "section");
   const [entryParam] = useParam("entry", "");
   const [step] = useParam("step", "");
   const [focus] = useParam("focus", "");
-  const [seat] = useParam("seat", "");
-  const [job] = useParam("job", "");
+  const [add] = useParam("add", "");
   const nav = useNavigator();
   return {
     flow: flow as Flow | "",
     entry: entryFromPage ?? entryParam,
-    at: wizardAtOf({ step, focus, seat, job }),
-    open: (next: Flow, entry?: string) => {
-      if (entry && !entryFromPage) nav.filter({ entry });
+    at: wizardAtOf({ step, focus, add }),
+    open: (next: Flow, entry?: string, at?: WizardAt) => {
+      if ((entry && !entryFromPage) || at)
+        nav.filter({
+          ...(entry && !entryFromPage ? { entry } : {}),
+          ...(at ? { ...WIZARD_PARAMS, ...wizardQuery(at) } : {}),
+        });
       setFlow(next);
     },
     wizard: (key: string, at: WizardAt) => {

@@ -18,7 +18,8 @@
  */
 
 import type { ReactNode } from "react";
-import { Button, Callout, Disclosure, InlineCode, RelativeTime, Text } from "@crewlethq/ui";
+import { ChevronDownGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Callout, Disclosure, InlineCode, Menu, RelativeTime, Text } from "@crewlethq/ui";
 import type { ModelAlarmKind } from "~/contract/models.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtClock, fmtDate, listed, plural, tsKey } from "~/lib/format.ts";
@@ -26,7 +27,13 @@ import { CATEGORY_JOBS, CATEGORY_ORDER, type JobCategory } from "~/lib/modelUses
 import type { Seat } from "~/lib/seats.ts";
 import type { ModelAlarm } from "~/protocol/models.ts";
 import type { ModelsData, ModelView } from "./data.ts";
-import { credentialAction, type Flow, type OnFlow, type WizardAt } from "./parts.tsx";
+import {
+  credentialAction,
+  type Flow,
+  type OnFlow,
+  type WizardAdd,
+  type WizardAt,
+} from "./parts.tsx";
 import { ALARM_TONE, CATEGORY_WORDS, WINDOW, product } from "./words.ts";
 
 /** The gesture that fixes an alarm: a flow, opened on one model. */
@@ -35,6 +42,16 @@ export interface AlarmFix {
   flow: Flow;
   key: string;
   at?: WizardAt;
+}
+
+/**
+ * A limit's second gesture: move the seats it holds to a model that can
+ * answer. The uses are every seat's category on the limited models; the
+ * models offered are the ones that can take all of them now.
+ */
+export interface AlarmMove {
+  add: WizardAdd[];
+  to: ModelView[];
 }
 
 /** One alarm as the page draws it: one credential or one plan, and the models on it. */
@@ -50,7 +67,14 @@ export interface AlarmCard {
   /** Who it stops, a line per job, for the disclosure. */
   stops: string[];
   fix: AlarmFix | null;
+  /** For a limit holding seats, the way to move them; null otherwise. */
+  move: AlarmMove | null;
 }
+
+const LIMIT_KINDS: readonly ModelAlarmKind[] = ["llm_limit", "llm_limit_waiting"];
+
+/** A model that answers now: ready, or signing in until its credential expires. */
+const ANSWERS = new Set(["ready", "expiring"]);
 
 const CREDENTIAL_KINDS: readonly ModelAlarmKind[] = [
   "llm_sign_in_refused",
@@ -109,20 +133,26 @@ function whoLine(names: readonly string[]): string {
   return names.length <= NAMED_SEATS ? listed(names) : plural(names.length, "seat");
 }
 
-/**
- * Who the models stop, a clause per category: "coding for PM and Designer",
- * "task delegations and routines for every seat", and the Dashboard
- * Assistant. A seat is in a category when any of its jobs there runs on one
- * of the models, as the engine's `used_by` says.
- */
-function stopsOf(models: readonly ModelView[], seats: readonly Seat[]): string[] {
-  const name = seatNamer(seats);
-  const out: string[] = [];
+/** The seats each category runs on the models, as the engine's `used_by` says: a seat is in a category when any of its jobs there does. */
+function seatsByCategory(models: readonly ModelView[]): Map<JobCategory, Set<string>> {
+  const out = new Map<JobCategory, Set<string>>();
   for (const category of CATEGORY_ORDER) {
     const handles = new Set<string>();
     for (const m of models)
       for (const job of CATEGORY_JOBS[category]) for (const s of m.uses.jobs[job]) handles.add(s);
-    if (handles.size === 0) continue;
+    if (handles.size > 0) out.set(category, handles);
+  }
+  return out;
+}
+
+/**
+ * Who the models stop, a clause per category: "coding for PM and Designer",
+ * "routines and evaluations for every seat", and the Dashboard Assistant.
+ */
+function stopsOf(models: readonly ModelView[], seats: readonly Seat[]): string[] {
+  const name = seatNamer(seats);
+  const out: string[] = [];
+  for (const [category, handles] of seatsByCategory(models)) {
     const who =
       seats.length > 0 && handles.size >= seats.length
         ? "every seat"
@@ -131,6 +161,35 @@ function stopsOf(models: readonly ModelView[], seats: readonly Seat[]): string[]
   }
   if (models.some((m) => m.uses.assistant)) out.push("the Dashboard Assistant");
   return out;
+}
+
+/**
+ * Moving the seats a limit holds: each seat's category on the limited models,
+ * and the models that can take every one of them now. Not the assistant: it
+ * is company-wide, and moving it is its own choice on By job.
+ *
+ * NEVER BACK ONTO THE LIMIT: neither a limited model nor, unless the window is
+ * the one model's own, any model on the same plan, which a session or weekly
+ * limit holds too even before the engine has seen it refused. Coding goes only
+ * to a CLI that runs it.
+ */
+function moveOf(models: readonly ModelView[], all: readonly ModelView[]): AlarmMove | null {
+  const add: WizardAdd[] = [];
+  for (const [job, handles] of seatsByCategory(models))
+    for (const seat of [...handles].sort()) add.push({ job, seat });
+  if (add.length === 0) return null;
+  const held = new Set(models.map((m) => m.key));
+  const own = models.some((m) => m.entry.sitting_out?.window === "model");
+  const plans = new Set(own ? [] : models.flatMap((m) => (m.admin?.plan ? [m.admin.plan] : [])));
+  const coding = add.some((a) => a.job === "coding");
+  const to = all.filter(
+    (m) =>
+      !held.has(m.key) &&
+      !(m.admin?.plan && plans.has(m.admin.plan)) &&
+      ANSWERS.has(m.entry.health) &&
+      (m.executor || !coding),
+  );
+  return { add, to };
 }
 
 const categoryWords = (c: JobCategory) => CATEGORY_WORDS[c].label.toLowerCase();
@@ -190,6 +249,7 @@ export function alarmCards(data: Pick<ModelsData, "alarms" | "models" | "seats">
         recorded: [],
         stops: [],
         fix: null,
+        move: null,
       });
       continue;
     }
@@ -208,6 +268,7 @@ export function alarmCards(data: Pick<ModelsData, "alarms" | "models" | "seats">
         fix: CREDENTIAL_KINDS.includes(alarm.kind)
           ? credentialFix(models[0], keys[0]!)
           : { label: "Retry now", flow: "retry", key: keys[0]! },
+        move: LIMIT_KINDS.includes(alarm.kind) ? moveOf(models, data.models) : null,
       });
     }
   }
@@ -333,6 +394,38 @@ function words(
 
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+/**
+ * The menu that moves a limit's seats: each model that can take them opens
+ * its wizard at Use it for with them added, and adding a model starts with
+ * them added too. Review shows each seat it moves before anything is written.
+ */
+function MoveMenu({ move, onFlow }: { move: AlarmMove; onFlow: OnFlow }) {
+  const label = "Use a different model for these seats";
+  return (
+    <Menu
+      label={label}
+      trigger={label}
+      trailingIcon={<ChevronDownGlyph size="sm" />}
+      triggerVariant="secondary"
+      align="end"
+      items={[
+        ...move.to.map((m) => ({
+          key: m.key,
+          label: m.key,
+          description: m.model,
+          onSelect: () => onFlow("edit", m.key, { step: "assign", add: move.add }),
+        })),
+        ...(move.to.length > 0 ? [{ kind: "separator" as const, key: "sep" }] : []),
+        {
+          key: "add",
+          label: "Add a model",
+          onSelect: () => onFlow("add", undefined, { step: "cli", add: move.add }),
+        },
+      ]}
+    />
+  );
+}
+
 /** The alarms, worst first, each with its one fixing gesture. An admin's alone: a member's reading carries none. */
 export function Alarms({ data, onFlow }: { data: ModelsData; onFlow: OnFlow }) {
   const now = useNow();
@@ -346,14 +439,19 @@ export function Alarms({ data, onFlow }: { data: ModelsData; onFlow: OnFlow }) {
           variant={card.tone}
           title={card.title}
           action={
-            card.fix ? (
-              <Button
-                size="small"
-                variant="primary"
-                onClick={() => onFlow(card.fix!.flow, card.fix!.key, card.fix!.at)}
-              >
-                {card.fix.label}
-              </Button>
+            card.fix || card.move ? (
+              <>
+                {card.fix ? (
+                  <Button
+                    size="small"
+                    variant="primary"
+                    onClick={() => onFlow(card.fix!.flow, card.fix!.key, card.fix!.at)}
+                  >
+                    {card.fix.label}
+                  </Button>
+                ) : null}
+                {card.move ? <MoveMenu move={card.move} onFlow={onFlow} /> : null}
+              </>
             ) : undefined
           }
         >
