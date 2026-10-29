@@ -725,6 +725,11 @@ func TestAPublicationsRepackReadsExactlyItsInputs(t *testing.T) {
 		builds int
 	)
 	compact.BuildWith(c, func(ctx context.Context, adm *cache.Admission, cmd gitproc.Cmd) (gitproc.Result, error) {
+		if cmd.Args[0] != "pack-objects" {
+			// The layer's multi-pack-index and commit-graph writes, in the
+			// layer's own scratch: the case is about the repack.
+			return compact.RunInSlot(ctx, adm, cmd)
+		}
 		mu.Lock()
 		builds++
 		mu.Unlock()
@@ -781,6 +786,57 @@ func TestAPublicationsRepackReadsExactlyItsInputs(t *testing.T) {
 	}
 	if outs := outputs(before, x.rows()); len(outs) != 1 {
 		t.Errorf("the repack wrote %d outputs, want the nine packs merged into one: %+v", len(outs), outs)
+	}
+}
+
+// A PUBLICATION'S REPACK IS HELD TO ITS RULES BEFORE ITS LAYER IS WRITTEN: the
+// count and bundle rules read the repack's outputs alone, so an output past
+// the bundle rule at the first cut is built once more, at its own ratio,
+// before the multi-pack-index layer and its bitmap — a walk of the whole
+// history, minutes at the largest repository — are written over it: the
+// layer is written ONCE, over outputs that pass both rules, nothing past the
+// bound reaches the store, and the publication lands.
+//
+// Mutation: hold the repack's outputs to the rules once the layer is written,
+// and the bundle rule's rebuild writes the multi-pack-index layer twice.
+func TestAPublicationsRepackIsHeldToItsRulesBeforeItsLayerIsWritten(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t)
+	// NINE PACKS NOT FULL at the scaled cut, of a mebibyte each: one output of
+	// all of them, cut at nothing, is a bundle past the scaled bound.
+	x.pushN(compact.LayerRepackPacks+1, 1<<20)
+	b := &builder{rewrite: func(call int, args []string) []string {
+		if call == 0 {
+			return withoutCut(args)
+		}
+		return args
+	}}
+	rs := &recordingStore{Store: x.store}
+	c, _, _ := x.scaled(func(o *compact.Options) { o.Objects = rs })
+	compact.BuildWith(c, b.run)
+	before := x.rows()
+	if out, err := publishWhileBusy(t, c, x.publicationCandidate()); out != compact.OutcomeApplied {
+		t.Fatalf("the publication of nine packs whose first repack is past the bundle rule: %s, %v; want applied",
+			out, err)
+	}
+	if cuts, _ := b.calls(); len(cuts) != 2 {
+		t.Errorf("the repack was built %d times, want twice: its first output past the bound built once more",
+			len(cuts))
+	}
+	if n := b.ran("multi-pack-index"); n != 1 {
+		t.Errorf("the publication wrote its multi-pack-index layer %d times, want once, over outputs that pass "+
+			"both rules", n)
+	}
+	_, sizes := rs.stored()
+	for _, n := range sizes {
+		if n > scaledBundle {
+			t.Errorf("a put of %d bytes reached the store, past the %d bound", n, scaledBundle)
+		}
+	}
+	for _, o := range outputs(before, x.rows()) {
+		if o.Size > scaledBundle {
+			t.Errorf("output %s weighs %d bytes, past the %d bound", o.PackID, o.Size, scaledBundle)
+		}
 	}
 }
 

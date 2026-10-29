@@ -261,9 +261,11 @@ type Compactor struct {
 	// bounds are the cut and the bundle bound a build is held to — the
 	// domain's in production, a suite's scaled ones (export_test.go).
 	bounds bounds
-	// runBuild runs one pack-objects of a build in its admission's slot:
-	// cache.Admission.Run, a field so a suite can stand in a builder whose
-	// outputs pass the bundle rule (export_test.go).
+	// runBuild runs one git process of a build in its admission's slot — a
+	// merge's pack-objects, a layer's multi-pack-index and commit-graph
+	// writes: cache.Admission.Run, a field so a suite can stand in a builder
+	// whose outputs pass the bundle rule, or count what a build ran
+	// (export_test.go).
 	runBuild func(ctx context.Context, adm *cache.Admission, cmd gitproc.Cmd) (gitproc.Result, error)
 
 	// compacting and publishing are each held for one build's whole length:

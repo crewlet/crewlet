@@ -139,8 +139,11 @@
 // full they are repacked first, under a compaction's caps and as a
 // compaction's build is, over a store of exactly them in a merge's scratch of
 // their own — never in the layer's scratch, whose links of every pack would
-// have its walk run the whole history — the outputs then gathered into the
-// layer's scratch (cache.Scratch.Gather). A layer is WRITTEN,
+// have its walk run the whole history — and held to a compaction's count and
+// bundle rules BEFORE the layer is written over the outputs, which those rules
+// alone read (held after, an output past either threw a finished bitmap
+// away), the outputs then gathered into the layer's scratch
+// (cache.Scratch.Gather). A layer is WRITTEN,
 // never merged with `multi-pack-index compact`, in a scratch of hard links
 // whose chain files name EXACTLY its base (cache.Cache.NewLayerScratch):
 // measured on git 2.56.0, the same write with layers above its base still

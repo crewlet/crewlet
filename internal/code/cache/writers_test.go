@@ -503,8 +503,9 @@ var cacheWriters = []writerRow{
 			"outputs written into the scratch alone, never an incarnation, entering the cache only by Adopt, " +
 			"once their rows have applied", nil},
 	{"internal/code/compact/compactor.go", kindRuntime,
-		"runInSlot hands the build's one pack-objects Cmd — build.go's literal — to the admission's reserved " +
-			"slot (cache.Admission.Run), unchanged: a function value, so a suite can stand in a builder", nil},
+		"runInSlot hands a build's every Cmd — build.go's pack-objects literal, publish.go's multi-pack-index " +
+			"and commit-graph literals — to the admission's reserved slot (cache.Admission.Run), unchanged: a " +
+			"function value, so a suite can stand in a builder or count what a build ran", nil},
 	{"internal/code/compact/publish.go", kindGit + " multi-pack-index",
 		"a publication's layer: `multi-pack-index write --incremental --bitmap --no-write-chain-file` over the " +
 			"layer's packs, in the publication's own SCRATCH of links (cache.NewLayerScratch), whose chain file " +

@@ -21,8 +21,9 @@ func ScaleBounds(c *Compactor, cut, maxBundle int64) {
 // code.CompactMinMerge: what BenchmarkCompact's min-merge arms vary.
 func MergeFrom(c *Compactor, n int) { c.bounds.minMerge = n }
 
-// BuildWith has c run every pack-objects of a build through run, in place of
-// the admission's reserved slot: a builder a case stands in — one whose
+// BuildWith has c run every git process of a build through run — a merge's
+// pack-objects, a layer's multi-pack-index and commit-graph writes — in place
+// of the admission's reserved slot: a builder a case stands in, one whose
 // outputs a cut cannot bound, or that records what it was asked.
 func BuildWith(c *Compactor, run func(ctx context.Context, adm *cache.Admission, cmd gitproc.Cmd) (
 	gitproc.Result, error)) {

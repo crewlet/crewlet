@@ -462,13 +462,15 @@ var (
 //     asked at once, and a base the store lost is replaced with every layer
 //     above it, that plan's charge held in the same slot in place of the
 //     first's ([Compactor.admitOverItsBase]).
-//  4. BUILD in a scratch of its own whose chain files name EXACTLY the layers
-//     it is written over (cache.Cache.NewLayerScratch): the repack where the
-//     plan has one — built over a store of exactly its inputs, as a
-//     compaction's is, and gathered into that scratch ([Compactor.repack]) —
-//     held to a compaction's count and bundle rules; the
-//     multi-pack-index layer with its bitmap over every pack the layer
-//     covers; and its commit-graph layer with every changed-path filter. Then
+//  4. BUILD the repack first, where the plan has one — over a store of
+//     exactly its inputs, as a compaction's is ([Compactor.repack]) — and
+//     hold it to a compaction's count and bundle rules BEFORE the layer is
+//     written over its outputs ([Compactor.repackChecked]); then, in a
+//     scratch of its own whose chain files name EXACTLY the layers it is
+//     written over (cache.Cache.NewLayerScratch), the repack's outputs
+//     gathered into it ([gather]), the multi-pack-index layer with its
+//     bitmap over every pack the layer covers, and its commit-graph layer
+//     with every changed-path filter, each written once. Then
 //     the layer is laid out (code.LayLayer) and the whole proposal held to
 //     every rule its committer will, before any byte is stored. THE ADMISSION
 //     IS RELEASED HERE, once the build's last git step has ended — the
@@ -783,11 +785,11 @@ type layerBuilt struct {
 	proposal code.CompactionProposal
 }
 
-// buildLayer builds p in a scratch of its own — its repack held to a
-// compaction's count and bundle rules, rebuilt ONCE at the densest offender's
-// ratio as a compaction's is — and, where git wrote the layer without a
-// bitmap, planned and built ONCE more over one more layer of the chain. On an
-// error the scratch is gone, and the outcome is the publication's.
+// buildLayer builds p in a scratch of its own — its repack first, held to a
+// compaction's count and bundle rules before the layer is written over its
+// outputs ([Compactor.repackChecked]) — and, where git wrote the layer without
+// a bitmap, planned and built ONCE more over one more layer of the chain. On
+// an error the scratch is gone, and the outcome is the publication's.
 func (c *Compactor) buildLayer(ctx context.Context, cand code.PublicationCandidate, s cache.Synced,
 	adm *cache.Admission, chain cache.Chain, live []code.PackRow, p layerPlan, cap int64,
 	limits code.Limits) (layerBuilt, Outcome, error) {
@@ -814,55 +816,24 @@ func (c *Compactor) buildLayer(ctx context.Context, cand code.PublicationCandida
 	return b, out, err
 }
 
-// buildLayerChecked builds p once — and its repack once more where an output
-// passes the bundle rule — and holds the proposal to every rule its committer
-// will. On an error the scratch is gone.
+// buildLayerChecked builds p once and holds the proposal to every rule its
+// committer will. On an error the scratch is gone.
 func (c *Compactor) buildLayerChecked(ctx context.Context, cand code.PublicationCandidate, s cache.Synced,
 	adm *cache.Admission, chain cache.Chain, p layerPlan, cap int64, limits code.Limits) (layerBuilt, Outcome,
 	error) {
 
 	began := c.now()
-	cut := c.bounds.cut
-	if p.repack.due {
-		cut = c.bounds.cutFor(p.repack)
-		if at := InputByteCap(cut); at < cap {
-			p.repack, cap = p.repack.recap(at), at
-		}
-	}
-	b, err := c.writeLayer(ctx, cand.ID, s, adm, chain, p, cut, limits)
+	b, out, err := c.writeLayer(ctx, cand, s, adm, chain, p, cap, limits)
 	if err != nil {
-		return layerBuilt{}, c.publicationFailedOnly(cand, "build", err), err
-	}
-	if out, err := c.layerCountHolds(cand, b, cap); err != nil {
 		return layerBuilt{}, out, err
 	}
-	if ratio := pastBound(b.outs, c.bounds.maxBundle); ratio > 0 {
-		// ONE REBUILD, in the same reserved slot, at the densest offender's
-		// own ratio, the repack capped again at that cut's byte cap.
-		b.sc.Remove()
-		cut = int64(float64(c.bounds.cut) / ratio)
-		if at := InputByteCap(cut); at < cap {
-			p.repack, cap = p.repack.recap(at), at
-		}
-		if b, err = c.writeLayer(ctx, cand.ID, s, adm, chain, p, cut, limits); err != nil {
-			return layerBuilt{}, c.publicationFailedOnly(cand, "build", err), err
-		}
-		if out, err := c.layerCountHolds(cand, b, cap); err != nil {
-			return layerBuilt{}, out, err
-		}
-		if pastBound(b.outs, c.bounds.maxBundle) > 0 {
-			b.sc.Remove()
-			c.layerCapFailed(cand, b.plan.repack, cap, reasonBundleTooLarge, len(b.outs))
-			return layerBuilt{}, OutcomeFailed, errBundleTooLarge
-		}
-	}
-	if err := c.fault(ctx, codefault.PublishAfterBuild, 0); err != nil {
+	if err = c.fault(ctx, codefault.PublishAfterBuild, 0); err != nil {
 		b.sc.Remove()
 		return layerBuilt{}, c.publicationFailedOnly(cand, "build", err), err
 	}
 	layer := b.proposal.Compaction.Layer
 	layer.TookMs = c.now().Sub(began).Milliseconds()
-	if err := b.proposal.ValidateUnstored(); err != nil {
+	if err = b.proposal.ValidateUnstored(); err != nil {
 		// THE BUILDER'S OWN BUG — every rule above passed and one of its
 		// committer's did not — refused before any byte is stored.
 		b.sc.Remove()
@@ -871,18 +842,6 @@ func (c *Compactor) buildLayerChecked(ctx context.Context, cand code.Publication
 		return layerBuilt{}, OutcomeFailed, err
 	}
 	return b, "", nil
-}
-
-// layerCountHolds holds a publication's repack to its own count, as
-// [Compactor.countHolds] holds a compaction's: past what one record retires
-// and adds, nothing is uploaded and the repository's cap is halved.
-func (c *Compactor) layerCountHolds(cand code.PublicationCandidate, b layerBuilt, cap int64) (Outcome, error) {
-	if n := len(b.outs); !b.plan.repack.due || (n <= code.MaxCompactOutputs && n <= len(b.plan.repack.ids())) {
-		return "", nil
-	}
-	b.sc.Remove()
-	c.layerCapFailed(cand, b.plan.repack, cap, reasonOutputs, len(b.outs))
-	return OutcomeFailed, errOutputs
 }
 
 // layerCapFailed halves cand's cap after a publication's repack of p, capped
@@ -903,43 +862,59 @@ func (c *Compactor) layerCapFailed(cand code.PublicationCandidate, p planned, ca
 		"input_bytes", p.packBytes(), "next_cap", c.capFor(cand.ID), "at_floor", atFloor)
 }
 
-// writeLayer writes p's layer in a scratch named by a fresh publication id —
-// its repack at cut where it has one — and lays it out into the publication
-// its committer would be asked to decide. On an error the scratch is removed.
-func (c *Compactor) writeLayer(ctx context.Context, repoID string, s cache.Synced, adm *cache.Admission,
-	chain cache.Chain, p layerPlan, cut int64, limits code.Limits) (layerBuilt, error) {
+// writeLayer writes p's layer under a fresh publication id and lays it out into
+// the publication its committer would be asked to decide: its repack first,
+// where it has one, built and held to its rules in a merge's scratch of its
+// own ([Compactor.repackChecked]); then the layer's scratch, the repack's
+// outputs gathered into it ([gather]); then the layer over them
+// ([Compactor.writeLayerIn]). On an error nothing it made is left, and the
+// outcome is the publication's.
+func (c *Compactor) writeLayer(ctx context.Context, cand code.PublicationCandidate, s cache.Synced,
+	adm *cache.Admission, chain cache.Chain, p layerPlan, cap int64, limits code.Limits) (layerBuilt, Outcome,
+	error) {
 
 	cid := statelog.NewOpID(c.now(), "")
+	b := layerBuilt{plan: p}
+	var merged *cache.Scratch
+	if p.repack.due {
+		rp, out, failed := c.repackChecked(ctx, cand, s, cid, adm, p.repack, cap, limits)
+		if failed != nil {
+			return layerBuilt{}, out, failed
+		}
+		// The layer's scratch links the outputs' very inodes, so the
+		// merge's goes once they are gathered there.
+		defer rp.ms.Remove()
+		merged, b.outs, b.plan.repack = rp.ms, rp.outs, rp.plan
+	}
 	sc, err := c.o.Cache.NewLayerScratch(ctx, s, cid, p.base)
 	if err != nil {
-		return layerBuilt{}, err
+		return layerBuilt{}, c.publicationFailedOnly(cand, "build", err), err
 	}
-	b := layerBuilt{sc: sc, plan: p}
-	if err := c.writeLayerIn(ctx, &b, s, cid, adm, chain, cut, limits); err != nil {
+	b.sc = sc
+	if merged != nil {
+		err = gather(sc, merged, b.outs)
+	}
+	if err == nil {
+		err = c.writeLayerIn(ctx, &b, adm, chain)
+	}
+	if err != nil {
 		sc.Remove()
-		return layerBuilt{}, err
+		return layerBuilt{}, c.publicationFailedOnly(cand, "build", err), err
 	}
 	b.proposal = code.CompactionProposal{Compaction: code.Compaction{
-		RepoID: repoID, CompactionID: cid, Node: c.o.NodeID, Seen: s.Position, Add: refs(b.outs),
+		RepoID: cand.ID, CompactionID: cid, Node: c.o.NodeID, Seen: s.Position, Add: refs(b.outs),
 		Layer: b.proposal.Compaction.Layer}}
-	if p.repack.due {
-		b.proposal.Compaction.Retire = p.repack.ids()
+	if b.plan.repack.due {
+		b.proposal.Compaction.Retire = b.plan.repack.ids()
 	}
-	return b, nil
+	return b, "", nil
 }
 
-// writeLayerIn is writeLayer's build in b.sc: the repack, the
-// multi-pack-index layer, the commit-graph layer, and the layer laid out.
-func (c *Compactor) writeLayerIn(ctx context.Context, b *layerBuilt, s cache.Synced, cid string,
-	adm *cache.Admission, chain cache.Chain, cut int64, limits code.Limits) error {
-
-	if b.plan.repack.due {
-		outs, err := c.repack(ctx, s, b.sc, cid, adm, b.plan.repack, cut, limits)
-		if err != nil {
-			return err
-		}
-		b.outs = outs
-	}
+// writeLayerIn writes b's layer in b.sc over its packs — the members its
+// repack did not merge, and the repack's outputs, gathered there already: the
+// multi-pack-index layer, the commit-graph layer, and the layer laid out, each
+// git step in the admission's reserved slot (the compactor's runBuild).
+func (c *Compactor) writeLayerIn(ctx context.Context, b *layerBuilt, adm *cache.Admission, chain cache.Chain) error {
 	packs := b.plan.layerPacks(b.outs)
 	var stdin strings.Builder
 	var packBytes int64
@@ -959,7 +934,7 @@ func (c *Compactor) writeLayerIn(ctx context.Context, b *layerBuilt, s cache.Syn
 		baseID = chain.Rows[b.plan.base-1].Layer.LayerID
 		baseArg = baseID
 	}
-	res, err := adm.Run(ctx, gitproc.Cmd{
+	res, err := c.runBuild(ctx, adm, gitproc.Cmd{
 		Dir: b.sc.Dir, Class: gitproc.ClassMaintenance,
 		Args: []string{"multi-pack-index", "write", "--incremental", "--bitmap", "--stdin-packs",
 			"--no-write-chain-file", "--base=" + baseArg, "--no-progress"},
@@ -981,16 +956,16 @@ func (c *Compactor) writeLayerIn(ctx context.Context, b *layerBuilt, s cache.Syn
 	layers := filepath.Join(b.sc.Dir, "objects", "pack", "multi-pack-index.d")
 	b.paths[0] = filepath.Join(layers, "multi-pack-index-"+id+".midx")
 	b.paths[1] = filepath.Join(layers, "multi-pack-index-"+id+".bitmap")
-	if _, err := os.Lstat(b.paths[1]); errors.Is(err, os.ErrNotExist) {
+	if _, statErr := os.Lstat(b.paths[1]); errors.Is(statErr, os.ErrNotExist) {
 		return errNoBitmap
-	} else if err != nil {
-		return fmt.Errorf("compact: read whether the layer has its bitmap: %w", err)
+	} else if statErr != nil {
+		return fmt.Errorf("compact: read whether the layer has its bitmap: %w", statErr)
 	}
 	baseGraphs, err := graphChain(b.sc.Dir)
 	if err != nil {
 		return err
 	}
-	if _, err := adm.Run(ctx, gitproc.Cmd{
+	if _, err = c.runBuild(ctx, adm, gitproc.Cmd{
 		Dir: b.sc.Dir, Class: gitproc.ClassMaintenance,
 		Args:   []string{"commit-graph", "write", "--stdin-packs", "--split=no-merge", "--changed-paths", "--no-progress"},
 		Stdin:  strings.NewReader(stdin.String()),
@@ -1025,15 +1000,94 @@ func (c *Compactor) writeLayerIn(ctx context.Context, b *layerBuilt, s cache.Syn
 	return nil
 }
 
+// repacked is a publication's repack built: the merge's scratch holding its
+// outputs, the outputs laid out under the publication's derived ids, and the
+// plan it was built from — capped again where a cut smaller than the nominal
+// one needed it.
+type repacked struct {
+	ms   *cache.Scratch
+	outs []output
+	plan planned
+}
+
+// repackChecked builds a publication's repack of p — the non-full packs its
+// layer gathers — and holds it to a compaction's rules BEFORE THE LAYER IS
+// WRITTEN over its outputs: cut as a compaction's build is
+// ([bounds.cutFor]), the plan capped again at that cut's [InputByteCap]; its
+// own COUNT held to what one record retires and adds — past it, nothing is
+// uploaded and the repository's cap is halved; and every output to the
+// BUNDLE RULE, built ONCE more at the densest offender's own ratio in a fresh
+// merge's scratch, the plan capped again at that cut's byte cap, a second miss
+// halving the cap too. It answers the repack that passed, whose merge's
+// scratch is the caller's to remove once its outputs are gathered; on an error
+// nothing it made is left, and the outcome is the publication's.
+//
+// THE RULES READ THE REPACK'S OUTPUTS ALONE, so they are held before the
+// multi-pack-index layer and its bitmap — a walk of the repository's whole
+// history, minutes and up to the publication's whole charge at the largest
+// repository — and the commit-graph layer are written: held after them, an
+// output past either rule threw a finished bitmap away, and the bundle rule's
+// rebuild wrote the whole layer twice.
+func (c *Compactor) repackChecked(ctx context.Context, cand code.PublicationCandidate, s cache.Synced, cid string,
+	adm *cache.Admission, p planned, cap int64, limits code.Limits) (repacked, Outcome, error) {
+
+	cut := c.bounds.cutFor(p)
+	if at := InputByteCap(cut); at < cap {
+		p, cap = p.recap(at), at
+	}
+	rp, err := c.repack(ctx, s, cid, adm, p, cut, limits)
+	if err != nil {
+		return repacked{}, c.publicationFailedOnly(cand, "build", err), err
+	}
+	if out, failed := c.repackCountHolds(cand, rp, cap); failed != nil {
+		return repacked{}, out, failed
+	}
+	ratio := pastBound(rp.outs, c.bounds.maxBundle)
+	if ratio == 0 {
+		return rp, "", nil
+	}
+	// ONE REBUILD, in the same reserved slot and a fresh merge's scratch, at
+	// the densest offender's own ratio, the repack capped again at that cut's
+	// byte cap.
+	rp.ms.Remove()
+	cut = int64(float64(c.bounds.cut) / ratio)
+	if at := InputByteCap(cut); at < cap {
+		p, cap = p.recap(at), at
+	}
+	if rp, err = c.repack(ctx, s, cid, adm, p, cut, limits); err != nil {
+		return repacked{}, c.publicationFailedOnly(cand, "build", err), err
+	}
+	if out, failed := c.repackCountHolds(cand, rp, cap); failed != nil {
+		return repacked{}, out, failed
+	}
+	if pastBound(rp.outs, c.bounds.maxBundle) > 0 {
+		rp.ms.Remove()
+		c.layerCapFailed(cand, rp.plan, cap, reasonBundleTooLarge, len(rp.outs))
+		return repacked{}, OutcomeFailed, errBundleTooLarge
+	}
+	return rp, "", nil
+}
+
+// repackCountHolds holds a publication's repack to its own count, as
+// [Compactor.countHolds] holds a compaction's: past what one record retires
+// and adds, nothing is uploaded, the merge's scratch is removed and the
+// repository's cap is halved.
+func (c *Compactor) repackCountHolds(cand code.PublicationCandidate, rp repacked, cap int64) (Outcome, error) {
+	if n := len(rp.outs); n <= code.MaxCompactOutputs && n <= len(rp.plan.ids()) {
+		return "", nil
+	}
+	rp.ms.Remove()
+	c.layerCapFailed(cand, rp.plan, cap, reasonOutputs, len(rp.outs))
+	return OutcomeFailed, errOutputs
+}
+
 // repack builds a publication's repack of p — the non-full packs its layer
 // gathers, at cut — in a MERGE'S SCRATCH OF ITS OWN, leaning on a store of
 // exactly p's inputs (cache.Cache.NewMergeScratch) as a compaction's build
-// does ([Compactor.pack]); lays its outputs out under the publication cid's
-// derived ids, holding the merge's scratch to exactly what the build printed
-// ([lay]); and gathers them into the layer's scratch sc
-// (cache.Scratch.Gather), where the multi-pack-index layer names them and the
-// adoption finds them. The merge's scratch is removed before it answers: sc's
-// links are the same inodes.
+// does ([Compactor.pack]), and lays its outputs out under the publication
+// cid's derived ids, holding the merge's scratch to exactly what the build
+// printed ([lay]). On an error the merge's scratch is gone; otherwise it is
+// the caller's.
 //
 // NEVER IN THE LAYER'S SCRATCH, which links every pack of the copy: there
 // `--stdin-packs`, filling in its name hashes, walked from the inputs' commits
@@ -1043,30 +1097,42 @@ func (c *Compactor) writeLayerIn(ctx context.Context, b *layerBuilt, s cache.Syn
 // follow its inputs, so past a few million objects every publication that
 // repacked ran out its repack's deadline and failed, at every pass that
 // planned it.
-func (c *Compactor) repack(ctx context.Context, s cache.Synced, sc *cache.Scratch, cid string,
-	adm *cache.Admission, p planned, cut int64, limits code.Limits) ([]output, error) {
+func (c *Compactor) repack(ctx context.Context, s cache.Synced, cid string, adm *cache.Admission, p planned,
+	cut int64, limits code.Limits) (repacked, error) {
 
 	ms, err := c.o.Cache.NewMergeScratch(ctx, s, statelog.NewOpID(c.now(), ""), p.checksums())
 	if err != nil {
-		return nil, err
+		return repacked{}, err
 	}
-	defer ms.Remove()
 	printed, err := c.pack(ctx, adm, ms, p, cut, limits)
-	if err != nil {
-		return nil, err
+	var outs []output
+	if err == nil {
+		outs, err = lay(ms, cid, printed)
 	}
-	outs, err := lay(ms, cid, printed)
 	if err != nil {
-		return nil, err
+		ms.Remove()
+		return repacked{}, err
 	}
-	if err := sc.Gather(ms, printed); err != nil {
-		return nil, fmt.Errorf("compact: gather the repack's %d outputs into the layer's scratch: %w", len(printed),
-			err)
+	return repacked{ms: ms, outs: outs, plan: p}, nil
+}
+
+// gather links the repack's outputs from the merge's scratch from into the
+// layer's scratch sc (cache.Scratch.Gather) — where the multi-pack-index
+// layer names them and the adoption finds them, a multi-pack-index naming only
+// packs of its own directory — and points every output's path there: from's
+// links are the same inodes, and from goes once they are gathered.
+func gather(sc, from *cache.Scratch, outs []output) error {
+	checksums := make([]string, len(outs))
+	for i, o := range outs {
+		checksums[i] = o.ref.GitChecksum
+	}
+	if err := sc.Gather(from, checksums); err != nil {
+		return fmt.Errorf("compact: gather the repack's %d outputs into the layer's scratch: %w", len(outs), err)
 	}
 	for i := range outs {
 		outs[i].path = filepath.Join(sc.Dir, "objects", "pack", filepath.Base(outs[i].path))
 	}
-	return outs, nil
+	return nil
 }
 
 // graphChain is the commit-graph layers a scratch's commit-graph-chain lists,

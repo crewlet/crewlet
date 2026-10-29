@@ -2705,9 +2705,12 @@ is written into a new layer a logarithmic number of times over its life. Where
 more than 8 of the new layer's packs are not full, they are repacked first, as
 a merge is, under its caps — over exactly those packs, in a scratch of their
 own, so the repack's cost follows what it merges and never the history beside
-it ([Compaction](#compaction)). A layer whose files would pass 16 parts of 1 GiB
-is refused before it is built (`layer_too_large`), and a plan that meets a
-layer the maintainer's own installer has not placed yet waits for it.
+it ([Compaction](#compaction)) — and held to a merge's rules, its count and
+every output's bundle, before the layer is written over the outputs, so a
+repack that fails them costs its own build and never a bitmap already
+written. A layer whose files would pass 16 parts of 1 GiB is refused before it
+is built (`layer_too_large`), and a plan that meets a layer the maintainer's
+own installer has not placed yet waits for it.
 
 **The build** runs in a scratch of hard links of the maintainer's copy whose
 chain files name exactly the layers the new one is written over — on git

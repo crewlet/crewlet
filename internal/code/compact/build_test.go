@@ -480,15 +480,27 @@ func filesIn(t *testing.T, dir string) []string {
 
 // builder is a case's stand-in for a build's git: every pack-objects asked of
 // it recorded — the cut it was asked for and the packs it was handed — and
-// then run, by rewrite where that is set, in the admission's slot.
+// then run, by rewrite where that is set, in the admission's slot; and every
+// other git process of a build — a layer's multi-pack-index and commit-graph
+// writes — counted by its command and run as asked.
 type builder struct {
 	mu      sync.Mutex
 	cuts    []int64
 	inputs  [][]string
+	steps   map[string]int
 	rewrite func(call int, args []string) []string
 }
 
 func (b *builder) run(ctx context.Context, adm *cache.Admission, cmd gitproc.Cmd) (gitproc.Result, error) {
+	if cmd.Args[0] != "pack-objects" {
+		b.mu.Lock()
+		if b.steps == nil {
+			b.steps = map[string]int{}
+		}
+		b.steps[cmd.Args[0]]++
+		b.mu.Unlock()
+		return compact.RunInSlot(ctx, adm, cmd)
+	}
 	in, err := io.ReadAll(cmd.Stdin)
 	if err != nil {
 		return gitproc.Result{}, err
@@ -521,6 +533,14 @@ func (b *builder) calls() ([]int64, [][]string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return slices.Clone(b.cuts), slices.Clone(b.inputs)
+}
+
+// ran is how many times the build ran the git command name beside its
+// pack-objects: `multi-pack-index`, `commit-graph`.
+func (b *builder) ran(name string) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.steps[name]
 }
 
 // withoutCut is args with no --max-pack-size: one output of everything.
