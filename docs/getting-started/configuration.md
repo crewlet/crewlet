@@ -1016,7 +1016,7 @@ stream:
                                     #   their packs and sweep what each
                                     #   compaction retired, and its git
                                     #   clients' read barriers take about
-                                    #   three fifths to four fifths of the
+                                    #   five eighths to five sixths of the
                                     #   bytes a day its tracker writes and its
                                     #   seats' reads do, and the ratio sits a
                                     #   little under the middle, no higher

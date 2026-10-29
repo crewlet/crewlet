@@ -56,13 +56,20 @@ const (
 // the ratio of the two days a blocked trim fills both logs in the same time,
 // so that ratio is a figure derived from this log's published day. A push is
 // a SEAT'S, as every one of the reference company's is — a hundred seats
-// pushing thirty times a day — alone in its record: internal/code's measured
+// pushing thirty times a day — alone in its record, and priced as its CODING
+// BOX'S, the most a seat's push takes of the log: internal/code's measured
 // figure for a person's push (BenchmarkPushLogBytes, its package doc's "What
-// a push costs, measured") and what a seat's principal, its way and the
-// company day its quota counted it on take of the log beyond it (its
-// push=agent arm). The COMPACTIONS that merge those pushes' packs take the
-// log a push too, and so do the code-retention duty's SWEEPS of the rows they
-// retired, a day later: internal/code/compact's measured figures
+// a push costs, measured") and what a box's principal — the seat, the run
+// behind it and the coding run that pushed — its way and the company day its
+// quota counted it on take of the log beyond it (its push=box arm). A seat's
+// push the engine builds for a tool takes 74 bytes less (its push=agent arm),
+// and which of a company's seats push from their boxes and which through
+// their tools is no figure the reference company has, so the day prices every
+// push at the box's, at its least as at its most — as it prices the
+// compactions at the most the reference company's pushes cost them. The
+// COMPACTIONS that merge those pushes' packs take the log a push too, and so
+// do the code-retention duty's SWEEPS of the rows they retired, a day later:
+// internal/code/compact's measured figures
 // (BenchmarkCompact's steady/pushes=1200/rate=1/min/min-merge=16 arm, its
 // record-B/push and sweep-B/push, in its package doc's "Measured"), a
 // repository pushed once a minute, so every merge takes the floor's
@@ -85,13 +92,18 @@ const (
 // minutes of an eight-hour day, and a CI polls ten repositories a minute
 // where one runs.
 const (
-	referencePushesADay  = 3_000
-	codePushRecordBytes  = 1_481
-	codeCompactionBytes  = 108
-	codeSweepBytes       = 44
-	referencePushReads   = 3 * referencePushesADay
-	referencePeopleReads = 30 * 8 * 60 / 3
-	referenceCIReads     = 10 * 60 * 24
+	referencePushesADay = 3_000
+	codePushRecordBytes = 1_555
+	// codeEnginePushRecordBytes is a seat's push the engine builds for a
+	// tool, alone in its record (BenchmarkPushLogBytes's push=agent arm):
+	// no term of the day, which prices every push at the box's, and printed
+	// beside it.
+	codeEnginePushRecordBytes = 1_481
+	codeCompactionBytes       = 108
+	codeSweepBytes            = 44
+	referencePushReads        = 3 * referencePushesADay
+	referencePeopleReads      = 30 * 8 * 60 / 3
+	referenceCIReads          = 10 * 60 * 24
 )
 
 // codeLogTerm is one term of the code log's day: the bytes a day one SHAPE of
@@ -113,10 +125,10 @@ type codeLogTerm struct {
 }
 
 // codeLogDay is the code log's day, a term for each shape of record it
-// prices: a seat's push, a merge of the pushes' packs — a plain merge and no
-// publication, since the steady arm its figure is measured on publishes
-// nothing — the sweep of what the merges retired, and its git clients'
-// barriers at code.BarrierRecordBytes. What the day is summed from, so a term
+// prices: a seat's push, priced as its coding box's, a merge of the pushes'
+// packs — a plain merge and no publication, since the steady arm its figure
+// is measured on publishes nothing — the sweep of what the merges retired,
+// and its git clients' barriers at code.BarrierRecordBytes. What the day is summed from, so a term
 // priced here is a term of every figure TestTheDocsPrintTheMeasuredDay holds.
 func codeLogDay() []codeLogTerm {
 	pushes := float64(referencePushesADay * codePushRecordBytes)
@@ -124,8 +136,9 @@ func codeLogDay() []codeLogTerm {
 	sweeps := float64(referencePushesADay * codeSweepBytes)
 	git := float64((referencePushReads + referencePeopleReads) * code.BarrierRecordBytes)
 	return []codeLogTerm{
-		{op: code.OpPush, shape: "a seat's push alone in its record, built by the engine for a " +
-			"tool — the reference company's every push — as BenchmarkPushLogBytes's push=agent " +
+		{op: code.OpPush, shape: "a seat's coding box's push alone in its record, received by git " +
+			"and naming its coding run beside the turn — the most a seat's push takes, at which the " +
+			"day prices every one of the reference company's — as BenchmarkPushLogBytes's push=box " +
 			"arm measures it", least: pushes, most: pushes},
 		{op: code.OpCompact, shape: "a merge: a compaction carrying no layer, as every one " +
 			"BenchmarkCompact's steady arm makes", least: compactions, most: compactions},
@@ -192,7 +205,7 @@ var codeLogNegligible = map[code.OpKind]string{
 		"tools) — so it records none. That is the whole case for leaving it out, and what rides on " +
 		"it is not small: were each of its 3 000 turns a day to name one, at the most a hold record " +
 		"takes as the engine writes one (896 bytes, codeHoldRecordBytes), they would append 2.69 " +
-		"MB a day, 37 % of the day's least of 7.3 MB — a company whose seats work so reads it in " +
+		"MB a day, 36 % of the day's least of 7.5 MB — a company whose seats work so reads it in " +
 		"its code log's crewlet.statelog.log.bytes_per_day. The window is that long because " +
 		"code.HoldRecordAfter is idle_days' floor, not the idle_days in force; pricing the rate " +
 		"needs a figure from a running company's tool calls, which nobody has, as codeLogManagers " +
@@ -325,18 +338,17 @@ var codeLogUnwrittenShapes = []struct {
 // TestTheCodeLogsDayPricesEveryRecordItTakes fails on it until its pushes are
 // priced into the day or argued out of it here.
 var codeLogPushVias = map[code.PushVia]string{
-	code.ViaEngine: "a write the engine builds for a tool: a seat's is the push term's records " +
-		"(codeLogDay), every one of the reference company's 3 000 a day, and a person's takes " +
-		"the log less, naming no run and no day",
-	code.ViaGit: "received by git: a person's push, which the day prices as a seat's, since it " +
-		"takes the log less (1 380 bytes alone in its record against a seat's 1 481, " +
-		"BenchmarkPushLogBytes), and none of the reference company's 3 000 is one; an " +
-		"import's batches (crewlet code import), up to code.MaxCommandsPerPush refs a record, " +
-		"once a repository when a person imports it; and a seat's coding box's push, the one " +
-		"seat's push git may receive (code.Proposal.Validate), naming the coding run that pushed " +
-		"and its coding agent beside the turn — a shape of push the day does not price " +
-		"(codeLogFields' run_id), which no node of this build receives: no route it serves " +
-		"admits a coding box",
+	code.ViaEngine: "a write the engine builds for a tool: a seat's takes the log less than its " +
+		"coding box's push (1 481 bytes alone in its record against 1 555, BenchmarkPushLogBytes), " +
+		"at which the day prices every one of the reference company's 3 000 a day, and a " +
+		"person's takes it less still, naming no run and no day",
+	code.ViaGit: "received by git: a seat's coding box's push, the one seat's push git may receive " +
+		"(code.Proposal.Validate), naming the coding run that pushed and its coding agent beside " +
+		"the turn — the push term's records (codeLogDay), at which the day prices every one of " +
+		"the reference company's 3 000; a person's push, which takes the log less (1 380 bytes " +
+		"alone in its record against a box's 1 555), and none of the reference company's 3 000 " +
+		"is one; and an import's batches (crewlet code import), up to code.MaxCommandsPerPush refs " +
+		"a record, once a repository when a person imports it",
 }
 
 // codeLogManagers is everything that may manage a repository
@@ -360,7 +372,7 @@ var codeLogManagers = map[code.ManagedBy]string{
 		"counted until its purge a week after its deletion, so one making and deleting them at " +
 		"the cap makes about seven a day, and every one of the reference company's hundred " +
 		"seats doing so would append under 0.73 MB of creates a day, a tenth of the day's " +
-		"least (7.3 MB), before their deletions and purges",
+		"least (7.5 MB), before their deletions and purges",
 }
 
 // codeLogFields is every key the payload of an op the day prices declares, as
@@ -368,12 +380,13 @@ var codeLogManagers = map[code.ManagedBy]string{
 // CARRY, and every other one with why the term's records never carry it — an
 // absent key naming a whole subtree where they carry none of it (a merge's
 // records, no layer at all). A KEY IS A SHAPE OF RECORD the payload tells
-// apart: one declared since the term was measured — a box's push naming its
-// coding run and agent, a push opening a change — is a record of that op the
-// term was not measured on, larger by what the key spells in every record that
-// carries it, so TestTheCodeLogsDayPricesEveryRecordItTakes fails on it until
-// the term is measured again and restated, or the key is listed here with why
-// the term's records never carry it.
+// apart: one declared since the term was measured — a push opening a change,
+// as a box's push naming its coding run and agent was until the push term was
+// measured on a box's — is a record of that op the term was not measured on,
+// larger by what the key spells in every record that carries it, so
+// TestTheCodeLogsDayPricesEveryRecordItTakes fails on it until the term is
+// measured again and restated, or the key is listed here with why the term's
+// records never carry it.
 //
 // The ENVELOPE every record carries is no op's: a barrier is nothing else,
 // and internal/code's census test holds what one costs.
@@ -387,7 +400,8 @@ var codeLogFields = map[code.OpKind]struct {
 		carried: []string{"repo_id", "pushes.push_id", "pushes.principal.kind",
 			"pushes.principal.seat", "pushes.principal.run.turn_id",
 			"pushes.principal.run.work_backend", "pushes.principal.run.work_key",
-			"pushes.principal.run.model", "pushes.via", "pushes.node", "pushes.commands.ref",
+			"pushes.principal.run.model", "pushes.principal.run.run_id",
+			"pushes.principal.run.coding_agent", "pushes.via", "pushes.node", "pushes.commands.ref",
 			"pushes.commands.old", "pushes.commands.new", "pushes.commands.result",
 			"pushes.pack.pack_id", "pushes.pack.object", "pushes.pack.hash", "pushes.pack.size",
 			"pushes.pack.index_bytes", "pushes.pack.reverse_bytes", "pushes.pack.git_checksum",
@@ -395,23 +409,20 @@ var codeLogFields = map[code.OpKind]struct {
 			"pushes.received_at", "pushes.day"},
 		absent: map[string]string{
 			"pushes.principal.operator_id": "a person's credential, and a seat acts as itself",
-			"pushes.principal.run.run_id": "the coding run behind a coding box's push, which git " +
-				"receives (codeLogPushVias' git), and the measured push is one the engine built for a " +
-				"tool, whose run is the turn that called it: code.Proposal.Validate refuses a push the " +
-				"engine built naming a coding run",
-			"pushes.principal.run.coding_agent": "the coding agent a box ran, named only beside its " +
-				"coding run (run_id's reason)",
-			"pushes.atomic": "--atomic, which a push the engine builds never carries: it moves " +
-				"one ref",
-			"pushes.commands.forced": "a forced update, and a seat's write moves its branch on " +
-				"from its tip",
+			"pushes.atomic": "--atomic, a client's flag for a push of several refs, and the measured " +
+				"push moves one: the box's branch",
+			"pushes.commands.forced": "a forced update, and the measured push moves the box's " +
+				"branch on from its tip",
 			"pushes.commands.reason": "a refused command's code, and the measured push lands",
 			"pushes.commands.detail": "an answer's sentence, which no record carries",
 			"pushes.change": "the change a push opens from its options (git push -o change): only a push git " +
-				"received carries one — never the engine's writes, the term's records — and only the push " +
-				"that opens a change, once a change, a branch heading one live change at a time; the day " +
-				"prices a push git received as a seat's, and none of the reference company's 3 000 is one " +
-				"(codeLogPushVias)",
+				"received carries one — never the engine's writes — and only the push that OPENS a change, " +
+				"once a change, a branch heading one live change at a time; the measured push, a coding " +
+				"box's moving its branch on, opens none. A push that opens one takes the log what its " +
+				"options spell beyond it — a target, a title of at most code.MaxChangeTitleBytes (256) and " +
+				"a description of at most code.MaxChangeBodyBytes (32 KiB) — once a change, and the " +
+				"reference company has no figure for how many of its 3 000 a day open one: a change is no " +
+				"term of the day, its opening as its other records (codeLogUnwritten)",
 		},
 	},
 	code.OpCompact: {
@@ -944,15 +955,17 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		{"half of the records are the turns", referenceTurnsADay * whole.turn / records, 0.45, 0.55},
 		{"the keys a five-year-old project writes are under a tenth of one percent of the day",
 			keyBytes / records, 0, 0.001},
-		{"the code log takes about three fifths of this log's day at its least", codeLeast, 0.58, 0.62},
-		{"and about four fifths at its most", codeMost, 0.78, 0.82},
-		{"two thirds is under the middle of that range, about three tenths of the way up it",
-			(share - codeLeast) / (codeMost - codeLeast), 0.25, 0.35},
+		{"the code log takes about five eighths of this log's day at its least", codeLeast, 0.61, 0.64},
+		{"and about five sixths at its most", codeMost, 0.82, 0.85},
+		{"two thirds is under the middle of that range, about a fifth of the way up it",
+			(share - codeLeast) / (codeMost - codeLeast), 0.15, 0.25},
 		{"so a code log at two thirds of this log's ceiling fills after this log with no CI",
 			share / codeLeast, 1, math.Inf(1)},
 		{"and in about four fifths of this log's time with one", share / codeMost, 0.77, 0.83},
 		{"the compactions and their sweeps moved the middle up by about four hundredths",
 			merges / day, 0.035, 0.045},
+		{"pricing every seat's push as its coding box's moved it up by about two hundredths more",
+			float64(referencePushesADay*(codePushRecordBytes-codeEnginePushRecordBytes)) / day, 0.015, 0.025},
 		{"half suffices under fewer barriers than the reference company's git clients " +
 			"append with no CI, and under some", halfCount / float64(leastReads), 0, 1},
 		{"git's barriers over min_age are under a thirtieth of the tenth of the derived ceiling",
@@ -1058,6 +1071,8 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			fmt.Sprintf("the code log %s–%s MB a day: %s pushes at %s bytes",
 				mb(codeLeastBytes, 1), mb(codeMostBytes, 1), spaced(referencePushesADay),
 				spaced(codePushRecordBytes)),
+			fmt.Sprintf("push=box arm beside a person's; %s where the engine builds the push for a tool",
+				spaced(codeEnginePushRecordBytes)),
 			fmt.Sprintf("%s MB; the compactions that merge those pushes' packs, %s MB at %d bytes a push, "+
 				"and the code-retention duty's sweeps of what they retired, %s MB at %d", mb(pushes, 1),
 				mb(compactions, 2), codeCompactionBytes, mb(sweeps, 2), codeSweepBytes),
@@ -1070,8 +1085,8 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 			fmt.Sprintf("So the code log takes %.2f–%.2f of the mutation log's day — %.2f on its push "+
 				"records alone (%.2f of the tracker's records)", codeLeast, codeMost, pushes/day,
 				pushes/records),
-			fmt.Sprintf("TWO THIRDS is under the middle of that range (%.2f), about three tenths of "+
-				"the way up it", middle),
+			fmt.Sprintf("TWO THIRDS is under the middle of that range (%.2f), about a fifth of the "+
+				"way up it", middle),
 			fmt.Sprintf("beside the reference company's %s MB of pushes and %s MB of their compactions "+
 				"and sweeps, ABOUT %s BARRIERS A DAY, %s MB, make half the mutation log's %s MB day",
 				mb(pushes, 1), mb(merges, 1), hundreds(halfCount), mb(halfBarriers, 1), mb(day, 1)),
@@ -1080,8 +1095,8 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 		"internal/code/limits.go": {
 			fmt.Sprintf("against the tracker's measured %s MB of records and %s MB of barriers",
 				mb(records, 1), mb(barriers, 1)),
-			fmt.Sprintf("%s pushes at the MEASURED %s bytes a seat's push alone in its record "+
-				"(BenchmarkPushLogBytes), %s MB, the compactions that merge their packs and the "+
+			fmt.Sprintf("%s pushes at the MEASURED %s bytes a seat's coding box's push alone in its "+
+				"record (BenchmarkPushLogBytes), %s MB, the compactions that merge their packs and the "+
 				"sweeps of what those retired at the MEASURED %d and %d bytes a push "+
 				"(internal/code/compact's steady arm at the floor), %s MB, and its git clients' "+
 				"barriers at BarrierRecordBytes, %s–%s MB", spaced(referencePushesADay),
@@ -1093,16 +1108,16 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 				window*gitLeast/1e6, window*gitMost/1e6),
 		},
 		"docs/guides/replication.md": {
-			fmt.Sprintf("a company's push records (%s bytes a seat's push, measured), the records that "+
-				"compact their packs and sweep what each compaction retired (%d bytes a push, measured) "+
-				"and the barriers its git clients' reads append (%d bytes a read) take about three "+
-				"fifths to about four fifths of what its tracker writes and its seats' reads take a day, "+
-				"and the ratio is taken under the middle of that range", spaced(codePushRecordBytes),
-				codeCompactionBytes+codeSweepBytes, code.BarrierRecordBytes),
+			fmt.Sprintf("a company's push records (%s bytes a seat's push from its coding box, measured), "+
+				"the records that compact their packs and sweep what each compaction retired (%d bytes "+
+				"a push, measured) and the barriers its git clients' reads append (%d bytes a read) take "+
+				"about five eighths to about five sixths of what its tracker writes and its seats' reads "+
+				"take a day, and the ratio is taken under the middle of that range",
+				spaced(codePushRecordBytes), codeCompactionBytes+codeSweepBytes, code.BarrierRecordBytes),
 			fmt.Sprintf("Beside the reference company's %s pushes a day, that is **about %s barriers a "+
-				"day**: its pushes' %s MB — every one a seat's, %s bytes alone in its record — the %s "+
-				"MB of the records that", spaced(referencePushesADay), hundreds(halfCount),
-				mb(pushes, 1), spaced(codePushRecordBytes), mb(merges, 1)),
+				"day**: its pushes' %s MB — every one a seat's, priced as its coding box's, %s bytes "+
+				"alone in its record — the %s MB of the records that", spaced(referencePushesADay),
+				hundreds(halfCount), mb(pushes, 1), spaced(codePushRecordBytes), mb(merges, 1)),
 			fmt.Sprintf("their packs and sweep what each compaction retired a day later, %d bytes a "+
 				"push, and those barriers' %s MB are half the %s MB a day its tracker writes and its "+
 				"seats' reads take", codeCompactionBytes+codeSweepBytes, mb(halfBarriers, 1),
@@ -1119,8 +1134,9 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 				window*besideBarriers/1e6),
 		},
 		"docs/concepts/scaling.md": {
-			fmt.Sprintf("takes %s bytes for a seat's push in a record of its own",
-				spaced(codePushRecordBytes)),
+			fmt.Sprintf("takes %s bytes for a seat's coding box's push in a record of its own (%s where "+
+				"the engine builds it for a tool)", spaced(codePushRecordBytes),
+				spaced(codeEnginePushRecordBytes)),
 			fmt.Sprintf("43 to %d bytes a push more", codeCompactionBytes),
 			fmt.Sprintf("and the sweeps that remove the rows a merge retired, a day later, up to %d more",
 				codeSweepBytes),

@@ -377,8 +377,9 @@
 //
 // THE PUSH ON THE LOG (BenchmarkPushLogBytes; restated from one count of one
 // iteration once an entry named its way, once a seat's push was measured
-// beside a person's, once the person pushed through a token's name, and once
-// a seat's entry carried the day its quota counted it on): the code log's
+// beside a person's, once the person pushed through a token's name, once a
+// seat's entry carried the day its quota counted it on, and once a seat's
+// coding box's push was measured beside them): the code log's
 // growth over the records the committer forms for that same person's push —
 // its principal naming the token bound to them, `pat:` and its id, its one
 // command, its bundle named and its one introduced id — is 1 380 bytes a push
@@ -394,7 +395,14 @@
 // where a person's names the token, its way is `engine`, and its entry
 // carries the company day its quota counted it on ([PushEntry.Day]),
 // nineteen bytes (`,"day":"2031-04-02"`); so 1 481 bytes alone in its record
-// and about 893 in a burst. The compactions that merge the pushes' packs add
+// and about 893 in a burst. A seat's CODING BOX's push of the commit takes
+// 175.0 bytes more than a person's (push=box): its principal names, beside
+// the run the engine's write names, the coding run that pushed — the
+// launch's id, a UUID — and the coding agent the box ran (`claude-code`),
+// and its way is `git`; so 1 555 bytes alone in its record and about 967 in
+// a burst, the most a seat's push takes of the log, at which the code log's
+// day prices every one of the reference company's (internal/tracker's
+// codeLogDay). The compactions that merge the pushes' packs add
 // their own records, MEASURED a push (internal/code/compact's steady arms,
 // the code log's growth over every pass): 108 bytes where a merge takes the
 // floor's sixteen, a quiet repository's, and 43 where it takes a minute's
@@ -409,11 +417,11 @@
 // merges is swept together, a record for every [RetireSweepRows] of its rows
 // whatever pushes they came from. The log keeps the trim's window of records
 // rather than the history, so the reference company's 3 000 pushes a day,
-// every one a seat's, hold about 31 MB of it over the default seven-day
-// min_age, and the records that merge their packs and sweep what those
-// merges retired at most about 3.2 MB beside them — about 34 MB, under a
-// thirtieth of the log's 1 GiB floor — and the bytes of a push's pack are
-// never on it: a record names its bundle.
+// every one a seat's and priced as its coding box's, hold about 33 MB of it
+// over the default seven-day min_age, and the records that merge their packs
+// and sweep what those merges retired at most about 3.2 MB beside them —
+// about 36 MB, about a thirtieth of the log's 1 GiB floor — and the bytes of
+// a push's pack are never on it: a record names its bundle.
 //
 // # The activation fence
 //

@@ -1726,8 +1726,8 @@ type Stream struct {
 	// log's ceiling as set or derived, clamped to 1 GiB..1 TiB. The ratio is
 	// the byte rate: once seats push, a company's push records, the records
 	// that compact their packs and sweep what each compaction retired, and
-	// the barriers its git clients' reads append take about three fifths to
-	// about four fifths of what its tracker writes and its seats' reads take
+	// the barriers its git clients' reads append take about five eighths to
+	// about five sixths of what its tracker writes and its seats' reads take
 	// a day, and the ratio is taken a little under the middle of that range
 	// ([DerivedCodeLogNumerator] has the arithmetic and the reason), so a
 	// blocked trim reaches either ceiling in about the same time.

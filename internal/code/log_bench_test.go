@@ -54,6 +54,13 @@ import (
 //     and published through the same publisher onto the same broker; what a
 //     seat's push takes of the log, alone or in a burst, is the batch arms'
 //     figure plus it.
+//   - push=box: the same for that seat's CODING BOX's push of the commit,
+//     received by git: its principal names the seat's run as the engine's
+//     write does and beside it the coding run that pushed — the launch's id,
+//     a UUID — and the coding agent the box ran (`claude-code`), and its
+//     way is `git` (code.Proposal.Validate takes a seat's push git received
+//     only naming its coding run). It is the most a seat's push takes of
+//     the log, which the code log's day prices every seat's push at.
 //
 // The branches are created before the stream is measured, and each iteration
 // is a fresh log of a fixed number of rounds, so the figure is the same at any
@@ -130,64 +137,81 @@ func BenchmarkPushLogBytes(b *testing.B) {
 			b.ReportMetric(perRecord, "pushes/record")
 		})
 	}
-	b.Run("push=agent", func(b *testing.B) {
-		// rounds is the records each principal's pushes are measured over,
-		// as many as the lone push's arm takes.
-		const rounds = 16
-		// day is the company day a seat's push is counted against, as the
-		// committer stamps it: harnessAt's on UTC's calendar, committerOn's.
-		day := period.At(period.Day, harnessAt, time.UTC).Label
-		var extra float64
-		for b.Loop() {
-			b.StopTimer()
-			// grew is the log's growth a push over rounds records of one push
-			// each by who, built as via names, each moving ref on from the
-			// commit the record before left — ON A LOG OF ITS OWN, so the two
-			// principals' records sit at the same positions and every number
-			// a record carries beside its entry is as wide for both.
-			grew := func(who code.Principal, via code.PushVia, ref string) float64 {
-				n := newNode(b)
-				repo := repoOn(b, n, "push-log")
-				tip := code.ZeroOID
-				push := func(r int) {
-					id, next := uuid.Must(uuid.NewV7()).String(), oidOf(fmt.Sprint(ref, "-", r))
-					if who.Kind == code.PrincipalAgent {
-						who.Run.TurnID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprint("turn-", r))).String()
-					}
-					// THE ENTRY AS THE COMMITTER FORMS IT: a seat's carries
-					// its day, and a person's none.
-					n.push(repo, code.EntryOf(code.Proposal{PushID: id, RepoID: repo, Principal: who,
-						Via: via, Node: n.id, Commands: []code.Command{set(ref, tip, next)},
-						Pack: suitePack(id), Introduced: []string{next}, IntroducedCount: 1,
-						ReceivedAt: harnessAt}, day))
-					tip = next
-				}
-				// THE BRANCH EXISTS BEFORE THE LOG IS MEASURED, as in the
-				// batch arms.
-				push(0)
-				before, err := n.log.Stats(b.Context())
-				if err != nil {
-					b.Fatal(err)
-				}
-				for r := 1; r <= rounds; r++ {
-					push(r)
-				}
-				after, err := n.log.Stats(b.Context())
-				if err != nil {
-					b.Fatal(err)
-				}
-				if records := after.Messages - before.Messages; records != rounds {
-					b.Fatalf("%d pushes made %d records, want one each", rounds, records)
-				}
-				return float64(after.Bytes-before.Bytes) / rounds
+	// THE SEATS' ARMS: each the log's growth a push of a seat's, built as its
+	// way names, beyond a person's.
+	//
+	// rounds is the records each principal's pushes are measured over, as many
+	// as the lone push's arm takes; day the company day a seat's push is counted
+	// against, as the committer stamps it: harnessAt's on UTC's calendar,
+	// committerOn's.
+	const rounds = 16
+	day := period.At(period.Day, harnessAt, time.UTC).Label
+	// grew is the log's growth a push over rounds records of one push each by
+	// who, built as via names, each moving ref on from the commit the record
+	// before left — ON A LOG OF ITS OWN, so every principal's records sit at
+	// the same positions and every number a record carries beside its entry
+	// is as wide for each.
+	grew := func(b *testing.B, who code.Principal, via code.PushVia, ref string) float64 {
+		n := newNode(b)
+		repo := repoOn(b, n, "push-log")
+		tip := code.ZeroOID
+		push := func(r int) {
+			id, next := uuid.Must(uuid.NewV7()).String(), oidOf(fmt.Sprint(ref, "-", r))
+			if who.Kind == code.PrincipalAgent {
+				who.Run.TurnID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(fmt.Sprint("turn-", r))).String()
 			}
-			persons := grew(person, code.ViaGit, fmt.Sprintf(branch, 0))
-			seats := grew(code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer",
-				Run: code.RunProvenance{WorkBackend: "native", WorkKey: "ENG-1234", Model: "claude-sonnet-4-5"}},
-				code.ViaEngine, fmt.Sprintf(branch, 1))
-			extra = seats - persons
-			b.StartTimer()
+			// THE ENTRY AS THE COMMITTER FORMS IT: a seat's carries its day,
+			// and a person's none.
+			n.push(repo, code.EntryOf(code.Proposal{PushID: id, RepoID: repo, Principal: who,
+				Via: via, Node: n.id, Commands: []code.Command{set(ref, tip, next)},
+				Pack: suitePack(id), Introduced: []string{next}, IntroducedCount: 1,
+				ReceivedAt: harnessAt}, day))
+			tip = next
 		}
-		b.ReportMetric(extra, "extra-bytes/push")
-	})
+		// THE BRANCH EXISTS BEFORE THE LOG IS MEASURED, as in the batch arms.
+		push(0)
+		before, err := n.log.Stats(b.Context())
+		if err != nil {
+			b.Fatal(err)
+		}
+		for r := 1; r <= rounds; r++ {
+			push(r)
+		}
+		after, err := n.log.Stats(b.Context())
+		if err != nil {
+			b.Fatal(err)
+		}
+		if records := after.Messages - before.Messages; records != rounds {
+			b.Fatalf("%d pushes made %d records, want one each", rounds, records)
+		}
+		return float64(after.Bytes-before.Bytes) / rounds
+	}
+	// seat is the seat's principal both seat arms push as: the run behind a
+	// write at each field's usual size, a turn id per push (a UUID), a
+	// tracker's work item and a model id of a provider's usual length.
+	seat := code.Principal{Kind: code.PrincipalAgent, Seat: "docs-writer",
+		Run: code.RunProvenance{WorkBackend: "native", WorkKey: "ENG-1234", Model: "claude-sonnet-4-5"}}
+	// box is the same seat's coding box: its run names the coding run too —
+	// the launch's id, a UUID, and its coding agent.
+	box := seat
+	box.Run.RunID, box.Run.CodingAgent = "0192f00d-0000-7000-8000-00000000c0de", "claude-code"
+	for _, arm := range []struct {
+		name string
+		who  code.Principal
+		via  code.PushVia
+	}{
+		{"push=agent", seat, code.ViaEngine},
+		{"push=box", box, code.ViaGit},
+	} {
+		b.Run(arm.name, func(b *testing.B) {
+			var extra float64
+			for b.Loop() {
+				b.StopTimer()
+				persons := grew(b, person, code.ViaGit, fmt.Sprintf(branch, 0))
+				extra = grew(b, arm.who, arm.via, fmt.Sprintf(branch, 1)) - persons
+				b.StartTimer()
+			}
+			b.ReportMetric(extra, "extra-bytes/push")
+		})
+	}
 }

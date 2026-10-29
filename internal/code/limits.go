@@ -169,12 +169,13 @@ const (
 	// the tracker's declared size (TestTheCodeLogIsDeclaredAtTierAsRatioToTheTrackers),
 	// so the log the suites provision and the log a node creates are sized
 	// by one rule — config's DerivedCodeLogNumerator, whose arithmetic is
-	// what this log takes a day at the reference company once seats push:
-	// 3 000 pushes at the MEASURED 1 481 bytes a seat's push alone in its
-	// record (BenchmarkPushLogBytes), 4.4 MB, the compactions that merge
-	// their packs and the sweeps of what those retired at the MEASURED 108
-	// and 44 bytes a push (internal/code/compact's steady arm at the floor),
-	// 0.5 MB, and its git clients' barriers at BarrierRecordBytes,
+	// what this log takes a day at the reference company once seats push,
+	// each push priced as a coding box's, the most a seat's push takes:
+	// 3 000 pushes at the MEASURED 1 555 bytes a seat's coding box's push
+	// alone in its record (BenchmarkPushLogBytes), 4.7 MB, the compactions
+	// that merge their packs and the sweeps of what those retired at the
+	// MEASURED 108 and 44 bytes a push (internal/code/compact's steady arm
+	// at the floor), 0.5 MB, and its git clients' barriers at BarrierRecordBytes,
 	// 2.4–5.0 MB, against the tracker's measured 9.9 MB of records and
 	// 2.2 MB of barriers, every record in its signed frame.
 	// It was the tracker's whole sixteen, on an estimate of 2 KiB a push and

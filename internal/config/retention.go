@@ -238,13 +238,17 @@ const (
 	//     within a tenth of the 16 GiB in five years its declared ceiling is
 	//     sized at, tracker.TrackerLogMaxBytes), and 2.2 MB of barriers, its
 	//     seats' 12 500 reads and the object collector's 25;
-	//   - the code log 7.3–9.9 MB a day: 3 000 pushes at 1 481 bytes,
-	//     MEASURED for a seat's push alone in its record, as every one of the
-	//     reference company's is (internal/code's BenchmarkPushLogBytes, its
-	//     push=agent arm beside a person's; about 893 a push in a burst group
-	//     commit holds together), 4.4 MB; the compactions that merge those
-	//     pushes' packs, 0.32 MB at 108 bytes a push, and the code-retention
-	//     duty's sweeps of what they retired, 0.13 MB at 44, both MEASURED on
+	//   - the code log 7.5–10.1 MB a day: 3 000 pushes at 1 555 bytes,
+	//     MEASURED for a seat's coding box's push alone in its record, the
+	//     most a seat's push takes, at which every one of the reference
+	//     company's is priced (internal/code's BenchmarkPushLogBytes, its
+	//     push=box arm beside a person's; 1 481 where the engine builds the
+	//     push for a tool, its push=agent arm, and which of its seats push
+	//     from their boxes is no figure the reference company has; about 967
+	//     a push in a burst group commit holds together), 4.7 MB; the
+	//     compactions that merge those pushes' packs, 0.32 MB at 108 bytes a
+	//     push, and the code-retention duty's sweeps of what they retired,
+	//     0.13 MB at 44, both MEASURED on
 	//     a repository pushed once a minute, whose every merge takes the
 	//     floor's sixteen packs and is swept by a record of its own a day
 	//     later (internal/code/compact's BenchmarkCompact, its steady arm at
@@ -265,16 +269,18 @@ const (
 	// percent, so it moved the code log, whose day is half barriers, more
 	// than the mutation log.
 	//
-	// So the code log takes 0.60–0.81 of the mutation log's day — 0.37 on
-	// its push records alone (0.45 of the tracker's records), which is what
+	// So the code log takes 0.62–0.83 of the mutation log's day — 0.38 on
+	// its push records alone (0.47 of the tracker's records), which is what
 	// the 1.5–2 KiB a record this ratio was first set from overstated — and
-	// TWO THIRDS is under the middle of that range (0.71), about three tenths
-	// of the way up it: under a blocked trim a code log at two thirds of the
+	// TWO THIRDS is under the middle of that range (0.73), about a fifth of the
+	// way up it: under a blocked trim a code log at two thirds of the
 	// mutation log's ceiling fills after the mutation log while the company's
 	// git clients are its seats and its people, and in about four fifths of
 	// the mutation log's time where a CI polls beside them. It was the
 	// middle until the compactions and their sweeps were priced into the
-	// day, which moved the middle up by about four hundredths. Not raised to
+	// day, which moved the middle up by about four hundredths, and pricing
+	// every seat's push as its coding box's moved it up by about two
+	// hundredths more. Not raised to
 	// the middle again, because the git barriers are the softest term in the
 	// day — the CI's polls alone are the whole width of the range — a
 	// JUDGEMENT on an ESTIMATE of git traffic no deployment has reported yet,
@@ -295,9 +301,9 @@ const (
 	// and its git clients' barriers, the same line is a count of the
 	// barriers, its crewlet.statelog.barrier.applied (stream
 	// CREWLET_CODE_LOG), which any one data node counts whole, since every
-	// data node applies every barrier: beside the reference company's 4.4 MB
-	// of pushes and 0.5 MB of their compactions and sweeps, ABOUT 6 600
-	// BARRIERS A DAY, 1.2 MB, make half the mutation log's 12.1 MB day. The
+	// data node applies every barrier: beside the reference company's 4.7 MB
+	// of pushes and 0.5 MB of their compactions and sweeps, ABOUT 5 300
+	// BARRIERS A DAY, 0.9 MB, make half the mutation log's 12.1 MB day. The
 	// reference company's own git clients append more than that with no CI
 	// at all (13 800), so a half is for a company whose people and CI fetch
 	// less.
