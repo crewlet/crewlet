@@ -65,7 +65,9 @@ func (fixtureRoster) Within(unit, ancestor string) bool {
 }
 
 // FixtureSeatRules is the fixture chart and the company's clock as a data
-// node's committer judges a seat's push by them (code.CommitterOptions).
+// node's committer judges a seat's push by them (code.CommitterOptions), and
+// its change writer a seat's write of a change's conversation and every
+// reviewer an ask names (code.ChangeWriterOptions).
 func FixtureSeatRules() (code.SeatRules, bool) {
 	return code.SeatRules{Roster: FixtureRoster(), Zone: time.UTC}, true
 }

@@ -64,8 +64,9 @@ type DataOptions struct {
 	// must then fail on (TestTheSuiteCatchesARetirementWithNoGrace).
 	WrapApplier func(statelog.Applier) statelog.Applier
 	// SeatRules is the chart and the clock the node's committer judges a
-	// seat's push by — an engine write's among them; nil is the fixture
-	// chart on UTC (FixtureSeatRules).
+	// seat's push by — an engine write's among them — and its change writer
+	// a seat's write of a change's conversation and every reviewer an ask
+	// names; nil is the fixture chart on UTC (FixtureSeatRules).
 	SeatRules func() (code.SeatRules, bool)
 }
 
@@ -294,9 +295,11 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		Publisher: &faultPublisher{inner: pub, faults: d.o.Faults, appends: &d.appends},
 		DB:        p.estate.Reader(), NodeID: d.o.ID,
 		Retention: func() time.Duration { return deletedRetention },
-		// NO CHART, as the committer's: every conversation case of the
-		// suite writes as a person, whose comment reads no chart.
-		SeatRules: func() (code.SeatRules, bool) { return code.SeatRules{}, false },
+		// THE COMMITTER'S CHART, as the engine hands the two the same one
+		// (codeSeatRules): a seat's write of a change's conversation, and
+		// every reviewer an ask names, is judged by the chart a seat's push
+		// is, so a node of the suite decides what a node of the fleet does.
+		SeatRules: seatRules,
 	}); err != nil {
 		t.Fatalf("codetest: %s: build the change writer: %v", d.o.ID, err)
 	}

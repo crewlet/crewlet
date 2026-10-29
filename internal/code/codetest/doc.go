@@ -57,18 +57,18 @@
 // # An engine write is a seat's commit, and lands as a push
 //
 // Every topology judges a seat by THE FIXTURE CHART (FixtureRoster on its git
-// nodes, FixtureSeatRules on its committers, FixtureSigner signing its
-// commits) unless a case names its own: the unit ENG — owner of every case's
-// repository — led by `lead`, with `alice` full_access, `bob` read_only and the
-// human seat `pat`, whose person holds a token like every person's. Fleet.Write
-// asks a write of the git nodes' code hosts IN PROCESS, the repository's home
-// first and stamped so, the next asked only where one refuses about itself —
-// the walk a keyed write takes (WriteThrough). The cases (F32–F38, ADR-0062)
-// hold what a person's clone then reads of the commit — its author, its
-// committer, its dates, its tree — and what the push row says of who built it,
-// that one write asked again is one push, that a conflict and a refusal store
-// nothing, and that a git node killed at every point of a write's path leaves
-// one push or none.
+// nodes, FixtureSeatRules on its committers and change writers, FixtureSigner
+// signing its commits) unless a case names its own: the unit ENG — owner of
+// every case's repository — led by `lead`, with `alice` full_access, `bob`
+// read_only and the human seat `pat`, whose person holds a token like every
+// person's. Fleet.Write asks a write of the git nodes' code hosts IN PROCESS,
+// the repository's home first and stamped so, the next asked only where one
+// refuses about itself — the walk a keyed write takes (WriteThrough). The cases
+// (F32–F38, ADR-0062) hold what a person's clone then reads of the commit — its
+// author, its committer, its dates, its tree — and what the push row says of
+// who built it, that one write asked again is one push, that a conflict and a
+// refusal store nothing, and that a git node killed at every point of a write's
+// path leaves one push or none.
 //
 // # Crashes are held past the node's death
 //
