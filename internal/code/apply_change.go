@@ -228,18 +228,39 @@ func writeChange(ctx context.Context, tx *sql.Tx, r changeRow) error {
 }
 
 // write writes what a push record's [changeBook] made of the changes its
-// entries reached — each change's row whole, its revisions and its new
-// authors — and answers the rows it wrote, [changeBook.rowCount]: the push
-// apply's half of the book, here in the applier's own files, while the model
-// it writes from (revisions.go) is the decide's as much as the apply's. A
-// conflict on a revision's or an author's key is a skip, never an abort,
-// which would stall the log on every node: no record this build applies
-// meets one, since the book adds only what the rows it read do not hold.
+// entries reached — each change's row whole, inserted for a change the record
+// opened and written back over every other, its revisions, its new authors,
+// the descriptions of the changes it opened and, where it opened any, the
+// repository's next number — and answers the rows it wrote,
+// [changeBook.rowCount]: the push apply's half of the book, here in the
+// applier's own files, while the model it writes from (revisions.go) is the
+// decide's as much as the apply's. A conflict on a key is a skip, never an
+// abort, which would stall the log on every node: no record this build
+// applies meets one, since the book adds only what the rows it read do not
+// hold, and a change it opens takes an id derived from a push no row holds
+// yet ([PushChangeID]).
 func (b *changeBook) write(ctx context.Context, tx *sql.Tx, maxVariables int) (int, error) {
+	var opened []*changeRow
 	for _, id := range b.touched {
+		if b.opened[id] {
+			opened = append(opened, b.rows[id])
+			continue
+		}
 		if err := writeChange(ctx, tx, *b.rows[id]); err != nil {
 			return 0, fmt.Errorf("code: write change %s: %w", id, err)
 		}
+	}
+	if _, err := store.InsertRows(ctx, tx, maxVariables,
+		`INSERT INTO code_changes (`+changeColumns+`) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`ON CONFLICT (id) DO NOTHING`, len(opened), func(i int) []any {
+			r := opened[i]
+			return []any{r.id, r.repoID, r.number, r.title, r.bodyBytes, string(r.state), r.source, r.target, r.head,
+				r.revision, r.owner, string(r.ownerKind), r.operator, string(r.work.Backend), r.work.ID, r.work.Key,
+				r.work.Project, r.turn, r.run, r.openedAt, r.opened, r.closedAt, r.closeReason, r.mergedAt,
+				string(r.mergedVia), r.mergeOID, r.version, r.position}
+		}); err != nil {
+		return 0, fmt.Errorf("code: open the changes: %w", err)
 	}
 	if _, err := store.InsertRows(ctx, tx, maxVariables,
 		`INSERT INTO code_revisions (change_id, n, head_oid, pusher, pusher_kind, push_id, position, at) VALUES `,
@@ -258,6 +279,20 @@ func (b *changeBook) write(ctx context.Context, tx *sql.Tx, maxVariables int) (i
 			return []any{a.change, a.author, string(a.kind), a.first, b.packed}
 		}); err != nil {
 		return 0, fmt.Errorf("code: write the authors: %w", err)
+	}
+	if _, err := store.InsertRows(ctx, tx, maxVariables, `INSERT INTO code_change_bodies (change_id, body) VALUES `,
+		`(?, ?)`, `ON CONFLICT (change_id) DO NOTHING`, len(b.bodies), func(i int) []any {
+			return []any{b.bodies[i].change, b.bodies[i].body}
+		}); err != nil {
+		return 0, fmt.Errorf("code: write the descriptions of the changes opened: %w", err)
+	}
+	// THE REPOSITORY'S NEXT NUMBER, moved on past every change the record
+	// opened, in the repository's own row — which the record writes anyway,
+	// its counters, so this costs the record no row of its budget.
+	if len(opened) > 0 {
+		if _, err := tx.ExecContext(ctx, nextChangeAfterSQL, b.next, b.repo); err != nil {
+			return 0, fmt.Errorf("code: move the repository's next change on: %w", err)
+		}
 	}
 	return b.rowCount(), nil
 }
@@ -285,6 +320,11 @@ const (
 		ON CONFLICT (id) DO NOTHING`
 	openedSQL  = `UPDATE code_repos SET next_change = next_change + 1, version = ? WHERE id = ?`
 	touchedSQL = `UPDATE code_repos SET version = ? WHERE id = ?`
+
+	// nextChangeAfterSQL sets the repository's next number past the changes a
+	// push record opened: its version is the record's counters' to move.
+	nextChangeAfterSQL = `UPDATE code_repos SET next_change = ? WHERE id = ?`
+
 	setBodySQL = `INSERT INTO code_change_bodies (change_id, body) VALUES (?, ?)
 		ON CONFLICT (change_id) DO UPDATE SET body = excluded.body`
 	deleteBodySQL = `DELETE FROM code_change_bodies WHERE change_id = ?`

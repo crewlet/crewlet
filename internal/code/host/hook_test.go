@@ -227,6 +227,7 @@ func TestTheCommandSectionIsBounded(t *testing.T) {
 	oid := func(c byte) string { return strings.Repeat(string(c), 40) }
 	command := func(ref string) string { return pkt(oid('a') + " " + oid('b') + " " + ref + "\n") }
 	first := pkt(oid('a') + " " + oid('b') + " refs/heads/main\x00report-status atomic agent=git/2.43.0\n")
+	optioned := pkt(oid('a') + " " + oid('b') + " refs/heads/main\x00report-status push-options\n")
 	many := func(n int) string {
 		var b strings.Builder
 		for i := range n {
@@ -277,6 +278,17 @@ func TestTheCommandSectionIsBounded(t *testing.T) {
 		{name: "an empty ref", body: pkt(oid('a')+" "+oid('b')+" \n") + "0000", commands: 1},
 		{name: "a push certificate", body: pkt("push-cert\x00report-status\n") + pkt("certificate version 0.1\n") +
 			"0000", err: host.ErrPushCertificate},
+		// THE OPTIONS AFTER THE COMMANDS, of a client that asked for them:
+		// receive-pack reads them before the pack, so they are the section's,
+		// to its own bound.
+		{name: "options after the commands", body: optioned + "0000" + pkt("change") + pkt("change.title=x") +
+			"0000" + "PACK", commands: 1, raw: optioned + "0000" + pkt("change") + pkt("change.title=x") + "0000"},
+		{name: "options past a mebibyte with the commands", body: optioned + "0000" +
+			strings.Repeat(pkt("ci.variable="+strings.Repeat("v", 60_000)), 18) + "0000", err: host.ErrOptionsTooLarge},
+		{name: "options of a client that asked for none are the pack's", body: first + "0000" + pkt("change") +
+			"0000", commands: 1, raw: first + "0000"},
+		{name: "options of a section that queued no command", body: pkt("not a command\x00push-options\n") +
+			"0000" + pkt("change") + "0000", raw: pkt("not a command\x00push-options\n") + "0000"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, err := host.ReadCommands(strings.NewReader(tc.body), host.MaxCommandSectionBytes, code.MaxCommandsPerPush)
@@ -310,15 +322,19 @@ func TestTheCommandSectionIsBounded(t *testing.T) {
 
 // THE COMMAND SECTION IS READ AS RECEIVE-PACK READS IT, measured against real
 // git: each section, followed by an empty pack, is handed to `git receive-pack
-// --stateless-rpc` in a bare repository holding one commit and NO HOOK, so git
-// creates every ref it queued that its own rules take. What git created is
-// held to what the reader read: every ref git creates is a command the reader
-// read — so no check the receiver makes before receive-pack runs is skipped for
-// a command git acts on — and the reader's capabilities are the ones git
-// answered with (its report, and its side-band). Each row pins git's side as
-// well as the reader's, so a git that changes its reading fails here rather
-// than in a push. A section the reader refuses is one git acts on regardless,
-// which is why it is refused.
+// --stateless-rpc` in a bare repository holding one commit and NO HOOK, under
+// the receive configuration's receive.advertisePushOptions, so git creates
+// every ref it queued that its own rules take. What git created is held to
+// what the reader read: every ref git creates is a command the reader read —
+// so no check the receiver makes before receive-pack runs is skipped for a
+// command git acts on — the reader's capabilities are the ones git answered
+// with (its report, and its side-band), and the bytes the reader takes for the
+// section are the section's whole, the push's options after its commands
+// among them, so what receive-pack reads before the pack is what the
+// receiver bounded. Each row pins git's side as well as the reader's, so a
+// git that changes its reading fails here rather than in a push. A section
+// the reader refuses is one git acts on regardless, which is why it is
+// refused.
 func TestTheCommandSectionIsReadAsReceivePackReadsIt(t *testing.T) {
 	c := gittest.NewClient(t)
 	work := c.Init(t)
@@ -371,6 +387,14 @@ func TestTheCommandSectionIsReadAsReceivePackReadsIt(t *testing.T) {
 			pkt(create(head, "refs/heads/ce")) + pkt("rt3\n") + pkt("push-cert-end\n") + "0000",
 			created: []string{"refs/heads/cert1", "refs/heads/cert2", "refs/heads/cert3"},
 			err:     host.ErrPushCertificate},
+		// THE OPTIONS AFTER THE COMMANDS, which receive-pack reads before the
+		// pack once a line asked for push-options — the first or a later one.
+		{name: "options after the commands", section: pkt(create(head, "refs/heads/opt")+
+			"\x00report-status push-options\n") + "0000" + pkt("change") + pkt("change.title=Retry") + "0000",
+			created: []string{"refs/heads/opt"}, read: []string{"refs/heads/opt"}},
+		{name: "options asked for on a later line", section: pkt(create(head, "refs/heads/o1")+"\n") +
+			pkt(create(head, "refs/heads/o2")+"\x00report-status push-options\n") + "0000" + pkt("ci.skip") + "0000",
+			created: []string{"refs/heads/o1", "refs/heads/o2"}, read: []string{"refs/heads/o1", "refs/heads/o2"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, err := host.ReadCommands(strings.NewReader(tc.section+pack), host.MaxCommandSectionBytes,
@@ -385,12 +409,15 @@ func TestTheCommandSectionIsReadAsReceivePackReadsIt(t *testing.T) {
 			if tc.err == nil && !slices.Equal(read, tc.read) {
 				t.Errorf("the reader read %q, want %q", read, tc.read)
 			}
+			if tc.err == nil && string(s.Raw) != tc.section {
+				t.Errorf("the reader took %q for the section, want the section whole: %q", s.Raw, tc.section)
+			}
 
 			bare := t.TempDir()
 			c.Run(t, bare, "init", "--bare", "-q")
 			c.Run(t, work, "push", "-q", bare, "main")
-			stdout, stderr, gitErr := c.Try(t, bare, strings.NewReader(tc.section+pack), "receive-pack",
-				"--stateless-rpc", bare)
+			stdout, stderr, gitErr := c.Try(t, bare, strings.NewReader(tc.section+pack), "-c",
+				"receive.advertisePushOptions=true", "receive-pack", "--stateless-rpc", bare)
 			if (gitErr != nil) != tc.dies {
 				t.Fatalf("git receive-pack exited %v, want it to die: %v\n%s", gitErr, tc.dies, stderr)
 			}

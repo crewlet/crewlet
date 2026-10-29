@@ -100,14 +100,17 @@ func (p Principal) party() (string, PartyKind) {
 
 // ChangeRefusal is why a repository's committer decided nothing of a write of a
 // change's lifecycle ([ChangeProposal]) — a code its asker reads as "<code>:
-// <sentence>", the sentence the decide's ([ChangeResult.Detail]). A named
-// string, so a code this build does not know is a value rather than a panic.
-// NONE IS EVER RECORDED: a refused write appends nothing, so no record of the
-// code log carries one and none takes a versionedFields row.
+// <sentence>", the sentence the decide's ([ChangeResult.Detail]) — and why a
+// push's options opened no change ([ChangeAnswer], [PushChangeRefusals]). A
+// named string, so a code this build does not know is a value rather than a
+// panic. NONE IS EVER RECORDED: a refused write appends nothing, and a push
+// whose change was refused lands as a push that asked for none, so no record
+// of the code log carries one and none takes a versionedFields row.
 type ChangeRefusal string
 
-// The codes, in the order the decide's rules reach them (decide_change.go)
-// and then the committer's own.
+// The codes, in the order the decide's rules reach them (decide_change.go),
+// then the two only a push's receiver answers (pushchange.go), and then the
+// committer's own.
 const (
 	// ChangeRefusalRepoDeleted is a write to a repository that is deleted,
 	// being purged, purged or not there at all — in the sentence of the
@@ -151,6 +154,18 @@ const (
 	// merged.
 	ChangeRefusalChangeMerged ChangeRefusal = "change_merged"
 
+	// ChangeRefusalAmbiguousSource is a push asking for a change that sets
+	// more than one branch: a change proposes ONE branch, and which of the
+	// push's is the asker's to say, by pushing it alone (pushchange.go). Its
+	// receiver's answer, never its committer's.
+	ChangeRefusalAmbiguousSource ChangeRefusal = "ambiguous_source"
+	// ChangeRefusalBadOption is a push whose options are no change's — a
+	// key of the change namespace this engine does not read, a value its
+	// field refuses, a key given twice — or a change too wide for the
+	// record of the push carrying it ([ParseChangeOptions]). Its receiver's
+	// answer, never its committer's.
+	ChangeRefusalBadOption ChangeRefusal = "bad_option"
+
 	// ChangeRefusalBusy is a write the repository's committer did not reach
 	// in time — its queue full, its asker's attempt run short, or the
 	// repository changing under every round the write may take — and
@@ -169,7 +184,8 @@ func ChangeRefusals() []ChangeRefusal {
 		ChangeRefusalRepoDeleted, ChangeRefusalRepoArchived, ChangeRefusalChangeNotFound,
 		ChangeRefusalNotPermitted, ChangeRefusalStale, ChangeRefusalSameRef, ChangeRefusalNoSource,
 		ChangeRefusalNoTarget, ChangeRefusalNoDifference, ChangeRefusalChangeExists, ChangeRefusalChangeClosed,
-		ChangeRefusalChangeMerged, ChangeRefusalBusy, ChangeRefusalNotApplied, ChangeRefusalUnavailable,
+		ChangeRefusalChangeMerged, ChangeRefusalAmbiguousSource, ChangeRefusalBadOption, ChangeRefusalBusy,
+		ChangeRefusalNotApplied, ChangeRefusalUnavailable,
 	}
 }
 

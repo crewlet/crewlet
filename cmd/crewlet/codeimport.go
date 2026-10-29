@@ -620,9 +620,10 @@ func (imp *importer) checkPushAccess(ctx context.Context, probe string) error {
 // changes what a push carries, or whether git will make it at all:
 //
 //   - push.pushOption, cleared (an empty value empties the list): the code
-//     host advertises no push options, so a push carrying one — ci.skip, set
-//     for a forge — is refused by git itself, "the receiving end does not
-//     support push options", at every step of every run;
+//     host reads a change from a push's options, so a `change` the operator
+//     keeps there for their own pushes would open a change from every step
+//     that pushes one branch alone — an import's steps are history, never a
+//     proposal — and a forge's (ci.skip) means nothing here;
 //   - push.negotiate=false: a negotiation is a fetch from the node before
 //     each push, which can only shrink the pack against the measurement and
 //     costs the node an upload-pack a step;

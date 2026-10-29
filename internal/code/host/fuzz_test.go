@@ -70,21 +70,32 @@ func FuzzRelayFrames(f *testing.F) {
 }
 
 // FuzzProcReceive: git's proc-receive input as the engine reads it — the
-// version block and the commands. Never a panic; an accepted command list
-// holds only commands of two object ids and a ref, at most a push's.
+// version block, the commands and, where the version block offered them, the
+// push's options. Never a panic; an accepted command list holds only commands
+// of two object ids and a ref, at most a push's; the answer to the version
+// block offers push-options exactly where git did; and every accepted option
+// is one line of what was sent.
 func FuzzProcReceive(f *testing.F) {
 	version := string(pktString("version=1\x00atomic push-options\n")) + flushPkt
-	f.Add([]byte(version + string(pktString(oidA+" "+oidB+" refs/heads/main\n")) + flushPkt))
+	f.Add([]byte(version + string(pktString(oidA+" "+oidB+" refs/heads/main\n")) + flushPkt +
+		string(pktString("change")) + string(pktString("change.title=Retry")) + flushPkt))
 	f.Add([]byte(string(pktString("version=1\n")) + flushPkt +
 		string(pktString(gitref.ZeroOID+" "+oidB+" refs/heads/new\n")) +
 		string(pktString(oidA+" "+gitref.ZeroOID+" refs/tags/v1\n")) + flushPkt))
 	f.Add([]byte(string(pktString("repo=other\n")) + flushPkt))
 	f.Add([]byte(version + delimPkt + flushPkt))
+	f.Add([]byte(version + flushPkt + delimPkt))
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		br := readerOf(raw)
 		s := &Server{}
-		if _, err := s.versionBlock(br, &frameWriter{w: &bytes.Buffer{}}); err != nil {
+		var answer bytes.Buffer
+		features, err := s.versionBlock(br, &frameWriter{w: &answer})
+		if err != nil {
 			return
+		}
+		if offered := bytes.Contains(answer.Bytes(), []byte("push-options")); offered != features.pushOptions {
+			t.Fatalf("the relay answered %q to a version block whose push-options it read as %v", answer.Bytes(),
+				features.pushOptions)
 		}
 		cmds, err := readHookCommands(br)
 		if err != nil {
@@ -93,6 +104,18 @@ func FuzzProcReceive(f *testing.F) {
 		for _, c := range cmds {
 			if !gitref.ValidOID(c.Old) || !gitref.ValidOID(c.New) || c.Ref == "" {
 				t.Fatalf("an accepted command %+v", c)
+			}
+		}
+		if !features.pushOptions {
+			return
+		}
+		options, err := readHookPushOptions(br)
+		if err != nil {
+			return
+		}
+		for _, o := range options {
+			if !bytes.Contains(raw, []byte(o)) {
+				t.Fatalf("an accepted option %q is none of what was sent", o)
 			}
 		}
 	})
@@ -116,6 +139,8 @@ func FuzzCommandSection(f *testing.F) {
 	f.Add([]byte(string(pktString("push-cert\x00report-status\n")) + string(pktString("certificate version 0.1\n")) +
 		flushPkt))
 	f.Add([]byte(flushPkt))
+	f.Add([]byte(string(pktString(gitref.ZeroOID+" "+oidB+" refs/heads/x\x00report-status push-options\n")) +
+		flushPkt + string(pktString("change")) + string(pktString("change.title=Retry")) + flushPkt + "PACK"))
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		s, err := readCommands(readerOf(raw), MaxCommandSectionBytes, code.MaxCommandsPerPush)
 		if !bytes.HasPrefix(raw, s.Raw) {

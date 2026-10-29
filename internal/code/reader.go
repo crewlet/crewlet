@@ -1114,7 +1114,9 @@ func checkCursor(c *StateCursor) error {
 
 // PushOutcome answers what became of one push, at session floored at the
 // record's own position: "not found" is final only at or past it, so a node
-// that cannot reach it refuses `behind` rather than answering early.
+// that cannot reach it refuses `behind` rather than answering early. Asked
+// ([OutcomeQuery.Change]), it names the change the push opened from its
+// options as well, by the id the push derives, in the same snapshot.
 func (r *Reader) PushOutcome(ctx context.Context, q OutcomeQuery) (PushOutcome, error) {
 	switch {
 	case q.At.IsZero():
@@ -1140,7 +1142,16 @@ func (r *Reader) PushOutcome(ctx context.Context, q OutcomeQuery) (PushOutcome, 
 			return fmt.Errorf("%w: push %s is %s's, not %s's", ErrInvalid, q.PushID, row.RepoID, q.RepoID)
 		}
 		out.Found, out.Push = true, row
-		return nil
+		if !q.Change {
+			return nil
+		}
+		// THE CHANGE IT OPENED, by the id its push derives, in the
+		// snapshot its row was read in.
+		change, opened, err := changeRowIn(ctx, tx, PushChangeID(q.PushID))
+		if err == nil && opened && change.repoID == q.RepoID {
+			out.Opened = change.number
+		}
+		return err
 	})
 	if err != nil {
 		return PushOutcome{}, err

@@ -59,18 +59,19 @@ This is the product's current shape, not a configuration choice:
   no live turn holds ([Repositories made by tools](#repositories-made-by-tools));
   the tools that ask it arrive with seats' code writes, so today every
   repository is one `code.repos` declares.
-- **Nothing asks for a change or its discussion yet, and there are no checks.**
-  A repository's committer decides a [change](#changes)'s opening, its edits
-  and its close, a push to a change's branches writes its revisions, merges it
-  or closes it, the [change writer](#reviews-and-findings) beside the committer
-  decides who is asked to review it and what is said on it, and a data node
-  answers a listing of changes and one change in detail
-  ([Reading changes](#reading-changes)) — but no tool, route or push opens,
-  reads or discusses a change in this release, and no change is gated in front
-  of a protected branch. A protection rule decides what a push may do to a ref,
-  and nothing else stands in front of one. So a repository's [path
-  owners](#path-owners) are recorded and read, and no review is asked of them
-  yet.
+- **Only a push opens a change, nothing asks for its discussion yet, and
+  there are no checks.** A push opens a [change](#changes) from its options
+  ([A change a push opens](#a-change-a-push-opens)); a repository's committer
+  decides a change's opening, its edits and its close, a push to a change's
+  branches writes its revisions, merges it or closes it, the [change
+  writer](#reviews-and-findings) beside the committer decides who is asked to
+  review it and what is said on it, and a data node answers a listing of
+  changes and one change in detail ([Reading changes](#reading-changes)) —
+  but no tool or route opens, edits, reads or discusses a change in this
+  release, and no change is gated in front of a protected branch. A protection
+  rule decides what a push may do to a ref, and nothing else stands in front
+  of one. So a repository's [path owners](#path-owners) are recorded and read,
+  and no review is asked of them yet.
 - **Nothing drops an object a push stored.** A force-push or a deletion
   leaves the history behind it in the repository's packs, fetchable by its
   id, for as long as the repository lives. The object each such push left is
@@ -827,7 +828,7 @@ Four tables hold a change, on every data node:
 | `code_changes` | each change | Its number and title; its state; its source and target branches; the head of its latest revision; who opened it — a seat, or a person by the human seat they hold, with the credential they used; the work item it carries; when it was opened, closed and merged, and how; and how many bytes its description holds |
 | `code_change_bodies` | each change with a description | Its description, up to 32 KiB |
 | `code_change_authors` | each of its authors | Who wrote the change: whoever opened it, and everyone whose push moved its head, each from the revision they first wrote. An author's approval of their own change counts for nothing |
-| `code_revisions` | each time its head moved while it was live | The new head, who pushed it and the push that did. Revision 1 is the source branch's head when the change was opened, and a reopen's revision its head when the change was reopened — each made by whoever opened or reopened it, by no push |
+| `code_revisions` | each time its head moved while it was live | The new head, who pushed it and the push that did. Revision 1 is the source branch's head when the change was opened — made by the push that opened it, for a change a push opened, and otherwise by whoever opened it, by no push — and a reopen's revision its head when the change was reopened, made by whoever reopened it |
 
 - **A number is the repository's own**, counted from 1 in the order the code
   log applies the records that open changes, so two changes of a repository
@@ -914,6 +915,38 @@ A write that is refused appends nothing, and says why in one sentence:
 asked to decide, by its write and what became of it, and
 `crewlet.code.commit.busy` counts one met busy under `kind` `change` (the
 [metrics reference](../reference/metrics.md)).
+
+### A change a push opens
+
+A push opens a change from its options — `git push -o change` — **in the
+push's own record**: the record that moves the branch opens the change on it,
+so the commit and the change proposing it land together or not at all, on
+every data node, and no second record is ever half of it ([how to open
+one](../guides/code.md#open-a-change-from-a-push)).
+
+- **From the one branch the push sets.** The change's source is the branch
+  the push creates or moves, its head the commit the push set it to; a push
+  that sets no branch, or several, opens none. Its target is the branch
+  `change.target` names, or the repository's default branch; its title the
+  one `change.title` names, or the subject of the commit the push set the
+  branch to.
+- **By its pusher, as an open is.** The pusher is the change's owner and
+  first author, and the push its first revision; a seat's push names the turn
+  that made it. Whoever may push the branch may open a change from it, so the
+  push's own update is the check.
+- **Numbered like any other.** The record takes the repository's next number
+  when it applies, in the order of the pushes it carries, and a later push in
+  the same record revises or merges the change as it would any live one.
+- **A branch heading a live change names it.** A push to a branch that
+  already heads a draft or open change revises that change, as every push to
+  it does, and opens no other, whatever the options ask: they shape only a
+  change a push opens.
+- **Its options never fail the push.** Options that are no change's, a push of
+  no branch or of several, and a change the rules of an open refuse — a target
+  that is the source, no live target, a source at its target's commit — leave
+  the push to land as one that asked for nothing. git prints one line of what
+  became of the change, `remote: crewlet: change web!42 opened` or why none was
+  ([What git prints](#when-a-push-asked-for-a-change)).
 
 ### Revisions
 
@@ -3297,7 +3330,7 @@ sequenceDiagram
   H->>H: read the commands; refuse what needs no object
   H->>L: sync the cache through the barrier
   H->>S: receive-pack in a scratch repository
-  S->>P: the ref updates git accepted
+  S->>P: the ref updates git accepted, and the push's options
   P->>H: relayed over the node's hook socket
   H->>H: forced updates, blob sizes, new commits
   H->>O: upload the push's one pack bundle
@@ -3349,6 +3382,16 @@ beside about 2 ms for receive-pack's own start — a few per cent of a push that
 also stores a bundle and waits for its record. What the engine's own packages
 do at initialisation is held small by a test of their init trace, so a table a
 package could build at first use is not built on every push.
+
+**Its options are read where git hands them to the hook.** A push's options
+(`git push -o`) reach the engine from receive-pack, after the ref updates it
+accepted, and the engine reads a change from them there ([A change a push
+opens](#a-change-a-push-opens)) — never from the request's own bytes, which are
+what the client wrote rather than what git read. Every option but the
+`change` ones is a forge's, read by nobody. receive-pack keeps every option a
+client sends in its memory, so the node holds a push's command list and its
+options together to 1 MiB before receive-pack reads either, and refuses a
+push past it — far past the 33 KiB a change's options take at their longest.
 
 **Checked before it is stored.** A push naming more than 1 000 refs, a credential
 bound to no seat, an archived or deleted repository, a deletion or a direct
@@ -3846,6 +3889,8 @@ words, since git does not read the header.
 | A token bound to nobody (a push) | `fatal: remote error: this token is not bound to a person: …`, or `(not_permitted: this token is not bound to a person: …)` on every ref of a push sent without its advertisement | Push with a token that acts as your human seat — your own machine token (`crewlet iam token -login`). |
 | A command the pusher's grant does not cover ([who may read and push](#who-may-read-and-push)) | `(not_permitted: …)`, saying what the pusher holds, what the command needs and what would admit it | Ask for what the sentence names, or push where it says. |
 | More than 1 000 refs in one push | `(this push names more than 1000 refs; push them in parts …)` | Push the refs in groups. |
+| A command list past 1 MiB — the most refs one push takes, at the longest the engine takes (255 bytes), come to about 340 KiB, so it holds refs past that or lines that are no ref update | `(this push's command list is over 1 MiB)` | Push the refs in groups, each at most 255 bytes. Nothing of the push was run or stored. |
+| Push options that take the push's command list past 1 MiB — far past what any change's options take ([A change a push opens](#a-change-a-push-opens)) | `(this push's options take its command list past 1 MiB; push with fewer or shorter options (git push -o))` | Push with fewer options. Nothing of the push was run or stored. |
 | More ref updates than one push's record holds — some six hundred of the longest refs whose characters the code log spells long (`&`, `<`, `>`) | `(this push's ref updates take up to <size> of its record, past the 1023.5 KiB one push may; push them in parts …)` | Push the refs in groups. Nothing of the push was run or stored. |
 | A push carries a push certificate — a signed push, from a client built by hand (`git push --signed` stops in git itself, since the engine advertises none) | `this push carries a push certificate (a signed push), which this engine never advertises and does not take: push without --signed` (400) | Push without `--signed`. Nothing of the push was run or stored. |
 | A ref moved since you fetched | `(stale: refs/heads/main is at <id>; fetch first)`, or `(stale: was at <id>, which this repository does not hold; fetch first)` when the commit you pushed from was never pushed here | Fetch, integrate, push again. |
@@ -3901,6 +3946,29 @@ behind several CI runners, or a node whose spooling is full, before any
 checkout fails; `expired` and `refused` are checkouts that did, and their
 `code_fetch_spool_unserved` lines say which held them back ([metrics
 reference](../reference/metrics.md)).
+
+### When a push asked for a change
+
+A push that asked for a change (`git push -o change`, [A change a push
+opens](#a-change-a-push-opens)) is told in one line what became of it, beside
+the line of each ref. None of these is a refusal of the push, which lands or
+not by its refs alone. Where the push landed and its change did not open, a
+push of the same commit again moves nothing and asks for nothing: fix what the
+line says and push the branch's next commit with `-o change`.
+
+| What happened | What git prints | What to do |
+|---|---|---|
+| The push opened a change | `remote: crewlet: change <repo>!<n> opened` | Nothing: the change proposes the branch into its target, and the branch's next push is its next revision. |
+| The branch already headed a live change, which the push revised | `remote: crewlet: change <repo>!<n> updated` | Nothing: the push is the change's next revision. The options shaped nothing — they shape a change a push opens. |
+| The options are no change's — a key the `change` options do not include, which the line names, a value its option refuses, a key given twice — or the push carries so many refs beside the branch that its record cannot hold the change too | `remote: crewlet: change not opened: bad_option: …` | Fix the option the line names; push the change's branch alone. |
+| The push set no branch — it pushed only tags or deletions — or its update of the branch was refused or found the branch already there, which the line says | `remote: crewlet: change not opened: no_source: …` | Push a commit to the branch with `-o change`; for a refused update, its own line says why. |
+| The push set several branches, and a change proposes one | `remote: crewlet: change not opened: ambiguous_source: …` | Push the change's branch alone with `-o change`. |
+| The branch pushed is the change's target: the repository's default branch, unless `change.target` named another | `remote: crewlet: change not opened: same_ref: …` | Push a branch of its own, or name another target with `-o change.target=<branch>`. |
+| The target is no live branch of the repository | `remote: crewlet: change not opened: no_target: …` | Name a branch the repository holds with `-o change.target=<branch>`. |
+| The branch is at its target's commit, so it holds nothing to merge | `remote: crewlet: change not opened: no_difference: …` | Push a commit to the branch. |
+| The push was refused or failed, which its refs' lines say | `remote: crewlet: change not opened: nothing of this push landed` | Fix what the refs' lines say and push again, with `-o change`. |
+| The push is pending, or its outcome unknown, here | `remote: crewlet: change not known yet: this push has not applied here, and the change it asked for lands with it or not at all` | Fetch: where the branch moved, the push landed, and its change with it. |
+| The push had landed before this answer, which a node gave again after the first was lost | `remote: crewlet: change not known: this push landed, and the answer it was given does not say what became of its change` | Nothing for the push. A change it opened is open on the branch, and the branch's next push with `-o change` names it. |
 
 ---
 

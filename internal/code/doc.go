@@ -112,6 +112,19 @@
 // that fits only alone is carried, with the pushes behind it, to lead the
 // committer's next batch.
 //
+// A PUSH MAY OPEN ONE, IN ITS OWN RECORD (pushchange.go). `git push -o change`
+// asks for a change on the one branch the push sets ([ParseChangeOptions],
+// [ChangeSource]), and the push decide opens it in the push's own entry
+// ([PushEntry.Change]), on the state the push leaves: the record's apply
+// numbers it from next_change and writes it after the entry's own moves, so
+// the push is its first revision and its pusher its owner. A push to a branch
+// already heading a live change NAMES that change instead, which its move
+// revised; and options that are no change's, a push of no branch or of
+// several, and a change its rules refuse — a target that is its source, no
+// live target, a source at its target's commit — leave the push to land as
+// one that asked for none, its pusher told why ([ChangeAnswer]): a change's
+// options never fail its push.
+//
 // ITS READS ARE ITS REPOSITORY'S (changeread.go). A listing ([ReadChanges])
 // names a repository, a work item, a state, a reviewer or what its changes
 // wait on, and walks the ONE index its filters lead — a reviewer's standing

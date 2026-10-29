@@ -1577,8 +1577,10 @@ In order:
    carries or have git refuse it: `--no-follow-tags` (`push.followTags` adds
    tags the step never planned), `--no-signed` (`push.gpgSign` asks for a push
    certificate the code host does not take), `--no-recurse-submodules`, push
-   options cleared (`push.pushOption`: the code host takes none, and git
-   refuses a push carrying one) and `push.negotiate` off.
+   options cleared (`push.pushOption`: a `change` kept there would open a
+   [change](../guides/code.md#open-a-change-from-a-push) from every step that
+   pushes one branch, and an import is history, not a proposal) and
+   `push.negotiate` off.
 8. **The proof**: every branch and tag of the source, read back from the node
    as git lists it, at the source's value; any that differs exits 1 naming it.
 

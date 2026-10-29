@@ -30,11 +30,12 @@ import (
 
 // capabilities are the ones receive-pack reads off a push's lines that the
 // engine reads too: the report and its framing for a refusal the receiver
-// writes itself, and --atomic for its refusal of the whole push. The rest
-// receive-pack reads for itself — push-options among them, which it ignores
-// under receive.advertisePushOptions=false.
+// writes itself, --atomic for its refusal of the whole push, and
+// push-options, after which receive-pack reads the client's options before
+// the pack — so the section a push is bounded by runs to their end
+// (readCommands). The rest receive-pack reads for itself.
 type capabilities struct {
-	reportStatus, reportStatusV2, sideBand64k, atomic, quiet bool
+	reportStatus, reportStatusV2, sideBand64k, atomic, quiet, pushOptions bool
 }
 
 // add reads one line's capability list into c as read_head_info does: EVERY
@@ -43,7 +44,10 @@ type capabilities struct {
 // and a list asks only for what it names; nothing a later line says unasks it.
 // The list is a C string to receive-pack, so it ends at the next NUL. atomic
 // is read because receive-pack honours it whenever it advertises it, which it
-// does unless receive.advertiseAtomic is false, and the engine never sets it.
+// does unless receive.advertiseAtomic is false, and the engine never sets it;
+// push-options likewise, which it honours whenever
+// receive.advertisePushOptions is true, as the receive configuration sets it
+// (receiveConfig).
 func (c *capabilities) add(list []byte) {
 	list, _, _ = bytes.Cut(list, []byte{0})
 	c.reportStatus = c.reportStatus || asks(list, "report-status")
@@ -51,6 +55,7 @@ func (c *capabilities) add(list []byte) {
 	c.sideBand64k = c.sideBand64k || asks(list, "side-band-64k")
 	c.atomic = c.atomic || asks(list, "atomic")
 	c.quiet = c.quiet || asks(list, "quiet")
+	c.pushOptions = c.pushOptions || asks(list, "push-options")
 }
 
 // asks is git's parse_feature_request, its loop and all: feature found where
@@ -86,8 +91,10 @@ type parsedCommand struct{ Old, New, Ref string }
 
 // section is a push's command section.
 type section struct {
-	// Raw is every byte read, the packet that ended it included — joined back
-	// in front of the rest of the body for receive-pack.
+	// Raw is every byte read, the packet that ended it included — and the
+	// push's options after it with the packet that ended them, where the
+	// client asked for push-options — joined back in front of the rest of the
+	// body for receive-pack.
 	Raw []byte
 	// Commands are the updates in the client's order.
 	Commands []parsedCommand
@@ -111,6 +118,10 @@ func (s section) Empty() bool { return string(s.Raw) == flushPkt }
 // its own refusal.
 var (
 	errSectionTooLarge = errors.New("host: the push's command list is over a mebibyte")
+	// errOptionsTooLarge is a push whose options take its command section
+	// past the bound: receive-pack holds every option a client sends in its
+	// memory, so a push past it is refused before receive-pack reads one.
+	errOptionsTooLarge = errors.New("host: the push's options take its command list past a mebibyte")
 	errTooManyCommands = fmt.Errorf("host: the push names more than %d refs", code.MaxCommandsPerPush)
 	// errPushCertificate is a push certificate — the start of a signed push.
 	// The engine never advertises push-cert (receive.certNonceSeed is unset),
@@ -140,9 +151,14 @@ var (
 //     before it acts on any command, and is passed, uncounted, for it to
 //     refuse in its own words.
 //
-// errSectionTooLarge past maxBytes read; errTooManyCommands at the
-// maxCommands+1th command. A read error or a malformed packet is returned as
-// itself (the body could not be read as git's).
+// AND THE PUSH'S OPTIONS AFTER IT, where the section queued a command and a
+// line asked for push-options: the pkt-lines receive-pack reads next, to the
+// first packet that is no line, before the pack (readPushOptions).
+//
+// errSectionTooLarge past maxBytes read, errOptionsTooLarge past it with the
+// options; errTooManyCommands at the maxCommands+1th command. A read error or
+// a malformed packet is returned as itself (the body could not be read as
+// git's).
 func readCommands(r *bufio.Reader, maxBytes, maxCommands int) (section, error) {
 	var s section
 	for {
@@ -159,7 +175,12 @@ func readCommands(r *bufio.Reader, maxBytes, maxCommands int) (section, error) {
 		}
 		s.Raw = append(s.Raw, raw...)
 		if p.flush || p.delim || p.end {
-			return s, nil
+			// receive-pack reads options only of a push whose section
+			// queued a command: one that queued none it acts on nothing of.
+			if len(s.Commands) == 0 || !s.Caps.pushOptions {
+				return s, nil
+			}
+			return s, readPushOptions(r, &s, maxBytes)
 		}
 		line := bytes.TrimSuffix(p.payload, []byte{'\n'})
 		if len(line) > len("shallow ") && bytes.HasPrefix(line, []byte("shallow ")) {
@@ -180,6 +201,40 @@ func readCommands(r *bufio.Reader, maxBytes, maxCommands int) (section, error) {
 			return s, errTooManyCommands
 		}
 		s.Commands = append(s.Commands, cmd)
+	}
+}
+
+// readPushOptions reads a push's options into s.Raw — the pkt-lines
+// receive-pack reads after the commands of a client that asked for
+// push-options (read_push_options), to the first packet that is no line, that
+// packet included — held to what maxBytes leaves of the section: receive-pack
+// keeps every option a client sends in its memory, with no bound of git's, so
+// a push whose options take the section past it is refused before receive-pack
+// reads one (errOptionsTooLarge). The bound is the commands' own because a
+// change's options at their longest are some 33 KiB, beside the 340 KiB the
+// most commands the engine takes come to, and every other option is a forge's
+// that a push to the code host has no reason to send.
+//
+// WHAT THEY SAY IS READ BY NOBODY HERE. The relay reads the options
+// receive-pack hands the push's hook, which are what it read and accepted
+// (session.go); bytes the client wrote beside them are no option of the push.
+func readPushOptions(r *bufio.Reader, s *section, maxBytes int) error {
+	for {
+		p, err := readPkt(r)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				err = io.ErrUnexpectedEOF
+			}
+			return err
+		}
+		raw := encodePkt(p)
+		if len(s.Raw)+len(raw) > maxBytes {
+			return errOptionsTooLarge
+		}
+		s.Raw = append(s.Raw, raw...)
+		if p.flush || p.delim || p.end {
+			return nil
+		}
 	}
 }
 

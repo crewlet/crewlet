@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,7 +33,7 @@ type Section struct {
 // Capabilities are what a section's lines asked for, as readCommands read
 // them.
 type Capabilities struct {
-	ReportStatus, ReportStatusV2, SideBand64k, Atomic, Quiet bool
+	ReportStatus, ReportStatusV2, SideBand64k, Atomic, Quiet, PushOptions bool
 }
 
 // ReadCommands is readCommands over r.
@@ -39,7 +41,7 @@ func ReadCommands(r io.Reader, maxBytes, maxCommands int) (Section, error) {
 	s, err := readCommands(bufio.NewReader(r), maxBytes, maxCommands)
 	out := Section{Raw: s.Raw, Empty: s.Empty(), Caps: Capabilities{ReportStatus: s.Caps.reportStatus,
 		ReportStatusV2: s.Caps.reportStatusV2, SideBand64k: s.Caps.sideBand64k, Atomic: s.Caps.atomic,
-		Quiet: s.Caps.quiet}}
+		Quiet: s.Caps.quiet, PushOptions: s.Caps.pushOptions}}
 	for _, c := range s.Commands {
 		out.Commands = append(out.Commands, [3]string{c.Old, c.New, c.Ref})
 	}
@@ -49,9 +51,23 @@ func ReadCommands(r io.Reader, maxBytes, maxCommands int) (Section, error) {
 // The command section's refusals.
 var (
 	ErrSectionTooLarge = errSectionTooLarge
+	ErrOptionsTooLarge = errOptionsTooLarge
 	ErrTooManyCommands = errTooManyCommands
 	ErrPushCertificate = errPushCertificate
 )
+
+// ChangeAnswerLines is every line a push's change is told in, as the concept
+// page's table prints it: a change named by placeholders (<repo>!<n>), and a
+// refusal by its code with its sentence left out, the sentences being the
+// decide's and the receiver's to word.
+func ChangeAnswerLines() []string {
+	lines := []string{fmt.Sprintf(changeOpenedLine, "<repo>!<n>"), fmt.Sprintf(changeUpdatedLine, "<repo>!<n>"),
+		changeUnlanded, changePending, changeUnknown}
+	for _, r := range code.PushChangeRefusals() {
+		lines = append(lines, strings.TrimSpace(fmt.Sprintf(changeRefusedLine, r, "")))
+	}
+	return lines
+}
 
 // IdxOIDs is idxOIDs.
 func IdxOIDs(path string) (int64, io.ReadCloser, error) { return idxOIDs(path) }

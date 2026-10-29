@@ -98,11 +98,15 @@ type verdict struct {
 	position statelog.Position
 	// applied: the push's row exists — its pack may be adopted.
 	applied bool
+	// change is what the push's change came to (code.PushAnswer.Change),
+	// nil where the answer says nothing of one.
+	change *code.ChangeAnswer
 }
 
 // decided is the verdict of a landing's proposal's answer (Estate.Propose):
-// every command's answer and the audit's outcome, the pending wait included.
-func (s *Server) decided(ctx context.Context, l *landing, proposed []code.Command,
+// every command's answer and the audit's outcome, the pending wait included,
+// and what the proposal's change came to where it carried one (asked).
+func (s *Server) decided(ctx context.Context, l *landing, proposed []code.Command, asked bool,
 	res code.ProposeResult, err error) verdict {
 
 	var quiet silence
@@ -133,16 +137,18 @@ func (s *Server) decided(ctx context.Context, l *landing, proposed []code.Comman
 		return verdict{commands: refuseRest(res.Answer.Commands, res.Answer.Refused, detail),
 			outcome: types.AuditRefused, refusal: AuditRefusal(res.Answer.Refused)}
 	case res.Outcome == statelog.OutcomePending:
-		return s.awaitPending(ctx, l, proposed, res.Position)
+		return s.awaitPending(ctx, l, proposed, asked, res.Answer.Change, res.Position)
 	case res.Outcome == statelog.OutcomeUnknown:
 		return verdict{commands: refuseRest(proposed, code.RefusalUnknown,
 			fmt.Sprintf("outcome unknown (op %s); fetch, then re-run git push", res.OpID)),
-			outcome: types.AuditUnknown}
+			outcome: types.AuditUnknown, change: res.Answer.Change}
 	}
 	// APPLIED, or answered with no record of its own: the commands are the
 	// row's (or the decision's where every one was noop or ng).
 	row := res.Outcome == statelog.OutcomeApplied || res.Answer.Collapsed
-	return settled(res.Answer.Commands, res.Position, row, res.Answer.Collapsed)
+	v := settled(res.Answer.Commands, res.Position, row, res.Answer.Collapsed)
+	v.change = res.Answer.Change
+	return v
 }
 
 // settled is the verdict of a push whose commands are final — row reports that
@@ -177,22 +183,26 @@ func settled(cmds []code.Command, at statelog.Position, row, collapsed bool) ver
 
 // awaitPending waits for a push durable at at to apply, reading its outcome
 // until Timing.PendingGrace after the proposal returned: found, its row's
-// commands are the answer; not found at or past at, a gate dropped the record
-// and the push applied nowhere; any error — a node behind, nobody answering —
-// is read again after a wait that doubles from PendingFirst to PendingMax; and
-// a grace spent is `pending`, never `ok`.
-func (s *Server) awaitPending(ctx context.Context, l *landing, proposed []code.Command,
-	at statelog.Position) verdict {
+// commands are the answer, and its change what the outcome read beside the
+// row and the decision said (resolvedChange); not found at or past at, a gate
+// dropped the record and the push applied nowhere; any error — a node behind,
+// nobody answering — is read again after a wait that doubles from
+// PendingFirst to PendingMax; and a grace spent is `pending`, never `ok`, its
+// change the decision's, tentative as the push is.
+func (s *Server) awaitPending(ctx context.Context, l *landing, proposed []code.Command, asked bool,
+	tentative *code.ChangeAnswer, at statelog.Position) verdict {
 
 	l.Progress("waiting for the push to apply")
 	deadline := s.now().Add(s.o.Timing.PendingGrace)
 	wait := s.o.Timing.PendingFirst
 	for {
 		out, err := s.o.Estate.PushOutcome(ctx, code.OutcomeQuery{RepoID: l.Synced.Repo.ID, PushID: l.PushID,
-			At: at})
+			At: at, Change: asked})
 		switch {
 		case err == nil && out.Found:
-			return settled(out.Push.Commands, out.Push.Position, true, false)
+			v := settled(out.Push.Commands, out.Push.Position, true, false)
+			v.change = resolvedChange(asked, tentative, out, l.PushID)
+			return v
 		case err == nil && out.Position.Packed() >= at.Packed():
 			return verdict{commands: refuseRest(proposed, code.RefusalNotApplied,
 				fmt.Sprintf("the push was durable at %s and applied nowhere; re-run git push", at)),
@@ -202,7 +212,7 @@ func (s *Server) awaitPending(ctx context.Context, l *landing, proposed []code.C
 		if left <= 0 || ctx.Err() != nil {
 			return verdict{commands: refuseRest(proposed, code.RefusalPending,
 				fmt.Sprintf("durable at %s, unresolved here; re-run git push (a push that landed reports "+
-					"up to date)", at)), outcome: types.AuditPending, position: at}
+					"up to date)", at)), outcome: types.AuditPending, position: at, change: tentative}
 		}
 		timer := time.NewTimer(min(wait, left))
 		select {

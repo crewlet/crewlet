@@ -23,6 +23,8 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // importLimits is the code block every import case runs under: a 1 MiB push
@@ -1596,9 +1598,9 @@ func operatorsGit(t *testing.T, settings ...string) string {
 // AN IMPORT PINS WHAT EACH STEP PUSHES, whatever the operator's push settings
 // say: push.followTags would add the annotated tag on main's first commit to
 // main's first step — a ref the plan never batched, objects it never measured
-// — push.pushOption a push option the code host does not take, push.gpgSign a
-// push certificate it does not advertise, and git itself refuses a push
-// carrying either. Each step moves exactly the refs it planned.
+// — and push.gpgSign a push certificate the code host does not advertise,
+// which git itself refuses. Each step moves exactly the refs it planned. (The
+// operator's push options are TestAnImportOpensNoChange's.)
 //
 // Mutation: push without --no-follow-tags, and the first step carries the tag.
 func TestImportPinsWhatEachStepPushes(t *testing.T) {
@@ -1618,7 +1620,7 @@ func TestImportPinsWhatEachStepPushes(t *testing.T) {
 	git, url, bare := hist.load(t)
 
 	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-git", operatorsGit(t,
-		"push.followTags=true", "push.pushOption=ci.skip", "push.gpgSign=true", "push.negotiate=true"))
+		"push.followTags=true", "push.gpgSign=true", "push.negotiate=true"))
 	if err != nil {
 		t.Fatalf("an import under the operator's push settings: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
@@ -1635,6 +1637,44 @@ func TestImportPinsWhatEachStepPushes(t *testing.T) {
 		t.Errorf("the last step moved %+v, want the tag", last.Commands)
 	}
 	wantSameRefs(t, h, git, bare)
+}
+
+// AN IMPORT OPENS NO CHANGE, whatever push options the operator keeps: a
+// `change` in push.pushOption asks the code host to open a change from a push
+// of one branch, which the step that brings topic is, and an import's steps
+// are history, never a proposal — so every step pushes with the options
+// cleared.
+//
+// Mutation: drop push.pushOption= from importPushConfig, and topic's step
+// opens web!1.
+func TestAnImportOpensNoChange(t *testing.T) {
+	t.Parallel()
+	h := importNode(t)
+	var hist sourceHistory
+	tip := hist.commit("refs/heads/main", 0, map[string]string{"README.md": "one\n"})
+	hist.commit("refs/heads/topic", tip, map[string]string{"TOPIC.md": "two\n"})
+	git, url, bare := hist.load(t)
+
+	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-git", operatorsGit(t,
+		"push.pushOption=change"))
+	if err != nil {
+		t.Fatalf("an import under a push option asking for a change: %v\nstdout:\n%s\nstderr:\n%s", err, out,
+			errOut)
+	}
+	wantSameRefs(t, h, git, bare)
+	seam, ok := engine.OperatorCode(h.node.e)
+	if !ok {
+		t.Fatal("the node hosts no code")
+	}
+	read, err := seam.Read(t.Context(), code.ReadQuery{Kind: code.ReadChanges, Repo: "web",
+		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "ops", Seat: "founder"},
+		Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
+	if err != nil {
+		t.Fatalf("list web's changes: %v", err)
+	}
+	if len(read.Changes) != 0 {
+		t.Fatalf("an import opened %d changes: %+v", len(read.Changes), read.Changes)
+	}
 }
 
 // AN IMPORT REPORTS A REFUSED STEP WITHOUT WAITING FOR THE NEXT ONE'S

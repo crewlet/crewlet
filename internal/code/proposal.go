@@ -83,6 +83,18 @@ type Proposal struct {
 	// The snapshot that synced the copy reads every page at one epoch
 	// (Reader.Snapshot). Never recorded, as Seen is not.
 	DropEpoch int64 `json:"drop_epoch,omitempty"`
+	// Change is the change the push's options ask for ([ParseChangeOptions]),
+	// as its receiver read them — its title filled in from the subject of
+	// the commit the push sets its source to where the options named none —
+	// or nil for a push that asks for none. A proposal carries one only
+	// beside exactly one command setting a branch ([ChangeSource]), which its
+	// receiver judges first. Its decide opens it in the push's own entry
+	// ([PushEntry.Change]), names the live change its source already heads,
+	// or answers why it opened none ([PushAnswer.Change]); it never refuses
+	// the push. It rides the estate's wire as it rides the record, under
+	// [PushEntry.Change]'s stated condition: a committer of a build without
+	// it would decide the push and open nothing.
+	Change *ChangeOption `json:"change,omitempty"`
 }
 
 // ProposeResult is what became of one proposal.
@@ -132,6 +144,15 @@ type PushAnswer struct {
 	// Collapsed is a push answered from a row an EARLIER record applied: a
 	// forwarded or failed-over proposal of a push that had already landed.
 	Collapsed bool `json:"collapsed,omitempty"`
+	// Change is what the push's change came to ([Proposal.Change]), nil for
+	// a push that asked for none, one no record carries, and one whose
+	// answer cannot say: for an applied push, the change it opened where the
+	// rows hold one of its id ([PushChangeID]) — the one fact they hold
+	// whichever round of the batch decided the record — and otherwise the
+	// decision's, the live change its source headed (numbered from its row)
+	// or why it opened none; for a pending or unknown push, the decision's,
+	// tentative until the record resolves, as its commands are.
+	Change *ChangeAnswer `json:"change,omitempty"`
 }
 
 // maxDetailBytes is the longest Detail a receiver may fill in on a command it
@@ -191,9 +212,13 @@ const EntryRoom = MaxRecordBytes - recordOverheadBytes
 // holds it once it has read the client's commands, before receive-pack runs:
 // its principal — a seat's run with it — how it is being built ([Proposal.Via]), its
 // node and its commands, with the receiver's refusals that need no object;
-// every other field is ignored. The principal and the way are MEASURED AS
-// STAMPED, since every proposer stamps both before its work: no work adds to
-// them, so taking them at a largest that is not theirs would refuse a push
+// every other field is ignored but its change ([Proposal.Change]), which the
+// receiver learns only from the options receive-pack hands its hook and asks
+// this again with before it proposes one: a change too wide for the entry
+// beside the commands at their largest is answered to its pusher and left
+// out, so the push lands without it. The principal and the way are MEASURED
+// AS STAMPED, since every proposer stamps both before its work: no work adds
+// to them, so taking them at a largest that is not theirs would refuse a push
 // that fits.
 //
 // WHAT IT REFUSES IS THE CLIENT'S PUSH, never the receiver's bug: the client
@@ -247,7 +272,8 @@ func (p Proposal) ValidateCommands() error {
 // adds [commandResultBound] for the committer's decision — a pack whose every
 // field is spelled at its longest, the push id and the receive instant at
 // their longest spellings, and the push --atomic. The principal, its run among
-// it, and the way stay as their proposer stamped them: no work adds to them.
+// it, the way and the change stay as their proposer stamped them: no work adds
+// to them, and [entryBound] measures the change's target at its longest.
 func (p Proposal) completed() Proposal {
 	w := p
 	w.PushID, w.Atomic = largestEntry().PushID, true
@@ -432,6 +458,17 @@ func (p Proposal) validFields() error {
 			return err
 		}
 	}
+	// A CHANGE RIDES BESIDE ONE BRANCH: its receiver answers a push of no
+	// branch or of several itself, and proposes the change of none.
+	if p.Change != nil {
+		if err := p.Change.validFields(); err != nil {
+			return err
+		}
+		if _, r, why := ChangeSource(p.Commands); r != "" {
+			return badField("change", "%s — its receiver proposes a change only beside the one branch a "+
+				"push sets", why)
+		}
+	}
 	switch {
 	case len(p.Introduced) > MaxIntroduced:
 		return fmt.Errorf("%w: introduced: %d ids, past the %d a push row lists (MaxIntroduced)",
@@ -559,10 +596,14 @@ const (
 
 // entryBound is the most bytes p's entry can take in a push record: the
 // entry encoded as proposed — a seat's carrying the day its decide stamps, at
-// its longest ([longestDay]) — plus what deciding can add to each command,
+// its longest ([longestDay]), and its change as its decide would open it,
+// the target it stamps at its longest where the options named none
+// ([ChangeOption.measured]) — plus what deciding can add to each command,
 // plus the comma between it and the next entry.
 func entryBound(p Proposal) (int, error) {
-	b, err := json.Marshal(p.entryWith(p.Commands, longestDay))
+	e := p.entryWith(p.Commands, longestDay)
+	e.Change = p.Change.measured()
+	b, err := json.Marshal(e)
 	if err != nil {
 		return 0, fmt.Errorf("encode the push's entry: %w", err)
 	}

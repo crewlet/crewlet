@@ -617,6 +617,13 @@ func registeredStatements() map[string]statement {
 		"next change":        {nextChangeSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"opened":             {openedSQL, []any{3000, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"touched":            {touchedSQL, []any{3000, "repo-1"}, []string{repoKey + " (id=?)"}},
+		// A CHANGE A PUSH OPENS: the repository's next number moved past
+		// the opens of a push record, by its key; and the numbers of the
+		// changes a batch's answers name, driven from their list, one seek
+		// of the changes' key an element.
+		"next change after": {nextChangeAfterSQL, []any{4, "repo-1"}, []string{repoKey + " (id=?)"}},
+		"change numbers": {changeNumbersSQL, []any{"repo-1", `["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", changeKey + " (id=?)"}},
 		// THE READS OF CHANGES: each walk a listing's filters choose
 		// (changeread.go's walkOf), a first page and a page after a cursor,
 		// newest first in its index's own order — a repository's by

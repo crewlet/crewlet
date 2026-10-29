@@ -1112,8 +1112,9 @@ func TestTheFirstCommandsCapabilitiesAreReadWhateverItsRef(t *testing.T) {
 	}
 }
 
-// A refusal the receiver synthesises is what git prints, per ref; and what
-// git refuses itself — push options, never advertised — git refuses.
+// A refusal the receiver synthesises is what git prints, per ref; and a push
+// option of a namespace the code host does not read — a forge's — is read by
+// nobody: the push lands, told nothing of a change it never asked for.
 func TestASynthesizedReportIsWhatGitPrints(t *testing.T) {
 	c := newCase(t, codetest.SoloOptions{}, codetest.Settings())
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
@@ -1136,9 +1137,9 @@ func TestASynthesizedReportIsWhatGitPrints(t *testing.T) {
 			t.Errorf("a push past the command limit printed %s ok", ref)
 		}
 	}
-	options := p.PushArgs(c.Ctx, work, []string{"-o", "x"}, c.URL(0), "main")
-	if options.Err == nil || !strings.Contains(options.Stderr, "does not support push options") {
-		t.Errorf("a push with an option: %s", options)
+	options := p.PushArgs(c.Ctx, work, []string{"-o", "ci.skip"}, c.URL(0), "main")
+	if options.Err != nil || !options.OK("refs/heads/main") || strings.Contains(options.Stderr, "crewlet: change") {
+		t.Errorf("a push with a forge's option: %s", options)
 	}
 }
 

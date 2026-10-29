@@ -103,9 +103,11 @@ import (
 //
 // A push that moves a live change's source branch writes the change's next
 // revision and makes its pusher an author; one that sets a change's target to
-// exactly its head merges it; one that deletes its source closes it — each in
-// this record, from the change rows it finds, in its entries' order
-// ([applyChangeMoves], revisions.go). Their rows are the record's own, written
+// exactly its head merges it; one that deletes its source closes it; and one
+// whose entry carries the change its decide opened from the push's options
+// opens it, numbered the repository's next — each in this record, from the
+// change rows it finds, in its entries' order ([applyChangeMoves],
+// revisions.go). Their rows are the record's own, written
 // before any horizon and counted in its rows: the decide admitted each entry
 // only while they fit with its own, counted by the same model this writes them
 // from ([changeBook]).
@@ -355,8 +357,11 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 
 // applyChangeMoves writes what the record's entries — pushes, in order, none
 // already applied — do to the live changes their ok commands reach: a head
-// move's revision and its pusher as an author, a merge, a close (revisions.go),
-// from the change rows the record finds, and answers the rows it wrote.
+// move's revision and its pusher as an author, a merge, a close, and the
+// change an entry opens from its push's options (revisions.go), from the
+// change rows the record finds, and answers the rows it wrote. A record
+// carrying an open reads the repository's next number first, which its opens
+// take in their entries' order.
 func applyChangeMoves(ctx context.Context, tx *sql.Tx, at applyContext, repoID string,
 	pushes []PushEntry) (int, error) {
 
@@ -364,8 +369,22 @@ func applyChangeMoves(ctx context.Context, tx *sql.Tx, at applyContext, repoID s
 	if err != nil {
 		return 0, fmt.Errorf("code: the push at %s: %w", at.position, err)
 	}
+	if slices.ContainsFunc(pushes, func(e PushEntry) bool { return e.Change != nil }) {
+		if err := tx.QueryRowContext(ctx, nextChangeSQL, repoID).Scan(&book.next); err != nil {
+			return 0, fmt.Errorf("code: read %s's next change at %s: %w", repoID, at.position, err)
+		}
+	}
 	for _, e := range pushes {
 		book.move(e)
+		if e.Change == nil {
+			continue
+		}
+		if _, why := book.open(e); why != "" {
+			// A RECORD NO CORRECT LOG CARRIES — its decide opens a change
+			// only where every guard holds — applies the push and opens
+			// nothing, logged: a refusal would stop the log on every node.
+			_, _ = changeNotApplied(ctx, at, repoID, PushChangeID(e.PushID), why)
+		}
 	}
 	written, err := book.write(ctx, tx, at.maxVariables)
 	if err != nil {

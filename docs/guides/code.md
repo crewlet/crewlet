@@ -281,6 +281,51 @@ is never said of a push that is merely on its way. Every other condition, the
 exact line git prints and what to do about it is in [What git prints, and what
 it means](../concepts/code-host.md#what-git-prints-and-what-it-means).
 
+## Open a change from a push
+
+A push opens a [change](../concepts/code-host.md#changes) — `web!42`,
+proposing its branch into another — when it asks with a push option:
+
+```sh
+git push -o change origin feature
+```
+
+The change proposes `feature` into the repository's default branch, titled by
+the subject of the commit you pushed, and git prints which one it opened:
+
+```text
+remote: crewlet: change web!42 opened
+```
+
+It opens **in the push's own record**, so the commit and the change land
+together or not at all. More options shape it:
+
+| Option | What it does |
+|---|---|
+| `-o change` | Asks for a change. The options below do nothing without it, so a target kept in your `push.pushOption` configuration waits for a push that asks. |
+| `-o change.target=<branch>` | The branch it proposes into, by name (`main`) or in full (`refs/heads/main`): the repository's default branch unless you name one. |
+| `-o change.title=<title>` | Its title, one line of at most 256 bytes: the subject of the commit you pushed unless you name one. |
+| `-o change.description=<text>` | Its description, at most 32 KiB — one line, since git takes no line break in a push option. |
+| `-o change.draft` | Opens it as a draft, not yet asking to be merged. |
+
+- **Push the change's branch alone.** A change proposes one branch, so a push
+  that asks for one sets exactly one; tags beside it are fine.
+- **A branch heads one live change.** A push to a branch that already heads an
+  open change revises it — `change web!42 updated` — and opens no other: the
+  options shape only a change a push opens.
+- **The push lands whatever becomes of its change.** An option the engine does
+  not read, a target that is no branch, or a branch already at its target's
+  commit leaves the push to land with no change, and git says why in the same
+  line, `change not opened: <code>: <why>` ([every line it
+  prints](../concepts/code-host.md#when-a-push-asked-for-a-change)). Pushing the
+  same commit again moves nothing, so fix what the line says and push the
+  branch's next commit with `-o change`.
+- **Every other option is read by nobody** — `ci.skip`, or any other a forge
+  takes.
+
+Whoever may push the branch may open a change from it: the push's own update
+is the check ([A change a push opens](../concepts/code-host.md#a-change-a-push-opens)).
+
 ## What your seats read
 
 Nothing to set up: once the company hosts code, every seat holds the seven

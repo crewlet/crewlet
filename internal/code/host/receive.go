@@ -39,7 +39,12 @@ import (
 //     names;
 //   - receive.fsckObjects=true: a malformed object is refused at the door;
 //   - receive.maxInputSize: the epoch's code.limits.max_push_bytes;
-//   - receive.advertisePushOptions=false: nothing reads them;
+//   - receive.advertisePushOptions=true: a push opens a change from its
+//     options (`git push -o change`, code.ParseChangeOptions), which
+//     receive-pack hands the hook after the commands — what it read, which
+//     the relay reads there (session.go) — and which the handler's section
+//     bound holds before receive-pack, which keeps every one in its memory,
+//     reads any (readCommands);
 //   - receive.autogc=false and receive.updateServerInfo=false: a scratch is
 //     thrown away;
 //   - pack.writeReverseIndex=true and pack.indexVersion=2: the .rev and the
@@ -51,7 +56,7 @@ func receiveConfig(l code.Limits) []gitproc.KV {
 		{Key: "receive.unpackLimit", Value: "1"},
 		{Key: "receive.fsckObjects", Value: "true"},
 		{Key: "receive.maxInputSize", Value: strconv.FormatInt(l.MaxPushBytes, 10)},
-		{Key: "receive.advertisePushOptions", Value: "false"},
+		{Key: "receive.advertisePushOptions", Value: "true"},
 		{Key: "receive.autogc", Value: "false"},
 		{Key: "receive.updateServerInfo", Value: "false"},
 		{Key: "pack.writeReverseIndex", Value: "true"},
@@ -119,11 +124,17 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 		audit.record(pushRecord{outcome: types.AuditRefused, refusal: reason, commands: len(sec.Commands)})
 	}
 	switch {
-	case errors.Is(err, errTooManyCommands), errors.Is(err, errSectionTooLarge):
+	case errors.Is(err, errTooManyCommands), errors.Is(err, errSectionTooLarge), errors.Is(err, errOptionsTooLarge):
 		words := "this push's command list is over 1 MiB"
-		if errors.Is(err, errTooManyCommands) {
+		switch {
+		case errors.Is(err, errTooManyCommands):
 			words = "this push names more than " + strconv.Itoa(code.MaxCommandsPerPush) +
 				" refs; push them in parts (git push origin <some refs>)"
+		case errors.Is(err, errOptionsTooLarge):
+			// THE COMMANDS WERE READ WHOLE, so every one is answered: the
+			// options came after them.
+			words = "this push's options take its command list past 1 MiB; push with fewer or shorter " +
+				"options (git push -o)"
 		}
 		if len(sec.Commands) == 0 {
 			auth.GitText(w, http.StatusRequestEntityTooLarge, words)

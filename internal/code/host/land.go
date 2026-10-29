@@ -71,6 +71,12 @@ type landing struct {
 	Commands []code.Command
 	// Atomic is a push that lands whole or not at all (code.Atomic).
 	Atomic bool
+	// PushOptions are the push's options as git handed them to its hook
+	// (readHookPushOptions) — what receive-pack accepted from the client, in
+	// its order — and nil for a push that sent none or a builder that takes
+	// none. The change they ask for is read from them here (askChange), and
+	// what becomes of it is never a refusal of the push.
+	PushOptions []string
 	// Principal is who pushes.
 	Principal code.Principal
 	// Via is how the builder built the push's pack — the relay's is
@@ -112,6 +118,9 @@ type landed struct {
 	// Adopted reports that the push's pack was handed to the cache's
 	// adoption, once its row applied, and the adoption did not fail.
 	Adopted bool
+	// Change is what the push's options asked of a change and what became
+	// of it, for the line its pusher reads (changeLine).
+	Change changeAsk
 }
 
 // landingError is a landing that ended with no outcome its pusher can be told
@@ -153,7 +162,9 @@ func unchecked(err error) error {
 //     upload (behind) — on its synced row, read once more before it refuses.
 //  8. THE BUNDLE AND THE LISTING TOGETHER (introduceAndStore): the bundle
 //     stored and sealed while the commits the push introduces are listed,
-//     and the proposal held to every rule its committer will hold it to.
+//     and the proposal held to every rule its committer will hold it to —
+//     the change the push's options ask for made ready for it first
+//     (readyChange), never a refusal of the push.
 //  9. THE PROPOSAL, to the repository's committer through the estate router.
 //  10. THE OUTCOME, `ok` only from the push's applied row (decided,
 //     awaitPending).
@@ -171,11 +182,19 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	}
 	cmds := slices.Clone(l.Commands)
 	result := pushResult{commands: len(cmds)}
+	// THE CHANGE THE OPTIONS ASK FOR, read once, before anything is decided
+	// — never a refusal of the push — and carried on every answer the
+	// landing gives (done), for the line its pusher reads of it.
+	ask := askChange(l.PushOptions, l.Commands)
+	done := func(out landed) landed {
+		out.Change = ask
+		return out
+	}
 
 	// 1 THE STATUS FIRST.
 	if reason, words := s.statusRefusal(l.Synced.Repo); reason != "" {
 		result.outcome, result.refusal = types.AuditRefused, AuditRefusal(reason)
-		return landed{Commands: refuseRest(cmds, reason, words), Result: result}, nil
+		return done(landed{Commands: refuseRest(cmds, reason, words), Result: result}), nil
 	}
 	rules, err := code.ParseProtections(l.Synced.Repo.Protections)
 	if err != nil {
@@ -280,7 +299,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	if !undecided(cmds) {
 		v := settled(cmds, statelog.Position{}, false, false)
 		result.outcome, result.refusal = v.outcome, v.refusal
-		return landed{Commands: cmds, Result: result}, nil
+		return done(landed{Commands: cmds, Result: result}), nil
 	}
 
 	// 6 THE SIZE, before a byte is uploaded.
@@ -289,7 +308,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 			"once, or without thin packs (git push --no-thin)", humanBytes(ref.Size), humanBytes(code.MaxPackBytes))
 		cmds = refuseRest(cmds, code.RefusalPackTooLarge, detail)
 		result.outcome, result.refusal = types.AuditRefused, AuditRefusal(code.RefusalPackTooLarge)
-		return landed{Commands: cmds, Result: result}, nil
+		return done(landed{Commands: cmds, Result: result}), nil
 	}
 
 	// 7 THE PACK BOUND, before a byte is uploaded: every retry of a push its
@@ -299,7 +318,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		if detail, refused := s.behind(ctx, &l); refused {
 			cmds = refuseRest(cmds, code.RefusalCompactionBehind, detail)
 			result.outcome, result.refusal = types.AuditRefused, AuditRefusal(code.RefusalCompactionBehind)
-			return landed{Commands: cmds, Result: result}, nil
+			return done(landed{Commands: cmds, Result: result}), nil
 		}
 	}
 
@@ -316,11 +335,15 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		}
 	}
 	proposed, named := recordedCommands(cmds)
+	// AND THE CHANGE THE OPTIONS ASK FOR, made ready for the proposal now
+	// that the push is to be proposed (readyChange): answered here, and left
+	// out, where it has no source by now or no room in the push's record.
+	change := s.readyChange(ctx, &l, &ask, cmds, proposed)
 	proposal := func(introduced []string, count int, pack *code.PackRef) code.Proposal {
 		return code.Proposal{
 			PushID: l.PushID, RepoID: l.Synced.Repo.ID, Principal: l.Principal, Via: l.Via, Node: s.o.NodeID,
 			Atomic: l.Atomic, Commands: proposed, Pack: pack, Introduced: introduced, IntroducedCount: count,
-			ReceivedAt: l.ReceivedAt, Seen: l.Synced.Position, DropEpoch: l.Synced.DropEpoch,
+			ReceivedAt: l.ReceivedAt, Seen: l.Synced.Position, DropEpoch: l.Synced.DropEpoch, Change: change,
 		}
 	}
 	introduced, count, stored, err := s.introduceAndStore(ctx, &l, news, packPath, ref,
@@ -336,9 +359,9 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		// THE RECEIVER'S OWN BUG, found before its committer was asked and
 		// before its bundle was stored: answered as the committer answers
 		// one (decided), its upload stopped.
-		v := s.decided(ctx, &l, proposed, code.ProposeResult{}, invalid.err)
+		v := s.decided(ctx, &l, proposed, change != nil, code.ProposeResult{}, invalid.err)
 		result.outcome = v.outcome
-		return landed{Commands: withRefs(v.commands, named), Result: result}, nil
+		return done(landed{Commands: withRefs(v.commands, named), Result: result}), nil
 	case err != nil:
 		return landed{}, unchecked(err)
 	case errors.As(stored, &full):
@@ -355,7 +378,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 			"%s this push stores, and nothing was stored; it lands only once %s", humanBytes(ref.Size),
 			full.Remedy))
 		result.outcome, result.refusal = types.AuditRefused, AuditRefusal(code.RefusalStoreFull)
-		return landed{Commands: cmds, Result: result}, nil
+		return done(landed{Commands: cmds, Result: result}), nil
 	case stored != nil:
 		var bad *code.BadBundle
 		detail := "object store unavailable: " + sentence(stored.Error())
@@ -364,7 +387,7 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 		}
 		cmds = refuseRest(cmds, code.RefusalUnavailable, detail)
 		result.outcome = types.AuditFailed
-		return landed{Commands: cmds, Result: result}, nil
+		return done(landed{Commands: cmds, Result: result}), nil
 	}
 	if ref != nil {
 		if err := s.fault(ctx, codefault.HostAfterUpload, 0); err != nil {
@@ -382,14 +405,17 @@ func (s *Server) land(ctx context.Context, l landing) (landed, error) {
 	}
 
 	// 10 THE OUTCOME, from the push's own row.
-	v := s.decided(ctx, &l, proposed, res, perr)
+	v := s.decided(ctx, &l, proposed, change != nil, res, perr)
 	result.outcome, result.refusal, result.position = v.outcome, v.refusal, v.position
 	for _, c := range v.commands {
 		if c.Result == code.ResultOK {
 			result.ok++
 		}
 	}
-	out := landed{Commands: withRefs(v.commands, named), Result: result}
+	if ask.answer == nil {
+		ask.answer = v.change
+	}
+	out := done(landed{Commands: withRefs(v.commands, named), Result: result})
 
 	// 11 THE ADOPTION, once the row has applied: a pack linked in before
 	// it would be an object no row names (cache.Cache.Adopt).

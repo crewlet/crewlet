@@ -321,6 +321,11 @@ type OutcomeQuery struct {
 	PushID string `json:"push_id"`
 	// At is the record's position: "not found" is final only at or past it.
 	At statelog.Position `json:"at"`
+	// Change asks, of a push that asked for a change ([Proposal.Change]),
+	// for the change it opened as well ([PushOutcome.Opened]). A field a
+	// build without it ignores, answering no change: the receiver then says
+	// it does not know what became of it, which is true.
+	Change bool `json:"change,omitempty"`
 }
 
 // PushOutcome is what became of one push.
@@ -328,6 +333,10 @@ type PushOutcome struct {
 	Found    bool              `json:"found"`
 	Push     PushRow           `json:"push,omitzero"`
 	Position statelog.Position `json:"position"`
+	// Opened is the number of the change the push opened from its options
+	// ([PushChangeID]), read in the snapshot its row was, where the query
+	// asked and the push opened one; 0 otherwise.
+	Opened int64 `json:"opened,omitempty"`
 }
 
 // PushRow is one push as its repository's history keeps it.

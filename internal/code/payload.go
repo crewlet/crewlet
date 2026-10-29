@@ -733,6 +733,26 @@ type PushEntry struct {
 	// apply a seat's push without counting it, and every committer of it
 	// would read the seat's day short by that push.
 	Day string `json:"day,omitempty"`
+	// Change is the change this push opens from its options
+	// ([ChangeOption], pushchange.go): STAMPED BY ITS DECIDE, and only where
+	// the decide opens one — its target resolved to the repository's default
+	// branch where the options named none — so the record's apply opens it on
+	// the entry's one branch command, at the head that command set, from the
+	// record alone (revisions.go). A push whose options asked for no change,
+	// whose change was refused, or whose source already heads a live change
+	// carries none: nothing of a change a push did not open is state.
+	//
+	// BASE FORMAT, AS A STATED CONDITION: no build that carries the code
+	// domain has run without this field — none of the domain is on main, so
+	// no image and no release holds it — and while that is so, every build
+	// that meets a push record reads it. Once a build without it has run, it
+	// takes {Name: "PushEntry.Change", Since: 2, Op: "push", Path:
+	// []string{"mutation", "pushes", "change"}} in versionedFields, with
+	// RecordVersion at 2, its line under "What each version added" and a
+	// Carrying record in the statelogtest candidate — such a build would
+	// apply the push and open no change, and every data node of it would
+	// hold the repository short of the change its pusher was told it opened.
+	Change *ChangeOption `json:"change,omitempty"`
 }
 
 // Principal is who acts on a repository: an operator credential and the

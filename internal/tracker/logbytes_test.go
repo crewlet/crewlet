@@ -407,6 +407,11 @@ var codeLogFields = map[code.OpKind]struct {
 				"from its tip",
 			"pushes.commands.reason": "a refused command's code, and the measured push lands",
 			"pushes.commands.detail": "an answer's sentence, which no record carries",
+			"pushes.change": "the change a push opens from its options (git push -o change): only a push git " +
+				"received carries one — never the engine's writes, the term's records — and only the push " +
+				"that opens a change, once a change, a branch heading one live change at a time; the day " +
+				"prices a push git received as a seat's, and none of the reference company's 3 000 is one " +
+				"(codeLogPushVias)",
 		},
 	},
 	code.OpCompact: {

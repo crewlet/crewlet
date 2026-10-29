@@ -1077,7 +1077,13 @@ func (c *Committer) answers(ctx context.Context, repoID string, batch []Proposal
 		}
 		return out
 	}
-	var rows map[string]PushRow
+	var (
+		rows map[string]PushRow
+		// numbers is the number of every change a proposal's answer may
+		// name — the one its push would have opened, and the live one the
+		// decision says it named — that the repository holds.
+		numbers map[string]int64
+	)
 	if res.Outcome == statelog.OutcomeApplied && !res.Position.IsZero() {
 		ids := make([]string, len(batch))
 		for i, p := range batch {
@@ -1085,7 +1091,10 @@ func (c *Committer) answers(ctx context.Context, repoID string, batch []Proposal
 		}
 		readErr := c.db.Read(ctx, func(tx *sql.Tx) error {
 			var err error
-			rows, err = pushRowsIn(ctx, tx, ids)
+			if rows, err = pushRowsIn(ctx, tx, ids); err != nil {
+				return err
+			}
+			numbers, err = changeNumbersIn(ctx, tx, repoID, answeredChanges(batch, last.answers, false))
 			return err
 		})
 		if readErr != nil {
@@ -1098,6 +1107,18 @@ func (c *Committer) answers(ctx context.Context, repoID string, batch []Proposal
 			}
 			return out
 		}
+	} else if ids := answeredChanges(batch, last.answers, true); len(ids) > 0 {
+		// PUSHES THAT LANDED BEFORE THE BATCH and asked for a change, whose
+		// change no round of it decided: the one each opened, if it did,
+		// read by its id. Its read failing leaves them answered with no
+		// word of their change, which is all it costs.
+		if readErr := c.db.Read(ctx, func(tx *sql.Tx) error {
+			var err error
+			numbers, err = changeNumbersIn(ctx, tx, repoID, ids)
+			return err
+		}); readErr != nil {
+			c.log.WarnContext(ctx, "code_change_unanswered", "repo", repoID, "op_id", opID, "error", readErr)
+		}
 	}
 	c.observeBatch(last, res, rows)
 	for i, p := range batch {
@@ -1106,9 +1127,93 @@ func (c *Committer) answers(ctx context.Context, repoID string, batch []Proposal
 			out[i] = out[d.dupOf]
 			continue
 		}
-		out[i] = c.answer(repoID, p, d, res, rows, opID)
+		out[i] = c.answer(repoID, p, d, res, rows, numbers, opID)
 	}
 	return out
+}
+
+// answeredChanges is the id of every change the answers of batch may name: for
+// each proposal that asked for a change, the one its push opens
+// ([PushChangeID]) and the live one its decision says it named — or, collapsed
+// alone, only those of the proposals that landed before the batch, the one
+// thing their answer can say of a change no round of it decided.
+func answeredChanges(batch []Proposal, answers []decided, collapsed bool) []string {
+	var ids []string
+	for i, p := range batch {
+		d := answers[i]
+		if p.Change == nil || d.dupOf >= 0 || (collapsed && d.collapsed == nil) {
+			continue
+		}
+		ids = append(ids, PushChangeID(p.PushID))
+		if d.change != nil && d.change.ChangeID != "" && !d.change.Opened {
+			ids = append(ids, d.change.ChangeID)
+		}
+	}
+	return ids
+}
+
+// changeNumbersIn is the number of each change ids names that is a change of
+// repoID, by its id — one statement over the changes' key, driven from the
+// list.
+func changeNumbersIn(ctx context.Context, tx *sql.Tx, repoID string, ids []string) (map[string]int64, error) {
+	out := map[string]int64{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	list, err := jsonList(ids)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, changeNumbersSQL, repoID, list)
+	if err != nil {
+		return nil, fmt.Errorf("code: read the numbers of the changes a batch's answers name: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		var number int64
+		if err := rows.Scan(&id, &number); err != nil {
+			return nil, fmt.Errorf("code: read the numbers of the changes a batch's answers name: %w", err)
+		}
+		out[id] = number
+	}
+	return out, rows.Err()
+}
+
+// changeNumbersSQL is each change of a repository its list names, by id: one
+// seek of the changes' key an element, driven from the list.
+const changeNumbersSQL = `SELECT c.id, c.number FROM json_each(?2) AS j CROSS JOIN code_changes AS c
+	WHERE c.id = CAST(j.value AS TEXT) AND c.repo_id = ?1`
+
+// landedChange is what p's change came to, from the rows a record applied
+// (numbers): the change its push opened, where the repository holds one of its
+// id — the one fact the rows hold, whichever round of the batch decided the
+// record that landed — and otherwise what the decision says, the live change
+// it named with that change's number from its row, or why it opened none. Nil
+// where p asked for no change; where the decision says it opened one the rows
+// do not hold, a decision of another round than the record's; and where there
+// is no decision to say it — a push that landed in an earlier record, whose
+// answer of its change went with that record's.
+func landedChange(p Proposal, decision *ChangeAnswer, numbers map[string]int64) *ChangeAnswer {
+	if p.Change == nil {
+		return nil
+	}
+	id := PushChangeID(p.PushID)
+	if n, ok := numbers[id]; ok {
+		return &ChangeAnswer{ChangeID: id, Number: n, Opened: true}
+	}
+	switch {
+	case decision == nil, decision.Opened:
+		return nil
+	case decision.Refusal != "":
+		refused := *decision
+		return &refused
+	}
+	n, ok := numbers[decision.ChangeID]
+	if !ok {
+		return nil
+	}
+	return &ChangeAnswer{ChangeID: decision.ChangeID, Number: n}
 }
 
 // observeBatch records how many pushes the batch's record carried: the rows
@@ -1133,9 +1238,10 @@ func (c *Committer) observeBatch(last round, res statelog.Result, rows map[strin
 }
 
 // answer is one proposal's answer from its row, its decision and the
-// publish's result.
+// publish's result — and its change's, from the numbers of the changes the
+// repository holds that its answer may name (numbers, [landedChange]).
 func (c *Committer) answer(repoID string, p Proposal, d decided, res statelog.Result,
-	rows map[string]PushRow, opID string) answered {
+	rows map[string]PushRow, numbers map[string]int64, opID string) answered {
 
 	if d.err != nil {
 		return answered{err: d.err}
@@ -1147,12 +1253,17 @@ func (c *Committer) answer(repoID string, p Proposal, d decided, res statelog.Re
 		}
 		// THE RECORD'S OWN ROW, or one an earlier record applied: the push
 		// is answered from it either way, and collapsed when it is not this
-		// record's.
+		// record's — whose change no round of this batch decided either.
 		ours := row.Position == res.Position
+		decision := d.change
+		if !ours {
+			decision = nil
+		}
 		answer := ProposeResult{
 			Outcome: statelog.OutcomeApplied, Position: row.Position,
 			Answer: PushAnswer{
 				PushID: p.PushID, Commands: withDetails(row.Commands, d.commands), Collapsed: !ours,
+				Change: landedChange(p, decision, numbers),
 			},
 		}
 		if ours {
@@ -1165,7 +1276,8 @@ func (c *Committer) answer(repoID string, p Proposal, d decided, res statelog.Re
 		// answer when no record applied and so no rows were read again.
 		return answered{res: ProposeResult{
 			Outcome: statelog.OutcomeApplied, Position: d.collapsed.Position,
-			Answer: PushAnswer{PushID: p.PushID, Commands: d.collapsed.Commands, Collapsed: true},
+			Answer: PushAnswer{PushID: p.PushID, Commands: d.collapsed.Commands, Collapsed: true,
+				Change: landedChange(p, nil, numbers)},
 		}}
 	}
 	if d.carried {
@@ -1188,12 +1300,12 @@ func (c *Committer) answer(repoID string, p Proposal, d decided, res statelog.Re
 	case statelog.OutcomePending:
 		return answered{res: ProposeResult{
 			Outcome: statelog.OutcomePending, Position: res.Position, OpID: opID,
-			Answer: PushAnswer{PushID: p.PushID, Commands: d.commands},
+			Answer: PushAnswer{PushID: p.PushID, Commands: d.commands, Change: d.change},
 		}}
 	}
 	return answered{res: ProposeResult{
 		Outcome: statelog.OutcomeUnknown, OpID: opID,
-		Answer: PushAnswer{PushID: p.PushID, Commands: d.commands},
+		Answer: PushAnswer{PushID: p.PushID, Commands: d.commands, Change: d.change},
 	}}
 }
 

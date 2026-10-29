@@ -19,10 +19,12 @@ import (
 )
 
 // PROC-RECEIVE, THE ENGINE'S SIDE: what a push's hook is served once it has
-// named its session — git's ref updates read off the hook, handed to the one
-// landing every push takes (land.go), and git told what landed. Everything
-// here is the RELAY's — the protocol, the keepalive, the report — and what a
-// push IS once receive-pack has written its pack is the landing's.
+// named its session — git's ref updates and the push's options read off the
+// hook, handed to the one landing every push takes (land.go), and git told
+// what landed, and what became of the change the options asked for
+// (change.go). Everything here is the RELAY's — the protocol, the keepalive,
+// the report — and what a push IS once receive-pack has written its pack is
+// the landing's.
 
 // session is one push's hook session: the relay's own state, and what the
 // receive handler hands the landing.
@@ -167,7 +169,7 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 	stop := s.keepalive(sess, fw)
 	defer stop()
 
-	atomic, err := s.versionBlock(br, fw)
+	features, err := s.versionBlock(br, fw)
 	if err != nil {
 		protocol("proc-receive did not speak version 1, the one this engine speaks", err)
 		return
@@ -177,15 +179,24 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 		protocol("git handed the hook a command it cannot read", err)
 		return
 	}
+	// THE PUSH'S OPTIONS, which git sends after the commands only because
+	// the relay answered its version block that it reads them.
+	var options []string
+	if features.pushOptions {
+		if options, err = readHookPushOptions(br); err != nil {
+			protocol("git handed the hook a push option it cannot read", err)
+			return
+		}
+	}
 	for i, c := range cmds {
 		if a, ok := sess.preRefused[c.Ref]; ok {
 			cmds[i].Result, cmds[i].Reason, cmds[i].Detail = code.ResultNG, a.Reason, a.Detail
 		}
 	}
 	ld, err := s.land(ctx, landing{
-		Synced: sess.synced, Scratch: sess.scratch, Commands: cmds, Atomic: atomic, Principal: sess.principal,
-		Via: code.ViaGit, PushID: sess.pushID, ReceivedAt: sess.receivedAt, Judged: sess.judged,
-		Progress: sess.step,
+		Synced: sess.synced, Scratch: sess.scratch, Commands: cmds, Atomic: features.atomic,
+		PushOptions: options, Principal: sess.principal, Via: code.ViaGit, PushID: sess.pushID,
+		ReceivedAt: sess.receivedAt, Judged: sess.judged, Progress: sess.step,
 	})
 	if err != nil {
 		cause := err
@@ -213,19 +224,32 @@ func (s *Server) serveSession(sess *session, br *bufio.Reader, fw *frameWriter) 
 		_ = fw.write(frameStderr, []byte(fmt.Sprintf("crewlet: %s at %s\n", sess.synced.Repo.Name,
 			ld.Result.position)))
 	}
+	if line := changeLine(ld.Change, ld.Result, sess.synced.Repo.Name); line != "" {
+		_ = fw.write(frameStderr, []byte("crewlet: "+line+"\n"))
+	}
 	_ = fw.write(frameExit, []byte{0})
 }
 
+// procFeatures are the features of git's proc-receive version block the relay
+// answers: --atomic, which the report must agree with, and push-options —
+// offered only for a push that sent options — which the relay answers it
+// reads, so git sends them after the commands, and only then.
+type procFeatures struct{ atomic, pushOptions bool }
+
 // versionBlock reads git's version block — pkt-lines to a flush, the first
-// `version=1` with its NUL-separated features — answers `version=1` with no
-// feature of the engine's own (so git sends no push options), and reports
-// whether git is running the push --atomic, which the report must agree with.
-func (s *Server) versionBlock(br *bufio.Reader, fw *frameWriter) (atomic bool, err error) {
+// `version=1` with its NUL-separated features — and answers `version=1` with
+// push-options where git offered them (so git hands the hook the push's
+// options after its commands, readHookPushOptions) and no feature otherwise:
+// the protocol's negotiation, in which the hook answers what it reads of what
+// git offered. It reports both features, the options the ones the relay must
+// read now that it said it would.
+func (s *Server) versionBlock(br *bufio.Reader, fw *frameWriter) (procFeatures, error) {
+	var f procFeatures
 	first := true
 	for {
 		p, err := readPkt(br)
 		if err != nil {
-			return false, err
+			return procFeatures{}, err
 		}
 		if p.flush {
 			break
@@ -236,18 +260,49 @@ func (s *Server) versionBlock(br *bufio.Reader, fw *frameWriter) (atomic bool, e
 		first = false
 		version, features, _ := strings.Cut(strings.TrimSuffix(string(p.payload), "\n"), "\x00")
 		if version != "version=1" {
-			return false, fmt.Errorf("%w: proc-receive spoke %q", errProtocol, version)
+			return procFeatures{}, fmt.Errorf("%w: proc-receive spoke %q", errProtocol, version)
 		}
-		for f := range strings.SplitSeq(features, "\x00") {
-			for word := range strings.FieldsSeq(f) {
-				atomic = atomic || word == "atomic"
+		for list := range strings.SplitSeq(features, "\x00") {
+			for word := range strings.FieldsSeq(list) {
+				f.atomic = f.atomic || word == "atomic"
+				f.pushOptions = f.pushOptions || word == "push-options"
 			}
 		}
 	}
 	if first {
-		return false, fmt.Errorf("%w: no version line", errProtocol)
+		return procFeatures{}, fmt.Errorf("%w: no version line", errProtocol)
 	}
-	return atomic, fw.write(frameStdout, append(pktString("version=1\x00"), flushPkt...))
+	answer := "version=1\x00"
+	if f.pushOptions {
+		answer += "push-options"
+	}
+	return f, fw.write(frameStdout, append(pktString(answer), flushPkt...))
+}
+
+// readHookPushOptions reads the push options git hands the hook after the
+// commands — one pkt-line each, to a flush, sent because the relay answered
+// git's version block that it reads them (versionBlock). They are
+// AUTHORITATIVE as the commands are: what receive-pack read from the client
+// and accepted, which the client's own bytes beside it are not — a special
+// packet among them is a protocol violation, and each option is its line, its
+// one trailing line feed dropped as git's packet reader drops it. How many and
+// how long the handler held before receive-pack read any (readCommands), so
+// they are nothing a push could not already make the receiver hold.
+func readHookPushOptions(br *bufio.Reader) ([]string, error) {
+	var options []string
+	for {
+		p, err := readPkt(br)
+		if err != nil {
+			return nil, err
+		}
+		if p.flush {
+			return options, nil
+		}
+		if p.delim || p.end {
+			return nil, fmt.Errorf("%w: a special packet among the push options", errProtocol)
+		}
+		options = append(options, strings.TrimSuffix(string(p.payload), "\n"))
+	}
 }
 
 // readHookCommands reads git's `<old> <new> <ref>` lines to a flush. These are

@@ -145,8 +145,11 @@ import (
 // # A push's changes are counted, and one that does not fit leads the next
 //
 // A push record writes the rows of the live changes its pushes move — a
-// revision, an author, a merge, a close (revisions.go) — beside its entries'
-// own, so the decide counts them as it admits each entry: the live changes the
+// revision, an author, a merge, a close (revisions.go) — and of the change a
+// push opens from its options, decided on the state the push leaves
+// (pushchange.go: its row, its owner as its first author, the push as its
+// first revision, its description), beside its entries' own, so the decide
+// counts them as it admits each entry: the live changes the
 // batch's branch commands can move, and the authors its pushers already are of
 // them, read ONCE a round into one model ([changeBook]), moved by every entry
 // it admits as the apply will move it, and the record held to [MaxRecordRows]
@@ -186,10 +189,12 @@ import (
 // the directories its creates would make, and the refs under each create —
 // and one that creates none reads neither; a batch carrying a SEAT'S push
 // reads one more, every seat's count of the day over the counter's key, and
-// one of persons' pushes alone reads none; and a batch whose commands name a
+// one of persons' pushes alone reads none; a batch whose commands name a
 // branch reads up to three more, each driven from its list — the live changes
 // its branches head, the ones whose targets it sets to their heads, and the
-// authors its pushers are of the changes whose heads they move (revisions.go).
+// authors its pushers are of the changes whose heads they move (revisions.go);
+// and a batch whose pushes ask for a change reads one more, the branches their
+// changes propose into that no command of it names (pushchange.go).
 //
 // # A ref is never beside a directory of its name
 //
@@ -388,6 +393,10 @@ type decided struct {
 	// dupOf is the index of an earlier proposal in the batch with this
 	// proposal's push id, whose answer is this one's; -1 for none.
 	dupOf int
+	// change is what the proposal's change came to ([pushOpen]) for one
+	// whose entry is in the round's record; nil for every other, and for
+	// one that asked for no change.
+	change *ChangeAnswer
 }
 
 // decideBatch is one round's decision over the rows tx holds, for the batch in
@@ -504,6 +513,12 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	if err != nil {
 		return nil, nil, 0, 0, err
 	}
+	// THE BRANCHES THE BATCH'S CHANGES PROPOSE INTO, where no command of it
+	// names them: an open is judged by its target's head as well as its
+	// source's, and the working state holds only the refs commands name.
+	if err := w.readTargets(ctx, tx, repoID, changeTargets(batch, open, repo)); err != nil {
+		return nil, nil, 0, 0, err
+	}
 	quota, err := newSeatQuota(ctx, tx, batch, open, seats.Zone, now, limits.PushesPerSeatDay)
 	if err != nil {
 		return nil, nil, 0, 0, err
@@ -561,6 +576,17 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		entry := p.entryWith(cmds, quota.day.Label)
 		trial := book.clone()
 		trial.move(entry)
+		// AND THE CHANGE IT ASKS FOR, opened in its own entry where its rules
+		// let it ([pushOpen]) — after the entry's own moves, since a push to
+		// a branch heading a live change revises that one rather than opens
+		// another — and its rows counted with the record's.
+		var change *ChangeAnswer
+		if p.Change != nil {
+			entry.Change, change = pushOpen(p, cmds, w, trial, repo)
+			if entry.Change != nil {
+				trial.open(entry)
+			}
+		}
 		own := entryRows(entry)
 		if recordRows(rows+own+trial.rowCount()) > MaxRecordRows {
 			// ALONE is the push leading the next record, the entries before
@@ -568,6 +594,9 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			// land at all.
 			solo := book.afresh()
 			solo.move(entry)
+			if entry.Change != nil {
+				solo.open(entry)
+			}
 			if alone := recordRows(own + solo.rowCount()); alone > MaxRecordRows {
 				detail := tooManyChangesDetail(solo.moved(), alone)
 				answers[i].refused, answers[i].detail = RefusalTooManyChanges, detail
@@ -580,7 +609,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		book, rows = trial, rows+own
 		w.apply(p, cmds)
 		quota.count(p)
-		answers[i].inRecord = true
+		answers[i].inRecord, answers[i].change = true, change
 		entries = append(entries, entry)
 	}
 	return entries, answers, book.rowCount(), repo.version, nil
@@ -735,6 +764,9 @@ type pushRepo struct {
 	// managedBy is who manages it, which the remedy a refusal of a deleted
 	// or archived repository names follows ([RepoGone], [ArchivedDetail]).
 	managedBy ManagedBy
+	// defaultBranch is its default branch, by name ("main"): what a push's
+	// change proposes into where its options name no target ([pushOpen]).
+	defaultBranch string
 }
 
 // grantRef is the repository id names as a grant reads it: its name, which a
@@ -750,7 +782,7 @@ func pushRepoIn(ctx context.Context, tx *sql.Tx, id string) (pushRepo, bool, err
 	var deleted sql.NullInt64
 	err := tx.QueryRowContext(ctx, decideRepoSQL, id).Scan(&r.name, &status, &r.refs,
 		&r.liveBytes, &r.livePacks, &r.version, &deleted, &r.dropEpoch, &r.expungeID, &ownerKind,
-		&r.owner.Ref, &visibility, &managed)
+		&r.owner.Ref, &visibility, &managed, &r.defaultBranch)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return pushRepo{}, false, nil
@@ -1084,6 +1116,66 @@ func (w *working) current(ref string) string {
 		return target
 	}
 	return ZeroOID
+}
+
+// after is ref's value once the push being decided has applied as well as the
+// batch's entries before it: its ok command on ref where it has one —
+// ZeroOID for a deletion — and otherwise what the working state holds.
+func (w *working) after(cmds []Command, ref string) string {
+	for _, c := range cmds {
+		if c.Ref == ref && c.Result == ResultOK {
+			return c.New
+		}
+	}
+	return w.current(ref)
+}
+
+// readTargets reads, in one statement a part, the rows of the refs that no
+// command of the batch names — the branches its changes propose into
+// ([changeTargets]) — into the working state, which then answers them as it
+// answers the refs its commands name. They take no part in what is around a
+// create (readAround, read before): no command moves them, so no create is
+// beside one that the batch could change.
+func (w *working) readTargets(ctx context.Context, tx *sql.Tx, repoID string, refs []string) error {
+	var unread []string
+	for _, ref := range refs {
+		if _, held := w.targets[ref]; !held {
+			unread = append(unread, ref)
+		}
+	}
+	return inChunks(unread, func(part []string) error {
+		rows, err := refsNamed(ctx, tx, repoID, part)
+		if err != nil {
+			return fmt.Errorf("code: read the branches a batch's changes propose into: %w", err)
+		}
+		maps.Copy(w.targets, rows)
+		return nil
+	})
+}
+
+// changeTargets is the branch each open proposal's change proposes into — the
+// one its options name, else the repository's default branch — each once.
+func changeTargets(batch []Proposal, open []int, repo pushRepo) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, i := range open {
+		if c := batch[i].Change; c != nil {
+			if ref := changeTarget(c, repo); !seen[ref] {
+				seen[ref] = true
+				out = append(out, ref)
+			}
+		}
+	}
+	return out
+}
+
+// changeTarget is the branch c proposes into: the one its options name, else
+// the repository's default branch, as a ref.
+func changeTarget(c *ChangeOption, repo pushRepo) string {
+	if c.Target != "" {
+		return c.Target
+	}
+	return branchPrefix + repo.defaultBranch
 }
 
 // watchedUnder is every watched ref that lies under ref — with ref + "/" as a
@@ -1551,7 +1643,8 @@ func UnheldDetail(old string) string {
 // batch names are read by the applier's own statement (refsNamedSQL).
 const (
 	decideRepoSQL = `SELECT name, status, refs, live_bytes, live_packs, version, deleted_at,
-		drop_epoch, expunge_id, owner_kind, owner, visibility, managed_by FROM code_repos WHERE id = ?`
+		drop_epoch, expunge_id, owner_kind, owner, visibility, managed_by, default_branch FROM code_repos
+		WHERE id = ?`
 	decideDeletionSQL = `SELECT name FROM code_deletions WHERE repo_id = ?`
 	// seatDaysSQL is each named seat's pushes counted on one company day: ONE
 	// row a seat of the counter the push apply keeps (code_seat_days), each
