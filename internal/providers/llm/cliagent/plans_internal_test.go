@@ -343,3 +343,49 @@ func setUnnamed(p *Provider, step int) {
 	defer plan.mu.Unlock()
 	plan.wide.unnamed = step
 }
+
+// AN ENV SIGN-IN IS AS MANY SIGN-INS AS THE PLACES IT REACHES. A Bedrock entry
+// on ambient AWS credentials hands its CLI one switch whatever its region, so
+// keyed by its credentials alone, a throttle on the primary region benched its
+// regional fallback; Vertex projects and gateway addresses collided the same
+// way. The profile's identity_env names what says where a call goes.
+//
+// Mutation: drop the identity_env fold from SignInID, and every pair below
+// shares one id.
+func TestAnEnvSignInIsOneSignInPerPlaceItReaches(t *testing.T) {
+	t.Parallel()
+	plans := NewPlans([]byte("a fleet key"))
+	id := func(key string, vars map[string]string) SignInID {
+		t.Helper()
+		dir := t.TempDir()
+		t.Cleanup(func() { forgetWorkspace(dir) })
+		p, err := New(Config{Key: key, Agent: "claude-code", Model: "sonnet", StateDir: dir,
+			Timeout: time.Minute, Env: vars, Auth: Auth{Mode: AuthEnv}, Plans: plans})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.SignInID()
+	}
+	bedrock := func(region string) map[string]string {
+		return map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_REGION": region}
+	}
+	vertex := func(project string) map[string]string {
+		return map[string]string{"CLAUDE_CODE_USE_VERTEX": "1", "ANTHROPIC_VERTEX_PROJECT_ID": project,
+			"CLOUD_ML_REGION": "us-east5"}
+	}
+	gateway := func(url string) map[string]string {
+		return map[string]string{"ANTHROPIC_AUTH_TOKEN": "gw-token", "ANTHROPIC_BASE_URL": url}
+	}
+	for name, pair := range map[string][2]map[string]string{
+		"two Bedrock regions": {bedrock("us-east-1"), bedrock("eu-west-1")},
+		"two Vertex projects": {vertex("acme-prod"), vertex("acme-dr")},
+		"two gateways":        {gateway("https://gw-a.example.com"), gateway("https://gw-b.example.com")},
+	} {
+		if id("a", pair[0]) == id("b", pair[1]) {
+			t.Errorf("%s share one sign-in", name)
+		}
+	}
+	if id("primary", bedrock("us-east-1")) != id("review", bedrock("us-east-1")) {
+		t.Error("two entries in one Bedrock region read as two sign-ins")
+	}
+}

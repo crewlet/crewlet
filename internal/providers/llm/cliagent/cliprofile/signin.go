@@ -175,6 +175,14 @@ func (p *Profile) validateSignIn(add func(string, ...any)) {
 			add("sign_in_env[%d] %q is a variable the engine sets to isolate the call", i, name)
 		}
 	}
+	for i, name := range p.IdentityEnv {
+		switch {
+		case !envref.ValidName(name):
+			add("identity_env[%d] %q is not an environment variable name", i, name)
+		case slices.Contains(isolation, name):
+			add("identity_env[%d] %q is a variable the engine sets to isolate the call", i, name)
+		}
+	}
 	if p.EnvSignIn && len(p.SignInEnv) > 0 {
 		// env_sign_in counts every credential-named variable in an entry's
 		// env, and sign_in_env a fixed list: a profile with both would have
@@ -339,6 +347,7 @@ func (p Profile) cloneSignIn(out *Profile) {
 		}
 	}
 	out.SignInEnv = slices.Clone(p.SignInEnv)
+	out.IdentityEnv = slices.Clone(p.IdentityEnv)
 	out.DeviceLoginArgs = slices.Clone(p.DeviceLoginArgs)
 	if p.DeviceCodePatterns != nil {
 		d := *p.DeviceCodePatterns

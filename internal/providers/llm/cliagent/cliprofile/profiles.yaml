@@ -391,6 +391,20 @@ claude-code:
     - "CLAUDE_CODE_USE_BEDROCK"
     - "CLAUDE_CODE_USE_VERTEX"
     - "CLAUDE_CODE_USE_FOUNDRY"
+  # Which account or endpoint those reach, none of it a credential: a Bedrock
+  # region and AWS profile, a Vertex project and region, a Foundry resource,
+  # and each one's or a gateway's address. Two entries that differ here are
+  # two sign-ins, and a limit one meets does not sit the other out.
+  identity_env:
+    - "AWS_REGION"
+    - "AWS_PROFILE"
+    - "ANTHROPIC_BEDROCK_BASE_URL"
+    - "ANTHROPIC_VERTEX_PROJECT_ID"
+    - "CLOUD_ML_REGION"
+    - "ANTHROPIC_VERTEX_BASE_URL"
+    - "ANTHROPIC_FOUNDRY_RESOURCE"
+    - "ANTHROPIC_FOUNDRY_BASE_URL"
+    - "ANTHROPIC_BASE_URL"
   # `auth login`, NOT `/login`. `claude` takes a bare argument as the PROMPT
   # ("Usage: claude [options] [command] [prompt]"), so `claude /login` never ran
   # a login command at all: it opened an INTERACTIVE SESSION carrying `/login`

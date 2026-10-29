@@ -1295,6 +1295,14 @@ type Profile struct {
 	// would count it.
 	SignInEnv []string `yaml:"sign_in_env,omitempty"`
 
+	// IdentityEnv lists the variables, none of them a credential, whose
+	// values say WHICH account or endpoint a call reaches: a cloud region and
+	// profile, a project and location, a gateway's address. Folded into the
+	// entry's sign-in identity beside its credentials, so two entries on one
+	// cloud switch but different regions, projects or gateways are two
+	// sign-ins, and a limit one meets does not sit the other out.
+	IdentityEnv []string `yaml:"identity_env,omitempty"`
+
 	// TokenPrefix and APIKeyPrefix are how the vendor's headless token and
 	// its API key begin (`sk-ant-oat01-`, `sk-ant-api03-`): what a hint of
 	// a stored credential shows, and what tells a key pasted where a token

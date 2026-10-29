@@ -834,7 +834,9 @@ a model call.
 What a vendor says about a limit is said about an **account**, so the engine
 keeps it per sign-in, not per entry. Each entry has a sign-in identity: a keyed
 hash of its CLI, its `auth.mode` and every credential its CLI is handed (the
-token, the key, a gateway token or a cloud switch in its `env`), or, for a login
+token, the key, a gateway token or a cloud switch in its `env`) with where it
+reaches (the profile's `identity_env`: a cloud region and profile, a project, a
+gateway's address), or, for a login
 kept in files, of that login's install record, which a login command, an import,
 a bundle restore or a device sign-in writes and a token refresh does not. The
 key is derived from the node's keyring, so every node computes one identity for
@@ -3817,6 +3819,7 @@ it runs on.
 | `limit_reset_events` | Events that date and name the limit a run reported, from the CLI's own fields: `match` (as `limit_events`), `resets_at: {path, unit}` (`epoch`, `epoch_ms` or `rfc3339`) and `window: {path, map}` (the vendor's window names mapped to `session`, `weekly`, `model` or `unknown`; a name the map does not hold is `unknown`). The last match of a run wins. They classify nothing: a run still reports its limit by `limit_events` or a marker. `jsonl` output only. |
 | `limit_windows` | `{contains, window}`: the window a vendor's sentence names (`weekly limit` is `weekly`), for a limit no `limit_reset_events` entry named one for. Compared case-sensitively against the sentence already taken as the vendor's report. |
 | `sign_in_env` | The variables that sign the CLI in when an entry's `env` sets one: a cloud provider's switch or a gateway's token (Claude Code's `ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` and `CLAUDE_CODE_USE_FOUNDRY`). [`auth.mode: env`](#7-a-cloud-provider-or-gateway-authmode-env) requires one. Never `token_env`, `api_key_env` or an isolation variable, and never beside `env_sign_in`. |
+| `identity_env` | Variables, none of them a credential, whose values say which account or endpoint a call reaches (Claude Code's `AWS_REGION`, `AWS_PROFILE`, `ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION`, `ANTHROPIC_FOUNDRY_RESOURCE` and the Bedrock, Vertex, Foundry and gateway base URLs). Folded into the entry's sign-in identity, so two entries in different regions, projects or gateways sit out their limits apart. Never an isolation variable. |
 | `token_prefix` | How the vendor's headless token begins (`sk-ant-oat01-`): what a stored token's hint shows, and what tells a key pasted where a token belongs from the token. Requires `token_env`. |
 | `api_key_prefix` | How the vendor's API key begins (`sk-ant-api03-`, `sk-`), for the same two readings. Requires `api_key_env`, and may not overlap `token_prefix`. |
 | `token_lifetime_days` | How long a headless token the CLI mints lasts, as the vendor documents it (Claude Code: 365). A stored token's expiry is computed as when it was stored plus this, never read from the token, which is opaque. Zero is unknown. Requires `token_env`. |

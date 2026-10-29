@@ -71,6 +71,16 @@ func (p *Provider) SignInID() SignInID {
 	for _, name := range slices.Sorted(maps.Keys(credentials)) {
 		write(name + "=" + credentials[name])
 	}
+	// WHERE THOSE CREDENTIALS REACH ([cliprofile.Profile.IdentityEnv]): a
+	// cloud switch, or ambient cloud credentials the box resolves itself,
+	// is one value for every region, project and gateway, and the limit is
+	// each one's own.
+	env := childEnv(p.profile, &Checkout{}, p.env, p.auth)
+	for _, name := range slices.Sorted(slices.Values(p.profile.IdentityEnv)) {
+		if value := strings.TrimSpace(env[name]); value != "" {
+			write(name + "~" + value)
+		}
+	}
 	write(login)
 	return SignInID(hex.EncodeToString(mac.Sum(nil)))
 }
