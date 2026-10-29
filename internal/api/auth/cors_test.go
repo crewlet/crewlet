@@ -3,6 +3,7 @@ package auth_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -57,7 +58,7 @@ func TestAPermittedOriginIsAllowed(t *testing.T) {
 	// header outside a short safelist, and without the engine's mark every
 	// answer reads as something in front of the engine.
 	exposed := rec.Header().Get("Access-Control-Expose-Headers")
-	for _, want := range []string{httpjson.EngineHeader, "ETag", "Retry-After"} {
+	for _, want := range []string{httpjson.EngineHeader, "ETag", "Retry-After", "X-Request-Id"} {
 		if !strings.Contains(exposed, want) {
 			t.Errorf("Access-Control-Expose-Headers = %q, missing %s", exposed, want)
 		}
@@ -102,6 +103,11 @@ func TestAnUnknownOriginIsUnpermittedRatherThanRefused(t *testing.T) {
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("an unlisted origin was permitted as %q", got)
 	}
+	// NOR IS ANYTHING EXPOSED TO IT: the headers a permitted origin reads
+	// stay hidden from a page the allow-list does not name.
+	if got := rec.Header().Get("Access-Control-Expose-Headers"); got != "" {
+		t.Errorf("an unlisted origin was exposed %q", got)
+	}
 	if !reached {
 		t.Error("a same-origin write was refused before it reached the API — " +
 			"a same-origin POST carries an Origin, so this is the dashboard's " +
@@ -143,6 +149,18 @@ func TestAPreflightIsAnsweredWithoutACredential(t *testing.T) {
 	} {
 		if got := rec.Header().Get(header); got == "" || !strings.Contains(got, want) {
 			t.Errorf("%s = %q, want it to carry %q", header, got, want)
+		}
+	}
+	// THE WRITE PATH WHOLE: each header a write the API takes reads, or a
+	// cross-origin write that sends it is refused by the browser before it
+	// is sent.
+	allowed := strings.Split(rec.Header().Get("Access-Control-Allow-Headers"), ", ")
+	for _, want := range []string{
+		"Authorization", "Content-Type", "If-Match", "If-None-Match",
+		"Idempotency-Key", "X-Summary", "X-Request-Id",
+	} {
+		if !slices.Contains(allowed, want) {
+			t.Errorf("Access-Control-Allow-Headers = %q, missing %s", allowed, want)
 		}
 	}
 }
