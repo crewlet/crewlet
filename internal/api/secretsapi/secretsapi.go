@@ -868,16 +868,6 @@ func (s *Service) reactivate(ctx context.Context, names []string, readBy map[str
 	return outcome
 }
 
-// noQuery refuses a request to a route that takes no query string, naming its
-// parameters and the route, and reports whether the request may go on. hint
-// says what the route reads instead.
-//
-// REFUSED, NEVER IGNORED. `?source=` once chose the word a row recorded, and a
-// client still sending it would otherwise be told its write landed while the
-// row says something else — a client that judged its own rows by that word
-// would read every one as overwritten and write it again, for ever, with
-// nothing failing. So any parameter is a 400 before the body is read, and the
-// answer says what the route reads instead.
 // deferQuery reads PUT /secrets/{name}'s one query parameter, `defer_reload`:
 // exactly `true` or `false`, given once, or absent for false. Anything else is
 // refused, as every other parameter is.
@@ -909,6 +899,16 @@ func deferQuery(w http.ResponseWriter, r *http.Request) (deferred, ok bool) {
 	return values[0] == "true", true
 }
 
+// noQuery refuses a request to a route that takes no query string, naming its
+// parameters and the route, and reports whether the request may go on. hint
+// says what the route reads instead.
+//
+// REFUSED, NEVER IGNORED. `?source=` once chose the word a row recorded, and a
+// client still sending it would otherwise be told its write landed while the
+// row says something else — a client that judged its own rows by that word
+// would read every one as overwritten and write it again, for ever, with
+// nothing failing. So any parameter is a 400 before the body is read, and the
+// answer says what the route reads instead.
 func noQuery(w http.ResponseWriter, r *http.Request, route, hint string) bool {
 	if r.URL.RawQuery == "" {
 		return true
