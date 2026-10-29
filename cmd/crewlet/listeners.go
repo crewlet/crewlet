@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 
 	"github.com/crewlet/crewlet/internal/api"
@@ -137,4 +139,66 @@ func (s *handlerSlot) store(h http.Handler) { s.current.Store(&slotted{Handler: 
 
 func (s *handlerSlot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.current.Load().ServeHTTP(w, r)
+}
+
+// unusedConns is every connection of one listener that has not sent a
+// request, closed as the listener's shutdown begins (#315).
+//
+// net/http's Shutdown closes an IDLE connection at once, but counts one that
+// has sent nothing yet (StateNew) as active until it is five seconds old (Go
+// issue 22682) — and [apiShutdownGrace] is five seconds, so a stop with one
+// open spent its whole grace waiting for it and then logged
+// api_shutdown_failed, the warning meant for a request that was stuck. Clients
+// leave such connections routinely: one whose request finds no idle connection
+// dials another, takes the connection the request before it frees if that
+// comes first, and keeps the one it dialled idle, never used (a goroutine dump
+// of a stop held so showed exactly that); a browser opens them ahead of its
+// requests.
+//
+// So the stop closes them as it closes the idle ones: a connection that has
+// sent nothing carries no request to finish. What it shares with an idle
+// connection is the one instant a client may be writing its first request
+// down it as the stop begins, which then meets a closed connection — as it
+// would at the end of Go's five seconds, or on a node that has stopped.
+type unusedConns struct {
+	mu    sync.Mutex
+	conns map[net.Conn]struct{}
+	// closing is set once the shutdown began: a connection accepted as it
+	// began, whose state arrives after, is closed as it arrives.
+	closing bool
+}
+
+func newUnusedConns() *unusedConns { return &unusedConns{conns: map[net.Conn]struct{}{}} }
+
+// track is the server's ConnState hook: a connection is unused until its
+// state leaves StateNew.
+func (u *unusedConns) track(conn net.Conn, state http.ConnState) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	switch {
+	case state != http.StateNew:
+		delete(u.conns, conn)
+	case u.closing:
+		_ = conn.Close()
+	default:
+		u.conns[conn] = struct{}{}
+	}
+}
+
+// close closes every unused connection, and every one tracked after it.
+func (u *unusedConns) close() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.closing = true
+	for conn := range u.conns {
+		_ = conn.Close()
+	}
+	clear(u.conns)
+}
+
+// count is how many unused connections are open.
+func (u *unusedConns) count() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return len(u.conns)
 }

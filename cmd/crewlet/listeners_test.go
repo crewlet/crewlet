@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -556,6 +557,47 @@ func TestTheShutdownFinishesGitBeforeTheListenerCloses(t *testing.T) {
 	}
 	if listening(t, admin.socket) {
 		t.Error("api.port is still listening after the shutdown")
+	}
+}
+
+// A CONNECTION THAT NEVER SENT A REQUEST DOES NOT HOLD A LISTENER'S STOP
+// (#315). net/http counts one as active until it is five seconds old — the
+// whole shutdown grace — so a stop with a client's unused connection open
+// (one its pool dialled and never used, one a browser opened ahead of a
+// request) spent its grace on it and logged api_shutdown_failed, the warning
+// for a stuck request. The stop closes it, as it closes an idle one.
+//
+// Mutation: register no close of the unused connections, and the stop runs
+// to its deadline.
+func TestAConnectionThatSentNothingDoesNotHoldTheStop(t *testing.T) {
+	t.Parallel()
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	listener, addr, err := listenAPI(t.Context(), bindTCP, "127.0.0.1:0", ok, logging.Get("test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { shutdownListener(context.Background(), listener, "api", logging.Get("test")) })
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	// TAKEN BY THE SERVER, as the stop will find it.
+	for deadline := time.Now().Add(10 * time.Second); listener.unused.count() == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the server never took the connection")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), apiShutdownGrace/2)
+	defer cancel()
+	if err := listener.server.Shutdown(ctx); err != nil {
+		t.Errorf("the listener's stop with a connection open that sent nothing: %v — the connection held it", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Errorf("the unused connection reads %v after the stop, want it closed (EOF)", err)
 	}
 }
 

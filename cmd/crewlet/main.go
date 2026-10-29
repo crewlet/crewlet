@@ -1728,6 +1728,9 @@ type apiListener struct {
 	// served is closed once the goroutine [listenAPI] started to Serve the
 	// socket has returned.
 	served <-chan struct{}
+	// unused is every connection that has not sent a request, which the
+	// server closes as its shutdown begins.
+	unused *unusedConns
 }
 
 // serve hands this listener the handler it answers with from now on. A request
@@ -1857,7 +1860,9 @@ func shutdownListener(ctx context.Context, l *apiListener, listener string, log 
 // assistant's listening stream on /operator/mcp is ended as the shutdown
 // begins ([api.App.EndListens], registered on the listener), so it answers and
 // completes like any other request rather than spending the grace — and
-// api_shutdown_failed keeps meaning that something was stuck.
+// api_shutdown_failed keeps meaning that something was stuck. Nor is a
+// connection that has not sent a request, which net/http would wait for until
+// it is five seconds old: it is closed as the shutdown begins ([unusedConns]).
 const apiShutdownGrace = 5 * time.Second
 
 // seedPauses puts every paused seat on the live projection, by the agent id the
@@ -2965,6 +2970,7 @@ func listenAPI(ctx context.Context, bind bindFunc, addr string, handler http.Han
 		return nil, "", fmt.Errorf("api: bind %s: %w", addr, err)
 	}
 	slot := newHandlerSlot(handler)
+	unused := newUnusedConns()
 	server := &http.Server{
 		Handler: slot,
 		// A read that never completes holds a connection open forever,
@@ -2973,7 +2979,9 @@ func listenAPI(ctx context.Context, bind bindFunc, addr string, handler http.Han
 		ReadHeaderTimeout: apiReadHeaderTimeout,
 		IdleTimeout:       apiIdleTimeout,
 		BaseContext:       func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
+		ConnState:         unused.track,
 	}
+	server.RegisterOnShutdown(unused.close)
 	// The goroutine belongs to the listener's stop, which waits for it
 	// ([shutdownListener]).
 	served := make(chan struct{})
@@ -2983,7 +2991,7 @@ func listenAPI(ctx context.Context, bind bindFunc, addr string, handler http.Han
 			log.ErrorContext(ctx, "api_serve_failed", "error", err)
 		}
 	}()
-	return &apiListener{server: server, socket: listener, handler: slot, served: served},
+	return &apiListener{server: server, socket: listener, handler: slot, served: served, unused: unused},
 		listener.Addr().String(), nil
 }
 
