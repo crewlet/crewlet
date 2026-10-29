@@ -66,13 +66,15 @@ func (n *node) body(id string) string {
 // for a change appends ONE record, which moves the branch and opens the change
 // at the head it set — numbered from the repository's next, into its default
 // branch, the seat its owner and first author, the push its first revision,
-// opened at the record's position with the turn that pushed it — and the
-// answer names the change by its number, read from its row, as does the
-// push's outcome asked of it. The next change the repository opens takes the
-// next number.
+// opened at the record's position with the turn and the coding run that
+// pushed it — and the answer names the change by its number, read from its
+// row, as does the push's outcome asked of it. The next change the repository
+// opens takes the next number.
 //
-// Mutation: open the change in a record of its own after the push's, and the
-// push appends two records and the change is opened at another position.
+// Mutations: open the change in a record of its own after the push's, and the
+// push appends two records and the change is opened at another position; open
+// it without the push's coding run, and the change says no sandbox run opened
+// it.
 func TestAPushOpensItsChangeInItsOwnRecord(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -97,10 +99,10 @@ func TestAPushOpensItsChangeInItsOwnRecord(t *testing.T) {
 	if got.number != 1 || got.state != "open" || got.source != featureRef || got.target != mainRef ||
 		got.head != oidOf("C") || got.revision != 1 || got.version != 1 || got.position != at ||
 		got.owner != "dev" || got.ownerKind != "agent" || got.operator != "" ||
-		got.turn != p.Principal.Run.TurnID || got.title != "Retry the upload" ||
+		got.turn != p.Principal.Run.TurnID || got.run != p.Principal.Run.RunID || got.title != "Retry the upload" ||
 		got.bodyBytes != int64(len("The upload is retried once.")) {
 		t.Fatalf("the change the push opened is %+v, want dev's web!1 from feature into main at C, revision 1, "+
-			"version 1, at the push's record", got)
+			"version 1, at the push's record, opened by the turn and the coding run that pushed", got)
 	}
 	if opened := n.count(`SELECT COUNT(*) FROM code_changes WHERE id = ? AND opened_position = ?`, id,
 		at); opened != 1 {

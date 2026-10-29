@@ -931,8 +931,10 @@ one](../guides/code.md#open-a-change-from-a-push)).
   one `change.title` names, or the subject of the commit the push set the
   branch to.
 - **By its pusher, as an open is.** The pusher is the change's owner and
-  first author, and the push its first revision; a seat's push names the turn
-  that made it. Whoever may push the branch may open a change from it, so the
+  first author, and the push its first revision. A seat's push names the turn
+  that made it, and a push the seat's coding box made the coding run that
+  pushed it too, and the change keeps both as the turn and the run that
+  opened it. Whoever may push the branch may open a change from it, so the
   push's own update is the check.
 - **Numbered like any other.** The record takes the repository's next number
   when it applies, in the order of the pushes it carries, and a later push in

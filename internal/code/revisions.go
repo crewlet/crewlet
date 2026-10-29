@@ -413,11 +413,15 @@ func (b *changeBook) move(e PushEntry) {
 // command ([ChangeSource]), at the head that command set — the record's rows
 // at its position: the change's, numbered the repository's next where the
 // book numbers (the apply), open or a draft as the change says; its
-// description, where it has one; its pusher as its owner and first author;
-// and its first revision, made by the push. From here on it is a live change
-// on its source and into its target, which the record's later entries revise,
-// merge or close as any other, at the version the open gave it: the record
-// that opens a change is its first, however many of its entries move it.
+// description, where it has one; its pusher as its owner and first author,
+// with what made the push — the turn behind a seat's push and, for a push its
+// coding box made, the coding run that pushed ([RunProvenance.RunID]) — as the
+// turn and the sandbox run that opened it, an open's own ([ChangeOpen.TurnID],
+// [ChangeOpen.RunID]); and its first revision, made by the push. From here on
+// it is a live change on its source and into its target, which the record's
+// later entries revise, merge or close as any other, at the version the open
+// gave it: the record that opens a change is its first, however many of its
+// entries move it.
 //
 // IT CARRIES NO WORK ITEM: a change carries an item by its identity in its
 // tracker, and a push names its run's item by that tracker and the key it
@@ -459,7 +463,8 @@ func (b *changeBook) open(e PushEntry) (string, string) {
 	row := &changeRow{id: id, repoID: b.repo, number: b.next, title: e.Change.Title,
 		bodyBytes: int64(len(e.Change.Body)), state: state, source: source.Ref, target: e.Change.Target,
 		head: source.New, revision: 1, owner: owner, ownerKind: kind, operator: operator,
-		turn: e.Principal.Run.TurnID, openedAt: b.at, opened: b.packed, version: 1, position: b.packed}
+		turn: e.Principal.Run.TurnID, run: e.Principal.Run.RunID, openedAt: b.at, opened: b.packed, version: 1,
+		position: b.packed}
 	if b.next > 0 {
 		b.next++
 	}
