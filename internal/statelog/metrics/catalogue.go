@@ -1185,9 +1185,14 @@ func Catalogue() []Instrument {
 				"graph above zero raises code_maintenance_refused, since a " +
 				"repository refused its graph is refused its bitmap too; a tip " +
 				"raises nothing, its copy served through its chain's bitmap. " +
-				"Falling back is a repository purged, evicted, rebuilt smaller " +
-				"or published, or a node given more memory, which the cache " +
-				"reads again every ten seconds.",
+				"Falling back is a repository purged, evicted or rebuilt " +
+				"smaller, a node given more memory, which the cache reads " +
+				"again every ten seconds, or a publication its copy installs: " +
+				"its bitmap and graph are then the chain's, and its tail " +
+				"shorter — which lifts a tip refused for its tail's length, " +
+				"never one refused for its repository's size, since a tip " +
+				"keeps room beside its tail for a walking clone of the whole " +
+				"repository.",
 		},
 		{
 			Name: CodeCacheMemoBytes, Kind: KindGauge, Unit: UnitBytes,

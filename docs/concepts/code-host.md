@@ -1440,7 +1440,11 @@ by `crewlet.code.cache.maintenance.refusals`, and a refused bitmap raises the
 stays refused. A refused tip raises nothing: the copy is still served through
 its chain's bitmap and graph layers, and only the commits pushed since the
 last publication go by date — `crewlet.code.cache.maintenance.refused{step=tip-graph}`
-counts the copies. A connectivity check the budget cannot
+counts the copies. A publication that shortens the tail lifts a tip refused for
+the tail's length, never one refused for the repository's size: the tip keeps
+room beside the tail for a walking clone of the whole repository, so a node
+whose budget cannot hold that clone writes no tip of the repository until it
+is given more memory. A connectivity check the budget cannot
 hold is refused to whoever asked for it, and one that the work in flight
 leaves no room for is busy, as a full lane is. A step that fits the budget
 alone but not beside what is running waits for it, and the first such
