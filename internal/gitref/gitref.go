@@ -79,6 +79,23 @@
 // typical glob and 13 µs for the costliest, and allocates nothing. [ValidRef],
 // which every command's ref passes once before any rule is asked about it,
 // costs 0.16 µs on the release branch and 0.72 µs on the deepest ref.
+//
+// A path glob ([PathGlob.Match]) is the same walk over a path with no bound,
+// measured once on two efficiency cores of an Intel Core Ultra 7 265U shared
+// with other work, with Go 1.27 (go test -run '^$' -bench
+// BenchmarkPathGlobMatch -benchtime 5000x -count 1: one run of 5 000
+// iterations an arm; pathglob_test.go names each arm's glob and path). A
+// literal glob costs 4.0 ns and a directory's ** asked about a file below it
+// (web/**) 20 ns. A glob with at most one ** compares its parts at the path's
+// two ends, so d/**/y.go costs 22 ns on a path of 2 049 components, while a
+// run of parts between two **s is searched along it: **/z/** costs 33 µs on
+// that path, 16 ns a component. The costliest glob found within
+// MaxPathGlobComponents — five globs and a sixth that fails between two **s,
+// each searching six pieces — costs 3.2 ms on a path of 48 KiB of six-byte
+// components, every byte a revision's touched paths may take, about 65 ns a
+// byte: the cost a byte of path that bound holds, and what a repository's
+// home pays a glob at most to match its path owners against one revision's
+// paths. None of them allocates.
 package gitref
 
 import (

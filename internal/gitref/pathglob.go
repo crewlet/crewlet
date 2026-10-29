@@ -25,13 +25,29 @@ import (
 const MaxPathGlobBytes = 128
 
 // MaxPathGlobComponents is the most components a path glob holding a '*' may
-// have: [MaxPatternComponents], for its reason. A glob is matched by the same
-// walk a pattern is, so the one cost it can make large is the same — a run of
-// parts BETWEEN two **s, searched for along the path — and eight bounds that
-// run at six parts. Eight is deeper than any ownership a glob states: what one
-// owns below a directory is the directory's **, however deep the tree runs
-// under it. A literal glob is one comparison of the whole path, so it is
-// bounded only by its bytes.
+// have: eight, [MaxPatternComponents]' value, bounding the same cost. A glob is
+// matched by the same walk a pattern is, so the one cost it can make large is
+// the same — a run of parts BETWEEN two **s, searched for along the path — and
+// eight bounds that run at SEVEN parts: six components between a leading **
+// and a trailing one, and the * a trailing ** is read as before its own **
+// (one component or more, [readGlob]). A pattern's run is two shorter, refs and
+// its namespace being two of its eight. Eight is deeper than any ownership a
+// glob states: what one owns below a directory is the directory's **, however
+// deep the tree runs under it. A literal glob is one comparison of the whole
+// path, so it is bounded only by its bytes.
+//
+// IT BOUNDS A GLOB'S COST A BYTE OF PATH, NOT A MATCH'S: a ref's 255 bytes hold
+// a pattern's costliest rule to 13 µs, and a path has no bound, so the search
+// grows with it. The costliest glob found within eight costs 3.2 ms on a path
+// of 48 KiB — every byte a revision's touched paths may take (internal/code's
+// MaxTouchedBytes) — about 65 ns a byte, where a directory's ** costs 20 ns on
+// any path (the package doc's Measured section). So the repository's home,
+// matching its path owners' globs against a revision's paths (internal/code's
+// MatchOwners), pays at most about 6.5 s of a core a revision at
+// MaxPathOwners × MaxPathOwnerPaths globs every one of that shape, and about
+// 42 ms at as many directories' ** asked about MaxTouchedPaths paths. Fewer
+// components would shorten the run, and so the constant, and leave the cost
+// linear in the path's bytes, which the touched list's bound holds.
 const MaxPathGlobComponents = MaxPatternComponents
 
 // PathGlob is a glob over a repository's TREE PATHS, checked and read once by

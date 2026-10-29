@@ -309,6 +309,16 @@ func TestMatchingAPathAllocatesNothingAndNeverPanics(t *testing.T) {
 	// neighbours' allocations it would count.
 	deepest := "d/" + strings.Repeat("x/", 2047) + "y.go"
 	malformed := []string{"", "/", "//", "a//b", "/a", "a/", strings.Repeat("/", 600), "d//x//y.go"}
+	// THE BENCHMARK'S ARMS, the costliest glob on the longest path included.
+	for _, bc := range benchPathGlobs {
+		parsed, err := gitref.ParsePathGlob(bc.glob)
+		if err != nil {
+			t.Fatalf("ParsePathGlob(%s) refused it: %v", bc.glob, err)
+		}
+		if n := testing.AllocsPerRun(10, func() { parsed.Match(bc.path) }); n != 0 {
+			t.Errorf("%s: PathGlob.Match allocates %v times a call", bc.name, n)
+		}
+	}
 	for _, glob := range []string{"README.md", "*", "**", "**/*.go", "d/**/y.go", "d/**/x/**/y.go",
 		"d/**/z/**/y.go", "**/x/**", "a/*/b/**/c/*", "*a*/**/*b*/**/c*"} {
 		parsed, err := gitref.ParsePathGlob(glob)
@@ -328,5 +338,54 @@ func TestMatchingAPathAllocatesNothingAndNeverPanics(t *testing.T) {
 				parsed.Match(p)
 			}()
 		}
+	}
+}
+
+// longestTouched is the longest single path a revision's facts can list as
+// touched — 48 KiB of six-byte components, every byte of the touched list's
+// bound (internal/code's MaxTouchedBytes, as JSON) less its brackets and the
+// path's quotes — so a glob asked about it costs what it may cost asked about
+// all of one revision's paths, whose bytes that bound holds to the same.
+var longestTouched = strings.Repeat("aaaaaa/", 7021) + "b"
+
+// benchPathGlobs are the shapes a path owner's glob is asked about, each
+// against the path its arm names: a literal glob on the file it names; a
+// directory's ** on a file below it, the typical ownership; a ** with parts on
+// both sides, compared once at the two ends of a path of 2 049 components and
+// never slid along it; a ** on either side of one component, which IS
+// searched for along that path; and the costliest glob found within
+// MaxPathGlobComponents — a run of seven parts between two **s, five globs
+// that match every component of longestTouched searching six pieces each, a
+// sixth that fails, and the * the trailing ** stands for, so the run is tried
+// at every place and fails at its sixth part every time. It is the pattern
+// arm's costliest shape with the two components a ref spends on refs/heads
+// given to the run.
+var benchPathGlobs = []struct {
+	name, glob, path string
+	match            bool
+}{
+	{"literal", "web/app.go", "web/app.go", true},
+	{"typical", "web/**", "web/internal/handlers/login_test.go", true},
+	{"deepest", "d/**/y.go", "d/" + strings.Repeat("x/", 2047) + "y.go", true},
+	{"between", "**/z/**", "d/" + strings.Repeat("x/", 2047) + "y.go", false},
+	{"worst", "**/" + strings.Repeat("*a*a*a*a*a*a*/", 5) + "*a*a*a*a*a*a*c*/**", longestTouched, false},
+}
+
+// BenchmarkPathGlobMatch is what a path owner's glob, parsed once, costs a
+// path: the matching a repository's home pays for every glob of every owner
+// against every path a revision touches (internal/code's MatchOwners).
+func BenchmarkPathGlobMatch(b *testing.B) {
+	for _, bc := range benchPathGlobs {
+		parsed, err := gitref.ParsePathGlob(bc.glob)
+		if err != nil || parsed.Match(bc.path) != bc.match {
+			b.Fatalf("%s: %s against a path of %d bytes is not the case the arm measures (%v)", bc.name, bc.glob,
+				len(bc.path), err)
+		}
+		b.Run(bc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				parsed.Match(bc.path)
+			}
+		})
 	}
 }
