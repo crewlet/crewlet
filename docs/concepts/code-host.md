@@ -325,7 +325,13 @@ unit's effective lead at `full_access` a project, and the seat a scratch
 repository belongs to its own. A settings change is judged as the repository
 stands **and** as the change would leave it, so a seat cannot hand a
 repository to an owner, or narrow it to a visibility, under which it would no
-longer maintain it — it could not take it back. Everything else is refused
+longer maintain it — it could not take it back. Nor does a seat ever leave a
+project owned by a seat, its own included, by a create or a settings change,
+though it maintains one a person gave it: a seat's own repositories are its
+scratch repositories, which `code.scratch.max_per_seat` caps and an idle
+expiry deletes, while a project owned by a seat never expires and counts only
+against the 10 000 every project in the company shares — so only a person
+makes one. Everything else is refused
 `not_permitted`, with the reason, and nothing is written. Every request reads
 the chart, so a node [behind the company's
 configuration](#who-may-read-and-push) decides none of them and the next data

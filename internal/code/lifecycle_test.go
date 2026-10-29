@@ -155,10 +155,17 @@ func TestALifecycleRequestIsOneWrite(t *testing.T) {
 // settings change as the repository stands AND as the change leaves it, so a
 // seat cannot hand a repository to an owner under which it would not maintain
 // it. Below maintain — a lead at review, a member, an outsider, another seat —
-// is not_permitted, with nothing written.
+// is not_permitted, with nothing written. And a seat leaves no project owned
+// by a seat, its own included, by a create or a settings change, though it
+// would maintain one it owned: a seat's own repositories are its scratch
+// repositories, capped and expiring, and only a person makes a project a
+// seat's.
 //
-// Mutation: judge a settings change as the repository stands alone — the lead
-// hands its project to Sales, red.
+// Mutations: judge a settings change as the repository stands alone — the
+// lead hands its project to Sales, red; drop the owner-kind check from a
+// seat's project create and settings change — a full_access member creates a
+// project owned by itself, and the lead takes its unit's project for itself,
+// red.
 func TestWhoMayChangeARepository(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -245,24 +252,44 @@ func TestWhoMayChangeARepository(t *testing.T) {
 		{"a root seat's own", lcCreate(agent("root-bot"), "root-bot.c9", seatOwned("root-bot")), true},
 		{"another seat's scratch repository", lcCreate(agent("dev"), "reader.c10", seatOwned("reader")), false},
 		{"a scratch repository at read_only", lcCreate(agent("reader"), "reader.c11", seatOwned("reader")), false},
+		// A SEAT MAKES NO PROJECT A SEAT'S, its own included, though it would
+		// maintain one it owned: a seat's own are its scratch repositories.
+		{"a full_access member's project owned by itself", lcCreate(agent("dev"), "c12", seatOwned("dev")), false},
+		{"a lead's project owned by itself", lcCreate(agent("cto"), "c13", seatOwned("cto")), false},
+		{"a lead's project owned by another seat", lcCreate(agent("cto"), "c14", seatOwned("dev")), false},
+		{"a person's project for a seat", lcCreate(lcPerson, "c15", seatOwned("dev")), true},
 	} {
 		got := n.life(tc.req)
+		seatsProject := tc.req.Actor.Kind == code.PrincipalAgent && tc.req.Create.Owner.Kind == code.OwnerSeat &&
+			code.KindOf(tc.req.Name) == code.RepoProject
 		switch {
 		case tc.lands && (got.Refusal != "" || got.Outcome != statelog.OutcomeApplied):
 			t.Errorf("%s: %+v, want it created", tc.who, got)
 		case !tc.lands && got.Refusal != code.LifecycleNotPermitted:
 			t.Errorf("%s: %+v, want not_permitted", tc.who, got)
+		case seatsProject && !strings.Contains(got.Detail, "scratch repositories"):
+			t.Errorf("%s: refused %q, want the sentence naming a seat's own repositories", tc.who, got.Detail)
 		}
 	}
 
 	// AS THE CHANGE LEAVES IT: the lead may not hand its unit's project to a
-	// unit it does not lead — it could not take it back — and a person may.
+	// unit it does not lead — it could not take it back — nor to any seat,
+	// itself included, and a person may do both.
 	id := n.made(lcPerson, "handed", unitOwned("eng"))
-	sales := unitOwned("sales")
+	sales, cto := unitOwned("sales"), seatOwned("cto")
 	if got := n.life(lcSettings(agent("cto"), id, code.RepoChange{Owner: &sales})); got.Refusal !=
 		code.LifecycleNotPermitted || !strings.Contains(got.Detail, "could not take it back") {
 		t.Errorf("the lead handing its project to Sales: %+v, want not_permitted saying why", got)
 	}
+	if got := n.life(lcSettings(agent("cto"), id, code.RepoChange{Owner: &cto})); got.Refusal !=
+		code.LifecycleNotPermitted || !strings.Contains(got.Detail, "scratch repositories") {
+		t.Errorf("the lead taking its unit's project for itself: %+v, want not_permitted saying why", got)
+	}
+	n.lands(lcSettings(lcPerson, id, code.RepoChange{Owner: &cto}))
+	// A PROJECT A PERSON GAVE A SEAT the seat maintains, and may hand on to a
+	// unit it leads.
+	eng := unitOwned("eng")
+	n.lands(lcSettings(agent("cto"), id, code.RepoChange{Owner: &eng}))
 	n.lands(lcSettings(lcPerson, id, code.RepoChange{Owner: &sales}))
 }
 

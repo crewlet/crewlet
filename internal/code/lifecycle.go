@@ -39,8 +39,11 @@ import (
 // projects for any owner the chart holds; a seat maintains what its grant on
 // the repository lets it ([GrantOf], ADR-0058) — a unit's projects if it is
 // the unit's effective lead at full_access, its own scratch repositories at
-// full_access. A node behind the company's configuration decides none of it
-// ([StoreOptions.Current]): every kind reads the chart, a person's included.
+// full_access — and never leaves a project owned by a seat: its own
+// repositories are its scratch repositories, which a cap and an idle expiry
+// bound, and only a person makes a project a seat's. A node behind the
+// company's configuration decides none of it ([StoreOptions.Current]): every
+// kind reads the chart, a person's included.
 
 // LifecycleKind is what a lifecycle request asks.
 type LifecycleKind string
@@ -563,7 +566,13 @@ func pathOwnersAdded(req LifecycleRequest) []PathOwner {
 //     for a project's create as the new repository will stand, so only the
 //     owning unit's effective lead at full_access creates one; for a scratch
 //     create, its own handle, at full_access, owning it; and for a hold, only
-//     what its grant reads, since a seat holds what it may read.
+//     what its grant reads, since a seat holds what it may read;
+//   - and a seat leaves NO PROJECT OWNED BY A SEAT, its own or another's,
+//     whether it creates the project or hands one on by a settings change —
+//     though GrantOf gives an owning seat maintain on what it owns — because a
+//     seat's own repositories are its scratch repositories, capped and
+//     expiring, and a seat-owned project is neither: only a person makes one
+//     ([seatProjectRefusal]).
 //
 // A NAME OF THE OTHER KIND'S FORM is refused for every actor, a person's
 // included: renamed to <handle>.<slug>, a project would read as that seat's
@@ -618,6 +627,10 @@ func lifecycleRefusal(req LifecycleRequest, repo, next RepoRef, roster Roster) (
 			return true, fmt.Sprintf("the owner %s %s is no %s of the chart", next.Owner.Kind,
 				next.Owner.Ref, next.Owner.Kind)
 		}
+		if next.Owner.Kind != OwnerUnit {
+			return true, seatProjectRefusal(actor, "create the project repository "+req.Name+" owned by "+
+				ownerWords(next.Owner))
+		}
 		if g := GrantOf(actor, next, roster); g.Access < AccessMaintain {
 			return true, maintainRefusal(g, "create a project repository owned by "+ownerWords(next.Owner))
 		}
@@ -628,11 +641,15 @@ func lifecycleRefusal(req LifecycleRequest, repo, next RepoRef, roster Roster) (
 	}
 	// AS THE CHANGE LEAVES IT TOO: a seat cannot hand a repository to an
 	// owner, or narrow it to a visibility, under which it would not maintain
-	// it — it could not take it back.
+	// it — it could not take it back — and hands a project to no seat, itself
+	// included, where it would maintain it ([seatProjectRefusal]).
 	if req.Kind == LifecycleSettings && (next.Owner != repo.Owner || next.Visibility != repo.Visibility) {
 		if next.Owner != repo.Owner && !rosterHolds(roster, next.Owner) {
 			return true, fmt.Sprintf("the owner %s %s is no %s of the chart", next.Owner.Kind,
 				next.Owner.Ref, next.Owner.Kind)
+		}
+		if next.Owner != repo.Owner && next.Owner.Kind != OwnerUnit {
+			return true, seatProjectRefusal(actor, "give "+repo.Name+" to "+ownerWords(next.Owner))
 		}
 		if g := GrantOf(actor, next, roster); g.Access < AccessMaintain {
 			return true, fmt.Sprintf("seat %s may not leave %s owned by %s and visible to %s: it would not "+
@@ -700,6 +717,23 @@ func maintainRefusal(g Grant, what string) string {
 		"this takes maintain — the owning unit's effective lead at %s, or the seat a scratch "+
 		"repository belongs to", g.Principal.Seat, what, g.Access, g.Tier.spelled(), g.Relation,
 		TierFullAccess)
+}
+
+// seatProjectRefusal is the sentence of a seat that asked to do what, which
+// would leave a PROJECT repository owned by a seat — its own or another's.
+// A seat makes a project only for a unit whose effective lead it is, and
+// hands one on only to such a unit, because a seat's own repositories are its
+// SCRATCH repositories: capped by code.scratch.max_per_seat and expired by
+// code.scratch.idle_days. A project a seat owns is under neither — it never
+// expires, and only the company-wide repo_limit bounds it, the cap every
+// person's and every lead's project counts against — so one seat steered by
+// what it read could fill that cap with projects of its own. Only a person
+// makes a project a seat's.
+func seatProjectRefusal(actor Principal, what string) string {
+	return fmt.Sprintf("seat %s may not %s: a seat's own repositories are its scratch repositories, "+
+		"named %s.<slug>, which code.scratch.max_per_seat caps and code.scratch.idle_days expires — a seat "+
+		"makes a project, and hands one on, only for a unit whose effective lead it is, and only a person "+
+		"makes a project a seat's", actor.Seat, what, actor.Seat)
 }
 
 // ownerWords is an owner as a sentence names it.
