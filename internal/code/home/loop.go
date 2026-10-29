@@ -144,6 +144,9 @@ type Loop struct {
 	mu      sync.Mutex
 	workers []Worker
 	started bool
+	// stopped is set once Stop has begun, so a Start after it starts
+	// nothing.
+	stopped bool
 	// pending is every (worker, repository) queued, at the furthest floor
 	// it was asked at, and queue their order; busy is every pair a turn is
 	// working, and again every busy pair asked for once more meanwhile, at
@@ -237,17 +240,20 @@ func (l *Loop) named(name string) bool {
 // the backstop doing its work meanwhile. Its caller starts it once the
 // runtime its seams read through is published and the node writes: its first
 // pass asks who serves git and lists the rows at once, and every turn asks
-// records of the repositories' writers. A second Start does nothing.
+// records of the repositories' writers. A second Start does nothing, and so
+// does one once Stop has begun.
 func (l *Loop) Start() {
 	l.mu.Lock()
-	if l.started || l.life.Err() != nil {
+	if l.started || l.stopped {
 		l.mu.Unlock()
 		return
 	}
 	l.started = true
 	workers := len(l.workers)
-	l.mu.Unlock()
+	// COUNTED UNDER mu, beside started: a Stop that reads started reads the
+	// goroutines it waits for already counted.
 	l.wg.Add(1 + Concurrency)
+	l.mu.Unlock()
 	go l.passes()
 	for range Concurrency {
 		go l.turns()
@@ -259,13 +265,15 @@ func (l *Loop) Start() {
 // Stop ends the loop: the watch, the passes and every turn in flight — a
 // facts read cut, a record asked of a committer cancelled, which lands or
 // does not on its own — and waits for them to end, until ctx does.
-// Idempotent; a stop of a loop never started ends nothing.
+// Idempotent; a stop of a loop never started ends nothing, and a Start after
+// it starts nothing.
 func (l *Loop) Stop(ctx context.Context) {
-	l.end()
 	l.mu.Lock()
+	l.stopped = true
 	started, w := l.started, l.watch
 	l.watch = nil
 	l.mu.Unlock()
+	l.end()
 	if w != nil {
 		w.Stop()
 	}
