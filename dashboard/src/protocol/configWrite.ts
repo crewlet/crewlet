@@ -210,7 +210,12 @@ export type EntityRead =
       readonly kind: "entity";
       /** The entity itself, redacted — the body the write takes back. */
       readonly entity: Record<string, unknown>;
-      /** The DOCUMENT's tag: an entity is a slice of one revision. */
+      /**
+       * THE ENTITY'S OWN TAG, as its GET answers it: the precondition a write
+       * of this entity (a replacement, a removal) takes back. Not the
+       * document's: a removal sent the document's tag and was refused 412 for
+       * every model, since the engine decides it on the entry it removes.
+       */
       readonly etag: string;
     }
   /** Nothing in the active revision carries this id, or nothing is active. */
@@ -218,8 +223,8 @@ export type EntityRead =
   | ConfigRefusal;
 
 /**
- * Read one entity of the active revision, with the tag of the revision it was
- * read from — the pair [putEntity] and [dryRunEntity] take back.
+ * Read one entity of the active revision, with its own tag: the pair
+ * [putEntity], [dryRunEntity] and a removal take back.
  */
 export async function getEntity(
   kind: EntityPath,

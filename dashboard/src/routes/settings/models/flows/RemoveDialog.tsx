@@ -34,7 +34,7 @@ import { useNavigator } from "~/app/router.tsx";
 import { listed, plural } from "~/lib/format.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
-import { getConfig, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
+import { getEntity, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
 import { managedSentence, unsettledSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
 import type { ConfigWarning } from "~/protocol/types.ts";
 import type { ModelReference, ModelRepoint } from "~/protocol/models.ts";
@@ -158,6 +158,19 @@ export function summaryOf(key: string, removal: Removal, mood: "says" | "audit" 
   return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}${mood === "says" ? "." : ""}`;
 }
 
+/**
+ * Where each place that ran on the model goes, one line each, by the seat's
+ * name: "Product Manager, coding: default-host → default". Said before the
+ * removal is confirmed, so no seat moves unannounced.
+ */
+export function movesOf(key: string, removal: Removal, seats: ModelsData["seats"]): string[] {
+  return removal.repoint.map((r) => {
+    const where = placeWords(seats, r.at);
+    if (removal.assistantOff && r.at.assistant === "chat") return `${where}: turned off`;
+    return `${where}: ${key} → ${r.to ?? "left unset"}`;
+  });
+}
+
 /** A field's chain after the removal, as the revision writes it. */
 function chainAfter(ref: ModelReference, removing: string, to: string | null): string[] {
   const out: string[] = [];
@@ -266,13 +279,14 @@ export function RemoveDialog({
     const abort = new AbortController();
     setLoad({ kind: "loading" });
     void (async () => {
-      const read = await getConfig(abort.signal);
-      if (read.kind !== "document") {
+      // THE ENTRY'S OWN TAG is the precondition a removal takes, never the document's.
+      const read = await getEntity("llm-providers", key, abort.signal);
+      if (read.kind !== "entity") {
         setLoad({
           kind: "failed",
           message:
-            read.kind === "none"
-              ? "No company is configured, so there is no model to remove."
+            read.kind === "missing"
+              ? `${key} is no longer in the configuration, so there is nothing to remove.`
               : refusalWords(read, key, "check"),
         });
         return;
@@ -431,7 +445,12 @@ export function RemoveDialog({
             </>
           )}
 
-          <CheckCallout check={check} summary={summaryOf(key, removal)} data={data} />
+          <CheckCallout
+            check={check}
+            summary={summaryOf(key, removal)}
+            moves={movesOf(key, removal, data.seats)}
+            data={data}
+          />
 
           <Disclosure title="Every change in the revision">
             <ul className="models-revision" aria-label="Every change in the revision">
@@ -480,10 +499,12 @@ function checkOf(outcome: ConfigWriteOutcome, key: string): Check {
 function CheckCallout({
   check,
   summary,
+  moves,
   data,
 }: {
   check: Check;
   summary: string;
+  moves: readonly string[];
   data: ModelsData;
 }) {
   if (check.kind === "checking") {
@@ -504,6 +525,13 @@ function CheckCallout({
     <Callout variant="info" title="Ready to remove" live="polite">
       <span className="models-stack">
         <span>{summary}</span>
+        {moves.length > 0 ? (
+          <ul className="models-checklist" aria-label="Where each moves">
+            {moves.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        ) : null}
         {check.warnings.length > 0 ? (
           <ul className="models-checklist" aria-label="Also changes">
             {check.warnings.map((w, i) => (
