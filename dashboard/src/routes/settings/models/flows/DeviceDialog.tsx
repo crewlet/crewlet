@@ -27,7 +27,7 @@ import {
   Text,
   useToast,
 } from "@crewlethq/ui";
-import type { ModelDeviceStatus } from "~/contract/models.ts";
+import type { ModelDeviceStatus } from "~/protocol/models.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { ModelDevice } from "~/protocol/models.ts";
 import { cancelDeviceSignIn, startDeviceSignIn } from "../api.ts";

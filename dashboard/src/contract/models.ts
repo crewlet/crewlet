@@ -95,14 +95,6 @@ export type ModelAlarmKind =
   | "llm_limit_waiting";
 
 /**
- * Where a device sign-in is (`coord.DeviceSignInStatus`). Held against
- * `coord.DeviceSignInStatuses` by the health gate, so the sign-in panel has
- * words for every state it follows a session through.
- */
-export type ModelDeviceStatus =
-  "starting" | "pending" | "cancel_requested" | "approved" | "failed" | "expired" | "cancelled";
-
-/**
  * How a model's CLI signs in as one node resolves it (`cliagent.SignInRoute`).
  * Held against `cliagent.SignInRoutes` by
  * `internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns`.

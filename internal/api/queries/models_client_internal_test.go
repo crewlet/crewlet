@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/clientsource"
-	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // THE MODELS SCREEN READS THE ENGINE'S HEALTH AND ALARMS. A model's condition
@@ -13,8 +12,7 @@ import (
 // the reading it is handed: a reading the dashboard lacks is a model drawn with
 // no condition at all, and one the engine dropped is copy for a state that never
 // arrives. The same holds for the five alarms `llm_entries` carries, whose
-// banners link each one to the model it names, and for the states of a device
-// sign-in, which the sign-in panel follows to its end.
+// banners link each one to the model it names.
 func TestTheModelsScreenReadsTheEnginesHealthAndAlarms(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)
@@ -24,7 +22,6 @@ func TestTheModelsScreenReadsTheEnginesHealthAndAlarms(t *testing.T) {
 	}{
 		{"ModelHealth", names(ModelHealths)},
 		{"ModelAlarmKind", names(llmAlarmKinds)},
-		{"ModelDeviceStatus", names(coord.DeviceSignInStatuses)},
 	} {
 		got, err := clientsource.Union(tree, tc.name)
 		if err != nil {

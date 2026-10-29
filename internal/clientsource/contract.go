@@ -151,7 +151,6 @@ var contract = []Entry{
 	{"SEAT_JOB_FIELDS", ReadLiteral, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"ModelHealth", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsTheEnginesHealthAndAlarms"},
 	{"ModelAlarmKind", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsTheEnginesHealthAndAlarms"},
-	{"ModelDeviceStatus", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsTheEnginesHealthAndAlarms"},
 	{"ModelSignInRoute", ReadUnion, "internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns"},
 	{"ModelLimitWindow", ReadUnion, "internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns"},
 	{"ModelCheckName", ReadUnion, "internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns"},
