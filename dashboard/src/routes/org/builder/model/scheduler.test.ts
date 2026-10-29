@@ -106,7 +106,11 @@ describe("classifyCheck", () => {
   test("a dry run on the draft's base is clean, carrying its warnings and derivation", () => {
     expect(
       classifyCheck(
-        { status: 200, body: { valid: true, base_revision_id: "r1", warnings: null, derived } },
+        {
+          status: 200,
+          body: { valid: true, base_revision_id: "r1", warnings: null, derived },
+          fromEngine: true,
+        },
         "edit",
         "r1",
         null,
@@ -117,7 +121,7 @@ describe("classifyCheck", () => {
   test("a dry run that validated against another base is a conflict", () => {
     expect(
       classifyCheck(
-        { status: 200, body: { valid: true, base_revision_id: "r2" } },
+        { status: 200, body: { valid: true, base_revision_id: "r2" }, fromEngine: true },
         "edit",
         "r1",
         null,
@@ -129,7 +133,7 @@ describe("classifyCheck", () => {
     });
     expect(
       classifyCheck(
-        { status: 200, body: { valid: true, base_revision_id: "r2" } },
+        { status: 200, body: { valid: true, base_revision_id: "r2" }, fromEngine: true },
         "create",
         null,
         null,
@@ -140,7 +144,7 @@ describe("classifyCheck", () => {
     });
     expect(
       classifyCheck(
-        { status: 200, body: { valid: true, base_revision_id: "" } },
+        { status: 200, body: { valid: true, base_revision_id: "" }, fromEngine: true },
         "create",
         null,
         null,
@@ -153,11 +157,11 @@ describe("classifyCheck", () => {
   test("refusals map to the states that halt, and failures to unchecked, each said apart by why", () => {
     const cases: [HttpAnswer, unknown][] = [
       [
-        { status: 401, body: { error: "unauthorized" } },
+        { status: 401, body: { error: "unauthorized" }, fromEngine: true },
         { status: "guarded", code: "unauthorized" },
       ],
       [
-        { status: 403, body: {} },
+        { status: 403, body: {}, fromEngine: true },
         { status: "unchecked", why: "unanswered", answerStatus: 403, detail: "" },
       ],
       [
@@ -170,23 +174,27 @@ describe("classifyCheck", () => {
         { status: "unchecked", why: "unanswered", answerStatus: 413, detail: "body_too_large" },
       ],
       [
-        { status: 503, body: { error: "draining", detail: "restarting" } },
+        { status: 503, body: { error: "draining", detail: "restarting" }, fromEngine: true },
         { status: "unchecked", why: "draining", answerStatus: 503, detail: "restarting" },
       ],
       [
-        { status: 503, body: { error: "starting", detail: "recovering" } },
+        { status: 503, body: { error: "starting", detail: "recovering" }, fromEngine: true },
         { status: "unchecked", why: "starting", answerStatus: 503, detail: "recovering" },
       ],
       [
-        { status: 0, body: { error: "unreachable" } },
+        { status: 0, body: { error: "unreachable" }, fromEngine: false },
         { status: "unchecked", why: "unanswered", answerStatus: 0, detail: "unreachable" },
       ],
       [
-        { status: 502, body: { error: "unreadable_body" } },
+        { status: 502, body: { error: "unreadable_body" }, fromEngine: true },
         { status: "unchecked", why: "unanswered", answerStatus: 502, detail: "unreadable_body" },
       ],
       [
-        { status: 500, body: { error: "internal", detail: "the store could not commit" } },
+        {
+          status: 500,
+          body: { error: "internal", detail: "the store could not commit" },
+          fromEngine: true,
+        },
         {
           status: "unchecked",
           why: "failed",
@@ -195,15 +203,23 @@ describe("classifyCheck", () => {
         },
       ],
       [
-        { status: 409, body: { error: "revision_advanced", current_revision_id: "r9" } },
+        {
+          status: 409,
+          body: { error: "revision_advanced", current_revision_id: "r9" },
+          fromEngine: true,
+        },
         { status: "conflict", reason: "revision_advanced", currentRevisionId: "r9" },
       ],
       [
-        { status: 412, body: { error: "already_configured", current_revision_id: "r3" } },
+        {
+          status: 412,
+          body: { error: "already_configured", current_revision_id: "r3" },
+          fromEngine: true,
+        },
         { status: "conflict", reason: "already_configured", currentRevisionId: "r3" },
       ],
       [
-        { status: 409, body: { error: "no_active_revision" } },
+        { status: 409, body: { error: "no_active_revision" }, fromEngine: true },
         { status: "conflict", reason: "no_active_revision", currentRevisionId: null },
       ],
     ];
@@ -224,6 +240,7 @@ describe("classifyCheck", () => {
         grants: ["admin"],
         refused: [{ kind: "document", id: "", place: "", why: "unchanged", reason: "no_grant" }],
       },
+      fromEngine: true,
     };
     expect(classifyCheck(answer, "edit", "r1", null)).toEqual({
       status: "guarded",
@@ -244,6 +261,7 @@ describe("classifyCheck", () => {
     const answer: HttpAnswer = {
       status: 403,
       body: { error: "config_managed", managed_by: ["gitops"] },
+      fromEngine: true,
     };
     for (const scope of [null, "engineering"]) {
       expect(classifyCheck(answer, "edit", "r1", scope), String(scope)).toEqual({
@@ -271,6 +289,7 @@ describe("classifyCheck", () => {
             problems: [problem],
             derived,
           },
+          fromEngine: true,
         },
         "edit",
         "r1",
@@ -285,7 +304,11 @@ describe("classifyCheck", () => {
     });
     expect(
       classifyCheck(
-        { status: 413, body: { error: "body_too_large", detail: "the body is over the limit" } },
+        {
+          status: 413,
+          body: { error: "body_too_large", detail: "the body is over the limit" },
+          fromEngine: true,
+        },
         "edit",
         "r1",
         null,
@@ -565,7 +588,7 @@ describe("CheckRunner", () => {
     const { clock, transport, settled, change, reset } = harness();
     reset();
     expect(transport.pending).toHaveLength(1);
-    transport.pending[0]!.resolve({ status: 200, body: { valid: true } });
+    transport.pending[0]!.resolve({ status: 200, body: { valid: true }, fromEngine: true });
     await flush();
     expect(settled.map((s) => s.generation)).toEqual([1]);
 
@@ -587,7 +610,7 @@ describe("CheckRunner", () => {
     const first = transport.pending[0]!;
     change();
     expect(first.signal.aborted).toBe(true);
-    first.resolve({ status: 200, body: { valid: true } });
+    first.resolve({ status: 200, body: { valid: true }, fromEngine: true });
     await flush();
     expect(settled).toEqual([]);
     clock.advance(CHECK_DEBOUNCE_MS);
@@ -597,6 +620,7 @@ describe("CheckRunner", () => {
         error: "validation_error",
         problems: [{ path: "name", segments: ["name"], kind: "missing", message: "name" }],
       },
+      fromEngine: true,
     });
     await flush();
     expect(settled).toHaveLength(1);
@@ -607,7 +631,7 @@ describe("CheckRunner", () => {
   test("an engine that did not answer is retried after the backoff, not at the next change", async () => {
     const { clock, transport, runner, change, reset } = harness();
     reset();
-    transport.pending[0]!.resolve({ status: 0, body: { error: "unreachable" } });
+    transport.pending[0]!.resolve({ status: 0, body: { error: "unreachable" }, fromEngine: false });
     await flush();
     expect(runner.state.status).toBe("unchecked");
     change();
@@ -624,8 +648,8 @@ describe("CheckRunner", () => {
     const first = transport.pending[0]!;
     runner.reset(1);
     expect(first.signal.aborted).toBe(true);
-    first.resolve({ status: 401, body: { error: "unauthorized" } });
-    transport.pending[1]!.resolve({ status: 200, body: { valid: true } });
+    first.resolve({ status: 401, body: { error: "unauthorized" }, fromEngine: true });
+    transport.pending[1]!.resolve({ status: 200, body: { valid: true }, fromEngine: true });
     await flush();
     expect(settled.map((s) => s.outcome.status)).toEqual(["clean"]);
   });

@@ -72,9 +72,10 @@ export class RestError extends Error {
   readonly retryAfterSeconds: number | null;
   /**
    * Whether the answer carried the engine's mark ([markedByEngine]): the one
-   * thing in it nothing in front of the engine writes. True for an error a
-   * caller builds itself, which names its own origin; [request] records what
-   * the response said.
+   * thing in it nothing in front of the engine writes. FALSE UNLESS SAID, so
+   * an error built anywhere that forgot to say reads as not the engine's
+   * (an outcome nobody knows), never as a refusal the engine made; [request]
+   * records what the response said.
    */
   readonly marked: boolean;
 
@@ -82,7 +83,7 @@ export class RestError extends Error {
     status: number,
     body: Record<string, unknown>,
     retryAfter: number | null = null,
-    marked = true,
+    marked = false,
   ) {
     const code = typeof body.error === "string" ? body.error : "";
     const detail = typeof body.detail === "string" ? body.detail : "";
@@ -387,6 +388,8 @@ export interface RestResponse {
    * the tag back exactly as it was given.
    */
   etag: string | null;
+  /** Whether the answer carried the engine's mark ([markedByEngine]). */
+  marked: boolean;
 }
 
 /** A deadline as a person would say it: seconds under two minutes, else
@@ -647,7 +650,12 @@ async function attempt(
   answeredAt = Date.now();
 
   if (read === "text" && response.ok) {
-    return { status: response.status, body: text, etag: response.headers.get("ETag") };
+    return {
+      status: response.status,
+      body: text,
+      etag: response.headers.get("ETag"),
+      marked: markedByEngine(response.headers),
+    };
   }
 
   let parsed: unknown = null;
@@ -691,7 +699,12 @@ async function attempt(
     noteSession(refusal);
     throw refusal;
   }
-  return { status: response.status, body: parsed, etag: response.headers.get("ETag") };
+  return {
+    status: response.status,
+    body: parsed,
+    etag: response.headers.get("ETag"),
+    marked: markedByEngine(response.headers),
+  };
 }
 
 /** The body alone, for the callers that need nothing else. */

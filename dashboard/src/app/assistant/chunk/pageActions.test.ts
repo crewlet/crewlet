@@ -163,7 +163,7 @@ describe("a page action", () => {
   test("another tab claimed first: nothing is applied here", async () => {
     const { reports, settled, deps } = harness([
       () => {
-        throw new RestError(409, { error: "action_already_claimed" });
+        throw new RestError(409, { error: "action_already_claimed" }, null, true);
       },
     ]);
     await takeAction(action(), true, deps, noWait);
@@ -201,7 +201,12 @@ describe("a page action", () => {
   test("a claim the engine refused applies nothing, in the engine's words", async () => {
     const { settled, deps } = harness([
       () => {
-        throw new RestError(410, { error: "proposal_expired", message: "This change expired." });
+        throw new RestError(
+          410,
+          { error: "proposal_expired", message: "This change expired." },
+          null,
+          true,
+        );
       },
     ]);
     await takeAction(action(), true, deps, noWait);
@@ -256,7 +261,7 @@ describe("a page action", () => {
     const second = harness([
       (b) => ({ state: b.state }),
       () => {
-        throw new RestError(404, { error: "not_found" });
+        throw new RestError(404, { error: "not_found" }, null, true);
       },
     ]);
     await takeAction(action(), true, second.deps, noWait);
