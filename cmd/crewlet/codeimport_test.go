@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,12 +29,13 @@ import (
 )
 
 // importLimits is the code block every import case runs under: a 1 MiB push
-// limit — the smallest the schema admits, so a test-sized history crosses the
-// step budget — and a 64 KiB blob limit, so a 100 KiB blob is past it.
+// limit — the smallest the schema admits, so a test-sized history takes more
+// than one step — and a 64 KiB blob limit, so a 100 KiB blob is past it.
 const importLimits = "  limits:\n    max_push_bytes: 1048576\n    max_blob_bytes: 65536\n"
 
-// importBudget is a step's budget under importLimits: 921.6 KiB.
-const importBudget = 1048576 - 1048576/10
+// importLimit is the push limit importLimits sets, which every step's pack is
+// held to.
+const importLimit = 1048576
 
 // importRepo declares the repository every import case imports into.
 const importRepo = "    - name: web\n      owner: {seat: founder}\n"
@@ -59,10 +61,17 @@ func when(mark int) int64 { return 1767225600 + int64(mark)*60 }
 // merges — whose tree is its first parent's with files changed ("" deletes
 // one), and answers its mark.
 func (h *sourceHistory) commit(ref string, from int, files map[string]string, merges ...int) int {
+	return h.commitAt(ref, when(h.marks+1), from, files, merges...)
+}
+
+// commitAt is [sourceHistory.commit] committed at at rather than at its
+// mark's own time: two commits of one second, which a walk meets in the order
+// it was handed them rather than by their times.
+func (h *sourceHistory) commitAt(ref string, at int64, from int, files map[string]string, merges ...int) int {
 	h.marks++
 	msg := fmt.Sprintf("commit %d", h.marks)
 	fmt.Fprintf(&h.stream, "commit %s\nmark :%d\ncommitter Crewlet Test <test@example.com> %d +0000\ndata %d\n%s\n",
-		ref, h.marks, when(h.marks), len(msg), msg)
+		ref, h.marks, at, len(msg), msg)
 	if from > 0 {
 		fmt.Fprintf(&h.stream, "from :%d\n", from)
 	}
@@ -215,29 +224,26 @@ func wantSameRefs(t *testing.T, h codeHost, git *gittest.Client, bare string) {
 	}
 }
 
-// AN IMPORT STEPS A LARGE HISTORY UNDER THE BUDGET. A first-parent main of
+// AN IMPORT STEPS A LARGE HISTORY UNDER THE PUSH LIMIT. A first-parent main of
 // sixty commits, each a new incompressible file of 52 KiB — about 3 MiB, three
 // times what one push may carry — lands as fast-forwards of main, then its
-// branch and its annotated tag, and EVERY PUSH IS HELD TO THE BUDGET: a push
+// branch and its annotated tag, and EVERY PUSH IS HELD TO THE LIMIT: a push
 // row's pack_bytes is the bundle the node stored, and a step is sent whole, so
 // that bundle is exactly the pack the step sent and the .idx and .rev beside
 // it, whose sizes follow from the objects the step carries — counted here in
-// the source, from what the repository held before the push. Run under
-// pack.threads=1, an operator's setting the measurement and the push share,
-// the push builds its measurement's pack byte for byte, so the budget holds of
-// what was stored exactly rather than within the drift between two threaded
-// builds that the budget's tenth below max_push_bytes is for.
+// the source, from what the repository held before the push. What a step
+// sends is the pack it was measured as, byte for byte, whatever the
+// operator's git sets for its delta search, so the limit holds of what was
+// stored exactly.
 //
-// And the steps are as LARGE as the budget allows: a step's estimate leaves out
+// And the steps are as LARGE as the limit allows: a step's estimate leaves out
 // what the repository will hold already, so after the first step each takes
-// another budget's worth of commits.
+// another limit's worth of commits.
 //
-// Mutation: cut steps to the push limit rather than a tenth below it, and a
-// push stores more than the budget and its indexes; cut them to twice the
-// limit, and the first step is refused past receive.maxInputSize; estimate a
-// step without what the repository will hold, and every step after the first
-// is a single commit.
-func TestImportStepsALargeHistoryUnderTheBudget(t *testing.T) {
+// Mutation: cut steps to twice the limit, and the first step is refused past
+// receive.maxInputSize; estimate a step without what the repository will
+// hold, and every step after the first is a single commit.
+func TestImportStepsALargeHistoryUnderThePushLimit(t *testing.T) {
 	t.Parallel()
 	h := importNode(t)
 	var hist sourceHistory
@@ -257,13 +263,13 @@ func TestImportStepsALargeHistoryUnderTheBudget(t *testing.T) {
 	hist.tag("v1", tagged, "the first release")
 	git, url, bare := hist.load(t)
 
-	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-git", operatorsGit(t, "pack.threads=1"))
+	out, errOut, err := h.importInto(t, url)
 	if err != nil {
 		t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
 	}
 	steps := strings.Count(out, "\nimported step ")
 	if steps < 3 || steps > 6 {
-		t.Errorf("the import took %d steps, want the 3 MiB history in 4 or 5 — about 0.9 MiB each:\n%s", steps, out)
+		t.Errorf("the import took %d steps, want the 3 MiB history in 4 or 5 — about 1 MiB each:\n%s", steps, out)
 	}
 	pushes := h.history(t)
 	if len(pushes) != steps {
@@ -284,8 +290,8 @@ func TestImportStepsALargeHistoryUnderTheBudget(t *testing.T) {
 			t.Fatalf("the objects of push %d: %v\n%s", i+1, err, stderr)
 		}
 		objects := int64(strings.Count(listed, "\n"))
-		if bound := importBudget + code.IndexBytesFor(objects) + code.ReverseBytesFor(objects); p.PackBytes > bound {
-			t.Errorf("push %d of %d stored %d bytes for %d objects, past the budget and their indexes (%d)", i+1,
+		if bound := importLimit + code.IndexBytesFor(objects) + code.ReverseBytesFor(objects); p.PackBytes > bound {
+			t.Errorf("push %d of %d stored %d bytes for %d objects, past the limit and their indexes (%d)", i+1,
 				len(pushes), p.PackBytes, objects, bound)
 		}
 		for _, c := range p.Commands {
@@ -302,12 +308,11 @@ func TestImportStepsALargeHistoryUnderTheBudget(t *testing.T) {
 // WHAT THE NODE STORES. A history packed as a forge packs one stores the
 // newest version of each file whole and every older version as a small delta
 // against it, so a range of the older commits ESTIMATES at a few kilobytes and
-// PACKS to every file whole — here sixteen files of 40 KiB growing by 1 KiB a
-// commit, whose first nineteen commits estimate under the budget and pack past
-// it. Measured, the step is cut shorter before anything is sent. And every
-// step is sent whole, so what the import says its steps stored is what the
-// repository holds once they land — within the drift between a measurement
-// and the push's own build of the pack.
+// PACKS to every file whole — here [forgeHistory]'s, whose first nineteen
+// commits estimate at about 120 KiB and pack past the 1 MiB limit. Measured,
+// the step is cut shorter before anything is sent. And every step is sent
+// whole, as the pack it was measured as, so what the import says its steps
+// stored is what the repository holds once they land.
 //
 // Mutation: take a step's estimate for its size, and the first push is
 // refused past receive.maxInputSize; measure and push thin packs, and the
@@ -315,16 +320,10 @@ func TestImportStepsALargeHistoryUnderTheBudget(t *testing.T) {
 func TestImportMeasuresEachStepBeforePushingIt(t *testing.T) {
 	t.Parallel()
 	h := importNode(t)
-	var hist sourceHistory
-	files := map[string]string{}
-	for i := range 16 {
-		files[fmt.Sprintf("f/%02d.bin", i)] = noise(uint64(1000+i), 40<<10)
-	}
-	tip := hist.commit("refs/heads/main", 0, maps.Clone(files))
-	git, url, bare := forgePacked(t, &hist, files, tip)
+	git, url, bare := forgeHistory(t)
 	first19, err := diskUsage(t, git, bare, "main~1")
-	if err != nil || first19 >= importBudget {
-		t.Fatalf("the first nineteen commits estimate at %d bytes (%v), want them under the budget — the case "+
+	if err != nil || first19 >= importLimit {
+		t.Fatalf("the first nineteen commits estimate at %d bytes (%v), want them under the limit — the case "+
 			"needs a history whose estimate understates its pack", first19, err)
 	}
 
@@ -341,13 +340,246 @@ func TestImportMeasuresEachStepBeforePushingIt(t *testing.T) {
 		start := strings.LastIndex(out[:i], ", ") + 2
 		said = parseHumanBytes(t, out[start:i])
 	}
-	// To humanBytes' tenth of a unit, and the drift between a measurement and
-	// the push's own build of the pack: far inside what completing thin packs
-	// adds, which here doubles it.
+	// To humanBytes' tenth of a unit, the precision the import says it in: far
+	// inside what completing thin packs adds, which here doubles it.
 	if held := h.liveBytes(t); said == 0 || math.Abs(float64(held-said)) > 0.05*float64(held) {
 		t.Errorf("the import says its steps stored %s, and web holds %s:\n%s", humanBytes(said), humanBytes(held),
 			out)
 	}
+}
+
+// AN IMPORT PUSHES THE PACK EACH STEP WAS MEASURED AS, whatever git would build
+// for the push itself. git push builds the pack it sends, and a second build
+// is not the first: pack-objects' threads split its delta search differently
+// on every run — at four threads one forge-packed range came to 895 KiB and to
+// 1057 KiB (the package doc) — so a step measured under the limit was refused
+// past it after its whole upload, `[remote rejected] (unpacker error)`, in
+// some runs and not others. The case makes that difference certain: the
+// operator's git builds every push's pack with no delta search of its own, so
+// a step that built its pack again for the push would send every version of
+// every file whole, many times the limit, and be refused at its first push.
+// One that pushes a copy of the pack it measured sends what it measured.
+//
+// EVERY VERSION THE SOURCE HOLDS IS A DELTA OF ITS FILE'S NEWEST (a repack at
+// depth 1, on one thread), so the clone holds no delta a step's range can
+// reuse: a search-free pack built from the clone takes each version whole,
+// since its base is the newest, which no step but the last sends. At
+// [forgePacked]'s depth of 50 the search may store each version as a delta of
+// the next instead, and a step's range then reuses all but one of them from
+// the clone — a second build that sends what the first did, which this case
+// could not tell from a copy, and did not in one of its mutation runs.
+//
+// Mutation: push from the clone, letting git push build its own pack, and the
+// first step is refused past receive.maxInputSize.
+func TestAnImportPushesThePackEachStepWasMeasuredAs(t *testing.T) {
+	t.Parallel()
+	h := importNode(t)
+	git, url, bare := forgeHistory(t)
+	git.Run(t, "", "--git-dir="+bare, "repack", "-a", "-d", "-f", "--window=50", "--depth=1", "--threads=1", "-q")
+	noSearchOnPush := hermeticGitWith(t, "for a in \"$@\"; do\n"+
+		"  if [ \"$a\" = push ]; then\n"+
+		"    n=${GIT_CONFIG_COUNT:-0}\n"+
+		"    export \"GIT_CONFIG_KEY_$n=pack.window\" \"GIT_CONFIG_VALUE_$n=0\" \"GIT_CONFIG_COUNT=$((n + 1))\"\n"+
+		"    break\n"+
+		"  fi\n"+
+		"done\n")
+
+	out, errOut, err := cli(t, "code", "import", url, "web", h.cfg, "-git", noSearchOnPush)
+	if err != nil {
+		t.Fatalf("code import: %v\nstdout:\n%s\nstderr:\n%s", err, out, errOut)
+	}
+	pushes := h.history(t)
+	if len(pushes) < 2 {
+		t.Errorf("web records %d pushes, want the history past one push in steps:\n%s", len(pushes), out)
+	}
+	for i, p := range pushes {
+		if p.PackBytes > importLimit+code.IndexBytesFor(512)+code.ReverseBytesFor(512) {
+			t.Errorf("push %d of %d stored %s, past the limit and the indexes of its few hundred objects", i+1,
+				len(pushes), humanBytes(p.PackBytes))
+		}
+	}
+	wantSameRefs(t, h, git, bare)
+}
+
+// A STEP'S MEASURED COPY IS THE PACK ITS PUSH SENDS, BYTE FOR BYTE, where the
+// push hands its pack-objects the step's tips in an order of its own: here a
+// step that updates b, which the node holds, and creates a, which names before
+// it, at two commits of one second. git push hands its pack-objects the tips
+// of the refs it updates first, in the node's order, then those it creates;
+// and a copy writes the objects in the order its walk meets them, which for
+// two tips of one commit time is the order it was handed them — so the copy
+// the import measures is handed them in the push's order
+// ([importStep.news]). The repository pushed to keeps the pack as it came
+// (receive.unpackLimit=1), named for its checksum, and that is the checksum
+// of the copy the import measured.
+//
+// Mutation: hand the copy the step's tips in the step's own order, and the
+// repository keeps a pack the import never measured.
+func TestAStepsMeasuredCopyIsThePackItsPushSends(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	copies := t.TempDir()
+	// EVERY COPY THE IMPORT MAKES (pack.window=0) IS KEPT, as it was counted;
+	// git push runs its own pack-objects from git's exec path, never through
+	// this script.
+	operators := hermeticGitWith(t, "case \" $* \" in *\" pack.window=0 \"*\" pack-objects \"*)\n"+
+		"  out=$(mktemp "+shellQuote(filepath.Join(copies, "copy.XXXXXX"))+") || exit 125\n"+
+		"  \"$real_git\" \"$@\" > \"$out\" || exit $?\n"+
+		"  exec cat \"$out\";;\n"+
+		"esac\n")
+
+	// Both tips grow f/1.bin, each by bytes of its own, so the step's build
+	// stores one of the two as a delta of the other.
+	var hist sourceHistory
+	files := map[string]string{}
+	for i := range 4 {
+		files[fmt.Sprintf("f/%d.bin", i)] = noise(uint64(3000+i), 16<<10)
+	}
+	base := hist.commit("refs/heads/b", 0, maps.Clone(files))
+	grown := func(seed uint64, paths ...int) map[string]string {
+		changed := map[string]string{}
+		for _, i := range paths {
+			path := fmt.Sprintf("f/%d.bin", i)
+			changed[path] = files[path] + noise(seed+uint64(i), 1<<10)
+		}
+		return changed
+	}
+	at := when(base) + 60
+	hist.commitAt("refs/heads/a", at, base, grown(3100, 0, 1))
+	hist.commitAt("refs/heads/b", at, base, grown(3200, 1, 2, 3))
+	git, _, source := hist.load(t)
+	oid := func(rev string) string {
+		return strings.TrimSpace(git.Run(t, "", "--git-dir="+source, "rev-parse", rev))
+	}
+
+	// THE NODE: a repository at the import's own URL that holds b at the
+	// commit both tips grow from.
+	dir := t.TempDir()
+	op := operatorGit{path: operators, base: "file://" + dir, environ: os.Environ()}
+	node := filepath.Join(dir, strings.TrimPrefix(op.repoURL("web"), op.base))
+	git.Run(t, "", "init", "--bare", "-q", node)
+	git.Run(t, "", "--git-dir="+source, "push", "-q", node, oid("refs/heads/b~1")+":refs/heads/b")
+	git.Run(t, "", "--git-dir="+node, "config", "receive.unpackLimit", "1")
+
+	imp := &importer{g: op, name: "web", clone: source, work: t.TempDir(), budget: importLimit,
+		maxStored: code.MaxPackBytes}
+	remote := &remoteRefs{refs: map[string]string{"refs/heads/b": oid("refs/heads/b~1")},
+		held: map[string]bool{oid("refs/heads/b~1"): true}}
+	step := &importStep{cmds: []importCmd{{oid: oid("refs/heads/a"), ref: "refs/heads/a"},
+		{oid: oid("refs/heads/b"), ref: "refs/heads/b"}}}
+	if _, _, past, err := imp.build(ctx, step, remote); err != nil || past {
+		t.Fatalf("the step's build: past %v, %v", past, err)
+	}
+	measured, err := imp.sent(ctx, step, remote)
+	if err != nil {
+		t.Fatalf("the step's measurement: %v", err)
+	}
+	if out := imp.push(ctx, step); out.err != nil {
+		t.Fatalf("the step's push: %v (%v)", out.err, out.rejected)
+	}
+
+	kept, err := filepath.Glob(filepath.Join(copies, "copy.*"))
+	if err != nil || len(kept) != 1 {
+		t.Fatalf("the import made copies %v (%v), want its one measurement", kept, err)
+	}
+	copied, err := os.ReadFile(kept[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(len(copied)) != measured || len(copied) < 20 {
+		t.Fatalf("the measurement counted %d bytes of a copy of %d", measured, len(copied))
+	}
+	packs, err := filepath.Glob(filepath.Join(node, "objects", "pack", "pack-*.pack"))
+	if err != nil || len(packs) != 1 {
+		t.Fatalf("the repository pushed to keeps packs %v (%v), want the step's one", packs, err)
+	}
+	if want := "pack-" + hex.EncodeToString(copied[len(copied)-20:]) + ".pack"; filepath.Base(packs[0]) != want {
+		t.Errorf("the push sent %s, and the import measured %s: what it measured is not what it sent",
+			filepath.Base(packs[0]), want)
+	}
+}
+
+// A STEP'S BUILD IS INDEXED BEFORE ITS REPOSITORY BORROWS THE CLONE. index-pack
+// checks every object of the pack it indexes that its repository already
+// holds against that copy, reading it whole, one object at a time under a
+// lock its threads share — and every object of a step's build is the clone's,
+// so an index run beside the borrowed clone read the whole build back out of
+// the clone's packs for a comparison that cannot fail. The operator's git here
+// refuses an index-pack in a repository that borrows anything.
+//
+// Mutation: borrow the clone as the step's repository is made, and its index
+// is refused.
+func TestAStepsBuildIsIndexedBeforeItsRepositoryBorrowsTheClone(t *testing.T) {
+	t.Parallel()
+	operators := hermeticGitWith(t, "case \" $* \" in *\" index-pack \"*)\n"+
+		"  for a in \"$@\"; do case $a in --git-dir=*) dir=${a#--git-dir=};; esac; done\n"+
+		"  if [ -s \"$dir/objects/info/alternates\" ]; then\n"+
+		"    echo \"index-pack in $dir, which borrows $(cat \"$dir/objects/info/alternates\")\" >&2\n"+
+		"    exit 1\n"+
+		"  fi;;\n"+
+		"esac\n")
+	step, remote, source := aStepOverAHeldCommit(t)
+	imp := &importer{g: operatorGit{path: operators, environ: os.Environ()}, clone: source, work: t.TempDir(),
+		budget: importLimit, maxStored: code.MaxPackBytes}
+	if _, _, past, err := imp.build(t.Context(), step, remote); err != nil || past {
+		t.Fatalf("the step's build: past %v, %v", past, err)
+	}
+	if _, err := imp.sent(t.Context(), step, remote); err != nil {
+		t.Errorf("the step's measurement: %v", err)
+	}
+}
+
+// A STEP'S REPOSITORY BORROWS THE CLONE BY ITS ABSOLUTE PATH, wherever the
+// import runs. Its working directory is under $TMPDIR, which an operator
+// points at a volume with room for the import and may name relative to where
+// they run it, and git reads a relative alternate against the borrowing
+// repository's own objects directory: borrowed by the path the import holds,
+// the clone was nowhere the step's repository looked, and the copy's walk
+// failed at the first object it read of the clone's — here the commit the
+// repository holds, which the step's own pack leaves out.
+//
+// Not parallel: it runs where a person ran the import, in a directory of its
+// own (t.Chdir).
+//
+// Mutation: borrow the clone by the path the import holds, and the copy
+// fails.
+func TestAStepsRepositoryBorrowsTheCloneByItsAbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	step, remote, source := aStepOverAHeldCommit(t)
+	clone, err := filepath.Rel(dir, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imp := &importer{g: operatorGit{path: hermeticGit(t), environ: os.Environ()}, clone: clone, work: ".",
+		budget: importLimit, maxStored: code.MaxPackBytes}
+	if _, _, past, err := imp.build(t.Context(), step, remote); err != nil || past {
+		t.Fatalf("the step's build: past %v, %v", past, err)
+	}
+	if _, err := imp.sent(t.Context(), step, remote); err != nil {
+		t.Errorf("the measurement of a step whose import holds its paths relative to where it runs: %v", err)
+	}
+}
+
+// aStepOverAHeldCommit loads a main of two commits into a source and answers
+// the step that takes main from the first, which the repository holds, to the
+// second; the refs the repository holds; and the source's path. The step's
+// own pack leaves the first commit out, so what reads it — a copy's walk, a
+// push — reads it from the clone. Its repository goes when the case ends.
+func aStepOverAHeldCommit(t *testing.T) (*importStep, *remoteRefs, string) {
+	t.Helper()
+	var hist sourceHistory
+	held := hist.commit("refs/heads/main", 0, map[string]string{"a.txt": "a\n"})
+	hist.commit("refs/heads/main", held, map[string]string{"b.txt": "b\n"})
+	git, _, source := hist.load(t)
+	oid := func(rev string) string {
+		return strings.TrimSpace(git.Run(t, "", "--git-dir="+source, "rev-parse", rev))
+	}
+	remote := &remoteRefs{refs: map[string]string{"refs/heads/main": oid("main~1")},
+		held: map[string]bool{oid("main~1"): true}}
+	step := &importStep{cmds: []importCmd{{oid: oid("main"), ref: "refs/heads/main"}}}
+	t.Cleanup(step.drop)
+	return step, remote, source
 }
 
 // forgePacked loads h — files growing by a kibibyte a commit for nineteen
@@ -366,6 +598,30 @@ func forgePacked(t *testing.T, hist *sourceHistory, files map[string]string, tip
 	git, url, bare := hist.load(t)
 	git.Run(t, "", "--git-dir="+bare, "repack", "-a", "-d", "-f", "--window=50", "--depth=50", "-q")
 	return git, url, bare
+}
+
+// forgeHistory is a history past one push only as a whole, packed as a forge
+// packs one ([forgePacked]): sixteen files of 40 KiB growing by a kibibyte a
+// commit, beside two of 50 KiB the first commit adds and none changes — 1.04
+// MiB as one pack, while each step it is pushed in fits the 1 MiB limit (the
+// first seventeen commits, then the last three: each step stores its files
+// whole once, and the two unchanging ones only in the first). Growing files
+// alone cannot be both: a forge-packed step stores the newest version of every
+// file it touches whole, so the history as one pack is its last commit's
+// files and little more — sixteen are 962 KiB as one pack (measured), and
+// eighteen are past 1 MiB in the last commit alone (18 × 59 KiB).
+func forgeHistory(t *testing.T) (*gittest.Client, string, string) {
+	t.Helper()
+	var hist sourceHistory
+	files := map[string]string{}
+	for i := range 16 {
+		files[fmt.Sprintf("f/%02d.bin", i)] = noise(uint64(1000+i), 40<<10)
+	}
+	first := maps.Clone(files)
+	for i := range 2 {
+		first[fmt.Sprintf("static/%d.bin", i)] = noise(uint64(1900+i), 50<<10)
+	}
+	return forgePacked(t, &hist, files, hist.commit("refs/heads/main", 0, first))
 }
 
 // parseHumanBytes reads back what humanBytes printed, to its precision.
@@ -1103,11 +1359,11 @@ func TestImportHoldsEachStepToWhatOnePushMayStore(t *testing.T) {
 // A stepped history stores more than one pack of it — every step keeps whole
 // the files its deltas cannot reach in the steps before it — so a source whose
 // own pack is under code.limits.repo_max_bytes can still store past it: here
-// under 1 MiB as one pack, against 1.5 MiB, in steps of about 0.9 MiB. The
-// import adds up what each step stores and stops before the step that would
-// cross, in its own words, with no push the node had to refuse. And a source
-// whose one pack is already past the limit is refused before anything is
-// pushed.
+// [forgeHistory]'s, 1.04 MiB as one pack, against 1.5 MiB, in steps of about
+// 1 MiB. The import adds up what each step stores and stops before the step
+// that would cross, in its own words, with no push the node had to refuse.
+// And a source whose one pack is already past the limit is refused before
+// anything is pushed.
 //
 // Mutation: measure and push thin packs, and the node refuses a step
 // repo_size — its completion stored what the import never counted.
@@ -1118,12 +1374,7 @@ func TestImportStopsBeforeTheStepThatWouldPassTheRepositoryLimit(t *testing.T) {
 			repoMax)}
 	}
 	h := codeNodeWith(t, limited(3<<19), nil)
-	var hist sourceHistory
-	files := map[string]string{}
-	for i := range 16 {
-		files[fmt.Sprintf("f/%02d.bin", i)] = noise(uint64(1000+i), 40<<10)
-	}
-	_, url, _ := forgePacked(t, &hist, files, hist.commit("refs/heads/main", 0, maps.Clone(files)))
+	_, url, _ := forgeHistory(t)
 
 	out, errOut, err := h.importInto(t, url)
 	if err == nil {
@@ -1173,15 +1424,16 @@ func TestImportStopsBeforeTheStepThatWouldPassTheRepositoryLimit(t *testing.T) {
 // COMMIT. The repository holds main at a commit of side, which the source's
 // main reaches only through a merge's second parent — a branch merged in since
 // the last run — so the first-parent history past what the repository holds
-// begins with three commits of main's own side, 0.9 MiB together, that do not
-// descend from it. Every step is a fast-forward of main: the walk begins at
-// the first commit that descends from the held one — the merge, which carries
-// the three before it, under the push limit — and the history after the
-// merge, larger than one step, goes in steps from there.
+// begins with three commits of main's own side, 1.05 MiB together, that do not
+// descend from it, and that the source's branch ours holds. Every step is a
+// fast-forward of main: the walk begins at the first commit that descends from
+// the held one — the merge — whose step would carry the three before it, past
+// the push limit, so they are stepped first on ours; main then goes on from
+// the merge, and the history after it, larger than one step, in steps.
 //
 // Mutation: walk every first-parent commit the repository lacks, and the
-// first step — two of the three, under the budget where all three are past it
-// — is refused as non-fast-forward, on every run.
+// first step — main to two of the three, under the limit where all three are
+// past it — is refused as non-fast-forward, on every run.
 func TestImportContinuesABranchHeldAtASecondParentAncestor(t *testing.T) {
 	t.Parallel()
 	h := importNode(t)
@@ -1191,10 +1443,11 @@ func TestImportContinuesABranchHeldAtASecondParentAncestor(t *testing.T) {
 	for c := range 3 {
 		files := map[string]string{}
 		for i := range 6 {
-			files[fmt.Sprintf("ours/%d-%d.bin", c, i)] = noise(uint64(800+c*10+i), 53<<10)
+			files[fmt.Sprintf("ours/%d-%d.bin", c, i)] = noise(uint64(800+c*10+i), 60<<10)
 		}
 		ours = hist.commit("refs/heads/main", ours, files)
 	}
+	hist.point("refs/heads/ours", ours)
 	side := hist.commit("refs/heads/side", base, map[string]string{"side.txt": "side\n"})
 	tip := hist.commit("refs/heads/main", ours, map[string]string{"side.txt": "side\n"}, side)
 	for i := range 30 {
@@ -1258,16 +1511,18 @@ func mergedHistory(t *testing.T, branch bool, descendants int) (git *gittest.Cli
 	return git, url, bare, vendor, merge
 }
 
-// measuringGit is [hermeticGit] recording the first rev every pack-objects
-// reads — the tip a step's measurement is built from, which the import names
-// first — and measured counts the builds that named oid. git push runs its own
+// measuringGit is [hermeticGit] recording the first rev every BUILD of a step's
+// pack reads — the tip it is built from, which the import names first — and
+// measured counts the builds that named oid. A build is a pack-objects that
+// searches for deltas: the copies a step's measurement and its push make of
+// it carry pack.window=0 and are not counted. git push runs its own
 // pack-objects from git's exec path, never through this script, so only the
-// import's measurements are counted.
+// import's own runs are seen.
 func measuringGit(t *testing.T) (path string, measured func(oid string) int) {
 	t.Helper()
 	dir := t.TempDir()
 	log := filepath.Join(dir, "measured")
-	path = hermeticGitWith(t, "case \" $* \" in *\" pack-objects \"*)\n"+
+	path = hermeticGitWith(t, "case \" $* \" in *\" pack.window=0 \"*) ;; *\" pack-objects \"*)\n"+
 		"  in=$(mktemp "+shellQuote(filepath.Join(dir, "revs.XXXXXX"))+") || exit 125\n"+
 		"  cat > \"$in\" || exit 125\n"+
 		"  head -n 1 \"$in\" >> "+shellQuote(log)+"\n"+
@@ -1642,11 +1897,13 @@ func operatorsGit(t *testing.T, settings ...string) string {
 // AN IMPORT PINS WHAT EACH STEP PUSHES, whatever the operator's push settings
 // say: push.followTags would add the annotated tag on main's first commit to
 // main's first step — a ref the plan never batched, objects it never measured
-// — and push.gpgSign a push certificate the code host does not advertise,
+// — had the step a tag to add, which its own repository holds none of, and
+// push.gpgSign asks for a push certificate the code host does not advertise,
 // which git itself refuses. Each step moves exactly the refs it planned. (The
 // operator's push options are TestAnImportOpensNoChange's.)
 //
-// Mutation: push without --no-follow-tags, and the first step carries the tag.
+// Mutation: push from the clone, whose refs hold the tag, and the first step
+// carries it.
 func TestImportPinsWhatEachStepPushes(t *testing.T) {
 	t.Parallel()
 	h := importNode(t)
@@ -1737,10 +1994,11 @@ func TestImportReportsARefusedStepWithoutWaitingForTheNextMeasurement(t *testing
 	c := hist.commit("refs/heads/main", 0, map[string]string{"README.md": "# web\n"})
 	hist.commit("refs/heads/other", c, map[string]string{"other.txt": "other\n"})
 	_, url, _ := hist.load(t)
-	// THE SECOND MEASUREMENT IS HELD: the first is main's step, the second
-	// the next step's, planned while main is pushed.
+	// THE SECOND BUILD IS HELD: the first is main's step's, the second the
+	// next step's, planned while main is pushed. A build searches for deltas;
+	// the copies a step's measurement and push make carry pack.window=0.
 	count := filepath.Join(t.TempDir(), "measurements")
-	held := hermeticGitWith(t, "case \" $* \" in *\" pack-objects \"*)\n"+
+	held := hermeticGitWith(t, "case \" $* \" in *\" pack.window=0 \"*) ;; *\" pack-objects \"*)\n"+
 		"  echo x >> "+shellQuote(count)+"\n"+
 		"  if [ $(( $(wc -l < "+shellQuote(count)+") )) -ge 2 ]; then sleep 120; fi;;\n"+
 		"esac\n")

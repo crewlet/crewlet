@@ -813,7 +813,8 @@ your git asks you on the terminal, as it would for a clone of your own. Your tok
 your seat ([Give each person a token](#give-each-person-a-token)): a token bound
 to nobody fetches only, and the import says so before it downloads anything.
 The source is cloned into the system's temporary directory, so point `TMPDIR`
-at a volume with room for it.
+at a volume with room for it, and for two steps' packs beside it — up to three
+times `code.limits.max_push_bytes`.
 
 **What it takes, and what it skips.** Every branch and every tag. A forge's own
 refs — GitHub's `refs/pull/*`, GitLab's `refs/merge-requests/*` — are the

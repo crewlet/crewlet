@@ -1478,13 +1478,13 @@ $ crewlet code import https://github.com/acme/web.git web
 skipping 412 refs outside refs/heads/ and refs/tags/ (refs/pull/*): a forge's, not the repository's
 cloning https://github.com/acme/web.git into /tmp/crewlet-import-2861
 cloned https://github.com/acme/web.git: 63 refs (4 branches, 59 tags), 2.1 GiB packed
-importing 63 refs in steps of at most 921.6 MiB (code.limits.max_push_bytes less a tenth), each measured before it is pushed
-pushing step 1: refs/heads/main → 3f2a91c (905.1 MiB)
-imported step 1: refs/heads/main → 3f2a91c (905.1 MiB)
-pushing step 2: refs/heads/main → 9e8d7c6 (911.4 MiB)
+importing 63 refs in steps of at most 1.0 GiB (code.limits.max_push_bytes), each measured before it is pushed
+pushing step 1: refs/heads/main → 3f2a91c (1009.2 MiB)
+imported step 1: refs/heads/main → 3f2a91c (1009.2 MiB)
+pushing step 2: refs/heads/main → 9e8d7c6 (1016.7 MiB)
 …
-imported step 5: 62 refs, refs/heads/develop … refs/tags/v3.2.0 (48.0 MiB)
-imported web: 63 refs, 3.6 GiB sent in 5 steps, 3.6 GiB stored with the packs' indexes
+imported step 4: 62 refs, refs/heads/develop … refs/tags/v3.2.0 (48.0 MiB)
+imported web: 63 refs, 3.4 GiB sent in 4 steps, 3.4 GiB stored with the packs' indexes
 ```
 
 In order:
@@ -1517,7 +1517,9 @@ In order:
    rather than after the source has been downloaded.
 3. **The clone**: a bare clone of the source's branches and tags, into the
    system's temporary directory — set `TMPDIR` to a volume with room for the
-   source, since a temporary directory is often small or held in memory. Refs
+   source and for two steps' packs beside it (step 6: up to three times
+   `code.limits.max_push_bytes`), since a temporary directory is often small or
+   held in memory. Refs
    outside `refs/heads/` and `refs/tags/` — a forge's `refs/pull/*` and
    `refs/merge-requests/*`, notes, remotes — are skipped and counted: they are
    the forge's rather than the repository's, the code host takes no push of
@@ -1552,10 +1554,15 @@ In order:
    acts as, which the node refuses past before anything of the push runs
    ([Limits](../concepts/code-host.md#limits)). Every step is **sent whole**
    (`--no-thin`), so the pack it sends is the pack the node stores, and is
-   **measured before it is pushed**:
-   its pack is built exactly as `git push` builds it, against what the
-   repository will hold, its bytes counted and thrown away. A step is held to
-   `code.limits.max_push_bytes` less a tenth for what it sends, to the
+   **measured before it is pushed**: its pack is built once, against what the
+   repository will hold and under your own pack settings, into a repository of
+   the step's own in the working directory, and the step is pushed from there
+   as a copy of that very pack — `git push` searching for no delta of its own
+   (`pack.window=0`) — so what is measured is what is sent, byte for byte. A
+   pack built twice is not one pack: git's delta search splits its work among
+   threads differently on every run, and one forge-packed range built at four
+   threads came to 895 KiB and to 1 057 KiB. A step is held to
+   `code.limits.max_push_bytes` for what it sends, to the
    1.25 GiB one push may store with its indexes, and — added to what the
    repository holds and what the steps before it stored — to
    `code.limits.repo_max_bytes`. Where a history is stored as a forge stores it
@@ -1578,24 +1585,27 @@ In order:
    the source (`git clone --mirror`, then `git branch`), imported from the
    mirror. One commit, or one tag no branch reaches, that alone packs past the
    limit cannot be split, and is refused naming it — raise
-   `code.limits.max_push_bytes` (at most 1 GiB). The next
-   step is measured while one is pushed, so the second build of each pack —
-   `git push` sends no pack it did not build — overlaps the upload and the
-   node's work rather than adding to them, and a push that fails ends that
-   measurement at once.
+   `code.limits.max_push_bytes` (at most 1 GiB). Each step's delta search runs
+   once, the push copying its result, and the next step is built while one is
+   pushed, so that search overlaps the upload and the node's work rather than
+   adding to them; a push that fails ends the next step's build at once. The
+   working directory holds a step's pack until the step is pushed: at most two
+   at a time, the one being pushed and the next one being built.
 7. **The pushes**: each step is one `git push --porcelain --atomic
-   --no-verify --no-thin`, through `crewlet code credential` exactly as
-   `export`'s clone is. `--atomic`: a step lands whole or not at all.
-   `--no-verify`: your own pre-push hooks are for your own pushes, and one that
-   uploads elsewhere — Git LFS's — would refuse every step. And each is
-   **pinned against your own push settings**, which would change what a step
-   carries or have git refuse it: `--no-follow-tags` (`push.followTags` adds
-   tags the step never planned), `--no-signed` (`push.gpgSign` asks for a push
-   certificate the code host does not take), `--no-recurse-submodules`, push
-   options cleared (`push.pushOption`: a `change` kept there would open a
+   --no-verify --no-thin` from the step's own repository, through `crewlet code
+   credential` exactly as `export`'s clone is. `--atomic`: a step lands whole or
+   not at all. `--no-verify`: your own pre-push hooks are for your own pushes,
+   and one that uploads elsewhere — Git LFS's — would refuse every step. And
+   each is **pinned against your own push settings**, which would change what a
+   step carries or have git refuse it: `--no-signed` (`push.gpgSign` asks for a
+   push certificate the code host does not take), `--no-recurse-submodules`,
+   push options cleared (`push.pushOption`: a `change` kept there would open a
    [change](../guides/code.md#open-a-change-from-a-push) from every step that
-   pushes one branch, and an import is history, not a proposal) and
-   `push.negotiate` off.
+   pushes one branch, and an import is history, not a proposal),
+   `push.negotiate` off, and the copy's own settings (`pack.window=0`, and no
+   multi-pack-index, bitmap or whole-pack reuse of the clone's, so every object
+   comes from the step's pack). `push.followTags` needs no pin: a step's
+   repository holds no ref, so it has no tag to add.
 8. **The proof**: every branch and tag of the source, read back from the node
    as git lists it, at the source's value; any that differs exits 1 naming it.
 
