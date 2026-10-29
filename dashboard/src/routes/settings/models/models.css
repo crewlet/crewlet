@@ -1,0 +1,376 @@
+/*
+ * Settings › Models, proposed: placement only. Every surface, colour and type
+ * is a kit component's or a design token; nothing here draws a value of its own.
+ */
+
+.models-page,
+.models-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.models-stack {
+  gap: var(--spacing-3);
+}
+
+.models-alarms {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.models-alarm-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+.models-health {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--spacing-0);
+  min-width: 0;
+}
+
+.models-health__detail {
+  font-variant-numeric: tabular-nums;
+}
+
+.models-phase-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+}
+
+.models-host {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+}
+
+.models-host > *,
+.models-stack > .crewlet-copyable {
+  align-self: stretch;
+}
+
+.models-note {
+  margin-block-start: var(--spacing-3);
+}
+
+.models-waiting {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.models-doctor,
+.models-checklist,
+.models-repoint,
+.models-problems {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.models-doctor__line {
+  display: grid;
+  grid-template-columns: 9rem minmax(0, 1fr);
+  gap: var(--spacing-3);
+  align-items: start;
+}
+
+.models-doctor__detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.models-repoint__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 16rem);
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.models-choices {
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr);
+  gap: var(--spacing-2) var(--spacing-3);
+  margin: 0;
+}
+
+.models-choices dt {
+  font-weight: var(--font-weight-medium);
+}
+
+.models-choices dd {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.models-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  margin: 0;
+  padding-inline-start: var(--spacing-5);
+}
+
+.models-steps > li {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+}
+
+.models-steps > li > .crewlet-copyable {
+  align-self: stretch;
+}
+
+.models-assign {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: var(--spacing-4);
+}
+
+.models-assign__phase {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+  margin: 0;
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.models-assign__phase > legend {
+  padding-inline: var(--spacing-1);
+}
+
+.models-assign__seats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2) var(--spacing-4);
+}
+
+.models-roles__cell {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+/* The Assistant's one picker, as wide as a cell's on the grid under it. */
+.models-roles__picker {
+  inline-size: 14rem;
+  max-inline-size: 100%;
+}
+
+/* The Assistant on By job: its name, its one picker and what it is, on one line that wraps. */
+.models-roles__assistant {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+}
+
+@media (width < 640px) {
+  .models-doctor__line,
+  .models-repoint__row,
+  .models-choices {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A list of what changed: each line's dot, then its words, which wrap. */
+.models-checklist > li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--spacing-2);
+}
+
+.models-alarms__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+
+.models-field-error {
+  color: var(--color-feedback-danger-ink);
+}
+
+.models-review-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+/* Who uses it: the seat chips, the summary lines, the per-phase grid. */
+.models-who__seats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+
+.models-who__seats-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+
+.models-who__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.models-who__grid {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) repeat(var(--phases), minmax(4.5rem, auto));
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  overflow-x: auto;
+}
+
+.models-who__row {
+  display: contents;
+}
+
+.models-who__phase {
+  text-align: center;
+}
+
+.models-who__grid .crewlet-checkbox {
+  justify-self: center;
+}
+
+/* A named CLI mark: the mark's own box, so the tooltip anchors on it and the row centres it. */
+.models-cli-mark {
+  display: inline-flex;
+  flex: none;
+}
+
+/* Raised over a linked row, it opens the row's entry, and says so under the pointer. */
+.models-cli-mark--pressable {
+  cursor: pointer;
+}
+
+.models-entry-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+/*
+ * Used by in the models table: the uses on one line and the seats under
+ * them, plain text that reads as the row does and a link only under the
+ * pointer or the keyboard's focus. The uses give way with an ellipsis in a
+ * narrow column, and the tooltip says them whole.
+ */
+.models-uses {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
+.models-uses__line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.models-uses__line > * + * {
+  margin-inline-start: var(--spacing-1);
+}
+
+.models-uses:hover .models-uses__line {
+  text-decoration: underline;
+}
+
+.models-uses:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* The tooltip's breakdown: one use to a line. */
+.models-uses-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+/* The add wizard's keyboard wrapper takes no box, so the wizard still fills its screen. */
+.models-keys {
+  display: contents;
+}
+
+/* One line of meta under a choice (a place's readiness, isolation and start; what an intent replaces), joined by a middle dot. */
+.models-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--spacing-1);
+}
+
+/* The dot ends the part before it, so a line the meta wraps onto starts with a word. */
+.models-meta > :not(:last-child)::after {
+  content: "·";
+  margin-inline-start: var(--spacing-1);
+}
+
+/* A job named by its glyph and its word, in the word's ink. */
+.models-job {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+/* A stored credential on an edit: its secret and age on one line, Replace at its end. */
+.models-stored {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2) var(--spacing-3);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+/* By job's seat cell: the seat, and under it "Everything" where one model runs every job. */
+.models-seat-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+/* A wizard area a deep link focuses: it takes focus to move the reader there, and draws no ring of its own. */
+.models-focus-target:focus {
+  outline: none;
+}
+
+/* The review's note on models a change leaves unused: one quiet line each. */
+.models-orphans {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+}

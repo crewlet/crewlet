@@ -1,0 +1,151 @@
+/**
+ * What every state on Settings › Models is called, and the words for what a
+ * model is for.
+ *
+ * EXHAUSTIVE over each engine enum (`contract/models.ts`, held to the engine
+ * by Go gates), so a state the engine adds fails the typecheck here rather
+ * than drawing as nothing. Vendor products are named as what a model RUNS
+ * ("Claude Code", "Codex"); no feature of ours borrows a vendor's name.
+ */
+
+import {
+  CLI_PRODUCTS,
+  type ModelAlarmKind,
+  type ModelCheckName,
+  type ModelDeviceStatus,
+  type ModelHealth,
+  type ModelLimitWindow,
+  type ModelSignInRoute,
+} from "~/contract/models.ts";
+import { listed } from "~/lib/format.ts";
+import { categoryFields, type JobCategory } from "~/lib/modelUses.ts";
+
+type Tone = "success" | "neutral" | "warning" | "danger" | "info";
+
+/** A model's one reading, as the list's dot and the page's header say it. */
+export const HEALTH: Record<ModelHealth, { label: string; tone: Tone }> = {
+  ready: { label: "Ready", tone: "success" },
+  expiring: { label: "Expires soon", tone: "warning" },
+  rejected: { label: "Sign-in refused", tone: "danger" },
+  sitting_out: { label: "Sitting out", tone: "warning" },
+  no_sign_in: { label: "Not signed in", tone: "danger" },
+  untested: { label: "Not used yet", tone: "neutral" },
+};
+
+/** How a model signs in on the answering node. */
+export const ROUTE: Record<ModelSignInRoute, string> = {
+  token: "Subscription token",
+  credentials: "CLI login on the host",
+  "api-key": "API key",
+  env: "Cloud provider or gateway",
+  "inherit-env": "The engine's own environment",
+  environment: "The CLI's environment",
+  none: "Nothing signs it in",
+};
+
+/** Which limit a model sits out. A session or weekly limit holds every model on the plan. */
+export const WINDOW: Record<ModelLimitWindow, string> = {
+  session: "session limit",
+  weekly: "weekly limit",
+  model: "model limit",
+  unknown: "usage limit",
+};
+
+/** One line of a model's test, by what it measured. */
+export const CHECK: Record<ModelCheckName, string> = {
+  binary: "CLI installed",
+  version: "CLI version",
+  "sign-in": "Signs in",
+  usage: "Reports its usage",
+  smoke: "Answers a call",
+  shell: "Shell and files",
+  web: "Web tools",
+  executor: "Coding runs",
+};
+
+/** Where a device sign-in is, as its panel says it. */
+export const DEVICE: Record<ModelDeviceStatus, { label: string; tone: Tone }> = {
+  starting: { label: "Starting", tone: "neutral" },
+  pending: { label: "Waiting for approval", tone: "info" },
+  cancel_requested: { label: "Cancelling", tone: "neutral" },
+  approved: { label: "Signed in", tone: "success" },
+  failed: { label: "Sign-in failed", tone: "danger" },
+  expired: { label: "Code expired", tone: "warning" },
+  cancelled: { label: "Cancelled", tone: "neutral" },
+};
+
+/**
+ * Each alarm's tone (design QA M15): a model that cannot sign in is the one
+ * that stops work, so it is the loud one; an expiry and a limit are warnings,
+ * and seats waiting on a limit are the limit's consequence, said in its tone.
+ */
+export const ALARM_TONE: Record<ModelAlarmKind, "danger" | "warning"> = {
+  llm_sign_in_refused: "danger",
+  llm_credential_expiring: "warning",
+  llm_credential_expires_soon: "warning",
+  llm_limit: "warning",
+  llm_limit_waiting: "warning",
+};
+
+/** What a model is for, by category: its name, what it covers, and the verb a summary uses. */
+export const CATEGORY_WORDS: Record<JobCategory, { label: string; hint: string; verb: string }> = {
+  coding: {
+    label: "Coding",
+    hint: "The seat's own work: writing code, running tools, and its onboarding pass.",
+    verb: "code",
+  },
+  checks: {
+    label: "Reviewing and evaluations",
+    hint: "Checks a turn's result before it is accepted, and decides when onboarding is done.",
+    verb: "review and evaluate work",
+  },
+  handoffs: {
+    label: "Task delegations and routines",
+    hint: "Smaller jobs a seat hands off, and background passes: memory, summaries and reflection.",
+    verb: "run delegated tasks and routines",
+  },
+};
+
+/** A category's tooltip: the engine fields it writes. */
+export function categoryTip(category: JobCategory): string {
+  return `Sets ${listed(categoryFields(category))}`;
+}
+
+/** The Dashboard Assistant as a use of a model: company-wide, one field, no seats. */
+export const ASSISTANT_USE = {
+  label: "Assistant",
+  hint: "Answers you in the dashboard's assistant.",
+  tip: "Sets assistant.llm. The assistant is the company's, so no seats are picked.",
+  rule: "The assistant runs only on a model that denies the CLI's web tools, so a page it reads cannot send what it read anywhere.",
+} as const;
+
+/** Every seat job at once. */
+export const EVERYTHING = {
+  label: "Everything",
+  hint: "Use this model for every seat job: coding, reviewing and evaluations, and task delegations and routines.",
+  tip: "Sets the seat's llm to this model and clears llm_review, llm_subagent, llm_auxiliary and llm_judge, so every seat job resolves to it. The Assistant is separate: choose it on its own.",
+} as const;
+
+/**
+ * The categories holding a job with a fixed deadline, and the quiet note shown
+ * when the model chosen is not a fast one. The deadlines are the engine's
+ * (llm-backends.md, "Auxiliary work and latency"): the onboarding extension
+ * judge and the turn-start prefetch each have 30 seconds, condensing and the
+ * reflection passes 60. A note, never a block: a slow model is cut off and
+ * does less, it does not stall a turn.
+ */
+export const FAST_NOTE: Partial<Record<JobCategory, string>> = {
+  checks: "Onboarding evaluations run under a 30 s limit; a fast model is recommended.",
+  handoffs:
+    "Memory and summary passes run under 30 s and 60 s limits; a fast model is recommended.",
+};
+
+/** Whether a model name reads as a vendor's fast tier. */
+export function isFastModel(model: string): boolean {
+  return /haiku|mini|nano|flash|lite/i.test(model);
+}
+
+/** A CLI's product name, or its key for a custom one. */
+export function product(agent: string): string {
+  return CLI_PRODUCTS[agent] ?? agent;
+}
