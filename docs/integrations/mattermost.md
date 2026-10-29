@@ -410,9 +410,10 @@ anything, naming `-api URL`. See
 [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values).
 A running engine reads the tokens at its next apply and not before, so a run
 that minted one says what is left on its `Next:` line: for `-secret-store`
-through a running node, nothing, since the node re-activates the revision that
-reads the tokens once, at the end of the run (a run that dies first leaves them sealed
-and inactive until the next re-activation); with this node's engine stopped,
+through a running node, nothing, since the run re-activates the revision that
+reads the tokens once, at its end (one that fails is named there instead and
+rolls nothing back; a run that dies first leaves them sealed and inactive until
+the company is next re-activated); with this node's engine stopped,
 re-activating the current revision (`POST /config/reload` to a node that is
 up). Where the block itself is new to the running company, the
 `crewlet config import` that applies it is that apply. A re-run that kept
@@ -570,8 +571,9 @@ tokens are what this run *mints*, so it cannot bootstrap itself from them.
 | `-config PATH` / `-api URL` | Where a real run reads the company's values (the instance URL, and with `-secret-store` each bot's token it reads back) and where `-secret-store` records: through the running engine holding the store `-config` names (default `./crewlet.yaml`), with one of its Tier A tokens in `CREWLET_API_TOKEN`, or through the node `-api` names; with this node's engine stopped, from the fleet's store itself; with neither a file nor `-api`, from the environment alone. On a member of a cluster whose engine is stopped a real run is refused before it touches the server, `-rotate` included — see [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values). |
 
 Afterwards, do what the run's `Next:` line says. With `-secret-store` through a
-running node there is nothing left, since the node re-activated the revision
-that reads each token; with this node's engine stopped it is
+running node there is nothing left once the run has re-activated the revision
+that reads each token (where that re-activation failed, the line says so and
+names `POST /config/reload`); with this node's engine stopped it is
 `POST /config/reload` to a node that is up — or the `crewlet config import`
 that adds the block, where it is new to the running company — and each seat's
 websocket is rebuilt from its new token at that apply, while a node that has

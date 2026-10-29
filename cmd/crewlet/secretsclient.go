@@ -334,6 +334,12 @@ func (c *secretsClient) listing(ctx context.Context, out any) error {
 // one to read, and decodes it, or explains the refusal.
 func (c *secretsClient) callWithin(ctx context.Context, method, path, contentType string,
 	body []byte, out any, limit int, tooLong string) error {
+	return c.callWith(ctx, method, path, contentType, nil, body, out, limit, tooLong)
+}
+
+// callWith is [secretsClient.callWithin] with headers of the caller's own.
+func (c *secretsClient) callWith(ctx context.Context, method, path, contentType string,
+	header http.Header, body []byte, out any, limit int, tooLong string) error {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -341,6 +347,9 @@ func (c *secretsClient) callWithin(ctx context.Context, method, path, contentTyp
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, reader)
 	if err != nil {
 		return err
+	}
+	for name, values := range header {
+		req.Header[name] = values
 	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
@@ -460,4 +469,21 @@ func refusedTheToken(err error) bool {
 	var refusal *nodeRefusal
 	return errors.As(err, &refusal) &&
 		(refusal.Status == http.StatusUnauthorized || refusal.Status == http.StatusForbidden)
+}
+
+// Reload re-activates the company the node runs, unchanged (`POST
+// /config/reload`): what a provisioning run that sealed its values with the
+// re-activation deferred sends once at its end, so the running company reads
+// them. It seals nothing, so a value rotated meanwhile is never overwritten.
+func (c *secretsClient) Reload(ctx context.Context, summary string) (*configapi.Reloaded, error) {
+	var answer struct {
+		RevisionID string `json:"revision_id"`
+		Epoch      int64  `json:"epoch"`
+	}
+	if err := c.callWith(ctx, http.MethodPost, "/config/reload", "",
+		http.Header{"X-Summary": {summary}}, nil, &answer, maxRowAnswerBytes,
+		"no answer about one re-activation is this long"); err != nil {
+		return nil, err
+	}
+	return &configapi.Reloaded{RevisionID: answer.RevisionID, Epoch: answer.Epoch}, nil
 }

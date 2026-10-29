@@ -953,6 +953,24 @@ func secretsNodeReading(t *testing.T, fleet coord.Fleet, cipher secrets.Cipher,
 	if err := svc.Routes(mux); err != nil {
 		t.Fatal(err)
 	}
+	// AND THE RE-ACTIVATION, as the config surface answers it, over the
+	// same company: what a provisioning run's flush sends.
+	mux.HandleFunc("POST /config/reload", func(w http.ResponseWriter, r *http.Request) {
+		applied, err := c.Reload(r.Context(), r.Header.Get("X-Summary"), iam.Actor{}, "")
+		var raced *configapi.RacedError
+		var invalid *configapi.ValidationError
+		switch {
+		case errors.As(err, &raced):
+			httpjson.Fail(w, http.StatusConflict, httpjson.CodeRevisionAdvanced)
+		case errors.As(err, &invalid):
+			httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeValidationError)
+		case err != nil:
+			httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		default:
+			httpjson.Write(w, http.StatusCreated, map[string]any{
+				"revision_id": applied.RevisionID, "epoch": applied.Epoch})
+		}
+	})
 	caller := iam.Principal{
 		ID:    uuid.NewSHA1(auth.TokenNamespace, []byte("ops")),
 		Login: iam.TokenLogin("ops"), Kind: iam.KindMachine,
@@ -1135,32 +1153,20 @@ func TestSettingSeveralSecretsIsOneActivation(t *testing.T) {
 }
 
 // A PROVISIONING RUN THROUGH A NODE RE-ACTIVATES ONCE, HOWEVER MANY VALUES IT
-// MINTS.
+// MINTS, AND SEALS NOTHING TWICE.
 //
 // Each minted credential is sealed the moment it exists (the sink's contract:
 // a token live at the vendor and recorded nowhere cannot be revoked), with its
-// re-activation deferred; the run's flush re-activates once for all of them.
-// Re-activating per value moved a running fleet through an epoch per seat.
+// re-activation deferred; the run's flush re-activates once, and seals nothing,
+// so a value rotated while the run went on is not written back over.
 func TestAProvisioningRunThroughANodeReactivatesOnce(t *testing.T) {
 	t.Parallel()
-	sum := make([]byte, 32)
-	sum[0] = 2
-	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1",
-		Keys: map[string][]byte{"k1": sum}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	names := []string{"GITLAB_TOKEN_CEO", "GITLAB_TOKEN_QA", "GITLAB_TOKEN_SWE"}
 	company := &nodeCompany{reads: map[string][]string{}}
 	for _, name := range names {
 		company.reads[name] = []string{"roles.integrations.gitlab.token"}
 	}
-	client := secretsNodeReading(t, coordmem.NewFleet(), cipher, company)
-	target := &secretTarget{secretBackend: client, throughNode: true, where: "the node"}
-	store := sinkStore{target: target,
-		values: &storedValues{values: map[string]string{}, held: map[string]bool{}}}
-	sink := nodeSink(store, target)
-
+	client, sink := nodeSinkOver(t, company)
 	for _, name := range names {
 		if err := sink.Record(t.Context(), name, "glpat-"+name); err != nil {
 			t.Fatalf("record %s: %v", name, err)
@@ -1173,25 +1179,32 @@ func TestAProvisioningRunThroughANodeReactivatesOnce(t *testing.T) {
 	if err != nil || len(held) != len(names) {
 		t.Fatalf("the minted values are not durable before the flush: (%v, %v)", held, err)
 	}
+	// SOMEBODY ROTATES ONE meanwhile, and the flush must not undo it.
+	if _, err := client.Set(t.Context(), "GITLAB_TOKEN_QA", "glpat-rotated", secrets.Author{},
+		secrets.SourceCLI, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	reloadsBefore := len(company.reloads)
 	if err := sink.Flush(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if len(company.reloads) != 1 {
-		t.Errorf("reloads = %q, want ONE for the whole run", company.reloads)
+	if got := len(company.reloads) - reloadsBefore; got != 1 {
+		t.Errorf("the flush made %d re-activations, want ONE for the whole run", got)
 	}
-	if err := sink.Flush(t.Context()); err != nil || len(company.reloads) != 1 {
+	if held, _ := client.Values(t.Context(), []string{"GITLAB_TOKEN_QA"}); held["GITLAB_TOKEN_QA"] != "glpat-rotated" {
+		t.Errorf("the flush wrote back over a rotation: %q", held["GITLAB_TOKEN_QA"])
+	}
+	if step := sink.NextStep(); !strings.Contains(step, "re-activated the company once") {
+		t.Errorf("next step = %q", step)
+	}
+	if err := sink.Flush(t.Context()); err != nil || len(company.reloads)-reloadsBefore != 1 {
 		t.Errorf("a second flush with nothing new re-activated: %q (%v)", company.reloads, err)
 	}
 }
 
-// nodeSink is a provisioning run's sink through a node, as sinkFlags.open
-// builds one, waiting nothing between retries.
-func nodeSink(store sinkStore, target *secretTarget) *nodeSecretSink {
-	return &nodeSecretSink{SecretStoreSink: provision.NewSecretStoreSink(store, hostAuthor()),
-		target: target, retries: []time.Duration{0, 0}, recorded: map[string]string{}}
-}
-
-// nodeSinkOver is a run's store, target and sink over one node's /secrets.
+// nodeSinkOver is a provisioning run's sink through one node's /secrets and
+// its re-activation, waiting nothing between retries, beside the node's
+// client.
 func nodeSinkOver(t *testing.T, company *nodeCompany) (*secretsClient, *nodeSecretSink) {
 	t.Helper()
 	sum := make([]byte, 32)
@@ -1205,13 +1218,12 @@ func nodeSinkOver(t *testing.T, company *nodeCompany) (*secretsClient, *nodeSecr
 	target := &secretTarget{secretBackend: client, throughNode: true, where: "the node"}
 	store := sinkStore{target: target,
 		values: &storedValues{values: map[string]string{}, held: map[string]bool{}}}
-	return client, nodeSink(store, target)
+	return client, &nodeSecretSink{SecretStoreSink: provision.NewSecretStoreSink(store, hostAuthor()),
+		reload: client.Reload, retries: []time.Duration{0, 0}}
 }
 
-// A RUN THAT DIES BEFORE ITS FLUSH LEAVES ITS VALUES SEALED AND INACTIVE.
-//
-// Every minted credential is durable, so nothing is lost; none is active,
-// since nothing re-activated, until the next run's flush (or a reload) does.
+// A RUN THAT DIES BEFORE ITS FLUSH LEAVES ITS VALUES SEALED AND INACTIVE until
+// the company is next re-activated: nothing that runs reads them before.
 func TestARunThatDiesBeforeItsFlushLeavesItsValuesSealedAndInactive(t *testing.T) {
 	t.Parallel()
 	company := &nodeCompany{reads: map[string][]string{
@@ -1232,22 +1244,20 @@ func TestARunThatDiesBeforeItsFlushLeavesItsValuesSealedAndInactive(t *testing.T
 	if len(company.reloads) != 0 {
 		t.Fatalf("a run that never flushed re-activated: %q", company.reloads)
 	}
-	// THE NEXT RUN'S FLUSH re-activates, and the company reads them then.
-	target := died.target
-	store := sinkStore{target: target,
-		values: &storedValues{values: map[string]string{}, held: map[string]bool{}}}
-	next := nodeSink(store, target)
-	if err := next.Record(t.Context(), "GITLAB_TOKEN_A", "glpat-GITLAB_TOKEN_A"); err != nil {
-		t.Fatal(err)
-	}
-	if err := next.Flush(t.Context()); err != nil || len(company.reloads) != 1 {
-		t.Errorf("the next run's flush = %v, reloads %q, want one", err, company.reloads)
+	// THE NEXT RE-ACTIVATION, whoever makes it, is what the company reads
+	// them at.
+	if _, err := client.Reload(t.Context(), "reload"); err != nil || len(company.reloads) != 1 {
+		t.Errorf("a reload after the run died = %v, reloads %q", err, company.reloads)
 	}
 }
 
-// A FLUSH WHOSE RE-ACTIVATION FAILS FOR A MOMENT IS RETRIED, AND ONE THE
-// COMPANY REFUSES IS SAID AT ONCE.
-func TestAFlushRetriesATransientFailure(t *testing.T) {
+// A FLUSH WHOSE RE-ACTIVATION FAILS NEVER ROLLS THE RUN BACK.
+//
+// The values are sealed and the accounts exist: an error from Flush would have
+// the run revoke and delete good credentials. A transient failure is retried;
+// a refusal is said in the next step, with the reload to make, and Flush
+// answers no error.
+func TestAFailedFlushRevokesNothing(t *testing.T) {
 	t.Parallel()
 	company := &nodeCompany{reads: map[string][]string{"TOKEN": {"roles[0].x"}},
 		refuse: []error{&configapi.RacedError{Base: "r-1", Current: "r-2"}}}
@@ -1258,18 +1268,28 @@ func TestAFlushRetriesATransientFailure(t *testing.T) {
 	if err := sink.Flush(t.Context()); err != nil {
 		t.Fatalf("a flush that lost one race = %v, want it retried", err)
 	}
-	if len(company.reloads) != 2 {
-		t.Errorf("reloads = %q, want the raced one and its retry", company.reloads)
+	if len(company.reloads) != 2 || !strings.Contains(sink.NextStep(), "re-activated the company once") {
+		t.Errorf("reloads = %q, next step %q, want the raced one and its retry", company.reloads,
+			sink.NextStep())
 	}
 
 	refused := &nodeCompany{reads: map[string][]string{"TOKEN": {"roles[0].x"}},
 		refuse: []error{&configapi.ValidationError{Err: errors.New("seat x names no model")}}}
-	_, sink = nodeSinkOver(t, refused)
+	client, sink := nodeSinkOver(t, refused)
 	if err := sink.Record(t.Context(), "TOKEN", "v"); err != nil {
 		t.Fatal(err)
 	}
-	if err := sink.Flush(t.Context()); err == nil || len(refused.reloads) != 1 {
-		t.Errorf("a refused re-activation = %v after %d tries, want it said at once",
-			err, len(refused.reloads))
+	if err := sink.Flush(t.Context()); err != nil {
+		t.Fatalf("a refused re-activation failed the flush (%v): the run would roll back", err)
+	}
+	if len(refused.reloads) != 1 {
+		t.Errorf("a refusal was retried %d times", len(refused.reloads))
+	}
+	if step := sink.NextStep(); !strings.Contains(step, "NOT re-activated") ||
+		!strings.Contains(step, "POST /config/reload") {
+		t.Errorf("next step = %q, want the reload left to make", step)
+	}
+	if held, _ := client.Values(t.Context(), []string{"TOKEN"}); held["TOKEN"] != "v" {
+		t.Errorf("a refused flush left %v, want the value sealed", held)
 	}
 }
