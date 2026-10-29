@@ -447,18 +447,25 @@ func (w *ChangeWriter) answer(ctx context.Context, cw ConversationWrite, last co
 		return ConversationResult{}, fmt.Errorf("code: the publish of operation %s answered applied with no "+
 			"record, and its decide neither refused nor found it unchanged", cw.OpID)
 	case statelog.OutcomePending:
-		return ConversationResult{Outcome: statelog.OutcomePending, ID: cw.made(), Position: res.Position}, nil
+		return cw.made(ConversationResult{Outcome: statelog.OutcomePending, Position: res.Position}), nil
 	}
-	return ConversationResult{Outcome: statelog.OutcomeUnknown, ID: cw.made()}, nil
+	return cw.made(ConversationResult{Outcome: statelog.OutcomeUnknown}), nil
 }
 
-// made is the id of what cw makes that is named apart from its change — a
-// comment's — and "" for a write that makes none.
-func (cw ConversationWrite) made() string {
-	if cw.Comment != nil {
-		return CommentID(cw.OpID)
+// made is res naming what cw makes that is named apart from its change — a
+// comment's id, a review's and its findings' — every one derived from the
+// write's operation id, so it is the same on every node and every retry.
+func (cw ConversationWrite) made(res ConversationResult) ConversationResult {
+	switch {
+	case cw.Comment != nil:
+		res.ID = CommentID(cw.OpID)
+	case cw.Review != nil:
+		res.ID = ReviewID(cw.OpID)
+		for i := range cw.Review.Findings {
+			res.FindingIDs = append(res.FindingIDs, FindingID(cw.OpID, i))
+		}
 	}
-	return ""
+	return res
 }
 
 // applied answers a write whose record applied at at, FROM THE ROWS: the
@@ -486,10 +493,10 @@ func (w *ChangeWriter) applied(ctx context.Context, cw ConversationWrite, at sta
 	if position < at.Packed() {
 		w.log.ErrorContext(ctx, "code_conversation_unanswerable", "repo", cw.RepoID(), "change", cw.ChangeID(),
 			"op_id", cw.OpID, "position", at.String())
-		return ConversationResult{Outcome: statelog.OutcomeUnknown, ID: cw.made(), Detail: fmt.Sprintf("the "+
-			"write's record applied at %s and the change's conversation this node holds is not at it", at)}, nil
+		return cw.made(ConversationResult{Outcome: statelog.OutcomeUnknown, Detail: fmt.Sprintf("the write's "+
+			"record applied at %s and the change's conversation this node holds is not at it", at)}), nil
 	}
-	return ConversationResult{Outcome: statelog.OutcomeApplied, ID: cw.made(), Position: at}, nil
+	return cw.made(ConversationResult{Outcome: statelog.OutcomeApplied, Position: at}), nil
 }
 
 // refused answers a write whose publish failed — the committer's mapping of a

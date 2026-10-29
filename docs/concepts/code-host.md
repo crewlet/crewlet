@@ -912,6 +912,21 @@ answer that holds every record the code log had committed when it was asked.
   names no reviewer: what waits on your review, read from the asks themselves
   rather than from every change the company holds. A credential bound to no
   seat is nobody's reviewer, and its `needs=review` is refused.
+- **The changes waiting on their owner's fix** are `needs=fix`: an
+  **owner**'s live changes — the asker's own where it names none — whose
+  reviewer's standing verdict asks for changes, or that hold a finding none
+  of their authors has answered (see [Reviews](#reviews)). It reads the
+  owner's changes in one state, `open` unless it names `draft`. A pushed
+  revision answers neither: a request for changes stands until its reviewer
+  reviews again, and a finding until an author answers it. A blocker an author
+  has answered waits on its raiser, not on the owner, and does not list the
+  change here.
+- **What waits on you** is `needs=me`: the changes whose ask of your review
+  stands, and then your own changes waiting on your fix — one listing, read as
+  those two one after the other, a change of both listed once. It names no
+  reviewer and no owner, since it is yours.
+- A need lists **live** changes alone, and is refused beside a closed or
+  merged state.
 - **One change**, by its number on its repository — `web!42` — with its row
   (title, state, branches, head and revision, version, owner, the work item it
   carries, when it was opened, closed or merged and how), its description and
@@ -920,13 +935,15 @@ answer that holds every record the code log had committed when it was asked.
   the repository does not hold is "no such change", naming it (`web!43`).
 
 **A listing reads the one index its filters lead with** — a reviewer's
-standing asks; a work item's changes; an owner's in a state; a repository's
-in a state; a repository's; the company's in a state — so a repository's open
-changes are read without its closed and merged history, however long that
-grows. A filter that index does not hold — a repository beside a work item,
-an owner or a reviewer, a state beside a work item or a reviewer, an owner
-beside a repository with no state, a work item beside a reviewer — is tested
-on each change the page read, never by reading further: a page is the changes it
+standing asks; a work item's changes; an owner's in a state, which is also
+what `needs=fix` reads; a repository's in a state; a repository's; the
+company's in a state — so a repository's open changes are read without its
+closed and merged history, however long that grows. A filter that index does
+not hold — a repository beside a work item, an owner or a reviewer, a state
+beside a work item or a reviewer, an owner beside a repository with no state,
+a work item beside a reviewer, and whether a change waits on its owner's fix,
+which its conversation's counters say — is tested on each change the page
+read, never by reading further: a page is the changes it
 **read**, not the changes it kept, so it can be short, or empty with a cursor,
 and a reader pages until no cursor comes back. A page reads 50 changes unless
 asked for fewer or more, 200 at most; a change's revisions come 200 a page,
@@ -952,13 +969,13 @@ push](#who-may-read-and-push)):
 ## Reviews and findings
 
 What is said ABOUT a change — who is asked to review it, its comments and the
-threads they form — is its **conversation**: rows on the code log like the
-change itself, written by records on a subject of the change's own
-(`crewlet.code.log.change.<id>`), never on its repository's. A change's
-lifecycle stays where its pushes are, in the repository's
-[committer](#the-committer); a comment shares nothing with those pushes, and
-decided in the committer's queue it would wait behind their batches and
-contend with every push to the repository.
+threads they form, its reviews and the findings they raise — is its
+**conversation**: rows on the code log like the change itself, written by
+records on a subject of the change's own (`crewlet.code.log.change.<id>`),
+never on its repository's. A change's lifecycle stays where its pushes are,
+in the repository's [committer](#the-committer); a comment or a review shares
+nothing with those pushes, and decided in the committer's queue it would wait
+behind their batches and contend with every push to the repository.
 
 - **One node writes a change's conversation.** A write is asked of the
   repository's committing data node — the node its pushes are asked of — and
@@ -978,36 +995,48 @@ contend with every push to the repository.
   because the writer has not seen the comment yet.
 - **A table is written by one subject's records.** The repository's records
   keep the change's row, its body, its authors and its revisions; the change's
-  keep its conversation's four tables:
+  keep its conversation's tables:
 
 | Table | A row for | What it holds |
 |---|---|---|
-| `code_conversations` | each change that has been discussed | Its counters — its comments — what its comments weigh, and the version and position of its last record |
+| `code_conversations` | each change that has been discussed | Its counters — its comments, its reviews, its open findings, its standing blockers and how many reviewers' standing verdict asks for changes — what its comments, reviews and findings weigh, and the version and position of its last record |
 | `code_reviewers` | each reviewer it has asked | A seat, or a person by the human seat they hold; whether the ask stands or was withdrawn — a withdrawn ask is kept, so the change says who was once asked — who asked, and the note they asked with, at most 1 KiB |
-| `code_participants` | everybody who takes part in it | Each reviewer asked and each author of a comment, by handle and kind |
-| `code_comments` | each comment | Its thread, its parent, who said it — a seat, or a person with the credential they used — the line it points at, whether its thread is resolved and by whom, the turn that said it, and its body, at most 32 KiB |
+| `code_participants` | everybody who takes part in it | Each reviewer asked or reviewing and each author of a comment, by handle and kind, and a reviewer's **standing verdict**: the latest of their reviews that approves or asks for changes, and the revision it judged |
+| `code_comments` | each comment | Its thread, its parent or the finding it replies to, who said it — a seat, or a person with the credential they used — the line it points at, whether its thread is resolved and by whom, the turn that said it, and its body, at most 32 KiB |
+| `code_reviews` | each review | The revision it judged, who reviewed — a seat, or a person with the credential they used — its verdict, how many findings it raised, the turn and the model that reviewed, and its summary, at most 4 KiB |
+| `code_findings` | each finding | The review and the revision that raised it, its raiser, where it points — a file, a side of the revision's diff, its lines, the commit and the blob they were read in — its severity and category, its state, and its last answer: the note, who gave it, the commit it names |
+| `code_finding_texts` | each finding | Its title (one line, at most 200 bytes), its body (at most 4 KiB) and the lines it suggests in place of the ones it points at (at most 16 KiB) — a row of its own, so the finding's state is rewritten without its text |
 
 ### Reading a conversation
 
 A change's conversation is read with the change: one change's read names the
 **part** it pages beside it — its revisions, which a read naming no part
-pages and whose first page carries the change's detail, its **reviewers** or
-its **comments** — every page held to the reader's grant on the repository as
-the change's own rows are ([Reading changes](#reading-changes)).
+pages and whose first page carries the change's detail, its **reviewers**,
+its **comments**, its **reviews** or its **findings** — every page held to the
+reader's grant on the repository as the change's own rows are ([Reading
+changes](#reading-changes)).
 
-- **The detail counts the conversation**: its comments, and the version and
-  position of its last record — the floor a read of its parts is asked at, so
-  a comment just written is read back with the change.
+- **The detail counts the conversation**: its comments, its reviews, its open
+  findings, its standing blockers and its requests for changes, and the
+  version and position of its last record — the floor a read of its parts is
+  asked at, so a comment just written is read back with the change.
 - **Comments come a thread at a time**: a thread's first comment and then its
   replies in the order they were said, threads in the order they started; a
   page holds 50 unless asked for fewer or more, 200 at most, and ends at the
   reply's byte budget first where comments are long. A comment names its
-  thread, the root it replies to, who said it — a seat, or a person and the
-  credential they used — the line a thread's first comment points at, and
-  whether its thread is resolved and by whom.
+  thread, the root or the finding it replies to, who said it — a seat, or a
+  person and the credential they used — the line a thread's first comment
+  points at, and whether its thread is resolved and by whom.
 - **Reviewers come by handle**, a withdrawn ask among them, 200 a page and
   1 000 at most: who was asked, by whom, with what note, and whether the ask
   stands.
+- **Reviews come in the order they were given**, 50 a page and 200 at most:
+  the revision each judged, who reviewed, its verdict, its summary and how
+  many findings it raised.
+- **Findings come by id** — the order the reviews that raised them were given
+  — each with its text and its suggestion, its state and its last answer, 50
+  a page and 200 at most, ending at the reply's byte budget first where
+  suggestions are long.
 
 ### Asking for review
 
@@ -1041,17 +1070,90 @@ discussed after it merges too. It is anybody's who reads the repository, and a
 credential bound to no seat says nothing: every comment names who said it.
 
 - **A thread is one level deep.** A comment starts a thread of its own, or
-  replies to the first comment of a thread on the same change; a reply to a
-  reply, to another change's comment or to nothing is refused `thread_gone`.
-  A comment's id is derived from its operation id, so a comment asked again is
-  the comment that landed.
+  replies to the first comment of a thread on the same change, or to a
+  finding on it, whose thread the finding names; a reply to a reply, to
+  another change's comment or finding, or to nothing is refused
+  `thread_gone`. A comment's id is derived from its operation id, so a
+  comment asked again is the comment that landed.
 - **A thread's first comment may point at a line**: a file, a revision of the
   change, a side of its diff and the line, with the blob read there. A
   revision the change has not reached is refused `unknown_revision`.
 - **A thread is resolved, or opened again,** by whoever started it, an author
   of the change, a principal that maintains the repository or a person —
   anybody else is refused `not_permitted` — and its first comment names who
-  resolved it.
+  resolved it. A finding's thread is answered by the finding's own answer
+  ([Findings](#findings)), never resolved as a comment's is.
+
+### Reviews
+
+A **review** judges one revision of a live change: a **verdict** —
+`approve`, `request_changes` or `comment` — a summary of at most 4 KiB, and
+the **findings** it raises, at most 64, each saying something about lines of
+the change. The review and every finding it raises are ONE record, so a
+review is never half there; its id and each finding's are derived from its
+operation id, so a review asked again is the review that landed.
+
+- **Who reviews:** a principal that reviews the repository (`review`, `write`
+  or `maintain`) and a person — and never an author of the change: the seat or
+  person who opened it, and everyone whose push moved its head. An author's
+  review of their own change, its approval above all, would count for
+  nothing, so it is refused `not_permitted`, as is a seat below `review`, the
+  sentence naming what it holds and what would admit it.
+- **It judges a revision the change has reached** — one past the change's
+  head as the writer reads it is refused `unknown_revision` — and a change
+  that is closed or merged is reviewed no further (`change_closed`,
+  `change_merged`).
+- **A reviewer's standing verdict** is the latest of their reviews that
+  approves or asks for changes. A review that only comments judges nothing
+  and leaves it as it was, so a comment after a request for changes withdraws
+  nothing. The change counts the reviewers whose standing verdict asks for
+  changes; a pushed revision answers none of them — a request for changes
+  stands until its reviewer reviews again.
+- **A review past what one record carries is refused**, before anything is
+  read: its findings with their suggestions encode to more than a record keeps
+  beside the room it saves for whom the change concerns. Split it into two
+  reviews of the same revision, which supersede nothing of each other.
+
+### Findings
+
+A **finding** points at lines of one revision — a file, a side of the
+revision's diff, its first and last line, the commit and the blob they were
+read in — and says how much it weighs (`blocker`, `major`, `minor`, `nit`),
+what it is about (`correctness`, `security`, `performance`, `tests`,
+`design`, `style`, `docs`), a title of one line, a body, and, where it
+suggests one, the lines it would put in their place.
+
+A finding **stands** while it is open, or an author answered it. Who may
+answer, and what each answer does:
+
+| Answer | Given by | The finding |
+|---|---|---|
+| `resolved`, `wont_fix`, `disputed` | an author of the change | Still stands: an author's answer is theirs to give and the raiser's to judge |
+| `dismissed` | its raiser, a principal that maintains the repository, or a person | No longer stands, and nothing answers it again |
+| `superseded` | the raiser's review of a later revision that does not carry it | No longer stands, and nothing answers it again |
+
+- **Only a dismissal or the raiser's later review clears a blocker.** A
+  standing blocker holds its change back whatever its authors answered: a
+  blocker resolved, marked won't fix or disputed still counts among the
+  change's standing blockers, for its raiser to judge.
+- **A review carries what still stands.** A review names the findings of its
+  reviewer's own that still stand as it judges its revision — its
+  **carries**; a review of a LATER revision supersedes every other standing
+  finding its reviewer raised on an earlier one, open or answered alike. A
+  review of the same revision supersedes nothing: one reviewer's second pass
+  over a revision adds to the first. A review carries its reviewer's own
+  findings alone (`not_raiser`), and only ones still standing
+  (`finding_gone`).
+- **A reviewer keeps at most 1 024 findings standing on a change**, which a
+  review that would leave more is refused `too_many_findings`: what one
+  review supersedes is part of its one record, and the bound keeps it one
+  record however long a reviewer has followed a change.
+- **An answer names findings standing on the change** (`finding_gone`
+  otherwise), at most 64 at once, each with a note of at most 1 KiB and, where
+  an author says a commit answers it, that commit. Resolving, marking won't fix
+  or disputing is refused `not_author` to anybody else, and dismissing
+  `not_raiser`. An answer that asks for what every finding already says
+  changes nothing and appends nothing.
 
 A write of a conversation that is refused appends nothing, and says why in one
 sentence:
@@ -1060,21 +1162,26 @@ sentence:
 |---|---|
 | `repo_deleted`, `repo_archived` | The repository is deleted, being purged or gone, or archived and read-only |
 | `change_not_found` | The repository holds no such change |
-| `not_permitted` | The asker may not make the write, or a reviewer asked may not review the change — the sentence says which, and what would admit it |
+| `not_permitted` | The asker may not make the write, a reviewer asked may not review the change, or an author asked to review their own — the sentence says which, and what would admit it |
 | `no_reviewer` | A reviewer asked is no seat of the chart |
 | `too_many_reviewers` | The change would ask more than 32 reviewers at once |
-| `unknown_revision` | A comment points at a revision the change has not reached |
-| `change_closed`, `change_merged` | An ask for review of a change that is not live |
-| `thread_gone` | A reply or a resolution names no thread of the change |
+| `unknown_revision` | A comment points at, or a review judges, a revision the change has not reached |
+| `change_closed`, `change_merged` | An ask for review, or a review, of a change that is not live |
+| `thread_gone` | A reply or a resolution names no thread of the change, or a reply no finding of it |
+| `not_author` | A finding resolved, marked won't fix or disputed by one who did not write the change |
+| `not_raiser` | A finding dismissed by one who neither raised it nor maintains the repository, nor is a person — or carried by a review of one who did not raise it |
+| `finding_gone` | A finding named that does not stand on the change: none by that id, or one dismissed or superseded |
+| `too_many_findings` | The review would leave its reviewer more than 1 024 findings standing on the change |
 | `busy`, `not_applied`, `unavailable` | The writer did not reach the write in time, or the code log refused it or dropped it on every node: nothing was decided, and the write is sent again |
 
 - **A conversation goes with its repository.** A repository's
   [purge](#deletion-and-purge) removes each change's conversation before the
   change's own row, within the purge's bounded steps: a conversation is
-  weighed by what its comments hold, read off its counters row, and one
-  heavier than a step is cut by its comments, oldest thread first. A record
-  about a purged repository's change applies nowhere, as one about the
-  repository does.
+  weighed by what its comments, its reviews' summaries and its findings' texts
+  hold, read off its counters row, and one heavier than a step is cut by them
+  — its comments, oldest thread first, then its findings' texts and its
+  reviews. A record about a purged repository's change applies nowhere, as one
+  about the repository does.
 
 `crewlet.code.conversation.writes` counts every write of a conversation a
 node's change writer was asked to decide, by its write and what became of it

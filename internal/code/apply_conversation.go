@@ -25,8 +25,9 @@ import (
 // node: a record whose change has no row — a repository's purge removed it, and
 // only a record the ledger would have collapsed reaches a change that gone —
 // applies as nothing, whole, logged (code_conversation_not_applied); one at or
-// below its conversation's position is a redelivery; a comment whose id is
-// held already, or a thread whose root is gone, applies as nothing too.
+// below its conversation's position is a redelivery; a comment or a review
+// whose id is held already, a thread whose root is gone, and an answer whose
+// every finding no longer stands apply as nothing too.
 //
 // EVERY RECORD COUNTS ONE VERSION of its change's conversation and moves its
 // position to its own (code_conversations): the version guard a redelivery
@@ -45,6 +46,10 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 	case Comment:
 		repoID, changeID = p.RepoID, p.ChangeID
 	case ThreadResolve:
+		repoID, changeID = p.RepoID, p.ChangeID
+	case Review:
+		repoID, changeID = p.RepoID, p.ChangeID
+	case FindingResolve:
 		repoID, changeID = p.RepoID, p.ChangeID
 	default:
 		return 0, fmt.Errorf("code: %s is not an op this build applies to a change (the record at %s)",
@@ -83,6 +88,10 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 		rows, counts, err = applyComment(ctx, tx, at, p)
 	case ThreadResolve:
 		rows, err = applyThreadResolve(ctx, tx, at, p)
+	case Review:
+		rows, counts, err = applyReview(ctx, tx, at, p)
+	case FindingResolve:
+		rows, counts, err = applyFindingResolve(ctx, tx, at, p)
 	}
 	if err != nil || rows == 0 {
 		return 0, err
@@ -93,9 +102,13 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 	return rows + 1, nil
 }
 
-// conversationCounts is what one record moves its conversation's counters by.
+// conversationCounts is what one record moves its conversation's counters by:
+// its comments and its reviews; its OPEN findings — none of whose authors has
+// answered — and its STANDING BLOCKERS, the blockers that hold the change back
+// whatever their authors answered (S40); how many reviewers' standing verdict
+// asks for changes; and what its wide text weighs.
 type conversationCounts struct {
-	comments, textBytes int64
+	comments, reviews, openFindings, openBlockers, changesRequested, textBytes int64
 }
 
 // touchConversation moves changeID's conversation by one record: its counters
@@ -104,11 +117,156 @@ type conversationCounts struct {
 func touchConversation(ctx context.Context, tx *sql.Tx, at applyContext, repoID, changeID string,
 	counts conversationCounts) error {
 
-	if _, err := tx.ExecContext(ctx, touchConversationSQL, changeID, repoID, counts.comments, counts.textBytes,
+	if _, err := tx.ExecContext(ctx, touchConversationSQL, changeID, repoID, counts.comments, counts.reviews,
+		counts.openFindings, counts.openBlockers, counts.changesRequested, counts.textBytes,
 		at.packed); err != nil {
 		return fmt.Errorf("code: move change %s's conversation at %s: %w", changeID, at.position, err)
 	}
 	return nil
+}
+
+// applyReview writes a review: its row, every finding it raises and its text,
+// its reviewer as a participant — their STANDING VERDICT on the change moved
+// to this review's where it judges (approve, request_changes), and left as it
+// was where it comments, which judges nothing — and the supersession of every
+// standing finding of its reviewer raised on an earlier revision that it does
+// not carry ([supersededBy], the decide's own rule over the same rows):
+// moving the conversation's counters by all of it, its changes_requested by
+// the reviewer's standing verdict before this one and after.
+func applyReview(ctx context.Context, tx *sql.Tx, at applyContext, r Review) (int, conversationCounts, error) {
+	by, kind := r.By.party()
+	if by == "" {
+		n, err := conversationNotApplied(ctx, at, r.RepoID, r.ChangeID, "its reviewer names no seat")
+		return n, conversationCounts{}, err
+	}
+	var before string
+	switch err := tx.QueryRowContext(ctx, standingVerdictSQL, r.ChangeID, by).Scan(&before); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return 0, conversationCounts{}, fmt.Errorf("code: read %s's standing verdict on change %s at %s: %w", by,
+			r.ChangeID, at.position, err)
+	}
+	// THE CREDENTIAL A PERSON REVIEWED WITH, as a comment keeps its own.
+	var operator string
+	if kind == PartyPerson {
+		operator = r.By.OperatorID
+	}
+	res, err := tx.ExecContext(ctx, addReviewSQL, r.ReviewID, r.ChangeID, r.Revision, by, string(kind), operator,
+		string(r.Verdict), len(r.Findings), r.TurnID, r.Model, len(r.Summary), at.packed, at.at(), r.Summary)
+	if err != nil {
+		return 0, conversationCounts{}, fmt.Errorf("code: write review %s at %s: %w", r.ReviewID, at.position, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		n, err := conversationNotApplied(ctx, at, r.RepoID, r.ChangeID, "a review already holds its id")
+		return n, conversationCounts{}, err
+	}
+	counts := conversationCounts{reviews: 1, textBytes: int64(len(r.Summary))}
+	judges := r.Verdict != VerdictComment
+	switch was, is := Verdict(before) == VerdictRequestChanges, r.Verdict == VerdictRequestChanges; {
+	case !judges:
+	case is && !was:
+		counts.changesRequested = 1
+	case was && !is:
+		counts.changesRequested = -1
+	}
+	rows := 1
+	_, superseded, err := supersededBy(ctx, tx, r.ChangeID, by, kind, r)
+	if err != nil {
+		return 0, conversationCounts{}, err
+	}
+	if len(superseded) > 0 {
+		ids := make([]string, len(superseded))
+		for i, f := range superseded {
+			ids[i] = f.id
+			if f.state == FindingOpen {
+				counts.openFindings--
+			}
+			if f.severity == SeverityBlocker {
+				counts.openBlockers--
+			}
+		}
+		list, err := jsonList(ids)
+		if err != nil {
+			return 0, conversationCounts{}, err
+		}
+		if _, err := tx.ExecContext(ctx, supersedeFindingsSQL, string(FindingSuperseded), by, string(kind),
+			at.packed, list); err != nil {
+			return 0, conversationCounts{}, fmt.Errorf("code: supersede %s's findings on change %s at %s: %w", by,
+				r.ChangeID, at.position, err)
+		}
+		rows += len(ids)
+	}
+	for _, f := range r.Findings {
+		if _, err := tx.ExecContext(ctx, addFindingSQL, f.ID, r.ChangeID, r.ReviewID, by, string(kind), r.Revision,
+			f.CommitOID, f.Path, f.BlobOID, string(f.Side), f.LineStart, f.LineEnd, string(f.Severity),
+			string(f.Category), string(FindingOpen), at.packed); err != nil {
+			return 0, conversationCounts{}, fmt.Errorf("code: write finding %s at %s: %w", f.ID, at.position, err)
+		}
+		if _, err := tx.ExecContext(ctx, addFindingTextSQL, r.ChangeID, f.ID, findingTextBytes(f), f.Title, f.Body,
+			f.Suggestion); err != nil {
+			return 0, conversationCounts{}, fmt.Errorf("code: write finding %s's text at %s: %w", f.ID,
+				at.position, err)
+		}
+		counts.openFindings++
+		if f.Severity == SeverityBlocker {
+			counts.openBlockers++
+		}
+		counts.textBytes += findingTextBytes(f)
+		rows += 2
+	}
+	participant, args := addParticipantSQL, []any{r.ChangeID, by, string(kind), at.packed}
+	if judges {
+		participant, args = judgeParticipantSQL, append(args, string(r.Verdict), r.Revision, r.ReviewID)
+	}
+	if _, err := tx.ExecContext(ctx, participant, args...); err != nil {
+		return 0, conversationCounts{}, fmt.Errorf("code: add %s to change %s at %s: %w", by, r.ChangeID,
+			at.position, err)
+	}
+	return rows + 1, counts, nil
+}
+
+// applyFindingResolve answers findings: each that still stands moves to the
+// state the record gives it, with its note, who answered, the commit named and
+// the record's position — a finding no longer standing, or in that state
+// already, applies as nothing — and the conversation's counters move with
+// them: an open finding answered leaves the open ones, and a blocker dismissed
+// the standing blockers (S40: resolved, won't fix and disputed keep it).
+func applyFindingResolve(ctx context.Context, tx *sql.Tx, at applyContext, fr FindingResolve) (int,
+	conversationCounts, error) {
+
+	by, kind := fr.By.party()
+	if by == "" {
+		n, err := conversationNotApplied(ctx, at, fr.RepoID, fr.ChangeID, "who answered names no seat")
+		return n, conversationCounts{}, err
+	}
+	var counts conversationCounts
+	rows := 0
+	for _, a := range fr.Findings {
+		f, found, err := findingIn(ctx, tx, a.FindingID)
+		if err != nil {
+			return 0, conversationCounts{}, err
+		}
+		if !found || f.changeID != fr.ChangeID || !f.state.Stands() || f.state == a.Resolution {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, answerFindingSQL, string(a.Resolution), a.Note, by, string(kind), a.Commit,
+			at.packed, a.FindingID); err != nil {
+			return 0, conversationCounts{}, fmt.Errorf("code: answer finding %s at %s: %w", a.FindingID,
+				at.position, err)
+		}
+		if f.state == FindingOpen {
+			counts.openFindings--
+		}
+		if a.Resolution == FindingDismissed && f.severity == SeverityBlocker {
+			counts.openBlockers--
+		}
+		rows++
+	}
+	if rows == 0 {
+		n, err := conversationNotApplied(ctx, at, fr.RepoID, fr.ChangeID, "no finding it answers still stands")
+		return n, conversationCounts{}, err
+	}
+	return rows, counts, nil
 }
 
 // applyReviewers writes an ask for review: each reviewer asked — named again
@@ -171,8 +329,8 @@ func applyComment(ctx context.Context, tx *sql.Tx, at applyContext, c Comment) (
 	if kind == PartyPerson {
 		operator = c.By.OperatorID
 	}
-	res, err := tx.ExecContext(ctx, addCommentSQL, c.CommentID, c.ChangeID, c.ThreadID, c.ParentID, by,
-		string(kind), operator, anchor, c.TurnID, len(c.Body), at.packed, at.at(), c.Body)
+	res, err := tx.ExecContext(ctx, addCommentSQL, c.CommentID, c.ChangeID, c.ThreadID, c.ParentID, c.FindingID,
+		by, string(kind), operator, anchor, c.TurnID, len(c.Body), at.packed, at.at(), c.Body)
 	if err != nil {
 		return 0, conversationCounts{}, fmt.Errorf("code: write comment %s at %s: %w", c.CommentID, at.position,
 			err)
@@ -248,12 +406,46 @@ func changeRepoOf(body []byte) (string, bool) {
 // every node.
 const (
 	changeRepoSQL        = `SELECT repo_id FROM code_changes WHERE id = ?`
-	touchConversationSQL = `INSERT INTO code_conversations (change_id, repo_id, comments, text_bytes, version,
-			position)
-		VALUES (?, ?, ?, ?, 1, ?)
+	touchConversationSQL = `INSERT INTO code_conversations (change_id, repo_id, comments, reviews, open_findings,
+			open_blockers, changes_requested, text_bytes, version, position)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
 		ON CONFLICT (change_id) DO UPDATE SET comments = code_conversations.comments + excluded.comments,
+			reviews = code_conversations.reviews + excluded.reviews,
+			open_findings = code_conversations.open_findings + excluded.open_findings,
+			open_blockers = code_conversations.open_blockers + excluded.open_blockers,
+			changes_requested = code_conversations.changes_requested + excluded.changes_requested,
 			text_bytes = code_conversations.text_bytes + excluded.text_bytes,
 			version = code_conversations.version + 1, position = excluded.position`
+	// A review's writes: the reviewer's standing verdict before this one, by
+	// their participant row's key; the review, its findings and their texts,
+	// each a conflict on its key a skip; the supersession of the findings the
+	// decide's rule names, driven from the list of their ids; the reviewer as
+	// a participant, their standing verdict moved by a review that judges; and
+	// a finding answered by its key.
+	standingVerdictSQL  = `SELECT verdict FROM code_participants WHERE change_id = ? AND handle = ?`
+	judgeParticipantSQL = `INSERT INTO code_participants (change_id, handle, kind, position, verdict,
+			verdict_revision, verdict_review)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (change_id, handle) DO UPDATE SET verdict = excluded.verdict,
+			verdict_revision = excluded.verdict_revision, verdict_review = excluded.verdict_review`
+	addReviewSQL = `INSERT INTO code_reviews (id, change_id, revision, reviewer, reviewer_kind, operator_id,
+			verdict, findings, turn_id, model, summary_bytes, position, at, summary)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO NOTHING`
+	addFindingSQL = `INSERT INTO code_findings (id, change_id, review_id, raiser, raiser_kind, revision,
+			commit_oid, path, blob_oid, side, line_start, line_end, severity, category, state, position)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (id) DO NOTHING`
+	addFindingTextSQL = `INSERT INTO code_finding_texts (change_id, finding_id, bytes, title, body, suggestion)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (change_id, finding_id) DO NOTHING`
+	supersedeFindingsSQL = `UPDATE code_findings SET state = ?, resolution_note = '', resolved_by = ?,
+			resolved_by_kind = ?, resolved_commit = '', resolved_position = ?
+		WHERE rowid IN (SELECT f.rowid FROM json_each(?) AS j CROSS JOIN code_findings AS f
+			WHERE f.id = CAST(j.value AS TEXT))`
+	answerFindingSQL = `UPDATE code_findings SET state = ?, resolution_note = ?, resolved_by = ?,
+			resolved_by_kind = ?, resolved_commit = ?, resolved_position = ?
+		WHERE id = ?`
 	askReviewerSQL = `INSERT INTO code_reviewers (change_id, reviewer, reviewer_kind, reason, state, requested_by,
 			requested_by_kind, note, position)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -264,10 +456,10 @@ const (
 		WHERE change_id = ? AND reviewer = ? AND state = 'requested'`
 	addParticipantSQL = `INSERT INTO code_participants (change_id, handle, kind, position) VALUES (?, ?, ?, ?)
 		ON CONFLICT (change_id, handle) DO NOTHING`
-	addCommentSQL = `INSERT INTO code_comments (id, change_id, thread_id, parent_id, author, author_kind,
-			author_operator_id, anchor, turn_id, body_bytes, position, at, body)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	addCommentSQL = `INSERT INTO code_comments (id, change_id, thread_id, parent_id, finding_id, author,
+			author_kind, author_operator_id, anchor, turn_id, body_bytes, position, at, body)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO NOTHING`
 	resolveThreadSQL = `UPDATE code_comments SET resolved = ?, resolved_by = ?, resolved_by_kind = ?
-		WHERE id = ? AND change_id = ? AND parent_id = ''`
+		WHERE id = ? AND change_id = ? AND thread_id = id`
 )

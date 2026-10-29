@@ -67,7 +67,8 @@ const (
 
 	// KindChange is one change (web!42), by its id — the subject what is said
 	// ABOUT a change is written on: who is asked to review it, its comments
-	// and the threads they form ([ConversationOps]). ITS OWN SUBJECT, NEVER
+	// and the threads they form, its reviews and the answers to their
+	// findings ([ConversationOps]). ITS OWN SUBJECT, NEVER
 	// ITS REPOSITORY'S: a change's lifecycle is on the repository's subject,
 	// in the committer's one queue beside the pushes that move its branches,
 	// and a comment decided there would wait behind a push's batch and

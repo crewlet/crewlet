@@ -305,6 +305,8 @@ const (
 	reviewerKey     = "sqlite_autoindex_code_reviewers_1"
 	participantKey  = "sqlite_autoindex_code_participants_1"
 	commentKey      = "sqlite_autoindex_code_comments_1"
+	findingKey      = "sqlite_autoindex_code_findings_1"
+	findingTextKey  = "sqlite_autoindex_code_finding_texts_1"
 	activationKey   = "sqlite_autoindex_code_activation_1"
 	evictionKey     = "sqlite_autoindex_code_evictions_1"
 	layersKey       = "sqlite_autoindex_code_layers_1"
@@ -368,7 +370,7 @@ func registeredStatements() map[string]statement {
 		"purge all packs":     {purgeAllPacksSQL, []any{"repo-1"}, []string{packsKey + " (repo_id=?)"}},
 		"remove repo":         {removeRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo name":           {repoNameSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", dropsKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)", "COVERING INDEX " + bodyKey + " (change_id=?)", reviewerKey + " (change_id=?)", participantKey + " (change_id=?)", "COVERING INDEX code_comments_thread_idx (change_id=?)", conversationKey + " (change_id=?)"}},
+		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", dropsKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)", "COVERING INDEX " + bodyKey + " (change_id=?)", reviewerKey + " (change_id=?)", participantKey + " (change_id=?)", "COVERING INDEX code_findings_raiser_idx (change_id=?)", "COVERING INDEX code_comments_thread_idx (change_id=?)", "COVERING INDEX " + findingTextKey + " (change_id=?)", "COVERING INDEX code_reviews_change_idx (change_id=?)", conversationKey + " (change_id=?)"}},
 		"claim":               {claimSQL, []any{"token"}, []string{nameKey + " (token=?)"}},
 		"claims":              {claimsSQL, []any{`["token","other"]`}, []string{nameKey + " (token=?)"}},
 		"repos rows":          {reposRowsSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
@@ -469,7 +471,10 @@ func registeredStatements() map[string]statement {
 		"purge change walk": {purgeChangeWalkSQL, []any{"repo-1", PurgePartRows},
 			[]string{changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)",
 				reviewerKey + " (change_id=?)", participantKey + " (change_id=?)",
-				"COVERING INDEX code_comments_thread_idx (change_id=?)", "COVERING INDEX " + bodyKey + " (change_id=?)",
+				"COVERING INDEX code_findings_raiser_idx (change_id=?)",
+				"COVERING INDEX code_comments_thread_idx (change_id=?)",
+				"COVERING INDEX " + findingTextKey + " (change_id=?)",
+				"COVERING INDEX code_reviews_change_idx (change_id=?)", "COVERING INDEX " + bodyKey + " (change_id=?)",
 				conversationKey + " (change_id=?)"}},
 		"purge changes' reviewers": {purgeChangeReviewersSQL, []any{changeIDs},
 			[]string{"SCAN json_each AS j", reviewerKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
@@ -477,12 +482,28 @@ func registeredStatements() map[string]statement {
 			[]string{"SCAN json_each AS j", participantKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge changes' comments": {purgeChangeCommentsSQL, []any{changeIDs},
 			[]string{"SCAN json_each AS j", "code_comments_thread_idx (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge changes' findings": {purgeChangeFindingsSQL, []any{changeIDs},
+			[]string{"SCAN json_each AS j", "code_findings_raiser_idx (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge changes' finding texts": {purgeChangeFindingTextsSQL, []any{changeIDs},
+			[]string{"SCAN json_each AS j", findingTextKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge changes' reviews": {purgeChangeReviewsSQL, []any{changeIDs},
+			[]string{"SCAN json_each AS j", "code_reviews_change_idx (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge changes' conversations": {purgeChangeConversationsSQL, []any{changeIDs},
 			[]string{"SCAN json_each AS j", conversationKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge a cut change's reviewers": {purgeCutReviewersSQL, []any{"repo-1-change-000001", PurgePartRows},
 			[]string{reviewerKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge a cut change's participants": {purgeCutParticipantsSQL, []any{"repo-1-change-000001", PurgePartRows},
 			[]string{participantKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge a cut change's findings": {purgeCutFindingsSQL, []any{"repo-1-change-000001", PurgePartRows},
+			[]string{"code_findings_raiser_idx (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"weigh a cut change's finding texts": {purgeCutFindingTextWidthsSQL, []any{"repo-1-change-000001",
+			PurgePartRows}, []string{findingTextKey + " (change_id=?)"}},
+		"purge a cut change's finding texts": {purgeCutFindingTextsSQL, []any{"repo-1-change-000001", 3},
+			[]string{findingTextKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"weigh a cut change's reviews": {purgeCutReviewWidthsSQL, []any{"repo-1-change-000001", PurgePartRows},
+			[]string{"code_reviews_change_idx (change_id=?)"}},
+		"purge a cut change's reviews": {purgeCutReviewsSQL, []any{"repo-1-change-000001", 3},
+			[]string{"code_reviews_change_idx (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"weigh a cut change's comments": {purgeCutCommentWidthsSQL, []any{"repo-1-change-000001", PurgePartRows},
 			[]string{"code_comments_thread_idx (change_id=?)"}},
 		"purge a cut change's comments": {purgeCutCommentsSQL, []any{"repo-1-change-000001", 3},
@@ -496,6 +517,15 @@ func registeredStatements() map[string]statement {
 				"INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all comments": {purgeAllCommentsSQL, []any{"repo-1"},
 			[]string{changesNumberKey + " (repo_id=?)", "code_comments_thread_idx (change_id=?)",
+				"INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge all findings": {purgeAllFindingsSQL, []any{"repo-1"},
+			[]string{changesNumberKey + " (repo_id=?)", "code_findings_raiser_idx (change_id=?)",
+				"INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge all finding texts": {purgeAllFindingTextsSQL, []any{"repo-1"},
+			[]string{changesNumberKey + " (repo_id=?)", findingTextKey + " (change_id=?)",
+				"INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge all reviews": {purgeAllReviewsSQL, []any{"repo-1"},
+			[]string{changesNumberKey + " (repo_id=?)", "code_reviews_change_idx (change_id=?)",
 				"INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all conversations": {purgeAllConversationsSQL, []any{"repo-1"},
 			[]string{changesNumberKey + " (repo_id=?)", conversationKey + " (change_id=?)",
@@ -566,6 +596,22 @@ func registeredStatements() map[string]statement {
 			"seat-0"}, []string{reviewerKey + " (change_id=? AND reviewer=?)"}},
 		"resolve thread": {resolveThreadSQL, []any{true, "seat-0", "agent", "comment-1", "repo-1-change-000001"},
 			[]string{commentKey + " (id=?)"}},
+		// A CHANGE'S REVIEWS AND FINDINGS: a finding by its key — a decide's
+		// and an answer's; a raiser's standing findings, driven from the list
+		// of the standing states, one seek of the raiser's index a state; a
+		// reviewer's standing verdict, by their participant row's key; and a
+		// review's supersession, driven from the list of the findings' ids,
+		// one seek of the key an id.
+		"finding": {findingSQL, []any{"finding-1"}, []string{findingKey + " (id=?)"}},
+		"answer finding": {answerFindingSQL, []any{string(FindingResolved), "", "seat-0", "agent", "", 3000,
+			"finding-1"}, []string{findingKey + " (id=?)"}},
+		"standing findings": {standingFindingsSQL, []any{"repo-1-change-000001", "seat-0", "agent", standingStates},
+			[]string{"SCAN json_each AS j", "code_findings_raiser_idx (change_id=? AND raiser=? AND state=?)"}},
+		"standing verdict": {standingVerdictSQL, []any{"repo-1-change-000001", "seat-0"},
+			[]string{participantKey + " (change_id=? AND handle=?)"}},
+		"supersede findings": {supersedeFindingsSQL, []any{string(FindingSuperseded), "seat-0", "agent", 3000,
+			`["finding-1","finding-2"]`}, []string{"SCAN json_each AS j", findingKey + " (id=?)",
+			"INTEGER PRIMARY KEY (rowid=?)"}},
 		"change body":        {changeBodySQL, []any{"repo-1-change-000002"}, []string{bodyKey + " (change_id=?)"}},
 		"delete change body": {deleteBodySQL, []any{"repo-1-change-000002"}, []string{bodyKey + " (change_id=?)"}},
 		"next change":        {nextChangeSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
@@ -612,17 +658,34 @@ func registeredStatements() map[string]statement {
 		// THE READS OF A CHANGE'S CONVERSATION (conversationread.go): a
 		// reviewer's standing asks newest first, a first page and a page
 		// after a cursor, and the changes they name driven from their list;
-		// one change's counters, its reviewers and its comments by their
-		// keys, each a first page and a page after a cursor — the comments'
-		// >= beside the OR keeping the seek past the thread.
+		// which of a page's changes await their owner's fix, and which of
+		// those ask a reviewer's review, each driven from the page's list,
+		// one seek of a key a change; one change's counters, its reviewers,
+		// its comments, its reviews and its findings by their keys, each a
+		// first page and a page after a cursor — the comments' >= beside the
+		// OR keeping the seek past the thread, and the findings' texts' key
+		// walked, each finding sought by its own.
 		"changes asked": {changesAskedSQL, []any{"seat-1", 50},
 			[]string{reviewerAsksKey + " (reviewer=? AND state=?)"}},
 		"changes asked after": {changesAskedAfterSQL, []any{"seat-1", "repo-1-change-000031", 50},
 			[]string{reviewerAsksKey + " (reviewer=? AND state=? AND change_id<?)"}},
 		"changes by id": {changesByIDSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
 			[]string{changeKey + " (id=?)"}},
+		"changes needing a fix": {needingFixSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", conversationKey + " (change_id=?)"}},
+		"changes asking a reviewer": {askedAmongSQL,
+			[]any{`["repo-1-change-000001","repo-1-change-000002"]`, "seat-0"},
+			[]string{"SCAN json_each AS j", reviewerKey + " (change_id=? AND reviewer=?)"}},
 		"conversation counts": {conversationCountsSQL, []any{"repo-1-change-000001"},
 			[]string{conversationKey + " (change_id=?)"}},
+		"reviews of a change": {reviewsOfSQL, []any{"repo-1-change-000001", 50},
+			[]string{"code_reviews_change_idx (change_id=?)"}},
+		"reviews of a change after": {reviewsOfAfterSQL, []any{"repo-1-change-000001", 3000, 50},
+			[]string{"code_reviews_change_idx (change_id=? AND position>?)"}},
+		"findings of a change": {findingsOfSQL, []any{"repo-1-change-000001", 50},
+			[]string{findingTextKey + " (change_id=?)", findingKey + " (id=?)"}},
+		"findings of a change after": {findingsOfAfterSQL, []any{"repo-1-change-000001", "finding-1", 50},
+			[]string{findingTextKey + " (change_id=? AND finding_id>?)", findingKey + " (id=?)"}},
 		"reviewers of a change": {reviewersOfSQL, []any{"repo-1-change-000001", 200},
 			[]string{reviewerKey + " (change_id=?)"}},
 		"reviewers of a change after": {reviewersOfAfterSQL, []any{"repo-1-change-000001", "seat-0", 200},

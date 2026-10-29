@@ -434,7 +434,9 @@ const (
 
 	// MaxReviewNoteBytes is the longest note a request for review carries —
 	// a sentence or two of what to look at, kept on each requested
-	// reviewer's narrow row as a change's close reason is on its own.
+	// reviewer's narrow row as a change's close reason is on its own — and
+	// the longest an answer to a finding carries, kept on the finding's own
+	// narrow row for the same reason.
 	MaxReviewNoteBytes = 1 << 10
 
 	// MaxCommentBytes is the longest comment on a change: as long as the
@@ -443,6 +445,58 @@ const (
 	// quotes from. Weighed into its conversation's text_bytes, which a purge
 	// part counts toward PurgePartBytes as it does a change's body.
 	MaxCommentBytes = 32 << 10
+
+	// MaxReviewSummaryBytes is the longest summary a review gives — a
+	// paragraph or two of what the reviewer found, kept on the review's row
+	// beside its verdict and weighed into its conversation's text_bytes.
+	MaxReviewSummaryBytes = 4 << 10
+
+	// MaxFindingsPerReview is the most findings one review raises: what one
+	// careful pass over a change says line by line, and what keeps a review
+	// with every finding at its bounds inside one record beside the room the
+	// record keeps ([MaxConversationBytes] — a review over it is refused,
+	// "split into two reviews of the same revision", which supersede
+	// nothing of each other).
+	MaxFindingsPerReview = 64
+
+	// MaxFindingTitleBytes, MaxFindingBodyBytes and MaxSuggestionBytes bound a
+	// finding's text: a title one line a listing shows whole, a body a
+	// paragraph or two of why, and a suggestion the lines it would put in
+	// place of the ones it is anchored to — every one weighed into its
+	// conversation's text_bytes and kept on a row of its own
+	// (code_finding_texts), off the narrow row a finding's resolution and a
+	// later review's supersession rewrite.
+	MaxFindingTitleBytes = 200
+	MaxFindingBodyBytes  = 4 << 10
+	MaxSuggestionBytes   = 16 << 10
+
+	// MaxStandingFindings is the most findings one reviewer keeps STANDING —
+	// open, resolved, won't fix or disputed — on one change: sixteen
+	// reviews' worth at [MaxFindingsPerReview], which a reviewer reaches only
+	// by reviewing one revision again and again, since a review of a later
+	// revision supersedes every standing finding of its reviewer it does
+	// not carry. Past it a review is refused too_many_findings. It bounds
+	// what one review's record rewrites when it supersedes them — 1 024
+	// narrow rows beside its own 64 findings and their texts, a third of
+	// [MaxRecordRows] — so a review is always one record however long a
+	// reviewer has followed a change.
+	MaxStandingFindings = 1 << 10
+
+	// MaxRoutingBytes is the room every record of a change keeps for the
+	// snapshot of whom the change concerns — its owner, authors, reviewers,
+	// path owners, participants, mentions and work item: about two hundred
+	// handles at seventy bytes, the work item and the title — so the text a
+	// write carries never takes the room its record needs for the wakes it
+	// causes.
+	MaxRoutingBytes = 64 << 10
+
+	// MaxConversationBytes is the most one write of a change's conversation
+	// may encode to: a record's bytes ([MaxRecordBytes]) less the routing's
+	// room and four kibibytes of the record's own envelope. A review of
+	// [MaxFindingsPerReview] findings with suggestions at their bound can
+	// pass it, and is refused, "split into two reviews of the same
+	// revision".
+	MaxConversationBytes = MaxRecordBytes - MaxRoutingBytes - 4<<10
 
 	// HorizonDeletesPerRecord is how many expired PUSH ROWS one push record
 	// removes from its repository: no fewer than the push rows a record can

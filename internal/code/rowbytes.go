@@ -515,6 +515,9 @@ func (c CommentRow) encodedBytes() int {
 	if c.ParentID != "" {
 		n += field("parent_id", stringBytes(c.ParentID), false)
 	}
+	if c.FindingID != "" {
+		n += field("finding_id", stringBytes(c.FindingID), false)
+	}
 	n += field("author", stringBytes(c.Author), false) +
 		field("author_kind", stringBytes(string(c.AuthorKind)), false)
 	if c.AuthorOperatorID != "" {
@@ -537,6 +540,70 @@ func (c CommentRow) encodedBytes() int {
 	}
 	return n + field("body", stringBytes(c.Body), false) +
 		field("position", positionBytes(c.Position), false) + field("at", timeBytes(c.At), false)
+}
+
+// encodedBytes is the length of the review's JSON encoding.
+func (r ReviewRow) encodedBytes() int {
+	n := 2 + field("id", stringBytes(r.ID), true) +
+		field("revision", intBytes(r.Revision), false) +
+		field("reviewer", stringBytes(r.Reviewer), false) +
+		field("reviewer_kind", stringBytes(string(r.ReviewerKind)), false)
+	if r.OperatorID != "" {
+		n += field("operator_id", stringBytes(r.OperatorID), false)
+	}
+	n += field("verdict", stringBytes(string(r.Verdict)), false)
+	if r.Summary != "" {
+		n += field("summary", stringBytes(r.Summary), false)
+	}
+	n += field("findings", intBytes(r.Findings), false)
+	if r.TurnID != "" {
+		n += field("turn_id", stringBytes(r.TurnID), false)
+	}
+	if r.Model != "" {
+		n += field("model", stringBytes(r.Model), false)
+	}
+	return n + field("position", positionBytes(r.Position), false) + field("at", timeBytes(r.At), false)
+}
+
+// encodedBytes is the length of the finding's JSON encoding.
+func (f FindingRow) encodedBytes() int {
+	n := 2 + field("id", stringBytes(f.ID), true) +
+		field("review_id", stringBytes(f.ReviewID), false) +
+		field("raiser", stringBytes(f.Raiser), false) +
+		field("raiser_kind", stringBytes(string(f.RaiserKind)), false) +
+		field("revision", intBytes(f.Revision), false) +
+		field("commit_oid", stringBytes(f.CommitOID), false) +
+		field("path", stringBytes(f.Path), false) +
+		field("blob_oid", stringBytes(f.BlobOID), false) +
+		field("side", stringBytes(string(f.Side)), false) +
+		field("line_start", intBytes(int64(f.LineStart)), false) +
+		field("line_end", intBytes(int64(f.LineEnd)), false) +
+		field("severity", stringBytes(string(f.Severity)), false) +
+		field("category", stringBytes(string(f.Category)), false) +
+		field("title", stringBytes(f.Title), false)
+	if f.Body != "" {
+		n += field("body", stringBytes(f.Body), false)
+	}
+	if f.Suggestion != nil {
+		n += field("suggestion", stringBytes(*f.Suggestion), false)
+	}
+	n += field("state", stringBytes(string(f.State)), false)
+	if f.ResolutionNote != "" {
+		n += field("resolution_note", stringBytes(f.ResolutionNote), false)
+	}
+	if f.ResolvedBy != "" {
+		n += field("resolved_by", stringBytes(f.ResolvedBy), false)
+	}
+	if f.ResolvedByKind != "" {
+		n += field("resolved_by_kind", stringBytes(string(f.ResolvedByKind)), false)
+	}
+	if f.ResolvedCommit != "" {
+		n += field("resolved_commit", stringBytes(f.ResolvedCommit), false)
+	}
+	if !f.ResolvedPosition.IsZero() {
+		n += field("resolved_position", positionBytes(f.ResolvedPosition), false)
+	}
+	return n + field("position", positionBytes(f.Position), false)
 }
 
 // encodedBytes is the length of the anchor's JSON encoding.

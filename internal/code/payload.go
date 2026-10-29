@@ -1410,6 +1410,10 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[Comment](rec)
 	case kind == KindChange && op == OpThreadResolve:
 		return decodePayload[ThreadResolve](rec)
+	case kind == KindChange && op == OpReview:
+		return decodePayload[Review](rec)
+	case kind == KindChange && op == OpFindingResolve:
+		return decodePayload[FindingResolve](rec)
 	case kind == KindCompany && op == OpActivate:
 		return decodePayload[Activated](rec)
 	case kind == KindEviction && op == OpEviction:

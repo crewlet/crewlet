@@ -37,8 +37,9 @@ import (
 //     replicated 0069), the item's changes — the narrowest set a listing
 //     names, and still paged, since a recurring item gathers a change every
 //     time it is worked;
-//   - an owner and a state: code_changes_owner_idx, the owner's changes in
-//     that state;
+//   - an owner and a state — or a need of a fix, an owner's in one live
+//     state (conversationread.go): code_changes_owner_idx, the owner's
+//     changes in that state;
 //   - a repository and a state: code_changes_repo_state_idx (replicated
 //     0069), the repository's changes in that state;
 //   - a repository: code_changes_number_idx, the repository's changes;
@@ -51,7 +52,8 @@ import (
 // open several. A filter the walked index does not seek — a repository beside
 // a work item, an owner or a reviewer, a state beside a work item or a
 // reviewer, an owner beside a repository's, a work item's or a reviewer's
-// walk, a work item beside a reviewer's — is tested on each row
+// walk, a work item beside a reviewer's, and whether a change awaits its
+// owner's fix, which its conversation's counters say — is tested on each row
 // the page read, never written into the statement: a test inside a statement
 // that no index serves reads every row it rejects before its LIMIT fills,
 // without bound, where a page that reads LIMIT rows and keeps what passes reads
@@ -121,15 +123,17 @@ type changeWalk struct {
 	// repo, state, owner and work are the filters its index does not seek,
 	// which a page tests on each row it read ([changeWalk.keeps]); live
 	// keeps a draft or open change alone, for a listing of what a live
-	// change waits on.
-	repo, state, owner, work, live bool
+	// change waits on; fix keeps a change awaiting its owner's fix alone,
+	// which its conversation's counters say ([needingFixIn]).
+	repo, state, owner, work, live, fix bool
 }
 
 // walkOf is the walk q's filters choose, repoID the id of the repository q
-// names — "" where it names none. q is a listing [ReadQuery.validate] passed:
-// it names a repository, a work item, a state, a reviewer or a need.
+// names — "" where it names none. q is a listing [ReadQuery.validate] passed,
+// a need of a fix read as [ReadQuery.fixing] reads it: it names a repository,
+// a work item, a state, a reviewer or a need.
 func walkOf(q ReadQuery, repoID string) changeWalk {
-	named := repoID != ""
+	named, fix := repoID != "", q.Needs == NeedFix
 	switch {
 	case q.Reviewer != "" || q.Needs == NeedReview:
 		return changeWalk{index: reviewerAsksKey, keys: []any{q.waitedOn()}, order: byAsk, repo: named,
@@ -137,10 +141,10 @@ func walkOf(q ReadQuery, repoID string) changeWalk {
 	case q.Work != "":
 		backend, id, _ := cutWork(q.Work)
 		return changeWalk{index: changesWorkKey, keys: []any{string(backend), id}, order: byOpening,
-			repo: named, state: q.State != "", owner: q.Owner != ""}
+			repo: named, state: q.State != "", owner: q.Owner != "", fix: fix}
 	case q.Owner != "" && q.State != "":
 		return changeWalk{index: changesOwnerKey, keys: []any{q.Owner, string(q.State)}, order: byOpening,
-			repo: named}
+			repo: named, fix: fix}
 	case named && q.State != "":
 		return changeWalk{index: changesRepoStateKey, keys: []any{repoID, string(q.State)}, order: byNumber}
 	case named:
@@ -275,8 +279,26 @@ func readableIn(ctx context.Context, tx *sql.Tx, name string, asker Principal, c
 
 // changes serves one page of a listing of changes: the walk q's filters
 // choose ([walkOf]), the rows it read tested against the filters its index
-// does not seek and held to the grant — see the file's doc.
+// does not seek and held to the grant — see the file's doc — and a listing of
+// what waits on the asker a page of one of its two halves
+// ([Reader.changesWaitingOnMe]).
 func (r *Reader) changes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
+	switch q.Needs {
+	case NeedMe:
+		return r.changesWaitingOnMe(ctx, tx, q, chart, out)
+	case NeedFix:
+		q = q.fixing()
+	}
+	return r.listChanges(ctx, tx, q, chart, out, "")
+}
+
+// listChanges is [Reader.changes] over one walk, leaving out — of a walk of
+// the changes awaiting a fix — those whose ask of asked stands, where asked
+// names a reviewer: the first half of a listing of what waits on asked lists
+// those.
+func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer,
+	asked string) error {
+
 	repos := map[string]listedRepo{}
 	var repoID string
 	if q.Repo != "" {
@@ -298,10 +320,16 @@ func (r *Reader) changes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Ros
 			return err
 		}
 	}
+	var fixing map[string]bool
+	if walk.fix {
+		if fixing, err = needingFixIn(ctx, tx, scanned, asked); err != nil {
+			return err
+		}
+	}
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for _, row := range scanned {
 		repo, listed := repos[row.repoID]
-		if !listed || !walk.keeps(row, q, repoID) {
+		if !listed || !walk.keeps(row, q, repoID) || walk.fix && !fixing[row.id] {
 			continue
 		}
 		s := repo.summary(row)
@@ -386,6 +414,10 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		return r.changeReviewers(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
 	case PartComments:
 		return r.changeComments(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
+	case PartReviews:
+		return r.changeReviews(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
+	case PartFindings:
+		return r.changeFindings(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
 	}
 	limit := min(limitOr(q.Limit, defaultRevisionLimit), r.pageRows)
 	var rows *sql.Rows
@@ -498,8 +530,9 @@ func (r changeRow) wire() ChangeRow {
 // validateChanges is [ReadQuery.validate] for a `changes` listing: it names a
 // repository, a work item, a state, a reviewer or a need — what the indexes it
 // walks are led by ([walkOf]) — each a value one could be, an owner and a
-// reviewer by a seat's handle, and a need of a review whose reviewer it
-// names or whose asker is bound to a seat.
+// reviewer by a seat's handle; and a need in a live state, whose one it waits
+// on it names or its asker's seat is — a reviewer for a review, an owner for
+// a fix, and for what waits on the asker neither, as that is the asker's own.
 func (q ReadQuery) validateChanges() error {
 	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
@@ -517,9 +550,19 @@ func (q ReadQuery) validateChanges() error {
 			"human seat a person holds", q.Reviewer))
 	case q.Needs != "" && !q.Needs.Valid():
 		return refused("needs", fmt.Sprintf("%q is not one of %v", q.Needs, Needs()))
+	case q.Needs != "" && q.State != "" && !q.State.Live():
+		return refused("state", fmt.Sprintf("needs=%s lists live changes, and a %s change waits on nobody",
+			q.Needs, q.State))
+	case q.Needs == NeedFix && q.Reviewer != "":
+		return refused("reviewer", "needs=fix lists an owner's changes awaiting their fix; the changes awaiting "+
+			"a reviewer's review are needs=review")
+	case q.Needs == NeedMe && (q.Reviewer != "" || q.Owner != ""):
+		return refused("needs", "needs=me is what waits on the asker, and names no reviewer and no owner")
 	case q.Needs != "" && q.waitedOn() == "":
-		return refused("needs", fmt.Sprintf("needs=%s is the asker's own unless it names whose — a "+
-			"reviewer — and this credential is bound to no seat", q.Needs))
+		whose := map[Need]string{NeedReview: "unless it names whose — a reviewer — ",
+			NeedFix: "unless it names whose — an owner — "}[q.Needs]
+		return refused("needs", fmt.Sprintf("needs=%s is the asker's own %sand this credential is bound to no "+
+			"seat", q.Needs, whose))
 	}
 	if q.Work != "" {
 		if _, _, why := cutWork(q.Work); why != "" {

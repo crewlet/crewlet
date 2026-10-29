@@ -958,9 +958,10 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // deletes nothing and inserts nothing. Unbounded statements are safe because
 // the decide forms a purge only once at most PurgePartRows of the
 // repository's pushes, refs, packs, retired packs, ref drops, changes'
-// revisions, authors, bodies and rows and their conversations' rows remain AND
-// the pushes, the bodies and the conversations' text among them weigh at most
-// PurgePartBytes — a part's own bounds — and it holds at most
+// revisions, authors, bodies and rows and their conversations' rows — its
+// reviewers, participants, comments, reviews and findings among them — remain
+// AND the pushes, the bodies and the conversations' text among them weigh at
+// most PurgePartBytes — a part's own bounds — and it holds at most
 // MaxProtectionsPerRepo rules, MaxPathOwners path owners (one row each, their
 // globs packed into it) and a published chain of at most MaxPublishedLayers
 // layers of MaxLayerParts parts each: with the name claim, the row, its kind's
@@ -986,7 +987,8 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 	for _, stmt := range []string{
 		purgeAllPushesSQL, purgeAllRefsSQL, purgeAllPacksSQL, purgeAllRetiredSQL, purgeAllDropsSQL,
 		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllReviewersSQL, purgeAllParticipantsSQL,
-		purgeAllCommentsSQL, purgeAllBodiesSQL, purgeAllConversationsSQL, purgeAllChangesSQL,
+		purgeAllFindingsSQL, purgeAllCommentsSQL, purgeAllFindingTextsSQL, purgeAllReviewsSQL,
+		purgeAllBodiesSQL, purgeAllConversationsSQL, purgeAllChangesSQL,
 		purgeAllLayerPartsSQL, purgeAllLayersSQL, clearProtectionsSQL, clearPathOwnersSQL,
 	} {
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)

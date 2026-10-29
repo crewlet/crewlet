@@ -7,18 +7,20 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE READS OF A CHANGE'S CONVERSATION: a listing of the changes waiting on a
-// reviewer ([ReadQuery.Reviewer], [ReadQuery.Needs]) and the parts of one
+// THE READS OF A CHANGE'S CONVERSATION: the listings of the changes waiting on
+// somebody ([ReadQuery.Reviewer], [ReadQuery.Needs]) and the parts of one
 // change's conversation a `change` read pages ([ReadQuery.Part]) — its
-// reviewers and its comments — each served inside the one transaction
-// [Reader.Read] hands it, from the rows the records on the change's own
-// subject wrote (replicated 0070), and held to the grant on the change's
-// repository as every read of a change is (changeread.go).
+// reviewers, its comments, its reviews and its findings — each served inside
+// the one transaction [Reader.Read] hands it, from the rows the records on the
+// change's own subject wrote (replicated 0070 and 0071), and held to the grant
+// on the change's repository as every read of a change is (changeread.go).
 //
 // # Who a change waits on
 //
@@ -36,32 +38,72 @@ import (
 // change down meets the live ones first, and a reviewer who pages on reads
 // the history of what they were asked.
 //
+// The changes that wait on their OWNER's fix, needs=fix — an owner's, the
+// asker's own where it names none — walk the owner's changes in ONE live state
+// (code_changes_owner_idx): open, or the state it names, since the index keeps
+// an owner's changes by state and a walk of two states is no walk of one
+// index's order. A change waits on its owner's fix while a reviewer's latest
+// verdict asks for changes or a finding stands that none of its authors has
+// answered — its conversation's counters (code_conversations
+// changes_requested and open_findings), read for the page's changes in one
+// statement ([needingFixIn]). A pushed revision answers neither: a request for
+// changes stands until its reviewer reviews again, and a finding until an
+// author answers it, so what is waiting is said by the rows and never guessed
+// from a head that moved. A standing blocker an author has answered waits on
+// its raiser, not on the owner (S40), and does not list the change here.
+//
+// What waits on the ASKER, needs=me, is both, one after the other: the changes
+// whose ask of the asker stands, as needs=review lists them, and then the
+// asker's own awaiting a fix, as needs=fix does — each its own index's walk, a
+// page reading one of them, the fix half's cursor spelled after [fixHalf] — a
+// change of both, the asker's own whose review is asked of them (a person may
+// be), listed once, by the first.
+//
 // # A part of one change
 //
 // A `change` read names the part it pages: its revisions — the default, with
 // the change's detail on their first page (changeread.go) — its reviewers, in
-// the order of their handles, or its comments, in THREAD order: each thread's
+// the order of their handles; its comments, in THREAD order: each thread's
 // first comment and then its replies, by the position of the record that said
 // each, threads in the order of their ids, which are minted as they start
-// (code_comments_thread_idx). Every page names the change by its number and
-// is held to the grant again; a page past a cursor resumes after the row the
-// cursor names, so a comment said meanwhile in a thread already read is read
-// by reading the change again, at the floor its write answered with.
+// (code_comments_thread_idx); its reviews in the order they were given
+// (code_reviews_change_idx); or its findings by id — the order the reviews
+// that raised them were asked — each finding's text read with it
+// (code_finding_texts' key, which leads with the change). Every page names the
+// change by its number and is held to the grant again; a page past a cursor
+// resumes after the row the cursor names, so a comment said meanwhile in a
+// thread already read is read by reading the change again, at the floor its
+// write answered with.
 
 // Need is what a listing of changes asks its changes to be waiting on
-// ([ReadQuery.Needs]).
+// ([ReadQuery.Needs]): each a LIVE change's.
 type Need string
 
-// NeedReview is the changes waiting on a review: live, and asking it of the
-// reviewer [ReadQuery.Reviewer] names — of the asker's own seat where it
-// names none.
-const NeedReview Need = "review"
+const (
+	// NeedReview is the changes waiting on a review: live, and asking it of
+	// the reviewer [ReadQuery.Reviewer] names — of the asker's own seat where
+	// it names none.
+	NeedReview Need = "review"
+	// NeedFix is the changes waiting on their owner's fix: live, owned by
+	// the owner [ReadQuery.Owner] names — the asker's own seat where it names
+	// none — a reviewer's latest verdict asking for changes or a finding
+	// standing that none of its authors has answered.
+	NeedFix Need = "fix"
+	// NeedMe is the changes waiting on the asker: those asking its review,
+	// then its own awaiting a fix. It names no reviewer and no owner.
+	NeedMe Need = "me"
+)
 
 // Needs is the closed set, in this order.
-func Needs() []Need { return []Need{NeedReview} }
+func Needs() []Need { return []Need{NeedReview, NeedFix, NeedMe} }
 
 // Valid reports a need this build knows.
 func (n Need) Valid() bool { return slices.Contains(Needs(), n) }
+
+// fixHalf spells a needs=me listing's cursor in its second half, the asker's
+// own changes awaiting a fix: the half's own cursor follows it, and a cursor
+// of the first half — a change's id — never starts so.
+const fixHalf = "fix:"
 
 // ChangePart is the list a `change` read pages beside the change
 // ([ReadQuery.Part]).
@@ -75,10 +117,16 @@ const (
 	PartReviewers ChangePart = "reviewers"
 	// PartComments is the change's comments, a thread at a time.
 	PartComments ChangePart = "comments"
+	// PartReviews is the change's reviews, in the order they were given.
+	PartReviews ChangePart = "reviews"
+	// PartFindings is the change's findings, by id, each with its text.
+	PartFindings ChangePart = "findings"
 )
 
 // ChangeParts is the closed set, in this order.
-func ChangeParts() []ChangePart { return []ChangePart{PartRevisions, PartReviewers, PartComments} }
+func ChangeParts() []ChangePart {
+	return []ChangePart{PartRevisions, PartReviewers, PartComments, PartReviews, PartFindings}
+}
 
 // Valid reports a part this build knows.
 func (p ChangePart) Valid() bool { return slices.Contains(ChangeParts(), p) }
@@ -94,6 +142,10 @@ func (p ChangePart) maxPerPage() int {
 		return MaxReviewersPerPage
 	case PartComments:
 		return MaxCommentsPerPage
+	case PartReviews:
+		return MaxReviewsPerPage
+	case PartFindings:
+		return MaxFindingsPerPage
 	}
 	return MaxRevisionsPerPage
 }
@@ -105,17 +157,68 @@ const (
 	MaxReviewersPerPage  = 1_000
 	defaultCommentLimit  = 50
 	MaxCommentsPerPage   = 200
+	defaultReviewLimit   = 50
+	MaxReviewsPerPage    = 200
+	defaultFindingLimit  = 50
+	MaxFindingsPerPage   = 200
 )
 
-// waitedOn is the handle a listing of what its changes wait on names: the
-// reviewer it names, or the asker's own — a seat's handle, or the human seat a
-// person holds — and "" for an asker bound to no seat.
+// waitedOn is the handle a listing of what its changes wait on names: for
+// needs=fix the owner it names, for every other the reviewer it names — or,
+// naming none, the asker's own: a seat's handle, or the human seat a person
+// holds — and "" for an asker bound to no seat.
 func (q ReadQuery) waitedOn() string {
-	if q.Reviewer != "" {
+	switch {
+	case q.Needs == NeedFix && q.Owner != "":
+		return q.Owner
+	case q.Needs != NeedFix && q.Needs != NeedMe && q.Reviewer != "":
 		return q.Reviewer
 	}
 	handle, _ := q.Asker.party()
 	return handle
+}
+
+// fixing is q as the walk of the changes awaiting a fix reads it: its owner
+// the one it waits on ([ReadQuery.waitedOn]), and its state open where it
+// names none — the one state of an owner's that walk reads.
+func (q ReadQuery) fixing() ReadQuery {
+	q.Owner = q.waitedOn()
+	if q.State == "" {
+		q.State = ChangeStateOpen
+	}
+	return q
+}
+
+// changesWaitingOnMe serves a page of needs=me: its first half — the changes
+// whose ask of the asker stands, needs=review — until that half's walk ends,
+// and then its second, after [fixHalf] — the asker's own changes awaiting a
+// fix, needs=fix — each a walk of its own index, so a page reads one half and
+// the one that ends the first may be short. A change of both is listed by the
+// first half alone.
+func (r *Reader) changesWaitingOnMe(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster,
+	out *ReadAnswer) error {
+
+	me := q.waitedOn()
+	half := q
+	inner, fixes := strings.CutPrefix(q.Cursor, fixHalf)
+	if fixes {
+		half.Needs, half.Cursor = NeedFix, inner
+		if err := r.listChanges(ctx, tx, half.fixing(), chart, out, me); err != nil {
+			return err
+		}
+		if out.Next != "" {
+			out.Next = fixHalf + out.Next
+		}
+		return nil
+	}
+	half.Needs, half.Reviewer = NeedReview, me
+	if err := r.listChanges(ctx, tx, half, chart, out, ""); err != nil {
+		return err
+	}
+	if out.Next == "" {
+		out.Next = fixHalf
+	}
+	return nil
 }
 
 // readAsked is one page of the changes whose ask of the walk's reviewer
@@ -191,6 +294,57 @@ func changesByIDIn(ctx context.Context, tx *sql.Tx, ids []string) (map[string]ch
 	return out, rows.Err()
 }
 
+// needingFixIn is which of the changes a page read wait on their owner's fix
+// — a reviewer's latest verdict asks for changes, or a finding stands that
+// none of their authors has answered — less, where asked names a reviewer,
+// those whose ask of asked stands, which the first half of a needs=me listing
+// lists: one statement over the page's changes for each, a seek of a key a
+// change.
+func needingFixIn(ctx context.Context, tx *sql.Tx, scanned []changeRow, asked string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(scanned) == 0 {
+		return out, nil
+	}
+	ids := make([]string, len(scanned))
+	for i, row := range scanned {
+		ids[i] = row.id
+	}
+	list, err := jsonList(ids)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, needingFixSQL, list)
+	if err != nil {
+		return nil, fmt.Errorf("code: read which of %d changes await a fix: %w", len(ids), err)
+	}
+	if err := eachID(rows, func(id string) { out[id] = true }); err != nil {
+		return nil, fmt.Errorf("code: read which of %d changes await a fix: %w", len(ids), err)
+	}
+	if asked == "" || len(out) == 0 {
+		return out, nil
+	}
+	if rows, err = tx.QueryContext(ctx, askedAmongSQL, list, asked); err != nil {
+		return nil, fmt.Errorf("code: read which of %d changes ask %s's review: %w", len(ids), asked, err)
+	}
+	if err := eachID(rows, func(id string) { delete(out, id) }); err != nil {
+		return nil, fmt.Errorf("code: read which of %d changes ask %s's review: %w", len(ids), asked, err)
+	}
+	return out, nil
+}
+
+// eachID hands each id rows answers to each, and closes rows.
+func eachID(rows *sql.Rows, each func(id string)) error {
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		each(id)
+	}
+	return rows.Err()
+}
+
 // conversationRowIn is change id's conversation's counters, nil where nobody
 // has discussed it.
 func conversationRowIn(ctx context.Context, tx *sql.Tx, id string) (*ConversationRow, error) {
@@ -198,7 +352,8 @@ func conversationRowIn(ctx context.Context, tx *sql.Tx, id string) (*Conversatio
 		c        ConversationRow
 		position int64
 	)
-	err := tx.QueryRowContext(ctx, conversationCountsSQL, id).Scan(&c.Comments, &c.Version, &position)
+	err := tx.QueryRowContext(ctx, conversationCountsSQL, id).Scan(&c.Comments, &c.Reviews, &c.OpenFindings,
+		&c.OpenBlockers, &c.ChangesRequested, &c.Version, &position)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, nil
@@ -280,7 +435,7 @@ func (r *Reader) changeComments(ctx context.Context, tx *sql.Tx, q ReadQuery, na
 			position, at int64
 		)
 		if err := rows.Scan(&c.ID, &c.ThreadID, &c.ParentID, &c.Author, &kind, &c.AuthorOperatorID, &anchor,
-			&c.Resolved, &c.ResolvedBy, &byKind, &c.TurnID, &position, &at, &c.Body); err != nil {
+			&c.Resolved, &c.ResolvedBy, &byKind, &c.TurnID, &position, &at, &c.Body, &c.FindingID); err != nil {
 			return fmt.Errorf("code: read the comments of %s: %w", named, err)
 		}
 		c.AuthorKind, c.ResolvedByKind = PartyKind(kind), PartyKind(byKind)
@@ -294,6 +449,99 @@ func (r *Reader) changeComments(ctx context.Context, tx *sql.Tx, q ReadQuery, na
 		out.Comments = append(out.Comments, c)
 		if pg.add(c.encodedBytes()) {
 			out.Next = logCursor(position, c.ThreadID)
+			break
+		}
+	}
+	return rows.Err()
+}
+
+// changeReviews serves a page of change id's reviews — named, its web!n — in
+// the order they were given, after the review a cursor names: the packed
+// position of its record, which is its own, since a record gives one review.
+func (r *Reader) changeReviews(ctx context.Context, tx *sql.Tx, q ReadQuery, named, id string,
+	out *ReadAnswer) error {
+
+	limit := min(limitOr(q.Limit, defaultReviewLimit), r.pageRows)
+	query, args := reviewsOfSQL, []any{id}
+	if q.Cursor != "" {
+		position, err := strconv.ParseInt(q.Cursor, 10, 64)
+		if err != nil || position < 1 {
+			return fmt.Errorf("%w: %q is not a review's place in its change", ErrBadCursor, q.Cursor)
+		}
+		query, args = reviewsOfAfterSQL, append(args, position)
+	}
+	rows, err := tx.QueryContext(ctx, query, append(args, limit)...)
+	if err != nil {
+		return fmt.Errorf("code: read the reviews of %s: %w", named, err)
+	}
+	defer func() { _ = rows.Close() }()
+	pg := page{maxRows: limit, maxB: r.pageBytes}
+	for rows.Next() {
+		var (
+			rv            ReviewRow
+			kind, verdict string
+			position, at  int64
+		)
+		if err := rows.Scan(&rv.ID, &rv.Revision, &rv.Reviewer, &kind, &rv.OperatorID, &verdict, &rv.Findings,
+			&rv.TurnID, &rv.Model, &position, &at, &rv.Summary); err != nil {
+			return fmt.Errorf("code: read the reviews of %s: %w", named, err)
+		}
+		rv.ReviewerKind, rv.Verdict = PartyKind(kind), Verdict(verdict)
+		rv.Position, rv.At = unpacked(position), store.DecodeTime(at)
+		out.Reviews = append(out.Reviews, rv)
+		if pg.add(rv.encodedBytes()) {
+			out.Next = strconv.FormatInt(position, 10)
+			break
+		}
+	}
+	return rows.Err()
+}
+
+// changeFindings serves a page of change id's findings — named, its web!n —
+// by id, after the finding a cursor names: the texts' key walked, which leads
+// with the change, and each finding's narrow row read by its key beside its
+// text.
+func (r *Reader) changeFindings(ctx context.Context, tx *sql.Tx, q ReadQuery, named, id string,
+	out *ReadAnswer) error {
+
+	limit := min(limitOr(q.Limit, defaultFindingLimit), r.pageRows)
+	query, args := findingsOfSQL, []any{id}
+	if q.Cursor != "" {
+		if bareUUIDv7("cursor", q.Cursor) != nil {
+			return fmt.Errorf("%w: %q is not a finding's id", ErrBadCursor, q.Cursor)
+		}
+		query, args = findingsOfAfterSQL, append(args, q.Cursor)
+	}
+	rows, err := tx.QueryContext(ctx, query, append(args, limit)...)
+	if err != nil {
+		return fmt.Errorf("code: read the findings of %s: %w", named, err)
+	}
+	defer func() { _ = rows.Close() }()
+	pg := page{maxRows: limit, maxB: r.pageBytes}
+	for rows.Next() {
+		var (
+			f                                             FindingRow
+			kind, side, severity, category, state, byKind string
+			resolved, position                            int64
+			suggestion                                    sql.NullString
+		)
+		if err := rows.Scan(&f.ID, &f.ReviewID, &f.Raiser, &kind, &f.Revision, &f.CommitOID, &f.Path, &f.BlobOID,
+			&side, &f.LineStart, &f.LineEnd, &severity, &category, &state, &f.ResolutionNote, &f.ResolvedBy,
+			&byKind, &f.ResolvedCommit, &resolved, &position, &f.Title, &f.Body, &suggestion); err != nil {
+			return fmt.Errorf("code: read the findings of %s: %w", named, err)
+		}
+		f.RaiserKind, f.Side, f.Severity, f.Category = PartyKind(kind), Side(side), Severity(severity),
+			Category(category)
+		f.State, f.ResolvedByKind, f.Position = FindingState(state), PartyKind(byKind), unpacked(position)
+		if resolved != 0 {
+			f.ResolvedPosition = unpacked(resolved)
+		}
+		if suggestion.Valid {
+			f.Suggestion = &suggestion.String
+		}
+		out.Findings = append(out.Findings, f)
+		if pg.add(f.encodedBytes()) {
+			out.Next = f.ID
 			break
 		}
 	}
@@ -320,9 +568,12 @@ const (
 // the pinned driver's planner is held to the index each is written for, and to
 // reading in its order: a reviewer's standing asks newest first, a first page
 // and a page after a cursor; the changes they name, driven from the list of
-// their ids; one change's counters by its key; its reviewers by theirs; and
-// its comments in thread order, the >= beside the OR keeping the seek past
-// the thread.
+// their ids; which of a page's changes await their owner's fix, and which of
+// them ask the asker's review, driven from that list too; one change's
+// counters by its key; its reviewers by theirs; its comments in thread order,
+// the >= beside the OR keeping the seek past the thread; its reviews in the
+// order given; and its findings by id, the texts' key walked and each
+// finding's sought by its own.
 const (
 	changesAskedSQL = `SELECT change_id FROM code_reviewers INDEXED BY ` + reviewerAsksKey + `
 		WHERE reviewer = ? AND state = 'requested' ORDER BY change_id DESC LIMIT ?`
@@ -330,8 +581,15 @@ const (
 		WHERE reviewer = ? AND state = 'requested' AND change_id < ? ORDER BY change_id DESC LIMIT ?`
 	changesByIDSQL = `SELECT ` + changeColumns + ` FROM code_changes
 		WHERE id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
-	conversationCountsSQL = `SELECT comments, version, position FROM code_conversations WHERE change_id = ?`
-	reviewersOfSQL        = `SELECT reviewer, reviewer_kind, reason, state, requested_by, requested_by_kind,
+	needingFixSQL = `SELECT v.change_id FROM json_each(?) AS j CROSS JOIN code_conversations AS v
+		WHERE v.change_id = CAST(j.value AS TEXT) AND (v.changes_requested > 0 OR v.open_findings > 0)`
+	askedAmongSQL = `SELECT r.change_id FROM json_each(?1) AS j
+		CROSS JOIN code_reviewers AS r INDEXED BY ` + reviewersKey + `
+		WHERE r.change_id = CAST(j.value AS TEXT) AND r.reviewer = ?2 AND r.state = 'requested'`
+	conversationCountsSQL = `SELECT comments, reviews, open_findings, open_blockers, changes_requested, version,
+			position
+		FROM code_conversations WHERE change_id = ?`
+	reviewersOfSQL = `SELECT reviewer, reviewer_kind, reason, state, requested_by, requested_by_kind,
 			note, position
 		FROM code_reviewers INDEXED BY ` + reviewersKey + ` WHERE change_id = ? ORDER BY reviewer LIMIT ?`
 	reviewersOfAfterSQL = `SELECT reviewer, reviewer_kind, reason, state, requested_by, requested_by_kind,
@@ -339,10 +597,28 @@ const (
 		FROM code_reviewers INDEXED BY ` + reviewersKey + ` WHERE change_id = ? AND reviewer > ?
 		ORDER BY reviewer LIMIT ?`
 	commentsOfSQL = `SELECT id, thread_id, parent_id, author, author_kind, author_operator_id, anchor, resolved,
-			resolved_by, resolved_by_kind, turn_id, position, at, body
+			resolved_by, resolved_by_kind, turn_id, position, at, body, finding_id
 		FROM code_comments WHERE change_id = ? ORDER BY thread_id, position LIMIT ?`
 	commentsOfAfterSQL = `SELECT id, thread_id, parent_id, author, author_kind, author_operator_id, anchor,
-			resolved, resolved_by, resolved_by_kind, turn_id, position, at, body
+			resolved, resolved_by, resolved_by_kind, turn_id, position, at, body, finding_id
 		FROM code_comments WHERE change_id = ? AND thread_id >= ? AND (thread_id > ? OR position > ?)
 		ORDER BY thread_id, position LIMIT ?`
+	reviewsOfSQL = `SELECT id, revision, reviewer, reviewer_kind, operator_id, verdict, findings, turn_id, model,
+			position, at, summary
+		FROM code_reviews WHERE change_id = ? ORDER BY position LIMIT ?`
+	reviewsOfAfterSQL = `SELECT id, revision, reviewer, reviewer_kind, operator_id, verdict, findings, turn_id,
+			model, position, at, summary
+		FROM code_reviews WHERE change_id = ? AND position > ? ORDER BY position LIMIT ?`
+	findingsOfSQL = `SELECT f.id, f.review_id, f.raiser, f.raiser_kind, f.revision, f.commit_oid, f.path,
+			f.blob_oid, f.side, f.line_start, f.line_end, f.severity, f.category, f.state, f.resolution_note,
+			f.resolved_by, f.resolved_by_kind, f.resolved_commit, f.resolved_position, f.position, x.title,
+			x.body, x.suggestion
+		FROM code_finding_texts AS x CROSS JOIN code_findings AS f
+		WHERE x.change_id = ? AND f.id = x.finding_id ORDER BY x.finding_id LIMIT ?`
+	findingsOfAfterSQL = `SELECT f.id, f.review_id, f.raiser, f.raiser_kind, f.revision, f.commit_oid, f.path,
+			f.blob_oid, f.side, f.line_start, f.line_end, f.severity, f.category, f.state, f.resolution_note,
+			f.resolved_by, f.resolved_by_kind, f.resolved_commit, f.resolved_position, f.position, x.title,
+			x.body, x.suggestion
+		FROM code_finding_texts AS x CROSS JOIN code_findings AS f
+		WHERE x.change_id = ? AND x.finding_id > ? AND f.id = x.finding_id ORDER BY x.finding_id LIMIT ?`
 )

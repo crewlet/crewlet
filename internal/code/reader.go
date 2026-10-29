@@ -1274,7 +1274,14 @@ func scanIntroduced(rows *sql.Rows) (IntroducedRow, int, error) {
 //   - a change's comments: a listing of changes' bounds, 50 a screen of a
 //     timeline and 200 at most, over rows of a few hundred bytes to
 //     MaxCommentBytes — 200 one-line comments are under 100 KB, and a page
-//     of long ones ends at the byte budget first.
+//     of long ones ends at the byte budget first;
+//   - a change's reviews and its findings: a comment's bounds, for rows of
+//     the same width — a review's summary up to MaxReviewSummaryBytes, a
+//     finding's narrow row of about 600 bytes beside a title, a body up to
+//     MaxFindingBodyBytes and a suggestion up to MaxSuggestionBytes — so a
+//     review of MaxFindingsPerReview findings is one page of them where
+//     they say what a reviewer's finding usually says, and a page of
+//     findings with long suggestions ends at the byte budget first.
 //
 // The maxima are exported for a client that pages: the most a page may ask
 // for of each, which a page past them is refused naming.

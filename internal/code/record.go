@@ -299,15 +299,39 @@ const (
 	// thread_resolve", Since: 2, Path: []string{"op"}, Equals:
 	// string(OpThreadResolve)}, with the same companions. It is no gate.
 	OpThreadResolve OpKind = "thread_resolve"
+
+	// OpReview is a review of one revision of a change — a verdict, a
+	// summary and the findings it raises, and the reviewer's own standing
+	// findings it carries ([Review]) — on the change's own subject, written
+	// by the repository's committing data node, ONE RECORD with all its
+	// findings; a review of a later revision than a finding of its
+	// reviewer's supersedes that finding unless it carries it.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// review", Since: 2, Path: []string{"op"}, Equals: string(OpReview)},
+	// with the same companions. It is no gate.
+	OpReview OpKind = "review"
+
+	// OpFindingResolve answers findings of a change — resolved, won't fix
+	// and disputed by an author, dismissed by its raiser, a maintainer or a
+	// person ([FindingResolve]) — on the change's own subject, written by
+	// the repository's committing data node.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "RecordEnvelope.Op
+	// finding_resolve", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpFindingResolve)}, with the same companions. It is no gate.
+	OpFindingResolve OpKind = "finding_resolve"
 )
 
-// OpKinds are the twenty-six, in the order they are documented.
+// OpKinds are the twenty-eight, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
 	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpRename, OpReleaseName, OpHold,
 	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen,
-	OpReviewers, OpComment, OpThreadResolve,
+	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve,
 }
 
 // ChangeOps are the six ops of a change's LIFECYCLE, in [OpKinds]' order:
@@ -322,7 +346,7 @@ func ChangeOps() []OpKind {
 // subject ([KindChange]), written by the repository's committing data node
 // ([ChangeWriter]).
 func ConversationOps() []OpKind {
-	return []OpKind{OpReviewers, OpComment, OpThreadResolve}
+	return []OpKind{OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve}
 }
 
 // Valid reports whether an op off the wire is one this build knows.

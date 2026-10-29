@@ -739,15 +739,17 @@ func Catalogue() []Instrument {
 			Shows: "Writes of a change's conversation this node's change writer " +
 				"was asked to decide — each a record on the change's own " +
 				"subject, never in the repository's committer queue — by `op` " +
-				"(`reviewers`, `comment`, `thread_resolve`) and what became of " +
-				"each, by `outcome`: `applied`, its record landed and the " +
-				"change's conversation holds it; `unchanged`, it asked for what " +
-				"the conversation already said, and nothing was appended; " +
-				"`pending` and `unknown`, its record was appended and is not yet " +
-				"known here to have applied; a refusal's own code — " +
-				"`not_permitted`, `no_reviewer`, `too_many_reviewers`, " +
-				"`unknown_revision`, `change_closed`, `change_merged`, " +
-				"`thread_gone`, `change_not_found`, `repo_archived`, " +
+				"(`reviewers`, `comment`, `thread_resolve`, `review`, " +
+				"`finding_resolve`) and what became of each, by `outcome`: " +
+				"`applied`, its record landed and the change's conversation " +
+				"holds it; `unchanged`, it asked for what the conversation " +
+				"already said, and nothing was appended; `pending` and " +
+				"`unknown`, its record was appended and is not yet known here " +
+				"to have applied; a refusal's own code — `not_permitted`, " +
+				"`no_reviewer`, `too_many_reviewers`, `unknown_revision`, " +
+				"`change_closed`, `change_merged`, `thread_gone`, " +
+				"`not_author`, `not_raiser`, `finding_gone`, " +
+				"`too_many_findings`, `change_not_found`, `repo_archived`, " +
 				"`repo_deleted`, `busy`, `not_applied`, `unavailable` — which " +
 				"decided nothing; `handed_on`, one this node decided nothing of " +
 				"for a reason about itself (stopping, no chart to judge a seat " +

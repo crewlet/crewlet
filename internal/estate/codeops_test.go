@@ -613,6 +613,30 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Expunge: []code.ExpungeCandidate{{ID: ref.ID, Name: "app", Open: "019a0c2e-0000-7000-8000-0000000000e1",
 				Request: "019a0c2e-0000-7000-8000-0000000000e0", Requested: at, ExpungedAt: created, LivePacks: 40,
 				LiveBytes: 90_000, Version: at}},
+			// A CHANGE'S CONVERSATION'S PARTS, every field of each row.
+			Reviewers: []code.ReviewerRow{{Reviewer: "plat-lead", Kind: code.PartyAgent, Reason: code.ReviewerAsked,
+				State: code.ReviewerRequested, RequestedBy: "dev", RequestedByKind: code.PartyAgent,
+				Note: "the retry loop", Position: at}},
+			Comments: []code.CommentRow{{ID: "019a0c2e-0000-7000-8000-0000000000e6",
+				ThreadID: "019a0c2e-0000-7000-8000-0000000000e4", FindingID: "019a0c2e-0000-7000-8000-0000000000e4",
+				Author: "founder", AuthorKind: code.PartyPerson, AuthorOperatorID: "op-founder", Resolved: true,
+				ResolvedBy: "dev", ResolvedByKind: code.PartyAgent, TurnID: "019a0c2e-0000-7000-8000-0000000000d2",
+				Body: "Why two retries?", Position: at, At: created,
+				Anchor: &code.CommentAnchor{Revision: 3, Path: "upload/retry.go", Side: code.SideNew, Line: 42,
+					BlobOID: "8888888888888888888888888888888888888888"}}},
+			Reviews: []code.ReviewRow{{ID: "019a0c2e-0000-7000-8000-0000000000e3", Revision: 3, Reviewer: "founder",
+				ReviewerKind: code.PartyPerson, OperatorID: "op-founder", Verdict: code.VerdictRequestChanges,
+				Summary: "The retry loop never backs off.", Findings: 1, TurnID: "019a0c2e-0000-7000-8000-0000000000d3",
+				Model: "model-a", Position: at, At: created}},
+			Findings: []code.FindingRow{{ID: "019a0c2e-0000-7000-8000-0000000000e4",
+				ReviewID: "019a0c2e-0000-7000-8000-0000000000e3", Raiser: "founder", RaiserKind: code.PartyPerson,
+				Revision: 3, CommitOID: "9999999999999999999999999999999999999999", Path: "upload/retry.go",
+				BlobOID: "8888888888888888888888888888888888888888", Side: code.SideNew, LineStart: 40, LineEnd: 44,
+				Severity: code.SeverityBlocker, Category: code.CategoryCorrectness, Title: "No backoff",
+				Body: "Two retries back to back.", Suggestion: new("time.Sleep(backoff)"),
+				State: code.FindingDisputed, ResolutionNote: "the client backs off", ResolvedBy: "dev",
+				ResolvedByKind: code.PartyAgent, ResolvedCommit: "7777777777777777777777777777777777777777",
+				ResolvedPosition: at, Position: at}},
 			Next: "c-2", Position: at, Level: statelog.ReadSession},
 	}}
 	serveDesk(t, f, d)
@@ -728,7 +752,8 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// writer stamps among them, which cross whole whoever set them — and
 	// every field of the answer.
 	comment := &code.Comment{RepoID: ref.ID, ChangeID: item.ChangeID, CommentID: "019a0c2e-0000-7000-8000-0000000000e1",
-		ThreadID: "019a0c2e-0000-7000-8000-0000000000e2", ParentID: "019a0c2e-0000-7000-8000-0000000000e2", By: seat,
+		ThreadID: "019a0c2e-0000-7000-8000-0000000000e2", ParentID: "019a0c2e-0000-7000-8000-0000000000e2",
+		FindingID: "019a0c2e-0000-7000-8000-0000000000e4", By: seat,
 		Body: "Why two retries?", TurnID: "019a0c2e-0000-7000-8000-0000000000d2",
 		Anchor: &code.CommentAnchor{Revision: 3, Path: "upload/retry.go", Side: code.SideNew, Line: 42,
 			BlobOID: "8888888888888888888888888888888888888888"}}
@@ -739,10 +764,25 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		"a comment": {Comment: comment},
 		"a thread's resolution": {ThreadResolve: &code.ThreadResolve{RepoID: ref.ID, ChangeID: item.ChangeID,
 			ThreadID: comment.ThreadID, Resolved: true, By: seat}},
+		"a review": {Review: &code.Review{RepoID: ref.ID, ChangeID: item.ChangeID,
+			ReviewID: "019a0c2e-0000-7000-8000-0000000000e3", By: seat, Revision: 3,
+			Verdict: code.VerdictRequestChanges, Summary: "The retry loop never backs off.",
+			Findings: []code.Finding{{ID: "019a0c2e-0000-7000-8000-0000000000e4", Path: "upload/retry.go",
+				Side: code.SideNew, LineStart: 40, LineEnd: 44, CommitOID: "9999999999999999999999999999999999999999",
+				BlobOID: "8888888888888888888888888888888888888888", Severity: code.SeverityBlocker,
+				Category: code.CategoryCorrectness, Title: "No backoff", Body: "Two retries back to back.",
+				Suggestion: new("time.Sleep(backoff)")}},
+			Carries: []string{"019a0c2e-0000-7000-8000-0000000000e5"},
+			TurnID:  "019a0c2e-0000-7000-8000-0000000000d3", Model: "model-a"}},
+		"an answer to findings": {FindingResolve: &code.FindingResolve{RepoID: ref.ID, ChangeID: item.ChangeID,
+			By: seat, Findings: []code.FindingResolution{{FindingID: "019a0c2e-0000-7000-8000-0000000000e4",
+				Resolution: code.FindingResolved, Note: "backs off now",
+				Commit: "7777777777777777777777777777777777777777"}}}},
 	} {
 		w.OpID, w.Asker, w.Seen = "019a0c2e-0000-7000-8000-0000000000e0.code_comment_on_change", seat, at
 		d.mu.Lock()
-		d.conversed = code.ConversationResult{Outcome: statelog.OutcomeApplied, ID: comment.CommentID, Position: at,
+		d.conversed = code.ConversationResult{Outcome: statelog.OutcomeApplied, ID: comment.CommentID,
+			FindingIDs: []string{"019a0c2e-0000-7000-8000-0000000000e4"}, Position: at,
 			Unchanged: true, Refusal: code.ConversationRefusalThreadGone,
 			Detail: "app!42 holds no thread 019a0c2e-0000-7000-8000-0000000000e2"}
 		d.mu.Unlock()

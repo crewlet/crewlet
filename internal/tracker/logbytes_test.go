@@ -255,6 +255,11 @@ var codeLogUnwritten = map[code.OpKind]struct {
 		"code_comment_on_change, through the estate's code.conversation"},
 	code.OpThreadResolve: {payload: reflect.TypeFor[code.ThreadResolve](), how: "a thread is " +
 		"resolved by code_comment_on_change's resolve, through the estate's code.conversation"},
+	code.OpReview: {payload: reflect.TypeFor[code.Review](), how: "a change is reviewed — its " +
+		"verdict, its summary and every finding it raises in one record — by code_review_change, " +
+		"through the estate's code.conversation"},
+	code.OpFindingResolve: {payload: reflect.TypeFor[code.FindingResolve](), how: "findings are " +
+		"answered or dismissed by code_resolve_finding, through the estate's code.conversation"},
 }
 
 // codeLogUnwrittenShapes is every SHAPE of record of an op the day classifies
@@ -413,8 +418,8 @@ var codeLogKinds = map[code.ObjectKind]string{
 	code.KindGeneration: "a reanchor (codeLogNegligible)",
 	code.KindCompany:    "the activation fence (codeLogNegligible)",
 	code.KindTrimmed:    "the trim's sweep of the anchors (codeLogNegligible)",
-	code.KindChange: "a change's conversation — its asks for review, its comments and its threads' " +
-		"resolutions — on the change (codeLogUnwritten)",
+	code.KindChange: "a change's conversation — its asks for review, its comments, its threads' " +
+		"resolutions, its reviews and the answers to their findings — on the change (codeLogUnwritten)",
 }
 
 // The reference company's chart, as a seat's tools hold it. Its work is filed

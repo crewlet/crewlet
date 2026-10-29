@@ -130,32 +130,45 @@
 // # A change's conversation is rows on its own subject
 //
 // What is said ABOUT a change — who is asked to review it, its comments and
-// the threads they form — is code_conversations, code_reviewers,
-// code_participants and code_comments, written by records on the CHANGE's own
-// subject ([KindChange], change.<id>) and by no record on its repository's:
-// one table, one subject's writer. Each write is a [ConversationWrite] the
-// estate asks of the repository's committing data node, whose [ChangeWriter]
-// — the committer's sibling, sharing none of its queue — decides it in ONE
-// snapshot under PatternArbitrated, its session the asker's Seen, as a record
-// of its own op ([ConversationOps], decide_conversation.go): who may ask for
-// review and who may be asked (rule D21, the reviewers judged by the deciding
-// node's chart whoever asks — [ConversationWrite.JudgesChart]), a reply only to
-// a thread's root, a thread resolved by its starter, an author, a maintainer or
-// a person. The writer takes ONE CHANGE'S WRITES ONE AT A TIME, so two of them
-// never lose rounds to each other at the broker, and a comment's id is derived
-// from the write's operation id ([CommentID]), so a comment asked again of the
-// repository's runner-up is the comment that landed. Every record names the
-// repository's path and the change's in its scope, since its decide reads the
-// repository's rows; the deletion gate reads the repository off its payload
-// ([gatedRepo]); its apply is pure over the record — a reviewer's kind, stamped
-// from the chart by the writer, rides it (apply_conversation.go); and a
-// conversation's comments are weighed on its counters row (text_bytes), so a
-// purge takes it with its change, cutting a heavy one by its comments
-// ([purgeChanges]). It is READ WITH ITS CHANGE (conversationread.go): a
-// listing naming a reviewer, or what waits on a review, walks the reviewer's
-// standing asks (code_reviewers_reviewer_idx), and a change read pages one
-// part of its conversation — its reviewers, or its comments a thread at a
-// time — the detail on its revisions' first page counting it.
+// the threads they form, its reviews and the findings they raise — is
+// code_conversations, code_reviewers, code_participants, code_comments,
+// code_reviews, code_findings and code_finding_texts, written by records on
+// the CHANGE's own subject ([KindChange], change.<id>) and by no record on its
+// repository's: one table, one subject's writer. Each write is a
+// [ConversationWrite] the estate asks of the repository's committing data
+// node, whose [ChangeWriter] — the committer's sibling, sharing none of its
+// queue — decides it in ONE snapshot under PatternArbitrated, its session the
+// asker's Seen, as a record of its own op ([ConversationOps],
+// decide_conversation.go): who may ask for review and who may be asked (rule
+// D21, the reviewers judged by the deciding node's chart whoever asks —
+// [ConversationWrite.JudgesChart]), a reply only to a thread's root or a
+// finding, a thread resolved by its starter, an author, a maintainer or a
+// person; a review only by one who reviews the repository and did not write
+// the change, ONE RECORD with every finding it raises, superseding its
+// reviewer's standing findings of earlier revisions it does not carry (D22);
+// and a finding answered by an author, dismissed by its raiser, a maintainer
+// or a person — a blocker cleared by its dismissal or its raiser's later
+// review alone (S40, conversation.go). The writer takes ONE CHANGE'S WRITES
+// ONE AT A TIME, so two of them never lose rounds to each other at the
+// broker, and a comment's id, a review's and its findings' are derived from
+// the write's operation id ([CommentID], [ReviewID], [FindingID]), so a write
+// asked again of the repository's runner-up is the write that landed. Every
+// record names the repository's path and the change's in its scope, since its
+// decide reads the repository's rows; the deletion gate reads the repository
+// off its payload ([gatedRepo]); its apply is pure over the record — a
+// reviewer's kind, stamped from the chart by the writer, rides it
+// (apply_conversation.go) — and keeps the conversation's counters (its
+// comments, reviews, open findings, standing blockers and requests for
+// changes) on one narrow row with what its wide text weighs (text_bytes), so
+// a purge takes it with its change, cutting a heavy one by its comments,
+// findings' texts and reviews ([purgeChanges]). It is READ WITH ITS CHANGE
+// (conversationread.go): a listing naming a reviewer, or what waits on a
+// review, walks the reviewer's standing asks (code_reviewers_reviewer_idx);
+// what waits on an owner's fix walks the owner's changes in a live state,
+// keeping those whose counters ask for one; and a change read pages one part
+// of its conversation — its reviewers, its comments a thread at a time, its
+// reviews or its findings — the detail on its revisions' first page counting
+// it.
 //
 // # Group commit
 //

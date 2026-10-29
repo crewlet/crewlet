@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/code"
 )
 
@@ -211,6 +213,241 @@ func TestAChangesConversationIsReadAPartAtATime(t *testing.T) {
 		q.Asker, q.Kind, q.Repo, q.Change, q.Fresh = cto, code.ReadChange, "web", 1, stale
 		if _, err := n.reader.Read(ctx, q); !errors.Is(err, code.ErrBadCursor) {
 			t.Errorf("%s: Read = %v, want ErrBadCursor", name, err)
+		}
+	}
+}
+
+// A CHANGE'S REVIEWS AND FINDINGS ARE READ WITH IT: its detail counts its
+// reviews, its open findings, its standing blockers and its requests for
+// changes; its reviews come in the order they were given and its findings by
+// id, each with its text — the lines a suggestion would put in place among
+// it — and its last answer, a page at a time; a reply to a finding names it;
+// and a cursor of another part is none of these.
+//
+// Mutations: order the reviews by reviewer, and cto's comes before
+// plat-lead's earlier one; read a finding's suggestion as an empty string
+// where it has none, and every finding suggests deleting its lines.
+func TestAChangesReviewsAndFindingsAreReadWithIt(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	repo, change := discussed(t, n, "web")
+	w, _ := writerOn(t, n, n.pub)
+	ctx := t.Context()
+	suggestion := "time.Sleep(backoff)"
+	suggesting := raising(code.SeverityMajor, 7, "Sleep between tries")
+	suggesting.Suggestion = &suggestion
+	res, err := w.Converse(ctx, reviewing(repo, change, platLead, 1, code.VerdictRequestChanges, nil,
+		raising(code.SeverityBlocker, 3, "No backoff"), suggesting))
+	first := requireReviewed(t, res, err)
+	firstID := res.ID
+	res, err = w.Converse(ctx, reviewing(repo, change, cto, 1, code.VerdictComment, nil,
+		raising(code.SeverityNit, 9, "A name")))
+	second := requireReviewed(t, res, err)
+	secondID := res.ID
+	res, err = w.Converse(ctx, conversing(dev, func(cw *code.ConversationWrite) {
+		cw.FindingResolve = &code.FindingResolve{RepoID: repo, ChangeID: change, Findings: []code.FindingResolution{
+			{FindingID: first[0], Resolution: code.FindingDisputed, Note: "the client backs off"}}}
+	}))
+	requireConversed(t, res, err)
+	answeredAt := res.Position
+	res, err = w.Converse(ctx, conversing(platLead, func(cw *code.ConversationWrite) {
+		cw.Comment = &code.Comment{RepoID: repo, ChangeID: change, FindingID: first[0], Body: "It does not."}
+	}))
+	requireConversed(t, res, err)
+	reply := res.ID
+
+	detail, err := readChange(t, n, cto, "", "web", 1, 0, "")
+	if err != nil {
+		t.Fatalf("read web!1: %v", err)
+	}
+	if got := detail.Change.Conversation; got == nil || got.Reviews != 2 || got.OpenFindings != 2 ||
+		got.OpenBlockers != 1 || got.ChangesRequested != 1 || got.Comments != 1 {
+		t.Fatalf("web!1's conversation counts %+v, want 2 reviews, 2 open findings, 1 standing blocker, 1 "+
+			"request for changes and 1 comment", got)
+	}
+
+	// THE REVIEWS, a page of one at a time, in the order given.
+	var reviews []string
+	q := code.ReadQuery{Asker: cto, Kind: code.ReadChange, Repo: "web", Change: 1, Part: code.PartReviews,
+		Limit: 1, Fresh: stale}
+	for pages := 1; ; pages++ {
+		answer, err := n.reader.Read(ctx, q)
+		if err != nil {
+			t.Fatalf("read web!1's reviews: %v", err)
+		}
+		if answer.Change != nil || len(answer.Findings) > 0 {
+			t.Fatalf("a page of reviews carries more than reviews: %+v", answer)
+		}
+		for _, rv := range answer.Reviews {
+			reviews = append(reviews, rv.ID)
+			if rv.ID == firstID && (rv.Reviewer != "plat-lead" || rv.ReviewerKind != "agent" ||
+				rv.Verdict != code.VerdictRequestChanges || rv.Findings != 2 || rv.Revision != 1 ||
+				rv.Summary != "The retry loop.") {
+				t.Errorf("plat-lead's review reads %+v", rv)
+			}
+		}
+		if answer.Next == "" {
+			break
+		}
+		if pages > 3 {
+			t.Fatal("two reviews took more than three pages")
+		}
+		q.Cursor = answer.Next
+	}
+	if !slices.Equal(reviews, []string{firstID, secondID}) {
+		t.Fatalf("the reviews came %v, want %v in the order given", reviews, []string{firstID, secondID})
+	}
+
+	// THE FINDINGS, a page of two at a time, by id.
+	want := slices.Concat(first, second)
+	slices.Sort(want)
+	var findings []string
+	q = code.ReadQuery{Asker: cto, Kind: code.ReadChange, Repo: "web", Change: 1, Part: code.PartFindings,
+		Limit: 2, Fresh: stale}
+	for pages := 1; ; pages++ {
+		answer, err := n.reader.Read(ctx, q)
+		if err != nil {
+			t.Fatalf("read web!1's findings: %v", err)
+		}
+		for _, f := range answer.Findings {
+			findings = append(findings, f.ID)
+			switch f.ID {
+			case first[0]:
+				if f.State != code.FindingDisputed || f.ResolutionNote != "the client backs off" ||
+					f.ResolvedBy != "dev" || f.ResolvedByKind != "agent" || f.ResolvedPosition != answeredAt ||
+					f.Severity != code.SeverityBlocker || f.Title != "No backoff" || f.Suggestion != nil ||
+					f.ReviewID != firstID || f.Raiser != "plat-lead" || f.LineStart != 3 {
+					t.Errorf("the disputed blocker reads %+v", f)
+				}
+			case first[1]:
+				if f.Suggestion == nil || *f.Suggestion != suggestion || f.State != code.FindingOpen ||
+					!f.ResolvedPosition.IsZero() {
+					t.Errorf("the suggesting finding reads %+v", f)
+				}
+			}
+		}
+		if answer.Next == "" {
+			break
+		}
+		if pages > 3 {
+			t.Fatal("three findings took more than three pages")
+		}
+		q.Cursor = answer.Next
+	}
+	if !slices.Equal(findings, want) {
+		t.Fatalf("the findings came %v, want %v by id", findings, want)
+	}
+
+	// A REPLY TO A FINDING NAMES IT.
+	answer, err := n.reader.Read(ctx, code.ReadQuery{Asker: cto, Kind: code.ReadChange, Repo: "web", Change: 1,
+		Part: code.PartComments, Fresh: stale})
+	if err != nil || len(answer.Comments) != 1 || answer.Comments[0].ID != reply ||
+		answer.Comments[0].FindingID != first[0] || answer.Comments[0].ThreadID != first[0] {
+		t.Fatalf("web!1's comments read %+v, %v; want the reply in the finding's thread", answer.Comments, err)
+	}
+
+	// A CURSOR OF ANOTHER PART.
+	for name, q := range map[string]code.ReadQuery{
+		"reviews after a finding":         {Part: code.PartReviews, Cursor: first[0]},
+		"findings after a review":         {Part: code.PartFindings, Cursor: "3000"},
+		"reviews after a comment's place": {Part: code.PartReviews, Cursor: "12/" + reply},
+	} {
+		q.Asker, q.Kind, q.Repo, q.Change, q.Fresh = cto, code.ReadChange, "web", 1, stale
+		if _, err := n.reader.Read(ctx, q); !errors.Is(err, code.ErrBadCursor) {
+			t.Errorf("%s: Read = %v, want ErrBadCursor", name, err)
+		}
+	}
+}
+
+// WHAT WAITS ON AN OWNER'S FIX IS WHAT THEIR CHANGES' COUNTERS ASK: needs=fix
+// lists an owner's live changes — the asker's own where it names none — whose
+// reviewer's standing verdict asks for changes or whose finding nobody has
+// answered, newest first, in the state it names, open where it names none;
+// an author's answer to the last open finding takes a change off it; and
+// needs=me is what waits on the asker, the changes asking its review and then
+// its own awaiting a fix, a change of both listed once. A need is refused in a
+// state that is not live, beside a reviewer or an owner it does not take, and
+// for a credential bound to no seat.
+//
+// Mutations: drop the fix test on the rows, and dev's approved change is
+// listed as awaiting a fix; drop the second half's leaving out of the asks,
+// and the founder's own change asked of them is listed twice.
+func TestWhatWaitsOnAnOwnersFixIsWhatTheirCountersAsk(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	ctx := t.Context()
+	web := changeRepo(t, n, "web")
+	app := changeRepo(t, n, "app")
+	n.push(app, entry(uuid.Must(uuid.NewV7()).String(), set("refs/heads/fix", code.ZeroOID, oidOf("F"))))
+	open := func(repo, source string, owner code.Principal) code.ChangeResult {
+		t.Helper()
+		res, err := c.ProposeChange(ctx, opening(repo, source, mainRef, owner))
+		requireChanged(t, res, err)
+		return res
+	}
+	web1, web2 := open(web, featureRef, dev), open(web, releaseRef, dev)
+	app1, app2 := open(app, featureRef, dev), open(app, releaseRef, cto)
+	app3 := open(app, "refs/heads/fix", ada)
+	converse := func(cw code.ConversationWrite) code.ConversationResult {
+		t.Helper()
+		res, err := w.Converse(ctx, cw)
+		requireConversed(t, res, err)
+		return res
+	}
+	converse(reviewing(web, web1.ChangeID, platLead, 1, code.VerdictRequestChanges, nil))
+	web2Finding := converse(reviewing(web, web2.ChangeID, platLead, 1, code.VerdictComment, nil,
+		raising(code.SeverityMinor, 1, "A long line"))).FindingIDs[0]
+	converse(reviewing(app, app1.ChangeID, platLead, 1, code.VerdictApprove, nil))
+	converse(reviewing(app, app2.ChangeID, platLead, 1, code.VerdictRequestChanges, nil))
+	converse(asking(app, app2.ChangeID, cto, "dev"))
+	converse(reviewing(app, app3.ChangeID, platLead, 1, code.VerdictRequestChanges, nil))
+	converse(asking(app, app3.ChangeID, cto, "founder"))
+
+	for name, tc := range map[string]struct {
+		q    code.ReadQuery
+		want []string
+	}{
+		"what waits on dev's fix": {code.ReadQuery{Asker: dev, Needs: code.NeedFix}, []string{"web!2", "web!1"}},
+		"what waits on cto's fix, asked by a person": {code.ReadQuery{Asker: ada, Needs: code.NeedFix,
+			Owner: "cto"}, []string{"app!2"}},
+		"what waits on dev's fix on one repository": {code.ReadQuery{Asker: dev, Needs: code.NeedFix,
+			Repo: "web"}, []string{"web!2", "web!1"}},
+		"dev's drafts awaiting a fix": {code.ReadQuery{Asker: dev, Needs: code.NeedFix,
+			State: code.ChangeStateDraft}, nil},
+		"what waits on dev": {code.ReadQuery{Asker: dev, Needs: code.NeedMe},
+			[]string{"app!2", "web!2", "web!1"}},
+		"what waits on the founder, a change of both once": {code.ReadQuery{Asker: ada, Needs: code.NeedMe},
+			[]string{"app!3"}},
+	} {
+		for _, limit := range []int{1, 50} {
+			if got, _ := listChanges(t, n, tc.q, limit); !slices.Equal(got, tc.want) {
+				t.Errorf("%s, %d a page: listed %v, want %v", name, limit, got, tc.want)
+			}
+		}
+	}
+
+	converse(answering(web, web2.ChangeID, dev, code.FindingResolved, web2Finding))
+	if got, _ := listChanges(t, n, code.ReadQuery{Asker: dev, Needs: code.NeedFix}, 50); !slices.Equal(got,
+		[]string{"web!1"}) {
+		t.Fatalf("once its finding is answered dev's fixes are %v, want web!1 alone", got)
+	}
+
+	unbound := code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ci"}
+	for name, q := range map[string]code.ReadQuery{
+		"a need in a state that is not live": {Asker: dev, Needs: code.NeedReview,
+			State: code.ChangeStateClosed},
+		"a fix beside a reviewer":                {Asker: dev, Needs: code.NeedFix, Reviewer: "plat-lead"},
+		"what waits on me beside an owner":       {Asker: dev, Needs: code.NeedMe, Owner: "cto"},
+		"a fix of a credential bound to no seat": {Asker: unbound, Needs: code.NeedFix},
+		"a need this build does not know":        {Asker: dev, Needs: "merge"},
+	} {
+		q.Kind, q.Fresh = code.ReadChanges, stale
+		if _, err := n.reader.Read(ctx, q); !errors.Is(err, code.ErrInvalid) {
+			t.Errorf("%s: Read = %v, want ErrInvalid", name, err)
 		}
 	}
 }

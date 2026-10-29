@@ -2,6 +2,7 @@ package code
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 )
 
@@ -140,6 +141,16 @@ func ChangeWriterHolders(w *ChangeWriter, changeID string) int {
 		return t.holders
 	}
 	return 0
+}
+
+// StandingStates is the list of states a raiser's standing findings are read
+// by, as the decide's statement is driven from it.
+func StandingStates() []string {
+	var states []string
+	if err := json.Unmarshal([]byte(standingStates), &states); err != nil {
+		panic("code: standingStates is no JSON list of strings: " + err.Error())
+	}
+	return states
 }
 
 // The committer's batching bounds, for the limits test.

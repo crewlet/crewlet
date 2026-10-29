@@ -154,17 +154,18 @@ func (s *Store) repoName(ctx context.Context, id string) (string, bool, error) {
 // the decide needs "more than PurgePartRows", never the total, so each table
 // a part deletes from — the pushes, the refs, the packs, the retired packs, the
 // ref drops, the changes' revisions, authors, bodies and rows, and their
-// conversations' reviewers, participants, comments and rows — is counted at
-// most PurgePartRows + 1 deep (?2, against the repository ?1), and beside them
-// what the wide rows among them weigh, summed over the same depth: the push
-// rows' row_bytes from code_pushes_repo_idx, which carries every row's width,
-// the changes' body_bytes from their own narrow rows, never from the bodies,
-// whose overflow pages a read would walk, and their conversations' text_bytes
-// from the conversations' narrow rows, never from the comments. Past
-// PurgePartRows pushes or changes the count alone already forms a part, and
-// short of it each sum is the whole. A table left out of the count — or a wide
-// row left out of the sum — is one the final purge's unbounded statements
-// would delete whatever it held.
+// conversations' reviewers, participants, findings, comments, finding texts,
+// reviews and rows — is counted at most PurgePartRows + 1 deep (?2, against
+// the repository ?1), and beside them what the wide rows among them weigh,
+// summed over the same depth: the push rows' row_bytes from
+// code_pushes_repo_idx, which carries every row's width, the changes'
+// body_bytes from their own narrow rows, never from the bodies, whose overflow
+// pages a read would walk, and their conversations' text_bytes from the
+// conversations' narrow rows, never from the comments, the findings' texts or
+// the reviews' summaries it counts. Past PurgePartRows pushes or changes the
+// count alone already forms a part, and short of it each sum is the whole. A
+// table left out of the count — or a wide row left out of the sum — is one the
+// final purge's unbounded statements would delete whatever it held.
 //
 // A CHANGE'S REVISIONS, AUTHORS, BODY AND CONVERSATION ARE COUNTED THROUGH
 // THEIR CHANGE, the changes in number order ([changesNumberKey]) and each
@@ -190,7 +191,13 @@ const (
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
 			CROSS JOIN code_participants AS p WHERE c.repo_id = ?1 AND p.change_id = c.id LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
+			CROSS JOIN code_findings AS f WHERE c.repo_id = ?1 AND f.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
 			CROSS JOIN code_comments AS m WHERE c.repo_id = ?1 AND m.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
+			CROSS JOIN code_finding_texts AS x WHERE c.repo_id = ?1 AND x.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
+			CROSS JOIN code_reviews AS w WHERE c.repo_id = ?1 AND w.change_id = c.id LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
 			CROSS JOIN code_conversations AS v WHERE c.repo_id = ?1 AND v.change_id = c.id LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes INDEXED BY ` + changesNumberKey + `

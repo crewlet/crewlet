@@ -796,8 +796,9 @@ func TestAPurgedRepositorysConversationIsGated(t *testing.T) {
 
 // A CONVERSATION REPLAYS IDENTICALLY: a node that applies the change's records
 // from the log holds the rows of its conversation the node that wrote them
-// does — the apply reads no clock, no configuration and no chart, a reviewer's
-// kind riding the record.
+// does — its reviews, its findings and their texts, a later review's
+// supersessions and the counters among them — the apply reads no clock, no
+// configuration and no chart, a reviewer's kind riding the record.
 func TestAConversationReplaysIdentically(t *testing.T) {
 	t.Parallel()
 	a, b := newTwoNodes(t)
@@ -806,17 +807,29 @@ func TestAConversationReplaysIdentically(t *testing.T) {
 	ctx := t.Context()
 	root, err := w.Converse(ctx, saying(repo, change, ada, "", "Why?"))
 	requireConversed(t, root, err)
+	review, err := w.Converse(ctx, reviewing(repo, change, platLead, 1, code.VerdictRequestChanges, nil,
+		raising(code.SeverityBlocker, 1, "No backoff"), raising(code.SeverityMinor, 2, "A long line")))
+	findings := requireReviewed(t, review, err)
 	for _, cw := range []code.ConversationWrite{
 		asking(repo, change, cto, "plat-lead", "founder"),
 		saying(repo, change, platLead, root.ID, "Because."),
 		withdrawing(repo, change, cto, "founder"),
 		resolving(repo, change, cto, root.ID, true),
+		answering(repo, change, dev, code.FindingWontFix, findings[0]),
+		conversing(dev, func(cw *code.ConversationWrite) {
+			cw.Comment = &code.Comment{RepoID: repo, ChangeID: change, FindingID: findings[0], Body: "Not here."}
+		}),
+		reviewing(repo, change, cto, 1, code.VerdictApprove, nil),
 	} {
 		res, err := w.Converse(ctx, cw)
 		requireConversed(t, res, err)
 	}
+	a.revise(repo, "B", "B2")
+	res, err := w.Converse(ctx, reviewing(repo, change, platLead, 2, code.VerdictApprove, nil))
+	requireReviewed(t, res, err)
 	b.drain()
-	for _, table := range []string{"code_reviewers", "code_participants", "code_comments", "code_conversations"} {
+	for _, table := range []string{"code_reviewers", "code_participants", "code_comments", "code_conversations",
+		"code_reviews", "code_findings", "code_finding_texts"} {
 		if got, want := b.dump(table), a.dump(table); !slices.Equal(got, want) {
 			t.Errorf("%s replayed as\n\t%v\nwant\n\t%v", table, got, want)
 		}
@@ -893,13 +906,59 @@ func (n *node) seedConversation(repoID, changeID string, reviewers, participants
 	}
 }
 
+// seedReviews writes reviews of a change straight into a node's estate, each
+// raising findings of its own — the review's summary and each finding's text
+// of the width given — and adds what they weigh to the change's conversation
+// row, which seedConversation made: the bulk of a reviewed change a purge
+// has to clear. Each review and each text stands for the width its row states,
+// as a seeded comment does.
+func (n *node) seedReviews(changeID string, reviews, findings int, width int64) {
+	n.t.Helper()
+	ctx := n.t.Context()
+	vars := n.db.Caps().MaxVariables
+	if err := n.db.Tx(ctx, func(tx *sql.Tx) error {
+		if _, err := store.InsertRows(ctx, tx, vars, `INSERT INTO code_reviews (id, change_id, revision, reviewer,
+			reviewer_kind, verdict, findings, summary_bytes, position, at, summary) VALUES `,
+			`(?, ?, 1, 'seat-00000', 'agent', 'comment', ?, ?, ?, 0, ?)`, ``, reviews, func(i int) []any {
+				return []any{fmt.Sprintf("%s-review-%06d", changeID, i), changeID, findings, width, i + 1,
+					strings.Repeat("s", int(min(width, 1<<10)))}
+			}); err != nil {
+			return err
+		}
+		for r := range reviews {
+			review := fmt.Sprintf("%s-review-%06d", changeID, r)
+			if _, err := store.InsertRows(ctx, tx, vars, `INSERT INTO code_findings (id, change_id, review_id,
+				raiser, raiser_kind, revision, commit_oid, path, blob_oid, side, line_start, line_end, severity,
+				category, state, position) VALUES `, `(?, ?, ?, 'seat-00000', 'agent', 1, '', 'a.go', '', 'new', 1,
+				1, 'minor', 'style', 'open', ?)`, ``, findings, func(i int) []any {
+				return []any{fmt.Sprintf("%s-finding-%06d", review, i), changeID, review, r + 1}
+			}); err != nil {
+				return err
+			}
+			if _, err := store.InsertRows(ctx, tx, vars, `INSERT INTO code_finding_texts (change_id, finding_id,
+				bytes, title) VALUES `, `(?, ?, ?, ?)`, ``, findings, func(i int) []any {
+				return []any{changeID, fmt.Sprintf("%s-finding-%06d", review, i), width,
+					strings.Repeat("t", int(min(width, 1<<10)))}
+			}); err != nil {
+				return err
+			}
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE code_conversations SET reviews = reviews + ?,
+			text_bytes = text_bytes + ? WHERE change_id = ?`, reviews, int64(reviews*(1+findings))*width, changeID)
+		return err
+	}); err != nil {
+		n.t.Fatalf("seed %s's reviews: %v", changeID, err)
+	}
+}
+
 // conversationRows is every row of the conversations of the changes ids names
 // this node holds, the conversations' own included.
 func (n *node) conversationRows(ids []string) int {
 	n.t.Helper()
 	list := `["` + strings.Join(ids, `","`) + `"]`
 	total := 0
-	for _, table := range []string{"code_reviewers", "code_participants", "code_comments", "code_conversations"} {
+	for _, table := range []string{"code_reviewers", "code_participants", "code_comments", "code_conversations",
+		"code_reviews", "code_findings", "code_finding_texts"} {
 		total += n.count(`SELECT COUNT(*) FROM `+table+` WHERE change_id IN (SELECT value FROM json_each(?))`,
 			list)
 	}
@@ -908,8 +967,9 @@ func (n *node) conversationRows(ids []string) int {
 
 // A PURGE REMOVES A CHANGE'S CONVERSATION with the change, every part within
 // PurgePartRows and the conversation before its change's row: a change whose
-// conversation does not fit a part is cut — its narrow rows first, then its
-// comments — and a later part takes it whole; nothing of a neighbour's goes.
+// conversation does not fit a part is cut — its narrow rows first, its
+// findings among them, then its comments, its findings' texts and its
+// reviews — and a later part takes it whole; nothing of a neighbour's goes.
 //
 // Mutation: leave a conversation table out of the walk's count, and a part
 // deletes past PurgePartRows; out of the final purge, and its rows outlive
@@ -931,6 +991,7 @@ func TestAPurgeRemovesAChangesConversation(t *testing.T) {
 			comments = code.PurgePartRows
 		}
 		n.seedConversation(id, change, 3, 4, comments, 64)
+		n.seedReviews(change, 2, 3, 64)
 	}
 	neighbours := n.seedChanges(other, changesOf(2, changeShape{revisions: 1, authors: 1}))
 	for _, change := range neighbours {
@@ -1012,5 +1073,61 @@ func TestAPurgeIsBoundedByWhatAConversationWeighs(t *testing.T) {
 	}
 	if changes, _, _, _ := n.changeRows(id); changes != 0 {
 		t.Fatalf("the purge left %d changes", changes)
+	}
+}
+
+// A PURGE CUTS A CONVERSATION BY ITS FINDINGS AND REVIEWS TOO: a change whose
+// findings' texts and reviews' summaries weigh three parts' bytes is cut by
+// them — its findings' texts by finding, then its reviews in the order given
+// — each part taking them while what it weighs is under PurgePartBytes and
+// taking what it deleted off the conversation's text_bytes, and the change
+// goes whole once what is left fits.
+//
+// Mutation: leave the findings' texts out of a cut, and the purge never ends;
+// leave text_bytes as it was after a cut, and the walk weighs texts that are
+// gone.
+func TestAPurgeCutsAConversationByItsFindingsAndReviewsToo(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.ensure("app", described("one"), t1)
+	id := n.mustID("app")
+	n.deleteAt(id, harnessAt.Add(-2*keep))
+	ids := n.seedChanges(id, changesOf(1, changeShape{revisions: 1, authors: 1}))
+	const width = 1 << 20
+	perPart := int(code.PurgePartBytes / width)
+	// ONE REVIEW RAISING ALL BUT ONE OF THREE PARTS' WIDE ROWS, its summary
+	// the last of them.
+	n.seedConversation(id, ids[0], 0, 0, 0, width)
+	n.seedReviews(ids[0], 1, 3*perPart-1, width)
+	wide := func() int {
+		return n.count(`SELECT COUNT(*) FROM code_finding_texts WHERE change_id = ?`, ids[0]) +
+			n.count(`SELECT COUNT(*) FROM code_reviews WHERE change_id = ?`, ids[0])
+	}
+	var steps []int
+	for range 6 {
+		before := wide()
+		res, err := n.store.PurgeStep(t.Context(), id, keep)
+		if err != nil {
+			t.Fatalf("PurgeStep: %v", err)
+		}
+		after := wide()
+		steps = append(steps, before-after)
+		if after > 0 {
+			if got, want := n.count(`SELECT text_bytes FROM code_conversations WHERE change_id = ?`, ids[0]),
+				after*width; got != want {
+				t.Fatalf("after a cut the conversation weighs %d bytes, want the %d its %d wide rows hold", got,
+					want, after)
+			}
+		}
+		if res.Done {
+			break
+		}
+	}
+	if want := []int{perPart, perPart, perPart}; !slices.Equal(steps, want) {
+		t.Fatalf("the purge removed %v wide rows a record, want %v: a part's bytes of them at a time, then the "+
+			"purge once what is left fits", steps, want)
+	}
+	if changes, _, _, _ := n.changeRows(id); changes != 0 || n.conversationRows(ids) != 0 {
+		t.Fatalf("the purge left %d changes and %d rows of their conversation", changes, n.conversationRows(ids))
 	}
 }

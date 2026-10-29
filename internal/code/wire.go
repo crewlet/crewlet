@@ -836,9 +836,11 @@ type ReadQuery struct {
 	// of somebody, each refused on every other kind (conversationread.go):
 	// Reviewer, the changes whose ask of that reviewer stands — a seat by
 	// its handle, or a person by the human seat they hold; and Needs, the
-	// changes waiting on what it names ([Need]). A listing either names
-	// walks the ONE index of who the changes wait on and tests every other
-	// filter on the rows it read, as every listing does.
+	// LIVE changes waiting on whom it names ([Need]): on a reviewer's review
+	// (review), on their owner's fix (fix), or on the asker either way (me).
+	// A listing either names walks the ONE index of who the changes wait on
+	// — a reviewer's standing asks, or an owner's changes in a state — and
+	// tests every other filter on the rows it read, as every listing does.
 	//
 	// THE CHANGES KINDS CAME WITH THIS BUILD'S LINE: no build that carries
 	// the code domain has run without these two — none of it is on main —
@@ -846,11 +848,12 @@ type ReadQuery struct {
 	Reviewer string `json:"reviewer,omitempty"`
 	Needs    Need   `json:"needs,omitempty"`
 	// Part is the list a `change` read pages beside the change — its
-	// revisions, which "" names too, its reviewers or its comments
-	// ([ChangeParts]) — refused on every other kind. The change's detail
-	// rides a first page of its revisions alone; every page of another part
-	// carries that part's rows, held to the grant again as every page of a
-	// change is. Under the same condition as Reviewer: no build ignores it.
+	// revisions, which "" names too, its reviewers, its comments, its
+	// reviews or its findings ([ChangeParts]) — refused on every other kind.
+	// The change's detail rides a first page of its revisions alone; every
+	// page of another part carries that part's rows, held to the grant again
+	// as every page of a change is. Under the same condition as Reviewer: no
+	// build ignores it.
 	Part ChangePart `json:"part,omitempty"`
 	// Introduced is an `introduced` read's range: REQUIRED for that kind,
 	// refused on every other.
@@ -869,10 +872,10 @@ type ReadQuery struct {
 	// Limit is repos 1..500 (0 = 100), pushes and run_pushes 1..200 (0 =
 	// 50), refs 1..1 000 (0 = 200), changes 1..200 (0 = 50) — the rows a
 	// page READS, whatever its filters keep of them — a change's revisions
-	// and its reviewers 1..1 000 (0 = 200), its comments 1..200 (0 = 50),
-	// and introduced 1..MaxSnapshotItems (0 = the most); a page of a duty
-	// listing — `compaction_due`, `publication_due`, `expunge_due` — is
-	// MaxSnapshotItems and names none.
+	// and its reviewers 1..1 000 (0 = 200), its comments, its reviews and its
+	// findings 1..200 (0 = 50), and introduced 1..MaxSnapshotItems (0 = the
+	// most); a page of a duty listing — `compaction_due`, `publication_due`,
+	// `expunge_due` — is MaxSnapshotItems and names none.
 	Limit int                `json:"limit,omitempty"`
 	Fresh statelog.Freshness `json:"fresh"`
 }
@@ -880,8 +883,8 @@ type ReadQuery struct {
 // ReadAnswer is a [ReadQuery]'s answer: Changes is a `changes` listing's page;
 // Change a `change` read's detail, on the first page of its revisions alone;
 // Revisions a page of that change's revisions, newest first, on every page of
-// them; and Reviewers and Comments a page of the part of its conversation a
-// `change` read names ([ReadQuery.Part]).
+// them; and Reviewers, Comments, Reviews and Findings a page of the part of
+// its conversation a `change` read names ([ReadQuery.Part]).
 type ReadAnswer struct {
 	Repos []RepoSummary `json:"repos,omitempty"`
 	Repo  *RepoDetail   `json:"repo,omitempty"`
@@ -895,6 +898,8 @@ type ReadAnswer struct {
 	Revisions  []RevisionRow          `json:"revisions,omitempty"`
 	Reviewers  []ReviewerRow          `json:"reviewers,omitempty"`
 	Comments   []CommentRow           `json:"comments,omitempty"`
+	Reviews    []ReviewRow            `json:"reviews,omitempty"`
+	Findings   []FindingRow           `json:"findings,omitempty"`
 	Introduced []IntroducedRow        `json:"introduced,omitempty"`
 	Due        []CompactionCandidate  `json:"due,omitempty"`
 	Publish    []PublicationCandidate `json:"publish,omitempty"`
@@ -1121,13 +1126,14 @@ type ChangeResult struct {
 
 // ConversationWrite is one write of a change's conversation as its asker hands
 // it to the repository's committing data node ([ChangeWriter.Converse]):
-// EXACTLY ONE of the records it may be — an ask for review, a comment and a
-// thread's resolution, each its op's payload ([ConversationOps]) — decided as a
-// record of its own on the change's subject, beside who asks and the floor
-// they read at. Its OpID is the record's operation id, its Seen the publish's
-// session floor. What no asker sends — who wrote it, a reviewer's kind, a
-// comment's id and thread — the writer stamps into the record from its asker,
-// the chart and its snapshot.
+// EXACTLY ONE of the records it may be — an ask for review, a comment, a
+// thread's resolution, a review and an answer to findings, each its op's
+// payload ([ConversationOps]) — decided as a record of its own on the change's
+// subject, beside who asks and the floor they read at. Its OpID is the
+// record's operation id, its Seen the publish's session floor. What no asker
+// sends — who wrote it, a reviewer's kind, a comment's id and thread, a
+// review's id and its findings' — the writer stamps into the record from its
+// asker, the chart and its snapshot.
 type ConversationWrite struct {
 	// OpID is the record's operation id, minted once by whoever asks — an
 	// operation id this engine accepts (statelog.CheckCallerOpID) — so the
@@ -1152,9 +1158,11 @@ type ConversationWrite struct {
 	// a change it was shown open as missing, a revision it read as unknown.
 	Seen statelog.Position `json:"seen,omitzero"`
 
-	Reviewers     *ReviewerRequest `json:"reviewers,omitempty"`
-	Comment       *Comment         `json:"comment,omitempty"`
-	ThreadResolve *ThreadResolve   `json:"thread_resolve,omitempty"`
+	Reviewers      *ReviewerRequest `json:"reviewers,omitempty"`
+	Comment        *Comment         `json:"comment,omitempty"`
+	ThreadResolve  *ThreadResolve   `json:"thread_resolve,omitempty"`
+	Review         *Review          `json:"review,omitempty"`
+	FindingResolve *FindingResolve  `json:"finding_resolve,omitempty"`
 }
 
 // ConversationResult is what became of one write of a change's conversation.
@@ -1166,8 +1174,11 @@ type ConversationResult struct {
 	// decision.
 	Outcome statelog.Outcome `json:"outcome,omitempty"`
 	// ID is what the write made that is named apart from its change — a
-	// comment's id ([CommentID]) — and "" for a write that made none.
-	ID string `json:"id,omitempty"`
+	// comment's id ([CommentID]), a review's ([ReviewID]) — and "" for a
+	// write that made none; FindingIDs is a review's findings' ids, in the
+	// order it raised them ([FindingID]).
+	ID         string   `json:"id,omitempty"`
+	FindingIDs []string `json:"finding_ids,omitempty"`
 	// Position is where the write's record landed — for one asked again under
 	// its own operation id, the record the ledger found; for an Unchanged
 	// answer, the conversation's last record — and, for a not_applied or
@@ -1308,13 +1319,72 @@ type ChangeDetail struct {
 }
 
 // ConversationRow is a change's conversation's counters
-// (code_conversations): its comments, and the version and position of the
-// last record on the change's subject — the floor a read of its parts is
-// asked at.
+// (code_conversations): its comments and its reviews; its OPEN findings, which
+// none of its authors has answered; its STANDING BLOCKERS — the blockers that
+// hold it back whatever its authors answered, until their raiser's later
+// review or a dismissal clears them (S40); how many reviewers' latest verdict
+// asks for changes; and the version and position of the last record on the
+// change's subject — the floor a read of its parts is asked at.
 type ConversationRow struct {
-	Comments int64             `json:"comments"`
-	Version  int64             `json:"version"`
-	Position statelog.Position `json:"position"`
+	Comments         int64             `json:"comments"`
+	Reviews          int64             `json:"reviews"`
+	OpenFindings     int64             `json:"open_findings"`
+	OpenBlockers     int64             `json:"open_blockers"`
+	ChangesRequested int64             `json:"changes_requested"`
+	Version          int64             `json:"version"`
+	Position         statelog.Position `json:"position"`
+}
+
+// ReviewRow is one review of a change (code_reviews): the revision it judged,
+// who reviewed — a seat, or a person with the credential they used — its
+// verdict and summary, how many findings it raised, the turn and the model
+// that reviewed, and its record's position and broker instant.
+type ReviewRow struct {
+	ID           string            `json:"id"`
+	Revision     int64             `json:"revision"`
+	Reviewer     string            `json:"reviewer"`
+	ReviewerKind PartyKind         `json:"reviewer_kind"`
+	OperatorID   string            `json:"operator_id,omitempty"`
+	Verdict      Verdict           `json:"verdict"`
+	Summary      string            `json:"summary,omitempty"`
+	Findings     int64             `json:"findings"`
+	TurnID       string            `json:"turn_id,omitempty"`
+	Model        string            `json:"model,omitempty"`
+	Position     statelog.Position `json:"position"`
+	At           time.Time         `json:"at"`
+}
+
+// FindingRow is one finding on a change (code_findings and its text,
+// code_finding_texts): the review that raised it and who — its raiser — the
+// revision it was raised on, where it points — the path, the side of that
+// revision's diff, its lines, and the commit and the blob they were read in —
+// how much it weighs, what it is about and what it says, the lines it would
+// put in their place where it suggests some, its STATE, and its last answer:
+// the note, who gave it, the commit it names and the record that gave it.
+type FindingRow struct {
+	ID               string            `json:"id"`
+	ReviewID         string            `json:"review_id"`
+	Raiser           string            `json:"raiser"`
+	RaiserKind       PartyKind         `json:"raiser_kind"`
+	Revision         int64             `json:"revision"`
+	CommitOID        string            `json:"commit_oid"`
+	Path             string            `json:"path"`
+	BlobOID          string            `json:"blob_oid"`
+	Side             Side              `json:"side"`
+	LineStart        int               `json:"line_start"`
+	LineEnd          int               `json:"line_end"`
+	Severity         Severity          `json:"severity"`
+	Category         Category          `json:"category"`
+	Title            string            `json:"title"`
+	Body             string            `json:"body,omitempty"`
+	Suggestion       *string           `json:"suggestion,omitempty"`
+	State            FindingState      `json:"state"`
+	ResolutionNote   string            `json:"resolution_note,omitempty"`
+	ResolvedBy       string            `json:"resolved_by,omitempty"`
+	ResolvedByKind   PartyKind         `json:"resolved_by_kind,omitempty"`
+	ResolvedCommit   string            `json:"resolved_commit,omitempty"`
+	ResolvedPosition statelog.Position `json:"resolved_position,omitzero"`
+	Position         statelog.Position `json:"position"`
 }
 
 // ReviewerRow is one reviewer a change has asked (code_reviewers): a seat by
@@ -1333,14 +1403,16 @@ type ReviewerRow struct {
 }
 
 // CommentRow is one comment on a change (code_comments): its thread — its own
-// id for a thread's first comment — the root it replies to, who said it — a
-// seat, or a person with the credential they used — the line a thread's first
-// comment points at, whether its thread is resolved and by whom, the turn that
-// said it, what it says, and its record's position and broker instant.
+// id for a thread's first comment, a finding's for a reply to one — the root
+// or the finding it replies to, who said it — a seat, or a person with the
+// credential they used — the line a thread's first comment points at, whether
+// its thread is resolved and by whom, the turn that said it, what it says, and
+// its record's position and broker instant.
 type CommentRow struct {
 	ID               string            `json:"id"`
 	ThreadID         string            `json:"thread_id"`
 	ParentID         string            `json:"parent_id,omitempty"`
+	FindingID        string            `json:"finding_id,omitempty"`
 	Author           string            `json:"author"`
 	AuthorKind       PartyKind         `json:"author_kind"`
 	AuthorOperatorID string            `json:"author_operator_id,omitempty"`

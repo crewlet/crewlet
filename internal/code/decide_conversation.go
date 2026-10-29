@@ -7,16 +7,19 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CHANGE'S CONVERSATION, DECIDED: an ask for review, a comment and a thread's
-// resolution are each a [ConversationWrite] its asker hands the repository's
-// committing data node ([ChangeWriter.Converse]), which decides it in ONE
-// snapshot as a record of its own op ([ConversationOps]) on the CHANGE's subject.
+// A CHANGE'S CONVERSATION, DECIDED: an ask for review, a comment, a thread's
+// resolution, a review and an answer to findings are each a
+// [ConversationWrite] its asker hands the repository's committing data node
+// ([ChangeWriter.Converse]), which decides it in ONE snapshot as a record of
+// its own op ([ConversationOps]) on the CHANGE's subject.
 //
 // # What the decide holds a write to
 //
@@ -43,21 +46,43 @@ import (
 //
 // A COMMENT takes a change in any state — a change is discussed after it
 // merges — and an asker who reads the repository (not_permitted, in the
-// grant's own sentence). A reply names the ROOT of a thread on this change
-// (thread_gone otherwise): a thread is answered at its root, so a thread is one
-// level deep and its replies are read in order. An anchored comment's revision
-// is one the change has reached (unknown_revision past its head).
+// grant's own sentence). A reply names the ROOT of a thread on this change, or
+// a finding on it, whose thread the finding names (thread_gone otherwise): a
+// thread is answered at its root, so a thread is one level deep and its
+// replies are read in order. An anchored comment's revision is one the change
+// has reached (unknown_revision past its head).
 //
 // A THREAD'S RESOLUTION names the root of a thread on this change
-// (thread_gone), and is made by the comment's own author, an author of the
-// change, a principal that maintains the repository or a person
-// (not_permitted).
+// (thread_gone) — a finding's thread is answered by the finding's own answer —
+// and is made by the comment's own author, an author of the change, a
+// principal that maintains the repository or a person (not_permitted).
+//
+// A REVIEW (rules D21 and D22) takes a LIVE change (change_closed,
+// change_merged) and a reviewer who reviews the repository ([AccessReview]; a
+// person maintains every repository) and did NOT write the change — an
+// author's review of their own change, its approval above all, counts for
+// nothing, so none is taken (not_permitted) — of a revision the change has
+// reached (unknown_revision). What it CARRIES are its reviewer's own findings
+// (not_raiser) still standing on the change (finding_gone); every other
+// standing finding of its reviewer's raised on an EARLIER revision than the
+// one it judges it SUPERSEDES, and a review of the same revision supersedes
+// nothing — one reviewer's two passes over one revision. A reviewer keeps at
+// most [MaxStandingFindings] standing on a change once its review is taken
+// (too_many_findings), so what one review's record rewrites is bounded.
+//
+// AN ANSWER TO FINDINGS names findings STANDING on the change (finding_gone —
+// none by that id, or one dismissed or superseded, which nothing moves again):
+// resolved, won't fix and disputed are an author's to give (not_author), and a
+// dismissal its raiser's, a maintainer's or a person's (not_raiser). Only a
+// dismissal or its raiser's later review clears a blocker (S40): an author's
+// answer leaves it standing, for its raiser to judge.
 //
 // A write that asks for what the conversation already says — every reviewer
 // it asks already asked and nobody it withdraws still asked, a thread's state
-// it is in — is ANSWERED UNCHANGED from the rows, with no record. A comment is
-// never unchanged: two comments saying the same are two comments, and one
-// asked again under its own operation id is collapsed by the ledger.
+// it is in, every finding in the state an answer gives it — is ANSWERED
+// UNCHANGED from the rows, with no record. A comment and a review are never
+// unchanged: two saying the same are two, and one asked again under its own
+// operation id is collapsed by the ledger.
 //
 // # A seat's write, and every ask for review, is decided only by a node that can judge it
 //
@@ -71,25 +96,34 @@ import (
 
 // Validate refuses a write no change's writer could decide
 // ([ErrInvalidProposal], naming the field), before anything is read: anything
-// but exactly one of the three records; an operation id this engine does not
+// but exactly one of the five records; an operation id this engine does not
 // accept (statelog.CheckCallerOpID); an asker that is no principal, or that
 // names a run; a Seen that is no position on the code log; a repository id
 // that is no UUID in its canonical spelling; a change id that is no bare
 // UUIDv7; a field the writer stamps — who wrote it, a reviewer's kind, a
-// comment's id or thread — set by the asker; an ask that names nobody, a handle
-// twice or one that is no seat's handle, past [MaxReviewersPerChange] in either
-// list, or a note its bound refuses; a comment its bound refuses, an anchor on
-// a reply or one [anchorProblem] refuses, or a turn its bound refuses; a thread
-// named by no comment id; and a record past what one write may carry
-// ([EntryRoom]). What the repository and the change hold is the decide's to
-// judge, from the rows.
+// comment's id or thread, a review's id or a finding's — set by the asker; an
+// ask that names nobody, a handle twice or one that is no seat's handle, past
+// [MaxReviewersPerChange] in either list, or a note its bound refuses; a
+// comment its bound refuses, one replying to a root and a finding both, an
+// anchor on a reply or one [anchorProblem] refuses, or a turn its bound
+// refuses; a thread named by no comment id; a review of no revision, of a
+// verdict this build does not know, that comments and says nothing, past
+// [MaxFindingsPerReview] findings or [MaxStandingFindings] carried, a finding
+// [findingProblem] refuses, a carried id twice or no finding's id, or a turn
+// or a model its bound refuses; an answer naming no finding, past
+// [MaxFindingsPerReview], one twice, an answer no write gives, a commit that
+// is no whole object id or a note its bound refuses; and a record past what
+// one write of a conversation may carry ([MaxConversationBytes]). What the
+// repository and the change hold is the decide's to judge, from the rows.
 func (w ConversationWrite) Validate() error {
 	_, err := w.measure()
 	return err
 }
 
 // measure validates w and answers its record's payload's bytes as the writer
-// stamps it, held under [EntryRoom].
+// stamps it, held under [MaxConversationBytes]: a review past it is refused,
+// split into two reviews of the same revision — which supersede nothing of
+// each other — since its findings are its own to raise in either.
 func (w ConversationWrite) measure() (int, error) {
 	if err := w.validFields(); err != nil {
 		return 0, err
@@ -100,17 +134,25 @@ func (w ConversationWrite) measure() (int, error) {
 		return 0, fmt.Errorf("%w: %s: encode it: %w", ErrInvalidProposal, op, err)
 	}
 	// THE STAMPED FIELDS AT THEIR WIDEST: the asker as who wrote it, a kind
-	// on every reviewer, and a comment's id and thread at a UUID's length.
+	// on every reviewer, a comment's id and thread, and a review's id and
+	// its findings' at a UUID's length.
+	const stampedID = len(`,"comment_id":"00000000-0000-7000-8000-000000000000"`)
 	stamped := len(encoded) + principalBytes(w.Asker)
 	switch {
 	case w.Reviewers != nil:
 		stamped += len(w.Reviewers.Request) * len(`,"kind":"person"`)
 	case w.Comment != nil:
-		stamped += 2 * len(`,"comment_id":"00000000-0000-7000-8000-000000000000"`)
+		stamped += 2 * stampedID
+	case w.Review != nil:
+		stamped += (1 + len(w.Review.Findings)) * stampedID
 	}
-	if stamped > EntryRoom {
-		return 0, fmt.Errorf("%w: %s: %d bytes, past the %d one write may take of its record",
-			ErrInvalidProposal, op, stamped, EntryRoom)
+	if stamped > MaxConversationBytes {
+		why := fmt.Sprintf("%d bytes, past the %d one write of a change's conversation may take of its record "+
+			"(MaxConversationBytes)", stamped, MaxConversationBytes)
+		if w.Review != nil {
+			why += ": split it into two reviews of the same revision, which supersede nothing of each other"
+		}
+		return 0, fmt.Errorf("%w: %s: %s", ErrInvalidProposal, op, why)
 	}
 	return stamped, nil
 }
@@ -136,6 +178,10 @@ func (w ConversationWrite) record() (OpKind, any) {
 		return OpComment, *w.Comment
 	case w.ThreadResolve != nil:
 		return OpThreadResolve, *w.ThreadResolve
+	case w.Review != nil:
+		return OpReview, *w.Review
+	case w.FindingResolve != nil:
+		return OpFindingResolve, *w.FindingResolve
 	}
 	return "", nil
 }
@@ -153,6 +199,10 @@ func (w ConversationWrite) RepoID() string {
 		return w.Comment.RepoID
 	case w.ThreadResolve != nil:
 		return w.ThreadResolve.RepoID
+	case w.Review != nil:
+		return w.Review.RepoID
+	case w.FindingResolve != nil:
+		return w.FindingResolve.RepoID
 	}
 	return ""
 }
@@ -167,6 +217,10 @@ func (w ConversationWrite) ChangeID() string {
 		return w.Comment.ChangeID
 	case w.ThreadResolve != nil:
 		return w.ThreadResolve.ChangeID
+	case w.Review != nil:
+		return w.Review.ChangeID
+	case w.FindingResolve != nil:
+		return w.FindingResolve.ChangeID
 	}
 	return ""
 }
@@ -185,14 +239,16 @@ func (w ConversationWrite) JudgesChart() bool {
 // bytes.
 func (w ConversationWrite) validFields() error {
 	set := 0
-	for _, isSet := range []bool{w.Reviewers != nil, w.Comment != nil, w.ThreadResolve != nil} {
+	for _, isSet := range []bool{w.Reviewers != nil, w.Comment != nil, w.ThreadResolve != nil, w.Review != nil,
+		w.FindingResolve != nil} {
 		if isSet {
 			set++
 		}
 	}
 	if set != 1 {
 		return fmt.Errorf("%w: a write of a change's conversation is exactly one of an ask for review, a "+
-			"comment and a thread's resolution, and this one sets %d", ErrInvalidProposal, set)
+			"comment, a thread's resolution, a review and an answer to findings, and this one sets %d",
+			ErrInvalidProposal, set)
 	}
 	if err := statelog.CheckCallerOpID(w.OpID); err != nil {
 		return badField("op_id", "%v", err)
@@ -224,11 +280,103 @@ func (w ConversationWrite) validFields() error {
 		return w.Reviewers.validFields()
 	case w.Comment != nil:
 		return w.Comment.validFields()
+	case w.Review != nil:
+		return w.Review.validFields()
+	case w.FindingResolve != nil:
+		return w.FindingResolve.validFields()
 	}
 	if err := bareUUIDv7("thread_resolve.thread_id", w.ThreadResolve.ThreadID); err != nil {
 		return err
 	}
 	return stampedBy("thread_resolve", w.ThreadResolve.By)
+}
+
+// validFields holds a review to [ConversationWrite.Validate]'s rules: a
+// revision from 1, a verdict this build knows, a summary and every finding
+// within their bounds — and a comment says something, its summary or a
+// finding — at most [MaxFindingsPerReview] findings, and its carried
+// findings named once each, as bare UUIDv7s, at most [MaxStandingFindings];
+// its id and its reviewer the writer's to stamp.
+func (r *Review) validFields() error {
+	switch {
+	case r.ReviewID != "":
+		return badField("review.review_id", "the writer derives a review's id from the write's operation id, "+
+			"and an asker sends none")
+	case r.Revision < 1:
+		return badField("review.revision", "%d; a change's revisions count from 1", r.Revision)
+	case !r.Verdict.Valid():
+		return badField("review.verdict", "%q is not one of %v", r.Verdict, Verdicts())
+	case r.Verdict == VerdictComment && strings.TrimSpace(r.Summary) == "" && len(r.Findings) == 0:
+		return badField("review", "a review that judges nothing says something: a summary or a finding")
+	case len(r.Findings) > MaxFindingsPerReview:
+		return badField("review.findings", "%d findings, past the %d one review raises (MaxFindingsPerReview): "+
+			"split it into two reviews of the same revision", len(r.Findings), MaxFindingsPerReview)
+	case len(r.Carries) > MaxStandingFindings:
+		return badField("review.carries", "%d findings, past the %d one reviewer keeps standing on a change "+
+			"(MaxStandingFindings)", len(r.Carries), MaxStandingFindings)
+	}
+	if why := textProblem(r.Summary, MaxReviewSummaryBytes, "review's summary"); why != "" {
+		return badField("review.summary", "%s", why)
+	}
+	for i, f := range r.Findings {
+		if why := findingProblem(f); why != "" {
+			return badField(fmt.Sprintf("review.findings[%d]", i), "%s", why)
+		}
+	}
+	carried := map[string]bool{}
+	for i, id := range r.Carries {
+		if err := bareUUIDv7(fmt.Sprintf("review.carries[%d]", i), id); err != nil {
+			return err
+		}
+		if carried[id] {
+			return badField(fmt.Sprintf("review.carries[%d]", i), "%s is carried twice", id)
+		}
+		carried[id] = true
+	}
+	for _, label := range []struct{ field, value string }{
+		{"review.turn_id", r.TurnID}, {"review.model", r.Model},
+	} {
+		if why := labelProblem(label.value); why != "" {
+			return badField(label.field, "%s", why)
+		}
+	}
+	return stampedBy("review", r.By)
+}
+
+// validFields holds an answer to findings to [ConversationWrite.Validate]'s
+// rules: 1 to [MaxFindingsPerReview] findings, each named once as a bare
+// UUIDv7, its resolution one a write may make, its note and its commit within
+// their bounds; who answers the writer's to stamp.
+func (r *FindingResolve) validFields() error {
+	switch {
+	case len(r.Findings) == 0:
+		return badField("finding_resolve.findings", "an answer names the findings it answers, and this one "+
+			"names none")
+	case len(r.Findings) > MaxFindingsPerReview:
+		return badField("finding_resolve.findings", "%d findings, past the %d one answer names "+
+			"(MaxFindingsPerReview)", len(r.Findings), MaxFindingsPerReview)
+	}
+	named := map[string]bool{}
+	for i, f := range r.Findings {
+		field := fmt.Sprintf("finding_resolve.findings[%d]", i)
+		if err := bareUUIDv7(field+".finding_id", f.FindingID); err != nil {
+			return err
+		}
+		switch {
+		case named[f.FindingID]:
+			return badField(field+".finding_id", "%s is answered twice", f.FindingID)
+		case !f.Resolution.Resolution():
+			return badField(field+".resolution", "%q is no answer to a finding: resolved, wont_fix, disputed or "+
+				"dismissed", f.Resolution)
+		case f.Commit != "" && !gitref.ValidOID(f.Commit):
+			return badField(field+".commit", "%q is not a whole object id", f.Commit)
+		}
+		if why := textProblem(f.Note, MaxReviewNoteBytes, "answer's note"); why != "" {
+			return badField(field+".note", "%s", why)
+		}
+		named[f.FindingID] = true
+	}
+	return stampedBy("finding_resolve", r.By)
 }
 
 // validFields holds an ask for review to [ConversationWrite.Validate]'s rules.
@@ -284,14 +432,21 @@ func (c *Comment) validFields() error {
 		return badField("comment.thread_id", "the writer stamps the thread a comment is in — a reply names "+
 			"its thread's root as its parent_id")
 	}
-	if c.ParentID != "" {
+	switch {
+	case c.ParentID != "" && c.FindingID != "":
+		return badField("comment.finding_id", "a comment replies to a thread's root or to a finding, never both")
+	case c.ParentID != "":
 		if err := bareUUIDv7("comment.parent_id", c.ParentID); err != nil {
 			return err
 		}
-		if c.Anchor != nil {
-			return badField("comment.anchor", "a reply is about its thread, whose first comment carries the "+
-				"anchor; a reply carries none")
+	case c.FindingID != "":
+		if err := bareUUIDv7("comment.finding_id", c.FindingID); err != nil {
+			return err
 		}
+	}
+	if (c.ParentID != "" || c.FindingID != "") && c.Anchor != nil {
+		return badField("comment.anchor", "a reply is about its thread, whose first comment or finding carries "+
+			"the anchor; a reply carries none")
 	}
 	if why := commentProblem(c.Body); why != "" {
 		return badField("comment.body", "%s", why)
@@ -385,8 +540,228 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 		return decideReviewers(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, grant, d)
 	case w.Comment != nil:
 		return decideComment(ctx, tx, w, row, named, grant, d)
+	case w.Review != nil:
+		return decideReview(ctx, tx, w, asker, kind, row, named, grant, d)
+	case w.FindingResolve != nil:
+		return decideFindingResolve(ctx, tx, w, asker, kind, row, named, grant, d)
 	}
 	return decideThreadResolve(ctx, tx, w, asker, kind, row, named, grant, d)
+}
+
+// decideReview is a review's rules over row (rules D21 and D22): a LIVE change
+// (change_closed, change_merged); a reviewer who may review the repository and
+// did not write the change — an author's review of their own change, its
+// approval above all, counts for nothing, so none is taken (not_permitted); a
+// revision the change has reached (unknown_revision); every finding it carries
+// one of its reviewer's own (not_raiser) still standing on the change
+// (finding_gone); and its reviewer left with at most [MaxStandingFindings]
+// standing findings once the review supersedes those of earlier revisions it
+// does not carry (too_many_findings).
+func decideReview(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker string, kind PartyKind,
+	row changeRow, named string, grant Grant, d conversationDecision) (conversationDecision, error) {
+
+	switch row.state {
+	case ChangeStateClosed:
+		return d.refuse(ConversationRefusalChangeClosed, fmt.Sprintf("%s is closed: reopen it before reviewing "+
+			"it", named))
+	case ChangeStateMerged:
+		return d.refuse(ConversationRefusalChangeMerged, fmt.Sprintf("%s is merged, and a merged change is "+
+			"reviewed no further", named))
+	}
+	r := *w.Review
+	authors, err := authorsAmong(ctx, tx, row.id, []string{asker})
+	if err != nil {
+		return conversationDecision{}, err
+	}
+	switch {
+	case authors[asker] == kind:
+		return d.refuse(ConversationRefusalNotPermitted, fmt.Sprintf("%s is an author of %s, and an author's "+
+			"review of their own change counts for nothing, so none is taken: ask a reviewer", grant.who(), named))
+	case grant.Access < AccessReview:
+		return d.refuse(ConversationRefusalNotPermitted, fmt.Sprintf("%s holds %s on %s's repository, and a "+
+			"review needs review: %s", grant.who(), grant.Access, named, reviewRemedy(grant)))
+	case r.Revision > row.revision:
+		return d.refuse(ConversationRefusalUnknownRevision, fmt.Sprintf("%s is at revision %d, and the review "+
+			"judges revision %d: read the change again", named, row.revision, r.Revision))
+	}
+	for _, id := range r.Carries {
+		f, found, err := findingIn(ctx, tx, id)
+		if err != nil {
+			return conversationDecision{}, err
+		}
+		switch {
+		case !found || f.changeID != row.id:
+			return d.refuse(ConversationRefusalFindingGone, fmt.Sprintf("%s holds no finding %s to carry", named,
+				id))
+		case f.raiser != asker || f.raiserKind != kind:
+			return d.refuse(ConversationRefusalNotRaiser, fmt.Sprintf("finding %s was raised by %s, and a review "+
+				"carries its own reviewer's findings alone", id, f.raiser))
+		case !f.state.Stands():
+			return d.refuse(ConversationRefusalFindingGone, fmt.Sprintf("finding %s is %s: it no longer stands, "+
+				"so no review carries it", id, f.state))
+		}
+	}
+	standing, superseded, err := supersededBy(ctx, tx, row.id, asker, kind, r)
+	if err != nil {
+		return conversationDecision{}, err
+	}
+	if after := standing - len(superseded) + len(r.Findings); after > MaxStandingFindings {
+		return d.refuse(ConversationRefusalTooManyFindings, fmt.Sprintf("the review would leave %s %d standing "+
+			"findings on %s, past the %d one reviewer keeps (MaxStandingFindings): dismiss some, or review a "+
+			"later revision, which supersedes those it does not carry", grant.who(), after, named,
+			MaxStandingFindings))
+	}
+	r.ReviewID, r.By = ReviewID(w.OpID), w.Asker
+	r.Findings = slices.Clone(r.Findings)
+	for i := range r.Findings {
+		r.Findings[i].ID = FindingID(w.OpID, i)
+	}
+	d.payload = r
+	// THE REVIEW, EVERY FINDING AND ITS TEXT, every finding it supersedes,
+	// its reviewer as a participant, and the conversation's row.
+	d.rows = 1 + 2*len(r.Findings) + len(superseded) + 2
+	return d, nil
+}
+
+// decideFindingResolve is an answer to findings' rules over row (rule D21):
+// every finding it names standing on the change (finding_gone); resolved,
+// won't fix and disputed an author's to give (not_author); a dismissal its
+// raiser's, a maintainer's or a person's (not_raiser); and answered unchanged
+// where every finding is already in the state it asks for.
+func decideFindingResolve(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker string, kind PartyKind,
+	row changeRow, named string, grant Grant, d conversationDecision) (conversationDecision, error) {
+
+	fr := *w.FindingResolve
+	authors, err := authorsAmong(ctx, tx, row.id, []string{asker})
+	if err != nil {
+		return conversationDecision{}, err
+	}
+	moved := 0
+	for _, a := range fr.Findings {
+		f, found, err := findingIn(ctx, tx, a.FindingID)
+		if err != nil {
+			return conversationDecision{}, err
+		}
+		switch {
+		case !found || f.changeID != row.id:
+			return d.refuse(ConversationRefusalFindingGone, fmt.Sprintf("%s holds no finding %s", named,
+				a.FindingID))
+		case !f.state.Stands():
+			return d.refuse(ConversationRefusalFindingGone, fmt.Sprintf("finding %s is %s: it no longer stands, "+
+				"and nothing answers it again", a.FindingID, f.state))
+		}
+		switch {
+		case a.Resolution == FindingDismissed:
+			if kind != PartyPerson && (f.raiser != asker || f.raiserKind != kind) && grant.Access < AccessMaintain {
+				return d.refuse(ConversationRefusalNotRaiser, fmt.Sprintf("%s did not raise finding %s and holds "+
+					"%s on %s's repository: a finding is dismissed by whoever raised it, a principal that "+
+					"maintains the repository, or a person", grant.who(), a.FindingID, grant.Access, named))
+			}
+		case authors[asker] != kind:
+			return d.refuse(ConversationRefusalNotAuthor, fmt.Sprintf("%s did not write %s: a finding is resolved, "+
+				"marked won't fix or disputed by an author of the change", grant.who(), named))
+		}
+		if f.state != a.Resolution {
+			moved++
+		}
+	}
+	if moved == 0 {
+		d.unchanged = true
+		return d, nil
+	}
+	fr.By = w.Asker
+	d.payload = fr
+	// EVERY FINDING IT ANSWERS, and the conversation's row.
+	d.rows = len(fr.Findings) + 1
+	return d, nil
+}
+
+// supersededBy is how many findings raiser keeps standing on changeID, and
+// which of them review supersedes: those raised on a revision before the one
+// it judges that it does not carry — a review of the same revision supersedes
+// nothing, since two reviews of one revision are one reviewer's two passes over
+// it. The decide and the apply read the same rows by the same rule.
+func supersededBy(ctx context.Context, tx *sql.Tx, changeID, raiser string, kind PartyKind, r Review) (int,
+	[]standingFinding, error) {
+
+	all, err := standingFindings(ctx, tx, changeID, raiser, kind)
+	if err != nil {
+		return 0, nil, err
+	}
+	// A SET OF WHAT IT CARRIES: up to MaxStandingFindings against as many
+	// standing, which a scan of the list for each would make a million
+	// comparisons of a decide and an apply.
+	carried := make(map[string]bool, len(r.Carries))
+	for _, id := range r.Carries {
+		carried[id] = true
+	}
+	var out []standingFinding
+	for _, f := range all {
+		if f.revision < r.Revision && !carried[f.id] {
+			out = append(out, f)
+		}
+	}
+	return len(all), out, nil
+}
+
+// standingFinding is one finding of a raiser's still standing, as a review's
+// supersession reads it.
+type standingFinding struct {
+	id       string
+	revision int64
+	severity Severity
+	state    FindingState
+}
+
+// standingFindings is every finding raiser keeps standing on changeID, in one
+// seek of code_findings_raiser_idx a standing state: at most
+// [MaxStandingFindings] rows, which every review that would add past it is
+// refused.
+func standingFindings(ctx context.Context, tx *sql.Tx, changeID, raiser string, kind PartyKind) (
+	[]standingFinding, error) {
+
+	rows, err := tx.QueryContext(ctx, standingFindingsSQL, changeID, raiser, string(kind), standingStates)
+	if err != nil {
+		return nil, fmt.Errorf("code: read %s's standing findings on %s: %w", raiser, changeID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []standingFinding
+	for rows.Next() {
+		var f standingFinding
+		var severity, state string
+		if err := rows.Scan(&f.id, &f.revision, &severity, &state); err != nil {
+			return nil, fmt.Errorf("code: read %s's standing findings on %s: %w", raiser, changeID, err)
+		}
+		f.severity, f.state = Severity(severity), FindingState(state)
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// findingRow is what a decide and an apply read of one finding.
+type findingRow struct {
+	id, changeID string
+	raiser       string
+	raiserKind   PartyKind
+	revision     int64
+	severity     Severity
+	state        FindingState
+}
+
+// findingIn reads the finding id names, and false where no finding has it.
+func findingIn(ctx context.Context, tx *sql.Tx, id string) (findingRow, bool, error) {
+	var f findingRow
+	var kind, severity, state string
+	err := tx.QueryRowContext(ctx, findingSQL, id).Scan(&f.id, &f.changeID, &f.raiser, &kind, &f.revision,
+		&severity, &state)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return findingRow{}, false, nil
+	case err != nil:
+		return findingRow{}, false, fmt.Errorf("code: read finding %s: %w", id, err)
+	}
+	f.raiserKind, f.severity, f.state = PartyKind(kind), Severity(severity), FindingState(state)
+	return f, true, nil
 }
 
 // decideReviewers is an ask for review's rules over row — see this file's head.
@@ -499,7 +874,8 @@ func decideComment(ctx context.Context, tx *sql.Tx, w ConversationWrite, row cha
 	c := *w.Comment
 	c.CommentID, c.By = CommentID(w.OpID), w.Asker
 	c.ThreadID = c.CommentID
-	if c.ParentID != "" {
+	switch {
+	case c.ParentID != "":
 		parent, found, err := commentIn(ctx, tx, c.ParentID)
 		if err != nil {
 			return conversationDecision{}, err
@@ -508,11 +884,24 @@ func decideComment(ctx context.Context, tx *sql.Tx, w ConversationWrite, row cha
 		case !found || parent.changeID != row.id:
 			return d.refuse(ConversationRefusalThreadGone, fmt.Sprintf("%s holds no comment %s to reply to",
 				named, c.ParentID))
-		case parent.parentID != "":
+		case !parent.root():
 			return d.refuse(ConversationRefusalThreadGone, fmt.Sprintf("comment %s is a reply in thread %s: a "+
 				"thread is answered at its root", c.ParentID, parent.threadID))
 		}
 		c.ThreadID = parent.id
+	case c.FindingID != "":
+		// A FINDING'S THREAD IS NAMED BY THE FINDING, whatever state it is
+		// in: what a dismissed or superseded finding said is still talked
+		// about.
+		finding, found, err := findingIn(ctx, tx, c.FindingID)
+		if err != nil {
+			return conversationDecision{}, err
+		}
+		if !found || finding.changeID != row.id {
+			return d.refuse(ConversationRefusalThreadGone, fmt.Sprintf("%s holds no finding %s to reply to",
+				named, c.FindingID))
+		}
+		c.ThreadID = c.FindingID
 	}
 	if c.Anchor != nil && c.Anchor.Revision > row.revision {
 		return d.refuse(ConversationRefusalUnknownRevision, fmt.Sprintf("%s is at revision %d, and the comment "+
@@ -534,9 +923,10 @@ func decideThreadResolve(ctx context.Context, tx *sql.Tx, w ConversationWrite, a
 	if err != nil {
 		return conversationDecision{}, err
 	}
-	if !found || root.changeID != row.id || root.parentID != "" {
+	if !found || root.changeID != row.id || !root.root() {
 		return d.refuse(ConversationRefusalThreadGone, fmt.Sprintf("%s holds no thread %s: a thread is named "+
-			"by its first comment's id", named, t.ThreadID))
+			"by its first comment's id, and a finding's is answered by the finding's resolution", named,
+			t.ThreadID))
 	}
 	authors, err := authorsAmong(ctx, tx, row.id, []string{asker})
 	if err != nil {
@@ -598,6 +988,11 @@ type commentRow struct {
 	authorKind                       PartyKind
 	resolved                         bool
 }
+
+// root reports the first comment of a thread of its own: its thread is named
+// by its own id. A reply's thread is its root's, and a reply to a finding's the
+// finding's.
+func (c commentRow) root() bool { return c.threadID == c.id }
 
 // commentIn reads the comment id names, and false where no comment has it.
 func commentIn(ctx context.Context, tx *sql.Tx, id string) (commentRow, bool, error) {
@@ -693,6 +1088,21 @@ const (
 		WHERE r.change_id = ?1 AND r.reviewer = CAST(j.value AS TEXT)`
 	reviewersAskedSQL = `SELECT COUNT(*) FROM (SELECT 1 FROM code_reviewers
 		WHERE change_id = ? AND state = 'requested' LIMIT ?)`
+	// findingSQL is a finding by its key; standingFindingsSQL a raiser's
+	// standing findings on a change, driven from the list of the standing
+	// states ([standingStates]), one seek of code_findings_raiser_idx a state —
+	// never `state IN (…)`, which the pinned driver seeks no deeper than the
+	// raiser, reading every finding they raised on the change, superseded and
+	// dismissed ones of every earlier revision among them.
+	findingSQL = `SELECT id, change_id, raiser, raiser_kind, revision, severity, state
+		FROM code_findings WHERE id = ?`
+	standingFindingsSQL = `SELECT f.id, f.revision, f.severity, f.state
+		FROM json_each(?4) AS j CROSS JOIN code_findings AS f
+		WHERE f.change_id = ?1 AND f.raiser = ?2 AND f.state = CAST(j.value AS TEXT) AND f.raiser_kind = ?3`
+	// standingStates is the states [FindingState.Stands] names, as the JSON
+	// list standingFindingsSQL is driven from; a test holds the two to each
+	// other.
+	standingStates = `["open","resolved","wont_fix","disputed"]`
 )
 
 // conversationAgain is what a conversation write's asker does after a refusal
