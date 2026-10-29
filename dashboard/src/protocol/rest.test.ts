@@ -5,7 +5,14 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { GATE_REQUEST_TIMEOUT_MS } from "../contract/gate.ts";
-import { isAbort, REQUEST_TIMEOUT_MS, rest, RestError, retryAfterSeconds } from "./index.ts";
+import {
+  isAbort,
+  pathSegment,
+  REQUEST_TIMEOUT_MS,
+  rest,
+  RestError,
+  retryAfterSeconds,
+} from "./index.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -491,4 +498,18 @@ describe("what a 403 tells a screen", () => {
     expect(refusalOf({ error: "seat_unavailable", detail: "ana" })).toBeNull();
     expect(refusalOf({ error: "csrf_origin" })).toBeNull();
   });
+});
+
+// A SEGMENT STAYS ONE SEGMENT once a URL resolves it, and a value that
+// cannot be one (empty, or dots alone, which the URL standard reads as a step
+// along the path however they are escaped) is refused rather than sent.
+test("a path segment is one segment, whatever it holds, or refused", () => {
+  for (const value of ["a/b", "a?b#c", "a..b", ".hidden", "x.", "50% off"]) {
+    const path = new URL(`/base/${pathSegment(value)}/end`, "http://engine.example").pathname;
+    const parts = path.split("/");
+    expect(parts, value).toHaveLength(4);
+    expect(decodeURIComponent(parts[2]!), value).toBe(value);
+  }
+  for (const value of ["", ".", "..", "..."])
+    expect(() => pathSegment(value), value).toThrow(RangeError);
 });

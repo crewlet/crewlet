@@ -358,6 +358,8 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
     blocked: () => (busy ? "The brand is being saved." : null),
   });
   const spec = stepSpec(step);
+  // THE STEP'S PRIMARY ACTION is the wizard's own slot: it keeps one width on
+  // every step, and on a phone it takes the footer's second row by name.
   const footer =
     step === "review" ? (
       <>
@@ -367,11 +369,8 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
         <Button variant="secondary" loading={draftSave.busy} onClick={() => void saveDraft()}>
           Save as draft
         </Button>
-        <Button variant="primary" loading={busy} onClick={() => void finish()}>
-          {admin ? "Publish as the company brand" : "Save for review"}
-        </Button>
       </>
-    ) : (
+    ) : step !== "identity" || spec.optional ? (
       <>
         {step !== "identity" ? (
           <Button variant="ghost" onClick={() => void go(previousStep(step))}>
@@ -383,10 +382,17 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
             Skip for now
           </Button>
         ) : null}
-        <Button variant="primary" loading={draftSave.busy} onClick={() => void go(nextStep(step))}>
-          Continue
-        </Button>
       </>
+    ) : undefined;
+  const primary =
+    step === "review" ? (
+      <Button variant="primary" loading={busy} onClick={() => void finish()}>
+        {admin ? "Publish as the company brand" : "Save for review"}
+      </Button>
+    ) : (
+      <Button variant="primary" loading={draftSave.busy} onClick={() => void go(nextStep(step))}>
+        Continue
+      </Button>
     );
 
   const editorProps = { edit, onEdit: setEdit, assets };
@@ -431,6 +437,7 @@ function SetupFlow({ target, admin }: { target: SetupTarget; admin: boolean }) {
               asideLabel: "Preview of your draft",
             })}
         footer={footer}
+        primaryAction={primary}
       >
         <div ref={body} onKeyDown={onKeyDown} className="brand-setup-body">
           {/* WHY THE STEP IS HELD, over its fields, where it is read first. */}

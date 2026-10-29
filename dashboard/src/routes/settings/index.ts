@@ -10,7 +10,7 @@ export { IntegrationPeek } from "./integrations/catalogue.tsx";
 export { Integrations } from "./integrations/Directory.tsx";
 export { Limits } from "./Limits.tsx";
 export { ApiTokens, People, PersonPeek, ServiceAccounts } from "./Access.tsx";
-export { Models } from "./Models.tsx";
+export { Models } from "./models/Models.tsx";
 export { CredentialPeek, Secrets } from "./Secrets.tsx";
 export { SignInPolicy } from "./SignInPolicy.tsx";
 export { ToolPeek, Tools } from "./Tools.tsx";

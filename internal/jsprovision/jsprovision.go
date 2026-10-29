@@ -201,6 +201,81 @@ func SequenceBudget(clustered bool) time.Duration {
 // running, at ~120s each, on a different object every time.
 const LookupBudget = 30 * time.Second
 
+// Lookup asks one, a metadata read of an object that should exist (a bucket's,
+// a stream's, a consumer's), the way every lookup is asked: through [Read],
+// re-asked while nobody answers, for at most [LookupBudget] of ctx.
+//
+// ONE FUNCTION FOR EVERY CALLER, because a single request is the defect this
+// budget's own doc records: on a cluster only an object's leader answers its
+// info, every other member drops the request, and while the group elects
+// (a raft election timeout is four to nine seconds) nobody answers at all, so
+// one request on the client's five-second default fails a lookup of an
+// object that is there. That held for the cluster tests too, which bound
+// their buckets with one bare request and failed the same way under CI load.
+func Lookup(ctx context.Context, one func(context.Context) error) error {
+	return Clustered(false).Timing().lookup(ctx, one)
+}
+
+// lookup is [Lookup] at t's cadences: [Timing.Read] within t.Lookup of ctx.
+func (t Timing) lookup(ctx context.Context, one func(context.Context) error) error {
+	ctx, cancel := context.WithTimeout(ctx, t.Lookup)
+	defer cancel()
+	return t.Read(ctx, one, nil)
+}
+
+// LookupBucket binds the key-value bucket named bucket through js, looked up
+// as [Lookup] asks.
+func LookupBucket(ctx context.Context, js jetstream.JetStream, bucket string) (jetstream.KeyValue, error) {
+	var kv jetstream.KeyValue
+	err := Lookup(ctx, func(ctx context.Context) error {
+		var e error
+		kv, e = js.KeyValue(ctx, bucket)
+		return e
+	})
+	return kv, err
+}
+
+// LookupStream is the info of the stream named name AS ITS LEADER ANSWERED
+// IT, looked up as [Lookup] asks.
+//
+// A replicated stream's info that names NO LEADER is a member's own copy,
+// which a member answers once its group has been leaderless for a while: its
+// last sequence and its state can be short of what the quorum committed. That
+// answer is asked again like no answer at all ([leaderAnswered]), so what
+// comes back is the leader's. A stream on one server always names it.
+func LookupStream(ctx context.Context, js jetstream.JetStream, name string) (*jetstream.StreamInfo, error) {
+	var info *jetstream.StreamInfo
+	err := Lookup(ctx, func(ctx context.Context) error {
+		stream, e := js.Stream(ctx, name)
+		if e != nil {
+			return e
+		}
+		info = stream.CachedInfo()
+		return leaderAnswered(name, info)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+// errNoLeaderAnswer is a stream's info that a member answered from its own
+// copy, naming no leader. It wraps [nats.ErrTimeout], so [Unanswered] reads
+// it as no answer and [Timing.Read] asks again.
+var errNoLeaderAnswer = fmt.Errorf("answered by a member while the stream has no leader: %w", nats.ErrTimeout)
+
+// leaderAnswered is nil for info its leader answered (or a stream with no
+// cluster to elect one), and [errNoLeaderAnswer] for a member's own copy.
+func leaderAnswered(name string, info *jetstream.StreamInfo) error {
+	if info == nil {
+		return fmt.Errorf("stream %s: the answer carried no info", name)
+	}
+	if info.Cluster != nil && info.Cluster.Leader == "" {
+		return fmt.Errorf("stream %s: %w", name, errNoLeaderAnswer)
+	}
+	return nil
+}
+
 // Timing is every duration a provisioning call waits on, for one topology.
 //
 // [Clustered.Timing] is the production value; nothing else in the engine

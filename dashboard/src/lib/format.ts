@@ -963,3 +963,17 @@ export function greeting(now: number, name: string): string {
   const first = name.trim().split(/\s+/)[0] ?? "";
   return first ? `${salute}, ${first}` : salute;
 }
+
+/**
+ * Names or clauses in a sentence: "a", "a and b", "a, b, and c".
+ *
+ * THE OXFORD COMMA IS LOAD-BEARING: a clause can carry its own "and" ("the
+ * company's and every seat's token budget", "reviewing and evaluations"), so
+ * without it the last two run together and read as one item. Joined here
+ * rather than by `Intl.ListFormat`, which joins in the BROWSER's locale and
+ * would put "、" between words that are themselves English.
+ */
+export function listed(parts: readonly string[]): string {
+  if (parts.length < 3) return parts.join(" and ");
+  return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1) ?? ""}`;
+}

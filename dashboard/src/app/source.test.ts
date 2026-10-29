@@ -592,10 +592,50 @@ test("the element scanner reads a multi-line prop", () => {
 });
 
 /**
+ * A `label:` line that gives a column its word: a non-empty string literal,
+ * or the NAME of one, since a column built per item of a table of words (By
+ * job's one column per category) labels itself from that table, which a
+ * literal cannot. An empty literal of either quote, a template literal of any
+ * kind, and a bare `undefined` or `null` are refused: the first and the last
+ * are nothing to read, and the second cannot be told from nothing by its
+ * spelling. A name is trusted to hold a word, so
+ * the tables it reads hold that themselves (`CATEGORY_WORDS` refuses an empty
+ * word at the typecheck, and By job's suite reads every head's name).
+ */
+function namesALabel(line: string): boolean {
+  return /^\s*label:\s*((["'])(?!\2)\S|(?!(?:undefined|null)\b)[A-Za-z_$][\w$.[\]]*,?$)/.test(line);
+}
+
+test("a label line names a word, or the table one comes from, and never nothing", () => {
+  for (const line of [
+    '        label: "Coding",',
+    "        label: 'Coding',",
+    "        label: word,",
+    "        label: CATEGORY_WORDS[c].label,",
+    "        label: words.coding.label",
+    "        label: nullable.word,",
+    "        label: undefinedWords[c],",
+  ])
+    expect(namesALabel(line), line).toBe(true);
+  for (const line of [
+    '        label: "",',
+    "        label: '',",
+    "        label: ``,",
+    "        label: `${word}`,",
+    '        label: " ",',
+    "        label: undefined ?? word,",
+    "        label: undefined,",
+    "        label: null,",
+    "        label: null",
+  ])
+    expect(namesALabel(line), line).toBe(false);
+});
+
+/**
  * A COLUMN WHOSE HEAD IS A GLYPH STILL HAS A NAME.
  *
  * `GridColumn.header` is drawn in the head row, so a column twenty pixels wide
- * carries a mark or nothing at all — a work item's type, a row's actions, a
+ * carries a mark or nothing at all: a work item's type, a row's actions, a
  * pair of state tags. That is right for the wide table and wrong for the card a
  * grid becomes below the phone breakpoint (640px, `breakpoint.phone`), where
  * the head is gone and every value draws its own name beside it: a cell with no name draws none, and the card gets a bare
@@ -603,19 +643,19 @@ test("the element scanner reads a multi-line prop", () => {
  * tracker at 390px, it reads as a rendering fault rather than as a value.
  *
  * So the column says the word separately, in `label`. NOTHING ELSE CATCHES
- * THIS: the field is optional by necessity — a column with a real head must not
- * repeat it — so a new glyph column type-checks, renders, and is wrong only on
+ * THIS: the field is optional by necessity (a column with a real head must not
+ * repeat it), so a new glyph column type-checks, renders, and is wrong only on
  * a phone, which no suite in this tree has a viewport for.
  *
  * EXCEPT A COLUMN OF ROW ACTIONS, which says `action: true` instead: its cell
- * is a button that names itself, so the card draws no name beside it — and a
+ * is a button that names itself, so the card draws no name beside it, and a
  * `label` this rule had demanded there printed the word twice, `SIGN OUT  Sign
  * out` on every session of the Account page.
  *
  * THE SIBLINGS ARE FOUND BY INDENTATION, which is a real invariant here rather
  * than a guess: prettier is a gate (`make dashboard-lint`), so a literal's own
  * properties share a column and everything nested under one is indented past
- * it. Brace-counting would be the obvious alternative and is the worse one — a
+ * it. Brace-counting would be the obvious alternative and is the worse one: a
  * cell is JSX with children, template strings and comments in it, and a counter
  * walking through those answers confidently and wrongly. `typescript` is not
  * the alternative either: at 7.x the package exports its syntax tree only under
@@ -647,7 +687,7 @@ test("a column with no word in its head declares one", () => {
           siblings.push(line);
         }
       }
-      if (siblings.some((line) => /^\s*label:\s*["']\S/.test(line))) continue;
+      if (siblings.some(namesALabel)) continue;
       if (siblings.some((line) => /^\s*action:\s*true,?$/.test(line))) continue;
       offenders.push(`${path}:${at + 1}`);
     }

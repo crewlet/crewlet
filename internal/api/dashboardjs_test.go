@@ -1350,11 +1350,19 @@ const (
 	// Models screen, its words in the shared models module every chunk that
 	// imports it carries, took it to 4639.1 KiB. The Audit log's row for a
 	// model gesture (`model_acted`, its action and its entry linked to the
-	// models) took it to 4639.4 KiB. The secret dialogs reading whether the
-	// company switched to a write (`reload`), and saying so when it did not
-	// rather than closing on the 200, took it to 4640.5 KiB.
-	// 4641 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 545<<10
+	// models) took it to 4639.4 KiB.
+	// 4640 KiB, which still refuses a doubled baseline. Settings › Models built
+	// on the engine's model answers (the list with its alarms, By job, a page
+	// per model, the one wizard that adds and edits a model, and the test,
+	// retry, device sign-in and removal flows), with uilet 0.76.0's choice
+	// cards and setup wizard, took it to 4758.3 KiB: the Settings chunk the
+	// first load does not fetch grew from 192 KiB to 303 KiB, and the first
+	// load is 350.1 KiB. 4759 KiB, which still refuses a doubled baseline.
+	// The secret dialogs reading whether the company switched to a write
+	// (`reload`), and saying so when it did not rather than closing on the
+	// 200, took it to 4759.4 KiB. 4760 KiB, which still refuses a doubled
+	// baseline.
+	treeBudget = 4<<20 + 664<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

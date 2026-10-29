@@ -2409,7 +2409,7 @@ node knows".
       "expires_at": "2026-11-04T18:37:00Z", "expiry_basis": "stored_at+365d", "host_logins": []},
     "sitting_out": null, "last_success": "2026-10-28T21:56:00Z", "last_failure": null,
     "waiting": null,
-    "usage": {"days": 7, "calls": 412, "total_tokens": 38400000, "cost_usd": 0, "priced_calls": 0},
+    "usage": {"days": 7, "calls": 412, "total_tokens": 38400000},
     "used_by": [{"seat": "pm", "job": "executor", "position": 0, "written": false, "source": "default-entry"}],
     "device_sign_in": null
   }],
@@ -2432,7 +2432,8 @@ node knows".
   `last_failure` (`kind`, `at`, `said`, `node`) are the latest across live nodes;
   `waiting` is the seats parked on a chain naming it, by handle, and since when.
 - `usage` is the trailing seven days of the [spend rollup](#get-tokensbreakdown)'s per-entry
-  row.
+  row, in calls and tokens and never money: the dashboard renders tokens, never a
+  price, and the rollup itself carries `cost_usd` for a reader that wants one.
 - `used_by` is the engine's own resolution of every agent seat's jobs
   (`position` 0 runs the job, more is a fallback; `written` is whether the seat
   wrote the field; `source` the level that decided it: `seat`, `executor`,
