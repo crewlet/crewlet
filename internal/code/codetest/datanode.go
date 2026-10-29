@@ -70,8 +70,10 @@ type DataOptions struct {
 	SeatRules func() (code.SeatRules, bool)
 	// Current is whether the node serves the company's configuration, as
 	// its committer reads it before it decides a seat's push
-	// (code.CommitterOptions.Current) — false is a node confirmed behind
-	// it, which decides none; nil is current.
+	// (code.CommitterOptions.Current) and its change writer before it
+	// decides a write the chart judges (code.ChangeWriterOptions.Current) —
+	// false is a node confirmed behind it, which decides neither; nil is
+	// current.
 	Current func() bool
 }
 
@@ -301,11 +303,13 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		Publisher: &faultPublisher{inner: pub, faults: d.o.Faults, appends: &d.appends},
 		DB:        p.estate.Reader(), NodeID: d.o.ID,
 		Retention: func() time.Duration { return deletedRetention },
-		// THE COMMITTER'S CHART, as the engine hands the two the same one
-		// (codeSeatRules): a seat's write of a change's conversation, and
-		// every reviewer an ask names, is judged by the chart a seat's push
-		// is, so a node of the suite decides what a node of the fleet does.
-		SeatRules: seatRules,
+		// THE COMMITTER'S CHART AND POSTURE, as the engine hands the two the
+		// same ones (codeSeatRules, e.admits): a seat's write of a change's
+		// conversation, and every reviewer an ask names, is judged by the
+		// chart a seat's push is, and by no node confirmed behind the
+		// company's configuration, so a node of the suite decides what a node
+		// of the fleet does.
+		SeatRules: seatRules, Current: d.o.Current,
 	}); err != nil {
 		t.Fatalf("codetest: %s: build the change writer: %v", d.o.ID, err)
 	}

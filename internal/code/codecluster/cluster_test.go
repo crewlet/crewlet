@@ -484,8 +484,9 @@ func (c memberCopy) For(context.Context, string) (estate.Backend, bool) {
 type revocation struct{ seat, behind string }
 
 // roster is the chart the member judges a seat's grant by — its git node's
-// reads and engine writes, and its committer's decide: the fixture chart, less
-// the seat a revision revoked where the member applied that revision.
+// reads and engine writes, its committer's decide and its change writer's: the
+// fixture chart, less the seat a revision revoked where the member applied
+// that revision.
 func (m *member) roster() code.Roster {
 	if r := m.c.revoked.Load(); r != nil && r.behind != m.id {
 		return codetest.FixtureRosterWithout(r.seat)
@@ -494,7 +495,8 @@ func (m *member) roster() code.Roster {
 }
 
 // seatRules is the member's chart on the company's clock, as its committer
-// judges a seat's push by them.
+// judges a seat's push by them and its change writer a seat's write of a
+// change's conversation.
 func (m *member) seatRules() (code.SeatRules, bool) {
 	return code.SeatRules{Roster: m.roster(), Zone: time.UTC}, true
 }

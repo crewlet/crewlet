@@ -74,7 +74,8 @@ type Cluster interface {
 	// the chart that still holds the seat, and is CONFIRMED BEHIND the
 	// company's configuration (shed), as every reader of a node's posture on
 	// it reads it — its estate service (estate.Backend.Current), its committer
-	// (code.CommitterOptions.Current) and its git node's reads and engine
+	// (code.CommitterOptions.Current), its change writer
+	// (code.ChangeWriterOptions.Current) and its git node's reads and engine
 	// writes. restore is the fleet back on the fixture chart with every member
 	// current, which a case runs before it returns.
 	Revoke(t testing.TB, seat, behind string) (restore func())
