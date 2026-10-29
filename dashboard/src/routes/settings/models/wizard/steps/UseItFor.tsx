@@ -29,7 +29,7 @@ import { useMemo } from "react";
 import {
   Button,
   Callout,
-  Checkbox,
+  CheckGrid,
   ChoiceList,
   Disclosure,
   FilterChip,
@@ -37,6 +37,7 @@ import {
   Switch,
   Text,
   Tooltip,
+  type CheckGridState,
   type ChoiceListOption,
 } from "@crewlethq/ui";
 import { listed } from "~/lib/format.ts";
@@ -55,7 +56,7 @@ import {
 } from "~/lib/modelUses.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { ModelsData } from "../../data.ts";
-import { JobGlyph, JobName } from "../../JobGlyph.tsx";
+import { JobGlyph } from "../../JobGlyph.tsx";
 import { seatName } from "../../places.ts";
 import {
   ASSISTANT_USE,
@@ -75,6 +76,13 @@ const CHOICES: readonly Exclude<Intent, "custom">[] = [
   "assistant",
   "none",
 ];
+
+/** A seat's category in the per-seat grid: every job in it ticks the box, some of them half-tick it. */
+const GRID_STATE: Record<ReturnType<typeof categoryState>, CheckGridState> = {
+  all: "checked",
+  some: "mixed",
+  none: "unchecked",
+};
 
 type Patch = Partial<Pick<Draft, "uses" | "intent" | "webDenied">>;
 
@@ -413,49 +421,25 @@ export function UseItFor({
       ) : null}
 
       <Disclosure title="Customise per seat" defaultOpen={draft.intent === "custom"}>
-        <div
-          className="models-who__grid"
-          style={{ ["--models-who-columns" as string]: CATEGORY_ORDER.length }}
-        >
-          <span />
-          {CATEGORY_ORDER.map((c) => (
-            <Text
-              key={c}
-              as="span"
-              variant="caption"
-              tone="secondary"
-              className="models-who__phase"
-            >
-              <JobName job={c} />
-            </Text>
-          ))}
-          {data.seats.map((s) => (
-            <div key={s.handle} className="models-who__row">
-              <span className="models-who__chip">
-                <SeatAvatar name={s.name} kind={s.kind} avatar={s.avatar} size="xs" decorative />
-                {s.name}
-              </span>
-              {CATEGORY_ORDER.map((c) => {
-                const state = categoryState(draft.uses, s.handle, c);
-                const blocked = c === "coding" && !executor;
-                return (
-                  <Checkbox
-                    key={c}
-                    size="sm"
-                    hideLabel
-                    label={`${s.name}: ${CATEGORY_WORDS[c].label} on ${draft.key || "this model"}`}
-                    checked={state === "all"}
-                    // ONE JOB OF A CATEGORY, written by hand, reads as part of it; a press sets both.
-                    indeterminate={state === "some"}
-                    disabled={blocked && state === "none"}
-                    title={blocked ? noCoding : undefined}
-                    onCheckedChange={(next) => setSeatCategory(s.handle, c, next)}
-                  />
-                );
-              })}
-            </div>
-          ))}
-        </div>
+        <CheckGrid
+          label={`Jobs per seat on ${draft.key || "this model"}`}
+          rows={data.seats.map((s) => ({
+            value: s.handle,
+            label: s.name,
+            media: (
+              <SeatAvatar name={s.name} kind={s.kind} avatar={s.avatar} size="xs" decorative />
+            ),
+          }))}
+          columns={CATEGORY_ORDER.map((c) => ({
+            value: c,
+            label: CATEGORY_WORDS[c].label,
+            media: <JobGlyph job={c} size="sm" />,
+            ...(c === "coding" && !executor ? { disabledReason: noCoding } : {}),
+          }))}
+          // ONE JOB OF A CATEGORY, written by hand, reads as part of it; a press sets both.
+          stateOf={(seat, c) => GRID_STATE[categoryState(draft.uses, seat, c as JobCategory)]}
+          onChange={(seat, c, on) => setSeatCategory(seat, c as JobCategory, on)}
+        />
         {assistantOn ? (
           <Switch
             label="Also answer in the Dashboard Assistant"
@@ -478,11 +462,6 @@ export function UseItFor({
               onChange({ uses, intent });
             }}
           />
-        ) : null}
-        {!executor ? (
-          <Text as="p" variant="caption" tone="secondary">
-            {product(draft.agent)} serves every job but coding, so the Coding column is off.
-          </Text>
         ) : null}
       </Disclosure>
     </div>

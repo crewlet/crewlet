@@ -4,13 +4,14 @@
  * The invariants: a category writes exactly the jobs `CATEGORY_JOBS` gives
  * it; an edit's choice keeps the seats the model serves, never every seat;
  * no choice row carries a "Replaces" line, Review lists the changes; seats
- * are named, never keyed; a document that split a category reads back half-checked; the
+ * are named, never keyed; a document that split a category reads back half-checked;
+ * a CLI that cannot code refuses the coding box of a seat without it; the
  * fast-model note is quiet and only where a category carries one; and the
  * web tools rule is said wherever a choice meets it, with its one-click fix.
  */
 
 import { useState } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import {
   CATEGORY_JOBS,
@@ -175,10 +176,26 @@ test("a category the document split by hand reads back half-checked", () => {
   uses.jobs[CATEGORY_JOBS[split][0]!] = ["qa"];
   render(<Harness start={{ intent: "custom", uses }} />);
   const box = screen.getByRole("checkbox", {
-    name: `Quality Lead: ${CATEGORY_WORDS[split].label} on haiku`,
+    name: `Quality Lead ${CATEGORY_WORDS[split].label}`,
   }) as HTMLInputElement;
   expect(box.indeterminate).toBe(true);
   expect(box.checked).toBe(false);
+});
+
+test("a CLI that cannot code refuses a seat's coding box, says why once, and lets a ticked one off", () => {
+  const uses = noUses();
+  for (const job of CATEGORY_JOBS.coding) uses.jobs[job] = ["qa"];
+  render(<Harness company={split} start={{ agent: "codex", intent: "custom", uses }} />);
+  const box = (name: string) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
+  const coding = CATEGORY_WORDS.coding.label;
+  expect(box(`Product Manager ${coding}`).disabled).toBe(true);
+  expect(box(`Quality Lead ${coding}`).disabled).toBe(false);
+  expect(box(`Product Manager ${CATEGORY_WORDS.reviews.label}`).disabled).toBe(false);
+  // The grid says why under itself, and the section says it once, whatever the number of seats.
+  const section = screen.getByRole("region", { name: "Customise per seat" });
+  expect(within(section).getAllByText(/but coding|cannot run coding/)).toHaveLength(1);
+  fireEvent.click(box(`Quality Lead ${coding}`));
+  for (const job of CATEGORY_JOBS.coding) expect(latest.uses.jobs[job]).toEqual([]);
 });
 
 test("the fast-model note shows only where a category carries one, and only for a slow model", () => {
