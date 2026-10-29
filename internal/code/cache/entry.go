@@ -463,6 +463,12 @@ type incarnation struct {
 	// work — and said so: each logged and counted once an incarnation,
 	// however many passes, rounds and checks find it again.
 	memoryRefused maintStep
+	// publishRefused is the charge of the last publication of the repository
+	// the node's memory refused (Cache.AdmitPublication), 0 for none: what
+	// every maintainer pass judges against its budget for the gauge and the
+	// alarm (memory.go's refusalWalk). Cleared by a publication admitted, and
+	// by the rows' chain moving (setChain) — another node published it.
+	publishRefused int64
 	// inherited: a previous process left it — Open indexed it from the disk
 	// — so its bytes are none this process held to their rows as it placed
 	// them, and its first full round in this process makes its first scrub

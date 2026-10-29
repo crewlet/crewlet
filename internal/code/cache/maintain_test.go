@@ -1937,6 +1937,16 @@ func TestTheMaintainersStepsAreTheDeclaredWrites(t *testing.T) {
 			}
 		}
 		for step, v := range gauged {
+			// A PUBLICATION'S STEP is the maintainer's background work beside
+			// its declared writes, gauged at every pass, and nothing was
+			// published here, so nothing of it is refused.
+			if step == cache.PublishStep {
+				if v != 0 {
+					t.Errorf("%s{step=%s} = %v, want 0 with no publication refused",
+						metrics.CodeCacheMaintenanceRefused, step, v)
+				}
+				continue
+			}
 			if _, ok := want[step]; !ok || v != 1 {
 				t.Errorf("%s{step=%s} = %v, want 1 for a declared step", metrics.CodeCacheMaintenanceRefused, step, v)
 			}

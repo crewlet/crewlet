@@ -184,12 +184,13 @@ import (
 // is the next run, never an interval.
 //
 // A FULL ROUND THAT LEAVES MANY PACKS INDEXES THEM BEFORE IT ANSWERS. One push
-// is one pack until the repository's home merges them (internal/code/compact),
-// so a repository may reach thousands (code.MaxPacksPerRepo) between merges;
-// without a multi-pack-index every object lookup binary-searches each pack's
-// own .idx in turn, and the request a cold cache was synced for — a clone on a
-// node that just joined, the first fetch after a restart — would be served by
-// pack-objects searching every pack for every object. MANY is MidxRoundPacks
+// is one pack until the repository's maintainer merges them
+// (internal/code/compact), so a repository may reach thousands
+// (code.MaxPacksPerRepo) between merges; without a multi-pack-index every
+// object lookup binary-searches each pack's own .idx in turn, and the request
+// a cold cache was synced for — a clone on a node that just joined, the first
+// fetch after a restart — would be served by pack-objects searching every
+// pack for every object. MANY is MidxRoundPacks
 // (256), where the cold clone alone pays the index back, over 100 MB and over
 // a gigabyte. Under that the index saves the cold request less than it costs
 // it, so the round answers without one, and the maintainer's index follows
@@ -489,6 +490,13 @@ func (c *Cache) maintainerPass(ctx context.Context) []*maintRun {
 		if c.holdsWork(e) {
 			inc := e.current
 			p, refused, charges := c.plan(inc, budget, c.due(e, now))
+			// A PUBLICATION THE NODE'S MEMORY REFUSED, judged again on
+			// this pass's budget: a node given the memory in place clears
+			// it here, before its maintainer next asks.
+			if inc.publishRefused > budget {
+				refused |= stepPublish
+				charges[stepPublish] = inc.publishRefused
+			}
 			walk.note(&c.mw, e.id, inc, refused, charges)
 			if p.steps() && !c.runnable(e) && e.adopting > 0 {
 				// Held back by an adoption's links alone, milliseconds:

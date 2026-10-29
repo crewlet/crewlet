@@ -272,7 +272,7 @@ status and the node's log keeps the reason. The ones a person meets most:
 | `(pending: durable at <position>, …)` | The push is recorded and was not applied on the node that answered within a minute. Run the same `git push` again: if it landed, git says `Everything up-to-date`. |
 | `(unknown: outcome unknown (op …); …)` | The answer was lost — it may or may not have landed. Fetch, then push again. |
 | `(not_applied: …)` | The push was recorded and every node dropped it: nothing landed. Push again. |
-| `(compaction_behind: <repo> holds <n> live packs, …)` | The repository holds as many packs as one may until its home git node merges them, which it does every minute: run the same `git push` again in a minute. If it persists, the node's `code_compaction_behind` alarm is up and its log says why ([A busy repository's packs are merged](#a-busy-repositorys-packs-are-merged)). |
+| `(compaction_behind: <repo> holds <n> live packs, …)` | The repository holds as many packs as one may until its maintainer — the git node that merges its packs and publishes its layers — merges them, which it does every minute: run the same `git push` again in a minute. If it persists, the node's `code_compaction_behind` alarm is up and its log says why ([A busy repository's packs are merged](#a-busy-repositorys-packs-are-merged)). |
 | `… retry in 30 s …` (a `503`) | The node is draining or stopping: retry, and a balancer sends you to another. |
 | `error: RPC failed; HTTP 503 …` then `fatal: could not fetch <id> from promisor remote` (the checkout of a blobless clone) | The checkout's one fetch for the files it lacks found the node's room for large fetch requests in use — it waited 55 s for its turn, or found no place to wait — and git does not retry it: run the checkout again. git prints no reason for a request answered mid-transfer; the node's `code_fetch_spool_unserved` line names the token and what held it back, and if it was the token's own requests, the token is shared by several CI runners — give each its own. |
 
@@ -484,17 +484,19 @@ while it runs, since it clones a mirror there and bundles it; see
 
 ## A busy repository's packs are merged
 
-Every push that carries objects stores one pack, and the repository's home git
-node merges its small packs into a few with no step of yours: it looks every
-minute and merges them once sixteen have gathered, or a busy repository's
-minute of pushes at every look
+Every push that carries objects stores one pack, and the repository's
+[maintainer](../concepts/code-host.md#who-maintains-a-repository) — the git
+node that also publishes its bitmapped index for every other git node, its
+home on a fleet of alike nodes — merges its small packs into a few with no step
+of yours: it looks every minute and merges them once sixteen have gathered, or
+a busy repository's minute of pushes at every look
 ([Compaction](../concepts/code-host.md#compaction)). The packs a merge replaces
 are kept a day for any clone still reading them, then deleted. A repository
-that takes pushes faster than its home merges them can reach the 2 048 live
-packs one may hold: a push carrying objects is then refused
+that takes pushes faster than its maintainer merges them can reach the 2 048
+live packs one may hold: a push carrying objects is then refused
 `compaction_behind`, while one that only moves or deletes refs still lands —
-run the push again a minute later. The home git node raises the
-`code_compaction_behind` alarm while any repository it compacts stands there,
+run the push again a minute later. The maintainer raises the
+`code_compaction_behind` alarm while any repository it maintains stands there,
 and its log names what keeps the merge from landing: a node whose memory cannot
 hold the merge (`code_cache_compaction_refused`, a node with more memory, or
 fewer git transfers, holds it), an object store with no room

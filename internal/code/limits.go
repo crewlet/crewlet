@@ -1031,8 +1031,8 @@ const (
 
 	// CompactTargetPacks is the live packs a repository is held near: git's
 	// gc.autoPackLimit, and the approved design's "about fifty". Past it the
-	// home compacts whatever its roll merges, two packs at the least, so a
-	// repository past the target shrinks at every poll.
+	// maintainer compacts whatever its roll merges, two packs at the least, so
+	// a repository past the target shrinks at every poll.
 	CompactTargetPacks = 50
 
 	// CompactPackBytes is the --max-pack-size every compaction output is cut

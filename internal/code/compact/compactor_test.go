@@ -15,7 +15,6 @@ import (
 	"github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -29,7 +28,7 @@ func TestACompactorMissingASeamIsRefusedByName(t *testing.T) {
 	if !errors.Is(err, compact.ErrOptions) {
 		t.Fatalf("New with no seams = %v, want ErrOptions", err)
 	}
-	for _, name := range []string{"Cache", "Objects", "Estate", "Homes", "NodeID"} {
+	for _, name := range []string{"Cache", "Objects", "Estate", "Maintainers", "NodeID"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("New with no seams = %q, which does not name %s", err, name)
 		}
@@ -76,10 +75,14 @@ func TestAPlanNotDueIsNotPlannedAgainUntilTheRepositoryMoves(t *testing.T) {
 }
 
 // A COMPACTOR THAT CANNOT READ THE PLACEMENT COMPACTS NOTHING: a node that
-// cannot tell whether it is a repository's home does none of a home's work —
-// no sync, no build — for any repository of the pass, and says so once.
+// cannot tell whether it is a repository's maintainer does none of a
+// maintainer's work — no sync, no build — for any repository of the pass, and
+// says so once. It asks by the charge a publication of the repository is
+// placed by, so the repository's compactions and its publications fall to one
+// node.
 //
-// Mutation: treat the error as home, and the pass syncs.
+// Mutation: treat the error as the maintainer, and the pass syncs; or ask by
+// the compaction's own charge, and the charge asked is not the publication's.
 func TestACompactorThatCannotReadThePlacementCompactsNothing(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
@@ -92,8 +95,10 @@ func TestACompactorThatCannotReadThePlacementCompactsNothing(t *testing.T) {
 	}
 	cc := countedOver(x.node().Cache())
 	placement := errors.New("who serves git cannot be read")
+	var asked []int64
 	c, _, l := x.compactorOf(func(o *compact.Options) {
-		o.Cache, o.Estate, o.Homes = cc, &listed{Estate: served{x.fleet}}, homes{err: placement}
+		o.Cache, o.Estate = cc, &listed{Estate: served{x.fleet}}
+		o.Maintainers = maintainers{err: placement, asked: &asked}
 	})
 	report, err := c.Poll(t.Context())
 	if err != nil {
@@ -102,25 +107,134 @@ func TestACompactorThatCannotReadThePlacementCompactsNothing(t *testing.T) {
 	if report.Listed != 2 {
 		t.Fatalf("the pass listed %d repositories, want both", report.Listed)
 	}
-	if syncs, _ := cc.counts(); syncs != 0 || report.Home != 0 {
+	if syncs, _ := cc.counts(); syncs != 0 || report.Maintained != 0 {
 		t.Errorf("a pass that could not read the placement synced %d times and counted %d repositories its "+
-			"own, want none", syncs, report.Home)
+			"own, want none", syncs, report.Maintained)
 	}
-	if n := l.count("code_compaction_home_unknown", `"level":"WARN"`); n != 1 {
-		t.Errorf("the pass logged code_compaction_home_unknown %d times, want once:\n%s", n, l)
+	if n := l.count("code_compaction_maintainer_unknown", `"level":"WARN"`); n != 1 {
+		t.Errorf("the pass logged code_compaction_maintainer_unknown %d times, want once:\n%s", n, l)
+	}
+	cand := x.candidate()
+	if want := x.node().Cache().PublishCharge(cand.LiveObjects); len(asked) == 0 || asked[0] != want {
+		t.Errorf("the pass asked who maintains the repository by the charges %v, want the publication's %d, "+
+			"which both loops are placed by", asked, want)
 	}
 }
 
-// A PASS JUDGES ITS HOMES AGAINST ONE READING: a pass asks who serves git ONCE,
-// for every listed repository it must judge — on a node home to none of them,
-// every one, which no plan of it is ever made on to remember — and plans none
-// it is not home to; and once its home has found a plan of each not due at its
-// version, a pass asks nothing at all: a repository it remembers costs the
-// pass a lookup.
+// listedGate is a compactor's placement that lists this node among the git
+// nodes once a case says so, counting the times it was asked — and has this
+// node maintain every repository.
+type listedGate struct {
+	mu     sync.Mutex
+	listed bool
+	asked  int
+}
+
+func (*listedGate) MaintainerOf(charges map[string]int64) (map[string]bool, error) {
+	out := map[string]bool{}
+	for id := range charges {
+		out[id] = true
+	}
+	return out, nil
+}
+
+func (g *listedGate) Listed() (bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.asked++
+	return g.listed, nil
+}
+
+// list has every later question answered listed.
+func (g *listedGate) list() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.listed = true
+}
+
+// asks is how many times the gate was asked.
+func (g *listedGate) asks() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.asked
+}
+
+// kindsRead is a compactor's reads of the code host, counting each kind read.
+type kindsRead struct {
+	compact.Estate
+	mu    sync.Mutex
+	kinds map[code.ReadKind]int
+}
+
+func (k *kindsRead) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	k.mu.Lock()
+	k.kinds[q.Kind]++
+	k.mu.Unlock()
+	return k.Estate.Read(ctx, q)
+}
+
+// read is how many reads of kind it counted.
+func (k *kindsRead) read(kind code.ReadKind) int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.kinds[kind]
+}
+
+// THE LOOPS PASS ONCE THIS NODE IS LISTED, AND NOT BEFORE: a node no listing of
+// the git nodes carries maintains nothing (internal/estate's
+// Router.Maintainer), so Start's loops ask whether it is listed, every
+// compact.ListedRecheck, and read no listing until it is — a booting node is
+// listed only once its host beats, and a pass before that would find every
+// repository placed elsewhere or nowhere, and log a placement it could read.
+// Listed, both loops pass at once.
 //
-// Mutation: ask who serves git once a repository, and the first pass reads
-// it twice.
-func TestAPassJudgesItsHomesAgainstOneReading(t *testing.T) {
+// Mutation: pass at Start without asking, and the loops list while this node
+// is unlisted.
+func TestTheLoopsPassOnceThisNodeIsListed(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t)
+	gate := &listedGate{}
+	seam := &kindsRead{Estate: served{x.fleet}, kinds: map[code.ReadKind]int{}}
+	c, _, _ := x.compactorOf(func(o *compact.Options) { o.Estate, o.Maintainers = seam, gate })
+	c.Start()
+
+	// FOUR ASKS UNLISTED: a recheck waited out by each loop, or by one of
+	// them twice — whichever, none may have read a listing.
+	await(t, "the loops to ask whether this node is listed four times", func() bool { return gate.asks() >= 4 })
+	for _, kind := range []code.ReadKind{code.ReadCompactionDue, code.ReadPublicationDue} {
+		if n := seam.read(kind); n != 0 {
+			t.Errorf("the loops read %d %s listings with this node unlisted, want none", n, kind)
+		}
+	}
+	gate.list()
+	await(t, "both loops to list once this node is listed", func() bool {
+		return seam.read(code.ReadCompactionDue) > 0 && seam.read(code.ReadPublicationDue) > 0
+	})
+}
+
+// await waits until done holds, failing t after a minute: what a case waits
+// on here is a loop's next step, a second or two away.
+func await(t *testing.T, what string, done func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Minute)
+	for !done() {
+		if time.Now().After(deadline) {
+			t.Fatalf("waited a minute for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A PASS JUDGES ITS MAINTAINERS AGAINST ONE LISTING: a pass asks who maintains
+// what ONCE, for every listed repository it must judge — on a node that
+// maintains none of them, every one, which no plan of it is ever made on to
+// remember — and plans none it does not maintain; and once its maintainer has
+// found a plan of each not due at its version, a pass asks nothing at all: a
+// repository it remembers costs the pass a lookup.
+//
+// Mutation: ask who maintains a repository once a repository, and the first
+// pass reads the listing twice.
+func TestAPassJudgesItsMaintainersAgainstOneListing(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
 	x.pushN(2, 4<<10)
@@ -131,9 +245,9 @@ func TestAPassJudgesItsHomesAgainstOneReading(t *testing.T) {
 		t.Fatalf("the push to other: %s", res)
 	}
 	cc := countedOver(x.node().Cache())
-	h := &askedHomes{}
+	m := &askedMaintainers{}
 	c, _, _ := x.compactorOf(func(o *compact.Options) {
-		o.Cache, o.Estate, o.Homes = cc, &listed{Estate: served{x.fleet}}, h
+		o.Cache, o.Estate, o.Maintainers = cc, &listed{Estate: served{x.fleet}}, m
 	})
 
 	report, err := c.Poll(t.Context())
@@ -143,28 +257,28 @@ func TestAPassJudgesItsHomesAgainstOneReading(t *testing.T) {
 	if report.Listed != 2 {
 		t.Fatalf("the pass listed %d repositories, want both", report.Listed)
 	}
-	if got := h.readings(); len(got) != 1 || len(got[0]) != 2 {
-		t.Errorf("a pass over two repositories on a node home to neither asked who serves git %v, want once, "+
-			"of both", got)
+	if got := m.readings(); len(got) != 1 || len(got[0]) != 2 {
+		t.Errorf("a pass over two repositories on a node maintaining neither asked who maintains them %v, want "+
+			"once, of both", got)
 	}
-	if syncs, _ := cc.counts(); syncs != 0 || report.Home != 0 {
-		t.Errorf("a pass on a node home to neither repository synced %d times and counted %d its own, want none",
-			syncs, report.Home)
+	if syncs, _ := cc.counts(); syncs != 0 || report.Maintained != 0 {
+		t.Errorf("a pass on a node maintaining neither repository synced %d times and counted %d its own, want "+
+			"none", syncs, report.Maintained)
 	}
 
-	h.setHome(true)
-	if report, err := c.Poll(t.Context()); err != nil || report.Home != 2 || report.Due != 0 {
-		t.Fatalf("the pass on their home = %+v, %v; want both planned and found not due", report, err)
+	m.setMaintains(true)
+	if report, err := c.Poll(t.Context()); err != nil || report.Maintained != 2 || report.Due != 0 {
+		t.Fatalf("the pass on their maintainer = %+v, %v; want both planned and found not due", report, err)
 	}
-	if got := h.readings(); len(got) != 2 || len(got[1]) != 2 {
-		t.Errorf("the second pass asked who serves git %v, want once more, of both", got)
+	if got := m.readings(); len(got) != 2 || len(got[1]) != 2 {
+		t.Errorf("the second pass asked who maintains them %v, want once more, of both", got)
 	}
 	if _, err := c.Poll(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if got := h.readings(); len(got) != 2 {
-		t.Errorf("a pass over two repositories remembered as not due asked who serves git %v, want nothing more",
-			got)
+	if got := m.readings(); len(got) != 2 {
+		t.Errorf("a pass over two repositories remembered as not due asked who maintains them %v, want nothing "+
+			"more", got)
 	}
 }
 
@@ -206,7 +320,7 @@ func TestACompactionTheNodeCannotHoldIsAdmittedWhenTheNodeGrows(t *testing.T) {
 
 // THE COMPACTION-BEHIND ALARM HOLDS WHILE ITS COMPACTION IS REFUSED: every pass
 // names in the alarm reading every listed repository at code.MaxPacksPerRepo
-// it is home for — before its memory of plans not due, and whatever its
+// it maintains — before its memory of plans not due, and whatever its
 // compaction then decides — because at the bound every push carrying a pack
 // is refused and records nothing, so the repository's version stands still.
 // One whose build the node's memory refuses at every pass is named after every
@@ -310,7 +424,7 @@ func TestTheAdmissionIsReleasedBeforeTheUploads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var adm *cache.Compacting
+	var adm *cache.Admission
 	for deadline := time.Now().Add(10 * time.Second); ; {
 		adm, err = x.node().Cache().AdmitCompaction(s, 1, code.DefaultLimits())
 		if err == nil || !errors.Is(err, gitproc.ErrBusy) || time.Now().After(deadline) {
@@ -327,91 +441,6 @@ func TestTheAdmissionIsReleasedBeforeTheUploads(t *testing.T) {
 	close(release)
 	if out := <-done; out != compact.OutcomeApplied {
 		t.Errorf("the compaction once its upload was let go: %s, want applied", out)
-	}
-}
-
-// A STORE WITH NO ROOM HOLDS A COMPACTION BACK UNTIL IT HAS THE ROOM, never as a
-// blip to retry: a compaction whose output the object store refused for room
-// (objstore.ErrFull) is refused `store_full`, counted so, and its repository
-// is planned again only once the store shows the room — on a store that holds
-// a reservation, once a pass's read of it holds what the compaction would
-// store; on a provider's bucket, which says nothing, once the collector's
-// interval has passed since the refusal — and never remembered at its version,
-// which no room coming back moves.
-//
-// Mutation: plan a held repository again at the next pass whatever the store
-// shows, and the second pass syncs it.
-func TestAStoreWithNoRoomHoldsACompactionBackUntilItHasTheRoom(t *testing.T) {
-	t.Parallel()
-	full := &objstore.Full{Remedy: "the operator raises the bucket's reservation", Err: errors.New("no room")}
-	for _, c := range []struct {
-		name     string
-		reserves bool
-	}{{"a reserved store", true}, {"a provider's bucket", false}} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			x := newFixture(t)
-			x.pushN(code.CompactMinMerge, 4<<10)
-			var (
-				mu  sync.Mutex
-				now = time.Now()
-			)
-			clock := func() time.Time {
-				mu.Lock()
-				defer mu.Unlock()
-				return now
-			}
-			advance := func(d time.Duration) {
-				mu.Lock()
-				defer mu.Unlock()
-				now = now.Add(d)
-			}
-			room := int64(0)
-			rs := &recordingStore{Store: x.store}
-			rs.refuse = func() error { return full }
-			rs.usage = func() (objstore.Usage, bool, error) {
-				mu.Lock()
-				defer mu.Unlock()
-				return objstore.Usage{Bytes: 1 << 30, MaxBytes: 1<<30 + room}, c.reserves, nil
-			}
-			cc := countedOver(x.node().Cache())
-			comp, rec, l := x.compactorOf(func(o *compact.Options) { o.Cache, o.Objects, o.Now = cc, rs, clock })
-
-			report := pollWhileBusy(t, comp, rec)
-			if report.Refused != 1 {
-				t.Fatalf("the pass whose output the store refused for room reported %+v, want it refused", report)
-			}
-			if n := counter(rec, metrics.CodeCompactRefusals, "reason", string(code.RefusalStoreFull)); n != 1 {
-				t.Errorf("%s{reason=store_full} = %d, want 1", metrics.CodeCompactRefusals, n)
-			}
-			if n := l.count("code_compaction_refused", `"refusal":"store_full"`); n != 1 {
-				t.Errorf("code_compaction_refused with the refusal store_full logged %d times, want once:\n%s", n,
-					l)
-			}
-			synced, _ := cc.counts()
-
-			// Still no room — and, on a provider's bucket, the collector's
-			// interval not yet passed.
-			advance(collect.CollectInterval / 2)
-			if _, err := comp.Poll(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			if syncs, _ := cc.counts(); syncs != synced {
-				t.Errorf("a pass while the store has no room synced the repository held back for it")
-			}
-
-			rs.set(func(r *recordingStore) { r.refuse = nil })
-			mu.Lock()
-			room = 1 << 30
-			mu.Unlock()
-			advance(collect.CollectInterval / 2)
-			if report := pollWhileBusy(t, comp, rec); report.Compacted != 1 {
-				t.Errorf("the pass once the store has room reported %+v, want the repository compacted", report)
-			}
-			if live := x.rows().Repo.LivePacks; live != 1 {
-				t.Errorf("the repository holds %d live packs, want the one output", live)
-			}
-		})
 	}
 }
 

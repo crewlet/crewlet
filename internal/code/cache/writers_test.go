@@ -39,9 +39,11 @@ import (
 // pushes, tags, deletions, refused pushes, adoptions, syncs at every level,
 // syncs killed mid-step, restarts, evictions, rebuilds, maintenance, swept
 // tombstones, a log recreated backwards, compactions and the swaps that take
-// their packs out, killed or crashed mid-way — every cache equals a cache
-// rebuilt from nothing at the same position, and no file under repos/ holds
-// a pack a refused push uploaded (interleavings_test.go).
+// their packs out, killed or crashed mid-way, publications by this node and
+// by another, the installer's passes, layers the store lost or spoiled, and
+// the node's tip — every cache equals a cache rebuilt from nothing at the
+// same position, its installed chain a prefix of the rows', and no file under
+// repos/ holds a pack a refused push uploaded (interleavings_test.go).
 func TestNothingButSyncWritesACache(t *testing.T) {
 	t.Parallel()
 	t.Run("static", func(t *testing.T) {
@@ -448,8 +450,11 @@ var cacheWriters = []writerRow{
 	{"internal/code/cache/scratch.go", kindOS,
 		"a push's scratch repository, a merge's and an advertisement view under scratch/: their directories, " +
 			"HEAD, config and alternates, a view's packed-refs linked from its incarnation, and a merge's store " +
-			"of exactly the packs it merges, their files linked from its incarnation; and a request's spool " +
-			"(Spool), created there and unlinked at once, so it is no file of the cache's", nil},
+			"of exactly the packs it merges, their files linked from its incarnation; a publication's scratch " +
+			"(NewLayerScratch): its directories, HEAD and config, its incarnation's packed-refs, every pack file " +
+			"and the base layers' files HARD-LINKED — the same inodes, written by nothing here — and the two " +
+			"chain files naming exactly that base; and a request's spool (Spool), created there and unlinked " +
+			"at once, so it is no file of the cache's", nil},
 	{"internal/code/cache/adopt.go", kindOS,
 		"the receiving node's own pack, once its row has applied: linked into tmp/ and from there into " +
 			"objects/pack, and its staging names removed; and a maintainer's own published layer, once its " +
@@ -484,18 +489,29 @@ var cacheWriters = []writerRow{
 			"here — and the whole renamed into repos/ under its number; its state goes through durable.go, " +
 			"the memo's tree moves whole through memo.go, and the chain is placed through layers.go, the " +
 			"node's tip a retirement keeps linked beside its layers", nil},
-	{"internal/code/cache/compaction.go", kindRuntime,
-		"Compacting.Run hands a compaction's build — internal/code/compact's pack-objects literal, which its own " +
-			"row judges — unchanged to the maintenance slot its admission reserved (gitproc.Reserved.Run): the " +
-			"build runs in its own scratch, never in an incarnation", nil},
+	{"internal/code/cache/background.go", kindRuntime,
+		"Admission.Run hands a compaction's build and a publication's — internal/code/compact's pack-objects, " +
+			"multi-pack-index and commit-graph literals, which their own rows judge — unchanged to the maintenance " +
+			"slot its admission reserved (gitproc.Reserved.Run): each build runs in its own scratch, never in an " +
+			"incarnation", nil},
 	{"internal/code/compact/build.go", kindGit + " pack-objects",
 		"a compaction's build: ONE `pack-objects --stdin-packs` in the compaction's own SCRATCH " +
 			"(cache.NewMergeScratch), its inputs read through the scratch's one alternate — a store of exactly " +
-			"them, linked from the incarnation — and its outputs written into the scratch alone, never an " +
-			"incarnation; the outputs enter the cache only by Adopt, once their rows have applied", nil},
+			"them, linked from the incarnation — and a publication's repack, in the publication's scratch of " +
+			"links (cache.NewLayerScratch); its outputs written into the scratch alone, never an incarnation, " +
+			"entering the cache only by Adopt, once their rows have applied", nil},
 	{"internal/code/compact/compactor.go", kindRuntime,
-		"runInSlot hands the build's one Cmd — build.go's pack-objects literal — to the admission's reserved slot " +
-			"(cache.Compacting.Run), unchanged: a function value, so a suite can stand in a builder", nil},
+		"runInSlot hands the build's one pack-objects Cmd — build.go's literal — to the admission's reserved " +
+			"slot (cache.Admission.Run), unchanged: a function value, so a suite can stand in a builder", nil},
+	{"internal/code/compact/publish.go", kindGit + " multi-pack-index",
+		"a publication's layer: `multi-pack-index write --incremental --bitmap --no-write-chain-file` over the " +
+			"layer's packs, in the publication's own SCRATCH of links (cache.NewLayerScratch), whose chain file " +
+			"names exactly the layer's base — never an incarnation; the layer enters the cache only by " +
+			"AdoptLayer, once its record has applied, or by the installer's fetch", nil},
+	{"internal/code/compact/publish.go", kindGit + " commit-graph",
+		"a publication's commit-graph layer: `commit-graph write --stdin-packs --split=no-merge` over the " +
+			"layer's packs in the same scratch, its chain naming exactly the base's graph layers — never an " +
+			"incarnation; it enters the cache with the layer", nil},
 	{"internal/code/host/receive.go", kindGit + " receive-pack",
 		"a push, received in its SCRATCH repository (cache.NewScratch) — never in a cache, since git " +
 			"migrates a push's objects into the repository it runs in before any hook can refuse them; " +

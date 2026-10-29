@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -142,60 +143,72 @@ func (s served) Compact(ctx context.Context, p code.CompactionProposal) (code.Co
 	return s.f.Data().Served().ProposeCompaction(ctx, p)
 }
 
-// homes answers every question of which repositories this node is the home
-// of with home for every one asked, or err.
-type homes struct {
-	home bool
-	err  error
+// maintainers answers every question of which repositories this node
+// maintains with maintains for every one asked, or err, and records the
+// charges it was asked by, in the order of the ids they were asked for; and
+// this node is listed among the git nodes, whatever it answers.
+type maintainers struct {
+	maintains bool
+	err       error
+	asked     *[]int64
 }
 
-func (h homes) HomeOf(repoIDs []string) (map[string]bool, error) {
-	if h.err != nil {
-		return nil, h.err
+func (m maintainers) MaintainerOf(charges map[string]int64) (map[string]bool, error) {
+	if m.asked != nil {
+		for _, id := range slices.Sorted(maps.Keys(charges)) {
+			*m.asked = append(*m.asked, charges[id])
+		}
+	}
+	if m.err != nil {
+		return nil, m.err
 	}
 	out := map[string]bool{}
-	for _, id := range repoIDs {
-		out[id] = h.home
+	for id := range charges {
+		out[id] = m.maintains
 	}
 	return out, nil
 }
 
-// askedHomes is a compactor's homes that records every question it is asked —
-// the ids of each, one entry a reading — and answers home for every one while
-// home is set.
-type askedHomes struct {
-	mu    sync.Mutex
-	home  bool
-	asked [][]string
+func (maintainers) Listed() (bool, error) { return true, nil }
+
+// askedMaintainers is a compactor's maintainers that records every question it
+// is asked — the ids of each, sorted, one entry a listing read — and answers
+// maintains for every one while maintains is set; this node is listed.
+type askedMaintainers struct {
+	mu        sync.Mutex
+	maintains bool
+	asked     [][]string
 }
 
-func (h *askedHomes) HomeOf(repoIDs []string) (map[string]bool, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.asked = append(h.asked, slices.Clone(repoIDs))
+func (m *askedMaintainers) MaintainerOf(charges map[string]int64) (map[string]bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.asked = append(m.asked, slices.Sorted(maps.Keys(charges)))
 	out := map[string]bool{}
-	for _, id := range repoIDs {
-		out[id] = h.home
+	for id := range charges {
+		out[id] = m.maintains
 	}
 	return out, nil
 }
+
+func (*askedMaintainers) Listed() (bool, error) { return true, nil }
 
 // readings is every question asked so far.
-func (h *askedHomes) readings() [][]string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return slices.Clone(h.asked)
+func (m *askedMaintainers) readings() [][]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.asked)
 }
 
-// setHome makes every later answer home, or not.
-func (h *askedHomes) setHome(home bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.home = home
+// setMaintains makes every later answer maintains, or not.
+func (m *askedMaintainers) setMaintains(maintains bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.maintains = maintains
 }
 
 // compactorOf builds a compactor over x's git node's cache and the fleet's
-// store, listing and proposing through the data node, home for every
+// store, listing and proposing through the data node, the maintainer of every
 // repository — each of which edit may replace before New.
 func (x *fixture) compactorOf(edit func(*compact.Options)) (*compact.Compactor, *metrics.Recorder, *logs) {
 	x.t.Helper()
@@ -204,8 +217,13 @@ func (x *fixture) compactorOf(edit func(*compact.Options)) (*compact.Compactor, 
 		x.t.Fatal(err)
 	}
 	l := &logs{}
-	o := compact.Options{Cache: x.node().Cache(), Objects: x.store, Estate: served{x.fleet}, Homes: homes{home: true},
-		NodeID: x.node().ID(), Limits: code.DefaultLimits, Metrics: rec, Logger: l.logger()}
+	// A CLOCK A DEBOUNCE AHEAD OF THE WALL'S, so a publication pass takes the
+	// pushes a case has just made for a burst that has settled
+	// (compact.PublishDebounce): a case about the cadence itself judges
+	// compact.Due, or hands its own clock.
+	o := compact.Options{Cache: x.node().Cache(), Objects: x.store, Estate: served{x.fleet},
+		Maintainers: maintainers{maintains: true}, NodeID: x.node().ID(), Limits: code.DefaultLimits, Metrics: rec,
+		Logger: l.logger(), Now: func() time.Time { return time.Now().Add(compact.PublishDebounce) }}
 	if edit != nil {
 		edit(&o)
 	}
@@ -315,7 +333,9 @@ type counted struct {
 	mu    sync.Mutex
 	syncs int
 	plans int
-	admit func(s cache.Synced, objects int64, limits code.Limits) (*cache.Compacting, error)
+	admit func(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error)
+	// publish, where set, answers every publication's admission.
+	publish func(s cache.Synced, layerObjects, repackObjects int64, limits code.Limits) (*cache.Admission, error)
 }
 
 func countedOver(c *cache.Cache) *counted { return &counted{Cache: c} }
@@ -334,7 +354,7 @@ func (c *counted) Packs(s cache.Synced) []code.PackRow {
 	return c.Cache.Packs(s)
 }
 
-func (c *counted) AdmitCompaction(s cache.Synced, objects int64, limits code.Limits) (*cache.Compacting, error) {
+func (c *counted) AdmitCompaction(s cache.Synced, objects int64, limits code.Limits) (*cache.Admission, error) {
 	c.mu.Lock()
 	admit := c.admit
 	c.mu.Unlock()
@@ -344,12 +364,33 @@ func (c *counted) AdmitCompaction(s cache.Synced, objects int64, limits code.Lim
 	return c.Cache.AdmitCompaction(s, objects, limits)
 }
 
-// answerAdmissions has every later admission answered by admit; nil asks the
-// cache.
-func (c *counted) answerAdmissions(admit func(cache.Synced, int64, code.Limits) (*cache.Compacting, error)) {
+func (c *counted) AdmitPublication(s cache.Synced, layerObjects, repackObjects int64, limits code.Limits) (
+	*cache.Admission, error) {
+
+	c.mu.Lock()
+	publish := c.publish
+	c.mu.Unlock()
+	if publish != nil {
+		return publish(s, layerObjects, repackObjects, limits)
+	}
+	return c.Cache.AdmitPublication(s, layerObjects, repackObjects, limits)
+}
+
+// answerAdmissions has every later compaction's admission answered by admit;
+// nil asks the cache.
+func (c *counted) answerAdmissions(admit func(cache.Synced, int64, code.Limits) (*cache.Admission, error)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.admit = admit
+}
+
+// answerPublications has every later publication's admission answered by
+// publish; nil asks the cache.
+func (c *counted) answerPublications(publish func(cache.Synced, int64, int64, code.Limits) (*cache.Admission,
+	error)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.publish = publish
 }
 
 // counts is the syncs and plans so far.
@@ -360,8 +401,14 @@ func (c *counted) counts() (syncs, plans int) {
 }
 
 // noMemory is an admission the node's memory refuses, as the cache answers it.
-func noMemory(cache.Synced, int64, code.Limits) (*cache.Compacting, error) {
+func noMemory(cache.Synced, int64, code.Limits) (*cache.Admission, error) {
 	return nil, fmt.Errorf("cache: compact %s: %w: a case's node too small for the build", codetest.RepoName,
+		cache.ErrNoMemory)
+}
+
+// noMemoryToPublish is a publication's admission the node's memory refuses.
+func noMemoryToPublish(cache.Synced, int64, int64, code.Limits) (*cache.Admission, error) {
+	return nil, fmt.Errorf("cache: publish %s: %w: a case's node too small for the build", codetest.RepoName,
 		cache.ErrNoMemory)
 }
 

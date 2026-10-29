@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -25,10 +26,13 @@ import (
 // interleaving of what a node's cache meets, every cache equals a cache
 // rebuilt from nothing at the same position — HEAD, config and packed-refs
 // byte for byte, the same pack files and nothing outside the image (imageOf)
-// — no file under repos/ holds the pack of a push no row names, and every
-// repository's index of pushes, backfilled as far as it goes, says within the
-// coverage it claims exactly what the push rows say (indexAgainstLog): the
-// push that introduced each commit, and every move of every ref in log order.
+// — its published chain installed to the same layer as that fresh cache's,
+// but for a layer it installed before the store lost a part of it (the
+// layers' check, interleavings_layers_test.go); no file under repos/ holds
+// the pack of a push no row names, and every repository's index of pushes,
+// backfilled as far as it goes, says within the coverage it claims exactly
+// what the push rows say (indexAgainstLog): the push that introduced each
+// commit, and every move of every ref in log order.
 //
 // Each seed draws interleavingSteps operations by weight over two
 // repositories, each with a pushed commit to start from, and checks every
@@ -65,7 +69,8 @@ import (
 //     next round tries again; and that kill followed by a restart, the next
 //     boot reading what was leaving from the state's floor;
 //   - DAMAGE A PREVIOUS PROCESS LEFT: a byte of an index file — a pack's .idx
-//     or .rev, a multi-pack-index, its bitmap, the commit-graph — flipped in
+//     or .rev, a multi-pack-index, its bitmap, the commit-graph, or a chained
+//     copy's layer files, graph layers, tip and chain files — flipped in
 //     place, its identity kept, and the same directory booted again; and a
 //     file replaced under another identity while the check hashes it
 //     (interleavings_check_test.go);
@@ -74,12 +79,29 @@ import (
 //     REPORT of a derived file, a pack, an object, or a crash, begun now or
 //     before anything this process wrote, a third of them with a check
 //     admitted around it; and a SCRUB with the clock past ScrubInterval
-//     (interleavings_scrub_test.go).
+//     (interleavings_scrub_test.go);
+//   - a PUBLICATION of the first repository's next layer — the second is
+//     never published, so every operation meets a copy in own mode too — by
+//     THIS node, its maintainer: the production compactor's, decided and
+//     applied on the log, its layer and any repack's outputs adopted here, a
+//     third of them after a burst of pushes past compact.LayerRepackPacks,
+//     whose plan repacks them first; one by ANOTHER git node, a cache of its
+//     own over the same log and store, whose layer this node's installer
+//     fetches, a third of them from a git newer than this one's and a third
+//     with this node's installer meeting a store that fails to answer for
+//     the layer's part; a request's sync and a pass of the INSTALLER behind
+//     it; a part of a published layer LOST from the store or SPOILED in it;
+//     and a push into a chained copy's tail with the maintainer's pass over
+//     it, the node's TIP commit-graph (interleavings_layers_test.go).
 //
 // Every check first scrubs every copy — the clock past ScrubInterval and
 // each repository used — and then holds every file a scrub reads to its
 // checksum: whatever damage the run left, the scrub found and the round
-// before the check repaired.
+// before the check repaired. Each copy's installed chain is held sound as it
+// stands, its round at the log's head having handed what moved to the
+// installer; then the installer has its say, and each copy's chain is held
+// to the rows' — installed to a prefix of it, the next layer refused — and
+// to the fresh cache's.
 //
 // A failure names the seed, the step and every operation drawn before it.
 //
@@ -91,29 +113,33 @@ import (
 // interleaving that showed the sweep moving the lock only after the round's
 // index had been refused over it. A round indexes from
 // interleavingRoundPacks packs here, not MidxRoundPacks, which two
-// repositories over forty steps never reach; seeds 1, 9 and 11 draw
-// that crash and that round, and putting the round's index back before the
-// sweep turns the outcome — and the run — red. The maintainer is due again
-// from interleavingMidxPacks packs beside its index rather than MidxPacks,
-// at whose production count no seed maintains a repository over its own
-// index and bitmap; and it is drawn at a weight of six, since a report's
-// repair drops the index it would run over — at four, once the reports were
-// drawn, no seed maintained a repository over its own index. A rebuild is
-// drawn at a weight of five: at three, once the compaction's four operations
-// were drawn beside the rest, no seed's rebuild met a copy a repair had just
-// written, so none answered a request from the copy as it stands. A
-// compaction a copy misses is an operation of its own rather than a
-// compaction and a sweep meeting by chance: drawn apart, they met with no
-// round of the repository between them over a copy holding its graph on no
-// seed, so none reached a swap that dropped a graph the copy held.
+// repositories over a run's steps never reach; the seeds draw that crash and
+// that round ("round index over a crash's lock"), and putting the round's
+// index back before the sweep turns the outcome — and the run — red. The
+// maintainer is due again from interleavingMidxPacks packs beside its index
+// rather than MidxPacks, at whose production count no seed maintains a
+// repository over its own index and bitmap; and it is drawn at a weight of
+// six, since a report's repair drops the index it would run over — at four,
+// once the reports were drawn, no seed maintained a repository over its own
+// index. A rebuild is drawn at a weight of five: at three, once the
+// compaction's four operations were drawn beside the rest, no seed's rebuild
+// met a copy a repair had just written, so none answered a request from the
+// copy as it stands. A compaction a copy misses is an operation of its own
+// rather than a compaction and a sweep meeting by chance: drawn apart, they
+// met with no round of the repository between them over a copy holding its
+// graph on no seed, so none reached a swap that dropped a graph the copy held.
 // interleavingOutcomes holds the seeds to reaching every outcome; sixteen
-// reach them all, in about ten seconds under the race detector, the
-// seeds in parallel. Forty steps a seed, a check every ten:
+// reach them all, in about half a minute under the race detector on two
+// cores, the seeds in parallel. Sixty-four steps a seed, a check every ten:
 // enough history for a recreation to go back to and short enough that a
-// failure's trace reads in one screen.
+// failure's trace reads in two screens. Forty were enough until the published
+// chain's six operations drew a sixth of the steps and kept one repository's
+// copy chained for most of a run, where a damage meets a layer's file rather
+// than own mode's: at forty-eight, no seed's rebuild then answered a request
+// from the copy as it stands, nor did any check drop a derived file.
 const (
 	interleavingSeeds = 16
-	interleavingSteps = 40
+	interleavingSteps = 64
 	checkEvery        = 10
 )
 
@@ -147,6 +173,12 @@ var interleavingOps = []struct {
 	{"a compaction a copy missed", 2, (*interleaving).missedCompaction},
 	{"a swap killed", 3, (*interleaving).killedSwap},
 	{"a crash mid-swap", 2, (*interleaving).crashMidSwap},
+	{"publish", 6, (*interleaving).publish},
+	{"publish elsewhere", 5, (*interleaving).publishElsewhere},
+	{"install", 6, (*interleaving).install},
+	{"lose a layer's part", 2, (*interleaving).loseLayer},
+	{"spoil a layer's part", 2, (*interleaving).spoilLayer},
+	{"tip", 3, (*interleaving).tip},
 }
 
 // interleavingOutcomes is every outcome the seeds must reach between them —
@@ -168,6 +200,12 @@ var interleavingOutcomes = []string{
 	"compact", "sweep retirements", "a swap with the graph kept", "a swap with the graph dropped",
 	"a swap with no graph to keep", "a swap killed at its rename", "a failed swap retried by the next round",
 	"a crash mid-swap",
+	"a layer's file refetched by its check", "a chain file rewritten by its check",
+	"a layer-only publication", "a repacking publication", "a publication by another git node",
+	"a publication by a newer git", "a publication waited for its installer", "a repair",
+	"a layer's part lost", "a layer's part spoiled", "a tip written",
+	"layer installed", "layer adopted", "layer kept", "layer cut", "layer missing", "layer corrupt",
+	"layer newer_git", "layer failed",
 }
 
 // errKilled is what a killed sync's fault point answers.
@@ -220,6 +258,11 @@ type interleaving struct {
 	// later swap from that incarnation by. A restart or an eviction ends
 	// the line.
 	killed map[string]swapKilled
+
+	// damaged is every part of a published layer the run had the store lose
+	// or spoil (loseLayer, spoilLayer): a layer a copy installed before may
+	// stay installed there, and a fresh cache refuses it (check).
+	damaged map[objstore.Key]bool
 }
 
 // swapKilled is a swap a killedSwap failed: the incarnation it left serving,
@@ -241,7 +284,7 @@ func interleave(t *testing.T, seed uint64) map[string]bool {
 	in := &interleaving{
 		t: t, w: w, rng: rand.New(rand.NewPCG(seed, 1)), clk: newClock(), faults: &codefault.Script{},
 		last: map[string]statelog.Position{}, exercised: map[string]bool{}, indexed: map[string]bool{},
-		killed: map[string]swapKilled{},
+		killed: map[string]swapKilled{}, damaged: map[objstore.Key]bool{},
 	}
 	// Logged whatever the verdict: shown with a failure, and under -v the
 	// record of what a passing seed exercised.
@@ -268,12 +311,16 @@ func interleave(t *testing.T, seed uint64) map[string]bool {
 		}
 		o := interleavingOps[i]
 		repo := in.repos[in.rng.IntN(len(in.repos))]
+		if onPublished[o.name] {
+			repo = in.published()
+		}
 		in.trace = append(in.trace, fmt.Sprintf("%d: %s, repo-%d", step, o.name, slices.Index(in.repos, repo)+1))
 		in.trace[len(in.trace)-1] += ": " + o.run(in, repo)
 		in.noteRoundIndexes()
 		in.noteChecks()
 		in.noteReports()
 		in.noteSwaps()
+		in.noteLayers()
 		in.remember()
 		in.audit()
 		if step%checkEvery == 0 || step == interleavingSteps {
@@ -288,9 +335,9 @@ func (in *interleaving) saw(outcome string) { in.exercised[outcome] = true }
 
 // interleavingRoundPacks is the packs a full round leaves before it writes
 // its own index in an interleaving, in place of MidxRoundPacks: two
-// repositories over forty steps hold a dozen packs or so between them, and
-// at the production count no round would ever index — nor meet a dead
-// maintenance run's lock in the way of its index.
+// repositories over a run's steps hold a few dozen packs at the most between
+// them, and at the production count no round would ever index — nor meet a
+// dead maintenance run's lock in the way of its index.
 const interleavingRoundPacks = 4
 
 // interleavingMidxPacks is the packs gathered beside the maintainer's index
@@ -647,13 +694,6 @@ func (in *interleaving) recreateBackwards(string) string {
 	return fmt.Sprintf("to the rows after step %d", at)
 }
 
-// livePacks is repo's live pack rows, as the log holds them now.
-func (f *fakeLog) livePacks(repo string) []code.PackRow {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return slices.Clone(f.repos[repo].packs)
-}
-
 // retiredRows is how many retirements of repo the rows still keep.
 func (f *fakeLog) retiredRows(repo string) int {
 	f.mu.Lock()
@@ -663,11 +703,13 @@ func (f *fakeLog) retiredRows(repo string) int {
 
 // compact merges two or three of repo's live packs into one, as a git node's
 // compaction would, and writes the record retiring them and adding it: what
-// the copy's next round takes out of it by a swap (swap.go).
+// the copy's next round takes out of it by a swap (swap.go). Never a pack a
+// published layer names, as no compaction's plan takes one and the decide
+// refuses one: a copy's chain loads only over every pack it names.
 func (in *interleaving) compact(repo string) string {
-	live := in.w.log.livePacks(repo)
+	live := in.w.log.unpublishedPacks(repo)
 	if len(live) < 2 {
-		return "fewer than two packs to merge"
+		return "fewer than two unpublished packs to merge"
 	}
 	in.rng.Shuffle(len(live), func(i, j int) { live[i], live[j] = live[j], live[i] })
 	n := 2 + in.rng.IntN(min(len(live), 3)-1)
@@ -790,20 +832,33 @@ func (in *interleaving) check(step int) {
 	if _, err := cache.BackfillPass(in.c); err != nil {
 		in.fatalf("the backfill: %v", err)
 	}
+	// THE PUBLISHED CHAIN AS IT STANDS, each copy's round at the log's head
+	// having handed what moved to the installer; then the installer let have
+	// its say, and every copy held to the rows' chain and to a fresh
+	// cache's — its packs back to the rows' once the replacement of a layer
+	// that held some is placed (the chain holds its packs until then).
 	for _, repo := range in.repos {
 		s := in.syncAt(repo, linearizable)
+		in.checkLayersAsTheyStand(step, repo, s.Dir)
+		s.Release()
+	}
+	for _, repo := range in.repos {
+		s := settledSync(t, in.c, repo, in.waitOutInstaller)
 		got := imageOf(t, s.Dir)
 		in.checkSound(step, repo, s.Dir)
 		if problems := indexAgainstLog(in.c, in.w.log, repo, s); len(problems) > 0 {
 			t.Fatalf("after step %d, repo-%d's index of pushes:\n\t%s", step, slices.Index(in.repos, repo)+1,
 				strings.Join(problems, "\n\t"))
 		}
+		want, fresh := in.w.rebuiltChain(t, repo)
+		in.checkLayersSettled(step, repo, s.Dir, in.c.Chain(s), fresh)
 		s.Release()
-		if want := in.w.rebuilt(t, repo); got != want {
+		if got != want {
 			t.Fatalf("after step %d, repo-%d's cache:\n%s\nwant a fresh cache's at the same position:\n%s",
 				step, slices.Index(in.repos, repo)+1, got, want)
 		}
 	}
+	in.noteLayers()
 	err := filepath.WalkDir(in.w.path("repos"), func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err

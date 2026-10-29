@@ -96,6 +96,37 @@ func TestThePlanNeverTakesAFullPack(t *testing.T) {
 	}
 }
 
+// THE PLAN LEAVES EVERY PUBLISHED PACK OUT: a node's chain loads only over
+// every pack a layer of it names, so the decide refuses a compaction retiring
+// one stale — and the plan never builds one: the packs a layer names are out
+// of the roll before it is split or counted against the target, so a roll's
+// small packs that a layer covers and two more are no compaction, where the
+// same packs unpublished are one.
+//
+// Mutation: plan over every live pack, and the published packs are merged.
+func TestThePlanLeavesEveryPublishedPackOut(t *testing.T) {
+	t.Parallel()
+	n := code.CompactMinMerge + 2
+	var live []code.PackRow
+	published := map[string]bool{}
+	for i := range n {
+		id := fmt.Sprintf("p-%02d", i)
+		live = append(live, row(id, 100, 10<<10))
+		if i < code.CompactMinMerge {
+			published[checksumOf(id)] = true
+		}
+	}
+	cap := compact.InputByteCap(code.CompactPackBytes)
+	if p := compact.PlanOver(live, published, cap, code.CompactPackBytes); p.Due {
+		t.Errorf("%d packs %d of which a layer covers planned the merge of %v, want nothing due", n,
+			code.CompactMinMerge, inputIDs(p))
+	}
+	if p := compact.PlanOver(live, nil, cap, code.CompactPackBytes); !p.Due || len(inputIDs(p)) != n {
+		t.Errorf("the same %d packs published nowhere planned due=%v over %v, want the %d merged (the premise)", n,
+			p.Due, inputIDs(p), n)
+	}
+}
+
 // A REPOSITORY PAST THE TARGET ALWAYS SHRINKS: one whose packs already form a
 // geometric progression rolls up nothing by git's split, and past
 // code.CompactTargetPacks non-full packs the two lightest are merged anyway,

@@ -575,18 +575,26 @@ func (e atTheBound) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer
 }
 
 // THE COMPACTION-BEHIND ALARM FIRES ON ITS NODE, through the wiring a running
-// node has: a git node whose compactor's pass finds a repository it is home
-// for at the pack bound fills its alarm reading's compaction half, which the
-// retention loop's own reading carries into the alarm table — so
-// code_compaction_behind stands on that node, naming the repository, for as
-// long as its pushes would be refused. And it is the compactor's FIRST pass
-// that names it: started only once the runtime it reads through is
-// published, that pass finds this node the repository's home.
+// node has: a STARTED git node — listed among the git nodes once its host
+// beats, and so, alone, the maintainer of every repository — whose compactor's
+// pass finds a repository at the pack bound fills its alarm reading's
+// compaction half, which the retention loop's own reading carries into the
+// alarm table — so code_compaction_behind stands on that node, naming the
+// repository, for as long as its pushes would be refused. And it is the
+// compactor's FIRST pass that names it: started only once the runtime it reads
+// through is published, and passing only once this node is listed, that pass
+// finds its listing served and this node the repository's maintainer.
+//
+// STARTED, because a node is a repository's maintainer only once a listing of
+// the git nodes carries it, and only a started node's host beats its presence:
+// a node built and never started maintains nothing, its compactor waiting to
+// be listed.
 //
 // Mutations: leave the compactor's half out of the reading (codeReading), and
-// the alarm never fires; start the compactor where the code host is built,
-// before the runtime is published, and its first pass finds this node home to
-// nothing — the repository is named a listing later.
+// the alarm never fires; pass at Start without waiting for this node to be
+// listed (compact's awaitListed), and the first pass, before the host beats,
+// finds no listing that carries this node — the repository is named a listing
+// later.
 func TestTheCompactionBehindAlarmFiresOnItsNode(t *testing.T) {
 	t.Parallel()
 	b := gitNodeBootstrap(t, nil)
@@ -603,11 +611,16 @@ func TestTheCompactionBehindAlarmFiresOnItsNode(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.WithoutCancel(t.Context())) })
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
 
 	// THE COMPACTOR'S READING, read until it names the repository: its first
-	// pass's, at once — the next comes a Poll later, and the deadline leaves
-	// room for it only so that a pass too early fails here by its count rather
-	// than by the clock.
+	// pass's, once the node's first beat is listed — which the presence view
+	// hears within about a second, the pass following within a
+	// codecompact.ListedRecheck — the next comes a Poll later, and the
+	// deadline leaves room for it only so that a pass too early fails here by
+	// its count rather than by the clock.
 	deadline := time.Now().Add(codecompact.Poll + time.Minute)
 	for engine.CodeReadingForTest(e).CodeCompactionBehind == 0 {
 		if time.Now().After(deadline) {
@@ -618,8 +631,7 @@ func TestTheCompactionBehindAlarmFiresOnItsNode(t *testing.T) {
 	}
 	if n := listings.Load(); n != 1 {
 		t.Errorf("the compactor's reading first named the repository at the bound after %d listings, want its "+
-			"first pass's: a pass started before the runtime it reads through was published finds this node "+
-			"home to nothing", n)
+			"first pass's: a pass before this node is listed finds no maintainer of the repository here", n)
 	}
 
 	// AND THE ALARM, at the retention loop's next evaluation of its reading.

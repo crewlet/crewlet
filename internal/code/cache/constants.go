@@ -454,6 +454,37 @@ const GraphBytesPerObject = 56
 // intercept passes a tenth of the charge at the publication's tail bound.
 const TipGraphBytesPerObject = 1700
 
+// PublishBytesPerObject is the memory a publication's multi-pack-index layer
+// and its bitmap hold for every object of the WHOLE repository
+// (Cache.AdmitPublication, internal/code/compact), beside the room for one
+// clone of the repository every whole-repository step is charged (memory.go's
+// chargeOver) — and the figure a repository's publication is PLACED by
+// (Cache.PublishCharge, the git node its maintenance falls to): a bitmap is
+// O(history), so the layer's own few objects say nothing of what it holds.
+//
+// 900 BYTES, PROVISIONAL (M3-decisions M3-O39): on git 2.56.0 a bitmapped tip
+// layer over an eighth of a 219 679-object history held 131.6 MiB (628 bytes
+// an object of the history), a sixty-fourth 127.5 MiB, and the whole index
+// with its bitmap 167.8 MiB (801), because the bitmap's writer walks every
+// commit and reuses no bitmap of the base; rounded up for the growth with the
+// history's size the per-object figures above saw, some 220 bytes a tenfold.
+// BenchmarkMidx's step=publish re-derives it from the largest figure measured
+// at 100 MB, 1 GB and 5 GB.
+const PublishBytesPerObject = 900
+
+// GraphLayerBytesPerObject is the memory a publication's commit-graph layer —
+// `commit-graph write --stdin-packs --split=no-merge --changed-paths`, every
+// changed-path filter computed, since it runs once for the fleet — holds for
+// every object of the LAYER it covers (Cache.AdmitPublication), beside the
+// room for one clone of the repository: a split layer reads only the commits
+// of its own packs.
+//
+// 700 BYTES, PROVISIONAL (M3-decisions M3-O39): 117 MiB on git 2.56.0 over
+// 35 000 commits, some 190 000 objects of a source repository's composition
+// (620 bytes an object), rounded up. BenchmarkMidx's step=publish re-derives
+// it from its graph step.
+const GraphLayerBytesPerObject = 700
+
 // MaxNewFilters is the most changed-path filters one commit-graph write
 // computes — the node's tip and own mode's whole graph alike, git's
 // --max-new-filters, spelled whole in the argument lists that run it

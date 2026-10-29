@@ -966,18 +966,23 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 //
 // Mutation: change IndexBytesPerObject, GraphBytesPerObject,
 // TipGraphBytesPerObject, CompactBytesPerObject, CompactWindowBytes'
-// multiple or MidxDebounce, and the catalogue no longer says what the cache
-// does.
+// multiple, PublishBytesPerObject or MidxDebounce, and the catalogue no
+// longer says what the cache does.
 func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 	t.Parallel()
 	bitmap := fmt.Sprintf("%d bytes an object", cache.BitmapBytesPerObject)
 	transfer := fmt.Sprintf("%d more", gitproc.TransferBytesPerObject)
 	reread := "again every " + spell(t, cache.MidxDebounce)
 	window := word(t, windowBlobs(t))
+	publish := fmt.Sprintf("%d bytes an object of the repository", cache.PublishBytesPerObject)
 	ref := statelog.AlarmReference()
 	if strings.Count(ref, bitmap) < 2 || !strings.Contains(ref, transfer) || !strings.Contains(ref, reread) {
 		t.Errorf("the alarm reference does not say %q in both the code_maintenance_refused alarm's meaning and its "+
 			"remedy, %q of the transfer beside it, and that the memory is read %q", bitmap, transfer, reread)
+	}
+	if strings.Count(ref, publish) < 2 {
+		t.Errorf("the alarm reference does not say %q of a publication the alarm counts, in both its meaning and "+
+			"its remedy", publish)
 	}
 	shows := map[string]string{}
 	for _, in := range metrics.Catalogue() {
@@ -993,8 +998,12 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 				"bytes an object merged, never of the whole repository, whose size alone would refuse every merge "+
 				"of a large one — and %s times max_blob_bytes for the build's delta search)",
 				cache.CompactBytesPerObject, gitproc.TransferBytesPerObject, window),
+			fmt.Sprintf("`publish` (%d bytes an object of the repository", cache.PublishBytesPerObject),
 		},
 		metrics.CodeCacheMaintenanceRefused: {reread},
+		// A publication refused for memory is the cache's refusal, counted
+		// by the compactor too: its reason's charge is the cache's figure.
+		metrics.CodePublishRefusals: {publish},
 	} {
 		text, ok := shows[name]
 		if !ok {
@@ -1081,6 +1090,9 @@ func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 		fmt.Sprintf("holding %d packs or more gets an index", cache.MidxRoundPacks),
 		fmt.Sprintf("charged by the tail rather than the repository: %s bytes an object of the tail",
 			spaced(cache.TipGraphBytesPerObject)),
+		fmt.Sprintf("it is charged the largest of theirs: %s bytes an object of the whole repository for its bitmap",
+			spaced(cache.PublishBytesPerObject)),
+		fmt.Sprintf("%s an object of the layer for its commit-graph layer", spaced(cache.GraphLayerBytesPerObject)),
 		fmt.Sprintf("One write computes at most %s new filters", spaced(cache.MaxNewFilters)),
 		// A COMPACTION'S BUILD, charged as its admission charges it, in the
 		// section that runs it and in the Memory paragraph beside every
@@ -1116,14 +1128,15 @@ func windowBlobs(t *testing.T) int {
 // THE SCALING PAGE SIZES A GIT NODE BY THE SAME FIGURES: docs/concepts/scaling.md
 // tells an operator that a git node is sized by its memory before its disk,
 // in the bytes an object its bitmap and a clone beside it hold, and what a
-// home's compaction is charged beside them, and sends them to the concept
-// page for everything else — so the figures it does state are the cache's own
-// and gitproc's, held here as the concept page's are above, or a retune would
-// leave one page saying what the other no longer does.
+// repository's maintainer is charged beside them for its compaction and its
+// publication, and sends them to the concept page for everything else — so
+// the figures it does state are the cache's own and gitproc's, held here as
+// the concept page's are above, or a retune would leave one page saying what
+// the other no longer does.
 //
-// Mutation: change BitmapBytesPerObject, gitproc.TransferBytesPerObject,
-// CompactBytesPerObject or CompactWindowBytes' multiple, and the scaling page
-// no longer says what the cache charges.
+// Mutation: change BitmapBytesPerObject, PublishBytesPerObject,
+// gitproc.TransferBytesPerObject, CompactBytesPerObject or CompactWindowBytes'
+// multiple, and the scaling page no longer says what the cache charges.
 func TestTheScalingPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "scaling.md")
@@ -1144,6 +1157,13 @@ func TestTheScalingPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 		if !strings.Contains(page, want) {
 			t.Errorf("%s does not say %q", path, want)
 		}
+	}
+	// THE PUBLICATION'S CHARGE, which places a repository's maintainer.
+	publish := fmt.Sprintf("its bitmap at %s bytes an object of the whole repository and a clone's %d beside it, "+
+		"%s bytes an object", spaced(cache.PublishBytesPerObject), gitproc.TransferBytesPerObject,
+		spaced(int64(cache.PublishBytesPerObject+gitproc.TransferBytesPerObject)))
+	if !strings.Contains(page, publish) {
+		t.Errorf("%s does not say %q", path, publish)
 	}
 }
 

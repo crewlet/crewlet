@@ -73,3 +73,12 @@ Who compacts a repository, engine-built writes, git nodes that hold no data, and
 hashes `/git/` by repository — recommended for a cache's locality, never required for correctness. Nor who
 may read: the git node that answers judges the asker's grant from its own chart
 ([ADR-0058](0058-a-repository-grant-is-derived-from-the-chart.md)).
+
+## Amendment — who compacts and publishes
+
+[ADR-0061](0061-a-derived-object-is-published-kept-and-never-audited.md)
+decides what this record left open: a repository's packs are compacted, and its
+layers published, by its MAINTAINER — the first git node of this same
+rendezvous order whose advertised background budget holds the publication, and
+the home where none does. On a fleet of alike nodes it is the home. The home
+stays the node a repository's reads are asked of first.

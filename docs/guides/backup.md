@@ -599,6 +599,18 @@ files. One only a
 row names is never reported: the backup never carried it and nothing is owed
 it — a retired row goes once its grace has passed, and the engine builds a
 derived object again.
+The derived objects are the code host's
+[published layers](../concepts/code-host.md#when-a-layer-is-missing). On
+`s3` a restore brings none back, and on `nats` the bucket's snapshot brings
+back whatever parts it held, uncounted: every git node installs a part the
+store holds once it passes the checks any layer is held to, and refuses a
+layer with a part it lacks as `missing`, serving from the layers below it — or
+from its own index, slower and never wrong — until the repository's
+[maintainer](../concepts/code-host.md#who-maintains-a-repository) publishes
+again: one walk of the repository's history, once, for a chain the store lost
+whole. `crewlet.code.cache.layers{outcome=missing}` counts each layer a node
+refused, and `crewlet.code.cache.chained` climbs back to the repositories held
+as their maintainers publish; nothing alarms meanwhile.
 The stream half is restored into a broker with `nats stream restore` per
 snapshot for an external cluster; for the embedded topology, restore into a
 fresh `stream.store_dir` on a node started for that purpose — every snapshot,

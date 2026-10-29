@@ -144,11 +144,11 @@ type GitOptions struct {
 	// again at every call — the engine hands its compactor the router's code
 	// seam, whose Compact this is.
 	Compactions func(context.Context, code.CompactionProposal) (code.CompactResult, error)
-	// Homes is which repositories the node is the home of, as its compactor
+	// Maintainers is which repositories the node maintains, as its compactor
 	// asks once a pass: the node's own router in every topology, as the
 	// engine hands its compactor the router — or a fixed answer a case hands
-	// it (SplitHomes).
-	Homes compact.Homes
+	// it (SplitMaintainers).
+	Maintainers compact.Maintainers
 	// Objects is the object store's backend for each incarnation: asked
 	// again at every start, because a backend riding a broker connection
 	// dies with a member's restart.
@@ -228,6 +228,20 @@ type GitNode struct {
 	// killed is the incarnation a KILLED node's presence row still speaks
 	// for (BackgroundBudget): set by Kill, cleared by Stop and Restart.
 	killed *gitIncarnation
+	// advertised is what the node says its cache gives its background work
+	// in place of the cache's own figure, where it is positive (Advertise).
+	advertised int64
+}
+
+// Advertise has the node say it gives its background work budget bytes — 0
+// is the cache's own figure again — as its presence row says it
+// (BackgroundBudget): git nodes of different sizes, which a repository's
+// maintainer is placed by, on one machine. The node's own admissions still
+// hold its builds to the cache's real budget.
+func (g *GitNode) Advertise(budget int64) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.advertised = budget
 }
 
 // gitIncarnation is one incarnation of a git node.
@@ -243,9 +257,10 @@ type gitIncarnation struct {
 	// compactor is built as the engine builds a git node's and NEVER
 	// STARTED: every case drives Compact or Poll itself, so no case races a
 	// pass of its own.
-	compactor *compact.Compactor
-	srv       *httptest.Server
-	reads     func(context.Context, code.ReadQuery) (code.ReadAnswer, error)
+	compactor   *compact.Compactor
+	maintainers compact.Maintainers
+	srv         *httptest.Server
+	reads       func(context.Context, code.ReadQuery) (code.ReadAnswer, error)
 }
 
 func (n *gitIncarnation) ID() string                 { return n.id }
@@ -260,6 +275,7 @@ func (n *gitIncarnation) Share() *code.GitShare      { return n.share }
 func (n *gitIncarnation) Compactor() *compact.Compactor {
 	return n.compactor
 }
+func (n *gitIncarnation) Maintainers() compact.Maintainers { return n.maintainers }
 func (n *gitIncarnation) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	return n.reads(ctx, q)
 }
@@ -272,9 +288,9 @@ func StartGitNode(t testing.TB, o GitOptions) *GitNode {
 	t.Helper()
 	switch {
 	case o.ID == "" || o.Dir == "" || o.Estate == nil || o.Reads == nil || o.Compactions == nil ||
-		o.Homes == nil || o.Objects == nil || o.Credentials == nil:
+		o.Maintainers == nil || o.Objects == nil || o.Credentials == nil:
 		t.Fatalf("codetest: a git node needs an id, a directory, an estate, its reads, its compactions, "+
-			"its homes, its objects and its credentials (%+v)", o)
+			"its maintainers, its objects and its credentials (%+v)", o)
 	}
 	if o.Faults == nil {
 		o.Faults = &codefault.Script{}
@@ -306,7 +322,7 @@ func StartGitNode(t testing.TB, o GitOptions) *GitNode {
 func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	t.Helper()
 	ctx := g.life.Context()
-	n := &gitIncarnation{id: g.o.ID, dir: g.o.Dir, reads: g.o.Reads}
+	n := &gitIncarnation{id: g.o.ID, dir: g.o.Dir, reads: g.o.Reads, maintainers: g.o.Maintainers}
 	var err error
 	if n.metrics, err = metrics.New(); err != nil {
 		t.Fatalf("codetest: a recorder: %v", err)
@@ -382,8 +398,8 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	// the node's cache and store, listing through the node's reads and
 	// proposing through its compactions.
 	if n.compactor, err = compact.New(compact.Options{Cache: n.cache, Objects: objects,
-		Estate: compactions{read: g.o.Reads, compact: g.o.Compactions}, Homes: g.o.Homes, NodeID: n.id,
-		Limits: limits, Faults: g.o.Faults, Metrics: n.metrics, Logger: g.o.Logger}); err != nil {
+		Estate: compactions{read: g.o.Reads, compact: g.o.Compactions}, Maintainers: g.o.Maintainers,
+		NodeID: n.id, Limits: limits, Faults: g.o.Faults, Metrics: n.metrics, Logger: g.o.Logger}); err != nil {
 		t.Fatalf("codetest: build %s's compactor: %v", n.id, err)
 	}
 	mux := http.NewServeMux()
@@ -413,20 +429,25 @@ func (g *GitNode) Git() (estate.GitServer, bool) {
 // BackgroundBudget is what the node's presence row says its cache gives its
 // background work (cache.Cache.BackgroundBudget), as an engine's git node
 // writes it on every beat beside its status: its running incarnation's
-// figure; a KILLED node's last — a process that dies gives no presence back,
-// so the row its last beat wrote, figure and all, stands until its lease
-// lapses; and nothing for a STOPPED node, which gave its presence back before
-// it stopped, so no row speaks for it.
+// figure — or what a case has it advertise in its place (Advertise); a KILLED
+// node's last — a process that dies gives no presence back, so the row its
+// last beat wrote, figure and all, stands until its lease lapses; and nothing
+// for a STOPPED node, which gave its presence back before it stopped, so no
+// row speaks for it.
 func (g *GitNode) BackgroundBudget() (int64, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	switch {
-	case g.cur != nil:
-		return g.cur.cache.BackgroundBudget(), true
-	case g.killed != nil:
-		return g.killed.cache.BackgroundBudget(), true
+	n := g.cur
+	if n == nil {
+		n = g.killed
 	}
-	return 0, false
+	switch {
+	case n == nil:
+		return 0, false
+	case g.advertised > 0:
+		return g.advertised, true
+	}
+	return n.cache.BackgroundBudget(), true
 }
 
 // GitPlacement is a topology's git placement as its routers read it

@@ -37,13 +37,14 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// BenchmarkCompact is what a home git node's compaction of a repository's
-// packs costs, and the figures the compactor's constants and the cache's
-// charge of a build are decided by. Every figure lands in the doc of what it
-// decides with the arm's name, the machine, the date and the object store it
-// ran over (CONTRIBUTING's benchmark rule): the in-memory store here, so a
-// figure an S3 bucket would bill is stated as the requests and bytes the arm
-// counts, never a bucket's time.
+// BenchmarkCompact is what a repository's maintainer's compaction of its packs
+// costs — on a fleet of alike git nodes, its home — and the figures the
+// compactor's constants and the cache's charge of a build are decided by.
+// Every figure lands in the doc of what it decides with the arm's name, the
+// machine, the date and the object store it ran over (CONTRIBUTING's
+// benchmark rule): the in-memory store here, so a figure an S3 bucket would
+// bill is stated as the requests and bytes the arm counts, never a bucket's
+// time.
 //
 //   - history=source/inputs={4,8,16,64}: ONE compaction of a repository whose
 //     history — gittest.History's 100 MB composition, the cache benchmarks'
@@ -129,14 +130,14 @@ import (
 //     them — a SWAP into the copy's next directory, of links: its wall clock,
 //     its download of the one output included, and the files it links
 //     (links/swap), which follow the pack count, never the bytes.
-//   - poll/repos={1000,10000}/op=pass/home={all,1of8}: one pass over that
-//     many listed repositories none of which is due here — the memory's
-//     steady state — on the home of every one (all: each remembered as not
-//     due, a lookup) and on a node home to an eighth of them, as each node of
-//     a fleet of eight is (1of8: the eighth remembered, the rest judged
-//     against the pass's ONE reading of who serves git — a set's lookup here,
-//     the router's own judging priced by estate's BenchmarkHomeOf); ns/repo
-//     is what a repository costs a pass.
+//   - poll/repos={1000,10000}/op=pass/maintains={all,1of8}: one pass over
+//     that many listed repositories none of which is due here — the memory's
+//     steady state — on the maintainer of every one (all: each remembered as
+//     not due, a lookup) and on a node maintaining an eighth of them, as each
+//     node of a fleet of eight alike nodes is (1of8: the eighth remembered,
+//     the rest judged against the pass's ONE listing of who serves git — a
+//     set's lookup here, the router's own judging priced by estate's
+//     BenchmarkMaintainerOf); ns/repo is what a repository costs a pass.
 //   - poll/repos={1000,10000}/op=page: the serving data node's read of ONE
 //     page of the listing of that many repositories (code_repos_packs_idx,
 //     at stale, as every pass reads it). Past 100 ms at 10 000 — two listings
@@ -264,8 +265,9 @@ func (c countingPuts) Put(ctx context.Context, r io.Reader, limit int64, m objst
 
 // benchFleet is one arm's code host: a solo fleet over the in-memory store,
 // its data node's committer taking every push the arm proposes, its first git
-// node the HOME whose compactor the arm builds and drives itself (never
-// started), and every git node's downloads counted apart.
+// node the HOME — the maintainer, on alike nodes — whose compactor the arm
+// builds and drives itself (never started), and every git node's downloads
+// counted apart.
 type benchFleet struct {
 	fleet *codetest.SoloFleet
 	store *objstore.Store
@@ -316,9 +318,9 @@ func (f *benchFleet) declare(b *testing.B) (name, id string) {
 }
 
 // compactor is a compactor over the home's cache — storing through puts,
-// listing and proposing through the data node, home for every repository —
-// merging at minMerge packs and more, as the engine builds one but never
-// started: the arm drives every pass and every compaction.
+// listing and proposing through the data node, the maintainer of every
+// repository — merging at minMerge packs and more, as the engine builds one
+// but never started: the arm drives every pass and every compaction.
 func (f *benchFleet) compactor(b *testing.B, minMerge int, puts *traffic) (*compact.Compactor, *metrics.Recorder,
 	*recordedEstate) {
 
@@ -329,8 +331,8 @@ func (f *benchFleet) compactor(b *testing.B, minMerge int, puts *traffic) (*comp
 	}
 	est := &recordedEstate{Estate: served{f.fleet}}
 	c, err := compact.New(compact.Options{Cache: f.home().Cache(), Objects: countingPuts{Store: f.store, t: puts},
-		Estate: est, Homes: homes{home: true}, NodeID: f.home().ID(), Limits: code.DefaultLimits, Metrics: rec,
-		Logger: slog.New(slog.DiscardHandler)})
+		Estate: est, Maintainers: maintainers{maintains: true}, NodeID: f.home().ID(), Limits: code.DefaultLimits,
+		Metrics: rec, Logger: slog.New(slog.DiscardHandler)})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -456,7 +458,7 @@ type buildMeasure struct {
 	measured bool
 }
 
-func (m *buildMeasure) run(ctx context.Context, adm *cache.Compacting, cmd gitproc.Cmd) (gitproc.Result, error) {
+func (m *buildMeasure) run(ctx context.Context, adm *cache.Admission, cmd gitproc.Cmd) (gitproc.Result, error) {
 	var (
 		res gitproc.Result
 		err error
@@ -1214,45 +1216,46 @@ func benchPoll(b *testing.B, n int) {
 	slices.SortFunc(listed, func(x, y code.CompactionCandidate) int {
 		return cmp.Or(cmp.Compare(y.LivePacks, x.LivePacks), strings.Compare(y.ID, x.ID))
 	})
-	// THE PASS, on the home of every listed repository and on a git node home
-	// to an eighth of them, as each node of a fleet of eight is: only a
-	// repository's home ever plans it, so only its home remembers it as not
-	// due, and every other listed repository is judged against the pass's one
-	// reading of who serves git — here a set's lookup, the router's own
-	// judging priced apart (estate's BenchmarkHomeOf).
+	// THE PASS, on the maintainer of every listed repository and on a git
+	// node maintaining an eighth of them, as each node of a fleet of eight
+	// alike nodes is: only a repository's maintainer ever plans it, so only
+	// its maintainer remembers it as not due, and every other listed
+	// repository is judged against the pass's one listing of who serves git —
+	// here a set's lookup, the router's own judging priced apart (estate's
+	// BenchmarkMaintainerOf).
 	for _, arm := range []struct {
-		name string
-		home func(i int) bool
+		name      string
+		maintains func(i int) bool
 	}{
-		{"home=all", func(int) bool { return true }},
-		{fmt.Sprintf("home=1of%d", eightNodes), func(i int) bool { return i%eightNodes == 0 }},
+		{"maintains=all", func(int) bool { return true }},
+		{fmt.Sprintf("maintains=1of%d", eightNodes), func(i int) bool { return i%eightNodes == 0 }},
 	} {
 		b.Run("op=pass/"+arm.name, func(b *testing.B) {
 			store, err := objstore.NewStore(memobj.New())
 			if err != nil {
 				b.Fatal(err)
 			}
-			home := homeTo{}
+			maintained := maintainedSet{}
 			for i, cand := range listed {
-				if arm.home(i) {
-					home[cand.ID] = true
+				if arm.maintains(i) {
+					maintained[cand.ID] = true
 				}
 			}
 			reached := &unreached{}
 			c, err := compact.New(compact.Options{Cache: reached, Objects: countingPuts{Store: store, t: &traffic{}},
-				Estate: pagedListing{due: listed}, Homes: home, NodeID: "bench", Limits: code.DefaultLimits,
-				Logger: slog.New(slog.DiscardHandler)})
+				Estate: pagedListing{due: listed}, Maintainers: maintained, NodeID: "bench",
+				Limits: code.DefaultLimits, Logger: slog.New(slog.DiscardHandler)})
 			if err != nil {
 				b.Fatal(err)
 			}
 			for _, cand := range listed {
-				if home[cand.ID] {
+				if maintained[cand.ID] {
 					compact.RememberNotDue(c, cand)
 				}
 			}
 			for b.Loop() {
 				report, err := c.Poll(b.Context())
-				if err != nil || report.Listed != n || report.Home != 0 {
+				if err != nil || report.Listed != n || report.Maintained != 0 {
 					b.Fatalf("a pass over %d repositories none of which is due here: %+v, %v", n, report, err)
 				}
 			}
@@ -1278,20 +1281,23 @@ func benchPoll(b *testing.B, n int) {
 	})
 }
 
-// homeTo is a node's homes from a fixed set — the repositories it is the home
-// of, as one reading of who serves git names them — answered by a lookup each,
-// so a pass's own share of what its homes cost is what the poll arms price.
-type homeTo map[string]bool
+// maintainedSet is a node's maintainers from a fixed set — the repositories it
+// maintains, as one listing of who serves git names them — answered by a
+// lookup each, so a pass's own share of what judging its maintainers costs is
+// what the poll arms price; and this node is listed.
+type maintainedSet map[string]bool
 
-func (h homeTo) HomeOf(repoIDs []string) (map[string]bool, error) {
+func (m maintainedSet) MaintainerOf(charges map[string]int64) (map[string]bool, error) {
 	out := map[string]bool{}
-	for _, id := range repoIDs {
-		if h[id] {
+	for id := range charges {
+		if m[id] {
 			out[id] = true
 		}
 	}
 	return out, nil
 }
+
+func (maintainedSet) Listed() (bool, error) { return true, nil }
 
 // pagedListing is a code log whose due listing is due, served in the pages a
 // data node serves it in (code.MaxSnapshotItems rows), and which proposes
@@ -1336,7 +1342,26 @@ func (u *unreached) Packs(cache.Synced) []code.PackRow {
 	return nil
 }
 
-func (u *unreached) AdmitCompaction(cache.Synced, int64, code.Limits) (*cache.Compacting, error) {
+func (u *unreached) Chain(cache.Synced) cache.Chain {
+	u.calls.Add(1)
+	return cache.Chain{}
+}
+
+// PublishCharge is arithmetic over the listing's own figure, which reaches no
+// copy of a repository, so it is never counted.
+func (u *unreached) PublishCharge(objects int64) int64 { return objects }
+
+func (u *unreached) Damaged() []code.RepoRef {
+	u.calls.Add(1)
+	return nil
+}
+
+func (u *unreached) AdmitCompaction(cache.Synced, int64, code.Limits) (*cache.Admission, error) {
+	u.calls.Add(1)
+	return nil, errUnreached
+}
+
+func (u *unreached) AdmitPublication(cache.Synced, int64, int64, code.Limits) (*cache.Admission, error) {
 	u.calls.Add(1)
 	return nil, errUnreached
 }
@@ -1346,7 +1371,17 @@ func (u *unreached) NewMergeScratch(context.Context, cache.Synced, string, []str
 	return nil, errUnreached
 }
 
+func (u *unreached) NewLayerScratch(context.Context, cache.Synced, string, int) (*cache.Scratch, error) {
+	u.calls.Add(1)
+	return nil, errUnreached
+}
+
 func (u *unreached) Adopt(context.Context, string, *cache.Scratch, ...code.PackRef) error {
+	u.calls.Add(1)
+	return errUnreached
+}
+
+func (u *unreached) AdoptLayer(context.Context, string, *cache.Scratch, code.LayerRef) error {
 	u.calls.Add(1)
 	return errUnreached
 }

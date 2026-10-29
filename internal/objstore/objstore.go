@@ -74,7 +74,10 @@
 // copied, counted or asked after by a backup — a retired or derived object's
 // bytes ride a `nats` backup's stream snapshot uncounted, like anything else
 // the bucket holds — while a store move copies a Required table's objects and
-// a Derived one's. The collector (internal/objstore/collect) deletes what
+// a Derived one's. The first Derived objects are a repository's published
+// layers, which one git node builds and every other installs only once it has
+// checked them, and which a restore leaves to be published again (ADR-0061).
+// The collector (internal/objstore/collect) deletes what
 // nothing names once it is past a grace measured both from when the backend
 // stored it and from when its key was minted — and [RecordWithin] is the bound
 // on the write that names a key that makes the second of those safe. It also

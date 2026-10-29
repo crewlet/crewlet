@@ -477,6 +477,30 @@ var codeTables = func() []objstore.ReferenceTable {
 // over every declared table.
 func (d *DataNode) CollectAt(t testing.TB, objects objstore.Backend, at time.Time) collect.CollectionReport {
 	t.Helper()
+	report, err := d.collector(t, objects, at).Collect(t.Context())
+	if err != nil {
+		t.Fatalf("codetest: a collection: %v", err)
+	}
+	return report
+}
+
+// Audit runs the collector's audit of objects over the code estate as this
+// node holds it — what raises objects_missing — every table the code domain
+// declares handed to it, as the engine's collector is built, so a table the
+// audit must leave alone is one it is handed and leaves.
+func (d *DataNode) Audit(t testing.TB, objects objstore.Backend) collect.AuditReport {
+	t.Helper()
+	report, err := d.collector(t, objects, time.Now()).Audit(t.Context())
+	if err != nil {
+		t.Fatalf("codetest: an audit: %v", err)
+	}
+	return report
+}
+
+// collector is a collector of objects over the code estate as this node holds
+// it, its clock at at.
+func (d *DataNode) collector(t testing.TB, objects objstore.Backend, at time.Time) *collect.Collector {
+	t.Helper()
 	store, err := objstore.NewStore(objects)
 	if err != nil {
 		t.Fatalf("codetest: the object store: %v", err)
@@ -490,11 +514,7 @@ func (d *DataNode) CollectAt(t testing.TB, objects objstore.Backend, at time.Tim
 	if err != nil {
 		t.Fatalf("codetest: a collector: %v", err)
 	}
-	report, err := c.Collect(t.Context())
-	if err != nil {
-		t.Fatalf("codetest: a collection: %v", err)
-	}
-	return report
+	return c
 }
 
 // Evict publishes an operator's eviction of node through this node's log —

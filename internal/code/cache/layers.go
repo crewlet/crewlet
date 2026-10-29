@@ -532,14 +532,20 @@ func bootInstalled(inc *incarnation, chain []code.LayerRow) []code.LayerRow {
 
 // setChain records chain as the rows' published chain of inc, as a snapshot
 // served it (code.RepoSnapshot.LayersServed), and drops every refusal of a
-// layer the rows no longer name at the record that added it; e.mu is held.
-// The generation moves only where chain is not the chain inc read before:
-// every full round serves the chain, and one serving the very chain an
+// layer the rows no longer name at the record that added it — and, where the
+// chain moved, the publication the node's memory refused: a publication
+// landed, so the repository has a maintainer that holds it, and this node's
+// next try of it, if it is still the maintainer, is judged again. e.mu is
+// held. The generation moves only where chain is not the chain inc read
+// before: every full round serves the chain, and one serving the very chain an
 // installer's plan was made over is no move of it — counted as one, it threw
 // away whatever the plan had fetched.
 func setChain(inc *incarnation, chain []code.LayerRow) {
 	if !inc.chainRead || !sameRows(inc.chain, chain) {
 		inc.chainGen++
+	}
+	if inc.chainRead && !sameChain(inc.chain, chain) {
+		inc.publishRefused = 0
 	}
 	inc.chain, inc.chainRead = slices.Clone(chain), true
 	for id, r := range inc.refused {
@@ -1591,18 +1597,79 @@ func tailObjects(rows []code.LayerRow, live map[string]int64) int64 {
 	return n
 }
 
-// Layers is the published chain the incarnation s pins holds the rows'
-// account of — the chain as of s.Position, root first, the layers this node
-// may not have installed among them — copied under its entry's lock: what a
-// repository's maintainer plans a publication over, beside the packs. nil for
-// a Synced this cache did not hand out.
-func (c *Cache) Layers(s Synced) []code.LayerRow {
+// Chain is a repository's published chain as one copy of it holds it: the
+// rows' chain the copy's last round read, root first; how many of them, from
+// the root, the copy has installed; and the layers of it this node refused,
+// each with what refused it.
+type Chain struct {
+	// Rows is the rows' chain as of the copy's last round — the layers this
+	// node may not have installed among them.
+	Rows []code.LayerRow
+	// Installed is how many of Rows, from the root, the copy holds installed
+	// over exactly the base below each: the prefix a layer may be written
+	// over (Cache.NewLayerScratch). Between a publication's round and the
+	// installer's placement of its layer, the copy still holds the layer the
+	// publication replaced, which is no layer of Rows, so the prefix ends
+	// below it.
+	Installed int
+	// Refused is the layers of Rows this node will not try to install again
+	// while the rows name them at the records that added them, by id, each
+	// with the outcome that refused it: `missing`, `corrupt` or `newer_git`.
+	// A layer above a refused one is neither installed nor refused — none is
+	// installed over a base the copy lacks.
+	Refused map[string]string
+}
+
+// Chain is the published chain the incarnation s pins holds ([Chain]), read
+// under its entry's lock as ONE reading — so a publication planned over it
+// never pairs an installation with a refusal of another moment: what a
+// repository's maintainer plans a publication over, beside the packs
+// ([Cache.Packs]). The zero Chain for a Synced this cache did not hand out.
+func (c *Cache) Chain(s Synced) Chain {
 	if c.handedOut(s, "a read of the published chain") != nil {
-		return nil
+		return Chain{}
 	}
 	s.entry.mu.Lock()
 	defer s.entry.mu.Unlock()
-	return slices.Clone(s.inc.chain)
+	return chainOf(s.inc)
+}
+
+// chainOf is inc's [Chain]; e.mu is held.
+func chainOf(inc *incarnation) Chain {
+	out := Chain{Rows: slices.Clone(inc.chain), Refused: map[string]string{}}
+	for out.Installed < min(len(inc.installed), len(inc.chain)) &&
+		sameLayer(inc.installed[out.Installed], inc.chain[out.Installed]) {
+		out.Installed++
+	}
+	for _, row := range inc.chain {
+		if r, ok := inc.refused[row.Layer.LayerID]; ok && r.added == row.Added {
+			out.Refused[row.Layer.LayerID] = string(r.outcome)
+		}
+	}
+	return out
+}
+
+// Damaged is every repository whose CURRENT copy on this node holds a layer of
+// its rows' chain this node refused — missing from the store, corrupt, or
+// from a newer git — read from memory, as the repository's row the copy's last
+// round read: what a maintainer REPAIRS by publishing again over the base it
+// holds, whether or not any pack was pushed since (internal/code/compact). An
+// idle repository whose layer the store lost is listed by no due listing,
+// since nothing is left to publish by its rows, so its first git node to be
+// its maintainer finds it here. Sorted by id.
+func (c *Cache) Damaged() []code.RepoRef {
+	var out []code.RepoRef
+	c.mu.Lock()
+	for _, e := range c.entries {
+		e.mu.Lock()
+		if inc := e.current; !e.dead && inc != nil && !inc.retired && len(chainOf(inc).Refused) > 0 {
+			out = append(out, inc.repo)
+		}
+		e.mu.Unlock()
+	}
+	c.mu.Unlock()
+	slices.SortFunc(out, func(a, b code.RepoRef) int { return strings.Compare(a.ID, b.ID) })
+	return out
 }
 
 // THE INSTALLER: one goroutine a cache, started by Start, that installs the

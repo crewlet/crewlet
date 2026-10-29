@@ -21,14 +21,19 @@ import (
 // commit-graph over an installed chain (TipGraphBytesPerObject), holds memory
 // in proportion to the TAIL it covers — the commits no installed layer holds
 // — and is charged so (chargeOver), with the room for a clone of the whole
-// repository beside it that every step keeps; and a compaction's build, which
-// the cache admits to a slot of the maintenance lane (compaction.go), in
+// repository beside it that every step keeps; a compaction's build, which
+// the cache admits to a slot of the maintenance lane (background.go), in
 // proportion to the packs it merges (CompactBytesPerObject), charged so with
 // room beside it for a transfer of as many objects — of them, never of the
-// whole repository, below — and its delta window (CompactWindowBytes). Each
-// write's figure is its declaration's own (derived.go, Write.BytesPerObject),
-// which the plan and a refusal's line read from the declaration, never beside
-// it; the check and the build are no writes and keep their own. The largest
+// whole repository, below — and its delta window (CompactWindowBytes); and a
+// publication's, admitted there too at the largest of its steps' charges —
+// its layer's bitmap over the whole repository (PublishBytesPerObject), its
+// commit-graph layer over the layer's packs (GraphLayerBytesPerObject) and
+// its repack, a compaction's build over the packs it repacks — each with the
+// room for a clone of the whole repository beside it. Each write's figure is
+// its declaration's own (derived.go, Write.BytesPerObject), which the plan and
+// a refusal's line read from the declaration, never beside it; the check, the
+// build and the publication are no writes and keep their own. The largest
 // repository the defaults admit is some 60 million objects, which no node
 // holds a bitmap of; and on a node with less memory than a run needs, every
 // duty cycle's run was killed by the kernel, which may as well have chosen
@@ -70,12 +75,14 @@ import (
 // more: what bounds the transfers themselves is the transfer lane, which
 // knows no repository (gitproc). The node's tip, whose own figure is the
 // tail's, keeps the same room for a clone of the WHOLE repository beside it
-// (chargeOver): the clone it shares the node with is of the repository. A
-// compaction's build keeps room for a transfer of the packs it merges and no
-// more, because it is the one step whose refusal is not "slower": the home
-// alone merges a repository's packs, and a repository whose merges its home
-// refuses gathers packs until every push carrying one is refused — so its
-// charge follows the merge, never the repository (compaction.go says what the
+// (chargeOver), since the clone it shares the node with is of the repository;
+// so does every step of a publication, whose refusal leaves its tail outside
+// every bitmap — slower, never a push refused. A compaction's build keeps room
+// for a transfer of the packs it merges and no more, because it is the one
+// step whose refusal is not "slower": the maintainer alone merges a
+// repository's packs, and a repository whose merges its maintainer refuses
+// gathers packs until every push carrying one is refused — so its charge
+// follows the merge, never the repository (Cache.AdmitCompaction says what the
 // whole repository's room would refuse).
 //
 // WHAT IT REFUSES is a step whose charge alone is past the budget, which never
@@ -90,30 +97,34 @@ import (
 // it (maintain.go says why). Each step refused is logged and counted once an
 // incarnation (code_cache_maintenance_refused,
 // crewlet.code.cache.maintenance.refusals{step}); a refused BITMAP, a refused
-// GRAPH and a refused TIP are each kept on a gauge while they stay refused
-// (crewlet.code.cache.maintenance.refused{step}) — a repository refused its
-// graph walks by date for as long, and a push of a commit dated before its
-// parent walks its whole history — and a refused bitmap raises
-// code_maintenance_refused, whose threshold is the budget: a measurement,
-// never a knob. The alarm stands for a refused graph too, since a graph's
-// charge is a fraction of the bitmap's over the same objects: no repository
-// is refused its graph and not its bitmap. A refused TIP raises nothing: its
-// copy is served through its installed chain's bitmap and its commit-graph
-// layers, and only the commits pushed since the last publication walk by
-// date — those of the tail, which a publication bounds — so the alarm's
-// "served without a bitmap" would be false of it, and the gauge says it.
+// GRAPH, a refused TIP and a refused PUBLICATION are each kept on a gauge
+// while they stay refused (crewlet.code.cache.maintenance.refused{step}) — a
+// repository refused its graph walks by date for as long, and a push of a
+// commit dated before its parent walks its whole history — and a refused
+// bitmap or publication raises code_maintenance_refused, whose threshold is
+// the budget: a measurement, never a knob. The alarm stands for a refused
+// graph too, since a graph's charge is a fraction of the bitmap's over the
+// same objects: no repository is refused its graph and not its bitmap. A
+// refused TIP raises nothing: its copy is served through its installed
+// chain's bitmap and its commit-graph layers, and only the commits pushed
+// since the last publication walk by date — those of the tail, which a
+// publication bounds — so the alarm's "served without a bitmap" would be
+// false of it, and the gauge says it.
 
 // chargeOver is what a git process the cache starts or admits is charged at,
 // over stepObjects objects with room kept for a transfer of roomObjects: its
 // own perObject bytes an object of what it covers, and room beside it for one
 // transfer of roomObjects at gitproc.TransferBytesPerObject. Every step of the
-// maintainer's but one covers the whole repository, and keeps room for a
-// clone of it (stepObjects and roomObjects are both the repository's); the
-// node's tip commit-graph covers the tail alone (maintain.go), so its own
-// memory follows the tail, while the clone it shares the node with is of the
-// repository — charged by the tail alone, a large repository's tip would be
-// admitted beside a clone the budget kept no room for. A compaction's build
-// (compaction.go) keeps room for a transfer of the packs it merges alone
+// maintainer's but the node's tip covers the whole repository, and keeps room
+// for a clone of it (stepObjects and roomObjects are both the repository's).
+// The node's tip commit-graph covers the tail alone (maintain.go), and a
+// publication's commit-graph layer and repack the packs of its layer and of
+// its repack (background.go), so the own memory of each follows what it
+// covers, while the clone it shares the node with is of the repository —
+// charged by the tail or those packs alone, a large repository's tip or
+// publication would be admitted beside a clone the budget kept no room for
+// (roomObjects is the repository's). A compaction's build (background.go) is
+// the one step that keeps room for a transfer of the packs it merges alone
 // (roomObjects is its inputs): refused for a room that grew with the
 // repository, it would cost the repository its pushes, never just speed.
 func chargeOver(stepObjects, perObject, roomObjects int64) int64 {
@@ -217,26 +228,37 @@ func (c *Cache) nodeMemory() gitproc.Memory {
 
 // maintStep is a set of the maintainer's declared writes (maintWrites), bit i
 // its all[i]: what a plan takes, and what the node's memory refused an
-// incarnation — where one more step sits past every write's bit, a
-// compaction's build ([stepCompact]). A write's name — a line's and a count's
-// `step` — is its write's Step, and the compaction's is "compact".
+// incarnation — where two more steps sit past every write's bit, a
+// compaction's build ([stepCompact]) and a publication's ([stepPublish]). A
+// write's name — a line's and a count's `step` — is its write's Step, the
+// compaction's "compact" and the publication's "publish".
 type maintStep uint16
 
-// stepCompact is a compaction's build (Cache.AdmitCompaction) as a step of an
-// incarnation's memoryRefused set: the one step there that is no declared
-// write, at the first bit past every bit a write may take (maxMaintWrites),
-// so the set an incarnation keeps of what the node's memory refused it —
-// logged and counted once an incarnation, carried across a swap — holds a
-// refused compaction beside the maintainer's refused steps, and logs it once
+// stepCompact and stepPublish are the background work a repository's
+// maintainer runs between passes (background.go: Cache.AdmitCompaction and
+// Cache.AdmitPublication) as steps of an incarnation's memoryRefused set: the
+// two steps there that are no declared write, at the first bits past every
+// bit a write may take (maxMaintWrites), so the set an incarnation keeps of
+// what the node's memory refused it — logged and counted once an incarnation,
+// carried across a swap — holds a refused compaction and a refused
+// publication beside the maintainer's refused steps, and logs each once
 // however many polls find it again.
-const stepCompact maintStep = 1 << maxMaintWrites
+const (
+	stepCompact maintStep = 1 << maxMaintWrites
+	stepPublish maintStep = 1 << (maxMaintWrites + 1)
+)
 
-// stepCompactName is stepCompact's `step`, on its line and its count.
-const stepCompactName = "compact"
+// stepCompactName and stepPublishName are the two steps' `step`, on their
+// lines and their counts.
+const (
+	stepCompactName = "compact"
+	stepPublishName = "publish"
+)
 
 // memoryRefusals is what the maintainer's latest walk of the entries found
-// refused for memory: how many repositories their bitmap, and the largest of
-// those charges. Its lock is a leaf.
+// refused for memory: how many repositories a bitmap — their own, or the one
+// their publication writes — and the largest of those charges. Its lock is a
+// leaf.
 type memoryRefusals struct {
 	mu      sync.Mutex
 	repos   int
@@ -252,22 +274,40 @@ type refusal struct {
 	charge int64
 }
 
-// refusalWalk gathers what one walk of the entries finds refused.
+// refusalWalk gathers what one walk of the entries finds refused: by step,
+// for the gauge, and the repositories served without a bitmap of what they
+// hold, for the alarm (unbitmapped), with the largest of their charges.
 type refusalWalk struct {
-	bitmaps, graphs, tips int
-	largest               int64
-	fresh                 []refusal
+	bitmaps, graphs, tips, publications int
+	unbitmapped                         int
+	largest                             int64
+	fresh                               []refusal
 }
 
 // note records inc's steps refused on the walk's budget — refused, with each
 // step's charge in charges — and marks the ones refused for the first time on
 // the incarnation, for their line and count. e.mu is held.
+//
+// A PUBLICATION REFUSED IS A BITMAP REFUSED: a repository whose maintainer
+// cannot publish its next layer serves every pack pushed since its last
+// publication outside every bitmap, and every one pushed after, so it counts
+// toward the repositories the alarm stands for, its charge beside the
+// bitmaps' — once, where the copy's own bitmap is refused as well. Its line
+// was logged at its admission (Cache.AdmitPublication), so the walk logs none
+// for it.
 func (w *refusalWalk) note(mw *maintWrites, id string, inc *incarnation, refused maintStep,
 	charges map[maintStep]int64) {
 
+	if refused&(mw.bitmap|stepPublish) != 0 {
+		w.unbitmapped++
+	}
 	if refused&mw.bitmap != 0 {
 		w.bitmaps++
 		w.largest = max(w.largest, charges[mw.bitmap])
+	}
+	if refused&stepPublish != 0 {
+		w.publications++
+		w.largest = max(w.largest, charges[stepPublish])
 	}
 	if refused&mw.graph != 0 {
 		w.graphs++
@@ -285,10 +325,11 @@ func (w *refusalWalk) note(mw *maintWrites, id string, inc *incarnation, refused
 }
 
 // noteRefusals records what one walk of the entries found: the repositories
-// refused their bitmap — and their graph, and their tip — and the largest of
-// the bitmaps' charges, for the gauge and the alarm, and every step refused
-// for the first time on its incarnation — each logged, and counted once.
-// Holding no lock of the cache or an entry.
+// refused their bitmap — and their graph, their tip and their publication —
+// and the repositories served without a bitmap of what they hold with the
+// largest of those charges, for the gauges and the alarm, and every step
+// refused for the first time on its incarnation — each logged, and counted
+// once. Holding no lock of the cache or an entry.
 func (c *Cache) noteRefusals(w refusalWalk) {
 	slices.SortFunc(w.fresh, func(a, b refusal) int {
 		if n := strings.Compare(a.repo, b.repo); n != 0 {
@@ -297,7 +338,7 @@ func (c *Cache) noteRefusals(w refusalWalk) {
 		return int(a.step) - int(b.step)
 	})
 	c.refusals.mu.Lock()
-	c.refusals.repos, c.refusals.largest = w.bitmaps, w.largest
+	c.refusals.repos, c.refusals.largest = w.unbitmapped, w.largest
 	c.refusals.mu.Unlock()
 	for _, r := range w.fresh {
 		c.logRefusal(r)
@@ -310,6 +351,8 @@ func (c *Cache) noteRefusals(w refusalWalk) {
 	c.metrics.Set(metrics.CodeCacheMaintenanceRefused, float64(w.graphs), metrics.Attrs{"step": c.mw.name(c.mw.graph)})
 	c.metrics.Set(metrics.CodeCacheMaintenanceRefused, float64(w.tips),
 		metrics.Attrs{"step": c.mw.name(c.mw.tipGraph)})
+	c.metrics.Set(metrics.CodeCacheMaintenanceRefused, float64(w.publications),
+		metrics.Attrs{"step": stepPublishName})
 }
 
 // logRefusal logs and counts one step refused an incarnation for the first

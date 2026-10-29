@@ -21,27 +21,37 @@ var (
 	errBundleTooLarge = errors.New("compact: an output's bundle is past the bound every stored pack is held to")
 )
 
-// Compact plans and runs ONE compaction of cand — a repository this node is the
-// home of, as the `compaction_due` listing named it — and answers what became
-// of it: the unit a suite drives, and what every pass runs one at a time.
-// Nothing is retried inside it: every failure is the next poll's (a moment's
-// state) or remembered until something changes (a definite one), and every
-// outcome is counted and logged. Its error is the one that failed or refused
-// it, nil for every other outcome.
+// Compact plans and runs ONE compaction of cand — a repository this node
+// maintains, as the `compaction_due` listing named it — and answers what
+// became of it: the unit a suite drives, and what every pass runs one at a
+// time. Nothing is retried inside it: every failure is the next poll's (a
+// moment's state) or remembered until something changes (a definite one), and
+// every outcome is counted and logged. Its error is the one that failed or
+// refused it, nil for every other outcome.
 //
 // Throughout, cand.ID is the REPOSITORY and the compaction's own id is minted
 // at its build — two ids of two things, never one name for both.
+//
+// NEVER BESIDE A PUBLICATION OF THE SAME REPOSITORY on this node: each would
+// retire packs the other planned over, so one would be refused stale after a
+// whole build. A repository whose publication is running answers busy, and is
+// planned again at the next pass ([Compactor.claim]).
 //
 //  1. SYNC at session, floored at the repository's version the listing read:
 //     never linearizable, because a barrier a compaction would cost the code
 //     log up to some 17 000 records a day at 250 000 pushes buys nothing — the
 //     committer holds every input to its own snapshot, and a plan from an
-//     older one is refused stale. The repository's home holds it already in
-//     the ordinary case: its reads are asked of it too (ADR-0059).
-//  2. PLAN ([plan]) over the incarnation's live packs, capped at the
-//     repository's cap ([Compactor.capFor]) and then at [InputByteCap] of the
-//     cut the inputs take ([bounds.cutFor]). Not due is remembered at the
-//     listing's version and the cap, never an admission's refusal.
+//     older one is refused stale. The repository's maintainer holds it
+//     already in the ordinary case — on a fleet of alike git nodes it is the
+//     home, whose reads are asked of it too (ADR-0059).
+//  2. PLAN ([plan]) over the incarnation's live packs less every pack a
+//     published layer of its chain names — a published pack is never a
+//     compaction's input (the decide's rule 2), since a node's chain loads
+//     only over every pack it names — capped at the repository's cap
+//     ([Compactor.capFor]) and then at [InputByteCap] of the cut the inputs
+//     take ([bounds.cutFor]). Not due is remembered at the listing's version
+//     and the cap, never an admission's refusal: a publication, the one thing
+//     that moves the chain, moves the version too.
 //  3. ADMIT the build to the maintenance lane ([cache.Cache.AdmitCompaction]):
 //     busy is the next poll's; a charge the node's memory cannot hold is
 //     refused `memory` and never remembered, since the budget is read again
@@ -79,6 +89,13 @@ func (c *Compactor) Compact(ctx context.Context, cand code.CompactionCandidate) 
 	defer cancel(nil)
 	defer context.AfterFunc(c.life, func() { cancel(context.Cause(c.life)) })()
 	began := c.now()
+	if !c.claim(cand.ID) {
+		c.log.Debug("code_compaction_busy", "repo", cand.Name,
+			"detail", "a publication of the repository is running on this node")
+		c.counted(OutcomeBusy, began)
+		return OutcomeBusy, errClaimed
+	}
+	defer c.unclaim(cand.ID)
 	out, err := c.compact(ctx, cand, began)
 	c.counted(out, began)
 	return out, err
@@ -93,7 +110,7 @@ func (c *Compactor) compact(ctx context.Context, cand code.CompactionCandidate, 
 	defer s.Release()
 
 	cap := c.capFor(cand.ID)
-	p := plan(c.o.Cache.Packs(s), cap, c.bounds)
+	p := plan(c.o.Cache.Packs(s), publishedPacks(c.o.Cache.Chain(s).Rows), cap, c.bounds)
 	if !p.due {
 		c.remember(cand, cap)
 		return OutcomeNotDue, nil
@@ -158,7 +175,7 @@ type built struct {
 // the pack bytes p was capped at, which a failure halves. On an error the
 // scratch is gone, and the outcome is the compaction's.
 func (c *Compactor) buildChecked(ctx context.Context, cand code.CompactionCandidate, s cache.Synced,
-	adm *cache.Compacting, p planned, cut, cap int64, limits code.Limits) (built, Outcome, error) {
+	adm *cache.Admission, p planned, cut, cap int64, limits code.Limits) (built, Outcome, error) {
 
 	b, err := c.build(ctx, cand.ID, s, adm, p, cut, limits)
 	if err != nil {
@@ -201,7 +218,7 @@ func (c *Compactor) buildChecked(ctx context.Context, cand code.CompactionCandid
 // build runs one pack-objects over p at cut in a scratch named by a fresh
 // compaction id, and lays its outputs out into the compaction its committer
 // would be asked to decide. On an error the scratch is removed.
-func (c *Compactor) build(ctx context.Context, repoID string, s cache.Synced, adm *cache.Compacting, p planned,
+func (c *Compactor) build(ctx context.Context, repoID string, s cache.Synced, adm *cache.Admission, p planned,
 	cut int64, limits code.Limits) (built, error) {
 
 	cid := statelog.NewOpID(c.now(), "")
@@ -215,7 +232,9 @@ func (c *Compactor) build(ctx context.Context, repoID string, s cache.Synced, ad
 	}
 	var outs []output
 	if err == nil {
-		outs, err = lay(sc, cid, printed)
+		// The scratch held no pack before the build: its inputs are read
+		// through its alternate.
+		outs, err = lay(sc, cid, printed, nil)
 	}
 	if err != nil {
 		sc.Remove()
@@ -241,14 +260,11 @@ func (c *Compactor) countHolds(cand code.CompactionCandidate, b built, cap int64
 }
 
 // capFailed halves cand's cap after a build of p, capped at cap, failed for
-// reason — HALF WHAT THE BUILD MERGED, which a cap far above a small roll's
-// bytes would otherwise halve to no effect, the next plan the same roll —
-// floored at its two lightest inputs, and remembered as not due at the floor,
-// where a plan of the same inputs would fail the same way until the
-// repository moves; and counts and logs it.
+// reason ([Compactor.halveCap]), remembers it as not due at the floor, where a
+// plan of the same inputs would fail the same way until the repository moves,
+// and counts and logs it.
 func (c *Compactor) capFailed(cand code.CompactionCandidate, p planned, cap int64, reason string, outputs int) {
-	floor := p.inputs[0].packBytes + p.inputs[1].packBytes
-	atFloor := c.halve(cand.ID, min(cap, p.packBytes()), floor)
+	atFloor := c.halveCap(cand.ID, p, cap)
 	if atFloor {
 		c.remember(cand, c.capFor(cand.ID))
 	}
@@ -275,7 +291,7 @@ func (c *Compactor) upload(ctx context.Context, cand code.CompactionCandidate, b
 	err := uploadAll(ctx, uploads)
 	if full, ok := storeFull(err); ok {
 		estimate := b.plan.size()
-		c.holdFull(cand.ID, estimate)
+		c.holdFull(compactionLoop, cand.ID, estimate)
 		c.refused(reasonStoreFull)
 		c.log.Warn("code_compaction_refused", "repo", cand.Name, "compaction", b.proposal.Compaction.CompactionID,
 			"refusal", reasonStoreFull, "bytes", estimate, "error", err,
@@ -294,7 +310,7 @@ func (c *Compactor) upload(ctx context.Context, cand code.CompactionCandidate, b
 	for i, o := range b.outs {
 		b.proposal.Compaction.Add[i] = o.ref
 	}
-	c.stored(ctx, cand.ID)
+	c.stored(ctx, compactionLoop, cand.ID)
 	return "", nil
 }
 

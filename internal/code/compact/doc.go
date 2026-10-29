@@ -1,20 +1,81 @@
-// Package compact keeps a repository's pack count bounded: the HOME git node's
-// compaction loop (ADR-0060).
+// Package compact keeps a repository's pack count bounded and its bitmap
+// published: the MAINTAINER's two loops (ADR-0060, ADR-0061).
 //
 // Every push stores one pack, so a busy repository's pack count grows with
 // its pushes, and every cold sync then pays a GET a pack and every request a
-// lookup a pack. On every [Poll], a git node lists the repositories holding
-// code.CompactMinMerge live packs or more, most first (the code domain's
-// `compaction_due` read), and for each it is the HOME of — the first git node
-// of the repository's rendezvous order over the live git nodes, the node its
-// reads are asked of too (ADR-0059) — merges the small packs geometrically,
-// git's own `repack --geometric=2` split over the packs that are not FULL,
-// into one or a few pack bundles in the stored format, stores each as one
-// object, and proposes ONE compaction to the repository's committer, which
-// decides it in one snapshot and retires the inputs into code_packs_retired
-// for code.RetireGrace. Every git node's cache drops a retired pack by an
-// incarnation swap over hard links, so a reader holding the old directory
-// keeps every file it may open (internal/code/cache's swap.go).
+// lookup a pack. And every git node used to write its own whole
+// multi-pack-index and bitmap of every repository it serves — O(history) in
+// memory and minutes on every node at every duty cycle, refused outright on a
+// node whose memory could not hold the largest repository's bitmap. One git
+// node a repository, its maintainer, now does both for the fleet:
+//
+//   - THE COMPACTION LOOP ([Compactor.Poll]): on every [Poll] it lists the
+//     repositories holding code.CompactMinMerge live packs or more, most
+//     first (the code domain's `compaction_due` read), and for each it
+//     maintains merges the small packs no published layer names
+//     geometrically, git's own `repack --geometric=2` split over the packs
+//     that are not FULL, into one or a few pack bundles in the stored format,
+//     stores each as one object, and proposes ONE compaction to the
+//     repository's committer, which decides it in one snapshot and retires
+//     the inputs into code_packs_retired for code.RetireGrace. Every git
+//     node's cache drops a retired pack by an incarnation swap over hard
+//     links, so a reader holding the old directory keeps every file it may
+//     open (internal/code/cache's swap.go).
+//   - THE PUBLICATION LOOP ([Compactor.PublishPass]): on every [PublishPoll]
+//     it lists the repositories holding a pack no published layer covers,
+//     least recently published first (`publication_due`), and the
+//     repositories whose copy on this node holds a layer this node refused,
+//     and for each it maintains whose tail is worth a layer ([Due]) — or
+//     that is a REPAIR — writes the repository's next PUBLISHED LAYER: git's
+//     own incremental multi-pack-index layer with its bitmap, and the
+//     commit-graph layer with every changed-path filter, over every live pack
+//     the chain beneath it does not cover. It stores the layer's bytes as
+//     parts (code.StoreLayer) and proposes it as one compaction carrying the
+//     layer, which every git node then installs (internal/code/cache's
+//     layers.go).
+//
+// # Who maintains, and why one node does both
+//
+// The MAINTAINER is the first git node of the repository's rendezvous order
+// whose ADVERTISED background budget holds the publication's charge — the
+// bitmap over the whole history, cache.Cache.PublishCharge — and the home
+// where none can (internal/estate's Router.Maintainer): on a fleet of alike
+// nodes it is the home, and on a fleet with one large git node every
+// repository only that node can publish is maintained there. Both loops ask by
+// the same charge, so the two writers of a repository's packs run on ONE node,
+// and on that node a repository is never compacted and published at once
+// ([Compactor.claim]): each would retire packs the other planned over, and one
+// would be refused stale after a whole build. There is no lease and no epoch:
+// two nodes whose presence views disagree for a moment may both build, and the
+// committer refuses the second `stale`, one wasted build. Each pass judges
+// every listed repository it must against ONE LISTING of who serves git and
+// what each git node advertises (Maintainers), and a node that cannot read it
+// does nothing that pass rather than guess (Maintainers is three-valued); a
+// node no listing of the git nodes carries maintains
+// nothing — a booting one until its host beats — so both loops wait for this
+// node to be listed before their first pass ([Compactor.awaitListed]). TWO
+// LOOPS, because a publication of a large repository takes minutes and a hot
+// repository gains packs at up to three hundred a minute: behind a publication
+// in one loop, it would reach code.MaxPacksPerRepo and refuse pushes. They
+// share the node's maintenance slots and memory through the cache's
+// admissions, which bound them. Each runs ONE BUILD AT A TIME and a pass
+// works through every due repository it maintains in its listing's order
+// until the next tick would begin. A repository a plan found NOT DUE
+// (nothing to merge, nothing to publish) is remembered at its row's version —
+// and a compaction's at its byte cap — so an idle repository costs its
+// maintainer's pass a map lookup, never a sync, and every other git node's —
+// where no plan of it is ever made to remember — its rendezvous order over the
+// pass's one listing; an admission the node's memory refused is never
+// remembered, since the node's budget is read again at every pass, and the
+// next pass asks again who maintains the repository, which is how a larger
+// node takes it over.
+//
+// THE SYNC IS AT SESSION, floored at the repository's own version the listing
+// read, never linearizable: the committer holds every input and the chain to
+// its own snapshot and refuses a plan from an older one `stale`, so a barrier
+// would buy nothing — and at 250 000 pushes a day a compaction's barriers
+// would be some 17 000 records a day on the code log, a fifth of its git
+// clients' census at the gibibyte floor.
 //
 // # A merge makes no reachability judgement
 //
@@ -28,7 +89,10 @@
 // different snapshots may each retire the pack the other relied on, and both
 // land. So no push decided against the inputs can land a ref whose closure a
 // compaction removed, and nothing fences a compaction against a push: what
-// drops objects is an expunge, never this (ADR-0060).
+// drops objects is an expunge, never this (ADR-0060). A PUBLISHED PACK IS
+// NEVER A COMPACTION'S INPUT: a node's chain loads only over every pack it
+// names, so the plan leaves every pack a layer names out, and a published
+// repository's small packs are merged by its publications' repacks instead.
 //
 // NOTHING BUT THE INPUTS IN REACH, because `--stdin-packs` fills in the name
 // hash its delta search sorts by with a walk from every commit its inputs hold
@@ -45,96 +109,125 @@
 // whole copy a roll of eight took 451 ms and 100.8 MiB; internal/code/cache's
 // scratch.go has the runs).
 //
-// # Who compacts, and how often
+// # A layer covers every pack its base does not, and is written over exactly it
 //
-// The HOME, with no lease and no epoch: two nodes that both believe they are
-// home — a presence view split for a moment — both build, and the committer
-// refuses the second `stale`, one wasted build. A pass judges every listed
-// repository it must against ONE READING of who serves git (Homes), and a
-// node that cannot read it compacts nothing that pass rather than guess (Homes
-// is three-valued). ONE COMPACTION AT A TIME A NODE, and a pass compacts every
-// due repository it is home for, most live packs first, until the next tick
-// would begin: a bound in count would leave a repository at two thousand packs
-// behind a queue of barely due ones, while the order is the bound. A
-// repository a plan found NOT DUE is remembered at its row's version and its
-// byte cap — every input a plan reads but the live packs, which move only with
-// the version — so an idle repository costs its home's pass a map lookup,
-// never a sync, and every other git node's — where no plan of it is ever made
-// to remember — its rendezvous order over the pass's one reading; an
-// admission the node's memory refused is never remembered, since the node's
-// budget is read again at every pass.
+// git writes a bitmap only over a chain whose packs hold everything their
+// commits reach — measured on git 2.56.0, a layer over all of a history's
+// packs but one, and one over the full packs of a cut alone, were refused
+// ("Packfile doesn't have full closure") and wrote no bitmap — and every pack
+// live at one position is closed over the packs before it, since a push's pack
+// is closed and a compaction drops no object. So a layer covers EVERY live
+// pack its base does not, as of its plan (planLayer), and a pack pushed since
+// stays outside the chain, which git reads beside it. The layers are merged
+// GEOMETRICALLY, git's own policy (LayerSplitFactor, LayerRepackPacks): the
+// next layer down is absorbed into the replacement while the objects gathered
+// above it, twice over, reach its own, so the chain stays logarithmic in the
+// history; and where more than LayerRepackPacks of a layer's packs are not
+// full they are repacked first, under a compaction's caps. A layer is WRITTEN,
+// never merged with `multi-pack-index compact`, in a scratch of hard links
+// whose chain files name EXACTLY its base (cache.Cache.NewLayerScratch):
+// measured on git 2.56.0, the same write with layers above its base still
+// named took 196–200 s against 1.03 s, and `compact` of two non-root layers
+// with one above them did too; compacting from the root, which reuses bitmaps,
+// cannot take the new packs a publication exists to add. A tail that holds no
+// commit gives git nothing to bitmap, and a layer without a bitmap switches
+// off every bitmap beneath it, so such a plan is made once more over one more
+// layer.
 //
-// THE SYNC IS AT SESSION, floored at the repository's own version the listing
-// read, never linearizable: the committer holds every input to its own
-// snapshot and refuses a plan from an older one `stale`, so a barrier would
-// buy nothing — and at 250 000 pushes a day a compaction's barriers would be
-// some 17 000 records a day on the code log, a fifth of its git clients'
-// census at the gibibyte floor.
+// # The builds' bounds
 //
-// # The build's bounds
-//
-// The plan caps a roll at code.MaxCompactInputs packs and at [InputByteCap]
-// of the cut, half code.MaxCompactOutputs cuts — 8 GiB at the nominal 1 GiB
-// cut — because pack-objects closes an output before the object that would
-// pass the cut and writes whole a delta whose base went to another output, so
-// the BUILD'S OWN COUNT is the authority on how many outputs it wrote: more
-// than one compaction records, and nothing is uploaded and the repository's
-// next plan merges half the bytes. Every output is held to the BUNDLE RULE
-// (code.MaxPackBytes for the pack and both its indexes) before any byte is
-// stored: a dense roll — many small objects, whose indexes at 32 bytes an
-// object would take a bundle past the bound at the nominal cut — is cut
-// smaller from the start by the inputs' aggregate bundle-to-pack ratio, and an
-// output past the rule anyway is built once more at its own ratio; a second
-// miss halves the next plan the same way. The build holds a slot of the
-// node's MAINTENANCE lane and its charge of the node's background memory
-// (internal/code/cache's AdmitCompaction: 500 bytes an object of the inputs
-// and room beside them for a transfer of as many — never for a clone of the
-// whole repository, whose size would refuse every merge of a large one and
-// so its pushes — and six times max_blob_bytes for its delta search, the
-// first and the last what BenchmarkCompact's memory arms measured a build to
-// hold, # Measured) —
-// at the maintainer's limit, never the slot it keeps for a person's verify —
-// and gives both back once its last git process has ended, before the
-// uploads: an upload the store paces may take hours, and holding the slot
-// through it would idle the node's maintenance for every other repository.
+// A plan caps a roll — a compaction's, and a publication's repack — at
+// code.MaxCompactInputs packs and at [InputByteCap] of the cut, half
+// code.MaxCompactOutputs cuts — 8 GiB at the nominal 1 GiB cut — because
+// pack-objects closes an output before the object that would pass the cut and
+// writes whole a delta whose base went to another output, so the BUILD'S OWN
+// COUNT is the authority on how many outputs it wrote: more than one record
+// takes, and nothing is uploaded and the repository's next plan merges half
+// the bytes. Every output is held to the BUNDLE RULE (code.MaxPackBytes for the
+// pack and both its indexes) before any byte is stored: a dense roll — many
+// small objects, whose indexes at 32 bytes an object would take a bundle past
+// the bound at the nominal cut — is cut smaller from the start by the inputs'
+// aggregate bundle-to-pack ratio, and an output past the rule anyway is built
+// once more at its own ratio; a second miss halves the next plan the same way.
+// A layer that would weigh more than code.MaxLayerParts parts of
+// code.LayerPartBytes is refused before it is built. Each build holds a slot
+// of the node's MAINTENANCE lane and its charge of the node's background
+// memory (internal/code/cache's AdmitCompaction and AdmitPublication: a
+// compaction's 500 bytes an object of its inputs and room beside them for a
+// transfer of as many — never for a clone of the whole repository, whose size
+// would refuse every merge of a large one and so its pushes — and six times
+// max_blob_bytes for its delta search, the first and the last what
+// BenchmarkCompact's memory arms measured a build to hold (# Measured); a
+// publication's the largest of its bitmap's 900 an object of the WHOLE
+// repository, its graph layer's and its repack's, provisional until
+// BenchmarkMidx's memory arms measure them, each beside room for a clone of
+// the repository, since a publication refused is slower, never a push
+// refused) — at the maintainer's limit, never the slot it keeps for a
+// person's verify — and gives both back once its last git process has ended,
+// before the uploads: an upload the store paces may take hours, and holding
+// the slot through it would idle the node's maintenance for every other
+// repository.
 //
 // # The uploads, and a store with no room
 //
-// Every output is uploaded AT ONCE ([uploadAll]): a key is minted as its upload
-// begins, and outputs uploaded one after another age the first key by every
-// later one past what a record may name. A store with no room for an output
-// (objstore.ErrFull) refuses the compaction `store_full`, and the repository
-// is held back until the store has the room — never retried as a blip, never
-// remembered at its version, which no room coming back moves: on the fleet's
-// own bucket, whose reservation says its room, once a pass's read of it holds
-// what the compaction would store; on a provider's bucket, which says nothing,
-// by one held repository let through an hour after the last refusal, the
-// collector's own interval, whose outputs stored release every other. On
-// either, a repository's OWN hold goes once its own outputs are stored: the
-// refusal it was held back for is answered, and a refusal of a later roll
-// sets an estimate of its own — kept, the first roll's estimate held back
-// every later roll of a repository the listing goes on naming, however small,
-// once the room fell below it.
+// Every output and every layer part is uploaded AT ONCE ([uploadAll]): a key
+// is minted as its upload begins, and uploads one after another age the first
+// key by every later one past what a record may name. A store with no room
+// (objstore.ErrFull) refuses the build `store_full`, and the repository is
+// held back in that loop until the store has the room — never retried as a
+// blip, never remembered at its version, which no room coming back moves: on
+// the fleet's own bucket, whose reservation says its room, once a pass's read
+// of it holds what the build would store; on a provider's bucket, which says
+// nothing, by one held repository a loop let through an hour after the last
+// refusal, the collector's own interval, whose upload stored releases every
+// other. On either, a repository's OWN hold in a loop goes once that loop's
+// own upload of it is stored: the refusal it was held back for is answered,
+// and a refusal of a later build sets an estimate of its own — kept, the first
+// build's estimate held back every later build of a repository the listing
+// goes on naming, however small, once the room fell below it. A maintainer
+// holds at most code.MaxCompactOutputs + code.MaxLayerParts
+// + code.MaxCompactOutputs uploads at once — 48, a publication's sixteen parts
+// and sixteen outputs beside a compaction's sixteen — 384 MiB of S3 first
+// buffers out of the serving share, never the maintenance budget (M3-decisions
+// M3-O40).
+//
+// # Self-healing
+//
+// A layer part the store lost, or one whose bytes are damaged, is refused
+// `missing` or `corrupt` on every git node, its maintainer included, and the
+// node serves from the prefix below it. The maintainer's next pass finds the
+// refusal in its own cache (cache.Cache.Damaged) whether or not the repository
+// has a tail, and REPAIRS it: the plan replaces the refused layer and every
+// layer above it, paced by PublishMinInterval alone. A restore carries no
+// layer (ADR-0061), so every node serves in own mode until each repository's
+// maintainer publishes again. None of this alarms: a lost layer costs a
+// publication, never data.
 //
 // # What it raises
 //
-// code_compaction_behind, on the home: every listed repository at the most live
-// packs a repository may hold (code.MaxPacksPerRepo) that this node is home
-// for, read off every pass's listing whatever its compaction decided — at the
-// bound a refused push records nothing, so the repository's version stands
-// still, and a reading taken only of what reached a compaction would clear
-// while every push is refused. The committer raises nothing: the receiver
-// refuses most such pushes before any committer sees them.
+// code_compaction_behind, on the maintainer: every listed repository at the
+// most live packs a repository may hold (code.MaxPacksPerRepo) that this node
+// maintains, read off every pass's listing whatever its compaction decided —
+// at the bound a refused push records nothing, so the repository's version
+// stands still, and a reading taken only of what reached a compaction would
+// clear while every push is refused. The committer raises nothing: the
+// receiver refuses most such pushes before any committer sees them. A
+// publication the node's memory refuses counts toward code_maintenance_refused
+// through the cache, for as long as the budget stays under its charge.
 //
 // # Measured
 //
-// The constants this package's plan reads are the code domain's, each with its
-// reason and the arm that confirms it where it is defined (code.CompactFactor,
+// The constants the plans read are the code domain's, each with its reason
+// and the arm that confirms it where it is defined (code.CompactFactor,
 // code.CompactMinMerge, code.CompactTargetPacks, code.MaxCompactInputs,
-// code.MaxCompactOutputs); [Poll], [InputByteCap]'s half and the cache's
-// CompactBytesPerObject and CompactWindowBytes are BenchmarkCompact's
-// (bench_test.go), whose arms and what each decides are listed there. Every
-// figure below is of git 2.56.0 over the in-memory store, so what an S3
+// code.MaxCompactOutputs, code.MaxPublishedLayers, code.MaxLayerParts); [Poll],
+// [InputByteCap]'s half and the cache's CompactBytesPerObject and
+// CompactWindowBytes are BenchmarkCompact's (bench_test.go), whose arms and
+// what each decides are listed there; the publication's cadence ([Due]'s
+// constants) and the cache's PublishBytesPerObject and GraphLayerBytesPerObject
+// are BenchmarkMidx's (internal/code/cache), each provisional until its arm
+// runs on the pin. Every figure below is of git 2.56.0 over the in-memory
+// store, so what an S3
 // bucket would bill is stated as requests and bytes, never as a bucket's
 // time; each arm ran once (-benchtime 1x, one count) with Go 1.27.2 on two
 // E-cores of an Intel Core Ultra 7 265U, which has SHA instructions, on
@@ -205,13 +298,15 @@
 // 2026-10-27, five reads), under the 100 ms past which two listings a minute
 // from each of sixteen git nodes would hold over a twentieth of one reader and
 // a listing of what changed since the last poll would have to be priced. And a
-// pass over those 10 000, none of them due here, cost 342 ns a repository on
-// their home (op=pass/home=all: a lookup in the memory of plans found not due,
-// 3.4 ms the pass) and 340 ns of its own on a git node home to an eighth of
-// them (op=pass/home=1of8: the rest judged against the pass's one reading of
-// who serves git), beside which the router's judging of every one of those
-// costs 575 ns a repository over eight git nodes and 1.28 µs over sixteen
-// (internal/estate's BenchmarkHomeOf) — under a microsecond a repository, some
-// 9 ms a pass, on each of a fleet of eight (the poll arms and BenchmarkHomeOf
-// at -benchtime 20x, one count, on the same machine, 2026-10-28).
+// pass over those 10 000, none of them due here, cost 326 ns a repository on
+// their maintainer (op=pass/maintains=all: a lookup in the memory of plans
+// found not due, 3.3 ms the pass) and 383 ns of its own on a git node
+// maintaining an eighth of them (op=pass/maintains=1of8: the rest judged
+// against the pass's one listing of the git nodes, each by its publication's
+// charge), beside which the router's judging of every one of those costs
+// 569 ns a repository over eight git nodes and 1.11 µs over sixteen
+// (internal/estate's BenchmarkMaintainerOf) — under a microsecond a
+// repository, some 9 ms a pass, on each of a fleet of eight (the poll arms and
+// BenchmarkMaintainerOf at -benchtime 20x, one count, on the same machine,
+// 2026-10-29).
 package compact

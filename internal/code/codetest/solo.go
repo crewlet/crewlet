@@ -64,8 +64,13 @@ type Node interface {
 	// reads take their units of.
 	Share() *code.GitShare
 	// Compactor is the node's compactor, built as the engine builds a git
-	// node's and never started: a case drives its Compact or its Poll.
+	// node's and never started: a case drives its Compact or its Poll, its
+	// Publish or its PublishPass.
 	Compactor() *compact.Compactor
+	// Maintainers is what the node's compactor asks of whether it is a
+	// repository's maintainer (GitOptions.Maintainers): which node a case's
+	// publication is driven on.
+	Maintainers() compact.Maintainers
 }
 
 // Fleet is a topology under test.
@@ -86,6 +91,9 @@ type Fleet interface {
 	// collector's clock at at — every table the code domain declares
 	// shielding what its rows name.
 	CollectAt(t testing.TB, at time.Time) collect.CollectionReport
+	// Audit runs the collector's audit over the code estate — what raises
+	// objects_missing — handed every table the code domain declares.
+	Audit(t testing.TB) collect.AuditReport
 	// Retain runs ONE code-retention pass with its clock at now — what a
 	// retired pack's grace and a deletion's age are judged by — so a case
 	// moves a grace without moving the broker.
@@ -165,7 +173,15 @@ type Shape struct {
 	// WrapEstate wraps what every git node's host and cache ask — the
 	// window a case has onto the estate.
 	WrapEstate func(host.Estate) host.Estate
+	// WrapCompactions wraps what every git node's compactor proposes its
+	// compactions and publications through — the window a case has onto what
+	// a maintainer asks a committer to decide: a lying publisher's.
+	WrapCompactions func(Compactions) Compactions
 }
+
+// Compactions is what a git node's compactor proposes a compaction or a
+// publication through: the router's code seam's Compact, in the engine.
+type Compactions func(context.Context, code.CompactionProposal) (code.CompactResult, error)
 
 // NewFleet builds a fresh fleet of a shape, for one case.
 type NewFleet func(t *testing.T, s Shape) Fleet
@@ -210,10 +226,6 @@ type SoloOptions struct {
 	// Reads) — its cache's backfill's pages of pushes among them: the window
 	// a case has onto them, to fail or count them; nil reads the data node.
 	WrapReads func(Reads) Reads
-	// Homes is the git node id's answer to which repositories it is the home
-	// of in place of its own router's — a case's fixed answer, a split
-	// presence view (SplitHomes); nil asks every node's own router.
-	Homes func(id string) compact.Homes
 	// LogBytes is the code log's ceiling; 0 is soloLogBytes. A benchmark
 	// whose history outgrows what that ceiling admits beside its gate
 	// reserve — about 7 MB of records, the reserve the larger of a sixteenth
@@ -308,20 +320,20 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	if o.WrapReads != nil {
 		reads = o.WrapReads(reads)
 	}
-	f.homes = make([]atomic.Pointer[estate.Router], o.GitNodes)
+	var compactions Compactions = f.compact
+	if o.WrapCompactions != nil {
+		compactions = o.WrapCompactions(compactions)
+	}
+	f.routers = make([]atomic.Pointer[estate.Router], o.GitNodes)
 	for i := range o.GitNodes {
 		id := fmt.Sprintf("solo-%c", 'a'+i)
-		var homes compact.Homes = soloHomes{f: f, i: i}
-		if o.Homes != nil {
-			homes = o.Homes(id)
-		}
 		objects := o.Objects
 		if o.WrapObjects != nil {
 			objects = o.WrapObjects(id, objects)
 		}
 		f.git = append(f.git, StartGitNode(t, GitOptions{
 			ID: id, Dir: filepath.Join(f.dir, id, "git"), Estate: seam, Reads: reads,
-			Compactions: f.compact, Homes: homes,
+			Compactions: compactions, Maintainers: soloMaintainers{f: f, i: i},
 			Objects: func() objstore.Backend { return objects }, Limits: o.Limits, Timing: o.Timing,
 			Faults: o.Faults, Credentials: f.creds, Audit: f.record, Fetched: f.recordFetched,
 			MaxTransfers: o.MaxTransfers, MaxProcesses: o.MaxProcesses, CacheMaxBytes: o.CacheMaxBytes,
@@ -384,34 +396,45 @@ func (f *SoloFleet) route(t testing.TB) {
 	}
 	f.router.Store(r)
 	// EVERY GIT NODE'S OWN ROUTER, which its compactor asks whether it is a
-	// repository's home, as the engine hands each node's compactor the
-	// node's router: the node itself among the git nodes while its git half
-	// answers, so a killed node is no repository's home.
+	// repository's maintainer, as the engine hands each node's compactor the
+	// node's router: over the same git placement, which lists every git node
+	// with what each advertises, so a killed node — which the solo fleet's
+	// placement still lists — keeps its place as its last beat left it.
 	for i, g := range f.git {
 		own, err := estate.NewRouter(estate.RouterOptions{Self: g.o.ID, Queue: q, Placement: nodes, Git: git,
 			LocalGit: g, Session: estate.NewSession(), Timing: estate.Production(), Envelopes: soloEnvelopes})
 		if err != nil {
 			t.Fatalf("codetest: %s's router: %v", g.o.ID, err)
 		}
-		f.homes[i].Store(own)
+		f.routers[i].Store(own)
 	}
 }
 
-// soloHomes is which repositories a solo fleet's i-th git node is the home
-// of, as its compactor asks it once a pass: that node's own router, read again
-// at every question, so a restarted fleet's is the one asked — and none while
-// the fleet is killed, which is an error rather than an answer.
-type soloHomes struct {
+// soloMaintainers is which repositories a solo fleet's i-th git node
+// maintains, as its compactor asks it once a pass: that node's own router,
+// read again at every question, so a restarted fleet's is the one asked — and
+// none while the fleet is killed, which is an error rather than an answer.
+type soloMaintainers struct {
 	f *SoloFleet
 	i int
 }
 
-func (h soloHomes) HomeOf(repoIDs []string) (map[string]bool, error) {
-	r := h.f.homes[h.i].Load()
+func (m soloMaintainers) MaintainerOf(charges map[string]int64) (map[string]bool, error) {
+	r := m.f.routers[m.i].Load()
 	if r == nil {
 		return nil, errors.New("codetest: the solo fleet routes nothing while it is killed")
 	}
-	return r.HomeOf(repoIDs)
+	return r.MaintainerOf(charges)
+}
+
+// Listed is whether the solo fleet's i-th git node is listed among the git
+// nodes, by that node's own router — an error while the fleet is killed.
+func (m soloMaintainers) Listed() (bool, error) {
+	r := m.f.routers[m.i].Load()
+	if r == nil {
+		return false, errors.New("codetest: the solo fleet routes nothing while it is killed")
+	}
+	return r.Listed()
 }
 
 // compact is what every git node's compactor proposes a compaction to: the
@@ -441,8 +464,15 @@ func (f *SoloFleet) Write(ctx context.Context, w code.EngineWrite) (code.EngineW
 		if n == nil {
 			continue
 		}
-		home, err := soloHomes{f: f, i: i}.HomeOf([]string{w.RepoID})
-		if err == nil && home[w.RepoID] {
+		// The node's own router, as a keyed walk orders it (estate.Router.Home);
+		// none while the fleet is killed, and a node whose router cannot tell
+		// is no home.
+		home := false
+		if r := f.routers[i].Load(); r != nil {
+			id, err := r.Home(w.RepoID)
+			home = err == nil && id == g.o.ID
+		}
+		if home {
 			order = append(order, n)
 		} else {
 			rest = append(rest, n)
@@ -543,9 +573,10 @@ type SoloFleet struct {
 	// router is the running broker's router, holding nothing of its own,
 	// which [SoloFleet.GitRead] asks through (route); nil while killed.
 	router atomic.Pointer[estate.Router]
-	// homes is each git node's own router, which its compactor asks whether
-	// it is a repository's home (soloHomes); nil while killed.
-	homes []atomic.Pointer[estate.Router]
+	// routers is each git node's own router, which its compactor asks
+	// whether it is a repository's maintainer (soloMaintainers); nil while
+	// killed.
+	routers []atomic.Pointer[estate.Router]
 
 	mu sync.Mutex
 	// brokers is every incarnation's embedded broker, the running one last.
@@ -758,6 +789,12 @@ func (f *SoloFleet) CollectAt(t testing.TB, at time.Time) collect.CollectionRepo
 	return f.data.CollectAt(t, f.o.Objects, at)
 }
 
+// Audit runs the collector's audit over the code estate (Fleet).
+func (f *SoloFleet) Audit(t testing.TB) collect.AuditReport {
+	t.Helper()
+	return f.data.Audit(t, f.o.Objects)
+}
+
 // Retain runs one code-retention pass at now (Fleet).
 func (f *SoloFleet) Retain(t testing.TB, now time.Time) code.RetentionReport {
 	t.Helper()
@@ -803,8 +840,8 @@ func (f *SoloFleet) Kill(t testing.TB, _ string) {
 	}
 	f.data.Kill()
 	f.router.Store(nil)
-	for i := range f.homes {
-		f.homes[i].Store(nil)
+	for i := range f.routers {
+		f.routers[i].Store(nil)
 	}
 	if err := f.broker().Stop(context.Background()); err != nil {
 		t.Errorf("codetest: stop the killed node's broker: %v", err)

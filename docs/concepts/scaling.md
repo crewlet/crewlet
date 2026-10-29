@@ -252,7 +252,7 @@ Each node's client then slows every request it sends to the bucket rather than
 failing it ([the object store](object-store.md#an-s3-bucket--s3)), so those syncs slow
 down and nothing they hold is wrong, and routing by repository is again what
 bounds it. What shortens a cold sync is fewer packs, which is why a
-repository's home merges them ([Compaction](code-host.md#compaction)): the
+repository's maintainer merges them ([Compaction](code-host.md#compaction)): the
 fifty or so a compacted repository holds come up in under a second, the
 2 048 a repository holds at the most ([Limits](code-host.md#limits)) in about
 14 to 27 seconds, and the 10 000 of a history nothing merged — one pack a
@@ -271,16 +271,49 @@ has every figure, and what the node keeps back for the store, the broker and
 the engine. A repository whose bitmap the node's memory cannot hold is still
 served — without one, so each of its clones walks its history — and raises
 [`code_maintenance_refused`](../reference/alarms.md). A single repository of
-50 to 100 GB of history is past what a git node is sized for. A repository's
-home also MERGES its packs ([Compaction](code-host.md#compaction)): the build
-is held to the same background budget — about 500 bytes an object it merges,
-240 more an object merged for a transfer's room beside them and six times
+50 to 100 GB of history is past what a git node is sized for.
+
+**One git node writes a repository's bitmap for the fleet.** A repository's
+[maintainer](code-host.md#who-maintains-a-repository) — the first git node of
+its order whose advertised background budget holds the work, its home on a
+fleet of alike nodes — MERGES its packs ([Compaction](code-host.md#compaction))
+and PUBLISHES its bitmapped index as layers every other git node installs
+([When a repository is published](code-host.md#when-a-repository-is-published)).
+A publication is charged the largest of its steps: its bitmap at 900 bytes an
+object of the whole repository and a clone's 240 beside it, 1 140 bytes an
+object — so a repository near the default `repo_max_bytes` needs ONE git node
+with the memory for its bitmap, for the whole fleet, and every other git node
+installs the layers in a few MiB of memory and serves through them
+([Sizing git nodes](../guides/deployment.md#sizing-git-nodes)). A merge is
+held to the same budget — about 500 bytes an object it merges, 240 more an
+object merged for a transfer's room beside them and six times
 `code.limits.max_blob_bytes` for its delta search, as measured: by what it
 merges, never by the repository's size, which would refuse a large
 repository's every merge and with them its pushes — and refused where the
-budget cannot hold it (`code_cache_compaction_refused`), while its
-outputs go up at once, holding up to sixteen 8 MiB first parts, 128 MiB, on
-an `s3` store, out of what the node keeps back for serving and the store.
+budget cannot hold it (`code_cache_compaction_refused`). Each build gives its
+slot and its memory back before it uploads, and uploads everything it built at
+once: a merge's up to sixteen outputs, a publication's up to sixteen parts and
+sixteen outputs — on an `s3` store an 8 MiB first part each, 384 MiB on a
+maintainer running both, 256 MiB of them one publication's — out of what the
+node keeps back for serving and the store, never its background budget. On the
+broker's own bucket a layer's parts count against the bucket's byte
+reservation like any object ([Its byte
+reservation](object-store.md#its-byte-reservation)).
+
+**Between publications, the tail is walked.** The packs pushed since a
+repository's last publication sit outside its layers, and every clone walks
+their objects without a bitmap. A publication is due once that tail holds
+64 packs, a sixteenth of the repository's objects, or 90 909 objects — a
+second of walk at the slowest a walk is held to, and about 21 MiB of a clone's
+memory — whichever comes first, and the maintainer publishes a repository at
+most every 10 minutes or every ten times its last publication's build,
+whichever is longer. A maintainer publishes one repository at a time, so it
+keeps up with about ten large repositories at that duty cycle; past that, each
+waits for the others and its tail grows meanwhile, the signal to give a second
+git node the memory for them — the repositories then spread over both, each in
+its own order. A maintainer also holds every repository it maintains in its
+cache: give it the cache budget to keep them, or each of its publications
+begins with a whole download.
 
 **And by the bytes and CPU it serves, not by its requests.** Measured on git
 2.47.3 over a tree of 10 000 files in two hundred pushes, a 31.5 MB pack: from a
@@ -319,7 +352,7 @@ delta, and one a request is reading is never evicted. Unset, the budget is
 derived from the cache's volume at every boot — half of what a shared volume
 leaves it, seven eighths of a volume of its own ([`git`](configuration.md#git))
 — so give the cache a volume of its own. The object store holds one object a
-push until the repository's home git node merges its packs into a few
+push until the repository's maintainer merges its packs into a few
 ([Compaction](code-host.md#compaction)); the packs a merge replaces keep their
 objects a day, then the collector deletes them.
 
@@ -405,7 +438,7 @@ whole estate, and the code host's rows with it. A seat's push of one commit
 leaves a push row of about 680 bytes, naming the seat and the turn, work item
 and model behind it (a person's push, naming the token it came through,
 leaves one of about 623), kept 181 days, and its pack's row of about 588,
-kept while the pack is live: a repository's home looks at it every minute and
+kept while the pack is live: a repository's maintainer looks at it every minute and
 merges its small packs once sixteen have gathered — a busy repository's at
 every look, the minute's pushes taking it past them
 ([Compaction](code-host.md#compaction)) — so a repository holds at most fifty

@@ -387,51 +387,11 @@ func (r *Router) Home(repoID string) (string, error) {
 	return h.home(r, repoID), nil
 }
 
-// HomeOf answers which of repoIDs this node is the HOME of ([Router.Home]),
-// every one judged against ONE READING of who serves git: the set holds
-// exactly the ids this node is home for. An error is UNKNOWN for every one of
-// them — who serves git could not be read, or it names no git node
-// ([ErrNoGitNode]) — never "home to none", so a node that cannot tell does
-// none of a home's work rather than guess. No ids read nothing.
-//
-// ONE READING FOR MANY REPOSITORIES, because what reads it — a compactor's
-// pass, over every repository its due listing names, every minute on every
-// git node — is a question about the whole listing: asked a repository at a
-// time, each answer read the presence view again (its leases cloned under its
-// lock, every node's profile decoded, the git nodes copied and sorted) before
-// the one rendezvous order that is the answer, so a git node home to an
-// eighth of ten thousand repositories paid all of that every minute for each
-// of the rest, to find out that it is not their home. Read once, a repository
-// costs its rendezvous order alone — 575 ns over eight git nodes and 1.28 µs
-// over sixteen, 5.8 ms and 12.8 ms for ten thousand, the one read of the
-// placement included (BenchmarkHomeOf, -benchtime 20x and one count, two
-// E-cores of an Intel Core Ultra 7 265U, 2026-10-28) — and a pass judges every
-// repository against one fleet rather than a fleet that moved part way through
-// it. Two nodes whose readings differ may each judge themselves a repository's
-// home, as they may a repository at a time: a home's work is decided by its
-// repository's committer, which takes it once (ADR-0059).
-func (r *Router) HomeOf(repoIDs []string) (map[string]bool, error) {
-	if len(repoIDs) == 0 {
-		return map[string]bool{}, nil
-	}
-	h, err := r.readHomes()
-	if err != nil {
-		return nil, fmt.Errorf("estate: the homes of %d repositories: %w", len(repoIDs), err)
-	}
-	out := map[string]bool{}
-	for _, id := range repoIDs {
-		if h.home(r, id) == r.self {
-			out[id] = true
-		}
-	}
-	return out, nil
-}
-
-// homeReading is one reading of who serves git, as [Router.Home] and
-// [Router.HomeOf] order a repository's git nodes over it: every live git node
-// the placement names, and whether this node's own git half is built — which
-// places it in the order where the placement does not yet name it, so its
-// reads are answered in process.
+// homeReading is one reading of who serves git, as [Router.Home] orders a
+// repository's git nodes over it: every live git node the placement names, and
+// whether this node's own git half is built — which places it in the order
+// where the placement does not yet name it, so its reads are answered in
+// process.
 type homeReading struct {
 	nodes []string
 	own   bool
@@ -522,9 +482,71 @@ func (r *Router) Maintainer(repoID string, charge int64) (string, error) {
 		return "", fmt.Errorf("estate: the maintainer of repository %s: read who serves git and what each "+
 			"git node can give its background work: %w", repoID, err)
 	}
+	maintainer, err := r.maintainerOver(listing, repoID, charge)
+	if err != nil {
+		return "", fmt.Errorf("estate: the maintainer of repository %s: %w", repoID, err)
+	}
+	return maintainer, nil
+}
+
+// MaintainerOf answers which of the repositories charges names — each id
+// mapped to the charge its work is placed by ([Router.Maintainer]) — this node
+// MAINTAINS, every one judged against ONE LISTING of who serves git and what
+// each git node advertises: the set holds exactly the ids this node maintains.
+// An error is UNKNOWN for every one of them — the listing could not be read,
+// or it carries no git node ([ErrNoGitNode]) — never "maintains none", so a
+// node that cannot tell does none of a maintainer's work rather than guess. No
+// ids read nothing.
+//
+// ONE LISTING FOR MANY REPOSITORIES, because what asks it — a maintainer's
+// passes (internal/code/compact), the compaction's and the publication's, over
+// every repository their due listings name, every minute on every git node — is
+// a question about the whole listing: asked a repository at a time, each answer
+// read the presence view again (its leases cloned under its lock, every node's
+// profile decoded, the git nodes copied and sorted) before the one rendezvous
+// order that is the answer, so a git node maintaining an eighth of ten
+// thousand repositories paid all of that every minute for each of the rest, to
+// find out that it does not maintain them — only a repository's maintainer ever
+// plans it, so only its maintainer remembers a plan of it found not due, and
+// every other git node judges every listed repository at every pass. Read
+// once, a repository costs its rendezvous order and its nodes' budgets alone —
+// 569 ns over eight git nodes and 1.11 µs over sixteen, 5.7 ms and 11.1 ms for
+// ten thousand, the one read of the listing included (BenchmarkMaintainerOf,
+// -benchtime 20x and one count, two E-cores of an Intel Core Ultra 7 265U,
+// 2026-10-29) — and a pass judges every repository against one fleet rather
+// than a fleet that moved part way through it. Two nodes whose
+// listings differ may each judge themselves a repository's maintainer, as they
+// may a repository at a time: its committer takes the work once (ADR-0059).
+func (r *Router) MaintainerOf(charges map[string]int64) (map[string]bool, error) {
+	if len(charges) == 0 {
+		return map[string]bool{}, nil
+	}
+	listing, err := r.gitPlacement.Listing()
+	if err != nil {
+		return nil, fmt.Errorf("estate: the maintainers of %d repositories: read who serves git and what each "+
+			"git node can give its background work: %w", len(charges), err)
+	}
+	out := map[string]bool{}
+	for id, charge := range charges {
+		maintainer, err := r.maintainerOver(listing, id, charge)
+		if err != nil {
+			return nil, fmt.Errorf("estate: the maintainers of %d repositories: %w", len(charges), err)
+		}
+		if maintainer == r.self {
+			out[id] = true
+		}
+	}
+	return out, nil
+}
+
+// maintainerOver is repoID's maintainer for work charged at charge under ONE
+// listing ([Router.Maintainer]'s rule): [Router.Maintainer] and
+// [Router.MaintainerOf] both judge through it, so the two can never be
+// computed two ways. A listing that carries no git node is [ErrNoGitNode].
+func (r *Router) maintainerOver(listing GitListing, repoID string, charge int64) (string, error) {
 	order := r.keyed(repoID, listing.Nodes, slices.Contains(listing.Nodes, r.self))
 	if len(order) == 0 {
-		return "", fmt.Errorf("estate: the maintainer of repository %s: %w", repoID, ErrNoGitNode)
+		return "", ErrNoGitNode
 	}
 	for i, node := range order {
 		budget, said := listing.Budgets[node]
@@ -541,17 +563,24 @@ func (r *Router) Maintainer(repoID string, charge int64) (string, error) {
 	return order[0], nil
 }
 
-// IsMaintainer reports whether this node is repoID's maintainer for work
-// charged at charge ([Router.Maintainer]): (true, nil), (false, nil), or
-// (false, err) where the listing of who serves git and what each advertises
-// cannot be read — three facts, so a node that cannot tell does none of a
-// maintainer's work rather than guess.
-func (r *Router) IsMaintainer(repoID string, charge int64) (bool, error) {
-	maintainer, err := r.Maintainer(repoID, charge)
+// Listed reports whether this node is among the git nodes its git listing
+// carries ([GitPlacement.Listing]) — the only nodes [Router.Maintainer] ever
+// answers, so a node it does not carry maintains no repository, whatever it
+// would rank: (true, nil), (false, nil), or (false, err) where the listing
+// cannot be read. A maintainer's loops wait for it before their first pass
+// (internal/code/compact): a booting node's presence is listed only once its
+// host beats, and a pass before that would find every repository placed
+// elsewhere or nowhere.
+//
+// THE LISTING, NEVER THIS NODE'S GIT HALF, which places this node in its own
+// order for [Router.Home] alone: a node with its half built that no listing
+// carries yet is one its peers cannot see.
+func (r *Router) Listed() (bool, error) {
+	listing, err := r.gitPlacement.Listing()
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("estate: whether this node is listed among the git nodes: %w", err)
 	}
-	return maintainer == r.self, nil
+	return slices.Contains(listing.Nodes, r.self), nil
 }
 
 // runLocalGit runs one git operation in-process on this node's own git half,

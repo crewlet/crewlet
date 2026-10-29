@@ -1881,6 +1881,46 @@ cache on its own disk. What such a node needs from its host:
   code log or the object store — and one full with the CPU high is a node
   short of cores.
 
+### Sizing git nodes
+
+Size ONE git node for publishing, and every other for serving. A repository's
+bitmapped index is written once, by its
+[maintainer](../concepts/code-host.md#who-maintains-a-repository), and
+installed by every other git node in a few MiB of memory: the maintainer is the
+first git node of the repository's order whose background budget — what the
+node can give its background work, which every git node advertises on its
+presence heartbeat — holds the repository's publication, about 1 140 bytes of
+memory an object of the repository (900 for the bitmap, 240 for a clone beside
+it; [Memory](../concepts/code-host.md#the-cache-on-a-git-node)). On a fleet of
+alike git nodes that is each repository's home, and a fleet whose repositories
+every node can publish needs nothing more. Where one repository's publication
+is past every node of ordinary size, give one git node the memory for it: every
+repository only that node can hold is published there, whatever its home, and
+the rest stay with their homes. A repository NO git node can hold is still
+served, without a bitmap for what was pushed since its last publication, and
+its home raises [`code_maintenance_refused`](../reference/alarms.md), its
+`code_cache_maintenance_refused` line naming the repository and the charge.
+
+The node that publishes also holds:
+
+- **Every repository it maintains, in its cache.** Each merge and publication
+  syncs the repository first, so give that node a cache budget
+  ([`git`](../concepts/configuration.md#git)) that keeps the repositories it
+  maintains warm; otherwise each publication begins with a download of the
+  whole repository — 20 GiB at the default `repo_max_bytes`.
+- **About ten large repositories at their duty cycle.** It publishes one
+  repository at a time, each at most every ten times its last build, so past
+  about ten repositories whose builds take minutes each waits for the others,
+  its unpublished tail growing meanwhile
+  (`crewlet.code.publish.duration` against how often each is due). Give a
+  second git node the same memory, and the repositories spread over the two,
+  each in its own order.
+- **Its uploads' buffers.** A publication uploads up to sixteen parts of its
+  layer and sixteen outputs of its repack at once, and a merge beside it up to
+  sixteen outputs: on an `s3` store an 8 MiB first part each, 384 MiB at most,
+  256 MiB of them one publication's — out of what the node keeps back for
+  serving and the store, not its background budget.
+
 ---
 
 ## Observability

@@ -123,8 +123,9 @@ type cluster struct {
 	mu          sync.Mutex
 	activations int
 	audited     []types.OperatorActed
-	// split is every repository whose home a case split the members' view
-	// of (SplitHomes): the members that each take themselves for its home.
+	// split is every repository whose maintainer a case split the members'
+	// view of (SplitMaintainers): the members that each take themselves for
+	// its maintainer.
 	split map[string][]string
 	// proposed is the last compaction any member's compactor proposed of
 	// each repository, by its id: what ProposeCompactionAgain asks again.
@@ -210,7 +211,7 @@ func startClusterOf(t testing.TB, backend string, broker js.Config) *cluster {
 	for _, m := range c.members {
 		g := codetest.StartGitNode(t, codetest.GitOptions{
 			ID: m.id, Dir: filepath.Join(m.dir, "git"), Estate: memberEstate{m}, Reads: m.read,
-			Compactions: m.compact, Homes: memberHomes{m},
+			Compactions: m.compact, Maintainers: memberMaintainers{m},
 			Objects: m.backend, Faults: c.faults, Credentials: c.creds, Audit: c.record,
 			MaxTransfers: transfers,
 		})
@@ -366,33 +367,38 @@ func (m *member) compact(ctx context.Context, p code.CompactionProposal) (code.C
 	return m.router.Load().Code().Compact(ctx, p)
 }
 
-// memberHomes is which repositories the member is the home of, as its
+// memberMaintainers is which repositories the member maintains, as its
 // compactor asks once a pass: its own router — the incarnation's, read again
-// at every question — but for a repository whose home a case split the
-// fleet's view of (SplitHomes), of which every member it named is home.
-type memberHomes struct{ m *member }
+// at every question — but for a repository whose maintainer a case split the
+// fleet's view of (SplitMaintainers), of which every member it named takes
+// itself for the maintainer.
+type memberMaintainers struct{ m *member }
 
-func (h memberHomes) HomeOf(repoIDs []string) (map[string]bool, error) {
+func (h memberMaintainers) MaintainerOf(charges map[string]int64) (map[string]bool, error) {
 	out := map[string]bool{}
-	var rest []string
-	for _, id := range repoIDs {
+	rest := map[string]int64{}
+	for id, charge := range charges {
 		if split, ok := h.m.c.splitOf(id); ok {
 			if slices.Contains(split, h.m.id) {
 				out[id] = true
 			}
 			continue
 		}
-		rest = append(rest, id)
+		rest[id] = charge
 	}
-	homes, err := h.m.router.Load().HomeOf(rest)
+	maintained, err := h.m.router.Load().MaintainerOf(rest)
 	if err != nil {
 		return nil, err
 	}
-	for id, home := range homes {
-		out[id] = home
+	for id, yes := range maintained {
+		out[id] = yes
 	}
 	return out, nil
 }
+
+// Listed is whether the member is listed among the git nodes, by its own
+// router.
+func (h memberMaintainers) Listed() (bool, error) { return h.m.router.Load().Listed() }
 
 // backend is the member's object store, its incarnation's.
 func (m *member) backend() objstore.Backend {
@@ -666,7 +672,7 @@ func (c *cluster) Write(ctx context.Context, w code.EngineWrite) (code.EngineWri
 			continue
 		}
 		if r := m.router.Load(); r != nil {
-			if homes, err := r.HomeOf([]string{w.RepoID}); err == nil && homes[w.RepoID] {
+			if id, err := r.Home(w.RepoID); err == nil && id == m.id {
 				home = append(home, n)
 				continue
 			}
@@ -796,6 +802,12 @@ func (c *cluster) CollectAt(t testing.TB, at time.Time) collect.CollectionReport
 	return m.data.CollectAt(t, m.backend(), at)
 }
 
+func (c *cluster) Audit(t testing.TB) collect.AuditReport {
+	t.Helper()
+	m := c.via(t)
+	return m.data.Audit(t, m.backend())
+}
+
 func (c *cluster) Retain(t testing.TB, now time.Time) code.RetentionReport {
 	t.Helper()
 	report := c.via(t).data.Retain(t, now)
@@ -803,10 +815,22 @@ func (c *cluster) Retain(t testing.TB, now time.Time) code.RetentionReport {
 	return report
 }
 
-// SplitHomes has every member of nodes take itself for repoID's home until the
-// case ends (codetest.Cluster): a presence view split between them, which no
-// lease or epoch arbitrates (ADR-0059).
-func (c *cluster) SplitHomes(t testing.TB, repoID string, nodes ...string) {
+// Advertise has member node say its git cache gives its background work
+// budget bytes until the case ends (codetest.Cluster).
+func (c *cluster) Advertise(t testing.TB, node string, budget int64) {
+	t.Helper()
+	m := c.member(t, node)
+	m.mu.Lock()
+	g := m.git
+	m.mu.Unlock()
+	g.Advertise(budget)
+	t.Cleanup(func() { g.Advertise(0) })
+}
+
+// SplitMaintainers has every member of nodes take itself for repoID's
+// maintainer until the case ends (codetest.Cluster): a presence view split
+// between them, which no lease or epoch arbitrates (ADR-0059).
+func (c *cluster) SplitMaintainers(t testing.TB, repoID string, nodes ...string) {
 	t.Helper()
 	c.mu.Lock()
 	if c.split == nil {
@@ -821,7 +845,7 @@ func (c *cluster) SplitHomes(t testing.TB, repoID string, nodes ...string) {
 	})
 }
 
-// splitOf is the members a case split repoID's home between, if it did.
+// splitOf is the members a case split repoID's maintainer between, if it did.
 func (c *cluster) splitOf(repoID string) ([]string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

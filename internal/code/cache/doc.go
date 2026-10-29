@@ -151,10 +151,10 @@
 // A full round that leaves [MidxRoundPacks] or more packs and no
 // multi-pack-index writes one over exactly those packs — without a bitmap, a
 // merge of the packs' own indexes — before its refs' peel reads them and
-// before it answers: one push is one pack until the repository's home merges
-// them (internal/code/compact), and the request a cold cache was synced for
-// would otherwise be served by git searching every pack's index for every
-// object. Under that count the index
+// before it answers: one push is one pack until the repository's maintainer
+// merges them (internal/code/compact), and the request a cold cache was
+// synced for would otherwise be served by git searching every pack's index
+// for every object. Under that count the index
 // costs the cold request more than it saves it (Measured, below), so the
 // round answers without one, and the maintainer's follows once the packs
 // have stood still and the runs queued before it have ended — on four cores
@@ -205,18 +205,18 @@
 // directory renamed into trash/ for the janitor; under it, nothing goes,
 // however long a repository has been idle. An idle repository costs disk the
 // budget already bounds, while evicting it costs a GET a live pack the next
-// time anybody fetches it — a pack a push until its home merges them — and a
-// cache older than the rows' tombstone horizon is brought forward by a whole
-// read that reuses every
-// pack it holds. A repository a request holds is never evicted, even over the
-// budget: it is served, and goes as soon as its last reader — or its
-// maintenance run — lets go. The budget counts everything the cache holds on
-// disk once — every incarnation, the downloads in flight, the pushes' scratch
-// repositories, but not a file in scratch/ that is an incarnation's own under
-// a second name — and a round that takes the cache past it kicks the janitor
-// at once, so a burst of cold syncs never overshoots it for a tick. An
-// eviction is decided under the cache's lock and its directory moved into
-// trash/ after it, so no sync on the node waits on a rename.
+// time anybody fetches it — a pack a push until its maintainer merges them —
+// and a cache older than the rows' tombstone horizon is brought forward by a
+// whole read that reuses every pack it holds. A repository a request holds is
+// never evicted, even over the budget: it is served, and goes as soon as its
+// last reader — or its maintenance run — lets go. The budget counts
+// everything the cache holds on disk once — every incarnation, the downloads
+// in flight, the pushes' scratch repositories, but not a file in scratch/
+// that is an incarnation's own under a second name — and a round that takes
+// the cache past it kicks the janitor at once, so a burst of cold syncs never
+// overshoots it for a tick. An eviction is decided under the cache's lock and
+// its directory moved into trash/ after it, so no sync on the node waits on a
+// rename.
 //
 // # What each repository costs the node is counted, and decides nothing
 //

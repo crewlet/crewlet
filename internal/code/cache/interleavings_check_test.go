@@ -46,14 +46,27 @@ func (in *interleaving) heldRepo() string {
 }
 
 // fileOf picks one of the index files of the incarnation at dir — a pack's
-// .idx or .rev, or a derived file, and with packs a pack's .pack too — and
-// answers its path relative to dir, or "" when it holds none.
+// .idx or .rev, or a derived file: own mode's, or a chained copy's, each of
+// its installed layers' files, its commit-graph layers and its tip, and both
+// chain files — and with packs a pack's .pack too — and answers its path
+// relative to dir, or "" when it holds none. A chained copy holds no derived
+// file of own mode's, so a damage drawn over the pack directory alone would
+// never meet a derived file of the copies a publication chained.
 func (in *interleaving) fileOf(dir string, packs bool) string {
 	var files []string
 	for _, name := range names(in.t, filepath.Join(dir, "objects", "pack")) {
 		if strings.HasSuffix(name, ".idx") || strings.HasSuffix(name, ".rev") || strings.HasSuffix(name, ".bitmap") ||
 			name == "multi-pack-index" || packs && strings.HasSuffix(name, ".pack") {
 			files = append(files, filepath.Join("objects", "pack", name))
+		}
+	}
+	for _, chained := range []string{filepath.Join("objects", "pack", "multi-pack-index.d"),
+		filepath.Join("objects", "info", "commit-graphs")} {
+		if !statOK(in.t, filepath.Join(dir, chained)) {
+			continue
+		}
+		for _, name := range names(in.t, filepath.Join(dir, chained)) {
+			files = append(files, filepath.Join(chained, name))
 		}
 	}
 	if statOK(in.t, filepath.Join(dir, "objects", "info", "commit-graph")) {
@@ -121,7 +134,9 @@ func (in *interleaving) hashed(path string, held bool) {
 
 // noteChecks records the outcomes the cache's checks reached: damage a first
 // round found, a pack reinstalled in place, a derived file dropped by its
-// check, and a verdict withheld for a file replaced while it was hashed.
+// check — a chained copy's layer file fetched again and its chain file written
+// again among them — and a verdict withheld for a file replaced while it was
+// hashed.
 func (in *interleaving) noteChecks() {
 	if counterOf(in.w.rec, metrics.CodeCacheChecks, map[string]string{"trigger": "first", "outcome": "damaged"}) > 0 {
 		in.saw("a first round's check found damage")
@@ -133,8 +148,13 @@ func (in *interleaving) noteChecks() {
 		in.saw("a pack reinstalled in place")
 	}
 	for _, l := range in.w.logs.lines(in.t, "code_cache_check_damaged") {
-		if l["action"] == "dropped" {
+		switch l["action"] {
+		case "dropped":
 			in.saw("a derived file dropped by its check")
+		case "refetched":
+			in.saw("a layer's file refetched by its check")
+		case "rewritten":
+			in.saw("a chain file rewritten by its check")
 		}
 	}
 }

@@ -794,16 +794,20 @@ func Catalogue() []Instrument {
 		{
 			Name: CodeCompactRuns, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"outcome"},
-			Shows: "Compactions this node made as the HOME git node of their " +
-				"repositories — each a plan over a repository's live packs, and " +
-				"what became of it, by `outcome`. `applied`: its record landed and " +
+			Shows: "Compactions this node made as the MAINTAINER of their " +
+				"repositories — the first git node in each repository's order " +
+				"whose background budget holds its publication, the home on a " +
+				"fleet of alike nodes — each a plan over a repository's live " +
+				"packs that no published layer names, and what became of it, by " +
+				"`outcome`. `applied`: its record landed and " +
 				"its outputs replaced its inputs. `pending`, `unknown`: its record " +
 				"was appended and is not yet known to have applied — the next poll " +
 				"reads the rows. `not_due`: the plan found nothing worth merging, " +
 				"and the repository is not planned again until its row moves. " +
-				"`stale`: another compaction, or a purge, moved an input first. " +
-				"`busy`: no maintenance slot or no memory room was free, or the " +
-				"repository's committer was busy. `refused`: by the committer or " +
+				"`stale`: another compaction, a publication or a purge moved an " +
+				"input first. `busy`: no maintenance slot or no memory room was " +
+				"free, a publication of the repository was running on the node, " +
+				"or the repository's committer was busy. `refused`: by the committer or " +
 				"before it (`crewlet.code.compact.refusals` says why). `failed`: " +
 				"the build, an upload or the answer failed " +
 				"(`code_compaction_failed` names which). Every outcome but " +
@@ -820,8 +824,8 @@ func Catalogue() []Instrument {
 				"of a few small packs takes under a second; one of several " +
 				"gigabytes, minutes of its build and of the store's pace. " +
 				"`applied` durations rising while the pushes hold steady are a " +
-				"home node short of the CPU its builds run on, or of the bandwidth " +
-				"to its object store.",
+				"maintaining node short of the CPU its builds run on, or of the " +
+				"bandwidth to its object store.",
 		},
 		{
 			Name: CodeCompactRefusals, Kind: KindCounter, Unit: UnitCount,
@@ -845,11 +849,76 @@ func Catalogue() []Instrument {
 		},
 		{
 			Name: CodeCompactBehind, Kind: KindGauge, Unit: UnitCount,
-			Shows: "Repositories this node compacts that its last pass found at " +
+			Shows: "Repositories this node maintains that its last pass found at " +
 				"the most live packs a repository may hold, whose pushes carrying " +
 				"objects are refused `compaction_behind` until a compaction lands: " +
-				"`code_compaction_behind` fires on any. Zero on a node that is the " +
-				"home of no such repository.",
+				"`code_compaction_behind` fires on any. Zero on a node that " +
+				"maintains no such repository.",
+		},
+		{
+			Name: CodePublishRuns, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Publications this node made as the MAINTAINER of their " +
+				"repositories — each a plan of the repository's next published " +
+				"multi-pack-index layer, its bitmap and its commit-graph layer " +
+				"over every live pack its base does not cover, which every git " +
+				"node installs — and what became of it, by `outcome`. `applied`: " +
+				"its record landed and its layer is the top of the chain. " +
+				"`pending`, `unknown`: its record was appended and is not yet " +
+				"known to have applied. `not_due`: nothing lay outside the chain " +
+				"to publish, and the repository is not planned again until its row " +
+				"moves. `waiting`: a layer of the chain was still at this node's " +
+				"installer, so the plan waited for it rather than replace it. " +
+				"`stale`: another publication, a compaction, an expunge or a purge " +
+				"moved the chain or a pack first. `busy`: no maintenance slot or no memory " +
+				"room was free, a compaction of the repository was running on the " +
+				"node, or its committer was busy. `refused`: by the committer or " +
+				"before it (`crewlet.code.publish.refusals` says why). `failed`: " +
+				"the build, an upload or the answer failed " +
+				"(`code_publication_failed` names which). Every outcome but " +
+				"`applied` is tried again at a later poll; `failed` rising is the " +
+				"node's disk, its git or its object store.",
+		},
+		{
+			Name: CodePublishDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"outcome"},
+			Shows: "One publication from its plan to its answer, by `outcome` (as " +
+				"`crewlet.code.publish.runs` counts them): the sync, the plan, the " +
+				"repack, the layer's bitmap — a walk of the repository's whole " +
+				"history, seconds at a gigabyte and minutes at the largest — every " +
+				"part's and output's upload, and the committer's decide. Its " +
+				"build is what paces the repository's next publication: at most a " +
+				"tenth of the node's time.",
+		},
+		{
+			Name: CodePublishRefusals, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason"},
+			Shows: "Publications refused before or at their decide, by `reason`. " +
+				"This node's own: `memory`, the build's charge — 900 bytes an " +
+				"object of the repository for the bitmap, with room beside it for a " +
+				"clone — past what the node can give its background work " +
+				"(`code_cache_maintenance_refused` names it with step `publish`, " +
+				"and the repository counts toward code_maintenance_refused for as " +
+				"long; asked again at every pass, and a git node with the memory " +
+				"takes it over); `store_full`, an object store with no room for a " +
+				"part or an output (held back until the store shows the room); " +
+				"`outputs` and `bundle_too_large`, its repack's, as a " +
+				"compaction's; `no_bitmap`, a layer git wrote without a bitmap — no " +
+				"pack it covers holds a commit — even over one more layer; " +
+				"`layer_too_large`, a layer past what sixteen parts of a gibibyte " +
+				"hold. The committer's: `stale`, `busy`, `repo_deleted`, " +
+				"`upload_expired`, `pack_too_large`, `not_applied` and " +
+				"`unavailable`, as for a compaction.",
+		},
+		{
+			Name: CodePublishBytes, Kind: KindCounter, Unit: UnitBytes,
+			Attributes: []string{"kind"},
+			Shows: "Bytes this node stored for its publications, by `kind`: " +
+				"`layer`, a layer's three files — its multi-pack-index, its bitmap " +
+				"and its commit-graph layer — stored as parts of a gibibyte; " +
+				"`outputs`, its repack's packs. A layer is about 37 bytes an " +
+				"object and 69 a commit of what it covers, so a repository's root " +
+				"layer is the one large write and every later one is its tail's.",
 		},
 		// ---- git ------------------------------------------------------
 		{
@@ -1186,14 +1255,18 @@ func Catalogue() []Instrument {
 				"bytes an object merged, never of the whole repository, whose " +
 				"size alone would refuse every merge of a large one — and six " +
 				"times max_blob_bytes for the build's delta search): the " +
-				"repository's home cannot merge its small packs, " +
+				"repository's maintainer cannot merge its small packs, " +
 				"so its pack count grows with its pushes until a git node with " +
-				"more memory is its home or this one is given more — and at " +
+				"more memory maintains it or this one is given more — and at " +
 				"the pack bound its pushes are refused, which " +
-				"code_compaction_behind raises. Rising is repositories " +
-				"outgrowing the node; the code_maintenance_refused alarm " +
-				"stands while any bitmap is refused, and never for a tip, " +
-				"whose copy is served through its chain's bitmap.",
+				"code_compaction_behind raises. `publish` (900 bytes an object " +
+				"of the repository for the layer's bitmap, beside the clone's " +
+				"room): the repository's maintainer cannot publish its next " +
+				"layer, so every pack pushed since its last publication is served " +
+				"outside every bitmap, and every one pushed after. Rising is " +
+				"repositories outgrowing the node; the code_maintenance_refused " +
+				"alarm stands while any bitmap or publication is refused, and " +
+				"never for a tip, whose copy is served through its chain's bitmap.",
 		},
 		{
 			Name: CodeCacheMaintenanceRefused, Kind: KindGauge, Unit: UnitCount,
@@ -1201,24 +1274,27 @@ func Catalogue() []Instrument {
 			Shows: "Repositories this node's git cache cannot write a bitmap " +
 				"(`step` `bitmap`), a commit-graph (`graph`) or, serving from " +
 				"a published chain, its own tip commit-graph over the chain " +
-				"(`tip-graph`) of now, because one needs more memory than the " +
-				"node can give its background work — as its latest pass found " +
-				"them. Each refused a bitmap is indexed without one; each " +
+				"(`tip-graph`) of now, and repositories this node maintains whose " +
+				"next layer it cannot publish (`publish`), because one needs more " +
+				"memory than the node can give its background work — as its latest " +
+				"pass found them. Each refused a bitmap is indexed without one; each " +
 				"refused a commit-graph walks its history by date, so a push " +
 				"of a commit dated before its parent walks every commit; each " +
 				"refused its tip walks the commits pushed since its last " +
-				"publication by date — slower, never refused. A bitmap or a " +
-				"graph above zero raises code_maintenance_refused, since a " +
-				"repository refused its graph is refused its bitmap too; a tip " +
-				"raises nothing, its copy served through its chain's bitmap. " +
-				"Falling back is a repository purged, evicted or rebuilt " +
-				"smaller, a node given more memory, which the cache reads " +
-				"again every ten seconds, or a publication its copy installs: " +
-				"its bitmap and graph are then the chain's, and its tail " +
-				"shorter — which lifts a tip refused for its tail's length, " +
-				"never one refused for its repository's size, since a tip " +
-				"keeps room beside its tail for a walking clone of the whole " +
-				"repository.",
+				"publication by date — slower, never refused; each refused its " +
+				"publication serves every pack pushed since its last one outside " +
+				"every bitmap. A bitmap, a graph or a publication above zero raises " +
+				"code_maintenance_refused, since a repository refused its graph is " +
+				"refused its bitmap too; a tip raises nothing, its copy served " +
+				"through its chain's bitmap. Falling back is a repository purged, " +
+				"evicted or rebuilt smaller, a node given more memory, which the " +
+				"cache reads again every ten seconds, or a publication — by this " +
+				"node or by another with the memory, which takes its maintenance " +
+				"over — that its copy installs: its bitmap and graph are then the " +
+				"chain's, and its tail shorter, which lifts a tip refused for its " +
+				"tail's length but never one refused for its repository's size, " +
+				"since a tip keeps room beside its tail for a walking clone of the " +
+				"whole repository.",
 		},
 		{
 			Name: CodeCacheMemoBytes, Kind: KindGauge, Unit: UnitBytes,

@@ -128,6 +128,14 @@ func cases() []suiteCase {
 		{"C7_ACrashMidSwapLeavesTheOldIncarnation", aCrashMidSwapLeavesTheOldIncarnation},
 		{"C8_ARestartedNodeKeepsTheCommitGraphOfACompactedRepository",
 			aRestartedNodeKeepsTheCommitGraphOfACompactedRepository},
+		{"LY1_ALayerIsInstalled", aLayerIsInstalled},
+		{"LY2_ALayerTheStoreLostFallsBack", aLayerTheStoreLostFallsBack},
+		{"LY3_ACorruptLayerFallsBack", aCorruptLayerFallsBack},
+		{"LY4_APushRacingAPublicationStaysInTheTail", aPushRacingAPublicationStaysInTheTail},
+		{"LY5_ARepackingPublicationKeepsTheBitmap", aRepackingPublicationKeepsTheBitmap},
+		{"LY6_ACompactionKeepsTheChainWhole", aCompactionKeepsTheChainWhole},
+		{"LY7_ALayerFromANewerGitIsNotInstalled", aLayerFromANewerGitIsNotInstalled},
+		{"LY10_AMaintainerKilledAtEveryPublishPoint", aMaintainerKilledAtEveryPublishPoint},
 	}
 }
 

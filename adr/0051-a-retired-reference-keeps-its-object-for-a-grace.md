@@ -128,3 +128,13 @@ readers go on without it. Which objects exist and where they are kept
 when an unnamed object may be deleted
 ([ADR-0027](0027-a-deletion-from-the-shared-store-needs-no-lock.md)). A
 project's file rows are `Required` and never retired.
+
+## Amendment — the first derived table is a repository's published layers
+
+[ADR-0061](0061-a-derived-object-is-published-kept-and-never-audited.md)
+gives `Derived` its first table, `code_layer_parts`: the parts of a
+repository's published multi-pack-index layer, its bitmap and its commit-graph
+layer, which one git node publishes and every other installs. For it, "the
+engine builds them again" is that record's rule: a git node whose layer is
+missing or damaged serves from the layers below it, and the repository's
+maintainer publishes a replacement.

@@ -69,17 +69,18 @@ var (
 	ErrRebuildRefused = errors.New("cache: a rebuild would not end the failure")
 
 	// ErrNoMemory is a git process a caller asked for — Verify's
-	// connectivity check of a whole repository, a person's, or a compaction's
-	// build over the packs it merges (Cache.AdmitCompaction) — whose charge
-	// alone is more than this node can give its background work: the node's
-	// memory, less what it keeps for its git lanes, the store, the broker and
-	// the engine (memory.go). Definite
-	// for this node AT THIS MEMORY: a node with more memory can run it, and so
-	// can this one once its memory is raised in place, which the budget reads
-	// again at every maintainer pass — so a caller asks again later rather
-	// than remembering the refusal. Wrapped naming the repository, the charge
-	// and the budget. The maintainer's own steps are never an error: they are
-	// refused and said so (the code_maintenance_refused alarm).
+	// connectivity check of a whole repository, a person's, a compaction's
+	// build over the packs it merges (Cache.AdmitCompaction) or a
+	// publication's (Cache.AdmitPublication) — whose charge alone is more
+	// than this node can give its background work: the node's memory, less
+	// what it keeps for its git lanes, the store, the broker and the engine
+	// (memory.go). Definite for this node AT THIS MEMORY: a node with more
+	// memory can run it, and so can this one once its memory is raised in
+	// place, which the budget reads again at every maintainer pass — so a
+	// caller asks again later rather than remembering the refusal. Wrapped
+	// naming the repository, the charge and the budget. The maintainer's own
+	// steps are never an error: they are refused and said so (the
+	// code_maintenance_refused alarm).
 	ErrNoMemory = errors.New("cache: this node's memory cannot hold it")
 
 	// ErrNotHeld is a check asked of a repository this node holds no copy

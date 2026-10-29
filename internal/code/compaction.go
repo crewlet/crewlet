@@ -97,6 +97,13 @@ func (p CompactionProposal) Validate() error {
 // no committer could take — an output past the bundle rule, more outputs than
 // it may write, a record past its bytes — stores nothing. An output already
 // stored is refused: Validate is the check of that.
+//
+// A PUBLICATION'S LAYER is held the same way: its parts are not stored either,
+// so the layer carries none, and each is stood in by the part the layer's
+// sections cut into — its size the cut's, its key and digest one spelling's
+// length each — so the layer is held to every rule its row must meet
+// ([LayerRef.Check]) and the record to its bytes with every part named. A
+// layer that already names a part is refused, as a stored output is.
 func (p CompactionProposal) ValidateUnstored() error {
 	stand := largestEntry().Pack
 	add := make([]PackRef, len(p.Compaction.Add))
@@ -109,6 +116,19 @@ func (p CompactionProposal) ValidateUnstored() error {
 		add[i] = out
 	}
 	p.Compaction.Add = add
+	if l := p.Compaction.Layer; l != nil {
+		if len(l.Parts) > 0 {
+			return fmt.Errorf("%w: layer.parts: already stored as %d parts — Validate checks a stored layer",
+				ErrInvalidProposal, len(l.Parts))
+		}
+		layer := *l
+		sections := layer.Sections()
+		for i := int64(0); i*LayerPartBytes < layer.Size(); i++ {
+			layer.Parts = append(layer.Parts, LayerPart{Object: stand.Object, Hash: stand.Hash,
+				Size: layerPart(sections, int(i)).size})
+		}
+		p.Compaction.Layer = &layer
+	}
 	return p.Validate()
 }
 

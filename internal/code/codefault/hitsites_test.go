@@ -23,7 +23,8 @@ const codefaultPath = "github.com/crewlet/crewlet/internal/code/codefault"
 // hitDirs are the directories the points are hit in: the code host's
 // pipeline, its engine write's build among it, and the suite's wrapping
 // publisher that hits the committer's — a push's — the cache, whose sync hits
-// its own, and the compactor, which hits the compaction's.
+// its own, and the compactor, which hits the compaction's and the
+// publication's.
 var hitDirs = []string{"internal/code/host", "internal/code/codetest", "internal/code/cache",
 	"internal/code/compact"}
 
@@ -98,6 +99,8 @@ var pointNames = map[string]codefault.Point{
 	"SyncSwapBeforeRename": codefault.SyncSwapBeforeRename, "InstallAfterFetch": codefault.InstallAfterFetch,
 	"CompactAfterBuild": codefault.CompactAfterBuild, "CompactUpload": codefault.CompactUpload,
 	"CompactAfterUpload": codefault.CompactAfterUpload, "CompactAfterPropose": codefault.CompactAfterPropose,
+	"PublishAfterBuild": codefault.PublishAfterBuild, "PublishUpload": codefault.PublishUpload,
+	"PublishAfterUpload": codefault.PublishAfterUpload, "PublishAfterPropose": codefault.PublishAfterPropose,
 	"WriteAfterBuild": codefault.WriteAfterBuild,
 }
 
@@ -120,13 +123,16 @@ func byPoint(t *testing.T, counts map[codefault.Point]int) map[codefault.Point]i
 }
 
 // A fault point is ONE step, named once: F21 kills the node at every point
-// of PushPath(), C6 the home at every point of CompactPath(), F38 the git node
-// at every point of WritePath() — the write's own and the one landing's — and
-// a cache case holds a sync — or crashes it — at each of the sync's, so a
-// point hit at two sites fires at whichever runs first and a point hit at
-// none is a fault no case can make — the swap's rename among them, which a
-// case copies the disk at as a crash would leave it. The two upload points
-// are each hit in the one closure their caller hands code.StoreBundle.
+// of PushPath(), C6 the maintainer at every point of CompactPath(), LY10 at
+// every point of PublishPath(), F38 the git node at every point of WritePath()
+// — the write's own and the one landing's — and a cache case holds a sync —
+// or crashes it — at each of the sync's, so a point hit at two sites fires at
+// whichever runs first and a point hit at none is a fault no case can make —
+// the swap's rename among them, which a case copies the disk at as a crash
+// would leave it. The push's and the compaction's upload points are each hit
+// in the one closure their caller hands code.StoreBundle, and the
+// publication's in the one it hands both code.StoreLayer and
+// code.StoreBundle.
 func TestEveryPointHasOneHitSite(t *testing.T) {
 	root := sourcetree.Root(t)
 	dirs := make([]string, len(hitDirs))

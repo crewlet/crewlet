@@ -401,7 +401,7 @@ func TestTheBuildReadsItsInputsThroughTheAlternate(t *testing.T) {
 		mu     sync.Mutex
 		builds int
 	)
-	compact.BuildWith(c, func(ctx context.Context, adm *cache.Compacting, cmd gitproc.Cmd) (gitproc.Result, error) {
+	compact.BuildWith(c, func(ctx context.Context, adm *cache.Admission, cmd gitproc.Cmd) (gitproc.Result, error) {
 		mu.Lock()
 		builds++
 		mu.Unlock()
@@ -488,7 +488,7 @@ type builder struct {
 	rewrite func(call int, args []string) []string
 }
 
-func (b *builder) run(ctx context.Context, adm *cache.Compacting, cmd gitproc.Cmd) (gitproc.Result, error) {
+func (b *builder) run(ctx context.Context, adm *cache.Admission, cmd gitproc.Cmd) (gitproc.Result, error) {
 	in, err := io.ReadAll(cmd.Stdin)
 	if err != nil {
 		return gitproc.Result{}, err

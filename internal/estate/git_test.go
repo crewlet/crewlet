@@ -234,11 +234,9 @@ func TestAGitOperationIsAskedOfItsRepositorysHome(t *testing.T) {
 // git nodes, the home every router names — one on a node that holds nothing,
 // and one on a git node whose own half is built, asked in process — is the git
 // node the walk asks a read of the repository first on a quiet fleet, the one
-// that answers it stamped home, and a git node is home (HomeOf) for exactly
-// the repositories that name it. With no demotion: a home that answered
-// nothing is still the home. A placement that cannot say who serves git is an
-// error — unknown, never "this node" or "home to none" — and a fleet with no
-// git node is ErrNoGitNode.
+// that answers it stamped home. With no demotion: a home that answered nothing
+// is still the home. A placement that cannot say who serves git is an error —
+// unknown, never "this node" — and a fleet with no git node is ErrNoGitNode.
 //
 // Mutations: key Home on the asking node's id rather than the repository's —
 // most homes are not the node the reads ask first, red; order Home with the
@@ -250,7 +248,6 @@ func TestHomeIsTheReadsFirstGitNode(t *testing.T) {
 	halves := f.gitNodes(t, holders)
 	ownHalf := f.gitRouter(t, "git-c", gitHalf{node: halves["git-c"]})
 	homes := map[string]int{}
-	homeOf := map[string]string{}
 	for i := range 200 {
 		repo := repoID(i)
 		before := asks(halves)
@@ -271,22 +268,9 @@ func TestHomeIsTheReadsFirstGitNode(t *testing.T) {
 			t.Fatalf("the home %s of %s was not the one node asked, stamped home", read.Rev, repo)
 		}
 		homes[read.Rev]++
-		homeOf[repo] = read.Rev
 	}
 	if len(homes) != len(holders) {
 		t.Fatalf("two hundred repositories are homed on %v, want every git node home to some", homes)
-	}
-	own, err := ownHalf.HomeOf(slices.Collect(maps.Keys(homeOf)))
-	if err != nil {
-		t.Fatalf("git-c's HomeOf the two hundred repositories: %v", err)
-	}
-	for repo, home := range homeOf {
-		if own[repo] != (home == "git-c") {
-			t.Fatalf("git-c's HomeOf names %s %t, and the home is %s", repo, own[repo], home)
-		}
-	}
-	if len(own) != homes["git-c"] {
-		t.Fatalf("git-c's HomeOf names %d repositories, and it is the home of %d", len(own), homes["git-c"])
 	}
 
 	// NO DEMOTION: a home the router remembers silent keeps its
@@ -309,61 +293,62 @@ func TestHomeIsTheReadsFirstGitNode(t *testing.T) {
 	if home, err := ownHalf.Home(repo); err == nil || errors.Is(err, ErrNoGitNode) {
 		t.Fatalf("Home with the git placement unknown = (%s, %v), want the placement's error", home, err)
 	}
-	if own, err := ownHalf.HomeOf([]string{repo}); err == nil || own != nil {
-		t.Fatalf("HomeOf with the git placement unknown = (%v, %v), want no answer and an error", own, err)
-	}
 	none := newFleet(t)
 	if home, err := none.client.Home(repo); !errors.Is(err, ErrNoGitNode) {
 		t.Fatalf("Home on a fleet with no git node = (%s, %v), want ErrNoGitNode", home, err)
 	}
-	if own, err := none.client.HomeOf([]string{repo}); !errors.Is(err, ErrNoGitNode) || own != nil {
-		t.Fatalf("HomeOf on a fleet with no git node = (%v, %v), want ErrNoGitNode", own, err)
-	}
 }
 
-// HOMES ARE JUDGED AGAINST ONE READING: HomeOf over a thousand repositories
-// reads who serves git ONCE, and names exactly the repositories Home names
-// this node for — a compactor's pass over its listing pays one read of the
-// presence view, never one a repository — and asked of no repository it reads
-// nothing and names none.
+// MAINTAINERS ARE JUDGED AGAINST ONE LISTING: MaintainerOf over a thousand
+// repositories, each at its own charge, reads the git listing ONCE and names
+// exactly the repositories Maintainer names this node for — a maintainer's
+// pass over its due listing pays one read of the presence view, never one a
+// repository — and asked of no repository it reads nothing and names none.
 //
-// Mutation: read who serves git again for every repository (HomeOf over
-// Home), and the placement is read a thousand times.
-func TestHomeOfJudgesEveryRepositoryAgainstOneReading(t *testing.T) {
+// Mutation: read the listing again for every repository (MaintainerOf over
+// Maintainer), and it is read a thousand times.
+func TestMaintainerOfJudgesEveryRepositoryAgainstOneListing(t *testing.T) {
 	t.Parallel()
+	const gib = int64(1) << 30
 	f := newFleet(t)
 	holders := []string{"git-a", "git-b", "git-c", "git-d", "git-e"}
-	halves := f.gitNodes(t, holders)
-	ownHalf := f.gitRouter(t, "git-c", gitHalf{node: halves["git-c"]})
-	repos := make([]string, 1000)
-	for i := range repos {
-		repos[i] = repoID(i)
+	f.git.set(func(p *fakePlacement) {
+		p.nodes = slices.Clone(holders)
+		p.said = map[string]int64{"git-a": 8 * gib, "git-b": 8 * gib, "git-c": 64 * gib, "git-d": 8 * gib,
+			"git-e": 8 * gib}
+	})
+	large := f.gitRouter(t, "git-c", gitHalf{node: &fakeGit{name: "git-c"}})
+	charges := make(map[string]int64, 1000)
+	for i := range 1000 {
+		// Work every node holds, and work only the large node holds, in
+		// turn: the set is judged at each repository's own charge.
+		charges[repoID(i)] = []int64{4 * gib, 40 * gib}[i%2]
 	}
 	before := f.git.readsSoFar()
-	own, err := ownHalf.HomeOf(repos)
+	own, err := large.MaintainerOf(charges)
 	if err != nil {
-		t.Fatalf("HomeOf a thousand repositories: %v", err)
+		t.Fatalf("MaintainerOf a thousand repositories: %v", err)
 	}
 	if reads := f.git.readsSoFar() - before; reads != 1 {
-		t.Errorf("HomeOf a thousand repositories read who serves git %d times, want once", reads)
+		t.Errorf("MaintainerOf a thousand repositories read the git listing %d times, want once", reads)
 	}
-	for _, repo := range repos {
-		home, err := ownHalf.Home(repo)
+	for repo, charge := range charges {
+		m, err := large.Maintainer(repo, charge)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if own[repo] != (home == "git-c") {
-			t.Fatalf("HomeOf names %s %t, and Home names %s", repo, own[repo], home)
+		if own[repo] != (m == "git-c") {
+			t.Fatalf("MaintainerOf names %s %t at %d GiB, and Maintainer names %s", repo, own[repo], charge/gib, m)
 		}
 	}
-	if len(own) == 0 || len(own) == len(repos) {
-		t.Fatalf("the premise: git-c is the home of %d of %d repositories, want some and not all", len(own),
-			len(repos))
+	if len(own) <= len(charges)/2 || len(own) == len(charges) {
+		t.Fatalf("the premise: git-c maintains %d of %d repositories, want every 40 GiB one and some, not all, "+
+			"of the rest", len(own), len(charges))
 	}
 	before = f.git.readsSoFar()
-	if none, err := ownHalf.HomeOf(nil); err != nil || len(none) != 0 || f.git.readsSoFar() != before {
-		t.Errorf("HomeOf no repository = (%v, %v) after %d reads of who serves git, want none and no read", none,
-			err, f.git.readsSoFar()-before)
+	if none, err := large.MaintainerOf(nil); err != nil || len(none) != 0 || f.git.readsSoFar() != before {
+		t.Errorf("MaintainerOf no repository = (%v, %v) after %d reads of the git listing, want none and no read",
+			none, err, f.git.readsSoFar()-before)
 	}
 }
 
@@ -375,7 +360,7 @@ func TestHomeOfJudgesEveryRepositoryAgainstOneReading(t *testing.T) {
 // (100 GiB) is the home's, whose own admission then refuses it. A node that
 // SAYS it has nothing to give — its code host not built — is passed over as
 // one too small is: with the large node saying so, the 40 GiB work is each
-// home's again. And a git node is the maintainer (IsMaintainer) of exactly the
+// home's again. And a git node is the maintainer (MaintainerOf) of exactly the
 // repositories that name it, its own git half in process.
 //
 // NOTHING MOVES PAST A HOME ON MISSING INFORMATION. A node NOT SAYING — its row
@@ -429,9 +414,9 @@ func TestTheMaintainerIsTheFirstNodeInOrderThatHoldsTheCharge(t *testing.T) {
 				t.Fatalf("%s: Maintainer(%s, %d GiB) = (%s, %v), want %s", arm, repo, charge/gib, got, err,
 					want(repo))
 			}
-			is, err := large.IsMaintainer(repo, charge)
-			if err != nil || is != (got == "git-c") {
-				t.Fatalf("%s: git-c's IsMaintainer(%s, %d GiB) = (%v, %v), and the maintainer is %s", arm,
+			is, err := large.MaintainerOf(map[string]int64{repo: charge})
+			if err != nil || is[repo] != (got == "git-c") {
+				t.Fatalf("%s: git-c's MaintainerOf(%s, %d GiB) = (%v, %v), and the maintainer is %s", arm,
 					repo, charge/gib, is, err, got)
 			}
 		}
@@ -478,14 +463,14 @@ func TestTheMaintainerIsTheFirstNodeInOrderThatHoldsTheCharge(t *testing.T) {
 
 // A MAINTAINER NOBODY CAN READ IS UNKNOWN, NEVER A GUESS: where the listing of
 // who serves git and what each advertises cannot be read, Maintainer answers
-// its error — never "this node" and never "nobody" — and IsMaintainer answers
-// it beside false, so a node that cannot tell compacts and publishes nothing
-// that pass. And a listing that carries no git node has nobody to maintain
+// its error — never "this node" and never "nobody" — and MaintainerOf answers
+// it in place of a set, so a node that cannot tell compacts and publishes
+// nothing that pass. And a listing that carries no git node has nobody to maintain
 // anything, ErrNoGitNode — a node whose own git half is built included, which
 // no listing carries: its peers name nobody either.
 //
 // Mutation: answer a listing that could not be read with the node this one's
-// own git half would make it — IsMaintainer true, red.
+// own git half would make it — MaintainerOf names the repository, red.
 func TestAMaintainerOfAnUnreadablePlacementIsUnknown(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -501,24 +486,64 @@ func TestAMaintainerOfAnUnreadablePlacementIsUnknown(t *testing.T) {
 		!strings.Contains(err.Error(), "background work") {
 		t.Errorf("Maintainer with the git listing unknown = (%s, %v), want the listing's error", m, err)
 	}
-	if is, err := own.IsMaintainer(repo, 1); err == nil || is {
-		t.Errorf("IsMaintainer with the git listing unknown = (%v, %v), want (false, an error)", is, err)
+	if is, err := own.MaintainerOf(map[string]int64{repo: 1}); err == nil || is != nil {
+		t.Errorf("MaintainerOf with the git listing unknown = (%v, %v), want no answer and an error", is, err)
 	}
 
 	none := newFleet(t)
 	if m, err := none.client.Maintainer(repo, 1); !errors.Is(err, ErrNoGitNode) {
 		t.Errorf("Maintainer on a fleet with no git node = (%s, %v), want ErrNoGitNode", m, err)
 	}
-	if is, err := none.client.IsMaintainer(repo, 1); is || !errors.Is(err, ErrNoGitNode) {
-		t.Errorf("IsMaintainer on a fleet with no git node = (%v, %v), want (false, ErrNoGitNode)", is, err)
+	if is, err := none.client.MaintainerOf(map[string]int64{repo: 1}); is != nil || !errors.Is(err, ErrNoGitNode) {
+		t.Errorf("MaintainerOf on a fleet with no git node = (%v, %v), want no answer and ErrNoGitNode", is, err)
 	}
 	unlisted := none.gitRouter(t, "git-z", gitHalf{node: &fakeGit{name: "git-z"}})
 	if home, err := unlisted.Home(repo); err != nil || home != "git-z" {
 		t.Fatalf("the premise: a node whose git half is built is its own home on no listing (%s, %v)", home, err)
 	}
-	if is, err := unlisted.IsMaintainer(repo, 1); is || !errors.Is(err, ErrNoGitNode) {
-		t.Errorf("a node no listing carries, on a listing with no git node, maintains (%v, %v), want (false, "+
-			"ErrNoGitNode)", is, err)
+	if is, err := unlisted.MaintainerOf(map[string]int64{repo: 1}); is != nil || !errors.Is(err, ErrNoGitNode) {
+		t.Errorf("a node no listing carries, on a listing with no git node, maintains (%v, %v), want no answer "+
+			"and ErrNoGitNode", is, err)
+	}
+}
+
+// A NODE IS LISTED WHERE ITS GIT LISTING CARRIES IT, AND ONLY THERE — the
+// question a maintainer's loops wait on before their first pass: a node the
+// listing names is listed; one it does not name is not, its own git half
+// built — the very node Maintainer never answers, though Home places it; and
+// a listing that cannot be read is unknown, never "not listed".
+//
+// Mutation: answer Listed by this node's own git half, as Home places it, and
+// the unlisted node is listed.
+func TestANodeIsListedOnlyWhereItsGitListingCarriesIt(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	f.git.set(func(p *fakePlacement) { p.nodes = []string{"git-a", "git-b"} })
+	carried := f.gitRouter(t, "git-a", gitHalf{node: &fakeGit{name: "git-a"}})
+	if listed, err := carried.Listed(); err != nil || !listed {
+		t.Errorf("a node its git listing carries is listed (%v, %v), want (true, nil)", listed, err)
+	}
+	unlisted := f.gitRouter(t, "git-z", gitHalf{node: &fakeGit{name: "git-z"}})
+	homed := false
+	for i := range 64 {
+		if home, err := unlisted.Home(repoID(i)); err == nil && home == "git-z" {
+			homed = true
+			break
+		}
+	}
+	if !homed {
+		t.Fatal("the premise: Home places a node whose git half is built in its own order, home to one " +
+			"repository in three")
+	}
+	if listed, err := unlisted.Listed(); err != nil || listed {
+		t.Errorf("a node its git listing does not carry, its git half built, is listed (%v, %v), want "+
+			"(false, nil)", listed, err)
+	}
+
+	f.git.set(func(p *fakePlacement) { p.err = errors.New("the presence view answers unknown") })
+	if listed, err := carried.Listed(); err == nil || listed {
+		t.Errorf("a node whose git listing cannot be read is listed (%v, %v), want (false, an error)", listed,
+			err)
 	}
 }
 
@@ -639,7 +664,7 @@ func TestAMaintainerIsWeighedOffTheListingThatNamesIt(t *testing.T) {
 				t.Fatalf("git-f, which no listing carries, names %s's maintainer for %d GiB (%s, %v), want %s, "+
 					"the node every listed node names", repo, charge/gib, got, err, want)
 			}
-			if is, err := unlisted.IsMaintainer(repo, charge); err != nil || is {
+			if is, err := unlisted.MaintainerOf(map[string]int64{repo: charge}); err != nil || is[repo] {
 				t.Fatalf("git-f, which no listing carries, takes %s's %d GiB work (%v, %v)", repo, charge/gib, is,
 					err)
 			}

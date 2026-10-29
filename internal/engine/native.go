@@ -167,10 +167,11 @@ type native struct {
 	// request's question, so no route reaches it through the host.
 	gitCache *cache.Cache
 
-	// compactor merges the packs of the repositories this node is the home
-	// git node of (internal/code/compact), built and started with codeHost
-	// and nil where it is; stopped first in the code host's one bounded
-	// stop. A CONCRETE type, never an interface this package declares,
+	// compactor merges the packs of the repositories this node maintains and
+	// publishes their layers (internal/code/compact), built with codeHost
+	// and nil where it is, started with the native half's duties
+	// ([Engine.startNativeDuties]); stopped first in the code host's one
+	// bounded stop. A CONCRETE type, never an interface this package declares,
 	// because the alarm reading's producers gate follows a call only
 	// through one ([Engine.codeReading]).
 	compactor *codecompact.Compactor
@@ -746,7 +747,7 @@ func (e *Engine) startCollectorOver(ctx context.Context, n *native) error {
 // a trash past its term ([Engine.startTrashReaper]), and, where the half hosts
 // code, the purge of deleted repositories ([Engine.startCodeRetention]) — and,
 // where it serves git, this node's own COMPACTOR, which no lease decides: every
-// git node runs one, for the repositories it is home to. ONE CALL FOR BOTH
+// git node runs one, for the repositories it maintains. ONE CALL FOR BOTH
 // CALLERS, [New] and [Engine.startNativeFor], so halves met at an apply cannot
 // be missing a duty a boot would have armed. The trim, the identity estate's
 // duties and the usage publisher are the core's, armed at boot by
@@ -766,16 +767,17 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	// its name and its packs are held for ever.
 	e.startCodeRetention(ctx, n)
 	// AND THE COMPACTOR, where the half serves git ([Engine.buildCodeHost]
-	// built it unstarted), started HERE for the two reasons both callers
-	// reach this past: the runtime it reads through is PUBLISHED — its first
-	// pass runs at once, and the router resolves this node's git half from
-	// the published runtime to place it among the git nodes, as this node's
-	// own copy answers the due listing from it, so a pass started before
-	// found this node home to nothing and its listing unserved — and the
-	// node's mode PUBLISHES: a compaction stores its outputs in the object
-	// store and appends its record, and a node a capacity window restarted to
-	// write nothing must start nothing that writes on its own. Its stop is
-	// the code host's ([native.stopCodeHost]).
+	// built it unstarted): both its loops, the compaction's and the
+	// publication's, started HERE for the two reasons both callers reach
+	// this past: the runtime it reads through is PUBLISHED — each loop's
+	// first pass runs at once this node is listed among the git nodes, and
+	// this node's own copy answers its due listings from the published
+	// runtime, so a pass started before found its listing unserved — and the
+	// node's mode PUBLISHES: a compaction stores its outputs, and a
+	// publication its layer, in the object store and appends its record, and
+	// a node a capacity window restarted to write nothing must start nothing
+	// that writes on its own. Its stop is the code host's
+	// ([native.stopCodeHost]).
 	if n.compactor != nil {
 		n.compactor.Start()
 	}

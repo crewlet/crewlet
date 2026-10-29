@@ -667,15 +667,16 @@ type Reading struct {
 	CodeMaintenanceRefused                        int
 	CodeMaintenanceLargest, CodeMaintenanceBudget int64
 
-	// CodeCompactionBehind is how many repositories this node's compactor —
-	// the git node that is their HOME, which merges their packs — found at
-	// the most live packs a repository may hold on its last pass, so every
-	// push carrying a pack into them is refused `compaction_behind` until a
-	// compaction lands; CodeCompactionBehindLargest is the most live packs
-	// among them and CodeCompactionBehindRepo that repository's name. Counted
-	// against code.MaxPacksPerRepo by the compactor, which already judged
-	// each repository it names (internal/code/compact): this framework imports
-	// no code-host package, and the alarm borrows the bound the push decide
+	// CodeCompactionBehind is how many of the repositories this node
+	// maintains — as their MAINTAINER, the git node that merges their packs
+	// and publishes their layers — its compactor found at the most live packs
+	// a repository may hold on its last pass, so every push carrying a pack
+	// into them is refused `compaction_behind` until a compaction lands;
+	// CodeCompactionBehindLargest is the most live packs among them and
+	// CodeCompactionBehindRepo that repository's name. Counted against
+	// code.MaxPacksPerRepo by the compactor, which already judged each
+	// repository it names (internal/code/compact): this framework imports no
+	// code-host package, and the alarm borrows the bound the push decide
 	// refuses at (ADR-0015) rather than holding a number of its own. All zero
 	// on a node that serves no git, compacts nothing, or found none.
 	CodeCompactionBehind        int
@@ -1412,7 +1413,13 @@ var table = []rule{
 			"beside it for a clone of the repository; each " +
 			"`code_cache_maintenance_refused` line names a repository, the step " +
 			"refused and its charge (a step `index` or `graph` refused as well " +
-			"is a repository served from its packs' own indexes). The budget is " +
+			"is a repository served from its packs' own indexes; a step " +
+			"`publish` is a repository this node maintains whose next published " +
+			"layer it cannot write, at 900 bytes an object of the repository, " +
+			"which falls to this node because no git node advertises a budget " +
+			"that holds it — give one git node that memory, and it becomes the " +
+			"repository's maintainer: docs/guides/deployment.md, Sizing git " +
+			"nodes). The budget is " +
 			"the node's memory (its cgroup's limit where one is set, read again " +
 			"every ten seconds) less what it keeps for its git lanes, the " +
 			"store, the broker and the engine, on the `code_cache_opened` line. " +
@@ -1442,20 +1449,21 @@ var table = []rule{
 		// the node's compactor counts the repositories it already judged
 		// against that bound and the rule fires at any — never at a number of
 		// its own. Raised by the node that COMPACTS them, the repository's
-		// home, because it is the one node that can act on it and the receiver
-		// refuses most such pushes before any committer sees them; held from
-		// the listing of every pass, whatever that pass's compaction of the
-		// repository decided, so it stands for as long as pushes are refused.
+		// maintainer, because it is the one node that can act on it and the
+		// receiver refuses most such pushes before any committer sees them;
+		// held from the listing of every pass, whatever that pass's compaction
+		// of the repository decided, so it stands for as long as pushes are
+		// refused.
 		kind: KindCodeCompactionBehind,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("%d repository(ies) this node compacts hold the most live packs a "+
+			return fmt.Sprintf("%d repository(ies) this node maintains hold the most live packs a "+
 					"repository may — the most, %s, holds %d — so every push carrying a pack "+
 					"into them is refused compaction_behind until a compaction of theirs lands",
 					r.CodeCompactionBehind, r.CodeCompactionBehindRepo, r.CodeCompactionBehindLargest),
 				r.CodeCompactionBehind > 0
 		},
 		remedy: "Every push carrying objects adds a pack, and the repository's " +
-			"home git node merges them on a minute's poll; pushes that carry " +
+			"maintainer merges them on a minute's poll; pushes that carry " +
 			"nothing — deletions, refs moved onto commits the repository holds — " +
 			"still land meanwhile. Read this node's log for the repository. " +
 			"`code_cache_compaction_refused` says the build's memory charge, on " +

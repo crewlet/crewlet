@@ -94,6 +94,17 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	if got := codefault.CompactPath(); !slices.Equal(got, compactPoints) {
 		t.Fatalf("CompactPath() = %v\nwant the order a compaction reaches them: %v", got, compactPoints)
 	}
+	// The publication's crash matrix walks PublishPath(), so its order is a
+	// claim as well.
+	publishPoints := []codefault.Point{
+		codefault.PublishAfterBuild,   // the layer and any outputs written in the scratch, nothing stored
+		codefault.PublishUpload,       // inside a part's or an output's upload
+		codefault.PublishAfterUpload,  // every part and output stored, nothing proposed
+		codefault.PublishAfterPropose, // the committer answered, nothing adopted
+	}
+	if got := codefault.PublishPath(); !slices.Equal(got, publishPoints) {
+		t.Fatalf("PublishPath() = %v\nwant the order a publication reaches them: %v", got, publishPoints)
+	}
 	// An engine write's crash matrix walks WritePath(): its own point, then
 	// the landing's, each in the order the one landing hits it — and none of
 	// the relay's own, which a write never meets.
@@ -107,9 +118,10 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	if got := codefault.WritePath(); !slices.Equal(got, writePoints) {
 		t.Fatalf("WritePath() = %v\nwant the order an engine write reaches them: %v", got, writePoints)
 	}
-	if got, wantAll := codefault.Points(), slices.Concat(want, syncPoints, compactPoints,
+	if got, wantAll := codefault.Points(), slices.Concat(want, syncPoints, compactPoints, publishPoints,
 		[]codefault.Point{codefault.WriteAfterBuild}); !slices.Equal(got, wantAll) {
-		t.Fatalf("Points() = %v\nwant the push path, then the sync's, then the compaction's, then the write's own: %v",
+		t.Fatalf("Points() = %v\nwant the push path, then the sync's, the compaction's and the publication's, "+
+			"then the write's own: %v",
 			got, wantAll)
 	}
 
@@ -135,12 +147,15 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	path[0] = "host.nope"
 	compactions := codefault.CompactPath()
 	compactions[0] = "host.nope"
+	publications := codefault.PublishPath()
+	publications[0] = "host.nope"
 	writes := codefault.WritePath()
 	writes[0], writes[1] = "host.nope", "host.nope"
 	all := codefault.Points()
 	all[0] = "host.nope"
 	if codefault.PushPath()[0] != codefault.HostAfterCommands || codefault.Points()[0] != codefault.HostAfterCommands ||
-		codefault.CompactPath()[0] != codefault.CompactAfterBuild || codefault.WritePath()[0] != codefault.WriteAfterBuild ||
+		codefault.CompactPath()[0] != codefault.CompactAfterBuild ||
+		codefault.PublishPath()[0] != codefault.PublishAfterBuild || codefault.WritePath()[0] != codefault.WriteAfterBuild ||
 		codefault.WritePath()[1] != codefault.HostUpload || codefault.PushPath()[4] != codefault.HostUpload {
 		t.Fatal("rewriting a returned list changed the next call's")
 	}
@@ -543,6 +558,22 @@ func TestAnUploadFaultFiresAtItsOffset(t *testing.T) {
 		t.Fatalf("a push's upload hit beside an armed compaction upload = %v, want nil: the two points are "+
 			"two steps", err)
 	}
+
+	// AND SO DOES THE PUBLICATION'S: a part's offset is the layer's, an
+	// output's its bundle's, and a crash armed at one fires there.
+	s.Arm(codefault.PublishUpload, codefault.Action{At: 4096, Once: true, Err: errCrash})
+	for _, at := range []int64{0, 1024, 4095} {
+		if err := s.Hit(ctx, codefault.PublishUpload, at); err != nil {
+			t.Fatalf("a publication's upload hit at %d, before the offset 4096 = %v, want nil", at, err)
+		}
+	}
+	if err := s.Hit(ctx, codefault.PublishUpload, 8192); !errors.Is(err, errCrash) {
+		t.Fatalf("the first publication upload hit past the offset = %v, want %v", err, errCrash)
+	}
+	if err := s.Hit(ctx, codefault.CompactUpload, 8192); err != nil {
+		t.Fatalf("a compaction's upload hit beside an armed publication upload = %v, want nil: the two "+
+			"points are two steps", err)
+	}
 }
 
 // A case that arms something no hit can ever reveal is a case that can never
@@ -563,9 +594,15 @@ func TestArmingAPointThatDoesNotExistPanics(t *testing.T) {
 			func(s *codefault.Script) { s.Arm(codefault.HostUpload, codefault.Action{At: -1, Err: errCrash}) }},
 		{"a negative offset on the compaction's upload", "negative",
 			func(s *codefault.Script) { s.Arm(codefault.CompactUpload, codefault.Action{At: -1, Err: errCrash}) }},
-		{"an offset on a compaction point that has none", "only host.upload and compact.upload",
+		{"an offset on a compaction point that has none", "only host.upload, compact.upload and publish.upload",
 			func(s *codefault.Script) {
 				s.Arm(codefault.CompactAfterUpload, codefault.Action{At: 1, Err: errCrash})
+			}},
+		{"a negative offset on the publication's upload", "negative",
+			func(s *codefault.Script) { s.Arm(codefault.PublishUpload, codefault.Action{At: -1, Err: errCrash}) }},
+		{"an offset on a publication point that has none", "only host.upload, compact.upload and publish.upload",
+			func(s *codefault.Script) {
+				s.Arm(codefault.PublishAfterBuild, codefault.Action{At: 1, Err: errCrash})
 			}},
 		{"an action that does nothing", "does nothing",
 			func(s *codefault.Script) { s.Arm(codefault.SyncRefs, codefault.Action{Once: true}) }},
@@ -623,7 +660,7 @@ func TestAHitOnAnUnknownPointFails(t *testing.T) {
 				!strings.Contains(err.Error(), "7") {
 				t.Fatalf("Hit(ctx, SyncState, 7) = %v, want ErrOffset saying sync.state reads no offset", err)
 			}
-			for _, p := range []codefault.Point{codefault.HostUpload, codefault.CompactUpload} {
+			for _, p := range []codefault.Point{codefault.HostUpload, codefault.CompactUpload, codefault.PublishUpload} {
 				err = c.s.Hit(ctx, p, -1)
 				if !errors.Is(err, codefault.ErrOffset) || !strings.Contains(err.Error(), "negative offset -1") {
 					t.Fatalf("Hit(ctx, %s, -1) = %v, want ErrOffset naming the negative offset -1", p, err)

@@ -104,6 +104,12 @@ func (r *Reserved) Run(ctx context.Context, c Cmd) (Result, error) {
 	return res, err
 }
 
+// Version is the git every process run in the slot is: the pool's
+// ([Pool.Version]). What a publication's layer names as the release that wrote
+// it (internal/code/compact), so the git a git node holds the layer to is the
+// one that ran its build, never a second reading of the binary beside it.
+func (r *Reserved) Version() Version { return r.p.version }
+
 // Release gives the slot back, once — a later call does nothing — after
 // waiting for a process running in it to end.
 func (r *Reserved) Release() {

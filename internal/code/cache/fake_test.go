@@ -236,13 +236,20 @@ func (f *fakeLog) compact(repo string, outputs []code.PackRow, retire ...string)
 	defer f.mu.Unlock()
 	f.seq++
 	pos := f.at()
+	f.retireAndAdd(repo, pos, outputs, retire)
+	return pos
+}
+
+// retireAndAdd is the pack half of a record on repo at pos — a compaction's,
+// a publication's: the packs whose ids retire leave the live rows for the
+// retired ones, and outputs are added. f.mu is held.
+func (f *fakeLog) retireAndAdd(repo string, pos statelog.Position, outputs []code.PackRow, retire []string) {
 	r := f.repos[repo]
 	f.retire(repo, pos, retire...)
 	for _, out := range outputs {
 		out.Added = pos
 		r.packs = append(r.packs, out)
 	}
-	return pos
 }
 
 // retire moves the pack rows of repo whose ids are ids out of the live rows
@@ -341,12 +348,8 @@ func (f *fakeLog) publish(repo string, chain []code.LayerRef, outputs []code.Pac
 	defer f.mu.Unlock()
 	f.seq++
 	pos := f.at()
+	f.retireAndAdd(repo, pos, outputs, retire)
 	r := f.repos[repo]
-	f.retire(repo, pos, retire...)
-	for _, out := range outputs {
-		out.Added = pos
-		r.packs = append(r.packs, out)
-	}
 	rows := make([]code.LayerRow, len(chain))
 	for i, l := range chain {
 		added := pos

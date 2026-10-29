@@ -14,8 +14,8 @@ import (
 )
 
 // THE COMPACTION'S FLEET CASES: what only more than one data node can make of
-// a compaction — two homes, a committer that dies under one, an answer that
-// comes back late.
+// a compaction — two maintainers, a committer that dies under one, an answer
+// that comes back late.
 
 // memberNode is the running member called id as a git node.
 func memberNode(t *testing.T, c Cluster, id string) Node {
@@ -88,16 +88,16 @@ func passUntilCompacted(t *testing.T, n Node) {
 	}
 }
 
-// F28: two git nodes that each take themselves for a repository's home — a
-// presence view split for a moment, which no lease decides — both build a
+// F28: two git nodes that each take themselves for a repository's maintainer
+// — a presence view split for a moment, which no lease decides — both build a
 // compaction from the same rows, and the committer lands one: the other is
 // refused stale, its outputs named by no row, which the collector deletes.
-func twoHomesLandOneCompaction(t *testing.T, c Cluster) {
+func twoMaintainersLandOneCompaction(t *testing.T, c Cluster) {
 	rc := newRepoCase(t, c, "fleet-f28")
 	committer := rc.committer()
 	a := rc.other(committer)
 	b := rc.other(committer, a)
-	c.SplitHomes(t, rc.id, a, b)
+	c.SplitMaintainers(t, rc.id, a, b)
 	p := NewPerson(t, c, "ceo")
 	work := p.Init()
 	rc.pushN(p, work, a, code.CompactMinMerge)
@@ -119,7 +119,7 @@ func twoHomesLandOneCompaction(t *testing.T, c Cluster) {
 	}
 	after := rc.rows()
 	if len(after.Packs) != 1 {
-		t.Fatalf("two homes left %d live packs, want one compaction's one output", len(after.Packs))
+		t.Fatalf("two maintainers left %d live packs, want one compaction's one output", len(after.Packs))
 	}
 	retired := retiredSince(&Case{T: t, Fleet: c, Ctx: rc.ctx}, rc.id, before.Position)
 	if len(retired) != len(before.Packs) {
@@ -173,9 +173,9 @@ func aCompactionFailsOverToTheRunnerUpCommitter(t *testing.T, c Cluster) {
 	rc := newRepoCase(t, c, "fleet-f29")
 	committer := rc.committer()
 	x := rc.other(committer)
-	// THE HOME IS NOT THE COMMITTER, so killing the committer leaves the
-	// compaction's builder running.
-	c.SplitHomes(t, rc.id, x)
+	// THE MAINTAINER IS NOT THE COMMITTER, so killing the committer leaves
+	// the compaction's builder running.
+	c.SplitMaintainers(t, rc.id, x)
 	p := NewPerson(t, c, "ceo")
 	work := p.Init()
 	rc.pushN(p, work, x, code.CompactMinMerge)
@@ -215,7 +215,7 @@ func aCompactionAnsweredLateIsCollapsed(t *testing.T, c Cluster) {
 	rc := newRepoCase(t, c, "fleet-f30")
 	committer := rc.committer()
 	x := rc.other(committer)
-	c.SplitHomes(t, rc.id, x)
+	c.SplitMaintainers(t, rc.id, x)
 	p := NewPerson(t, c, "ceo")
 	work := p.Init()
 	rc.pushN(p, work, x, code.CompactMinMerge)

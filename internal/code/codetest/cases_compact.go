@@ -32,8 +32,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE COMPACTION CASES (C1–C8): a repository's packs merged by its home git
-// node and decided by its committer (ADR-0060), the merged packs retired for
+// THE COMPACTION CASES (C1–C8): a repository's packs merged by its maintainer
+// and decided by its committer (ADR-0060), the merged packs retired for
 // a day and swept, and every git node's cache following by a swap — through
 // the production compactor every git node of a topology is built with
 // (Node.Compactor), never started, so each case drives its passes itself.
@@ -69,7 +69,7 @@ func candidateOf(c *Case, n Node) code.CompactionCandidate {
 }
 
 // compactOn is node n's compaction of RepoName — as its compactor makes one
-// for a repository it is home for — asked again while it answers busy: the
+// for a repository it maintains — asked again while it answers busy: the
 // node's maintainer keeps the one slot a compaction may take for a moment at
 // a time, and a case judging something else waits that out, a minute at most.
 func compactOn(c *Case, n Node) compact.Outcome {
@@ -95,10 +95,11 @@ func tryCompactOn(ctx context.Context, c *Case, n Node) (compact.Outcome, error)
 	}
 }
 
-// compactAtHome is a pass of every git node's compactor, in turn, until the
-// repository's home has compacted it — a node that is not its home skips it —
-// asked again while a pass finds it busy; it answers the home.
-func compactAtHome(c *Case) Node {
+// compactAtMaintainer is a pass of every git node's compactor, in turn, until
+// the repository's maintainer has compacted it — a node that is not its
+// maintainer skips it — asked again while a pass finds it busy; it answers the
+// maintainer.
+func compactAtMaintainer(c *Case) Node {
 	c.T.Helper()
 	deadline := time.Now().Add(time.Minute)
 	for {
@@ -214,10 +215,11 @@ func fsckCaches(c *Case, p *Person, repoID string) {
 	}
 }
 
-// C1: a compaction merges a repository's packs on its home, its committer
-// retires them in one record, and every git node's cache follows — the home by
-// adopting the output it built, the other by its next fetch's swap, keeping
-// the commit-graph — while every clone checks out every commit.
+// C1: a compaction merges a repository's packs on its maintainer, its
+// committer retires them in one record, and every git node's cache follows —
+// the maintainer by adopting the output it built, the other by its next
+// fetch's swap, keeping the commit-graph — while every clone checks out every
+// commit.
 func aCompactionMergesPacksAndEveryCacheFollows(t *testing.T, newFleet NewFleet) {
 	c := newCase(t, newFleet, Shape{GitNodes: 2}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
@@ -241,7 +243,7 @@ func aCompactionMergesPacksAndEveryCacheFollows(t *testing.T, newFleet NewFleet)
 		kept[n.ID()] = counterOf(n, metrics.CodeCacheSwaps, "graph", "kept")
 	}
 
-	home := compactAtHome(c)
+	maintainer := compactAtMaintainer(c)
 	after := c.Rows()
 	if after.Repo.LivePacks != 1 || len(after.Packs) != 1 {
 		t.Fatalf("after the compaction the rows hold %d live packs (%d rows), want the one output",
@@ -258,12 +260,12 @@ func aCompactionMergesPacksAndEveryCacheFollows(t *testing.T, newFleet NewFleet)
 			break
 		}
 	}
-	if got := counterOf(home, metrics.CodeCacheAdoptions, "outcome", "adopted"); got != adopted[home.ID()]+1 {
-		t.Errorf("the home adopted %d packs, want its one output linked from its build, never downloaded",
-			got-adopted[home.ID()])
+	if got := counterOf(maintainer, metrics.CodeCacheAdoptions, "outcome", "adopted"); got != adopted[maintainer.ID()]+1 {
+		t.Errorf("the maintainer adopted %d packs, want its one output linked from its build, never downloaded",
+			got-adopted[maintainer.ID()])
 	}
 	for i, n := range c.Fleet.Nodes() {
-		if n.ID() == home.ID() {
+		if n.ID() == maintainer.ID() {
 			continue
 		}
 		clone := p.Clone(c.URL(i))
@@ -621,9 +623,9 @@ func bulkPacks(c *Case, p *Person, repoID, tip string, n int) {
 
 // C5: a repository at code.MaxPacksPerRepo live packs refuses a push carrying
 // one more `compaction_behind`, BEFORE its bundle is stored, while a push that
-// carries none lands; its home names it in its alarm reading while it is so;
-// and once a compaction has merged its packs the push lands and the reading
-// is clear.
+// carries none lands; its maintainer names it in its alarm reading while it
+// is so; and once a compaction has merged its packs the push lands and the
+// reading is clear.
 func compactionBehindRefusesAPack(t *testing.T, newFleet NewFleet) {
 	c := newCase(t, newFleet, Shape{}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
@@ -651,11 +653,11 @@ func compactionBehindRefusesAPack(t *testing.T, newFleet NewFleet) {
 		t.Errorf("a push of a deletion alone at the bound: %s, want ok", del)
 	}
 
-	home := compactAtHome(c)
+	maintainer := compactAtMaintainer(c)
 	var r statelog.Reading
-	home.Compactor().AlarmReading(&r)
+	maintainer.Compactor().AlarmReading(&r)
 	if r.CodeCompactionBehind != 1 || r.CodeCompactionBehindRepo != RepoName {
-		t.Errorf("the home's reading after the pass that found %s at the bound names %d repositories, the "+
+		t.Errorf("the maintainer's reading after the pass that found %s at the bound names %d repositories, the "+
 			"most %q; want it", RepoName, r.CodeCompactionBehind, r.CodeCompactionBehindRepo)
 	}
 	if live := c.Rows().Repo.LivePacks; live >= code.MaxPacksPerRepo {
@@ -664,20 +666,20 @@ func compactionBehindRefusesAPack(t *testing.T, newFleet NewFleet) {
 	if again := p.Push(c.Ctx, work, c.URL(0), "main"); !again.OK("refs/heads/main") {
 		t.Errorf("the push once compacted below the bound: %s, want ok", again)
 	}
-	if _, err := home.Compactor().Poll(c.Ctx); err != nil {
+	if _, err := maintainer.Compactor().Poll(c.Ctx); err != nil {
 		t.Fatal(err)
 	}
 	r = statelog.Reading{}
-	home.Compactor().AlarmReading(&r)
+	maintainer.Compactor().AlarmReading(&r)
 	if r.CodeCompactionBehind != 0 {
-		t.Errorf("the home's reading once the repository is below the bound names %d repositories, want none",
+		t.Errorf("the maintainer's reading once the repository is below the bound names %d repositories, want none",
 			r.CodeCompactionBehind)
 	}
 	assertConverged(t, c.Fleet)
 }
 
-// compactCrash is one point C6 crashes the home at, and the offset an upload's
-// point is hit at.
+// compactCrash is one point C6 crashes the maintainer at, and the offset an
+// upload's point is hit at.
 type compactCrash struct {
 	point codefault.Point
 	at    int64
@@ -696,7 +698,7 @@ func compactCrashes() []compactCrash {
 	return out
 }
 
-// C6: a crash of the home at every step of a compaction leaves a truthful
+// C6: a crash of the maintainer at every step of a compaction leaves a truthful
 // state: nothing applied — the outputs named by no row, which the collector
 // deletes and nothing else — or applied once; a compaction again is applied or
 // not due; every cache converges; a push lands.
@@ -726,10 +728,10 @@ func compactCrashAt(t *testing.T, newFleet NewFleet, crash compactCrash) {
 
 	reached := make(chan struct{})
 	c.Fleet.Faults().Arm(crash.point, codefault.Action{Once: true, Crash: true, Reached: reached, At: crash.at})
-	home := c.Fleet.Nodes()[0]
+	maintainer := c.Fleet.Nodes()[0]
 	done := make(chan compact.Outcome, 1)
 	go func() {
-		out, _ := tryCompactOn(context.WithoutCancel(c.Ctx), c, home)
+		out, _ := tryCompactOn(context.WithoutCancel(c.Ctx), c, maintainer)
 		done <- out
 	}()
 	select {
@@ -737,8 +739,8 @@ func compactCrashAt(t *testing.T, newFleet NewFleet, crash compactCrash) {
 	case out := <-done:
 		t.Fatalf("the compaction ended %s before it reached %s", out, crash.point)
 	}
-	c.Fleet.Kill(t, home.ID())
-	c.Fleet.Restart(t, home.ID())
+	c.Fleet.Kill(t, maintainer.ID())
+	c.Fleet.Restart(t, maintainer.ID())
 
 	rows := c.Rows()
 	switch {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/hostbox"
 )
@@ -89,19 +90,22 @@ import (
 
 // Scratch is a repository a push's receive-pack runs in (NewScratch), or a
 // merge's pack-objects writes its outputs into (NewMergeScratch), or an
-// advertisement view (AdvertiseView). It pins the incarnation it leans on —
-// directly, or through the store a merge's links of it make — until Remove:
-// its alternate must outlive the push or the build, so the budget never
-// evicts it from under one.
+// advertisement view (AdvertiseView), or a publication writes its layer in
+// (NewLayerScratch). It pins the incarnation it leans on — directly, or
+// through the store a merge's links of it make — until Remove: its alternate
+// must outlive the push or the build, so the budget never evicts it from under
+// one — and a layer's scratch, which links rather than leans, pins it all the
+// same, so the cache counts its links' bytes where the incarnation is.
 type Scratch struct {
 	// Dir is the repository: absolute and clean, scratch/<id>.git — a push's
-	// id, or a merge's — or scratch/adv-<uuid>.git.
+	// id, a merge's or a publication's — or scratch/adv-<uuid>.git.
 	Dir string
 	// Alternate is the repository it leans on, whose objects its one
 	// alternates line names — the incarnation, or a merge's store of exactly
 	// the packs it merges — what every git process run in it names as its
 	// gitproc.Cmd.Alternate, since the pool runs in no repository whose
-	// alternate the call did not name.
+	// alternate the call did not name. "" for a layer's scratch, which holds
+	// links of the incarnation's packs and names no alternate.
 	Alternate string
 
 	c    *Cache
@@ -167,6 +171,144 @@ func (c *Cache) NewMergeScratch(ctx context.Context, s Synced, id string, packs 
 			ErrInvalid)
 	}
 	return c.newScratch(ctx, s, id, false, packs)
+}
+
+// NewLayerScratch makes the repository a publication writes the repository's
+// next published layer in (internal/code/compact): scratch/<id>.git holding,
+// by HARD LINKS of s's incarnation, every pack file the copy holds and its
+// packed-refs; HEAD the bytes of s's and the pool's config; and the files of
+// the first base layers of the rows' chain — each layer's multi-pack-index,
+// its bitmap and its commit-graph layer — with a multi-pack-index-chain and a
+// commit-graph-chain naming EXACTLY those base layers, root first. It pins s's
+// incarnation until Remove. id names it — the publication's own id, a
+// canonical lowercase UUID, since it is a path component — once.
+//
+// LINKS, NEVER AN ALTERNATE, for two reasons git gives: a multi-pack-index
+// names packs of ITS OWN pack directory, which an alternate's are not, and the
+// bitmap's writer selects its commits off the repository's own refs. A link
+// is the same inode, and nothing here writes one: every git process in the
+// scratch writes new files by renaming them in, as the incarnation's own
+// writers do. Three links a pack, as a swap pays.
+//
+// THE CHAIN FILES NAME EXACTLY THE BASE, never the whole chain: measured on
+// git 2.56.0, a write over a base with layers above it still named in the
+// chain file took 196–200 s against 1.03 s for the same write with only its
+// base named, and so did `multi-pack-index compact` of two layers with one
+// above them. And a layer is written over a base the copy HOLDS: a base past
+// the installed prefix ([Chain.Installed]) is refused with ErrInvalid, since a
+// layer is valid only over its exact base and the files of one the copy does
+// not hold are not there to link.
+//
+// THE REFS ARE LINKED BEFORE THE PACKS ARE LISTED: a round over the copy
+// installs a pack before it renames the packed-refs naming its commits in, so
+// every commit the linked refs name is in a pack the listing finds, and the
+// bitmap's writer, which parses every commit a ref names, never meets one the
+// scratch lacks. A pack a round is still installing meanwhile — its index the
+// last of its files renamed in — is one git does not read, and no plan named.
+func (c *Cache) NewLayerScratch(ctx context.Context, s Synced, id string, base int) (*Scratch, error) {
+	if err := c.handedOut(s, "a layer's scratch"); err != nil {
+		return nil, err
+	}
+	if !canonicalID(id) {
+		return nil, fmt.Errorf("%w: scratch id %q is not a canonical lowercase UUID (it becomes a path component)",
+			ErrInvalid, id)
+	}
+	if !c.enter() {
+		return nil, ErrStopped
+	}
+	defer c.leave()
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("cache: making a layer's scratch for %s: %w", s.entry.id, context.Cause(ctx))
+	}
+	e, inc := s.entry, s.inc
+	e.mu.Lock()
+	if inc.discarded {
+		e.mu.Unlock()
+		return nil, fmt.Errorf("%w: a scratch names a Synced still held, and %s was released and removed",
+			ErrInvalid, s.Dir)
+	}
+	if held := chainOf(inc).Installed; base < 0 || base > held {
+		e.mu.Unlock()
+		return nil, fmt.Errorf("%w: a layer over the chain's first %d layers, and %s holds %d of them installed",
+			ErrInvalid, base, s.Dir, held)
+	}
+	under := slices.Clone(inc.chain[:base])
+	inc.pins++
+	c.used(e, inc)
+	e.mu.Unlock()
+
+	dir := filepath.Join(c.dir, scratchDir, id+".git")
+	if err := os.Mkdir(dir, hostbox.DirMode); err != nil {
+		c.release(e, inc, noReader)
+		if errors.Is(err, fs.ErrExist) {
+			return nil, fmt.Errorf("%w: %s already exists: a publication id names one scratch, once", ErrInvalid, dir)
+		}
+		return nil, fmt.Errorf("cache: making %s: %w", dir, err)
+	}
+	sc := &Scratch{Dir: dir, c: c, e: e, inc: inc}
+	sc.remove = sync.OnceFunc(sc.discard)
+	if err := sc.fillLayer(s.Dir, under); err != nil {
+		sc.Remove()
+		return nil, fmt.Errorf("cache: making %s for %s: %w", dir, e.id, err)
+	}
+	return sc, nil
+}
+
+// fillLayer writes a layer's scratch from the incarnation at from, its chain
+// files naming exactly under ([Cache.NewLayerScratch]).
+func (s *Scratch) fillLayer(from string, under []code.LayerRow) error {
+	for _, d := range []string{"refs/heads", "refs/tags", layersDir, graphLayersDir} {
+		if err := os.MkdirAll(filepath.Join(s.Dir, filepath.FromSlash(d)), hostbox.DirMode); err != nil {
+			return err
+		}
+	}
+	head, err := os.ReadFile(filepath.Join(from, "HEAD"))
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(s.Dir, "HEAD"), head, hostbox.FileMode); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(s.Dir, "config"), []byte(gitproc.RepoConfig), hostbox.FileMode); err != nil {
+		return err
+	}
+	if err := os.Link(filepath.Join(from, "packed-refs"), filepath.Join(s.Dir, "packed-refs")); err != nil {
+		return err
+	}
+	packs, err := os.ReadDir(filepath.Join(from, "objects", "pack"))
+	if err != nil {
+		return err
+	}
+	for _, d := range packs {
+		if !packFileName().MatchString(d.Name()) {
+			continue
+		}
+		rel := filepath.Join("objects", "pack", d.Name())
+		if err := os.Link(filepath.Join(from, rel), filepath.Join(s.Dir, rel)); err != nil {
+			return err
+		}
+	}
+	for _, row := range under {
+		for _, rel := range layerRels(row.Layer) {
+			if rel == "" {
+				continue
+			}
+			if err := os.Link(filepath.Join(from, rel), filepath.Join(s.Dir, rel)); err != nil {
+				return err
+			}
+		}
+	}
+	if len(under) == 0 {
+		return nil
+	}
+	midx, graph := chainIDs(under)
+	if err := os.WriteFile(filepath.Join(s.Dir, layersChainRel), chainText(midx), hostbox.FileMode); err != nil {
+		return err
+	}
+	if len(graph) == 0 {
+		return nil
+	}
+	return os.WriteFile(filepath.Join(s.Dir, graphChainRel), chainText(graph), hostbox.FileMode)
 }
 
 // AdvertiseView is NewScratch for a push's ADVERTISEMENT: its packed-refs is

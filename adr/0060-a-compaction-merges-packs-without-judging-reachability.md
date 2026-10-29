@@ -76,3 +76,18 @@ Which git node is a repository's home
 layer is published over full packs. Expunge. How long a person may wait on a
 refused push: `MaxPacksPerRepo` is derived from a cold sync's share of
 `host.Timing.SpoolWait`, measured in `internal/code`'s doc.
+
+## Amendment — the maintainer merges, and a published pack is no input
+
+[ADR-0061](0061-a-derived-object-is-published-kept-and-never-audited.md)
+moves the merge from the home to the repository's MAINTAINER — the first git
+node of its order
+([ADR-0059](0059-a-repositorys-git-work-is-asked-of-its-home-git-node.md))
+whose advertised background budget holds its publication, the home on a fleet
+of alike nodes — so the repository's two writers of packs, compaction and
+publication, run on one node, never at once there; and the maintainer raises
+`code_compaction_behind`. It adds a fourth rule: **a pack a published layer
+names is never a compaction's input**, unless the compaction is the
+publication that replaces that layer, since a node's chain loads only over
+every pack it names. A published repository's small packs are merged by its
+publications' repacks instead.

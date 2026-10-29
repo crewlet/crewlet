@@ -1250,6 +1250,10 @@ func WriteCharge(c *Cache, repoID string, w Write) int64 {
 	return chargeOf(c, repoID, w.BytesPerObject)
 }
 
+// PublishStep is a publication's `step` on the maintenance refusals' count and
+// gauge: background work of the maintainer's, beside its declared writes.
+const PublishStep = stepPublishName
+
 // BackfillStep takes the backfill's next step due and does it, synchronously
 // and owing no pace, as work of the cache's own: "check", "merge", "gap",
 // "history" or "horizon" for the step it took, "" when none was due — and the

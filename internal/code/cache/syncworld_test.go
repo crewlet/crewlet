@@ -384,7 +384,32 @@ func (w *syncWorld) image(t testing.TB, c *cache.Cache, repo string) string {
 // synced linearizably from nothing at the log's position now.
 func (w *syncWorld) rebuilt(t testing.TB, repo string) string {
 	t.Helper()
-	layout, err := cache.Prepare(t.Context(), filepath.Join(t.TempDir(), "reference"))
+	image, _ := w.rebuiltChain(t, repo)
+	return image
+}
+
+// rebuiltChain is rebuilt's image and the published chain the fresh cache
+// holds once its installer has had its say (settledSync): what its full round
+// installed before it answered, and what it left its installer — a missing
+// part is asked about at the log's head once, from there. A repository with
+// no chain is one sync, as rebuilt always was.
+func (w *syncWorld) rebuiltChain(t testing.TB, repo string) (string, cache.Chain) {
+	t.Helper()
+	c, stop := w.fresh(t)
+	defer stop()
+	s := settledSync(t, c, repo, nil)
+	defer s.Release()
+	return imageOf(t, s.Dir), c.Chain(s)
+}
+
+// fresh is a cache of its own directory and pool over the world's log and
+// store — a git node that joins with nothing, recording nothing in the
+// world's log, metrics or logs — and what stops it and removes its
+// directory.
+func (w *syncWorld) fresh(t testing.TB) (*cache.Cache, func()) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "reference")
+	layout, err := cache.Prepare(t.Context(), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,13 +422,12 @@ func (w *syncWorld) rebuilt(t testing.TB, repo string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Stop(context.Background())
-	s, err := c.Sync(t.Context(), repo, statelog.Freshness{Level: statelog.ReadLinearizable})
-	if err != nil {
-		t.Fatalf("a fresh cache's sync of %s: %v", repo, err)
+	return c, func() {
+		c.Stop(context.Background())
+		if err := os.RemoveAll(filepath.Dir(dir)); err != nil {
+			t.Errorf("removing a fresh cache's directory: %v", err)
+		}
 	}
-	defer s.Release()
-	return imageOf(t, s.Dir)
 }
 
 // The image grammar, as the cases read it.
@@ -442,6 +466,14 @@ func imageOf(t testing.TB, dir string) string {
 			// THE DROPPING VIEW: the packs only rows an expunge's begin
 			// left dropping name, part of the image as much as objects/pack.
 			dropping = append(dropping, name)
+		// The published chain's two directories — its multi-pack-index layers
+		// and its commit-graph layers with the node's tip — are derived
+		// files, which a check of their own holds (codetest.LayersHold): a
+		// copy's chain is no function of the rows alone, since a layer the
+		// store lost after the copy installed it stays installed there.
+		case rel == filepath.Join("objects", "pack", "multi-pack-index.d") && d.IsDir(),
+			rel == filepath.Join("objects", "info", "commit-graphs") && d.IsDir():
+			return fs.SkipDir
 		default:
 			strays = append(strays, rel)
 			if d.IsDir() {

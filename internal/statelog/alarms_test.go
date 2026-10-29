@@ -195,11 +195,11 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 			"2 repository(ies) on this node are served without a bitmap: the largest's needs about " +
 				"19.0 GiB, and the node can give its background work 1.0 GiB",
 		},
-		"repositories a home git node has not compacted to under the pack bound": {
+		"repositories a maintainer has not compacted to under the pack bound": {
 			statelog.KindCodeCompactionBehind,
 			statelog.Reading{CodeCompactionBehind: 2, CodeCompactionBehindLargest: 2_051,
 				CodeCompactionBehindRepo: "web"},
-			"2 repository(ies) this node compacts hold the most live packs a repository may — the most, " +
+			"2 repository(ies) this node maintains hold the most live packs a repository may — the most, " +
 				"web, holds 2051",
 		},
 		"a service objective burning its budget": {

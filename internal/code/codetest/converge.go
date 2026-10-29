@@ -98,18 +98,20 @@ func convergedOn(ctx context.Context, f Fleet, names ...string) error {
 	return errors.Join(errs...)
 }
 
-// cacheHolds syncs one repository on one node linearizable and compares its
-// directory with rows.
+// cacheHolds syncs one repository on one node linearizable — once its
+// installer has placed or refused every published layer the rows name — and
+// compares its directory with rows, its installed chain among them
+// ([LayersHold]).
 func cacheHolds(ctx context.Context, n Node, rows Rows) error {
-	s, err := n.Cache().Sync(ctx, rows.Repo.ID, Linearizable)
-	if err != nil {
-		return fmt.Errorf("sync: %w", err)
+	s, chain, err := settledCopy(ctx, n, rows.Repo.ID)
+	if s.Dir == "" {
+		return err
 	}
 	defer s.Release()
 	if s.Position.Packed() < rows.Position.Packed() {
 		return fmt.Errorf("synced at %s, behind the rows read at %s", s.Position, rows.Position)
 	}
-	var errs []error
+	errs := []error{err, LayersHold(ctx, s.Dir, chain)}
 	head, err := os.ReadFile(filepath.Join(s.Dir, "HEAD"))
 	if want := "ref: refs/heads/" + rows.Repo.DefaultBranch + "\n"; err != nil || string(head) != want {
 		errs = append(errs, fmt.Errorf("HEAD is %q (%w), want %q", head, err, want))

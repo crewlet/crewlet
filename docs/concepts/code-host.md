@@ -71,9 +71,6 @@ This is the product's current shape, not a configuration choice:
   and nothing else stands in front of one. So a repository's [path
   owners](#path-owners) are recorded and read, and no review is asked of them
   yet.
-- **Nothing publishes a repository's layers.** A git node installs the chain
-  the rows name ([Published layers](#published-layers)), and no row names one
-  yet, so each node serves from the index and graph it writes itself.
 - **Nothing drops an object a push stored.** A force-push or a deletion
   leaves the history behind it in the repository's packs, fetchable by its
   id, for as long as the repository lives. The object each such push left is
@@ -567,7 +564,7 @@ refuses one past the bound before anything of it is run or stored.
 batch of refs it pushes by the same rule, so an import never meets it.
 
 What a repository holds is its packs **as the pushes stored them** until its
-home merges them ([Compaction](#compaction)) — which matters for a history
+maintainer merges them ([Compaction](#compaction)) — which matters for a history
 that arrived in many pushes rather than grew by them. A history [imported](../guides/code.md#import-from-github-or-gitlab)
 in steps stores more than one pack of it: every step keeps whole the files it
 touches whose earlier versions an earlier step stored. Measured on this
@@ -578,7 +575,7 @@ size `repo_max_bytes`, the object store and the git nodes' caches for the
 repository as it was pushed, not for the source it came from. A merge writes
 each object of the packs it takes once, and git searches for deltas among the
 objects it merges, so a file a step kept whole may be stored as a delta again
-once its home merges the steps' packs; how much that saves depends on the
+once its maintainer merges the steps' packs; how much that saves depends on the
 history, which is why the sizing above is for the repository as it was
 pushed.
 
@@ -611,28 +608,34 @@ would sit beside each other, the first stands and the second is refused.
 Every push stores one pack, so a busy repository's pack count grows with its
 pushes — and a git node that reads it whole pays a GET for every pack, and
 every request a lookup in every pack its index does not cover. The
-repository's [home git node](#the-home-git-node) — the node its reads are
-asked of first — merges them, and its committer decides the merge as it
-decides a push
+repository's **maintainer** merges them — the git node that also publishes its
+layers ([Who maintains a repository](#who-maintains-a-repository)), on a fleet
+of alike git nodes its [home git node](#the-home-git-node) — and its committer
+decides the merge as it decides a push
 ([ADR-0060](https://github.com/crewlet/crewlet/blob/main/adr/0060-a-compaction-merges-packs-without-judging-reachability.md)).
 
 **The roll.** Once a minute every git node lists the repositories holding
-sixteen live packs or more, most packs first, judges whose home each is against
-one reading of the live git nodes, and for each it is home for it
+sixteen live packs or more, most packs first, judges which of them it
+maintains against one listing of the live git nodes, and for each it maintains
+it
 plans git's own geometric split — the one `git repack --geometric=2` makes —
-over the packs that are not FULL: the lightest are merged until every pack
-left weighs at least twice the objects of all the lighter ones together, and
-only where that takes sixteen packs or more, so a repository pushed a pack at a
-time is merged sixteen pushes at a time rather than at every poll. A
+over the packs that are not FULL and that no [published
+layer](#published-layers) names: a layer is valid only over every pack it
+names, so a published pack is merged only by the publication that replaces its
+layer ([When a repository is published](#when-a-repository-is-published)). The
+lightest are merged until every pack left weighs at least twice the objects of
+all the lighter ones together, and only where that takes sixteen packs or more,
+so a repository pushed a pack at a time is merged sixteen pushes at a time
+rather than at every poll. A
 pack is full once its pack section, or its whole bundle, is at seven eighths of
 the 1 GiB a merge cuts its outputs at, and a full pack is never merged again.
 A repository holding more than 50 packs that are not full is merged two packs
 at a time even when they already stand in that progression, so it shrinks at
 every poll. One merge takes at most 1 024 packs and 8 GiB of pack bytes, the
 lightest first. A repository whose plan finds nothing worth merging is not
-planned again until its rows move, so an idle repository costs its home's
-minute a lookup, and every other git node's the one judgment of whose home it
-is.
+planned again until its rows move, so an idle repository costs its
+maintainer's minute a lookup, and every other git node's the one judgment of
+who maintains it.
 
 **The build.** One `git pack-objects --stdin-packs` over the packs merged,
 run in a scratch repository — never in the copy — whose one alternate holds
@@ -647,9 +650,9 @@ budget beside the indexing's (500 bytes an object merged, 240 more an object
 merged for a transfer's room beside them, and six times
 `code.limits.max_blob_bytes` for its delta search, as a build was measured to
 hold). It follows the merge and never the repository, where every other step
-keeps room for a clone of the whole repository: a home that refused a large
-repository's every merge would refuse its pushes too, once its packs reached
-the bound. It cuts its outputs at 1 GiB. **The outputs hold every object of the
+keeps room for a clone of the whole repository: a maintainer that refused a
+large repository's every merge would refuse its pushes too, once its packs
+reached the bound. It cuts its outputs at 1 GiB. **The outputs hold every object of the
 packs merged** — an object a pack outside the merge also holds included —
 because a merge judges no
 reachability: no push decided against the packs it replaces can land a ref
@@ -661,20 +664,20 @@ and a record may name only keys of the last twelve hours. The maintenance slot
 and the memory go back as soon as the build's last git process ends, before
 the uploads.
 
-**The decision.** The home proposes ONE compaction to the repository's
+**The decision.** The maintainer proposes ONE compaction to the repository's
 [committer](#the-committer) through the estate router, as a push is proposed,
 under an id of its own — so the runner-up asked after a committer went silent
 decides the same compaction, never a second. The committer decides it ALONE,
-in one snapshot: every pack it merges still live and not full, or it is
-refused `stale` and the next poll plans again from the rows; and ONE record
-adds the outputs' rows and moves the merged packs' rows into a table of
-retired packs. Two git nodes that both take themselves for the home for a
-moment both build, and the second is refused `stale`; what it stored is named
-by no row, and the object collector deletes it.
+in one snapshot: every pack it merges still live, not full and named by no
+published layer, or it is refused `stale` and the next poll plans again from
+the rows; and ONE record adds the outputs' rows and moves the merged packs'
+rows into a table of retired packs. Two git nodes that both take themselves
+for the maintainer for a moment both build, and the second is refused `stale`;
+what it stored is named by no row, and the object collector deletes it.
 
 ```mermaid
 sequenceDiagram
-    participant H as Home git node
+    participant H as Maintainer
     participant S as Object store
     participant R as Estate router
     participant C as Committer
@@ -691,8 +694,8 @@ sequenceDiagram
     G->>G: next sync: the copy's next directory, of links
 ```
 
-**Every copy follows.** The home links the outputs it built into its copy, so
-it downloads none of them; every other git node downloads them at its next
+**Every copy follows.** The maintainer links the outputs it built into its
+copy, so it downloads none of them; every other git node downloads them at its next
 sync of the repository, and drops the merged packs by moving its copy into a
 next directory of hard links, keeping the commit-graph, since a merge drops no
 commit ([When packs leave a copy](#the-cache-on-a-git-node)). A request
@@ -710,9 +713,9 @@ deletes the object at its next pass ([Deletion and purge](#deletion-and-purge)).
 
 **When it cannot keep up.** A repository at the 2 048 live packs one may hold
 refuses a push carrying objects `compaction_behind` ([Limits](#limits)), and
-its home raises the [`code_compaction_behind`](../reference/alarms.md) alarm
-for every repository it compacts at that bound, from its own poll, for as long
-as one is there — its log says why the merge has not landed:
+its maintainer raises the [`code_compaction_behind`](../reference/alarms.md)
+alarm for every repository it maintains at that bound, from its own poll, for
+as long as one is there — its log says why the merge has not landed:
 `code_cache_compaction_refused` for a build the node's memory cannot hold,
 `code_compaction_refused` for a refusal (`store_full` among them: an object
 store with no room, which holds the repository back until the store has the
@@ -748,10 +751,51 @@ hold took 27 seconds and the 10 000 of a history nothing merged over two
 minutes ([The cache on a git node](#the-cache-on-a-git-node)).
 
 **What it does not do.** It removes no object: what no ref reaches stays in
-the repository's packs for as long as it lives. And every merge drops the
-multi-pack index and its bitmap on every git node holding the repository —
-the commit-graph survives — which the background indexing writes again at its
-own pace, so a clone between the two counts its objects by walking.
+the repository's packs for as long as it lives. And it never touches a
+published chain: a merge takes only the tail's packs, so a copy serving from
+the chain keeps it, and its tip, through the swap. On a copy serving in own
+mode a merge drops the copy's own multi-pack index and its bitmap — the
+commit-graph survives — which the background indexing writes again at its own
+pace, so a clone between the two counts its objects by walking.
+
+### Who maintains a repository
+
+A repository's background work — merging its packs and
+[publishing its layers](#when-a-repository-is-published) — runs on ONE git
+node, its **maintainer**: the first git node of the repository's rendezvous
+order (the order its reads walk, [The home git node](#the-home-git-node))
+whose **advertised background budget** holds the repository's publication — a
+bitmap over its whole history, 900 bytes an object of the repository with
+room beside it for a clone — and its home where no git node's does. Every git
+node advertises its budget on its presence heartbeat, so every node reads the
+placement from memory. On a fleet of alike git nodes every repository's
+maintainer is its home; on a fleet with one large git node, every repository
+only that node can publish is maintained there, and every other git node
+installs what it publishes ([Sizing git
+nodes](../guides/deployment.md#sizing-git-nodes)).
+
+The git nodes weighed are the ones the fleet's presence listing carries, so a
+node is a maintainer only once its peers can see it: a git node that is
+starting maintains nothing until its first heartbeat is listed, about a second
+after it starts, and its loops wait for that rather than run a pass before it;
+a node that is draining has left the listing, and every repository it
+maintained is placed among the rest.
+
+Both of a maintainer's loops ask by the publication's charge, so the two
+writers of a repository's packs run on one node, and that node never merges
+and publishes one repository at once: each would retire packs the other
+planned over, and one would be refused `stale` after a whole build. Nothing
+leases a repository to its maintainer: two nodes whose presence views disagree
+for a moment may both build, and the committer refuses the second `stale`.
+Each pass judges every repository it lists against one reading of the
+listing, so a repository a git node does not maintain costs that node's pass
+the one judgment of who does, never a read of the presence view of its own. A
+node that cannot read who serves git does none of a maintainer's work that
+pass rather than guess (`code_compaction_maintainer_unknown`,
+`code_publication_maintainer_unknown`). **The maintainer holds what it
+maintains**: each merge and publication syncs the repository into its cache,
+so a maintainer's cache budget holds the repositories it maintains, or each of
+its publications begins with a whole download of its repository.
 
 ---
 
@@ -1678,7 +1722,12 @@ tail, from 40 MiB over 5 000 new commits on git 2.56.0. A
 [compaction](#compaction)'s build walks no history, only the packs it merges,
 and is charged by them: 500 bytes an object merged, 240 more an object merged
 for a transfer's room beside them, and six times
-`code.limits.max_blob_bytes` for its delta search. A git node reads its
+`code.limits.max_blob_bytes` for its delta search. A
+[publication](#when-a-repository-is-published)'s steps run one after another,
+and it is charged the largest of theirs: 900 bytes an object of the whole
+repository for its bitmap — whose writer walks every commit however few
+objects the layer adds — 700 an object of the layer for its commit-graph
+layer, and a compaction's for its repack. A git node reads its
 memory — the least of the machine's and any cgroup limit set on its
 container — and keeps 224 MiB of it for every
 git transfer it admits at once and 896 MiB for each core its git runs on, for
@@ -1688,15 +1737,16 @@ its host's every core, so a node of 64 cores and 16 GiB admits 32 transfers
 rather than 256, and runs as the eight-core node its memory makes it. What is
 left is the budget of its background work, and every step of it — the
 bitmap, the index without one (a cold cache's included), the commit-graph, the
-tip, a connectivity check, a compaction's build — is held to the budget
+tip, a connectivity check, a compaction's build, a publication's — is held to the budget
 together with everything in flight, each charged its own figure an object of
 what it walks and room beside it for one clone of the whole repository — but
-the build, whose room is a transfer of the packs it merges: any other step
-refused costs speed, while a build refused leaves the repository's packs to
-gather until its pushes are refused, so a room that grew with the repository
-would refuse every merge, and in time every push, of any repository whose
-clone the node's budget cannot hold beside the build — on either node worked
-through below, repositories under the 20 GiB one may hold. A
+a compaction's build, whose room is a transfer of the packs it merges: any
+other step refused costs speed, a publication's repack among them, while a
+build refused leaves the repository's packs to gather until its pushes are
+refused, so a room that grew with the repository would refuse every merge, and
+in time every push, of any repository whose clone the node's budget cannot
+hold beside the build — on either node worked through below, repositories
+under the 20 GiB one may hold. A
 step whose charge alone is past the budget never runs on the node, and the
 repository is served without it: a bitmap refused leaves the repository
 indexed without one — its pushes keep joining an index, so lookups stay fast,
@@ -2041,7 +2091,11 @@ own mode ([Published layers](#published-layers)) —
 as `code_layer_refused` ([When a layer is missing](#when-a-layer-is-missing)),
 and `failed` climbing an object store failing the installer — beside
 `crewlet.code.cache.layer.install`, how long each layer took to fetch, check
-and place — and `crewlet.code.cache.memo.lookups` by `outcome` beside
+and place — `crewlet.code.publish.refusals` by `reason` on a maintainer —
+`memory` at all a repository no git node holds the publication of, which
+`code_maintenance_refused` raises and `code_cache_maintenance_refused` (step
+`publish`) names, any other reason logged as `code_publication_refused` — and
+`crewlet.code.cache.memo.lookups` by `outcome` beside
 `crewlet.code.cache.memo.bytes`: misses climbing while the memo sits at its
 sixteenth of the budget is a memo too small for the pages seats ask for again,
 and `corrupt` at all a disk damaging what the cache holds
@@ -2053,8 +2107,10 @@ A repository's multi-pack index, its bitmap and its commit-graph are the
 dearest files a git node derives — writing the bitmap walks the whole history
 and holds about 1 000 bytes of memory an object of it ([Memory](#the-cache-on-a-git-node))
 — and every git node that serves the repository wants them. So they can be
-written **once**, by one git node, the repository's **maintainer**, and
-installed by every other. The maintainer writes git's own incremental
+written **once**, by one git node, the repository's
+[maintainer](#who-maintains-a-repository), and installed by every other
+([ADR-0061](https://github.com/crewlet/crewlet/blob/main/adr/0061-a-derived-object-is-published-kept-and-never-audited.md)).
+The maintainer writes git's own incremental
 multi-pack-index **layer** over the packs the layers below it do not cover,
 with that layer's bitmap and a commit-graph layer over the same packs; stores
 the three files in the object store, in parts of at most 1 GiB; and names the
@@ -2065,13 +2121,10 @@ Every git node installs the chain the rows name. Each layer is fetched, held
 to its row and placed byte for byte as the maintainer's git wrote it, which
 any node holding the layer's packs byte for byte can read — every copy does.
 The two chain files that list the layers are the node's own, written from the
-rows' order, since a layer's files never name the layer beneath them.
-
-Nothing in this build publishes a layer yet: a publication is a compaction
-carrying one, and no [compaction](#compaction) carries one yet ([what it does
-not do yet](#what-it-does-not-do-yet)). So every copy serves from the index
-and graph its own node writes, and the rest of this section is how a git node
-installs whatever chain the rows name.
+rows' order, since a layer's files never name the layer beneath them. Who
+publishes and when is [When a repository is
+published](#when-a-repository-is-published); this section is how every git
+node installs what the rows name.
 
 **Chain mode or own mode, never both.** A copy holding an installed chain
 serves in **chain mode**: each layer's `.midx` and `.bitmap` in
@@ -2215,6 +2268,67 @@ which holds every file of the chain to its checksum. A rebuild links into its
 new copy every layer whose files pass and whose packs it linked, and fetches
 the rest.
 
+### When a repository is published
+
+A repository's [maintainer](#who-maintains-a-repository) publishes in a loop
+of its own beside its merges, so a publication of a large repository — minutes
+of its build — never holds back a merge that keeps a busy repository under the
+pack bound. Once a minute it lists the repositories holding a pack no layer
+covers, least recently published first, and publishes each it maintains whose
+tail is due:
+
+- **Worth a layer**: the repository was never published, or its tail holds 64
+  packs, or a sixteenth of its objects, or 90 909 objects — a second of walk
+  for every clone at the slowest a walk is held to — whichever comes first.
+  The bound in objects keeps the largest repository's tail small: a sixteenth
+  of it would be millions of objects every clone walks.
+- **Settled**: the tail has stood still 10 seconds, so a burst of pushes is
+  published once; or it has waited 10 minutes since the maintainer first
+  listed it, or since its last publication where that is later, so a
+  repository pushed to without a pause is published as often as one that
+  pauses.
+- **Paced**: 10 minutes since the last publication, or ten times that
+  publication's build where that is longer, so a repository's publications
+  take at most a tenth of the time of the node that runs them.
+
+**The plan is git's own.** A new layer covers every live pack the layers
+beneath it do not: git writes a bitmap only over packs closed over what their
+commits reach, and every pack live at one position is. It replaces the chain's
+top layers geometrically — the next layer down is absorbed while the layers
+above it hold at least half its objects, and regardless while the chain would
+pass 32 layers — so the chain stays logarithmic in the history and each object
+is written into a new layer a logarithmic number of times over its life. Where
+more than 8 of the new layer's packs are not full, they are repacked first, as
+a merge is, under its caps. A layer whose files would pass 16 parts of 1 GiB
+is refused before it is built (`layer_too_large`), and a plan that meets a
+layer the maintainer's own installer has not placed yet waits for it.
+
+**The build** runs in a scratch of hard links of the maintainer's copy whose
+chain files name exactly the layers the new one is written over — on git
+2.56.0 the same write with layers above its base still named took 196–200
+seconds, against 1.03 with its base alone — never in the copy, and never over
+a base the object store no longer holds: the maintainer asks the store for
+every part of the base first, and replaces a base the store lost, with every
+layer above it. It writes the multi-pack-index layer with its bitmap, then the
+commit-graph layer with every changed-path filter, in one slot of the node's
+maintenance lane and against its background budget at the largest of its
+steps' charges ([Memory](#the-cache-on-a-git-node)), and gives both back once
+its last git process has ended, before the uploads. A tail holding no commit
+gives git nothing to bitmap, and a layer without a bitmap would switch off
+every bitmap beneath it, so such a layer is planned once more over one more
+layer. The three files are cut into parts of at most 1 GiB and uploaded at
+once with any repack's outputs — at most 32 uploads, 256 MiB of an `s3`
+store's buffers — and proposed to the repository's committer as ONE compaction
+carrying the layer, which it decides alone, holding it to the chain it was
+built over and to every pack live at its plan that its base does not cover. A
+store with no room refuses the publication `store_full` and holds the
+repository back until it has the room, as it holds a merge back, never retried
+as a blip. The maintainer then links what it built into its own copy, so it
+downloads none of it, and every other git node's installer fetches the layer.
+`code_publication_applied` logs each one, and `crewlet.code.publish.runs`,
+`.duration`, `.refusals` and `.bytes` count them
+([metrics reference](../reference/metrics.md)).
+
 ### When a layer is missing
 
 A layer is never needed for a right answer: without the chain, git reads each
@@ -2248,6 +2362,14 @@ node each half hour once it keeps failing — while the copy serves as it is.
 Each is logged as `code_layer_install_failed`, or as `code_cache_swap_failed`
 where it was the placement's swap that failed.
 
+**The maintainer repairs.** A part the store lost or damaged is refused on
+every git node, the maintainer's own among them, so the maintainer's next
+publication pass finds the refusal in its own copy whether or not anything was
+pushed since, and publishes again over the layers it holds sound: the refused
+layer and every one above it are replaced, at most once every 10 minutes. An
+idle repository whose layer the store lost is repaired by the first git node
+to be its maintainer, or at its next push.
+
 **After a restore.** A backup carries no layer: a layer is derived, and the
 backup neither copies nor asks after it ([Live, retired and derived
 references](object-store.md#live-retired-and-derived-references)). So a
@@ -2255,9 +2377,11 @@ restore brings back rows naming layers whose parts the restored object store
 may not hold. On `s3` it holds none; on the broker's bucket it holds what the
 bucket's snapshot did. A part the store holds is held to its row and placed
 like any other. A layer with a part it lacks is refused `missing` on every git
-node, and each copy serves from the layers below it, or in own mode, until the
-rows name another chain. Nothing alarms: a layer is not data, and the
-collector's audit never asks after one.
+node, and each copy serves from the layers below it, or in own mode, until
+the repository's maintainer publishes again — over every live pack, once, for
+a chain the store lost whole: one walk of the repository's history
+([Restoring](../guides/backup.md#restoring)). Nothing
+alarms: a layer is not data, and the collector's audit never asks after one.
 
 ---
 
@@ -3803,17 +3927,27 @@ reference](../reference/metrics.md)).
 | `code_pack_missing` | `WARN` | A git request failed because a pack the rows name is gone from the object store or damaged there (`damaged`), answered 503 naming the pack. The [cache](#the-cache-on-a-git-node) logs the same line once for the sync that found it (below); the alarm is [`objects_missing`](object-store.md#alarms). |
 | `code_pack_checksum_mismatch`, `code_bad_snapshot` | `ERROR` | A git request failed because a downloaded bundle is not the one its row describes — the cache logs that line too, once for the sync (below) — or the rows cannot be read into a cache: an operator's problem, answered 500 with no `Retry-After`, since no retry ends it. |
 | `code_pack_rejected`, `code_push_invalid` | `ERROR` | The receiving git wrote a pack the engine's own checks refuse, or the engine built a proposal its own check or its committer refused: a bug, and the push fails. A proposal is checked as soon as the commits it introduces are listed, and its bundle's upload is ended there; a bundle already stored is named by no row, and the object collector removes it after its grace. A push past what one push may carry is never this: it is refused before its work, in git's words. |
-| `code_compaction_pass` | `INFO` | A git node's minute's poll of the repositories a compaction may be due in that compacted, refused or failed something: how many it `listed`, how many it is `home` for, how many were `due`, `compacted`, `refused` and `failed`, and how many are `behind` — at the most live packs a repository may hold; `DEBUG` when it did none of those. |
+| `code_compaction_pass` | `INFO` | A git node's minute's poll of the repositories a compaction may be due in that compacted, refused or failed something: how many it `listed`, how many of them it `maintained`, how many were `due`, `compacted`, `refused` and `failed`, and how many are `behind` — at the most live packs a repository may hold; `DEBUG` when it did none of those. |
 | `code_compaction_pass_failed` | `WARN` | A poll's listing of the repositories a compaction may be due in failed: nothing was compacted, and the alarm reading stays as the last pass left it until the next poll, a minute on. |
-| `code_compaction_home_unknown` | `WARN` | Who serves git could not be read, so the poll compacted nothing rather than guess which repositories this node is home for; `listed` is how many repositories its listing named. |
+| `code_compaction_maintainer_unknown` | `WARN` | Who serves git, and what each git node advertises, could not be read — or the listing carries no git node at all, this one included, its own presence lapsed — so the poll compacted nothing rather than guess which repositories this node maintains ([Who maintains a repository](#who-maintains-a-repository)); `listed` is how many repositories its listing named. |
 | `code_compaction_applied` | `INFO` | This node's compaction of a `repo` landed: its `compaction` id, how many `inputs` it merged into how many `outputs`, the `objects`, `bytes_in` and `bytes_out`, the record's `position` and how long it `took`, from its plan to its answer. |
 | `code_compaction_refused` | `WARN` | A compaction this node built was refused — by the repository's committer (`refusal`: `repo_deleted`, `upload_expired`, `pack_too_large`, `not_applied`) or by an object store with no room for its outputs (`store_full`: the repository is held back until the store has the room, and the line names the room to make). `pack_too_large` and `upload_expired` are a build past its own bounds or longer than twelve hours, and say so in `detail`. |
 | `code_compaction_failed` | `WARN` | A compaction this node began did not land: the `step` that failed — `sync`, `admit`, `build`, `upload`, `propose`, `adopt` — and why. `reason` `outputs`: the build wrote more packs than one compaction records; `bundle_too_large`: an output stayed past the bundle rule at a smaller cut too. Either uploaded nothing and halves what the repository's next plan merges. Tried again at the next poll. |
 | `code_compaction_rejected` | `ERROR` | An output of a compaction failed its own seal on its way to the object store — the bytes the store took are not the bundle the build laid out: a bug, or a disk returning other bytes than were written. Nothing is proposed, and the object, named by no row, is the collector's. |
 | `code_compaction_adopt_failed` | `WARN` | A compaction this node built landed and the node could not link its outputs into its own copy: its next sync downloads them instead. |
 | `code_compaction_store_unread` | `WARN` | The object store's room could not be read, so every repository held back for a full store waits for the next poll. |
-| `code_compaction_stop_unfinished` | `WARN` | The node stopped while a compaction was still running past the stop's wait: its build was killed and its uploads abandoned, and what it stored, named by no row, is the collector's. |
-| `code_compaction_invalid`, `code_publication_invalid`, `code_compaction_unanswerable` | `ERROR` | A repository's committer refused a compaction before its record because its outputs hold more objects than the packs it replaces — or a publication, a compaction carrying a published multi-pack-index layer, because the chain it leaves would hold more than 32 layers or its layer names a pack or the id of a layer below it — a bug in the build of the git node that made it (`node`), never the repository's: nothing was recorded, and what it stored, named by no row, is removed by the object collector after its grace; or a compaction's record applied and this node's rows do not hold the outputs or the layer it added (`missing`) — a bug in the build that wrote the record, answered `unknown`, so the node that built it adopts nothing. Each with the `repo` and the `compaction_id`. Report any of these lines. |
+| `code_compaction_stop_unfinished` | `WARN` | The node stopped while a compaction or a publication was still running past the stop's wait: its build was killed and its uploads abandoned, and what it stored, named by no row, is the collector's. |
+| `code_publication_pass` | `INFO` | A git node's minute's pass of the repositories a publication may be due in that published, refused or failed something ([When a repository is published](#when-a-repository-is-published)): how many it `listed`, how many hold a layer this node refused (`damaged`, each a repair), how many of them it `maintained`, how many were `due`, `published`, `refused` and `failed`; `DEBUG` when it did none of those. |
+| `code_publication_pass_failed` | `WARN` | A pass's listing of the repositories a publication may be due in failed: nothing was published, until the next pass a minute on. |
+| `code_publication_maintainer_unknown` | `WARN` | Who serves git, and what each git node advertises, could not be read — or the listing carries no git node at all, this one included — so the pass published nothing rather than guess which repositories this node maintains; `listed` is how many repositories it named. |
+| `code_publication_applied` | `INFO` | This node's publication of a `repo` landed: its `publication` id, the `layer` it put on top of the chain over its `base`, how many layers it `replaces`, how many packs it `repacked` into how many `outputs`, the layer's `objects` and `bytes`, the record's `position` and how long it `took`, from its plan to its answer. |
+| `code_publication_refused` | `WARN` | A publication this node planned or built was refused: by the repository's committer (`refusal`: `repo_deleted`, `upload_expired`, `pack_too_large`, `not_applied`, with its `detail`); by an object store with no room for its parts or outputs (`store_full`: the repository is held back until the store has the room, and the line names the room to make); or before its build, a layer whose files would pass 16 parts of 1 GiB (`layer_too_large`, with its `objects`, its `estimate` and the `most` its parts hold), not planned again until the repository moves. |
+| `code_publication_failed` | `WARN` | A publication this node began did not land: the `step` that failed — `sync`, `store`, `admit`, `build`, `upload`, `propose`, `adopt` — and why. `reason` `no_bitmap`: git wrote the layer without a bitmap even over one more layer, since no pack it covers holds a commit; `outputs` and `bundle_too_large`: its repack wrote more packs than one record names, or an output past the bundle rule, as a compaction's would. Tried again at the next pass. |
+| `code_publication_base_lost` | `WARN` | The object store no longer holds every part of a `layer` this node holds installed — a restore, which carries no layer, or a bucket's own deletion — so the publication replaces it, and every layer above it, rather than build over a base no other git node can install. |
+| `code_publication_rejected` | `ERROR` | A part of a publication's layer or one of its repack's outputs failed its own seal on its way to the object store: a bug, or a disk returning other bytes than were written. Nothing is proposed, and what was stored, named by no row, is the collector's. |
+| `code_publication_adopt_failed` | `WARN` | A publication this node built landed and the node could not link its outputs or its `layer` into its own copy: its next sync downloads the outputs, and its installer the layer. |
+| `code_publication_store_unread` | `WARN` | The object store's room could not be read, so every repository the publication loop holds back for a full store waits for the next pass. |
+| `code_compaction_invalid`, `code_publication_invalid`, `code_compaction_unanswerable` | `ERROR` | Under the component `code.compact`: the node that built a compaction or a publication found it breaking a rule its committer holds it to before storing any of it — a bug in that node's build, so nothing was stored or proposed. Otherwise a repository's committer refused a compaction before its record because its outputs hold more objects than the packs it replaces — or a publication, a compaction carrying a published multi-pack-index layer, because the chain it leaves would hold more than 32 layers or its layer names a pack or the id of a layer below it — a bug in the build of the git node that made it (`node`), never the repository's: nothing was recorded, and what it stored, named by no row, is removed by the object collector after its grace; or a compaction's record applied and this node's rows do not hold the outputs or the layer it added (`missing`) — a bug in the build that wrote the record, answered `unknown`, so the node that built it adopts nothing. Each with the `repo` and the `compaction_id`. Report any of these lines. |
 | `code_layer_not_applied` | `WARN` | Under the component `code.apply`: a publication's record applied as nothing on this node, because the layers it replaces are not the top of the repository's published chain or its base is not the layer below them (`chain`, `base`, `replaces`) — a record no correct committer forms, which every node applies alike, so the chain stays as it was. With the `repo`, the `layer` and the record's `position`. Report it. |
 | `code_pack_adopt_failed` | `WARN` | The receiving node could not link a push's pack into its cache once its row applied; its next sync downloads it instead. |
 | `code_push_blob_path` | `WARN` | The path of a blob over the limit could not be found; the refusal names the blob without it. |

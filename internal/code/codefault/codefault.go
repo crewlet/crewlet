@@ -1,17 +1,18 @@
-// Package codefault is THE NAMED FAULT POINTS of the code host's push, sync
-// and compaction paths, and the one seam that reaches them. Production passes
-// a nil [Injector] and every call site is a nil check; the suites pass a
-// [*Script].
+// Package codefault is THE NAMED FAULT POINTS of the code host's push, sync,
+// compaction, publication and engine write paths, and the one seam that
+// reaches them. Production passes a nil [Injector] and every call site is a
+// nil check; the suites pass a [*Script].
 //
 // NAMED rather than ad hoc hooks, because the code host's crash matrices walk
 // EVERY point of a path in pipeline order and kill the node there — the push
 // path's ([PushPath]) the receiving node, the compaction's ([CompactPath])
-// the repository's home git node building one, and an engine write's
-// ([WritePath]) the git node building it: a step with no point is a step
-// nobody ever crashed at. So a new step of the receive pipeline, of a
-// compaction or of an engine write, that can leave state behind gets a point
-// here, in order, or the matrix does not cover it. The order is written ONCE,
-// in this package, and a call site adds a hit and never edits the list.
+// and the publication's ([PublishPath]) the repository's maintainer building
+// one, and an engine write's ([WritePath]) the git node building it: a step
+// with no point is a step nobody ever crashed at. So a new step of the
+// receive pipeline, of a compaction, of a publication or of an engine write,
+// that can leave state behind gets a point here, in order, or the matrix does
+// not cover it. The order is written ONCE, in this package, and a call site
+// adds a hit and never edits the list.
 //
 // A crash is a hit HELD PAST THE NODE'S DEATH ([Action.Crash]). The case
 // kills the node while the hit is held, restarts it over the same files and
@@ -89,8 +90,8 @@ const (
 	HostHookAdmitted Point = "host.hook_admitted"
 	// HostUpload: inside the bundle's upload, before each read the object
 	// store makes of the bundle, at the offset of the bundle bytes handed to
-	// the store so far — one of the two points that read an offset
-	// ([Action.At]), with [CompactUpload].
+	// the store so far — one of the three points that read an offset
+	// ([Action.At]), with [CompactUpload] and [PublishUpload].
 	// It is NOT a count of bytes stored: s3obj fills a whole part
 	// (PartBytes, 8 MiB — all of a smaller bundle) before it sends any and
 	// reads the next part while up to four are in flight unanswered, and
@@ -160,6 +161,27 @@ const (
 	// building node's cache.
 	CompactAfterPropose Point = "compact.after_propose"
 
+	// PublishAfterBuild: a publication's layer — its multi-pack-index layer,
+	// its bitmap and its commit-graph layer — and its repack's outputs, if it
+	// repacks, are written in the publication's scratch, and nothing of them
+	// is laid out or stored (internal/code/compact).
+	PublishAfterBuild Point = "publish.after_build"
+	// PublishUpload: inside the upload of one of the layer's parts or one of
+	// the repack's outputs, before each read the object store makes of it, at
+	// the offset of the bytes handed to the store so far — the layer's offset
+	// for a part, the bundle's for an output: the publication's
+	// [CompactUpload], an offset rather than a count of bytes stored, for
+	// [HostUpload]'s reasons. Every part and output is uploaded at once, so
+	// each hit is one upload's, at its own offset.
+	PublishUpload Point = "publish.upload"
+	// PublishAfterUpload: every part and every output is stored, and no row
+	// names any of them: no proposal has been made.
+	PublishAfterUpload Point = "publish.after_upload"
+	// PublishAfterPropose: the repository's committer has answered the
+	// publication's proposal, and neither its outputs nor its layer is
+	// adopted into the publishing node's cache.
+	PublishAfterPropose Point = "publish.after_propose"
+
 	// WriteAfterBuild: an engine write's build has made its commit and its one
 	// pack, indexed in the write's scratch, and nothing of it is stored or
 	// proposed (internal/code/host's Server.Write): the landing every push
@@ -181,9 +203,15 @@ var pushPath = []Point{
 // round, so no order of the round's own puts it elsewhere.
 var syncPath = []Point{SyncDownload, SyncRefs, SyncState, SyncSwapBeforeRename, InstallAfterFetch}
 
-// compactPath is a compaction's points in the order its home reaches them:
-// its build, each output's upload, the uploads ended, the committer's answer.
+// compactPath is a compaction's points in the order its maintainer reaches
+// them: its build, each output's upload, the uploads ended, the committer's
+// answer.
 var compactPath = []Point{CompactAfterBuild, CompactUpload, CompactAfterUpload, CompactAfterPropose}
+
+// publishPath is a publication's points in the order its maintainer reaches
+// them: its build, each part's and each output's upload, the uploads ended,
+// the committer's answer.
+var publishPath = []Point{PublishAfterBuild, PublishUpload, PublishAfterUpload, PublishAfterPropose}
 
 // writePath is an engine write's OWN points: its build ended, before the
 // landing. What it meets after them is the landing's ([WritePath]).
@@ -202,10 +230,15 @@ var landingPath = []Point{HostUpload, HostAfterUpload, HostAfterPropose, HostBef
 // reorder the next walk.
 func PushPath() []Point { return slices.Clone(pushPath) }
 
-// CompactPath is a compaction's points in the order its home reaches them,
-// every one hit by internal/code/compact. A fresh copy at every call, for
-// [PushPath]'s reason: the compaction's crash matrix walks it.
+// CompactPath is a compaction's points in the order its maintainer reaches
+// them, every one hit by internal/code/compact. A fresh copy at every call,
+// for [PushPath]'s reason: the compaction's crash matrix walks it.
 func CompactPath() []Point { return slices.Clone(compactPath) }
+
+// PublishPath is a publication's points in the order its maintainer reaches
+// them, every one hit by internal/code/compact. A fresh copy at every call,
+// for [PushPath]'s reason: the publication's crash matrix walks it.
+func PublishPath() []Point { return slices.Clone(publishPath) }
 
 // WritePath is an engine write's points in the order it reaches them: its own
 // ([WriteAfterBuild]), then the landing's of the push path, in their order —
@@ -216,40 +249,41 @@ func CompactPath() []Point { return slices.Clone(compactPath) }
 func WritePath() []Point { return slices.Concat(writePath, landingPath) }
 
 // Points is the closed set: every point, the push path first in pipeline
-// order, then the sync's, then the compaction's, then the engine write's own.
-// A fresh copy at every call, so no importer can rewrite what [Point.Valid]
-// accepts.
-func Points() []Point { return slices.Concat(pushPath, syncPath, compactPath, writePath) }
+// order, then the sync's, the compaction's and the publication's, then the
+// engine write's own. A fresh copy at every call, so no importer can rewrite
+// what [Point.Valid] accepts.
+func Points() []Point { return slices.Concat(pushPath, syncPath, compactPath, publishPath, writePath) }
 
 // Valid reports whether p is one of [Points].
 func (p Point) Valid() bool {
 	return slices.Contains(pushPath, p) || slices.Contains(syncPath, p) || slices.Contains(compactPath, p) ||
-		slices.Contains(writePath, p)
+		slices.Contains(publishPath, p) || slices.Contains(writePath, p)
 }
 
 // readsOffset reports whether p is hit at an offset ([Action.At]): an upload's
-// point, [HostUpload] or [CompactUpload], hit before each read the object
-// store makes of the bytes it uploads. Every other point is hit at zero.
+// point, [HostUpload], [CompactUpload] or [PublishUpload], hit before each
+// read the object store makes of the bytes it uploads. Every other point is
+// hit at zero.
 //
 // ONE PREDICATE, read at all three places the rule is applied — an arming's
 // refusal (Arm), a firing's offset gate (fire) and a call site's refusal
 // (checkHit): spelled once a place, a point added at one and not another
 // either armed an offset no hit could reach or fired at its first hit, offset
 // 0, whatever its arming said.
-func readsOffset(p Point) bool { return p == HostUpload || p == CompactUpload }
+func readsOffset(p Point) bool { return p == HostUpload || p == CompactUpload || p == PublishUpload }
 
 // offsetPoints names the points that read an offset, for a refusal's
 // sentence.
-const offsetPoints = "host.upload and compact.upload"
+const offsetPoints = "host.upload, compact.upload and publish.upload"
 
 // ErrNotAPoint is a hit, an arming or a count naming a point that is not one
 // of [Points].
 var ErrNotAPoint = errors.New("codefault: not a fault point")
 
 // ErrOffset is a hit handing an offset to a point that reads none — every
-// point but the uploads', [HostUpload] and [CompactUpload], is hit at zero —
-// or a negative offset to an upload's, which counts bytes from zero. Each
-// wrap says which of the two it was.
+// point but the uploads', [HostUpload], [CompactUpload] and [PublishUpload],
+// is hit at zero — or a negative offset to an upload's, which counts bytes
+// from zero. Each wrap says which of the two it was.
 var ErrOffset = errors.New("codefault: an offset the point does not read")
 
 // ErrCrashed is what a hit held at a crash ([Action.Crash]) answers once
@@ -286,10 +320,10 @@ type Action struct {
 	// closed at most once, however many hits fire, and must be open when
 	// armed.
 	Reached chan struct{}
-	// At is the uploads' alone, [HostUpload]'s and [CompactUpload]'s: the
-	// action fires on hits whose offset — bundle bytes the object store has
-	// read, never bytes it has stored — is at or past it (with Once, the
-	// first such hit). Zero is the first byte.
+	// At is the uploads' alone, [HostUpload]'s, [CompactUpload]'s and
+	// [PublishUpload]'s: the action fires on hits whose offset — bundle bytes
+	// the object store has read, never bytes it has stored — is at or past it
+	// (with Once, the first such hit). Zero is the first byte.
 	At int64
 }
 
@@ -297,8 +331,8 @@ type Action struct {
 // call site's nil check is the whole cost of this package.
 type Injector interface {
 	// Hit reports that the step p was reached, at the offset at (zero for
-	// every point but the uploads', [HostUpload] and [CompactUpload]); a
-	// non-nil error fails the step.
+	// every point but the uploads', [HostUpload], [CompactUpload] and
+	// [PublishUpload]); a non-nil error fails the step.
 	Hit(ctx context.Context, p Point, at int64) error
 }
 

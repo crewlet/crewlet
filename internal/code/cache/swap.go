@@ -1457,6 +1457,9 @@ var swapFields = []swapField{
 	{name: "memoryRefused", class: carried, why: "the steps the node's memory refuses the repository, which " +
 		"its objects decide — beside any the round's index the swap wrote was refused",
 		carry: func(s *swapping) { s.next.memoryRefused |= s.inc.memoryRefused }},
+	{name: "publishRefused", class: carried, why: "the publication of the repository the node's memory " +
+		"refused, which its objects decide whichever directory serves them",
+		carry: func(s *swapping) { s.next.publishRefused = s.inc.publishRefused }},
 	{name: "inherited", class: carried, why: "whether a previous process left the bytes next holds",
 		carry: func(s *swapping) { s.next.inherited = s.inc.inherited }},
 	{name: "scrubbing", class: notCarried, why: "a scrub running reads inc's files; its verdict lands on the " +

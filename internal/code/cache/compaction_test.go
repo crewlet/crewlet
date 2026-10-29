@@ -191,9 +191,9 @@ func TestACompactionPastTheBudgetIsRefusedOnce(t *testing.T) {
 // them for a transfer of as many — gitproc.TransferBytesPerObject an object
 // MERGED, never an object of the repository — and its delta window, so a merge
 // of a large repository's few small packs is admitted on a budget that holds no
-// clone of the repository. The home alone merges a repository's packs, and a
-// charge that grew with the repository would refuse its every merge for as
-// long as the node's memory stays as it is, and once its live packs reached
+// clone of the repository. The maintainer alone merges a repository's packs,
+// and a charge that grew with the repository would refuse its every merge for
+// as long as the node's memory stays as it is, and once its live packs reached
 // code.MaxPacksPerRepo its every push carrying one. A budget a byte short of
 // the merge's own charge refuses it ErrNoMemory, naming that charge, and that
 // budget admits it.
