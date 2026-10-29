@@ -527,6 +527,114 @@ func TestTheCodeBlockRefusesByField(t *testing.T) {
 			path: "code.repos[0].path_owners[1]", kind: "conflict",
 			says: []string{"unit engineering", "path_owners[0]"},
 		},
+		// THE MERGE GATE, each field at itself.
+		"a merge authority nobody knows": {
+			doc:  codeRepos(rule("{branch: main, merge_by: admins}")),
+			path: "code.repos[0].protect[0].merge_by", kind: "unknown_value",
+			says: []string{"admins", "writers, maintainers, persons"},
+		},
+		"two approvals": {
+			doc:  codeRepos(rule("{branch: main, approvals: two}")),
+			path: "code.repos[0].protect[0].approvals", kind: "unknown_value", says: []string{"none, one"},
+		},
+		"no_code_change exempting approvals": {
+			doc:  codeRepos(rule("{branch: main, approvals: one, approvals_unless: [no_code_change]}")),
+			path: "code.repos[0].protect[0].approvals_unless[0]", kind: "conflict",
+			says: []string{"already carries", "whitespace_only, comment_only"},
+		},
+		"an exempting class nobody knows": {
+			doc:  codeRepos(rule("{branch: main, approvals: one, approvals_unless: [docs_only]}")),
+			path: "code.repos[0].protect[0].approvals_unless[0]", kind: "unknown_value", says: []string{"docs_only"},
+		},
+		"an exempting class twice": {
+			doc: codeRepos(rule("{branch: main, approvals: one, " +
+				"approvals_unless: [comment_only, comment_only]}")),
+			path: "code.repos[0].protect[0].approvals_unless[1]", kind: "conflict",
+			says: []string{"comment_only", "approvals_unless[0]"},
+		},
+		"a human path with no glob": {
+			doc:  codeRepos(rule("{branch: main, human_paths: [{unless: [comment_only]}]}")),
+			path: "code.repos[0].protect[0].human_paths[0].glob", kind: "missing", says: []string{"deploy/**"},
+		},
+		"a human path that is no glob": {
+			doc:  codeRepos(rule("{branch: main, human_paths: [{glob: '/deploy/**'}]}")),
+			path: "code.repos[0].protect[0].human_paths[0].glob", kind: "shape",
+			says: []string{`"/deploy/**"`, "relative to the repository's root"},
+		},
+		"a human path twice": {
+			doc:  codeRepos(rule("{branch: main, human_paths: [{glob: 'deploy/**'}, {glob: 'deploy/**'}]}")),
+			path: "code.repos[0].protect[0].human_paths[1].glob", kind: "conflict",
+			says: []string{`"deploy/**"`, "human_paths[0]"},
+		},
+		"no_code_change sparing a human path": {
+			doc:  codeRepos(rule("{branch: main, human_paths: [{glob: 'deploy/**', unless: [no_code_change]}]}")),
+			path: "code.repos[0].protect[0].human_paths[0].unless[0]", kind: "conflict",
+			says: []string{"already carries"},
+		},
+		"too many human paths": {
+			doc: func() string {
+				var globs []string
+				for i := range config.CodeMaxHumanPaths + 1 {
+					globs = append(globs, fmt.Sprintf("{glob: 'd%d/**'}", i))
+				}
+				return codeRepos(rule("{branch: main, human_paths: [" + strings.Join(globs, ", ") + "]}"))
+			}(),
+			path: "code.repos[0].protect[0].human_paths", kind: "out_of_range", says: []string{"33", "32"},
+		},
+		"a check that is no name": {
+			doc:  codeRepos(rule("{branch: main, checks: ['Unit Tests']}")),
+			path: "code.repos[0].protect[0].checks[0]", kind: "shape", says: []string{`"Unit Tests"`},
+		},
+		"a check twice": {
+			doc:  codeRepos(rule("{branch: main, checks: [unit, lint, unit]}")),
+			path: "code.repos[0].protect[0].checks[2]", kind: "conflict", says: []string{`"unit"`, "checks[0]"},
+		},
+		"too many checks": {
+			doc: func() string {
+				var checks []string
+				for i := range config.CodeMaxRequiredChecks + 1 {
+					checks = append(checks, fmt.Sprintf("c%d", i))
+				}
+				return codeRepos(rule("{branch: main, checks: [" + strings.Join(checks, ", ") + "]}"))
+			}(),
+			path: "code.repos[0].protect[0].checks", kind: "out_of_range", says: []string{"33", "32"},
+		},
+		"a landing policy nobody knows": {
+			doc:  codeRepos(rule("{branch: main, checks: [unit], landing: {policy: on_green}}")),
+			path: "code.repos[0].protect[0].landing.policy", kind: "unknown_value",
+			says: []string{"on_green", "pre_land, post_land"},
+		},
+		"a queue past its depth": {
+			doc:  codeRepos(rule("{branch: main, checks: [unit], landing: {depth: 9}}")),
+			path: "code.repos[0].protect[0].landing.depth", kind: "out_of_range", says: []string{"1..8", "4"},
+		},
+		"a negative depth": {
+			doc:  codeRepos(rule("{branch: main, checks: [unit], landing: {depth: -1}}")),
+			path: "code.repos[0].protect[0].landing.depth", kind: "out_of_range", says: []string{"1..8"},
+		},
+		"a batch past its bound": {
+			doc:  codeRepos(rule("{branch: main, checks: [unit], landing: {batch: 9}}")),
+			path: "code.repos[0].protect[0].landing.batch", kind: "out_of_range", says: []string{"1..8", "4"},
+		},
+		"a source branch's fate nobody knows": {
+			doc:  codeRepos(rule("{branch: main, delete_source: always}")),
+			path: "code.repos[0].protect[0].delete_source", kind: "unknown_value", says: []string{"seats, none"},
+		},
+		// A TAG RULE'S GATE IS ONE MISTAKE, refused at the first field it sets
+		// and naming every one.
+		"a merge gate on a tag rule": {
+			doc:  codeRepos(rule("{tag: 'v*', merge_by: persons, checks: [unit]}")),
+			path: "code.repos[0].protect[0].merge_by", kind: "conflict",
+			says: []string{"tag never moves", "merge_by, checks"},
+		},
+		"a merge floor nobody knows": {
+			doc:  codeChart + "code:\n  native: true\n  merge_by_floor: admins\n",
+			path: "code.merge_by_floor", kind: "unknown_value", says: []string{"admins", "writers"},
+		},
+		"a merge floor with nothing hosting code": {
+			doc:  codeChart + "code:\n  merge_by_floor: persons\n",
+			path: "code.merge_by_floor", kind: "conflict", says: []string{"code.native"},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -576,21 +684,220 @@ func TestPathOwnersAreBounded(t *testing.T) {
 	}
 }
 
+// A GATE ON A TAG RULE IS REFUSED, whichever of its fields the rule sets: a tag
+// never moves, so no merge reaches one and the gate has nothing to hold — one
+// problem, at the field, as `allow_force` on a tag is.
+func TestAGateOnATagRuleIsRefused(t *testing.T) {
+	t.Parallel()
+	for field, value := range map[string]string{
+		"merge_by": "persons", "approvals": "one", "approvals_unless": "[comment_only]",
+		"human_paths": "[{glob: 'deploy/**'}]", "checks": "[unit]", "landing": "{depth: 2}",
+		"owners_approve": "true", "delete_source": "none", "auto_revert": "true", "agents_edit_checks": "true",
+	} {
+		_, err := config.ParseCompany([]byte(codeRepos("    - name: web\n      owner: {seat: swe}\n" +
+			"      protect:\n        - {branch: main}\n        - {tag: 'v*', " + field + ": " + value + "}\n")))
+		problems := config.Problems(err)
+		if len(problems) != 1 || problems[0].Path != "code.repos[0].protect[1]."+field ||
+			problems[0].Kind != "conflict" || !strings.Contains(problems[0].Message, "tag never moves") {
+			t.Errorf("%s on a tag rule: problems = %+v, want one conflict at code.repos[0].protect[1].%s",
+				field, problems, field)
+		}
+	}
+}
+
+// A GATE IS FORMED BY ANY OF ITS FIELDS, THE REST RESOLVED — writers, none,
+// pre_land at depth 4 and batch 4, seats — in one place (CodeProtection.Gate),
+// which the reconcile records and the gate's bound weighs; and a rule that
+// sets none of them has no gate.
+func TestAGateResolvesItsDefaults(t *testing.T) {
+	t.Parallel()
+	if g := (config.CodeProtection{Branch: "main", AllowDelete: true}).Gate(); g != nil {
+		t.Fatalf("a rule setting no gate field has the gate %+v", *g)
+	}
+	defaults := config.CodeGate{MergeBy: config.CodeMergeByWriters, Approvals: config.CodeApprovalsNone,
+		Landing: config.CodeLanding{Policy: config.CodeLandingPreLand, Depth: config.CodeDefaultQueueDepth,
+			Batch: config.CodeDefaultQueueBatch}, DeleteSource: config.CodeDeleteSeats}
+	for name, tc := range map[string]struct {
+		rule config.CodeProtection
+		want func(*config.CodeGate)
+	}{
+		"merge_by":    {config.CodeProtection{MergeBy: config.CodeMergeByPersons}, func(g *config.CodeGate) { g.MergeBy = config.CodeMergeByPersons }},
+		"approvals":   {config.CodeProtection{Approvals: config.CodeApprovalsOne}, func(g *config.CodeGate) { g.Approvals = config.CodeApprovalsOne }},
+		"checks":      {config.CodeProtection{Checks: []string{"unit"}}, func(g *config.CodeGate) { g.Checks = []string{"unit"} }},
+		"a depth":     {config.CodeProtection{Landing: config.CodeLanding{Depth: 2}}, func(g *config.CodeGate) { g.Landing.Depth = 2 }},
+		"a policy":    {config.CodeProtection{Landing: config.CodeLanding{Policy: config.CodeLandingPostLand}}, func(g *config.CodeGate) { g.Landing.Policy = config.CodeLandingPostLand }},
+		"auto_revert": {config.CodeProtection{AutoRevert: true}, func(g *config.CodeGate) { g.AutoRevert = true }},
+		"delete_source": {config.CodeProtection{DeleteSource: config.CodeDeleteNone},
+			func(g *config.CodeGate) { g.DeleteSource = config.CodeDeleteNone }},
+		"agents_edit_checks": {config.CodeProtection{AgentsEditChecks: true},
+			func(g *config.CodeGate) { g.AgentsEditChecks = true }},
+	} {
+		tc.rule.Branch = "main"
+		want := defaults
+		tc.want(&want)
+		if got := tc.rule.Gate(); got == nil || !reflect.DeepEqual(*got, want) {
+			t.Errorf("%s alone forms the gate %+v, want %+v", name, got, want)
+		}
+	}
+	if got := config.CodeMergeBy("").Resolved(); got != config.CodeMergeByWriters {
+		t.Errorf("an unset code.merge_by_floor is %q, want writers", got)
+	}
+}
+
+// A GATE WEIGHS AT MOST CodeMaxGateBytes as the code log records it, refused at
+// its rule past it — reached here with no field at fault, every check at its
+// longest name and human paths of globs JSON spells long (each & six bytes) —
+// and accepted at it.
+func TestAGateIsBoundedByItsBytes(t *testing.T) {
+	t.Parallel()
+	doc := func(paths int) (string, int) {
+		rule := config.CodeProtection{Branch: "main"}
+		for i := range config.CodeMaxRequiredChecks {
+			rule.Checks = append(rule.Checks, fmt.Sprintf("%02d", i)+strings.Repeat("x", 62))
+		}
+		var globs []string
+		for i := range paths {
+			glob := fmt.Sprintf("%02d", i) + strings.Repeat("&", 120)
+			rule.HumanPaths = append(rule.HumanPaths, config.CodeHumanPath{Glob: glob})
+			globs = append(globs, fmt.Sprintf("{glob: %q}", glob))
+		}
+		return codeRepos(fmt.Sprintf("    - name: web\n      owner: {seat: swe}\n      protect:\n"+
+			"        - {branch: main, checks: [%s], human_paths: [%s]}\n", strings.Join(rule.Checks, ", "),
+			strings.Join(globs, ", "))), rule.Gate().EncodedBytes()
+	}
+	under, n := 0, 0
+	for {
+		_, weight := doc(under + 1)
+		if weight > config.CodeMaxGateBytes {
+			break
+		}
+		under++
+		n = weight
+	}
+	accepted, _ := doc(under)
+	if _, err := config.ParseCompany([]byte(accepted)); err != nil {
+		t.Fatalf("a gate of %d bytes is refused: %v", n, err)
+	}
+	refused, weight := doc(under + 1)
+	_, err := config.ParseCompany([]byte(refused))
+	problems := config.Problems(err)
+	if len(problems) != 1 || problems[0].Path != "code.repos[0].protect[0]" || problems[0].Kind != "out_of_range" ||
+		!strings.Contains(problems[0].Message, fmt.Sprint(weight)) ||
+		!strings.Contains(problems[0].Message, fmt.Sprint(config.CodeMaxGateBytes)) {
+		t.Fatalf("a gate of %d bytes: problems = %+v, want one out_of_range at code.repos[0].protect[0] naming "+
+			"%d and %d", weight, problems, weight, config.CodeMaxGateBytes)
+	}
+}
+
+// A MERGE GATE FIELD THAT DOES NOTHING IS WARNED, NEVER REFUSED, at that field:
+// owners_approve where the repository names no path owners, landing and
+// auto_revert where the rule requires no checks — only a branch whose merges
+// wait for checks has a queue — and approvals_unless beside approvals: none.
+// Each is silent once the field beside it is set.
+func TestAGateFieldThatDoesNothingIsWarned(t *testing.T) {
+	t.Parallel()
+	owned := "      path_owners: [{paths: ['web/**'], seat: swe}]\n"
+	for name, tc := range map[string]struct {
+		rule, beside string
+		warns        string // the field warned at, or none
+	}{
+		"owners_approve and no path owners": {rule: "owners_approve: true", warns: "owners_approve"},
+		"owners_approve and path owners":    {rule: "owners_approve: true", beside: owned},
+		"a landing and no checks":           {rule: "landing: {policy: post_land}", warns: "landing"},
+		"a landing and checks":              {rule: "landing: {policy: post_land}, checks: [unit]"},
+		"auto_revert and no checks":         {rule: "auto_revert: true", warns: "auto_revert"},
+		"auto_revert and checks":            {rule: "auto_revert: true, checks: [unit]"},
+		"approvals_unless and no approval":  {rule: "approvals_unless: [comment_only]", warns: "approvals_unless"},
+		"approvals_unless and an approval":  {rule: "approvals: one, approvals_unless: [comment_only]"},
+	} {
+		c, err := config.ParseCompany([]byte(codeRepos("    - name: web\n      owner: {seat: swe}\n" + tc.beside +
+			"      protect:\n        - {branch: main, " + tc.rule + "}\n")))
+		if err != nil {
+			t.Fatalf("%s: refused: %v", name, err)
+		}
+		var found []config.Warning
+		for _, w := range c.Warnings() {
+			if strings.HasPrefix(w.Path, "code.") {
+				found = append(found, w)
+			}
+		}
+		switch {
+		case tc.warns == "" && len(found) != 0:
+			t.Errorf("%s: warned %+v, want nothing", name, found)
+		case tc.warns == "":
+		case len(found) != 1 || found[0].Path != "code.repos[0].protect[0]."+tc.warns ||
+			found[0].Kind != config.WarningAdvisory || !strings.Contains(found[0].Message, tc.warns):
+			t.Errorf("%s: warned %+v, want one advisory at code.repos[0].protect[0].%s", name, found, tc.warns)
+		}
+	}
+}
+
+// THE SCHEMA ADMITS THE LANDING THE VALIDATOR DOES: the js tags are a second
+// spelling of the queue's bounds.
+func TestTheCodeLandingIsTheSchemasBounds(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		field    string
+		min, max int64
+	}{
+		{"Depth", 1, config.CodeMaxQueueDepth},
+		{"Batch", 1, config.CodeMaxQueueBatch},
+	} {
+		field, ok := reflect.TypeFor[config.CodeLanding]().FieldByName(tc.field)
+		if !ok {
+			t.Fatalf("config.CodeLanding has no field %s", tc.field)
+		}
+		if want := fmt.Sprintf("min=%d;max=%d", tc.min, tc.max); field.Tag.Get("js") != want {
+			t.Errorf("%s's schema says %q and validation %q", tc.field, field.Tag.Get("js"), want)
+		}
+	}
+}
+
+// ONE RULE NAMES A CHECK: a lowercase letter or digit, then up to 63 more of
+// them, '.', '_' and '-' — no capital, no space, nothing a shell splits.
+func TestACheckIsNamedByOneRule(t *testing.T) {
+	t.Parallel()
+	for name, want := range map[string]bool{
+		"unit": true, "a": true, "0": true, "e2e": true, "lint.go": true, "build_linux-arm64": true,
+		strings.Repeat("a", config.CodeMaxCheckNameBytes): true,
+		"": false, "Unit": false, "-unit": false, ".unit": false, "_unit": false, "unit tests": false,
+		"unit/fast": false, "ünit": false, "unit:fast": false, strings.Repeat("a", config.CodeMaxCheckNameBytes+1): false,
+	} {
+		if got := config.ValidCodeCheckName(name); got != want {
+			t.Errorf("ValidCodeCheckName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
 // A WHOLE DECLARATION IS ACCEPTED: an owner by a unit's NAME, one by a unit's
-// id, one by a seat, a branch glob, a frozen branch and a tag rule, and path
-// owners naming units by name and by id and a seat — and every repository's
-// default branch protected, so nothing is warned either.
+// id, one by a seat, a branch glob, a frozen branch and a tag rule, a merge
+// gate setting every field and a merge floor, and path owners naming units by
+// name and by id and a seat — and every repository's default branch protected
+// and every gate field doing something, so nothing is warned either.
 func TestADeclaredCodeBlockIsAccepted(t *testing.T) {
 	t.Parallel()
 	c, err := config.ParseCompany([]byte(codeChart + `code:
   native: true
   deleted_retention_days: 30
+  merge_by_floor: maintainers
   repos:
     - name: web
       owner: {unit: Engineering}
       description: The customer-facing web app.
       protect:
         - branch: main
+          merge_by: persons
+          approvals: one
+          approvals_unless: [whitespace_only, comment_only]
+          human_paths:
+            - glob: .crewlet/**
+            - {glob: "deploy/**", unless: [comment_only]}
+          checks: [unit, lint, e2e.linux]
+          landing: {policy: post_land, depth: 8, batch: 1}
+          owners_approve: true
+          delete_source: none
+          auto_revert: true
+          agents_edit_checks: true
         - branch: release/*
           direct_push: none
         - tag: "v*"
@@ -628,7 +935,8 @@ func TestADeclaredCodeBlockIsAccepted(t *testing.T) {
 // AN UNPROTECTED DEFAULT BRANCH IS WARNED, NEVER REFUSED — through the matcher
 // a push's decide asks (gitref), so a glob that covers the branch protects it
 // and one beside it does not. The warning sits at the field to add, the
-// repository's protect list, and names the branch it is about.
+// repository's protect list, names the branch it is about, and names the
+// fields a rule gates what merges into it with.
 func TestAnUnprotectedDefaultBranchIsWarned(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -672,6 +980,9 @@ func TestAnUnprotectedDefaultBranchIsWarned(t *testing.T) {
 					found[0].Path, found[0].Kind)
 			case !strings.Contains(found[0].Message, "web's default branch "+tc.branch+" is unprotected"):
 				t.Errorf("message = %q, want it to name web's default branch %s", found[0].Message, tc.branch)
+			case !strings.Contains(found[0].Message, "merge gate") || !strings.Contains(found[0].Message, "checks"):
+				t.Errorf("message = %q, want it to name the merge gate's fields a protect rule gates merges "+
+					"with", found[0].Message)
 			}
 		})
 	}

@@ -167,6 +167,9 @@ func withDefaults(l code.Limits) code.Limits {
 	if l.PushesPerSeatDay == 0 {
 		l.PushesPerSeatDay = defaults.PushesPerSeatDay
 	}
+	if l.MergeByFloor == "" {
+		l.MergeByFloor = defaults.MergeByFloor
+	}
 	return l
 }
 

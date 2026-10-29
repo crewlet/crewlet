@@ -276,8 +276,10 @@ func schemaSites(t *testing.T, root reflect.Type) []schemaSite {
 					base+"/properties/"+escapePointer(name), parseDirectives(f.Tag.Get("js")))
 			}
 		case reflect.Slice, reflect.Array:
+			// A LIST'S DIRECTIVES ARE ITS MEMBERS', as the generator gives
+			// them: each item is held to the list field's enum or pattern.
 			sites = append(sites, site)
-			visit(typ.Elem(), append(slices.Clone(path), "[]"), pointer+"/items", nil)
+			visit(typ.Elem(), append(slices.Clone(path), "[]"), pointer+"/items", directives)
 		case reflect.Map:
 			sites = append(sites, site)
 			visit(typ.Elem(), append(slices.Clone(path), "{}"), pointer+"/additionalProperties", nil)

@@ -660,11 +660,12 @@ func retiredByOmission(l code.RepoLife) bool {
 // chart of the activation being applied, indexed once for the whole list
 // ([codeOwners]): the owner and every path owner resolved to a unit's key (or
 // a seat's handle), every protection rule spelled as its namespaced pattern
-// ([config.CodeProtection.Pattern]) and SORTED, and the path owners in their
-// one form ([code.CanonicalPathOwners]) — the record carries one canonical
-// order, so every node deciding one declaration forms byte-identical records,
-// and [code.RepoSettings.Validate] refuses any other — and the default branch
-// defaulted.
+// ([config.CodeProtection.Pattern]) and SORTED, each one's merge gate resolved
+// ([config.CodeProtection.Gate]) and in its one form ([code.CanonicalGate]),
+// and the path owners in theirs ([code.CanonicalPathOwners]) — the record
+// carries one canonical order, so every node deciding one declaration forms
+// byte-identical records, and [code.RepoSettings.Validate] refuses any other —
+// and the default branch defaulted.
 //
 // AN ERROR only for a revision validation refuses — an owner the chart does
 // not resolve: a runnable revision never reaches it, and one that does is
@@ -682,10 +683,15 @@ func declaredRepo(o *org.Index, r config.CodeRepo) (code.Declared, error) {
 	}
 	protections := make([]code.Protection, 0, len(r.Protect))
 	for _, rule := range r.Protect {
-		protections = append(protections, code.Protection{
+		p := code.Protection{
 			Pattern: rule.Pattern(), AllowForce: rule.AllowForce, AllowDelete: rule.AllowDelete,
 			DirectPush: code.DirectPush(rule.DirectPush.Resolved()),
-		})
+		}
+		if g := rule.Gate(); g != nil {
+			gate := code.CanonicalGate(declaredGate(*g))
+			p.Gate = &gate
+		}
+		protections = append(protections, p)
 	}
 	slices.SortFunc(protections, func(a, b code.Protection) int { return cmp.Compare(a.Pattern, b.Pattern) })
 	owners := make([]code.PathOwner, 0, len(r.PathOwners))
@@ -701,6 +707,43 @@ func declaredRepo(o *org.Index, r config.CodeRepo) (code.Declared, error) {
 		DefaultBranch: r.ResolvedDefaultBranch(), Description: r.Description, Archived: r.Archived,
 		Protections: protections, PathOwners: code.CanonicalPathOwners(owners),
 	}}, nil
+}
+
+// declaredGate is a rule's resolved merge gate ([config.CodeProtection.Gate])
+// as the code domain records it: each value of config's closed sets the
+// domain's of the same spelling (TestEveryDeclaredMergeByIsOneTheDomainRecords
+// holds the sets to each other), its lists in the document's order —
+// [code.CanonicalGate] forms the record's — and nil where the document names
+// none, so a gate that names no human path records none.
+func declaredGate(g config.CodeGate) code.MergeGate {
+	out := code.MergeGate{
+		MergeBy: code.MergeBy(g.MergeBy), Approvals: code.Approvals(g.Approvals),
+		ApprovalsUnless: declaredClasses(g.ApprovalsUnless), Checks: g.Checks,
+		Landing: code.Landing{Policy: code.LandingPolicy(g.Landing.Policy), Depth: g.Landing.Depth,
+			Batch: g.Landing.Batch},
+		OwnersApprove: g.OwnersApprove, DeleteSource: code.DeleteSource(g.DeleteSource),
+		AutoRevert: g.AutoRevert, AgentsEditChecks: g.AgentsEditChecks,
+	}
+	if g.HumanPaths != nil {
+		out.HumanPaths = make([]code.HumanPath, len(g.HumanPaths))
+		for i, h := range g.HumanPaths {
+			out.HumanPaths[i] = code.HumanPath{Glob: h.Glob, Unless: declaredClasses(h.Unless)}
+		}
+	}
+	return out
+}
+
+// declaredClasses is a list of config's change classes as the domain's: nil
+// for none.
+func declaredClasses(classes []config.CodeChangeClass) []code.ChangeClass {
+	if classes == nil {
+		return nil
+	}
+	out := make([]code.ChangeClass, len(classes))
+	for i, c := range classes {
+		out[i] = code.ChangeClass(c)
+	}
+	return out
 }
 
 // declaredOwner is the owner a declaration names at field — exactly one of a

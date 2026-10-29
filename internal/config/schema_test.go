@@ -139,6 +139,12 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"GitHubProvisioning", "org_webhook", strs(ContainerWebhookModes)},
 		{"CodeProtection", "direct_push", strs(CodeDirectPushes)},
 		{"CodeRepo", "visibility", strs(CodeVisibilities)},
+		// A protection rule's merge gate, and the company's floor beside it.
+		{"CodeProtection", "merge_by", strs(CodeMergeBys)},
+		{"CodeProtection", "approvals", strs(CodeApprovalCounts)},
+		{"CodeProtection", "delete_source", strs(CodeDeleteSources)},
+		{"CodeLanding", "policy", strs(CodeLandingPolicies)},
+		{"Code", "merge_by_floor", strs(CodeMergeBys)},
 		// The three tiers, each in its one spelling: the validator reads
 		// exactly these, so an editor underlines exactly what the engine
 		// refuses.
@@ -163,6 +169,64 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		got := closedSet(t, field)
 		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
 			t.Fatalf("%s.%s enum = %v, validators accept %v", tc.def, tc.field, got, tc.want)
+		}
+	}
+}
+
+// A LIST OF A CLOSED SET HOLDS EACH MEMBER TO IT, in the schema as in the
+// validator: the list's own enum tag is its members', so an editor underlines
+// a class the engine refuses in a list — no_code_change among them, which no
+// exempting list takes — and none it takes.
+func TestAListOfAClosedSetHoldsEachMember(t *testing.T) {
+	t.Parallel()
+	defs, _ := schemaDoc(t, TierCompany)["$defs"].(map[string]any)
+	for _, tc := range []struct {
+		def, field string
+		want       []string
+	}{
+		{"CodeProtection", "approvals_unless", strs(CodePathClasses)},
+		{"CodeHumanPath", "unless", strs(CodePathClasses)},
+	} {
+		def, _ := defs[tc.def].(map[string]any)
+		props, _ := def["properties"].(map[string]any)
+		field, ok := props[tc.field].(map[string]any)
+		if !ok {
+			t.Fatalf("%s has no %s", tc.def, tc.field)
+		}
+		members, ok := field["items"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s.%s is no list: %v", tc.def, tc.field, field)
+		}
+		if got := closedSet(t, members); strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("%s.%s's members enum = %v, validators accept %v", tc.def, tc.field, got, tc.want)
+		}
+	}
+}
+
+// A REQUIRED CHECK'S NAME IS THE ONE RULE'S: the schema's pattern for each of a
+// rule's checks and ValidCodeCheckName agree on every name a table reaches for,
+// or an editor underlines a check the engine runs, or passes one every node's
+// reconcile refuses.
+func TestTheRequiredCheckPatternIsTheValidators(t *testing.T) {
+	t.Parallel()
+	defs, _ := schemaDoc(t, TierCompany)["$defs"].(map[string]any)
+	def, _ := defs["CodeProtection"].(map[string]any)
+	props, _ := def["properties"].(map[string]any)
+	field, ok := props["checks"].(map[string]any)
+	if !ok {
+		t.Fatal("the company schema's CodeProtection has no checks")
+	}
+	members, ok := field["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("CodeProtection.checks is no list: %v", field)
+	}
+	pattern := regexp.MustCompile(ownPattern(t, members))
+	for _, name := range []string{
+		"unit", "a", "0", "e2e", "lint.go", "build_linux-arm64", strings.Repeat("a", 64), strings.Repeat("a", 65),
+		"", "Unit", "-unit", ".unit", "_unit", "unit tests", "unit/fast", "ünit", "unit:fast", "a\n",
+	} {
+		if got, want := pattern.MatchString(name), ValidCodeCheckName(name); got != want {
+			t.Errorf("the schema's pattern says %v of %q, ValidCodeCheckName %v", got, name, want)
 		}
 	}
 }
@@ -972,6 +1036,36 @@ units:
 			name: "a github repo that is not owner/repo", tier: TierCompany,
 			validatorOnly: true,
 			yaml:          "name: Acme\nintegrations:\n  github: {enabled: true, webhook_secret: s, provisioning: {repos: [engine]}}\n",
+		},
+		// THE ENGINE'S OWN CODE HOST, a branch rule gating its merges with
+		// every field of its gate: neither layer may refuse it.
+		{
+			name: "a merge gate on a protected branch", tier: TierCompany,
+			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  native: true\n  merge_by_floor: maintainers\n" +
+				"  repos:\n    - name: web\n      owner: {seat: dev}\n      protect:\n        - {branch: main, " +
+				"merge_by: persons, approvals: one, approvals_unless: [comment_only], human_paths: [{glob: " +
+				"'deploy/**', unless: [whitespace_only]}], checks: [unit, e2e.linux], landing: {policy: post_land, " +
+				"depth: 8, batch: 2}, owners_approve: true, delete_source: none, auto_revert: true, " +
+				"agents_edit_checks: true}\n",
+		},
+		// A CLASS NO EXEMPTING LIST TAKES, which the members' enum names
+		// while the author is still typing.
+		{
+			name: "no_code_change exempting approvals", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  native: true\n  repos:\n" +
+				"    - name: web\n      owner: {seat: dev}\n      protect:\n        - {branch: main, approvals: one, " +
+				"approvals_unless: [no_code_change]}\n",
+		},
+		{
+			name: "a required check with a capital", tier: TierCompany, editorCatches: true,
+			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  native: true\n  repos:\n" +
+				"    - name: web\n      owner: {seat: dev}\n      protect:\n        - {branch: main, checks: [Unit]}\n",
+		},
+		// A CHECK REQUIRED TWICE: a list's uniqueness is the validator's.
+		{
+			name: "a required check listed twice", tier: TierCompany, validatorOnly: true,
+			yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev}\ncode:\n  native: true\n  repos:\n" +
+				"    - name: web\n      owner: {seat: dev}\n      protect:\n        - {branch: main, checks: [unit, unit]}\n",
 		},
 		// The Atlassian tracker, which IS served: a Cloud site named by its
 		// cloud id, delivering through the Forge app. Neither layer may

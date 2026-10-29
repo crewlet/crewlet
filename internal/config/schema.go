@@ -445,7 +445,11 @@ func (g *schemaGen) fieldSchema(t reflect.Type, directives map[string]string, se
 		applyNumberDirectives(out, directives)
 		return g.orWholeReference(out)
 	case reflect.Slice, reflect.Array:
-		return map[string]any{"type": []any{"array", "null"}, "items": g.fieldSchema(t.Elem(), nil, secret)}
+		// A LIST'S DIRECTIVES ARE ITS MEMBERS': a list has no shape of its
+		// own a tag could state, so `js:"enum=…"` on a list of a closed set —
+		// a protection rule's approvals_unless — holds each member to it, as
+		// the validator holds each one.
+		return map[string]any{"type": []any{"array", "null"}, "items": g.fieldSchema(t.Elem(), directives, secret)}
 	case reflect.Map:
 		return map[string]any{"type": []any{"object", "null"}, "additionalProperties": g.fieldSchema(t.Elem(), nil, secret)}
 	case reflect.Struct:

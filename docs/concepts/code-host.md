@@ -80,7 +80,8 @@ This is the product's current shape, not a configuration choice:
   but no tool or route opens, edits, reads or discusses a change in this
   release, and no change is gated in front of a protected branch. A protection
   rule decides what a push may do to a ref, and nothing else stands in front
-  of one.
+  of one. So a rule's [merge gate](#merge-gates) is recorded and read, and
+  nothing merges by it yet.
 - **Nothing drops an object a push stored.** A force-push or a deletion
   leaves the history behind it in the repository's packs, fetchable by its
   id, for as long as the repository lives. The object each such push left is
@@ -106,6 +107,8 @@ code:
       description: The customer-facing web app.
       protect:
         - branch: main             # refs/heads/main, and nothing below it
+          approvals: one           # a merge into it waits for an approval…
+          checks: [unit]           # …and for its unit check (a merge gate)
         - branch: release/**       # every branch inside release/, never release itself
           allow_delete: true
         - tag: "v*"                # a tag rule: a tag never moves
@@ -139,7 +142,8 @@ code:
 - **`archived`** — read-only. A push to an archived repository is refused as a
   whole, and reading it is not; unarchiving it is setting it back to `false`.
 - **`protect`** — at most 64 rules, each naming exactly one of a `branch` or a
-  `tag` pattern, each pattern once.
+  `tag` pattern, each pattern once; a `branch` rule may also carry a [merge
+  gate](#merge-gates).
 - **`path_owners`** — at most 64 owners, each exactly one of `unit` or `seat`
   resolved as `owner` is, owning 1 to 32 globs of the repository's paths, each
   glob once and each owner in one entry ([Path owners](#path-owners)).
@@ -197,6 +201,68 @@ repository's `protect`, naming the rule to add — and never fails on it. An
 archived repository is not warned about: it takes no push at all, so nothing
 can move or delete its branch until it is unarchived, and the revision that
 unarchives it brings the warning back.
+
+### Merge gates
+
+A rule over branches can also say what a **merge** into them needs: its
+**merge gate**. Any of these fields set on a `branch` rule forms one, and every
+field it leaves unset takes its default:
+
+```yaml
+protect:
+  - branch: main
+    merge_by: maintainers            # writers (unset), maintainers or persons
+    approvals: one                   # none (unset) or one counted approval
+    approvals_unless: [comment_only] # path classes whose changes need no approval
+    human_paths:                     # paths a change touching waits for a person
+      - glob: ".crewlet/**"
+      - glob: "deploy/**"
+        unless: [comment_only, whitespace_only]
+    checks: [lint, unit]             # the checks a merge waits for, by name
+    landing: {policy: pre_land, depth: 4, batch: 4}
+    owners_approve: true             # one approval eligible for every owned glob touched
+    delete_source: seats             # seats (unset) or none
+```
+
+| Field | Unset | Set |
+|---|---|---|
+| `merge_by` | `writers`: anybody who may write to the repository merges | `maintainers`: only those who maintain it; `persons`: a person, never a seat |
+| `approvals` | `none` | `one`: a merge waits for one counted approval |
+| `approvals_unless` | none | The path classes — `whitespace_only`, `comment_only` — that exempt a change from those approvals: one whose every touched path is of a class listed waits for none |
+| `human_paths` | none | At most 32 globs, in the [path owners'](#path-owners) grammar: a change touching a path one matches waits for a **person's** approval, whatever else approved it — unless every path that glob matched is of a class its `unless` lists |
+| `checks` | none | At most 32 checks a merge waits for, by name: a lowercase letter or digit, then up to 63 more of them, `.`, `_` and `-` |
+| `landing` | `pre_land`, `depth: 4`, `batch: 4` | `policy`: `pre_land` tests each change merged on the branch before it lands, and `post_land` lands changes ahead of their checks and checks the branch's newest tip; `depth`: how many candidates the queue tests at once, 1 to 8; `batch`: how many waiting changes one candidate takes, 1 to 8 |
+| `owners_approve` | off | A change waits for one counted approval from somebody eligible for every [path owner](#path-owners)'s glob it touches |
+| `delete_source` | `seats`: a merge deletes a source branch in a seat's own namespace, in the record that merges it | `none`: it keeps every source branch |
+| `auto_revert` | off | Whoever queues a change may consent, when they queue it, to the revert of a landing that breaks the branch |
+| `agents_edit_checks` | off: on a rule requiring checks, a change to `.crewlet/**` — where a repository's checks are defined — waits for a person | A seat's approval stands for it too |
+
+A merge gate on a `tag` rule is refused, at the first gate field it sets: a tag
+never moves, so no merge reaches one. `no_code_change` is refused in
+`approvals_unless` and in an `unless`: it is a revision's class, never a
+path's, and an approval already carries across a revision that changed
+nothing. Each check, each human path's glob and each class is listed once. A
+gate is recorded with every field resolved and every list sorted, whatever
+order the document wrote them in, so one declaration is one record on every
+node, and an activation that changes nothing writes nothing for it. A gate
+weighs at most 8 KiB as the code log records it — reached only with both
+lists near their bounds at once, or with globs JSON spells long (`&`, `<` and
+`>` are six bytes each) — which keeps a repository's 64 rules' gates within
+512 KiB of its settings.
+
+**`code.merge_by_floor`** — `writers` (unset), `maintainers` or `persons` — is
+the least a merge into **any** protected branch needs: a merge is held to the
+stricter of the floor and the `merge_by` of every rule matching its branch, a
+rule with no gate reading as `writers`.
+
+A gate is **recorded and answered, and nothing merges by it yet**: every read
+of a repository answers each rule's `gate` (`GET /code/repos/{name}`), and a
+push is held to the rule's `allow_force`, `allow_delete` and `direct_push`
+alone, as before ([What it does not do yet](#what-it-does-not-do-yet)).
+`crewlet validate` warns — never fails — about a gate field that would do
+nothing: `owners_approve` on a repository that names no path owners, `landing`
+or `auto_revert` on a rule that requires no checks (only a branch whose merges
+wait for checks has a queue), and `approvals_unless` beside `approvals: none`.
 
 ### Path owners
 

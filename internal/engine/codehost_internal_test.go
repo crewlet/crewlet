@@ -456,11 +456,12 @@ func codeLogDrift(alarms []statelog.Alarm) (string, bool) {
 	return "", false
 }
 
-// codeHostLimited is [codeHostCompany] with every code.limits field set, and a
-// retention of a year.
+// codeHostLimited is [codeHostCompany] with every code.limits field set, a
+// retention of a year, and merges held to maintainers at least.
 const codeHostLimited = nativeCleanupCompany + `code:
   native: true
   deleted_retention_days: 365
+  merge_by_floor: maintainers
   limits:
     max_push_bytes: 67108864
     max_blob_bytes: 1048576
@@ -478,7 +479,8 @@ const codeHostLimited = nativeCleanupCompany + `code:
 // committer decided was held to the defaults: a company that had capped a
 // repository at 2 GiB, a push at 64 MiB and a seat at 40 pushes a day was
 // handed 20 GiB repositories, 1 GiB pushes and a thousand pushes a seat on a
-// host it had just asked to wind down — and the still-running retention duty
+// host it had just asked to wind down — and one holding merges to maintainers
+// would have its floor dropped to writers — and the still-running retention duty
 // would purge, by the default week, a repository the company had chosen to
 // keep restorable for a year. The settings in force are the newest activated
 // revision's that hosted code, carried from epoch to epoch; a revision that
@@ -487,7 +489,7 @@ func TestTheCodeSettingsOutliveTheRevisionThatTurnsTheHostOff(t *testing.T) {
 	t.Parallel()
 	e := newSandboxNode(t, parseCompany(t, codeHostLimited))
 	capped := code.Limits{MaxPushBytes: 64 << 20, MaxBlobBytes: 1 << 20, RepoMaxBytes: 2 << 30,
-		PushesPerSeatDay: 40}
+		PushesPerSeatDay: 40, MergeByFloor: code.MergeByMaintainers}
 	year := 365 * 24 * time.Hour
 	if got := e.codeLimits(); got != capped {
 		t.Fatalf("the premise: a company hosting code with limits is held to %+v, want %+v",

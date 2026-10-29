@@ -228,6 +228,7 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 	if got := code.DefaultLimits(); got != (code.Limits{
 		MaxPushBytes: config.DefaultCodeMaxPushBytes, MaxBlobBytes: config.DefaultCodeMaxBlobBytes,
 		RepoMaxBytes: config.DefaultCodeRepoMaxBytes, PushesPerSeatDay: config.DefaultCodePushesPerSeatDay,
+		MergeByFloor: code.MergeBy(config.CodeMergeBy("").Resolved()),
 	}) {
 		t.Errorf("DefaultLimits is %+v, and config's defaults differ", got)
 	}
@@ -595,7 +596,8 @@ func TestTheBoundsFitTheRecordBudgets(t *testing.T) {
 
 // THE LIMITS A PUSH IS HELD TO ARE CONFIG'S OWN READING OF code.limits — one
 // resolution of the defaults, so `crewlet validate`'s order rules and the
-// committer's decide can never disagree about what an unset field means.
+// committer's decide can never disagree about what an unset field means — and
+// so is the floor a merge is held to, code.merge_by_floor.
 func TestLimitsOfIsConfigsReading(t *testing.T) {
 	t.Parallel()
 	if got := code.LimitsOf(config.Code{}); got != code.DefaultLimits() {
@@ -619,29 +621,38 @@ func TestLimitsOfIsConfigsReading(t *testing.T) {
 			set: config.CodeLimits{MaxPushBytes: 512 << 20},
 			want: code.Limits{MaxPushBytes: 512 << 20,
 				MaxBlobBytes: config.DefaultCodeMaxBlobBytes, RepoMaxBytes: config.DefaultCodeRepoMaxBytes,
-				PushesPerSeatDay: config.DefaultCodePushesPerSeatDay},
+				PushesPerSeatDay: config.DefaultCodePushesPerSeatDay, MergeByFloor: code.MergeByWriters},
 		},
 		"a file limit alone": {
 			set: config.CodeLimits{MaxBlobBytes: 10 << 20},
 			want: code.Limits{MaxPushBytes: config.DefaultCodeMaxPushBytes,
 				MaxBlobBytes: 10 << 20, RepoMaxBytes: config.DefaultCodeRepoMaxBytes,
-				PushesPerSeatDay: config.DefaultCodePushesPerSeatDay},
+				PushesPerSeatDay: config.DefaultCodePushesPerSeatDay, MergeByFloor: code.MergeByWriters},
 		},
 		"a repository limit alone": {
 			set: config.CodeLimits{RepoMaxBytes: 4 << 30},
 			want: code.Limits{MaxPushBytes: config.DefaultCodeMaxPushBytes,
 				MaxBlobBytes: config.DefaultCodeMaxBlobBytes, RepoMaxBytes: 4 << 30,
-				PushesPerSeatDay: config.DefaultCodePushesPerSeatDay},
+				PushesPerSeatDay: config.DefaultCodePushesPerSeatDay, MergeByFloor: code.MergeByWriters},
 		},
 		"a seat's daily quota alone": {
 			set: config.CodeLimits{PushesPerSeatDay: 40},
 			want: code.Limits{MaxPushBytes: config.DefaultCodeMaxPushBytes,
 				MaxBlobBytes: config.DefaultCodeMaxBlobBytes, RepoMaxBytes: config.DefaultCodeRepoMaxBytes,
-				PushesPerSeatDay: 40},
+				PushesPerSeatDay: 40, MergeByFloor: code.MergeByWriters},
 		},
 	} {
 		if got := code.LimitsOf(config.Code{Native: true, Limits: tc.set}); got != tc.want {
 			t.Errorf("%s: code.limits %+v is held to %+v, want %+v", name, tc.set, got, tc.want)
+		}
+	}
+	// THE MERGE FLOOR, unset and each value set, beside limits nobody set:
+	// config's own resolution, as a value the domain records.
+	for _, floor := range append([]config.CodeMergeBy{""}, config.CodeMergeBys...) {
+		got := code.LimitsOf(config.Code{Native: true, MergeByFloor: floor}).MergeByFloor
+		if want := code.MergeBy(floor.Resolved()); got != want || !got.Valid() {
+			t.Errorf("code.merge_by_floor %q is held as %q, want %q, a value the domain records", floor, got,
+				want)
 		}
 	}
 }

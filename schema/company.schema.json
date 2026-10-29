@@ -119,6 +119,16 @@
         "limits": {
           "$ref": "#/$defs/CodeLimits"
         },
+        "merge_by_floor": {
+          "description": "The least a merge into any protected branch needs, whatever its rules say: writers (unset) — anybody who may write to the repository — maintainers, or persons, a person and never a seat. A merge is held to the stricter of this and the merge_by of every rule matching its branch; a rule with no merge gate reads as writers.",
+          "enum": [
+            "writers",
+            "maintainers",
+            "persons",
+            "",
+            null
+          ]
+        },
         "native": {
           "description": "Host the company's git repositories in the engine itself, on its own state log: every data node commits their pushes. A node running no native backend yet starts the code host at the activation that sets it; on a node whose native runtime already runs, turning it on or off takes effect at the node's restart, which the node says (native_backend_needs_restart).",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
@@ -140,6 +150,75 @@
         },
         "scratch": {
           "$ref": "#/$defs/CodeScratch"
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeHumanPath": {
+      "additionalProperties": false,
+      "properties": {
+        "glob": {
+          "description": "A glob over the repository's tree, from its root, as a path owner's paths are written: * within one component, ** whole components, at most 128 bytes.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "unless": {
+          "description": "The path classes — whitespace_only, comment_only — that let a change through without the person's approval when every path this glob matched is of one. Each once.",
+          "items": {
+            "enum": [
+              "whitespace_only",
+              "comment_only",
+              "",
+              null
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeLanding": {
+      "additionalProperties": false,
+      "properties": {
+        "batch": {
+          "description": "How many waiting changes one candidate takes: 1..8; unset is 4.",
+          "maximum": 8,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "depth": {
+          "description": "How many candidates the queue tests at once: 1..8; unset is 4.",
+          "maximum": 8,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "policy": {
+          "description": "pre_land (unset) tests each change merged on the branch before it lands; post_land lands changes ahead of their checks, which then run on the branch's newest tip.",
+          "enum": [
+            "pre_land",
+            "post_land",
+            "",
+            null
+          ]
         }
       },
       "type": [
@@ -264,6 +343,15 @@
     "CodeProtection": {
       "additionalProperties": false,
       "properties": {
+        "agents_edit_checks": {
+          "description": "Let a seat's approval stand for a change to .crewlet/** — where a repository's checks are defined — which, on a rule requiring checks, otherwise waits for a person's.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "allow_delete": {
           "description": "Let a push delete a matching ref.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
@@ -282,6 +370,39 @@
             "null"
           ]
         },
+        "approvals": {
+          "description": "How many counted approvals a merge waits for: none (unset) or one.",
+          "enum": [
+            "none",
+            "one",
+            "",
+            null
+          ]
+        },
+        "approvals_unless": {
+          "description": "The path classes that exempt a change from those approvals: a change whose every touched path is of a class listed — whitespace_only, comment_only — waits for none. Each once.",
+          "items": {
+            "enum": [
+              "whitespace_only",
+              "comment_only",
+              "",
+              null
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "auto_revert": {
+          "description": "Let whoever queues a change consent, when it does, to reverting a landing that breaks the branch.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "branch": {
           "description": "A branch name or glob: * matches one path component, ** any number, and a name with no * matches only itself. Exactly one of branch and tag.",
           "type": [
@@ -291,6 +412,38 @@
             "null"
           ]
         },
+        "checks": {
+          "description": "At most 32 checks a merge waits for, by name: a lowercase letter or digit, then up to 63 more of them, '.', '_' and '-'. Each once.",
+          "items": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+              },
+              {
+                "const": ""
+              }
+            ],
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "delete_source": {
+          "description": "Whether a merge deletes its change's source branch in the record that merges it: seats (unset), a branch in a seat's own namespace, or none.",
+          "enum": [
+            "seats",
+            "none",
+            "",
+            null
+          ]
+        },
         "direct_push": {
           "description": "Who may push to a matching ref directly: persons (unset), a person and never a seat, whose push is refused; or none, which freezes it — nothing pushes to it.",
           "enum": [
@@ -298,6 +451,39 @@
             "none",
             "",
             null
+          ]
+        },
+        "human_paths": {
+          "description": "At most 32 globs of the repository's paths a change touching which waits for a person's approval, whatever else approved it. Each glob once.",
+          "items": {
+            "$ref": "#/$defs/CodeHumanPath"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "landing": {
+          "$ref": "#/$defs/CodeLanding",
+          "description": "How the branch's queue lands a change: each field its default when unset."
+        },
+        "merge_by": {
+          "description": "Who may merge into a matching branch: writers (unset) — anybody who may write to the repository — maintainers, or persons, a person and never a seat. The stricter of this and code.merge_by_floor holds. Merge gate fields are refused on a tag rule: no merge reaches a tag.",
+          "enum": [
+            "writers",
+            "maintainers",
+            "persons",
+            "",
+            null
+          ]
+        },
+        "owners_approve": {
+          "description": "Make the repository's path owners gating: a change waits for one counted approval from somebody eligible for every owned glob it touches.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
           ]
         },
         "tag": {

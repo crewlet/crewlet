@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"slices"
@@ -108,10 +109,24 @@ const (
 	// more than the round lands.
 	CodeMaxQueueDepth = 8
 
+	// CodeDefaultQueueDepth is an unset landing.depth: FOUR candidates at
+	// once, a round of which lands whole 81 % of the time at the same 5 %
+	// (0.95⁴) — the rate the queue is sized by.
+	CodeDefaultQueueDepth = 4
+
 	// CodeMaxQueueBatch is the most waiting changes one candidate takes (a
 	// red batch is bisected): eight, so a round at both bounds is sixty-four
 	// changes — the most one candidate's record names.
 	CodeMaxQueueBatch = 8
+
+	// CodeDefaultQueueBatch is an unset landing.batch: FOUR changes a
+	// candidate, PROVISIONAL. A batch of four is green 81 % of the time at
+	// the 5 % failure rate the depth is sized by, a red one's culprit is
+	// found in log₂ 4 = 2 more rounds, and it spends about 0.4 check runs a
+	// landed change against 1.05 unbatched; the queue's throughput
+	// benchmark, which lands with the queue that reads this, decides it on
+	// measurement.
+	CodeDefaultQueueBatch = 4
 
 	// CodeMaxCheckNameBytes is the longest name a check takes: sixty-four
 	// bytes of [ValidCodeCheckName]'s alphabet, a CI job's name rather than a
@@ -282,7 +297,12 @@ type Code struct {
 	IdentityDomain       string      `yaml:"identity_domain,omitempty" json:"identity_domain,omitempty" js:"pattern=^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?([.][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$;maxlen=189" desc:"The domain a commit the engine builds through a tool spells its addresses in: its committer's, engine@<domain>, and its author's, <handle>@<domain>, for a seat whose role states no email address. A lowercase DNS name of at most 189 bytes, so every such address is at most 254; unset is seats.invalid, a name nobody can own."`
 	Limits               CodeLimits  `yaml:"limits,omitempty" json:"limits,omitzero"`
 	Scratch              CodeScratch `yaml:"scratch,omitempty" json:"scratch,omitzero"`
-	Repos                []CodeRepo  `yaml:"repos,omitempty" json:"repos,omitempty" desc:"The company's repositories, at most 10000. Each activation creates the ones declared and settles their settings; removing one deletes it, restorable for deleted_retention_days by declaring it again."`
+	// MergeByFloor is the least authority a merge into ANY protected branch
+	// needs, whatever its rules say: a merge is held to the stricter of it
+	// and the merge_by of every rule matching its branch. The EPOCH'S, read at
+	// every decision as the limits are (internal/code.Limits.MergeByFloor).
+	MergeByFloor CodeMergeBy `yaml:"merge_by_floor,omitempty" json:"merge_by_floor,omitempty" js:"enum=writers|maintainers|persons" desc:"The least a merge into any protected branch needs, whatever its rules say: writers (unset) — anybody who may write to the repository — maintainers, or persons, a person and never a seat. A merge is held to the stricter of this and the merge_by of every rule matching its branch; a rule with no merge gate reads as writers."`
+	Repos        []CodeRepo  `yaml:"repos,omitempty" json:"repos,omitempty" desc:"The company's repositories, at most 10000. Each activation creates the ones declared and settles their settings; removing one deletes it, restorable for deleted_retention_days by declaring it again."`
 }
 
 // CodeScratch is the policy for seats' SCRATCH repositories: the ones a seat's
@@ -516,13 +536,127 @@ type CodeOwner struct {
 }
 
 // CodeProtection is one protection rule: the branches or the tags it matches,
-// and what a push to one of them may do.
+// what a push to one of them may do, and — on a branch rule — what a merge
+// into one needs, its MERGE GATE: any of the gate's fields set forms one, every
+// field it leaves unset taking its default ([CodeProtection.Gate]).
 type CodeProtection struct {
 	Branch      string         `yaml:"branch,omitempty" json:"branch,omitempty" desc:"A branch name or glob: * matches one path component, ** any number, and a name with no * matches only itself. Exactly one of branch and tag."`
 	Tag         string         `yaml:"tag,omitempty" json:"tag,omitempty" desc:"A tag name or glob, as for branch. Exactly one of branch and tag."`
 	AllowForce  bool           `yaml:"allow_force,omitempty" json:"allow_force,omitempty" desc:"Let a push move a matching branch to a commit that does not descend from it. Not on a tag rule: a tag never moves."`
 	AllowDelete bool           `yaml:"allow_delete,omitempty" json:"allow_delete,omitempty" desc:"Let a push delete a matching ref."`
 	DirectPush  CodeDirectPush `yaml:"direct_push,omitempty" json:"direct_push,omitempty" js:"enum=persons|none" desc:"Who may push to a matching ref directly: persons (unset), a person and never a seat, whose push is refused; or none, which freezes it — nothing pushes to it."`
+
+	// THE MERGE GATE: none of it on a tag rule, which no merge reaches.
+
+	MergeBy          CodeMergeBy       `yaml:"merge_by,omitempty" json:"merge_by,omitempty" js:"enum=writers|maintainers|persons" desc:"Who may merge into a matching branch: writers (unset) — anybody who may write to the repository — maintainers, or persons, a person and never a seat. The stricter of this and code.merge_by_floor holds. Merge gate fields are refused on a tag rule: no merge reaches a tag."`
+	Approvals        CodeApprovals     `yaml:"approvals,omitempty" json:"approvals,omitempty" js:"enum=none|one" desc:"How many counted approvals a merge waits for: none (unset) or one."`
+	ApprovalsUnless  []CodeChangeClass `yaml:"approvals_unless,omitempty" json:"approvals_unless,omitempty" js:"enum=whitespace_only|comment_only" desc:"The path classes that exempt a change from those approvals: a change whose every touched path is of a class listed — whitespace_only, comment_only — waits for none. Each once."`
+	HumanPaths       []CodeHumanPath   `yaml:"human_paths,omitempty" json:"human_paths,omitempty" desc:"At most 32 globs of the repository's paths a change touching which waits for a person's approval, whatever else approved it. Each glob once."`
+	Checks           []string          `yaml:"checks,omitempty" json:"checks,omitempty" js:"pattern=^[a-z0-9][a-z0-9._-]{0,63}$" desc:"At most 32 checks a merge waits for, by name: a lowercase letter or digit, then up to 63 more of them, '.', '_' and '-'. Each once."`
+	Landing          CodeLanding       `yaml:"landing,omitempty" json:"landing,omitzero" desc:"How the branch's queue lands a change: each field its default when unset."`
+	OwnersApprove    bool              `yaml:"owners_approve,omitempty" json:"owners_approve,omitempty" desc:"Make the repository's path owners gating: a change waits for one counted approval from somebody eligible for every owned glob it touches."`
+	DeleteSource     CodeDeleteSource  `yaml:"delete_source,omitempty" json:"delete_source,omitempty" js:"enum=seats|none" desc:"Whether a merge deletes its change's source branch in the record that merges it: seats (unset), a branch in a seat's own namespace, or none."`
+	AutoRevert       bool              `yaml:"auto_revert,omitempty" json:"auto_revert,omitempty" desc:"Let whoever queues a change consent, when it does, to reverting a landing that breaks the branch."`
+	AgentsEditChecks bool              `yaml:"agents_edit_checks,omitempty" json:"agents_edit_checks,omitempty" desc:"Let a seat's approval stand for a change to .crewlet/** — where a repository's checks are defined — which, on a rule requiring checks, otherwise waits for a person's."`
+}
+
+// CodeHumanPath is one glob of a repository's tree a change touching which
+// waits for a person's approval, unless every path of the change the glob
+// matched is of a class Unless lists.
+type CodeHumanPath struct {
+	Glob   string            `yaml:"glob" json:"glob" desc:"A glob over the repository's tree, from its root, as a path owner's paths are written: * within one component, ** whole components, at most 128 bytes."`
+	Unless []CodeChangeClass `yaml:"unless,omitempty" json:"unless,omitempty" js:"enum=whitespace_only|comment_only" desc:"The path classes — whitespace_only, comment_only — that let a change through without the person's approval when every path this glob matched is of one. Each once."`
+}
+
+// CodeLanding is how a gated branch's queue lands a change. An unset field
+// takes its default ([CodeLanding.Resolved]); the queue lands only where the
+// rule requires checks.
+type CodeLanding struct {
+	Policy CodeLandingPolicy `yaml:"policy,omitempty" json:"policy,omitempty" js:"enum=pre_land|post_land" desc:"pre_land (unset) tests each change merged on the branch before it lands; post_land lands changes ahead of their checks, which then run on the branch's newest tip."`
+	Depth  int               `yaml:"depth,omitempty" json:"depth,omitempty" js:"min=1;max=8" desc:"How many candidates the queue tests at once: 1..8; unset is 4."`
+	Batch  int               `yaml:"batch,omitempty" json:"batch,omitempty" js:"min=1;max=8" desc:"How many waiting changes one candidate takes: 1..8; unset is 4."`
+}
+
+// Resolved is the landing with its defaults applied — THE ONE PLACE they are
+// applied ([CodeProtection.Gate] reads it).
+func (l CodeLanding) Resolved() CodeLanding {
+	l.Policy = l.Policy.Resolved()
+	if l.Depth == 0 {
+		l.Depth = CodeDefaultQueueDepth
+	}
+	if l.Batch == 0 {
+		l.Batch = CodeDefaultQueueBatch
+	}
+	return l
+}
+
+// CodeGate is a protection rule's merge gate RESOLVED — every field its value
+// or its default — in the shape the code domain records it: code.MergeGate's
+// keys, in its order and with its omissions, so its encoding is as long as
+// the record's ([CodeGate.EncodedBytes]; the engine's
+// TestADeclaredGateWeighsWhatTheDomainRecords holds the two). Its lists are in
+// the document's order: the reconcile records them in the domain's one order,
+// which changes no length.
+type CodeGate struct {
+	MergeBy          CodeMergeBy       `json:"merge_by"`
+	Approvals        CodeApprovals     `json:"approvals"`
+	ApprovalsUnless  []CodeChangeClass `json:"approvals_unless,omitempty"`
+	HumanPaths       []CodeHumanPath   `json:"human_paths,omitempty"`
+	Checks           []string          `json:"checks,omitempty"`
+	Landing          CodeLanding       `json:"landing"`
+	OwnersApprove    bool              `json:"owners_approve,omitempty"`
+	DeleteSource     CodeDeleteSource  `json:"delete_source"`
+	AutoRevert       bool              `json:"auto_revert,omitempty"`
+	AgentsEditChecks bool              `json:"agents_edit_checks,omitempty"`
+}
+
+// EncodedBytes is what the gate weighs as the code log records it — the
+// length of its JSON — which [CodeMaxGateBytes] bounds.
+func (g CodeGate) EncodedBytes() int {
+	// IT CANNOT FAIL: strings, whole numbers, booleans and lists of them are
+	// every value a gate holds, and json.Marshal encodes each of them.
+	b, _ := json.Marshal(g)
+	return len(b)
+}
+
+// Gate is the rule's merge gate RESOLVED: nil where the rule sets none of its
+// fields, and otherwise every field its value or its default — writers, none,
+// pre_land at depth 4 and batch 4, seats. THE ONE PLACE those defaults are
+// applied, read by the engine's reconcile, which records it, and by the
+// gate's bound here, so the gate validated is the gate recorded.
+func (rule CodeProtection) Gate() *CodeGate {
+	if len(rule.gateFields()) == 0 {
+		return nil
+	}
+	return &CodeGate{
+		MergeBy: rule.MergeBy.Resolved(), Approvals: rule.Approvals.Resolved(),
+		ApprovalsUnless: rule.ApprovalsUnless, HumanPaths: rule.HumanPaths, Checks: rule.Checks,
+		Landing: rule.Landing.Resolved(), OwnersApprove: rule.OwnersApprove,
+		DeleteSource: rule.DeleteSource.Resolved(), AutoRevert: rule.AutoRevert,
+		AgentsEditChecks: rule.AgentsEditChecks,
+	}
+}
+
+// gateFields is every field of a merge gate the rule sets, by its name in the
+// document and in the document's order: what a gate is formed from, and what
+// a tag rule is refused for.
+func (rule CodeProtection) gateFields() []string {
+	var set []string
+	for _, f := range []struct {
+		name string
+		set  bool
+	}{
+		{"merge_by", rule.MergeBy != ""}, {"approvals", rule.Approvals != ""},
+		{"approvals_unless", len(rule.ApprovalsUnless) > 0}, {"human_paths", len(rule.HumanPaths) > 0},
+		{"checks", len(rule.Checks) > 0}, {"landing", rule.Landing != CodeLanding{}},
+		{"owners_approve", rule.OwnersApprove}, {"delete_source", rule.DeleteSource != ""},
+		{"auto_revert", rule.AutoRevert}, {"agents_edit_checks", rule.AgentsEditChecks},
+	} {
+		if f.set {
+			set = append(set, f.name)
+		}
+	}
+	return set
 }
 
 // Pattern is the rule as the domain records it: the namespaced protection
@@ -569,6 +703,144 @@ func (d CodeDirectPush) Resolved() CodeDirectPush {
 	}
 	return d
 }
+
+// CodeMergeBy is who may merge into the branches a gated rule matches, and
+// code.merge_by_floor's least one for every protected branch.
+type CodeMergeBy string
+
+const (
+	// CodeMergeByWriters lets anybody who may write to the repository merge —
+	// what unset reads as.
+	CodeMergeByWriters CodeMergeBy = "writers"
+	// CodeMergeByMaintainers lets only those who maintain the repository
+	// merge.
+	CodeMergeByMaintainers CodeMergeBy = "maintainers"
+	// CodeMergeByPersons lets only a person merge, never a seat.
+	CodeMergeByPersons CodeMergeBy = "persons"
+)
+
+// CodeMergeBys is the closed set, loosest first: the one list the validator
+// and the schema read. The code domain's own set is held to it in both
+// directions by the engine's TestEveryDeclaredMergeByIsOneTheDomainRecords,
+// because config cannot import the domain that imports it — and so is each of
+// the merge gate's closed sets below.
+var CodeMergeBys = []CodeMergeBy{CodeMergeByWriters, CodeMergeByMaintainers, CodeMergeByPersons}
+
+// Valid reports a value this build knows. Unset is valid: it reads as writers
+// ([CodeMergeBy.Resolved]).
+func (m CodeMergeBy) Valid() bool { return m == "" || slices.Contains(CodeMergeBys, m) }
+
+// Resolved is the value with its default applied: unset is writers.
+func (m CodeMergeBy) Resolved() CodeMergeBy {
+	if m == "" {
+		return CodeMergeByWriters
+	}
+	return m
+}
+
+// CodeApprovals is how many counted approvals a merge waits for.
+type CodeApprovals string
+
+const (
+	// CodeApprovalsNone waits for none — what unset reads as.
+	CodeApprovalsNone CodeApprovals = "none"
+	// CodeApprovalsOne waits for one.
+	CodeApprovalsOne CodeApprovals = "one"
+)
+
+// CodeApprovalCounts is the closed set, fewest first.
+var CodeApprovalCounts = []CodeApprovals{CodeApprovalsNone, CodeApprovalsOne}
+
+// Valid reports a value this build knows. Unset is valid: it reads as none.
+func (a CodeApprovals) Valid() bool { return a == "" || slices.Contains(CodeApprovalCounts, a) }
+
+// Resolved is the value with its default applied: unset is none.
+func (a CodeApprovals) Resolved() CodeApprovals {
+	if a == "" {
+		return CodeApprovalsNone
+	}
+	return a
+}
+
+// CodeLandingPolicy is how a gated branch's queue lands a change.
+type CodeLandingPolicy string
+
+const (
+	// CodeLandingPreLand tests each change merged on the branch before it
+	// lands — what unset reads as.
+	CodeLandingPreLand CodeLandingPolicy = "pre_land"
+	// CodeLandingPostLand lands changes ahead of their checks, which then run
+	// on the branch's newest tip.
+	CodeLandingPostLand CodeLandingPolicy = "post_land"
+)
+
+// CodeLandingPolicies is the closed set, the default first.
+var CodeLandingPolicies = []CodeLandingPolicy{CodeLandingPreLand, CodeLandingPostLand}
+
+// Valid reports a value this build knows. Unset is valid: it reads as
+// pre_land.
+func (l CodeLandingPolicy) Valid() bool { return l == "" || slices.Contains(CodeLandingPolicies, l) }
+
+// Resolved is the value with its default applied: unset is pre_land.
+func (l CodeLandingPolicy) Resolved() CodeLandingPolicy {
+	if l == "" {
+		return CodeLandingPreLand
+	}
+	return l
+}
+
+// CodeDeleteSource is whether a merge deletes its change's source branch.
+type CodeDeleteSource string
+
+const (
+	// CodeDeleteSeats deletes a source branch in a seat's own namespace, in
+	// the record that merges it — what unset reads as.
+	CodeDeleteSeats CodeDeleteSource = "seats"
+	// CodeDeleteNone keeps every source branch.
+	CodeDeleteNone CodeDeleteSource = "none"
+)
+
+// CodeDeleteSources is the closed set, the default first.
+var CodeDeleteSources = []CodeDeleteSource{CodeDeleteSeats, CodeDeleteNone}
+
+// Valid reports a value this build knows. Unset is valid: it reads as seats.
+func (d CodeDeleteSource) Valid() bool { return d == "" || slices.Contains(CodeDeleteSources, d) }
+
+// Resolved is the value with its default applied: unset is seats.
+func (d CodeDeleteSource) Resolved() CodeDeleteSource {
+	if d == "" {
+		return CodeDeleteSeats
+	}
+	return d
+}
+
+// CodeChangeClass names what a change does NOT touch, as the code domain's
+// lexer classes it: a list of them exempts a change from an approval.
+type CodeChangeClass string
+
+const (
+	// CodeChangeClassNoCodeChange is a revision that moved nothing — a
+	// revision's class and never a path's, so no list here takes it.
+	CodeChangeClassNoCodeChange CodeChangeClass = "no_code_change"
+	// CodeChangeClassWhitespaceOnly is a path whose only change is the space
+	// between its tokens.
+	CodeChangeClassWhitespaceOnly CodeChangeClass = "whitespace_only"
+	// CodeChangeClassCommentOnly is a path whose only change is in its
+	// comments, none of them a directive.
+	CodeChangeClassCommentOnly CodeChangeClass = "comment_only"
+)
+
+// CodeChangeClasses is the closed set, in the code domain's order.
+var CodeChangeClasses = []CodeChangeClass{CodeChangeClassNoCodeChange, CodeChangeClassWhitespaceOnly,
+	CodeChangeClassCommentOnly}
+
+// CodePathClasses is the classes a PATH has, narrowest first: the ones a
+// gate's approvals_unless and a human path's unless take.
+var CodePathClasses = []CodeChangeClass{CodeChangeClassWhitespaceOnly, CodeChangeClassCommentOnly}
+
+// Valid reports a class this build knows. There is no unset class: a list
+// names classes, or is empty.
+func (c CodeChangeClass) Valid() bool { return slices.Contains(CodeChangeClasses, c) }
 
 // CodeLimits are what one push and one repository may hold. An unset field
 // takes its default ([CodeLimits.Resolved]).
@@ -650,6 +922,15 @@ func (c Code) validate(path Path, o *org.Organization) error {
 				"code.scratch configures the native code host, and nothing hosts code on this "+
 					"company: set code.native: true, or remove code.scratch")
 		}
+	}
+	switch {
+	case !c.MergeByFloor.Valid():
+		p.add(at(path, "merge_by_floor"), ErrUnknownValue, "%q (want %s, or unset for %s)",
+			c.MergeByFloor, names(CodeMergeBys), CodeMergeByWriters)
+	case !c.Native && c.MergeByFloor != "":
+		p.add(at(path, "merge_by_floor"), ErrConflict,
+			"nothing hosts code on this company, so no merge is held to it: set code.native, or remove "+
+				"code.merge_by_floor")
 	}
 	if d := c.DeletedRetentionDays; d < 0 || d > codeMaxHeldRetentionDays {
 		p.add(at(path, "deleted_retention_days"), ErrOutOfRange,
@@ -795,8 +1076,9 @@ func validateCodeRepos(path Path, repos []CodeRepo, o *org.Organization) error {
 // chart: its name, its one owner resolving on the chart, its visibility, its
 // default branch, its description, its protection rules — at most
 // [CodeMaxProtections], each naming exactly one of a branch or a tag pattern
-// in gitref's grammar, each pattern protected once, and no force on a tag — and
-// its path owners ([validatePathOwners]).
+// in gitref's grammar, each pattern protected once, no force on a tag, and
+// each one's merge gate ([CodeProtection.validateGate]) — and its path owners
+// ([validatePathOwners]).
 func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 	var p problems
 	switch {
@@ -1067,7 +1349,130 @@ func (rule CodeProtection) validate(p *problems, path Path) bool {
 			rule.DirectPush, names(CodeDirectPushes), CodeDirectPersons)
 		ok = false
 	}
+	rule.validateGate(p, path)
 	return ok
+}
+
+// validateGate holds the rule's merge gate at path — the rule's own path, its
+// fields beneath it — into p, RUNNABLE as its pattern is: the code domain
+// refuses a gate on a tag rule, a value of no closed set, a landing outside its
+// bounds, a list past its bound or naming a value twice, a glob gitref does not
+// read, a check no repository can name, no_code_change as a class that
+// exempts, and a gate past [CodeMaxGateBytes] — and the reconcile cannot
+// record a declaration the domain refuses. The bytes are judged last and only
+// of a gate whose every field passed: a field refused is the one mistake to
+// name. Whether the gate does anything is a warning's ([Company.codeWarnings]).
+func (rule CodeProtection) validateGate(p *problems, path Path) {
+	set := rule.gateFields()
+	if len(set) == 0 {
+		return
+	}
+	if rule.Tag != "" {
+		// AT THE FIRST FIELD THE RULE SETS, naming every one: a tag never
+		// moves, so the gate as a whole has nothing to hold — one mistake.
+		p.add(at(path, set[0]), ErrConflict,
+			"a tag never moves, so no merge reaches one: %s gate merges, which only a branch rule has — "+
+				"move them to a rule over the branches they are for", strings.Join(set, ", "))
+		return
+	}
+	before := len(*p)
+	if !rule.MergeBy.Valid() {
+		p.add(at(path, "merge_by"), ErrUnknownValue, "%q (want %s, or unset for %s)",
+			rule.MergeBy, names(CodeMergeBys), CodeMergeByWriters)
+	}
+	if !rule.Approvals.Valid() {
+		p.add(at(path, "approvals"), ErrUnknownValue, "%q (want %s, or unset for %s)",
+			rule.Approvals, names(CodeApprovalCounts), CodeApprovalsNone)
+	}
+	validateGateClasses(p, at(path, "approvals_unless"), "approvals_unless", rule.ApprovalsUnless)
+	humans := at(path, "human_paths")
+	if n := len(rule.HumanPaths); n > CodeMaxHumanPaths {
+		p.add(humans, ErrOutOfRange, "%d paths, past the %d one rule's merge gate may name: a glob holds a "+
+			"whole directory (deploy/**), so name fewer", n, CodeMaxHumanPaths)
+	}
+	globs := make(map[string]int, len(rule.HumanPaths))
+	for k, h := range rule.HumanPaths {
+		entry := idx(humans, k)
+		switch _, err := gitref.ParsePathGlob(h.Glob); {
+		case h.Glob == "":
+			p.add(at(entry, "glob"), ErrMissing,
+				"a human path names the paths it holds: a glob such as .crewlet/** or deploy/**")
+		case err != nil:
+			p.add(at(entry, "glob"), ErrShape, "%q is not a path glob: %v", h.Glob, err)
+		default:
+			if was, dup := globs[h.Glob]; dup {
+				p.add(at(entry, "glob"), ErrConflict, "%q is listed twice (first at human_paths[%d])", h.Glob,
+					was)
+				break
+			}
+			globs[h.Glob] = k
+		}
+		validateGateClasses(p, at(entry, "unless"), "unless", h.Unless)
+	}
+	checks := at(path, "checks")
+	if n := len(rule.Checks); n > CodeMaxRequiredChecks {
+		p.add(checks, ErrOutOfRange, "%d checks, past the %d one rule's merge gate may require", n,
+			CodeMaxRequiredChecks)
+	}
+	named := make(map[string]int, len(rule.Checks))
+	for k, name := range rule.Checks {
+		switch was, dup := named[name]; {
+		case !ValidCodeCheckName(name):
+			p.add(idx(checks, k), ErrShape, "%q is not a check's name: a lowercase letter or digit, then up "+
+				"to %d more of them, '.', '_' and '-'", name, CodeMaxCheckNameBytes-1)
+		case dup:
+			p.add(idx(checks, k), ErrConflict, "%q is listed twice (first at checks[%d])", name, was)
+		default:
+			named[name] = k
+		}
+	}
+	landing := at(path, "landing")
+	if !rule.Landing.Policy.Valid() {
+		p.add(at(landing, "policy"), ErrUnknownValue, "%q (want %s, or unset for %s)",
+			rule.Landing.Policy, names(CodeLandingPolicies), CodeLandingPreLand)
+	}
+	if d := rule.Landing.Depth; d < 0 || d > CodeMaxQueueDepth {
+		p.add(at(landing, "depth"), ErrOutOfRange, "%d is outside 1..%d candidates, or unset for the default %d",
+			d, CodeMaxQueueDepth, CodeDefaultQueueDepth)
+	}
+	if b := rule.Landing.Batch; b < 0 || b > CodeMaxQueueBatch {
+		p.add(at(landing, "batch"), ErrOutOfRange, "%d is outside 1..%d changes a candidate, or unset for the "+
+			"default %d", b, CodeMaxQueueBatch, CodeDefaultQueueBatch)
+	}
+	if !rule.DeleteSource.Valid() {
+		p.add(at(path, "delete_source"), ErrUnknownValue, "%q (want %s, or unset for %s)",
+			rule.DeleteSource, names(CodeDeleteSources), CodeDeleteSeats)
+	}
+	if len(*p) > before {
+		return
+	}
+	if n := rule.Gate().EncodedBytes(); n > CodeMaxGateBytes {
+		p.add(path, ErrOutOfRange, "the rule's merge gate is %d bytes as the code log records it, past the %d "+
+			"one gate may weigh: require fewer checks or name fewer human paths — a glob's &, < and > are "+
+			"six bytes each", n, CodeMaxGateBytes)
+	}
+}
+
+// validateGateClasses holds a list of the classes that exempt a change, the
+// field name at path, into p: each a PATH class, each once. no_code_change is
+// refused for why it is no path's: an approval already carries across a
+// revision that changed nothing, so it has nothing to exempt.
+func validateGateClasses(p *problems, path Path, name string, list []CodeChangeClass) {
+	seen := make(map[CodeChangeClass]int, len(list))
+	for k, c := range list {
+		switch was, dup := seen[c]; {
+		case c == CodeChangeClassNoCodeChange:
+			p.add(idx(path, k), ErrConflict, "no_code_change is a revision's class, never a path's: an "+
+				"approval already carries across a revision that changed nothing, so it has nothing to "+
+				"exempt (want %s)", names(CodePathClasses))
+		case !slices.Contains(CodePathClasses, c):
+			p.add(idx(path, k), ErrUnknownValue, "%q (want %s)", c, names(CodePathClasses))
+		case dup:
+			p.add(idx(path, k), ErrConflict, "%q is listed twice (first at %s[%d])", c, name, was)
+		default:
+			seen[c] = k
+		}
+	}
 }
 
 // codeWarnings is what is valid about the company's code and still worth
@@ -1080,9 +1485,12 @@ func (rule CodeProtection) validate(p *problems, path Path) bool {
 //     no lead's seat reads it, because there is none, and every other seat is
 //     what the visibility shuts out. Located at the visibility;
 //   - has a default branch no rule protects: a person who may push to it may
-//     force-push it or delete it. Through gitref's own matcher — the one a
-//     push's decide asks — so `release/*` warns about main and `**` does not.
-//     Located at the field to ADD, the repository's protect.
+//     force-push it or delete it, and no merge gate holds what merges into
+//     it. Through gitref's own matcher — the one a push's decide asks — so
+//     `release/*` warns about main and `**` does not. Located at the field to
+//     ADD, the repository's protect;
+//   - has a rule whose merge gate sets a field that does nothing as the rule
+//     stands ([idleGateFields]), located at that field.
 //
 // NOT AN ARCHIVED REPOSITORY'S BRANCH: it takes no push at all — the decide
 // refuses the whole push — so nobody can force-push or delete its branch, and
@@ -1104,6 +1512,7 @@ func (c *Company) codeWarnings() []Warning {
 		if w, ok := unitWithNoLead(units, i, r); ok {
 			out = append(out, w)
 		}
+		out = append(out, idleGateFields(i, r)...)
 		if r.Archived {
 			continue
 		}
@@ -1120,8 +1529,56 @@ func (c *Company) codeWarnings() []Warning {
 			continue
 		}
 		out = append(out, advisory(at(idx(field("code.repos"), i), "protect"), fmt.Sprintf(
-			"%s's default branch %s is unprotected: a person can force-push or delete it "+
-				"(add {branch: %s} to its protect list)", r.Name, branch, branch)))
+			"%s's default branch %s is unprotected: a person can force-push or delete it, and no merge "+
+				"gate holds what merges into it (add {branch: %s} to its protect list, with merge_by, "+
+				"approvals, human_paths or checks to gate its merges)", r.Name, branch, branch)))
+	}
+	return out
+}
+
+// idleGateFields is a warning for every merge gate field of code.repos[i], r,
+// that does nothing as the rule beside it stands — valid, and a sign the rule
+// says less than its author meant:
+//
+//   - owners_approve on a repository that names no path owners: no change
+//     touches an owned path, so it waits for nobody's approval;
+//   - landing or auto_revert on a rule that requires no checks: only a branch
+//     whose merges wait for checks has a queue to land them, whose enqueuer
+//     consents to a revert — every merge into this one lands directly;
+//   - approvals_unless beside approvals: none, which exempts changes from
+//     approvals the rule never asks.
+//
+// Each at the field that does nothing — the line to remove, or the one beside
+// it to set. A tag rule is skipped: any gate on one is validation's refusal,
+// the line to read.
+func idleGateFields(i int, r CodeRepo) []Warning {
+	var out []Warning
+	for k, rule := range r.Protect {
+		if rule.Branch == "" || rule.Tag != "" {
+			continue
+		}
+		rulePath := idx(at(idx(field("code.repos"), i), "protect"), k)
+		idle := func(name, why string) {
+			out = append(out, advisory(at(rulePath, name), fmt.Sprintf("%s's rule on %s sets %s, %s",
+				r.Name, rule.Branch, name, why)))
+		}
+		if rule.OwnersApprove && len(r.PathOwners) == 0 {
+			idle("owners_approve", "and the repository names no path owners: no change touches an owned "+
+				"path, so it waits for nobody's approval (name path_owners, or remove owners_approve)")
+		}
+		if len(rule.Checks) == 0 && rule.Landing != (CodeLanding{}) {
+			idle("landing", "and requires no checks: only a branch whose merges wait for checks has a queue "+
+				"to land them, so every merge into this one lands directly (require checks, or remove landing)")
+		}
+		if len(rule.Checks) == 0 && rule.AutoRevert {
+			idle("auto_revert", "and requires no checks: a revert is consented to when a change is queued, "+
+				"and only a branch whose merges wait for checks has a queue (require checks, or remove "+
+				"auto_revert)")
+		}
+		if len(rule.ApprovalsUnless) > 0 && rule.Approvals.Resolved() == CodeApprovalsNone {
+			idle("approvals_unless", "beside approvals: none, so it exempts changes from approvals the rule "+
+				"never asks (set approvals: one, or remove approvals_unless)")
+		}
 	}
 	return out
 }

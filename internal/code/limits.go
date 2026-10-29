@@ -27,20 +27,27 @@ type Limits struct {
 	// runaway bound on what a seat costs the code log, which the push decide
 	// holds every seat's push to ([RefusalPushQuota]) and no person's.
 	PushesPerSeatDay int `json:"pushes_per_seat_day"`
+	// MergeByFloor is code.merge_by_floor: the least authority a merge into
+	// ANY protected ref needs, whatever its rules say — a merge is held to the
+	// stricter of it and the merge_by of every rule matching its target
+	// ([MergeBy.Stricter]), a rule with no gate reading as writers. The
+	// deciding epoch's, as every limit here is.
+	MergeByFloor MergeBy `json:"merge_by_floor"`
 }
 
 // DefaultLimits are the limits of a company that sets none.
 func DefaultLimits() Limits { return LimitsOf(config.Code{}) }
 
 // LimitsOf is a company's code.limits with the defaults applied — what a push
-// is held to on the deciding node's epoch. A CONVERSION of config's own
-// reading ([config.CodeLimits.Resolved]), never a second resolution of the
-// defaults, so `crewlet validate`'s order rules and the committer's decide
-// read one document one way (TestLimitsOfIsConfigsReading).
+// is held to on the deciding node's epoch — and its code.merge_by_floor. A
+// CONVERSION of config's own readings ([config.CodeLimits.Resolved],
+// [config.CodeMergeBy.Resolved]), never a second resolution of the defaults,
+// so `crewlet validate`'s rules and the committer's decide read one document
+// one way (TestLimitsOfIsConfigsReading).
 func LimitsOf(c config.Code) Limits {
 	r := c.Limits.Resolved()
 	return Limits{MaxPushBytes: r.MaxPushBytes, MaxBlobBytes: r.MaxBlobBytes, RepoMaxBytes: r.RepoMaxBytes,
-		PushesPerSeatDay: r.PushesPerSeatDay}
+		PushesPerSeatDay: r.PushesPerSeatDay, MergeByFloor: MergeBy(c.MergeByFloor.Resolved())}
 }
 
 // OutsideSeatShare divides what a seat OUTSIDE a repository's owning unit may

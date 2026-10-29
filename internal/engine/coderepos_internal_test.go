@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -497,6 +498,105 @@ func TestEveryDeclaredVisibilityIsOneTheDomainRecords(t *testing.T) {
 	}
 }
 
+// sameClosedSet holds one of a merge gate's closed sets as config declares it
+// to the code domain's: the same values, in the same order.
+func sameClosedSet[C, D ~string](t *testing.T, field string, declared []C, recorded []D) {
+	t.Helper()
+	d := make([]string, len(declared))
+	for i, v := range declared {
+		d[i] = string(v)
+	}
+	r := make([]string, len(recorded))
+	for i, v := range recorded {
+		r[i] = string(v)
+	}
+	if !slices.Equal(d, r) {
+		t.Errorf("code.repos may declare %s %v, and the code domain records %v", field, d, r)
+	}
+}
+
+// EVERY VALUE A MERGE GATE MAY DECLARE IS ONE THE CODE DOMAIN RECORDS, AND THE
+// OTHER WAY ROUND — merge_by, and with it approvals, the landing's policy,
+// delete_source and the change classes, the path classes an unless list takes
+// among them. config cannot import the domain that imports it, so each set is
+// spelled twice and held to the other here, in order: a value only config had
+// would pass `crewlet validate` and be refused by every node's reconcile, and
+// one only the domain had could be recorded and never declared. And each unset
+// value resolves to one the domain records, since the domain takes none.
+func TestEveryDeclaredMergeByIsOneTheDomainRecords(t *testing.T) {
+	t.Parallel()
+	sameClosedSet(t, "merge_by", config.CodeMergeBys, code.MergeBys())
+	sameClosedSet(t, "approvals", config.CodeApprovalCounts, code.ApprovalCounts())
+	sameClosedSet(t, "landing.policy", config.CodeLandingPolicies, code.LandingPolicies())
+	sameClosedSet(t, "delete_source", config.CodeDeleteSources, code.DeleteSources())
+	sameClosedSet(t, "a change class", config.CodeChangeClasses, code.ChangeClasses())
+	sameClosedSet(t, "an exempting class", config.CodePathClasses, code.PathClasses())
+	for field, valid := range map[string]bool{
+		"merge_by":       code.MergeBy(config.CodeMergeBy("").Resolved()).Valid(),
+		"approvals":      code.Approvals(config.CodeApprovals("").Resolved()).Valid(),
+		"landing.policy": code.LandingPolicy(config.CodeLandingPolicy("").Resolved()).Valid(),
+		"delete_source":  code.DeleteSource(config.CodeDeleteSource("").Resolved()).Valid(),
+	} {
+		if !valid {
+			t.Errorf("an unset %s resolves to a value the code domain refuses", field)
+		}
+	}
+}
+
+// A DECLARED GATE WEIGHS WHAT THE DOMAIN RECORDS: config refuses a gate past
+// CodeMaxGateBytes by the length of its own resolved gate's JSON
+// (config.CodeGate.EncodedBytes), and the code domain refuses one past
+// MaxGateBytes by the length of the record's — so the two lengths must be one,
+// or `crewlet validate` passes a gate every node's reconcile refuses, or
+// refuses one the domain would record. Held over a gate of one field, and over
+// one of every field with its lists out of order and its globs spelled long,
+// whose canonical order changes no length; and both sides judge the same bound.
+func TestADeclaredGateWeighsWhatTheDomainRecords(t *testing.T) {
+	t.Parallel()
+	c, err := NewCompany(parseCompany(t, codeReposDoc(webRepo(""), "")))
+	if err != nil {
+		t.Fatalf("build the epoch: %v", err)
+	}
+	if config.CodeMaxGateBytes != code.MaxGateBytes {
+		t.Fatalf("config bounds a gate at %d bytes and the domain at %d", config.CodeMaxGateBytes,
+			code.MaxGateBytes)
+	}
+	for name, rule := range map[string]config.CodeProtection{
+		"one field": {Branch: "main", MergeBy: config.CodeMergeByPersons},
+		"every field, spelled long": {
+			Branch: "main", MergeBy: config.CodeMergeByMaintainers, Approvals: config.CodeApprovalsOne,
+			ApprovalsUnless: []config.CodeChangeClass{config.CodeChangeClassWhitespaceOnly,
+				config.CodeChangeClassCommentOnly},
+			HumanPaths: []config.CodeHumanPath{
+				{Glob: "z&<>/**", Unless: []config.CodeChangeClass{config.CodeChangeClassWhitespaceOnly,
+					config.CodeChangeClassCommentOnly}},
+				{Glob: "a/été/**"},
+			},
+			Checks:        []string{"unit", "lint", "e2e.linux"},
+			Landing:       config.CodeLanding{Policy: config.CodeLandingPostLand, Depth: 8, Batch: 1},
+			OwnersApprove: true, DeleteSource: config.CodeDeleteNone, AutoRevert: true, AgentsEditChecks: true,
+		},
+	} {
+		repo := c.Config.Code.Repos[0]
+		repo.Protect = []config.CodeProtection{rule}
+		declared, err := declaredRepo(c.Org.Index(), repo)
+		if err != nil {
+			t.Fatalf("%s: declare web: %v", name, err)
+		}
+		if err := declared.Validate(); err != nil {
+			t.Fatalf("%s: the declared gate is not one the domain records: %v", name, err)
+		}
+		recorded, err := json.Marshal(declared.Settings.Protections[0].Gate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := rule.Gate().EncodedBytes(); got != len(recorded) {
+			t.Errorf("%s: config weighs the gate at %d bytes and the domain records %d: %s", name, got,
+				len(recorded), recorded)
+		}
+	}
+}
+
 // A DECLARATION IS RECORDED IN ONE CANONICAL FORM, whichever order its rules
 // were written in — every node deciding it forms one record — and an owner the
 // chart does not resolve is named rather than recorded empty.
@@ -568,6 +668,33 @@ func TestADeclarationIsRecordedInOneCanonicalForm(t *testing.T) {
 		!strings.Contains(err.Error(), "path_owners[0].unit") || !strings.Contains(err.Error(), "Marketing") {
 		t.Errorf("a path owner the chart does not resolve was declared (%v), want it named at its field", err)
 	}
+
+	// A MERGE GATE, every field the document left unset resolved — writers,
+	// none, pre_land at 4 and 4, seats — and its lists in their one order
+	// whatever order the document wrote them in; a rule with no gate field
+	// records none.
+	gated := c.Config.Code.Repos[0]
+	gated.Protect = []config.CodeProtection{{Branch: "release/*"}, {Branch: "main", Checks: []string{"unit", "lint"},
+		HumanPaths: []config.CodeHumanPath{{Glob: "deploy/**", Unless: []config.CodeChangeClass{
+			config.CodeChangeClassWhitespaceOnly, config.CodeChangeClassCommentOnly}}, {Glob: ".crewlet/**"}}}}
+	recorded, err := declaredRepo(c.Org.Index(), gated)
+	if err != nil {
+		t.Fatalf("declare web with a gate: %v", err)
+	}
+	wantGate := code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone,
+		HumanPaths: []code.HumanPath{{Glob: ".crewlet/**"}, {Glob: "deploy/**", Unless: []code.ChangeClass{
+			code.ChangeClassCommentOnly, code.ChangeClassWhitespaceOnly}}},
+		Checks:  []string{"lint", "unit"},
+		Landing: code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats}
+	switch rules := recorded.Settings.Protections; {
+	case len(rules) != 2 || rules[0].Pattern != "refs/heads/main" || rules[1].Gate != nil:
+		t.Errorf("web's rules are declared as %+v, want main's gated and release/*'s with none", rules)
+	case rules[0].Gate == nil || !rules[0].Gate.Equal(wantGate):
+		t.Errorf("main's gate is declared as %+v, want %+v", rules[0].Gate, wantGate)
+	}
+	if err := recorded.Validate(); err != nil {
+		t.Errorf("web's declaration with its gate is not one the domain records: %v", err)
+	}
 }
 
 // PATH OWNERS RECONCILE FROM THE DOCUMENT: code.repos' path_owners reach the
@@ -636,6 +763,79 @@ func TestPathOwnersReconcileFromTheDocument(t *testing.T) {
 	applyReconciled(t, e, doc("", false))
 	if got := mustRepo(t, e, "web").PathOwners; len(got) != 0 {
 		t.Errorf("after an activation that names no path owners, web has %+v", got)
+	}
+}
+
+// AN UNCHANGED GATE WRITES NOTHING, AND A CHANGED ONE LANDS. code.repos' merge
+// gate reaches the repository it declares resolved and in its one form; an
+// activation whose gate is the same — its lists written in another order — is
+// its fence alone, though every read of the gate from the rows is a new
+// pointer the declaration's is compared with by value; one that changes one
+// field of it settles that in one settings record; and one that drops the gate
+// leaves the rule with none.
+//
+// Mutations: compare two rules without their gates (code.Protection.Equal) —
+// the changed field never reaches the log, red; compare the rules with
+// slices.Equal (code.RepoSettings.equal) — the unchanged activation writes a
+// settings record, red.
+func TestAnUnchangedGateWritesNothing(t *testing.T) {
+	t.Parallel()
+	doc := func(rule string) string {
+		return codeReposDoc("    - name: web\n      owner: {unit: Engineering}\n      protect:\n        - "+rule+"\n",
+			"")
+	}
+	gated := func(checks string) string {
+		return "{branch: main, merge_by: maintainers, approvals: one, checks: [" + checks + "], " +
+			"human_paths: [{glob: 'deploy/**'}, {glob: '.crewlet/**', unless: [comment_only]}]}"
+	}
+	gateWith := func(checks ...string) *code.MergeGate {
+		return &code.MergeGate{MergeBy: code.MergeByMaintainers, Approvals: code.ApprovalsOne,
+			HumanPaths: []code.HumanPath{{Glob: ".crewlet/**", Unless: []code.ChangeClass{code.ChangeClassCommentOnly}},
+				{Glob: "deploy/**"}},
+			Checks:  checks,
+			Landing: code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats}
+	}
+	node := newSandboxNode(t, parseCompany(t, doc(gated("unit, lint"))))
+	servesCodeReads(t, node)
+	reconciled(t, node)
+	web := mustRepo(t, node, "web")
+	read := func(stage string) *code.MergeGate {
+		t.Helper()
+		rules := mustRepo(t, node, "web").Protections
+		if len(rules) != 1 || rules[0].Pattern != "refs/heads/main" {
+			t.Fatalf("%s: web's rules are %+v, want main's one", stage, rules)
+		}
+		return rules[0].Gate
+	}
+	if got, want := read("created"), gateWith("lint", "unit"); got == nil || !got.Equal(*want) {
+		t.Fatalf("web's gate is %+v, want %+v", got, *want)
+	}
+
+	// THE SAME GATE, its checks written in another order: the fence alone.
+	before := codeLogEnd(t, node)
+	applyReconciled(t, node, doc(gated("lint, unit")))
+	if wrote := codeLogWrites(t, node, before); !slices.Equal(wrote, []code.Subject{code.CompanySubject()}) {
+		t.Errorf("an activation whose gate is unchanged wrote %v to the code log, want its fence alone, %v",
+			wrote, code.CompanySubject())
+	}
+
+	// ONE FIELD CHANGED: one settings record beside the fence.
+	before = codeLogEnd(t, node)
+	applyReconciled(t, node, doc(gated("lint, unit, e2e")))
+	if got, want := read("after a check was added"), gateWith("e2e", "lint", "unit"); got == nil ||
+		!got.Equal(*want) {
+		t.Errorf("after an activation adding a check, web's gate is %+v, want %+v", got, *want)
+	}
+	if wrote := codeLogWrites(t, node, before); !slices.Equal(wrote,
+		[]code.Subject{code.CompanySubject(), code.RepoSubject(web.ID)}) {
+		t.Errorf("an activation changing one field of a gate wrote %v to the code log, want its fence and "+
+			"one settings record", wrote)
+	}
+
+	// DROPPED: the rule stays, with no gate.
+	applyReconciled(t, node, doc("{branch: main}"))
+	if got := read("after the gate was dropped"); got != nil {
+		t.Errorf("after an activation that sets no gate field, main's rule keeps the gate %+v", *got)
 	}
 }
 
