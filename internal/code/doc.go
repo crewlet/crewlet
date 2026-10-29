@@ -1387,7 +1387,10 @@
 //
 // A CHANGED ACTIVATION (internal/engine's BenchmarkAChangedActivation, the
 // reconcile end to end on one booted node, its fence, walk and batch read
-// included, one count each, [reconcileInFlight] the width): over the same ten
+// included, one count each, at thirty-two in flight — [reconcileInFlight]
+// then, fifteen since the path owners' rows made the widest record a
+// reconcile writes 257 rows, a width inside the eight to a hundred and
+// twenty-eight below that all measured the same): over the same ten
 // thousand, the activation that creates them all is 18.3–19.5 s, one that
 // deletes them all 17.2–18.5 s, one that restores them all 16.3–17.2 s, and
 // one that changes nothing 0.45–0.53 s (its batch read, too, before the path

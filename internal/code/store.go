@@ -450,26 +450,43 @@ func (s *Store) DeleteRepos(ctx context.Context, a Activation, ids []string) ([]
 }
 
 // reconcileInFlight is how many repositories a reconcile decides at once
-// ([Store.EnsureRepos], [Store.DeleteRepos]).
+// ([Store.EnsureRepos], [Store.DeleteRepos]): as many as one apply
+// transaction holds of the widest record a reconcile writes — FIFTEEN.
 //
 // ENOUGH TO HIDE A DECISION'S ROUND TRIP, by Little's law: in flight = the
 // rate the node can apply them × how long each takes from its publish to its
 // apply. On one node (doc.go's measured section) the rate is about 550 a
 // second whatever the width — this node's applier and the snapshots of the
 // decisions themselves are the floor — and a decision's round trip alone is
-// 6.7 ms, so under four in flight reach it: 8 and 128 decide ten thousand in
-// the same 16–21 s, where 4 takes 23–25 s, 2 takes 34–35 s, 1 takes 67–70 s.
-// In a fleet each append also waits for its stream's quorum, so the round
-// trip grows by the members' round trips while the rate does not; THIRTY-TWO
-// keeps the floor's rate up to a round trip of about 58 ms.
+// 6.7 ms, so under four in flight reach it: every width from 8 to 128 decided
+// ten thousand in the same 16–21 s, where 4 took 23–25 s, 2 took 34–35 s, 1
+// took 67–70 s. In a fleet each append also waits for its stream's quorum, so
+// the round trip grows by the members' round trips while the rate does not;
+// fifteen keeps the floor's rate up to a round trip of about 27 ms, four
+// times one node's, with a quorum's round trip inside a region beside it.
 //
-// AND NO WIDER, because the decisions in flight append together and the
-// applier commits them as one batch: the widest record a reconcile writes — a
-// create of a repository with [MaxProtectionsPerRepo] rules, its claim, its
-// row and 64 rule rows — is 66 rows, so thirty-two of them are 2 112 rows,
-// inside the applier's row budget (statelog.ApplyTxRowBudget, 4 000), where
-// sixty-four would cross it and split the batch.
-const reconcileInFlight = 32
+// AND NO WIDER, because the decisions in flight append together, and the
+// applier commits them as one batch only while their rows fit its row budget
+// (statelog.ApplyTxRowBudget, 4 000): past it the batch splits into two
+// transactions or more, and a write appended behind the reconcile — a push
+// whose person's git waits on its row — waits on each. The widest record a
+// reconcile writes is a settings change or a restore that replaces every rule
+// and every path owner of a repository holding its bound of each
+// ([reconcileRecordRows], 257 rows), so fifteen are 3 855 rows
+// (TestAReconcileInFlightFitsOneApplyTransaction measures the three records a
+// reconcile writes a repository's settings with, and holds the product). It
+// was thirty-two while the widest was taken to be a create of 66 rows, when a
+// settings record already wrote 129 — thirty-two of those were 4 128 — and
+// the path owners' rows then doubled them.
+const reconcileInFlight = statelog.ApplyTxRowBudget / reconcileRecordRows
+
+// reconcileRecordRows is the most rows one record a reconcile writes touches,
+// as the applier counts them: a settings change or a restore deletes a
+// repository's rules and its path owners and writes the new ones — at most
+// [MaxProtectionsPerRepo] and [MaxPathOwners] rows each way — and moves the
+// repository's row. A create writes at most 131, its claim, its row and its
+// kind's count beside the rules and owners, and a deletion one.
+const reconcileRecordRows = 2*(MaxProtectionsPerRepo+MaxPathOwners) + 1
 
 // decideEach runs decide for every k in [0, n), up to [reconcileInFlight] at
 // once, as a CLOSED LOOP — a decision begins only when one in flight has
