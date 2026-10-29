@@ -235,19 +235,25 @@ func validEnvName(name string) bool {
 	return true
 }
 
-// ChecksFileError is every fault [ParseChecks] found in a file, each a
+// checksFileError is every fault [ParseChecks] found in a file, each a
 // [config.Fault] at the authored path and line it is about.
 //
 // IT IS A JOIN BY CONTRACT — it renders one fault a line and unwraps to them —
 // so config.Problems reads it as it reads a company document's refusal, one
-// problem a fault; and it IS [ErrInvalid], this domain's refusal of a
-// declaration by field.
-type ChecksFileError struct {
+// problem a fault, and errors.As finds each *config.Fault; and it IS
+// [ErrInvalid], this domain's refusal of a declaration by field.
+//
+// UNEXPORTED, because a checks file is parsed where its bytes are read and
+// its refusal is answered there: no estate operation answers one, so the type
+// crosses no wire — and the estate carries every EXPORTED error type of this
+// package across it by its fields, which a fault's kind, an error, would not
+// survive. What a caller reads of it is the contract above, never the type.
+type checksFileError struct {
 	Faults []*config.Fault
 }
 
 // Error renders one fault a line.
-func (e *ChecksFileError) Error() string {
+func (e *checksFileError) Error() string {
 	lines := make([]string, len(e.Faults))
 	for i, f := range e.Faults {
 		lines[i] = f.Error()
@@ -256,7 +262,7 @@ func (e *ChecksFileError) Error() string {
 }
 
 // Unwrap is the faults, so a walk reads each one.
-func (e *ChecksFileError) Unwrap() []error {
+func (e *checksFileError) Unwrap() []error {
 	out := make([]error, len(e.Faults))
 	for i, f := range e.Faults {
 		out[i] = f
@@ -265,7 +271,7 @@ func (e *ChecksFileError) Unwrap() []error {
 }
 
 // Is reports that the file was refused by field.
-func (e *ChecksFileError) Is(target error) bool { return target == ErrInvalid }
+func (e *checksFileError) Is(target error) bool { return target == ErrInvalid }
 
 // ParseChecks reads a `.crewlet/checks.yaml` STRICTLY: one YAML document, a
 // mapping holding `checks:` — a list of at most [MaxChecksPerFile] checks,
@@ -280,9 +286,9 @@ func (e *ChecksFileError) Is(target error) bool { return target == ErrInvalid }
 //	checkout         a list of a cone's directories, or the scalar none
 //	env              a list of at most MaxCheckEnv variable names
 //
-// A file past [MaxChecksFileBytes] is refused unread. Every refusal is a
-// [ChecksFileError] holding every fault found, each located at the field and
-// the line it is about.
+// A file past [MaxChecksFileBytes] is refused unread. Every refusal is one
+// error holding every fault found — a join of [config.Fault]s, each located
+// at the field and the line it is about, that IS [ErrInvalid].
 func ParseChecks(raw []byte) (ChecksFile, error) {
 	p := &checksParser{}
 	if len(raw) > MaxChecksFileBytes {
@@ -336,12 +342,12 @@ func (p *checksParser) fault(path config.Path, n *yaml.Node, kind error, detail 
 	p.faults = append(p.faults, f)
 }
 
-// err is every fault found, as one [ChecksFileError], or nil for none.
+// err is every fault found, as one [checksFileError], or nil for none.
 func (p *checksParser) err() error {
 	if len(p.faults) == 0 {
 		return nil
 	}
-	return &ChecksFileError{Faults: p.faults}
+	return &checksFileError{Faults: p.faults}
 }
 
 // file reads the document's root: a mapping holding `checks:` and nothing

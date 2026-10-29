@@ -24,33 +24,41 @@ type wantFault struct {
 }
 
 // faultsOf is a refused file's faults, holding the refusal to its contract on
-// the way: a *code.ChecksFileError that IS code.ErrInvalid, every fault one of
+// the way: a join of *config.Fault that IS code.ErrInvalid, every fault one of
 // config's classified kinds — so `crewlet validate -json` reports each one as a
 // config document's problem, never as `invalid`.
 func faultsOf(t *testing.T, err error) []*config.Fault {
 	t.Helper()
-	var refused *code.ChecksFileError
+	var joined interface{ Unwrap() []error }
 	switch {
 	case err == nil:
 		t.Fatal("the file parsed")
-	case !errors.As(err, &refused):
-		t.Fatalf("the refusal is a %T, not a *code.ChecksFileError: %v", err, err)
+	case !errors.As(err, &joined):
+		t.Fatalf("the refusal is a %T, not a join of faults: %v", err, err)
 	case !errors.Is(err, code.ErrInvalid):
 		t.Fatalf("the refusal is not code.ErrInvalid: %v", err)
-	case len(refused.Faults) == 0:
+	}
+	var faults []*config.Fault
+	for _, e := range joined.Unwrap() {
+		f, ok := e.(*config.Fault)
+		if !ok {
+			t.Fatalf("the refusal joins a %T, not a *config.Fault: %v", e, e)
+		}
+		faults = append(faults, f)
+	}
+	if len(faults) == 0 {
 		t.Fatalf("the refusal holds no fault: %v", err)
 	}
 	problems := config.Problems(err)
-	if len(problems) != len(refused.Faults) {
-		t.Fatalf("config.Problems reads %d problems from %d faults: %+v", len(problems), len(refused.Faults),
-			problems)
+	if len(problems) != len(faults) {
+		t.Fatalf("config.Problems reads %d problems from %d faults: %+v", len(problems), len(faults), problems)
 	}
 	for i, p := range problems {
 		if p.Kind == "invalid" {
-			t.Errorf("fault %d (%v) is no kind config classifies", i, refused.Faults[i])
+			t.Errorf("fault %d (%v) is no kind config classifies", i, faults[i])
 		}
 	}
-	return refused.Faults
+	return faults
 }
 
 // A CHECKS FILE PARSES STRICTLY: every check of a whole file reads into the
