@@ -458,6 +458,8 @@ var droppingViewers = []struct{ file, word, why string }{
 	{"internal/code/cache/verify.go", "fsck", "Verify's connectivity check of what the copy serves, through " +
 		"the view the directory holds (heldView)"},
 	{"internal/code/query/anchor.go", "diff-pairs", queryServes},
+	{"internal/code/query/blame.go", "blame", queryServes},
+	{"internal/code/query/blame.go", "cat-file", queryServes},
 	{"internal/code/query/blob.go", "cat-file", queryServes},
 	{"internal/code/query/compare.go", "merge-base", queryServes},
 	{"internal/code/query/compare.go", "rev-list", queryServes},
@@ -466,6 +468,7 @@ var droppingViewers = []struct{ file, word, why string }{
 	{"internal/code/query/facts.go", "diff-tree", queryServes},
 	{"internal/code/query/facts.go", "patch-id", queryServes},
 	{"internal/code/query/landed.go", "merge-base", queryServes},
+	{"internal/code/query/log.go", "log", queryServes},
 	{"internal/code/query/objects.go", "rev-parse", queryServes},
 	{"internal/code/query/objects.go", "cat-file", queryServes},
 	{"internal/code/query/tree.go", "ls-tree", queryServes},
