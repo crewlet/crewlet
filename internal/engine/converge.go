@@ -148,6 +148,9 @@ func (e *Engine) followCompany(ctx context.Context, c *Company) []string {
 		// AND A PAUSE WHOSE SEAT THIS COMPANY REMOVED goes with the seat.
 		// See seatpause.go.
 		e.clearRemovedSeatPauses(ctx, c)
+		// AND A RETRY WHOSE MODEL IT REMOVED goes with the model. See
+		// modelretry.go.
+		e.clearRemovedModelRetries(ctx, c)
 		steps = append(steps, "mailboxes")
 	}
 

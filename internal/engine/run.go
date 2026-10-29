@@ -312,6 +312,10 @@ type Engine struct {
 	// node's disk, and the loop that keeps it ([hostLogins]).
 	hostLogins hostLogins
 
+	// retries is this node's watched copy of the fleet's model retries
+	// ([modelRetries]).
+	retries modelRetries
+
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
 	// [Engine.Apply].
@@ -2019,6 +2023,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// heartbeat tells the Models page.
 	e.startRunnerProbe(ctx)
 	e.startHostLogins(ctx)
+	// THE RETRIES PEOPLE ASKED FOR, applied as every node hears them.
+	e.startModelRetries(ctx)
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx); err != nil {
@@ -2654,6 +2660,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopSeatPauses()
 	e.stopRunnerProbe()
 	e.stopHostLogins()
+	e.stopModelRetries()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing
 	// it while a seat was still finishing a turn would tell a coordinator
