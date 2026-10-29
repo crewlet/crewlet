@@ -55,7 +55,8 @@ import (
 // The rest never lived on a node's own database and are here because the
 // question they answer is a company's from the start: the company's sealed
 // [Secrets], the [Follows] a chat thread is routed by, the [Mailboxes] a seat
-// may still have, the [SeatPauses] a person set, the windowed token [Budgets]
+// may still have, the [SeatPauses] a person set, the [ModelRetries] a person
+// asked for and the [DeviceSignIns] in progress, the windowed token [Budgets]
 // every node charges (budget.go), the [PositionRegister] and its neighbours
 // the state log trims against, the [Rebases] a retried unit of work inherits
 // its instant from, the [ObjectStores] backend the fleet's files are in, the
@@ -1643,6 +1644,8 @@ type Fleet interface {
 	ObjectStores
 	TrashReaps
 	SeatPauses
+	ModelRetries
+	DeviceSignIns
 	PositionRegister
 	HoldRegister
 	FloorRegister
