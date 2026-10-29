@@ -4802,22 +4802,24 @@ history its caller never saw, and one that creates a branch needs it absent.
    touches: one read of what every path the write names and every directory
    above one is, one read of those directories and the files an edit
    rewrites, one `hash-object` of the new files, one `mktree` a level of
-   directories, deepest first, every entry the change does not touch passed
-   through as it stands, and one `commit-tree`; a revert or a cherry-pick runs
-   one `merge-tree --write-tree`, whose cost follows the trees' differences.
-   Never an index of the whole tree or a checkout, so what a commit costs
-   follows the entries of the directories it touches, never the files the
-   repository holds: a commit beside sibling directories of ten thousand files
-   asks git exactly what one beside directories of ten does. The build takes a
-   unit of the node's [seat git-work share](#server-side-reads), given back
-   before it lands, and one budget of ten seconds of git run time that every
-   process of it shares. The read of what the named paths are is the build's,
-   never a quick check before it: git walks each path from the root, a
-   directory at a time, so its cost grows with the square of a path's depth —
-   a thousand paths sixty-four deep, each with every directory above it, took
-   19 s of git on two E-cores of an Intel Core Ultra 7 265U — and a write too
-   wide or too deep for the budget is refused `too_large`, never taken for a
-   git node that failed and asked of the next.
+   directories — at most 64, since a path a write names is at most 64
+   components deep — deepest first, every entry the change does not touch
+   passed through as it stands, and one `commit-tree`; a revert or a
+   cherry-pick runs one `merge-tree --write-tree`, whose cost follows the
+   trees' differences. Never an index of the whole tree or a checkout, so what
+   a commit costs follows the entries of the directories it touches, never the
+   files the repository holds: a commit beside sibling directories of ten
+   thousand files asks git exactly what one beside directories of ten does.
+   The build takes a unit of the node's [seat git-work
+   share](#server-side-reads), given back before it lands, and one budget of
+   ten seconds of git run time that every process of it shares. The read of
+   what the named paths are is the build's, never a quick check before it: git
+   walks each path from the root, a directory at a time, so its cost grows
+   with the square of a path's depth — a thousand paths at the depth bound,
+   each with every directory above it, took 19 s of git on two E-cores of an
+   Intel Core Ultra 7 265U — and a write too wide or too deep for the budget is
+   refused `too_large`, never taken for a git node that failed and asked of
+   the next.
 3. **Checked as a push is.** The new objects are packed into one
    self-contained pack, indexed by `git index-pack --strict` — the check
    receive-pack runs on every person's push (`receive.fsckObjects`) — so a
@@ -4918,15 +4920,15 @@ asked through
 ### What a write is refused
 
 A write the request itself gets wrong is refused before anything is read:
-more than 1 000 operations or more than 1 MiB of them with the message, two
-operations on one path, a message with a NUL byte or text git would rewrite,
-and a new path git or a checkout would refuse or misread — past 4 096 bytes,
-a component past 255, an empty, `.` or `..` component, a control character, a
-backslash, a code point HFS+ ignores, `.git` in any spelling git reads as one
-(any case, trailing dots and spaces, an NTFS stream such as
-`.GIT::$INDEX_ALLOCATION`), and a link named `.gitmodules`, `.gitattributes`,
-`.gitignore` or `.mailmap`, which git refuses or ignores. Paths a write does not
-touch are never judged.
+more than 1 000 operations or more than 1 MiB of them with the message, a path
+it names more than 64 components deep, two operations on one path, a message
+with a NUL byte or text git would rewrite, and a new path git or a checkout
+would refuse or misread — past 4 096 bytes, a component past 255, an empty,
+`.` or `..` component, a control character, a backslash, a code point HFS+
+ignores, `.git` in any spelling git reads as one (any case, trailing dots and
+spaces, an NTFS stream such as `.GIT::$INDEX_ALLOCATION`), and a link named
+`.gitmodules`, `.gitattributes`, `.gitignore` or `.mailmap`, which git refuses
+or ignores. Paths a write does not touch are never judged.
 
 A refusal of the **push** — `stale`, the grant's `not_permitted`, a
 protection's, `blob_too_large`, `repo_deleted`, `busy` — says what a push's
@@ -4953,10 +4955,11 @@ repository's committer reaches is recorded as any push's is. A refusal of the
 | Bound | Value | Why |
 |---|---|---|
 | A write's operations and message | 1 MiB | An engine write is a document or a configuration fix, never a codebase: a larger change belongs in a coding box, whose push has no such bound. |
-| Operations in one `commit_files` | 1 000 | Past every document or configuration change, and what bounds the directories one build rewrites. |
+| Operations in one `commit_files` | 1 000 | Past every document or configuration change, and — with a path's depth — what bounds the directories one build rewrites: every directory above a path the write names, at most 2 × 1 000 × 63 and the root, since a move names two paths. |
 | A write's pack | 4 MiB | Four payloads' worth: a commit's new files compressed and the directories it touches, each written whole — about 40 bytes an entry, so some 3 MB for a file put into a directory of 100 000. |
 | A write's git | 10 s | Every process of a build together, one read's deadline. |
 | A path | 4 096 bytes | Linux's `PATH_MAX`: a path no checkout can create is a tree no client can use. |
+| A path's depth | 64 components | An engine write is a document or a configuration fix, whose paths run from a few components to a couple of dozen even in a deep tree; a deeper change belongs in a coding box. It bounds every cost of a write that grows with depth, which 4 096 bytes alone leave at 2 048 components: the directories its build rewrites, its one `mktree` a level, and its read of what each path it names and each directory above one is, which git walks from the root at a cost growing with the square of the depth — a thousand paths at the bound took 19 s of git, which the build's ten seconds refuse `too_large`. Only the paths a write names are held to it: a repository's own deeper paths are never judged. |
 | A conflict's start | 2 KiB | Enough to see what collided; each stage is readable whole by its id. |
 
 Every write a git node builds or answers is counted

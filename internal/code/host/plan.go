@@ -35,7 +35,9 @@ import (
 // as its own: one put 2 047 components deep, which a 4 KiB path holds, took
 // 5.3 s of a core before a byte of git ran. So the plan's work is a few map
 // operations a path it names and a directory above one, each hashing the
-// directory's own path once, whatever the depth.
+// directory's own path once, whatever the depth — and the depth is bounded
+// besides (code.MaxTreePathDepth, refused before anything is read), so what a
+// plan holds is at most a directory a component of every path it names.
 
 // plan is a commit_files' change laid out by directory.
 type plan struct {

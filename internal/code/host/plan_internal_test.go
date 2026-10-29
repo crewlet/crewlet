@@ -28,17 +28,18 @@ func depthOf(d string) int {
 }
 
 // A PLAN JUDGES EACH DIRECTORY ONCE, from its parent's judgement, however many
-// rules ask of it: a plan of puts and edits at the foot of forty chains
-// sixty-four deep, and of a removal halfway down each with a path made anew
-// beneath it, judges every directory above a path it names exactly once and
-// lays the directories out by depth in one pass — its work a few map
-// operations a directory, whatever the depth.
+// rules ask of it: a plan of puts and edits at the foot of forty chains as
+// deep as a write may name (code.MaxTreePathDepth), and of a removal halfway
+// down each with a path made anew beneath it at the bound, judges every
+// directory above a path it names exactly once and lays the directories out
+// by depth in one pass — its work a few map operations a directory, linear in
+// the directories it touches, whatever the depth.
 //
 // Mutation: judge a directory again at every ask (drop ancestry's memo) — the
 // count grows with the depth squared, red.
 func TestAPlanJudgesEachDirectoryOnce(t *testing.T) {
 	t.Parallel()
-	const depth, chains = 64, 40
+	const depth, chains = code.MaxTreePathDepth, 40
 	parent := idOf("parent")
 	paths := map[string]object{}
 	var files []code.FileOp
@@ -62,6 +63,13 @@ func TestAPlanJudgesEachDirectoryOnce(t *testing.T) {
 				code.FileOp{Op: code.FileOpPut, Path: half + strings.Repeat("/b", depth/2-1) + "/new",
 					Content: &text})
 		}
+	}
+	deepest := 0
+	for _, f := range files {
+		deepest = max(deepest, depthOf(f.Path))
+	}
+	if deepest != code.MaxTreePathDepth {
+		t.Fatalf("the plan's deepest path is %d components, want the bound, %d", deepest, code.MaxTreePathDepth)
 	}
 	p, refusal, detail := planFiles(files, parent, paths)
 	if refusal != "" {

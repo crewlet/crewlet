@@ -292,8 +292,10 @@ const (
 	MaxCommitPayloadBytes = 1 << 20
 
 	// MaxFileOps is the most operations one commit_files carries: past every
-	// doc or configuration change, and what bounds the directories one build
-	// rewrites to MaxFileOps × depth. PROVISIONAL (M3-decisions M3-O49):
+	// doc or configuration change, and — with MaxTreePathDepth — what bounds
+	// the directories one build rewrites: every directory above a path the
+	// write names, at most 2 × MaxFileOps × (MaxTreePathDepth − 1) and the
+	// root, since a move names two paths. PROVISIONAL (M3-decisions M3-O49):
 	// BenchmarkEngineCommit's largest arm is a hundred files, a tenth of it,
 	// and re-derives it.
 	MaxFileOps = 1_000
@@ -324,6 +326,33 @@ const (
 	// MaxTreePathBytes is the longest path a write names: Linux's PATH_MAX,
 	// since a path no checkout can create is a tree no client can use.
 	MaxTreePathBytes = 4_096
+
+	// MaxTreePathDepth is the most components a path an engine write NAMES
+	// may have — an operation's path, a move's destination: SIXTY-FOUR, a
+	// JUDGMENT. An engine write is a document or a configuration fix, whose
+	// paths run from a few components to a couple of dozen even in a deep
+	// tree — a source file of a Java module in a monorepo sits some fifteen
+	// down — so sixty-four refuses no such change, and a deeper one belongs in
+	// a coding box, whose push has no such bound.
+	//
+	// It is what bounds every cost of a write that GROWS WITH DEPTH, which
+	// MaxTreePathBytes alone leaves at 2 048 components: the directories one
+	// build rewrites, every one above a path the write names (MaxFileOps); its
+	// mktree, one process a level, each a read-lane slot; what its plan and
+	// its asks hold, a map entry and an ask of git a directory; and its read
+	// of what every named path and every directory above one is, which git
+	// walks from the root, at a cost growing with the SQUARE of the depth
+	// (internal/code/host's building.paths: a thousand paths at this bound,
+	// each with every directory above it, took 19 s of git on two E-cores,
+	// which WriteBuildDeadline answers too_large). Unbounded, one mebibyte of
+	// paths 2 047 components deep was some 1.1 GB of asks for git, the
+	// directories of 253 of them for the plan to hold, and 2 047 mktree
+	// processes for one. A repository's own deeper paths are never judged:
+	// only the paths a write names, which EngineWrite.Validate holds to it
+	// beside ValidTreePath — a rule of what a write may carry, as MaxFileOps
+	// is, never of what a name in a tree may be, so ValidTreePath's other
+	// callers (a check's report path) are not held to it.
+	MaxTreePathDepth = 64
 
 	// ConflictMarkedBytes is how much of a conflicted file a write answers:
 	// TWO KIBIBYTES, enough to see what collided — each stage is readable
@@ -544,13 +573,14 @@ func (w EngineWrite) validFiles() error {
 }
 
 // valid holds one operation to its kind: the fields it takes and no other, and
-// its paths to [ValidTreePath].
+// its paths to [ValidTreePath] and the depth one write may name
+// ([validWritePath]).
 func (f FileOp) valid(i int) error {
 	at := fmt.Sprintf("files[%d]", i)
 	if !f.Op.Valid() {
 		return fmt.Errorf("%w: %s.op: %q is not one of %v", ErrInvalid, at, f.Op, FileOpKinds())
 	}
-	if err := ValidTreePath(f.Path); err != nil {
+	if err := validWritePath(f.Path); err != nil {
 		return fmt.Errorf("%w: %s.path: %w", ErrInvalid, at, err)
 	}
 	type field struct {
@@ -584,7 +614,7 @@ func (f FileOp) valid(i int) error {
 			return fmt.Errorf("%w: %s.new: it is the old text again, which changes nothing", ErrInvalid, at)
 		}
 	case FileOpMove:
-		if err := ValidTreePath(f.To); err != nil {
+		if err := validWritePath(f.To); err != nil {
 			return fmt.Errorf("%w: %s.to: %w", ErrInvalid, at, err)
 		}
 	case FileOpMode:
@@ -637,6 +667,21 @@ func (f FileOp) validPut(at string) error {
 	return nil
 }
 
+// validWritePath is what a path an engine write names may be: a name
+// [ValidTreePath] admits, at most [MaxTreePathDepth] components deep — refused
+// by name before anything is read, as a write's other bounds are, since every
+// cost of its build that grows with a path's depth is bounded by it.
+func validWritePath(p string) error {
+	if err := ValidTreePath(p); err != nil {
+		return err
+	}
+	if n := strings.Count(p, "/") + 1; n > MaxTreePathDepth {
+		return fmt.Errorf("%d components deep, past the %d a path one engine write names may be "+
+			"(code.MaxTreePathDepth); make a change this deep in a coding box (run_sandbox)", n, MaxTreePathDepth)
+	}
+	return nil
+}
+
 // ValidTreePath is the EARLY, NAMED refusal of a path an engine write may make
 // in a tree: what git's own check of a tree (fsck, which the build's
 // `index-pack --strict` runs, the relay's receive.fsckObjects) refuses of a
@@ -656,7 +701,9 @@ func (f FileOp) validPut(at string) error {
 // outright, where git refuses one only where it spells `.git` — because no
 // tool needs one in a name it writes and each is a way to make a name read as
 // another. Existing names in a tree are never judged: a write passes every
-// entry it does not touch through unchanged.
+// entry it does not touch through unchanged. A path a write names is held to
+// [MaxTreePathDepth] besides — a bound of what one write carries, never of a
+// name ([validWritePath]).
 func ValidTreePath(p string) error {
 	switch {
 	case p == "":

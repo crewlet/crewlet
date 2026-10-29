@@ -781,10 +781,12 @@
 // write ([EngineWrite]), its answer ([EngineWriteResult]) and the change's own
 // refusals ([WriteRefusal], UNRECORDED — decided on the git node before
 // anything is stored), the ONE rule every party holds a write to
-// ([EngineWrite.Validate], every new path to [ValidTreePath]), and the bounds
-// that size it. Its push id is an unnamed derivation of the caller's
-// operation ([WritePushID]), so a retry anywhere is the same push, and its
-// commit's dates are read off the instant that operation carries
+// ([EngineWrite.Validate], every new path to [ValidTreePath] and every path it
+// names to [MaxTreePathDepth] components), and the bounds that size it — the
+// depth among them, since what a build reads, holds and runs grows with it.
+// Its push id is an unnamed derivation of the caller's operation
+// ([WritePushID]), so a retry anywhere is the same push, and its commit's
+// dates are read off the instant that operation carries
 // ([EngineWrite.Instant]), so a retry is the same commit. Nothing of a write
 // rides the code log but its push: a proposal [ViaEngine], which moves one ref
 // and carries no pack past [MaxWritePackBytes].

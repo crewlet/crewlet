@@ -36,14 +36,16 @@ func aWrite() code.EngineWrite {
 // ErrInvalid naming the field: each kind takes the fields it needs and no
 // other; a seat names its run — its turn, never a coding run, whose box pushes
 // through git — and a person their human seat; the operation is one this
-// engine mints; the payload, the operations and every path are bounded; one
-// operation names a path; a link takes its target as text alone; and the
-// message is what git writes as given.
+// engine mints; the payload, the operations, every path and the depth of every
+// path it names are bounded; one operation names a path; a link takes its
+// target as text alone; and the message is what git writes as given.
 //
 // Mutations: admit a blob_oid for a link — its row passes, red; count a move's
 // destination as no path — the colliding row passes, red; let a seat's run
 // name a coding run — its row passes, and its build would land as a proposal
-// its committer refuses, red.
+// its committer refuses, red; drop the depth bound, or hold a move's
+// destination to none — a path one component past it passes, red; refuse a
+// path at the bound — the write at it is refused, red.
 func TestAnEngineWriteIsHeldToOneRule(t *testing.T) {
 	t.Parallel()
 	if err := aWrite().Validate(); err != nil {
@@ -54,6 +56,20 @@ func TestAnEngineWriteIsHeldToOneRule(t *testing.T) {
 		f(&w)
 		return w
 	}
+	// deep is a path exactly as deep as a write may name: admitted, and one
+	// component more refused, whichever field names it.
+	deep := strings.TrimSuffix(strings.Repeat("d/", code.MaxTreePathDepth), "/")
+	for _, w := range []code.EngineWrite{
+		edit(aWrite(), func(w *code.EngineWrite) { w.Files[0].Path = deep }),
+		edit(aWrite(), func(w *code.EngineWrite) {
+			w.Files[0] = code.FileOp{Op: code.FileOpMove, Path: deep, To: "e/" + deep[2:]}
+		}),
+	} {
+		if err := w.Validate(); err != nil {
+			t.Errorf("a write naming paths %d components deep, the bound: %v", code.MaxTreePathDepth, err)
+		}
+	}
+	pastDepth := fmt.Sprintf("%d components deep", code.MaxTreePathDepth+1)
 	big := strings.Repeat("x", code.MaxCommitPayloadBytes)
 	many := make([]code.FileOp, code.MaxFileOps+1)
 	for i := range many {
@@ -136,6 +152,11 @@ func TestAnEngineWriteIsHeldToOneRule(t *testing.T) {
 			"message:"},
 		"a path into .git": {edit(aWrite(), func(w *code.EngineWrite) { w.Files[0].Path = "a/.Git/config" }),
 			"files[0].path:"},
+		"a path past the depth bound": {edit(aWrite(), func(w *code.EngineWrite) { w.Files[0].Path = deep + "/x" }),
+			"files[0].path: " + pastDepth},
+		"a move past the depth bound": {edit(aWrite(), func(w *code.EngineWrite) {
+			w.Files[0] = code.FileOp{Op: code.FileOpMove, Path: "a", To: deep + "/x"}
+		}), "files[0].to: " + pastDepth},
 		"a revert of nothing": {code.EngineWrite{Kind: code.WriteRevert, RepoID: aWrite().RepoID,
 			Principal: aWrite().Principal, OpID: aWrite().OpID, Ref: "refs/heads/main", ExpectedHead: oidOf("H")},
 			"commit:"},
@@ -189,10 +210,14 @@ func TestAnEngineWritesPushIsItsOperations(t *testing.T) {
 // tree with mktree and checked by `git fsck` on every run, is a name
 // ValidTreePath refuses; and it refuses more (a control character, a
 // backslash, a code point HFS+ ignores), which no tool needs in a name it
-// writes. The ordinary names beside them pass both.
+// writes. The ordinary names beside them pass both, and so does a path deeper
+// than a write may name: depth is a bound of what one write carries
+// (code.MaxTreePathDepth), never of a name, which a check's report path is
+// held to as well.
 //
-// Mutation: drop the `:` rule — `.GIT::$INDEX_ALLOCATION`, which fsck flags,
-// passes, red.
+// Mutations: drop the `:` rule — `.GIT::$INDEX_ALLOCATION`, which fsck flags,
+// passes, red; hold a name to the write's depth bound — the deep path is
+// refused, red.
 func TestATreePathGitWouldRefuseIsRefused(t *testing.T) {
 	t.Parallel()
 	names := []string{
@@ -220,7 +245,8 @@ func TestATreePathGitWouldRefuseIsRefused(t *testing.T) {
 			t.Errorf("%q: ValidTreePath admits a name with a backslash or a control character", name)
 		}
 	}
-	for _, ok := range []string{"README.md", ".github/workflows/ci.yml", ".gitignore", "a.git/b", "x/y/z.txt"} {
+	for _, ok := range []string{"README.md", ".github/workflows/ci.yml", ".gitignore", "a.git/b", "x/y/z.txt",
+		strings.Repeat("d/", code.MaxTreePathDepth) + "x"} {
 		if err := code.ValidTreePath(ok); err != nil {
 			t.Errorf("%q: %v, want it admitted", ok, err)
 		}

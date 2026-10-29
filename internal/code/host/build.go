@@ -268,10 +268,10 @@ func (wr *writing) lookup(ctx context.Context, q lookups, what string, deadline 
 // object ids, then paths at one commit, each spelled `<commit>:<path>` as
 // git reads it. NEVER SPELLED OUT AHEAD: every directory above a path is a
 // path asked, so a write's asks spelled out are its paths' every prefix — some
-// 133 KB for one 4 KiB path of 64 components, 34 MB for a mebibyte of such
-// paths — and they are fed to git as it reads (reader) and matched against
-// its answers in place (missing), never held as a list and again as the
-// input it makes.
+// 133 KB for one 4 KiB path at code.MaxTreePathDepth's 64 components, 34 MB
+// for a mebibyte of such paths — and they are fed to git as it reads (reader)
+// and matched against its answers in place (missing), never held as a list
+// and again as the input it makes.
 type lookups struct {
 	ids   []string
 	at    string

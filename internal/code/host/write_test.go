@@ -513,6 +513,48 @@ func TestAWriteReadsItsPathsInItsBuild(t *testing.T) {
 	}
 }
 
+// A WRITE PAST THE DEPTH BOUND RUNS NO GIT, and one at it builds a level at a
+// time: a commit_files putting a file one component deeper than a write may
+// name (code.MaxTreePathDepth), or moving an entry there, is refused
+// ErrInvalid naming the bound before any git process runs; and a put at the
+// bound lands, its build running one mktree a level — as many as the bound,
+// and no more. Every cost of a build that grows with depth is held down by
+// that bound: the directories it rewrites, its mktree a level, and its read of
+// what each named path and each directory above one is, which git walks from
+// the root.
+//
+// Mutation: drop the depth bound — the deeper put runs git, red.
+func TestAWritePastTheDepthBoundRunsNoGit(t *testing.T) {
+	t.Parallel()
+	c := newWriteCase(t, codetest.SoloOptions{}, map[string]string{"README.md": "one\n"})
+	cmds := host.RecordGit(c.server())
+	deep := strings.TrimSuffix(strings.Repeat("d/", code.MaxTreePathDepth), "/")
+	for _, op := range []code.FileOp{
+		text(deep+"/x.md", "x\n"),
+		{Op: code.FileOpMove, Path: "README.md", To: deep + "/x.md"},
+	} {
+		res, err := c.write(files(c.repo, pat(), "refs/heads/main", c.head, "", op))
+		if !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), "code.MaxTreePathDepth") {
+			t.Errorf("a %s %d components deep: %+v %v, want ErrInvalid naming code.MaxTreePathDepth", op.Op,
+				code.MaxTreePathDepth+1, res, err)
+		}
+		if ran := cmds(); len(ran) != 0 {
+			t.Fatalf("a %s past the depth bound ran %d git processes, the first %s", op.Op, len(ran), ran[0].Args)
+		}
+	}
+	c.land(files(c.repo, pat(), "refs/heads/main", c.head, "", text(deep, "at the bound\n")))
+	mktrees := 0
+	for _, cmd := range cmds() {
+		if cmd.Args[0] == "mktree" {
+			mktrees++
+		}
+	}
+	if mktrees != code.MaxTreePathDepth {
+		t.Errorf("a put %d components deep ran %d mktree processes, want one a level, %d", code.MaxTreePathDepth,
+			mktrees, code.MaxTreePathDepth)
+	}
+}
+
 // A WRITE'S BUILD IS ONE READ'S DEADLINE: its git — every process of it,
 // together — is given gitproc.ReadDeadline of run time, code.WriteBuildDeadline,
 // which this package's constant names apart since code imports no git; and a
