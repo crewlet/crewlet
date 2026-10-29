@@ -61,9 +61,11 @@ This is the product's current shape, not a configuration choice:
   the tools that ask it arrive with seats' code writes, so today every
   repository is one `code.repos` declares.
 - **No check runs yet.** A repository defines its checks in
-  `.crewlet/checks.yaml`, and `crewlet validate` reads that file as the code
-  host does ([Checks](#checks)); nothing queues, runs or gates on one in this
-  release.
+  `.crewlet/checks.yaml`, `crewlet validate` reads that file as the code host
+  does, and the code log has the records a check's attempts take
+  ([Checks](#checks)); nothing queues, runs or gates on one in this release,
+  so no record of one is written but the retention duty's sweep of what a
+  check left past its history.
 - **Only a push opens a change, and only its home asks for its review.** A
   push opens a [change](#changes) from its options
   ([A change a push opens](#a-change-a-push-opens)); a repository's committer
@@ -1385,12 +1387,76 @@ the file as the code host does, told apart from either config tier by its lone
 .crewlet/checks.yaml: 2 checks (unit, api-shape)
 ```
 
+### What the log records of a check
+
+Each **attempt** of each check of each commit is a row on the code log —
+`code_checks`, keyed by the repository, the commit, the check's name and the
+attempt — written by records on a subject of the repository's **checks**
+(`crewlet.code.log.checks.<repo>`), never on its repository's own: a check's
+records share nothing with the repository's pushes, and decided in its
+[committer](#the-committer)'s queue they would wait behind their batches.
+
+| Record | What it says |
+|---|---|
+| `check_queued` | An attempt is queued on a commit: what it is for (a change's head, a merge queue's candidate, a protected branch's tip, a bisection), the branch it is checked for, the checks file it was read from and its definition whole — so it runs under the definition it was queued with, whatever the file says by the time a box starts — whether that branch requires it, and why it was queued: dispatched, run again by a seat or a person, queued again after its runner was lost, or reported by a person's own CI. Or the attempt is recorded `skipped`: its change touched none of its `paths` |
+| `check_started` | A runner claims the attempt — and, once it has made one, names its box |
+| `check_finished` | The attempt ended: its state and why, its exit status, how long it ran, its summary (at most 4 KiB), the last 16 KiB of its output, the failures its reports named (at most 200, weighing at most 64 KiB, the rest counted), the link a person's CI reported, and the log a failed run kept |
+| `checks_sweep` | The rows that ended before an instant are removed — the `code-retention` duty's, for a repository whose checks stopped ending ([How long a check is kept](#how-long-a-check-is-kept)) |
+
+An attempt's **state** is one of seven: `queued`; `running`; and the five
+endings — `passed` and `failed`, which measured the commit (a run past its
+timeout fails, since the timeout is the check's own), and `errored`
+(its runner was lost, its box or its setup failed, or its definition could not
+be read), `cancelled` and `skipped`, which did not.
+
+**A check's records commute.** They carry no expectation: many runners claim
+and end one repository's checks at once, and arbitrating each would put every
+one of them behind every other for rows two of them seldom share. So every
+data node must hold one row whatever order two records about one attempt reach
+it in, and every record's apply is a **join**:
+
+- **the state only rises** — once ended, an attempt is never running again,
+  and once running never queued, whatever arrives after;
+- **two claims of one attempt keep the earlier** — by its runner's instant,
+  then the runner's name — wherever each landed, and the box is the kept
+  claim's, named once by its holder;
+- **two endings keep a measurement over infrastructure's** — a run that
+  failed says more of the commit than one whose runner was lost — then the
+  earlier of them, and the log is the kept ending's;
+- **a field arrives with the record that carries it**, so a record about an
+  attempt no other record has reached yet makes its row with what it carries.
+
+A failed run's **log** is one object in the [object store](object-store.md),
+named by a `code_check_logs` row: a live reference, audited and carried by
+every backup, since nothing builds it again.
+
+### How long a check is kept
+
+A check's rows are kept **30 days** after it ended: past that, a check is one
+nobody reads — a change merged weeks ago, a tip its branch has long moved
+past.
+
+- **Every ending removes its own repository's history**: the rows that ended
+  before its instant less the 30 days, oldest first, at most 500 of them and
+  about a mebibyte — so a repository whose checks keep ending keeps a month of
+  them by itself, and no other repository's rows are touched.
+- **A repository whose checks stopped ending is swept** by the
+  `code-retention` duty: each pass lists the repositories holding rows past
+  the 30 days and appends a `checks_sweep` on each one's checks subject, which
+  every data node applies as an ending's removal ([Deletion and
+  purge](#deletion-and-purge)).
+- **A check queued and never ended is kept** until it ends, or its repository
+  is purged.
+- **A repository's purge takes its checks and their logs** with the rest of
+  it, and a check record about a purged repository — a runner ending a check
+  its repository's purge outran — writes nothing on any node.
+
 ---
 
 ## Retention and history
 
-Four horizons, each kept by the record that applies it inside its own
-repository, never by a sweep:
+Five horizons, each kept by records that apply it inside their own
+repository, never by a node's own sweep:
 
 - **Push history** — a push row is kept **181 days**, the same horizon as the
   company's [usage history](../guides/retention.md), so "what happened over
@@ -1443,6 +1509,10 @@ repository, never by a sweep:
   records nothing. The committer counts these rows in the record it forms,
   so a record holds one push of a thousand forced updates or deletions where
   it holds three of a thousand fast-forwards.
+- **Check history** — a check's rows are kept 30 days after it ended, removed
+  by each later ending of its repository and, where its checks stopped
+  ending, by the `code-retention` duty's sweep record ([How long a check is
+  kept](#how-long-a-check-is-kept)).
 - **A purge** — below.
 
 A pack a compaction retires is kept a day as a retired row, which the
@@ -1464,6 +1534,8 @@ the log can replay), the fleet-singleton `code-retention` duty purges it (see
 - every 15 minutes, it first removes the rows of the packs a compaction
   retired more than a day ago, so the collector can take their objects (see
   [Live, retired and derived references](object-store.md#live-retired-and-derived-references)),
+  then the check rows that ended more than 30 days ago in a repository whose
+  checks stopped ending ([How long a check is kept](#how-long-a-check-is-kept)),
   then finishes every purge already begun — whatever the retention, since a
   purge has no undo — then purges the repositories deleted longest ago first,
   then releases every renamed repository's old name whose redirect has ended,
@@ -1475,14 +1547,16 @@ the log can replay), the fleet-singleton `code-retention` duty purges it (see
   packs and the ones a compaction retired, its
   [ref drops](#retention-and-history), then its [changes](#changes), each
   whole: a change's revisions, authors, [conversation](#reviews-and-findings)
-  and description, then its row — and the last leaves only a **deletion
-  marker**, which drops every later record about the repository on every
-  node, for ever — on the repository and on its changes alike
+  and description, then its row — then its [checks](#checks), each with its
+  log — and the last leaves only a **deletion marker**, which drops every
+  later record about the repository on every node, for ever — on the
+  repository, on its changes and on its checks alike
   ([the deletion gate](../guides/replication.md#applied-is-not-permanent)).
   A step is bounded by how many rows it removes and by what its widest rows
-  weigh: the push records, the change descriptions and the comments it
-  removes together stop at about 32 MiB, so a repository with long
-  descriptions or long discussions takes more steps rather than longer ones;
+  weigh: the push records, the change descriptions, the comments and the
+  checks' definitions and output it removes together stop at about 32 MiB, so
+  a repository with long descriptions, long discussions or many failed checks
+  takes more steps rather than longer ones;
 - every data node applies every step on its one write lane, so the duty paces
   itself: after each step it waits twice the step's duration, a third of the
   lane, and a pass stops after a minute of steps and the next resumes from
@@ -4231,7 +4305,7 @@ line says and push the branch's next commit with `-o change`.
 | `code_repos_interrupted` | `INFO` | The node stopped before its reconcile finished; the next boot reconciles. |
 | `code_repo_not_applied`, `code_repos_not_applied`, `code_repos_not_listed` | `ERROR`, `ERROR`, `WARN` | A reconcile could not apply one repository, any, or delete what the document no longer declares; the node runs the reconcile again (`code_repos_retrying`). Two of a repository's are not run again for, and say what to change instead: its name is held by a repository the configuration does not manage — rename the declaration — or the code log refuses its declaration as written. |
 | `code_repos_retrying` | `INFO` | The reconcile of `activation` left something undone — said in the lines before — and runs again in `retry_in`: five seconds after the first such run, doubling with each run in a row (`attempt`) to five minutes, until one applies or a newer activation replaces it. |
-| `code_retention_pass` | `INFO` | A pass that swept retired packs, purged, failed a repository, held a purged name, released a renamed repository's old name, expired a scratch repository or kept one a live turn holds, could not read the live turns' holds, or stopped at its budget (`sweeps`, `swept_rows`, `purged`, `steps`, `remain`, `failed`, `unhanded`, `released`, `expired`, `scratch_held`, `scratch_expiry_unread`); `DEBUG` when nothing was due. |
+| `code_retention_pass` | `INFO` | A pass that swept retired packs or an idle repository's checks, purged, failed a repository, held a purged name, released a renamed repository's old name, expired a scratch repository or kept one a live turn holds, could not read the live turns' holds, or stopped at its budget (`sweeps`, `swept_rows`, `checks_sweeps`, `checks_swept_rows`, `purged`, `steps`, `remain`, `failed`, `unhanded`, `released`, `expired`, `scratch_held`, `scratch_expiry_unread`); `DEBUG` when nothing was due. |
 | `code_retention_pass_failed` | `WARN` | A pass ended on an error; the next pass lists what is due again. |
 | `code_scratch_expired` | `INFO` | A scratch repository idle past `code.scratch.idle_days` (`idle_since`) and held by no live turn was deleted, restorable for `code.deleted_retention_days`. |
 | `code_scratch_expiry_skipped` | `WARN` | The live turns' holds on a page of idle scratch repositories could not be read — the run store, the seat leases, or a seat holder that did not answer within two seconds (`error`, naming which) — so this pass expired none; the next pass asks again ([A scratch repository's idle expiry](#a-scratch-repositorys-idle-expiry)). |

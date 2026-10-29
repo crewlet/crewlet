@@ -38,8 +38,9 @@ func (r PurgeResult) Held() bool { return r.Outcome != statelog.OutcomePending }
 
 // PurgeStep takes ONE step of purging a deleted repository past its retention,
 // and reports what it did. Each step is one record bounded by [PurgePartRows]
-// and, for its wide rows — the push rows and the changes' bodies — by
-// [PurgePartBytes]: a part while more remains than one record may delete,
+// and, for its wide rows — the push rows, the changes' bodies and
+// conversations, and the checks — by [PurgePartBytes]: a part while more
+// remains than one record may delete,
 // then the purge itself — the gate that writes the deletion marker and
 // releases the name — once what remains fits both. A caller steps until
 // [PurgeResult.Done].
@@ -67,9 +68,14 @@ func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Dur
 		return PurgeResult{}, err
 	}
 	subject := RepoSubject(repoID)
-	scope := []string{RepoPath(repoID)}
+	// THE REPOSITORY'S CHECKS ARE IN EVERY STEP'S SCOPE: a part and the purge
+	// delete its check rows, which records on its checks subject write, so a
+	// node holding a check record it cannot decode holds a step back behind
+	// it, and a step's decide reads them (remainingSQL).
+	parts := []string{RepoPath(repoID), ChecksPath(repoID)}
+	scope := parts
 	if found {
-		scope = append([]string{NamePath(NameToken(name))}, scope...)
+		scope = append([]string{NamePath(NameToken(name))}, parts...)
 	}
 	opID := statelog.NewOpID(time.Now(), "code.purge")
 	at := s.now()
@@ -114,7 +120,7 @@ func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Dur
 			wrote = true
 			actor := Actor{ID: s.nodeID, Kind: ActorSystem}
 			if remaining > PurgePartRows || weighed > PurgePartBytes {
-				return recordFor(stamp, subject, OpPurgePart, []string{RepoPath(repoID)}, opID,
+				return recordFor(stamp, subject, OpPurgePart, parts, opID,
 					actor, PurgePart{RepoID: repoID, Part: row.PurgeParts + 1}, at)
 			}
 			done = true
@@ -166,18 +172,20 @@ func (s *Store) NameOf(ctx context.Context, id string) string {
 // a part deletes from — the pushes, the refs, the packs, the retired packs, the
 // ref drops, the changes' revisions, authors, bodies and rows, and their
 // conversations' reviewers, participants, findings, comments, finding texts,
-// reviews, revisions' facts and rows — is counted at most PurgePartRows + 1
-// deep (?2, against the repository ?1), and beside them what the wide rows
-// among them weigh, summed over the same depth: the push rows' row_bytes from
-// code_pushes_repo_idx, which carries every row's width, the changes'
-// body_bytes from their own narrow rows, never from the bodies, whose overflow
-// pages a read would walk, and their conversations' text_bytes from the
-// conversations' narrow rows, never from the comments, the findings' texts,
-// the reviews' summaries or the facts' touched paths it counts. Past
-// PurgePartRows pushes or changes the count alone already forms a part, and
-// short of it each sum is the whole. A table left out of the count — or a wide
-// row left out of the sum — is one the final purge's unbounded statements
-// would delete whatever it held.
+// reviews, revisions' facts and rows, and the checks and their logs — is
+// counted at most PurgePartRows + 1 deep (?2, against the repository ?1), and
+// beside them what the wide rows among them weigh, summed over the same depth:
+// the push rows' row_bytes from code_pushes_repo_idx, which carries every
+// row's width, the changes' body_bytes from their own narrow rows, never from
+// the bodies, whose overflow pages a read would walk, their conversations'
+// text_bytes from the conversations' narrow rows, never from the comments, the
+// findings' texts, the reviews' summaries or the facts' touched paths it
+// counts, and the checks' row_bytes from code_checks_finished_idx, which
+// carries every row's width as the pushes' index does. Past PurgePartRows
+// pushes or changes the count alone already forms a part, and short of it
+// each sum is the whole. A table left out of the count — or a wide row left
+// out of the sum — is one the final purge's unbounded statements would delete
+// whatever it held.
 //
 // A CHANGE'S REVISIONS, AUTHORS, BODY AND CONVERSATION ARE COUNTED THROUGH
 // THEIR CHANGE, the changes in number order ([changesNumberKey]) and each
@@ -215,7 +223,10 @@ const (
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
 			CROSS JOIN code_conversations AS v WHERE c.repo_id = ?1 AND v.change_id = c.id LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_changes INDEXED BY ` + changesNumberKey + `
-			WHERE repo_id = ?1 LIMIT ?2)),
+			WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_checks INDEXED BY ` + checksEndedKey + `
+			WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_check_logs WHERE repo_id = ?1 LIMIT ?2)),
 		(SELECT COALESCE(SUM(row_bytes), 0) FROM
 			(SELECT row_bytes FROM code_pushes WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COALESCE(SUM(body_bytes), 0) FROM
@@ -223,5 +234,8 @@ const (
 				WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COALESCE(SUM(text_bytes), 0) FROM
 			(SELECT v.text_bytes FROM code_changes AS c INDEXED BY ` + changesNumberKey + `
-				CROSS JOIN code_conversations AS v WHERE c.repo_id = ?1 AND v.change_id = c.id LIMIT ?2))`
+				CROSS JOIN code_conversations AS v WHERE c.repo_id = ?1 AND v.change_id = c.id LIMIT ?2))
+		+ (SELECT COALESCE(SUM(row_bytes), 0) FROM
+			(SELECT row_bytes FROM code_checks INDEXED BY ` + checksEndedKey + `
+				WHERE repo_id = ?1 LIMIT ?2))`
 )

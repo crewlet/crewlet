@@ -49,6 +49,13 @@ var ReproducibleTables = []string{
 	"code_reviewers", "code_comments", "code_participants", "code_conversations",
 	"code_reviews", "code_findings", "code_finding_texts", "code_revision_facts",
 
+	// A repository's checks — each attempt of each check of each commit, and
+	// the log a failed run kept — written by the records on the repository's
+	// CHECKS subject alone, each apply a join, and removed past CheckHistory
+	// by those records and by the code-retention duty's checks_sweep, and
+	// with the repository by its purge.
+	"code_checks", "code_check_logs",
+
 	// A repository's published chain and the objects its layers are stored
 	// in — written by the compaction records that carry a layer, each
 	// replacing the chain's top, and removed whole by its purge.

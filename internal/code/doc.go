@@ -210,6 +210,30 @@
 // the facts concern, so the apply judges nothing again; code_revision_facts
 // keeps one row a revision, and a change read's revisions carry it.
 //
+// # A repository's checks are rows on their own subject
+//
+// What a repository's `.crewlet/checks.yaml` defines (checksfile.go:
+// ParseChecks, one strict grammar for every reader) is MEASURED on commits,
+// and what became of each attempt of each check of each commit is
+// code_checks — with code_check_logs, the log a failed run kept, a Required
+// object reference (CheckLogReferences) — written by records on the
+// repository's CHECKS subject ([KindChecks], checks.<repo>, scope
+// [ChecksPath]) and by no record on its repository's (checks.go): queued,
+// started, finished and swept ([CheckOps]). The subject is ADDITIVE — no
+// expectation, so no runner's claim waits behind another's — and every
+// apply a JOIN (apply_checks.go, [joinCheck]), so its records commute as
+// PatternAdditive requires: the state is derived and only rises, a claim
+// tie keeps the lower (StartedAt, Runner) and its box is set once, an
+// ending tie keeps a measurement over infrastructure's, the log follows
+// the ending kept. Its rows are kept [CheckHistory]: every ending removes
+// its own repository's oldest past its broker instant, bounded by
+// [CheckHorizonRows] and [CheckHorizonBytes], and the retention duty's
+// checks_sweep ([Store.ChecksSweep], [Retention.Pass]'s checks step) does
+// the same for a repository whose checks stopped ending. The deletion gate
+// reads the repository off the subject, so a check that ends after its
+// repository's purge writes nothing, and the purge's parts take its checks
+// after its changes, in the same rows-and-bytes budget.
+//
 // # Group commit
 //
 // Because every push to a repository contends on its one subject, a

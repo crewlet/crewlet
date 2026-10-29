@@ -36,6 +36,7 @@ const (
 	pathRepo       = "r"
 	pathActivation = "a"
 	pathChange     = "c"
+	pathChecks     = "k"
 )
 
 // NamePath is a repository name's claim.
@@ -55,6 +56,16 @@ func RepoPath(id string) string { return pathDomain + "/" + pathRepo + "/" + id 
 // — so a record of the repository's this node could not decode leaves the
 // conversation's decide reading stale rows, and the scope probe must find it.
 func ChangePath(id string) string { return pathDomain + "/" + pathChange + "/" + id }
+
+// ChecksPath is one repository's checks: every row a record on its checks
+// subject may write — its check rows and their logs. BESIDE the repository's
+// path rather than under it, as a change's is: a check's record never writes
+// the repository's rows, and of the repository's own records only its purge
+// writes a check's — whose every step names this path beside the
+// repository's ([Store.PurgeStep]) — so neither makes the other's reads stale;
+// and the deletion gate reads the repository off the subject alone
+// ([gatedRepo]).
+func ChecksPath(repoID string) string { return pathDomain + "/" + pathChecks + "/" + repoID }
 
 // ActivationPath is the activation fence's row.
 func ActivationPath() string { return pathDomain + "/" + pathActivation }

@@ -20,7 +20,7 @@ import (
 // and the deferral this build files it under is formed from that literal.
 type ObjectKind string
 
-// The eight kinds.
+// The nine kinds.
 //
 // EXPORTED AND ENUMERATED because the readers that compare against them cannot
 // see each other: the publisher builds the subject, the applier's dispatch
@@ -93,9 +93,26 @@ const (
 	// FAIL on the record at Apply's unknown-kind arm rather than retain it.
 	// It is no gate.
 	KindChange ObjectKind = "change"
+
+	// KindChecks is a repository's CHECKS, by the repository's id
+	// (checks.<repo>): the subject what became of each of its checks — queued,
+	// claimed, ended — is written on (checks.go). ITS OWN SUBJECT, NEVER
+	// THE REPOSITORY'S, for the conversation's reason: a check's records share
+	// nothing with the repository's pushes and would wait behind their
+	// batches in its committer's queue. ADDITIVE: its records carry no
+	// expectation, and commute because every apply on it is a join
+	// ([joinCheck]). A table is written by the records of ONE subject:
+	// code_checks and code_check_logs by this one's.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as the checks subject's doc
+	// states it (checks.go): once a build without it has run, it takes
+	// {Name: "Subject.Kind checks", Since: 2, Path: []string{"subject",
+	// "k"}, Equals: string(KindChecks)} with the same companions as
+	// [KindChange]. It is no gate.
+	KindChecks ObjectKind = "checks"
 )
 
-// ObjectKinds are the eight, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the nine, and THE ORDER IS LOAD-BEARING.
 //
 // [statelogtest] publishes the FIRST THREE a domain declares, twice each, in
 // order — so the declaration decides what the framework's own suite certifies.
@@ -103,11 +120,12 @@ const (
 // repository; a push on that repository; and an eviction. A push on a
 // repository no create made is a malformed record under a strict replay, so
 // the repository before its name would certify a failure. A kind added later
-// is APPENDED, so the three never move: a change's subject is last, and a
-// record on it needs a change no record of the suite's opens.
+// is APPENDED, so the three never move: a change's subject and a repository's
+// checks are last, and a record on either needs what no record of the suite's
+// opens.
 var ObjectKinds = []ObjectKind{
 	KindName, KindRepo, KindEviction, KindGeneration, KindCompany,
-	KindBarrier, KindTrimmed, KindChange,
+	KindBarrier, KindTrimmed, KindChange, KindChecks,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -116,12 +134,15 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// SIX OF EIGHT DO. The barrier shares one subject across the whole domain, so
+// SIX OF NINE DO. The barrier shares one subject across the whole domain, so
 // an expectation there would serialise every linearizable read behind every
-// other one; and a trimmed record REMOVES anchors, so an anchor of its own
-// would be the one row it exists not to leave behind (ADR-0050).
+// other one; a trimmed record REMOVES anchors, so an anchor of its own would
+// be the one row it exists not to leave behind (ADR-0050); and a repository's
+// checks are ADDITIVE — its records commute, every apply a join (checks.go) —
+// so an expectation would put every runner's claim and ending behind every
+// other's for nothing.
 func (k ObjectKind) Arbitrated() bool {
-	return k != KindBarrier && k != KindTrimmed
+	return k != KindBarrier && k != KindTrimmed && k != KindChecks
 }
 
 // InstallsGate reports a kind whose unknown version must STOP the applier
@@ -173,6 +194,10 @@ func RepoSubject(id string) Subject { return Subject{Kind: KindRepo, ID: id} }
 // ChangeSubject is one change — what every record of its conversation
 // arbitrates on.
 func ChangeSubject(id string) Subject { return Subject{Kind: KindChange, ID: id} }
+
+// ChecksSubject is one repository's checks — what every record of them is
+// published on, by the repository's id.
+func ChecksSubject(repoID string) Subject { return Subject{Kind: KindChecks, ID: repoID} }
 
 // EvictionSubject is one node's standing on this log, so an eviction and the
 // readmission that inverts it contend with each other and with nothing else.

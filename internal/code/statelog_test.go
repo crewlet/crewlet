@@ -228,6 +228,16 @@ func suitePayload(kind code.ObjectKind, id string) (code.Subject, code.OpKind, a
 	case code.KindTrimmed:
 		return code.Subject{Kind: code.KindTrimmed, ID: id}, code.OpTrimmed, nil,
 			code.Scope{statelog.FrameworkScope}
+	case code.KindChecks:
+		// A TIP'S CHECK QUEUED on the repository's checks subject, which the
+		// deletion gate reads the repository off: a purged repository's
+		// late check record writes nothing.
+		return code.ChecksSubject(id), code.OpCheckQueued, code.CheckQueued{
+			CheckKey: code.CheckKey{RepoID: id, OID: oidOf(id), Name: "unit", Attempt: 1},
+			Purpose:  code.PurposeTip, Target: "refs/heads/main", Reason: code.QueueDispatch,
+			Def:      &code.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 600},
+			QueuedAt: suiteAt,
+		}, code.Scope{code.ChecksPath(id)}
 	}
 	return code.Subject{Kind: kind, ID: id}, code.OpCreate, nil, code.Scope{code.DomainPath()}
 }

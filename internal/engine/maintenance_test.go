@@ -137,7 +137,10 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// one node's clock would be the second writer again. The
 		// references gate reviews that table's sweep as the duty's, and
 		// TestARetirementIsSweptByARecordTheEngineRuns holds the duty the
-		// engine runs to publishing it.
+		// engine runs to publishing it. NOR ITS CHECKS past
+		// code.CheckHistory, `code_checks` and `code_check_logs`, for the
+		// same reason again: every ending removes its own repository's,
+		// and the duty's checks_sweep records an idle repository's.
 		"pages_ops",
 		// NEITHER NATIVE BACKEND SWEEPS ANY MORE, and the absence of
 		// their entries is the point. The knowledge base had three —

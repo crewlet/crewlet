@@ -951,7 +951,8 @@ func (d *codeRetentionDuty) turn(ctx context.Context) (code.RetentionReport, boo
 // code_scratch_expiry_skipped warning, are where a pass is read.
 func logCodeRetention(ctx context.Context, logger *slog.Logger, report code.RetentionReport, err error,
 	ended bool) {
-	attrs := []any{"sweeps", report.Sweeps, "swept_rows", report.SweptRows, "purged", report.Purged,
+	attrs := []any{"sweeps", report.Sweeps, "swept_rows", report.SweptRows,
+		"checks_sweeps", report.ChecksSweeps, "checks_swept_rows", report.ChecksSweptRows, "purged", report.Purged,
 		"steps", report.Steps, "remain", report.Remain, "released", report.Released, "expired", report.Expired,
 		"scratch_held", report.ScratchHeld}
 	if len(report.Failed) > 0 {
@@ -967,7 +968,7 @@ func logCodeRetention(ctx context.Context, logger *slog.Logger, report code.Rete
 	case err != nil && !ended:
 		logger.WarnContext(ctx, "code_retention_pass_failed", append(attrs, "error", err.Error(),
 			"detail", "the next pass, a tick later, lists what is due again")...)
-	case report.Sweeps > 0 || len(report.Purged) > 0 || len(report.Failed) > 0 ||
+	case report.Sweeps > 0 || report.ChecksSweeps > 0 || len(report.Purged) > 0 || len(report.Failed) > 0 ||
 		len(report.Unhanded) > 0 || report.Remain || report.Released > 0 || report.Expired > 0 ||
 		report.ScratchHeld > 0 || report.ScratchExpiryUnread != "":
 		logger.InfoContext(ctx, "code_retention_pass", attrs...)

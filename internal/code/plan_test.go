@@ -312,6 +312,7 @@ const (
 	evictionKey     = "sqlite_autoindex_code_evictions_1"
 	layersKey       = "sqlite_autoindex_code_layers_1"
 	layerPartsKey   = "sqlite_autoindex_code_layer_parts_1"
+	checkLogsKey    = "sqlite_autoindex_code_check_logs_1"
 	seatDaysKey     = "sqlite_autoindex_code_seat_days_1"
 	repoKindsKey    = "sqlite_autoindex_code_repo_kinds_1"
 )
@@ -371,7 +372,7 @@ func registeredStatements() map[string]statement {
 		"purge all packs":     {purgeAllPacksSQL, []any{"repo-1"}, []string{packsKey + " (repo_id=?)"}},
 		"remove repo":         {removeRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo name":           {repoNameSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", dropsKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)", "COVERING INDEX " + bodyKey + " (change_id=?)", reviewerKey + " (change_id=?)", participantKey + " (change_id=?)", "COVERING INDEX code_findings_raiser_idx (change_id=?)", "COVERING INDEX code_comments_thread_idx (change_id=?)", "COVERING INDEX " + findingTextKey + " (change_id=?)", "COVERING INDEX code_reviews_change_idx (change_id=?)", factsKey + " (change_id=?)", conversationKey + " (change_id=?)"}},
+		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", dropsKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)", "COVERING INDEX " + bodyKey + " (change_id=?)", reviewerKey + " (change_id=?)", participantKey + " (change_id=?)", "COVERING INDEX code_findings_raiser_idx (change_id=?)", "COVERING INDEX code_comments_thread_idx (change_id=?)", "COVERING INDEX " + findingTextKey + " (change_id=?)", "COVERING INDEX code_reviews_change_idx (change_id=?)", factsKey + " (change_id=?)", conversationKey + " (change_id=?)", "COVERING INDEX " + checksEndedKey + " (repo_id=?)", checkLogsKey + " (repo_id=?)"}},
 		"claim":               {claimSQL, []any{"token"}, []string{nameKey + " (token=?)"}},
 		"claims":              {claimsSQL, []any{`["token","other"]`}, []string{nameKey + " (token=?)"}},
 		"repos rows":          {reposRowsSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
@@ -802,6 +803,20 @@ func registeredStatements() map[string]statement {
 		"begin dropped layers": {beginDroppedLayersSQL, []any{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, "x", 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"commit counters":      {commitCountersSQL, []any{1, 1, 1, 1, 1, 1, "", 0, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"expunge due":          {expungeDueSQL, []any{"", MaxSnapshotItems}, []string{"code_repos_expunging_idx (id>?)"}},
+		// A REPOSITORY'S CHECKS': the join's read of one row by its whole
+		// key, and its log's by the same; the oldest rows past a cutoff —
+		// the horizon's, a sweep's decide's and a purge part's — weighed by
+		// a covering read of code_checks_finished_idx and deleted in its
+		// order, their logs through them; the final purge's two; and the
+		// retention duty's listing, one row an instant and a repository.
+		"check row":            {readCheckSQL, []any{"repo-1", oid("c"), "unit", 1}, []string{checksKey + " (repo_id=? AND oid=? AND name=? AND attempt=?)"}},
+		"drop check log":       {dropCheckLogSQL, []any{"repo-1", oid("c"), "unit", 1}, []string{checkLogsKey + " (repo_id=? AND oid=? AND name=? AND attempt=?)"}},
+		"checks oldest":        {checksOldestSQL, []any{"repo-1", 1, 1000, CheckHorizonRows + 1}, []string{"COVERING INDEX " + checksEndedKey + " (repo_id=? AND finished_at>=? AND finished_at<?)"}},
+		"delete oldest logs":   {deleteOldestCheckLogsSQL, []any{"repo-1", 1, 1000, CheckHorizonRows}, []string{"COVERING INDEX " + checksEndedKey + " (repo_id=? AND finished_at>=? AND finished_at<?)", checkLogsKey + " (repo_id=? AND oid=? AND name=? AND attempt=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"delete oldest checks": {deleteOldestChecksSQL, []any{"repo-1", 1, 1000, CheckHorizonRows}, []string{"COVERING INDEX " + checksEndedKey + " (repo_id=? AND finished_at>=? AND finished_at<?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge all check logs": {purgeAllCheckLogsSQL, []any{"repo-1"}, []string{checkLogsKey + " (repo_id=?)"}},
+		"purge all checks":     {purgeAllChecksSQL, []any{"repo-1"}, []string{checksKey + " (repo_id=?)"}},
+		"checks due":           {checksDueSQL, []any{1000, -1, -1, "", 100}, []string{"COVERING INDEX code_checks_recent_idx (finished_at>=? AND finished_at<?)"}},
 	}
 	return out
 }
@@ -825,6 +840,7 @@ var referenceTables = map[string]objstore.ReferenceTable{
 	"PackReferences":        PackReferences,
 	"RetiredPackReferences": RetiredPackReferences,
 	"LayerReferences":       LayerReferences,
+	"CheckLogReferences":    CheckLogReferences,
 }
 
 // referenceWidths is every width each of objstore's statement builders is
@@ -914,6 +930,15 @@ func planShapes() map[string]shape {
 	// backup never do.
 	reference("ObjectsAmong", LayerReferences, keys, "code_layer_parts_object_idx (object=?)")
 	reference("ReferencesAfter", LayerReferences, after(""), "code_layer_parts_object_idx (object>?)")
+	// THE CHECKS' LOGS, a live table like the packs: the collector's
+	// question, the walk the audit, a backup and a store move read, a
+	// backup's question of the keys its log names, and its page of the
+	// records the log deferred.
+	reference("ObjectsAmong", CheckLogReferences, keys, "code_check_logs_object_idx (object=?)")
+	reference("ReferencesAfter", CheckLogReferences, after(""), "code_check_logs_object_idx (object>?)")
+	reference("ReferencesAmong", CheckLogReferences, keys, "code_check_logs_object_idx (object=?)")
+	reference("DeferredRecordsAfter", CheckLogReferences, after(0),
+		"SEARCH code_log_deferred USING INTEGER PRIMARY KEY (rowid=?)")
 	return out
 }
 
@@ -950,6 +975,22 @@ func claimedReads() map[string]statement {
 		"code_repos_expunge_due_idx": {`SELECT id, name FROM code_repos INDEXED BY code_repos_expunge_due_idx
 			WHERE status IN ('active', 'archived') AND expunged_at <= ? ORDER BY expunged_at, id LIMIT ?`,
 			[]any{2, MaxSnapshotItems}, []string{"code_repos_expunge_due_idx (expunged_at<=?)"}},
+		// THE CHECKS' INDEXES THEIR LATER READERS SEEK (replicated 0074): a
+		// runner's claim walk, oldest queued first from where its last page
+		// ended, the queued state repeated as the index is partial on it; the
+		// home's sweep of a repository's running checks by runner, the running
+		// state repeated likewise; and a change's checks by commit, name and
+		// attempt.
+		"code_checks_queued_idx": {`SELECT repo_id, oid, name, attempt FROM code_checks
+			INDEXED BY code_checks_queued_idx WHERE state = 'queued' AND queued_at >= ?
+			ORDER BY queued_at, repo_id, oid, name, attempt LIMIT ?`,
+			[]any{0, 1024}, []string{"code_checks_queued_idx (queued_at>=?)"}},
+		"code_checks_running_idx": {`SELECT oid, name, attempt, runner_node FROM code_checks
+			INDEXED BY code_checks_running_idx WHERE repo_id = ? AND state = 'running'`,
+			[]any{"repo-1"}, []string{"code_checks_running_idx (repo_id=?)"}},
+		"code_checks_change_idx": {`SELECT oid, name, attempt, state FROM code_checks
+			INDEXED BY code_checks_change_idx WHERE change_id = ? ORDER BY oid, name, attempt`,
+			[]any{"repo-1-change-000001"}, []string{"code_checks_change_idx (change_id=?)"}},
 	}
 }
 

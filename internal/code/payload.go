@@ -1448,6 +1448,14 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[FindingResolve](rec)
 	case kind == KindChange && op == OpRevise:
 		return decodePayload[Revise](rec)
+	case kind == KindChecks && op == OpCheckQueued:
+		return decodePayload[CheckQueued](rec)
+	case kind == KindChecks && op == OpCheckStarted:
+		return decodePayload[CheckStarted](rec)
+	case kind == KindChecks && op == OpCheckFinished:
+		return decodePayload[CheckFinished](rec)
+	case kind == KindChecks && op == OpChecksSweep:
+		return decodePayload[ChecksSweep](rec)
 	case kind == KindCompany && op == OpActivate:
 		return decodePayload[Activated](rec)
 	case kind == KindEviction && op == OpEviction:

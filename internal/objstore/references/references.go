@@ -107,13 +107,15 @@ import (
 // All is every replicated table whose rows keep objects alive, whatever its
 // standing: a project's files, the pack bundles the company's repositories'
 // pushes stored and, for a grace, the ones a record retired, the parts of each
-// repository's published multi-pack-index layers, an artifact's version files
-// and assets, and the files of the company's adopted brand.
+// repository's published multi-pack-index layers, the logs its failed checks
+// kept, an artifact's version files and assets, and the files of the company's
+// adopted brand.
 var All = []objstore.ReferenceTable{
 	tracker.FileObjectReferences,
 	code.PackReferences,
 	code.RetiredPackReferences,
 	code.LayerReferences,
+	code.CheckLogReferences,
 	artifactsdomain.ObjectReferences,
 	artifactsdomain.AssetReferences,
 	artifactsdomain.BrandFileReferences,

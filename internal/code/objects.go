@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -62,6 +63,111 @@ var LayerReferences = objstore.ReferenceTable{
 	Key: "object", Hash: "hash", Size: "size",
 	Owner:    []string{"repo_id", "layer_id", "part"},
 	Standing: objstore.Derived,
+}
+
+// CheckLogReferences declares code_check_logs: the log a failed check's run
+// kept, one object a row names. REQUIRED (ADR-0051): the log is what a reader
+// of a failed check is told to read, and nothing builds it again — the run is
+// gone — so it is audited, carried by every backup and copied by a store
+// move, and declared in internal/objstore/references, or the collector would
+// delete every log a day after it was written. A row goes with its check's —
+// past CheckHistory, or with its repository's purge — and the collector's
+// next pass takes its object.
+var CheckLogReferences = objstore.ReferenceTable{
+	Domain: Domain{}.Name(), Table: "code_check_logs",
+	Key: "object", Hash: "hash", Size: "size",
+	Owner:    []string{"repo_id", "oid", "name", "attempt"},
+	Standing: objstore.Required,
+	Log:      Domain{}.Stream().Name,
+	Deferred: Domain{}.DeferredTable(),
+	Records:  checkLogRecordReferences,
+}
+
+// checkLogRecordReferences answers the code_check_logs rows one record of the
+// code log writes, and the object each names once the record applies —
+// [objstore.ReferenceTable.Records] for [CheckLogReferences].
+//
+// A RECORD THIS BUILD READS is answered by the applier's own decoder: an
+// ending that keeps a log writes its attempt's row naming it — answered
+// whether or not the join keeps that ending, since a backup reads a superset
+// of what a restore's rows name, never a subset. An ending that keeps none
+// answers NOTHING, never a removal, though the ending a join keeps replaces
+// the row an earlier one named: a removal answered for a row the join leaves
+// standing — the ending lost — would read the restore's row as naming nothing,
+// and its object would be lost to the backup. A horizon, a sweep and a purge
+// remove rows their records do not list, and answer none, as a pack's purge
+// does.
+//
+// A RECORD THIS BUILD CANNOT READ — a newer version, or a kind it has never
+// heard of — is answered from what EVERY build reads of it ([mayWriteCheckLogs]):
+// one that may write a log row is [objstore.ErrRecordUnreadable].
+//
+// THE ROW IS SPELLED IN THE ORDER [CheckLogReferences] LISTS ITS OWNER COLUMNS
+// — repo_id, oid, name, attempt — through [objstore.JoinOwner], as the walk of
+// the table spells it.
+func checkLogRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
+	env, err := DecodeEnvelope(payload)
+	if err != nil {
+		return nil, fmt.Errorf("code: a record no build reads: %w", err)
+	}
+	if env.V > RecordVersion || !env.Subject.Kind.Valid() {
+		if !mayWriteCheckLogs(env) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("%w: the record on %s is version %d of a kind this build %s (it reads "+
+			"version %d), and the scope its writer stated reaches a repository's checks",
+			objstore.ErrRecordUnreadable, env.Subject, env.V, knownOrNot(env.Subject.Kind), RecordVersion)
+	}
+	if env.Subject.Kind != KindChecks || env.Op != OpCheckFinished {
+		return nil, nil
+	}
+	rec, err := Decode(payload)
+	if err != nil {
+		return nil, err
+	}
+	payloadAny, err := DecodeMutation(rec)
+	if err != nil {
+		return nil, err
+	}
+	f, ok := payloadAny.(CheckFinished)
+	if !ok {
+		return nil, fmt.Errorf("code: the %s on %s carries a %T", env.Op, env.Subject, payloadAny)
+	}
+	if f.Log == nil {
+		return nil, nil
+	}
+	return []objstore.RecordReference{{
+		NamedBy: objstore.JoinOwner(f.RepoID, f.OID, f.Name, strconv.Itoa(f.Attempt)),
+		Object:  f.Log.Content(), Names: true,
+	}}, nil
+}
+
+// mayWriteCheckLogs reports whether a record this build cannot read may write
+// a code_check_logs row, from what every build reads of it: its kind and the
+// scope its writer stated as the complete set of objects its apply may write.
+// AN UNKNOWN KIND MAY. A KNOWN KIND may when any path of its scope reaches a
+// repository's checks — the domain, a checks path, or a path this build cannot
+// interpret, which is the domain's reading of it — and may not when every
+// path is a name's claim, a repository's own, a change's, the activation
+// fence or the framework's: a log row is written only under its repository's
+// checks path, which a record writing one names.
+func mayWriteCheckLogs(env RecordEnvelope) bool {
+	if !env.Subject.Kind.Valid() {
+		return true
+	}
+	elsewhere := []string{
+		pathDomain + statelog.ScopeSeparator + pathName + statelog.ScopeSeparator,
+		pathDomain + statelog.ScopeSeparator + pathRepo + statelog.ScopeSeparator,
+		pathDomain + statelog.ScopeSeparator + pathChange + statelog.ScopeSeparator,
+	}
+	for _, p := range env.Scope {
+		if p == statelog.FrameworkScope || p == ActivationPath() ||
+			slices.ContainsFunc(elsewhere, func(prefix string) bool { return strings.HasPrefix(p, prefix) }) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // packRecordReferences answers the code_packs rows one record of the code log
@@ -196,17 +302,21 @@ func knownOrNot(k ObjectKind) string {
 // of names. A KNOWN KIND may when any path of its scope reaches a repository —
 // the domain, a repository's own path, or a path this build cannot interpret,
 // which is the domain's reading of it — and may not when every path is a
-// name's claim, the activation fence or the framework's own.
+// name's claim, a repository's checks, the activation fence or the
+// framework's own: a pack row is written only under its repository's own
+// path, which a record writing one names, and a check's record never names it.
 func mayWritePacks(env RecordEnvelope) bool {
 	if !env.Subject.Kind.Valid() {
 		return true
 	}
 	names := pathDomain + statelog.ScopeSeparator + pathName + statelog.ScopeSeparator
+	checks := pathDomain + statelog.ScopeSeparator + pathChecks + statelog.ScopeSeparator
 	for _, p := range env.Scope {
-		// EVERYTHING BUT THE THREE PATHS THAT REACH NO REPOSITORY may: the
-		// domain, a repository's path, and a path this build cannot
+		// EVERYTHING BUT THE FOUR PATHS THAT REACH NO REPOSITORY'S PACKS may:
+		// the domain, a repository's path, and a path this build cannot
 		// interpret alike.
-		if p == statelog.FrameworkScope || p == ActivationPath() || strings.HasPrefix(p, names) {
+		if p == statelog.FrameworkScope || p == ActivationPath() || strings.HasPrefix(p, names) ||
+			strings.HasPrefix(p, checks) {
 			continue
 		}
 		return true

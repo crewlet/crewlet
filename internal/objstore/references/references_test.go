@@ -249,6 +249,8 @@ var standings = map[string]standing{
 		"a pack a compaction replaced: nothing new reads it, and a read that began on it gets its grace before the row is swept"},
 	"code_layer_parts": {objstore.Derived,
 		"a published multi-pack-index layer's bytes: any git node builds the layer again from the repository's packs, and one it cannot fetch it does without"},
+	"code_check_logs": {objstore.Required,
+		"a failed check's log, which a reader of the failure is sent to and nothing builds again — the run is gone"},
 	"artifact_objects": {objstore.Required,
 		"an artifact version's file, which a retained version serves"},
 	"artifact_assets": {objstore.Required,
@@ -393,9 +395,10 @@ func TestAHoldRecordCoversEveryPassInFlight(t *testing.T) {
 // while neither raises `clock_skew`. And the bound itself has to outlast the
 // slowest upload the engine accepts — the largest object any declaring domain
 // stores (a file of tracker.MaxFileBytes, a pack bundle of code.MaxPackBytes,
-// a part of a published layer of code.LayerPartBytes, an artifact's file or
-// asset of artifacts.MaxTextFileBytes) at the objstore.MiBPace floor — or a
-// legal upload would finish only to be refused.
+// a part of a published layer of code.LayerPartBytes, a failed check's log of
+// code.MaxCheckLogBytes, an artifact's file or asset of
+// artifacts.MaxTextFileBytes) at the objstore.MiBPace floor — or a legal
+// upload would finish only to be refused.
 //
 // The controls show the first inequality is held to two nodes' clocks: a grace
 // past the bound by one node's skew and not two is refused.
@@ -425,6 +428,7 @@ func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 		{"tracker.MaxFileBytes", tracker.MaxFileBytes},
 		{"code.MaxPackBytes", code.MaxPackBytes},
 		{"code.LayerPartBytes", code.LayerPartBytes},
+		{"code.MaxCheckLogBytes", code.MaxCheckLogBytes},
 		{"artifacts.MaxTextFileBytes", artifacts.MaxTextFileBytes},
 	} {
 		slowest := objstore.PaceFor(largest.bytes)

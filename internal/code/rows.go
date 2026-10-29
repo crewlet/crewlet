@@ -30,7 +30,10 @@ func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows
 // the answer rather than an omission. A CHANGE's subject is no exception: the
 // framework asks both only of a create-only write, and every write on a
 // change's subject is arbitrated; its repository's marker drops its records at
-// the apply gate ([gatedRepo]) and its rows go with the repository's purge.
+// the apply gate ([gatedRepo]) and its rows go with the repository's purge. A
+// repository's CHECKS subject is none either: its writes are additive, which
+// the framework asks neither of, and the repository's marker drops them at the
+// same gate.
 func codeGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (deleted, guard bool, err error) {
 	switch ObjectKind(subj.Kind) {
 	case KindRepo:
@@ -217,7 +220,8 @@ func evictedAt(at int64, from, readmitted sql.NullInt64) bool {
 }
 
 // gatedRepo is the repository whose deletion marker gates a record on subj
-// with the body given: a repository subject names its own; a CHANGE's subject
+// with the body given: a repository subject names its own, and so does a
+// repository's CHECKS subject, keyed by the repository's id; a CHANGE's subject
 // names its change, and the repository is the one its payload names
 // ([changeRepoOf]) — none where no body is handed, or one this build cannot
 // decode. A NAME subject names none — its create's payload names the
@@ -226,7 +230,7 @@ func evictedAt(at int64, from, readmitted sql.NullInt64) bool {
 // [Gates.GatedAt] alike, because [statelog.Gates] holds the two to one answer.
 func gatedRepo(subj statelog.Subject, body []byte) (string, bool) {
 	switch ObjectKind(subj.Kind) {
-	case KindRepo:
+	case KindRepo, KindChecks:
 		return subj.ID, true
 	case KindChange:
 		if body == nil {

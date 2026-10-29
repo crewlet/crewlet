@@ -276,9 +276,10 @@ func TestEveryKindIsClassifiedAndEveryArbitratedKindIsDeclared(t *testing.T) {
 				kind.Arbitrated(), declared[string(kind)])
 		}
 	}
-	if len(declared) != len(code.ObjectKinds)-2 {
-		t.Errorf("the stream declares %d arbitrated kinds of %d — only the barrier and "+
-			"the trimmed record are unarbitrated", len(declared), len(code.ObjectKinds))
+	if len(declared) != len(code.ObjectKinds)-3 {
+		t.Errorf("the stream declares %d arbitrated kinds of %d — only the barrier, the "+
+			"trimmed record and a repository's checks, whose records commute, are "+
+			"unarbitrated", len(declared), len(code.ObjectKinds))
 	}
 }
 

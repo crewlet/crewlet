@@ -348,15 +348,61 @@ const (
 	// revise", Since: 2, Path: []string{"op"}, Equals: string(OpRevise)},
 	// with the same companions. It is no gate.
 	OpRevise OpKind = "revise"
+
+	// OpCheckQueued queues one attempt of one check of one commit, or records
+	// it skipped ([CheckQueued]), on the repository's CHECKS subject
+	// ([KindChecks]), its apply a join (checks.go).
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as the checks subject states it;
+	// once a build without it has run, it takes {Name: "MutationRecord.Op
+	// check_queued", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpCheckQueued)}, with the same companions as [OpChangeOpen]. It
+	// is no gate.
+	OpCheckQueued OpKind = "check_queued"
+
+	// OpCheckStarted claims an attempt for a runner, or names the box its
+	// holder made ([CheckStarted]), on the repository's checks subject.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpCheckQueued] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op
+	// check_started", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpCheckStarted)}, with the same companions. It is no gate.
+	OpCheckStarted OpKind = "check_started"
+
+	// OpCheckFinished ends an attempt ([CheckFinished]), on the repository's
+	// checks subject, and removes the repository's rows past [CheckHistory].
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpCheckQueued] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op
+	// check_finished", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpCheckFinished)}, with the same companions. It is no gate.
+	OpCheckFinished OpKind = "check_finished"
+
+	// OpChecksSweep removes a repository's check rows past [CheckHistory]
+	// where no check of its own ends to ([ChecksSweep]), on its checks
+	// subject — the code-retention duty's.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpCheckQueued] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op
+	// checks_sweep", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpChecksSweep)}, with the same companions. It is no gate.
+	OpChecksSweep OpKind = "checks_sweep"
 )
 
-// OpKinds are the thirty-three, in the order they are documented.
+// OpKinds are the thirty-seven, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
 	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpRename, OpReleaseName, OpHold,
 	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen, OpChangeLanded,
 	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise,
+	OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep,
+}
+
+// CheckOps are the ops of a repository's CHECKS, in [OpKinds]' order: every
+// record on its checks subject ([KindChecks]).
+func CheckOps() []OpKind {
+	return []OpKind{OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep}
 }
 
 // ChangeOps are the seven ops of a change's LIFECYCLE, in [OpKinds]' order:

@@ -19,10 +19,11 @@ import (
 )
 
 // THE RETENTION PASS: what removes a retired pack's row once its grace has
-// passed, a deleted repository for good once it has been deleted for longer
-// than the company's code.deleted_retention_days, a renamed repository's old
-// name once its redirect has ended, and a seat's scratch repository once it has
-// sat idle code.scratch.idle_days — never one a live turn holds.
+// passed, an idle repository's check rows once they outlive CheckHistory, a
+// deleted repository for good once it has been deleted for longer than the
+// company's code.deleted_retention_days, a renamed repository's old name once
+// its redirect has ended, and a seat's scratch repository once it has sat idle
+// code.scratch.idle_days — never one a live turn holds.
 //
 // It is the BODY of the code-retention duty. The duty — a fleet singleton,
 // its lease and its tick ([RetentionInterval]) — is the engine's, because
@@ -41,6 +42,16 @@ import (
 // purges keep their order behind them. The listing is a page at a time over
 // its own index, oldest retirement first, one entry a retiring record rather
 // than a row.
+//
+// Then the CHECKS: every repository holding check rows that ended before the
+// pass's clock less [CheckHistory] is swept ([Store.ChecksSweep]) — one
+// checks_sweep record on its checks subject removing up to [CheckHorizonRows]
+// of them, oldest first, the repository stepped again while rows past the
+// history are left. A repository whose checks keep ending removes its own
+// history with each ending; this is for one whose checks stopped ending, whose
+// rows nothing else would ever remove. Its listing is a page at a time over
+// code_checks_recent_idx, oldest ending first, one entry an instant and a
+// repository rather than a row.
 //
 // Then every PURGING repository, whatever the retention: a purge once begun
 // is always finished, because its rows are already partly gone, its name is
@@ -184,6 +195,13 @@ type RetentionReport struct {
 	// SweptRows counts the retired pack rows those records remove — each
 	// step's decide's own count of the rows at or below its Through.
 	SweptRows int `json:"swept_rows"`
+	// ChecksSweeps counts the checks_sweep records the pass published, across
+	// every repository: each removing up to CheckHorizonRows of one
+	// repository's check rows past CheckHistory.
+	ChecksSweeps int `json:"checks_sweeps"`
+	// ChecksSweptRows counts the check rows those records remove — each
+	// step's decide's own count of the rows that ended before its Through.
+	ChecksSweptRows int `json:"checks_swept_rows"`
 	// Purged names every repository whose purge the pass saw through and
 	// handed on — its last record applied in this node's rows and its name
 	// taken by OnPurged — in that order. A name an earlier pass purged and
@@ -228,11 +246,11 @@ type RetentionReport struct {
 }
 
 // Pass hands on what an earlier pass purged and could not, sweeps every
-// repository's retired pack rows past [RetireGrace], then steps what is due a
-// purge — every purging repository, then every one deleted past the current
-// retention, each oldest deletion first — until its purge is done, the
-// pass's budget runs out, or the context ends, pacing every step to the
-// pass's share of the write lane.
+// repository's retired pack rows past [RetireGrace] and its check rows past
+// [CheckHistory], then steps what is due a purge — every purging repository,
+// then every one deleted past the current retention, each oldest deletion
+// first — until its purge is done, the pass's budget runs out, or the context
+// ends, pacing every step to the pass's share of the write lane.
 //
 // A repository whose sweep or purge fails is reported in
 // [RetentionReport.Failed] and the pass goes on to the next: one repository's
@@ -288,11 +306,12 @@ func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error
 		return report, err
 	}
 	// THE STEPS IN ORDER, on one pacer and one budget: the retired packs'
-	// sweeps, the purges, the old names' releases, the idle scratch
-	// repositories' expiry. Each stops the pass at the budget (Remain), and
-	// the next pass resumes every step from the rows.
+	// sweeps, the checks' sweeps, the purges, the old names' releases, the
+	// idle scratch repositories' expiry. Each stops the pass at the budget
+	// (Remain), and the next pass resumes every step from the rows.
 	for _, step := range []func() (bool, error){
 		func() (bool, error) { return r.sweep(ctx, now, pace, &report) },
+		func() (bool, error) { return r.sweepChecks(ctx, now, pace, &report) },
 		func() (bool, error) { return r.purges(ctx, now, retention, pace, &report, log) },
 		func() (bool, error) { return r.release(ctx, now, pace, &report) },
 		func() (bool, error) { return r.expireScratch(ctx, now, pace, &report, log) },
@@ -483,7 +502,11 @@ func (r *Retention) sweep(ctx context.Context, now time.Time, pace *pacer,
 				continue
 			}
 			stepped[id] = true
-			if stop, err := r.sweepRepo(ctx, id, now, pace, report); err != nil || stop {
+			step := func(ctx context.Context) (SweepResult, error) { return r.Store.RetireSweep(ctx, id, now) }
+			if stop, err := r.sweepRepo(ctx, id, pace, report, step, func(res SweepResult) {
+				report.Sweeps++
+				report.SweptRows += res.Rows
+			}); err != nil || stop {
 				return stop, err
 			}
 		}
@@ -494,16 +517,59 @@ func (r *Retention) sweep(ctx context.Context, now time.Time, pace *pacer,
 	}
 }
 
-// sweepRepo steps one repository's sweep while rows past the grace are left
-// beyond what the last record removed, a step fails, the pass's budget runs
-// out (stop) or the context ends (the error).
+// sweepChecks steps every repository the checks listing names — the
+// repositories holding check rows past [CheckHistory], once each however many
+// of its endings the listing names — until nothing past the history is left,
+// the pass's budget runs out (stop) or the context ends (the error).
+//
+// A repository whose checks keep ending removes its own history, and is
+// listed here only for what its endings' bounded horizons left; an IDLE one,
+// whose checks stopped ending, has nothing else that would ever remove it. The
+// listing is a stale read and each step decides again inside its own snapshot,
+// so a repository whose rows an ending's horizon or a purge removed since the
+// listing read them is simply answered nothing.
+func (r *Retention) sweepChecks(ctx context.Context, now time.Time, pace *pacer,
+	report *RetentionReport) (stop bool, err error) {
+
+	q := checksQuery{cutoff: now.Add(-CheckHistory), limit: cmp.Or(r.page, retentionPage)}
+	stepped := map[string]bool{}
+	for {
+		page, err := r.Reader.checksDue(ctx, q)
+		if err != nil {
+			return false, err
+		}
+		for _, id := range page.repos {
+			if stepped[id] {
+				continue
+			}
+			stepped[id] = true
+			step := func(ctx context.Context) (SweepResult, error) { return r.Store.ChecksSweep(ctx, id, now) }
+			if stop, err := r.sweepRepo(ctx, id, pace, report, step, func(res SweepResult) {
+				report.ChecksSweeps++
+				report.ChecksSweptRows += res.Rows
+			}); err != nil || stop {
+				return stop, err
+			}
+		}
+		if page.next == nil {
+			return false, nil
+		}
+		q.after = page.next
+	}
+}
+
+// sweepRepo steps one repository's sweep — step, the retired packs' or the
+// checks', each of its rows past its own horizon — while rows past it are
+// left beyond what the last record removed, a step fails, the pass's budget
+// runs out (stop) or the context ends (the error); counted is told each step
+// that appended a record.
 //
 // A STEP WHOSE RECORD RESOLVED PENDING ENDS THE REPOSITORY'S TURN: its rows
 // are removed on the log and not yet in this node's, so a further step would
 // decide from rows that still hold them, and wait for this node to apply what
 // it already appended. The next pass sweeps what is left.
-func (r *Retention) sweepRepo(ctx context.Context, id string, now time.Time, pace *pacer,
-	report *RetentionReport) (stop bool, err error) {
+func (r *Retention) sweepRepo(ctx context.Context, id string, pace *pacer, report *RetentionReport,
+	step func(context.Context) (SweepResult, error), counted func(SweepResult)) (stop bool, err error) {
 	for {
 		switch turn, err := pace.wait(ctx); {
 		case err != nil:
@@ -512,7 +578,7 @@ func (r *Retention) sweepRepo(ctx context.Context, id string, now time.Time, pac
 			return true, nil
 		}
 		began := pace.clock()
-		res, err := r.Store.RetireSweep(ctx, id, now)
+		res, err := step(ctx)
 		pace.took(began)
 		switch {
 		case err != nil && ctx.Err() != nil:
@@ -525,8 +591,7 @@ func (r *Retention) sweepRepo(ctx context.Context, id string, now time.Time, pac
 		case res.Rows == 0:
 			return false, nil
 		}
-		report.Sweeps++
-		report.SweptRows += res.Rows
+		counted(res)
 		if !res.More || !res.Held() {
 			return false, nil
 		}
