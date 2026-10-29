@@ -324,7 +324,13 @@ its own; this header is set by nothing in front of the node. The dashboard and
 the CLI read an answer as the node's only when it carries both the header and a
 code, so a proxy's `401`, `403` or `413` is an answer that says nothing about
 what the node did, never a refused token, a grant to ask for or a smaller
-document. A proxy in front of the node must pass the header through unchanged.
+document. A proxy in front of the node must pass the header through unchanged;
+one that strips it makes every answer read as one the node never gave, so a
+write's outcome is reported unknown and never as refused. A dashboard served
+from another origin (`api.auth.allowed_origins`) reads it because the node
+exposes it to permitted origins (`Access-Control-Expose-Headers`, beside the
+`ETag` and `Retry-After` it reads too); a proxy that rewrites that header must
+keep `X-Crewlet-Engine` in it.
 
 ---
 
