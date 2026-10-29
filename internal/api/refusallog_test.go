@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 )
@@ -60,6 +61,12 @@ func TestAStaleCompanyWriteLogsOneLineThroughTheApp(t *testing.T) {
 			id := rec.Header().Get("X-Request-Id")
 			if id == "" {
 				t.Errorf("the refusal answered no X-Request-Id")
+			}
+			// THE ENGINE'S MARK SURVIVES THE WRAP: servedOn sets it outside
+			// every route, before the watched writer writes a status.
+			if got := rec.Header().Get(httpjson.EngineHeader); got != httpjson.EngineHeaderValue {
+				t.Errorf("the logged refusal answered %s %q, want %q", httpjson.EngineHeader,
+					got, httpjson.EngineHeaderValue)
 			}
 			var lines []map[string]any
 			for _, raw := range strings.Split(strings.TrimSpace(logged), "\n") {
