@@ -289,7 +289,7 @@ export function useSave({
             return;
           case "refused": {
             const refused = outcome.outcome;
-            if (refused.status === "clean" || refused.status === "unreachable") {
+            if (refused.status === "clean" || refused.status === "unchecked") {
               // A success that is not a 201 stored nothing this client can name,
               // and a failure the classifier could not place is not a refusal:
               // both are settled as an unknown outcome rather than believed.

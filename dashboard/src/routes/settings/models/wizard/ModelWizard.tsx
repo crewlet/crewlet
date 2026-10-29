@@ -33,6 +33,7 @@ import { configGuardedReason } from "~/lib/useWriteAccess.ts";
 import {
   introducedWarnings,
   managedSentence,
+  unsettledSentence,
   type ConfigRefusal,
 } from "~/protocol/configAnswer.ts";
 import { getConfig } from "~/protocol/configWrite.ts";
@@ -99,8 +100,12 @@ const LEADS: Record<WizardStep, string> = {
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** A refusal of the configuration surface in one sentence a person can act on. */
-function refusalWords(refusal: ConfigRefusal): string {
+/**
+ * A refusal of the configuration surface in one sentence a person can act on,
+ * at the `check` (the read and the dry runs, which store nothing whoever
+ * answered) or the `save`, the one write that may have landed.
+ */
+function refusalWords(refusal: ConfigRefusal, stage: "check" | "save"): string {
   switch (refusal.kind) {
     case "guarded":
       return configGuardedReason(refusal.code);
@@ -114,8 +119,10 @@ function refusalWords(refusal: ConfigRefusal): string {
       return `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
     case "starting":
       return `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
-    case "unreachable":
-      return "The engine did not answer, so the change may or may not have been stored. Reopen the model before trying again.";
+    case "unsettled":
+      return stage === "check"
+        ? `${unsettledSentence(refusal)} Nothing was stored. Check the change again.`
+        : `${unsettledSentence(refusal)} The change may or may not have been stored. Reopen the model before trying again.`;
     case "problems":
       return "The engine refused the change. Correct what is marked and try again.";
   }
@@ -477,7 +484,7 @@ export function ModelWizard({
           message:
             read.kind === "none"
               ? "No company is configured yet. Set one up first."
-              : refusalWords(read),
+              : refusalWords(read, "check"),
         });
         return;
       }
@@ -499,7 +506,7 @@ export function ModelWizard({
         setEngineProblems([...outcome.problems]);
         setCheck({ kind: "problems" });
       } else if (outcome.kind !== "saved") {
-        setCheck({ kind: "blocked", message: refusalWords(outcome) });
+        setCheck({ kind: "blocked", message: refusalWords(outcome, "check") });
       }
     } catch (err) {
       if (!isAbort(err)) throw err;
@@ -601,7 +608,7 @@ export function ModelWizard({
         setCheck({ kind: "problems" });
       } else if (outcome.kind !== "valid") {
         setPrepared(null);
-        setCheck({ kind: "blocked", message: refusalWords(outcome) });
+        setCheck({ kind: "blocked", message: refusalWords(outcome, "save") });
       }
     } finally {
       if (!screen.aborted) setSaving(false);

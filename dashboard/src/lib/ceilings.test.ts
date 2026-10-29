@@ -144,9 +144,22 @@ describe("what the engine's answer means", () => {
         scope,
       ).reload,
     ).toBe(true);
-    expect(refusalWords({ kind: "unreachable", detail: "" }, scope)).toEqual({
+    expect(
+      refusalWords({ kind: "unsettled", answered: false, detail: "", status: 0 }, scope),
+    ).toEqual({
       message:
-        "The engine did not answer, so the change may or may not have landed. Reload before trying again.",
+        "The engine did not answer. The change may or may not have landed. Reload before trying again.",
+      reload: true,
+    });
+    // AN ENGINE THAT ANSWERED AND FAILED is said as one, with its own words.
+    expect(
+      refusalWords(
+        { kind: "unsettled", answered: true, detail: "the store could not commit", status: 500 },
+        scope,
+      ),
+    ).toEqual({
+      message:
+        "The engine failed: the store could not commit. The change may or may not have landed. Reload before trying again.",
       reload: true,
     });
     // A REFUSAL ON AUTHORITY names the grant, never a token this browser

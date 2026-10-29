@@ -28,7 +28,7 @@
  */
 
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
-import { managedSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
+import { managedSentence, unsettledSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
 import type { TokenBudget } from "~/protocol/types.ts";
 import { PERIOD_ADJECTIVE, readCeiling } from "./budget.ts";
 import { fmtCount } from "./format.ts";
@@ -246,10 +246,9 @@ export function refusalWords(
         message: `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`,
         reload: false,
       };
-    case "unreachable":
+    case "unsettled":
       return {
-        message:
-          "The engine did not answer, so the change may or may not have landed. Reload before trying again.",
+        message: `${unsettledSentence(refusal)} The change may or may not have landed. Reload before trying again.`,
         reload: true,
       };
     case "missing":

@@ -18,7 +18,8 @@
  *   `~/lib/avatar.ts` (the ONE reading of a seat's avatar, which imports
  *   nothing but the contract, held below) or
  *   `~/protocol/configAnswer.ts` (the ONE reading of a `/config` refusal,
- *   which imports nothing but types — held below); the rest of `~/protocol`
+ *   which imports nothing but types and `engineAnswer.ts`, itself importing
+ *   nothing, both held below); the rest of `~/protocol`
  *   is imported for TYPES only, because its runtime half is the socket and
  *   `fetch`;
  * - no module names a browser or time global.
@@ -120,15 +121,22 @@ describe("the builder core", () => {
     // THE ONE RUNTIME DOOR INTO ~/protocol, and it stays a door only while
     // what is behind it imports nothing at runtime: the day it reached for
     // `rest.ts` the model would be one import away from the network.
+    // One step further, and no more: the rule of whose answer an answer is,
+    // which `rest.ts` reads too, imports nothing at all.
     const answer = modules().find(({ path }) => path === "protocol/configAnswer.ts");
     expect(answer, "protocol/configAnswer.ts is gone").toBeDefined();
     const runtime = imports(answer!.text).filter(({ typeOnly }) => !typeOnly);
-    expect(runtime).toEqual([]);
-    const body = code(answer!.text);
-    const reached = FORBIDDEN_GLOBALS.filter(([, pattern]) => pattern.test(body)).map(
-      ([label]) => label,
-    );
-    expect(reached).toEqual([]);
+    expect(runtime.map(({ spec }) => spec)).toEqual(["./engineAnswer.ts"]);
+    const engine = modules().find(({ path }) => path === "protocol/engineAnswer.ts");
+    expect(engine, "protocol/engineAnswer.ts is gone").toBeDefined();
+    expect(imports(engine!.text)).toEqual([]);
+    for (const { text } of [answer!, engine!]) {
+      const body = code(text);
+      const reached = FORBIDDEN_GLOBALS.filter(([, pattern]) => pattern.test(body)).map(
+        ([label]) => label,
+      );
+      expect(reached).toEqual([]);
+    }
   });
 
   test("reads a seat's avatar through a module that imports nothing but the contract", () => {
