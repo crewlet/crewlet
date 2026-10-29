@@ -29,6 +29,7 @@ import type {
   CredentialStored,
   HostLoginAnswer,
   ModelDevice,
+  ModelReference,
   ModelRepoint,
   RetryAnswer,
 } from "~/protocol/models.ts";
@@ -216,31 +217,55 @@ export interface Removal {
   assistantOff: boolean;
 }
 
+/** What a removal came to, and every place that names the model where the engine listed them. */
+export interface RemovalAnswer {
+  outcome: ConfigWriteOutcome;
+  /**
+   * Every written reference to the model, from a refusal for repoints that do
+   * not answer them all (`body.references`): the list the page draws its
+   * repoints from. Empty on any other answer.
+   */
+  references: ModelReference[];
+}
+
+/** A refusal body's references, as the engine wrote them; nothing else is read as one. */
+export function referencesOf(body: unknown): ModelReference[] {
+  if (typeof body !== "object" || body === null) return [];
+  const refs = (body as { references?: unknown }).references;
+  if (!Array.isArray(refs)) return [];
+  return refs.filter(
+    (r): r is ModelReference =>
+      typeof r === "object" &&
+      r !== null &&
+      typeof (r as ModelReference).at === "object" &&
+      Array.isArray((r as ModelReference).chain),
+  );
+}
+
 /**
  * `DELETE /config/llm-providers/{key}`: the model removed and every dependant
  * repointed in one revision, or with `dryRun` the same checked and stored
  * nowhere. A refusal for repoints that miss a reference carries every
- * reference (`body.references`), from which the page draws its list.
+ * reference, from which the page draws its list.
  */
 export async function removeModel(
   key: string,
   removal: Removal,
   options: { etag: string; summary: string; dryRun: boolean },
   signal: AbortSignal,
-): Promise<ConfigWriteOutcome> {
-  return outcomeOf(
-    await answerOf(
-      rest.request("DELETE", `/config/llm-providers/${encodeURIComponent(key)}`, {
-        body: { repoint: removal.repoint, assistant_off: removal.assistantOff },
-        headers: {
-          "If-Match": options.etag,
-          ...(options.dryRun ? {} : { "X-Summary": options.summary }),
-        },
-        ...(options.dryRun ? { query: { dry_run: "true" } } : {}),
-        signal,
-      }),
-    ),
+): Promise<RemovalAnswer> {
+  const answer = await answerOf(
+    rest.request("DELETE", `/config/llm-providers/${encodeURIComponent(key)}`, {
+      body: { repoint: removal.repoint, assistant_off: removal.assistantOff },
+      headers: {
+        "If-Match": options.etag,
+        ...(options.dryRun ? {} : { "X-Summary": options.summary }),
+      },
+      ...(options.dryRun ? { query: { dry_run: "true" } } : {}),
+      signal,
+    }),
   );
+  return { outcome: outcomeOf(answer), references: referencesOf(answer.body) };
 }
 
 /**
