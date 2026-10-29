@@ -222,6 +222,18 @@ var codeLogNegligible = map[code.OpKind]string{
 		"name, never one a push or a read",
 	code.OpExpungeRequest: "a person's purge of a repository's unreachable objects: a command " +
 		"a person runs, one record each, a later one widening the purge already open",
+	// AN EXPUNGE'S TWO RECORDS, appended by the repository's maintainer
+	// (internal/code/compact's expunge loop, polling code.ReadExpungeDue),
+	// come at the rate of the purge above, which is the one thing this build
+	// expunges for: a schedule of the maintainer's own — an expunge keeping
+	// a grace, ExpungeBegin.Grace not 0 — would append them at a rate of its
+	// own, which the day must price once it exists.
+	code.OpExpungeBegin: "the begin of an expunge serving a person's purge: its repository's " +
+		"maintainer begins a cycle for each purge asked, as many as its live packs need — one or " +
+		"two for a repository at the default ceiling (code.MaxExpungeOutputs) — each begin naming " +
+		"at most code.MaxExpungeInputs packs it retires and code.MaxExpungeOutputs it writes",
+	code.OpExpungeCommit: "the commit that ends an expunge its begin opened: one a begin, " +
+		"retiring its dropping packs and adding their rescue, each at most code.MaxExpungeOutputs",
 }
 
 // codeLogUnwritten is every op of the code domain that no node of this build
@@ -255,11 +267,6 @@ var codeLogUnwritten = map[code.OpKind]struct {
 	payload reflect.Type
 	how     string
 }{
-	code.OpExpungeBegin: {listing: code.ReadExpungeDue, how: "an expunge is begun by a " +
-		"repository's maintainer alone, through the estate's code.expunge, for a repository its " +
-		"listing names, and a begin can list a thousand packs"},
-	code.OpExpungeCommit: {listing: code.ReadExpungeDue, how: "an expunge is committed by the " +
-		"maintainer that began it, through the estate's code.expunge"},
 	// A CHANGE'S LIFECYCLE, decided by its repository's committer since the
 	// committer's change path landed, is appended by no node while nothing
 	// asks for one: the change tools a seat and a person open, edit and close
@@ -519,10 +526,11 @@ var codeLogKinds = map[code.ObjectKind]string{
 	code.KindRepo: "a push (codeLogDay, by the way its pack was built: codeLogPushVias), a " +
 		"merge of the pushes' packs and the sweep of the rows a merge retired (codeLogDay) are " +
 		"on their repository; so are its settings, deletion, restore and purge " +
-		"(codeLogNegligible, by its manager: codeLogManagers), a live turn's hold on it and a " +
-		"person's purge of its unreachable objects (codeLogNegligible), an expunge's begin and " +
-		"commit and a change's lifecycle (codeLogUnwritten), a change's landing, which rides the " +
-		"change's making (codeLogRiders), and a publication of its layers (codeLogUnwrittenShapes)",
+		"(codeLogNegligible, by its manager: codeLogManagers), a live turn's hold on it, a " +
+		"person's purge of its unreachable objects and the expunge's begin and commit that serve " +
+		"it (codeLogNegligible), a change's lifecycle (codeLogUnwritten), a change's landing, " +
+		"which rides the change's making (codeLogRiders), and a publication of its layers " +
+		"(codeLogUnwrittenShapes)",
 	code.KindBarrier: "a git client's read (codeLogDay)",
 	code.KindName: "a repository's create and a tool's rename of it, each on the name it " +
 		"claims (codeLogNegligible, by its manager: codeLogManagers), and an old name's release " +
@@ -1270,13 +1278,12 @@ func TestTheDocsPrintTheMeasuredDay(t *testing.T) {
 // TestTheDocsPrintTheMeasuredDay holds — or argued out of it.
 //
 // Mutation: declare an op, a kind, a way or a manager in the code domain, add
-// a key to a priced op's payload, name code.ReadPublicationDue or
-// code.ReadExpungeDue in a non-test file of internal/code/compact, or build a
-// code.ChangeOpen in a non-test file of internal/agent/builtin, and this fails
-// naming it — and naming the revise and the landing that ride it, as it does
-// where the push term's records carry a key of pushes.change; take the
-// compactor's poll off code.ReadCompactionDue and it fails saying the walk
-// found no writer.
+// a key to a priced op's payload, name code.ReadPublicationDue in a non-test
+// file of internal/code/compact, or build a code.ChangeOpen in a non-test file
+// of internal/agent/builtin, and this fails naming it — and naming the revise
+// and the landing that ride it, as it does where the push term's records carry
+// a key of pushes.change; take the compactor's poll off code.ReadCompactionDue
+// and it fails saying the walk found no writer.
 func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 	t.Parallel()
 	const remedy = "price its records into codeLogDay — and restate the code log's share and " +
