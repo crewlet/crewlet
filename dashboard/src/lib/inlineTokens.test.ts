@@ -10,6 +10,7 @@
 
 import { describe, expect, test } from "vitest";
 import type { LinkHost } from "~/contract/integrations.ts";
+import { LINEAR_BOUND, growth } from "../test/growth.ts";
 import {
   codeColour,
   codeHostOwners,
@@ -492,34 +493,20 @@ describe("cost", () => {
   // EVERY PATTERN IS LINEAR IN ITS RUN: a comment an agent wrote is rendered by
   // every reader, so a run that costs seconds freezes everybody.
   //
-  // GROWTH, NOT A CLOCK: a run four times longer must take well under the
-  // sixteen times a quadratic pass takes, here under eight. An absolute bound
-  // passed both a linear pass and a quadratic one at the size a loaded
-  // runner could afford, so it held nothing; a ratio is the machine's speed
-  // divided out. Each run is timed after a warm-up, as the median of five
-  // samples, each sample enough calls to take 10 ms, so a timer's grain or one
-  // stalled sample decides nothing.
+  // GROWTH, TIMED WITH ROOM TO SPARE (`test/growth.ts`): a call over a run
+  // thirty-two times longer must take under 181 times as long, where a linear
+  // pass takes about thirty-two and a quadratic one about a thousand. And it
+  // must take more than four times as long, so a case that measured nothing
+  // passes nothing.
   //
-  // Mutation: count the brackets again per character trimmed, bring back the
-  // lazy pattern around a word, scan the text before every bound number, or
-  // look every reference up again for each commit, and its case exceeds it.
+  // Mutation: count the brackets again per character trimmed, look every
+  // reference up again for each commit, bring back a lazy run between a bound
+  // number's repository and its number, or scan the text before every bound
+  // number, and its case exceeds the bound.
   const OWNERS = new Set(["a", "gp"]);
-  const sample = (text: string, calls: number) => {
-    const start = performance.now();
-    for (let i = 0; i < calls; i++) inlineTokens(text, OWNERS);
-    return performance.now() - start;
-  };
-  const median = (xs: number[]) => xs.sort((x, y) => x - y)[Math.floor(xs.length / 2)]!;
-  /** How much longer a run four times the size takes. */
-  const growth = (make: (n: number) => string, n: number) => {
-    const small = make(n);
-    const large = make(4 * n);
-    sample(small, 1);
-    sample(large, 1);
-    let calls = 1;
-    while (calls < 256 && sample(small, calls) < 10) calls *= 2;
-    const times = (text: string) => median(Array.from({ length: 5 }, () => sample(text, calls)));
-    return times(large) / times(small);
+  const holdsLinear = (ratio: number) => {
+    expect(ratio, "the larger run took no longer, so this measured nothing").toBeGreaterThan(4);
+    expect(ratio).toBeLessThan(LINEAR_BOUND);
   };
 
   test.each<[string, (n: number) => string]>([
@@ -535,7 +522,32 @@ describe("cost", () => {
     ["bound numbers", (n) => "#1 in a/b ".repeat(n / 10)],
     ["repositories before a number", (n) => "a/b PR ".repeat(n / 7)],
     ["repositories and numbers", (n) => "a/b #1 ".repeat(n / 7)],
-  ])("%s read in linear time", (_, make) => {
-    expect(growth(make, 5_000)).toBeLessThan(8);
+  ])("%s read in linear time", (_, text) => {
+    holdsLinear(
+      growth((n) => {
+        const run = text(n);
+        return () => inlineTokens(run, OWNERS);
+      }, 1_000),
+    );
+  });
+
+  // A CODE SPAN IS AN AGENT'S TOO: `rgb(1`, a run of spaces and a letter.
+  test("a colour's channels between runs of spaces read in linear time", () => {
+    holdsLinear(
+      growth((n) => {
+        const code = `rgb(1${" ".repeat(n)}x`;
+        return () => codeColour(code);
+      }, 1_000),
+    );
+  });
+
+  // A CONFIGURED HOST'S BASE, a run of slashes before its last part.
+  test("a configured host's base path of slashes reads in linear time", () => {
+    holdsLinear(
+      growth((n) => {
+        const hosts: LinkHost[] = [{ kind: "jira", url: `https://x.test${"/".repeat(n)}a` }];
+        return () => describeLink("https://x.test/a/browse/GP-1", hosts);
+      }, 1_000),
+    );
   });
 });

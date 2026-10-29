@@ -1367,9 +1367,10 @@ const (
 	// a /config failure by whether the engine answered, its sentence shared
 	// by every screen that writes the company; and the Models fixes from the
 	// owner's review: a removal on its entry's own tag, Review's list of who
-	// changes model, an edit keeping its seats; and an answer read as the
-	// engine's only where it carries the engine's mark) took it to
-	// 4765.6 KiB. 4766 KiB, which still refuses a doubled baseline.
+	// changes model, an edit keeping its seats; an answer read as the
+	// engine's only where it carries the engine's mark; and rgb channels and
+	// trailing slashes read in linear time) took it to 4765.6 KiB. 4766 KiB,
+	// which still refuses a doubled baseline.
 	treeBudget = 4<<20 + 670<<10
 )
 
