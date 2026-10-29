@@ -133,18 +133,24 @@ func (s *Server) defaultTitle(ctx context.Context, l *landing, source code.Comma
 			"commit", source.New, "error", err)
 		return branch
 	}
-	if title := asTitle(commitSubject(head.buf)); title != "" {
+	if title := asTitle(logSubject(head.buf)); title != "" {
 		return title
 	}
 	return branch
 }
 
-// commitSubject is the subject of raw, a commit object as `git cat-file
-// commit` prints it, whole or its head: its message's first paragraph, each
-// line trimmed and the lines joined by a space — git's own subject (%s) — or
-// "" where raw holds no message. Its headers end at the first blank line:
-// a header's continuation lines (a signature's) each start with a space.
-func commitSubject(raw []byte) string {
+// logSubject is the subject of raw, a commit object as `git cat-file commit`
+// prints it, whole or its head: its message's first paragraph, each line
+// trimmed and the lines joined by a space — git's own subject (%s), what `git
+// log` shows of the commit — or "" where raw holds no message. Its headers end
+// at the first blank line: a header's continuation lines (a signature's) each
+// start with a space.
+//
+// NOT commitSubject's (message.go), which is a message's first LINE — the
+// subject a revert quotes, as the sequencer finds it — since a change is first
+// read by what `git log` shows of its commit: a subject wrapped over two lines
+// titles it whole.
+func logSubject(raw []byte) string {
 	_, msg, ok := bytes.Cut(raw, []byte("\n\n"))
 	if !ok {
 		return ""
