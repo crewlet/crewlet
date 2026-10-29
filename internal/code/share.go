@@ -53,7 +53,8 @@ type SeatWork string
 
 const (
 	// SeatWorkRead is a server-side read of a repository by object id: the
-	// git a read's kind runs (internal/code/query).
+	// git a read's kind runs (internal/code/query), and a merge preview's
+	// merge (internal/code/home), a read of two commits by their ids too.
 	SeatWorkRead SeatWork = "read"
 	// SeatWorkWrite is an engine write's git (internal/code/host): its
 	// lookups and its build, from the check of what it names to its pack

@@ -450,8 +450,12 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if conversationErr != nil {
 			return conversationErr
 		}
+		merge, mergeErr := mergeabilityRowIn(ctx, tx, row.id)
+		if mergeErr != nil {
+			return mergeErr
+		}
 		out.Change = &ChangeDetail{ChangeSummary: repo.summary(row), Body: body, Authors: authors,
-			Conversation: conversation}
+			Conversation: conversation, Mergeability: merge}
 		rows, err = tx.QueryContext(ctx, revisionsSQL, row.id, limit)
 	} else {
 		n, parseErr := strconv.ParseInt(q.Cursor, 10, 64)

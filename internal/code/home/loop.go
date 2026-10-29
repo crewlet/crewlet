@@ -89,6 +89,11 @@ type Options struct {
 	// Placement answers who is home; Nudges is the code log's watch.
 	Placement Placement
 	Nudges    Nudges
+	// Cache is this node's git cache, a copy of which every merge of the
+	// home's runs over in a scratch beside it ([MergeScratchID]), and Git the
+	// node's git pool the merge runs in, in its maintenance lane.
+	Cache Cache
+	Git   Pool
 	// NodeID is this node: the home every placement answer is compared
 	// with, and the node every record the home asks names.
 	NodeID string
@@ -140,6 +145,8 @@ type Loop struct {
 	// backstop is the passes' interval and a turn's bound: [Backstop], a
 	// suite's own (export_test.go).
 	backstop time.Duration
+	// changes is the change work, the worker every loop is built with.
+	changes *changes
 
 	mu      sync.Mutex
 	workers []Worker
@@ -188,6 +195,8 @@ func New(o Options) (*Loop, error) {
 	need(o.Estate == nil, "Estate")
 	need(o.Placement == nil, "Placement")
 	need(o.Nudges == nil, "Nudges")
+	need(o.Cache == nil, "Cache")
+	need(o.Git == nil, "Git")
 	need(!config.ValidNodeID(o.NodeID), "NodeID")
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%w: %s missing", ErrOptions, strings.Join(missing, ", "))
@@ -202,7 +211,9 @@ func New(o Options) (*Loop, error) {
 		l.now = time.Now
 	}
 	l.life, l.end = context.WithCancel(context.Background())
-	l.workers = []Worker{&changes{estate: o.Estate, node: o.NodeID, metrics: o.Metrics, log: l.log, now: l.now}}
+	l.changes = &changes{estate: o.Estate, cache: o.Cache, git: o.Git, node: o.NodeID, metrics: o.Metrics,
+		log: l.log, now: l.now, rechecks: newRecheckBudget(Backstop)}
+	l.workers = []Worker{l.changes}
 	return l, nil
 }
 
@@ -263,10 +274,11 @@ func (l *Loop) Start() {
 }
 
 // Stop ends the loop: the watch, the passes and every turn in flight — a
-// facts read cut, a record asked of a committer cancelled, which lands or
-// does not on its own — and waits for them to end, until ctx does.
-// Idempotent; a stop of a loop never started ends nothing, and a Start after
-// it starts nothing.
+// facts read cut, a merge's git ended, a record asked of a committer
+// cancelled, which lands or does not on its own — and waits for them to end,
+// until ctx does. Called by whoever stops the code host, BEFORE the cache a
+// merge reads. Idempotent; a stop of a loop never started ends nothing, and a
+// Start after it starts nothing.
 func (l *Loop) Stop(ctx context.Context) {
 	l.mu.Lock()
 	l.stopped = true

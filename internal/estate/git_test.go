@@ -60,6 +60,37 @@ type fakeGit struct {
 	// commit.
 	written    []askedWrite
 	ranNothing error
+
+	// previewed is every merge preview it was asked, stamped home or not,
+	// each answered as a read is: unready where the node is told to be,
+	// not_held where it holds no copy and is not the walk's home, and else
+	// a clean merge of the two commits asked.
+	previewed []code.MergePreviewQuery
+}
+
+func (g *fakeGit) MergePreview(_ context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.previewed = append(g.previewed, q)
+	switch {
+	case g.unready != "" && (!g.seatsOnly || q.Asker.Kind == code.PrincipalAgent):
+		return code.MergePreviewAnswer{}, &code.ErrGitUnready{Reason: g.unready,
+			Detail: fmt.Sprintf("%s is %s for repository %s", g.name, g.unready, q.RepoID)}
+	case g.held != nil && !g.held[q.RepoID] && !q.Home:
+		return code.MergePreviewAnswer{}, &code.ErrGitUnready{Reason: code.UnreadyNotHeld,
+			Detail: fmt.Sprintf("%s holds no copy of repository %s", g.name, q.RepoID)}
+	}
+	if g.held != nil {
+		g.held[q.RepoID] = true
+	}
+	return code.MergePreviewAnswer{RepoID: q.RepoID, Base: q.Base, Head: q.Head, State: code.MergeClean}, nil
+}
+
+// previews is every merge preview the half was asked, in order.
+func (g *fakeGit) previews() []code.MergePreviewQuery {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.previewed)
 }
 
 // askedWrite is one engine write a fakeGit was asked, and what its context had
@@ -265,13 +296,31 @@ func writesAsked(halves map[string]*fakeGit) map[string]int {
 	return out
 }
 
+// previewOf is a person's merge preview of one commit of repo into another, as
+// a comparison asks one.
+func previewOf(repo string) code.MergePreviewQuery {
+	return code.MergePreviewQuery{RepoID: repo,
+		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
+		Base:  "1111111111111111111111111111111111111111", Head: "2222222222222222222222222222222222222222"}
+}
+
+// previewsAsked is how many merge previews each half has been asked, by node.
+func previewsAsked(halves map[string]*fakeGit) map[string]int {
+	out := map[string]int{}
+	for name, g := range halves {
+		out[name] = len(g.previews())
+	}
+	return out
+}
+
 // A GIT OPERATION IS ASKED OF ITS REPOSITORY'S HOME (ADR-0059): for each of a
 // thousand repositories, the first git node asked — and the one that answers,
 // every node answering — is the first of rendezvous.Order(repository, every
 // live git node), from a node that holds nothing and from a git node whose own
-// half answers in process, for a read by object id and for an engine write
-// alike: the home's copy is the one a repository's reads keep warm, and a
-// write is built beside it. Never the node that answered last (a keyed order
+// half answers in process, for a read by object id, an engine write and a merge
+// preview alike: the home's copy is the one a repository's reads keep warm, and
+// a write is built and a preview merged beside it. Never the node that answered
+// last (a keyed order
 // has no sticky node) and never the asking git node out of its turn: asked
 // first wherever it is not the home, it would warm a copy of every repository
 // its seats read or wrote.
@@ -331,6 +380,26 @@ func TestAGitOperationIsAskedOfItsRepositorysHome(t *testing.T) {
 			}
 			if asked := halves[home].writes()[after[home]-1]; !asked.w.Home {
 				t.Fatalf("%s: the home %s was asked %s's write not stamped home", name, home, repo)
+			}
+
+			before = previewsAsked(halves)
+			p, err := r.Code().MergePreview(t.Context(), previewOf(repo))
+			if err != nil || p.State != code.MergeClean || p.RepoID != repo {
+				t.Fatalf("%s: the preview of %s = (%+v, %v), want it answered clean", name, repo, p, err)
+			}
+			after = previewsAsked(halves)
+			for _, n := range holders {
+				want := before[n]
+				if n == home {
+					want++
+				}
+				if after[n] != want {
+					t.Fatalf("%s: previewing %s asked %s %d times, want only its home %s asked, once", name,
+						repo, n, after[n]-before[n], home)
+				}
+			}
+			if asked := halves[home].previews()[after[home]-1]; !asked.Home {
+				t.Fatalf("%s: the home %s was asked %s's preview not stamped home", name, home, repo)
 			}
 		}
 	}
@@ -1168,16 +1237,21 @@ func TestANodeWithNoCodeHostRunsNoGitRead(t *testing.T) {
 }
 
 // A GIT READ IS NEVER ASKED ON THE SHARED LANE: a git node answers a git read
-// on its git lane alone and a data operation on the shared lane alone, each
-// asked on the other answered unserved naming the lane it is answered on and
-// nothing run — the separation is the server's to keep, so a git read's sync
-// and its git process never hold a slot the node's replicated reads and a
-// push's resolve are answered through.
+// — a read by object id, or a merge preview — on its git lane alone and a data
+// operation on the shared lane alone, each asked on the other answered
+// unserved naming the lane it is answered on and nothing run — the separation
+// is the server's to keep, so a git read's sync and its git process never hold
+// a slot the node's replicated reads and a push's resolve are answered
+// through.
 func TestAGitReadIsNeverAskedOnTheSharedLane(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	halves := f.gitNodes(t, []string{"git-a"})
 	args, err := json.Marshal(treeOf(repoID(1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := json.Marshal(previewOf(repoID(1)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1188,6 +1262,7 @@ func TestAGitReadIsNeverAskedOnTheSharedLane(t *testing.T) {
 		want    string
 	}{
 		{opCodeGitRead.spec.name, args, Subject("git-a"), "the git lane"},
+		{opCodeMergePreview.spec.name, preview, Subject("git-a"), "the git lane"},
 		{opTasks.spec.name, json.RawMessage(`{}`), laneGitReads.subject("git-a"), "the shared lane"},
 	} {
 		rep := askSignedOn(t, f.start(t), tc.subject, request{Op: tc.op, Args: tc.args, From: "agent-9"})
@@ -1195,8 +1270,10 @@ func TestAGitReadIsNeverAskedOnTheSharedLane(t *testing.T) {
 			t.Errorf("%s asked on %s answered %+v, want it unserved naming %s", tc.op, tc.subject, rep, tc.want)
 		}
 	}
-	if got := halves["git-a"].reads(); len(got) != 0 || f.nodes["git-a"].askedFor("tasks") {
-		t.Errorf("an operation asked on another lane ran: reads %v, %v", got, f.nodes["git-a"].asked)
+	if got := halves["git-a"].reads(); len(got) != 0 || len(halves["git-a"].previews()) != 0 ||
+		f.nodes["git-a"].askedFor("tasks") {
+		t.Errorf("an operation asked on another lane ran: reads %v, previews %v, %v", got,
+			halves["git-a"].previews(), f.nodes["git-a"].asked)
 	}
 }
 

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sourcetree"
@@ -32,60 +34,92 @@ const (
 )
 
 // estate is the code log and the git reads as a home's loop reaches them: each
-// repository's due changes, answered at the floor a read names, and the facts
-// of each head — a revise or a landing asked of it takes its change off the
-// list, as the rows' own would.
+// repository's due changes and its rechecks — the changes a moved target asks
+// merged again, oldest first, as many as a read asks — answered at the floor a
+// read names, and the facts of each head. A revise takes its change's facts
+// off the list, a mergeability its merge, and a landing the whole change, as
+// the rows' own would; a change owing nothing more leaves the list.
 type estate struct {
 	mu       sync.Mutex
 	due      map[string][]code.ChangeDue
+	rechecks map[string][]code.ChangeDue
 	owners   map[string][]code.PathOwner
 	facts    map[string]code.RevisionFactsAnswer
 	at       statelog.Position
 	floors   []statelog.Freshness
+	asked    []code.ChangesDueQuery
 	revises  []code.Revise
+	merges   []code.Mergeability
 	landings []code.ChangeLanded
 	changed  chan struct{}
 }
 
 func newEstate() *estate {
-	return &estate{due: map[string][]code.ChangeDue{}, owners: map[string][]code.PathOwner{},
-		facts: map[string]code.RevisionFactsAnswer{}, changed: make(chan struct{}, 1),
-		at: statelog.Position{Stream: topics.CodeLogStream, Seq: 40}}
+	return &estate{due: map[string][]code.ChangeDue{}, rechecks: map[string][]code.ChangeDue{},
+		owners: map[string][]code.PathOwner{}, facts: map[string]code.RevisionFactsAnswer{},
+		changed: make(chan struct{}, 1), at: statelog.Position{Stream: topics.CodeLogStream, Seq: 40}}
 }
 
-// hold puts change n of repo on repo's due list, its head head and its target
-// main at tip, the facts its home reads of it f.
+// hold puts change n of repo on repo's due list, owing its facts alone, its
+// head head and its target main at tip, the facts its home reads of it f.
 func (e *estate) hold(repo string, n int64, head, tip string, f code.RevisionFactsAnswer) code.ChangeDue {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	due := code.ChangeDue{ID: changeID(repo, n), Number: n, Revision: 1, Head: head,
 		SourceRef: "refs/heads/feature-" + string(rune('a'+n)), TargetRef: "refs/heads/main", Tip: tip,
-		TipPosition: statelog.Position{Stream: topics.CodeLogStream, Seq: 30}}
+		TipPosition: statelog.Position{Stream: topics.CodeLogStream, Seq: 30}, FactsDue: true}
 	e.due[repo] = append(e.due[repo], due)
 	f.Head, f.Target = head, tip
 	e.facts[head] = f
 	return due
 }
 
+// owe puts due on repo's due list as it is.
+func (e *estate) owe(repo string, due code.ChangeDue) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.due[repo] = append(e.due[repo], due)
+}
+
+// recheck puts due among repo's rechecks, after every recheck already there:
+// the order the rows name them in, the oldest merge first.
+func (e *estate) recheck(repo string, due code.ChangeDue) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.rechecks[repo] = append(e.rechecks[repo], due)
+}
+
 func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if q.Kind != code.ReadChangesDue {
+	switch {
+	case q.Kind != code.ReadChangesDue:
 		return code.ReadAnswer{}, errors.New("the home asked a read that is not its listing")
+	case q.ChangesDue == nil || q.ChangesDue.RecheckBefore.IsZero():
+		return code.ReadAnswer{}, errors.New("the home's listing named no instant its refresh is paced by")
 	}
 	e.floors = append(e.floors, q.Fresh)
-	if q.ChangesDue == nil {
+	e.asked = append(e.asked, *q.ChangesDue)
+	if q.ChangesDue.RepoID == "" {
 		var repos []string
 		for repo, changes := range e.due {
-			if len(changes) > 0 {
+			if len(changes) > 0 || len(e.rechecks[repo]) > 0 {
+				repos = append(repos, repo)
+			}
+		}
+		for repo, changes := range e.rechecks {
+			if len(changes) > 0 && len(e.due[repo]) == 0 {
 				repos = append(repos, repo)
 			}
 		}
 		slices.Sort(repos)
-		return code.ReadAnswer{DueRepos: repos, Position: e.at}, nil
+		return code.ReadAnswer{DueRepos: slices.Compact(repos), Position: e.at}, nil
 	}
 	repo := q.ChangesDue.RepoID
-	return code.ReadAnswer{DueChanges: slices.Clone(e.due[repo]), PathOwners: e.owners[repo], Position: e.at}, nil
+	again := e.rechecks[repo]
+	again = slices.Clone(again[:min(len(again), q.ChangesDue.Rechecks)])
+	return code.ReadAnswer{DueChanges: slices.Clone(e.due[repo]), Rechecks: again, PathOwners: e.owners[repo],
+		Position: e.at}, nil
 }
 
 func (e *estate) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -107,8 +141,14 @@ func (e *estate) Converse(_ context.Context, w code.ConversationWrite) (code.Con
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.revises = append(e.revises, *w.Revise)
-	e.done(w.Revise.RepoID, w.Revise.ChangeID)
+	switch {
+	case w.Revise != nil:
+		e.revises = append(e.revises, *w.Revise)
+		e.done(w.Revise.RepoID, w.Revise.ChangeID, func(d *code.ChangeDue) { d.FactsDue = false })
+	case w.Mergeability != nil:
+		e.merges = append(e.merges, *w.Mergeability)
+		e.done(w.Mergeability.RepoID, w.Mergeability.ChangeID, func(d *code.ChangeDue) { d.MergeDue = false })
+	}
 	return code.ConversationResult{Outcome: statelog.OutcomeApplied, Position: e.at}, nil
 }
 
@@ -119,14 +159,23 @@ func (e *estate) Change(_ context.Context, p code.ChangeProposal) (code.ChangeRe
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.landings = append(e.landings, *p.Landed)
-	e.done(p.Landed.RepoID, p.Landed.ChangeID)
+	e.done(p.Landed.RepoID, p.Landed.ChangeID, func(d *code.ChangeDue) { d.FactsDue, d.MergeDue = false, false })
 	return code.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: p.Landed.ChangeID, Position: e.at}, nil
 }
 
-// done takes change off repo's due list, as its record's rows would, and says
-// so. Under mu.
-func (e *estate) done(repo, change string) {
-	e.due[repo] = slices.DeleteFunc(e.due[repo], func(d code.ChangeDue) bool { return d.ID == change })
+// done takes what a record settled off change on repo's due list — the change
+// leaving it where it owes nothing more, and its rechecks for whatever record
+// settled it — as its record's rows would, and says so. Under mu.
+func (e *estate) done(repo, change string, settle func(*code.ChangeDue)) {
+	for i := range e.due[repo] {
+		if e.due[repo][i].ID == change {
+			settle(&e.due[repo][i])
+		}
+	}
+	e.due[repo] = slices.DeleteFunc(e.due[repo], func(d code.ChangeDue) bool {
+		return d.ID == change && !d.FactsDue && !d.MergeDue
+	})
+	e.rechecks[repo] = slices.DeleteFunc(e.rechecks[repo], func(d code.ChangeDue) bool { return d.ID == change })
 	select {
 	case e.changed <- struct{}{}:
 	default:
@@ -159,13 +208,21 @@ func (e *estate) wrote() ([]code.Revise, []code.ChangeLanded) {
 	return slices.Clone(e.revises), slices.Clone(e.landings)
 }
 
-// waitDone waits until repo's due list is empty, or fails t at the deadline.
+// merged is every mergeability asked so far.
+func (e *estate) merged() []code.Mergeability {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return slices.Clone(e.merges)
+}
+
+// waitDone waits until repo's due list and its rechecks are empty, or fails t
+// at the deadline.
 func (e *estate) waitDone(t *testing.T, repo string, within time.Duration) {
 	t.Helper()
 	deadline := time.After(within)
 	for {
 		e.mu.Lock()
-		left := len(e.due[repo])
+		left := len(e.due[repo]) + len(e.rechecks[repo])
 		e.mu.Unlock()
 		if left == 0 {
 			return
@@ -174,6 +231,24 @@ func (e *estate) waitDone(t *testing.T, repo string, within time.Duration) {
 		case <-e.changed:
 		case <-deadline:
 			t.Fatalf("repository %s still holds %d due changes after %v", repo, left, within)
+		}
+	}
+}
+
+// waitMerged waits until n mergeabilities have been asked, or fails t at the
+// deadline.
+func (e *estate) waitMerged(t *testing.T, n int, within time.Duration) []code.Mergeability {
+	t.Helper()
+	deadline := time.After(within)
+	for {
+		if got := e.merged(); len(got) >= n {
+			return got
+		}
+		select {
+		case <-e.changed:
+		case <-deadline:
+			t.Fatalf("the home asked %d mergeabilities in %v, want %d: %+v", len(e.merged()), within, n,
+				e.merged())
 		}
 	}
 }
@@ -276,17 +351,27 @@ type stopped struct{}
 func (stopped) Stop() {}
 
 // loopOn is node's loop over e, p and n, its backstop backstop, started, with
-// a recorder of its own; stopped when the case ends.
+// a recorder of its own; stopped when the case ends. Its cache and pool are
+// stand-ins no merge reaches ([unmerged]): every change its cases hold owes
+// its facts alone.
 func loopOn(t *testing.T, node string, e *estate, p *placement, n *nudges,
 	backstop time.Duration) (*home.Loop, *metrics.Recorder) {
 
+	t.Helper()
+	return loopOver(t, home.Options{Estate: e, Placement: asNode{placement: p, node: node}, Nudges: n,
+		Cache: unmerged{t: t}, Git: unmerged{t: t}, NodeID: node}, backstop)
+}
+
+// loopOver is a loop over o, with a recorder of its own, its backstop
+// backstop, started; stopped when the case ends.
+func loopOver(t *testing.T, o home.Options, backstop time.Duration) (*home.Loop, *metrics.Recorder) {
 	t.Helper()
 	rec, err := metrics.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	l, err := home.New(home.Options{Estate: e, Placement: asNode{placement: p, node: node}, Nudges: n,
-		NodeID: node, Metrics: rec})
+	o.Metrics = rec
+	l, err := home.New(o)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -294,6 +379,31 @@ func loopOn(t *testing.T, node string, e *estate, p *placement, n *nudges,
 	l.Start()
 	t.Cleanup(func() { l.Stop(context.WithoutCancel(t.Context())) })
 	return l, rec
+}
+
+// unmerged is the cache and the pool of a loop whose cases hold no change that
+// owes a merge: whatever reaches either is the case's failure, since nothing
+// the case holds asks one.
+type unmerged struct{ t *testing.T }
+
+func (u unmerged) Holds(string) bool {
+	u.t.Error("a loop whose changes owe no merge asked whether its cache holds a copy")
+	return false
+}
+
+func (u unmerged) Sync(context.Context, string, statelog.Freshness) (cache.Synced, error) {
+	u.t.Error("a loop whose changes owe no merge synced its cache")
+	return cache.Synced{}, errors.New("no merge is owed")
+}
+
+func (u unmerged) NewScratch(context.Context, cache.Synced, string) (*cache.Scratch, error) {
+	u.t.Error("a loop whose changes owe no merge made a scratch")
+	return nil, errors.New("no merge is owed")
+}
+
+func (u unmerged) Run(context.Context, gitproc.Cmd) (gitproc.Result, error) {
+	u.t.Error("a loop whose changes owe no merge ran git")
+	return gitproc.Result{}, errors.New("no merge is owed")
 }
 
 // changeID is change n of repo's id: a bare UUIDv7 naming both.

@@ -347,6 +347,38 @@ var opCodeGitRead = define("code.git_read", opRead, GitCopy, false,
 		return q
 	}).answeredOn(laneGitReads)
 
+// opCodeMergePreview is one MERGE PREVIEW — what merging one commit of a
+// repository into another would do, a comparison's preview
+// (code.MergePreviewQuery) — asked as a read by object id is: of the
+// repository's HOME git node first, then its runner-up (ADR-0059), on the git
+// reads' lane, each attempt stamped with whether the node asked is the walk's
+// effective home (code.MergePreviewQuery.Home), the one node a walk lets fill
+// a copy. The git node answers it by THE merge a repository's home records a
+// change's mergeability by (internal/code/home's Previews), written into a
+// scratch of its own and never its cache, so a preview and the change it would
+// open say one thing. A git node that cannot answer for a reason about itself
+// (code.ErrGitUnready) ran nothing about the repository's content, and the walk
+// asks the next without demoting it ([gitUnready]). The git node judges a
+// seat's grant itself, and refuses a seat where it is behind its
+// configuration, so the operation declares no grant here, as a read's
+// declares none.
+//
+// THE CODE DOMAIN'S RECORD FORMAT IS UNTOUCHED: a preview rides no log, so it
+// takes no versionedFields row; the envelope evolves as every operation's
+// does, additive only.
+var opCodeMergePreview = define("code.merge_preview", opRead, GitCopy, false,
+	func(ctx context.Context, b Backend, _ *Actor, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
+		if b.Git == nil {
+			return code.MergePreviewAnswer{}, errNoHalf
+		}
+		answer, err := b.Git.MergePreview(ctx, q)
+		return answer, gitUnready(err)
+	}).keyedOnGit(func(q code.MergePreviewQuery) string { return q.RepoID },
+	func(q code.MergePreviewQuery, home bool) code.MergePreviewQuery {
+		q.Home = home
+		return q
+	}).answeredOn(laneGitReads)
+
 // opCodeGitWrite is one ENGINE WRITE — a commit of files, a revert, a
 // cherry-pick, a branch created or deleted, which a seat or a person asks of
 // a repository through a tool and the engine builds beside a copy of it

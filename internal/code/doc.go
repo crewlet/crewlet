@@ -103,11 +103,13 @@
 // target's tip the home read.
 //
 // ITS HOME'S WORK LIST IS ITS ROWS (changesdue.go): a live change whose head
-// revision holds no facts against the branch it merges into, on an active
-// repository, its target a live branch, is due its home's change work
-// ([ReadChangesDue], the engine's own read), which records the facts
-// ([Revise]) or lands the change — each taking it off the list by its own
-// row.
+// revision holds no facts, or no mergeability, against the branch it merges
+// into — or whose mergeability its moved target asks again, once its home's
+// refresh has passed — on an active repository, its target a live branch, is
+// due its home's change work ([ReadChangesDue], the engine's own read), which
+// records the facts ([Revise]) and whether the change merges cleanly into its
+// target's tip ([Mergeability], mergeability.go), or lands the change — each
+// taking its part off the list by its own row.
 //
 // ITS REVISIONS ARE ITS PUSHES' (revisions.go). The apply of the push record
 // that moves a live change's source writes the change's next revision and

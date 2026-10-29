@@ -53,9 +53,11 @@ type LocalGit interface {
 
 // GitServer is the git half a git node serves, declared here by its consumer
 // with exactly the methods the git operations call: its reads by object id,
-// which internal/code/query's *Server answers, and its engine writes, which
-// internal/code/host's *Server builds and lands. The engine hands the router
-// the two together, over one cache, one git pool and one seat git-work share.
+// which internal/code/query's *Server answers, its engine writes, which
+// internal/code/host's *Server builds and lands, and its merge previews, which
+// internal/code/home's *Previews answers by the merge a repository's home
+// records a change's mergeability by. The engine hands the router the three
+// together, over one cache, one git pool and one seat git-work share.
 type GitServer interface {
 	// Read answers one read by object id. ctx ENDS WHEN THE ANSWER IS DUE —
 	// a reply's margin before its asker stops listening, remote or in
@@ -74,6 +76,13 @@ type GitServer interface {
 	// push's row — never ctx's own error, which the walk would take for the
 	// write's answer.
 	Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error)
+
+	// MergePreview answers what merging one commit into another would do —
+	// a comparison's merge preview — merged in a scratch beside this node's
+	// copy, never in it. ctx ends when the answer is due, as a read's does,
+	// and a preview that ctx ends that way answers code.ErrGitUnready while
+	// the asker still listens, never ctx's own error.
+	MergePreview(ctx context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error)
 }
 
 // GitPlacement is who serves GIT as the router reads it ([RouterOptions.Git]):

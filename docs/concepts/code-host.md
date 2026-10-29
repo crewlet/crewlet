@@ -73,8 +73,9 @@ This is the product's current shape, not a configuration choice:
   decides a change's opening, its edits and its close, a push to a change's
   branches writes its revisions, merges it or closes it, the repository's home
   records each revision's facts — asking a review of the [path
-  owners](#path-owners) whose paths it touches — and lands a change whose head
-  its target holds ([The home's change work](#the-homes-change-work)), the
+  owners](#path-owners) whose paths it touches — and whether it merges cleanly
+  into its target ([Mergeability](#mergeability)), and lands a change whose
+  head its target holds ([The home's change work](#the-homes-change-work)), the
   [change writer](#reviews-and-findings) beside the committer decides who is
   asked to review it and what is said on it, and a data node answers a listing
   of changes and one change in detail ([Reading changes](#reading-changes)) —
@@ -3863,14 +3864,16 @@ counts them under `op` `revise`, beside the conversation's other writes.
 ### The home's change work
 
 A repository's [home](#the-home-git-node) — the first git node of its order,
-which its git reads are asked of first — owes its live changes their facts:
-every git node runs a **home loop** for the repositories it is home to, and
-the rows are its work list. A change is **due** while its head revision holds
-no facts against the branch it merges into: a push that moves its head, and a
-retarget, make it due again, and the facts recorded take it off. A change of
-an archived or a deleted repository is nobody's work, and neither is one
-whose target branch is gone, until the branch is pushed again or the change
-retargeted.
+which its git reads are asked of first — owes its live changes their facts
+and their [mergeability](#mergeability): every git node runs a **home loop**
+for the repositories it is home to, and the rows are its work list. A change
+is **due** while its head revision holds no facts, or no mergeability, against
+the branch it merges into: a push that moves its head, and a retarget, make it
+due again, and each record takes its half off. A change whose target has moved
+past the tip it was merged into is due again too, at the home's own pace
+([A moved target asks again](#mergeability)). A change of an archived or a
+deleted repository is nobody's work, and neither is one whose target branch
+is gone, until the branch is pushed again or the change retargeted.
 
 For each due change the home reads the revision's facts against its target's
 tip as the rows hold it, then either
@@ -3881,7 +3884,11 @@ tip as the rows hold it, then either
   since, a retarget or the target moved again are each refused `stale`,
   recorded nowhere, for the home's next read; or
 - **records its facts**, its touched paths matched against the repository's
-  path owners on the home ([Recorded on the change](#recorded-on-the-change)).
+  path owners on the home ([Recorded on the change](#recorded-on-the-change));
+
+and where it owes its merge, **merges it** into its target's tip — or lands
+it, where the target came to hold its head — and records what the merge did
+([Mergeability](#mergeability)).
 
 Two things put a repository's work in front of its home:
 
@@ -3903,9 +3910,91 @@ home both read, and the records' own guards take one. A node works two
 repositories at once, one turn of a minute at the most each, a repository
 with more due work than a turn finishing it at the passes that follow.
 `crewlet.code.home.passes` counts the turns by what became of them,
-`crewlet.code.home.nudges` the code log's word to the loop, and
-`crewlet.code.home.facts.duration` each facts read (the [metrics
+`crewlet.code.home.nudges` the code log's word to the loop,
+`crewlet.code.home.facts.duration` each facts read and
+`crewlet.code.home.merge.duration` each merge (the [metrics
 reference](../reference/metrics.md)).
+
+### Mergeability
+
+Whether a change's head revision merges cleanly into its target's tip is a
+function of the two commits alone, and its [home](#the-home-git-node) records
+it on the change beside the revision's facts: its **mergeability**. The home
+merges the two commits with `git merge-tree --write-tree` — the merge `git
+merge` would make, from every merge base git finds — in a SCRATCH repository
+of its own beside its copy of the repository, never in the copy, whose
+objects are its rows' alone: the merged tree, and every blob a conflict
+leaves marked, are written into the scratch and removed with it once the
+merge has answered. The record is a write of the change's
+[conversation](#reviews-and-findings), as a revision's facts are: the home
+asks it of the repository's committing data node, whose change writer
+decides it in one snapshot and publishes it on the change's own subject, and
+it names no asker.
+
+| State | What the merge did |
+|---|---|
+| `clean` | It wrote a tree and left no path conflicted. |
+| `conflict` | It left paths conflicted. The record names each once, in git's order — the first 100, and no more than 16 KiB of the list as JSON — and counts the rest; a path that is not UTF-8, which a record cannot carry exactly, is counted and never listed. |
+| `unknown` | The merge ran out of its 30 seconds and decided nothing. It is tried again at the home's refresh, as a moved target is. |
+
+- **Ancestry first.** Before it merges, the home asks whether the target's
+  tip holds the head already: a target moved past the change — by a merge
+  commit, or any push that took the head in — merged it, and the home lands
+  the change ([The home's change work](#the-homes-change-work)) rather than
+  merge it again.
+- **A history of its own** merges from the empty tree, as its facts measure
+  it: a head whose history shares no commit with its target's conflicts in
+  every path both sides add differently, and merges every other.
+- **One row a change, and monotone.** A mergeability is of the change's head
+  revision against its current target, or it is refused `superseded`,
+  recorded nowhere: a merge of a revision a push has moved past, of a head the
+  change no longer has, or into a branch it no longer targets. For that
+  revision against that branch it moves only forward: a merge into an earlier
+  tip than the row holds — a home that read before the target moved, slower
+  than the one that read after — is `superseded`, and so is the same tip
+  merged again once the row is `clean` or `conflict`, since a merge of two
+  commits is decided once. Only an `unknown` row's tip is merged again, the
+  row's instant moving with it. A closed or merged change takes no merge
+  (`change_closed`, `change_merged`).
+- **A moved target asks again, at the home's pace.** A NEW head revision — a
+  push to the change's branch, a retarget — is merged at once, whatever came
+  before it. A target that moves past the tip a change was merged into asks
+  that merge again only once the mergeability is ten minutes old, and a home
+  merges no more than 64 of one repository's such changes a minute, the
+  oldest merge first: a target that moves on every push costs its home 64
+  merges a minute at the most, never a merge a change a push, and no change
+  waits behind the same first ones every refresh. On a change's page the
+  mergeability says which tip it is of — "as of" that tip — until then. An
+  `unknown` merge is tried again on the same pace.
+
+| Table | A row for | What it holds |
+|---|---|---|
+| `code_mergeability` | each change its home merged | The revision merged, the target branch, the tip merged into and the position of the record that moved the branch there; the state; the conflicted paths it names and how many more there were; the git node that merged; and the record that wrote it, with its broker instant, which the change's next recheck is paced by |
+
+The change's own read carries it (`mergeability` on a change's detail): of
+its head revision into its target where its home has merged that, and of an
+earlier revision or another branch while the home's next merge is owed. Its
+conflicted paths are weighed in the change's conversation's text, as its
+revisions' facts are, so a [purge](#deletion-and-purge) weighs them by that
+one narrow row. `crewlet.code.conversation.writes` counts the records under
+`op` `mergeability`, and `crewlet.code.home.merge.duration` each merge by
+`work` and `outcome`.
+
+#### A merge preview
+
+What merging one commit into another would do — a comparison's preview,
+before any change is opened — is asked of a repository's git nodes as a
+[server-side read](#server-side-reads) is: of its home first, held to the
+asker's grant and, inside a turn somebody woke, to theirs too, recorded where
+the repository is `visibility: unit` ([Who read it](#who-read-it)), and its
+two commits named by whole ids the asker resolved, never a ref. It is
+answered by THE SAME MERGE a change's mergeability is recorded by, so a
+preview and the change it would open say one thing — its state, the
+conflicted paths a record would hold and how many more there were — merged in
+a scratch of its own, in the node's read lane under one unit of its seat
+git-work share ([Fair share](#fair-share)), within a read's ten seconds of git:
+a merge that runs out of them answers `unknown`. No route asks for one yet;
+a comparison's question arrives with the code host's questions.
 
 ### Where lines are in another revision
 

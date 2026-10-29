@@ -201,6 +201,9 @@ var floorless = map[string]string{
 		"asker's floor travels in the write, as the cache's sync level, and the push it " +
 		"lands is decided by the repository's committer, whose proposal carries the floor " +
 		"its builder read",
+	"code.merge_preview": "merges two commits in a scratch beside a git node's cache, not a " +
+		"domain's copy (GitCopy): the asker's floor travels in the query, as the cache's sync " +
+		"level, and two object ids name the same two commits at every position",
 
 	"usage.spend": "reads the usage domain, whose log no write of the asker's lands " +
 		"on: every node publishes its own days, so there is no position to see",

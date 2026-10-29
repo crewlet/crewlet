@@ -989,10 +989,10 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // the decide forms a purge only once at most PurgePartRows of the
 // repository's pushes, refs, packs, retired packs, ref drops, changes'
 // revisions, authors, bodies and rows and their conversations' rows — its
-// reviewers, participants, comments, reviews, findings and revisions' facts
-// among them — and its checks and their logs remain AND the pushes, the
-// bodies, the conversations' text and the checks among them weigh at most
-// PurgePartBytes — a part's own bounds — and it holds at most
+// reviewers, participants, comments, reviews, findings, revisions' facts and
+// mergeability among them — and its checks and their logs remain AND the
+// pushes, the bodies, the conversations' text and the checks among them
+// weigh at most PurgePartBytes — a part's own bounds — and it holds at most
 // MaxProtectionsPerRepo rules, MaxPathOwners path owners (one row each, their
 // globs packed into it) and a published chain of at most MaxPublishedLayers
 // layers of MaxLayerParts parts each: with the name claim, the row, its kind's
@@ -1019,8 +1019,8 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 		purgeAllPushesSQL, purgeAllRefsSQL, purgeAllPacksSQL, purgeAllRetiredSQL, purgeAllDropsSQL,
 		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllReviewersSQL, purgeAllParticipantsSQL,
 		purgeAllFindingsSQL, purgeAllCommentsSQL, purgeAllFindingTextsSQL, purgeAllReviewsSQL,
-		purgeAllFactsSQL, purgeAllBodiesSQL, purgeAllConversationsSQL, purgeAllChangesSQL,
-		purgeAllCheckLogsSQL, purgeAllChecksSQL,
+		purgeAllFactsSQL, purgeAllBodiesSQL, purgeAllMergeabilitySQL, purgeAllConversationsSQL,
+		purgeAllChangesSQL, purgeAllCheckLogsSQL, purgeAllChecksSQL,
 		purgeAllLayerPartsSQL, purgeAllLayersSQL, clearProtectionsSQL, clearPathOwnersSQL,
 	} {
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)

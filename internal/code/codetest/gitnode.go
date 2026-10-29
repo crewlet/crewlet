@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
@@ -263,6 +264,9 @@ type gitIncarnation struct {
 	host    *host.Server
 	share   *code.GitShare
 	query   *query.Server
+	// previews answers the node's merge previews, built beside the query
+	// server over the same cache, pool and share, as the engine builds them.
+	previews *home.Previews
 	// compactor is built as the engine builds a git node's and NEVER
 	// STARTED: every case drives Compact or Poll itself, so no case races a
 	// pass of its own.
@@ -410,6 +414,14 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 		Roster: roster, Current: g.o.Current, Fetched: fetched}); err != nil {
 		t.Fatalf("codetest: build %s's query server: %v", n.id, err)
 	}
+	// THE MERGE PREVIEWS, as the engine builds them beside the query server:
+	// over the node's cache and its own pool, under the same share, judged
+	// and recorded as its reads are.
+	if n.previews, err = home.NewPreviews(home.PreviewOptions{NodeID: n.id, Cache: n.cache, Git: n.pool,
+		Share: n.share, Roster: roster, Current: g.o.Current, Fetched: fetched, Metrics: n.metrics,
+		Logger: g.o.Logger}); err != nil {
+		t.Fatalf("codetest: build %s's merge previews: %v", n.id, err)
+	}
 	// THE COMPACTOR, as the engine builds it after the host has started: over
 	// the node's cache and store, listing through the node's reads and
 	// proposing through its compactions.
@@ -438,25 +450,26 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 
 // Git is the node's git half as the estate's router and server ask for it
 // (estate.LocalGit): its running incarnation's query server for a read by
-// object id and its host for an engine write, as the engine pairs the two
-// over one cache, one pool and one share — read again at every request so a
-// restarted node's is the one asked, and none while the node is killed or
-// stopped, which the serving side answers `no_backend`, as a git node whose
-// code host is not built answers.
+// object id, its host for an engine write and its previews for a merge
+// preview, as the engine pairs them over one cache, one pool and one share —
+// read again at every request so a restarted node's is the one asked, and none
+// while the node is killed or stopped, which the serving side answers
+// `no_backend`, as a git node whose code host is not built answers.
 func (g *GitNode) Git() (estate.GitServer, bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.cur == nil {
 		return nil, false
 	}
-	return gitHalf{reads: g.cur.query, writes: g.cur.host}, true
+	return gitHalf{reads: g.cur.query, writes: g.cur.host, previews: g.cur.previews}, true
 }
 
-// gitHalf is one incarnation's git half: its query server's reads and its
-// host's engine writes (estate.GitServer).
+// gitHalf is one incarnation's git half: its query server's reads, its host's
+// engine writes and its merge previews (estate.GitServer).
 type gitHalf struct {
-	reads  *query.Server
-	writes *host.Server
+	reads    *query.Server
+	writes   *host.Server
+	previews *home.Previews
 }
 
 func (h gitHalf) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, error) {
@@ -465,6 +478,10 @@ func (h gitHalf) Read(ctx context.Context, q code.GitQuery) (code.GitAnswer, err
 
 func (h gitHalf) Write(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
 	return h.writes.Write(ctx, w)
+}
+
+func (h gitHalf) MergePreview(ctx context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
+	return h.previews.MergePreview(ctx, q)
 }
 
 // BackgroundBudget is what the node's presence row says its cache gives its
@@ -555,6 +572,7 @@ func (g *GitNode) Kill() {
 	n.compactor.Stop(ended)
 	n.srv.Listener.Close()
 	n.srv.CloseClientConnections()
+	n.previews.Stop(ended)
 	n.query.Stop(ended)
 	n.host.Stop(ended)
 }
@@ -566,10 +584,11 @@ func (g *GitNode) Kill() {
 // finishes the git requests it let through (api.App.DrainGit), with no bound
 // of its own, since what bounds a shutdown is whatever supervises the process.
 // THEN THE GIT READS AND THE HOST, as the teardown's stopCodeHost stops them
-// and bounded as it is, by host.StopBudget: a read in flight is cut and waited
-// for (query.Server.Stop), and a request still running past the drain is
-// cancelled and waited for, its relay and its cache stopped. Unlike Kill, it
-// waits for what it ends, so it is never the stop of a node a crash holds.
+// and bounded as it is, by host.StopBudget: a read or a merge preview in
+// flight is cut and waited for (query.Server.Stop, home.Previews.Stop), and a
+// request still running past the drain is cancelled and waited for, its relay
+// and its cache stopped. Unlike Kill, it waits for what it ends, so it is
+// never the stop of a node a crash holds.
 func (g *GitNode) Stop(drain context.Context) {
 	g.mu.Lock()
 	n := g.cur
@@ -587,6 +606,7 @@ func (g *GitNode) Stop(drain context.Context) {
 	stop, cancel := context.WithTimeout(context.WithoutCancel(drain), host.StopBudget)
 	defer cancel()
 	n.compactor.Stop(stop)
+	n.previews.Stop(stop)
 	n.query.Stop(stop)
 	n.host.Stop(stop)
 	n.srv.CloseClientConnections()
@@ -622,6 +642,7 @@ func (g *GitNode) teardown() {
 	g.mu.Unlock()
 	for _, n := range nodes {
 		n.compactor.Stop(context.Background())
+		n.previews.Stop(context.Background())
 		n.query.Stop(context.Background())
 		n.host.Stop(context.Background())
 		n.srv.Close()

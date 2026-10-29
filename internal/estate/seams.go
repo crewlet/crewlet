@@ -1002,6 +1002,17 @@ func (c CodeSeam) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer,
 	return call(ctx, c.r, opCodeGitRead, nil, q)
 }
 
+// MergePreview asks the repository's home git node what merging q.Head into
+// q.Base would do — by the merge the home records a change's mergeability by
+// — and its runner-up when the home cannot answer (ADR-0059), as a read by
+// object id is asked. Its floor is the query's own
+// (code.MergePreviewQuery.Fresh), which [CodeSeam.FloorOf] supplies where the
+// asker's own pushes must be in the copy it merges. It never raises this
+// node's floor: a preview writes nothing.
+func (c CodeSeam) MergePreview(ctx context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
+	return call(ctx, c.r, opCodeMergePreview, nil, q)
+}
+
 // GitWrite asks the repository's home git node to build one engine write and
 // land it as a push (ADR-0062), and its runner-up with the same write — the
 // same push — where the home ran nothing or went silent (ADR-0059). Its floor

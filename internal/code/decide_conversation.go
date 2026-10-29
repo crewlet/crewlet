@@ -85,6 +85,14 @@ import (
 // snapshot holds — else SUPERSEDED, recorded nowhere, for the home's next pass.
 // The chart then judges whom they ask, skip and wake (revise.go's head).
 //
+// A CHANGE'S MERGEABILITY ([Mergeability], mergeability.go) is the home's too,
+// asked by no principal and judged by no chart: it takes a LIVE change
+// (change_closed, change_merged), and is decided only while it is of the
+// change's head revision against its current target, and of a tip no earlier
+// than the one the change's row holds for that revision against that branch —
+// the same tip only where that row is undecided — else SUPERSEDED, recorded
+// nowhere.
+//
 // A write that asks for what the conversation already says — every reviewer
 // it asks already asked and nobody it withdraws still asked, a thread's state
 // it is in, every finding in the state an answer gives it — is ANSWERED
@@ -104,11 +112,11 @@ import (
 
 // Validate refuses a write no change's writer could decide
 // ([ErrInvalidProposal], naming the field), before anything is read: anything
-// but exactly one of the six records; an operation id this engine does not
+// but exactly one of the seven records; an operation id this engine does not
 // accept (statelog.CheckCallerOpID); an asker that is no principal, or that
-// names a run — and a revise that names any asker, being the home's own; a
-// Seen that is no position on the code log; a repository id
-// that is no UUID in its canonical spelling; a change id that is no bare
+// names a run — and a revise or a mergeability that names any asker, each
+// being the home's own; a Seen that is no position on the code log; a
+// repository id that is no UUID in its canonical spelling; a change id that is no bare
 // UUIDv7; a field the writer stamps — who wrote it, a reviewer's kind, a
 // comment's id or thread, a review's id or a finding's — set by the asker; an
 // ask that names nobody, a handle twice or one that is no seat's handle, past
@@ -121,9 +129,10 @@ import (
 // [findingProblem] refuses, a carried id twice or no finding's id, or a turn
 // or a model its bound refuses; an answer naming no finding, past
 // [MaxFindingsPerReview], one twice, an answer no write gives, a commit that
-// is no whole object id or a note its bound refuses; a revise its own rules
-// refuse ([Revise], revise.go); and a record past what one write of a
-// conversation may carry ([MaxConversationBytes]). What the
+// is no whole object id or a note its bound refuses; a revise or a
+// mergeability its own rules refuse ([Revise], revise.go; [Mergeability],
+// mergeability.go); and a record past what one write of a conversation may
+// carry ([MaxConversationBytes]). What the
 // repository and the change hold is the decide's to judge, from the rows.
 func (w ConversationWrite) Validate() error {
 	_, err := w.measure()
@@ -160,6 +169,10 @@ func (w ConversationWrite) measure() (int, error) {
 		// wrote it: what the writer stamps is whom the facts ask, skip and
 		// wake.
 		stamped += stampedReviseBytes(*w.Revise) - principalBytes(w.Asker)
+	case w.Mergeability != nil:
+		// THE HOME'S OWN WRITE, which names no asker and is stamped with
+		// nothing: the record is what the home sent.
+		stamped -= principalBytes(w.Asker)
 	}
 	if stamped > MaxConversationBytes {
 		why := fmt.Sprintf("%d bytes, past the %d one write of a change's conversation may take of its record "+
@@ -199,6 +212,8 @@ func (w ConversationWrite) record() (OpKind, any) {
 		return OpFindingResolve, *w.FindingResolve
 	case w.Revise != nil:
 		return OpRevise, *w.Revise
+	case w.Mergeability != nil:
+		return OpMergeability, *w.Mergeability
 	}
 	return "", nil
 }
@@ -222,6 +237,8 @@ func (w ConversationWrite) RepoID() string {
 		return w.FindingResolve.RepoID
 	case w.Revise != nil:
 		return w.Revise.RepoID
+	case w.Mergeability != nil:
+		return w.Mergeability.RepoID
 	}
 	return ""
 }
@@ -242,6 +259,8 @@ func (w ConversationWrite) ChangeID() string {
 		return w.FindingResolve.ChangeID
 	case w.Revise != nil:
 		return w.Revise.ChangeID
+	case w.Mergeability != nil:
+		return w.Mergeability.ChangeID
 	}
 	return ""
 }
@@ -250,7 +269,8 @@ func (w ConversationWrite) ChangeID() string {
 // SEAT's — its grant on the repository — every ask of reviewers, whoever
 // asks, since each reviewer is judged by the chart, and every revision's
 // facts, whose path owners the chart resolves to the seats they are asked of
-// and judges. ONE ANSWER, which the
+// and judges. A change's mergeability reads none: it is two commits merged.
+// ONE ANSWER, which the
 // estate declares the operation's grant by and the writer refuses a node that
 // cannot judge one by, so the two never disagree about which writes a node
 // behind the company's configuration may decide.
@@ -263,27 +283,28 @@ func (w ConversationWrite) JudgesChart() bool {
 func (w ConversationWrite) validFields() error {
 	set := 0
 	for _, isSet := range []bool{w.Reviewers != nil, w.Comment != nil, w.ThreadResolve != nil, w.Review != nil,
-		w.FindingResolve != nil, w.Revise != nil} {
+		w.FindingResolve != nil, w.Revise != nil, w.Mergeability != nil} {
 		if isSet {
 			set++
 		}
 	}
 	if set != 1 {
 		return fmt.Errorf("%w: a write of a change's conversation is exactly one of an ask for review, a "+
-			"comment, a thread's resolution, a review, an answer to findings and a revision's facts, and this "+
-			"one sets %d", ErrInvalidProposal, set)
+			"comment, a thread's resolution, a review, an answer to findings, a revision's facts and a change's "+
+			"mergeability, and this one sets %d", ErrInvalidProposal, set)
 	}
 	if err := statelog.CheckCallerOpID(w.OpID); err != nil {
 		return badField("op_id", "%v", err)
 	}
 	switch why := w.Asker.invalid(); {
-	case w.Revise != nil:
-		// THE HOME'S OWN WRITE: a revision's facts are read by the
-		// repository's home git node and asked by no principal, so a revise
-		// naming one would be judged as somebody nobody named.
+	case w.Revise != nil || w.Mergeability != nil:
+		// THE HOME'S OWN WRITE: a revision's facts and a change's
+		// mergeability are read by the repository's home git node and asked
+		// by no principal, so one naming a principal would be judged as
+		// somebody nobody named.
 		if w.Asker != (Principal{}) {
-			return badField("asker", "a revision's facts are the repository's home git node's own, which no "+
-				"principal asks")
+			return badField("asker", "a revision's facts and a change's mergeability are the repository's "+
+				"home git node's own, which no principal asks")
 		}
 	case why != "":
 		return fmt.Errorf("%w: asker: %s", ErrInvalidProposal, why)
@@ -317,6 +338,8 @@ func (w ConversationWrite) validFields() error {
 		return w.FindingResolve.validFields()
 	case w.Revise != nil:
 		return w.Revise.validFields()
+	case w.Mergeability != nil:
+		return w.Mergeability.validFields()
 	}
 	if err := bareUUIDv7("thread_resolve.thread_id", w.ThreadResolve.ThreadID); err != nil {
 		return err
@@ -561,10 +584,15 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 	if d.version, d.position, _, err = conversationIn(ctx, tx, changeID); err != nil {
 		return conversationDecision{}, err
 	}
-	if w.Revise != nil {
+	switch {
+	case w.Revise != nil:
 		// THE HOME'S OWN, which names no asker: its rules are the facts'
 		// guard and the chart's judgment of the path owners.
 		return decideRevise(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, d)
+	case w.Mergeability != nil:
+		// THE HOME'S OWN too, judged by no chart: its rules are the merge's
+		// guard alone.
+		return decideMergeability(ctx, tx, w, row, named, d)
 	}
 	asker, kind := w.Asker.party()
 	if kind == "" {

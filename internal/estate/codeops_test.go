@@ -514,6 +514,7 @@ type codeAnswers struct {
 	conversed code.ConversationResult
 	checked   code.ChecksResult
 	wrote     code.EngineWriteResult
+	previewed code.MergePreviewAnswer
 }
 
 func (d *codeDesk) For(context.Context, string) (Backend, bool) { return Backend{Code: d}, true }
@@ -601,9 +602,9 @@ func (d *codeDesk) Lifecycle(_ context.Context, r code.LifecycleRequest) (code.L
 	return held.lifecycle, err
 }
 
-// deskGit is a desk as a git node's git half: what it reads by object id and
-// every engine write it is asked are recorded and answered as the desk's code
-// half is, the desk's err included.
+// deskGit is a desk as a git node's git half: what it reads by object id,
+// every engine write and every merge preview it is asked are recorded and
+// answered as the desk's code half is, the desk's err included.
 type deskGit struct{ d *codeDesk }
 
 func (g deskGit) Git() (GitServer, bool) { return g, true }
@@ -616,6 +617,11 @@ func (g deskGit) Read(_ context.Context, q code.GitQuery) (code.GitAnswer, error
 func (g deskGit) Write(_ context.Context, w code.EngineWrite) (code.EngineWriteResult, error) {
 	held, err := g.d.took(w)
 	return held.wrote, err
+}
+
+func (g deskGit) MergePreview(_ context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
+	held, err := g.d.took(q)
+	return held.previewed, err
 }
 
 // serveDesk serves d as data-d, the one data node — and the one git node — the
@@ -639,13 +645,14 @@ func serveDesk(t *testing.T, f *fleet, d *codeDesk) {
 // introduced pages and its compactor's, publisher's and maintainer's due
 // listings, and a seat's resolve of a ref reach a data node from a node that
 // holds no data —
-// and a read by object id the git node — with their arguments as they were
-// sent (a seat's reads naming the colleague they are made for, whose grant
-// the answering node judges too), their answers come back as they were
-// given — a snapshot's layers, packs, refs, pushes, retirements and cursor, a
-// repository's detail and its limits, the refs and the introducing pushes,
-// the due listings, a resolved ref, a page of a diff — and a refusal keeps
-// the identity the host and the cache branch on.
+// and a read by object id and a merge preview the git node — with their
+// arguments as they were sent (a seat's reads naming the colleague they are
+// made for, whose grant the answering node judges too), their answers come
+// back as they were given — a snapshot's layers, packs, refs, pushes,
+// retirements and cursor, a repository's detail and its limits, the refs and
+// the introducing pushes, the due listings, a resolved ref, a page of a diff,
+// a preview's conflicted paths — and a refusal keeps the identity the host
+// and the cache branch on.
 func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -722,6 +729,23 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Expunge: []code.ExpungeCandidate{{ID: ref.ID, Name: "app", Open: "019a0c2e-0000-7000-8000-0000000000e1",
 				Request: "019a0c2e-0000-7000-8000-0000000000e0", Requested: at, ExpungedAt: created, LivePacks: 40,
 				LiveBytes: 90_000, Version: at}},
+			// THE HOME'S DUE CHANGE WORK, every field: a change owing its
+			// facts and its merge, and one whose merge its moved target asks
+			// again, with when it was merged.
+			DueRepos: []string{ref.ID},
+			DueChanges: []code.ChangeDue{{ID: "019a0c2e-0000-7000-8000-0000000000e7", Number: 3, Revision: 2,
+				Head: "7777777777777777777777777777777777777777", SourceRef: "refs/heads/fix",
+				TargetRef: "refs/heads/main", Tip: "6666666666666666666666666666666666666666", TipPosition: at,
+				FactsDue: true, MergeDue: true}},
+			Rechecks: []code.ChangeDue{{ID: "019a0c2e-0000-7000-8000-0000000000e8", Number: 4, Revision: 1,
+				Head: "8888888888888888888888888888888888888888", SourceRef: "refs/heads/more",
+				TargetRef: "refs/heads/main", Tip: "6666666666666666666666666666666666666666", TipPosition: at,
+				Checked: created}},
+			// A CHANGE'S MERGEABILITY as its read carries it, every field.
+			Change: &code.ChangeDetail{Mergeability: &code.MergeabilityRow{Revision: 2, TargetRef: "refs/heads/main",
+				TargetOID: "6666666666666666666666666666666666666666", TargetPosition: at,
+				State: code.MergeConflict, Conflicts: []string{"upload/retry.go"}, ConflictsOmitted: 3, Node: "git-a",
+				Position: at, At: created}},
 			// A CHANGE'S CONVERSATION'S PARTS, every field of each row.
 			Reviewers: []code.ReviewerRow{{Reviewer: "plat-lead", Kind: code.PartyAgent, Reason: code.ReviewerAsked,
 				State: code.ReviewerRequested, RequestedBy: "dev", RequestedByKind: code.PartyAgent,
@@ -1031,10 +1055,13 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		{Kind: code.ReadPublicationDue, Cursor: "1700000000000000/" + ref.ID,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		{Kind: code.ReadExpungeDue, Cursor: ref.ID, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
-		// THE HOME'S DUE CHANGE WORK, of every repository and of one.
-		{Kind: code.ReadChangesDue, Cursor: ref.ID, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
-		{Kind: code.ReadChangesDue, ChangesDue: &code.ChangesDueQuery{RepoID: ref.ID}, Cursor: "refs/heads/fix",
-			Fresh: statelog.FloorAt(statelog.ReadSession, at)},
+		// THE HOME'S DUE CHANGE WORK, of every repository and of one, each
+		// with the instant its refresh is paced by, and the rechecks one
+		// repository's asks.
+		{Kind: code.ReadChangesDue, ChangesDue: &code.ChangesDueQuery{RecheckBefore: created}, Cursor: ref.ID,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		{Kind: code.ReadChangesDue, ChangesDue: &code.ChangesDueQuery{RepoID: ref.ID, RecheckBefore: created,
+			Rechecks: 64}, Cursor: "refs/heads/fix", Fresh: statelog.FloorAt(statelog.ReadSession, at)},
 		// THE CONVERSATION'S FILTERS AND PARTS, each crossing whole: a
 		// filter dropped on the wire would answer the wider listing.
 		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadChanges,
@@ -1103,6 +1130,26 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	stamped.Home = true
 	if got := d.last(); !reflect.DeepEqual(got, stamped) {
 		t.Errorf("git read asked %+v, want %+v", got, stamped)
+	}
+
+	// A MERGE PREVIEW asked of the git node, every field of it — a seat's
+	// for the colleague it reads for, at its floor — and of its answer: the
+	// state, the conflicted paths it holds and how many more, and the
+	// position the copy was read at. Stamped home by the walk, as a read is.
+	previewQ := code.MergePreviewQuery{RepoID: ref.ID, Asker: code.Principal{Kind: code.PrincipalAgent,
+		Seat: "dev"}, CeilingSeat: "lead", Base: "6666666666666666666666666666666666666666",
+		Head: "7777777777777777777777777777777777777777", Fresh: statelog.FloorAt(statelog.ReadSession, at)}
+	d.mu.Lock()
+	d.previewed = code.MergePreviewAnswer{RepoID: ref.ID, Base: previewQ.Base, Head: previewQ.Head,
+		State: code.MergeConflict, Conflicts: []string{"a.go", "docs/b.md"}, ConflictsOmitted: 7, Position: at}
+	d.mu.Unlock()
+	if got, err := seam.MergePreview(ctx, previewQ); err != nil || !reflect.DeepEqual(got, d.previewed) {
+		t.Errorf("merge preview = (%+v, %v), want %+v", got, err, d.previewed)
+	}
+	stampedPreview := previewQ
+	stampedPreview.Home = true
+	if got := d.last(); !reflect.DeepEqual(got, stampedPreview) {
+		t.Errorf("merge preview asked %+v, want %+v", got, stampedPreview)
 	}
 
 	// AN ENGINE WRITE asked of the git node, every field of it and of its

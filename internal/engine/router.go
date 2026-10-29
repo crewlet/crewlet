@@ -223,25 +223,25 @@ func (w wholeGit) Unanswered(string) { w.roster.Invalidate() }
 func (e *Engine) localGit() estate.LocalGit { return engineGit{e: e} }
 
 // engineGit is [estate.LocalGit] over the PUBLISHED native runtime: its git
-// half ([gitHalf]) — the reads by object id of the query server
-// [Engine.buildCodeHost] built beside the code host, and the engine writes of
-// the code host itself.
+// half ([gitHalf]) — the reads by object id of the query server and the merge
+// previews [Engine.buildCodeHost] built beside the code host, and the engine
+// writes of the code host itself.
 //
 // LOADED ON EVERY CALL, never captured when the router or the server is built,
-// because the code host — and the query server with it — is built at boot or
-// at the first apply that sets code.native, after both exist: captured, a git
-// node that applied its company after boot would answer "no code host" to
-// every git read and every engine write until it restarted.
+// because the code host — and the query server and the previews with it — is
+// built at boot or at the first apply that sets code.native, after both exist:
+// captured, a git node that applied its company after boot would answer "no
+// code host" to every git read and every engine write until it restarted.
 type engineGit struct{ e *Engine }
 
 // Git is the runtime's git half, or false where no runtime is published or it
 // built no code host.
 func (g engineGit) Git() (estate.GitServer, bool) {
 	n := g.e.native.Load()
-	if n == nil || n.gitReads == nil || n.codeHost == nil {
+	if n == nil || n.gitReads == nil || n.mergePreviews == nil || n.codeHost == nil {
 		return nil, false
 	}
-	return gitHalf{reads: n.gitReads, writes: n.codeHost}, true
+	return gitHalf{reads: n.gitReads, writes: n.codeHost, previews: n.mergePreviews}, true
 }
 
 // estateEnvelopes is how this node signs and verifies every envelope the

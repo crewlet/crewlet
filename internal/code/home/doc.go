@@ -2,12 +2,15 @@
 // first git node of the repository's rendezvous order over the live git nodes
 // (ADR-0059), the node its git reads are asked of first, is the one that owes
 // its CHANGE WORK — reading each change's head revision against its target
-// and recording what it found (internal/code's Revise), or landing a change
-// whose head its target came to hold (internal/code's ChangeLanded). The rows
-// are the work list: a `changes_due` read (internal/code's ReadChangesDue)
-// names every live change whose head revision holds no facts against the
-// branch it merges into, and every record the home lands takes its change off
-// the list by its own row. Nothing here keeps a list of its own.
+// and recording what it found (internal/code's Revise), merging it into its
+// target's tip and recording whether it merges cleanly (internal/code's
+// Mergeability), or landing a change whose head its target came to hold
+// (internal/code's ChangeLanded). The rows are the work list: a `changes_due`
+// read (internal/code's ReadChangesDue) names every live change whose head
+// revision holds no facts or no mergeability against the branch it merges
+// into, or whose moved target asks its merge again, and every record the home
+// lands takes its change's work off the list by its own row. Nothing here
+// keeps a list of its own.
 //
 // # One loop, and the workers that register with it
 //
@@ -48,28 +51,41 @@
 // take themselves for a repository's home — a presence view split for a
 // moment — both read and both propose, and the records' own guards take one:
 // facts of a revision no later than the facts held of it are refused
-// superseded, a landing of a change merged already is answered unchanged. A
-// node that cannot read who serves git works nothing that turn rather than
-// guess.
+// superseded, so is a merge into a tip no later than a decided one, and a
+// landing of a change merged already is answered unchanged. A node that
+// cannot read who serves git works nothing that turn rather than guess.
 //
 // # What a turn of the changes worker does
 //
 // It reads the repository's due changes — at the nudge's floor, or stale on a
 // backstop pass — with the repository's path owners in the same snapshot, and
-// for each: asks the repository's git reads for the revision's facts
-// (internal/code's GitRevisionFacts, the engine's own read, through the
-// router, which asks the home first — this node — and its runner-up when the
-// home's copy cannot answer), then either lands the change — its head inside
-// its target's tip, whatever push moved the target there — through the
-// repository's committer, decided against the change's head and the tip the
-// home read; or matches the touched paths against the path owners
+// for each change owing its FACTS: asks the repository's git reads for the
+// revision's facts (internal/code's GitRevisionFacts, the engine's own read,
+// through the router, which asks the home first — this node — and its
+// runner-up when the home's copy cannot answer), then either lands the change
+// — its head inside its target's tip, whatever push moved the target there —
+// through the repository's committer, decided against the change's head and
+// the tip the home read; or matches the touched paths against the path owners
 // (code.MatchOwners) and asks the change writer to record the facts, the
-// owners matched and the digest of the owners matched against. A refusal that
-// the rows moved since — superseded, stale, a change closed or merged — is
-// the rows answering, left to the next pass, which reads them again; one that
-// decided nothing for a reason of the writer's or the log's — busy, the
-// record refused or dropped — fails the turn, and the next pass lists the
+// owners matched and the digest of the owners matched against. And for each
+// change owing its MERGE — a new head revision, or one its moved target asks
+// again within the repository's budget, the oldest merge first (merge.go) — it
+// merges the change over this node's own copy, in a scratch beside it, and
+// asks the change writer to record what the merge did, or lands the change
+// where its target came to hold its head. A refusal that the rows moved since
+// — superseded, stale, a change closed or merged — is the rows answering, left
+// to the next pass, which reads them again; one that decided nothing for a
+// reason of the writer's or the log's — busy, the record refused or dropped —
+// or a merge that could not run fails the turn, and the next pass lists the
 // repository again.
+//
+// # Merge previews, beside the loop
+//
+// The same merge answers a comparison's MERGE PREVIEW ([Previews]): a read a
+// principal makes of a repository's git nodes, served beside the node's git
+// reads from exactly their inputs and answered as they are, so a preview and
+// the change it would open say one thing. It shares the merge with the loop
+// and nothing else.
 //
 // # Its bounds
 //
@@ -83,7 +99,11 @@
 // reads at once are its whole share, which a seat's read waits for at most
 // code.GitShareWait before another git node answers it (PROVISIONAL, as M4's
 // spec marks it, until BenchmarkHomeLoop measures a home's turns: [Concurrency]
-// says what moves it).
+// says what moves it). A MERGE holds one slot of the node's maintenance lane,
+// which never waits — a lane full of other maintenance answers the merge busy,
+// the turn's failure — within [MergeabilityDeadline]; a moved target's merges
+// are at most [MergeabilityPerPass] a repository a window, each once
+// [MergeabilityRefresh] old.
 //
 // ITS IMPORTS: internal/code/query, internal/code/compact, internal/code/host
 // and this package never import each other (home_test.go holds the four):

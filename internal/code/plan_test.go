@@ -286,6 +286,9 @@ func everyStatement(t *testing.T) map[string]statement {
 var sortingStatements = map[string]string{
 	"protections of": "one listing page's rules, at most MaxReposPerPage of MaxProtectionsPerRepo " +
 		"each: a seek a repository of the page, whose union no one index orders",
+	"due rechecks": "one repository's live changes behind a moved target, at most one a live branch " +
+		"(code_changes_open_idx), so MaxRefsPerRepo bounds them: no index orders a repository's changes by " +
+		"when their merge was recorded without one written by the records of two subjects (changesdue.go)",
 }
 
 // The PRIMARY KEY indexes the plans name, as the driver names them.
@@ -308,6 +311,7 @@ const (
 	findingKey      = "sqlite_autoindex_code_findings_1"
 	findingTextKey  = "sqlite_autoindex_code_finding_texts_1"
 	factsKey        = "sqlite_autoindex_code_revision_facts_1"
+	mergeabilityKey = "sqlite_autoindex_code_mergeability_1"
 	activationKey   = "sqlite_autoindex_code_activation_1"
 	evictionKey     = "sqlite_autoindex_code_evictions_1"
 	layersKey       = "sqlite_autoindex_code_layers_1"
@@ -372,7 +376,7 @@ func registeredStatements() map[string]statement {
 		"purge all packs":     {purgeAllPacksSQL, []any{"repo-1"}, []string{packsKey + " (repo_id=?)"}},
 		"remove repo":         {removeRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo name":           {repoNameSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", dropsKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)", "COVERING INDEX " + bodyKey + " (change_id=?)", reviewerKey + " (change_id=?)", participantKey + " (change_id=?)", "COVERING INDEX code_findings_raiser_idx (change_id=?)", "COVERING INDEX code_comments_thread_idx (change_id=?)", "COVERING INDEX " + findingTextKey + " (change_id=?)", "COVERING INDEX code_reviews_change_idx (change_id=?)", factsKey + " (change_id=?)", conversationKey + " (change_id=?)", "COVERING INDEX " + checksEndedKey + " (repo_id=?)", checkLogsKey + " (repo_id=?)"}},
+		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", dropsKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)", "COVERING INDEX " + bodyKey + " (change_id=?)", reviewerKey + " (change_id=?)", participantKey + " (change_id=?)", "COVERING INDEX code_findings_raiser_idx (change_id=?)", "COVERING INDEX code_comments_thread_idx (change_id=?)", "COVERING INDEX " + findingTextKey + " (change_id=?)", "COVERING INDEX code_reviews_change_idx (change_id=?)", factsKey + " (change_id=?)", mergeabilityKey + " (change_id=?)", conversationKey + " (change_id=?)", "COVERING INDEX " + checksEndedKey + " (repo_id=?)", checkLogsKey + " (repo_id=?)"}},
 		"claim":               {claimSQL, []any{"token"}, []string{nameKey + " (token=?)"}},
 		"claims":              {claimsSQL, []any{`["token","other"]`}, []string{nameKey + " (token=?)"}},
 		"repos rows":          {reposRowsSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
@@ -486,7 +490,8 @@ func registeredStatements() map[string]statement {
 				"COVERING INDEX code_comments_thread_idx (change_id=?)",
 				"COVERING INDEX " + findingTextKey + " (change_id=?)",
 				"COVERING INDEX code_reviews_change_idx (change_id=?)", factsKey + " (change_id=?)",
-				"COVERING INDEX " + bodyKey + " (change_id=?)", conversationKey + " (change_id=?)"}},
+				"COVERING INDEX " + bodyKey + " (change_id=?)", mergeabilityKey + " (change_id=?)",
+				conversationKey + " (change_id=?)"}},
 		"purge changes' reviewers": {purgeChangeReviewersSQL, []any{changeIDs},
 			[]string{"SCAN json_each AS j", reviewerKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge changes' participants": {purgeChangeParticipantsSQL, []any{changeIDs},
@@ -501,6 +506,8 @@ func registeredStatements() map[string]statement {
 			[]string{"SCAN json_each AS j", "code_reviews_change_idx (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge changes' facts": {purgeChangeFactsSQL, []any{changeIDs},
 			[]string{"SCAN json_each AS j", factsKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge changes' mergeability": {purgeChangeMergeabilitySQL, []any{changeIDs},
+			[]string{"SCAN json_each AS j", mergeabilityKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge changes' conversations": {purgeChangeConversationsSQL, []any{changeIDs},
 			[]string{"SCAN json_each AS j", conversationKey + " (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge a cut change's reviewers": {purgeCutReviewersSQL, []any{"repo-1-change-000001", PurgePartRows},
@@ -546,6 +553,9 @@ func registeredStatements() map[string]statement {
 				"INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all facts": {purgeAllFactsSQL, []any{"repo-1"},
 			[]string{changesNumberKey + " (repo_id=?)", factsKey + " (change_id=?)",
+				"INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge all mergeability": {purgeAllMergeabilitySQL, []any{"repo-1"},
+			[]string{changesNumberKey + " (repo_id=?)", mergeabilityKey + " (change_id=?)",
 				"INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all conversations": {purgeAllConversationsSQL, []any{"repo-1"},
 			[]string{changesNumberKey + " (repo_id=?)", conversationKey + " (change_id=?)",
@@ -631,19 +641,31 @@ func registeredStatements() map[string]statement {
 			[]string{participantKey + " (change_id=? AND handle=?)"}},
 		// THE HOME'S DUE LISTING (changesdue.go): the repositories holding a
 		// due change, after a cursor, walking the index partial on the live
-		// states in its order, each change checked against its facts' key,
-		// its target's row by the refs' key and its repository's state by its
-		// key; one repository's state by its key; and one repository's due
-		// changes after a source branch, the same index's range, each joined
-		// to its target's row by the refs' key and checked against its
-		// facts' key.
-		"due repositories": {dueReposSQL, []any{"", MaxSnapshotItems},
+		// states in its order, each change checked against its facts' key and
+		// its mergeability's, its target's row by the refs' key and its
+		// repository's state by its key; one repository's state by its key;
+		// one repository's due changes after a source branch, the same
+		// index's range, each joined to its target's row by the refs' key and
+		// checked against its facts' key and its mergeability's; and one
+		// repository's due rechecks, the same index's range joined to its
+		// target's row and its mergeability by their keys, sorted by when the
+		// merge was recorded (sortingStatements says why).
+		"due repositories": {dueReposSQL, []any{"", MaxSnapshotItems, int64(3000)},
 			[]string{"code_changes_open_idx (repo_id>?)", factsKey + " (change_id=? AND n=?)",
-				refsKey + " (repo_id=? AND ref=?)", repoKey + " (id=?)"}},
+				mergeabilityKey + " (change_id=?)", refsKey + " (repo_id=? AND ref=?)", repoKey + " (id=?)"}},
 		"due repository": {dueRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"due changes": {dueChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",
-				factsKey + " (change_id=? AND n=?)"}},
+				factsKey + " (change_id=? AND n=?)", mergeabilityKey + " (change_id=?)"}},
+		"due rechecks": {dueRechecksSQL, []any{"repo-1", int64(3000), MaxSnapshotItems},
+			[]string{"code_changes_open_idx (repo_id=?)", refsKey + " (repo_id=? AND ref=?)",
+				mergeabilityKey + " (change_id=?)"}},
+		// A CHANGE'S MERGEABILITY: its row by its key, a decide's and an
+		// apply's, and a read's whole.
+		"mergeability": {mergeabilitySQL, []any{"repo-1-change-000001"},
+			[]string{mergeabilityKey + " (change_id=?)"}},
+		"mergeability row": {mergeabilityRowSQL, []any{"repo-1-change-000001"},
+			[]string{mergeabilityKey + " (change_id=?)"}},
 		// A REVISION'S FACTS: one revision's by their key, a decide's and an
 		// apply's; whether a change holds any, by the key's prefix; who
 		// stands on request_changes before a revision, a range of the

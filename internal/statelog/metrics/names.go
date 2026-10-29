@@ -65,6 +65,7 @@ const (
 	CodeGitShareWait                 = "crewlet.code.git.share_wait"
 	CodeGitWait                      = "crewlet.code.git.wait"
 	CodeHomeFactsDuration            = "crewlet.code.home.facts.duration"
+	CodeHomeMergeDuration            = "crewlet.code.home.merge.duration"
 	CodeHomeNudges                   = "crewlet.code.home.nudges"
 	CodeHomePasses                   = "crewlet.code.home.passes"
 	CodeHostSpoolWait                = "crewlet.code.host.spool.wait"

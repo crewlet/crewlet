@@ -30,9 +30,10 @@ import (
 // reviewers (code_reviewers), its comments (code_comments), who takes part in
 // it and each reviewer's standing verdict (code_participants), its reviews
 // (code_reviews), their findings (code_findings, code_finding_texts), its
-// counters (code_conversations) and the facts the repository's home git node
-// recorded of its revisions (code_revision_facts, [Revise]). Only a
-// repository's purge removes them,
+// counters (code_conversations), the facts the repository's home git node
+// recorded of its revisions (code_revision_facts, [Revise]) and whether its
+// head revision merges into its target (code_mergeability, [Mergeability]).
+// Only a repository's purge removes them,
 // behind the deletion gate that drops every record about a purged repository
 // ([Applier.Gated] reads a change record's repository off its payload).
 //
@@ -117,12 +118,15 @@ const (
 	// reviewer more than [MaxStandingFindings] standing findings on the
 	// change.
 	ConversationRefusalTooManyFindings ConversationRefusal = "too_many_findings"
-	// ConversationRefusalSuperseded is a revision's facts ([Revise]) the
-	// change no longer takes: of a revision or a head it has moved from,
-	// against a branch it no longer merges into, no later than the facts it
-	// holds of that revision against that branch, or matched against path
-	// owners the repository has changed since. The home's own refusal, which
-	// no principal is ever answered: its next pass reads the rows again.
+	// ConversationRefusalSuperseded is a revision's facts ([Revise]) or a
+	// change's mergeability ([Mergeability]) the change no longer takes: of a
+	// revision or a head it has moved from, against a branch it no longer
+	// merges into, no later than the facts it holds of that revision against
+	// that branch, or matched against path owners the repository has changed
+	// since; a merge into a tip before the one the change's mergeability is
+	// of, or into the same tip once that one is decided. The home's own
+	// refusal, which no principal is ever answered: its next pass reads the
+	// rows again.
 	ConversationRefusalSuperseded ConversationRefusal = "superseded"
 
 	// ConversationRefusalBusy is a write the change's writer did not reach in

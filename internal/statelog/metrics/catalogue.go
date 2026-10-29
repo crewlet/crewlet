@@ -791,8 +791,10 @@ func Catalogue() []Instrument {
 				"was asked to decide — each a record on the change's own " +
 				"subject, never in the repository's committer queue — by `op` " +
 				"(`reviewers`, `comment`, `thread_resolve`, `review`, " +
-				"`finding_resolve`, and `revise`, a revision's facts its " +
-				"repository's home git node read) and what became of each, by " +
+				"`finding_resolve`, and two its repository's home git node " +
+				"asks: `revise`, a revision's facts it read, and " +
+				"`mergeability`, whether the change's head revision merges " +
+				"into its target's tip) and what became of each, by " +
 				"`outcome`: " +
 				"`applied`, its record landed and the change's conversation " +
 				"holds it; `unchanged`, it asked for what the conversation " +
@@ -803,10 +805,12 @@ func Catalogue() []Instrument {
 				"`change_closed`, `change_merged`, `thread_gone`, " +
 				"`not_author`, `not_raiser`, `finding_gone`, " +
 				"`too_many_findings`, `change_not_found`, `repo_archived`, " +
-				"`repo_deleted`, `busy`, `not_applied`, `unavailable`, and a " +
-				"revise's `superseded` — facts of a revision, a head or a " +
-				"target the change has moved from, no later than the facts it " +
-				"holds, or matched against path owners changed since — which " +
+				"`repo_deleted`, `busy`, `not_applied`, `unavailable`, and the " +
+				"home's `superseded` — facts or a merge of a revision, a head or " +
+				"a target the change has moved from; facts no later than the " +
+				"facts it holds, or matched against path owners changed since; " +
+				"a merge into a tip before the one its mergeability is of, or " +
+				"into the same tip once decided — which " +
 				"decided nothing; `handed_on`, one this node decided nothing of " +
 				"for a reason about itself (stopping, no chart to judge a seat " +
 				"or a reviewer by, behind the company's configuration), which " +
@@ -859,8 +863,10 @@ func Catalogue() []Instrument {
 			Shows: "Turns this node took as the HOME git node of a repository — " +
 				"one worker's work in one repository, scheduled by a nudge from " +
 				"the code log or by the minute's backstop pass — by `worker` " +
-				"(`changes`: its live changes' facts recorded, or a change whose " +
-				"head its target holds landed) and `outcome`: `worked`, its due " +
+				"(`changes`: its live changes' facts and mergeability recorded — " +
+				"a moved target's merges again, at most sixty-four a repository " +
+				"a minute — or a change whose head its target holds landed) and " +
+				"`outcome`: `worked`, its due " +
 				"work done; `failed`, a read or a record that decided nothing for " +
 				"a reason of the node's or the log's (`code_home_turn_failed` " +
 				"says which), the rest worked and the repository listed again by " +
@@ -897,6 +903,26 @@ func Catalogue() []Instrument {
 				"Durations near the read's ten seconds of git are changes past " +
 				"what a home identifies — their patch-ids omitted — or a home " +
 				"short of the CPU its reads run on.",
+		},
+		{
+			Name: CodeHomeMergeDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"work", "outcome"},
+			Shows: "One merge of a change's head into its target's tip on this " +
+				"git node — `git merge-tree --write-tree` in a scratch of its " +
+				"own, never in a cache — by `work`: `mergeability`, the home's " +
+				"own, recorded on the change, its ancestry asked first and its " +
+				"merge given thirty seconds of the maintenance lane; or " +
+				"`preview`, a comparison's merge preview a person or a seat " +
+				"asked, given a read's ten seconds of the read lane under a " +
+				"unit of the node's seat git-work share. `outcome`: `clean`, " +
+				"`conflict`, `unknown` — the merge ran out of its time and " +
+				"decided nothing, which a change's home records and asks " +
+				"again ten minutes on — `landed`, the home's ancestry finding " +
+				"the head inside its target, the change landed with no merge " +
+				"run, and `failed`, a merge that could not run (a busy lane, a " +
+				"copy that would not sync). `unknown` climbing is changes past " +
+				"what a merge decides in its time; `failed` climbing on the " +
+				"`mergeability` work, a home whose maintenance lane is full.",
 		},
 		{
 			Name: CodeCompactRuns, Kind: KindCounter, Unit: UnitCount,

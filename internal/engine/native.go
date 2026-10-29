@@ -171,6 +171,16 @@ type native struct {
 	// cache they read ([native.stopCodeHost]).
 	gitReads *query.Server
 
+	// mergePreviews is this node's merge previews (internal/code/home's
+	// Previews), built beside gitReads over the same cache, pool and share
+	// and nil where it is: what the estate's router and server ask of this
+	// node for a comparison's preview — the third half of its git half
+	// ([gitHalf]) — answered by the merge a repository's home records a
+	// change's mergeability by. It holds no goroutine, and the code host's
+	// stop stops it with gitReads, cutting its previews in flight before the
+	// cache they read.
+	mergePreviews *codehome.Previews
+
 	// gitCache is the cache codeHost serves from, built and stopped with it
 	// and nil where it is: held only to be READ, at each alarm evaluation
 	// ([Engine.codeReading]) — what a node's maintenance refused is no
@@ -469,6 +479,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			}
 			n.codeHost, n.gitReads, n.gitCache, n.gitCacheSize = parts.host, parts.reads, parts.cache,
 				parts.size
+			n.mergePreviews = parts.previews
 			n.compactor, n.home = parts.compactor, parts.home
 			n.withdrawCodeStatus = parts.withdrawStatus
 		}

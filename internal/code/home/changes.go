@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -16,10 +19,11 @@ import (
 // Estate is the code log and the git reads as the home's change work reaches
 // them — the router's code seam satisfies it (estate.CodeSeam): the due
 // listing (Read), a revision's facts (GitRead, asked of the repository's git
-// nodes, its home first), a record of them on the change (Converse, asked of
-// the repository's committing data node's change writer) and a landing (Change,
-// asked of its committer). Each raises this node's floors past what it landed,
-// so the next listing reads it wherever it is answered.
+// nodes, its home first), a record of them or of a change's mergeability on
+// the change (Converse, asked of the repository's committing data node's
+// change writer) and a landing (Change, asked of its committer). Each raises
+// this node's floors past what it landed, so the next listing reads it
+// wherever it is answered.
 type Estate interface {
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
 	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
@@ -27,29 +31,54 @@ type Estate interface {
 	Change(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
 }
 
+// Cache is this node's git cache as the home's merges reach it —
+// internal/code/cache's *Cache satisfies it: a copy of a repository synced
+// to a floor and pinned while a merge runs over it (Sync), a scratch beside
+// it the merge writes in (NewScratch), and — for a merge preview, which only
+// the walk's home fills a copy for — whether it holds or is filling one
+// (Holds).
+type Cache interface {
+	Holds(repoID string) bool
+	Sync(ctx context.Context, repoID string, fresh statelog.Freshness) (cache.Synced, error)
+	NewScratch(ctx context.Context, s cache.Synced, id string) (*cache.Scratch, error)
+}
+
+// Pool runs git — internal/code/gitproc's *Pool satisfies it.
+type Pool interface {
+	Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error)
+}
+
 // WorkerChanges is the change work's worker's name, as
 // crewlet.code.home.passes counts its turns.
 const WorkerChanges = "changes"
 
 // changes is the home's CHANGE WORK, the worker every loop is built with: for
-// each live change of a repository whose head revision holds no facts against
-// the branch it merges into, the revision's facts read and recorded on the
-// change, or the change landed where its target holds its head.
+// each live change of a repository, its head revision's facts read and
+// recorded on the change and its merge into its target's tip recorded beside
+// them, or the change landed where its target holds its head — and, a moved
+// target's changes merged again at the refresh, within a pass's budget.
 type changes struct {
 	estate  Estate
+	cache   Cache
+	git     Pool
 	node    string
 	metrics *metrics.Recorder
 	log     *slog.Logger
 	now     func() time.Time
+	// rechecks is each repository's share of a pass's merges of moved
+	// targets ([MergeabilityPerPass]).
+	rechecks *recheckBudget
 }
 
 // Name is [WorkerChanges].
 func (c *changes) Name() string { return WorkerChanges }
 
 // Due is a page of the repositories holding a due change: the `changes_due`
-// listing (internal/code's ReadChangesDue).
+// listing (internal/code's ReadChangesDue), a merge due again once it is
+// [MergeabilityRefresh] old.
 func (c *changes) Due(ctx context.Context, floor statelog.Position, cursor string) ([]string, string, error) {
-	a, err := c.estate.Read(ctx, code.ReadQuery{Kind: code.ReadChangesDue, Cursor: cursor, Fresh: freshAt(floor)})
+	a, err := c.estate.Read(ctx, code.ReadQuery{Kind: code.ReadChangesDue, Cursor: cursor, Fresh: freshAt(floor),
+		ChangesDue: &code.ChangesDueQuery{RecheckBefore: c.now().Add(-MergeabilityRefresh)}})
 	if err != nil {
 		return nil, "", err
 	}
@@ -58,40 +87,101 @@ func (c *changes) Due(ctx context.Context, floor statelog.Position, cursor strin
 
 // Work is one repository's due changes, every page, each worked in the order
 // the listing names them ([changes.change]) — a failure of one left for the
-// next pass while the others are worked — until they are done or the turn's
-// context ends.
+// next pass while the others are worked — and then the merges its moved
+// targets ask again, the oldest first and no more than what is left of the
+// repository's share of this pass ([recheckBudget]), until they are done or
+// the turn's context ends. A change a step of this turn landed is merged
+// again by none.
 func (c *changes) Work(ctx context.Context, repoID string, floor statelog.Position) error {
-	q := code.ReadQuery{Kind: code.ReadChangesDue, ChangesDue: &code.ChangesDueQuery{RepoID: repoID},
-		Fresh: freshAt(floor)}
-	var failed []error
+	now := c.now()
+	q := code.ReadQuery{Kind: code.ReadChangesDue, Fresh: freshAt(floor),
+		ChangesDue: &code.ChangesDueQuery{RepoID: repoID, RecheckBefore: now.Add(-MergeabilityRefresh),
+			Rechecks: c.rechecks.left(repoID, now)}}
+	var (
+		failed  []error
+		again   []code.ChangeDue
+		againAt statelog.Position
+	)
+	landed := map[string]bool{}
 	for {
 		a, err := c.estate.Read(ctx, q)
 		if err != nil {
-			return fmt.Errorf("home: read repository %s's due changes: %w", repoID, err)
+			return errors.Join(append(failed, fmt.Errorf("home: read repository %s's due changes: %w", repoID,
+				err))...)
+		}
+		if q.Cursor == "" {
+			again, againAt = a.Rechecks, a.Position
 		}
 		for _, due := range a.DueChanges {
 			if err := ctx.Err(); err != nil {
 				return errors.Join(append(failed, err)...)
 			}
-			if err := c.change(ctx, repoID, due, a.PathOwners, a.Position); err != nil {
+			done, err := c.change(ctx, repoID, due, a.PathOwners, a.Position)
+			if done {
+				landed[due.ID] = true
+			}
+			if err != nil {
 				failed = append(failed, err)
 			}
 		}
 		if a.Next == "" {
-			return errors.Join(failed...)
+			break
 		}
 		q.Cursor = a.Next
 	}
+	for _, due := range again {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(failed, err)...)
+		}
+		if landed[due.ID] {
+			continue
+		}
+		c.rechecks.spend(repoID, now)
+		if _, err := c.merge(ctx, repoID, due, againAt); err != nil {
+			failed = append(failed, err)
+		}
+	}
+	return errors.Join(failed...)
 }
 
-// change is one due change: its head revision's facts against its target's
-// tip as the listing read it — asked at the listing's position, so the git node
-// that answers holds both commits — then the change LANDED where its target
-// holds its head, and the facts RECORDED otherwise, the path owners matched
-// against the touched paths here, on the home (code.MatchOwners), beside the
-// digest of the owners the listing read.
+// change is one due change: its head revision's FACTS where it owes them —
+// read against its target's tip as the listing read it, asked at the
+// listing's position, so the git node that answers holds both commits — the
+// change LANDED where its target holds its head, and the facts RECORDED
+// otherwise, the path owners matched against the touched paths here, on the
+// home (code.MatchOwners), beside the digest of the owners the listing read;
+// then its MERGE where it owes one ([changes.merge]), whatever became of its
+// facts, since the merge reads none of them. It answers whether the change
+// was landed.
 func (c *changes) change(ctx context.Context, repoID string, due code.ChangeDue, owners []code.PathOwner,
-	at statelog.Position) error {
+	at statelog.Position) (bool, error) {
+
+	var failed []error
+	if due.FactsDue {
+		landed, err := c.facts(ctx, repoID, due, owners, at)
+		if landed {
+			return true, nil
+		}
+		if err != nil {
+			failed = append(failed, err)
+		}
+	}
+	if due.MergeDue {
+		landed, err := c.merge(ctx, repoID, due, at)
+		if landed {
+			return true, errors.Join(failed...)
+		}
+		if err != nil {
+			failed = append(failed, err)
+		}
+	}
+	return false, errors.Join(failed...)
+}
+
+// facts is a due change's facts read, then the change landed or its facts
+// recorded ([changes.change]), and whether it was landed.
+func (c *changes) facts(ctx context.Context, repoID string, due code.ChangeDue, owners []code.PathOwner,
+	at statelog.Position) (bool, error) {
 
 	began := c.now()
 	read, err := c.estate.GitRead(ctx, code.GitQuery{Kind: code.GitRevisionFacts, RepoID: repoID,
@@ -105,17 +195,115 @@ func (c *changes) change(ctx context.Context, repoID string, due code.ChangeDue,
 	}
 	switch {
 	case err != nil:
-		return fmt.Errorf("home: read the facts of revision %d of change %d of repository %s: %w", due.Revision,
-			due.Number, repoID, err)
+		return false, fmt.Errorf("home: read the facts of revision %d of change %d of repository %s: %w",
+			due.Revision, due.Number, repoID, err)
 	case read.RevisionFacts == nil:
-		return fmt.Errorf("home: the facts of revision %d of change %d of repository %s were answered with none",
-			due.Revision, due.Number, repoID)
+		return false, fmt.Errorf("home: the facts of revision %d of change %d of repository %s were answered "+
+			"with none", due.Revision, due.Number, repoID)
 	}
 	f := read.RevisionFacts
 	if f.HeadInTarget {
-		return c.land(ctx, repoID, due, at)
+		return true, c.land(ctx, repoID, due, at)
 	}
-	return c.revise(ctx, repoID, due, f, owners, at)
+	return false, c.revise(ctx, repoID, due, f, owners, at)
+}
+
+// The outcomes of crewlet.code.home.merge.duration: a merge's state, a
+// landing the ancestry found with no merge run, and a merge that could not
+// run.
+const (
+	mergeLanded = "landed"
+	mergeFailed = "failed"
+)
+
+// merge is a due change's MERGE on this node — the repository's home — and
+// whether it landed the change: this node's copy synced to the listing's
+// position at, so it holds both commits, and pinned; a scratch beside it
+// ([MergeScratchID]), removed after; the change's ANCESTRY first — its head
+// inside its target's tip is a change merged, whatever push moved the target
+// there, which is LANDED rather than merged again (D7b) — and otherwise the
+// merge ([mergeIn]), in the maintenance lane within [MergeabilityDeadline],
+// recorded on the change as its MERGEABILITY. A refusal that the rows moved
+// since is the next pass's to read; one that decided nothing for a reason of
+// the log's is this turn's failure.
+func (c *changes) merge(ctx context.Context, repoID string, due code.ChangeDue, at statelog.Position) (bool,
+	error) {
+
+	began := c.now()
+	outcome := mergeFailed
+	defer func() {
+		if c.metrics != nil {
+			c.metrics.Observe(metrics.CodeHomeMergeDuration, c.now().Sub(began),
+				metrics.Attrs{"work": workMergeability, "outcome": outcome})
+		}
+	}()
+	synced, err := c.cache.Sync(ctx, repoID, freshAt(at))
+	if err != nil {
+		return false, fmt.Errorf("home: sync repository %s to merge change %d: %w", repoID, due.Number, err)
+	}
+	defer synced.Release()
+	sc, err := c.cache.NewScratch(ctx, synced, MergeScratchID(due.ID, due.Revision, due.TipPosition))
+	if err != nil {
+		return false, fmt.Errorf("home: a scratch to merge change %d of repository %s in: %w", due.Number, repoID,
+			err)
+	}
+	defer sc.Remove()
+	// ANCESTRY FIRST, as a read of the scratch: the one question a moved
+	// target asks before its merge — a target that came to hold the head is
+	// the change merged.
+	res, err := c.git.Run(ctx, gitproc.Cmd{Dir: sc.Dir, Alternate: sc.Alternate,
+		Args:  []string{"merge-base", "--is-ancestor", due.Head, due.Tip},
+		Class: gitproc.ClassMaintenance, Deadline: gitproc.ReadDeadline, Answers: []int{1}})
+	if err != nil {
+		return false, fmt.Errorf("home: ask whether change %d of repository %s is in its target: %w", due.Number,
+			repoID, err)
+	}
+	if res.Exit == 0 {
+		outcome = mergeLanded
+		return true, c.land(ctx, repoID, due, at)
+	}
+	m, err := mergeIn(ctx, c.git, sc, due.Tip, due.Head, gitproc.ClassMaintenance, MergeabilityDeadline)
+	if err != nil {
+		return false, fmt.Errorf("home: merge change %d of repository %s: %w", due.Number, repoID, err)
+	}
+	outcome = string(m.state)
+	return false, c.mergeability(ctx, repoID, due, m, at)
+}
+
+// workMergeability is the `work` crewlet.code.home.merge.duration counts the
+// home's own merges under, and workPreview a merge preview's.
+const (
+	workMergeability = "mergeability"
+	workPreview      = "preview"
+)
+
+// mergeability asks the repository's change writer to record m, the merge of
+// due's head revision into its target's tip: an answer that the rows moved
+// since — superseded, the change closed or merged — is the next pass's to
+// read; one that decided nothing for a reason of the log's is this turn's
+// failure.
+func (c *changes) mergeability(ctx context.Context, repoID string, due code.ChangeDue, m merged,
+	at statelog.Position) error {
+
+	res, err := c.estate.Converse(ctx, code.ConversationWrite{OpID: statelog.NewOpID(c.now(), ""), Seen: at,
+		Mergeability: &code.Mergeability{RepoID: repoID, ChangeID: due.ID, Revision: due.Revision,
+			HeadOID: due.Head, TargetRef: due.TargetRef, TargetOID: due.Tip, TargetPosition: due.TipPosition,
+			State: m.state, Conflicts: m.conflicts.Paths, ConflictsOmitted: m.conflicts.Omitted, Node: c.node}})
+	switch {
+	case err != nil:
+		return fmt.Errorf("home: record whether change %d of repository %s merges: %w", due.Number, repoID, err)
+	case slices.Contains(undecidedFacts, res.Refusal):
+		return fmt.Errorf("home: record whether change %d of repository %s merges: %s: %s", due.Number, repoID,
+			res.Refusal, res.Detail)
+	case res.Refusal != "":
+		c.log.Debug("code_change_mergeability_refused", "repo", repoID, "change", due.Number,
+			"revision", due.Revision, "refusal", res.Refusal, "detail", res.Detail)
+		return nil
+	}
+	c.log.Debug("code_change_mergeability_recorded", "repo", repoID, "change", due.Number,
+		"revision", due.Revision, "target", due.TargetRef, "tip", due.Tip, "state", m.state,
+		"conflicts", len(m.conflicts.Paths)+int(m.conflicts.Omitted), "position", res.Position.String())
+	return nil
 }
 
 // land asks the repository's committer to record due's change merged at the
@@ -176,16 +364,84 @@ func (c *changes) revise(ctx context.Context, repoID string, due code.ChangeDue,
 }
 
 // undecidedLandings and undecidedFacts are every refusal of a landing and of a
-// record of facts that decided NOTHING for a reason of the writer's or of the
-// log's — busy, the log refusing the record or dropping it everywhere — which
-// a turn counts as failed, its change listed again by the next pass; every
-// other refusal is the rows answering, which the next pass reads again.
+// record of facts or a mergeability that decided NOTHING for a reason of the
+// writer's or of the log's — busy, the log refusing the record or dropping it
+// everywhere — which a turn counts as failed, its change listed again by the
+// next pass; every other refusal is the rows answering, which the next pass
+// reads again.
 var (
 	undecidedLandings = []code.ChangeRefusal{code.ChangeRefusalBusy, code.ChangeRefusalNotApplied,
 		code.ChangeRefusalUnavailable}
 	undecidedFacts = []code.ConversationRefusal{code.ConversationRefusalBusy, code.ConversationRefusalNotApplied,
 		code.ConversationRefusalUnavailable}
 )
+
+// recheckBudget is each repository's share of a PASS's merges of its moved
+// targets on this node: at most [MergeabilityPerPass] in one window of the
+// loop's backstop, whichever turns — a pass's or a nudge's — run them. A rate
+// and never a list: the rows say which changes are due, and the window only
+// says how many of them a minute may merge, so a node that restarts or a home
+// that moves begins a window anew, at most one window's merges early.
+type recheckBudget struct {
+	mu sync.Mutex
+	// window is a pass's length — the loop's backstop — and perPass the
+	// merges one repository's window holds, [MergeabilityPerPass]: each a
+	// suite's own (export_test.go).
+	window  time.Duration
+	perPass int
+	used    map[string]recheckWindow
+	// swept is when the windows that ended were last forgotten: at most once
+	// a window, so a node home to many repositories forgets theirs at a cost
+	// that follows them once a minute, never once a turn.
+	swept time.Time
+}
+
+// recheckWindow is one repository's current window: when it began and how
+// many merges it has run.
+type recheckWindow struct {
+	began time.Time
+	used  int
+}
+
+// newRecheckBudget is a budget of windows of window, MergeabilityPerPass
+// merges each.
+func newRecheckBudget(window time.Duration) *recheckBudget {
+	return &recheckBudget{window: window, perPass: MergeabilityPerPass, used: map[string]recheckWindow{}}
+}
+
+// left is how many merges repoID may still run in the window now is in — the
+// whole share where its window has ended — forgetting, once a window, every
+// window that has.
+func (b *recheckBudget) left(repoID string, now time.Time) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if now.Sub(b.swept) >= b.window {
+		for repo, w := range b.used {
+			if now.Sub(w.began) >= b.window {
+				delete(b.used, repo)
+			}
+		}
+		b.swept = now
+	}
+	w := b.used[repoID]
+	if now.Sub(w.began) >= b.window {
+		return b.perPass
+	}
+	return max(0, b.perPass-w.used)
+}
+
+// spend counts one merge of repoID's in the window now is in, beginning one
+// where none runs.
+func (b *recheckBudget) spend(repoID string, now time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	w, ok := b.used[repoID]
+	if !ok || now.Sub(w.began) >= b.window {
+		w = recheckWindow{began: now}
+	}
+	w.used++
+	b.used[repoID] = w
+}
 
 // freshAt is the level a read at floor is asked at: `session` beside it, so
 // the rows read hold the record it names, and stale where it is zero.

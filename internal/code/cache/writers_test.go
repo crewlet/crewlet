@@ -550,6 +550,13 @@ var cacheWriters = []writerRow{
 	{"internal/code/host/relay.go", kindOS,
 		"the hook relay's private socket directory under TMPDIR, made at Start and removed at Stop: no " +
 			"path of the cache's", nil},
+	{"internal/code/home/merge.go", kindGit + " merge-tree",
+		"a change's mergeability and a comparison's merge preview: ONE `merge-tree --write-tree -z --name-only " +
+			"--no-messages --allow-unrelated-histories` of two whole commit ids, in a SCRATCH of its own " +
+			"(cache.NewScratch — the home's named by home.MergeScratchID, a preview's by a fresh id) leaning on " +
+			"the copy: the merged tree and every blob a conflict leaves marked written into the scratch alone and " +
+			"removed with it, never a cache; an object the copy already holds is freshened there, as an engine " +
+			"write's build freshens it (home.TestMergeabilityRunsInAScratch)", nil},
 	{"internal/code/query/diff.go", kindGit + " diff-tree",
 		"a seat's read of a diff or an interdiff — its stat's raw records, with their counts where the stat " +
 			"admits every file, and the raw record of the one file a patch names — whose only arguments not " +

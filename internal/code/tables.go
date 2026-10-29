@@ -43,11 +43,12 @@ var ReproducibleTables = []string{
 
 	// A change's conversation — who is asked to review it, its comments, who
 	// takes part, its reviews and their findings, its counters, and the facts
-	// its repository's home recorded of its revisions — written by the records
-	// on the CHANGE's own subject, which no record on the repository's writes,
-	// and removed with the repository's changes, each change's before its row.
+	// and the mergeability its repository's home recorded of its revisions —
+	// written by the records on the CHANGE's own subject, which no record on
+	// the repository's writes, and removed with the repository's changes, each
+	// change's before its row.
 	"code_reviewers", "code_comments", "code_participants", "code_conversations",
-	"code_reviews", "code_findings", "code_finding_texts", "code_revision_facts",
+	"code_reviews", "code_findings", "code_finding_texts", "code_revision_facts", "code_mergeability",
 
 	// A repository's checks — each attempt of each check of each commit, and
 	// the log a failed run kept — written by the records on the repository's

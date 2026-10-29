@@ -567,19 +567,41 @@ type RunPushesQuery struct {
 	After statelog.Position `json:"after"`
 }
 
-// ChangesDueQuery is a `changes_due` read of ONE repository's due change work:
-// the repository by its id, which its home was nudged about or found listed.
+// ChangesDueQuery is a `changes_due` read: the repositories a home owes
+// change work in, or ONE repository's due change work — the repository by its
+// id, which its home was nudged about or found listed — each judged against
+// the instant the home's recheck of a merge is paced by.
 type ChangesDueQuery struct {
-	RepoID string `json:"repo_id"`
+	// RepoID is "" for the listing of repositories, and otherwise the
+	// repository whose due changes the read pages.
+	RepoID string `json:"repo_id,omitempty"`
+	// RecheckBefore is REQUIRED: a change whose mergeability was recorded
+	// against a tip its target has moved from since, or recorded undecided,
+	// is due again once that record's broker instant is at or before it —
+	// its home's clock less its refresh (internal/code/home's
+	// MergeabilityRefresh) — so a target that moves on every push asks its
+	// changes' merges again at the home's pace, never at its own.
+	RecheckBefore time.Time `json:"recheck_before"`
+	// Rechecks is, with a repository, the most changes due such a recheck
+	// the read names on its first page ([ReadAnswer.Rechecks]), the change
+	// whose mergeability is oldest first, 0 to MaxSnapshotItems; none past
+	// its first page, and none without a repository.
+	Rechecks int `json:"rechecks,omitempty"`
 }
 
-// ChangeDue is one live change a `changes_due` read names: its head revision
-// has no facts against the branch it merges into, which is a live branch of
-// its repository. The change by its id and number, its head revision and
-// head, its source branch — the listing's order and cursor — and its target
-// with the tip the rows hold for it and the position of the record that moved
-// it there: everything its home reads the revision's facts against and
-// records them with, from the one snapshot the read was answered from.
+// ChangeDue is one live change a `changes_due` read names, its target a live
+// branch of its repository, and what its home owes it: its head revision's
+// FACTS where it holds none against the branch it merges into, and its head
+// revision's MERGE where the change holds no mergeability of that revision
+// against that branch — or, named among a read's rechecks, a mergeability its
+// target has moved past, or one undecided, recorded at Checked. The change by
+// its id and number, its head revision and head, its source branch — the
+// listing's order and cursor — and its target with the tip the rows hold for
+// it and the position of the record that moved it there: everything its home
+// reads the revision's facts and merges it against and records them with,
+// from the one snapshot the read was answered from. A `checks_due` read names
+// its changes in the same shape, its tip the one whose checks file its home
+// dispatches by, and owes them neither facts nor a merge.
 type ChangeDue struct {
 	ID          string            `json:"id"`
 	Number      int64             `json:"number"`
@@ -589,6 +611,14 @@ type ChangeDue struct {
 	TargetRef   string            `json:"target_ref"`
 	Tip         string            `json:"tip"`
 	TipPosition statelog.Position `json:"tip_position"`
+	// FactsDue and MergeDue say what the home owes a change of a page of a
+	// `changes_due` read's due changes; a recheck owes its merge alone, and
+	// says neither, and so does a `checks_due` read's change.
+	FactsDue bool `json:"facts_due,omitempty"`
+	MergeDue bool `json:"merge_due,omitempty"`
+	// Checked is a recheck's: the broker instant its mergeability was
+	// recorded at, which orders the rechecks; zero for every other.
+	Checked time.Time `json:"checked,omitzero"`
 }
 
 // MaxRunRepos is the most repositories one [RunPushesQuery] names: the most a
@@ -743,12 +773,13 @@ const (
 	ReadExpungeDue ReadKind = "expunge_due"
 	// ReadChangesDue is the change work a repository's HOME git node owes
 	// ([ChangesDueQuery]): with no repository, the active repositories
-	// holding a LIVE change whose head revision has no facts against the
-	// branch it merges into, by id; with one, those changes of that
-	// repository, by source branch, each with its target's tip as the rows
-	// hold it ([ChangeDue]), beside the repository's path owners. The
-	// engine's own read, as `compaction_due` is: what its home polls and is
-	// nudged into reading.
+	// holding a LIVE change whose head revision has no facts or no
+	// mergeability against the branch it merges into, or whose mergeability
+	// is due again, by id; with one, the first two kinds of that repository,
+	// by source branch, each with its target's tip as the rows hold it
+	// ([ChangeDue]), beside the repository's path owners, and the third
+	// oldest first. The engine's own read, as `compaction_due` is: what its
+	// home polls and is nudged into reading.
 	ReadChangesDue ReadKind = "changes_due"
 	// ReadChecks lists attempts of checks ([CheckRow]), held to the asker's
 	// grant: one repository's, newest ended first and every attempt not yet
@@ -933,13 +964,11 @@ type ReadQuery struct {
 	// kind refuses the read as a kind it does not know (ErrInvalid) — the
 	// run's pushes unread, never answered as none.
 	RunPushes *RunPushesQuery `json:"run_pushes,omitempty"`
-	// ChangesDue is a `changes_due` read's repository: nil lists the
-	// repositories a home owes change work in, and one names the repository
-	// whose due changes the read pages. Refused on every other kind. An
-	// estate request's field and no record's, so it takes no versionedFields
-	// row: a node of a build that predates the kind refuses the read as a
-	// kind it does not know (ErrInvalid) — the home's work waits, never
-	// answered as none.
+	// ChangesDue is a `changes_due` read's own: REQUIRED for that kind and
+	// refused on every other ([ChangesDueQuery]). An estate request's field
+	// and no record's, so it takes no versionedFields row: a node of a build
+	// that predates the kind refuses the read as a kind it does not know
+	// (ErrInvalid) — the home's work waits, never answered as none.
 	ChangesDue *ChangesDueQuery `json:"changes_due,omitempty"`
 	// Checks narrows a `checks` read to a change's attempts or a commit's,
 	// or bounds its window; and names the one attempt a `check` read is of,
@@ -997,11 +1026,14 @@ type ReadAnswer struct {
 	// DueRepos is a `changes_due` listing's page of repositories, by id;
 	// DueChanges a page of one repository's due changes, by source branch,
 	// beside PathOwners, its path owners as its settings carry them, read in
-	// the same snapshot — what its home matches the touched paths against.
-	// A `checks_due` read answers in the same two fields: its repositories
-	// in DueRepos, one repository's changes in DueChanges, with no owners.
+	// the same snapshot — what its home matches the touched paths against —
+	// and, on its first page, Rechecks: the changes whose merge is due again,
+	// the oldest recorded first ([ChangesDueQuery.Rechecks]). A `checks_due`
+	// read answers in the same two fields: its repositories in DueRepos, one
+	// repository's changes in DueChanges, with no owners and no rechecks.
 	DueRepos   []string    `json:"due_repos,omitempty"`
 	DueChanges []ChangeDue `json:"due_changes,omitempty"`
+	Rechecks   []ChangeDue `json:"rechecks,omitempty"`
 	PathOwners []PathOwner `json:"path_owners,omitempty"`
 	// Checks is a page of a `checks` read, and Check a `check` read's one
 	// attempt whole.
@@ -1275,9 +1307,12 @@ type ConversationWrite struct {
 	ThreadResolve  *ThreadResolve   `json:"thread_resolve,omitempty"`
 	Review         *Review          `json:"review,omitempty"`
 	FindingResolve *FindingResolve  `json:"finding_resolve,omitempty"`
-	// Revise is a revision's facts, which the repository's home git node
-	// asks with NO Asker: the engine's own write ([Revise]).
-	Revise *Revise `json:"revise,omitempty"`
+	// Revise is a revision's facts, and Mergeability whether the change's head
+	// revision merges into its target's tip, each of which the repository's
+	// home git node asks with NO Asker: the engine's own writes ([Revise],
+	// [Mergeability]).
+	Revise       *Revise       `json:"revise,omitempty"`
+	Mergeability *Mergeability `json:"mergeability,omitempty"`
 }
 
 // ConversationResult is what became of one write of a change's conversation.
@@ -1597,6 +1632,11 @@ type ChangeDetail struct {
 	// Conversation is what its conversation counts, nil for a change nobody
 	// has discussed; its rows are read a part at a time ([ReadQuery.Part]).
 	Conversation *ConversationRow `json:"conversation,omitempty"`
+	// Mergeability is whether its latest merged revision merges into its
+	// target, as its home recorded it — nil for a change its home has merged
+	// no revision of yet. One of an earlier revision than the change's head,
+	// or into another branch, is the home's to merge again.
+	Mergeability *MergeabilityRow `json:"mergeability,omitempty"`
 }
 
 // ConversationRow is a change's conversation's counters

@@ -375,6 +375,16 @@ func (c countedGit) Write(ctx context.Context, w code.EngineWrite) (code.EngineW
 	return c.inner.Write(ctx, w)
 }
 
+// MergePreview is the member's merge preview, as its git node's previews
+// answer it — a read, and counted as one.
+func (c countedGit) MergePreview(ctx context.Context, q code.MergePreviewQuery) (code.MergePreviewAnswer, error) {
+	a, err := c.inner.MergePreview(ctx, q)
+	if err == nil {
+		c.m.gitAnswered.Add(1)
+	}
+	return a, err
+}
+
 // read is a read of the code host through the member's router, as its API's
 // code reads ask.
 func (m *member) read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {

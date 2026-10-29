@@ -265,9 +265,10 @@
 // # A repository's git work is asked of its home git node
 //
 // An operation on a repository's git OBJECTS — a read by object id of a tree,
-// a file, a diff, and an ENGINE WRITE, a seat's or a person's commit built
-// beside a copy of them and landed as a push (ADR-0062) — is answered by a
-// node with the `git` role from its own cache, never by a data node's copy.
+// a file, a diff, a MERGE PREVIEW of two commits ([opCodeMergePreview], a read
+// too), and an ENGINE WRITE, a seat's or a person's commit built beside a copy
+// of them and landed as a push (ADR-0062) — is answered by a node with the
+// `git` role from its own cache, never by a data node's copy.
 // That is ADR-0059, amending ADR-0025: the router's walk has a second
 // placement beside the data nodes, every live git node ([RouterOptions.Git]),
 // keyed by repository ([op.keyedOnGit]), and such an operation names the git

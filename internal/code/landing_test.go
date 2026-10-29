@@ -117,11 +117,12 @@ func TestALandingIsDecidedAgainstTheTipItsHomeRead(t *testing.T) {
 }
 
 // dueChanges is every due change of repo the reader lists, every page, and the
-// path owners beside them.
+// path owners beside them — read as a home reads them now, its refresh's
+// instant an hour on, so every merge recorded is old enough to be due again.
 func (n *node) dueChanges(repo string) ([]code.ChangeDue, []code.PathOwner) {
 	n.t.Helper()
-	q := code.ReadQuery{Kind: code.ReadChangesDue, ChangesDue: &code.ChangesDueQuery{RepoID: repo},
-		Fresh: statelog.Freshness{Level: statelog.ReadStale}}
+	q := code.ReadQuery{Kind: code.ReadChangesDue, Fresh: statelog.Freshness{Level: statelog.ReadStale},
+		ChangesDue: &code.ChangesDueQuery{RepoID: repo, RecheckBefore: time.Now().Add(time.Hour)}}
 	var out []code.ChangeDue
 	var owners []code.PathOwner
 	for {
@@ -137,10 +138,12 @@ func (n *node) dueChanges(repo string) ([]code.ChangeDue, []code.PathOwner) {
 	}
 }
 
-// dueRepos is every repository the reader lists change work due in.
+// dueRepos is every repository the reader lists change work due in, read as
+// dueChanges reads its changes.
 func (n *node) dueRepos() []string {
 	n.t.Helper()
-	q := code.ReadQuery{Kind: code.ReadChangesDue, Fresh: statelog.Freshness{Level: statelog.ReadStale}}
+	q := code.ReadQuery{Kind: code.ReadChangesDue, Fresh: statelog.Freshness{Level: statelog.ReadStale},
+		ChangesDue: &code.ChangesDueQuery{RecheckBefore: time.Now().Add(time.Hour)}}
 	var out []string
 	for {
 		a, err := n.reader.Read(n.t.Context(), q)
@@ -155,17 +158,20 @@ func (n *node) dueRepos() []string {
 	}
 }
 
-// THE DUE LISTING IS THE ROWS: a live change whose head revision holds no facts
-// against the branch it merges into is due — on the listing of repositories by
-// its repository, and on its repository's listing with its target's tip and
-// the position that moved it there, beside the repository's path owners — and
-// its facts recorded take it off; a retarget puts it back; a change whose
-// target branch is gone is due nothing, and neither is one of an archived
-// repository. The engine's own read names no asker, and only it names a due
-// repository.
+// THE DUE LISTING IS THE ROWS: a live change whose head revision holds no facts,
+// or no mergeability, against the branch it merges into is due — on the listing
+// of repositories by its repository, and on its repository's listing with its
+// target's tip and the position that moved it there and what it owes, beside
+// the repository's path owners — and each record takes its half off: its facts
+// recorded leave its merge owed, and its mergeability recorded takes it off; a
+// retarget puts both back; a change whose target branch is gone is due
+// nothing, and neither is one of an archived repository. The engine's own read
+// names no asker, the instant its home's refresh is paced by, and only it
+// names a due repository.
 //
-// Mutation: take facts of a change's head revision against another branch for
-// its facts, and the retargeted change drops off the listing.
+// Mutations: take facts of a change's head revision against another branch for
+// its facts, and the retargeted change drops off the listing; take the facts
+// for the merge, and a change whose facts are recorded owes no merge.
 func TestTheDueListingIsTheRows(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -181,7 +187,7 @@ func TestTheDueListingIsTheRows(t *testing.T) {
 	due, gotOwners := n.dueChanges(repo)
 	tip, at := n.tip(repo, mainRef)
 	want := code.ChangeDue{ID: change, Number: 1, Revision: 1, Head: oidOf("B"), SourceRef: featureRef,
-		TargetRef: mainRef, Tip: tip, TipPosition: at}
+		TargetRef: mainRef, Tip: tip, TipPosition: at, FactsDue: true, MergeDue: true}
 	if len(due) != 1 || due[0] != want || len(gotOwners) != 1 || gotOwners[0].Owner != owners[0].Owner {
 		t.Fatalf("the repository's due changes are %+v beside %+v, want %+v beside its path owner", due, gotOwners,
 			want)
@@ -189,19 +195,28 @@ func TestTheDueListingIsTheRows(t *testing.T) {
 
 	res, err := w.Converse(ctx, n.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go"))
 	requireConversed(t, res, err)
+	want.FactsDue = false
+	if got, _ := n.dueChanges(repo); len(got) != 1 || got[0] != want {
+		t.Fatalf("a change whose head revision holds its facts is due as %+v, want %+v: its merge still owed",
+			got, want)
+	}
+	res, err = w.Converse(ctx, n.merging(repo, change, 1, oidOf("B"), mainRef, code.MergeClean))
+	requireConversed(t, res, err)
 	if got, _ := n.dueChanges(repo); len(got) != 0 {
-		t.Fatalf("a change whose head revision holds its facts is still due: %+v", got)
+		t.Fatalf("a change whose head revision holds its facts and its mergeability is still due: %+v", got)
 	}
 	if got := n.dueRepos(); len(got) != 0 {
-		t.Fatalf("the due repositories are %v once their changes hold their facts, want none", got)
+		t.Fatalf("the due repositories are %v once their changes hold their facts and their mergeability, "+
+			"want none", got)
 	}
 
 	moved, err := c.ProposeChange(ctx, writing(dev, n.change(change).version, func(p *code.ChangeProposal) {
 		p.Retarget = &code.ChangeRetarget{RepoID: repo, ChangeID: change, TargetRef: releaseRef}
 	}))
 	requireChanged(t, moved, err)
-	if got, _ := n.dueChanges(repo); len(got) != 1 || got[0].TargetRef != releaseRef || got[0].Tip != oidOf("R") {
-		t.Fatalf("the retargeted change is due as %+v, want it due against release at R", got)
+	if got, _ := n.dueChanges(repo); len(got) != 1 || got[0].TargetRef != releaseRef || got[0].Tip != oidOf("R") ||
+		!got[0].FactsDue || !got[0].MergeDue {
+		t.Fatalf("the retargeted change is due as %+v, want its facts and its merge due against release at R", got)
 	}
 
 	s := suiteSettings()
@@ -219,15 +234,28 @@ func TestTheDueListingIsTheRows(t *testing.T) {
 		t.Fatalf("a change whose target branch is gone is due as %+v, want nothing", got)
 	}
 
-	if _, err := n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadChangesDue, Asker: asker,
-		Fresh: statelog.Freshness{Level: statelog.ReadStale}}); !errors.Is(err, code.ErrInvalid) ||
-		!strings.Contains(err.Error(), "asker:") {
-		t.Fatalf("a due listing naming an asker read %v, want ErrInvalid naming the asker", err)
-	}
-	if _, err := n.reader.Read(ctx, code.ReadQuery{Kind: code.ReadChanges, Asker: asker, Repo: "web",
-		ChangesDue: &code.ChangesDueQuery{RepoID: repo},
-		Fresh:      statelog.Freshness{Level: statelog.ReadStale}}); !errors.Is(err, code.ErrInvalid) ||
-		!strings.Contains(err.Error(), "changes_due:") {
-		t.Fatalf("a listing of changes naming a due repository read %v, want ErrInvalid naming it", err)
+	now := time.Now()
+	for name, tc := range map[string]struct {
+		q     code.ReadQuery
+		field string
+	}{
+		"a due listing naming an asker": {code.ReadQuery{Kind: code.ReadChangesDue, Asker: asker,
+			ChangesDue: &code.ChangesDueQuery{RecheckBefore: now}}, "asker:"},
+		"a due listing naming no instant its refresh is paced by": {code.ReadQuery{Kind: code.ReadChangesDue,
+			ChangesDue: &code.ChangesDueQuery{RepoID: repo}}, "changes_due.recheck_before:"},
+		"a due listing with no query of its own": {code.ReadQuery{Kind: code.ReadChangesDue}, "changes_due:"},
+		"the listing of repositories asking rechecks": {code.ReadQuery{Kind: code.ReadChangesDue,
+			ChangesDue: &code.ChangesDueQuery{RecheckBefore: now, Rechecks: 1}}, "changes_due.rechecks:"},
+		"a repository's due changes asking more rechecks than a page": {code.ReadQuery{Kind: code.ReadChangesDue,
+			ChangesDue: &code.ChangesDueQuery{RepoID: repo, RecheckBefore: now, Rechecks: code.MaxSnapshotItems + 1}},
+			"changes_due.rechecks:"},
+		"a listing of changes naming a due repository": {code.ReadQuery{Kind: code.ReadChanges, Asker: asker,
+			Repo: "web", ChangesDue: &code.ChangesDueQuery{RepoID: repo, RecheckBefore: now}}, "changes_due:"},
+	} {
+		tc.q.Fresh = statelog.Freshness{Level: statelog.ReadStale}
+		if _, err := n.reader.Read(ctx, tc.q); !errors.Is(err, code.ErrInvalid) ||
+			!strings.Contains(err.Error(), tc.field) {
+			t.Errorf("%s read %v, want ErrInvalid naming %s", name, err, tc.field)
+		}
 	}
 }

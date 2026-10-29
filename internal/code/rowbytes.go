@@ -328,7 +328,7 @@ func (r CheckRow) encodedBytes() int {
 
 // encodedBytes is the length of the due change's JSON encoding.
 func (c ChangeDue) encodedBytes() int {
-	return 2 + field("id", stringBytes(c.ID), true) +
+	n := 2 + field("id", stringBytes(c.ID), true) +
 		field("number", intBytes(c.Number), false) +
 		field("revision", intBytes(c.Revision), false) +
 		field("head", stringBytes(c.Head), false) +
@@ -336,6 +336,16 @@ func (c ChangeDue) encodedBytes() int {
 		field("target_ref", stringBytes(c.TargetRef), false) +
 		field("tip", stringBytes(c.Tip), false) +
 		field("tip_position", positionBytes(c.TipPosition), false)
+	if c.FactsDue {
+		n += field("facts_due", trueBytes, false)
+	}
+	if c.MergeDue {
+		n += field("merge_due", trueBytes, false)
+	}
+	if !c.Checked.IsZero() {
+		n += field("checked", timeBytes(c.Checked), false)
+	}
+	return n
 }
 
 // encodedBytes is the length of the candidate's JSON encoding.
