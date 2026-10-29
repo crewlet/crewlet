@@ -2,12 +2,12 @@
  * How the engine reads one `providers.llm` entry: the closed set of its
  * `auth.mode`, and what each field the entry leaves out comes to.
  *
- * Settings › Models & keys draws every entry off the company document, which
- * holds what an operator WROTE — and an entry that names no `agent` or no
- * `auth.mode` still runs as something. What it runs as is the engine's
- * default, so the screen says it from here rather than guessing, and the words
- * for each sign-in are keyed on this union so a mode the engine adds is a
- * typecheck failure rather than a row drawn with nothing said.
+ * Settings › Models edits an entry as the company document WRITES it, and
+ * an entry that names no `agent` or no `auth.mode` still runs as something.
+ * What it runs as is the engine's default, so the wizard says it from here
+ * rather than guessing, and the words for each sign-in are keyed on this union
+ * so a mode the engine adds is a typecheck failure rather than a choice drawn
+ * with nothing said.
  *
  * HELD AGAINST `config.CLIAgentAuthModes`, `config.CodingAgents` and an unset
  * `config.LLMProvider`'s `AgentName`, `ResolvedAuthMode`, `Timeout` and
@@ -19,7 +19,7 @@
  */
 
 /**
- * How an entry's CLI signs in. `subscription`: the operator's own CLI login —
+ * How an entry's CLI signs in. `subscription`: the operator's own CLI login:
  * a headless token, or the files `crewlet llm login` wrote. `api-key`: one key,
  * put in the CLI's own key variable, billed to the metered account.
  * `inherit-env`: whichever of the CLI's two variables the engine's own
@@ -59,7 +59,7 @@ export const DEFAULT_CLI_AGENT = "claude-code";
  * The CLIs that can run a seat's executor: the coding agents with an in-box
  * runner. Every agent seat's executor is its CLI's own run, placed by the
  * launching entry's `run_in`, and a member of an executor chain on any other
- * CLI is skipped at launch — that entry serves the text phases alone (the
+ * CLI is skipped at launch, and that entry serves the text phases alone (the
  * reviewer, workers, onboarding and side passes).
  */
 export const EXECUTOR_CLI_AGENTS = ["claude-code", "opencode"] as const;
@@ -67,7 +67,7 @@ export const EXECUTOR_CLI_AGENTS = ["claude-code", "opencode"] as const;
 /** An entry's `auth.mode` when it names none. */
 export const DEFAULT_CLI_AUTH_MODE: CLIAuthMode = "subscription";
 
-/** The wall-clock cap on one stretch of a CLI's own work — no tool call in flight — when `timeout_seconds` is unset. */
+/** The wall-clock cap on one stretch of a CLI's own work (no tool call in flight) when `timeout_seconds` is unset. */
 export const DEFAULT_CLI_TIMEOUT_SECONDS = 600;
 
 /** How many CLI processes an entry runs at once when `max_concurrent` is unset. */
