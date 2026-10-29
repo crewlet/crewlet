@@ -311,8 +311,12 @@ func TestEveryGitprocErrorHasADecidedAnswer(t *testing.T) {
 func TestEveryCacheErrorHasADecidedAnswer(t *testing.T) {
 	refused := syncFailedAnswer{status: http.StatusInternalServerError,
 		says: "this node refused its own call serving this request", line: "code_git_refused", level: "ERROR"}
-	// A cache's boot refusals and a check's own never reach a request's
-	// sync; should one, it is this node's.
+	// A cache's boot refusals, a check's own and an expunge's rescue
+	// (ErrInputsLeaving: only the maintainer stages one) never reach a
+	// request's sync; should one, it is this node's. The rescue's is a
+	// moment's state of this node's copy, its objects/ still holding a
+	// begin's inputs until the round's swap takes them out, so the retry
+	// this answer promises is the one that ends it.
 	node := syncFailedAnswer{status: http.StatusServiceUnavailable, retry: true, says: "this node could not serve acme (",
 		line: "code_fetch_failed", level: "WARN"}
 	table := map[string]struct {
@@ -341,6 +345,8 @@ func TestEveryCacheErrorHasADecidedAnswer(t *testing.T) {
 		"ErrNoMemory":  {fmt.Errorf("%w: 9 GB", cache.ErrNoMemory), node},
 		"ErrNotHeld":   {fmt.Errorf("cache: verify r: %w", cache.ErrNotHeld), node},
 		"ErrPastBound": {fmt.Errorf("%w: 1m0s", cache.ErrPastBound), node},
+		"ErrInputsLeaving": {fmt.Errorf("%w: acme.git holds drop epoch 1 in its objects/ and its row 2",
+			cache.ErrInputsLeaving), node},
 		"ErrPackMissing": {&cache.ErrPackMissing{Repo: "r", Pack: code.PackRow{PackID: "p1"}}, syncFailedAnswer{
 			status: http.StatusServiceUnavailable, retry: true, says: "acme's pack p1 is missing from the object store",
 			line: "code_pack_missing", level: "WARN"}},
