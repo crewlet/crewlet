@@ -128,7 +128,13 @@ function hexOf(digits: string): string {
 }
 
 const HEX_ONLY = /^#([0-9a-f]{3}|[0-9a-f]{6})$/iu;
-const RGB_ONLY = /^rgb\(\s*(\d{1,3})\s*,?\s*(\d{1,3})\s*,?\s*(\d{1,3})\s*\)$/iu;
+/**
+ * `rgb(r, g, b)`, its commas optional. ONE WAY TO READ EACH RUN OF SPACES:
+ * written `\s*,?\s*`, a run with no comma could be split between the two
+ * `\s*` in every way, and a code span of `rgb(1`, 20,000 spaces and a letter
+ * took 640 ms to refuse. Spaces after a comma belong to the comma's group.
+ */
+const RGB_ONLY = /^rgb\(\s*(\d{1,3})\s*(?:,\s*)?(\d{1,3})\s*(?:,\s*)?(\d{1,3})\s*\)$/iu;
 
 /**
  * The colour a code span holds when it holds nothing else, as `#rrggbb`, or
@@ -465,6 +471,17 @@ function shortAddress(url: URL): string {
   return shown.length > ADDRESS_LABEL_MAX ? `${shown.slice(0, ADDRESS_LABEL_MAX - 1)}…` : shown;
 }
 
+/**
+ * `path` with its trailing slashes taken off, by one walk back. A pattern
+ * (`/\/+$/`) searched from every slash in a run of them, each to fail at the
+ * next character that is not one.
+ */
+function withoutTrailingSlashes(path: string): string {
+  let end = path.length;
+  while (end > 0 && path[end - 1] === "/") end--;
+  return path.slice(0, end);
+}
+
 /** The path under `base` when `url` is at it (host and path prefix), else null. */
 function under(url: URL, base: string): string[] | null {
   let root: URL;
@@ -474,7 +491,7 @@ function under(url: URL, base: string): string[] | null {
     return null;
   }
   if (url.host.toLowerCase() !== root.host.toLowerCase()) return null;
-  const prefix = root.pathname.replace(/\/+$/, "");
+  const prefix = withoutTrailingSlashes(root.pathname);
   if (prefix !== "" && url.pathname !== prefix && !url.pathname.startsWith(`${prefix}/`))
     return null;
   return segments(url.pathname.slice(prefix.length));
