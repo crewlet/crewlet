@@ -12,6 +12,7 @@
  * tested", never "Not used".
  */
 
+import type { ReactNode } from "react";
 import {
   Button,
   Callout,
@@ -146,59 +147,75 @@ function UsedBy({ model, name }: { model: ModelView; name: (handle: string) => s
 }
 
 /**
- * The model's name and the model it runs, each one line, whole on hover (QA
- * M15), with its CLI's mark.
+ * A cell's words, whole on hover (QA M15), as a link to the row's own page.
  *
  * THE ROW'S LINK LIES OVER EVERY CELL, so a tip a pointer can reach is on an
- * element raised above it, and a raised element takes the press. The names
- * are therefore a link of their own, to the page the row opens: a press, a
- * middle click and a copied address all do what the row does. It is out of
- * the tab order and hidden from assistive technology, which reach the model
- * once, by the row's link. The mark is not raised and does nothing of its own:
+ * element raised above it, and a raised element takes the press. So the
+ * raised words are a link of their own, to the page the row opens: a press, a
+ * middle click and a copied address all do what the row does, and no part of
+ * the row is a spot that opens nothing. Out of the tab order and hidden from
+ * assistive technology, which reach the model once, by the row's link.
+ */
+function RowReveal({
+  model,
+  tip,
+  children,
+}: {
+  model: ModelView;
+  tip: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip content={tip} placement="top">
+      <a
+        className="models-row-reveal"
+        href={href(["settings", "models", model.key])}
+        tabIndex={-1}
+        aria-hidden="true"
+      >
+        {children}
+      </a>
+    </Tooltip>
+  );
+}
+
+/**
+ * The model's name and the model it runs, each one line, with its CLI's mark
+ * centred beside them. The mark is not raised and does nothing of its own:
  * the row's link takes the press, and the tip names the CLI.
  */
 function ModelCell({ model }: { model: ModelView }) {
   return (
     <span className="models-entry-cell">
       <CliMark agent={model.agent} size={MARK_SIZE} named />
-      <Tooltip
-        content={
+      <RowReveal
+        model={model}
+        tip={
           <span className="mono">
             {product(model.agent)} · {model.key} · {model.model}
           </span>
         }
-        placement="top"
       >
-        <a
-          className="models-entry-cell__names"
-          href={href(["settings", "models", model.key])}
-          tabIndex={-1}
-          aria-hidden="true"
-        >
+        <span className="models-pair">
           <span className="mono models-clamp">{model.key}</span>
           <Text as="span" variant="caption" tone="secondary" className="mono models-clamp">
             {model.model}
           </Text>
-        </a>
-      </Tooltip>
+        </span>
+      </RowReveal>
     </span>
   );
 }
 
-/** The sign-in on one line per fact, its secret's name whole on hover (QA M15). */
+/** How the model signs in, its secret's name whole on hover; nothing raised where there is no name to reveal. */
 function SignInCell({ model }: { model: ModelView }) {
   const variable = model.admin?.sign_in.variable ?? null;
-  const line = (
-    <span className="models-signin" data-above-row={variable ? "" : undefined}>
-      <SignInLine model={model} />
-    </span>
-  );
   return variable ? (
-    <Tooltip content={<span className="mono">{variable}</span>} placement="top">
-      {line}
-    </Tooltip>
+    <RowReveal model={model} tip={<span className="mono">{variable}</span>}>
+      <SignInLine model={model} />
+    </RowReveal>
   ) : (
-    line
+    <SignInLine model={model} />
   );
 }
 

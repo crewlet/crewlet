@@ -4,7 +4,7 @@
  * sign-in in words, and its menu of actions.
  */
 
-import { Fragment, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Menu, RelativeTime, StatusDot, Text } from "@crewlethq/ui";
 import { EllipsisGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useParam } from "~/app/router.tsx";
@@ -200,30 +200,20 @@ export function HealthLine({ model, compact = false }: { model: ModelView; compa
 }
 
 /**
- * An identifier that may wrap only after its underscores, so a narrow column
- * shows CLAUDE_CODE_ over OAUTH_TOKEN, whole words of the name, rather than
- * cutting it to an ellipsis nothing reveals.
+ * How a model signs in: the route in words and, for an admin, the secret it
+ * reads; never a value. THE SAME PAIR AS A MODEL'S NAME AND ITS ID, in the
+ * same type and spacing (`models-pair`), its secret's name on one line and
+ * whole on hover where the row draws it.
  */
-function breakable(name: string): ReactNode {
-  const parts = name.split(/(?<=_)/);
-  return parts.map((part, i) => (
-    <Fragment key={i}>
-      {part}
-      {i < parts.length - 1 ? <wbr /> : null}
-    </Fragment>
-  ));
-}
-
-/** How a model signs in: the route in words and, for an admin, the secret it reads; never a value. */
 export function SignInLine({ model }: { model: ModelView }) {
   const route = model.entry.sign_in.route;
   const variable = model.admin?.sign_in.variable ?? null;
   return (
-    <span className="col">
+    <span className="models-pair">
       <span>{ROUTE[route]}</span>
       {variable ? (
-        <Text as="span" variant="caption" tone="tertiary" className="mono">
-          {breakable(variable)}
+        <Text as="span" variant="caption" tone="secondary" className="mono models-clamp">
+          {variable}
         </Text>
       ) : null}
     </span>
