@@ -32,38 +32,48 @@ func TestALookupIsAskedAgainUntilItIsAnswered(t *testing.T) {
 	}
 }
 
-// A LOOKUP NOBODY EVER ANSWERS GIVES UP: within its caller's deadline when
-// that is the shorter, and within its own budget otherwise, with the last
-// request's own error.
+// A LOOKUP NOBODY EVER ANSWERS GIVES UP, with the last request's own
+// silence: when its caller's deadline ends first, that deadline is what ended
+// it; with no deadline of the caller's, its own budget is.
 //
-// Mutation: re-ask without a bound, and neither case returns.
+// JUDGED BY OUTCOME, not by elapsed time, which a loaded runner stretches:
+// the error, and which context had run out when it came back. The only clock
+// here is a watchdog many budgets long, so an unbounded lookup fails rather
+// than hangs.
+//
+// Mutation: re-ask without a bound, and the case with no caller's deadline
+// never returns.
 func TestALookupNobodyAnswersGivesUpWithinItsBudget(t *testing.T) {
 	t.Parallel()
 	silent := func(context.Context) error { return nats.ErrTimeout }
-	for name, tc := range map[string]struct {
-		parent time.Duration
-		within time.Duration
-	}{
-		"the caller's deadline": {parent: 3 * fast.ReAsk / 2, within: fast.Lookup},
-		"its own budget":        {parent: 0, within: 2 * fast.Lookup},
+	for name, callerDeadline := range map[string]bool{
+		"the caller's deadline": true,
+		"its own budget":        false,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			ctx := t.Context()
-			if tc.parent > 0 {
+			if callerDeadline {
 				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(ctx, tc.parent)
+				ctx, cancel = context.WithTimeout(ctx, fast.ReAsk)
 				defer cancel()
 			}
 			done := make(chan error, 1)
 			go func() { done <- fast.lookup(ctx, silent) }()
+			var err error
 			select {
-			case err := <-done:
-				if !errors.Is(err, nats.ErrTimeout) {
-					t.Errorf("lookup = %v, want the last request's silence", err)
-				}
-			case <-time.After(tc.within):
-				t.Fatalf("a lookup nobody answered was still asking after %v", tc.within)
+			case err = <-done:
+			case <-time.After(20 * fast.Lookup):
+				t.Fatalf("a lookup nobody answered was still asking after %v", 20*fast.Lookup)
+			}
+			if !errors.Is(err, nats.ErrTimeout) {
+				t.Errorf("lookup = %v, want the last request's silence", err)
+			}
+			switch {
+			case callerDeadline && !errors.Is(ctx.Err(), context.DeadlineExceeded):
+				t.Errorf("the lookup gave up while its caller's deadline still stood (%v)", ctx.Err())
+			case !callerDeadline && ctx.Err() != nil:
+				t.Errorf("the caller's context ended (%v), so the lookup's own budget did not", ctx.Err())
 			}
 		})
 	}
