@@ -1345,9 +1345,12 @@ const (
 	// review's fixes (a run's question drawn whole and clamped with Show all
 	// rather than split, an answer naming the question it answers, a choice
 	// read back with the words beside it, and the focus kept on the outcome)
-	// took it to 4638.7 KiB.
-	// 4639 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 543<<10
+	// took it to 4638.7 KiB. 4639 KiB, which still refuses a doubled
+	// baseline. A model's cloud or gateway sign-in (auth.mode env) named on the
+	// Models screen, its words in the shared models module every chunk that
+	// imports it carries, took it to 4639.1 KiB.
+	// 4640 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 544<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

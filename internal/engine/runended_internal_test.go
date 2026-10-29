@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
@@ -198,5 +200,66 @@ func TestAResumeWaitsOnTheChainItsFirstCallTakes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// THE NODE'S APPLY BUILDS EVERY REVISION ON ITS ONE REGISTRY OF SIGN-INS. The
+// unit case above hands buildProviders a registry itself; this one goes through
+// Engine.Apply, the path a running node takes, so an apply that built its
+// revision on no registry, or a fresh one, fails here: an edit to the entry's
+// timeout must find the window its sign-in is sitting out, and a key rotated
+// under the same ${VAR} must not.
+//
+// NOT PARALLEL: the key is read from the process environment.
+//
+// Mutation: pass nil (or cliagent.NewPlans(nil)) to buildRevision in Apply, and
+// the edited entry answers through the spent plan.
+func TestARunningNodesApplyKeepsTheSignInsSitOut(t *testing.T) {
+	dir := t.TempDir()
+	revision := func(timeout int) *config.Company {
+		return parseBundled(t, fmt.Sprintf(`
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    k:
+      agent: claude-code
+      model: sonnet
+      state_dir: %q
+      timeout_seconds: %d
+      auth: {mode: api-key, api_key: "${PLAN_KEY_UNDER_TEST}"}
+roles:
+  - name: CEO
+    handle: ceo
+    llm: k
+`, dir, timeout))
+	}
+	entry := func(e *Engine) *cliagent.Provider {
+		t.Helper()
+		p, ok := e.Company().Models.Provider("k")
+		if !ok {
+			t.Fatal("the running epoch has no entry k")
+		}
+		return p.(*cliagent.Provider)
+	}
+	apply := func(e *Engine, c *config.Company) {
+		t.Helper()
+		if status, stages, err := e.Apply(t.Context(), c, time.Now()); err != nil || status != configplane.StatusOK {
+			t.Fatalf("Apply = (%s, %v, %v), want ok", status, stages, err)
+		}
+	}
+	t.Setenv("PLAN_KEY_UNDER_TEST", "sk-ant-api03-spent")
+	e := bundleNode(t, revision(600))
+	if !entry(e).RunEnded(t.Context(), cliagent.RunEnd{Answer: "Usage limit reached · resets 5pm"}) {
+		t.Fatal("the premise: the running entry sits out")
+	}
+	apply(e, revision(900))
+	if entry(e).SittingOut() == nil {
+		t.Error("an apply that edited the entry's timeout handed back the spent plan")
+	}
+	t.Setenv("PLAN_KEY_UNDER_TEST", "sk-ant-api03-rotated")
+	apply(e, revision(900))
+	if err := entry(e).SittingOut(); err != nil {
+		t.Errorf("an apply after the key was rotated under the same name still sits out: %v", err)
 	}
 }

@@ -1724,7 +1724,11 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// the probe, as a bad configuration exits whatever the probe says.
 	var company *Company
 	if opts.Company != nil {
-		company, err = NewCompanyWith(opts.Company, e.resolver())
+		// ON THE NODE'S REGISTRY OF SIGN-INS, as every apply's revision
+		// is ([Engine.Apply]): built on none, the boot's entries kept their
+		// sit-outs in registries of their own, which the first apply's
+		// entries never found.
+		company, err = newCompany(opts.Company, e.resolver(), e.plans)
 		if err != nil {
 			return nil, err
 		}
