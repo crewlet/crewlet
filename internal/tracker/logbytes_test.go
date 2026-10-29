@@ -297,6 +297,16 @@ var codeLogUnwritten = map[code.OpKind]struct {
 		"through the estate's code.conversation"},
 	code.OpFindingResolve: {payload: reflect.TypeFor[code.FindingResolve](), how: "findings are " +
 		"answered or dismissed by code_resolve_finding, through the estate's code.conversation"},
+	// A REPOSITORY'S CHECKS, written by the checks writer beside each
+	// committer, are appended by no node while nothing queues one: the home's
+	// dispatch of a change head's checks is their first writer, through the
+	// estate's code.checks, and an attempt comes at the rate its repository's
+	// heads are pushed times the checks its file defines — what the day must
+	// price once they exist, which that writer is the one to measure.
+	code.OpCheckQueued: {payload: reflect.TypeFor[code.CheckQueued](), how: "a change head's checks are " +
+		"queued — or recorded skipped — by its repository's home git node, one record a check its target's " +
+		"checks file defines, and an attempt its infrastructure ended queued again, through the estate's " +
+		"code.checks"},
 }
 
 // codeLogRiders is every op of the code domain a node of this build appends
@@ -334,6 +344,19 @@ var codeLogRiders = map[code.OpKind]struct {
 	code.OpChangeLanded: {on: code.OpChangeOpen, makers: changeMakers, how: "a change whose target came to " +
 		"hold its head is landed by its repository's home git node through the estate's code.change, once " +
 		"a change at the most"},
+	// A CHECK'S CLAIM, ITS ENDING AND ITS SWEEP are all about an attempt only
+	// a check_queued record makes — no priced op's payload makes one, so they
+	// name no maker — and come at its rate: two claims' records and an ending
+	// an attempt, and a sweep only where an idle repository's attempts
+	// outlive the history.
+	code.OpCheckStarted: {on: code.OpCheckQueued, how: "an attempt is claimed by the git node that runs " +
+		"it, and its box named by that node, through the estate's code.checks: two records an attempt"},
+	code.OpCheckFinished: {on: code.OpCheckQueued, how: "an attempt is ended by its runner — or by its " +
+		"repository's home, cancelled for a head its change moved on from or errored for a runner it " +
+		"lost — through the estate's code.checks: one record an attempt"},
+	code.OpChecksSweep: {on: code.OpCheckQueued, how: "the code-retention pass sweeps an idle repository's " +
+		"attempts past code.CheckHistory, which its own endings no longer remove: a record an idle " +
+		"repository holding them, a pass"},
 }
 
 // codeLogMaker is a key of a priced op's payload whose records make the object
@@ -511,6 +534,9 @@ var codeLogKinds = map[code.ObjectKind]string{
 	code.KindChange: "a change's conversation — its asks for review, its comments, its threads' " +
 		"resolutions, its reviews and the answers to their findings — on the change (codeLogUnwritten), " +
 		"and its revisions' facts, which ride the change's making (codeLogRiders)",
+	code.KindChecks: "a repository's checks: an attempt queued (codeLogUnwritten), and its claim, its " +
+		"ending and the sweep of an idle repository's past the history, which ride its queueing " +
+		"(codeLogRiders)",
 }
 
 // The reference company's chart, as a seat's tools hold it. Its work is filed
