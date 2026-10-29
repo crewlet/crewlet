@@ -213,7 +213,17 @@ const (
 	// cannot see without re-proving who they are is a status they stop
 	// checking.
 	ActionFleetRead Action = "fleet.read"
-	ActionAuditRead Action = "audit.read"
+	// ActionModelsCheck runs a model's checks on the answering node: the
+	// doctor over the API (`POST /llm/providers/{key}/check`, a few tokens of
+	// a real call, charged to no seat) and a host login's status read
+	// (`.../host-login/check`). ActionModelsRetry clears a model's sit-out
+	// on every node, or probes it first (`.../retry`). Both change RUNTIME
+	// state the company already reaches, never config or a credential, so
+	// they are admin's at any recency and an assistant's on approval; a
+	// credential's write and a device sign-in are `secrets.write`.
+	ActionModelsCheck Action = "models.check"
+	ActionModelsRetry Action = "models.retry"
+	ActionAuditRead   Action = "audit.read"
 
 	// --- one seat's own trail, read by somebody else ----------------- //
 	//
@@ -954,6 +964,13 @@ var rules = map[Action]rule{
 	ActionSetupConnect: {class: ClassAdmin, recency: iam.RecencyStepUp, assist: AssistApprove},
 	ActionFleetOperate: {class: ClassAdmin, recency: iam.RecencyStepUp, assist: AssistApprove},
 	ActionFleetRead:    {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistRead},
+	// A MODEL'S CHECKS AND ITS RETRY are admin's with no step-up: neither
+	// writes the company or a credential, and the person reaching for them
+	// is the one watching a model refuse right now. The assistant proposes
+	// each and the person approves it, since a check spends tokens and a
+	// retry moves every node.
+	ActionModelsCheck: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
+	ActionModelsRetry: {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistApprove},
 	// THE COMPANY-WIDE TRAIL — every event, turn and phase, every agent-to-
 	// agent channel, the identity estate's own audit. Admin's: one seat's
 	// trail is its lead's too ([ActionSeatTrailRead]); everybody's is not.

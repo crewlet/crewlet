@@ -2601,6 +2601,15 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// AND THE SOCKET'S ARTIFACT ROOMS, decided by that same admission and
 	// fed by this engine's appliers and presence hub.
 	opts.Rooms = artifactRooms
+	// SETTINGS › MODELS: the model routes, writing through the config
+	// surface and the fleet's store under the same keyring, audited on this
+	// node's queue, and the questions that read every model's state.
+	modelSurface, err := api.NewModelSurface(e, configSurface, cipher, e.Backends().Queue)
+	if err != nil {
+		return nil, err
+	}
+	opts.Models = modelSurface
+	api.ModelSources(&opts.Sources, e, cipher)
 	app, err := api.New(opts) //nolint:contextcheck // see the paragraph above the options
 	if err == nil {
 		err = assistantSvc.bindRoutes(app)

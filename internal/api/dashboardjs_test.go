@@ -1348,7 +1348,9 @@ const (
 	// took it to 4638.7 KiB. 4639 KiB, which still refuses a doubled
 	// baseline. A model's cloud or gateway sign-in (auth.mode env) named on the
 	// Models screen, its words in the shared models module every chunk that
-	// imports it carries, took it to 4639.1 KiB.
+	// imports it carries, took it to 4639.1 KiB. The Audit log's row for a
+	// model gesture (`model_acted`, its action and its entry linked to the
+	// models) took it to 4639.4 KiB.
 	// 4640 KiB, which still refuses a doubled baseline.
 	treeBudget = 4<<20 + 544<<10
 )

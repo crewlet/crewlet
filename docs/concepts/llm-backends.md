@@ -755,7 +755,9 @@ reads `stopped` with the reason `provider`, and the dashboard's Inbox draws one
 condition for the kind of limit ("Claude Code subscription limit reached.
 Agents resume at 4:30 PM.") rather than a row per seat. The condition reaches
 every reader of the dashboard, so it names no entry: which entries are spent and
-which carries a seat is on **Settings › Models**, for an admin. A seat whose chain has an entry that still answers is never parked: it
+which carries a seat is on [**Settings › Models**](#managing-models-from-the-dashboard): every member reads which
+models sit out and until when, and an admin reads which credential and which
+vendor sentence too. A seat whose chain has an entry that still answers is never parked: it
 runs on that entry, and the condition says so. A chain whose head is limited and
 whose fallback failed for another reason is retried as any failed turn is,
 because nothing says that failure lasts. An apply that changes the company's
@@ -3848,6 +3850,80 @@ it runs on.
 | `failure_markers` | Sentinels the CLI writes on stderr when its own confinement failed to load — a policy file it could not read — after which it would run on its vendor's defaults. Matched on every call as each stderr line arrives, and the run is stopped at once and fails: Gemini CLI reports `Policy file error` and carries on; Grok reports that a headless run cannot ask for an approval. Held to the shape of a vendor's words, as a limit marker is. |
 
 ---
+
+## Managing models from the dashboard
+
+**Settings › Models** is this page on a screen: what each model is doing on
+every node, and the gestures that change it. It reads one question,
+[`llm_entries`](../reference/api-endpoints.md#get-llmentries), and writes
+through the [model routes](../reference/api-endpoints.md#llm-models-settings--models),
+each its own verb and each recorded in the Audit log as a `model_acted` row,
+refused ones included.
+
+**Status comes from every node's heartbeat.** Each node publishes, per model,
+how it signs in there, whether it sits out a vendor's limit and until when,
+when it last answered and last failed, the seats parked on it and, for a model
+signed in with a CLI login, that login's state on its disk. The page joins them:
+a model is `sitting_out` while any live node sits it out, `no_sign_in` when
+nothing signs it in on the node answering, `rejected` after a refusal newer than
+its last answer or past its credential's expiry, `expiring` within seven days of
+that expiry, `untested` before anything said whether it works, and `ready`
+otherwise. A node whose beat carried no report is shown as one that did not say,
+never as a node where nothing happened. Members read every model's condition;
+only an admin reads the credential's name, its hint, who stored it and when, the
+account a login names and the vendor's own sentence.
+
+**A credential is tested before it is stored.** Rotating a token or a key types
+the new value once: the engine hands it to the model's own CLI, in a home of
+its own, for one one-turn call, and seals it only if the vendor signed it in (a
+`429` counts: it proves the credential authenticated). A refused value is never
+stored, so the model goes on signing in with the credential it had. Once
+sealed, the revision that reads it is re-activated in the same request, so every
+node reads it at the epoch the answer names
+([ADR-0070](../../adr/0070-a-secret-write-re-activates-the-revision-that-reads-it.md)),
+and the answer says which models read the value, which of them sat out on the
+sign-in it replaced, and how many runs are still running on the old one until
+their segment ends. A pasted setup-token is the operator's own subscription,
+for a self-hosted company; the wizard says so beside it.
+
+**Retry and clear.** A model sitting out can be probed now (one call on the
+answering node; if it answers, every node clears the sit-out) or cleared without
+a call, when the person knows the limit is over: every chain parked on it probes
+again at once, and one still limited parks again with the vendor's fresh word.
+
+**Test** runs `crewlet llm doctor`'s checks on the answering node, line by line,
+with or without the real completions; a test of an existing model is a real call
+on its sign-in and is remembered as any call is.
+
+**Host logins are read, never made.** A model that signs in with a CLI login
+shows that login's state on each node (`signed_in`, `signed_out` or `unknown`,
+how and as whom where the CLI says) and the command that signs it in on that
+node, `crewlet llm login <key>`, which the operator runs there. The check reruns
+the CLI's own status command now; it never calls the network.
+
+**Codex signs in with a device code.** The engine runs `codex login
+--device-auth` on the node that took the request and relays only the address and
+the one-time code; the person approves at OpenAI, nothing is pasted back, and
+the login the approval made is sealed as the model's credential bundle and
+re-activated, so every node restores it.
+
+**Removing a model repoints what names it.** The remove flow lists every seat
+job and assistant target that runs on the model, asks where each moves (another
+model, or unset, which falls back as an unset job does), shows where a job that
+named nothing will land now, and removes the model and every repoint as one
+revision ([the route](../reference/api-endpoints.md#delete-configllm-providersid-remove-a-model-and-repoint-what-names-it)).
+
+**Suggestions without a credential.** The model step lists the models each
+vendor offers from the public [models.dev](https://models.dev) catalogue, the
+CLI's own aliases and the vendor's model page; nothing typed on the page is sent
+anywhere to list them, and any model name is still accepted as text. A node that
+cannot reach the catalogue offers the aliases, the page and free text.
+
+**The model alarms** (`llm_credential_expiring` at 30 days,
+`llm_credential_expires_soon` at 7, `llm_sign_in_refused`, `llm_limit`, and
+`llm_limit_waiting` once a seat has waited 15 minutes) are the node's own
+evaluation, shown at the top of the page, on `/health` and in the alarm
+reference.
 
 ## Operating it
 

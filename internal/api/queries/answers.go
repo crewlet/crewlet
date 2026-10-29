@@ -449,6 +449,23 @@ type Sources struct {
 	// does not pin those.
 	Now func() time.Time
 
+	// Models is the engine's half of the model questions (`llm_entries`):
+	// what this node resolved for each entry and its latest alarms. Nil
+	// leaves `llm_entries` unregistered, with `llm_runners` beside it.
+	Models ModelSource
+
+	// Secrets is the fleet's secret rows, metadata only, which a model's
+	// credential is dated by (`stored_at`). Nil answers no `stored_at`.
+	Secrets SecretRows
+
+	// DeviceSignIns is the fleet's device sign-in records. Nil leaves
+	// `llm_device_sign_in` unregistered and `device_sign_in` null.
+	DeviceSignIns DeviceSignIns
+
+	// Catalogue is the model catalogue a model step suggests from. Nil
+	// leaves `llm_models` unregistered.
+	Catalogue ModelCatalogue
+
 	// Artifacts is the artifacts' admission and reads, for the artifacts'
 	// questions. Nil leaves them unregistered: a node built with no
 	// artifacts estate to route to.
@@ -615,6 +632,13 @@ func Register(r *Registry, s Sources) {
 		// failure, which `/config` shows the same reader. See
 		// [Sources.mcpServersStatus].
 		r.Register("mcp_servers_status", Requires(iam.GrantAdmin), s.mcpServersStatus)
+		// WHAT EACH MODEL IS DOING, from the same heartbeats: everybody's,
+		// in two readings (see [Sources.llmEntries]), and the runners'
+		// readiness the admin's, as the configuration is.
+		if s.Models != nil {
+			r.Register("llm_entries", Everybody(), s.llmEntries)
+			r.Register("llm_runners", Requires(iam.GrantAdmin), s.llmRunners)
+		}
 	}
 	if s.Backups != nil && s.Events != nil {
 		// THE DEPLOYMENT'S, for retention's reason and more: every row
@@ -636,6 +660,14 @@ func Register(r *Registry, s Sources) {
 	// no seat" is the answer a screen needs in order to say what to bind.
 	// Everybody's, since the answer is about the asker and nobody else.
 	r.Register("viewer", Everybody(), s.viewer)
+	if s.Catalogue != nil {
+		r.Register("llm_models", Requires(iam.GrantAdmin), s.llmModels)
+	}
+	// ONE DEVICE SIGN-IN WHILE ITS RECORD LINGERS, the admin's, as starting
+	// one is.
+	if s.DeviceSignIns != nil {
+		r.Register("llm_device_sign_in", Requires(iam.GrantAdmin), s.llmDeviceSignIn)
+	}
 	if s.Runs != nil {
 		// ONE SCHEDULE'S OWN HISTORY, gated on the LEDGER rather than on
 		// the company: the configured rows are a projection of the org

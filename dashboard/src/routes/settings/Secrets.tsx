@@ -239,6 +239,8 @@ const PROVENANCE: Record<string, string> = {
   provision: "minted by an integration's provisioning pass",
   cli: "set with crewlet secrets set while its node's engine was stopped",
   "llm-login": "a coding CLI's login, stored by crewlet llm while its node's engine was stopped",
+  models:
+    "a model's credential, stored from Settings › Models once it signed the model in on a test call",
 };
 
 /**
@@ -253,6 +255,7 @@ const SOURCE_WORDS: Record<string, string> = {
   provision: "Provisioning pass",
   cli: "CLI",
   "llm-login": "CLI login",
+  models: "Models",
 };
 
 /** A source in words, or the engine's own word for one this build does not know. */

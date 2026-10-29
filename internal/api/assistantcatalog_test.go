@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/iamapi"
+	"github.com/crewlet/crewlet/internal/api/llmapi"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
@@ -47,7 +48,8 @@ func everySurfaceApp(t *testing.T) *api.App {
 	}
 	opts := api.Options{
 		Config: &configapi.Service{}, Secrets: &secretsapi.Service{}, Setup: &setupapi.Service{},
-		IAM: &iamapi.Service{}, Work: &workapi.Service{}, Artifacts: &artifactsapi.Service{},
+		Models: &llmapi.Service{},
+		IAM:    &iamapi.Service{}, Work: &workapi.Service{}, Artifacts: &artifactsapi.Service{},
 		ArtifactData: &artifactdataapi.Service{},
 		Datasets: &api.DatasetsSource{Boards: &artifactsapi.Service{},
 			Data: boardData{mu: &sync.Mutex{}, deals: &[]float64{}}},

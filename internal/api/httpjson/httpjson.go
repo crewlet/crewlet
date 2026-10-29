@@ -1044,6 +1044,39 @@ const (
 	// CodeActionAlreadyClaimed is a page action another tab already
 	// claimed. 409.
 	CodeActionAlreadyClaimed Code = "action_already_claimed"
+
+	// --- the model routes (internal/api/llmapi) --- //
+
+	// CodeCredentialRejected is a candidate credential the vendor refused
+	// when it was tested: nothing was stored, and the current credential
+	// still signs the model in. 422, its problem at the value. Not
+	// `credential_refused`, which is an artifact's content carrying a
+	// credential's shape and says so to the person.
+	CodeCredentialRejected Code = "credential_rejected"
+	// CodeCredentialUntested is a candidate credential the vendor did not
+	// answer the test of (a timeout, a server error): nothing was stored.
+	// 502.
+	CodeCredentialUntested Code = "credential_untested"
+	// CodeAlreadyExists is a create-only credential write (`If-None-Match:
+	// *`) naming a secret that is already stored, its `names` listed. 412.
+	CodeAlreadyExists Code = "already_exists"
+	// CodeNotSittingOut is a probe of a model no live node sits out. 409.
+	CodeNotSittingOut Code = "not_sitting_out"
+	// CodeSignInInProgress is a device sign-in started while another for the
+	// same model is running, which the answer carries. 409.
+	CodeSignInInProgress Code = "sign_in_in_progress"
+	// CodeNoDeviceSignIn is a device sign-in for a model whose CLI has
+	// none, or whose sign-in reads no login. 422.
+	CodeNoDeviceSignIn Code = "no_device_sign_in"
+	// CodeDeviceSignInUnavailable is a device sign-in whose CLI printed no
+	// code in time, its first line beside it. 502.
+	CodeDeviceSignInUnavailable Code = "device_sign_in_unavailable"
+	// CodeNoHostLogin is a host login check of a model that signs in with
+	// no CLI login. 422.
+	CodeNoHostLogin Code = "no_host_login"
+	// CodeUnknownProvider is a model catalogue question about a provider
+	// the catalogue lists nothing under. 422.
+	CodeUnknownProvider Code = "unknown_provider"
 )
 
 // codes is THE TABLE: every code this engine answers with, each with the one
@@ -1425,6 +1458,20 @@ var codes = map[Code]string{
 	CodeProposalStale: "What this change would edit has moved since it was proposed, so " +
 		"nothing was sent. Ask the assistant to propose it again.",
 	CodeActionAlreadyClaimed: "Another tab is already applying this change.",
+	CodeCredentialRejected: "The vendor refused this credential, so nothing was stored. " +
+		"The current credential still signs the model in.",
+	CodeCredentialUntested: "The vendor did not answer the test, so nothing was stored. " +
+		"Try again.",
+	CodeAlreadyExists: "A secret with that name is already stored, so nothing was " +
+		"written. Choose another name, or rotate that one.",
+	CodeNotSittingOut: "This model isn't sitting out on any node. Nothing to retry; " +
+		"test it instead.",
+	CodeSignInInProgress: "A sign-in for this model is already in progress. Finish or " +
+		"cancel that one first.",
+	CodeNoDeviceSignIn:          "This model can't sign in with a device code.",
+	CodeDeviceSignInUnavailable: "The CLI didn't print a sign-in code in time. Try again.",
+	CodeNoHostLogin:             "This model signs in without a CLI login, so there is none to check.",
+	CodeUnknownProvider:         "The model catalogue lists no provider by that name.",
 }
 
 // Codes is every code in the vocabulary, sorted.
